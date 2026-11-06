@@ -218,5 +218,9 @@ this is not saved.
 6 lootable meshes, the 12 pickup meshes and the cardboard box's 3 clips. The meshes have default material slots, so they
 are untextured. The other 15 clips were refused by the converter's check that the MD5-to-UE map is the expected mirror:
 those skeletons have 2 or 3 bones, too few to determine the fitted map (rank 2 or 3 of 4), although the expected mirror
-matches each of their bones to within 0.00001 cm. Those lootables open with no animation until this is settled. Anything
-not imported falls back to a placeholder. How the imported assets look and play is `UNVERIFIED`.
+matches each of their bones to within 0.00001 cm. `convert_subset_rank_deficient`, which only this import uses, now tests the mirror directly on those skeletons at the same 0.05
+tolerance and logs it per clip. All 6 anim sets convert with it; importing the 15 clips needs one more editor run. It proves
+less than a fit, because directions the bones do not span are not tested, so these clips stay `UNVERIFIED` until a frame
+shows the lid opening the right way: `-owinteractivetest` captures `OWLootLid_<balance>_closed`, `_mid` and `_opened` for each
+type with a clip. Anything not imported falls back to a placeholder. How the imported assets look and play is
+`UNVERIFIED`.

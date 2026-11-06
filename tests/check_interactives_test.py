@@ -173,5 +173,24 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(ci.main(['--log', str(Path(tmp) / 'none.log'), '--interactives', str(Path(tmp) / 'x.json')]), 2)
 
 
+class LidCaptureTest(unittest.TestCase):
+    def grade(self, text):
+        out = ci.Results()
+        ci.grade_lid_capture(text, out)
+        return out.rows[0]
+
+    def test_all_three_frames_of_each_type_pass(self):
+        text = 'OWLOOTLID queue=1\n' + ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        row = self.grade(text)
+        self.assertEqual(row[1], 'PASS')
+        self.assertIn('UNVERIFIED', row[2])
+
+    def test_a_missing_frame_fails(self):
+        self.assertEqual(self.grade('OWLOOTLID queue=1\nOWLOOTLID shot balance=Synth phase=closed\n')[1], 'FAIL')
+
+    def test_no_imported_clip_is_missing(self):
+        self.assertEqual(self.grade('OWLOOTLID queue=0\n')[1], 'MISSING')
+
+
 if __name__ == '__main__':
     unittest.main()

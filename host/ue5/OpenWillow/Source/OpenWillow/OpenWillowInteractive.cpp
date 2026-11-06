@@ -1,6 +1,7 @@
 // AI-assisted (Claude). See OpenWillowInteractive.h. Strict manifest reading and loot rolls first, then the lootable actor,
 // the pickup rules, the subsystem (spawn, open, nearest use, auto pickup) and the in-engine test sequence.
 #include "OpenWillowInteractive.h"
+#include "GameFramework/Controller.h"
 #include "OpenWillowInteractivePickup.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowInventoryPickup.h"
@@ -402,7 +403,7 @@ void AOpenWillowLootable::Configure(const FString& InId, const FString& InBalanc
 void AOpenWillowLootable::ApplyVisual(const FOpenWillowLootTable& Visual)
 {
     if (Visual.SkeletalMesh.IsEmpty()) return;
-    const FString MeshPath = FString(LootableAssetRoot) + Visual.SkeletalMesh;
+    const FString MeshPath = FString(LootableAssetRoot) + Visual.SkeletalMesh + TEXT(".") + Visual.SkeletalMesh;
     USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
     if (!Mesh) return; // not imported: the placeholder stays
     Skeletal->SetSkeletalMesh(Mesh);
@@ -413,7 +414,8 @@ void AOpenWillowLootable::ApplyVisual(const FOpenWillowLootTable& Visual)
     bSkeletalShown = true;
     if (!Visual.AnimSet.IsEmpty())
     {
-        const FString AnimPath = FString(LootableAssetRoot) + TEXT("Anims/") + Visual.AnimSet + TEXT("_Open");
+        const FString AnimName = Visual.AnimSet + TEXT("_Open");
+        const FString AnimPath = FString(LootableAssetRoot) + TEXT("Anims/") + AnimName + TEXT(".") + AnimName;
         OpenAnim = LoadObject<UAnimSequence>(nullptr, *AnimPath);
     }
 }
@@ -800,6 +802,7 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
         }
         return;
     }
+    if (TickLidShots(*Walker)) return;
     switch (TestStep++)
     {
     case 0: TestOpen(*Walker); break;
@@ -839,6 +842,67 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
         break;
     default: break;
     }
+}
+
+bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
+{
+    UWorld* World = GetWorld();
+    if (!bLidQueueBuilt)
+    {
+        bLidQueueBuilt = true;
+        // The LAST lootable of each balance, so TestOpen (which takes the first) still has its own to open.
+        TMap<FString, TWeakObjectPtr<AOpenWillowLootable>> ByBalance;
+        for (const TWeakObjectPtr<AOpenWillowLootable>& Candidate : Lootables)
+            if (Candidate.IsValid() && Candidate->HasOpenClip()) ByBalance.Add(Candidate->Balance, Candidate);
+        ByBalance.GenerateValueArray(LidQueue);
+        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID queue=%d (balances with an imported open clip)"), LidQueue.Num());
+    }
+    if (LidQueue.Num() == 0) return false;
+    AOpenWillowLootable* Lootable = LidQueue[0].Get();
+    if (!Lootable)
+    {
+        LidQueue.RemoveAt(0);
+        LidPhase = 0;
+        return true;
+    }
+    const FString Leaf = Lootable->Balance.RightChop(Lootable->Balance.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd) + 1);
+    auto Shot = [&Leaf](const TCHAR* Phase)
+    {
+        const FString File = FString::Printf(TEXT("OWLootLid_%s_%s.png"), *Leaf, Phase);
+        FScreenshotRequest::RequestScreenshot(File, false, false);
+        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=%s"), *Leaf, Phase);
+    };
+    switch (LidPhase++)
+    {
+    case 0:
+    {
+        // Test fixture: Maya stands 220 uu in front of the lootable, looking at it.
+        const FVector Target = Lootable->GetActorLocation() + FVector(0.f, 0.f, 50.f);
+        const FVector From = Lootable->GetActorLocation() + Lootable->GetActorForwardVector() * 220.f + FVector(0.f, 0.f, 100.f);
+        Walker.SetActorLocation(From, false, nullptr, ETeleportType::TeleportPhysics);
+        if (AController* Controller = Walker.GetController()) Controller->SetControlRotation((Target - From).Rotation());
+        break;
+    }
+    case 1: Shot(TEXT("closed")); break;
+    case 2:
+    {
+        OpenLootable(Walker, *Lootable);
+        // A frame while the clip plays (the 2 s test step is longer than a lid's opening).
+        const FString MidLeaf = Leaf;
+        World->GetTimerManager().SetTimer(LidMidTimer, FTimerDelegate::CreateLambda([MidLeaf]()
+            {
+                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWLootLid_%s_mid.png"), *MidLeaf), false, false);
+                UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=mid"), *MidLeaf);
+            }), 0.4f, false);
+        break;
+    }
+    default:
+        Shot(TEXT("opened"));
+        LidQueue.RemoveAt(0);
+        LidPhase = 0;
+        break;
+    }
+    return true;
 }
 
 void UOpenWillowInteractiveSubsystem::TestOpen(AOpenWillowWalker& Walker)

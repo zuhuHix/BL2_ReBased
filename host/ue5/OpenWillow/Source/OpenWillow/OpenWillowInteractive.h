@@ -130,6 +130,8 @@ public:
     // Plays the open anim (or lifts the placeholder lid). False when it was open already.
     bool Open();
     bool IsOpened() const { return bOpened; }
+    // True when the imported open clip loaded (the lid-opening capture of -owinteractivetest uses these).
+    bool HasOpenClip() const { return OpenAnim != nullptr; }
 
     FString Id;
     FString Balance;
@@ -193,6 +195,13 @@ private:
     void AutoCollectTick();
     void TickInteractiveTest();
     void TestOpen(AOpenWillowWalker& Walker);
+    // The lid capture: one lootable per balance with an imported clip, Maya in front of it, frames closed, mid-open and
+    // opened (OWLootLid_<balance leaf>_<phase>.png). True while it is still working.
+    bool TickLidShots(AOpenWillowWalker& Walker);
+    TArray<TWeakObjectPtr<AOpenWillowLootable>> LidQueue;
+    bool bLidQueueBuilt = false;
+    int32 LidPhase = 0;
+    FTimerHandle LidMidTimer;
 
     TMap<FString, FOpenWillowLootTable> Tables;       // by balance path
     TMap<FString, FOpenWillowLootItem> Items;         // by leaf balance path
