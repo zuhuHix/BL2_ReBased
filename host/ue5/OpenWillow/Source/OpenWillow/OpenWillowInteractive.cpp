@@ -2,6 +2,7 @@
 // the pickup rules, the subsystem (spawn, open, nearest use, auto pickup) and the in-engine test sequence.
 #include "OpenWillowInteractive.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "OpenWillowQuickChange.h"
 #include "GameFramework/Controller.h"
 #include "OpenWillowInteractivePickup.h"
 #include "OpenWillowWalker.h"
@@ -568,6 +569,7 @@ void UOpenWillowInteractiveSubsystem::SpawnObjects(UWorld& World, const TSharedP
     });
     UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: %d lootable(s) spawned, %d unsupported not spawned"),
         Lootables.Num(), Unsupported);
+    SpawnStations(World, Root);
 }
 
 bool UOpenWillowInteractiveSubsystem::SpawnOne(UWorld& World, const TSharedPtr<FJsonObject>& Json)
@@ -680,11 +682,62 @@ bool FOpenWillowUseDistances::Offer(TFunctionRef<bool(EOpenWillowUseTarget)> Use
     return false;
 }
 
+AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::NearestStation(const FVector& From, double& OutDistanceSquared) const
+{
+    AOpenWillowQuickChangeStation* Nearest = nullptr;
+    double Best = FMath::Square(LootableReach);
+    for (const TWeakObjectPtr<AOpenWillowQuickChangeStation>& Candidate : Stations)
+    {
+        AOpenWillowQuickChangeStation* Station = Candidate.Get();
+        if (!Station) continue;
+        const double D2 = FVector::DistSquared(From, Station->GetActorLocation());
+        if (D2 >= Best) continue;
+        Best = D2;
+        Nearest = Station;
+    }
+    OutDistanceSquared = Best;
+    return Nearest;
+}
+
+void UOpenWillowInteractiveSubsystem::SpawnStations(UWorld& World, const TSharedPtr<FJsonObject>& Root)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+    if (!Root->TryGetArrayField(TEXT("stations"), Rows)) return;
+    for (const TSharedPtr<FJsonValue>& Value : *Rows)
+    {
+        const TSharedPtr<FJsonObject>* Row = nullptr;
+        FString Id;
+        FVector Location, Rotation;
+        if (!Value.IsValid() || !Value->TryGetObject(Row) || !(*Row)->TryGetStringField(TEXT("id"), Id)
+            || !ReadVector(*Row, TEXT("location"), Location) || !ReadVector(*Row, TEXT("rotation"), Rotation))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: a station row is not usable; not spawned"));
+            continue;
+        }
+        FActorSpawnParameters Params;
+        Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        const FTransform Pose(FRotator(Rotation.X, Rotation.Y, Rotation.Z), Location);
+        AOpenWillowQuickChangeStation* Station = World.SpawnActor<AOpenWillowQuickChangeStation>(AOpenWillowQuickChangeStation::StaticClass(), Pose, Params);
+        if (!Station) continue;
+        Station->Configure(Id);
+        Stations.Add(Station);
+    }
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: %d Quick Change station(s) spawned"), Stations.Num());
+}
+
 bool UOpenWillowInteractiveSubsystem::NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared)
 {
     AOpenWillowLootable* Lootable = nullptr;
     AOpenWillowLootPickup* Pickup = nullptr;
-    return FindNearest(Walker, Lootable, Pickup, OutDistanceSquared);
+    const bool bLoot = FindNearest(Walker, Lootable, Pickup, OutDistanceSquared);
+    UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(Walker.GetWorld());
+    double StationDistance = 0;
+    if (Subsystem && Subsystem->NearestStation(Walker.GetActorLocation(), StationDistance) && (!bLoot || StationDistance < OutDistanceSquared))
+    {
+        OutDistanceSquared = StationDistance;
+        return true;
+    }
+    return bLoot;
 }
 
 bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
@@ -693,7 +746,12 @@ bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
     AOpenWillowLootable* Lootable = nullptr;
     AOpenWillowLootPickup* Pickup = nullptr;
     double DistanceSquared = 0;
-    if (!Subsystem || !FindNearest(Walker, Lootable, Pickup, DistanceSquared)) return false;
+    if (!Subsystem) return false;
+    const bool bLoot = FindNearest(Walker, Lootable, Pickup, DistanceSquared);
+    double StationDistance = 0;
+    AOpenWillowQuickChangeStation* Station = Subsystem->NearestStation(Walker.GetActorLocation(), StationDistance);
+    if (Station && (!bLoot || StationDistance < DistanceSquared)) return Station->Use(Walker);
+    if (!bLoot) return false;
     if (Lootable) return Subsystem->OpenLootable(Walker, *Lootable);
     return Pickup && Pickup->TryCollect(Walker);
 }
@@ -852,6 +910,13 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
             UE_LOG(LogTemp, Error, TEXT("OWINTERACTIVETEST FAIL no walker after 60 s"));
             FPlatformMisc::RequestExit(false);
         }
+        return;
+    }
+    // The Quick Change station: one press asks, a second confirms (the tree may be empty: the script allows that).
+    if (Stations.Num() > 0 && TestStationStep < 2 && Stations[0].IsValid())
+    {
+        ++TestStationStep;
+        Stations[0]->Use(*Walker);
         return;
     }
     if (TickLidShots(*Walker)) return;

@@ -304,10 +304,23 @@ class PrepareInteractivesTest(unittest.TestCase):
         self.assertEqual(assets['anim_trees'], ['Anim.Tree'])
         self.assertEqual(assets['pickup_meshes'], ['Pickups.Ammo', 'Pickups.Cash'])
 
+    def test_quick_change_machine_is_found_by_its_definition(self):
+        packages = {'Map_P': {
+            'TheWorld.PersistentLevel.WillowInteractiveObject_1': ('WillowGame.WillowInteractiveObject', {
+                'InteractiveObjectDefinition': 'GD_Invented.Things.CharacterCustomizationMachine',
+                'Location': {'X': 1.0, 'Y': 2.0, 'Z': 3.0}, 'Rotation': {'Yaw': 16384}}),
+            'TheWorld.PersistentLevel.WillowInteractiveObject_2': ('WillowGame.WillowInteractiveObject', {
+                'InteractiveObjectDefinition': 'GD_Invented.Things.SomethingElse'})}}
+        reader = Reader(packages, self.tmp.name)
+        found = pi.placed_stations(reader, pi.pv.Chain(reader, ['Map_P']), 'Map_P')
+        self.assertEqual([s['id'] for s in found], ['Map_P:WillowInteractiveObject_1'])
+        self.assertEqual(found[0]['location'], [1.0, 2.0, 3.0])
+        self.assertEqual(found[0]['rotation'], [0.0, 90.0, 0.0])
+
     def test_document_shape(self):
         self.assertEqual(self.doc['schema'], 'openwillow-interactives/1')
         self.assertEqual((self.doc['map'], self.doc['stage']), ('Map_P', 8.0))
-        self.assertEqual(set(self.doc), {'schema', 'map', 'stage', 'counts', 'objects', 'balances', 'items', 'assets',
+        self.assertEqual(set(self.doc), {'schema', 'map', 'stage', 'counts', 'objects', 'stations', 'balances', 'items', 'assets',
                                          'unresolved', 'notes'})
         self.assertEqual(set(self.objects()['1']), {
             'id', 'kind', 'population', 'balance', 'definition', 'location', 'rotation', 'rotation_units',

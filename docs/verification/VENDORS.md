@@ -230,3 +230,15 @@ Frames of the 2026-11-06 capture, judged by eye by the hub, frames only and `UNV
 
 For each type the test tries its lootables, leaving the first to the test's own open unless it is the only one, and on each of eight sides needs Maya's capsule to fit on walkable floor with a clear view as wide as she is. It logs which lootable it used and what failed on each side. With no such side on any of them, the checker reports that type `INCOMPLETE`, which fails the run. Which types must reach the capture is read from the assets on disk at grading, not from an earlier import's report. How the imported assets look and play is
 `UNVERIFIED`.
+
+## 8. Quick Change respec
+
+AI-assisted (Claude), 2026-11-06. `tools/prepare_interactives.py` lists the placed `CharacterCustomizationMachine` under
+`stations` (one in Sanctuary); its mesh is already part of the imported scene. The use key near it calls
+`UOpenWillowSkills::PurchaseReset` and charges the money that takes. The cost is `ResetCost`: 100 x 1.12^level, read from
+data by the skills lane and `UNVERIFIED` in game.
+
+The customization menu is not built. A two-press confirmation stands in for its dialog (host choice, `UNVERIFIED`): the
+first press shows the cost on a label, and a second within 5 s does the reset. An empty tree can still be bought back, as
+the script allows; whether the game's dialog stops that was not read. Reach is 350 uu, as for lootables.
+

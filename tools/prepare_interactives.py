@@ -48,6 +48,7 @@ REPO = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO / 'local' / 'slice' / 'interactives.schema'
 SCHEMA_TAG = 'openwillow-interactives/1'
 POPULATION = 'GD_Population_Treasure.'
+QUICK_CHANGE = 'CharacterCustomizationMachine'   # the last part of the Quick Change station's definition path
 # Arrays the vendors schema does not name yet (each name once: the reader rejects repeats).
 SCHEMA_EXTRA = pv.SCHEMA_EXTRA + [
     'DefaultIncludedLootLists=ObjectProperty',
@@ -386,12 +387,34 @@ def describe_balance(chain, values, balance_path, stage, unresolved):
             'hud_icon': chain.props(definition).get('HUDIconDef') if definition else None}
 
 
+def placed_stations(reader, chain, level):
+    """The Quick Change machines placed in a level: WillowInteractiveObject actors of that definition. Their mesh is part
+    of the imported scene, so only the pose is needed."""
+    found = []
+    for export in list(reader.exports(level)['by_index'].values()):
+        path = export['path']
+        if path.count('.') != 2 or not path.startswith('TheWorld.PersistentLevel.') or short(export['class']) != 'WillowInteractiveObject':
+            continue
+        props = chain.props(path)
+        definition = str(props.get('InteractiveObjectDefinition') or '')
+        if definition.rsplit('.', 1)[-1] != QUICK_CHANGE:
+            continue
+        rotation = props.get('Rotation') or {}
+        found.append({'id': f'{level}:{path.rsplit(".", 1)[1]}', 'kind': 'quick_change', 'definition': definition,
+                      'location': vector(props.get('Location')),
+                      'rotation': [int(rotation.get(k) or 0) * 360 / 65536 for k in ('Pitch', 'Yaw', 'Roll')],
+                      'rotation_units': [int(rotation.get(k) or 0) for k in ('Pitch', 'Yaw', 'Roll')]})
+    return found
+
+
 def build_document(reader, persistent, stage):
     objects, balances, unresolved, missing, attributes = [], {}, [], set(), set()
+    stations = []
     for level in levels(reader, persistent):
         # The level's own package first: a placed point's path exists in more than one level package.
         chain = pv.Chain(reader, [level, persistent, 'Startup'])
         values = Values(chain, CONTEXT)
+        stations.extend(placed_stations(reader, chain, level))
         for export in list(reader.exports(level)['by_index'].values()):
             path = export['path']
             if path.count('.') != 2 or not path.startswith('TheWorld.PersistentLevel.'):
@@ -449,7 +472,7 @@ def build_document(reader, persistent, stage):
         f'{len(item_attributes)} pickup attribute paths did not resolve: {item_attributes}',
         f'{len(missing)} object paths are in none of the packages: {sorted(missing)}',
     ]
-    return {'schema': SCHEMA_TAG, 'map': persistent, 'stage': stage, 'counts': kinds, 'objects': objects,
+    return {'schema': SCHEMA_TAG, 'map': persistent, 'stage': stage, 'counts': kinds, 'objects': objects, 'stations': stations,
             'balances': balances, 'items': items, 'assets': assets(balances, items),
             'unresolved': unresolved, 'notes': notes}
 

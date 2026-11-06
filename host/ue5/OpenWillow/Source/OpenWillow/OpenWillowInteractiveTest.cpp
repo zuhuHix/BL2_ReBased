@@ -6,6 +6,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowInteractive.h"
+#include "OpenWillowQuickChange.h"
 #include "Math/RandomStream.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowInteractiveLootTest, "OpenWillow.Interactive.Loot",
@@ -172,6 +173,13 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
             OpenWillowInteractiveRules::AmmoAfter(20, 20, 5, HeldAmmoLeft));
         TestTrue(TEXT("every target refusing means nothing took it"), !Refusing.Offer([](EOpenWillowUseTarget) { return false; }));
     }
+
+    // The Quick Change press: the first asks, a second inside the window confirms, a late one asks again.
+    FOpenWillowQuickChangePress QuickChange;
+    TestFalse(TEXT("the first press only asks"), QuickChange.Press(10.0));
+    TestTrue(TEXT("a second press within the window confirms"), QuickChange.Press(12.0));
+    TestFalse(TEXT("after a confirm the next press asks again"), QuickChange.Press(13.0));
+    TestFalse(TEXT("a press after the window asks again"), QuickChange.Press(13.0 + FOpenWillowQuickChangePress::ConfirmSeconds + 0.1));
 
     return true;
 }

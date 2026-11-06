@@ -33,6 +33,8 @@ PICKUP = re.compile(r'OWPICKUP kind=(\S+) amount=(-?[\d.]+) before=(-?[\d.]+) af
 LID_PHASES = ('closed', 'mid', 'opened')
 DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
+QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)')
+QUICK_RESET = re.compile(r'OWQUICKCHANGE reset id=(\S+) ok=(\d) cost=(\d+) before=(\d+) after=(\d+) reason=(.*)$', re.M)
 LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
 LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
 LID_VIEW = re.compile(r'OWLOOTLID view balance=(\S+) clear=([01])')
@@ -210,6 +212,21 @@ def grade_pickups(log_text, out):
         out.add('pickups', 'PASS', f'{len(rows)} pickup line(s) follow their rule ({accepted} taken, {refused} refused)')
 
 
+def grade_quick_change(log_text, out):
+    """The station's two presses: the prompt charges nothing, the confirm charges exactly the cost."""
+    prompt, reset = QUICK_PROMPT.search(log_text), QUICK_RESET.search(log_text)
+    if prompt is None or reset is None:
+        out.add('quick_change', 'FAIL', 'no OWQUICKCHANGE prompt and reset lines (the station did not run)')
+    elif reset.group(2) != '1':
+        out.add('quick_change', 'FAIL', f'the reset was refused: {reset.group(6).strip()}')
+    elif int(reset.group(4)) != int(prompt.group(3)):
+        out.add('quick_change', 'FAIL', f'the prompt changed money: {prompt.group(3)} -> {reset.group(4)}')
+    elif int(reset.group(4)) - int(reset.group(5)) != int(reset.group(3)):
+        out.add('quick_change', 'FAIL', f'money {reset.group(4)} -> {reset.group(5)}, cost {reset.group(3)}')
+    else:
+        out.add('quick_change', 'PASS', f'prompt, then reset for {reset.group(3)}; money {reset.group(4)} -> {reset.group(5)}')
+
+
 def expected_lid_types(doc, content_root):
     """The balances that must reach the lid capture: those with a supported object whose imported mesh and open clip are
     on disk in this checkout now, by the paths the host loads. Read at grading, for this run's manifest and content, so no
@@ -317,6 +334,7 @@ def grade(log_text, automation_text, doc, skip_automation=False, content_root=No
     grade_opens(log_text, objects_by_id, out)
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
     grade_pickups(log_text, out)
+    grade_quick_change(log_text, out)
     grade_lid_capture(log_text, out, expected_lid_types(doc, content_root))
     grade_test_sequence(log_text, objects, out)
     grade_automation(automation_text, out, skip_automation)
