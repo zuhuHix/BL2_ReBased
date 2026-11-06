@@ -459,7 +459,7 @@ function Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'ash_start') { return __ASH__ }
     if ($Code -match 'pi_stop') { __STOP__; return 'stopped' }
     if ($Code -match 'pi_hud_evidence') { return __HUD__ }
-    if ($Code -match 'pi_shields\\(True\\)') { return '{"equipped":{"name":"Own"},"max_strength":181}' }
+    if ($Code -match 'pi_shields\(True\)') { return '{"equipped":{"name":"Own"},"max_strength":181}' }
     if ($Code -match 'pi_shield_try') { return '{"requested_level":1}' }
     if ($Code -match 'pi_shield_read') { return __READ__ }
     if ($Code -match 'pi_shield_restore|pi_shields_check') { $script:restoreCalls++; return __RESTORE__ }
