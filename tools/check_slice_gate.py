@@ -5,9 +5,12 @@ detail=<text>` for each link it reaches, in run order, and `OWSLICEGATE SUMMARY 
 finishes. `fixtures=[...]` names the test fixtures the link relied on (empty or absent: none). This checker lists the
 links in order, marks every link the host never logged as FAIL ("not reached"), and checks the run's structure: one
 start line, then each link at most once and in the expected order, then one SUMMARY line that agrees with the link lines.
+Every link line must carry the fixtures field.
 
 Exit codes: 0 when no link is FAIL, the structure holds and the SUMMARY is there and agrees; 1 otherwise; 2 when the log
-has no `OWSLICEGATE start` line. NOT_AVAILABLE is a known gap and does not fail the run.
+has no `OWSLICEGATE start` line. NOT_AVAILABLE means a missing capability or precondition and does not fail the run, so
+it is overruled to FAIL where the capability is there: `enemy_attacks_maya` in a run with the range
+(`range_command=1` on the start line), and `loot_drop_on_kill` with the gun roll forced.
 """
 import argparse
 import json
@@ -40,6 +43,7 @@ NO_SUMMARY = 'no SUMMARY line: the run did not finish (crash or timeout)'
 BOM = '﻿'
 
 START = re.compile(r'OWSLICEGATE start\b')
+RANGE_START = re.compile(r'OWSLICEGATE start\b.*\brange_command=1\b')
 LINK = re.compile(r'OWSLICEGATE link=(?P<name>\S+) result=(?P<result>PASS|FAIL|NOT_AVAILABLE)'
                   r'(?: fixtures=\[(?P<fixtures>[^\]]*)\])? detail=(?P<detail>.*)$')
 LINK_ANY = re.compile(r'OWSLICEGATE link=')
@@ -97,6 +101,8 @@ def parse_log(lines):
         expected = NAMES[len(logged)]
         if name != expected:
             errors.append(f'line {n}: link {name} out of order (expected {expected} next)')
+        if match['fixtures'] is None:
+            errors.append(f'line {n}: link {name} has no fixtures field')
         fixtures = [f.strip() for f in (match['fixtures'] or '').split(';') if f.strip()]
         logged[name] = (match['result'], match['detail'], fixtures)
     return starts, logged, summary, errors
@@ -106,23 +112,51 @@ def parse_log(lines):
 # PASS needs both, and they must be the same item: the checker reads them itself rather than trusting the host's verdict.
 CARD_LINKS = ('pick_up_gun', 'pick_up_aimed_not_nearest')
 CARD_IDS = re.compile(r'\bcard_id=(?P<card>\S+) .*?\bpicked_id=(?P<picked>[^\s:,]+)')
+ACCEPTED = re.compile(r'\baccepted=1\b')
+DECOY_ID = re.compile(r'\bnearer_decoy=(?P<decoy>\S+)')
+DECOY_LINK = 'pick_up_aimed_not_nearest'
+# The fixture that forces a gun from a kill.
+FORCED_LOOT = 'guaranteed loot roll'
 
 
-def cross_check(rows, errors):
-    """A PASS on a card link whose card id and picked-up id are missing or differ becomes a FAIL."""
+def card_link_problem(row):
+    """Why a PASS on a card link cannot stand, or None. Two rolls can share an id, so the decoy link needs them to differ."""
+    match = CARD_IDS.search(row['detail'])
+    if not match:
+        return 'no card_id/picked_id in the detail'
+    if match['card'] != match['picked'] or match['card'] == 'none':
+        return f'card_id {match["card"]} is not picked_id {match["picked"]}'
+    if not ACCEPTED.search(row['detail']):
+        return 'the pickup was not accepted (no accepted=1 in the detail)'
+    if row['name'] == DECOY_LINK:
+        decoy = DECOY_ID.search(row['detail'])
+        if not decoy:
+            return 'no nearer_decoy id in the detail'
+        if decoy['decoy'] == match['picked']:
+            return f'nearer_decoy has the same id as the picked-up drop ({decoy["decoy"]})'
+    return None
+
+
+def cross_check(rows, errors, range_mode):
+    """A PASS on a card link without matching, accepted ids becomes a FAIL, and so does a NOT_AVAILABLE where the
+    capability was there."""
     for row in rows:
-        if row['name'] not in CARD_LINKS or row['result'] != 'PASS':
-            continue
-        match = CARD_IDS.search(row['detail'])
-        if not match:
-            why = 'no card_id/picked_id in the detail'
-        elif match['card'] != match['picked'] or match['card'] == 'none':
-            why = f'card_id {match["card"]} is not picked_id {match["picked"]}'
-        else:
-            continue
-        errors.append(f'link {row["name"]}: PASS overruled, {why}')
-        row['result'] = 'FAIL'
-        row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
+        if row['name'] in CARD_LINKS and row['result'] == 'PASS':
+            why = card_link_problem(row)
+            if why:
+                errors.append(f'link {row["name"]}: PASS overruled, {why}')
+                row['result'] = 'FAIL'
+                row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
+        elif row['result'] == 'NOT_AVAILABLE':
+            if row['name'] == 'enemy_attacks_maya' and range_mode:
+                why = 'the range was there, so its enemies can attack'
+            elif row['name'] == 'loot_drop_on_kill' and FORCED_LOOT in row['fixtures']:
+                why = 'the gun roll was forced'
+            else:
+                continue
+            errors.append(f'link {row["name"]}: NOT_AVAILABLE overruled, {why}')
+            row['result'] = 'FAIL'
+            row['detail'] = f'checker: {why}; host said NOT_AVAILABLE: {row["detail"]}'
 
 
 def build_rows(logged):
@@ -173,13 +207,14 @@ def main(argv=None):
     parser.add_argument('--markdown', metavar='OUT', help='write the rows as a markdown table')
     args = parser.parse_args(argv)
 
-    starts, logged, summary, errors = parse_log(read_log(args.log))
+    lines = read_log(args.log)
+    starts, logged, summary, errors = parse_log(lines)
     if not starts:
         print('no slice-gate run in this log')
         return 2
 
     rows = build_rows(logged)
-    cross_check(rows, errors)
+    cross_check(rows, errors, any(RANGE_START.search(line) for line in lines))
     totals = {result: sum(1 for row in rows if row['result'] == result) for result in RESULTS}
     logged_counts = Counter(result for result, _, _ in logged.values())
     if summary is None:

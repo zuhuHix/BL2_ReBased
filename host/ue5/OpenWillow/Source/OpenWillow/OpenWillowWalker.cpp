@@ -231,7 +231,7 @@ float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const
     if (Applied > 0.f && From.Normalize())
     {
         LastHitFrom = From;
-        ++HitsByCauser.FindOrAdd(TObjectKey<AActor>(Causer));
+        if (bTrackHitCausers) ++HitsByCauser.FindOrAdd(TObjectKey<AActor>(Causer));
         ++HitsTaken;
     }
     if (Hit.bWentDown) OnWentDown();

@@ -19,18 +19,23 @@ PREFIX = '[2026.11.04-10.00.00:000][123]LogTemp: Display: '
 TOTAL = len(chk.LINKS)
 
 
-def build(results=None, stop_after=None, summary='auto', start=True, extra=(), fixtures=None, order=None):
+CARD_DETAIL = 'card_id=item_x picked_id=item_x accepted=1 synthetic detail'
+DECOY_DETAIL = 'nearer_decoy=item_y ' + CARD_DETAIL
+
+
+def build(results=None, stop_after=None, summary='auto', start=True, extra=(), fixtures=None, order=None, range_mode=False):
     """Synthetic log lines: a start line, one link line per link (PASS unless results says otherwise, and only up to
     stop_after), the extra lines, then the SUMMARY line (counted from the results, unless summary is given or None).
-    fixtures maps a link name to its fixtures text; order, a list of link names, replaces the expected order."""
+    fixtures maps a link name to its fixtures text; order, a list of link names, replaces the expected order;
+    range_mode marks the run as one with the range on its start line."""
     results = results or {}
-    lines = [PREFIX + 'OWSLICEGATE start synthetic run'] if start else []
+    lines = [PREFIX + f'OWSLICEGATE start synthetic run range_command={int(range_mode)}'] if start else []
     effective = {}
     fixtures = fixtures or {}
     for index, name in enumerate(order or chk.NAMES, 1):
         if stop_after is not None and index > stop_after:
             break
-        default = 'card_id=item_x picked_id=item_x synthetic detail' if name in chk.CARD_LINKS else 'synthetic detail'
+        default = {'pick_up_gun': CARD_DETAIL, chk.DECOY_LINK: DECOY_DETAIL}.get(name, 'synthetic detail')
         result, detail = results.get(name, ('PASS', default))
         effective[name] = result
         lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} fixtures=[{fixtures.get(name, "")}] detail={detail}')
@@ -191,12 +196,50 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('NOT_AVAILABLE', self.row(out, 7))
         self.assertIn('inventory', self.row(out, 7))
 
-    def test_link_line_without_fixtures_field_is_read(self):
+    def test_link_line_without_fixtures_field_fails(self):
         lines = build()
-        lines[1] = PREFIX + 'OWSLICEGATE link=spawn_maya result=PASS detail=old format'
+        lines[1] = PREFIX + 'OWSLICEGATE link=spawn_maya result=PASS detail=no field'
         code, out = self.run_checker(self.write_log(lines))
+        self.assertEqual(code, 1)
+        self.assertIn('link spawn_maya has no fixtures field', out)
+
+    def test_card_link_pass_not_accepted_is_overruled(self):
+        for name, index, detail in (('pick_up_gun', 6, 'card_id=item_a picked_id=item_a accepted=0: synthetic'),
+                                    (chk.DECOY_LINK, 7, 'nearer_decoy=item_b card_id=item_a picked_id=item_a: synthetic')):
+            code, out = self.run_checker(self.write_log(build({name: ('PASS', detail)})))
+            self.assertEqual(code, 1)
+            self.assertIn('checker: the pickup was not accepted', self.row(out, index))
+
+    def test_decoy_link_pass_with_shared_id_is_overruled(self):
+        detail = 'nearer_decoy=item_a card_id=item_a picked_id=item_a accepted=1: synthetic'
+        code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: nearer_decoy has the same id as the picked-up drop (item_a)', self.row(out, 7))
+
+    def test_decoy_link_pass_without_decoy_id_is_overruled(self):
+        detail = 'card_id=item_a picked_id=item_a accepted=1: synthetic'
+        code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: no nearer_decoy id in the detail', self.row(out, 7))
+
+    def test_enemy_attack_not_available_fails_with_the_range(self):
+        results = {'enemy_attacks_maya': ('NOT_AVAILABLE', 'synthetic gap')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('FAIL', self.row(out, 4))
+        self.assertIn('error: link enemy_attacks_maya: NOT_AVAILABLE overruled', out)
+
+    def test_forced_loot_not_available_fails(self):
+        results = {'loot_drop_on_kill': ('NOT_AVAILABLE', 'synthetic gap')}
+        code, out = self.run_checker(self.write_log(build(results, fixtures={'loot_drop_on_kill': chk.FORCED_LOOT})))
+        self.assertEqual(code, 1)
+        self.assertIn('FAIL', self.row(out, 5))
+
+    def test_loot_not_available_is_kept_without_the_forced_roll(self):
+        results = {'loot_drop_on_kill': ('NOT_AVAILABLE', 'synthetic gap')}
+        code, out = self.run_checker(self.write_log(build(results)))
         self.assertEqual(code, 0)
-        self.assertIn('old format', self.row(out, 1))
+        self.assertIn('NOT_AVAILABLE', self.row(out, 5))
 
     def test_summary_mismatch_exits_one(self):
         code, out = self.run_checker(self.write_log(build(summary='pass=12 fail=1 na=0')))
