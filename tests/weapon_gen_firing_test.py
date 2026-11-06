@@ -174,6 +174,21 @@ class OutputPathTest(unittest.TestCase):
         self.refused(self.repo / 'local' / 'escape' / 'a.json')
         self.refused(store / 'a.json')   # the target's own path is not the repo's local/
 
+    @unittest.skipUnless(os.name == 'nt', 'junctions are a Windows feature')
+    def test_the_schema_file_is_checked_too(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (self.repo / 'local').mkdir()
+        self.assertEqual(tool.output_paths(self.repo / 'local' / 'a.json', repo=self.repo),
+                         (self.repo / 'local' / 'a.json', self.repo / 'local' / 'a.schema'))
+        # The output is inside local/, its .schema neighbour is a link out of it.
+        link = self.repo / 'local' / 'b.schema'
+        subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(outside)], check=True, capture_output=True)
+        self.addCleanup(os.rmdir, link)
+        self.assertEqual(tool.local_output(self.repo / 'local' / 'b.json', repo=self.repo), self.repo / 'local' / 'b.json')
+        with self.assertRaises(SystemExit):
+            tool.output_paths(self.repo / 'local' / 'b.json', repo=self.repo)
+
 
 if __name__ == '__main__':
     unittest.main()

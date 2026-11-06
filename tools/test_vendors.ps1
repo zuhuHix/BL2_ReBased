@@ -28,7 +28,7 @@ param(
 # (UOpenWillowVendorSubsystem::TickVendorTest). That first launch saves its money and
 # shelf to local/vendors/currency.json (-owcurrencysave). A second launch (unless -SkipPersist) loads that file, with no
 # -owmoney, and runs the same sequence; tools/check_vendors.py compares its first report with the first launch's last one.
-# Then the UE automation tests OpenWillow.Vendor.* (Stock and Persist) run in their own -nullrhi launch. tools/check_vendors.py
+# Then the UE automation tests OpenWillow.Vendor.* (check_vendors.py AUTOMATION_TESTS) run in their own -nullrhi launch. tools/check_vendors.py
 # grades the logs (CHECK lines and SUMMARY, exit code 1 on any FAIL).
 # Refuses to start when vendors.json is missing: run tools/prepare_vendors.py first.
 # Builds the module first (Build.bat, like tools/test_weapon_firing.ps1; -SkipBuild reuses the binary). Owns one editor at a
@@ -186,6 +186,7 @@ try {
         if (!(Test-Path -LiteralPath $persistLog)) { throw "No second-launch log written: $persistLog" }
         $checkArgs += @('--persist-log', $persistLog)
     }
+    if (!$SkipAutomation) { $checkArgs += '--require-automation' }
     if (!$SkipAutomation -and (Test-Path -LiteralPath $autoLog)) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs
     $exitCode = $LASTEXITCODE

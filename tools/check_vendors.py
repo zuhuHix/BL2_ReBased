@@ -44,7 +44,8 @@ RESTOCK = re.compile(r'OWVENDOR restock id=(\S*) ok=(\d)')
 REFUSED = re.compile(r'ow\.Vendor\.(\w+) refused: (.*)$', re.M)
 STATE = re.compile(r'OWVENDSTATE (\{.*)$', re.M)   # the whole rest of the line: a broken JSON is reported, not skipped
 PAGE_ERROR = re.compile(r'OWVENDERR (.*)$', re.M)   # the page refused a host state
-AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist', 'OpenWillow.Vendor.Items')
+AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist', 'OpenWillow.Vendor.Items',
+                    'OpenWillow.Vendor.RolledGunFiringTemplate')
 AMMO_LINE = re.compile(r'OWVENDAMMO type=(\w+) before=(-?\d+) after=(-?\d+) max=(-?\d+)')
 HEAL_LINE = re.compile(r'OWVENDHEAL before=(-?[\d.]+) after=(-?[\d.]+) max=(-?[\d.]+)')
 CURRENCY_REFUSED = re.compile(r'OWCURRENCY load refused: (.*)$', re.M)
@@ -101,7 +102,7 @@ def supported_machines(vendors):
 STALE_PRESS = re.compile(r'OWVENDTEST stale_press start=(-?\d+) after_refusals=(-?\d+) after_stale=(-?\d+) refusal=\[([^\]]*)\] kept=\[([^\]]*)\] alone=\[([^\]]*)\] opening=(\d+)')
 
 
-def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
+def grade(log_text, automation_text, vendors, open_index, open_kind='weapons', require_automation=False):
     """Return a Results object with one row per check. vendors is the parsed vendors.json document."""
     out = Results()
     machines = supported_machines(vendors)
@@ -259,7 +260,7 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
     grade_stale_press(log_text, out)
 
     if automation_text is None:
-        out.add('automation', 'MISSING', 'no automation log given')
+        out.add('automation', 'FAIL' if require_automation else 'MISSING', 'no automation log given')
     else:
         for name in AUTOMATION_TESTS:
             row = 'automation_' + name.rsplit('.', 1)[1].lower()     # automation_stock, automation_persist
@@ -564,6 +565,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--log', required=True, type=Path, help='the in-game run log (-abslog)')
     parser.add_argument('--automation-log', type=Path, help='the -nullrhi automation run log')
+    parser.add_argument('--require-automation', action='store_true',
+                        help='a run without an automation log fails (tools/test_vendors.ps1 passes this unless told to skip automation)')
     parser.add_argument('--vendors', required=True, type=Path, help='local/slice/vendors.json')
     parser.add_argument('--open-index', required=True, type=int, help='spawn index of the machine the suite opens')
     parser.add_argument('--open-kind', default='weapons')
@@ -579,7 +582,7 @@ def main(argv=None):
     except (OSError, json.JSONDecodeError) as error:
         print(f'check_vendors: cannot read input: {error}', file=sys.stderr)
         return 2
-    results = grade(log_text, automation_text, vendors, args.open_index, args.open_kind)
+    results = grade(log_text, automation_text, vendors, args.open_index, args.open_kind, args.require_automation)
     if persist_text is not None:
         results.rows.extend(grade_persist(log_text, persist_text).rows)
     return 1 if results.print() else 0

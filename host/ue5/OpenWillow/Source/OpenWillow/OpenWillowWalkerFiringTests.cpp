@@ -361,8 +361,10 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             RolledHold = 3.f / Held->FireRate + 0.1f;
             RolledShotsBefore = OpenWillowFiring::Counts.Shots;
             RolledLaunchesBefore = OpenWillowFiring::Counts.Launches;
-            RolledImpactsBefore = OpenWillowFiring::Counts.Impacts;
-            RolledDamageBefore = OpenWillowFiring::Counts.Damage;
+            // By this gun's id: a status tick left by an earlier gun must not count as this gun's damage. The same gun can be picked
+            // twice (a launcher with burst 1), so these are differences.
+            RolledImpactsBefore = OpenWillowFiring::Counts.ImpactsByWeapon.FindOrAdd(Held->Id);
+            RolledDamageBefore = OpenWillowFiring::Counts.DamageByWeapon.FindOrAdd(Held->Id);
             AimAt(CombatTarget->AimPoint());
             FirePressed();
             RolledAt = Now;
@@ -385,7 +387,8 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d impacts=%d damage=%.2f flying=%d"),
                 Wanted, *Held->Id, *Held->Type.Replace(TEXT(" "), TEXT("_")), Held->Firing.BurstCount, Held->Firing.bBurstFromManifest ? 1 : 0,
                 Held->Firing.bLoaded ? 1 : 0, 1.f / Held->FireRate, RolledHeld, Held->Magazine, C.Shots - RolledShotsBefore,
-                C.Launches - RolledLaunchesBefore, C.Impacts - RolledImpactsBefore, C.Damage - RolledDamageBefore, Flying);
+                C.Launches - RolledLaunchesBefore, C.ImpactsByWeapon.FindRef(Held->Id) - RolledImpactsBefore,
+                C.DamageByWeapon.FindRef(Held->Id) - RolledDamageBefore, Flying);
             ++RolledGun;
             RolledStep = 0;
         }

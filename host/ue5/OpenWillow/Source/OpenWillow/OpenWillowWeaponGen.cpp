@@ -58,8 +58,6 @@ bool IsWeaponBalanceUtf8(const weapongen::WeaponGenManifest& Manifest, const std
     return Object != Manifest.objectByPath.end() && Manifest.balanceByObject.count(std::to_string(Object->second)) > 0;
 }
 
-constexpr int32 FiringTemplatesSchema = 2;   // tools/weapon_gen_firing.py FILE_SCHEMA
-
 // tools/weapon_gen_firing.py's templates, next to the manifest, parsed once. Null when the file is missing or unreadable, older than
 // this code, or made with another manifest: a matching key alone would silently supply old values.
 const FJsonObject* FiringTemplates()
@@ -76,15 +74,10 @@ const FJsonObject* FiringTemplates()
         UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN no firing templates at %s: rolled guns fire a plain trace (python tools/weapon_gen_firing.py --game <BL2 folder>)"), *Path);
         return nullptr;
     }
-    double Schema = 0;
-    FString Stored;
-    Root->TryGetNumberField(TEXT("schema"), Schema);
-    Root->TryGetStringField(TEXT("manifest_md5"), Stored);
-    const FString Current = LexToString(FMD5Hash::HashFile(*FOpenWillowWeaponGen::ManifestPath()));
-    if (int32(Schema) != FiringTemplatesSchema || Stored.IsEmpty() || !Stored.Equals(Current, ESearchCase::IgnoreCase))
+    FString Why;
+    if (!FOpenWillowWeaponGen::FiringTemplatesUsable(*Root, LexToString(FMD5Hash::HashFile(*FOpenWillowWeaponGen::ManifestPath())), Why))
     {
-        UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN firing templates at %s refused (schema %d, want %d; manifest %s, made with %s): rolled guns fire a plain trace (rerun python tools/weapon_gen_firing.py --game <BL2 folder>)"),
-            *Path, int32(Schema), FiringTemplatesSchema, *Current, *Stored);
+        UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN firing templates at %s refused (%s): rolled guns fire a plain trace (rerun python tools/weapon_gen_firing.py --game <BL2 folder>)"), *Path, *Why);
         Root.Reset();
     }
     return Root.Get();
@@ -379,6 +372,21 @@ void RollGunCommand(const TArray<FString>& Args)
 FAutoConsoleCommand GRollGunCommand(TEXT("ow.RollGun"),
     TEXT("ow.RollGun <weapon balance or pool path> [stage=1] [seed=1]: roll a gun from the weapon generator into the backpack"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&RollGunCommand));
+}
+
+bool FOpenWillowWeaponGen::FiringTemplatesUsable(const FJsonObject& Root, const FString& ManifestMd5, FString& OutWhy)
+{
+    constexpr int32 FiringTemplatesSchema = 2;   // tools/weapon_gen_firing.py FILE_SCHEMA
+    double Schema = 0;
+    FString Stored;
+    Root.TryGetNumberField(TEXT("schema"), Schema);
+    Root.TryGetStringField(TEXT("manifest_md5"), Stored);
+    const TSharedPtr<FJsonObject>* Templates = nullptr;
+    if (int32(Schema) != FiringTemplatesSchema) OutWhy = FString::Printf(TEXT("schema %d, want %d"), int32(Schema), FiringTemplatesSchema);
+    else if (Stored.IsEmpty() || !Stored.Equals(ManifestMd5, ESearchCase::IgnoreCase)) OutWhy = FString::Printf(TEXT("manifest %s, made with %s"), *ManifestMd5, *Stored);
+    else if (!Root.TryGetObjectField(TEXT("templates"), Templates) || !Templates->IsValid()) OutWhy = TEXT("no templates object");
+    else return true;
+    return false;
 }
 
 bool FOpenWillowWeaponGen::MergeFiringTemplate(const FJsonObject& Template, const TArray<TSharedPtr<FJsonValue>>* LevelScales,
