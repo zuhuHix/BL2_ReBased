@@ -722,6 +722,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
     bAimModel = OpenWillowFiring::AimModelEnabled();   // off in scripted test and capture modes unless -owaimmodel
+    if (GrenadeReleaseAt > 0.f && GetWorld()->GetTimeSeconds() >= GrenadeReleaseAt) ReleaseGrenade();
     if (bAimModel)
     {
         // Accuracy pool fall and view kick (live 2026-11-03): the kick is a view offset, added here as this frame's change.
@@ -900,6 +901,7 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWFire"), IE_Pressed, this, &AOpenWillowWalker::FirePressed);
     Input->BindAction(TEXT("OWFire"), IE_Released, this, &AOpenWillowWalker::FireReleased);
     Input->BindAction(TEXT("OWPhaselock"), IE_Pressed, this, &AOpenWillowWalker::UsePhaselock);
+    Input->BindAction(TEXT("OWGrenade"), IE_Pressed, this, &AOpenWillowWalker::ThrowGrenadeKey);
 }
 void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
 {
@@ -1826,6 +1828,65 @@ FOpenWillowFiringState& AOpenWillowWalker::FiringStateFor(const FOpenWillowWeapo
 {
     return FiringStates.FindOrAdd(Weapon.InstanceId);
 }
+bool AOpenWillowWalker::ThrowGrenade()
+{
+    // WillowPlayerController.ThrowGrenade (script, read): a throw needs the weapon to be able to act and a grenade to
+    // spend (CanThrowGrenade: not while downed unless an attribute allows it); it then runs as a shared weapon action for
+    // the throw special move's length. The host blocks a throw while the menus are open, while Maya is not active and
+    // during the 1.05 s lockout. Live (4 throws of the save's Sky Rocket mod, WEAPON_PROJECTILES.md section 12): the throw
+    // completes 1.04-1.19 s after the press and the projectile appears 0.52-0.53 s after it; UNVERIFIED for the stock frag.
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (!bMayaActive || bInventoryPresentation || IsDown() || Now < ThrowLockUntil || !Inventory) return false;
+    if (!bGrenadeTried)
+    {
+        bGrenadeTried = true;
+        FString File;
+        if (!FParse::Value(FCommandLine::Get(), TEXT("-owgrenade="), File))
+            File = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(),
+                TEXT("../../../local/items/grenades/grenade_mod_standard_l8.json")));
+        FString Text;
+        TSharedPtr<FJsonObject> Root;
+        const TSharedPtr<FJsonObject>* Block = nullptr;
+        if (FFileHelper::LoadFileToString(Text, *File) && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root)
+            && Root.IsValid() && Root->TryGetObjectField(TEXT("grenade"), Block) && Block && Block->IsValid())
+            FOpenWillowFiringData::ParseGrenade(**Block, GrenadeData);
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade data %s from %s"), GrenadeData.bLoaded ? TEXT("loaded") : TEXT("missing"), *File);
+    }
+    if (!GrenadeData.bLoaded) return false;
+    const FOpenWillowAmmoPool& Pool = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade);
+    if (Pool.Current <= 0)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade: out of grenades"));
+        return false;
+    }
+    Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, Pool.Current - 1);
+    ThrowLockUntil = Now + 1.05f;
+    GrenadeReleaseAt = Now + 0.52f;
+    UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade pressed, %d left"), Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current);
+    return true;
+}
+void AOpenWillowWalker::ReleaseGrenade()
+{
+    GrenadeReleaseAt = 0.f;
+    if (!Camera || !GrenadeData.bLoaded) return;
+    // Live, same 4 Sky Rocket throws: first seen 84-110 uu ahead of the eye (up to one frame of flight included), about
+    // 20 uu to its left, along the aim at the projectile's speed. UNVERIFIED for the stock frag; any upward bonus is unsettled.
+    AOpenWillowProjectile::FLaunch Launch;
+    Launch.Data = &GrenadeData;
+    Launch.Shooter = this;
+    Launch.Start = Camera->GetComponentLocation() + Camera->GetForwardVector() * 80.f - Camera->GetRightVector() * 20.f;
+    Launch.Direction = Camera->GetForwardVector();
+    Launch.VisualStart = Launch.Start;
+    Launch.Damage = 0.f;   // a grenade's body deals no direct damage; its explosion does
+    Launch.SplashDamage = GrenadeData.Splash.Damage;
+    Launch.DamageType = GrenadeData.Splash.DamageType;
+    Launch.Element = OpenWillowHit::ElementName(OpenWillowHit::ElementOf(GrenadeData.Splash.DamageType));
+    Launch.WeaponId = TEXT("grenade:standard");
+    Launch.Color = FLinearColor(1.f, 0.7f, 0.3f);
+    UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade released: speed %.0f, fuse %.2f s, radius %.0f, damage %.1f"),
+        GrenadeData.ProjectileSpeed, GrenadeData.FuseTime, GrenadeData.Splash.Radius, GrenadeData.Splash.Damage);
+    AOpenWillowProjectile::Launch(GetWorld(), Launch);
+}
 void AOpenWillowWalker::StartReloadThrow(const FOpenWillowWeaponItem& Weapon)
 {
     // Tediore reload: the type's behaviour sequence throws the gun as a projectile (reload_throw). Measured live
@@ -1902,6 +1963,7 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
     ++OpenWillowFiring::Counts.HitKinds[uint8(E.Kind) & 3];
     if (E.Kind == EOpenWillowHitKind::StatusTick) ++OpenWillowFiring::Counts.TickWeapons.FindOrAdd(E.WeaponId);
     if (E.Source == EOpenWillowHitSource::Unknown) ++OpenWillowFiring::Counts.UnknownSources;
+    if (E.Source == EOpenWillowHitSource::Grenade) ++OpenWillowFiring::Counts.GrenadeHits;
     UE_LOG(LogTemp, Display, TEXT("OWFIRING hitevent %s %s on %s damage %.3f applied %.3f element %s crit %d momentum %.1f source %s"),
         OpenWillowHit::KindName(E.Kind), E.WeaponId.IsEmpty() ? TEXT("-") : *E.WeaponId, *Target->GetName(), E.Damage, Applied,
         OpenWillowHit::ElementName(E.Element), E.bCritical ? 1 : 0, float(E.Momentum.Size()), OpenWillowHit::SourceName(E.Source));

@@ -83,6 +83,11 @@ public:
     const FVector& ShotMomentum() const { return ShotMomentumInFlight; }
     // Phaselock from the action-skill manifest (-owactionskill=, default local/character/action_skill_siren.json).
     void UsePhaselock();
+    // Throws the grenade mod's grenade (tools/grenade_mod.py block, -owgrenade=<json>, default
+    // local/items/grenades/grenade_mod_standard_l8.json): one from the Grenade ammo pool, a falling projectile with the
+    // mod's speed, gravity, bounces, fuse and explosion. False when nothing was thrown (no data, no grenade, busy).
+    bool ThrowGrenade();
+    void ThrowGrenadeKey() { ThrowGrenade(); }
     // Whether a cast would start now; otherwise why not (not bought, cooldown, or the failing skill constraint).
     bool CanCastPhaselock(FString& OutReason) const;
     const FOpenWillowPhaselockData& GetPhaselockData() const { return Phaselock; }
@@ -457,6 +462,13 @@ private:
     // The accuracy pool and the view kick (OpenWillowFiring::TickAim / ShotAim / OnShot). Off in every scripted test or
     // capture mode (OpenWillowFiring::AimModelEnabled) unless -owaimmodel is given, so scripted shots keep their aim.
     FOpenWillowAimState AimState;
+    // The grenade mod's grenade (ThrowGrenade), loaded on first use; ThrowLockUntil holds the next throw back and
+    // GrenadeReleaseAt is when a pressed throw leaves the hand (0: none pending).
+    FOpenWillowFiringData GrenadeData;
+    bool bGrenadeTried = false;
+    float ThrowLockUntil = -100.f;
+    float GrenadeReleaseAt = 0.f;
+    void ReleaseGrenade();
     FRandomStream AimRng{0x41AC};
     bool bAimModel = true;
     FOpenWillowFiringState& FiringStateFor(const struct FOpenWillowWeaponItem& Weapon);

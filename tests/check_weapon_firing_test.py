@@ -295,9 +295,16 @@ class Cli(unittest.TestCase):
 
     def test_exit_codes(self):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
-                                  segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace')))
+                                  segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace'),
+                                  'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 splash_hits=1 splash=9.00 grenade_hits=1 '
+                                  'unknown_sources=0 after=0.50'))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
+        self.assertIn('grenade: PASS', out)
+        code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
+                                  segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace')))
+        self.assertEqual(code, 1, out)
+        self.assertIn('no OWFIRING grenade line', out)
         code, out = self.main(log(result('made_trace', direct='1.00')), '--guns', 'made_trace')
         self.assertEqual(code, 1, out)
         code, _ = self.main('no firing lines here\n', '--guns', 'made_trace')
@@ -311,6 +318,27 @@ def push(gun, rule=1000, last=1000, hits=5, pushes=5, moved=0.4):
 
 def wide(gun, line_hits=0, box_hits=1):
     return f'LogTemp: Display: OWFIRING wide id={gun} offset=40.0 half=24.0 line_hits={line_hits} box_hits={box_hits}'
+
+
+class GrenadeLine(unittest.TestCase):
+    GOOD = {'thrown': '1', 'ammo_before': '3', 'ammo_after': '2', 'splash_hits': '1', 'splash': '100.00',
+            'grenade_hits': '1', 'unknown_sources': '0', 'after': '0.50'}
+
+    def test_good_line_passes(self):
+        self.assertEqual(check.check_grenade(dict(self.GOOD)), [])
+
+    def test_read_from_the_log(self):
+        extra = {}
+        check.read_log('LogTemp: Display: OWFIRING grenade ' + ' '.join(f'{k}={v}' for k, v in self.GOOD.items()) + '\n', extra)
+        self.assertEqual(extra['grenade']['thrown'], '1')
+
+    def test_failures(self):
+        self.assertTrue(check.check_grenade(None))
+        self.assertTrue(check.check_grenade(dict(self.GOOD, thrown='0')))
+        self.assertTrue(check.check_grenade(dict(self.GOOD, ammo_after='3')))
+        self.assertTrue(check.check_grenade(dict(self.GOOD, splash_hits='0', grenade_hits='0')))
+        self.assertTrue(check.check_grenade(dict(self.GOOD, grenade_hits='0')))
+        self.assertTrue(check.check_grenade(dict(self.GOOD, unknown_sources='1')))
 
 
 class Momentum(unittest.TestCase):

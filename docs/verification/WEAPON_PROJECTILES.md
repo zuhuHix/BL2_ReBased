@@ -74,7 +74,7 @@ Ice_P, Maya with her skills switched off in memory, saving blocked, saves byte-i
 | A hit changes the target's velocity by momentum / `Mass` (`Default__Pawn.Mass` 100, Engine.upk); the target then slides, slowed by `GroundFriction` 8 (`Default__PhysicsVolume`) | stock UE3 pawn rule + data | UNVERIFIED: the host applies the friction as v x (1 - 8 dt) per frame, a stand-in for the game's walking physics |
 | Wide bullets: a firing mode's `TraceExtent` makes the shot a box sweep instead of a line (light bullets each tick and traces); rockets stay lines | native 2.2 + data | read only; none of the 28 local recipes has an extent, so the in-engine check uses a host-chosen 24 uu box |
 | A trace or light-bullet firing mode's own `Behavior_Explode` (in `OnAnyImpact`) runs at every impact that is not a pass-through actor, after the bullet's `TakeDamage`; radius, damage formula, momentum and falloff are the behaviour's; `ExplosionOverrideDefinition` (an `ExplosionCollectionDefinition`, first entry whose `WeaponDamage_Is_<element>` condition holds, chosen once at weapon setup) only picks the explosion definition and so the damage type | native read 2026-11-03 (section 8) + data | the Maliwan shock pistol's value **matches live**: 45.30 x 0.8 = 36.24, falloff off, on the same bullymong; every other part UNVERIFIED in game |
-| Status chance x the level-difference scale (`GD_Globals.General.Globals.StatusEffectChanceScales`): row = min(difference, 6); shooter higher -> `HigherLevelChanceScale` (x2.0 at 6+), lower -> `LowerLevelChanceScale` (x0 at 6+) | data | UNVERIFIED. **Equal levels did not give x1** (2026-11-03: 18 of 43 bullet procs against a 23.4 % card chance, section 10). The profile's Badass Rank, or a skill, is the likely extra factor, so the x2 against level-7 targets is not evidence for the level scale either; a skills-off rerun is queued |
+| Status chance x the level-difference scale (`GD_Globals.General.Globals.StatusEffectChanceScales`): row = min(difference, 6); shooter higher -> `HigherLevelChanceScale` (x2.0 at 6+), lower -> `LowerLevelChanceScale` (x0 at 6+) | data | UNVERIFIED. **Equal levels did not give x1** (2026-11-03: 18 of 43 bullet procs against a 23.4 % card chance, section 10). x1 at equal levels is consistent with a skills-off run (8 of 42, small sample, different class, section 13); the mechanism behind the skills-on ~x2 is UNVERIFIED; the higher-level scale is unmeasured |
 
 ## 4. The host (what it does and where it stands in for the game)
 
@@ -368,7 +368,7 @@ balance `Pistol_Maliwan_2_Fire`, since a mission balance cannot be readied outsi
 level was set in memory to Maya's (6 -> 8, `SetExpLevel`). `RollChanceForStatusEffect` ran 86 times: 43 for bullet hits and 43
 for the firing mode's impact explosion. `ApplyStatusEffect` followed 18 bullet rolls (42 %) and 23 explosion rolls (53 %). The
 card's flesh chance is 23.4 %. At equal levels the level-difference scale is 1, so if it were the only missing factor (section
-3) about 10 bullet procs would be expected; 18 is 2.8 standard deviations above that. **The x1 prediction is not supported.**
+3) about 10 bullet procs would be expected; 18 is 2.8 standard deviations above that. **The x1 prediction is not supported with skills on; see section 13 for skills off.**
 The proc rate is again about twice the card chance, as it was against a level-7 target. Maya's skills were active in this save,
 so a skill's instigated status-chance modifier can't be ruled out. The cause of the x2 stays UNVERIFIED. The host keeps the
 data's level-difference scale and the card chance; a skills-off rerun would settle it.
@@ -412,3 +412,55 @@ rocket trails. It is data and host code; no live session was used, and the look 
 - **Not done here.** The tracer's look: the cooked tracer colour is multiplied by a texture the host does not have, so lane E's
   tracer look and gate stay. Per-surface impact effects (`WeaponImpact`, `ImpactEffect`); the element tracer collections
   (`ConditionalPartSysTemplate`); grenades. The matched-frame critic round for this look is pending the hub's frame capture.
+
+## 12. Grenades: the stock grenade mod on the grenade key (2026-11-06, slice projectiles lane)
+
+AI-assisted (Claude; the data tool by a Claude Haiku sub-agent, reviewed). **The stock frag has not been thrown live yet.** One
+session (2026-11-06, `tools/real_game/projectiles_capture.ps1 -StatusOnly -NoSkills -Grenades`; saves and config restored and
+hash-compared) threw 4 grenades, but the save's equipped mod is the Sky Rocket (`Grenade_SkyRocket`), a different grenade.
+
+- **Measured on the Sky Rocket; UNVERIFIED for the frag.** The projectile is first seen 0.52-0.53 s after `ThrowGrenade` (4 of 4);
+  `GrenadeThrowComplete` comes 1.04-1.19 s after it. The launch speed was 1694-1701 uu/s, and the frag's `SpeedFormula` has the
+  same 1700. First seen 84-110 uu ahead of the eye (up to a frame of flight included), about 20 uu to its left, -1 to +15 uu
+  vertically. Two throws flew along the aim; two show about 16 degrees up, but the aim was tracking a moving target and the
+  probe's view read failed, so an upward bonus is not settled. The Sky Rocket's own fuse, damage, radius and children are not
+  recorded here because they say nothing about the frag.
+
+- **Script (read, in our own words).** `WillowPlayerController.ThrowGrenade` needs the weapon to be able to act and a
+  grenade to spend (`CanThrowGrenade`: not while downed, unless an attribute allows it). It then plays the body's throw special
+  move and runs it as a shared weapon action with the completion `GrenadeThrowComplete`, which only clears the throwing flag.
+  Without a grenade it notifies "out of grenades". The projectile's release is not in those script functions (an animation
+  notify or a native is the suspect), so its point and timing are for the live read.
+- **Data.** `tools/grenade_mod.py` resolves `GD_GrenadeMods.A_Item.GrenadeMod_Standard` with one part per list (default: the first
+  of each) at a level into a block under ignored `local/items/grenades/`: `Grenade_DefaultFrag`'s speed, gravity scale and
+  bounces, the radius (the explosion's formula plus the BlastRadius slot), the damage (`Init_ProjectileDamage` x the projectile's
+  scale x the Damage slot), the element and the explosion bands. Its own `unverified` list names each inferred rule.
+- **Fuse: open.** The default Trigger part gives the FuseTime slot a total of 0, while the projectile's behaviours hold two
+  timers (a shorter and a longer delay). Which one detonates needs a live throw of the frag itself. The block's fuse is
+  therefore 0, which the host reads as "no fuse": until then the grenade bursts on the impact after its bounces.
+- **Host.** `AOpenWillowWalker::ThrowGrenade` (key G, `OWGrenade`) spends one grenade from the Grenade ammo pool and launches
+  a falling projectile with the block's values 0.52 s later, from 80 uu ahead of the eye and 20 uu to its left, along the view;
+  a 1.05 s lockout covers the throw. Its explosion uses the section 11 bands and the hit source `Grenade`. **UNVERIFIED for the
+  frag:** that release delay, lockout and offset (all from the Sky Rocket), the damage, radius and bounces (from the data, not
+  seen live), and spending the grenade at the press. **Stand-ins:** no throw animation; no upward bonus; the falloff is the class
+  default. A throw needs a closed menu, an active Maya and Maya not down (the script's `CanThrowGrenade`; the attribute that allows
+  it while down is not modelled).
+- **Test.** After the last gun the firing test throws one grenade at the dummy and logs `OWFIRING grenade`.
+  `tools/check_weapon_firing.py` requires it to have been thrown, to have spent one grenade and to have hit the dummy, with
+  every hit counted as Source Grenade (`--legacy` skips this for older logs). `tools/test_weapon_firing.ps1` generates the block
+  when it is missing. Synthetic tests: `tests/grenade_mod_test.py` (CTest `grenade-mod-synthetic`).
+
+## 13. The status chance at equal levels, skills off (2026-11-06, slice projectiles lane)
+
+AI-assisted (Claude). Same session as section 12. The Maliwan fire pistol at a bullymong whose level was set in memory to Maya's
+(5 -> 8), after `fp3_no_skills`. **x1 at equal levels is consistent with this run:** fire took on 8 of 42 gun rolls (19 %; bullet
+6 of 21, impact explosion 2 of 21) against the card's flesh 23.4 %; at least 8 has probability 0.80 at 23.4 %, at most 8 has
+probability 0.0002 at twice that. It is a small sample, against a different class (`CharClass_PrimalBeast_Ranged`; the skills-on
+run used `CharClass_PrimalBeast`). The target also stood in environmental damage areas that applied `Status_Shock` 358 times;
+those rolls are not counted, and whether they affect the fire rolls is not known.
+
+**The mechanism behind the skills-on ~x2 (41 of 86, section 10) stays UNVERIFIED.** The state did change: the gun's damage stack
+held Badass Rank's +1.0175 in that run and is empty in this one. But the controller's five `Instigated*StatusChanceModifier`
+fields read 1.0 both before and after skills were switched off, so the factor is not in those fields; `fp3_no_skills` also
+listed no active skills before it ran, so its list cannot name the cause. **The higher-level scale (x2 at 6+ levels) is
+unmeasured:** the older x2 against level-7 targets is no evidence for it, since that profile's skills were on.

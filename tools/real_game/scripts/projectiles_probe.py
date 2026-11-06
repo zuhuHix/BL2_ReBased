@@ -134,3 +134,132 @@ def pj_fields():
                     out[label + "." + prop.Name] = "<%s>" % type(error).__name__
     _write_json(_out("projectiles") / ("fields_%d.json" % int(time.time())), out)
     return out
+
+
+# ---------------------------------------------------------------- grenades and status-chance inputs (2026-11-04)
+#
+#   pj_grenade_mod()       the equipped grenade mod: definition, balance, parts, and the GrenadeDamage /
+#                          projectile-related attributes the item exposes (to compare with tools/grenade_mod.py).
+#   pj_grenade_start(tag)  per frame: every live WillowProjectile (path, definition, location, velocity), plus each
+#                          ThrowGrenade / ClientThrowGrenade / GrenadeThrowComplete call with the game clock, and the
+#                          view (location, rotation) at each call: spawn point, launch velocity, release delay, fuse.
+#   pj_grenade_stop()      remove the hooks and write <RG_OUT>/projectiles/<tag>.json.
+#   pj_status_mods()       the controller's instigated status-chance modifiers (general and per element), read
+#                          before a status run; with fp3_no_skills() first, the skills-off values.
+
+PJ_GRENADE_HOOKS = (
+    ("WillowGame.WillowPlayerController:ThrowGrenade", "throw"),
+    ("WillowGame.WillowPlayerController:ClientThrowGrenade", "client_throw"),
+    ("WillowGame.WillowPlayerController:GrenadeThrowComplete", "throw_complete"),
+)
+PJ_STATUS_MODS = ("InstigatedStatusEffectStatusChanceModifier", "InstigatedIncendiaryStatusChanceModifier",
+                  "InstigatedCorrosiveStatusChanceModifier", "InstigatedShockStatusChanceModifier",
+                  "InstigatedAmpStatusChanceModifier")
+pj_gstate = globals().setdefault("pj_gstate", {"tag": None, "frames": [], "calls": [], "hooks": [], "cap": 100000})
+
+
+def _pj_view(pc):
+    try:
+        pov = pc.PlayerCamera.CameraCache.POV
+        return {"loc": [pov.Location.X, pov.Location.Y, pov.Location.Z], "rot": _pj_rot(pov.Rotation), "fov": pov.FOV}
+    except Exception as error:
+        return {"error": repr(error)[:120]}
+
+
+def _pj_grenade_frame(*_args):
+    if pj_gstate["tag"] is None or len(pj_gstate["frames"]) >= pj_gstate["cap"]:
+        return
+    rows = []
+    for proj in unrealsdk.find_all("WillowProjectile", exact=False):
+        try:
+            if proj.bDeleteMe:
+                continue
+            loc, vel = proj.Location, proj.Velocity
+            rows.append({"path": proj._path_name(), "def": deep(getattr(proj, "Definition", None)),
+                         "loc": [loc.X, loc.Y, loc.Z], "vel": [vel.X, vel.Y, vel.Z]})
+        except Exception:
+            continue
+    if rows:
+        pj_gstate["frames"].append({"t": _game_t(), "projectiles": rows})
+
+
+def _pj_grenade_call(kind):
+    def callback(obj, args, ret, func):
+        if pj_gstate["tag"] is None:
+            return
+        row = {"kind": kind, "t": _game_t(), "view": _pj_view(get_pc())}
+        for prop in args._type._properties():
+            try:
+                row[prop.Name] = deep(getattr(args, prop.Name))
+            except Exception:
+                continue
+        pj_gstate["calls"].append(row)
+    return callback
+
+
+def pj_grenade_start(tag):
+    pj_grenade_stop(write=False)
+    pj_gstate.update({"tag": str(tag), "frames": [], "calls": [], "hooks": []})
+    add_hook(WP2_TICK, Type.POST, PJ_ID + "_gtick", _safe(lambda o, a, r, f: _pj_grenade_frame()))
+    pj_gstate["hooks"].append((WP2_TICK, "_gtick"))
+    for path, kind in PJ_GRENADE_HOOKS:
+        for when, suffix in ((Type.PRE, "_pre"), (Type.POST, "_post")):
+            try:
+                add_hook(path, when, PJ_ID + "_g" + kind + suffix, _safe(_pj_grenade_call(kind + suffix)))
+                pj_gstate["hooks"].append((path, "_g" + kind + suffix, when))
+            except Exception as error:
+                pj_gstate["calls"].append({"kind": "hook_error", "path": path, "error": repr(error)[:160]})
+    return {"tag": tag, "hooks": len(pj_gstate["hooks"])}
+
+
+def pj_grenade_stop(write=True):
+    for entry in pj_gstate.get("hooks", []):
+        path, suffix = entry[0], entry[1]
+        when = entry[2] if len(entry) > 2 else Type.POST
+        try:
+            remove_hook(path, when, PJ_ID + suffix)
+        except Exception:
+            pass
+    pj_gstate["hooks"] = []
+    tag, pj_gstate["tag"] = pj_gstate.get("tag"), None
+    result = {"tag": tag, "frames": len(pj_gstate["frames"]), "calls": len(pj_gstate["calls"])}
+    if write and tag:
+        _write_json(_out("projectiles") / (tag + ".json"), {"frames": pj_gstate["frames"], "calls": pj_gstate["calls"]})
+    return result
+
+
+def pj_grenade_mod():
+    pc, pawn = _get_pawn()
+    # The equipped mod sits on the inventory manager's item chain (Inventory -> NextItem), not in the backpack list.
+    inv = pc.GetPawnInventoryManager()
+    mod = _safe_call(pc, "GetCurrentGrenadeMod")
+    mod = None if isinstance(mod, str) else mod
+    item = getattr(inv, "ItemChain", None)
+    while item is not None and mod is None:
+        if item.Class.Name == "WillowGrenadeMod":
+            mod = item
+        item = getattr(item, "Inventory", None)
+    if mod is None:
+        return {"grenade_mod": None}
+    out = {"grenade_mod": _path(mod), "definition_data": deep(getattr(mod, "DefinitionData", None)),
+           "equipped": deep(getattr(mod, "bEquipped", None))}
+    for prop in mod.Class._properties():
+        name = prop.Name
+        if any(t in name for t in ("Grenade", "Damage", "Radius", "Fuse", "Projectile")) and not name.endswith("ModifierStack"):
+            try:
+                out[name] = deep(getattr(mod, name))
+            except Exception:
+                continue
+    _write_json(_out("projectiles") / ("grenade_mod_%d.json" % int(time.time())), out)
+    return {k: out[k] for k in ("grenade_mod", "equipped")}
+
+
+def pj_status_mods():
+    pc = get_pc()
+    out = {}
+    for name in PJ_STATUS_MODS:
+        try:
+            out[name] = deep(getattr(pc, name))
+        except Exception as error:
+            out[name] = "<%s>" % type(error).__name__
+    return out

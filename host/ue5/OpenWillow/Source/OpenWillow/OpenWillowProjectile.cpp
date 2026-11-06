@@ -115,6 +115,14 @@ void AOpenWillowProjectile::Tick(float DeltaSeconds)
         Impact(Hit);
         return;
     }
+    // A grenade's fuse: it explodes where it is once the fuse time has passed since the launch.
+    if (Data.FuseTime > 0.f && Flight.age >= Data.FuseTime)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING fuse %s after %.2f s at (%.0f %.0f %.0f)"), *Data.FiringMode, float(Flight.age), To.X, To.Y, To.Z);
+        if (Data.Splash.bValid) Explode(GetWorld(), Shooter.Get(), Data, To, FVector::UpVector, SplashDamage, WeaponId, SourceOfThis());
+        Destroy();
+        return;
+    }
     if (Flight.age >= MaxAge)
     {
         UE_LOG(LogTemp, Display, TEXT("OWFIRING expired %s after %.2f s at (%.0f %.0f %.0f)"),
@@ -312,10 +320,15 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
     // Bullets whose firing mode carries a Behavior_Explode (gyrojets) explode where they hit; a rocket explodes when its
     // projectile definition has a Detonate behaviour (explode_on_impact).
     if (Data.Splash.bValid && (!bRocket || Data.bExplodeOnImpact))
-        Explode(GetWorld(), Shooter.Get(), Data, Hit.ImpactPoint, Hit.ImpactNormal, SplashDamage, WeaponId,
-            Data.FiringMode == TEXT("reload_throw") ? EOpenWillowHitSource::Throw
-            : bRocket ? EOpenWillowHitSource::Rocket : EOpenWillowHitSource::Explosion);
+        Explode(GetWorld(), Shooter.Get(), Data, Hit.ImpactPoint, Hit.ImpactNormal, SplashDamage, WeaponId, SourceOfThis());
     Destroy();
+}
+
+EOpenWillowHitSource AOpenWillowProjectile::SourceOfThis() const
+{
+    if (Data.FiringMode == TEXT("reload_throw")) return EOpenWillowHitSource::Throw;
+    if (Data.FiringMode == TEXT("grenade")) return EOpenWillowHitSource::Grenade;
+    return bRocket ? EOpenWillowHitSource::Rocket : EOpenWillowHitSource::Explosion;
 }
 
 void AOpenWillowProjectile::Explode(UWorld* World, AOpenWillowWalker* Shooter, const FOpenWillowFiringData& Data,
