@@ -77,6 +77,11 @@ function Wait-Ready([double]$Timeout = 40) {
 }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
+$snapshots = @{}
+$stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
+$stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
+$log.status = 'running'; $log.requested_stages = $stagesRequested
+function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false
 # A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the
 # image path and the start time before stopping a PID). Unknown switches are ignored by the game.
@@ -99,7 +104,11 @@ try {
     Enter-RunLock 1800; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     # The SDK's settings and Sanity Saver's private store are compared too (an earlier session saw Sanity Saver rewrite one).
-    foreach ($d in $extraRoots.Keys) { if (Test-Path $extraRoots[$d]) { Copy-Item -Recurse $extraRoots[$d] (Join-Path $bak $d) } }
+    # A root is marked usable only after its copy compares identical; cleanup never restores from any other.
+    foreach ($d in 'SaveData', 'Config') { Assert-SnapshotMatches (Join-Path $script:WillowDir $d) (Join-Path $bak $d); $snapshots[$d] = 'verified' }
+    foreach ($d in $extraRoots.Keys) {
+        if (Test-Path -LiteralPath $extraRoots[$d]) { New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d); $snapshots[$d] = 'verified' } else { $snapshots[$d] = 'absent' }
+    }
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
     Install-Driver -BlockSavesAtStart -Exclusive
@@ -126,7 +135,8 @@ try {
     Start-Sleep 8
     foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") phaselock_integrity | Out-Null }
 
-    for ($i = 0; $i -lt 8 -and !$target; $i++) {
+    # The exact Adult or nothing: a variant has its own archetype, attachments and material, so its reads would answer another question.
+    for ($i = 0; $i -lt 24 -and !$target; $i++) {
         $pick = Py @'
 import json
 rows = []
@@ -135,19 +145,21 @@ for d, n, c, dead in list_ai():
     cls = p.AIClass._path_name() if p.AIClass else ""
     radius = p.CylinderComponent.CollisionRadius if p.CylinderComponent else 0
     rows.append({"name": n, "dist": d, "class": cls.split(".")[-1], "radius": radius, "dead": dead, "ctrl": p.Controller is not None})
-ok = [r for r in rows if not r["dead"] and r["ctrl"] and "PrimalBeast" in r["class"] and r["radius"] >= 120]
-ok.sort(key=lambda r: pi_target_rank(r["class"], r["dist"]))
-print(json.dumps({"pick": ok[0]["name"] if ok else None, "pick_class": ok[0]["class"] if ok else None, "rows": rows[:30]}))
+pick = pi_pick_target(rows)
+print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["class"] if pick else None, "rows": rows[:30]}))
 '@
         $res = $pick | ConvertFrom-Json; $log.candidates = $res.rows; $target = $res.pick
         if (!$target) { Start-Sleep 5 }
     }
-    if (!$target) { throw "no adult bullymong: $pick" }
-    $log.target = $target; $log.target_class = $res.pick_class; "target $target ($($res.pick_class))"
+    if (!$target) { throw "no live CharClass_PrimalBeastAdult after 2 minutes of polling: $pick" }
+    $liveClass = Py "print(ai_pawn('$target').AIClass._path_name().split('.')[-1])"
+    if ($liveClass -ne 'CharClass_PrimalBeastAdult') { throw "target $target is $liveClass, not the Adult" }
+    $log.target = $target; $log.target_class = $liveClass; "target $target ($liveClass)"
     $log.discover = Py 'import json; print(json.dumps(pi_discover(), default=str))' | ConvertFrom-Json
     # pi_flags() (CanPhaseLockTarget called from Python for every pawn) got no reply on 2026-11-02 and the session was lost; the
     # cast's own CanPhaseLockTarget result is marked by mark_lock() instead.
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+    Set-Stage 'discover' ($null -ne $log.discover) 'no discovery reply'
     if ($ProbeOnly) { return }
 
     function Set-Up([string]$Label) {
@@ -165,6 +177,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "pick_class": ok[0]["cl
         $result = $null
         for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
             $name = if ($attempt -eq 1) { $Label } else { "${Label}_try$attempt" }
+            $log["${Label}_attempt"] = $name
             $log["${name}_setup"] = Set-Up $name
             $log[$name] = Invoke-CastCapture "${name}_burst" $Before $After $Shots $IntervalMs $ActionAt $Action
             $result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
@@ -179,16 +192,19 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "pick_class": ok[0]["cl
     }
 
     # 1. Hit.
-    $null = Invoke-LiftCast 'hit' 1.0 8.0 $hostShots 50 -1 $null
+    $hitResult = Invoke-LiftCast 'hit' 1.0 8.0 $hostShots 50 -1 $null
+    Set-Stage 'hit' (($hitResult.target_lifted -eq $true) -and (Test-CaptureComplete $log[$log.hit_attempt] $hostShots)) 'target not lifted, or frames or shots missing'
     $log.hit_ready = Wait-Ready 40
 
     # 2. Miss: look away and up at the sky (yaw + 180, pitch 60 degrees), since looking away level lifted a second bullymong on
     # 2026-11-06. Whether it really was a miss is in miss_result ("lifted" empty).
     Py "import json; isolate('$target'); pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=10922, Yaw=(pc.Rotation.Yaw + 32768) & 0xFFFF, Roll=0); print(json.dumps(pi_start('miss', '$target'), default=str))" | Out-Null
     Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
-    $log.miss = Invoke-CastCapture 'miss_burst' 0.5 3.0 @{ 'miss-0.20' = 0.2; 'miss-0.40' = 0.4; 'miss-0.70' = 0.7 }
+    $missShots = @{ 'miss-0.20' = 0.2; 'miss-0.40' = 0.4; 'miss-0.70' = 0.7 }
+    $log.miss = Invoke-CastCapture 'miss_burst' 0.5 3.0 $missShots
     $log.miss_result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
     "miss: lifted '$($log.miss_result.lifted -join ',')' (empty is a real miss)"
+    Set-Stage 'miss' ((@($log.miss_result.lifted).Count -eq 0) -and (Test-CaptureComplete $log.miss $missShots)) 'a pawn was lifted, or frames or shots missing'
     Py 'pi_stop(); print("stopped")' | Out-Null
     $log.miss_ready = Wait-Ready 40
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
@@ -197,12 +213,17 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "pick_class": ok[0]["cl
     # needed: the rule under test is the end of the lock, not its length.
     if (!$SkipDown) {
         $injure = { Py "import json; protect_player(False); print(json.dumps(pi_injure('$target'), default=str))" 15 }
-        $null = Invoke-LiftCast 'down' 1.0 6.0 @{ 'down-1.90' = 1.9; 'down-2.50' = 2.5; 'down-3.50' = 3.5 } 100 2.0 $injure
-        "down: $($log.down.action)"
+        $downShots = @{ 'down-1.90' = 1.9; 'down-2.50' = 2.5; 'down-3.50' = 3.5 }
+        $downResult = Invoke-LiftCast 'down' 1.0 6.0 $downShots 100 2.0 $injure
+        "down: $($log[$log.down_attempt].action)"
+        Set-Stage 'down' (($downResult.target_lifted -eq $true) -and ($downResult.injure.injured -eq $true) -and (Test-CaptureComplete $log[$log.down_attempt] $downShots)) 'target not lifted, Maya not down, or frames or shots missing'
     }
     # The game may close before it answers this one (2026-11-06: the empty reply stopped the script after all the casts).
     try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
+} catch {
+    $runError = "$_"
+    throw
 } finally {
     # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: stop our game, and only once it
     # has exited remove our driver and restore and verify the saves and config; then write the logs and release the locks.
@@ -218,6 +239,10 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "pick_class": ok[0]["cl
             $proc.Refresh(); $gameGone = $proc.HasExited
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
+    $verifiedList = (@($snapshots.Keys | Where-Object { $snapshots[$_] -eq 'verified' }) | ForEach-Object { "'$_'" }) -join ', '
+    $restoreCommand = @"
+foreach (`$sub in $verifiedList) { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
+"@
     if (!$gameGone) {
         $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
         $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
@@ -226,7 +251,7 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
   1. Close Borderlands 2 yourself.
   2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
      Remove-Item -Recurse -Force '$script:DriverDir'
-     foreach (`$sub in 'SaveData', 'Config', 'sdk_settings', 'SanitySaver') { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
+     $restoreCommand
      Every row must read 'added, removed', 'missing, restored' or 'changed, restored'; a 'MISMATCH after restore' row means it failed.
   3. Then remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
 "@
@@ -238,32 +263,36 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
-    $rows = @()
+    $rows = @(); $holdLocks = $false
     if ($bak) {
         try {
             $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
             foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-            foreach ($sub in $roots.Keys) {
-                $b = Join-Path $bak $sub; $live = $roots[$sub]
-                try {
-                    if (Test-Path -LiteralPath $b) { $rows += @(Restore-Tree $b $live $sub) }
-                    elseif (Test-Path -LiteralPath $live) {
-                        # Absent at the backup and created during the run (an SDK mod's own store): reported, not deleted.
-                        $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' }
-                    }
-                } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
-            }
-            $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
-            $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
-        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)" }
+            $restored = Restore-VerifiedRoots $bak $roots $snapshots
+            $rows = @($restored.rows); $cleanup.saves = $restored.summary; $holdLocks = !$restored.clean
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $holdLocks = $true }
     }
     try {
+        $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
+        $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
         if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
     } catch { "log write failed: $_" }
+    # A failed restore keeps both locks, so no other run starts on files that still need recovery.
+    if ($holdLocks) { $runLock = $false; $hub = $null }
     try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
     try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
+    "status: $($log.status)"
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
     $rows
+    if ($holdLocks) {
+        @"
+MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both locks are held and the backup is kept at $bak.
+  1. Make sure Borderlands 2 is closed. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
+     $restoreCommand
+     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'; a 'MISMATCH after restore' row means it failed.
+  2. Only when no row reports a mismatch, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
+"@
+    }
 }
