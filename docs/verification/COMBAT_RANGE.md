@@ -152,7 +152,7 @@ clamped to the levels the manifest's tables cover (with a warning).
 sphere above it, else the enemy's feet. The range's own pickups expire after 60 s and its gun drops after 120 s (host choice); `ow.RangeClear`
 removes every drop with the range.
 
-**Known wrong: the money stand-in reads high.** At item level 7 it gives 9 per pickup, about 3 times the one live number on record (COMBAT_GOLDEN_TRACE.md item 8: three `Money_Little` pickups raised the cash by 9, so 3 each). It stays until a real-game read (`tools/real_game/cash_capture.ps1`) gives the value at more levels; one point would not give a rule, and only the range's own pickups use it.
+**Known wrong: the money stand-in reads high.** At item level 7 it gives 9 per pickup, about 3 times the one live number on record (COMBAT_GOLDEN_TRACE.md item 8: three `Money_Little` pickups raised the cash by 9, so 3 each). A real-game read is queued; the stand-in stays until that gives the value at more levels, since one point would not give a rule. Only the range's own pickups use it.
 
 `ow.RangeLoot normal|always|off`: `always` tries every weapon, money and ammo pool (for testing guns), `off` drops nothing. The range pickups (money,
 ammo) are engine-shape stand-ins collected on touch. Test steps: loot_roll, loot_money_pickup, loot_weapon_item (may SKIP without the weapon
