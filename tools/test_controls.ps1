@@ -9,8 +9,8 @@ param(
     [string[]]$Extra = @('-ddc=InstalledNoZenLocalFallback', '-d3d11')
 )
 # In-engine check of the player's keys (OpenWillowControls::TickTest, -owcontrolstest): presses each key through the player
-# controller's input path and prints each OWCONTROLS row and the summary. A pass says the host did this, not that it matches
-# the real game (docs/verification/CONTROLS.md).
+# controller's input path; tools/check_controls.py grades this run's log against the expected rows. A pass says the host did
+# this, not that it matches the real game (docs/verification/CONTROLS.md).
 # Needs the slice manifests test_quest.ps1 uses and local/ui/run/missionlog.json (tools/prepare_mission_log.py).
 # Exit codes: 0 all PASS; 1 a FAIL; 2 no summary (launch/timeout). Owns one editor and the machine-wide UE run lock
 # (tools/ue_lock.ps1); never touches another editor; stops only the editor and server it started.
@@ -31,9 +31,7 @@ $gear = & $path 'gear'
 $gearLevel = [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level
 $outDir = Join-Path $repo 'local/menus/controls'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$log = Join-Path $outDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
 $save = Join-Path $outDir 'save.json'
-if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 # --- lock: the machine-wide UE run lock (tools/ue_lock.ps1; waits while any editor runs), released in finally ---
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $exitCode = 2
@@ -41,6 +39,9 @@ $process = $null
 $server = $null
 Enter-OwUeLock -Owner 'test_controls' -TimeoutSeconds $LockWaitSeconds -PollSeconds 5
 try {
+    # A fresh log per run, named after the lock is held, so a run can only read its own lines.
+    $log = Join-Path $outDir ("run-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID-$([guid]::NewGuid().ToString('N').Substring(0, 8)).log")
+    if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
     $url = "http://127.0.0.1:$Port/"
     $pages = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'hud_overlay')).Path
     try { $running = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 $url } catch { $running = $null }
@@ -73,15 +74,11 @@ try {
         }
     }
     if ($summary) { [void]$process.WaitForExit(20000) }
-    $text = if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Raw } else { '' }
-    foreach ($m in [regex]::Matches($text, 'OWCONTROLS (\S+) (PASS|FAIL) (.*)')) {
-        Write-Output ('{0,-5} {1,-14} {2}' -f $m.Groups[2].Value, $m.Groups[1].Value, $m.Groups[3].Value.Trim())
-    }
-    if ($summary) {
-        Write-Output "OWCONTROLS SUMMARY $summary"
-        $exitCode = if ($summary -match 'failed=0') { 0 } else { 1 }
-    } else {
+    if (!$summary) {
         Write-Output "OWCONTROLS SUMMARY result=FAIL reason=$(if ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
+    } else {
+        & python (Join-Path $PSScriptRoot 'check_controls.py') $log
+        $exitCode = if ($LASTEXITCODE -eq 0) { 0 } else { 1 }
     }
     Write-Output "Log: $log"
 } finally {

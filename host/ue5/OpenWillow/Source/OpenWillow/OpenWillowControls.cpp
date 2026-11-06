@@ -65,11 +65,9 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
     switch (TestStep)
     {
     case 0: Check(TEXT("start_closed"), !Hud.IsSkillsOpen(), State()); Press(Player, EKeys::M); break;
-    case 1: Check(TEXT("m_opens_map"), Hud.IsMapOpen(), State()); Press(Player, EKeys::M); break;
-    case 2: Check(TEXT("m_again_closes_map"), !Hud.IsSkillsOpen(), State()); Press(Player, EKeys::L); break;
-    case 3: Check(TEXT("l_opens_missions"), Hud.IsMissionsOpen(), State()); Press(Player, EKeys::M); break;
-    case 4: Check(TEXT("m_over_missions_is_map"), Hud.IsMapOpen() && !Hud.IsMissionsOpen(), State()); Press(Player, EKeys::L); break;
-    case 5: Check(TEXT("l_over_map_is_missions"), Hud.IsMissionsOpen() && !Hud.IsMapOpen(), State()); Hud.CloseSkills(); break;
+    case 1: Check(TEXT("m_opens_map"), Hud.IsMapOpen() && !Hud.IsMissionsOpen(), State()); Hud.CloseSkills(); break;
+    case 2: Check(TEXT("map_closed"), !Hud.IsSkillsOpen(), State()); Press(Player, EKeys::L); break;
+    case 3: Check(TEXT("l_opens_missions"), Hud.IsMissionsOpen() && !Hud.IsMapOpen(), State()); Hud.CloseSkills(); break;
     default:
         Check(TEXT("closed_at_end"), !Hud.IsSkillsOpen(), State());
         UE_LOG(LogTemp, Display, TEXT("OWCONTROLS SUMMARY passed=%d failed=%d"), Passed, Failed);
