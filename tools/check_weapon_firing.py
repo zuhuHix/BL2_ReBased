@@ -254,11 +254,21 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
     return fails
 
 
+def finite(line, key):
+    """A grenade line field as a finite number, or None when it is missing or not one."""
+    try:
+        value = float(line[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def check_grenade(line):
     """The firing test's one grenade at the dummy, thrown by pressing G (OWFIRING grenade): it was thrown, took one grenade
     from the pool, has positive damage, exploded on the dummy with positive damage and no falloff, its first contact started
-    the fuse it then exploded on, every splash hit is a hit event with Source Grenade, and with the pool emptied a second
-    press is refused."""
+    the fuse it then exploded on, the dummy (not only a hit count: an invulnerable target records hits) lost health or died
+    during the throw, every splash hit is a hit event with Source Grenade, and with the pool emptied a second press is
+    refused."""
     if line is None:
         return ['no OWFIRING grenade line (the grenade check did not run)']
     fails = []
@@ -274,11 +284,21 @@ def check_grenade(line):
     expected = float(line.get('damage') or 0) * int(line['splash_hits'])
     if abs(float(line.get('splash') or 0) - expected) > 0.01 * max(expected, 1.0):
         fails.append(f"the grenade's splash {line.get('splash')} is not its full damage ({expected:.2f}): it has no falloff")
-    contact, fuse = float(line.get('contact_age', -1)), float(line.get('fuse_age', -1))
-    if contact < 0 or fuse < 0:
-        fails.append(f'no grenade contact or fuse explosion (contact_age={contact}, fuse_age={fuse})')
-    elif abs(fuse - contact - float(line.get('contact_fuse', 0))) > 0.2:
-        fails.append(f"the grenade exploded {fuse - contact:.2f} s after its first contact, its fuse is {line.get('contact_fuse')} s")
+    contact, fuse, contact_fuse = finite(line, 'contact_age'), finite(line, 'fuse_age'), finite(line, 'contact_fuse')
+    if contact_fuse is None or contact_fuse <= 0:
+        fails.append(f"the grenade's contact fuse is not a positive number ({line.get('contact_fuse')})")
+    elif contact is None or fuse is None or contact < 0 or fuse < 0:
+        fails.append(f"no grenade contact or fuse explosion (contact_age={line.get('contact_age')}, fuse_age={line.get('fuse_age')})")
+    elif abs(fuse - contact - contact_fuse) > 0.2:
+        fails.append(f'the grenade exploded {fuse - contact:.2f} s after its first contact, its fuse is {contact_fuse} s')
+    # The dummy's own health: a death counts (it respawns full, so the difference would not show it) only if it was alive.
+    dummy, before, after = line.get('dummy', 'the dummy'), finite(line, 'health_before'), finite(line, 'health_after')
+    if before is None or after is None or line.get('dummy_died') not in ('0', '1'):
+        fails.append(f"no health read for {dummy} (health_before={line.get('health_before')}, health_after={line.get('health_after')}, dummy_died={line.get('dummy_died')})")
+    elif before <= 0:
+        fails.append(f'{dummy} had no health before the throw ({before})')
+    elif line['dummy_died'] != '1' and not after < before:
+        fails.append(f'{dummy} lost no health to the grenade ({before} -> {after}) and did not die')
     if line.get('refused_empty') != '1':
         fails.append('a throw with an empty grenade pool was not refused')
     if int(line['splash_hits']) < 1:

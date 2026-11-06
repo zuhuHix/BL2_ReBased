@@ -480,7 +480,9 @@ parts.** Host suite evidence below is pending; a passing suite will mean "the ho
 
 - **The graph (read from the packages, tool: `tools/grenade_mod.py` `contact_rules`).** Hitting the world bounces at elasticity 0.4;
   hitting a damagable object bounces at 0.2. Either then passes a once-only gate and sets a 1.8 s timer. The spawn sets a 6 s
-  timer. Either timer running out detonates; no contact does. The explosion has `bDisableRadiusDamageFalloff`. The earlier block
+  timer. Either timer running out detonates; no contact does. Which event a timer fires is read from the pairing across the packages'
+  projectile graphs (28 read: an omitted `TimerId` with `Timer1`, `BTIMER_2` with `Timer2`, `BTIMER_3` with `Timer3`, no pairing against it;
+  not confirmed in the running game), and the tool refuses a graph where either timer's own event does not detonate. The explosion has `bDisableRadiusDamageFalloff`. The earlier block
   was wrong here: it counted the two Bounce behaviours as "2 bounces" and read the Detonate as an impact fuse.
 - **Confirmed live against that graph (4 of 4 throws, small sample).** No throw exploded on a contact: each hit a target's collision
   or something else without a `HitWall` at about 0.2 s (speed x 0.2, no `TakeDamage`), then touched the terrain 4 to 5 more times
@@ -501,7 +503,8 @@ parts.** Host suite evidence below is pending; a passing suite will mean "the ho
 - **The firing test's aim.** The first host run (at #115's f6fc289, pc-hummer) threw at the shapes dummy's centre and missed: about 180 uu
   up at the dummy, above its torso and 20 uu beside its head, then an explosion far past the radius. The fault was the test's, not the
   flight: it aimed as if there were no bonus, gravity or start offset. The test now aims where the lob meets the dummy and logs
-  `first_contact`, so a miss names what the grenade touched. That a player must lead a throw follows from this flight; the
+  `first_contact`, so a miss names what the grenade touched. It also logs the dummy's health around the throw: the checker requires a
+  decrease or a death on that dummy, because an invulnerable target records hits without losing health. That a player must lead a throw follows from this flight; the
   real pawn is larger than the shapes dummy.
 - **Host.** `ParseGrenade` takes elasticities, both timers and no-falloff from the block's `projectile.contact` and refuses a block
   without it. `AOpenWillowProjectile::Impact`: every contact bounces, a target takes no direct damage, the first contact starts the

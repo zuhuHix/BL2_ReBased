@@ -297,7 +297,7 @@ class Cli(unittest.TestCase):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace'),
                                   'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 damage=9.00 splash_hits=1 splash=9.00 grenade_hits=1 '
-                                  'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 after=0.50'))
+                                  'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 after=0.50'))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
         self.assertIn('grenade: PASS', out)
@@ -322,7 +322,8 @@ def wide(gun, line_hits=0, box_hits=1):
 
 class GrenadeLine(unittest.TestCase):
     GOOD = {'thrown': '1', 'ammo_before': '3', 'ammo_after': '2', 'refused_empty': '1', 'damage': '100.00', 'splash_hits': '1', 'splash': '100.00',
-            'grenade_hits': '1', 'unknown_sources': '0', 'contact_age': '0.20', 'fuse_age': '2.00', 'contact_fuse': '1.80', 'first_contact': 'Dummy_0', 'after': '0.50'}
+            'grenade_hits': '1', 'unknown_sources': '0', 'contact_age': '0.20', 'fuse_age': '2.00', 'contact_fuse': '1.80', 'first_contact': 'Dummy_0',
+            'dummy': 'Dummy_0', 'health_before': '500.00', 'health_after': '400.00', 'dummy_died': '0', 'after': '0.50'}
 
     def test_good_line_passes(self):
         self.assertEqual(check.check_grenade(dict(self.GOOD)), [])
@@ -350,6 +351,36 @@ class GrenadeLine(unittest.TestCase):
     def test_a_miss_names_what_the_grenade_touched(self):
         reasons = check.check_grenade(dict(self.GOOD, splash_hits='0', grenade_hits='0', splash='0.00', first_contact='Floor_7'))
         self.assertTrue(any('splashed nothing' in reason and 'Floor_7' in reason for reason in reasons), reasons)
+
+    def test_contact_fuse_is_required(self):
+        # An immediate contact explosion: both ages equal, which a missing field read as 0 would have passed.
+        immediate = dict(self.GOOD, contact_age='0.20', fuse_age='0.20')
+        del immediate['contact_fuse']
+        self.assertTrue(any('contact fuse' in reason for reason in check.check_grenade(immediate)))
+        for bad in ('0.000', '-1.000', 'nan', 'inf', 'x'):
+            line = dict(self.GOOD, contact_age='0.20', fuse_age='0.20', contact_fuse=bad)
+            self.assertTrue(any('contact fuse' in reason for reason in check.check_grenade(line)), bad)
+
+    def test_non_finite_ages_fail(self):
+        for field in ('contact_age', 'fuse_age'):
+            self.assertTrue(check.check_grenade(dict(self.GOOD, **{field: 'nan'})), field)
+
+    def test_the_dummy_must_lose_health(self):
+        reasons = check.check_grenade(dict(self.GOOD, health_after='500.00'))
+        self.assertTrue(any('Dummy_0' in reason and 'lost no health' in reason for reason in reasons), reasons)
+        self.assertTrue(check.check_grenade(dict(self.GOOD, health_after='501.00')))
+
+    def test_a_dummy_that_died_and_respawned_passes(self):
+        self.assertEqual(check.check_grenade(dict(self.GOOD, health_after='500.00', dummy_died='1')), [])
+
+    def test_a_dummy_dead_before_the_throw_fails(self):
+        self.assertTrue(check.check_grenade(dict(self.GOOD, health_before='0.00', health_after='0.00', dummy_died='1')))
+
+    def test_missing_health_fields_fail(self):
+        for field in ('health_before', 'health_after', 'dummy_died'):
+            line = dict(self.GOOD)
+            del line[field]
+            self.assertTrue(any('no health read' in reason for reason in check.check_grenade(line)), field)
 
     def test_falloff_fails(self):
         self.assertTrue(any('falloff' in reason for reason in check.check_grenade(dict(self.GOOD, splash='60.00'))))
