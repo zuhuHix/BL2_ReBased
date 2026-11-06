@@ -185,14 +185,17 @@ module or dependency). Without the option nothing changes.
 A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state, attenuation or ducking: every sound is 2D at full
 volume. Dialog is not hooked; the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.
 
-Refused by both the host and the prepare tool, with the same rules: a RIFF size past the file or a chunk past the RIFF size, partial sample frames, anything but 16-bit
+Refused by both the host and the prepare tool, with the same rules, after walking the whole declared RIFF: a RIFF size past the file, a chunk past the RIFF size (also after
+`data`), a partial chunk at its end, more than one `fmt` or `data`, partial sample frames, anything but 16-bit
 PCM mono or stereo, rates outside 8..96 kHz, a file over 64 MB, and a map over 256 MB in all (host choices; a test keeps the two sides' limits equal). Without
 `-owaudioplay` no delegate is bound, nothing is read, and a hook costs one flag test. When game sound arrives the flag is meant to become "a map was given or found at its
 prepared path", so a prepared machine has sound by default and an unprepared one stays silent.
 
-Test: `python tools/prepare_slice_audio.py --tone-only`, then `tools/test_audio.ps1` (`-owaudiotest`, a synthetic tone through the real path, 16 named rows).
-`tools/check_audio.py` grades that run's own log: each expected row exactly once and PASS, the tone's play line, the mixer row's own numbers, and a summary with matching
-counts. Its strongest check is that the mixer pulled every queued byte (`mixer_pulled_all_bytes`). That still says nothing about what a person hears. `OWAUDIO play` means
+Test: `python tools/prepare_slice_audio.py --tone-only`, then `tools/test_audio.ps1` (`-owaudiotest`, a synthetic tone through the real path, 20 named rows; the host then exits itself).
+`tools/check_audio.py` grades that run's own log: each expected row exactly once and PASS, the tone's play line, the mixer row's own numbers, a summary with matching
+counts, and the editor's exit code, which must be 0 within a short wait, so a crash during teardown fails the suite. Its strongest check on sound is that the mixer pulled every queued byte (`mixer_pulled_all_bytes`). That still says nothing about what a person hears.
+
+Run at 701af65 (runner1, 2026-11-06, before the exit and whole-walk checks existed): 16 of 16 rows, `mixer_pulled_all_bytes` queued=96000 left=0, exit 0. Nobody has reported hearing the tone. `OWAUDIO play` means
 the host called play. Python: `tests/prepare_slice_audio_test.py`, `tests/check_audio_test.py` (synthetic).
 
 ## UNVERIFIED list

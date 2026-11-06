@@ -4,6 +4,7 @@
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -29,13 +30,16 @@ bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& O
     if (RiffEnd < 12) { OutError = TEXT("RIFF size too small"); return false; }
     if (RiffEnd > Bytes.Num()) { OutError = TEXT("RIFF size runs past the end of the file"); return false; }
     bool bFormat = false;
-    for (int64 At = 12; At + 8 <= RiffEnd;)
+    int64 DataAt = -1, DataSize = 0;
+    int64 At = 12;
+    while (At + 8 <= RiffEnd)
     {
         const int32 Chunk = int32(At);
         const int64 Size = U32(Chunk + 4);
         if (At + 8 + Size > RiffEnd) { OutError = TEXT("chunk runs past the RIFF size"); return false; }
         if (Tag(Chunk, "fmt "))
         {
+            if (bFormat) { OutError = TEXT("more than one fmt chunk"); return false; }
             if (Size < 16) { OutError = TEXT("fmt chunk too short"); return false; }
             const int32 Format = U16(Chunk + 8);
             Out.Channels = U16(Chunk + 10);
@@ -50,15 +54,19 @@ bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& O
         else if (Tag(Chunk, "data"))
         {
             if (!bFormat) { OutError = TEXT("data before fmt"); return false; }
+            if (DataAt >= 0) { OutError = TEXT("more than one data chunk"); return false; }
             if (Size == 0 || Size % (2 * Out.Channels) != 0) { OutError = TEXT("data is not whole sample frames"); return false; }
-            Out.Pcm.Reset();
-            Out.Pcm.Append(&Bytes[Chunk + 8], int32(Size));
-            return true;
+            DataAt = At + 8;
+            DataSize = Size;
         }
         At += 8 + Size + (Size & 1);   // RIFF pads an odd chunk to a word; the pad is not in its size
     }
-    OutError = TEXT("no data chunk");
-    return false;
+    // Stops short of the end only for fewer than 8 bytes left: a chunk header cut off inside the declared size.
+    if (At < RiffEnd) { OutError = TEXT("partial chunk at the end of the RIFF size"); return false; }
+    if (DataAt < 0) { OutError = TEXT("no data chunk"); return false; }
+    Out.Pcm.Reset();
+    Out.Pcm.Append(&Bytes[int32(DataAt)], int32(DataSize));
+    return true;
 }
 
 bool OpenWillowAudio::WithinLimits(int64 FileBytes, int64 UsedBytes, FString& OutError)
@@ -213,6 +221,23 @@ void RunTest(UWorld* World)
     Check(!ParseWav(ZeroRate, Wav, Error), TEXT("refuse_zero_rate"));
     Check(!ParseWav(Changed(27, 0x7F), Wav, Error), TEXT("refuse_extreme_rate"));
     Check(!ParseWav(TArray<uint8>({'R', 'I', 'F', 'F'}), Wav, Error), TEXT("refuse_short_header"));
+    // Good's 24-byte fmt chunk is at 12, its 12-byte data chunk at 36. Each case below sets a RIFF size that matches its own length.
+    TArray<uint8> TwoFormats = {'R', 'I', 'F', 'F', 64, 0, 0, 0, 'W', 'A', 'V', 'E'};
+    TwoFormats.Append(&Good[12], 24);
+    TwoFormats.Append(&Good[12], 36);
+    Check(!ParseWav(TwoFormats, Wav, Error), TEXT("refuse_duplicate_fmt"));
+    TArray<uint8> TwoData = Good;
+    TwoData[4] = 52;
+    TwoData.Append(&Good[36], 12);
+    Check(!ParseWav(TwoData, Wav, Error), TEXT("refuse_duplicate_data"));
+    TArray<uint8> LateChunk = Good;
+    LateChunk[4] = 48;
+    LateChunk.Append(TArray<uint8>({'L', 'I', 'S', 'T', 100, 0, 0, 0}));
+    Check(!ParseWav(LateChunk, Wav, Error), TEXT("refuse_chunk_after_data_past_riff_size"));
+    TArray<uint8> Partial = Good;
+    Partial[4] = 44;
+    Partial.Append(TArray<uint8>({'L', 'I', 'S', 'T'}));
+    Check(!ParseWav(Partial, Wav, Error), TEXT("refuse_partial_chunk_at_riff_end"));
     Check(WithinLimits(MaxFileBytes, MaxTotalBytes - MaxFileBytes, Error), TEXT("accept_at_the_limits"));
     Check(!WithinLimits(MaxFileBytes + 1, 0, Error), TEXT("refuse_file_over_limit"));
     Check(!WithinLimits(1, MaxTotalBytes, Error), TEXT("refuse_total_over_limit"));
@@ -230,6 +255,8 @@ void RunTest(UWorld* World)
         (bDrained ? Passed : Failed)++;
         UE_LOG(LogTemp, Display, TEXT("OWAUDIOTEST %s mixer_pulled_all_bytes queued=%d left=%d"), bDrained ? TEXT("PASS") : TEXT("FAIL"), Queued, Left);
         UE_LOG(LogTemp, Display, TEXT("OWAUDIOTEST SUMMARY result=%s passed=%d failed=%d (nothing was listened to)"), Failed == 0 ? TEXT("PASS") : TEXT("FAIL"), Passed, Failed);
+        // A clean exit, because teardown is where a wave's lifetime would go wrong: tools/test_audio.ps1 requires exit code 0.
+        FPlatformMisc::RequestExit(false);
     }), FMath::Max(0.1f, GLastWave.IsValid() ? GLastWave->Duration + StopMargin - 0.05f : 0.1f), false);
 }
 
