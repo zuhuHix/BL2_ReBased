@@ -73,7 +73,7 @@ When it's done (see the roadmap; this isn't a remaster, not a remake) here's wha
 
 *Updated 2026-11-06, from `main` at `f5d5d60`.*
 
-**Short version:** there's no game to play yet, but there is a working vertical slice on Sanctuary, run in a developer harness. The slice is one Vault Hunter (Maya), a few guns, Phaselock, a skills page, a vending shop and one Fire mission. Most of it runs on stand-ins, and most of it has not been compared with the original game.
+**Short version:** there's no game to play yet. What exists is a partial developer prototype: a Sanctuary slice that runs in a developer harness. It covers one Vault Hunter (Maya), a few guns, Phaselock, the skills page, the gun vending machines, and one Fire mission. Most of it runs on stand-ins, and most of it has not been compared with the original game. The vending shop is not complete: the gun machines' stock and currency work, while the Ammo Dump and Dr. Zed are an open PR (#99).
 
 ### What works today (merged to `main`)
 
@@ -82,24 +82,24 @@ Each item names the merged PR. Anything not checked against the running game is 
 - **Maya.** Movement numbers (speeds, sprint, crouch, bob, sprint FOV, falling damage) read from the stock data (#77). Shield, health and Fight For Your Life sit in one host state (#72). Her action-skill cooldown shows on BL2's own HUD movie (#47).
 - **Going down and respawning.** The down, bleed-out, second-wind and respawn rules run on the VM (#59, [COMBAT_DOWN_RESPAWN.md](docs/verification/COMBAT_DOWN_RESPAWN.md)). In the slice, the fight is only against a stand-in that can't hit back yet.
 - **HUD.** BL2's movie HUD is on by default with real values (#54). Fight For Your Life, second wind, respawn and the mission tracker are in the movie (#63). Damage-direction arrows and the level-up banner come from host state (#67). The shield bar follows Maya's live pool (#80). The minimap uses BL2's own clip (#53). The Map screen shows Sanctuary's tactical map with Maya's arrow and the quest marker (#97).
-- **Guns.** Four slice guns have ADS, reload clips and muzzle flash (#48, #68). Guns are assembled from the game's own part meshes and skins (#57, #58, #86). Firing comes from the parts: firing modes, pellets, rockets, splash and elemental explosions (#56, #70). Bullets carry momentum (#62). Weapon paint is still a guess: an independent reviewer scored it 3-4.5/10 against real captures.
+- **Guns.** Four slice guns have ADS, reload clips and muzzle flash (#48, #68). Guns are assembled from the game's own part meshes and skins (#57, #58, #86). Firing comes from the parts: firing modes, pellets, rockets, splash and elemental explosions (#56, #70). Bullets carry momentum (#62). Visual fidelity is still short of the target. An independent critic scored host-versus-real frames for four slice guns at 6.5/10 in the last round (lane E round 4, 2026-10-22; the 8/10 target was not reached; earlier rounds scored 5.5 to 6.3). The weapon paint itself stays `UNVERIFIED`.
 - **Pickups and item cards.** The world pickup card uses BL2's own card movie while you aim at a dropped item (#95). Item cards show the level-requirement strip only above level 1 (#96).
 - **Phaselock.** The skill's presentation and colour constants (#50, #94). Lift bob and reload/weapon-swap rules are confirmed in the real game (see [PHASELOCK_STOCK_DATA.md](docs/verification/PHASELOCK_STOCK_DATA.md)).
 - **Inventory and menus.** Comma and Period, and the number keys, switch status-menu tabs (#91, #92). VALUE thumbnails, Inspect and card fits (#69). An item set that would leave the backpack without room is refused (#71). The Missions log shows the four Fire mission states (#64, #100).
 - **Skills.** The skills page is imported and navigable with the keyboard (#35, #49). Respec and the skill effects are still open (see below).
 - **Vendors.** Currency and stock persist, and non-weapon item values were confirmed live (#87, [VENDORS.md](docs/verification/VENDORS.md)). The Ammo Dump and Dr. Zed selling is still open.
 - **The Fire mission.** Accept, objective and turn-in run in the host on stock world data, with labelled stand-ins. The turn-in gives XP only, as the stock data does ([SANCTUARY_RPG_MISSION.md](docs/verification/SANCTUARY_RPG_MISSION.md)).
-- **One scripted run of the Phase 4 loop.** `tools/test_slice_gate.ps1` chains 14 links in one editor session (#90). On `main` on 2026-11-04 it recorded **10 PASS, 0 FAIL, 4 NOT_AVAILABLE**. The table is in [SLICE_GATE.md](docs/verification/SLICE_GATE.md).
+- **The slice gate.** `tools/test_slice_gate.ps1` runs 14 checks of the Phase 4 loop in sequence, in one editor session (#90). Each link reports PASS, FAIL or NOT_AVAILABLE, and NOT_AVAILABLE means the host lacks that piece. The basis of the latest recorded run (2026-11-04) is `main` at 195a016 plus the #98 branch, not plain `main`. It recorded **10 PASS, 0 FAIL, 4 NOT_AVAILABLE**. The table is in [SLICE_GATE.md](docs/verification/SLICE_GATE.md).
 
 <details>
-<summary><b>The slice gate, link by link (on <code>main</code>, 2026-11-04)</b></summary>
+<summary><b>The slice gate, link by link (main 195a016 plus the #98 branch, 2026-11-04)</b></summary>
 <br>
 
-| # | Link | Result on `main` | What closes the gap |
+| # | Link | Result (195a016 + #98) | What closes the gap |
 |:--:|---|:--|---|
 | 1 | Spawn Maya | PASS | |
 | 2 | Reach the fight area | NOT_AVAILABLE | The range (#76) |
-| 3 | Kill an enemy | PASS | |
+| 3 | Kill the stand-in target (a host dummy with 20,000 health, not an enemy) | PASS | |
 | 4 | Enemy attacks Maya | NOT_AVAILABLE | The range's enemy AI (#83) |
 | 5 | Loot drops on kill | NOT_AVAILABLE | The range's loot on death (#89) |
 | 6 | Pick up a gun | PASS | |
@@ -143,7 +143,7 @@ Every claim above comes from a dated verification record. Automated checks are r
 |---|---|
 | Phase 0 gated 2026-09-10 | Reader reads 2,008 / 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
 | Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a Sanctuary `Sky_Dome` sky approximation built from the dome's own inputs (UE5 atmosphere kept for ambient light), an opt-in outer-hull import and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`); an in-game Tab list switches between imported scenes. Walking is an opt-in placeholder verified on Sanctuary only. Sanctuary runs at 12–15 FPS on an integrated-GPU laptop, GPU-bound in TSR. Sanctuary terrain floors are imported with corroborated topology and walkable triangle collision. Not done: native sky graph decode and parity, skeletal meshes, lightmaps, real material graphs, full collision, 79 more maps. |
-| Slice gate, 2026-11-04 | `tools/test_slice_gate.ps1` on `main`: 10 PASS, 0 FAIL, 4 NOT_AVAILABLE of 14 links. Host behaviour only. |
+| Slice gate, 2026-11-04 | `tools/test_slice_gate.ps1` on main 195a016 plus the #98 branch: 10 PASS, 0 FAIL, 4 NOT_AVAILABLE of 14 links. Host behaviour only. |
 
 Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md) · [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md) · [collision and walking](COLLISION_WALKING_VERIFICATION.md) · [performance / in-game selector](docs/verification/PERFORMANCE.md) · [umodel cross-check](docs/verification/UMODEL_CROSSCHECK.md) · [object-dump cross-check](docs/verification/BLCMM_DUMP_CROSSCHECK.md) · [BSP texture axes](docs/verification/BSP_TEXTURE_AXES.md) · [slice gate](docs/verification/SLICE_GATE.md) · [gates and baseline](docs/verification/GATES.md).
 
@@ -163,7 +163,7 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now). Sanctuary looks close to the real game, still missing some lighting and NPCs |
 | **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | Prototype since 2026-09-30: C++ bytecode loader, interpreter and Core natives; drives backpack navigation in UE5 since 2026-10-01 | In progress (prototype) |
 | **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Movement numbers from the stock data on Maya (#77); the placeholder UE5 walking controller before that | Maintainer-tested 2026-10-02: walking, jumping and collision work well (no verification record yet) |
-| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host: Maya, Phaselock, the Fire mission, guns, pickups, down and respawn. One scripted run of the loop on `main` (2026-11-04): 10 of 14 links PASS. Not yet compared with the actual game (no verification record) | In progress (slice pieces; the range, enemy attacks and aimed pickups are open PRs) |
+| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host: Maya, Phaselock, the Fire mission, guns, pickups, down and respawn. One scripted run of the loop (2026-11-04, main 195a016 plus the #98 branch): 10 of 14 links PASS. Not yet compared with the actual game (no verification record) | In progress (slice pieces; the range, enemy attacks and aimed pickups are open PRs) |
 | **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
 | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
@@ -310,7 +310,7 @@ A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/i
 
 `tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest. `host/ue5/` is a minimal UE5 C++ project plus editor-Python importer/verifier that builds the scene, an inspection lighting rig and a free-flight spectator pawn, then reopens the saved scene and verifies it.
 
-The Sanctuary slice lives in `host/`: Maya's movement, state, HUD, guns, pickups, Phaselock, the Fire mission and the skills and vending pages, all in the host, with labelled stand-ins and unverified rules where the records say so. The skills page and the vending currency and stock live there too. The slice gate (`tools/test_slice_gate.ps1`) drives it end to end.
+The Sanctuary slice lives in `host/`: Maya's movement, state, HUD, guns, pickups, Phaselock, the Fire mission, the skills page and the gun vending machines' stock and currency, all in the host, with labelled stand-ins and unverified rules where the records say so. Ammo and health vending is still an open PR (#99). The slice gate (`tools/test_slice_gate.ps1`) runs its 14 checks in sequence and reports any link whose piece the host lacks as NOT_AVAILABLE.
 
 Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, real enemy combat in the slice, saves. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for Maya, Marcus and the dummy.)
 
