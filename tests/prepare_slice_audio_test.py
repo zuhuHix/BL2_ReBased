@@ -2,6 +2,9 @@
 """Synthetic tests for tools/prepare_slice_audio.py: every WAV and manifest here is generated, no game data."""
 import json
 import os
+from pathlib import Path
+import re
+import struct
 import sys
 import tempfile
 import unittest
@@ -9,6 +12,14 @@ import wave
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
 import prepare_slice_audio as psa  # noqa: E402
+
+
+def wav_bytes(rate=48000, channels=1, frames=48000, data=None, riff_size=None, before_fmt=b''):
+    """A WAV built by hand, so a test can make the header lie."""
+    payload = bytes(2 * channels * frames) if data is None else data
+    fmt = struct.pack('<4sIHHIIHH', b'fmt ', 16, 1, channels, rate, rate * 2 * channels & 0xFFFFFFFF, 2 * channels, 16)
+    body = b'WAVE' + before_fmt + fmt + struct.pack('<4sI', b'data', len(payload)) + payload
+    return b'RIFF' + struct.pack('<I', len(body) if riff_size is None else riff_size) + body
 
 
 def manifest(media):
@@ -25,6 +36,64 @@ class PrepareSliceAudioTest(unittest.TestCase):
         path = os.path.join(self.dir, name)
         psa.write_tone(path, seconds=seconds)
         return path
+
+    def write(self, name, data):
+        path = os.path.join(self.dir, name)
+        with open(path, 'wb') as fh:
+            fh.write(data)
+        return path
+
+    def test_a_truncated_file_with_a_good_header_is_refused(self):
+        whole = wav_bytes()
+        reason = psa.check_wav(self.write('1.wav', whole[:len(whole) // 2]), 1.0)
+        self.assertIn('past the end', reason)
+
+    def test_the_data_chunk_may_not_run_past_the_riff_size(self):
+        whole = wav_bytes()
+        self.assertIn('past the RIFF size', psa.check_wav(self.write('1.wav', wav_bytes(riff_size=len(whole) - 8 - 2)), None))
+
+    def test_riff_size_zero_is_refused(self):
+        self.assertIn('too small', psa.check_wav(self.write('1.wav', wav_bytes(riff_size=0)), None))
+
+    def test_partial_frames_are_refused(self):
+        self.assertIn('whole sample frames', psa.check_wav(self.write('1.wav', wav_bytes(channels=2, data=bytes(6))), None))
+
+    def test_a_zero_rate_is_refused_not_a_crash(self):
+        self.assertIn('sample rate', psa.check_wav(self.write('1.wav', wav_bytes(rate=0)), None))
+
+    def test_a_rate_outside_the_host_range_is_refused(self):
+        for rate in (psa.MIN_SAMPLE_RATE - 1, psa.MAX_SAMPLE_RATE + 1, 0x7FFFFFFF):
+            self.assertIn('sample rate', psa.check_wav(self.write('1.wav', wav_bytes(rate=rate)), None))
+
+    def test_a_padded_odd_chunk_is_stepped_over(self):
+        odd = struct.pack('<4sI', b'LIST', 3) + b'abc' + b'\0'
+        self.assertIsNone(psa.check_wav(self.write('1.wav', wav_bytes(before_fmt=odd)), 1.0))
+
+    def test_a_file_over_the_limit_is_refused_before_reading(self):
+        path = self.write('1.wav', b'x')
+        with open(path, 'r+b') as fh:
+            fh.truncate(psa.MAX_FILE_BYTES + 1)
+        self.assertIn('limit', psa.check_wav(path, None))
+
+    def test_the_map_stops_at_the_total_limit_and_says_so(self):
+        self.tone('1.wav')
+        self.tone('2.wav')
+        limit, psa.MAX_TOTAL_BYTES = psa.MAX_TOTAL_BYTES, os.path.getsize(os.path.join(self.dir, '1.wav'))
+        self.addCleanup(setattr, psa, 'MAX_TOTAL_BYTES', limit)
+        roles, unresolved = psa.build_play_map(manifest([{'source': 1, 'duration_s': 1.0}, {'source': 2, 'duration_s': 1.0}]), self.dir)
+        self.assertEqual(len(roles['fire']), 1)
+        self.assertNotIn('fire', unresolved)     # one file still plays
+        psa.MAX_TOTAL_BYTES = 1                  # nothing fits: the role is listed, not silently absent
+        roles, unresolved = psa.build_play_map(manifest([{'source': 1, 'duration_s': 1.0}]), self.dir)
+        self.assertNotIn('fire', roles)
+        self.assertIn('more than', unresolved['fire'])
+
+    def test_the_limits_match_the_host(self):
+        header = (Path(__file__).resolve().parent.parent / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowAudio.h').read_text(encoding='utf-8')
+        for name, value in (('MinSampleRate', psa.MIN_SAMPLE_RATE), ('MaxSampleRate', psa.MAX_SAMPLE_RATE)):
+            self.assertEqual(int(re.search(name + r' = (\d+);', header).group(1)), value)
+        for name, value in (('MaxFileBytes', psa.MAX_FILE_BYTES), ('MaxTotalBytes', psa.MAX_TOTAL_BYTES)):
+            self.assertEqual(int(re.search(name + r' = (\d+) \* 1024 \* 1024;', header).group(1)) * 1024 * 1024, value)
 
     def test_tone_is_16_bit_mono_of_the_asked_length(self):
         with wave.open(self.tone('t.wav', seconds=0.5), 'rb') as wav:

@@ -1,4 +1,5 @@
 #include "Modules/ModuleManager.h"
+#include "OpenWillowAudio.h"
 #include "HAL/PlatformMisc.h"
 #include "Misc/Paths.h"
 #include "Misc/MessageDialog.h"
@@ -19,6 +20,7 @@ public:
             FPlatformMisc::RequestExit(true);
             return;
         }
+        OpenWillowAudio::Startup();
         UE_LOG(LogTemp, Display, TEXT("OpenWillow Phase 0 host initialized. Original game installation found."));
     }
 };
