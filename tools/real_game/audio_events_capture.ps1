@@ -25,21 +25,26 @@ $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
 
-# One labelled window: $Act runs with the hooks counting. What it adds beyond the $Baselines windows lands in $log.window_<label>.
-function Invoke-Window([string]$Label, [string[]]$Baselines, [scriptblock]$Act) {
+# One labelled window: $Act runs with the hooks counting. What it adds beyond the $Baselines windows lands in $log.window_<label>, with `tied`:
+# the new events that followed at least $Need of the action's moments within $Within seconds. Stages accept only `tied`, so an ambient
+# sound that merely falls in the window does not count. That is still correlation, not proof the event belongs to the action.
+function Invoke-Window([string]$Label, [string[]]$Baselines, [scriptblock]$Act, [string]$Marker = '', [double]$Within = 0.5, [int]$Need = 1) {
+    $script:Presses = New-Object Collections.Generic.List[double]
     Py "ae_begin('$Label'); print('ok')" | Out-Null
     & $Act | Out-Null
     Start-Sleep -Milliseconds 800     # the last sound's calls
     $names = ($Baselines | ForEach-Object { "'$_'" }) -join ', '
-    $result = Py "import json; print(json.dumps(ae_end([$names]), default=str))" | ConvertFrom-Json
+    $times = ($script:Presses | ForEach-Object { $_.ToString('R', [Globalization.CultureInfo]::InvariantCulture) }) -join ', '
+    $result = Py "import json; print(json.dumps(ae_end([$names], [$times], '$Marker', $Within, $Need), default=str))" | ConvertFrom-Json
     $log["window_$Label"] = $result
-    "$Label`: rows $($result.rows), new events: $($result.new -join ' ')"
+    "$Label`: rows $($result.rows), new events: $($result.new -join ' '); tied to the action ($($result.anchored_by), $($result.anchors) moments): $($result.tied -join ' ')"
 }
 
 function Send-Shots([int]$Count) {
     Focus-Game | Out-Null; Start-Sleep -Milliseconds 300
-    for ($i = 0; $i -lt $Count; $i++) { Send-Click; Start-Sleep -Milliseconds 450 }
+    for ($i = 0; $i -lt $Count; $i++) { $script:Presses.Add((Get-QpcSeconds)); Send-Click; Start-Sleep -Milliseconds 450 }
 }
+function Send-ActionKey([string]$Key) { $script:Presses.Add((Get-QpcSeconds)); Send-Key $Key }
 
 # Wait until the lift skill is idle and the cooldown pool is empty (or $Timeout s).
 function Wait-Ready([double]$Timeout = 40) {
@@ -147,34 +152,32 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
     # Baseline: what the world posts with nobody acting.
     Invoke-Window 'idle' @() { Start-Sleep 3 }
 
-    # 1. Phaselock. A cast that did not lift the target is retried, each attempt in its own window.
-    $lifted = $false; $castNew = @()
+    # 1. Phaselock. A cast that did not lock the target is retried, each attempt in its own window. Whether it locked comes from the skill's
+    # own LockTarget call: no recorder, so no pawn is held across commands.
+    $lifted = $false; $castTied = @()
     for ($attempt = 1; $attempt -le 3 -and !$lifted; $attempt++) {
         $name = if ($attempt -eq 1) { 'phaselock' } else { "phaselock_try$attempt" }
         if ($attempt -gt 1) { $log["${name}_ready"] = Wait-Ready 40; Set-Up }
-        Py "import json; print(json.dumps(pi_start('$name', '$target'), default=str))" | Out-Null
-        Invoke-Window $name @('idle') { Focus-Game | Out-Null; Send-Key F; Start-Sleep 6 }
-        $result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
-        Py 'pi_stop(); print("stopped")' | Out-Null
-        $log["${name}_lifted"] = $result.target_lifted
-        $lifted = $result.target_lifted -eq $true
-        if ($lifted) { $castNew = @($log["window_$name"].new) }
+        Invoke-Window $name @('idle') { Focus-Game | Out-Null; Send-ActionKey F; Start-Sleep 6 } 'PhaseLockTarget' 1.0 1
+        $lifted = $log["window_$name"].calls.LockTarget -gt 0
+        $log["${name}_locked"] = $lifted
+        if ($lifted) { $castTied = @($log["window_$name"].tied) }
     }
-    Set-Stage 'phaselock' ($lifted -and $castNew.Count -gt 0) 'target not lifted, or no new sound event seen'
+    Set-Stage 'phaselock' ($lifted -and $castTied.Count -gt 0) 'target not locked, or no new sound event followed the cast'
     Start-Sleep 6     # the lock ends and the target lands
 
     # 2. Shots at the sky: the gun's own sound, with nothing hit.
     Py "pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=10922, Yaw=pc.Rotation.Yaw, Roll=0); print('ok')" | Out-Null
-    Invoke-Window 'fire_away' @('idle') { Send-Shots 3 }
-    Set-Stage 'fire_away' (@($log.window_fire_away.new).Count -gt 0) 'no new sound event seen'
+    Invoke-Window 'fire_away' @('idle') { Send-Shots 3 } 'PlayFiringSound' 0.4 2
+    Set-Stage 'fire_away' (@($log.window_fire_away.tied).Count -gt 0) 'no new sound event followed at least 2 shots'
 
     # 3. Shots at the target: what the hit adds to the shots above. The health says whether a shot landed.
     Set-Up
     $before = [double](Py "print(ae_health('$target'))")
-    Invoke-Window 'fire_hit' @('idle', 'fire_away') { Send-Shots 5 }
+    Invoke-Window 'fire_hit' @('idle', 'fire_away') { Send-Shots 5 } 'PlayFiringSound' 0.5 2
     $after = [double](Py "print(ae_health('$target'))")
     $log.fire_hit_health = @{ before = $before; after = $after }
-    Set-Stage 'fire_hit' (($after -lt $before) -and @($log.window_fire_hit.new).Count -gt 0) "health $before -> $after, or no new sound event seen"
+    Set-Stage 'fire_hit' (($after -lt $before) -and @($log.window_fire_hit.tied).Count -gt 0) "health $before -> $after, or no new sound event followed at least 2 shots"
 
     # 4. Pickup: drop a backpack item, stand at it and press use.
     $log.thrown = Py 'import json; print(json.dumps(ae_throw(), default=str))' | ConvertFrom-Json
@@ -184,11 +187,13 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
     $gone = $false
     if ($pickup -ne 'None') {
         Start-Sleep 1
-        Invoke-Window 'pickup' @('idle') { Focus-Game | Out-Null; Send-Key E; Start-Sleep 1; Send-Key E; Start-Sleep 1 }
+        Invoke-Window 'pickup' @('idle') { Focus-Game | Out-Null; Send-ActionKey E; Start-Sleep 1; Send-ActionKey E; Start-Sleep 1 } 'HandlePickup' 1.0 1
         $gone = (Py "print(ae_pickup_gone('$pickup'))") -eq 'True'
     }
     $log.pickup_gone = $gone
-    Set-Stage 'pickup' ($gone -and @($log.window_pickup.new).Count -gt 0) "pickup '$pickup' gone: $gone, or no new sound event seen"
+    Set-Stage 'pickup' ($gone -and @($log.window_pickup.tied).Count -gt 0) "pickup '$pickup' gone: $gone, or no new sound event followed the press"
+    # A tied event that other windows also saw is weaker evidence: kept beside the results rather than decided here.
+    $log.event_overlap = Py 'import json; print(json.dumps(ae_overlap()))' | ConvertFrom-Json
     # The game may close before it answers this one.
     try { Invoke-GamePy 'ae_remove(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }

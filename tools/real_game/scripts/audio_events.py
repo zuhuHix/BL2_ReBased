@@ -5,7 +5,12 @@
 # records; it never blocks or changes a call. A call made from native code to native code passes no hook, so an empty result
 # means "not seen here", not "the game plays nothing". Rows are game data: they stay under ignored local/realgame/.
 #
-# ae_install() -> which hooks exist         ae_begin(label) ... ae_end(baselines) -> what this window added
+# ae_install() -> which hooks exist         ae_begin(label) ... ae_end(...) -> what this window added, and what followed the action
+#
+# Evidence is tied to the action by time: an event counts only if it follows enough of the action's moments within a short span, so an
+# ambient sound that merely falls inside a window does not. That is still correlation. `tied` says the event followed the action, not that the
+# action caused it or that it is "the" sound of the action (a hit can also set off the enemy's own pain line, for example).
+# Holds no game object between commands; rows are plain strings and numbers, and the target is looked up by name each time.
 import json
 import math
 from pathlib import Path
@@ -29,9 +34,13 @@ AE_FUNCTIONS = (
     "WillowGame.WillowPlayerController:PlayUIAkEvent",
     "WillowGame.WillowPlayerPawn:PlayUIAkEvent",
     "WillowGame.WillowPhysicalMaterialProperty:PlayImpactEffectSound",
+    # Markers: no sound event of their own, they say when the action happened in the game.
     "WillowGame.WillowWeapon:PlayFiringSound",
+    "WillowGame.LiftActionSkill:PhaseLockTarget",
+    "WillowGame.LiftActionSkill:LockTarget",
+    "WillowGame.WillowPlayerController:HandlePickup",
 )
-ae = globals().setdefault("ae", {"label": None, "rows": [], "dropped": 0, "errors": 0, "seen": {}, "hooks": []})
+ae = globals().setdefault("ae", {"label": None, "rows": [], "dropped": 0, "errors": 0, "seen": {}, "tied": {}, "hooks": []})
 
 
 def _ae_event(obj, args):
@@ -87,9 +96,17 @@ def _ae_key(row):
     return "%s|%s|%s" % (row["fn"], row["by"], row["event"])
 
 
-def ae_end(baselines=()):
+def _ae_followed(event, rows, anchors, within):
+    """How many anchors this event follows within `within` seconds; each anchor counts once however often the event fires."""
+    times = [row["t"] for row in rows if row["event"] == event]
+    return sum(1 for anchor in anchors if any(anchor <= t <= anchor + within for t in times))
+
+
+def ae_end(baselines=(), presses=(), marker=None, within=0.5, need=1):
     """Close the window, write its rows and return its counts. `new` holds the events no baseline window saw, keyed by event only,
-    so the same sound through another function does not count as new; a call with no event (the firing marker) is left out."""
+    so the same sound through another function does not count as new; a call with no event (a marker) is left out. `tied` is the part of
+    `new` that followed at least `need` of the action's moments within `within` seconds. The moments are the game's own `marker` calls
+    when there are enough of them, else `presses`: key presses on the same clock (QueryPerformanceCounter)."""
     rows, label = ae["rows"], ae["label"]
     ae["label"] = None
     counts = {}
@@ -98,12 +115,26 @@ def ae_end(baselines=()):
     events = {row["event"] for row in rows if row["event"]}
     ae["seen"][label] = events
     earlier = set().union(*(ae["seen"].get(name, set()) for name in baselines)) if baselines else set()
+    new = sorted(events - earlier)
+    marked = [row["t"] for row in rows if marker and row["fn"] == marker]
+    anchors, anchored_by = (marked, "marker") if len(marked) >= max(need, 1) else (list(presses), "press")
+    tied = [event for event in new if _ae_followed(event, rows, anchors, within) >= need] if anchors else []
+    ae["tied"][label] = tied
+    calls = {}
+    for row in rows:
+        calls[row["fn"]] = calls.get(row["fn"], 0) + 1
     if label is not None:
         with open(Path(RG_OUT) / ("events_%s.jsonl" % label), "w", encoding="utf-8") as out:
             for row in rows:
                 out.write(json.dumps(row) + "\n")
-    return {"label": label, "rows": len(rows), "dropped": ae["dropped"], "errors": ae["errors"], "counts": counts,
-            "new": sorted(events - earlier), "firing_calls": sum(1 for row in rows if row["fn"] == "PlayFiringSound")}
+    return {"label": label, "rows": len(rows), "dropped": ae["dropped"], "errors": ae["errors"], "counts": counts, "calls": calls,
+            "new": new, "tied": tied, "anchored_by": anchored_by, "anchors": len(anchors), "within": within, "need": need}
+
+
+def ae_overlap():
+    """For each tied event, the other windows that also saw it: one that also shows up elsewhere is weaker evidence for its action."""
+    return {label: {event: sorted(other for other, seen in ae["seen"].items() if other != label and event in seen) for event in tied}
+            for label, tied in ae["tied"].items()}
 
 
 def ae_health(name):
