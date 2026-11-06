@@ -438,6 +438,9 @@ hash-compared) threw 4 grenades, but the save's equipped mod is the Sky Rocket (
 - **Fuse: open.** The default Trigger part gives the FuseTime slot a total of 0, while the projectile's behaviours hold two
   timers (a shorter and a longer delay). Which one detonates needs a live throw of the frag itself. The block's fuse is
   therefore 0, which the host reads as "no fuse": until then the grenade bursts on the impact after its bounces.
+- **The key.** `OWGrenade` is bound to G next to the other gameplay keys. The game's input config files do not hold gameplay keys as
+  text, so the evidence is the live read: on this profile each of 4 G presses was followed by a logged `ThrowGrenade`. Whether
+  G is the shipped default, rather than this profile's setting, is UNVERIFIED.
 - **Host.** `AOpenWillowWalker::ThrowGrenade` (key G, `OWGrenade`) spends one grenade from the Grenade ammo pool and launches
   a falling projectile with the block's values 0.52 s later, from 80 uu ahead of the eye and 20 uu to its left, along the view;
   a 1.05 s lockout covers the throw. Its explosion uses the section 11 bands and the hit source `Grenade`. **UNVERIFIED for the
@@ -447,7 +450,7 @@ hash-compared) threw 4 grenades, but the save's equipped mod is the Sky Rocket (
   it while down is not modelled).
 - **Test.** After the last gun the firing test throws one grenade at the dummy and logs `OWFIRING grenade`.
   `tools/check_weapon_firing.py` requires it to have been thrown, to have spent one grenade and to have hit the dummy, with
-  every hit counted as Source Grenade (`--legacy` skips this for older logs). `tools/test_weapon_firing.ps1` generates the block
+  every hit counted as Source Grenade, and a second throw with the pool emptied to have been refused (`--legacy` skips this for older logs). `tools/test_weapon_firing.ps1` generates the block
   when it is missing. Synthetic tests: `tests/grenade_mod_test.py` (CTest `grenade-mod-synthetic`).
 
 ## 13. The status chance at equal levels, skills off (2026-11-06, slice projectiles lane)

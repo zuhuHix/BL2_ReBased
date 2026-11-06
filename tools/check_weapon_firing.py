@@ -264,6 +264,8 @@ def check_grenade(line):
         return ['the grenade was not thrown (no grenade data: tools/grenade_mod.py, or no grenade in the pool)']
     if int(line['ammo_after']) != int(line['ammo_before']) - 1:
         fails.append(f"grenade ammo {line['ammo_before']} -> {line['ammo_after']}, expected one fewer")
+    if line.get('refused_empty') != '1':
+        fails.append('a throw with an empty grenade pool was not refused')
     if int(line['splash_hits']) < 1:
         fails.append('the grenade splashed nothing')
     if line['grenade_hits'] != line['splash_hits']:
