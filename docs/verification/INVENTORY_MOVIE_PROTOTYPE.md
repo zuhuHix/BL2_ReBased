@@ -1443,3 +1443,31 @@ and 'compare' frames); whether the game's selected card shows a red or a yellow 
 frame). From `ItemCardGFxObject.SetItemCardEx` (script): the strip shows only for a required level above 1, which the shared
 card code (`item_card.js`) now follows; overpower and DLC-restricted texts do not apply to the host.
 
+## Round 25 (2026-11-06, inventory lane, yorad PC)
+
+AI-assisted (Claude; Luna (Codex) as the independent critic, a fresh agent each round). Frames, critic reports and side-by-sides stay under ignored
+`local/orch/inv25/`. Host runs: `-owinvshots` with the bounded recipe set, `-owlevel=36`, no gear, `-owslots=2 -owmoney=0 -owerid=0`, compared
+with the matched D20 frames (14 pairs).
+
+**Local data decides these scores.** A first capture on this PC had recipes without card stats, no static previews and no weapon meshes, and
+scored nothing because it was not scored: a worktree provisioned by the hook is not enough. A comparable run needs the recipe JSON with card stats,
+the static previews, the full `Content/OpenWillow/Weapons` and `local/weapon_library`. Check the card rows and `menu weapon preview ... mesh=1` before a critic round.
+
+**Critic scores.** Round 1 **7.36** overall, **7.89** ignoring gun paint and render colour. Round 2, after the changes below and the weapon library, **7.79** and
+**8.21**. So the menu's own state passes the 8/10 target on that reading, and the overall score does not; the remaining overall gap is mostly gun paint and thumbnails
+(the gunlook lane, pattern placement in progress there). Round 3 pending. Different critics are not strictly comparable (see round 23).
+
+**Changed before round 2.** Every status page hides the first-person arms and gun, which stayed up behind Skills, Missions and Map. The menu's Maya also stands behind
+Skills, as in the real frames; Missions and Map get no Maya, because the game's behaviour there is not observed (UNVERIFIED). Mini Equipped panel, compare cards (with a separate left target
+when the compare starts from the Equipped panel) and the Skills side trees fitted to D20.
+
+**Changed after round 2 (not yet scored).** The compare cards' height corrections never reached the frame: the measured right card did not change when its correction did. The likely reason, inferred and
+not traced, is that the movie's TweenCards rewrites the card's scales after the page's correction, which the page then believed was still applied; the page now re-applies it when the Y scale is not the one it left.
+The focus view's rows are spaced slightly wider, so the last empty cell lands where it does in D2g. Inspect card fit. All UNVERIFIED beyond D20.
+
+**Still open, in the last critic's order.**
+1. Gun paint and thumbnails (gunlook lane); static thumbnails come from the offline renderer.
+2. D5 Inspect rifle smaller and further right than real since the guns come from the library. `InspectFrame` frames from the preview mesh's local bounds, which may not suit an assembled gun (not checked; gunlook lane).
+3. Zoom lines 0.1 high on two guns (`src/weapon_gen.cpp`, round 23's item 6).
+4. Skills tree widths; Backpack frame and the tab cluster a few pixels off.
+5. BRANDS tie order stays parked (native quick sort).
