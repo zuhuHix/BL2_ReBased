@@ -1,6 +1,10 @@
 """Synthetic tests for tools/weapon_gen_firing.py: invented blocks and numbers, no game data."""
+import hashlib
+import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import weapon_gen_firing as tool
@@ -97,6 +101,78 @@ class CollectorTest(unittest.TestCase):
         collector = tool.Collector()
         add(collector, block(), {'firing_mode': 'Fake.Other'})
         self.assertTrue(any('firing mode' in text for text in collector.problems))
+
+
+class CompleteTest(unittest.TestCase):
+    def test_each_shot_kind_needs_its_speed(self):
+        self.assertEqual(tool.incomplete({'schema': 1, 'firing_mode': 'M', 'bullet_speed': 10.0}), [])
+        self.assertEqual(tool.incomplete({'schema': 1, 'firing_mode': 'M', 'fire_type': 'EWWFT_HitScan'}), [])
+        rocket = {'schema': 1, 'firing_mode': 'M', 'fire_type': 'EWWFT_Rocket', 'projectile': {'speed': 10.0}}
+        self.assertEqual(tool.incomplete(rocket), [])
+        for bad in ({}, {'speed': 0.0}, {'speed': None}, {'speed': float('inf')}, {'speed': float('nan')}):
+            self.assertEqual(tool.incomplete(dict(rocket, projectile=bad)), ['projectile.speed'], bad)
+        self.assertEqual(tool.incomplete(dict(rocket, projectile=None)), ['projectile.speed'])
+        self.assertEqual(tool.incomplete({'schema': 1, 'firing_mode': 'M'}), ['bullet_speed'])
+
+    def test_a_thrown_gun_needs_its_speed(self):
+        template = {'schema': 1, 'firing_mode': 'M', 'bullet_speed': 10.0, 'reload_throw': {'projectile': {}}}
+        self.assertEqual(tool.incomplete(template), ['reload_throw.projectile.speed'])
+
+    def test_identity_is_required(self):
+        self.assertIn('firing_mode', tool.incomplete({'schema': 1, 'bullet_speed': 10.0}))
+        self.assertTrue(tool.incomplete({'schema': 2, 'firing_mode': 'M', 'bullet_speed': 10.0}))
+
+
+class FingerprintTest(unittest.TestCase):
+    def test_it_is_the_md5_of_the_bytes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'manifest.txt'
+            path.write_bytes(b'invented\r\nmanifest')
+            self.assertEqual(tool.fingerprint(path), hashlib.md5(b'invented\r\nmanifest').hexdigest())
+
+    def test_a_missing_manifest_names_its_tool(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(SystemExit) as stop:
+                tool.fingerprint(Path(folder) / 'none.txt')
+        self.assertIn('weapon_gen_manifest.py', str(stop.exception.code))
+
+
+class OutputPathTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.base = Path(temp.name).resolve()
+        self.repo = self.base / 'repo'
+        self.repo.mkdir()
+
+    def refused(self, path):
+        with self.assertRaises(SystemExit):
+            tool.local_output(path, repo=self.repo)
+
+    def test_inside_local_is_accepted(self):
+        (self.repo / 'local').mkdir()
+        self.assertEqual(tool.local_output(self.repo / 'local' / 'gen' / 'a.json', repo=self.repo), self.repo / 'local' / 'gen' / 'a.json')
+
+    def test_a_tracked_path_is_refused_and_nothing_is_created(self):
+        (self.repo / 'local').mkdir()
+        self.refused(self.repo / 'tools' / 'gen' / 'a.json')
+        self.assertFalse((self.repo / 'tools').exists())
+        self.refused(self.repo / 'local' / '..' / 'tools' / 'a.json')
+        self.refused(self.repo / 'a.json')
+        self.refused(self.repo / 'local')
+        self.refused(self.repo / 'localish' / 'a.json')
+
+    @unittest.skipUnless(os.name == 'nt', 'junctions are a Windows feature')
+    def test_a_junctioned_local_is_accepted_and_a_link_out_of_it_refused(self):
+        store, outside = self.base / 'store', self.base / 'outside'
+        store.mkdir()
+        outside.mkdir()
+        for link, target in ((self.repo / 'local', store), (store / 'escape', outside)):
+            subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], check=True, capture_output=True)
+            self.addCleanup(os.rmdir, link)
+        self.assertEqual(tool.local_output(self.repo / 'local' / 'a.json', repo=self.repo), self.repo / 'local' / 'a.json')
+        self.refused(self.repo / 'local' / 'escape' / 'a.json')
+        self.refused(store / 'a.json')   # the target's own path is not the repo's local/
 
 
 if __name__ == '__main__':

@@ -123,6 +123,9 @@ struct FOpenWillowFiringData
     // A grenade mod (tools/grenade_mod.py "grenade" block): a falling projectile with the mod's speed, gravity, bounces,
     // fuse, radius and damage, and its explosion bands. FiringMode is "grenade".
     static bool ParseGrenade(const FJsonObject& Grenade, FOpenWillowFiringData& Out);
+    // False with what is missing when the block cannot fire as its kind: a positive finite speed for a rocket's projectile, a
+    // light bullet and a thrown gun, and a firing mode. tools/weapon_gen_firing.py incomplete() is the same rule for its templates.
+    bool CompleteForShotKind(FString& OutMissing) const;
 };
 
 // Per-weapon state that the rules carry between shots.

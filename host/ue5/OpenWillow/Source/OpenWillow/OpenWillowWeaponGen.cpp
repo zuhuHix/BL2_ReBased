@@ -11,6 +11,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Misc/SecureHash.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "weapon_gen.hpp"
@@ -57,7 +58,10 @@ bool IsWeaponBalanceUtf8(const weapongen::WeaponGenManifest& Manifest, const std
     return Object != Manifest.objectByPath.end() && Manifest.balanceByObject.count(std::to_string(Object->second)) > 0;
 }
 
-// tools/weapon_gen_firing.py's templates, next to the manifest, parsed once. Null when the file is missing or unreadable.
+constexpr int32 FiringTemplatesSchema = 2;   // tools/weapon_gen_firing.py FILE_SCHEMA
+
+// tools/weapon_gen_firing.py's templates, next to the manifest, parsed once. Null when the file is missing or unreadable, older than
+// this code, or made with another manifest: a matching key alone would silently supply old values.
 const FJsonObject* FiringTemplates()
 {
     static bool bTried = false;
@@ -70,12 +74,24 @@ const FJsonObject* FiringTemplates()
     {
         Root.Reset();
         UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN no firing templates at %s: rolled guns fire a plain trace (python tools/weapon_gen_firing.py --game <BL2 folder>)"), *Path);
+        return nullptr;
+    }
+    double Schema = 0;
+    FString Stored;
+    Root->TryGetNumberField(TEXT("schema"), Schema);
+    Root->TryGetStringField(TEXT("manifest_md5"), Stored);
+    const FString Current = LexToString(FMD5Hash::HashFile(*FOpenWillowWeaponGen::ManifestPath()));
+    if (int32(Schema) != FiringTemplatesSchema || Stored.IsEmpty() || !Stored.Equals(Current, ESearchCase::IgnoreCase))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN firing templates at %s refused (schema %d, want %d; manifest %s, made with %s): rolled guns fire a plain trace (rerun python tools/weapon_gen_firing.py --game <BL2 folder>)"),
+            *Path, int32(Schema), FiringTemplatesSchema, *Current, *Stored);
+        Root.Reset();
     }
     return Root.Get();
 }
 
 // The rolled gun's firing block: its template (weapon type, firing mode, element) filled from the card, then the parser recipes use.
-// A gun with no template keeps the plain trace and its refire rule. UNVERIFIED: the accuracy pool is the type's base (parts not applied).
+// A gun with no template, or one that cannot fire as its kind, keeps the plain trace and its refire rule.
 void ApplyFiringTemplate(const weapongen::WeaponGenResult& Result, const weapongen::WeaponGenCard& Card, FOpenWillowWeaponItem& Item)
 {
     const FJsonObject* Root = FiringTemplates();
@@ -88,39 +104,11 @@ void ApplyFiringTemplate(const weapongen::WeaponGenResult& Result, const weapong
         UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN no firing template for %s"), *Key);
         return;
     }
-    // A shallow copy: only top-level fields change, and the parser only reads.
-    const TSharedRef<FJsonObject> Block = MakeShared<FJsonObject>();
-    Block->Values = (*Template)->Values;
-    Block->SetNumberField(TEXT("pellets"), Item.Projectiles);
-    Block->SetNumberField(TEXT("spread"), Item.Spread);
-    Block->SetNumberField(TEXT("burst_count"), Item.Firing.BurstCount);
-    Block->SetNumberField(TEXT("burst_interval"), Item.Firing.BurstInterval);
-    Block->SetNumberField(TEXT("spin_up"), Item.SpinUp);
-    if (Card.hasStatus && Card.statusEffectDefinition)
-    {
-        const TSharedRef<FJsonObject> Status = MakeShared<FJsonObject>();
-        Status->SetStringField(TEXT("definition"), FromUtf8(Card.statusEffectDefinition));
-        Status->SetStringField(TEXT("type"), FromUtf8(Card.statusEffect));
-        Status->SetNumberField(TEXT("duration"), Card.statusDuration.value_or(0));
-        Status->SetNumberField(TEXT("dps"), Card.statusDps.value_or(0));
-        const TSharedRef<FJsonObject> Surfaces = MakeShared<FJsonObject>();
-        for (const auto& [Surface, Chance] : Card.statusChanceBySurface) Surfaces->SetNumberField(FromUtf8(Surface), Chance);
-        Status->SetObjectField(TEXT("chance_by_surface"), Surfaces);
-        const TArray<TSharedPtr<FJsonValue>>* Scales = nullptr;
-        if (Root->TryGetArrayField(TEXT("level_chance_scales"), Scales)) Status->SetArrayField(TEXT("level_chance_scales"), *Scales);
-        Block->SetObjectField(TEXT("status"), Status);
-    }
-    const bool bBurstKnown = Item.Firing.bBurstFromManifest;
-    FOpenWillowFiringData Parsed;
-    if (!FOpenWillowFiringData::Parse(*Block, Item.Damage, Parsed)) return;
-    const float SpeedMultiplier = float(Card.speedMultiplier.value_or(1));
-    Parsed.BulletSpeed *= SpeedMultiplier;
-    Parsed.ProjectileSpeed *= SpeedMultiplier;
-    Parsed.bBurstFromManifest = bBurstKnown;
-    Parsed.bSpinsToFullRate = Item.SpinMode == TEXT("BSM_SpinUpToFullFireRate");
-    Parsed.SpinStartMultiplier = Item.SpinStartIntervalScale;
-    Parsed.SpinUpDuration = Item.SpinUp;
-    Item.Firing = MoveTemp(Parsed);
+    const TArray<TSharedPtr<FJsonValue>>* Scales = nullptr;
+    Root->TryGetArrayField(TEXT("level_chance_scales"), Scales);
+    FString Missing;
+    if (!FOpenWillowWeaponGen::MergeFiringTemplate(**Template, Scales, Card, Item, Missing))
+        UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN firing template %s refused: %s (python tools/weapon_gen_firing.py --game <BL2 folder>)"), *Key, *Missing);
 }
 
 // The manifest is parsed once, on the game thread, the first time something asks for it.
@@ -392,6 +380,50 @@ FAutoConsoleCommand GRollGunCommand(TEXT("ow.RollGun"),
     TEXT("ow.RollGun <weapon balance or pool path> [stage=1] [seed=1]: roll a gun from the weapon generator into the backpack"),
     FConsoleCommandWithArgsDelegate::CreateStatic(&RollGunCommand));
 }
+
+bool FOpenWillowWeaponGen::MergeFiringTemplate(const FJsonObject& Template, const TArray<TSharedPtr<FJsonValue>>* LevelScales,
+    const weapongen::WeaponGenCard& Card, FOpenWillowWeaponItem& Item, FString& OutMissing)
+{
+    // A shallow copy: only top-level fields change, and the parser only reads.
+    const TSharedRef<FJsonObject> Block = MakeShared<FJsonObject>();
+    Block->Values = Template.Values;
+    Block->SetNumberField(TEXT("pellets"), Item.Projectiles);
+    Block->SetNumberField(TEXT("spread"), Item.Spread);
+    Block->SetNumberField(TEXT("burst_count"), Item.Firing.BurstCount);
+    Block->SetNumberField(TEXT("burst_interval"), Item.Firing.BurstInterval);
+    Block->SetNumberField(TEXT("spin_up"), Item.SpinUp);
+    if (Card.hasStatus && Card.statusEffectDefinition)
+    {
+        const TSharedRef<FJsonObject> Status = MakeShared<FJsonObject>();
+        Status->SetStringField(TEXT("definition"), FromUtf8(Card.statusEffectDefinition));
+        Status->SetStringField(TEXT("type"), FromUtf8(Card.statusEffect));
+        Status->SetNumberField(TEXT("duration"), Card.statusDuration.value_or(0));
+        Status->SetNumberField(TEXT("dps"), Card.statusDps.value_or(0));
+        const TSharedRef<FJsonObject> Surfaces = MakeShared<FJsonObject>();
+        for (const auto& [Surface, Chance] : Card.statusChanceBySurface) Surfaces->SetNumberField(FromUtf8(Surface), Chance);
+        Status->SetObjectField(TEXT("chance_by_surface"), Surfaces);
+        if (LevelScales) Status->SetArrayField(TEXT("level_chance_scales"), *LevelScales);
+        Block->SetObjectField(TEXT("status"), Status);
+    }
+    const bool bBurstKnown = Item.Firing.bBurstFromManifest;
+    FOpenWillowFiringData Parsed;
+    if (!FOpenWillowFiringData::Parse(*Block, Item.Damage, Parsed))
+    {
+        OutMissing = TEXT("schema");
+        return false;
+    }
+    const float SpeedMultiplier = float(Card.speedMultiplier.value_or(1));
+    Parsed.BulletSpeed *= SpeedMultiplier;
+    Parsed.ProjectileSpeed *= SpeedMultiplier;
+    Parsed.bBurstFromManifest = bBurstKnown;
+    Parsed.bSpinsToFullRate = Item.SpinMode == TEXT("BSM_SpinUpToFullFireRate");
+    Parsed.SpinStartMultiplier = Item.SpinStartIntervalScale;
+    Parsed.SpinUpDuration = Item.SpinUp;
+    if (!Parsed.CompleteForShotKind(OutMissing)) return false;
+    Item.Firing = MoveTemp(Parsed);
+    return true;
+}
+
 
 FString FOpenWillowWeaponGen::ManifestPath()
 {

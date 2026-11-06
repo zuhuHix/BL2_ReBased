@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "OpenWillowInventory.h"
 
+namespace weapongen { struct WeaponGenCard; }
+
 // Host side of the weapon generator (src/weapon_gen.*, compiled into ow-core): rolls guns from the manifest that
 // tools/weapon_gen_manifest.py writes under the ignored local/weapons/gen/. The rules keep the generator's status
 // (read from the game's code or fitted on item cards; UNVERIFIED in game unless docs/verification says otherwise).
@@ -28,6 +30,10 @@ struct FOpenWillowWeaponGen
     // damage x (1 + Scale), so the check tells the stack from the old stand-in. The list comes from the local manifest, so no stock
     // path is in the code. False with OutReason no_manifest, no_stack or no_gun.
     static bool FindGunWithDamageStack(int32 Stage, float Scale, FOpenWillowWeaponItem& OutItem, FString& OutReason);
+    // Fills Item.Firing from a firing template and what the card and the item know (pellets, spread, burst, spin, status, speed
+    // multiplier). False with what is missing, leaving Item.Firing as it was, when the result could not fire as its shot kind.
+    static bool MergeFiringTemplate(const FJsonObject& Template, const TArray<TSharedPtr<FJsonValue>>* LevelScales,
+        const weapongen::WeaponGenCard& Card, FOpenWillowWeaponItem& Item, FString& OutMissing);
     // For the firing test: the first gun of the manifest's list, rolled at Stage, with this burst count. The list comes from the
     // local manifest, so no stock path is in the code. False with OutReason no_manifest, stale_manifest (no burst data),
     // no_firing_templates or no_gun. BurstTestRocket asks for a gun that launches a projectile instead.
