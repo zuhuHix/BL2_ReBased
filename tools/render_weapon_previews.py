@@ -289,7 +289,7 @@ class Texture:
     def __init__(self, path, size=2048, address=None, srgb=False):
         self.width, self.height, self.channels = load_channels(path, size)
         self.pixels = None
-        self.clamp = [mode == "TA_Clamp" for mode in (address or ["TA_Wrap", "TA_Wrap"])]
+        self.address = address or ["TA_Wrap", "TA_Wrap"]
         # sRGB textures decode their colour channels to linear when sampled (alpha stays linear).
         self.decode = SRGB_DECODE if srgb else None
 
@@ -301,10 +301,15 @@ class Texture:
 
     def sample(self, u, v):
         """Nearest texel as floats 0..1, (r, g, b, a); alpha is 1 without an alpha channel."""
-        def index(value, size, clamp):
-            value = min(max(value, 0.0), 0.999999) if clamp else value % 1.0
+        def index(value, size, mode):
+            if mode == "TA_Clamp":
+                value = min(max(value, 0.0), 0.999999)
+            elif mode == "TA_Mirror":
+                value = min(1.0 - abs(value % 2.0 - 1.0), 0.999999)  # 0..1, then back down to 0
+            else:
+                value = value % 1.0
             return int(value * size)
-        i = index(v, self.height, self.clamp[1]) * self.width + index(u, self.width, self.clamp[0])
+        i = index(v, self.height, self.address[1]) * self.width + index(u, self.width, self.address[0])
         values = [c[i] / 255.0 for c in self.channels]
         if self.decode:
             values[:3] = [self.decode[c[i]] for c in self.channels[:3]]
@@ -344,6 +349,7 @@ class Paint:
             self.pattern_channels = prepared.get("pattern_channels", "RGB")
             self.decal_channels = prepared.get("decal_channels", "RGB")
             decal_address = decal.get("address") if decal.get("used") else None
+            pattern_address = prepared.get("pattern_address")
         else:
             mic = str(recipe.get("material") or "").split(".")[-1]
             resolved = resolve_material(mic, materials_roots) if mic else None
@@ -360,13 +366,14 @@ class Paint:
             self.detail_channel = DETAIL_CHANNELS.get((leaf.get("p_Diffuse"), klass), 2)
             self.pattern_channels = self.decal_channels = "RGB"
             decal_address = None
+            pattern_address = None
         if detail_override is not None:
             self.detail_channel = detail_override
         self.chain = chain
         self.masks = texture("p_Masks")
         self.detail = texture("p_Diffuse")
         self.normal = texture("p_NormalScopesEmissive")
-        self.pattern = texture("p_Pattern") if patterns else None
+        self.pattern = texture("p_Pattern", address=pattern_address) if patterns else None
         self.decal = texture("p_Decal", decal_address) if prepared is not None and decal_address else None
         if self.masks is None:
             self.note = "missing p_Masks texture"

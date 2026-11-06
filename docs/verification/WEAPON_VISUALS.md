@@ -627,3 +627,30 @@ out. Left as is: a beam some ticks late the first time, for a player who has not
 
 **Open.** A real frame of a drop per rarity (tiers shown, stick size, gun scale and pose); physics and rest pose; a body glow, if the
 game has one (`Master_ColorizationPickup` not decoded).
+
+## 21. Pattern address modes, and guns painted white by the fallback (gunlook lane, 2026-11-06)
+
+AI-assisted (Claude Opus 5.5; critic Luna). Tools and imports only, no host code.
+
+**Cause of the white Wild Rifle: the pre-built fallback, not the paint data.** The inventory lane's worktree had no part library, so the
+gun fell back to its older per-recipe mesh and material, which showed it near-white with a little red. The same recipe on the library
+shows its pattern. The fallback logs one line and draws a wrong gun; a suite does not notice. Any run on a machine or worktree
+without the library shows this. To copy the library: `local/weapon_library` and `Content/OpenWillow/Weapons/Library`. Open: nothing
+fails when a suite's guns fall back; a suite should count `fallback to the pre-built` lines.
+
+**Patterns wrapped; the game's textures say otherwise.** The paint tools recorded address modes for the decal and the reflection but
+not the pattern, so every pattern wrapped. 48 of the 226 patterned skins have another mode (read from the installed textures).
+`prepare_weapon_paint.py` now records `pattern_address`; both importers and the thumbnail renderer apply it. A library import applies the
+modes on every request for a texture, in any order, and sets a texture nobody gave a mode for back to wrap (`host/ue5/weapon_texture_address.py`,
+tested without the editor). The renderer implements clamp and mirror; mirror is checked on an invented texture only.
+
+**Checked on one gun, the Wild Rifle, against its real Inspect frame.** In the offline renderer with and without the address, and in the
+engine with it: the pattern's placement agrees with the real frame with the address, and not without. This confirms the placement for this
+gun only. The other non-wrapping skins are not compared with the game.
+
+**Critic: 6.5 / 10, target 8 not reached** (side and turn0 against the real Inspect frame, one round; framing excluded). Report:
+ignored `local/gunlook/critic_r2.md`. Its ranked fixes: clipped, cool metal highlights and stock tones; the highlight peaks of the red;
+checker whites and the logo's sharpness. It warns that a blanket reduction of the Inspect light could make the Widow Maker worse,
+whose bright receiver already matches; that light (section 19) was fitted on that pistol alone. So one gun fits and another clips: a
+soft shoulder in the paint material, not another light value, is the candidate. Not changed here. On the reverse side the logo reads
+backwards; no real frame shows that side, so that is unsettled.

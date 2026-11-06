@@ -23,8 +23,12 @@ the scene lighting is calibrated. Set it True to get the shader-grounded inputs.
 import json
 import os
 import re
+import sys
 from pathlib import Path
 import unreal
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from weapon_texture_address import apply_address  # noqa: E402
 
 # Pass 4 (2026-10-04, UNVERIFIED): BL2_ANALYTIC_LIGHTING builds an Unlit material that evaluates the original pixel
 # shader's own lighting structure, albedo x 0.4 x (ambient + directional terms) + emissive, with constants instead of the
@@ -145,8 +149,7 @@ def apply(data):
             # A re-import keeps the old asset's settings; the packed normal/emissive texture used to be TC_NORMALMAP.
             asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
         # Installed Texture2D AddressX/AddressY (e.g. ['TA_Clamp', 'TA_Wrap']), read by prepare_weapon_paint.py.
-        for prop, mode in zip(('address_x', 'address_y'), address or []):
-            asset.set_editor_property(prop, getattr(unreal.TextureAddress, mode.upper()))
+        apply_address(asset, address, unreal.TextureAddress)  # none recorded: wrap, also over an older import's clamp
         eal.save_loaded_asset(asset, only_if_is_dirty=False)
         return asset
 
@@ -241,7 +244,7 @@ def apply(data):
     inputs['Tones'] = node(unreal.MaterialExpressionConstant2Vector, r=scalars['p_HighlightsIntensity'],
                            g=scalars['p_ShadowsIntensity'])
     if pattern:
-        inputs['Pattern'] = sample(import_texture('p_Pattern'))
+        inputs['Pattern'] = sample(import_texture('p_Pattern', address=data.get('pattern_address')))
         place = vectors['p_PatternScalePosition']
         feed_uv(inputs['Pattern'], 1, place[:2], place[2:4])
         inputs['PatternColor'] = constant3(vectors['p_PatternColor'])
