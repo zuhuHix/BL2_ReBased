@@ -50,6 +50,11 @@ TARGETS = {
         # (the host's icy white-lilac target) and the 100-unit cylinder and 0.7 scale that conflicted with the live reads.
         'pawn': 'GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult',
         'dest': '/Game/OpenWillow/Characters/PhaselockTarget/Bullymong',
+        # What the archetype's body composition must wear, as (component, bone); read live on one Adult, 2026-11-06. Any other set
+        # stops the tool (check_worn), so a filter or package change cannot quietly drop a piece.
+        'attachments': [('StaticMeshComponent_3114', 'lElbow1'), ('StaticMeshComponent_3115', 'lElbow2'),
+                        ('StaticMeshComponent_3116', 'rElbow1'), ('StaticMeshComponent_3117', 'rElbow2'),
+                        ('StaticMeshComponent_3118', 'Head'), ('StaticMeshComponent_3119', 'Spine2')],
         'roles': [('Idle', 'Idle_var1'), ('Death', 'Death_Fire_var1'),
                   ('PhaseLock_Lift', 'PhaseLock_Lift'), ('PhaseLock_Loop', 'PhaseLock_Loop'),
                   ('PhaseLock_Fall', 'PhaseLock_Fall'), ('PhaseLock_Land', 'PhaseLock_Land')],
@@ -104,6 +109,16 @@ def worn_attachments(composition, read_component):
     return worn
 
 
+def check_worn(name, worn, expected):
+    """Stop unless worn is exactly the expected (component, bone) pairs, each once."""
+    found = [(npc.leaf(att['component']), att['bone']) for att in worn]
+    duplicates = sorted({pair for pair in found if found.count(pair) > 1})
+    missing = sorted(set(map(tuple, expected)) - set(found))
+    extra = sorted(set(found) - set(map(tuple, expected)))
+    if duplicates or missing or extra:
+        sys.exit(f'{name}: worn attachments differ from the expected set: missing {missing}, unexpected {extra}, duplicated {duplicates}')
+
+
 def attachment_meshes(worn):
     """Each static mesh once, with the one material its components give it. Two materials on one mesh stop the tool: the import
     sets the material on the asset, so it could not show both."""
@@ -137,6 +152,7 @@ def identity_step(args):
                  'observed': spec['observed']}
         body = reader.dump(pawn['bodyclass'], package)
         entry['attachments'] = worn_attachments(body.get('bodycomposition') or {}, lambda path: reader.dump(path, package))
+        check_worn(name, entry['attachments'], spec['attachments'])
         if len(entry['anim_sets']) != 1:
             sys.exit(f'{name}: expected one AnimSet on the mesh component, got {component.get("animsets")}')
         result['targets'][name] = entry
@@ -273,9 +289,9 @@ def anims_step(args):
 
 
 def host_attachments(worn, assets):
-    """What the host attaches: the asset, the bone and the component's own transform on that bone. The live Adult's bone matrices show
-    the imported bone frames are the live ones with no flip (2026-11-06, one cast), so the citizens' correction does not apply here.
-    That a piece's world placement is the component's transform on its bone is assumed: LocalToWorld could not be read."""
+    """What the host attaches: the asset, the bone and the component's own transform on that bone. The live Adult's bone matrices fit
+    the imported bone frames with no flip (2026-11-06, one cast, approximate pose), so the citizens' correction is not used here.
+    UNVERIFIED: the composition of a component on its bone (LocalToWorld could not be read) and the glTF axes through the import."""
     import numpy as np
     from prepare_ambient_world import component_transform
     out = []
@@ -291,6 +307,7 @@ def attachments_step(args):
     hosts = npc.read_json(OUT / 'host_target.json')
     for name, target in identity['targets'].items():
         worn = target['attachments']
+        check_worn(name, worn, TARGETS[name]['attachments'])
         hosts[name]['attachments'] = host_attachments(worn, report[name])
         print(f'attachments: {name}: {len(worn)} pieces')
     npc.write_json(OUT / 'host_target.json', hosts)
