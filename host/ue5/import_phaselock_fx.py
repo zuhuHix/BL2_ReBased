@@ -33,7 +33,7 @@ import sys
 import unreal
 
 sys.path.insert(0, os.environ['OPENWILLOW_PHASELOCK_HOST_DIR'])   # set by tools/import_phaselock_fx.ps1
-from phaselock_fx_inputs import check_fx_inputs  # noqa: E402
+from phaselock_fx_inputs import check_fx_inputs, load_fx_constants  # noqa: E402
 
 destination = '/Game/OpenWillow/Phaselock'
 roots = [Path(p).resolve() for p in os.environ['OPENWILLOW_PHASELOCK_UMODEL'].split(';') if p]
@@ -45,12 +45,17 @@ eal = unreal.EditorAssetLibrary
 report = {'materials': {}, 'textures': {}, 'meshes': {}, 'skipped': {}}
 # Stock colour constants of the effect shaders (game-derived, so not in this tracked file): an ignored local input next to the
 # emitters, local/phaselock/fx_constants.json, e.g. {"Mat_SirenHandInnerOrb": {"blue": [r, g, b]}}. The values were read from
-# the effect shaders (round 6, the shader-cache reading); they are gamma-space numbers and are converted to linear here.
+# the shaders (round 6, the shader-cache reading). A missing or malformed value stops the import here, before anything changes.
 constants_path = Path(os.environ.get('OPENWILLOW_PHASELOCK_CONSTANTS', emitter_dir.parent / 'fx_constants.json'))
-if not constants_path.is_file():
+FX_CONSTANTS, constant_problems = load_fx_constants(constants_path)
+if constant_problems:
     # RuntimeError, not SystemExit: tools/import_phaselock_fx.ps1 fails the run on a Traceback in the log.
-    raise RuntimeError(f'OW_PLFX missing {constants_path}: the stock effect colour constants (ignored local input) are required')
-FX_CONSTANTS = json.loads(constants_path.read_text(encoding='utf-8'))
+    raise RuntimeError('OW_PLFX inputs incomplete, nothing changed: ' + '; '.join(constant_problems))
+
+
+def stock_colour(material, name):
+    """A stock colour constant as the shader holds it, unconverted."""
+    return [float(c) for c in FX_CONSTANTS[material][name][:3]]
 
 
 def stock_colour_linear(material, name):
@@ -423,7 +428,7 @@ def tattoo_material():
     uv = node(unreal.MaterialExpressionTextureCoordinate, -900, 0)
     time = node(unreal.MaterialExpressionTime, -900, 100)
     colour = node(unreal.MaterialExpressionVectorParameter, -900, 200, parameter_name='GlowColor',
-                  default_value=unreal.LinearColor(0.0, 14.55, 20.0, 1.0))
+                  default_value=unreal.LinearColor(*stock_colour('Master_Player', 'power_emissive'), 1.0))
     enable = node(unreal.MaterialExpressionScalarParameter, -900, 300, parameter_name='Enable', default_value=0.0)
     masks = node(unreal.MaterialExpressionTextureObjectParameter, -900, 400, parameter_name='Masks',
                  texture=unreal.load_asset('/Engine/EngineResources/Black'), sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
@@ -607,7 +612,7 @@ return float4(0.0, 0.0, 0.0, saturate(1.0 - keep));
 """)
 
 # Mat_PowerUpTwirls (translucent, sub-image sprites): twirling wisps. The twirl atlas is read at a UV bent by two slowly
-# rotating reads of a scrolling-energy texture (0.02 x). Colour = (sqrt(t) - t) x particle colour x (0.6, 0, 0.8); alpha =
+# rotating reads of a scrolling-energy texture (0.02 x). Colour = (sqrt(t) - t) x particle colour x a stock violet (fx_constants.json); alpha =
 # saturate(4 t.r^2) x particle alpha. The loop template gives it a near-black particle colour, so these are dark wisps.
 # Host calibration (UNVERIFIED): alpha x0.5, because the host's wisps read as hard black cracks where the game's are soft
 # purple clouds.
@@ -617,12 +622,12 @@ float t = GT;
 float bendX = Texture2DSample(T0, T0Sampler, OWSPIN(0.5 * uv - 0.25, 0.2 * t) + 0.25).r * 0.02;
 float bendY = Texture2DSample(T0, T0Sampler, OWSPIN(uv - 0.5, 0.2 * t) + 0.5).b * 0.02;
 float3 twirl = saturate(Texture2DSample(T1, T1Sampler, uv + float2(bendX, bendY)).rgb * 10.0);
-// These wisps are the bubble's purple mottling (colour x (0.6, 0, 0.8)). Host calibration (UNVERIFIED): rounds 7-13 drew them at alpha
+// These wisps are the bubble's purple mottling (colour x the stock violet). Host calibration (UNVERIFIED): rounds 7-13 drew them at alpha
 // x0.5 and the shader's own colour (x1), which left black cracks; round 14 draws them at alpha x0.6 and colour x5, soft purple clouds. A
 // first round 14 try at the shader's own alpha (x1, colour x1) was hard black cracks too.
 float alpha = 0.6 * saturate(4.0 * twirl.r * twirl.r) * Col.a;
-return float4(min(1.0, 5.0 * (sqrt(twirl) - twirl) * Col.rgb * float3(0.6, 0.0, 0.8)), alpha);
-""", subuv=True)
+return float4(min(1.0, 5.0 * (sqrt(twirl) - twirl) * Col.rgb * OW_STOCK_TINT), alpha);
+""".replace('OW_STOCK_TINT', 'float3({:.6f}, {:.6f}, {:.6f})'.format(*stock_colour('Mat_PowerUpTwirls', 'tint'))), subuv=True)
 
 # --- hand and release materials ---------------------------------------------------------------------------------------
 

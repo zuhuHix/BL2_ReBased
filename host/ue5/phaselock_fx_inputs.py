@@ -10,6 +10,27 @@ from pathlib import Path
 REQUIRED_TEMPLATES = ('Part_SirenASHandOrb', 'Part_SirenASHandFizzle', 'Part_PhaseLockScreenEffect',
                       'Part_SirenASEnemyOrb', 'Part_SirenASEnemyOrbBegin', 'Part_SirenASEnemyOrbEnd')
 
+# The stock shader colours the importer reads from the ignored local/phaselock/fx_constants.json ({material: {name: [r, g, b]}}).
+REQUIRED_CONSTANTS = (('Mat_SirenHandInnerOrb', 'blue'), ('Mat_PowerUpTwirls', 'tint'), ('Master_Player', 'power_emissive'))
+
+
+def load_fx_constants(path):
+    """(constants, problems): the parsed file, and every required colour that is missing or is not three numbers."""
+    path = Path(path)
+    if not path.is_file():
+        return {}, [f'{path} is missing: the stock effect colour constants (ignored local input) are required']
+    try:
+        constants = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        return {}, [f'{path} is unreadable: {error}']
+    problems = []
+    for material, name in REQUIRED_CONSTANTS:
+        value = constants.get(material, {}).get(name) if isinstance(constants.get(material), dict) else None
+        if not (isinstance(value, list) and len(value) == 3
+                and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in value)):
+            problems.append(f'{path}: {material}.{name} is missing or is not three numbers')
+    return constants, problems
+
 
 def _materials_used(data):
     """The material names a decoded template's emitters draw with."""
