@@ -206,42 +206,42 @@ def _bone_rows(mesh, pawn):
     rows = {}
     origin = pawn.Location
     for name in PI_BONES:
-        loc = _safe(lambda: mesh.GetBoneLocation(name), None)
-        if loc is None or isinstance(loc, str):
+        loc = _null(lambda: mesh.GetBoneLocation(name))
+        if loc is None:
             rows[name] = None
             continue
         row = {"rel": [_r(loc.X - origin.X), _r(loc.Y - origin.Y), _r(loc.Z - origin.Z)]}
-        index = _safe(lambda: mesh.MatchRefBone(name), None)
-        matrix = _safe(lambda: mesh.GetBoneMatrix(index), None) if isinstance(index, int) else None
-        if matrix is not None and not isinstance(matrix, str):
-            row["scale"] = _safe(lambda: [_r((p.X**2 + p.Y**2 + p.Z**2)**0.5) for p in (matrix.XPlane, matrix.YPlane, matrix.ZPlane)])
+        index = _null(lambda: mesh.MatchRefBone(name))
+        matrix = _null(lambda: mesh.GetBoneMatrix(index)) if isinstance(index, int) else None
+        if matrix is not None:
+            row["scale"] = _null(lambda: [_r((p.X**2 + p.Y**2 + p.Z**2)**0.5) for p in (matrix.XPlane, matrix.YPlane, matrix.ZPlane)])
         rows[name] = row
     return rows
 
 
 def _component_row(comp):
-    row = {"class": _safe(lambda: comp.Class.Name), "name": _safe(lambda: comp.Name)}
+    row = {"class": _null(lambda: comp.Class.Name), "name": _null(lambda: comp.Name)}
     for field in ("SkeletalMesh", "StaticMesh", "Template"):
-        asset = _safe(lambda: getattr(comp, field), None)
-        if asset is not None and not isinstance(asset, str):
-            row[field] = _safe(lambda: asset._path_name())
-    row["hidden"] = _safe(lambda: bool(comp.HiddenGame))
+        asset = _null(lambda: getattr(comp, field))
+        if asset is not None:
+            row[field] = _null(lambda: asset._path_name())
+    row["hidden"] = _null(lambda: bool(comp.HiddenGame))
     return row
 
 
 def _asset_row(pawn, mesh):
     """What the live pawn draws: its mesh asset, materials, LOD and every attached or owned component that draws something."""
-    row = {"skeletal_mesh": _safe(lambda: mesh.SkeletalMesh._path_name()),
-           "materials": _safe(lambda: [m._path_name() if m else None for m in mesh.Materials]),
-           "lod": {f: _safe(lambda: int(getattr(mesh, f))) for f in ("PredictedLODLevel", "ForcedLodModel", "MinLodModel")},
+    row = {"skeletal_mesh": _null(lambda: mesh.SkeletalMesh._path_name()),
+           "materials": _null(lambda: [m._path_name() if m else None for m in mesh.Materials]),
+           "lod": {f: _null(lambda: int(getattr(mesh, f))) for f in ("PredictedLODLevel", "ForcedLodModel", "MinLodModel")},
            "attachments": [], "components": [],
-           "attached_actors": _safe(lambda: [f"{a.Class.Name}:{a.Name}" for a in pawn.Attached][:32])}
-    for a in _safe(lambda: list(mesh.Attachments), []) or []:
-        comp = _safe(lambda: a.Component, None)
-        if comp is not None and not isinstance(comp, str):
-            row["attachments"].append({"socket": _safe(lambda: str(a.SocketName)), "bone": _safe(lambda: str(a.BoneName)), **_component_row(comp)})
-    for comp in _safe(lambda: list(pawn.Components), []) or []:
-        if comp is not None and not isinstance(comp, str):
+           "attached_actors": _null(lambda: [f"{a.Class.Name}:{a.Name}" for a in pawn.Attached][:32])}
+    for a in (_null(lambda: list(mesh.Attachments)) or []):
+        comp = _null(lambda: a.Component)
+        if comp is not None:
+            row["attachments"].append({"socket": _null(lambda: str(a.SocketName)), "bone": _null(lambda: str(a.BoneName)), **_component_row(comp)})
+    for comp in (_null(lambda: list(pawn.Components)) or []):
+        if comp is not None:
             row["components"].append(_component_row(comp))
     return row
 
