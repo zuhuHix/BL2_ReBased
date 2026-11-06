@@ -41,6 +41,9 @@ public:
     // Test fixture (the range test's AI steps): the enemy back at home at full health, facing Yaw, with no target, no swing and
     // no chase, and its patrol held for HoldSeconds, so each step's scene is laid out from the same place.
     void ResetForAITest(float Now, float Yaw, float HoldSeconds);
+    // The exposure stand-in (UNVERIFIED): a clear Visibility line from the enemy's centre to Maya's centre, or from the top of its
+    // body to her eye height (a low bump of the ground blocks only the first). Maya and the enemy themselves are ignored.
+    bool HasLineOfSightTo(const FVector& MayaCentre, const AActor* Maya) const;
     // Hits from Maya (her pawn, its controller, or an actor she instigated) set the "hit by Maya" flag; the brain reads it.
     virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator,
         AActor* DamageCauser) override;

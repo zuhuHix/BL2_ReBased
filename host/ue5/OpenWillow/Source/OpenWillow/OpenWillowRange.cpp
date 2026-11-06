@@ -40,6 +40,7 @@ constexpr float EnemyRing = 1600.f;         // the enemies stand on an arc this 
 constexpr float EnemyArcDegrees = 60.f;     // the arc runs from -60 to +60 degrees around the facing
 constexpr int32 ScoutRings = 9;             // radii 6000, 7000, ... 14000 uu
 constexpr int32 ScoutAngles = 24;
+constexpr float PlaceReach = 3000.f;        // the range test's floor search for Maya's placements, above and below the spot
 constexpr float LootNearCorpse = 400.f;     // the range test's limit for a drop's distance from the corpse (host choice)
 // Floor rules of the scout and the formation (host choice, UNVERIFIED). Real terrain slopes: a walkable floor is one whose normal
 // is within about 32 degrees of up (cos 32 = 0.85); the probes reach ProbeReach above and below, a probe may sit ProbeMaxRise
@@ -1262,13 +1263,48 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     auto Pools = [Walker]() { return Walker->GetHealth() + Walker->GetShield(); };
     const int32 Seen = OpenWillowThreat::SeenInThreatRadius;
 
+    // The enemy's facing, horizontal.
+    auto Forward = [](const AOpenWillowEnemy* Enemy) { return FRotator(0.f, Enemy->GetActorRotation().Yaw, 0.f).Vector(); };
+    auto YawToward = [](const FVector& From, const FVector& To) { return (To - From).Rotation().Yaw; };
     // Maya on the floor under XY (her origin at the floor plus her half height), facing Yaw. False when there is no floor there.
     auto PlaceMaya = [this, World, Pawn](const FVector2D& XY, float Yaw) -> bool
     {
         FVector Floor;
-        if (!AOpenWillowEnemy::TraceFloor(World, XY, SpotNow.Z + 300.f, SpotNow.Z - 900.f, Pawn, Floor)) return false;
+        if (!AOpenWillowEnemy::TraceFloor(World, XY, SpotNow.Z + PlaceReach, SpotNow.Z - PlaceReach, Pawn, Floor)) return false;
         TeleportMaya(World, Floor, Yaw);
         return true;
+    };
+    // Maya in E0's sight: ahead of it, beyond the proximity reach, inside the den's ThreatRadius, on a floor, with the enemy's own
+    // sight line clear (at a fixed 2000 uu the ground at this spot blocked it: batch 7). False when no such place is found.
+    auto PlaceInSight = [&](FString& OutWhere) -> bool
+    {
+        const float HalfHeight = Walker->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        for (const float Distance : {2000.f, 1600.f, 1300.f, 1000.f})
+            for (const float Angle : {0.f, 15.f, -15.f, 30.f, -30.f, 45.f, -45.f})
+            {
+                const FVector Dir = FRotator(0.f, E0->GetActorRotation().Yaw + Angle, 0.f).Vector();
+                const FVector At = E0->GetActorLocation() + Dir * Distance;
+                FVector Floor;
+                if (!AOpenWillowEnemy::TraceFloor(World, FVector2D(At.X, At.Y), SpotNow.Z + PlaceReach, SpotNow.Z - PlaceReach, Pawn, Floor)) continue;
+                if (FVector2D::Distance(FVector2D(Floor.X, Floor.Y), Den.Centre) >= Den.ThreatRadius) continue;
+                if (!E0->HasLineOfSightTo(Floor + FVector(0.f, 0.f, HalfHeight), Walker)) continue;
+                TeleportMaya(World, Floor, YawToward(Floor, E0->GetActorLocation()));
+                OutWhere = FString::Printf(TEXT("%.0f uu at %.0f degrees"), Distance, Angle);
+                return true;
+            }
+        return false;
+    };
+    // Maya far from the den: outside its ThreatRadius, on a floor, wherever the terrain has one (a fixed direction ran off the
+    // terrain at this spot: batch 7). False when no ring has a floor.
+    auto PlaceFar = [&]() -> bool
+    {
+        for (const float Radius : {Den.ThreatRadius + 500.f, Den.ThreatRadius + 1500.f, Den.ThreatRadius + 3000.f})
+            for (int32 Index = 0; Index < 12; ++Index)
+            {
+                const FVector At = SpotNow + FRotator(0.f, SpotYawNow + 30.f * float(Index), 0.f).Vector() * Radius;
+                if (PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation()))) return true;
+            }
+        return false;
     };
     // The scene of a check, for its log line: Maya's distance from E0 and from the den's centre, E0's distance from home, the den's radii.
     auto Scene = [this, Walker, E0]()
@@ -1280,9 +1316,6 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             FVector::Dist2D(E0->GetActorLocation(), E0->GetHome()), E0->IsAIEnabled() ? 1 : 0, E0->IsPassive() ? 1 : 0,
             Walker->IsDown() ? 1 : 0);
     };
-    // The enemy's facing, horizontal.
-    auto Forward = [](const AOpenWillowEnemy* Enemy) { return FRotator(0.f, Enemy->GetActorRotation().Yaw, 0.f).Vector(); };
-    auto YawToward = [](const FVector& From, const FVector& To) { return (To - From).Rotation().Yaw; };
     auto Reset = [this, Pawn, E0, Now](const TCHAR* Why)
     {
         Den.ResetRecord();
@@ -1340,10 +1373,9 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         Reset(TEXT("sight"));
         OnlyActive(E0);
-        const FVector At = E0->GetActorLocation() + Forward(E0) * 2000.f;
-        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        if (!PlaceInSight(TestWhere))
         {
-            TestSkip(TEXT("notice_sight"), TEXT("no floor 2000 uu in front of the enemy"));
+            TestCheck(TEXT("notice_sight"), false, TEXT("no place ahead of the enemy with a clear sight line"));
             TestStep = 20;
             return;
         }
@@ -1354,8 +1386,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     case 19:
     {
         if (Now - StepStart < 0.5f) return;
-        TestCheck(TEXT("notice_sight"), Den.Level >= Seen, FString::Printf(TEXT("level %d, %.2f s after the teleport (2000 uu in front)"),
-            Den.Level, Now - StepStart));
+        TestCheck(TEXT("notice_sight"), Den.Level >= Seen, FString::Printf(TEXT("level %d, %.2f s after the teleport (%s in front), %s"),
+            Den.Level, Now - StepStart, *TestWhere, *Scene()));
         TestStep = 20;
         return;
     }
@@ -1363,10 +1395,9 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         Reset(TEXT("far"));
         OnlyActive(E0);
-        const FVector At = SpotNow + FRotator(0.f, SpotYawNow, 0.f).Vector() * 6000.f;
-        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        if (!PlaceFar())
         {
-            TestSkip(TEXT("no_notice_far"), TEXT("no floor 6000 uu from the spot"));
+            TestCheck(TEXT("no_notice_far"), false, TEXT("no floor outside the den's threat radius"));
             TestStep = 22;
             return;
         }
@@ -1389,6 +1420,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         Reset(TEXT("provoked"));
         OnlyActive(E0);
+        PlaceFar();   // a hit from afar: only the damage can raise the level (near her, a notice rule could too)
         TestHit(E0, 1.f, E0->BodyComponent(), PC, Pawn);
         StepStart = Now;
         TestStep = 23;
@@ -1408,10 +1440,9 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         Reset(TEXT("approach"));
         OnlyActive(E0);
-        const FVector At = E0->GetActorLocation() + Forward(E0) * 2000.f;
-        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        if (!PlaceInSight(TestWhere))
         {
-            TestSkip(TEXT("approach"), TEXT("no floor 2000 uu in front of the enemy"));
+            TestCheck(TEXT("approach"), false, TEXT("no place ahead of the enemy with a clear sight line"));
             TestStep = 26;
             return;
         }
@@ -1605,10 +1636,9 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             return;
         }
         // Out of every rule now: far from the enemies. The record is left to run out.
-        const FVector At = SpotNow + FRotator(0.f, SpotYawNow, 0.f).Vector() * 6000.f;
-        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        if (!PlaceFar())
         {
-            TestSkip(TEXT("forget"), TEXT("no floor 6000 uu from the spot"));
+            TestCheck(TEXT("forget"), false, TEXT("no floor outside the den's threat radius"));
             TestStep = 35;
             return;
         }

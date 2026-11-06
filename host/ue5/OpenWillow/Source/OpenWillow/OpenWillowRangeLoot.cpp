@@ -23,6 +23,8 @@ constexpr int32 DropSpots = 6;                  // spots 60 degrees apart on eac
 constexpr int32 DropRings = 3;                  // rings at 1, 2 and 3 x DropRadius, tried in turn when a spot has no room
 constexpr float DropRoomRadius = 30.f;          // the room a drop needs: a free sphere this size just above the floor
 constexpr float WeaponDropLifeSeconds = 120.f;
+constexpr int32 AlwaysMinGunStage = 2;          // ow.RangeLoot always: the lowest stage the weapon pool is rolled at
+constexpr float DropRoomLift = 30.f;            // the room sphere's bottom above the floor: a 32 degree slope rises 19 uu over its radius
 constexpr int32 AlwaysWeaponTries = 8;          // ow.RangeLoot always: seeds tried until the weapon pool gives a gun  // a range gun drop expires after this (the range's own pickups after 60 s)
 
 // The money of one pickup at Level: round(4 x 1.13^level), saturated to the int32 range. The value of
@@ -65,7 +67,7 @@ FVector DropSpot(UWorld* World, const AOpenWillowEnemy* Enemy, int32 Index)
         const FVector2D XY = FVector2D(Centre.X, Centre.Y) + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * DropRadius * (Ring + 1);
         FVector Floor = FVector::ZeroVector;
         if (!AOpenWillowEnemy::TraceFloor(World, XY, Centre.Z + 100.f, Centre.Z - 600.f, Enemy, Floor)) continue;
-        const FVector Room = Floor + FVector(0.f, 0.f, DropLift + DropRoomRadius + 2.f);
+        const FVector Room = Floor + FVector(0.f, 0.f, DropRoomLift + DropRoomRadius);
         if (World->OverlapAnyTestByObjectType(Room, FQuat::Identity, Solid, FCollisionShape::MakeSphere(DropRoomRadius), Query)) continue;
         return Floor + FVector(0.f, 0.f, DropLift);
     }
@@ -230,12 +232,15 @@ FOpenWillowRangeLootResult RollRangeLoot(UWorld* World, AOpenWillowEnemy* Enemy,
                 // shield or a grenade mod does not leave the tester without a gun. The tries' seeds follow the first one, so the loot
                 // stream is not touched again.
                 const int32 Tries = Mode == EOpenWillowRangeLootMode::Always ? AlwaysWeaponTries : 1;
+                // At stage 1 the stock pool gives nothing at all (the core generator agrees: empty drops); always mode is for gun testing,
+                // so it rolls at stage 2 at least. Normal mode keeps the stock result.
+                const int32 GunStage = Mode == EOpenWillowRangeLootMode::Always ? FMath::Max(ItemStage, AlwaysMinGunStage) : ItemStage;
                 bool bRolled = false;
                 for (int32 Try = 0; Try < Tries && !bRolled; ++Try)
                 {
                     TArray<FString> Drops;
-                    bRolled = FOpenWillowWeaponGen::RollPoolWeapon(Pool.Pool, ItemStage, Seed + uint32(Try) * 7919u, Item, &Drops);
-                    UE_LOG(LogTemp, Display, TEXT("OWRANGE loot weapon_try %d pool=%s stage=%d gun=%d drops=%s"), Try, *Leaf, ItemStage,
+                    bRolled = FOpenWillowWeaponGen::RollPoolWeapon(Pool.Pool, GunStage, Seed + uint32(Try) * 7919u, Item, &Drops);
+                    UE_LOG(LogTemp, Display, TEXT("OWRANGE loot weapon_try %d pool=%s stage=%d gun=%d drops=%s"), Try, *Leaf, GunStage,
                         bRolled ? 1 : 0, *FString::Join(Drops, TEXT(",")));
                 }
                 if (bRolled)

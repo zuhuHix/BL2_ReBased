@@ -25,6 +25,7 @@ constexpr float TurnDegreesPerSecond = 360.f;
 constexpr float BarHeight = 30.f;           // health bar above the top of the collision bounds (uu)
 constexpr float BarShieldGap = 12.f;        // shield bar above the health bar (uu)
 constexpr float BarWidth = 120.f;           // uu
+constexpr float SightEyeHeight = 60.f;      // Maya's eye above her centre, for the second sight line (host stand-in)
 constexpr float BarThickness = 10.f;        // uu
 constexpr float BarFront = 1.5f;            // the fill sits this far toward the camera, so it does not share the back's plane
 
@@ -287,11 +288,26 @@ void AOpenWillowEnemy::OnDied(AActor* DamageCauser)
     OnEnemyDied.Broadcast(this, DamageCauser);
 }
 
+bool AOpenWillowEnemy::HasLineOfSightTo(const FVector& MayaCentre, const AActor* Maya) const
+{
+    FVector Centre;
+    float HalfHeight = 0.f;
+    CollisionCentre(Centre, HalfHeight);
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSight), true);
+    Query.AddIgnoredActor(this);
+    Query.AddIgnoredActor(Maya);
+    FHitResult Hit;
+    if (!GetWorld()->LineTraceSingleByChannel(Hit, Centre, MayaCentre, ECC_Visibility, Query)) return true;
+    return !GetWorld()->LineTraceSingleByChannel(Hit, Centre + FVector(0.f, 0.f, HalfHeight),
+        MayaCentre + FVector(0.f, 0.f, SightEyeHeight), ECC_Visibility, Query);
+}
+
 void AOpenWillowEnemy::ResetForAITest(float Now, float Yaw, float HoldSeconds)
 {
     ResetForTest();
     SetActorRotation(FRotator(0.f, Yaw, 0.f));
-    Brain.Stop();
+    Brain.ResetForTest();
+    bLineOfSightSample = false;
     bDamagedByMaya = false;
     bHasTarget = false;
     bHitPlaying = false;
@@ -369,14 +385,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
         // stay true every frame; the next sample comes with the first update after it resumes.
         if (!bPassive && !IsPhaselocked() && !IsDead() && Brain.IsUpdateDue(Now))
         {
-            FVector Centre;
-            float HalfHeight = 0.f;
-            CollisionCentre(Centre, HalfHeight);
-            FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeSight), true);
-            Query.AddIgnoredActor(this);
-            Query.AddIgnoredActor(Walker);
-            FHitResult Hit;
-            bLineOfSightSample = !GetWorld()->LineTraceSingleByChannel(Hit, Centre, In.MayaLocation, ECC_Visibility, Query);
+            bLineOfSightSample = HasLineOfSightTo(In.MayaLocation, Walker);
         }
         In.bLineOfSight = bLineOfSightSample;
     }
