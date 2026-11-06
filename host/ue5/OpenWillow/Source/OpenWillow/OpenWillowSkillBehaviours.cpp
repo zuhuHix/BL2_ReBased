@@ -20,14 +20,14 @@ UOpenWillowSkills::UOpenWillowSkills()
     Random.Initialize(FParse::Value(FCommandLine::Get(), TEXT("owskillseed="), Seed) ? Seed : int32(FPlatformTime::Cycles()));
 }
 
-float UOpenWillowSkills::CritBonusScale() const
+float UOpenWillowSkills::CritBonusAdd() const
 {
-    if (CritScaleVersion != GradeVersion)
+    if (CritAddVersion != GradeVersion)
     {
-        CritScaleVersion = GradeVersion;
-        CritScale = OpenWillowSkillEffects::Apply(GetOwner(), TEXT("D_Attributes.GameplayAttributes.PlayerCriticalHitBonus"), 2.f) / 2.f;
+        CritAddVersion = GradeVersion;
+        CritAdd = OpenWillowSkillEffects::Apply(GetOwner(), TEXT("D_Attributes.GameplayAttributes.PlayerCriticalHitBonus"), 2.f) - 2.f;
     }
-    return CritScale;
+    return CritAdd;
 }
 
 bool UOpenWillowSkills::KillSkillsActive() const
@@ -186,19 +186,22 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
                 A.At = At; A.Kind = FAction::EKind::Blast; A.Target = Target; A.Where = Target->GetActorLocation();
                 A.Radius = Radius; A.Damage = Damage; A.DamageType = DamageType; A.Skill = Skill; A.Why = Why;
             };
-            // Helios: at +0.75 s an incendiary blast on the target, radius 650, damage 0.2 x grade x PlayerSkillDamage.
+            // Helios: at +0.75 s an incendiary blast on the target, radius 650 (UNVERIFIED). Damage 0.29 x grade x
+            // PlayerSkillDamage: fitted to the live read, checked at level 8 only (linear at grades 1 and 5); the data reading
+            // gave 0.2, and the difference is not explained. The burn it applies is not modelled.
             if (const int32 G = GradeOfNamed(TEXT("Helios")))
-                Blast(CastAt + 0.75f, 650.f, 0.2f * G * SkillDamageAt(MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"), TEXT("Helios"));
+                Blast(CastAt + 0.75f, 650.f, 0.29f * G * SkillDamageAt(MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"), TEXT("Helios"));
             // Converge: at +1.25 s a blast on the target, radius 2000, 1 x PlayerSkillDamage. The pull (momentum -110000
             // toward the target) is not applied by the host.
             if (GradeOfNamed(TEXT("Converge")) > 0)
                 Blast(CastAt + 1.25f, 2000.f, SkillDamageAt(MayaLevel), TEXT(""), TEXT("Converge"), TEXT("Converge"));
-            // Ruin: 1, 2 and 3 s after the lock, slag, shock and corrosive pulses on the target, radius 650, damage
-            // 7.2 x PlayerSkillStatusEffectDamage each. Their status effects (always applied in the data) are not.
+            // Ruin: 1, 2 and 3 s after the lock, slag, shock and corrosive pulses on the target, radius 650 (UNVERIFIED). Damage
+            // 1 x PlayerSkillDamage each: the live value, checked at level 8 only (with the timing); the data reading gave
+            // 7.2 x PlayerSkillStatusEffectDamage. Their status effects are not modelled.
             if (GradeOfNamed(TEXT("Ruin")) > 0)
             {
                 const float LockedAt = CastAt + Maya->LastPhaselockTimeline().LockedAt;
-                const float Pulse = 7.2f * SkillStatusDamageAt(MayaLevel);
+                const float Pulse = SkillDamageAt(MayaLevel);
                 Blast(LockedAt + 1.f, 650.f, Pulse, TEXT("GD_Amp.DamageType.DmgType_Amp_Impact"), TEXT("Ruin"), TEXT("Ruin slag"));
                 Blast(LockedAt + 2.f, 650.f, Pulse, TEXT("GD_Shock.DamageType.DmgType_Shock_Impact"), TEXT("Ruin"), TEXT("Ruin shock"));
                 Blast(LockedAt + 3.f, 650.f, Pulse, TEXT("GD_Corrosive.DamageType.DmgType_Corrosive_Impact"), TEXT("Ruin"), TEXT("Ruin corrosive"));

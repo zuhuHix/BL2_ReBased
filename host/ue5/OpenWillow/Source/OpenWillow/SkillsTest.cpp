@@ -241,7 +241,7 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
     }
     TestTrue(TEXT("Recompense rolls replay from the seed"), bSame);
     TestTrue(TEXT("Seed 1234 gives both a proc and a no-proc in 20 rolls at grade 5"), Procs > 0 && Misses > 0);
-    TestEqual(TEXT("Crit bonus scale without an owner is 1"), Tree->CritBonusScale(), 1.f);
+    TestEqual(TEXT("Crit bonus add without an owner is 0"), Tree->CritBonusAdd(), 0.f);
 
     Tree->ResetTree();
     TestTrue(TEXT("A respec removes every modifier"), Stack(TEXT("A.Damage")).IsEmpty());

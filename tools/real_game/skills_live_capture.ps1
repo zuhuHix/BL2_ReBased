@@ -1,20 +1,19 @@
 # Skills live capture (first run 2026-11-06; fixed after it, see NATIVE_SKILL_BEHAVIOURS.md). One real-game session in Three Horns Divide (Ice_P) that drives
-# scripts/skills_live.py through the openwillow_realgame command channel. Steps, in order; each sets its grades in memory,
-# runs, then puts them back. A failed step is recorded and the run moves on:
+# scripts/skills_live.py through the openwillow_realgame command channel. Steps, in order (-Steps a,b,c runs only those); each sets
+# its grades in memory, runs, then puts them back. A failed step keeps its error, and two failures in a row end the run:
 #   discover                   the SkillDefinition paths that match each skill name (sl_find_skills)
-#   killskill_timer            Life Tap at grade 5 (a kill skill); two adult bullymongs killed about 2 s apart while
-#                              UpdateKillSkills and KillSkillTimeRemaining are sampled every 0.05 s (sl_killskill_watch)
-#   helios                     Helios at grade 5; one Phaselock cast (F key) on a lifted bullymong; TakeDamage recorded
+#   killskill_timer            Life Tap at grade 5 (a kill skill); two unwounded, controlled adult bullymongs killed with the gun
+#                              alone while UpdateKillSkills and KillSkillTimeRemaining are sampled every 0.05 s (sl_killskill_watch)
+#   converge                   Converge at grade 1; one Phaselock cast (F key) on a lifted bullymong; TakeDamage recorded
+#   minds_eye_crit             the crit bonus and its modifier stack as saved, at grade 1 and at grade 5 (sl_crit_bonus)
+#   subsequence_sweet_release  Sub-Sequence 5 and Sweet Release 5; Maya's health lowered; the lifted bullymong killed during the lock;
+#                              OnKilledTarget, InterruptPhaseLock, EndSkill counted per cast and Maya's health (sl_killedtarget_watch)
+#   helios                     Helios at grade 5; one cast, same recording as converge
 #   ruin                       Ruin at grade 1; one cast, same recording
-#   converge                   Converge at grade 1; one cast, same recording
-#   minds_eye_crit             Mind's Eye at grade 0, then 5: CurrentInstantHitCriticalHitBonus read at each
-#   subsequence_sweet_release  Sub-Sequence 5 and Sweet Release 5; the lifted bullymong is killed during the lock;
-#                              OnKilledTarget, InterruptPhaseLock and EndSkill counted per cast (sl_killedtarget_watch)
 # Takes the keyboard only (no frame capture). Everything written is game data under ignored local/realgame/skills_live/:
 # one JSON per step, summary.json, and save_compare.json.
 # Locks, saves and cleanup follow phaselock_integrity_capture.ps1: the hub lock and the run lock; saves backed up; saving
 # blocked in game from the first frame; afterwards the save folder is compared with the backup (changed files restored).
-# Results that depend on an unconfirmed API are recorded as 'not implemented' (see the TODO(live) marks in scripts/skills_live.py).
 param(
     # The machine-wide hub lock lives in the main checkout's local/ (shared by every worktree on this machine).
     [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
@@ -22,11 +21,14 @@ param(
     # quick_startup's -Character slot: the level-8 Maya (Phaselock) in Sanctuary, as the Phaselock integrity capture uses.
     # The hub may pass the level-70 save's file name instead.
     [string]$Character = 'Save0008.sav',
+    # Only these steps (comma-separated names, one argument); none named: all of them.
+    [string[]]$Steps = @(),
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
     [int]$HubWaitMinutes = 120
 )
 $ErrorActionPreference = 'Stop'
+$Steps = @($Steps | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $Out = Join-Path $script:RG 'skills_live'
@@ -91,11 +93,31 @@ function Invoke-GunKill([string]$Target) {
     @{ target = $Target; wound = $wound; how = $how }
 }
 
+# A kill with nothing done to the target first: Maya near it, not isolated, so it and the others keep their controllers, and the gun
+# held on it until it dies or the time is up. No fallback: a target that does not die is a result (the step says so).
+function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
+    $place = PyCall "place('$Target', 450.0)"
+    Start-Sleep 1
+    Focus-Game | Out-Null
+    $before = PyCall "{'health': ai_pawn('$Target').GetHealth(), 'controlled': ai_pawn('$Target').Controller is not None}"
+    $start = Get-Date; $dead = $false
+    PyCall 'sl_fire(True)' | Out-Null
+    try {
+        while (((Get-Date) - $start).TotalSeconds -lt $Seconds) {
+            PyCall "aim('$Target')" | Out-Null
+            Start-Sleep -Milliseconds 400
+            if ((PyCall "sl_is_dead('$Target')") -eq $true) { $dead = $true; break }
+        }
+    } finally { PyCall 'sl_fire(False)' | Out-Null }
+    @{ target = $Target; place = $place; before = $before; dead = $dead; seconds = [math]::Round(((Get-Date) - $start).TotalSeconds, 2) }
+}
+
 # Runs one step and writes its record. The grades are set first (a step whose grades cannot be set does not run), and always put
 # back, and any watch the step left open is stopped. A failure stops the step at once with its text (a Python traceback included)
 # in the step's JSON. Two steps failing in a row end the run, so a broken setup cannot use up the slot.
 $script:FailedInARow = 0
 function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
+    if ($Steps -and $Name -notin $Steps) { return }
     $rec = [ordered]@{ step = $Name; grades = $Grades; started = (Get-Date).ToString('o') }
     if ($script:FailedInARow -ge 2) {
         $summary.steps += [pscustomobject]@{ step = $Name; ok = $false; error = 'not run: the two steps before it failed' }
@@ -197,24 +219,21 @@ try {
         PyCall "{'Helios': sl_find_skills('Helios'), 'Ruin': sl_find_skills('Ruin'), 'Converge': sl_find_skills('Converge'), 'SubSequence': sl_find_skills('Sub-Sequence'), 'SweetRelease': sl_find_skills('Sweet Release'), 'MindsEye': sl_find_skills('Minds Eye'), 'LifeTap': sl_find_skills('Life Tap'), 'Phaselock': sl_find_skills('Phaselock')}"
     }
 
-    # 1. Kill-skill timer. Life Tap (a Harmony kill skill) at grade 5 makes the kill-skill switch run; two real gun kills a few
-    # seconds apart, then long enough to see it run out (refresh or add, and the duration).
+    # 1. Kill-skill timer, first, before anything isolates a pawn. Life Tap (a Harmony kill skill) at grade 5 makes the kill-skill
+    # switch run; two kills with the gun alone on unwounded, controlled targets, then long enough to see it run out (refresh or add,
+    # and the duration). The earlier runs' targets were wounded by a direct TakeDamage first, and the timer stayed at 0.
     Invoke-Step 'killskill_timer' @{ LifeTap = 5 } {
         $targets = Get-Bullymongs 2
-        $setup = Set-Up $targets[0]
-        $watch = PyCall 'sl_killskill_watch(22.0)'
+        $watch = PyCall 'sl_killskill_watch(75.0)'
         Start-Sleep 1
-        $k1 = Invoke-GunKill $targets[0]
-        $setup2 = Set-Up $targets[1]
-        $k2 = Invoke-GunKill $targets[1]
+        $k1 = Invoke-FreshKill $targets[0]
+        $k2 = Invoke-FreshKill $targets[1]
         Start-Sleep 16
         $res = PyCall 'sl_watch_result("killskill")'
-        @{ targets = $targets; setup = @($setup, $setup2); watch_start = $watch; kills = @($k1, $k2); result = $res }
+        @{ targets = $targets; watch_start = $watch; kills = @($k1, $k2); result = $res }
     }
 
-    # 2 to 4. One Phaselock cast per skill, each with its own grade set.
-    Invoke-DamageCast 'helios' @{ Helios = 5 }
-    Invoke-DamageCast 'ruin' @{ Ruin = 1 }
+    # 2. Converge: its blast leaves the target alive, so the next step can use it (isolate detaches every other pawn).
     Invoke-DamageCast 'converge' @{ Converge = 1 }
 
     # 5. Mind's Eye: the crit bonus and its stack as the save has it, at grade 1 and at grade 5. Grade 0 cannot be read this way:
@@ -234,6 +253,7 @@ try {
     Invoke-Step 'subsequence_sweet_release' @{ SubSequence = 5; SweetRelease = 5 } {
         $t = @(Get-Bullymongs 1)[0]
         $setup = Set-Up $t
+        $health = PyCall 'sl_maya_health(0.5)'
         $watch = PyCall 'sl_killedtarget_watch(12.0)'
         Send-Key F
         Start-Sleep -Milliseconds 1500
@@ -241,8 +261,12 @@ try {
         Start-Sleep 9
         $res = PyCall 'sl_watch_result("killedtarget")'
         $ready = Wait-Ready
-        @{ target = $t; setup = $setup; watch_start = $watch; kill = $kill; result = $res; ready = $ready }
+        @{ target = $t; setup = $setup; maya_health = $health; watch_start = $watch; kill = $kill; result = $res; ready = $ready }
     }
+
+    # 4 and 5. Helios and Ruin last: Ruin's pulses kill the target, and one controlled target is all that is left by now.
+    Invoke-DamageCast 'helios' @{ Helios = 5 }
+    Invoke-DamageCast 'ruin' @{ Ruin = 1 }
     # Normal end: the game quits itself (the finally block still stops it if it has not).
     # The game may be gone before it answers: no reply, or an empty one, is the expected end here.
     try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { 'quit sent (no reply)' }

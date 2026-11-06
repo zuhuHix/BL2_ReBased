@@ -95,6 +95,8 @@ the attribute falls back to its constant, 0. Implement as: `GradeOf(skill) = gra
   - +1 s: activate `Ruin_Feedback` (HUD), particle `Part_Ruin_Pulses` on the target, then radius damage centred on
     the target: **Slag** (`DmgType_Amp_Impact`), radius 650, damage = 7.2 x PlayerSkillStatusEffectDamage, status
     damage = 7.2 x PlayerSkillStatusEffectDamage, status chance 9001 (always applies); sound `Ak_Play_FX_Maya_Ruin`.
+  **Live correction (2026-11-06, level 8 only): a pulse does 1 x PlayerSkillDamage, not 7.2 x PlayerSkillStatusEffectDamage. The
+  timing below was seen as written. This data reading of the factor is wrong.**
   - +2 s: same pulse with **Shock** (`DmgType_Shock_Impact`).
   - +3 s: same pulse with **Corrosive** (`DmgType_Corrosive_Impact`).
   - +4 s: deactivate `Ruin_Feedback`.
@@ -188,6 +190,8 @@ the attribute falls back to its constant, 0. Implement as: `GradeOf(skill) = gra
   falloff, incendiary (`DmgType_Incendiary_Impact`, impact `ExplosiveImpactIncendiary512`), damage =
   0.2 x `Init_Ablaze_DamageCalc`, status damage = 0.11 x `Init_Ablaze_DamageCalc`, status chance 9001, where
   `Init_Ablaze_DamageCalc` = GradeOf(Helios) x PlayerSkillDamage. So damage = 0.2 x g x 8 x S^L.
+  **Live correction (2026-11-06, level 8 only): damage is linear in grade (seen at grades 1 and 5) at 0.29 x PlayerSkillDamage per
+  grade, not 0.2. 0.29 is fitted to the live read and its reason is not known. The 0.75 s delay was seen as written.**
 - **Script part:** at t = 0 `ShouldSpawnHelios` (server; skill manager; Helios active) spawns the `Part_Ablaze_Explosion`
   emitter at the target's location when charmed, else at `LiftEndLocation`. Quirk: the script checks that the charm
   skill reference is set instead of the Helios reference; harmless because both are set on the archetype.
@@ -380,18 +384,18 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 
 | Skill | Host | Not done |
 |---|---|---|
-| Kill skills (3.1) | a kill (`AOpenWillowWalker::NotifyKilledEnemy`) restarts a 7 s timer; Kill skills' modifiers count while it runs | refresh vs add, which kills count (guess) |
+| Kill skills (3.1) | a kill (`AOpenWillowWalker::NotifyKilledEnemy`) restarts a 7 s timer; Kill skills' modifiers count while it runs. UNVERIFIED, with no live support: see the third run | refresh vs add, which kills count (guess) |
 | Inertia (3.3) | reload speed (through the PR 2 reload hook) | shield regeneration (no shield) |
-| Helios (1.7) | +0.75 s blast on the lifted target, radius 650, 0.2 x g x PlayerSkillDamage | burn status; the blocked-target chain |
+| Helios (1.7) | +0.75 s blast on the lifted target, radius 650, 0.29 x g x PlayerSkillDamage (live, checked at level 8 only) | burn status; the blocked-target chain |
 | Converge (1.1) | +1.25 s blast, radius 2000, 1 x PlayerSkillDamage | the pull, the melee definitions; blocked chain |
-| Ruin (1.2) | slag, shock, corrosive blasts 1, 2, 3 s after the lock, radius 650, 7.2 x PlayerSkillStatusEffectDamage | the status effects; blocked chain |
+| Ruin (1.2) | slag, shock, corrosive blasts 1, 2, 3 s after the lock, radius 650, 1 x PlayerSkillDamage (live, checked at level 8 only) | the status effects; blocked chain |
 | Sweet Release (2.1) | when the held target dies, g orbs each heal 15 % of Maya's missing health after flight time at 800 uu/s | the orb actor and homing; other players |
 | Life Tap (3.4) | while the kill-skill timer runs, Maya heals `PlayerConvertDamageToHealingPercent` (0.012 x g) of each gun hit's applied damage | the native conversion rule (guess: applied damage x fraction) |
 | Cloud Kill (4.2) | a gun hit on an enemy, outside a 5.5 s cooldown, leaves a cloud at the enemy: 20 corrosive blasts every 0.25 s, radius 220, 0.25 x PlayerSkillDamage | the cloud actor; procs on hits whose `Source` is Bullet or Rocket (a rocket's explosion counts; a bullet's impact explosion, a Tediore throw and status damage do not) |
 | Immolate (4.4) | while Maya is down, each Bullet or Rocket hit adds an incendiary hit of 0.1 x g x its applied damage, sent as a non-critical splash event | the status damage |
 | Blight Phoenix (3.5) | while the kill-skill timer runs, every 0.5 s a corrosive and an incendiary blast around Maya, radius 512, 0.02 x g x PlayerMeleeDamage each | the status damage; the body effect |
 | Recompense (4.5) | when an enemy takes health from Maya (after the shield; hook in `ApplyDamageToPlayer`), chance 0.1 x g (the component's seeded stream, `-owskillseed=<n>`) that it takes the same amount back (DmgType_Normal, non-critical); not while Maya is down | shield-only hits (the host has no shield) |
-| Mind's Eye (2.2) | gun hits that can crit (not skill hits) have their crit bonus multiplied by `PlayerCriticalHitBonus` over its live base 2.0, i.e. 1 + 0.05 g (2.5 at grade 5); cached until a grade changes. No effect until a target applies the bonus (range #76) | the melee row (no host melee); how the bonus multiplies damage is the dispatcher's rule |
+| Mind's Eye (2.2) | gun hits that can crit (not skill hits) add 2.0 x 0.05 x g to their crit bonus, 2.5 at grade 5: the host's part of the live stack (third run). Range enemies apply the bonus on head hits; the range suite's `crit_minds_eye` step checks it | the stack's other modifiers; the melee row (no host melee) |
 | Sustenance (4.8), Elated (4.6) | health regeneration per second from `HealthPassiveRegenerationRate` (the effects file now carries balance formulas) | the 0.5 s refresh cadence; allies |
 
 Phaselock events are read from the Walker's public state (cast time, hit, target, timeline), so the Phaselock code has
@@ -407,9 +411,10 @@ The hit-driven skills (PR 4) listen to `OpenWillowHit::OnHit()`; they ignore sta
 the broadcast. Every skill hit sets `Source = Skill` (the field from the projectiles lane, PR #88).
 PlayerMeleeDamage is taken as 2.5 x PlayerSkillDamage (no melee buff in the host).
 
-## Skills live capture (first run 2026-11-06, no rule settled; fixed, rerun pending)
+## Skills live capture (three runs 2026-11-06; a fourth is queued)
 
-Two files prepare a bl-sdk capture of the questions in section 6. Neither has been run; nothing below is observed yet.
+Two files drive a bl-sdk capture of the questions in section 6. They have been run three times; what was seen is in the run sections
+below, and the table of steps is what the capture was first written to answer (the current order is in the script's header).
 
 - `tools/real_game/skills_live_capture.ps1`: the session driver (hub and run locks, saves backed up and blocked in game, the
   save folder compared and restored at the end, the same as the Phaselock integrity capture). It travels to Ice_P, makes Maya
@@ -466,3 +471,29 @@ not a corpse as first suspected.
   were on targets wounded by a direct `TakeDamage`, the second with its controller detached, and a grade set this way may not count
   until a refresh. The host's 7 s timer (section 3.1) stays UNVERIFIED and has no live support.
 - **Not read:** Helios, Ruin, Converge, Sub-Sequence, Sweet Release, Mind's Eye scaling and what makes up the crit bonus.
+
+### Third run (2026-11-06): crit stack and Ruin and Helios read; level 8 only
+
+Saves and config identical to the backup afterwards. Raw reads stay under ignored `local/realgame/`. One character at one level, so
+each formula below is checked at one point.
+
+- **Confirmed live, crit stack:** `CurrentInstantHitCriticalHitBonus` = (base 2.0 + PreAdd sum) x (1 + Scale sum), with Mind's Eye adding
+  Scale 0.05 per grade: this fits the reads at grades 1, 3 and 5 to 4 decimals, and a grade change reaches the running skill. This save
+  has other modifiers on the stack, one PreAdd and one Scale, which explains the first run's value. What they are was not read (the gun
+  in hand is the obvious suspect, unproven).
+- **Confirmed live, `Skill.UpdateGrade`:** Helios put back to grade 0 still fired, at its grade 1 damage, on the next cast.
+- **Confirmed live, timing:** Helios about 0.83 s after the key press; Ruin's three pulses about 1.005 s apart, the first about 1.77 s after
+  it, which fits the 0.75 s and the lock + 1, 2, 3 s above, plus input latency.
+- **Contradicted, then corrected in the host:** the data readings of Ruin's and Helios's damage (see sections 1.2 and 1.7).
+- **Not modelled yet (seen live):** status damage ticks about every 0.33 s (Helios's burn scales with grade and lasts about 5 s; Ruin's own
+  elements ticked too), and the health lost is not the damage argument: the target's resistances and scales apply (fire took more than its
+  damage from a bullymong, and slag raised later hits). The host's blasts apply the plain number.
+- **Kill-skill timer, UNVERIFIED and unchanged in the host:** with Life Tap at grade 5, in the second and third runs alike, two gun kills
+  left `KillSkillTimeRemaining` and `DurationOfLastKillSkillActivation` at 0 for 22 s and no `UpdateKillSkills` call was recorded. Both
+  targets had been wounded by a direct `TakeDamage` first and the second had no controller, so this is no verdict on the rule. The
+  host's 7 s timer stays as it was, with no live support.
+- **Not read:** Converge, Sub-Sequence and Sweet Release (the isolate helper detaches every other pawn, and Ruin killed the one controlled
+  target, so no eligible target was left), the radii of Helios and Ruin, and the other native rules of section 6.
+
+The queued fourth run takes the timer with unwounded, controlled targets first (no isolate), then Converge and Sub-Sequence with Sweet
+Release, with Maya's health lowered so the heal can be seen (`-Steps` picks the steps).
