@@ -8,8 +8,9 @@ param(
     # tools/prepare_interactives.py output (ignored); default local/slice/interactives.json.
     [string]$Interactives = '',
     # plan: writes local/lootables/plan.json (always runs first); prepare: UModel exports; mesh: editor meshes and pickups;
-    # tracks: MD5 clips -> bone tracks (python); anims: editor AnimSequences; report: import_report.json.
-    [ValidateSet('all', 'prepare', 'mesh', 'tracks', 'anims', 'report')][string[]]$Steps = @('all'),
+    # tracks: MD5 clips -> bone tracks (python); anims: editor AnimSequences; materials: textures bound to the meshes
+    # (python, then editor; after any mesh step); report: import_report.json.
+    [ValidateSet('all', 'prepare', 'mesh', 'tracks', 'anims', 'materials', 'report')][string[]]$Steps = @('all'),
     # 0 = refuse at once when the UE run lock is held by another owner (the default).
     [int]$WaitForEditorSeconds = 0,
     # Prints the plan and every command that would run. Launches nothing (no UModel, no UnrealEditor).
@@ -183,6 +184,20 @@ if (& $run 'anims') {
         throw 'anims needs local/lootables/editor_meshes.json (run the mesh step first)'
     }
     Invoke-LootEditor 'anims' 'editor_anims.json'
+}
+if (& $run 'materials') {
+    $materialsPlan = Join-Path $out 'materials_plan.json'
+    if ($DryRun) {
+        Write-Output "DRY RUN materials: $Python $tool materials --plan $planPath --umodel-jobs $jobsPath --out $materialsPlan"
+        Write-Output 'Commands for materials (editor, materials mode):'
+    } else {
+        if (!(Test-Path -LiteralPath (Join-Path $out 'editor_meshes.json'))) {
+            throw 'materials needs local/lootables/editor_meshes.json (run the mesh step first)'
+        }
+        & $Python $tool materials --plan $planPath --umodel-jobs $jobsPath --out $materialsPlan
+        if ($LASTEXITCODE -ne 0) { throw "lootables_editor.py materials failed: $LASTEXITCODE" }
+    }
+    Invoke-LootEditor 'materials' 'editor_materials.json'
 }
 if (& $run 'report') {
     if ($DryRun) {

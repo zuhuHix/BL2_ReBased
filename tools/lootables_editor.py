@@ -18,8 +18,12 @@ Editor half (run by UnrealEditor-Cmd with OPENWILLOW_LOOT_MODE=meshes|anims and 
 
   meshes   import each skeletal mesh (glTF) into /Game/OpenWillow/Lootables/<Mesh>, dump its reference pose, and import
            each pickup static mesh into /Game/OpenWillow/Pickups/<Mesh>. Physics assets are not imported (optional,
-           UNVERIFIED need). Materials: the imported meshes keep the importer's default slots (no textures bound).
+           UNVERIFIED need). The imported meshes keep the importer's default slots until the materials mode.
   anims    create one AnimSequence per clip as /Game/OpenWillow/Lootables/Anims/<AnimSet>_<Clip> from the tracks.
+  materials  (no Unreal) write materials_plan.json: each mesh's material and textures from UModel's export.
+  (editor) import those textures and bind one instance of a minimal diffuse-and-normal material to each mesh's slot. It
+           does not re-import a mesh, so clips stay valid; re-importing a mesh needs this step again. UModel's material
+           output is heuristic and this is not the game's material graph: how the result looks is UNVERIFIED.
 
 Nothing here is verified in the running game: the rule for how a lootable's clips are played is UNVERIFIED.
 """
@@ -46,6 +50,8 @@ ANIM_DEST = '/Game/OpenWillow/Lootables/Anims'
 PICKUP_DEST = '/Game/OpenWillow/Pickups'
 CLIPS = ('Closed_Idle', 'Open', 'Opened_Idle')   # the three sequences every lootable anim set holds (package data)
 PLAN_SCHEMA = 'openwillow-lootables-plan/1'
+MATERIAL_DEST = '/Game/OpenWillow/Lootables/Materials'
+MISSING_IMPORT = re.compile(r'Import\(([\w.]+)\) was not found')
 
 
 def local_output(value, repo=ROOT):
@@ -144,7 +150,11 @@ def build_plan(data, interactives_path):
         exports.append({'id': f'pickup.{pickup["name"]}.gltf', 'format': 'gltf', 'class': 'StaticMesh',
                         'package': pickup['package'], 'object': pickup['name'],
                         'out': str(pickup_dir / safe(pickup['name']))})
+        exports.append({'id': f'pickup.{pickup["name"]}.psk', 'format': 'psk', 'class': 'StaticMesh',
+                        'package': pickup['package'], 'object': pickup['name'],
+                        'out': str(OUT / 'umodel/pickup-psk' / safe(pickup['name']))})
         pickup['gltf_out'] = str(pickup_dir / safe(pickup['name']))
+        pickup['psk_out'] = str(OUT / 'umodel/pickup-psk' / safe(pickup['name']))
         pickup['dest'] = f'{PICKUP_DEST}/{pickup["name"]}'
     return {
         'schema': PLAN_SCHEMA,
@@ -271,6 +281,109 @@ def load_optional(path):
     return json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else None
 
 
+def load_jobs(path):
+    jobs_list = load_optional(path) or []
+    if isinstance(jobs_list, dict):   # ConvertTo-Json writes a one-element list as a bare object
+        jobs_list = [jobs_list]
+    return {job['id']: job for job in jobs_list}
+
+
+# ------------------------------------------------------------------------------------------------ materials
+
+
+def read_mat(text):
+    """UModel's .mat file: one Parameter=Texture per line."""
+    return dict(line.strip().split('=', 1) for line in text.splitlines() if '=' in line)
+
+
+def read_umodel_log(path):
+    """UModel's log text ('' when there is none). The job wrapper's logs are UTF-16."""
+    path = Path(path) if path else None
+    if path is None or not path.is_file():
+        return ''
+    raw = path.read_bytes()
+    return raw.decode('utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-8', errors='replace')
+
+
+def plan_material(name, own_dir, search_dirs, slot_names, log_text):
+    """Which material and textures one mesh's single slot takes, from UModel's export. The glTF slot names the material, and
+    UModel may also export its parent, so the name selects it. A material cooked into another package leaves a dummy slot and
+    no .mat of its own, but UModel's log names the import it could not load, and that object may have been exported with
+    another mesh: this is the mesh's own reference, not a match on the mesh's name. No answer leaves the mesh unbound, with
+    the reason."""
+    entry = {'mesh': name, 'material': None, 'source': None, 'diffuse': None, 'normal': None, 'reason': ''}
+    if len(slot_names) != 1:
+        entry['reason'] = f'expected one material slot, the glTF has {len(slot_names)}'
+        return entry
+    slot = slot_names[0]
+    own = {path.stem: path for path in sorted(Path(own_dir).rglob('*.mat'))}
+    if slot in own:
+        mat_path, entry['source'] = own[slot], 'own export'
+    elif slot.startswith('dummy_material'):
+        exported = {}
+        for folder in search_dirs:
+            for path in sorted(Path(folder).rglob('*.mat')):
+                exported.setdefault(path.stem, path)
+        named = sorted({found.rsplit('.', 1)[-1] for found in MISSING_IMPORT.findall(log_text)} & set(exported))
+        if len(named) != 1:
+            entry['reason'] = f"no material exported, and UModel's log names {len(named)} exported ones"
+            return entry
+        mat_path = exported[named[0]]
+        entry['source'] = f"import in UModel's log, exported with {export_root(mat_path, search_dirs).name}"
+    else:
+        entry['reason'] = f'slot {slot} has no exported material'
+        return entry
+    entry['material'] = mat_path.stem
+    inputs = read_mat(mat_path.read_text(encoding='utf-8', errors='replace'))
+    root = export_root(mat_path, search_dirs)
+    for parameter, key in (('Diffuse', 'diffuse'), ('Normal', 'normal')):   # the scope: no emissive, UModel's guesses there look wrong
+        texture = inputs.get(parameter)
+        if texture:
+            hits = sorted(root.rglob(f'{texture}.tga'))
+            entry[key] = str(hits[0]) if hits else None
+    if entry['diffuse'] is None:
+        entry['reason'] = f'{entry["material"]} has no exported diffuse texture'
+    return entry
+
+
+def export_root(path, folders):
+    """The export folder that holds this file."""
+    for folder in folders:
+        if Path(folder) in Path(path).parents:
+            return Path(folder)
+    raise ValueError(f'{path} is outside the exports')
+
+
+def gltf_slots(folder, name):
+    gltf = find_one(folder, f'{name}.gltf')
+    if gltf is None:
+        return []
+    return [m.get('name', '') for m in json.loads(gltf.read_text(encoding='utf-8')).get('materials') or []]
+
+
+def build_material_plan(plan, jobs):
+    md5_dirs = [mesh['md5_out'] for mesh in plan['skeletal_meshes']]
+    meshes = []
+    for mesh in plan['skeletal_meshes']:
+        log_text = read_umodel_log((jobs.get(f'mesh.{mesh["name"]}.md5') or {}).get('log'))
+        meshes.append(plan_material(mesh['name'], mesh['md5_out'], md5_dirs, gltf_slots(mesh['gltf_out'], mesh['name']), log_text))
+    pickups = [plan_material(pickup['name'], pickup['psk_out'], [pickup['psk_out']], gltf_slots(pickup['gltf_out'], pickup['name']), '')
+               for pickup in plan['pickup_meshes']]
+    return {'schema': 'openwillow-lootables-materials/1', 'meshes': meshes, 'pickups': pickups}
+
+
+def cmd_materials(args):
+    plan = load_plan(args.plan)
+    result = build_material_plan(plan, load_jobs(args.umodel_jobs))
+    target = local_output(args.out)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(result, indent=1), encoding='utf-8')
+    rows = result['meshes'] + result['pickups']
+    for row in rows:
+        print(f'material {row["mesh"]}: {row["material"]} ({row["source"]}) normal={"yes" if row["normal"] else "no"} {row["reason"]}'.rstrip())
+    print(f'materials: {sum(1 for r in rows if r["diffuse"])} of {len(rows)} meshes have a diffuse texture')
+
+
 def export_status(jobs, job_id):
     record = (jobs or {}).get(job_id)
     if record is None:
@@ -281,12 +394,11 @@ def export_status(jobs, job_id):
 def cmd_report(args):
     plan = load_plan(args.plan)
     out = Path(plan['out_dir'])
-    jobs_list = load_optional(args.umodel_jobs) or []
-    if isinstance(jobs_list, dict):   # ConvertTo-Json writes a one-element list as a bare object
-        jobs_list = [jobs_list]
-    jobs = {job['id']: job for job in jobs_list}
+    jobs = load_jobs(args.umodel_jobs)
     editor_meshes = load_optional(out / 'editor_meshes.json') or {}
     editor_anims = load_optional(out / 'editor_anims.json') or {}
+    material_plan = load_optional(out / 'materials_plan.json') or {}
+    editor_material = load_optional(out / 'editor_materials.json') or {}
     tracks = load_optional(out / 'tracks_report.json') or {}
     rows = []
 
@@ -313,8 +425,13 @@ def cmd_report(args):
         status = (editor_meshes.get('pickups') or {}).get(pickup['name'], {})
         row(status.get('asset') or f'{PICKUP_DEST}/{pickup["name"]}', 'pickup_mesh', status.get('imported'),
             status.get('reason') or ('' if status.get('imported') else 'no editor result'),
-            export_status(jobs, f'pickup.{pickup["name"]}.gltf'))
-    counts = {'yes': sum(1 for r in rows if r['imported']), 'no': sum(1 for r in rows if not r['imported'])}
+            f'gltf {export_status(jobs, "pickup." + pickup["name"] + ".gltf")}; psk {export_status(jobs, "pickup." + pickup["name"] + ".psk")}')
+    for planned in (material_plan.get('meshes') or []) + (material_plan.get('pickups') or []):
+        status = (editor_material.get('bound') or {}).get(planned['mesh'], {})
+        row(status.get('instance') or f'{MATERIAL_DEST}/{planned["material"] or planned["mesh"]}', 'material', status.get('bound'),
+            status.get('reason') or planned['reason'] or ('' if status.get('bound') else 'no editor result'),
+            planned['source'] or 'no material found')
+    counts ={'yes': sum(1 for r in rows if r['imported']), 'no': sum(1 for r in rows if not r['imported'])}
     report = {'schema': 'openwillow-lootables-import/1', 'generated': datetime.datetime.now().isoformat(timespec='seconds'),
               'imported_yes': counts['yes'], 'imported_no': counts['no'], 'assets': rows,
               'skipped_objects': plan['skipped_objects'],
@@ -344,9 +461,11 @@ def run_editor(mode):
         result = editor_meshes(plan)
     elif mode == 'anims':
         result = editor_anims(plan)
+    elif mode == 'materials':
+        result = editor_materials(plan)
     else:
         raise SystemExit(f'unknown OPENWILLOW_LOOT_MODE {mode}')
-    target = Path(plan['out_dir']) / {'meshes': 'editor_meshes.json', 'anims': 'editor_anims.json'}[mode]
+    target = Path(plan['out_dir']) / {'meshes': 'editor_meshes.json', 'anims': 'editor_anims.json', 'materials': 'editor_materials.json'}[mode]
     target.write_text(json.dumps(result, indent=1), encoding='utf-8')
     log(f'{mode} report {target}')
 
@@ -368,6 +487,107 @@ def import_one(path, folder, expected):
     if len(found) != 1:
         raise RuntimeError(f'expected one {expected.__name__} from {Path(path).name}, got {task.get_objects()}')
     return found[0]
+
+
+def lootable_master():
+    """The parent material: diffuse and normal parameters, as in tools/slice_npc_editor.py, with no original graph."""
+    name, path = 'M_OW_Lootable', f'{MATERIAL_DEST}/M_OW_Lootable'
+    if eal.does_asset_exist(path):
+        return unreal.load_asset(path)
+    mel = unreal.MaterialEditingLibrary
+    material = tools.create_asset(name, MATERIAL_DEST, unreal.Material, unreal.MaterialFactoryNew())
+
+    def node(cls, y, **props):
+        expression = mel.create_material_expression(material, cls, -600, y)
+        for key, value in props.items():
+            expression.set_editor_property(key, value)
+        return expression
+
+    diffuse = node(unreal.MaterialExpressionTextureSampleParameter2D, 0, parameter_name='Diffuse',
+                   texture=unreal.load_asset('/Engine/EngineResources/DefaultTexture'))
+    mel.connect_material_property(diffuse, 'RGB', unreal.MaterialProperty.MP_BASE_COLOR)
+    normal = node(unreal.MaterialExpressionTextureSampleParameter2D, 300, parameter_name='Normal',
+                  sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL,
+                  texture=unreal.load_asset('/Engine/EngineMaterials/DefaultNormal'))
+    mel.connect_material_property(normal, 'RGB', unreal.MaterialProperty.MP_NORMAL)
+    mel.connect_material_property(node(unreal.MaterialExpressionConstant, 600, r=0.7), '', unreal.MaterialProperty.MP_ROUGHNESS)
+    material.set_editor_property('used_with_skeletal_mesh', True)
+    mel.recompile_material(material)
+    eal.save_loaded_asset(material, only_if_is_dirty=False)
+    return material
+
+
+def material_instance(planned, parent):
+    """One instance per material (two meshes can share one), its textures in its own folder."""
+    mel = unreal.MaterialEditingLibrary
+    folder = f'{MATERIAL_DEST}/{planned["material"]}'
+    clean(folder)
+    instance = tools.create_asset(planned['material'], folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mel.set_material_instance_parent(instance, parent)
+    for parameter, source in (('Diffuse', planned['diffuse']), ('Normal', planned['normal'])):
+        if not source:
+            continue
+        texture = import_one(source, folder, unreal.Texture2D)
+        texture.set_editor_property('srgb', parameter == 'Diffuse')
+        if parameter == 'Normal':
+            texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
+        eal.save_loaded_asset(texture, only_if_is_dirty=False)
+        mel.set_material_instance_texture_parameter_value(instance, parameter, texture)
+    eal.save_loaded_asset(instance, only_if_is_dirty=False)
+    return instance
+
+
+def bind_skeletal(mesh, instance):
+    slots = mesh.get_editor_property('materials')
+    if len(slots) != 1:
+        raise RuntimeError(f'expected one material slot, the asset has {len(slots)}')
+    slots[0].set_editor_property('material_interface', instance)
+    mesh.set_editor_property('materials', slots)
+    return mesh.get_editor_property('materials')[0].get_editor_property('material_interface')
+
+
+def bind_static(mesh, instance):
+    slots = mesh.get_editor_property('static_materials')
+    if len(slots) != 1:
+        raise RuntimeError(f'expected one material slot, the asset has {len(slots)}')
+    mesh.set_material(0, instance)
+    return mesh.get_material(0)
+
+
+def editor_materials(plan):
+    out = Path(plan['out_dir'])
+    planned_doc = json.loads((out / 'materials_plan.json').read_text(encoding='utf-8'))
+    meshes_doc = json.loads((out / 'editor_meshes.json').read_text(encoding='utf-8'))
+    assets = dict(meshes_doc.get('mesh_assets') or {})
+    assets.update({name: row['asset'] for name, row in (meshes_doc.get('pickups') or {}).items() if row.get('asset')})
+    rows = [(row, bind_skeletal) for row in planned_doc['meshes']] + [(row, bind_static) for row in planned_doc['pickups']]
+    report = {'mode': 'materials', 'bound': {}}
+    parent = lootable_master()
+    instances = {}
+    for planned, bind in rows:
+        entry = {'bound': False, 'reason': planned['reason']}
+        report['bound'][planned['mesh']] = entry
+        if not planned['diffuse']:
+            log(f'material {planned["mesh"]} unbound: {planned["reason"]}')
+            continue
+        try:
+            asset = assets.get(planned['mesh'])
+            mesh = unreal.load_asset(asset) if asset else None
+            if mesh is None:
+                raise RuntimeError('the mesh is not imported')
+            if planned['material'] not in instances:
+                instances[planned['material']] = material_instance(planned, parent)
+            instance = instances[planned['material']]
+            if bind(mesh, instance) != instance:
+                raise RuntimeError('the slot did not keep the instance')
+            eal.save_loaded_asset(mesh, only_if_is_dirty=False)
+            entry.update(bound=True, instance=instance.get_path_name().split('.')[0], normal=bool(planned['normal']))
+            log(f'material {planned["mesh"]} bound {entry["instance"]} normal={1 if planned["normal"] else 0} source="{planned["source"]}"')
+        except Exception as error:   # recorded per mesh; the rest of the list still runs
+            entry['reason'] = f'{type(error).__name__}: {error}'
+            log(f'material {planned["mesh"]} failed: {entry["reason"]}')
+    eal.save_directory(MATERIAL_DEST, only_if_is_dirty=False, recursive=True)
+    return report
 
 
 def find_export(folder, file_name):
@@ -505,6 +725,11 @@ def main(argv):
     t = sub.add_parser('tracks', help='convert MD5 clips to UE bone tracks')
     t.add_argument('--plan', default=str(OUT / 'plan.json'))
     t.set_defaults(func=cmd_tracks)
+    m = sub.add_parser('materials', help="write materials_plan.json from UModel's export (no Unreal)")
+    m.add_argument('--plan', default=str(OUT / 'plan.json'))
+    m.add_argument('--umodel-jobs', default=str(OUT / 'umodel_jobs.json'))
+    m.add_argument('--out', default=str(OUT / 'materials_plan.json'))
+    m.set_defaults(func=cmd_materials)
     r = sub.add_parser('report', help='write import_report.json')
     r.add_argument('--plan', default=str(OUT / 'plan.json'))
     r.add_argument('--umodel-jobs', default=str(OUT / 'umodel_jobs.json'))

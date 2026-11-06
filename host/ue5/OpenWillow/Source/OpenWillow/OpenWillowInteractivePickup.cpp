@@ -48,6 +48,7 @@ void AOpenWillowLootPickup::Configure(const FOpenWillowPickupSpec& InSpec, int32
         {
             Visual->SetStaticMesh(Mesh);
             Visual->SetRelativeScale3D(FVector(1.f));
+            Label->SetVisibility(false); // the label only tells placeholder spheres apart; it is not from the game
         }
     }
     FString Text;
