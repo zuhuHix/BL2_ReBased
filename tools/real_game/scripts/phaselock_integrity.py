@@ -32,6 +32,7 @@ RG_OUT (normally the ignored local/realgame/phaselock_integrity).
   health and not injured. Refuses when the target is not lifted. Only for the end of a session: the player then bleeds out.
 """
 import json
+import math
 import time
 from pathlib import Path
 
@@ -42,7 +43,7 @@ PI_TICK = "WillowGame.WillowGameViewportClient:Tick"
 PI_HOOK = "ow_pi_probe"
 pi = {"file": None, "pawn": None, "ended_at": None, "scan_at": -1.0, "seqs": [], "arms_seqs": [], "hooks": [],
       "emitter_fields": [], "light_fields": [], "bubble_scan_at": -1.0, "bubbles": [],
-      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None, "rows": 0, "calls": set(), "shield_base": None, "shield_try": None, "killed_name": None}
+      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None, "rows": 0, "calls": set(), "shield_base": None, "shield_try": None, "killed_name": None, "started_at": None}
 
 # Key bones of the bullymong skeleton: the torso, the head, the four arms' hands and the feet.
 PI_BONES = ("Hips", "Spine2", "Neck", "Head", "lHand1", "lHand2", "rHand1", "rHand2", "LFoot", "RFoot")
@@ -438,6 +439,7 @@ def pi_start(label, pawn_name):
     pi["pawn"], pi["ended_at"], pi["scan_at"], pi["bubble_scan_at"] = ai_pawn(pawn_name), None, -1.0, -1.0
     pi["seen_lifted"], pi["assets_stage"], pi["bones_at"], pi["injure"] = set(), 0, -1.0, None
     pi["rows"], pi["calls"], pi["killed_name"] = 0, set(), None
+    pi["started_at"] = get_pc().WorldInfo.TimeSeconds     # this attempt's start: a retry's HUD evidence must not come from an earlier cast
     add_hook(PI_TICK, Type.POST_UNCONDITIONAL, PI_HOOK, _on_tick)
     for path in info["skill_hooks"] + info["player_hooks"]:
         add_hook(path, Type.PRE, PI_HOOK, _mk("pre"))
@@ -482,7 +484,7 @@ def pi_kill(pawn_name):
     if lifted != src.Name:
         return {"skipped": "the target is not lifted now", "lifted_now": lifted}
     before = _null(lambda: float(src.GetHealth()))
-    if not isinstance(before, float) or before <= 0.0:
+    if not isinstance(before, float) or not math.isfinite(before) or before <= 0.0:
         return {"skipped": "the target has no health to take", "before": before}
     # The dead pawn can be gibbed or destroyed, so the per-frame rows stop here (_on_tick returns with no pawn); the hooks' calls and the
     # HUD samples go on.
@@ -490,12 +492,13 @@ def pi_kill(pawn_name):
     zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
     call = _null(lambda: plain(src.TakeDamage(10000000, pc, src.Location, zero, unrealsdk.find_class("DamageType"))))
     after = _null(lambda: float(src.GetHealth()))
-    return {"before": before, "after": after, "call": call, "at": pc.WorldInfo.TimeSeconds,
+    return {"before": before, "after": after, "call": call, "at": pc.WorldInfo.TimeSeconds, "since": pi["started_at"],
             "killed": isinstance(after, float) and after <= 0.0}
 
 
-def pi_hud_evidence(at):
-    """Whether kill_hud.jsonl (scripts/action_skill_hud.py) holds real emblem samples on both sides of the kill at game time `at`. Flash
+def pi_hud_evidence(at, since):
+    """Whether kill_hud.jsonl (scripts/action_skill_hud.py) holds real emblem samples for this attempt: from `since`, its start, up to the
+    kill at game time `at`, and strictly after the kill. Flash
     frames start at 1 and a path that did not resolve reads 0 (_clip's GetVariableNumber), so only frames from 1 count. The emblem must
     also have been seen running before the kill: frame 1 is `none`, above it the skill's (ACTION_SKILL_HUD.md)."""
     before = after = running = 0
@@ -511,10 +514,10 @@ def pi_hud_evidence(at):
         except (ValueError, KeyError, TypeError):
             continue
         if isinstance(frame, (int, float)) and not isinstance(frame, bool) and frame >= 1:
-            if when < at:
+            if since <= when < at:
                 before += 1
                 running += frame > 1
-            else:
+            elif when > at:
                 after += 1
     return {"before": before, "running_before": running, "after": after, "usable": running > 0 and after > 0}
 
