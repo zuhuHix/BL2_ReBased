@@ -1252,6 +1252,7 @@ WeaponGenCard CardEvaluator::Run() {
     card.shotCost = Stat("WeaponShotCost");
     card.burstCount = Stat("WeaponAutomaticBurstCount");
     card.burstInterval = Stat("WeaponBurstInterval");
+    card.speedMultiplier = Stat("WeaponProjectileSpeedMultiplier");
     card.spinUp = Stat("WeaponBarrelSpinUpDuration");
     int barrel = r_.parts[2];
     bool spin = barrel >= 0 && Obj(m_, barrel).spinning;
@@ -1442,6 +1443,7 @@ std::string CardJson(const WeaponGenCard& c) {
     o.Num("burst_count", c.burstCount);
     o.Num("burst_interval", c.burstInterval);
     o.Bool("burst_known", c.BurstKnown());
+    o.Num("speed_multiplier", c.speedMultiplier);
     o.Num("spin_up", c.spinUp);
     o.Str("spin_mode", c.spinMode);
     o.Num("spin_start_interval_scale", c.spinStartIntervalScale);

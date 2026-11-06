@@ -321,12 +321,13 @@ void AOpenWillowWalker::RunFiringTest(float Now)
     }
     // After the last gun: rolled guns (tools/check_weapon_firing.py check_rolled). A gun with burst count 1 must fire one shot
     // from one hold, and one with burst count 0 more than one. The hold is long enough for further shots, derived from the gun's
-    // own fire interval, so one shot cannot just mean a short hold.
-    static int32 RolledGun = 0, RolledStep = 0, RolledShotsBefore = 0;
+    // own fire interval, so one shot cannot just mean a short hold. Third: one that launches a projectile, which only the
+    // firing template can make it do.
+    static int32 RolledGun = 0, RolledStep = 0, RolledShotsBefore = 0, RolledLaunchesBefore = 0;
     static float RolledAt = 0.f, RolledHold = 0.f;
-    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun < 2 && CombatTarget.IsValid())
+    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun < 3 && CombatTarget.IsValid())
     {
-        const int32 Wanted = RolledGun == 0 ? 1 : 0;
+        const int32 Wanted = RolledGun == 0 ? 1 : RolledGun == 1 ? 0 : FOpenWillowWeaponGen::BurstTestRocket;
         const auto Unavailable = [Wanted](const TCHAR* Reason)
         {
             UE_LOG(LogTemp, Error, TEXT("OWFIRING rolled unavailable=%s want=%d"), Reason, Wanted);
@@ -359,6 +360,7 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         {
             RolledHold = 3.f / Held->FireRate + 0.1f;
             RolledShotsBefore = OpenWillowFiring::Counts.Shots;
+            RolledLaunchesBefore = OpenWillowFiring::Counts.Launches;
             FirePressed();
             RolledAt = Now;
             RolledStep = 2;
@@ -367,9 +369,10 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         {
             const float HeldSeconds = Now - RolledAt;
             FireReleased();
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d"),
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d"),
                 Wanted, *Held->Id, *Held->Type.Replace(TEXT(" "), TEXT("_")), Held->Firing.BurstCount, Held->Firing.bBurstFromManifest ? 1 : 0,
-                1.f / Held->FireRate, HeldSeconds, Held->Magazine, OpenWillowFiring::Counts.Shots - RolledShotsBefore);
+                Held->Firing.bLoaded ? 1 : 0, 1.f / Held->FireRate, HeldSeconds, Held->Magazine, OpenWillowFiring::Counts.Shots - RolledShotsBefore,
+                OpenWillowFiring::Counts.Launches - RolledLaunchesBefore);
             ++RolledGun;
             RolledStep = 0;
         }

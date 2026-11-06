@@ -364,16 +364,18 @@ class RolledDamage(unittest.TestCase):
         self.assertTrue(any('no number' in reason for reason in check.check_rolled_damage(line)))
 
 
-ROLLED_LINES = ('LogTemp: Display: OWFIRING rolled want=1 id=gen_a type=Pistol burst=1 from_manifest=1 interval=0.100 hold=0.400 magazine=6 shots=1',
-                'LogTemp: Display: OWFIRING rolled want=0 id=gen_b type=Assault_Rifle burst=0 from_manifest=1 interval=0.100 hold=0.400 magazine=20 shots=4')
+ROLLED_LINES = ('LogTemp: Display: OWFIRING rolled want=1 id=gen_a type=Pistol burst=1 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=6 shots=1 launches=0',
+                'LogTemp: Display: OWFIRING rolled want=0 id=gen_b type=Assault_Rifle burst=0 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=20 shots=4 launches=0',
+                'LogTemp: Display: OWFIRING rolled want=-1 id=gen_c type=Launcher burst=0 from_manifest=1 firing_loaded=1 interval=0.500 hold=1.600 magazine=4 shots=2 launches=2')
 
 
 class RolledLines(unittest.TestCase):
-    ONE = {'want': '1', 'id': 'gen_a', 'type': 'Pistol', 'burst': '1', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'magazine': '6', 'shots': '1'}
-    ZERO = {'want': '0', 'id': 'gen_b', 'type': 'Assault_Rifle', 'burst': '0', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'magazine': '20', 'shots': '4'}
+    ONE = {'want': '1', 'id': 'gen_a', 'type': 'Pistol', 'burst': '1', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '6', 'shots': '1', 'launches': '0'}
+    ZERO = {'want': '0', 'id': 'gen_b', 'type': 'Assault_Rifle', 'burst': '0', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '20', 'shots': '4', 'launches': '0'}
+    ROCKET = {'want': '-1', 'id': 'gen_c', 'type': 'Launcher', 'burst': '0', 'from_manifest': '1', 'interval': '0.500', 'hold': '1.600', 'firing_loaded': '1', 'magazine': '4', 'shots': '2', 'launches': '2'}
 
-    def fails(self, one=None, zero=None):
-        return check.check_rolled([dict(self.ONE, **(one or {})), dict(self.ZERO, **(zero or {}))])
+    def fails(self, one=None, zero=None, rocket=None):
+        return check.check_rolled([dict(self.ONE, **(one or {})), dict(self.ZERO, **(zero or {})), dict(self.ROCKET, **(rocket or {}))])
 
     def test_good_lines_pass(self):
         self.assertEqual(self.fails(), [])
@@ -381,7 +383,7 @@ class RolledLines(unittest.TestCase):
     def test_read_from_the_log(self):
         extra = {}
         check.read_log('\n'.join(ROLLED_LINES) + '\n', extra)
-        self.assertEqual([row['want'] for row in extra['rolled']], ['1', '0'])
+        self.assertEqual([row['want'] for row in extra['rolled']], ['1', '0', '-1'])
         self.assertEqual(check.check_rolled(extra['rolled']), [])
 
     def test_the_original_bug_fails(self):
@@ -401,12 +403,21 @@ class RolledLines(unittest.TestCase):
 
     def test_stale_or_missing_manifest_names_the_tool(self):
         for reason in ('stale_manifest', 'no_manifest'):
-            fails = check.check_rolled([{'want': '1', 'unavailable': reason}, dict(self.ZERO)])
+            fails = check.check_rolled([{'want': '1', 'unavailable': reason}, dict(self.ZERO), dict(self.ROCKET)])
             self.assertTrue(any('weapon_gen_manifest.py' in text and reason in text for text in fails), reason)
         self.assertTrue(any('weapon_gen_manifest.py' in text for text in self.fails(one={'from_manifest': '0'})))
 
     def test_other_unavailable_reasons_fail(self):
-        self.assertTrue(check.check_rolled([{'want': '1', 'unavailable': 'not_equipped'}, dict(self.ZERO)]))
+        self.assertTrue(check.check_rolled([{'want': '1', 'unavailable': 'not_equipped'}, dict(self.ZERO), dict(self.ROCKET)]))
+
+    def test_missing_templates_name_the_tool(self):
+        fails = check.check_rolled([{'want': '1', 'unavailable': 'no_firing_templates'}, dict(self.ZERO), dict(self.ROCKET)])
+        self.assertTrue(any('weapon_gen_firing.py' in text for text in fails))
+        self.assertTrue(any('weapon_gen_firing.py' in text for text in self.fails(zero={'firing_loaded': '0'})))
+
+    def test_a_rolled_launcher_must_launch(self):
+        self.assertTrue(any('projectiles launched' in text for text in self.fails(rocket={'launches': '0'})))
+        self.assertTrue(check.check_rolled([dict(self.ONE), dict(self.ZERO)]))
 
     def test_a_missing_gun_fails(self):
         self.assertTrue(check.check_rolled([dict(self.ZERO)]))

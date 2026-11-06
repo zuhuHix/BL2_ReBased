@@ -57,6 +57,72 @@ bool IsWeaponBalanceUtf8(const weapongen::WeaponGenManifest& Manifest, const std
     return Object != Manifest.objectByPath.end() && Manifest.balanceByObject.count(std::to_string(Object->second)) > 0;
 }
 
+// tools/weapon_gen_firing.py's templates, next to the manifest, parsed once. Null when the file is missing or unreadable.
+const FJsonObject* FiringTemplates()
+{
+    static bool bTried = false;
+    static TSharedPtr<FJsonObject> Root;
+    if (bTried) return Root.Get();
+    bTried = true;
+    const FString Path = FPaths::Combine(FPaths::GetPath(FOpenWillowWeaponGen::ManifestPath()), TEXT("weapon_gen_firing.json"));
+    FString Text;
+    if (!FFileHelper::LoadFileToString(Text, *Path) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid())
+    {
+        Root.Reset();
+        UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN no firing templates at %s: rolled guns fire a plain trace (python tools/weapon_gen_firing.py --game <BL2 folder>)"), *Path);
+    }
+    return Root.Get();
+}
+
+// The rolled gun's firing block: its template (weapon type, firing mode, element) filled from the card, then the parser recipes use.
+// A gun with no template keeps the plain trace and its refire rule. UNVERIFIED: the accuracy pool is the type's base (parts not applied).
+void ApplyFiringTemplate(const weapongen::WeaponGenResult& Result, const weapongen::WeaponGenCard& Card, FOpenWillowWeaponItem& Item)
+{
+    const FJsonObject* Root = FiringTemplates();
+    const TSharedPtr<FJsonObject>* Templates = nullptr;
+    if (!Root || !Root->TryGetObjectField(TEXT("templates"), Templates)) return;
+    const FString Key = FromUtf8(Result.weaponType) + TEXT("|") + FromUtf8(Card.firingMode) + TEXT("|") + FromUtf8(Card.element);
+    const TSharedPtr<FJsonObject>* Template = nullptr;
+    if (!(*Templates)->TryGetObjectField(Key, Template))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN no firing template for %s"), *Key);
+        return;
+    }
+    // A shallow copy: only top-level fields change, and the parser only reads.
+    const TSharedRef<FJsonObject> Block = MakeShared<FJsonObject>();
+    Block->Values = (*Template)->Values;
+    Block->SetNumberField(TEXT("pellets"), Item.Projectiles);
+    Block->SetNumberField(TEXT("spread"), Item.Spread);
+    Block->SetNumberField(TEXT("burst_count"), Item.Firing.BurstCount);
+    Block->SetNumberField(TEXT("burst_interval"), Item.Firing.BurstInterval);
+    Block->SetNumberField(TEXT("spin_up"), Item.SpinUp);
+    if (Card.hasStatus && Card.statusEffectDefinition)
+    {
+        const TSharedRef<FJsonObject> Status = MakeShared<FJsonObject>();
+        Status->SetStringField(TEXT("definition"), FromUtf8(Card.statusEffectDefinition));
+        Status->SetStringField(TEXT("type"), FromUtf8(Card.statusEffect));
+        Status->SetNumberField(TEXT("duration"), Card.statusDuration.value_or(0));
+        Status->SetNumberField(TEXT("dps"), Card.statusDps.value_or(0));
+        const TSharedRef<FJsonObject> Surfaces = MakeShared<FJsonObject>();
+        for (const auto& [Surface, Chance] : Card.statusChanceBySurface) Surfaces->SetNumberField(FromUtf8(Surface), Chance);
+        Status->SetObjectField(TEXT("chance_by_surface"), Surfaces);
+        const TArray<TSharedPtr<FJsonValue>>* Scales = nullptr;
+        if (Root->TryGetArrayField(TEXT("level_chance_scales"), Scales)) Status->SetArrayField(TEXT("level_chance_scales"), *Scales);
+        Block->SetObjectField(TEXT("status"), Status);
+    }
+    const bool bBurstKnown = Item.Firing.bBurstFromManifest;
+    FOpenWillowFiringData Parsed;
+    if (!FOpenWillowFiringData::Parse(*Block, Item.Damage, Parsed)) return;
+    const float SpeedMultiplier = float(Card.speedMultiplier.value_or(1));
+    Parsed.BulletSpeed *= SpeedMultiplier;
+    Parsed.ProjectileSpeed *= SpeedMultiplier;
+    Parsed.bBurstFromManifest = bBurstKnown;
+    Parsed.bSpinsToFullRate = Item.SpinMode == TEXT("BSM_SpinUpToFullFireRate");
+    Parsed.SpinStartMultiplier = Item.SpinStartIntervalScale;
+    Parsed.SpinUpDuration = Item.SpinUp;
+    Item.Firing = MoveTemp(Parsed);
+}
+
 // The manifest is parsed once, on the game thread, the first time something asks for it.
 const weapongen::WeaponGenManifest* Manifest()
 {
@@ -128,8 +194,7 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     Item.Magazine = float(Card.magazine.value_or(0));
     Item.Spread = float(Card.spread.value_or(0));
     Item.ShotCost = float(Card.shotCost.value_or(1));
-    // The refire rule (weapon_firing::Burst). The rest of the firing block is not resolved for generated guns yet
-    // (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"), so Firing stays not loaded: they fire the fallback trace.
+    // The refire rule (weapon_firing::Burst), known from the manifest alone; ApplyFiringTemplate adds the rest of the block.
     Item.Firing.BurstCount = FMath::Max(0, int32(Card.burstCount.value_or(0)));
     Item.Firing.BurstInterval = float(Card.burstInterval.value_or(0));
     Item.Firing.bBurstFromManifest = Card.BurstKnown();
@@ -173,6 +238,7 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     Item.Material = FromUtf8(Result.material);
     Item.GestaltMesh = FromUtf8(Result.gestalt);
     Item.WeaponType = FromUtf8(Result.weaponType);
+    ApplyFiringTemplate(Result, Card, Item);
     return Item;
 }
 
@@ -387,8 +453,15 @@ bool FOpenWillowWeaponGen::FindGunForBurstTest(int32 WantedBurst, int32 Stage, F
             OutReason = TEXT("stale_manifest");
             return false;
         }
+        if (!Item.Firing.bLoaded)
+        {
+            OutReason = TEXT("no_firing_templates");
+            return false;
+        }
+        // BurstTestRocket wants any gun that launches a projectile, whatever its burst count.
+        const bool bWanted = WantedBurst == BurstTestRocket ? Item.Firing.Kind == EOpenWillowShotKind::Rocket : Item.Firing.BurstCount == WantedBurst;
         // Three shots in the magazine, so that it is not what stops the shots, and a level Maya can equip.
-        if (Item.Firing.BurstCount == WantedBurst && Item.Magazine >= 3.f * FMath::Max(1.f, Item.ShotCost) && Item.Level <= Stage && Item.FireRate > 0.f)
+        if (bWanted && Item.Magazine >= 3.f * FMath::Max(1.f, Item.ShotCost) && Item.Level <= Stage && Item.FireRate > 0.f)
         {
             OutItem = MoveTemp(Item);
             return true;
