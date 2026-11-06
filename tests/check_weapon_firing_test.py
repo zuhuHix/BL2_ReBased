@@ -296,7 +296,7 @@ class Cli(unittest.TestCase):
     def test_exit_codes(self):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace'),
-                                  'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 splash_hits=1 splash=9.00 grenade_hits=1 '
+                                  'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 damage=9.00 splash_hits=1 splash=9.00 grenade_hits=1 '
                                   'unknown_sources=0 after=0.50'))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
@@ -321,7 +321,7 @@ def wide(gun, line_hits=0, box_hits=1):
 
 
 class GrenadeLine(unittest.TestCase):
-    GOOD = {'thrown': '1', 'ammo_before': '3', 'ammo_after': '2', 'refused_empty': '1', 'splash_hits': '1', 'splash': '100.00',
+    GOOD = {'thrown': '1', 'ammo_before': '3', 'ammo_after': '2', 'refused_empty': '1', 'damage': '100.00', 'splash_hits': '1', 'splash': '100.00',
             'grenade_hits': '1', 'unknown_sources': '0', 'after': '0.50'}
 
     def test_good_line_passes(self):
@@ -337,6 +337,12 @@ class GrenadeLine(unittest.TestCase):
         self.assertTrue(check.check_grenade(dict(self.GOOD, thrown='0')))
         self.assertTrue(check.check_grenade(dict(self.GOOD, ammo_after='3')))
         self.assertTrue(check.check_grenade(dict(self.GOOD, refused_empty='0')))
+        for field in ('damage', 'splash'):
+            for bad in ('0.00', '-1.00', None):
+                line = dict(self.GOOD, **{field: bad})
+                if bad is None:
+                    del line[field]
+                self.assertTrue(any('not positive' in reason for reason in check.check_grenade(line)), (field, bad))
         self.assertTrue(check.check_grenade(dict(self.GOOD, splash_hits='0', grenade_hits='0')))
         self.assertTrue(check.check_grenade(dict(self.GOOD, grenade_hits='0')))
         self.assertTrue(check.check_grenade(dict(self.GOOD, unknown_sources='1')))

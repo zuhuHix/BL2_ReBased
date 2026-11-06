@@ -3,6 +3,8 @@
 // tools/check_weapon_firing.py) and -owfiringshots (RunFiringShots: frames at the real frames' pose for
 // tools/firing_contact_sheet.py). Test code only; the game logic never calls it.
 #include "OpenWillowWalker.h"
+#include "InputCoreTypes.h"
+#include "InputKeyEventArgs.h"
 #include "OpenWillowMover.h"
 #include "OpenWillowQuest.h"
 #include "Engine/DamageEvents.h"
@@ -241,12 +243,15 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         Ids = GunIdsFromCommandLine(List);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow firing test parsed %d recipe IDs: %s"), Ids.Num(), *List);
     }
-    // After the last gun: one grenade at the dummy (ThrowGrenade: the ammo, the flight, the explosion and its hit events).
-    static int32 GrenadeStep = 0, GrenadeAmmoBefore = 0;
+    // After the last gun: one grenade at the dummy, by pressing G through the player controller's input path (the same
+    // action mapping a keyboard press goes through): the binding, the ammo, the flight, the explosion and its hit events.
+    // Then the pool is emptied and G pressed again: the throw must be refused.
+    static int32 GrenadeStep = 0, GrenadeAmmoBefore = 0, GrenadeAmmoAfter = 0;
     static float GrenadeAt = 0.f;
-    static bool bGrenadeThrown = false;
-    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && GrenadeStep < 3 && CombatTarget.IsValid())
+    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && GrenadeStep < 5 && CombatTarget.IsValid())
     {
+        APlayerController* KeyPC = Cast<APlayerController>(Controller);
+        const auto PressG = [KeyPC](EInputEvent Event) { if (KeyPC) KeyPC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::G, Event, 1.f)); };
         const auto InFlight = [this]() { int32 Count = 0; for (TActorIterator<AOpenWillowProjectile> It(GetWorld()); It; ++It) ++Count; return Count; };
         if (GrenadeStep == 0)
         {
@@ -261,22 +266,30 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         else if (GrenadeStep == 1 && Now >= GrenadeAt + 0.3f)
         {
             GrenadeAmmoBefore = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current;
-            bGrenadeThrown = ThrowGrenade();
+            PressG(IE_Pressed);
             GrenadeAt = Now;
             GrenadeStep = 2;
         }
-        else if (GrenadeStep == 2 && (!bGrenadeThrown || (Now >= GrenadeAt + 1.2f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
+        else if (GrenadeStep == 2 && ((Now >= GrenadeAt + 1.2f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
         {
-            const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
-            const int32 AmmoAfter = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current;
+            PressG(IE_Released);
+            GrenadeAmmoAfter = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current;
             // Past the 1.05 s lockout, so an empty pool is the only reason left for a refusal.
             Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, 0);
-            const bool bRefusedEmpty = !ThrowGrenade();
-            Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, AmmoAfter);
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d after=%.2f"),
-                bGrenadeThrown ? 1 : 0, GrenadeAmmoBefore, AmmoAfter, bRefusedEmpty ? 1 : 0, C.SplashHits, C.Splash,
-                C.GrenadeHits, C.UnknownSources, Now - GrenadeAt);
+            PressG(IE_Pressed);
+            GrenadeAt = Now;
             GrenadeStep = 3;
+        }
+        else if (GrenadeStep == 3 && Now >= GrenadeAt + 0.3f)
+        {
+            PressG(IE_Released);
+            const bool bRefusedEmpty = GrenadeReleaseAt == 0.f && InFlight() == 0 && Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current == 0;
+            Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, GrenadeAmmoAfter);
+            const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d damage=%.2f splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d"),
+                GrenadeAmmoAfter < GrenadeAmmoBefore ? 1 : 0, GrenadeAmmoBefore, GrenadeAmmoAfter, bRefusedEmpty ? 1 : 0,
+                GrenadeData.bLoaded ? GrenadeData.Splash.Damage : 0.f, C.SplashHits, C.Splash, C.GrenadeHits, C.UnknownSources);
+            GrenadeStep = 5;
         }
         return;
     }

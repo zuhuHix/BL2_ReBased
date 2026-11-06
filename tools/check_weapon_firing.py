@@ -255,8 +255,9 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
 
 
 def check_grenade(line):
-    """The firing test's one grenade at the dummy (OWFIRING grenade): it was thrown, took one grenade from the pool,
-    exploded on the dummy and every splash hit is a hit event with Source Grenade."""
+    """The firing test's one grenade at the dummy, thrown by pressing G (OWFIRING grenade): it was thrown, took one grenade
+    from the pool, has positive damage, exploded on the dummy with positive damage, every splash hit is a hit event with
+    Source Grenade, and with the pool emptied a second press is refused."""
     if line is None:
         return ['no OWFIRING grenade line (the grenade check did not run)']
     fails = []
@@ -264,6 +265,11 @@ def check_grenade(line):
         return ['the grenade was not thrown (no grenade data: tools/grenade_mod.py, or no grenade in the pool)']
     if int(line['ammo_after']) != int(line['ammo_before']) - 1:
         fails.append(f"grenade ammo {line['ammo_before']} -> {line['ammo_after']}, expected one fewer")
+    # The mod's loaded damage and what actually landed: a zero-damage explosion still counts as hit events.
+    if float(line.get('damage') or 0) <= 0:
+        fails.append(f"the grenade's damage is not positive ({line.get('damage')})")
+    if float(line.get('splash') or 0) <= 0:
+        fails.append(f"the grenade's splash damage is not positive ({line.get('splash')})")
     if line.get('refused_empty') != '1':
         fails.append('a throw with an empty grenade pool was not refused')
     if int(line['splash_hits']) < 1:

@@ -59,7 +59,7 @@ AOpenWillowProjectile* AOpenWillowProjectile::Launch(UWorld* World, const FLaunc
     {
         // NATIVE_WEAPON_FIRING 2.1: Velocity = MaxSpeed x direction; life MaxLifespan. Weapon rockets flew straight in
         // the running game despite a GravityScaling of 0.1; a thrown gun fell at GravityScaling x 1000 (2026-10-23).
-        P->Flight.velocity = ToVec(In.Direction * In.Data->ProjectileSpeed);
+        P->Flight.velocity = ToVec(In.Direction * In.Data->ProjectileSpeed + FVector(0.f, 0.f, In.Data->UpwardVelocity));
         P->Motion.gravityZ = In.Data->bFalls ? OpenWillowFiring::WorldGravityZ * In.Data->GravityScale : 0.0;
         P->MaxAge = In.Data->ProjectileLifetime > 0.f ? In.Data->ProjectileLifetime : 5.f;
         P->BouncesLeft = In.Data->Bounces;
