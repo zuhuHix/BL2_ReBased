@@ -180,6 +180,23 @@ class WeaponGenTests(unittest.TestCase):
         rebuilt = (stack['base'] + stack['pre_add']) * (1 + stack['scale_up']) / (1 + stack['scale_down']) + stack['post_add']
         self.assertAlmostEqual(rebuilt, card['damage'], places=4)
 
+    def test_burst_rule_goes_through_the_modifier_stack(self):
+        count = ('F', 1, 'Base', 'AutomaticBurstCount', 'num', '1.0')
+        interval = ('F', 1, 'Base', 'BurstInterval', 'num', '0.25')
+        effect = ('F', 2, 'Effect', W + 'WeaponAutomaticBurstCount', 'MT_PreAdd', 8)
+        card = self.gun(1, 1, manifest=self.variant('burst_type', [count, interval]))['card']
+        self.assertEqual((card['burst_count'], card['burst_interval']), (1.0, 0.25))
+        card = self.gun(1, 1, manifest=self.variant('burst_part', [count, interval, effect]))['card']
+        self.assertEqual(card['burst_count'], 3.0)   # the type's 1 + the part's 2
+        none = ('F', 1, 'Base', 'AutomaticBurstCount', 'num', '0.0')
+        card = self.gun(1, 1, manifest=self.variant('burst_from_zero', [none, interval, effect]))['card']
+        self.assertEqual(card['burst_count'], 2.0)   # a type without a count still takes the part's
+
+    def test_a_manifest_without_burst_bases_gives_null(self):
+        card = self.gun(1, 1)['card']
+        self.assertIsNone(card['burst_count'])
+        self.assertIsNone(card['burst_interval'])
+
     def test_modifier_stack_and_card_rounding(self):
         card = self.gun(1, 1)['card']
         # Damage: (10 + 2) * (1 + 0.5) / (1 + 0.2f) + 3 (Weapon_Is_Acme * 3) = 17.99999996 -> float 18.

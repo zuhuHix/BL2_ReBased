@@ -1034,7 +1034,8 @@ void CardEvaluator::Bases() {
         {"InstantHitDamage", "WeaponDamage"}, {"FireRate", "WeaponFireInterval"}, {"ClipSize", "WeaponClipSize"},
         {"ReloadTime", "WeaponReloadSpeed"}, {"Spread", "WeaponSpread"},
         {"ProjectilesPerShot", "WeaponProjectilesPerShot"}, {"StatusEffectDamage", "WeaponStatusEffectDamage"},
-        {"BaseStatusEffectChanceModifier", "WeaponBaseStatusEffectChanceModifier"}};
+        {"BaseStatusEffectChanceModifier", "WeaponBaseStatusEffectChanceModifier"},
+        {"AutomaticBurstCount", "WeaponAutomaticBurstCount"}, {"BurstInterval", "WeaponBurstInterval"}};
     for (const auto& [field, attribute] : typeBases)
         for (const GenTypeBase& b : type_.bases)
             if (b.field == field) base_[kAttr + attribute] = b.init >= 0 ? value_.Value(b.init) : F32(b.number);
@@ -1249,6 +1250,8 @@ WeaponGenCard CardEvaluator::Run() {
     card.magazine = Stat("WeaponClipSize");
     card.spread = Stat("WeaponSpread");
     card.shotCost = Stat("WeaponShotCost");
+    card.burstCount = Stat("WeaponAutomaticBurstCount");
+    card.burstInterval = Stat("WeaponBurstInterval");
     card.spinUp = Stat("WeaponBarrelSpinUpDuration");
     int barrel = r_.parts[2];
     bool spin = barrel >= 0 && Obj(m_, barrel).spinning;
@@ -1436,6 +1439,8 @@ std::string CardJson(const WeaponGenCard& c) {
     o.Num("magazine", c.magazine);
     o.Num("spread", c.spread);
     o.Num("shot_cost", c.shotCost);
+    o.Num("burst_count", c.burstCount);
+    o.Num("burst_interval", c.burstInterval);
     o.Num("spin_up", c.spinUp);
     o.Str("spin_mode", c.spinMode);
     o.Num("spin_start_interval_scale", c.spinStartIntervalScale);

@@ -78,6 +78,8 @@ TYPE_BASES = {
     'ProjectilesPerShot': ATTR + 'WeaponProjectilesPerShot',
     'StatusEffectDamage': ATTR + 'WeaponStatusEffectDamage',
     'BaseStatusEffectChanceModifier': ATTR + 'WeaponBaseStatusEffectChanceModifier',
+    'AutomaticBurstCount': ATTR + 'WeaponAutomaticBurstCount',
+    'BurstInterval': ATTR + 'WeaponBurstInterval',
 }
 # The attribute -> WillowWeapon property names above are decoded from each attribute's
 # ObjectPropertyAttributeValueResolver.PropertyName (D_Attributes.Weapon in Startup.upk);
@@ -91,6 +93,7 @@ TYPE_DEFAULTS = {
     'Spread': 0.01,
     'ProjectilesPerShot': 1,
     'BaseStatusEffectChanceModifier': {'BaseValueConstant': 1.0},
+    'AutomaticBurstCount': 0,   # an int property: most types leave it out, and a part's PreAdd still counts from 0
 }
 # WillowWeapon properties no weapon type sets, as printed by the game's own `obj dump`
 # of WillowGame.Default__WillowWeapon (OpenBLCMM dumps, local oracle). The cooked

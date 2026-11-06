@@ -247,6 +247,8 @@ struct WeaponGenCard {
     int level = 0, levelRequirement = 0;
     bool levelLine = false;
     std::optional<double> damage, fireRate, reloadTime, magazine, spread, shotCost, spinUp, spinStartIntervalScale;
+    // The refire rule, not shown on the item card: absent only from a manifest older than these two type bases.
+    std::optional<double> burstCount, burstInterval;
     std::optional<std::string> spinMode, element, rarityRating, rarityColor, manufacturer, firingMode, damageType;
     std::optional<int> rarity;  // host scale 1 Common .. 5 Legendary
     int rarityLevel = 0;

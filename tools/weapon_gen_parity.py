@@ -44,7 +44,11 @@ FLOAT_PROPERTY_FIELDS = ('spin_start_interval_scale',)
 def python_gun(package, localize, balance, stage, seed, stage_cap=None):
     """The Python generator's result in ow-weapongen's JSON shape."""
     recipe = weapon_recipe.roll(package, balance, seed, stage, rng=weapon_recipe.CrtRand(seed), stage_cap=stage_cap)
-    card = weapon_stats.evaluate(package, recipe, recipe['game_stage'], localize)['card']
+    evaluated = weapon_stats.evaluate(package, recipe, recipe['game_stage'], localize)
+    card = evaluated['card']
+    # Not item-card rows: the C++ card also carries the refire rule the host fires by.
+    card['burst_count'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponAutomaticBurstCount')
+    card['burst_interval'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponBurstInterval')
     for field in FLOAT_PROPERTY_FIELDS:
         if isinstance(card.get(field), int):
             card[field] = float(card[field])
