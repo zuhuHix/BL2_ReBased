@@ -1145,11 +1145,11 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
         LidPhase = 0;
         return true;
     }
-    const FString Leaf = Lootable->Balance.RightChop(Lootable->Balance.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd) + 1);
-    const FString FullBalance = Lootable->Balance;   // the log's identity; the frames' file names keep the short name
-    auto Shot = [&Leaf, &FullBalance](const TCHAR* Phase)
+    const FString FullBalance = Lootable->Balance;
+    const FString FileKey = FullBalance.Replace(TEXT("."), TEXT("_"));   // two balances with one short name must not share a file
+    auto Shot = [&FileKey, &FullBalance](const TCHAR* Phase)
     {
-        const FString File = FString::Printf(TEXT("OWLootLid_%s_%s.png"), *Leaf, Phase);
+        const FString File = FString::Printf(TEXT("OWLootLid_%s_%s.png"), *FileKey, Phase);
         FScreenshotRequest::RequestScreenshot(File, false, false);
         UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=%s"), *FullBalance, Phase);
     };
@@ -1172,10 +1172,9 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
     {
         OpenLootable(Walker, *Lootable);
         // A frame while the clip plays (the 2 s test step is longer than a lid's opening).
-        const FString MidLeaf = Leaf;
-        World->GetTimerManager().SetTimer(LidMidTimer, FTimerDelegate::CreateLambda([MidLeaf, FullBalance]()
+        World->GetTimerManager().SetTimer(LidMidTimer, FTimerDelegate::CreateLambda([FileKey, FullBalance]()
             {
-                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWLootLid_%s_mid.png"), *MidLeaf), false, false);
+                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWLootLid_%s_mid.png"), *FileKey), false, false);
                 UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=mid"), *FullBalance);
             }), 0.4f, false);
         break;
