@@ -32,6 +32,9 @@ foreach ($key in @($manifests.Keys)) {
     $manifests[$key] = Join-Path $repo $manifests[$key]
     if (!(Test-Path -LiteralPath $manifests[$key])) { throw "Missing $($manifests[$key]) (see tools/test_quest.ps1 for the tool that writes it)" }
 }
+# The fight uses ow.Range: a failed or old prepare_range.py stops here, as in tools/test_range.ps1, before any build or editor.
+& python (Join-Path $repo 'tools/check_range.py') --preflight (Join-Path $repo 'local/range/range_manifest.json') --spot-json (Join-Path $repo 'local/range/range.json')
+if ($LASTEXITCODE -ne 0) { throw 'Range manifest not usable (see the line above; docs/verification/COMBAT_RANGE.md says how to prepare it).' }
 $itemDir = Split-Path -Parent $manifests.gear
 $gearLevel = [int](Get-Content -LiteralPath $manifests.gear -Raw | ConvertFrom-Json).level
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'

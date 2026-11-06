@@ -121,7 +121,7 @@ follows this one.
 
 This is not a merged state: the merge was local and was deleted after the run. **12 PASS, 1 FAIL, 1 NOT_AVAILABLE of
 14**:
-- `reach_fight_area`: `ow.Range` at the pinned spot (-3345, 3823, 3024), yaw 165.
+- `reach_fight_area`: `ow.Range` at the range's spot, which now comes from ignored local data (COMBAT_RANGE.md).
 - `kill_enemy`: an adult bullymong killed with 24 shots in 6.3 s.
 - `enemy_attacks_maya`: 2 hits credited to the selected enemy (3 more came from other causers).
 - `phaselock_enemy`: a range enemy lifted.
