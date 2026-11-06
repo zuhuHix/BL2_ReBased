@@ -385,8 +385,8 @@ check('An empty selection scrolls into the last visible row (D20 D2g, placement 
   const index = run('backpackEntries().findIndex(entry=>entry.id===selectedId)');
   const relative = index - run('firstRow');
   assert.equal(relative, 7); // eighth cell row, with the next cell clipped
-  assert.ok((relative + 1) * run('ROW_PITCH') <= run('viewHeight()+listPeekHeight()+1'));
-  assert.ok((relative + 1) * run('ROW_PITCH') + run('ROW_PITCH') > run('viewHeight()+listPeekHeight()'));
+  assert.ok((relative + 1) * run('rowPitch()') <= run('viewHeight()+listPeekHeight()+1'));
+  assert.ok((relative + 1) * run('rowPitch()') + run('rowPitch()') > run('viewHeight()+listPeekHeight()'));
 });
 check('The VM is not asked to move onto or between empty cells', () => {
   run("reset(); window.owInventory({...state, backpackCapacity:15}); inventoryVm.enabled = true; inventoryVm.failed = false; select('spare'); navigationPanel = 'backpack'");
@@ -444,9 +444,9 @@ check('D5 Inspect fit, zoom and hint text track the measured targets (UNVERIFIED
   assert.equal(run('INSPECT_CARD_TOP'), 50);
   assert.equal(run('INSPECT_ZOOM'), 1.54);
   assert.equal(run('INSPECT_HINT_FONT_SIZE'), 14);
-  assert.equal(run('CARD_FIT.inspect.width * FRAME_INSET'), 293);
-  assert.equal(run('CARD_FIT.inspect.aspect'), 306/224);
-  assert.equal(run('CARD_FIT.inspect.y'), 47);
+  assert.equal(run('CARD_FIT.inspect.width * FRAME_INSET'), 303);
+  assert.equal(run('CARD_FIT.inspect.aspect'), 1.40);
+  assert.equal(run('CARD_FIT.inspect.y'), 41);
   assert.ok(run('INSPECT_HINT_EXTRA_WIDTH') > 0); // the 14-px hint must fit one line (round 23 capture wrapped it without this)
 });
 check('Round-23 card and plate fits keep the measured D20 targets (UNVERIFIED)', () => {
@@ -459,5 +459,24 @@ check('Round-23 card and plate fits keep the measured D20 targets (UNVERIFIED)',
   assert.equal(run('FOCUS_EQUIPPED.centreY'), 346);
   assert.deepEqual(JSON.parse(run('JSON.stringify(FOCUS_CHROME_TARGETS.map(([, target]) => target))')),
     [{left:770, top:538, width:176, height:81}, {left:210, top:493, width:296, height:146}]);
+});
+check('A card height correction comes back after the movie tween and never compounds', () => {
+  const scales = JSON.parse(run(`(() => {
+    const saved = player.ow, seen = [];
+    let yscale = 100;
+    player.ow = (path, action, member, value) => {
+      if (member !== '_yscale') return undefined;
+      if (action === 'set') yscale = value;
+      return yscale;
+    };
+    try {
+      const fit = () => { fitCard('owFitTest', {heightScale:1.12}); seen.push(Math.round(yscale)); };
+      fit(); fit();
+      yscale = 100; // the movie's tween writes the scale back
+      fit();
+    } finally { player.ow = saved; }
+    return JSON.stringify(seen);
+  })()`));
+  assert.deepEqual(scales, [112, 112, 112]);
 });
 console.log(`${passed}/${passed} navigation checks passed (traversal from original-game observation; VM replies synthetic; UNVERIFIED cells noted in inventory.js)`);

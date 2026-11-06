@@ -52,7 +52,7 @@ const SCROLLED_LIST_ORIGIN = 28; // movie px; with focus scaling this is about 3
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
 const FOCUS_PANEL = {scale:0.931, scaleY:0.949, left:496, top:70}; // D20 focus bounds: x518..777, y76..640 (round-23 critic)
-const FOCUS_EQUIPPED = {scale:0.645, centreX:387, centreY:346}; // D20 D2d: row pitch 47.5 px, slot 1 centre about (398, 230), first gear row y 430 (UNVERIFIED fit)
+const FOCUS_EQUIPPED = {scale:0.645, centreX:387, centreY:346}; // fitted to the row pitch and position of the matched D20 frames (D2d, D2g); UNVERIFIED elsewhere
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
 // 2026-10-04; comparators, filters and headers are read from native code in
 // docs/verification/NATIVE_INVENTORY_SORT.md and stay UNVERIFIED beyond those captures). PageDown = +1,
@@ -388,8 +388,11 @@ function headerFor(item, mode) {
 // The focus view shows 7.6 rows (the list runs to y 625 of the real frame); the small view keeps 7.
 const VISIBLE_ROWS_FOCUS = 7.6;
 const HEADER_PITCH = Math.round(ROW_PITCH * 0.37);
+// The focus view's rows are 3.6% further apart than the other views' (fitted to D20 D2d and D2g). UNVERIFIED.
+const ROW_PITCH_FOCUS = 63.2;
+const rowPitch = () => backpackFocused() ? ROW_PITCH_FOCUS : ROW_PITCH;
 const viewHeight = () => (backpackFocused() || transferSourceId ? VISIBLE_ROWS_FOCUS : VISIBLE_ROWS) * ROW_PITCH;
-const entryHeight = entry => entry.header !== undefined ? HEADER_PITCH : ROW_PITCH;
+const entryHeight = entry => entry.header !== undefined ? HEADER_PITCH : rowPitch();
 function backpackEntries() {
   const items = backpackItems(), mode = listMode(), entries = [];
   let last;
@@ -786,9 +789,17 @@ const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left 
 // those two frames (the real cards are turned and these are not, so the edges cannot match along their whole length). UNVERIFIED.
 const CARD_FIT = {single:{...fitTarget(309, 214, 86), heightScale:1.06}, left:{...fitTarget(276, 211, 90)},
   leftFromEquipped:{...fitTarget(281, 205, 74), heightScale:1.05}, right:{...fitTarget(253, 600, 105), heightScale:1.12},
-  inspect:{...fitTarget(293, 56, 47), aspect:306/224}}; // D20 D5: UNVERIFIED fit to real x49-355,y31-283 (with the menu turn on)
+  inspect:{...fitTarget(303, 52, 41), aspect:1.40}}; // D20 D5: UNVERIFIED fit (with the menu turn on)
 const cardYCorrection = new Map();
+// The Y scale this page last left on each card. The movie's TweenCards writes the card's scales, which drops the correction;
+// a Y scale other than the one left here means it has gone, so it is applied again.
+const cardYLeft = new Map();
 function fitCard(card, target) {
+  fitCardBody(card, target);
+  cardYLeft.set(card, Number(get(card, '_yscale')));
+}
+function fitCardBody(card, target) {
+  if (Math.abs(Number(get(card, '_yscale')) - (cardYLeft.get(card) ?? Number(get(card, '_yscale')))) > 0.01) cardYCorrection.delete(card);
   const previousCorrection = cardYCorrection.get(card) || 1;
   if (target.aspect) {
     if (Math.abs(previousCorrection - 1) > 0.001) {
@@ -946,7 +957,7 @@ function shouldShowSortHint(item) {
 
 // One extra 8 px of scroll clip lets the last empty cell stay fully visible
 // after the D20 one-row alignment above. Position and fit remain UNVERIFIED.
-const listPeekHeight = () => isEmptyCellId(selectedId) ? 24 : PEEK_HEIGHT;
+const listPeekHeight = () => isEmptyCellId(selectedId) ? (backpackFocused() ? 42 : 24) : PEEK_HEIGHT;
 
 function scrollBackpack(delta) {
   const entries = backpackEntries();
@@ -1690,7 +1701,7 @@ function drawSelectionBands(rowGroup, ys, localPanelBounds, rowWidth) {
   const groupX = (localPanelBounds.xMin + localPanelBounds.xMax - rowWidth) / 2 - listOverhang;
   const x0 = localPanelBounds.xMin + pad + BAND_INSET_LEFT / scale - groupX;
   const x1 = localPanelBounds.xMax - pad - BAND_INSET_RIGHT / scale - groupX;
-  const cy = ys[0] + ROW_PITCH / 2, half = BAND_HEIGHT / panelPose().scaleY / COMPOSITION_SCALE / 2;
+  const cy = ys[0] + rowPitch() / 2, half = BAND_HEIGHT / panelPose().scaleY / COMPOSITION_SCALE / 2;
   call(path, 'beginFill', BAND_COLOUR, 100);
   call(path, 'moveTo', x0, cy - half);
   call(path, 'lineTo', x1, cy - half);
@@ -1871,8 +1882,8 @@ function render() {
     if (greenFrame) drawTileFrame(path);
     // The full-width band is the focus view's selection (in the compare and equipped views the movie's own highlight is used).
     if (rowSelected && backpackFocused()) bands.push(y);
-    const partial = y < 0 || y + ROW_PITCH > viewHeight() + 1;
-    y += ROW_PITCH;
+    const partial = y < 0 || y + rowPitch() > viewHeight() + 1;
+    y += rowPitch();
     row++;
     if (!item) continue;
     const rowButton = hit(path, '', () => {
