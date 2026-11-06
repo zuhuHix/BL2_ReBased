@@ -14,6 +14,9 @@ param(
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya (Phaselock) in Sanctuary
     [switch]$ProbeOnly,                     # stop after pi_discover / pi_flags
     [switch]$SkipDown,
+    # Instead of the hit, miss and down casts, two separate reads: kill the lifted target (the skill, and the HUD emblem through
+    # scripts/action_skill_hud.py), and the real shield's capacity against its level. A miss in one does not blank the other.
+    [switch]$KillAndShield,
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
     [int]$HubWaitMinutes = 120
@@ -85,7 +88,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
+$stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($KillAndShield) { @('discover', 'kill', 'shield_levels') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -145,7 +148,7 @@ try {
     }
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
-    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") phaselock_integrity | Out-Null }
+    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py', 'action_skill_hud.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") phaselock_integrity | Out-Null }
 
     # The exact Adult or nothing: a variant has its own archetype, attachments and material, so its reads would answer another question.
     for ($i = 0; $i -lt 24 -and !$target; $i++) {
@@ -203,6 +206,41 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         $result
     }
 
+    if ($KillAndShield) {
+        # Kill the lifted target 2.0 s after the cast, during the hold. The burst's frames and kill.jsonl show the skill, kill_hud.jsonl the emblem.
+        try {
+            $killShots = @{ 'kill-2.10' = 2.1; 'kill-2.50' = 2.5; 'kill-3.50' = 3.5; 'kill-5.00' = 5.0; 'kill-6.00' = 6.0 }
+            Py "ash_start('kill_hud'); print('ok')" | Out-Null
+            $kill = { Py "import json; print(json.dumps(pi_kill('$target'), default=str))" 15 }
+            $killResult = Invoke-LiftCast 'kill' 1.0 8.0 $killShots 100 2.0 $kill
+            Py "ash_stop(); print('ok')" | Out-Null
+            $killCapture = $log[$log.kill_attempt]
+            $killAction = if ($killCapture.action) { $killCapture.action | ConvertFrom-Json } else { $null }
+            "kill: $($killCapture.action); skill calls: $($killResult.skill_calls -join ',')"
+            Set-Stage 'kill' (($killResult.target_lifted -eq $true) -and ($killAction.killed -eq $true) -and (Test-CaptureComplete $killCapture $killShots)) 'target not lifted, not killed, or frames or shots missing'
+            $log.kill_ready = Wait-Ready 40
+        } catch { Set-Stage 'kill' $false "$_" }
+        $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+
+        # The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped.
+        try {
+            $log.shields_start = Py 'import json; print(json.dumps(pi_shields(), default=str))' | ConvertFrom-Json
+            $shieldRows = @()
+            foreach ($level in 1, 5, 8, 15, 30, 50) {
+                $tried = Py "import json; print(json.dumps(pi_shield_try('equipped', $level), default=str))" | ConvertFrom-Json
+                Start-Sleep 2
+                $shieldRows += [pscustomobject]@{ level = $level; tried = $tried; read = (Py 'import json; print(json.dumps(pi_shield_read(), default=str))' | ConvertFrom-Json) }
+                Py 'import json; print(json.dumps(pi_shield_restore(), default=str))' | Out-Null
+                Start-Sleep 1
+            }
+            $log.shield_levels = $shieldRows
+            $log.shields_end = Py 'import json; print(json.dumps(pi_shields(), default=str))' | ConvertFrom-Json
+            $measured = @($shieldRows | Where-Object { $_.read.equipped_is_test -eq $true -and $_.read.max_strength -gt 0 })
+            "shields: $($log.shields_start.equipped.name) capacity $($log.shields_start.max_strength); $($measured.Count) of $($shieldRows.Count) levels measured"
+            Set-Stage 'shield_levels' ($measured.Count -ge 2) "$($measured.Count) levels measured"
+        } catch { Set-Stage 'shield_levels' $false "$_" }
+        $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+    } else {
     # 1. Hit.
     $hitResult = Invoke-LiftCast 'hit' 1.0 8.0 $hostShots 50 -1 $null
     Set-Stage 'hit' (($hitResult.target_lifted -eq $true) -and (Test-CaptureComplete $log[$log.hit_attempt] $hostShots)) 'target not lifted, or frames or shots missing'
@@ -229,6 +267,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         $downResult = Invoke-LiftCast 'down' 1.0 6.0 $downShots 100 2.0 $injure
         "down: $($log[$log.down_attempt].action)"
         Set-Stage 'down' (($downResult.target_lifted -eq $true) -and ($downResult.injure.injured -eq $true) -and (Test-CaptureComplete $log[$log.down_attempt] $downShots)) 'target not lifted, Maya not down, or frames or shots missing'
+    }
     }
     # The game may close before it answers this one (2026-11-06: the empty reply stopped the script after all the casts).
     try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }

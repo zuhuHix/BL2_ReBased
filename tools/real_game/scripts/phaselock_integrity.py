@@ -470,6 +470,92 @@ def pi_result():
                 k: v for k, v in pi["injure"].items() if k != "source"} if pi["injure"] else None)}
 
 
+def pi_kill(pawn_name):
+    """Kill the target while it is lifted, as the player's damage, to read what the skill and the HUD emblem then do. Refuses when
+    the target is not lifted, so a failed cast does not cost the target."""
+    pc = get_pc()
+    src = ai_pawn(pawn_name)
+    if not any(n == src.Name for n in pi["seen_lifted"]):
+        return {"skipped": "the target is not lifted", "seen_lifted": sorted(pi["seen_lifted"])}
+    before = _null(lambda: float(src.GetHealth()))
+    zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
+    call = _null(lambda: plain(src.TakeDamage(10000000, pc, src.Location, zero, unrealsdk.find_class("DamageType"))))
+    after = _null(lambda: float(src.GetHealth()))
+    return {"before": before, "after": after, "call": call, "killed": isinstance(after, float) and after <= 0.0,
+            "at": pc.WorldInfo.TimeSeconds}
+
+
+def _shield_row(item):
+    row = {"class": _null(lambda: item.Class.Name), "name": _null(lambda: item.GetShortHumanReadableName()),
+           "level": _null(lambda: int(item.ExpLevel)), "stage": _null(lambda: int(item.GameStage)),
+           "grade": _null(lambda: int(item.GetManufacturerGradeIndex())), "rarity": _null(lambda: int(item.RarityLevel)),
+           "value": _null(lambda: int(item.MonetaryValue)), "readied": _null(lambda: bool(item.bReadied)),
+           "balance": _null(lambda: item.DefinitionData.BalanceDefinition._path_name())}
+    return row
+
+
+def _shields():
+    """(the equipped shield or None, every shield held.)"""
+    im = get_pc().GetPawnInventoryManager()
+    chain, item = [], im.InventoryChain
+    while item:
+        chain.append(item)
+        item = item.Inventory
+    held = [i for i in chain + list(im.Backpack) if i.Class.Name == "WillowShield"]
+    equipped = [i for i in chain if i.Class.Name == "WillowShield"]
+    return (equipped[0] if equipped else None), held
+
+
+def pi_shields():
+    """What the character holds and what the shield pool reads, read-only. Remembers the equipped shield for pi_shield_restore."""
+    equipped, held = _shields()
+    pi["shield_own"] = equipped
+    pawn = get_pc().Pawn
+    return {"player_level": _null(lambda: int(get_pc().PlayerReplicationInfo.ExpLevel)),
+            "max_strength": _null(lambda: float(pawn.GetMaxShieldStrength())), "strength": _null(lambda: float(pawn.GetShieldStrength())),
+            "equipped": _shield_row(equipped) if equipped is not None else None, "held": [_shield_row(i) for i in held]}
+
+
+def pi_shield_try(balance_path, level):
+    """Spawn one shield at this level ("equipped": from the equipped shield's balance) and equip it. Read with pi_shield_read a moment
+    later, when the pool has taken it. Saving is blocked and the saves are restored by the capture."""
+    im = get_pc().GetPawnInventoryManager()
+    own = pi.get("shield_own")
+    balance = own.DefinitionData.BalanceDefinition if balance_path == "equipped" else unrealsdk.find_object("InventoryBalanceDefinition", balance_path)
+    pool = unrealsdk.find_class("ItemPool").ClassDefaultObject
+    result = pool.SpawnBalancedInventoryFromInventoryBalanceDefinition(balance, 1, level, 0, get_pc().Pawn, [])
+    spawned = list(result[1]) if isinstance(result, tuple) else []
+    if not spawned:
+        return {"skipped": "nothing spawned", "level": level}
+    item = spawned[0]
+    pi["shield_test"] = item
+    im.AddInventoryToBackpack(item)
+    im.ReadyBackpackInventory(item)
+    return {"requested_level": level, "item": _shield_row(item)}
+
+
+def pi_shield_read():
+    equipped, _held = _shields()
+    pawn = get_pc().Pawn
+    test = pi.get("shield_test")
+    return {"max_strength": _null(lambda: float(pawn.GetMaxShieldStrength())),
+            "equipped_is_test": equipped is not None and test is not None and equipped is test,
+            "equipped": _shield_row(equipped) if equipped is not None else None}
+
+
+def pi_shield_restore():
+    """Put the character's own shield back and remove the test shield."""
+    im = get_pc().GetPawnInventoryManager()
+    own, test = pi.get("shield_own"), pi.get("shield_test")
+    if own is not None:
+        _null(lambda: im.ReadyBackpackInventory(own))
+    if test is not None:
+        _null(lambda: im.RemoveInventoryFromBackpack(test))
+        _null(lambda: test.Destroy())
+    pi["shield_test"] = None
+    return pi_shield_read()
+
+
 def pi_flags():
     """Do not use in a session: on 2026-11-02 this call got no reply and the session was lost.
     CanPhaseLockTarget for every live AI pawn (a read-only script function), with its class and allegiance."""
