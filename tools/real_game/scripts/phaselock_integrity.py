@@ -53,11 +53,11 @@ SKILL_FUNCS = ("BeginLifting", "LiftTarget", "LockTarget", "StartOutro", "Releas
 PLAYER_FUNCS = ("TakeDamage", "PlayInjured", "SetInjuredState", "GoToInjuredAndTargeted", "ServerDeactivateSkill")
 
 
-def pi_target_rank(ai_class, dist):
-    """Sort key for the capture's target pick: the Adult first (it is what the host's target stands for), then the plain
-    bullymong, then any other large one, each nearest first. A variant has its own archetype, attachments and material."""
-    leaf = ai_class.rsplit(".", 1)[-1]
-    return (0 if leaf == "CharClass_PrimalBeastAdult" else 1 if leaf == "CharClass_PrimalBeast" else 2, dist)
+def pi_pick_target(rows):
+    """The nearest live, controlled Adult of the capture's AI rows, or None. Exactly the Adult: a variant has its own archetype,
+    attachments and material, so the capture keeps polling rather than read one."""
+    usable = [r for r in rows if r["class"] == "CharClass_PrimalBeastAdult" and not r["dead"] and r["ctrl"] and r["radius"] >= 120]
+    return min(usable, key=lambda r: r["dist"]) if usable else None
 
 
 def _safe(fn, default=None):
@@ -282,7 +282,7 @@ def _tick_injure(me, now):
     if job is None or me is None or job["done"] or now < job["next"]:
         return None
     if _safe(lambda: bool(me.bIsInjured)):
-        job["done"] = True
+        job["done"] = job["injured"] = True
         return {"injured_after_hits": job["hits"]}
     if job["hits"] >= 8:
         job["done"] = True
@@ -486,5 +486,5 @@ def pi_injure(pawn_name):
     before = _player(me)
     result = _hit_player(me, src)
     now = get_pc().WorldInfo.TimeSeconds
-    pi["injure"] = {"source": src, "hits": 1, "next": now + 0.5, "done": False}
+    pi["injure"] = {"source": src, "hits": 1, "next": now + 0.5, "done": False, "injured": False}
     return {"before": before, "after": _player(me), "call": result}
