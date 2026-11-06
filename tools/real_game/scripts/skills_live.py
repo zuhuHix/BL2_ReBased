@@ -413,6 +413,11 @@ def _cast_key():
     return None if skill is None else str(round(skill.SkillStartTime, 3))
 
 
+def sl_cast_key():
+    """The Phaselock skill's start time: it moves when a cast starts, so a step can tell its cast happened."""
+    return _cast_key()
+
+
 def _killedtarget_hook(path):
     fname = path.split(":")[-1]
 

@@ -83,6 +83,7 @@ function Wait-Ready([double]$Timeout = 60) {
 function Invoke-GunKill([string]$Target) {
     $wound = PyCall "sl_wound('$Target')"
     $how = 'not dead'
+    PyCall "sl_damage_watch(6.0, '$Target')" | Out-Null
     for ($try = 1; $try -le 3; $try++) {
         PyCall "aim('$Target')" | Out-Null
         PyCall 'sl_fire(True)' | Out-Null; Start-Sleep -Milliseconds 400; PyCall 'sl_fire(False)' | Out-Null
@@ -90,7 +91,8 @@ function Invoke-GunKill([string]$Target) {
         if ((PyCall "sl_is_dead('$Target')") -eq $true) { $how = "gun, burst $try"; break }
     }
     if ($how -eq 'not dead') { PyCall "sl_kill('$Target')" | Out-Null; $how = 'TakeDamage fallback (the gun missed)' }
-    @{ target = $Target; wound = $wound; how = $how }
+    $hits = (PyCall 'sl_watch_result("damage")').rows
+    @{ target = $Target; wound = $wound; how = $how; dead = ((PyCall "sl_is_dead('$Target')") -eq $true); hits = $hits; controller = (Py 'print(get_pc().Name)') }
 }
 
 # A kill with nothing done to the target first: Maya near it, not isolated, so it and the others keep their controllers, and the gun
@@ -101,6 +103,7 @@ function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
     Focus-Game | Out-Null
     $before = PyCall "{'health': ai_pawn('$Target').GetHealth(), 'controlled': ai_pawn('$Target').Controller is not None}"
     $start = Get-Date; $dead = $false
+    PyCall "sl_damage_watch($($Seconds + 2), '$Target')" | Out-Null
     PyCall 'sl_fire(True)' | Out-Null
     try {
         while (((Get-Date) - $start).TotalSeconds -lt $Seconds) {
@@ -109,7 +112,9 @@ function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
             if ((PyCall "sl_is_dead('$Target')") -eq $true) { $dead = $true; break }
         }
     } finally { PyCall 'sl_fire(False)' | Out-Null }
-    @{ target = $Target; place = $place; before = $before; dead = $dead; seconds = [math]::Round(((Get-Date) - $start).TotalSeconds, 2) }
+    $hits = (PyCall 'sl_watch_result("damage")').rows
+    @{ target = $Target; place = $place; before = $before; dead = $dead; seconds = [math]::Round(((Get-Date) - $start).TotalSeconds, 2)
+       hits = $hits; controller = (Py 'print(get_pc().Name)') }
 }
 
 # What a step came for, as named yes/no checks. A step whose body ran without an error can still have got nothing: no check, or a
@@ -117,6 +122,68 @@ function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
 function Get-MissingEvidence($Evidence) {
     if ($null -eq $Evidence -or !@($Evidence.Keys).Count) { return @('no evidence') }
     @($Evidence.Keys | Where-Object { $Evidence[$_] -ne $true })
+}
+
+function Test-Number($Value) { $Value -is [ValueType] -and $Value -isnot [bool] }
+
+# The hits a target's TakeDamage hook recorded: one row per hit (the hook also fires for each parent class's TakeDamage, Actor's has no
+# numbers), with a number above 0.
+function Get-TargetHits([object[]]$Rows, [string]$Target) {
+    @($Rows | Where-Object { $_ -and $_.victim -eq $Target -and $_.via -and $_.via -ne 'Actor' -and (Test-Number $_.damage) -and $_.damage -gt 0 })
+}
+
+# The target died and its last hit came from Maya's controller with one of the game's damage sources. The probe's own TakeDamage
+# (sl_wound, sl_kill) uses the plain DamageType class, so a fallback or a wound does not count as her kill.
+function Test-KilledByMaya($Kill) {
+    if ($Kill.dead -ne $true) { return $false }
+    $hits = @(Get-TargetHits $Kill.hits $Kill.target)
+    if (!$hits.Count) { return $false }
+    $last = $hits[-1]
+    ($last.instigator -eq $Kill.controller) -and ("$($last.damage_type)" -like 'WillowDmgSource_*')
+}
+
+# This step's cast started, a skill hit reached the target, and its health really fell at or after that hit (a hook on TakeDamage
+# sees the damage asked for, not what was applied).
+function Get-CastEvidence([object[]]$Rows, [string]$Target, $KeyBefore, $KeyAfter) {
+    $hits = @(Get-TargetHits $Rows $Target | Where-Object { $_.damage_type -eq 'WillowDmgSource_Skill' })
+    $fell = $false
+    if ($hits.Count) {
+        $at = $hits[0].t
+        $health = @($Rows | Where-Object { $_ -and $_.event -eq 'target_health' -and (Test-Number $_.health) })
+        $before = @($health | Where-Object { $_.t -le $at })
+        if ($before.Count) { $fell = @($health | Where-Object { $_.t -ge $at -and $_.health -lt $before[-1].health }).Count -gt 0 }
+    }
+    @{ cast_started = ($null -ne $KeyAfter -and $KeyAfter -ne $KeyBefore); skill_hit_on_target = $hits.Count -gt 0; health_fell_after_the_hit = $fell }
+}
+
+# Every timer sample a number, every kill Maya's, and the timer seen running and then running out.
+function Get-TimerEvidence([object[]]$Rows, [object[]]$Kills) {
+    $samples = @($Rows | Where-Object { $_ -and $_.PSObject.Properties.Name -contains 'remaining' } | ForEach-Object { $_.remaining })
+    $numeric = $samples.Count -gt 0 -and !@($samples | Where-Object { !(Test-Number $_) }).Count
+    $lastRunning = -1; $expired = $false
+    if ($numeric) {
+        for ($i = 0; $i -lt $samples.Count; $i++) { if ($samples[$i] -gt 0) { $lastRunning = $i } }
+        $expired = $lastRunning -ge 0 -and $lastRunning -lt ($samples.Count - 1)
+    }
+    @{ timer_samples_numeric = $numeric; timer_ran = $lastRunning -ge 0; timer_ran_out = $expired
+       kills_by_maya = (@($Kills).Count -gt 0 -and !@(@($Kills) | Where-Object { !(Test-KilledByMaya $_) }).Count) }
+}
+
+# Both grades set and read back, and the bonus moving with the grade (the saved grade, when it lies between, in between too).
+function Get-CritEvidence($Saved, $At1, $At5, $Set1, $Set5) {
+    $wasSet = { param($Set, $Grade) $Set.status -eq 'done' -and @($Set.rows).Count -gt 0 -and !@(@($Set.rows) | Where-Object { $_.status -ne 'set' -or $_.after.grade -ne $Grade }).Count }
+    $b0 = $Saved.values.CurrentInstantHitCriticalHitBonus; $b1 = $At1.values.CurrentInstantHitCriticalHitBonus; $b5 = $At5.values.CurrentInstantHitCriticalHitBonus
+    $moves = (Test-Number $b0) -and (Test-Number $b1) -and (Test-Number $b5) -and $b5 -gt $b1
+    $savedGrade = @($Set1.rows)[0].before.grade
+    if ($moves -and (Test-Number $savedGrade) -and $savedGrade -gt 1 -and $savedGrade -lt 5) { $moves = $b1 -lt $b0 -and $b0 -lt $b5 }
+    @{ grade_1_set_and_read_back = (& $wasSet $Set1 1); grade_5_set_and_read_back = (& $wasSet $Set5 5); bonus_moves_with_the_grade = $moves }
+}
+
+# Each name looked up found something; a missing one is named.
+function Get-DiscoverEvidence($Found, [string[]]$Names) {
+    $evidence = @{}
+    foreach ($name in $Names) { $evidence["found_$name"] = @($Found.$name | Where-Object { $_ }).Count -gt 0 }
+    $evidence
 }
 
 # Runs one step and writes its record. The grades are set first (a step whose grades cannot be set does not run), and always put
@@ -187,13 +254,14 @@ function Invoke-DamageCast([string]$Name, [hashtable]$Grades) {
         $t = @(Get-Bullymongs 1)[0]
         $setup = Set-Up $t
         $watch = PyCall "sl_damage_watch(7.0, '$t')"
+        $keyBefore = PyCall 'sl_cast_key()'
         Send-Key F
         Start-Sleep 7
         $res = PyCall 'sl_watch_result("damage")'
         $ready = Wait-Ready
-        $hits = @($res.rows | Where-Object { $_.victim -eq $t -and ($_.damage -as [double]) -gt 0 })
-        @{ target = $t; setup = $setup; watch_start = $watch; result = $res; ready = $ready
-           evidence = @{ target_took_damage = $hits.Count -gt 0 } }
+        $keyAfter = PyCall 'sl_cast_key()'
+        @{ target = $t; setup = $setup; watch_start = $watch; result = $res; ready = $ready; cast = @($keyBefore, $keyAfter)
+           evidence = Get-CastEvidence $res.rows $t $keyBefore $keyAfter }
     }
 }
 
@@ -296,7 +364,7 @@ try {
 
     Invoke-Step 'discover' @{} {
         $found = PyCall "{'Helios': sl_find_skills('Helios'), 'Ruin': sl_find_skills('Ruin'), 'Converge': sl_find_skills('Converge'), 'SubSequence': sl_find_skills('Sub-Sequence'), 'SweetRelease': sl_find_skills('Sweet Release'), 'MindsEye': sl_find_skills('Minds Eye'), 'LifeTap': sl_find_skills('Life Tap'), 'Phaselock': sl_find_skills('Phaselock')}"
-        @{ found = $found; evidence = @{ skills_found = @($found.PSObject.Properties | Where-Object { @($_.Value).Count -gt 0 }).Count -gt 0 } }
+        @{ found = $found; evidence = Get-DiscoverEvidence $found @('Helios', 'Ruin', 'Converge', 'SubSequence', 'SweetRelease', 'MindsEye', 'LifeTap', 'Phaselock') }
     }
 
     # 1. Kill-skill timer, first, before anything isolates a pawn. Life Tap (a Harmony kill skill) at grade 5 makes the kill-skill
@@ -310,9 +378,8 @@ try {
         $k2 = Invoke-FreshKill $targets[1]
         Start-Sleep 16
         $res = PyCall 'sl_watch_result("killskill")'
-        $samples = @($res.rows | Where-Object { $null -ne $_.remaining })
         @{ targets = $targets; watch_start = $watch; kills = @($k1, $k2); result = $res
-           evidence = @{ both_kills_happened = ($k1.dead -eq $true -and $k2.dead -eq $true); timer_sampled = $samples.Count -gt 0 } }
+           evidence = Get-TimerEvidence $res.rows @($k1, $k2) }
     }
 
     # 2. Converge: its blast leaves the target alive, so the next step can use it (isolate detaches every other pawn).
@@ -328,9 +395,8 @@ try {
         $set5 = PyCall "sl_set_grades({'MindsEye': 5})"
         Start-Sleep 2
         $at5 = PyCall 'sl_crit_bonus()'
-        $read = { param($r) ($r.values.CurrentInstantHitCriticalHitBonus -as [double]) -gt 0 }
         @{ as_saved = $asSaved; grade1 = $at1; grade5 = $at5; set1 = $set1; set5 = $set5
-           evidence = @{ bonus_read_at_each_grade = ((& $read $asSaved) -and (& $read $at1) -and (& $read $at5)) } }
+           evidence = Get-CritEvidence $asSaved $at1 $at5 $set1 $set5 }
     }
 
     # 6. Sub-Sequence and Sweet Release: the lifted bullymong is killed 1.5 s after the F press, during the lock.
@@ -350,7 +416,7 @@ try {
         # cannot be told from no heal until the hook lets it through (NATIVE_SKILL_BEHAVIOURS.md, "What a useful fifth run needs").
         $immune = $true
         @{ target = $t; setup = $setup; maya_health = $health; watch_start = $watch; kill = $kill; result = $res; ready = $ready
-           evidence = @{ held_target_killed_by_the_gun = "$($kill.how)" -like 'gun*'; interrupt_seen = $interrupts.Count -gt 0
+           evidence = @{ held_target_killed_by_maya = (Test-KilledByMaya $kill); interrupt_seen = $interrupts.Count -gt 0
                          heal_could_be_observed = (!$immune -and ($health.after -as [double]) -lt ($health.max -as [double])) } }
     }
 
