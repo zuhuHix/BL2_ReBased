@@ -2621,6 +2621,15 @@ void AOpenWillowWalker::RunGunShots(float Now)
     }
     case 7:
     {
+        if (GunShotDropTicks > 0)
+        {
+            // Stay on this gun for the later drop frame: counted in ticks, because a timer fires on the very next tick after the
+            // side capture's hitch. Two ticks stay after the request, so the next gun is not equipped before the screenshot is taken.
+            if (--GunShotDropTicks == 2)
+                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_droplate.png"), *Id), true, false);
+            if (GunShotDropTicks == 0) ++GunShotStep;
+            return;
+        }
         if (Now < GunShotPhaseAt + 0.1f) return;
         if (GunShotPreview.IsValid()) GunShotPreview->Destroy();  // a fresh actor per gun: the preview component never ticks
         GunShotPreview = GetWorld()->SpawnActor<AOpenWillowInventoryPreviewActor>(GetActorLocation() + FVector(0, 0, 4000), FRotator::ZeroRotator);
@@ -2652,8 +2661,15 @@ void AOpenWillowWalker::RunGunShots(float Now)
                     GunShotPreview->SaveFrame(Dir / FString::Printf(TEXT("OWGun_%s_turn%s.png"), *Id, *Name), Yaw, 15.f, Radius, 1280, 720);
                 }
             }
+            // Optional world-drop frame (-owdropshots): the gun lying on the ground ahead, with its rarity beam.
+            if (FParse::Param(FCommandLine::Get(), TEXT("owdropshots")) && AOpenWillowInventoryPickup::SpawnShowcase(this, *Item))
+            {
+                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_drop.png"), *Id), true, false);
+                // A later frame too: the spawn frame alone cannot tell a late beam from a missing one.
+                GunShotDropTicks = 14;
+            }
         }
-        ++GunShotStep;
+        if (GunShotDropTicks == 0) ++GunShotStep;
         break;
     }
     default:

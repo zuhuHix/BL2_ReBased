@@ -337,6 +337,7 @@ private:
     int32 GunShotBurstCount = 0;
     float GunShotNextBurstAt = 0.f;
     float GunShotPhaseAt = 0.f;
+    int32 GunShotDropTicks = 0;  // -owdropshots: ticks left before the gun sequence moves on
     float GunShotFinishedAt = -1.f;
     TWeakObjectPtr<class AOpenWillowInventoryPreviewActor> GunShotPreview;
     float NextShotAt = 0;
