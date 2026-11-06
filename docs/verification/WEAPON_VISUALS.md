@@ -232,16 +232,14 @@ horizontal at 16:9, where the host uses 106 from its by-eye 90); the world FOV w
 
 `-owfpfov=<vertical degrees>` took the vertical angle in round 3. Superseded by section 10: with the real placement the 45 reads as a horizontal angle.
 
-Colour claims of round 2's critic that the numbers do not support (side view, `local/orch/C/cells.py`, cell medians; hex is sRGB):
+Colour claims of round 2's critic that the numbers do not support (side view, `local/orch/C/cells.py`, cell medians; the exact values are under ignored `local/`):
 
-- Fire pistol barrel and slide: real `#474c59`, `#43454f`, `#3d404d`, `#343f4c`; host `#4a505e`, `#3d424d`, `#3e444d`, `#424751`. The critic's
-  "light steel #8d9aa6" is the top highlight row only (real `#6b7a83`, host `#7c8a99`). The orange area as a fraction of the squared gun height is
+- Fire pistol barrel and slide: the host's dark blue-grey cells are close to the real ones, some slightly lighter and some slightly darker.
+  The critic's "light steel" is the top highlight row only, which is a little lighter in the host. The orange area as a fraction of the squared gun height is
   0.0425 real against 0.0409 host and the mean orange run across the grip is 0.046 against 0.0435 of the gun height: the stripes are not
-  twice as wide; the review composite scales the host crop up. The Infinity shroud cells match within 25 percent (real `#583742`, `#492c33`,
-  `#54323e`, `#4b2e3e`, host `#5b495d`, `#482b31`, `#58343d`, `#5f3a4e`), brightest toward the receiver.
-- Hyperion SMG yellow: host cells are 10 to 15 percent lighter and warmer than the real (`#d4c684` against `#f9dd92`), not duller.
-- Jakobs pistol metal matches (`#b6b3b4` against `#b7b9bd`); the wood cells are about 30 percent darker in the host with the right hue
-  (`#8e8371` against `#615a50`). Not tuned: one global look, no per-gun correction; the different signs on different guns point at the albedo
+  twice as wide; the review composite scales the host crop up. The Infinity shroud cells match within 25 percent, brightest toward the receiver.
+- Hyperion SMG yellow: host cells are 10 to 15 percent lighter and warmer than the real, not duller.
+- Jakobs pistol metal matches; the wood cells are about 30 percent darker in the host with the right hue. Not tuned: one global look, no per-gun correction; the different signs on different guns point at the albedo
   reading of each material (detail channel colour space), not at the light.
 
 ## 10. Round 4 (2026-10-05): what places the long guns differently from the pistols
@@ -278,7 +276,7 @@ without an entry gets offset 0 plus the Camera-bone offset and 45. `-owfpfov=<ho
 Exposure check (the maintainer saw all-white guns): inside the gun silhouette the 90th percentile luminance of the host against the real
 first-person frames is 126/116 (Infinity), 209/211 (Jakobs pistol), 230/228 (Maliwan), 219/222 (SMG), 199/213 (rifle) and 114/127 (shotgun); the
 99th percentile is 5 to 25 levels higher in the host on the pale guns (243 against 233 on the Jakobs pistol). The real Jakobs metal is also
-near-white (cell median `#b7b9bd`), and the real first-person frames are lit blue where the host's Sanctuary street is neutral, so a pale
+near-white, and the real first-person frames are lit blue where the host's Sanctuary street is neutral, so a pale
 metal reads whiter next to a grey street. No exposure error found; a small highlight excess on the Maliwan pistol (6 percent of pixels at
 250 or more, none in the real frame) is left alone. Light constants stay `UNVERIFIED`.
 
@@ -590,8 +588,8 @@ and the six rarity skins as distinct and plausible (medium; no real rarity frame
 hold for the common skin: `Mati_VladofCommon` / `Mati_VladofCommonAR` zone colours are warm and cool greys, while the
 Uncommon/Rare/Epic Vladof skins carry red decal colours (and show them in the host). Needs a real common Vladof frame to close.
 
-**Open, most visible first:** metal highlights plateau near white on the Inspect render (host p99 luma 248 against 235) while
+**Open, most visible first:** metal highlights plateau near white on the Inspect render (the host's brightest 1 percent is clearly brighter than the real frame's) while
 the wood mid-tones are darker than real: a soft shoulder in the paint material rather than one light level; the grip weave
-(host median 31 against 68); the real Inspect's thin pale silhouette rim; turntable frames covering the reverse side; a
+(host much darker than real); the real Inspect's thin pale silhouette rim; turntable frames covering the reverse side; a
 real-game reference session (Inspect and held frames of the 33 matrix guns, a dropped gun per rarity, the live Torgue glow
 colours), which on this PC needs the Steam account that owns the game.

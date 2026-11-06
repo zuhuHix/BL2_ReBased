@@ -152,7 +152,7 @@ Remaining, as the critic ranked them, with what was found:
 3. Maliwan violet accents too luminous (host `#A2AAFA` on a sniper): the elemental/Maliwan emissive term; how the game scales it
    after lighting is `UNVERIFIED`.
 4. Torgue checker coverage looks broader on some parts (pattern scale/placement reading, `UNVERIFIED`).
-5. Yellow/orange finishes shift warmer (Hornet real `#EDE372`, host `#D7983B`): the skin's zone colours are HDR (A midtone about
+5. Yellow/orange finishes shift warmer (the Hornet is a paler yellow in the real frame, a deeper orange in the host): the skin's zone colours are HDR (A midtone about
    3.9, 3.1, 0.7) and the material clips per channel, so the hue depends on the light level; the stand-in light level was calibrated
    on six guns (WEAPON_VISUALS.md section 8). Not re-tuned here: a global change moves every gun.
 
