@@ -183,6 +183,8 @@ public:
     static bool TryUseNearest(AOpenWillowWalker& Walker);
     // The use key went to Marcus (the quest takes it before the nearest-target rule): any open station prompt ends.
     static void CancelStationPrompts(UWorld* World, const TCHAR* Reason);
+    // What the use key would do to the nearest interactive: "use" (a station), "pickup" (a loose item), "open" (a lootable), or "".
+    static FString UseVerb(const AOpenWillowWalker& Walker);
     // The reach test of TryUseNearest on its own: the squared distance to the nearest closed lootable, or use-key pickup that
     // would be taken, in reach. The walker compares it with its other use targets, so a refusing pickup never holds the press
     // back from a nearer door.

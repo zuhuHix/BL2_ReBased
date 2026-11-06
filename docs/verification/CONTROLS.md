@@ -71,19 +71,36 @@ a wall ends the swing there.
   The capture reads a status page opened inside a stock swing.
 - A swing and a grenade throw refuse each other, as both are shared weapon actions. Enemy melee belongs to the range lane.
 
+## Use prompt
+
+**Confirmed from the code first, not seen in play:** nothing fed the use-target choice to the HUD. A vending machine had an always-on
+world label with its title and no key hint, a loose item a label with its amount, and a door nothing. The only key hint was a debug line
+for Marcus. The movie's prompt clip `p1.tools` was not driven.
+
+**What the host does:** `OpenWillowUsePrompt::StateField` reads `NearestUseTarget` (and whether Marcus would take the press, as he
+outranks it) and sends the `usePrompt` field; the page moves `p1.tools` to that frame and fills its `desc` field. It only reads: what the
+use key does is unchanged. Nothing shows while Maya is down, when the key does nothing, or under a menu. The placement is the movie's own,
+since the host only drives the clip.
+
+**Read from data:** the clip's frame labels and `desc` field (the HUD movie), and the words of the default icons (`GD_InteractionIcons`).
+
+**Open, UNVERIFIED until the real-game read:** which icon the game gives each target (a host choice per target), how the stock prompt
+writes the key (`[E]` is a host choice), whether a lootable says something other than open, costs on the prompt, and the secondary prompt.
+
 ## Checks
 
 - `tests/controls_keys_test.py` (ctest `controls-keys`): every `BindAction` has a mapping and every mapping a binding (UE ignores
   a mismatch silently), no key runs two actions, M and L are as above. Our own config and source only.
 - `tools/test_controls.ps1` (`-owcontrolstest`, in engine): presses through the player controller's input path, as the inventory
   suite does, with every page closed, because a simulated press reaches the bindings even where a real key could not. Rows:
-  `start_closed`, `m_opens_map`, `map_closed`, `l_opens_missions`, `melee_damage_rule`, `melee_cone_rule`, `melee_swing_rule`,
+  `start_closed`, `m_opens_map`, `map_closed`, `l_opens_missions`, `melee_damage_rule`, `melee_cone_rule`, `melee_swing_rule`, `use_prompt_rule`,
   `v_not_hit_before_the_delay` (the delay measured from the frames the swing started and the target lost health), `v_hits_target_ahead`
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_cancels_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
-  `v_keeps_refill_after_it`, `burst_ends_on_swing`, `down_cancels_swing`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=20 failed=0`.
+  `v_keeps_refill_after_it`, `burst_ends_on_swing`, `down_cancels_swing`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=21 failed=0`.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop cancelling a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.
 - `tests/check_controls_test.py` (ctest `controls-check`): the grader on invented logs, including a short count, a renamed row, a
   repeated row and a missing summary.
+- `tests/hud_fields_test.js`: the use prompt's calls on the movie.

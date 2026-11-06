@@ -3886,3 +3886,9 @@ existing page toggles, so a vending shop still refuses them. A passing `tools/te
 AI-assisted (Claude). Record: [docs/verification/CONTROLS.md](docs/verification/CONTROLS.md), "Melee". Host behaviour change, no parsing
 change. Numbers come from the game's data and script, not from a live swing: UNVERIFIED in game. The first-person clip is not imported
 yet, so a swing lands with no visible arm for now. A passing `tools/test_controls.ps1` means the host did this.
+
+## 2026-11-06: the HUD shows a use prompt for the use target (controls lane)
+
+AI-assisted (Claude). Record: [docs/verification/CONTROLS.md](docs/verification/CONTROLS.md), "Use prompt". Host behaviour change, no
+parsing change, and no change to what the use key does. It drives the movie's own prompt clip, so the placement is the movie's. The icon
+per target and the key's form are host choices: UNVERIFIED in game until the real-game read.
