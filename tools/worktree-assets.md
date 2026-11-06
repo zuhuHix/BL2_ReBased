@@ -15,8 +15,10 @@ into new worktrees before `git worktree add` returns:
 - `local/ui/`
 
 The UI seed must hold every converted movie the overlay loads, including `local/ui/run/UI_Inworld/` (the world pickup
-card); `python tools/check_overlay_data.py` lists what a worktree lacks. Refresh a seed with real copies: `serve.py`
-refuses anything that resolves outside its root, so a junction answers 404 like a missing file.
+card); `python tools/check_overlay_data.py` lists what a worktree lacks. Links: `serve.py` resolves both its movies folder and
+each file, and answers 404 for a file that resolves outside the folder. So a junction at `local/`, `local/ui` or `local/ui/run` is fine
+(the folder resolves too and everything stays inside it), and a junction inside `local/ui/run`, such as `UI_Inworld` pointing elsewhere, is
+a 404 like a missing file. The check follows the same rule. Use real copies inside the folder.
 
 The UI seed includes the generated static weapon previews at
 `local/ui/run/previews/`. Rebuild them from the provisioned UModel glTF files

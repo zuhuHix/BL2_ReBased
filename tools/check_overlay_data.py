@@ -10,13 +10,19 @@ from pathlib import Path
 
 # File, relative to the movies folder; what needs it; how to get it.
 UI_STEPS = 'DECISIONS.md 2026-09-26 (tools/gfx_to_swf.py, tools/hud_harness_swf.py)'
+STATUS_PAGES = 'Inventory, Skills, Missions, Map'
 PICKUP_STEPS = 'docs/verification/PICKUP_CARD.md "Local data"'
 REQUIRED = [
     ('ruffle/ruffle.js', 'every page', UI_STEPS),
     ('UI_HUD/harness.swf', 'HUD', UI_STEPS),
     ('UI_HUD/HUD.swf', 'HUD', UI_STEPS),
-    ('UI_StatusMenu/harness.swf', 'Inventory, Skills, Missions, Map', UI_STEPS),
-    ('UI_StatusMenu/StatusMenu.swf', 'Inventory, Skills, Missions, Map', UI_STEPS),
+    ('gfxfontlib.swf', 'HUD (imported by HUD.swf)', UI_STEPS),
+    ('UI_StatusMenu/harness.swf', STATUS_PAGES, UI_STEPS),
+    ('UI_StatusMenu/StatusMenu.swf', STATUS_PAGES, UI_STEPS),
+    # Imported by the movies above and below (their ImportAssets tags; tools/hud_overlay/movie_guard.js FILES lists the same).
+    ('SharedComponents/ConsoleComponents.swf', 'HUD, ' + STATUS_PAGES, UI_STEPS),
+    ('SharedWillowComponents/SharedWillowComponents.swf', 'HUD, world pickup card, ' + STATUS_PAGES, UI_STEPS),
+    ('SharedWillowInventory/SharedWillowInventory.swf', STATUS_PAGES, UI_STEPS),
     ('UI_Inworld/harness.swf', 'world pickup card', PICKUP_STEPS),
     ('UI_Inworld/Weapon_Card.swf', 'world pickup card', PICKUP_STEPS),
     ('UI_VendingMachine/VendingMachineInterface.swf', 'vending frame art (optional: the page works without it)', UI_STEPS),
@@ -24,8 +30,16 @@ REQUIRED = [
 ]
 
 
+def served(movies, name):
+    """Would serve.py answer with this file? Its rule: the movies folder and the file are both resolved, and a file that resolves
+    outside the folder is a 404. So a link above or at the folder itself is fine, and a link inside it pointing out is not."""
+    root = Path(movies).resolve()
+    target = (root / name).resolve()
+    return target.is_file() and target.is_relative_to(root)
+
+
 def missing(movies):
-    return [entry for entry in REQUIRED if not (Path(movies) / entry[0]).is_file()]
+    return [entry for entry in REQUIRED if not served(movies, entry[0])]
 
 
 def main(argv=None):

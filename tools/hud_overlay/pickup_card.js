@@ -60,10 +60,11 @@
   // UNVERIFIED).
   const MOVIE_WIDTH = 1280, MOVIE_HEIGHT = 720;
   const READY_TIMEOUT_MS = 15000; // give up waiting for the card clip after this long (logged)
-  let player = null, writer = null, api = null, ready = false, wanted = null, shown = null, noMovie = false;
+  let player = null, writer = null, api = null, ready = false, wanted = null, shown = null, retryAt = 0;
+  const RETRY_MS = 30000; // without its movie the card is off; the file may yet arrive, so a later card asks again
 
   function start(doc) {
-    if (player || noMovie || !root.RufflePlayer || !root.owItemCard) return;
+    if (player || Date.now() < retryAt || !root.RufflePlayer || !root.owItemCard) return;
     player = root.RufflePlayer.newest().createPlayer();
     player.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;display:block';
     doc.body.appendChild(player);
@@ -72,9 +73,9 @@
       get:(path, member) => player.ow(path, 'get', member),
       set:(path, member, value) => player.ow(path, 'set', member, value)
     };
-    // Without the movie there is no card, and it is not tried again. The rest of the game is not affected.
-    const gone = () => { noMovie = true; ready = false; shown = null; player = null; console.log('OpenWillow pickup card off: no movie'); };
-    root.owMovieGuard.load(player, {url:'UI_Inworld/harness.swf', base:'UI_Inworld/'}, 'pickup card', ['UI_Inworld/Weapon_Card.swf'], gone).then(found => {
+    // Without the movie there is no card. The rest of the game is not affected.
+    const gone = () => { retryAt = Date.now() + RETRY_MS; ready = false; shown = null; player = null; console.log('OpenWillow pickup card off: no movie'); };
+    root.owMovieGuard.load(player, {url:'UI_Inworld/harness.swf', base:'UI_Inworld/'}, 'pickup card', root.owMovieGuard.FILES.pickupCard, gone).then(found => {
       if (!found) { gone(); return; }
       const giveUpAt = Date.now() + READY_TIMEOUT_MS;
       const poll = () => {

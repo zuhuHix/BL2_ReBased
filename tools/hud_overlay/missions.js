@@ -9,7 +9,7 @@ const log = window.owMissionLog;
 const player = window.RufflePlayer.newest().createPlayer();
 document.body.appendChild(player);
 const noMovie = () => { document.querySelector('#loading small').textContent = 'Could not load the mission log. Press Esc to return.'; };
-window.owMovieGuard.load(player, {url: 'UI_StatusMenu/harness.swf', base: 'UI_StatusMenu/'}, 'Missions', ['UI_StatusMenu/StatusMenu.swf'], noMovie).then(found => { if (!found) noMovie(); });
+window.owMovieGuard.load(player, {url: 'UI_StatusMenu/harness.swf', base: 'UI_StatusMenu/'}, 'Missions', window.owMovieGuard.FILES.statusMenu, noMovie).then(found => { if (!found) noMovie(); });
 window.owPlayer = player;
 
 const ROOT = '_level1', MISSIONS = ROOT + '.missions';
