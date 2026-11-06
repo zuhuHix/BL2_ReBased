@@ -63,7 +63,7 @@ def colours(zones):
             for n, tone in enumerate(['Shadow', 'Midtone', 'Hilight'], 1)]
 
 
-def chain(root, parent_vectors, child_scalars=(), decal=True):
+def chain(root, parent_vectors, child_scalars=(), decal=True, pattern=False):
     mic = root / 'FakePkg' / 'MaterialInstanceConstant'
     tex = root / 'FakePkg' / 'Texture2D'
     mic.mkdir(parents=True)
@@ -71,6 +71,8 @@ def chain(root, parent_vectors, child_scalars=(), decal=True):
     textures = [('p_Masks', 'FakeMasks'), ('p_Diffuse', DETAIL), ('p_NormalScopesEmissive', 'FakeNormal')]
     if decal:
         textures.append(('p_Decal', 'FakeDecal'))
+    if pattern:
+        textures.append(('p_Pattern', 'FakePattern'))
     for leaf in [leaf for _, leaf in textures]:
         Image.new('RGB', (4, 4), (128, 128, 128)).save(tex / f'{leaf}.png')
     (mic / 'Mati_Fake.props.txt').write_text(props("MaterialInstanceConstant'Fake.Master.MasterMati_Fake'",
@@ -228,6 +230,20 @@ class StaticChoicesTest(unittest.TestCase):
             self.assertEqual(out['pattern_channels'], 'R')
             self.assertIn('Mati_Fake static parameters', out['channel_source'])
             self.assertIn('UNVERIFIED', out['reading'])
+
+    def test_pattern_records_its_address_only_when_drawn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            vectors = colours('ABC') + [('p_PatternChannelScale', (1, 0, 0, 0)), ('p_PatternColor', (1, 1, 1, 1)),
+                                        ('p_PatternScalePosition', (1, 1, 0, 0))]
+            root = chain(Path(folder), vectors, child_scalars=[('p_ReplacePattern', 0.0)], pattern=True)
+            out = paint.prepare(recipe(root), root, facts=FakeFacts())
+            self.assertTrue(out['pattern_used'])
+            self.assertEqual(out['pattern_address'], ['TA_Clamp', 'TA_Wrap'])
+        with tempfile.TemporaryDirectory() as folder:
+            root = chain(Path(folder), colours('ABC'))
+            out = paint.prepare(recipe(root), root, facts=FakeFacts())
+            self.assertFalse(out['pattern_used'])
+            self.assertIsNone(out['pattern_address'])
 
     def test_guess_without_static_parameters(self):
         with tempfile.TemporaryDirectory() as folder:

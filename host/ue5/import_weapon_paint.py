@@ -241,7 +241,7 @@ def apply(data):
     inputs['Tones'] = node(unreal.MaterialExpressionConstant2Vector, r=scalars['p_HighlightsIntensity'],
                            g=scalars['p_ShadowsIntensity'])
     if pattern:
-        inputs['Pattern'] = sample(import_texture('p_Pattern'))
+        inputs['Pattern'] = sample(import_texture('p_Pattern', address=data.get('pattern_address')))
         place = vectors['p_PatternScalePosition']
         feed_uv(inputs['Pattern'], 1, place[:2], place[2:4])
         inputs['PatternColor'] = constant3(vectors['p_PatternColor'])

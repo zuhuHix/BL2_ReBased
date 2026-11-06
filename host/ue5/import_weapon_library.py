@@ -125,12 +125,19 @@ def import_texture(source, address=None):
         asset = textures[0]
         asset.set_editor_property('srgb', False)
         asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
-        for prop, mode in zip(('address_x', 'address_y'), address or []):
-            asset.set_editor_property(prop, getattr(unreal.TextureAddress, mode.upper()))
         eal.save_loaded_asset(asset, only_if_is_dirty=False)
     known[name] = digest
     marker.write_text(json.dumps(known, indent=1), encoding='utf-8')
     asset = unreal.load_asset(path)
+    # Also on a texture that already exists, so a re-import corrects one imported before its address was known.
+    changed = False
+    for prop, mode in zip(('address_x', 'address_y'), address or []):
+        wanted = getattr(unreal.TextureAddress, mode.upper())
+        if asset.get_editor_property(prop) != wanted:
+            asset.set_editor_property(prop, wanted)
+            changed = True
+    if changed:
+        eal.save_loaded_asset(asset, only_if_is_dirty=False)
     texture_assets[str(source)] = asset
     return asset
 
@@ -149,7 +156,8 @@ def import_skin(master, data):
     for name, value in vectors.items():
         v = list(value) + [0.0] * (4 - len(value))
         mel.set_material_instance_vector_parameter_value(instance, name, unreal.LinearColor(*map(float, v[:4])))
-    addresses = {'p_Decal': (data.get('decal') or {}).get('address'),
+    addresses = {'p_Pattern': data.get('pattern_address'),
+                 'p_Decal': (data.get('decal') or {}).get('address'),
                  'P_SimpleReflect': (data.get('reflection') or {}).get('address')}
     for name, source in textures.items():
         mel.set_material_instance_texture_parameter_value(instance, name, import_texture(source, addresses.get(name)))
