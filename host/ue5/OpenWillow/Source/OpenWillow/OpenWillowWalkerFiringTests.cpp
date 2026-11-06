@@ -330,7 +330,9 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         FOpenWillowWeaponItem Rolled;
         FString Reason;
         if (!FOpenWillowWeaponGen::FindGunWithDamageStack(FMath::Max(1, Skills->GetLevel()), TestScale, Rolled, Reason))
+        {
             UE_LOG(LogTemp, Error, TEXT("OWFIRING rolled_damage unavailable=%s"), *Reason);
+        }
         else
         {
             const float Zero = ShotDamage(Rolled, Now);
