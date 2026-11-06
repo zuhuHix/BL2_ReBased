@@ -186,8 +186,8 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
     {
         if (bStopped) return;
         const double Now = FPlatformTime::Seconds();
-        const USoundWaveProcedural* Sound = Cast<USoundWaveProcedural>(Component->Sound);
-        const int32 Left = Sound ? const_cast<USoundWaveProcedural*>(Sound)->GetAvailableAudioByteCount() : 0;
+        USoundWaveProcedural* Sound = Cast<USoundWaveProcedural>(Component->Sound);
+        const int32 Left = Sound ? Sound->GetAvailableAudioByteCount() : 0;
         if (Left == 0 && DrainedAt < 0) DrainedAt = Now;
         const bool bStuck = Left > 0 && Now - Started > Seconds + DrainLimit;
         if (bStuck) UE_LOG(LogTemp, Warning, TEXT("OWAUDIO sound stopped with %d bytes never pulled after %.2f s"), Left, Now - Started);
