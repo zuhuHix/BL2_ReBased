@@ -188,8 +188,7 @@ def cp_page():
 def cp_injure():
     pc = _pc()
     pawn = pc.Pawn
-    zero = pawn.Location
-    zero.X = zero.Y = zero.Z = 0.0
+    zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)   # a new struct: pawn.Location is the live one
     hit = _try(lambda: pawn.TakeDamage(1000000, None, pawn.Location, zero, unrealsdk.find_class("DamageType")))
     return {"hit": str(hit), "injured": _try(lambda: bool(pawn.bIsInjured)), "health": _try(lambda: float(pawn.GetHealth()))}
 
