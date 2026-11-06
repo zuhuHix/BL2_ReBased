@@ -16,6 +16,7 @@
 #include "OpenWillowInventoryWidget.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowSkills.h"
+#include "OpenWillowPlaytest.h"
 #include "OpenWillowSliceGate.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/Paths.h"
@@ -427,6 +428,7 @@ void AOpenWillowWalker::BeginPlay()
     bMayaActive = FParse::Param(FCommandLine::Get(), TEXT("owmaya"));
     // -owslicegate: the unattended slice-gate run (OpenWillowSliceGate.h, tools/test_slice_gate.ps1).
     if (FParse::Param(FCommandLine::Get(), TEXT("owslicegate"))) NewObject<UOpenWillowSliceGate>(this, TEXT("SliceGate"))->RegisterComponent();
+    { FString PlaytestFile; if (FParse::Value(FCommandLine::Get(), TEXT("owplaytest="), PlaytestFile)) NewObject<UOpenWillowPlaytest>(this, TEXT("Playtest"))->RegisterComponent(); }
     if (!bMayaActive) return;
     ApplyMayaMovementDefaults();
     if (APlayerController* PC = Cast<APlayerController>(Controller))
