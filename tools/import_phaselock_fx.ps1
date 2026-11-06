@@ -32,6 +32,7 @@ $roots = ($UModelRoots | ForEach-Object { (Resolve-Path -LiteralPath (Join-Path 
 $env:OPENWILLOW_PHASELOCK_UMODEL = $roots
 $env:OPENWILLOW_PHASELOCK_EMITTERS = (Resolve-Path -LiteralPath (Join-Path $repo $Emitters)).Path
 $env:OPENWILLOW_PHASELOCK_REPORT = Join-Path $repo 'local/phaselock/fx_import.json'
+$env:OPENWILLOW_PHASELOCK_HOST_DIR = Join-Path $repo 'host/ue5'
 
 # Waits for the shared run lock (another lane's editor, a capture or a suite) and for no Unreal editor process, then claims
 # the lock atomically; it never touches another editor.

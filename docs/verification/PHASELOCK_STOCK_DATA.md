@@ -536,7 +536,7 @@ default belongs to the host camera, not this lane, and was not changed.
 |---|---|---|
 | Thick bright ring, lit interior | The black disc was fully dark only to half its radius. Measured at the same draw scale, the core sprite's bright magenta band falls at 0.46-0.70 of the black quad's radius and the bubble texture's thin rim at about 0.70 | Black disc fully dark to 0.6 of its radius: the band is hidden and the rim stays as a thin, dim edge |
 | Target fully lit inside the bubble | The darkening quad sat at the target's centre, so the target's front half was in front of it | A material's negative `DepthBias` / `Bias` default (read from the template JSON, following parents) moves the sprite that many uu toward the camera and shrinks it by the same ratio: same outline, different depth test (UNVERIFIED reading of the parameter) |
-| How dark | The game keeps the target at about a third of its brightness and the interior deep violet (mean about (50, 52, 98)). UE3 blended into an 8-bit target that clamps after each blend; UE5's float target lets the additive bubble layers sum to about 2.5 before the black | Black darkness capped at 0.9 where opaque geometry lies within 40 uu behind the quad (the target: a third of the 8-bit brightness, since (1/3)^2.2 is about 0.09). Capped at 0.96 where the scene is more than 80 uu behind (the interior: 1 - 0.1 / 2.5). Calibrated against the one capture |
+| How dark | The game keeps the target at about a third of its brightness and the interior deep violet. UE3 blended into an 8-bit target that clamps after each blend; UE5's float target lets the additive bubble layers sum to about 2.5 before the black | Black darkness capped at 0.9 where opaque geometry lies within 40 uu behind the quad (the target: a third of the 8-bit brightness, since (1/3)^2.2 is about 0.09). Capped at 0.96 where the scene is more than 80 uu behind (the interior: 1 - 0.1 / 2.5). Calibrated against the one capture |
 | Release ring blue-violet | One reading of `Mat_SirenGlowMOD` cannot give both the game's cobalt cast flashes (needs the brightness-keeping tint) and its cyan-white ring (needs a plain multiply clipped per channel: violet rim x the end template's `Brighten` colour). The colours and alpha curves do not separate the two | A labelled per-emitter override in `OpenWillowPhaselockFx.cpp` (`EmitterOverrides`): the end template's `Brighten` uses the plain multiply. The release is now a bright cyan-blue ring |
 
 **Bubble size: not changed, not confirmed.** The script reads `Pawn.Mesh.Bounds.SphereRadius` / `BubbleFXScale`
@@ -591,7 +591,7 @@ the surrounding glow moves the ridge out. That is 86.9 uu per unit, about 1.8 ti
   a deep blue-violet, linear (0.022, 0.022, 0.06), instead of black. This stands in for UE3's clamp after every blend,
   which saturated the additive layers to near-white before the orb darkened them. UE5's float target left a magenta
   interior instead.
-- **Interior result.** At 3.0 s the host interior measures (38, 37, 84), against the game's (39-48, 38-45, 88-100).
+- **Interior result.** At 3.0 s the host interior measures (38, 37, 84), close to the game's in all three channels and slightly lower in blue.
   The hand orb's emitter (same material, nothing additive under it) stays black.
 
 **Timing.** The real-game lane's three first locks put the release at 4.608 s after `SkillStartTime`, which matches the
@@ -727,8 +727,8 @@ Host frames: `-owfov=62.15` (77.55 degrees at 16:9) and `-owbubbleradius=255` (t
 adult bullymong, so its bounds radius is replaced for the comparison). Game frames: `local/realgame/phaselock/matched_650/run2`
 (0.25-4.5 s) and `size_rule/adult68` (release). Ranked by how visible the difference is, after round 6:
 
-1. **Bubble interior haze colour:** the game's band between the dark core and the rim is blue-violet (mean about (54, 56, 119)
-   at 0.6-0.85 of the rim radius); the host's is pink-violet even with the x3 calibration. The core texture is magenta; what
+1. **Bubble interior haze colour:** the game's band between the dark core and the rim is blue-violet
+   at 0.6-0.85 of the rim radius; the host's is pink-violet even with the x3 calibration. The core texture is magenta; what
    turns it blue in the game is not found.
 2. **The lifted target is not dimmer inside the bubble.** In the game the adult bullymong shows at about a third of its
    brightness. The black orb's depth fade says it should not darken the target's near surface, and no other layer explains
@@ -790,7 +790,7 @@ calibration is `UNVERIFIED`:
 * **Interior opacity, measured.** Method: take the annulus 0.45-0.8 of the rim radius (inside the rim, outside the target) and
   the same pixels in the pre-cast frame, convert both to linear luminance, and report the mean ratio, the regression slope (how
   much of the background's contrast gets through) and the correlation. Game (centre 645, 300, radius 205 px): ratio 0.44 / 0.47,
-  slope 0.26 / 0.21, correlation 0.45 / 0.37 at 1.5 / 3.0 s; mean colour (28, 32, 86) and (31, 35, 84) of 255. So the game
+  slope 0.26 / 0.21, correlation 0.45 / 0.37 at 1.5 / 3.0 s; its mean colour is a dark navy. So the game
   interior is neither opaque nor see-through: about a quarter of the background's contrast survives. Host with cap 0.85: slope
   0.06 / 0.15. Host now (cap 0.72, round 15): ratio 0.57 / 0.51, slope 0.11 / 0.26, mean colour (36, 38, 122) / (41, 41, 91).
   The host centre and radius used (640, 190, 195) are approximate, so these figures are rough. The script is
@@ -933,7 +933,7 @@ the 0.2-0.45 / 0.45-0.8 / 0.8-0.95 annuli of the rim (the rim found by a blue-mi
 | The dark layer is drawn behind the blue layers | Sort priorities: ring 3, dark layer 4 in both the game's emitter order and the host's | dark layer is drawn after the ring and the haze, as in the game; not the cause |
 | The dark layer is drawn additively | Material blend mode in the import report: translucent | not the cause |
 | The particle colour/alpha it is fed is wrong | The loop template scales its alpha to 0 and colour to 0, so darkness = full coverage; the host reads the same values | not the cause |
-| **The host's own compensations** | `ModulateBlack` with the shader's values (`DarkCap` 1, `FadeFloor` 1) gives a near-black interior (annulus mean (13, 16, 55) against the game's (28, 32, 86)); the compensations (cap 0.72, floor 0.5, haze x3 with a blue tint, ring tint (0.55, 0.9, 1.4)) had left (26, 32, 108) | **the cause**: three calibrations of rounds 5-8, made when the interior was magenta, together made it navy and see-through |
+| **The host's own compensations** | `ModulateBlack` with the shader's values (`DarkCap` 1, `FadeFloor` 1) gives a near-black interior (annulus mean (13, 16, 55), about half the game's brightness); the compensations (cap 0.72, floor 0.5, haze x3 with a blue tint, ring tint (0.55, 0.9, 1.4)) had left (26, 32, 108) | **the cause**: three calibrations of rounds 5-8, made when the interior was magenta, together made it navy and see-through |
 
 Also found: with the ring layer removed (`Sphere` gain 0) the interior is (27, 29, 84), i.e. the ring texture's navy disc is what fills the interior in
 both the game and the host; the game's near-black comes from the dark layer darkening it, with the purple from the twirl wisps (`ShockFlash`).
@@ -1072,7 +1072,7 @@ the exact truncation/depth interaction remains **UNVERIFIED**. Do not treat this
 ### Bubble interior and target material
 
 The `Mat_EnemyOrbCoreColor` haze's blue coefficient changed from 1.6 to 1.0 (a 37.5% reduction). Round 14's prior
-matched-frame measurement was host mean (26,32,108), game (28,32,86); that was the reason for reducing the excess blue.
+matched-frame measurement was host mean (26,32,108), about the game's red and green with excess blue; that was the reason for reducing the excess blue.
 The new 1.50 s pair still looks lighter and bluer in the host. A direct RGB annulus mean is not comparable here because the
 new host bubble sits over Sanctuary and the reference sits over snow/rock in Three Horns; the before/after isolated shader
 value remains **UNVERIFIED** until measured on equivalent background pixels. The annulus mean from round 14 must not be
@@ -1178,9 +1178,9 @@ Every Round 19 fit below is **UNVERIFIED** as stock rendering behavior.
 |---|---|---|
 | Target scale and facing | The Round 2 visual review measured the host silhouette about 10% larger at 3.00 s. The archetype scale remains 0.70; `tools/prepare_phaselock_target.py` now applies a separate 0.90 host fit, for 0.63. A host-only 180-degree yaw check made the target show its back at 3.00 s, so the existing zero offset is retained. | The final 3.00 s pair shows a smaller target. It remains cool silver/lavender and its face is still less readable than the brown/tan reference. |
 | Target material | The resolved parent is `WillowGame.Common_Materials.Creature.Master_Creature`, but the UModel property listing and local shader-cache lookup still provide no graph or shader-map GUID. The host continues to use the Phaselock target's zone-material instance; no hue was fitted by eye across Sanctuary and Three Horns lighting. | Cause remains unconfirmed. The stock shader/material mismatch is open. |
-| Bubble interior | Restored `ModulateBlack` `DarkCap=1` and `FadeFloor=1` for the loop and end templates, and restored `Mat_EnemyOrbCoreColor` to its decoded weight and texture colour (removed the host x3 weight and blue-violet tint). Using the Round 14 ridge detector's 0.45-0.8 normalized annulus at 4.50 s, RGB moved from Round 2 `[42,41,89]` to final Round 3 `[36,31,60]`; the matched game frame measured `[31,36,80]`. | The host annulus is darker; its blue is below the reference in this detector. The single lower-interior point cited by the Round 2 critic is not the same statistic as this annulus and should not be compared directly. The fit remains open. |
-| 0.80 s wash | The host log shows three large `InitialFlash` sprites active at 0.80 s. Restored `Mat_SirenGlowMOD`'s 0.4 default from 1.0 and clamped the screen-material hue stand-in to the stock shader's saturate range. On the same 920 x 360 host ROI, mean RGB changed from `[197.3,229.3,244.5]` to `[144.1,196.1,226.3]`; the game ROI was `[157.4,214.8,247.2]`. RGB distance to that game ROI fell from 42.5 to 31.1. | The pane is less white and shows more variation. The host still has a visible straight lower seam; the surface-quad scene-colour stand-in is **UNVERIFIED**. The two scenes differ, so ROI colour distance is only a visual proxy. |
-| Hand orb | Added a 0.8 scale for the `Center` emitter and a red/green texture fit while preserving blue. A 20 x 20 px center sample changed from Round 2 `[184.9,221.0,251.0]` to final Round 3 `[161.6,210.7,251.2]`; the matched game sample was `[138.3,182.6,252.6]`. | The orb is smaller and less pale, but it still looks cyan and smooth compared with the game's royal-blue core and filaments. The red/green fit remains **UNVERIFIED**. |
+| Bubble interior | Restored `ModulateBlack` `DarkCap=1` and `FadeFloor=1` for the loop and end templates, and restored `Mat_EnemyOrbCoreColor` to its decoded weight and texture colour (removed the host x3 weight and blue-violet tint). Using the Round 14 ridge detector's 0.45-0.8 normalized annulus at 4.50 s, RGB moved from Round 2 `[42,41,89]` to final Round 3 `[36,31,60]`; the matched game frame has a higher blue and green than that and a lower red. | The host annulus is darker; its blue is below the reference in this detector. The single lower-interior point cited by the Round 2 critic is not the same statistic as this annulus and should not be compared directly. The fit remains open. |
+| 0.80 s wash | The host log shows three large `InitialFlash` sprites active at 0.80 s. Restored `Mat_SirenGlowMOD`'s 0.4 default from 1.0 and clamped the screen-material hue stand-in to the stock shader's saturate range. On the same 920 x 360 host ROI, mean RGB changed from `[197.3,229.3,244.5]` to `[144.1,196.1,226.3]`; the game ROI is brighter than the final value in all three channels. The RGB distance to that game ROI fell by about a quarter. | The pane is less white and shows more variation. The host still has a visible straight lower seam; the surface-quad scene-colour stand-in is **UNVERIFIED**. The two scenes differ, so ROI colour distance is only a visual proxy. |
+| Hand orb | Added a 0.8 scale for the `Center` emitter and a red/green texture fit while preserving blue. A 20 x 20 px center sample changed from Round 2 `[184.9,221.0,251.0]` to final Round 3 `[161.6,210.7,251.2]`; the matched game sample is lower in red and green, with about the same blue. | The orb is smaller and less pale, but it still looks cyan and smooth compared with the game's royal-blue core and filaments. The red/green fit remains **UNVERIFIED**. |
 | 4.50 s rim | The shader's noise/normal displacement already frills the ring, but the host capped late push at 0.7. The capture log reads `Dyn=0.74` at 4.50 s; the host fit now ramps to 1.0 by `Dyn=0.75` while retaining the small early push. | The edge is more irregular in the final pair. The band remains broader and more purple than the reference; detached lower flecks remain. |
 
 ### Validation
@@ -1203,7 +1203,7 @@ All presentation choices and ratios below are **UNVERIFIED** as stock behavior.
 | Target scale and bubble bounds | Removed Round 19's fitted `host_visual_scale=0.90`. With corrected FOV and plain bounds, manual full-resolution boxes around the visible mesh (excluding HUD; ratios divide width and height by the outer rim's horizontal width) were: 1.50 s host 195 x 220 / 420 = 0.46 x 0.52, game 210 x 185 / 420 = 0.50 x 0.44; 3.00 s host 150 x 200 / 420 = 0.36 x 0.48, game 215 x 165 / 420 = 0.51 x 0.39; 4.50 s host 170 x 210 / 430 = 0.40 x 0.49, game 215 x 175 / 420 = 0.51 x 0.42. Measurements are manual and rounded to about 5-10 px. The 0.70 trial shrank both host dimensions by 30%, making the width ratios farther from the reference. `tools/prepare_phaselock_target.py` now uses the live component read of `1.0`; `MeshBoundsRadius()` uses raw bounds (307 / 245 / 200 uu versus live-game reads 290 / 230-260 / 193). | Scale 1.0 is the closer overall match, particularly in width, after correcting the earlier FOV conversion. It remains too upright/tall, a shape mismatch a uniform scale cannot fix. The live SDK read of 1.0 and archetype value of 0.70 still conflict; the host rendering choice is **UNVERIFIED**. |
 | Facing, pose and colour | The previous 180-degree yaw check showed the target's back; zero yaw remains. The Round 20 pair set uses the same 3.5-degree pitch as Round 18. No new live read establishes an additional yaw/pitch correction or loop-clip conversion. The target remains cool silver/lavender. The available UModel property list and shader-cache lookup still provide no material graph or shader-map identity. | No further pose or colour fit was made without evidence. The stock curl and brown/tan material remain open. |
 | 0.80 s shell | The final capture (`040022`) log at +0.806 s has three `InitialFlash` emitters: 2587 x 4743, alpha 1.00; 3924 x 1873, alpha 0.15; and 8233 x 3617, alpha 1.00. The scene still has a broad cyan wash with the target visible, while the reference forms a shell around and largely obscures the target. The material reader skips `Mat_SirenSuction`, a screen-distortion material. | No emitter size/alpha was guessed: the three overlapping flashes and skipped distortion layer do not identify a supported shell-only correction. The 0.80 s mismatch remains open. |
-| 0.50 s orb | Tested additional red/green multipliers `0.74` / `0.83` on the base and texture fills, then reverted them after the trial had no material effect. In the 40 x 40 px crop, the host changed from `[157.8,206.6,252.6]` before to `[156.9,205.9,252.6]` with the tint trial; the final restored-material capture was `[157.7,205.7,251.4]`. The matched game crop was `[117.3,171.0,252.4]` (host box x410-450/y324-364; game box x410-450/y345-385). The crop includes glow and overlapping layers, so their contribution is unresolved. | The color gap remains about 40 red and 35 green levels. The tint trial's near-zero change does not establish which layer dominates; retain the Round 19 shader fit rather than guess. The host still lacks the game's radial facets and bright arcs. |
+| 0.50 s orb | Tested additional red/green multipliers `0.74` / `0.83` on the base and texture fills, then reverted them after the trial had no material effect. In the 40 x 40 px crop, the host changed from `[157.8,206.6,252.6]` before to `[156.9,205.9,252.6]` with the tint trial; the final restored-material capture was `[157.7,205.7,251.4]`. The matched game crop is markedly lower in red and green, with about the same blue (host box x410-450/y324-364; game box x410-450/y345-385). The crop includes glow and overlapping layers, so their contribution is unresolved. | The color gap in red and green remains large. The tint trial's near-zero change does not establish which layer dominates; retain the Round 19 shader fit rather than guess. The host still lacks the game's radial facets and bright arcs. |
 | Settled rim | Reverted Round 3's displacement ramp `lerp(0.15,1.0,saturate(Dyn/0.75))` to `lerp(0.15,0.7,saturate(Dyn/0.6))`. At the capture's `Dyn=0.74`, strength is about 0.70 instead of 0.99. | The high-strength frill is reduced; the edge remains violet and broader than the cloudlike cyan-white game rim, with detached lower flecks. |
 
 ### Validation
@@ -1342,18 +1342,17 @@ the lift (not in the script read: `UpdateLiftedPawn` sets the location) or the c
 `tools/real_game/scripts/phaselock_integrity.py` now records the target's `Rotation` and its mesh's rotation every frame. bl-sdk is installed on this
 PC (round 21's note that it is not is out of date); the run needs a hub slot. The default stays 180 until then, which is a choice, not a finding.
 
-**What makes the palm orb pale (measured).** Mean of a 40 px box on the orb at 0.50 s, 8-bit:
+**What makes the palm orb pale (measured).** Mean of a 40 px box on the orb at 0.50 s, 8-bit, host frames only (the game's orb is markedly darker in red and green than the first two rows, with about the same blue; the game-frame and texture-derived numbers are in ignored `local/phaselock/r22/game_frame_measurements.txt`):
 
 | Frame | R | G | B |
 |---|---|---|---|
-| Game | 107 | 147 | 249 |
 | Round 22, offset 0 | 159 | 208 | 251 |
 | Round 23, offset 0 (the blue constant converted) | 158 | 208 | 251 |
 | Round 22, tone curve off | 10 | 158 | 253 |
 
-The inner orb's texture branch alone is already saturated (about 86, 109, 243 at its centre, computed from the texture and the host's factors).
+The inner orb's texture branch alone is already a saturated blue (computed from the texture and the host's factors).
 With the tone curve off, green and blue nearly match the game and red falls far below it. So most of the paleness is UE's film curve desaturating
-an over-bright blue, not the orb's own colour; the red gap with the curve off (10 against 107) is unexplained. The round-22 verdict that tone off moves
+an over-bright blue, not the orb's own colour; with the curve off red falls well below the game's, which is unexplained. The round-22 verdict that tone off moves
 the fur farther predates the zone-colour fix, so round 24 retests it. **Remaining, most visible first (critic):** the facing above; the held target
 larger, paler and less tucked; the 0.80 s blue-white bloom that hides the game's target (the host shows crisp cyan rings); the palm orb; the bubble rim
 (the game's is brighter electric blue, with more turbulent purple-black smoke).

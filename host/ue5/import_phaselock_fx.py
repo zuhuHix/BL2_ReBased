@@ -29,7 +29,11 @@ pass"):
 import json
 import os
 from pathlib import Path
+import sys
 import unreal
+
+sys.path.insert(0, os.environ['OPENWILLOW_PHASELOCK_HOST_DIR'])   # set by tools/import_phaselock_fx.ps1
+from phaselock_fx_inputs import check_fx_inputs  # noqa: E402
 
 destination = '/Game/OpenWillow/Phaselock'
 roots = [Path(p).resolve() for p in os.environ['OPENWILLOW_PHASELOCK_UMODEL'].split(';') if p]
@@ -44,7 +48,8 @@ report = {'materials': {}, 'textures': {}, 'meshes': {}, 'skipped': {}}
 # the effect shaders (round 6, the shader-cache reading); they are gamma-space numbers and are converted to linear here.
 constants_path = Path(os.environ.get('OPENWILLOW_PHASELOCK_CONSTANTS', emitter_dir.parent / 'fx_constants.json'))
 if not constants_path.is_file():
-    raise SystemExit(f'OW_PLFX missing {constants_path}: the stock effect colour constants (ignored local input) are required')
+    # RuntimeError, not SystemExit: tools/import_phaselock_fx.ps1 fails the run on a Traceback in the log.
+    raise RuntimeError(f'OW_PLFX missing {constants_path}: the stock effect colour constants (ignored local input) are required')
 FX_CONSTANTS = json.loads(constants_path.read_text(encoding='utf-8'))
 
 
@@ -531,7 +536,7 @@ float4 core = Texture2DSample(T1, T1Sampler, uv + parallax * viewXY);
 float2 centred = uv - 0.5;
 float mask = Texture2DSample(T2, T2Sampler, 2.0 * uv).r;
 // Round 19: restore the stock shader's weight and texture colour. The Round 2 matched 4.50 s frame measured a much
-// brighter, bluer host interior than the game (host 67/40/119, game 8/19/23); the Round 7-17 x3 weight and blue-violet
+// brighter, bluer host interior than the game; the Round 7-17 x3 weight and blue-violet
 // tint contributed light there. The rendering fit remains UNVERIFIED until this rebuilt material is captured.
 float weight = core.r * Col.a * mask * dot(centred, centred);
 float3 colour = Col.rgb * core.rgb;
@@ -690,7 +695,7 @@ float mixWeight = 12.0 * pow(oneMinus, 6.0) * m2;
 float base = saturate(2.0 * m2);
 float k = base + mixWeight * (m1 - base);
 // Round 20 tint trial (UNVERIFIED): applying the measured red/green ratios barely changed the matched 40x40 px host crop
-// (157.8/206.6/252.6 before, 156.9/205.9/252.6 after; game 117.3/171.0/252.4). The crop includes glow and overlapping
+// (157.8/206.6/252.6 before, 156.9/205.9/252.6 after; the game's crop is markedly lower in red and green). The crop includes glow and overlapping
 // layers may dominate it, but their contribution is unresolved. Retain the prior fit instead of stacking on another guess.
 // Round 23 (UNVERIFIED): the stock blue is read as a gamma-space value and converted to linear (stock_colour_linear), which
 // shows it as the game's cobalt instead of pale cyan; the earlier x0.7 compensation is dropped.
@@ -826,7 +831,7 @@ def exact_material(name):
     else:
         # The shaders write colours up to 4 (min(c, 4)). Host reading (UNVERIFIED): a layer's colour is brought into range
         # by dividing by its largest channel when that exceeds 1, which keeps the hue. A per-channel clip turned the spikes'
-        # blue (1.6, 13, 40) x texture into cyan-white, and no clip made them white lines; the game frames show deep blue.
+        # blue x texture into cyan-white, and no clip made them white lines; the game frames show deep blue.
         clamped = node(unreal.MaterialExpressionCustom, 800, 0, description='hue-keeping range', code=
                        'float m = max(1.0, max(C.r, max(C.g, C.b))); return C / m;',
                        output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
@@ -864,6 +869,10 @@ def exact_material(name):
 
 # --- run -------------------------------------------------------------------------------------------------------------
 
+# Nothing is deleted unless the inputs are complete: a failed check leaves the imported effects as they are.
+input_problems = check_fx_inputs(emitter_dir, roots, {name: spec['textures'] for name, spec in EXACT.items()})
+if input_problems:
+    raise RuntimeError('OW_PLFX inputs incomplete, nothing changed: ' + '; '.join(input_problems))
 if eal.does_directory_exist(destination):
     eal.delete_directory(destination)
 parents = {
