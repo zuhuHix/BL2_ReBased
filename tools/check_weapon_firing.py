@@ -53,6 +53,7 @@ LIFECYCLE = re.compile(r'OWFIRING lifecycle (.*)$')
 PUSH = re.compile(r'OWFIRING push (.*)$')
 WIDE = re.compile(r'OWFIRING wide (.*)$')
 SWAP = re.compile(r'OWFIRING swap (.*)$')
+GRENADE = re.compile(r'OWFIRING grenade (thrown=.*)$')
 SPLASH = re.compile(r'OWFIRING splash \S+ distance (\S+) scale (\S+) momentum (\S+) source (\w+)')
 SKIPPED = re.compile(r'OWFIRING skipped id=(\S+) reason=(.*)$')
 NO_WALL = re.compile(r'OWFIRING no wall in reach for id=(\S+)')
@@ -88,6 +89,9 @@ def read_log(text, extra=None):
         if match := WIDE.search(line):
             body = fields(match.group(1))
             extra['wide'][body['id']] = body
+            continue
+        if match := GRENADE.search(line):
+            extra['grenade'] = fields(match.group(1))
             continue
         if match := SWAP.search(line):
             body = fields(match.group(1))
@@ -247,6 +251,25 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
             fails.append(f"wide check inconclusive: the line beside the dummy hit it ({wide['line_hits']})")
         elif int(wide['box_hits']) < 1:
             fails.append('a TraceExtent box beside the dummy missed it')
+    return fails
+
+
+def check_grenade(line):
+    """The firing test's one grenade at the dummy (OWFIRING grenade): it was thrown, took one grenade from the pool,
+    exploded on the dummy and every splash hit is a hit event with Source Grenade."""
+    if line is None:
+        return ['no OWFIRING grenade line (the grenade check did not run)']
+    fails = []
+    if line.get('thrown') != '1':
+        return ['the grenade was not thrown (no grenade data: tools/grenade_mod.py, or no grenade in the pool)']
+    if int(line['ammo_after']) != int(line['ammo_before']) - 1:
+        fails.append(f"grenade ammo {line['ammo_before']} -> {line['ammo_after']}, expected one fewer")
+    if int(line['splash_hits']) < 1:
+        fails.append('the grenade splashed nothing')
+    if line['grenade_hits'] != line['splash_hits']:
+        fails.append(f"{line['grenade_hits']} grenade hit events for {line['splash_hits']} splash hits")
+    if int(line['unknown_sources']):
+        fails.append(f"{line['unknown_sources']} grenade hit events with an Unknown source")
     return fails
 
 
@@ -492,8 +515,14 @@ def main(argv=None):
         for note in notes:
             print(f'{gun}: note {note}')
     print(table(rows))
+    # The grenade line is required; only --legacy grades a run from before the grenade check without it.
+    grenade_fails = [] if args.legacy and 'grenade' not in extra else check_grenade(extra.get('grenade'))
+    for reason in grenade_fails:
+        print(f'grenade: FAIL {reason}')
+    if 'grenade' in extra and not grenade_fails:
+        print('grenade: PASS')
     print(f'{len(guns) - failed} PASS, {failed} FAIL of {len(guns)} guns')
-    return 1 if failed else 0
+    return 1 if failed or grenade_fails else 0
 
 
 if __name__ == '__main__':

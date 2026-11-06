@@ -128,6 +128,32 @@ const FOpenWillowExplosionBand* FOpenWillowFiringData::BandFor(float Radius, flo
     return Best;
 }
 
+bool FOpenWillowFiringData::ParseGrenade(const FJsonObject& Grenade, FOpenWillowFiringData& Out)
+{
+    Out = FOpenWillowFiringData();
+    const FJsonObject* Projectile = ObjectOrNull(Grenade, TEXT("projectile"));
+    const FJsonObject* Radius = ObjectOrNull(Grenade, TEXT("radius"));
+    const FJsonObject* Damage = ObjectOrNull(Grenade, TEXT("damage"));
+    if (!Projectile || !Radius || !Damage) return false;
+    Out.Kind = EOpenWillowShotKind::Rocket;
+    Out.FiringMode = TEXT("grenade");
+    Out.ProjectileSpeed = float(NumberOr(*Projectile, TEXT("speed"), 0));
+    Out.GravityScale = float(NumberOr(*Projectile, TEXT("gravity_scale"), 1));
+    Out.bFalls = true;   // PHYS_Falling
+    Out.Bounces = FMath::Max(0, int32(NumberOr(*Projectile, TEXT("bounces"), 0)));
+    Projectile->TryGetBoolField(TEXT("explode_on_impact"), Out.bExplodeOnImpact);
+    Out.ProjectileLifetime = float(NumberOr(*Projectile, TEXT("max_lifespan"), 10));
+    if (const FJsonObject* Fuse = ObjectOrNull(Grenade, TEXT("fuse_time"))) Out.FuseTime = float(NumberOr(*Fuse, TEXT("value"), 0));
+    Out.Splash.bValid = true;
+    Out.Splash.Radius = float(weapon_firing::explosionRadius(NumberOr(*Radius, TEXT("value"), 0)));
+    Out.Splash.Damage = float(NumberOr(*Damage, TEXT("value"), 0));
+    Grenade.TryGetStringField(TEXT("damage_type"), Out.Splash.DamageType);
+    // The grenade's falloff bands are not in the block: the class defaults (0.2 / 0.8 / 0.2) stand in (UNVERIFIED).
+    ParseFx(Grenade, Out);
+    Out.bLoaded = Out.ProjectileSpeed > 0.f && Out.Splash.Radius > 0.f;
+    return Out.bLoaded;
+}
+
 bool FOpenWillowFiringData::Parse(const FJsonObject& Firing, float CardDamage, FOpenWillowFiringData& Out)
 {
     Out = FOpenWillowFiringData();

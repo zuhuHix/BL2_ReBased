@@ -37,6 +37,7 @@ enum class EOpenWillowHitSource : uint8
     Throw,       // a thrown Tediore gun, its strike and its explosion
     Status,      // a status effect's damage over time
     Skill,       // a skill's own damage (set by the skills lane)
+    Grenade,     // a thrown grenade mod's projectile and its explosion
 };
 
 enum class EOpenWillowElement : uint8

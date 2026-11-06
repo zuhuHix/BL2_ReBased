@@ -1,0 +1,180 @@
+"""Synthetic tests for tools/grenade_mod.py: invented objects and numbers, no game data.
+
+FakePackage stands in for skill_stats.Package (props(), index, classes). Paths and values are made up.
+"""
+from pathlib import Path
+import sys
+import unittest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+import grenade_mod as grenade
+import weapon_firing
+
+ROOT = Path(__file__).resolve().parents[1]
+ATTR = grenade.ATTR
+MOD = 'Fake.Mod.Grenade'
+
+
+def const(value, attribute=None, scale=1.0):
+    return {'BaseValueConstant': value, 'BaseValueAttribute': attribute,
+            'InitializationDefinition': None, 'BaseValueScaleConstant': scale}
+
+
+class FakePackage:
+    def __init__(self):
+        self.objects, self.classes = {}, {}
+        self.index = self.objects
+
+    def add(self, path, cls, props=None):
+        self.objects[path] = dict(props or {})
+        self.classes[path] = cls
+        return path
+
+    def props(self, path):
+        return self.objects[path]
+
+
+def part_list(package, path, parts):
+    package.add(path, 'WillowGame.ItemPartListDefinition',
+                {'WeightedParts': [{'Part': part} for part in parts]})
+    return path
+
+
+def world():
+    """Invented grenade mod: trigger (fuse), damage (scale), radius (PreAdd), one projectile with a timer."""
+    package = FakePackage()
+    add = package.add
+    add('Fake.Trig.G0', 'WillowGame.GrenadeModPartDefinition', {
+        'AttributeSlotUpgrades': [{'SlotName': 'FuseTime', 'GradeIncrease': -1, 'bActivateSlot': True}]})
+    add('Fake.Trig.G2', 'WillowGame.GrenadeModPartDefinition', {
+        'AttributeSlotUpgrades': [{'SlotName': 'FuseTime', 'GradeIncrease': 2, 'bActivateSlot': True}]})
+    add('Fake.Dmg.D1', 'WillowGame.GrenadeModPartDefinition', {
+        'AttributeSlotUpgrades': [{'SlotName': 'Damage', 'GradeIncrease': 1, 'bActivateSlot': True}]})
+    add('Fake.Rad.R1', 'WillowGame.GrenadeModPartDefinition', {
+        'AttributeSlotUpgrades': [{'SlotName': 'DamageRadius', 'GradeIncrease': 1, 'bActivateSlot': True}]})
+    lists = {
+        'AlphaParts': part_list(package, 'Fake.Lists.Payload', ['Fake.Payload.Standard', 'Fake.Payload.Mirv']),
+        'BetaParts': part_list(package, 'Fake.Lists.Delivery', ['Fake.Delivery.Lob']),
+        'GammaParts': part_list(package, 'Fake.Lists.Trigger', ['Fake.Trig.G0', 'Fake.Trig.G2']),
+        'DeltaParts': part_list(package, 'Fake.Lists.Accessory', ['Fake.Acc.None']),
+        'EpsilonParts': part_list(package, 'Fake.Lists.Damage', ['Fake.Dmg.D1', 'Fake.Dmg.D0']),
+        'ZetaParts': part_list(package, 'Fake.Lists.Radius', ['Fake.Rad.R1', 'Fake.Rad.R0']),
+        'EtaParts': part_list(package, 'Fake.Lists.Child', ['Fake.Child.C0']),
+        'ThetaParts': part_list(package, 'Fake.Lists.Status', ['Fake.Status.S0']),
+        'MaterialParts': part_list(package, 'Fake.Lists.Material', ['Fake.Material.M0']),
+    }
+    add('Fake.Mod.Grenade', 'WillowGame.GrenadeModDefinition', dict(lists, **{
+        'DefaultProjectileDefinition': 'Fake.Proj.P',
+        'AttributeSlotEffects': [
+            {'SlotName': 'FuseTime', 'AttributeToModify': ATTR + 'FuseTime', 'ModifierType': 'MT_PreAdd',
+             'BaseModifierValue': const(0.5), 'PerGradeUpgrade': const(0.25), 'bExternalSlot': False},
+            {'SlotName': 'Damage', 'AttributeToModify': ATTR + 'GrenadeDamage', 'ModifierType': 'MT_Scale',
+             'BaseModifierValue': const(0), 'PerGradeUpgrade': const(0.1), 'bExternalSlot': False},
+            {'SlotName': 'DamageRadius', 'AttributeToModify': ATTR + 'BlastRadius', 'ModifierType': 'MT_PreAdd',
+             'BaseModifierValue': const(0), 'PerGradeUpgrade': const(30), 'bExternalSlot': False},
+        ]}))
+    for name in ('Fake.Payload.Standard', 'Fake.Payload.Mirv', 'Fake.Delivery.Lob', 'Fake.Acc.None', 'Fake.Dmg.D0',
+                 'Fake.Rad.R0', 'Fake.Child.C0', 'Fake.Status.S0', 'Fake.Material.M0'):
+        add(name, 'WillowGame.GrenadeModPartDefinition', {})   # parts with no slot upgrades
+    add('Fake.Attr.Scaler.ConstantAttributeValueResolver_0', 'WillowGame.ConstantAttributeValueResolver',
+        {'ConstantValue': 1.5})
+    add('Fake.Init.Dmg', 'Engine.AttributeInitializationDefinition', {'ValueFormula': {
+        'bEnabled': True, 'Multiplier': const(2), 'Level': {'BaseValueAttribute': 'Fake.Attr.Scaler'},
+        'Power': {'BaseValueAttribute': grenade.PROJECTILE_LEVEL}}})
+    add('Fake.Proj.P', 'WillowGame.ProjectileDefinition', {
+        'SpeedFormula': const(1000), 'GravityScaling': 0.5, 'PhysicsMode': 'PHYS_Falling',
+        'Damage': {'InitializationDefinition': 'Fake.Init.Dmg', 'BaseValueScaleConstant': 3},
+        'BehaviorProviderDefinition': 'Fake.Proj.P.BPD'})
+    add('Fake.Proj.P.BPD', 'GearboxFramework.BehaviorProviderDefinition', {})
+    add('Fake.Proj.P.BPD.Behavior_Explode_0', 'WillowGame.Behavior_Explode', {
+        'DamageRadiusFormula': const(100), 'DamageFormula': {'BaseValueAttribute': 'Fake.Attr.ProjDamage'},
+        'Definition': 'Fake.Expl.E'})
+    add('Fake.Proj.P.BPD.Behavior_ModifyTimer_0', 'GearboxFramework.Behavior_ModifyTimer', {
+        'TimerId': 'BTIMER_2', 'NewTimerDelay': const(1.8)})
+    add('Fake.Expl.E', 'WillowGame.ExplosionDefinition', {'DamageTypeDef': 'Fake.DT.Explosive'})
+    return package
+
+
+def defaults():
+    return FakePackage()
+
+
+class PartChoiceTest(unittest.TestCase):
+    def test_first_entry_is_default(self):
+        package = world()
+        parts = grenade.choose_parts(package, package.props(MOD), {})
+        self.assertEqual(parts['Trigger'], 'Fake.Trig.G0')
+        self.assertEqual(parts['Payload'], 'Fake.Payload.Standard')
+        self.assertEqual(parts['StatusDamage'], 'Fake.Status.S0')
+
+    def test_override_is_used(self):
+        package = world()
+        parts = grenade.choose_parts(package, package.props(MOD), {'Trigger': 'Fake.Trig.G2'})
+        self.assertEqual(parts['Trigger'], 'Fake.Trig.G2')
+
+    def test_override_not_in_list_is_refused(self):
+        package = world()
+        with self.assertRaises(SystemExit):
+            grenade.choose_parts(package, package.props(MOD), {'Trigger': 'Fake.Dmg.D1'})
+
+
+class SlotResolutionTest(unittest.TestCase):
+    def resolve(self, overrides=None, level=2):
+        package = world()
+        source = weapon_firing.Source(package, defaults())
+        return grenade.resolve(package, defaults(), overrides or {}, level, MOD), package, source
+
+    def test_fuse_from_trigger_grade(self):
+        # Grade 3 (one step above the base grade 1 plus two increases): 0.5 + 2 x 0.25.
+        block, _, _ = self.resolve({'Trigger': 'Fake.Trig.G2'})
+        self.assertAlmostEqual(block['fuse_time']['value'], 1.0, places=4)
+        self.assertEqual(block['fuse_time']['slot']['grade'], 3)
+        # Grade 0 with the default trigger: 0.5 + (0 - 1) x 0.25.
+        block, _, _ = self.resolve()
+        self.assertAlmostEqual(block['fuse_time']['value'], 0.25, places=4)
+        self.assertEqual(block['fuse_time']['projectile_timers'][0]['timer'], 'BTIMER_2')
+        self.assertAlmostEqual(block['fuse_time']['projectile_timers'][0]['delay'], 1.8, places=4)
+
+    def test_radius_is_explosion_formula_plus_blast_slot(self):
+        # Explosion radius 100, plus the DamageRadius slot at grade 2 (one step x 30).
+        block, _, _ = self.resolve()
+        self.assertAlmostEqual(block['radius']['value'], 130.0, places=4)
+        self.assertEqual(block['radius']['explode_radius'], 100)
+
+    def test_damage_is_init_at_level_times_scale_times_slot(self):
+        # Init: 2 x (1.5 ^ level 2) = 4.5; x scale 3 = 13.5; Damage slot grade 2 gives x (1 + 0.1).
+        block, _, _ = self.resolve({'Damage': 'Fake.Dmg.D1'}, level=2)
+        self.assertIsNone(block['damage']['reason'])
+        self.assertAlmostEqual(block['damage']['value'], 13.5 * 1.1, places=3)
+
+    def test_unresolved_damage_is_null_with_reason(self):
+        package = world()
+        package.objects['Fake.Init.Dmg']['ValueFormula']['Level'] = {'BaseValueAttribute': 'Fake.Attr.Missing'}
+        block = grenade.resolve(package, defaults(), {}, 2, MOD)
+        self.assertIsNone(block['damage']['value'])
+        self.assertIn('Fake.Attr.Missing', block['damage']['reason'])
+
+    def test_projectile_speed_gravity_and_child_count(self):
+        block, _, _ = self.resolve()
+        self.assertEqual(block['projectile']['speed'], 1000)
+        self.assertEqual(block['projectile']['gravity_scale'], 0.5)
+        self.assertEqual(block['projectile']['physics_mode'], 'PHYS_Falling')
+        self.assertEqual(block['child_count'], 0)
+        self.assertEqual(block['payload'], 'Standard')
+        self.assertEqual(block['damage_type'], 'Fake.DT.Explosive')
+        self.assertTrue(block['unverified'])
+
+
+class OutputPathTest(unittest.TestCase):
+    def test_path_outside_local_is_refused(self):
+        with self.assertRaises(SystemExit):
+            grenade.local_path(ROOT / 'tools' / 'grenade.json')
+        with self.assertRaises(SystemExit):
+            grenade.local_path(ROOT / 'local' / '..' / 'tools' / 'grenade.json')
+
+    def test_path_inside_local_is_accepted(self):
+        resolved = grenade.local_path(ROOT / 'local' / 'items' / 'grenades' / 'test.json')
+        self.assertIn(ROOT / 'local', resolved.parents)
+
+
+if __name__ == '__main__':
+    unittest.main()
