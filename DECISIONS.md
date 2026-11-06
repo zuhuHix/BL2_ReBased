@@ -948,8 +948,8 @@ AI-assisted (Claude). Host and tooling; no change to `src/`, `CMakeLists.txt` or
 - **Floor light:** it reaches the floor again, as its data says. The 10-03 game frames show a pale blue pool, which
   undoes the round-1 stand-in.
 - **Interior (stand-in, calibrated against one capture):** the bubble's black orb blends toward a deep blue-violet
-  instead of black, standing in for UE3's clamp after every blend. Host interior (38, 37, 84) against the game's
-  (39-48, 38-45, 88-100). The hand orb stays black.
+  instead of black, standing in for UE3's clamp after every blend. Host interior (38, 37, 84), close to the game's
+  and slightly lower in blue. The hand orb stays black.
 - **Timing:** first locks in game release at 4.608 s, which the host matches; no change.
 - **Open:** the dummy stays lit in front of the smaller bubble; the floor pool is fainter on dark asphalt; the 0.6 s
   starburst.
@@ -3749,7 +3749,7 @@ AI-assisted (Claude; host C++ drafted by a Claude Haiku sub-agent from a written
 AI-assisted (Claude). Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "Round 23 results" and "Round 24". Presentation change.
 
 - Round 23 scored 5.9 / 10 as a best-per-time mix of two facings (round 22 rescored 5.7); target 8 not reached. The target's fur now reads
-  tan and brown. The orb's blue-constant conversion had no measurable effect (40 px mean 159, 208, 251 to 158, 208, 251; game 107, 147, 249).
+  tan and brown. The orb's blue-constant conversion had no measurable effect (host 40 px mean 159, 208, 251 to 158, 208, 251; the game's orb is markedly darker in red and green).
 - With the tone curve off the orb reads 10, 158, 253: most of its paleness is the film curve on an over-bright blue, not its own colour.
 - The hand orb's ribbons, swirl and star-burst read their colour as gamma-space values (a `GammaOut` material parameter, set by the hand
   template's emitters only). UNVERIFIED until the capture, which also retests the tone curve off on the corrected target.
