@@ -44,6 +44,11 @@ class CheckControlsTest(unittest.TestCase):
         problems = cc.grade(log(summary='passed=4 failed=0'))[1]
         self.assertTrue(any('summary passed=4' in p for p in problems), problems)
 
+    def test_a_summary_with_anything_after_it_fails(self):
+        good = f'passed={len(cc.EXPECTED)} failed=0'
+        self.assertIn('0 summaries, expected one', cc.grade(log(summary=f'{good} failed=1'))[1])
+        self.assertEqual(cc.grade(log(summary=good).replace('\n', '\r\n') + '\r\n')[1], [])   # a Windows log's line ends still pass
+
     def test_a_missing_or_doubled_summary_fails(self):
         self.assertIn('0 summaries, expected one', cc.grade(log(summary=''))[1])
         self.assertIn('2 summaries, expected one', cc.grade(log() + '\n' + log(rows=[]).replace('passed=0', f'passed={len(cc.EXPECTED)}'))[1])
