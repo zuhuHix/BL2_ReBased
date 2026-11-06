@@ -226,6 +226,23 @@ def _bone_rows(mesh, pawn):
     return rows
 
 
+def _matrix_row(matrix):
+    """The four planes of a matrix as lists, or null when any field cannot be read."""
+    def planes():
+        return [[_r(getattr(getattr(matrix, p), a)) for a in ("X", "Y", "Z")] for p in ("XPlane", "YPlane", "ZPlane", "WPlane")]
+    return _null(planes)
+
+
+def _placement_row(mesh, comp, bone):
+    """What settles where an attached piece sits: its world matrix and its bone's, read on the same frame."""
+    index = _null(lambda: mesh.MatchRefBone(bone))
+    bone_matrix = _null(lambda: mesh.GetBoneMatrix(index)) if isinstance(index, int) else None
+    return {"local_to_world": _matrix_row(_null(lambda: comp.LocalToWorld)),
+            "bone_matrix": _matrix_row(bone_matrix),
+            "translation": _null(lambda: plain(comp.Translation)), "rotation": _null(lambda: plain(comp.Rotation)),
+            "scale": _null(lambda: comp.Scale), "scale3d": _null(lambda: plain(comp.Scale3D))}
+
+
 def _component_row(comp):
     row = {"class": _null(lambda: comp.Class.Name), "name": _null(lambda: comp.Name)}
     for field in ("SkeletalMesh", "StaticMesh", "Template"):
@@ -246,7 +263,8 @@ def _asset_row(pawn, mesh):
     for a in (_null(lambda: list(mesh.Attachments)) or []):
         comp = _null(lambda: a.Component)
         if comp is not None:
-            row["attachments"].append({"socket": _null(lambda: str(a.SocketName)), "bone": _null(lambda: str(a.BoneName)), **_component_row(comp)})
+            row["attachments"].append({"socket": _null(lambda: str(a.SocketName)), "bone": _null(lambda: str(a.BoneName)), **_component_row(comp),
+                                       **_placement_row(mesh, comp, _null(lambda: str(a.BoneName)))})
     for comp in (_null(lambda: list(pawn.Components)) or []):
         if comp is not None:
             row["components"].append(_component_row(comp))
