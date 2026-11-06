@@ -3,6 +3,37 @@
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "OpenWillowWalker.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+
+float FOpenWillowStandInShieldRule::CapacityAt(int32 Level) const
+{
+    if (!IsSet()) return 0.f;
+    return FMath::RoundToFloat(Capacity * FMath::Pow(Growth, float(FMath::Max(1, Level) - AtLevel)));
+}
+
+bool FOpenWillowStandInShieldRule::Parse(const FString& Json, FString& OutError)
+{
+    *this = FOpenWillowStandInShieldRule();
+    TSharedPtr<FJsonObject> Root;
+    double Level = 0, InCapacity = 0, InGrowth = 0;
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root) || !Root
+        || !Root->TryGetNumberField(TEXT("at_level"), Level) || !Root->TryGetNumberField(TEXT("capacity"), InCapacity)
+        || !Root->TryGetNumberField(TEXT("growth_per_level"), InGrowth))
+    {
+        OutError = TEXT("expected a JSON object with at_level, capacity and growth_per_level");
+        return false;
+    }
+    if (!(Level >= 1 && Level <= 100 && Level == FMath::FloorToDouble(Level)) || !(InCapacity > 0 && InCapacity < 1e7) || !(InGrowth >= 1 && InGrowth <= 2))
+    {
+        OutError = TEXT("at_level must be a whole number in 1..100, capacity above 0 and growth_per_level in 1..2");
+        return false;
+    }
+    AtLevel = int32(Level);
+    Capacity = float(InCapacity);
+    Growth = float(InGrowth);
+    return true;
+}
 
 FOpenWillowDamageResult FOpenWillowMayaState::ApplyDamage(float Amount, float Now)
 {

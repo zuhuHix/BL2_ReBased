@@ -301,6 +301,13 @@ private:
     FString EquippedShieldId;           // the shield MayaState was last given (TickShield)
     bool bShieldEverEquipped = false;
     void TickShield(float Now);
+    FOpenWillowStandInShieldRule StandInShieldRule;
+    bool bStandInShieldRuleRead = false;
+public:
+    // What a shield item gives: its card's stats, the stand-in rule's capacity when the card has none, the stats' defaults otherwise.
+    struct FShieldStats { float Capacity = 0.f; float RechargeDelay = 0.f; float RechargeRate = 0.f; bool bStandIn = false; };
+    static FShieldStats ReadShieldStats(const struct FOpenWillowGearItem* Item, const FOpenWillowStandInShieldRule& Rule);
+private:
     int32 HealthLevel = 0;              // the level MaxHealth was last set for (0: not yet)
     bool bHealthHeldForScript = false;  // a script level-up is pending: RefreshHealthForLevel does nothing
     struct FDamageScale { float Scale = 0; float EndsAt = 0; };

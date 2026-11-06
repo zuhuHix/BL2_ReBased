@@ -106,7 +106,7 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
     shields by weight.
   - Buying ammo adds the item's rounds to the pool, capped at its maximum, and is refused with "Ammo full". Health Now!
     heals 25 % of max health and is refused at full health. Ammo and health rows stay on the shelf.
-  - Shields and grenade mods are bought as stand-in gear with no stats and rarity 1.
+  - Shields and grenade mods are bought as stand-in gear with no stats and rarity 1. A shield's capacity comes from the walker's stand-in rule when equipped (`COMBAT_DOWN_RESPAWN.md`, "Stand-in shield capacity").
   - Class mods are left out: their shop pools are empty in the packages, and how the game fills them is open.
   - Item value is evaluated in single precision, in the tool's order.
 - PR 1 stocked guns only. Ammo, grenade mods, shields, class mods and health items need item kinds the host inventory
@@ -214,7 +214,7 @@ this is not saved, and what the real game does here is `UNVERIFIED`.
 
 **Use key.** Every target in its own reach is measured and offered the press, nearest first: vending machine, lootable or loot pickup, door, dropped gun or gear (ties in that order). A pickup that would refuse, such as ammo on a full pool, is not a target at all, so what lies behind it keeps the distance order. Any other target that refuses lets the next one try. A refused dropped gun still takes the press, because the player meant the gun and "backpack full" is its feedback. Marcus's talk is checked first on purpose, because it opens and turns in the slice's mission and his shop must not lose the press to a gun on the counter. All of this stands in for the native use trace (`UNVERIFIED`).
 
-**Stand-ins.** Shield and grenade mod drops are gear with no stats and rarity 1.
+**Stand-ins.** Shield and grenade mod drops are gear with no stats and rarity 1. A dropped shield gets its capacity the same way as a bought one, from the walker's stand-in rule when equipped (`COMBAT_DOWN_RESPAWN.md`, "Stand-in shield capacity"); the item itself still holds no stats, so its value and price do not change.
 
 **Assets.** `tools/import_lootables.ps1` (UModel 1590, then two editor imports) imported 36 of 36 assets on 2026-11-06: the
 6 lootable meshes, the 12 pickup meshes and 18 clips. The meshes are untextured: they render as plain pale surfaces. 15 of the
