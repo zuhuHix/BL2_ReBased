@@ -49,6 +49,7 @@ def python_gun(package, localize, balance, stage, seed, stage_cap=None):
     # Not item-card rows: the C++ card also carries the refire rule the host fires by.
     card['burst_count'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponAutomaticBurstCount')
     card['burst_interval'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponBurstInterval')
+    card['burst_known'] = card['burst_count'] is not None
     for field in FLOAT_PROPERTY_FIELDS:
         if isinstance(card.get(field), int):
             card[field] = float(card[field])

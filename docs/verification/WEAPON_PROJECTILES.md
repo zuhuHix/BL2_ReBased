@@ -209,7 +209,7 @@ hook); the critic aligned on the first visible effect.
   trace (card pellets and spread). Their refire rule is resolved since 2026-11-06: the card carries the evaluated burst count and
   interval, so a type with count 1 fires once per press. Before that every generated gun fired while held. The firing test now
   rolls one gun of each kind from the manifest and `tools/check_weapon_firing.py` requires one shot from one hold (burst 1) and more than
-  one (burst 0), with a hold of at least two fire intervals. A stale manifest fails and names `tools/weapon_gen_manifest.py`. Porting the resolution into `src/weapon_gen` (or calling a shared resolver) is the
+  one (burst 0), with a hold of at least two fire intervals. A stale manifest fails and names `tools/weapon_gen_manifest.py`; the burst count alone marks a fresh one. This check is about refire only: `from_manifest` is a data check, and a rolled gun with no imported mesh passes it on the host's stand-in, which says nothing about how that gun looks. Porting the resolution into `src/weapon_gen` (or calling a shared resolver) is the
   next step; recipe guns are unaffected.
 * Live skills change weapon stats a lot (a legendary amp shield added a flat 46,940 per shot); real-game measurements
   need skills off.

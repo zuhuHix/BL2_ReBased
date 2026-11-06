@@ -132,7 +132,7 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     // (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"), so Firing stays not loaded: they fire the fallback trace.
     Item.Firing.BurstCount = FMath::Max(0, int32(Card.burstCount.value_or(0)));
     Item.Firing.BurstInterval = float(Card.burstInterval.value_or(0));
-    Item.Firing.bBurstFromManifest = Card.burstCount && Card.burstInterval;
+    Item.Firing.bBurstFromManifest = Card.BurstKnown();
     if (!Item.Firing.bBurstFromManifest)
     {
         static bool bWarned = false;
