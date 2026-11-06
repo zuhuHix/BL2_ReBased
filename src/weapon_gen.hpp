@@ -58,6 +58,12 @@ struct GenDefinition {
     std::vector<GenTerm> formula, clamp;  // in the order the package lists them
 };
 
+// One value of the player's accuracy pool: its name, the owner attribute a weapon's external effects modify, and its base.
+struct GenAccuracyPoolValue {
+    std::string key, attribute;
+    int init = 0;
+};
+
 struct GenEffect {
     std::string attribute, modifier;  // AttributeToModify, ModifierType (MT_PreAdd / MT_Scale / MT_PostAdd)
     int init = 0;                     // BaseModifierValue
@@ -123,6 +129,7 @@ struct GenObject {
     std::string cls, path;
     // Gear: effects, slot upgrades, name lists, presentations, price and rarity.
     std::vector<GenEffect> effects;
+    std::vector<GenEffect> externalEffects;  // ExternalAttributeEffects: applied to the holder, e.g. the accuracy pool
     std::vector<GenSlotUpgrade> slotUpgrades;
     std::vector<int> prefixList, titleList, customPresentations, cardPresentations;
     bool cardZoom = false;   // WeaponCardAttributes lists WeaponZoomEndFOV
@@ -204,6 +211,7 @@ struct WeaponGenManifest {
     std::vector<GenBalance> balances;
     std::unordered_map<std::string, int> attributeByPath, objectByPath, balanceByObject;
     std::vector<GenRarityRow> rarity;
+    std::vector<GenAccuracyPoolValue> accuracyPool;  // empty in a manifest from before the pool rows
     std::map<std::string, GenRounding> rounding;  // card field -> presentation rounding
     bool hasAccuracy = false;
     double accuracy[4] = {0, 0, 0, 0};  // input low, input high, output low, output high
@@ -270,6 +278,7 @@ struct WeaponGenCard {
     std::vector<std::pair<std::string, double>> statusChanceBySurface;
     std::vector<WeaponGenNumber> display;
     std::optional<WeaponGenDamageStack> damageStack;  // absent when the weapon has no damage base
+    std::vector<std::pair<std::string, double>> accuracyPool;  // min, max, idle_rate for this roll; empty without the manifest's rows
 };
 
 struct WeaponGenResult {

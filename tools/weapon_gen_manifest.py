@@ -37,10 +37,11 @@ refer to an id defined on a later line. The V line must come first, and each tab
        manufacturer selects (its own entry, else DefaultWeightIndex), resolved here per balance
   G  <key>  <values...>                     globals: rarity rows, card rounding, accuracy remap, shot cost text,
                                             status_remap <damage type path> <in lo> <in hi> <out lo> <out hi>
+                                            accuracy_pool <min|max|idle_rate> <owner attribute path> <base init>
                                             (the card chance row's presentation remap per damage type)
 
 Object fields (F): Base <type field> init|num <value>; Effect <attribute> <modifier type> <init>;
-SlotUpgrade <slot> <grade> <activate>; SlotEffect <slot> <attribute> <modifier> <base init> <per-grade init>
+ExternalEffect <attribute> <modifier type> <init>; SlotUpgrade <slot> <grade> <activate>; SlotEffect <slot> <attribute> <modifier> <base init> <per-grade init>
 <external> <enforce min> <min> <enforce max> <max>; PrefixList / TitleList / CustomPresentations /
 WeaponCardPresentations <comma object ids>; CardZoom; MonetaryValueMod <attr id>; MonetaryValue <init>;
 MonetaryBase <num> (BaseMonetaryValueModifier, class default applied); SaleCap <int> (the FormOfCurrency cap); PriceChecked; Rarity <init>; BaseRarity <init>; SlotBaseGrade <init>; Gestalt; Material; Fragments <comma
@@ -74,6 +75,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import loot_pools  # noqa: E402
 import skill_stats  # noqa: E402
 import weapon_recipe  # noqa: E402
+import weapon_firing  # noqa: E402
 import weapon_stats  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -171,6 +173,9 @@ class Builder:
         """Fields every gear object may carry: effects, slot upgrades, names, presentations, price, rarity."""
         for effect in props.get('WeaponAttributeEffects') or []:
             self.field(path, 'Effect', text(effect['AttributeToModify']), text(effect['ModifierType']),
+                       str(self.init(effect.get('BaseModifierValue'))))
+        for effect in props.get('ExternalAttributeEffects') or []:
+            self.field(path, 'ExternalEffect', text(effect['AttributeToModify']), text(effect['ModifierType']),
                        str(self.init(effect.get('BaseModifierValue'))))
         for upgrade in props.get('AttributeSlotUpgrades') or []:
             self.field(path, 'SlotUpgrade', text(upgrade['SlotName']), num(upgrade.get('GradeIncrease') or 0),
@@ -428,7 +433,20 @@ class Builder:
                 self.pool(values, entry['path'])
 
     # --- globals ------------------------------------------------------------------------
+    def accuracy_pool(self):
+        """The player's accuracy pool: each value's base and the owner attribute a weapon's external effects modify. A plain number
+        in the pool's fields becomes a constant initialization."""
+        if weapon_firing.ACCURACY_POOL not in self.package.index:
+            return
+        pool = self.package.props(weapon_firing.ACCURACY_POOL)
+        fields = {'min': 'BaseMinValue', 'max': 'BaseMaxValue', 'idle_rate': 'BaseOnIdleRegenerationRate'}
+        for attribute, key in weapon_firing.ACCURACY_ATTRIBUTES.items():
+            raw = pool.get(fields[key])
+            init = raw if isinstance(raw, dict) else {'BaseValueConstant': float(raw or 0.0)}
+            self.lines.append('\t'.join(['G', 'accuracy_pool', key, text(attribute), str(self.init(init))]))
+
     def globals(self):
+        self.accuracy_pool()
         package = self.package
         table = package.props(weapon_stats.GLOBALS).get('RarityLevelColors') if weapon_stats.GLOBALS in package.index else None
         for row in table or []:
@@ -457,12 +475,12 @@ class Builder:
 def open_package(reader, startup):
     schema = ROOT / 'local/weapons/gen/weapon_gen.schema'
     schema.parent.mkdir(parents=True, exist_ok=True)
-    schema.write_text('\n'.join(dict.fromkeys(weapon_stats.SCHEMA_LINES + loot_pools.SCHEMA_LINES)) + '\n',
+    schema.write_text('\n'.join(dict.fromkeys(weapon_stats.SCHEMA_LINES + loot_pools.SCHEMA_LINES + weapon_firing.POOL_SCHEMA_LINES)) + '\n',
                       encoding='utf-8')
     package = skill_stats.Package(str(Path(reader).resolve()), Path(startup), str(schema.resolve()))
     roots = [p for p, c in package.classes.items()
              if c in BALANCE_CLASSES or is_pool_class(c) or c.rsplit('.', 1)[-1] in SOURCE_CLASSES]
-    package.crawl(roots + [weapon_stats.GLOBALS, weapon_stats.ACCURACY_PRESENTATION, weapon_stats.SHOT_COST_PRESENTATION,
+    package.crawl(roots + [weapon_firing.ACCURACY_POOL, weapon_stats.GLOBALS, weapon_stats.ACCURACY_PRESENTATION, weapon_stats.SHOT_COST_PRESENTATION,
                            weapon_stats.STATUS_CHANCE_MAPPING],
                   follow=lambda path, cls: cls.endswith('Definition') or 'ItemPool' in cls)
     # Attribute definitions, their resolver subobjects and the presentations, in batches.

@@ -205,6 +205,20 @@ class WeaponGenTests(unittest.TestCase):
         self.assertIsNone(card['burst_interval'])
         self.assertTrue(card['burst_known'])
 
+    def test_accuracy_pool_goes_through_the_modifier_stack(self):
+        pool_min = 'Test.Pool.Min'
+        rows = [('G', 'accuracy_pool', 'min', pool_min, 8), ('G', 'accuracy_pool', 'max', 'Test.Pool.Max', 5)]
+        self.assertIsNone(self.gun(1, 1)['card']['accuracy_pool'])   # an older manifest has no pool rows
+        card = self.gun(1, 1, manifest=self.variant('pool_base', rows))['card']
+        self.assertEqual(card['accuracy_pool'], {'min': 2.0, 'max': 10.0})
+        # A part's external effect and PreAdd count; one on another attribute, or a weapon attribute's external effect, does not.
+        effects = [('F', 2, 'ExternalEffect', pool_min, 'MT_PreAdd', 7), ('F', 2, 'ExternalEffect', pool_min, 'MT_Scale', 7),
+                   ('F', 2, 'ExternalEffect', 'Test.Pool.Other', 'MT_PreAdd', 5), ('F', 2, 'ExternalEffect', W + 'WeaponDamage', 'MT_PreAdd', 5)]
+        before = self.gun(1, 1)['card']['damage']
+        card = self.gun(1, 1, manifest=self.variant('pool_effects', rows + effects))['card']
+        self.assertEqual(card['accuracy_pool'], {'min': 3.75, 'max': 10.0})   # (2 + 0.5) x (1 + 0.5)
+        self.assertEqual(card['damage'], before)
+
     def test_modifier_stack_and_card_rounding(self):
         card = self.gun(1, 1)['card']
         # Damage: (10 + 2) * (1 + 0.5) / (1 + 0.2f) + 3 (Weapon_Is_Acme * 3) = 17.99999996 -> float 18.

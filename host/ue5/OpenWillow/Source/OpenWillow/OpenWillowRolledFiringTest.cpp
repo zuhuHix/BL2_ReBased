@@ -20,7 +20,7 @@ TSharedPtr<FJsonObject> Json(const FString& Text)
     return Out;
 }
 
-const TCHAR* RocketTemplate = TEXT(R"({"schema":1,"firing_mode":"Fake.Mode","fire_type":"EWWFT_Rocket","bullet_speed":100,"trace_range":5000,"projectile":{"speed":1000,"splash":{"radius":300,"damage":null,"damage_scale":0.5,"falloff":false}}})");
+const TCHAR* RocketTemplate = TEXT(R"({"accuracy_pool":{"min":1,"max":2,"idle_rate":3,"idle_delay":0.5,"start_with_max":true},"schema":1,"firing_mode":"Fake.Mode","fire_type":"EWWFT_Rocket","bullet_speed":100,"trace_range":5000,"projectile":{"speed":1000,"splash":{"radius":300,"damage":null,"damage_scale":0.5,"falloff":false}}})");
 
 FOpenWillowWeaponItem RolledItem()
 {
@@ -47,6 +47,7 @@ weapongen::WeaponGenCard RolledCard()
     Card.statusDuration = 4.0;
     Card.statusDps = 9.0;
     Card.statusChanceBySurface.push_back({"generic", 25.0});
+    Card.accuracyPool = {{"min", 4.0}, {"max", 5.0}, {"idle_rate", -6.0}};
     return Card;
 }
 }
@@ -73,6 +74,12 @@ bool FOpenWillowRolledGunFiringTemplateTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("spin-up"), F.SpinUpDuration, 0.7f);
         TestEqual(TEXT("spin start"), F.SpinStartMultiplier, 2.f);
         TestTrue(TEXT("spins to full rate"), F.bSpinsToFullRate);
+        // The roll's pool over the template's; its delay stays the template's.
+        TestTrue(TEXT("the pool is loaded"), F.bHasAccuracyPool);
+        TestEqual(TEXT("pool min from the card"), float(F.Pool.minValue), 4.f);
+        TestEqual(TEXT("pool max from the card"), float(F.Pool.maxValue), 5.f);
+        TestEqual(TEXT("pool idle rate from the card"), float(F.Pool.idleRate), -6.f);
+        TestEqual(TEXT("pool delay from the template"), float(F.Pool.idleDelay), 0.5f);
         // Scaling: speeds by the multiplier, an unevaluated splash by the card's damage.
         TestEqual(TEXT("bullet speed x multiplier"), F.BulletSpeed, 200.f);
         TestEqual(TEXT("projectile speed x multiplier"), F.ProjectileSpeed, 2000.f);
@@ -96,6 +103,12 @@ bool FOpenWillowRolledGunFiringTemplateTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("an evaluated splash is kept"), Item.Firing.Splash.Damage, 70.f);
         TestEqual(TEXT("no multiplier: speed unchanged"), Item.Firing.ProjectileSpeed, 1000.f);
         TestFalse(TEXT("no status on the card"), Item.Firing.Status.bValid);
+    }
+    {
+        // A card without pool values (an older manifest) keeps the template's.
+        FOpenWillowWeaponItem Item = RolledItem();
+        TestTrue(TEXT("merges"), FOpenWillowWeaponGen::MergeFiringTemplate(*Json(RocketTemplate), nullptr, weapongen::WeaponGenCard(), Item, Missing));
+        TestEqual(TEXT("pool min from the template"), float(Item.Firing.Pool.minValue), 1.f);
     }
     // The document: right schema, right manifest, and a templates object.
     FString Why;

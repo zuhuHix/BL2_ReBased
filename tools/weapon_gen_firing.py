@@ -8,7 +8,8 @@ and writes one template per key to ignored local/weapons/gen/. The host fills a 
 ROLL_FIELDS come from the card, not the template. Three other values vary inside a key and are normalised here:
 - a splash's evaluated damage becomes a scale of the card's damage (it follows the weapon's damage);
 - bullet and projectile speeds are stored before the WeaponProjectileSpeedMultiplier, which the host applies;
-- the accuracy pool keeps the type's base values only. Parts change it per roll, which is NOT modelled for generated guns yet.
+- the accuracy pool keeps the type's base values; the host overrides them with the roll's from the card (src/weapon_gen, compared
+  with the resolver by tools/weapon_gen_parity.py). The base only remains for a manifest from before the pool rows.
 
 Structural oracle: every roll is merged back (apply_roll) and compared with the resolver's own block. Any difference stops the
 tool before it writes. It covers the template's fields, speeds and splash damage in Python only. It does NOT cover the card

@@ -400,6 +400,15 @@ bool FOpenWillowWeaponGen::MergeFiringTemplate(const FJsonObject& Template, cons
     Block->SetNumberField(TEXT("burst_count"), Item.Firing.BurstCount);
     Block->SetNumberField(TEXT("burst_interval"), Item.Firing.BurstInterval);
     Block->SetNumberField(TEXT("spin_up"), Item.SpinUp);
+    // The roll's accuracy pool, with the template's delay and start rule; a manifest without the pool rows leaves the type's base.
+    const TSharedPtr<FJsonObject>* TemplatePool = nullptr;
+    if (!Card.accuracyPool.empty() && Template.TryGetObjectField(TEXT("accuracy_pool"), TemplatePool))
+    {
+        const TSharedRef<FJsonObject> Pool = MakeShared<FJsonObject>();
+        Pool->Values = (*TemplatePool)->Values;
+        for (const auto& [Name, Value] : Card.accuracyPool) Pool->SetNumberField(FromUtf8(Name), Value);
+        Block->SetObjectField(TEXT("accuracy_pool"), Pool);
+    }
     if (Card.hasStatus && Card.statusEffectDefinition)
     {
         const TSharedRef<FJsonObject> Status = MakeShared<FJsonObject>();
