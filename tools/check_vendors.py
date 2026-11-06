@@ -411,7 +411,10 @@ def grade_heal_buy(log_text):
     health_before, health_after, health_max = (float(found.group(i)) for i in (1, 2, 3))
     expected = min(health_max, health_before + float(row['healFraction']) * health_max)
     price, money_before, money_after = int(row['price']), int(before['money']), int(buy.group(4))
-    if abs(health_after - expected) > 0.01:
+    health_report = before.get('health') or {}
+    if abs(float(health_report.get('current', -1)) - health_before) > 0.01:
+        out.add('heal_buy', 'FAIL', f'health was {health_before:.2f} before the buy, the report said {health_report.get("current")}')
+    elif abs(health_after - expected) > 0.01:
         out.add('heal_buy', 'FAIL', f'health {health_before:.2f} -> {health_after:.2f}, expected {expected:.2f} (max {health_max:.2f})')
     elif money_before - money_after != price:
         out.add('heal_buy', 'FAIL', f'money {money_before} -> {money_after} (drop {money_before - money_after}), price {price}')
