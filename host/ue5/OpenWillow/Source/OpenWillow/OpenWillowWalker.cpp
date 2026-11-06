@@ -1340,26 +1340,9 @@ bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTake
     }
     return true;
 }
-void AOpenWillowWalker::PickupNearby()
+FOpenWillowUseDistances AOpenWillowWalker::UseDistances(AOpenWillowInventoryPickup*& OutPickup) const
 {
-    if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
-    // Marcus's talk outranks a nearer target on purpose: it opens and turns in the slice's mission, and in his shop the use
-    // key must not be taken by a gun lying on the counter. The quest's own reach test has no distance to compare, either.
-    if (Quest && Quest->TryUse()) return;
     const APlayerController* Player = Cast<APlayerController>(GetController());
-    auto Take = [this](AOpenWillowInventoryPickup* Pickup)
-    {
-        const FString Name = Pickup->DisplayName();
-        const bool bPickedUp = Pickup->TryPickup(Inventory);
-        ++PickupAttempts;
-        bLastPickupAccepted = bPickedUp;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow pickup %s: %s"), *Name,
-            bPickedUp ? TEXT("accepted") : TEXT("rejected: backpack full"));
-    };
-    // An aimed pickup within reach wins, the one the world pickup card shows (OpenWillowPickupCard::FindAimedPickup: the
-    // same 220 uu reach, a view cone, line of sight; UNVERIFIED host rule). Otherwise the nearest use target below.
-    if (Player)
-        if (AOpenWillowInventoryPickup* Aimed = OpenWillowPickupCard::FindAimedPickup(*this, *Player)) { Take(Aimed); return; }
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);
     for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
@@ -1378,6 +1361,45 @@ void AOpenWillowWalker::PickupNearby()
     if (UOpenWillowInteractiveSubsystem::NearestInReach(*this, Distance)) Targets.Interactive = Distance;
     if (Mover && Mover->InReach(GetActorLocation(), Distance)) Targets.Door = Distance;
     if (Nearest) Targets.Pickup = double(BestDistanceSquared);
+    OutPickup = Nearest;
+    return Targets;
+}
+EOpenWillowUseTarget AOpenWillowWalker::NearestUseTarget() const
+{
+    // An aimed pickup takes the press before the distance rule (PickupNearby).
+    const APlayerController* Player = Cast<APlayerController>(GetController());
+    if (Player && OpenWillowPickupCard::FindAimedPickup(*this, *Player)) return EOpenWillowUseTarget::Pickup;
+    AOpenWillowInventoryPickup* Ignored = nullptr;
+    return UseDistances(Ignored).Nearest();
+}
+void AOpenWillowWalker::PickupNearby()
+{
+    if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
+    // Down or dead: the use key does nothing, for every target (host rule, UNVERIFIED against the game's own use checks).
+    if (MayaState.IsDown()) return;
+    // Marcus's talk outranks a nearer target on purpose: it opens and turns in the slice's mission, and in his shop the use
+    // key must not be taken by a gun lying on the counter. The quest's own reach test has no distance to compare, either.
+    if (Quest && Quest->TryUse())
+    {
+        UOpenWillowInteractiveSubsystem::CancelStationPrompts(GetWorld(), TEXT("press went to the quest"));
+        return;
+    }
+    const APlayerController* Player = Cast<APlayerController>(GetController());
+    auto Take = [this](AOpenWillowInventoryPickup* Pickup)
+    {
+        const FString Name = Pickup->DisplayName();
+        const bool bPickedUp = Pickup->TryPickup(Inventory);
+        ++PickupAttempts;
+        bLastPickupAccepted = bPickedUp;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow pickup %s: %s"), *Name,
+            bPickedUp ? TEXT("accepted") : TEXT("rejected: backpack full"));
+    };
+    // An aimed pickup within reach wins, the one the world pickup card shows (OpenWillowPickupCard::FindAimedPickup: the
+    // same 220 uu reach, a view cone, line of sight; UNVERIFIED host rule). Otherwise the nearest use target below.
+    if (Player)
+        if (AOpenWillowInventoryPickup* Aimed = OpenWillowPickupCard::FindAimedPickup(*this, *Player)) { Take(Aimed); return; }
+    AOpenWillowInventoryPickup* Nearest = nullptr;
+    const FOpenWillowUseDistances Targets = UseDistances(Nearest);
     // Nearest first; a target that refuses (a full ammo pool, say) lets the next one try.
     Targets.Offer([&](EOpenWillowUseTarget Target)
     {

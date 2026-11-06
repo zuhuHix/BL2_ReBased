@@ -175,11 +175,21 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
     }
 
     // The Quick Change press: the first asks, a second inside the window confirms, a late one asks again.
+    int32 WalkerA = 0, WalkerB = 0; // only their addresses are used
     FOpenWillowQuickChangePress QuickChange;
-    TestFalse(TEXT("the first press only asks"), QuickChange.Press(10.0));
-    TestTrue(TEXT("a second press within the window confirms"), QuickChange.Press(12.0));
-    TestFalse(TEXT("after a confirm the next press asks again"), QuickChange.Press(13.0));
-    TestFalse(TEXT("a press after the window asks again"), QuickChange.Press(13.0 + FOpenWillowQuickChangePress::ConfirmSeconds + 0.1));
+    TestFalse(TEXT("the first press only asks"), QuickChange.Press(10.0, &WalkerA, 200));
+    TestTrue(TEXT("a second press within the window confirms"), QuickChange.Press(12.0, &WalkerA, 200));
+    TestFalse(TEXT("after a confirm the next press asks again"), QuickChange.Press(13.0, &WalkerA, 200));
+    TestFalse(TEXT("a press after the window asks again"), QuickChange.Press(13.0 + FOpenWillowQuickChangePress::ConfirmSeconds + 0.1, &WalkerA, 200));
+    TestFalse(TEXT("another walker's press does not confirm"), QuickChange.Press(19.0, &WalkerB, 200));
+    TestFalse(TEXT("nor does the first walker confirm the other's prompt"), QuickChange.Press(20.0, &WalkerA, 200));
+    TestFalse(TEXT("a changed price asks again"), QuickChange.Press(21.0, &WalkerA, 300));
+    TestEqual(TEXT("the new prompt holds the new price"), QuickChange.PromptedCost, 300);
+    TestTrue(TEXT("the new price can then be confirmed"), QuickChange.Press(22.0, &WalkerA, 300));
+    TestFalse(TEXT("a cancelled prompt leaves nothing open"), QuickChange.IsOpen());
+    QuickChange.Press(30.0, &WalkerA, 200);
+    QuickChange.Cancel();
+    TestFalse(TEXT("a press after a cancel only asks"), QuickChange.Press(31.0, &WalkerA, 200));
 
     return true;
 }

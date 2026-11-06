@@ -3,6 +3,7 @@
 #include "OpenWillowInteractive.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "OpenWillowQuickChange.h"
+#include "OpenWillowSkills.h"
 #include "GameFramework/Controller.h"
 #include "OpenWillowInteractivePickup.h"
 #include "OpenWillowWalker.h"
@@ -882,6 +883,12 @@ void UOpenWillowInteractiveSubsystem::AutoCollectTick()
     if (!Walker) return;
     const double Now = World->GetTimeSeconds();
     const FVector From = Walker->GetActorLocation();
+    if (Stations.Num() > 0)
+    {
+        const AOpenWillowQuickChangeStation* Selected = SelectedStation(*Walker);
+        for (const TWeakObjectPtr<AOpenWillowQuickChangeStation>& Station : Stations)
+            if (Station.IsValid()) Station->TickPrompt(Now, *Walker, Station.Get() == Selected);
+    }
     // Collected first, then tried: a taken pickup is destroyed, which must not happen during the iteration.
     TArray<AOpenWillowLootPickup*> Near;
     for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It)
@@ -912,13 +919,7 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
         }
         return;
     }
-    // The Quick Change station: one press asks, a second confirms (the tree may be empty: the script allows that).
-    if (Stations.Num() > 0 && TestStationStep < 2 && Stations[0].IsValid())
-    {
-        ++TestStationStep;
-        Stations[0]->Use(*Walker);
-        return;
-    }
+    if (TickStationTest(*Walker)) return;
     if (TickLidShots(*Walker)) return;
     switch (TestStep++)
     {
@@ -959,6 +960,76 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
         break;
     default: break;
     }
+}
+
+AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::SelectedStation(const AOpenWillowWalker& Walker) const
+{
+    if (Walker.NearestUseTarget() != EOpenWillowUseTarget::Interactive) return nullptr;
+    AOpenWillowLootable* Lootable = nullptr;
+    AOpenWillowLootPickup* Pickup = nullptr;
+    double LootDistance = 0, StationDistance = 0;
+    const bool bLoot = FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, LootDistance);
+    AOpenWillowQuickChangeStation* Station = NearestStation(Walker.GetActorLocation(), StationDistance);
+    return Station && (!bLoot || StationDistance < LootDistance) ? Station : nullptr;
+}
+
+bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
+{
+    if (Stations.Num() == 0 || !Stations[0].IsValid() || TestStationStep > 7) return false;
+    AOpenWillowQuickChangeStation& Station = *Stations[0].Get();
+    UOpenWillowSkills* Skills = Walker.GetSkills();
+    UOpenWillowInventory* Inventory = Walker.GetInventory();
+    if (!Skills || !Inventory) return false;
+    const auto Beside = [&Station, &Walker]()
+    {
+        const FVector At = Station.GetActorLocation() + Station.GetActorForwardVector() * 60.f + FVector(0.f, 0.f, 100.f);
+        Walker.SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics);
+    };
+    int32 Money = 0;
+    Inventory->GetMoney(Money);
+    switch (TestStationStep++)
+    {
+    case 0:
+    {
+        // Test fixture: a spent point, so a reset has something to do and a refusal has something to leave alone.
+        if (Skills->GetLevel() < 5) Skills->SetLevel(5);
+        FString Reason;
+        Skills->TrySpend(-1, -1, -1, Reason);
+        Beside();
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ready money=%d"), Money);
+        break;
+    }
+    case 1: Walker.PressUseKey(); break; // through the use-key path: asks
+    case 2:
+        // Walks away; the subsystem's tick must end the prompt.
+        Walker.SetActorLocation(Station.GetActorLocation() + FVector(1000.f, 0.f, 100.f), false, nullptr, ETeleportType::TeleportPhysics);
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST walked away"));
+        break;
+    case 3:
+        // Back inside the 5 s window: one press must ask again, not reset.
+        Beside();
+        Walker.PressUseKey();
+        break;
+    case 4:
+        // Too little money: the confirm is refused and changes nothing.
+        TestSavedMoney = Money;
+        TestStateBefore = Skills->StateJson();
+        Inventory->SetMoney(0);
+        Walker.PressUseKey();
+        break;
+    case 5:
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST refusal money=%d grades_same=%d"), Money, Skills->StateJson() == TestStateBefore ? 1 : 0);
+        Inventory->SetMoney(TestSavedMoney);
+        Walker.PressUseKey(); // asks
+        break;
+    }
+    case 6: TestStateBefore = Skills->StateJson(); Walker.PressUseKey(); break; // confirms
+    default:
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST reset grades_changed=%d"), Skills->StateJson() == TestStateBefore ? 0 : 1);
+        break;
+    }
+    return true;
 }
 
 namespace

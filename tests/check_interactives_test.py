@@ -34,6 +34,17 @@ def line(text):
     return f'LogTemp: Display: {text}\n'
 
 
+QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
+             'OWQCTEST walked away',
+             'OWQUICKCHANGE cancel id=S reason=not the selected target',
+             'OWQUICKCHANGE prompt id=S cost=200 money=5000',
+             'OWQUICKCHANGE reset id=S ok=0 cost=200 before=0 after=0 reason=respec costs 200 credits, 0 held',
+             'OWQCTEST refusal money=0 grades_same=1',
+             'OWQUICKCHANGE prompt id=S cost=200 money=5000',
+             'OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4800 reason=',
+             'OWQCTEST reset grades_changed=1']
+
+
 def good_log(spawned=3, unsupported=1):
     text = line(f'OpenWillow interactives: {spawned} lootable(s) spawned, {unsupported} unsupported not spawned')
     text += line('OWLOOT open id=Map:Point_0 config=Cash_Box drops=2')
@@ -55,8 +66,7 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWLOOTLID view balance=Synth clear=1 yaw=45')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
-    text += line('OWQUICKCHANGE prompt id=S cost=200 money=5000')
-    text += line('OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4800 reason=')
+    text += ''.join(line(row) for row in QUICK_RUN)
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
 
@@ -234,29 +244,63 @@ class CommandLineTest(unittest.TestCase):
 
 
 class QuickChangeTest(unittest.TestCase):
-    PROMPT = 'OWQUICKCHANGE prompt id=S cost=200 money=5000\n'
-
-    def grade(self, text):
+    def grade(self, rows=None):
         out = ci.Results()
-        ci.grade_quick_change(text, out)
+        ci.grade_quick_change('\n'.join(QUICK_RUN if rows is None else rows) + '\n', out)
         return out.rows[0]
 
-    def test_prompt_then_exact_charge_passes(self):
-        self.assertEqual(self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4800 reason=\n')[1], 'PASS')
+    def changed(self, index, old, new):
+        rows = list(QUICK_RUN)
+        self.assertIn(old, rows[index])
+        rows[index] = rows[index].replace(old, new)
+        return self.grade(rows)
 
-    def test_a_wrong_charge_fails(self):
-        self.assertEqual(self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4700 reason=\n')[1], 'FAIL')
-
-    def test_money_changed_by_the_prompt_fails(self):
-        self.assertEqual(self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=4900 after=4700 reason=\n')[1], 'FAIL')
-
-    def test_a_refused_reset_fails(self):
-        row = self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=0 cost=200 before=5000 after=5000 reason=respec costs\n')
-        self.assertEqual(row[1], 'FAIL')
-        self.assertIn('respec costs', row[2])
+    def test_the_full_sequence_passes(self):
+        self.assertEqual(self.grade()[1], 'PASS')
 
     def test_no_lines_fail(self):
-        self.assertEqual(self.grade('')[1], 'FAIL')
+        self.assertEqual(self.grade([])[1], 'FAIL')
+
+    def test_a_reset_with_no_cancel_after_walking_away_fails(self):
+        # The stale-confirm bug: one press after coming back resets.
+        rows = [r for r in QUICK_RUN if 'cancel' not in r]
+        self.assertEqual(self.grade(rows)[1], 'FAIL')
+
+    def test_a_prompt_cancelled_for_another_reason_fails(self):
+        row = self.changed(2, 'not the selected target', 'expired')
+        self.assertEqual(row[1], 'FAIL')
+        self.assertIn('expired', row[2])
+
+    def test_a_charged_price_other_than_the_prompted_one_fails(self):
+        row = self.changed(6, 'cost=200', 'cost=150')
+        self.assertEqual(row[1], 'FAIL')
+        self.assertIn('the prompt showed 150', row[2])
+
+    def test_a_refused_price_other_than_the_prompted_one_fails(self):
+        self.assertEqual(self.changed(3, 'cost=200', 'cost=150')[1], 'FAIL')
+
+    def test_a_reset_on_another_stations_prompt_fails(self):
+        row = self.changed(7, 'id=S', 'id=T')
+        self.assertEqual(row[1], 'FAIL')
+        self.assertIn('prompt of S', row[2])
+
+    def test_a_wrong_charge_fails(self):
+        self.assertEqual(self.changed(7, 'after=4800', 'after=4700')[1], 'FAIL')
+
+    def test_money_changed_by_the_prompt_fails(self):
+        self.assertEqual(self.changed(7, 'before=5000 after=4800', 'before=4900 after=4700')[1], 'FAIL')
+
+    def test_a_low_money_confirm_that_took_money_fails(self):
+        self.assertEqual(self.changed(4, 'before=0 after=0', 'before=10 after=0')[1], 'FAIL')
+
+    def test_grades_changed_by_the_refusal_fail(self):
+        self.assertEqual(self.changed(5, 'grades_same=1', 'grades_same=0')[1], 'FAIL')
+
+    def test_a_refused_final_reset_fails(self):
+        self.assertEqual(self.changed(7, 'ok=1', 'ok=0')[1], 'FAIL')
+
+    def test_a_reset_that_left_the_grades_fails(self):
+        self.assertEqual(self.changed(8, 'grades_changed=1', 'grades_changed=0')[1], 'FAIL')
 
 
 class LidCaptureTest(unittest.TestCase):

@@ -34,6 +34,10 @@ LID_PHASES = ('closed', 'mid', 'opened')
 DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)')
+QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
+QUICK_AWAY = re.compile(r'OWQCTEST walked away')
+QUICK_REFUSAL = re.compile(r'OWQCTEST refusal money=(\d+) grades_same=(\d)')
+QUICK_GRADES = re.compile(r'OWQCTEST reset grades_changed=(\d)')
 QUICK_RESET = re.compile(r'OWQUICKCHANGE reset id=(\S+) ok=(\d) cost=(\d+) before=(\d+) after=(\d+) reason=(.*)$', re.M)
 LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
 LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
@@ -212,19 +216,49 @@ def grade_pickups(log_text, out):
         out.add('pickups', 'PASS', f'{len(rows)} pickup line(s) follow their rule ({accepted} taken, {refused} refused)')
 
 
+def quick_events(log_text):
+    """The station's prompts, cancels and resets, in log order, as (kind, match)."""
+    found = [('prompt', m) for m in QUICK_PROMPT.finditer(log_text)]
+    found += [('cancel', m) for m in QUICK_CANCEL.finditer(log_text)]
+    found += [('reset', m) for m in QUICK_RESET.finditer(log_text)]
+    return [(kind, m) for kind, m in sorted(found, key=lambda row: row[1].start())]
+
+
 def grade_quick_change(log_text, out):
-    """The station's two presses: the prompt charges nothing, the confirm charges exactly the cost."""
-    prompt, reset = QUICK_PROMPT.search(log_text), QUICK_RESET.search(log_text)
-    if prompt is None or reset is None:
-        out.add('quick_change', 'FAIL', 'no OWQUICKCHANGE prompt and reset lines (the station did not run)')
-    elif reset.group(2) != '1':
-        out.add('quick_change', 'FAIL', f'the reset was refused: {reset.group(6).strip()}')
-    elif int(reset.group(4)) != int(prompt.group(3)):
-        out.add('quick_change', 'FAIL', f'the prompt changed money: {prompt.group(3)} -> {reset.group(4)}')
-    elif int(reset.group(4)) - int(reset.group(5)) != int(reset.group(3)):
-        out.add('quick_change', 'FAIL', f'money {reset.group(4)} -> {reset.group(5)}, cost {reset.group(3)}')
+    """The -owinteractivetest sequence through the use key: ask, walk away (cancel), ask again, refused for lack of money,
+    ask, reset. Each reset must answer the prompt just before it: same station, same price."""
+    events = quick_events(log_text)
+    kinds = [kind for kind, _ in events]
+    if kinds[:6] != ['prompt', 'cancel', 'prompt', 'reset', 'prompt', 'reset']:
+        out.add('quick_change', 'FAIL', f'station events {kinds}, expected prompt, cancel, prompt, reset, prompt, reset')
+        return
+    away, refused, confirmed = events[1][1], events[3][1], events[5][1]
+    if QUICK_AWAY.search(log_text, events[0][1].end(), away.start()) is None or away.group(2).strip() != 'not the selected target':
+        out.add('quick_change', 'FAIL', f'the prompt did not end from walking away: {away.group(2).strip()}')
+        return
+    for prompt, reset in ((events[2][1], refused), (events[4][1], confirmed)):
+        if reset.group(1) != prompt.group(1):
+            out.add('quick_change', 'FAIL', f'station {reset.group(1)} reset on the prompt of {prompt.group(1)}')
+            return
+        if reset.group(3) != prompt.group(2):
+            out.add('quick_change', 'FAIL', f'charged price {reset.group(3)}, the prompt showed {prompt.group(2)}')
+            return
+    refusal = QUICK_REFUSAL.search(log_text)
+    if refused.group(2) != '0' or refused.group(4) != refused.group(5):
+        out.add('quick_change', 'FAIL', f'the low-money confirm was not refused cleanly: ok={refused.group(2)} money {refused.group(4)} -> {refused.group(5)}')
+    elif refusal is None or refusal.group(2) != '1' or refusal.group(1) != refused.group(4):
+        out.add('quick_change', 'FAIL', f'after the refusal money or skill grades changed: {refusal.group(0) if refusal else "no OWQCTEST refusal line"}')
+    elif confirmed.group(2) != '1':
+        out.add('quick_change', 'FAIL', f'the reset was refused: {confirmed.group(6).strip()}')
+    elif int(confirmed.group(4)) - int(confirmed.group(5)) != int(confirmed.group(3)):
+        out.add('quick_change', 'FAIL', f'money {confirmed.group(4)} -> {confirmed.group(5)}, cost {confirmed.group(3)}')
+    elif int(events[4][1].group(3)) != int(confirmed.group(4)):
+        out.add('quick_change', 'FAIL', f'the prompt changed money: {events[4][1].group(3)} -> {confirmed.group(4)}')
+    elif (QUICK_GRADES.search(log_text) or [None, '0'])[1] != '1':
+        out.add('quick_change', 'FAIL', 'the reset charged money but the skill grades did not change')
     else:
-        out.add('quick_change', 'PASS', f'prompt, then reset for {reset.group(3)}; money {reset.group(4)} -> {reset.group(5)}')
+        out.add('quick_change', 'PASS', f'walk-away cancelled, low money refused, reset for {confirmed.group(3)}; '
+                                        f'money {confirmed.group(4)} -> {confirmed.group(5)}')
 
 
 def expected_lid_types(doc, content_root):

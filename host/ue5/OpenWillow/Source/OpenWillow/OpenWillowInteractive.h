@@ -205,7 +205,13 @@ private:
     // The nearest Quick Change station in reach, with its squared distance (reach as for lootables).
     class AOpenWillowQuickChangeStation* NearestStation(const FVector& From, double& OutDistanceSquared) const;
     TArray<TWeakObjectPtr<class AOpenWillowQuickChangeStation>> Stations;
+    // The station the press would go to now; null when another target would take it.
+    class AOpenWillowQuickChangeStation* SelectedStation(const AOpenWillowWalker& Walker) const;
+    // The test's Quick Change sequence through the real use-key path. True while it is still working.
+    bool TickStationTest(AOpenWillowWalker& Walker);
     int32 TestStationStep = 0;
+    int32 TestSavedMoney = 0;
+    FString TestStateBefore;
     bool SpawnOne(UWorld& World, const TSharedPtr<FJsonObject>& Json);
     void SpawnLeaf(AOpenWillowWalker& Walker, const AOpenWillowLootable& Lootable, const FOpenWillowLootLeaf& Leaf,
         int32 Level, int32 Index, int32 Count, FRandomStream& Rng, int32& Spawned);

@@ -7,10 +7,16 @@
 #include "Components/TextRenderComponent.h"
 #include "Engine/World.h"
 
-bool FOpenWillowQuickChangePress::Press(double Now)
+bool FOpenWillowQuickChangePress::Press(double Now, const void* Who, int32 Cost)
 {
-    const bool bConfirmed = PromptedAt >= 0.0 && Now - PromptedAt <= ConfirmSeconds;
-    PromptedAt = bConfirmed ? -1.0 : Now;
+    const bool bConfirmed = IsOpen() && !Expired(Now) && PromptedBy == Who && PromptedCost == Cost;
+    Cancel();
+    if (!bConfirmed)
+    {
+        PromptedAt = Now;
+        PromptedCost = Cost;
+        PromptedBy = Who;
+    }
     return bConfirmed;
 }
 
@@ -34,12 +40,13 @@ bool AOpenWillowQuickChangeStation::Use(AOpenWillowWalker& Walker)
     int32 Money = 0;
     Inventory->GetMoney(Money); // unknown money counts as 0
     const int32 Cost = UOpenWillowSkills::ResetCost(Skills->GetLevel());
-    if (!Press.Press(GetWorld()->GetTimeSeconds()))
+    if (!Press.Press(GetWorld()->GetTimeSeconds(), &Walker, Cost))
     {
         Label->SetText(FText::FromString(FString::Printf(TEXT("Reset skills: $%d (use again)"), Cost)));
         UE_LOG(LogTemp, Display, TEXT("OWQUICKCHANGE prompt id=%s cost=%d money=%d"), *Id, Cost, Money);
         return true;
     }
+    // Press confirmed the price just shown, and Cost is what PurchaseReset charges at this same level.
     const int32 Before = Money;
     FString Reason;
     const bool bOk = Skills->PurchaseReset(Money, Reason); // changes nothing when refused
@@ -48,4 +55,16 @@ bool AOpenWillowQuickChangeStation::Use(AOpenWillowWalker& Walker)
     UE_LOG(LogTemp, Display, TEXT("OWQUICKCHANGE reset id=%s ok=%d cost=%d before=%d after=%d reason=%s"),
         *Id, bOk ? 1 : 0, Cost, Before, Money, *Reason);
     return true;
+}
+
+void AOpenWillowQuickChangeStation::TickPrompt(double Now, const AOpenWillowWalker& Walker, bool bSelected)
+{
+    if (!Press.IsOpen()) return;
+    const TCHAR* Reason = Press.Expired(Now) ? TEXT("expired")
+        : Press.PromptedBy != &Walker ? TEXT("another walker")
+        : !bSelected ? TEXT("not the selected target") : nullptr;
+    if (!Reason) return;
+    Press.Cancel();
+    Label->SetText(FText::GetEmpty());
+    UE_LOG(LogTemp, Display, TEXT("OWQUICKCHANGE cancel id=%s reason=%s"), *Id, Reason);
 }
