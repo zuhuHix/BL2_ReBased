@@ -1392,6 +1392,7 @@ pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList 
 - `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
   yet; picking one is a maintainer decision (license and provenance entry first).
 - `tools/slice_npc_editor.py` imports `unreal` and only runs inside the editor.
+- `tools/build_phaselock_fx_constants.py` rebuilds the ignored `local/phaselock/fx_constants.json` that `import_phaselock_fx.py` needs, from the decoded emitters and `fx_manifest.json`. One colour in it stays hand-kept: the tool keeps it and stops if it is missing ([PHASELOCK_STOCK_DATA.md](verification/PHASELOCK_STOCK_DATA.md), "The stock colour constants").
 - `tools/import_phaselock_fx.ps1` waits for the machine-wide UE run lock (`tools/ue_lock.ps1`) like the suite scripts. `host/ue5/import_phaselock_fx.py`
   and the `tools/run_phaselock_shots.ps1 -Extra` switches `-owbubbleradius` and `-owfxscalar` are described in
   [PHASELOCK_STOCK_DATA.md](verification/PHASELOCK_STOCK_DATA.md). Write the values as literals, since a PowerShell

@@ -1383,7 +1383,15 @@ The effects import exited 0 on the PR head with the input check, its first run i
 Orb box at 0.50 s, host frames: offset 0 161, 210, 251; offset 180 162, 211, 251; tone curve off 10, 164, 255 (round 23, offset 0: 158, 208, 251).
 
 - **The 8/10 target is not reached.** The critic-round limit for this item is used up, so this is the recorded result: about 5.7 at the better facing, 5.1 at the default.
-- **`GammaOut` brought no visible or measured gain.** The orb box did not move toward the game, and the critic could not tell rounds 23 and 24 apart.
+- **`GammaOut` brought no visible or measured gain.** The orb box did not move toward the game, and the critic could not tell rounds 23 and 24 apart. It was removed afterwards ("The stock colour constants" below).
 - **Tone curve off stays a diagnostic.** With the fur corrected it is still farther overall: the orb's blue is slightly closer, but the bubble and the target are farther.
 - **Facing:** at the held times this critic again prefers offset 0, and at 0.25 s gives offset 180 only a slight, uncertain edge. The default costs about 0.6 here. It stays 180 until the live rotation read, as decided.
 - **Remaining, most visible first (critic):** the target too large in frame and pale; its pose (the game's face is clearly toward the camera at 1.50 s, and the host is more tightly curled); the 0.80 s blue-white flash that nearly hides the game's target; the bubble rim too smooth and bright; the palm orb a simpler sphere with a prominent X, without the game's layered streaks.
+
+### The stock colour constants, and the follow-up to round 24 (2026-11-06, maya lane)
+
+AI-assisted (Claude). `GammaOut` is removed, so the ribbon, swirl and star-burst materials are back to their round 23 shaders. The next FX import rebuilds them.
+
+The importer reads three stock colours from ignored `local/phaselock/fx_constants.json`. **Decision (maintainer, 2026-11-06, option C):** `tools/build_phaselock_fx_constants.py` rebuilds two of them from regenerable data: the palm orb's blue from the decoded emitter JSON and the tattoo glow from `fx_manifest.json`. The bubble twirls' violet exists only as a literal in the compiled pixel shader, so it stays hand-kept in that file. The tool keeps the existing value, and without one it stops and writes nothing. If the file is lost, restore the violet from another worktree or the maintainer; it is also in the git history from before PR #104. **Option B, a tracked shader-map reader that can regenerate it, comes after the slice.**
+
+The rebuilt blue and glow carry more digits than the earlier hand-rounded values, a negligible change to the output.
