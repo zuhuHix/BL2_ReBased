@@ -337,7 +337,8 @@ const PERSPECTIVE = 13200;
 const TREE_STRETCH_Y = 1.07;
 const PROJECTION = { x: -209, y: 12 };
 function branchTween(offset) {
-  const x = 15 + 330 * offset, y = 17, z = -5500 * Math.abs(offset);
+  // 380: D20 D6/D6b, the side trees reach about 37 px further out on each side than the movie's 330 gave (a fit, UNVERIFIED).
+  const x = 15 + 380 * offset, y = 17, z = -5500 * Math.abs(offset);
   const f = PERSPECTIVE / (PERSPECTIVE - z);
   return {
     x: PROJECTION.x + (x - PROJECTION.x) * f,

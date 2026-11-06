@@ -52,7 +52,7 @@ const SCROLLED_LIST_ORIGIN = 28; // movie px; with focus scaling this is about 3
 // VALUE has no sub-headers, so its first row would start under the panel title; the original keeps it below.
 const LIST_TOP_NO_HEADERS = 10;
 const FOCUS_PANEL = {scale:0.931, scaleY:0.949, left:496, top:70}; // D20 focus bounds: x518..777, y76..640 (round-23 critic)
-const FOCUS_EQUIPPED = {scale:0.59, centreX:412, centreY:395}; // row pitch 42 px like the real mini column (37 at 0.52)
+const FOCUS_EQUIPPED = {scale:0.645, centreX:387, centreY:346}; // D20 D2d: row pitch 47.5 px, slot 1 centre about (398, 230), first gear row y 430 (UNVERIFIED fit)
 // The stock backpack sort modes, in PageDown order (observed in the original game 2026-09-30 and again
 // 2026-10-04; comparators, filters and headers are read from native code in
 // docs/verification/NATIVE_INVENTORY_SORT.md and stay UNVERIFIED beyond those captures). PageDown = +1,
@@ -781,8 +781,11 @@ const FRAME_INSET = 0.896;
 const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left - (visible / FRAME_INSET - visible) / 2, y:top});
 // D20 single-card fit: the text row pitch is slightly compressed against the real card, so the Y scale grows with its content.
 // The measured frame moves about 5 px right and 15 px down; the 6% Y correction is a fit, UNVERIFIED beyond D20. Round 23 moved
-// the single card 8 px up and the right compare card 13 px up (critic measurements on D2, D3, D4).
-const CARD_FIT = {single:{...fitTarget(309, 214, 86), heightScale:1.06}, left:{...fitTarget(273, 210, 94)}, right:{...fitTarget(253, 600, 105), heightScale:1.06},
+// the single card 8 px up and the right compare card 13 px up (critic measurements on D2, D3, D4). The left card sits higher and
+// larger when the compare started from the Equipped panel (D4) than from the Backpack (D3); these targets are fits to the rows of
+// those two frames (the real cards are turned and these are not, so the edges cannot match along their whole length). UNVERIFIED.
+const CARD_FIT = {single:{...fitTarget(309, 214, 86), heightScale:1.06}, left:{...fitTarget(276, 211, 90)},
+  leftFromEquipped:{...fitTarget(281, 205, 74), heightScale:1.05}, right:{...fitTarget(253, 600, 105), heightScale:1.12},
   inspect:{...fitTarget(293, 56, 47), aspect:306/224}}; // D20 D5: UNVERIFIED fit to real x49-355,y31-283 (with the menu turn on)
 const cardYCorrection = new Map();
 function fitCard(card, target) {
@@ -838,8 +841,9 @@ function fitCards() {
   const mainBounds = readBounds(main + '.bkgd'), otherBounds = readBounds(other + '.bkgd');
   if (!mainBounds || !otherBounds) return;
   const mainIsLeft = mainBounds.xMin < otherBounds.xMin;
-  fitCard(main, mainIsLeft ? CARD_FIT.left : CARD_FIT.right);
-  fitCard(other, mainIsLeft ? CARD_FIT.right : CARD_FIT.left);
+  const left = compareStartedFromLeft ? CARD_FIT.leftFromEquipped : CARD_FIT.left;
+  fitCard(main, mainIsLeft ? left : CARD_FIT.right);
+  fitCard(other, mainIsLeft ? CARD_FIT.right : left);
 }
 
 function drawCard() {

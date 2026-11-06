@@ -541,11 +541,13 @@ void AOpenWillowMayaHUD::OpenStatusMenu(EOpenWillowStatusPage Page)
     double Mark = FPlatformTime::Seconds();
     auto Lap = [&Mark]() { const double Now = FPlatformTime::Seconds(), Ms = (Now - Mark) * 1000.; Mark = Now; return Ms; };
     double PresentationMs = 0, DisplayMs = 0, BrowserMs = 0, VmMs = 0;
-    if (bInventory)
+    // Every status page hides the first-person arms and gun. The menu's Maya stands behind the Inventory and the Skills pages
+    // (the real D20 frames show her on both); whether the game shows her on Missions and Map is not observed.
+    AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
+    if (Maya) Maya->SetInventoryPresentation(true);
+    PresentationMs = Lap();
+    if (!bMissions && !bMap)
     {
-        AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
-        if (Maya) Maya->SetInventoryPresentation(true);
-        PresentationMs = Lap();
         FActorSpawnParameters Spawn;
         Spawn.Owner = Maya;
         Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -665,13 +667,10 @@ void AOpenWillowMayaHUD::CloseSkills()
     InspectActor = nullptr;
     PendingInspectRequest.Reset();
     bMenuPreviewRequested = false;
-    if (bInventoryOpen)
-    {
-        if (AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr)
-            Maya->SetInventoryPresentation(false);
-        if (IsValid(InventoryMayaDisplay)) InventoryMayaDisplay->Destroy();
-        InventoryMayaDisplay = nullptr;
-    }
+    if (AOpenWillowWalker* Maya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr)
+        Maya->SetInventoryPresentation(false);
+    if (IsValid(InventoryMayaDisplay)) InventoryMayaDisplay->Destroy();
+    InventoryMayaDisplay = nullptr;
     if (bInventoryOpen && CachedInventoryRoot)
         CachedInventoryRoot->SetVisibility(EVisibility::Hidden);
     else if (SkillsRoot && SkillsRoot == CachedMissionsRoot)
@@ -1559,7 +1558,7 @@ void AOpenWillowMayaHUD::DrawHUD()
         }
         PendingInspectRequest.Reset();
     }
-    if (bInventoryOpen && IsValid(InventoryMayaDisplay) && PlayerOwner && PlayerOwner->PlayerCameraManager)
+    if (IsValid(InventoryMayaDisplay) && PlayerOwner && PlayerOwner->PlayerCameraManager)
         InventoryMayaDisplay->UpdateView(PlayerOwner->PlayerCameraManager->GetCameraLocation(),
             PlayerOwner->PlayerCameraManager->GetCameraRotation());
     if (bCloseSkillsRequested) CloseSkills();
