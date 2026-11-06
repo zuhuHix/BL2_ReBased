@@ -3401,6 +3401,13 @@ AI-assisted (Claude). The imported lootable and pickup meshes rendered as plain 
 - **Verified:** synthetic tests of the selection rules; the plan resolves all 18 meshes on the local export, with `Skel_StorageLocker` taking `Mati_StorageLocker` from its own import, read from the package's import table and UModel's log. Editor binding and rendering are not yet run.
 - **`UNVERIFIED`:** how the result looks (UModel's material output is heuristic, and this is not the game's material graph); the two meshes' slots in the running game; whether the game shows text on cash and ammo pickups. The host now hides the stand-in label when the real mesh loads.
 
+## 2026-11-06: a lootable material that did not bind now fails the run
+
+AI-assisted (Claude). The first editor run of the materials step bound only the 12 pickups. The skeletal path changed a copy of the slot, every lootable stayed grey, and both the import and `test_interactives` still read as a pass. Now `import_lootables.ps1` fails when a planned mesh did not bind, after writing the report, and the host logs the material each lootable type renders, which `check_interactives.py` reports as `INCOMPLETE` unless the materials step bound it. The slot is written back, and a rerun updates instances in place instead of deleting what meshes use.
+
+- **Verified:** synthetic tests, including one the old bind fails; the new check exits 1 on the failed run's own report. No parsing behaviour changed.
+- **`UNVERIFIED`:** that the fixed bind holds in the editor (not run yet), and how a bound material looks.
+
 ## 2026-11-03: elemental impact explosions from the firing mode, the cooked muzzle flash and casing (Weapons parity 2)
 
 AI-assisted (Claude). Records: `docs/verification/WEAPON_PROJECTILES.md` section 8, `WEAPON_VISUALS.md` section 18,

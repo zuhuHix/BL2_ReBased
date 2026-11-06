@@ -64,6 +64,7 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWPICKUP kind=eridium amount=4.00 before=1.00 after=5.00 cap=2147483647.00 ok=1 reason=')
     text += line('OWLOOTLID queue=1')
     text += line('OWLOOTLID view balance=Synth clear=1 yaw=45')
+    text += line('OWLOOTLID material balance=Synth id=Map:Point_2 path=/Game/OpenWillow/Lootables/Materials/Mat/Mat.Mat')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
     text += ''.join(line(row) for row in QUICK_RUN)
@@ -311,6 +312,52 @@ class QuickChangeTest(unittest.TestCase):
 
     def test_a_reset_that_left_the_grades_fails(self):
         self.assertEqual(self.changed(8, 'grades_changed=1', 'grades_changed=0')[1], 'FAIL')
+
+
+class LootableMaterialsTest(unittest.TestCase):
+    BOUND = '/Game/OpenWillow/Lootables/Materials/Mat/Mat.Mat'
+
+    def grade(self, text, expected=None):
+        out = ci.Results()
+        ci.grade_lootable_materials(text, out, expected)
+        return out.rows[0]
+
+    def row(self, balance, path):
+        return f'OWLOOTLID material balance={balance} id=Map:{balance} path={path}\n'
+
+    def test_every_type_with_a_bound_material_passes(self):
+        row = self.grade(self.row('A', self.BOUND) + self.row('B', self.BOUND), ['A', 'B'])
+        self.assertEqual(row[1], 'PASS')
+        self.assertIn('UNVERIFIED', row[2])
+
+    def test_the_importers_default_slot_fails_the_run(self):
+        # The false pass this replaces: the bind failed, and the suite was green with grey lootables.
+        default = '/Game/OpenWillow/Lootables/Skel_A/Skel_A/Materials/Mat.Mat'
+        row = self.grade(self.row('A', default) + self.row('B', self.BOUND), ['A', 'B'])
+        self.assertEqual(row[1], 'INCOMPLETE')
+        self.assertIn('A', row[2])
+        self.assertNotIn(', B', row[2])
+        results = ci.Results()
+        results.add(*row)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(results.print(), 1)
+
+    def test_no_material_at_all_is_incomplete(self):
+        self.assertEqual(self.grade(self.row('A', ''), ['A'])[1], 'INCOMPLETE')
+
+    def test_a_type_without_a_line_is_missing(self):
+        self.assertEqual(self.grade(self.row('A', self.BOUND), ['A', 'B'])[1], 'MISSING')
+
+    def test_a_checkout_without_lootable_content_is_skipped(self):
+        self.assertEqual(self.grade('', [])[1], 'SKIPPED')
+
+    def test_no_content_folder_and_no_line_cannot_pass(self):
+        self.assertEqual(self.grade('', None)[1], 'MISSING')
+
+    def test_it_is_part_of_the_graded_run(self):
+        self.assertEqual(status_of(grade(good_log()), 'lootable_materials'), 'PASS')
+        text = good_log().replace(self.BOUND, '/Game/Other/Mat.Mat')
+        self.assertEqual(status_of(grade(text), 'lootable_materials'), 'INCOMPLETE')
 
 
 class LidCaptureTest(unittest.TestCase):

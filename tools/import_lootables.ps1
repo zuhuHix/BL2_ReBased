@@ -155,6 +155,7 @@ function Invoke-LootEditor([string]$Mode, [string]$ReportName) {
 
 # ----------------------------------------------------------------------------------------- main
 
+$materialsFailed = $false
 New-Item -ItemType Directory -Force -Path $out, $logs | Out-Null
 $plan = Invoke-Plan
 if ($DryRun) {
@@ -198,6 +199,11 @@ if (& $run 'materials') {
         if ($LASTEXITCODE -ne 0) { throw "lootables_editor.py materials failed: $LASTEXITCODE" }
     }
     Invoke-LootEditor 'materials' 'editor_materials.json'
+    if (-not $DryRun) {
+        # The report below is still written; the run fails at the end, so a mesh that did not bind cannot read as success.
+        & $Python $tool check-materials --plan $planPath
+        $materialsFailed = $LASTEXITCODE -ne 0
+    }
 }
 if (& $run 'report') {
     if ($DryRun) {
@@ -207,3 +213,4 @@ if (& $run 'report') {
         if ($LASTEXITCODE -ne 0) { throw "lootables_editor.py report failed: $LASTEXITCODE" }
     }
 }
+if ($materialsFailed) { throw 'materials step: a planned mesh did not bind (see the lines above and editor_materials.json)' }

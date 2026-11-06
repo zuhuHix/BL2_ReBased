@@ -43,6 +43,8 @@ QUICK_RESET = re.compile(r'OWQUICKCHANGE reset id=(\S+) ok=(\d) cost=(\d+) befor
 LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
 LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
 LID_VIEW = re.compile(r'OWLOOTLID view balance=(\S+) clear=([01])')
+LID_MATERIAL = re.compile(r'OWLOOTLID material balance=(\S+) id=(\S+) path=(\S*)')
+BOUND_MATERIALS = '/Game/OpenWillow/Lootables/Materials/'   # where tools/lootables_editor.py puts the instances it binds
 TEST_OPENED = re.compile(r'OWINTERACTIVETEST opened (\d+) lootable')
 TEST_OPEN_BALANCE = re.compile(r'OWINTERACTIVETEST test_open id=(\S+) balance=(\S+)')
 TEST_DONE = re.compile(r'OWINTERACTIVETEST done spawned=(\d+) opened=(\d+)')
@@ -323,6 +325,28 @@ def grade_lid_capture(log_text, out, expected=None):
             out.add('lid_capture', 'PASS', f'{len(shots)} frames of {len(phases)} lootable types; lid direction UNVERIFIED until judged')
 
 
+def grade_lootable_materials(log_text, out, expected=None):
+    """Each type at the lid capture renders a material the materials step bound, read from what the host reports. An importer's
+    default slot does not count. PASS says nothing about how it looks. expected: as for grade_lid_capture."""
+    rendered = {balance: path for balance, _, path in LID_MATERIAL.findall(log_text)}
+    types = sorted(rendered) if expected is None else sorted(expected)
+    if not types:
+        if expected is None:
+            out.add('lootable_materials', 'MISSING', 'no "OWLOOTLID material" line, and no content folder was given to compare with')
+        else:
+            out.add('lootable_materials', 'SKIPPED', 'this checkout has no imported lootable to render a material')
+        return
+    silent = [t for t in types if t not in rendered]
+    if silent:
+        out.add('lootable_materials', 'MISSING', f'{len(silent)} type(s) with no "OWLOOTLID material" line; first: {silent[0]}')
+        return
+    unbound = [t for t in types if not rendered[t].startswith(BOUND_MATERIALS)]
+    if unbound:
+        out.add('lootable_materials', 'INCOMPLETE', f'{len(unbound)} type(s) render no bound material (tools/import_lootables.ps1 -Steps materials): {", ".join(unbound)}')
+    else:
+        out.add('lootable_materials', 'PASS', f'{len(types)} lootable types render a bound material; how they look is UNVERIFIED')
+
+
 def grade_test_sequence(log_text, supported, out):
     if TEST_FAIL.search(log_text):
         out.add('test_sequence', 'FAIL', TEST_FAIL.search(log_text).group(1).strip())
@@ -375,7 +399,9 @@ def grade(log_text, automation_text, doc, skip_automation=False, content_root=No
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
     grade_pickups(log_text, out)
     grade_quick_change(log_text, out)
-    grade_lid_capture(log_text, out, expected_lid_types(doc, content_root))
+    expected = expected_lid_types(doc, content_root)
+    grade_lid_capture(log_text, out, expected)
+    grade_lootable_materials(log_text, out, expected)
     grade_test_sequence(log_text, objects, out)
     grade_automation(automation_text, out, skip_automation)
     return out

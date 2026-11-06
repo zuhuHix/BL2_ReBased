@@ -62,6 +62,80 @@ class LocalOutputTest(unittest.TestCase):
             self.assertFalse((editor.ROOT / 'docs/plan.json').exists())
 
 
+class FakeSlot:
+    def __init__(self, material=None):
+        self.material = material
+
+    def set_editor_property(self, _name, value):
+        self.material = value
+
+    def get_editor_property(self, _name):
+        return self.material
+
+
+class CopyingArray(list):
+    """As unreal.Array of a struct: indexing gives a copy, so changing it changes nothing until it is written back."""
+
+    def __getitem__(self, index):
+        return FakeSlot(super().__getitem__(index).material)
+
+
+class FakeMesh:
+    def __init__(self, slot_count=1):
+        self.slots = [FakeSlot() for _ in range(slot_count)]
+        self.modified = False
+
+    def modify(self):
+        self.modified = True
+
+    def get_editor_property(self, _name):
+        return CopyingArray(FakeSlot(s.material) for s in self.slots)
+
+    def set_editor_property(self, _name, value):
+        self.slots = [FakeSlot(s.material) for s in list.__iter__(value)]
+
+
+class BindSkeletalTest(unittest.TestCase):
+    def test_the_slot_keeps_the_instance_through_the_copies(self):
+        mesh = FakeMesh()
+        self.assertEqual(editor.bind_skeletal(mesh, 'instance'), 'instance')
+        self.assertEqual(mesh.slots[0].material, 'instance')
+        self.assertTrue(mesh.modified)
+
+    def test_another_slot_count_is_refused(self):
+        with self.assertRaisesRegex(RuntimeError, 'one material slot'):
+            editor.bind_skeletal(FakeMesh(2), 'instance')
+
+
+class UnboundMeshesTest(unittest.TestCase):
+    PLAN = {'meshes': [{'mesh': 'A', 'reason': ''}, {'mesh': 'B', 'reason': ''}, {'mesh': 'C', 'reason': 'no diffuse'}],
+            'pickups': [{'mesh': 'P', 'reason': ''}]}
+
+    def test_all_bound_is_empty(self):
+        report = {'bound': {name: {'bound': True} for name in 'ABCP'}}
+        self.assertEqual(editor.unbound_meshes(self.PLAN, report), [])
+
+    def test_a_failed_bind_and_a_planned_refusal_are_both_named(self):
+        report = {'bound': {'A': {'bound': False, 'reason': 'RuntimeError: slot'}, 'B': {'bound': True},
+                            'C': {'bound': False, 'reason': 'no diffuse'}, 'P': {'bound': True}}}
+        self.assertEqual(editor.unbound_meshes(self.PLAN, report), [('A', 'RuntimeError: slot'), ('C', 'no diffuse')])
+
+    def test_a_mesh_missing_from_the_report_is_unbound(self):
+        rows = editor.unbound_meshes(self.PLAN, {'bound': {'A': {'bound': True}, 'B': {'bound': True}, 'C': {'bound': True}}})
+        self.assertEqual(rows, [('P', 'no editor result')])
+
+    def test_no_report_leaves_every_mesh_unbound(self):
+        self.assertEqual({mesh for mesh, _ in editor.unbound_meshes(self.PLAN, None)}, set('ABCP'))
+
+    def test_the_import_script_fails_after_writing_the_report(self):
+        text = (editor.ROOT / 'tools/import_lootables.ps1').read_text(encoding='utf-8')
+        check = text.index('check-materials --plan')
+        report = text.index("if (& $run 'report')")
+        failure = text.index('if ($materialsFailed) { throw')
+        self.assertLess(check, report)
+        self.assertLess(report, failure)
+
+
 class MaterialPlanTest(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
