@@ -287,6 +287,26 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('FAIL', self.row(out, 4))
         self.assertIn('error: link enemy_attacks_maya: NOT_AVAILABLE overruled', out)
 
+    def test_enemy_attack_pass_after_a_hold_ended_by_down_is_overruled(self):
+        results = {'enemy_attacks_maya': ('PASS', '1 hit(s), synthetic, landed after she was Up again')}
+        fixtures = {'enemy_attacks_maya': chk.HOLD_ENDED_BY_DOWN}
+        code, out = self.run_checker(self.write_log(build(results, fixtures=fixtures, range_mode=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('FAIL', self.row(out, 4))
+        self.assertIn('error: link enemy_attacks_maya: PASS overruled, the hold on fire ended with Maya down', out)
+
+    def test_enemy_attack_pass_after_other_hold_ends_is_kept(self):
+        for fixture in ('fire held, ended by timeout', 'fire held until the selected enemy hit Maya'):
+            results = {'enemy_attacks_maya': ('PASS', '1 hit(s), synthetic')}
+            code, out = self.run_checker(self.write_log(build(results, fixtures={'enemy_attacks_maya': fixture}, range_mode=True)))
+            self.assertEqual(code, 0, fixture)
+            self.assertIn(f'PASS (fixture: {fixture})', self.row(out, 4))
+
+    def test_enemy_attack_pass_with_no_hold_is_kept(self):
+        code, out = self.run_checker(self.write_log(build(range_mode=True)))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.row(out, 4).split()[2], 'PASS')
+
     def test_forced_loot_not_available_fails(self):
         results = {'loot_drop_on_kill': ('NOT_AVAILABLE', 'synthetic gap')}
         code, out = self.run_checker(self.write_log(build(results, fixtures={'loot_drop_on_kill': chk.FORCED_LOOT})))
