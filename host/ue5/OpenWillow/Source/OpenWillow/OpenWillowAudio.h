@@ -10,6 +10,10 @@
 // files picks one at random, because the real container's choice is UNVERIFIED.
 //
 // An "OWAUDIO play" log line means the host asked the engine to play, not that anyone has heard it or that it is right.
+//
+// Off really is off: without -owaudioplay no delegate is bound, nothing is read and Play returns on one cached flag. The flag exists
+// because no game sound can play yet. Once a decoder is approved, the intent is that it becomes "a play map was given or found at its
+// prepared path", so sound is on by default for a prepared machine and a machine with no map stays silent.
 
 namespace OpenWillowAudio
 {
@@ -20,7 +24,21 @@ struct FWav
     TArray<uint8> Pcm;   // 16-bit little-endian samples
 };
 
-// Accepts 16-bit PCM with 1 or 2 channels. False, with a reason, for anything else, including a truncated file.
+// Limits, mirrored in tools/prepare_slice_audio.py (a test compares them). The longest slice sound is well under 10 MB; the rate range
+// is wider than the 24..48 kHz the slice's files use. Host choices, not the game's.
+inline constexpr int32 MinSampleRate = 8000;
+inline constexpr int32 MaxSampleRate = 96000;
+inline constexpr int64 MaxFileBytes = 64 * 1024 * 1024;
+inline constexpr int64 MaxTotalBytes = 256 * 1024 * 1024;
+
+// Called once from the module's startup, when the command line is ready: reads the flag and binds what the flag turns on.
+void Startup();
+
+// Whether a file of FileBytes may be read when UsedBytes are already held. False, with a reason, when it may not.
+OPENWILLOW_API bool WithinLimits(int64 FileBytes, int64 UsedBytes, FString& OutError);
+
+// Accepts 16-bit PCM with 1 or 2 channels at a rate in the range above. Every chunk must lie inside the declared RIFF size, and that size
+// inside the file. False, with a reason, for anything else, including a truncated file.
 OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& OutError);
 
 // True when the engine accepted the sound. WorldContext gives the world; a null context or missing role returns false.

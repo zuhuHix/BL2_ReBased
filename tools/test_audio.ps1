@@ -6,6 +6,7 @@ param(
 )
 # Runs the host's sound path on a synthetic tone (-owaudiotest). Module build and map preparation are separate.
 # Owns one editor process and the shared lock; waits while another editor or the lock exists and never touches them.
+# tools/check_audio.py grades this run's own log against the exact expected rows and decides the exit code.
 # PASS means the engine pulled every queued byte. It does not mean anyone heard the tone or that any sound is right.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -16,7 +17,8 @@ $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $process = $null
 New-Item -ItemType Directory -Force (Join-Path $repo 'local/audio') | Out-Null
-$log = Join-Path $repo ('local/audio/run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+# A name no earlier run can have, so an old log can never be graded as this run's.
+$log = Join-Path $repo ("local/audio/run-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID-$([guid]::NewGuid().ToString('N').Substring(0, 8)).log")
 $code = 2
 Enter-OwUeLock -Owner 'test_audio' -TimeoutSeconds $WaitForEditorSeconds
 try {
@@ -38,7 +40,10 @@ try {
         Select-String -LiteralPath $log -Pattern 'OWAUDIO' | ForEach-Object { $_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '' }
     }
     if (!$summary) { Write-Output 'OWAUDIOTEST SUMMARY result=FAIL reason=no summary' }
-    else { $code = if ($summary -match '^result=PASS ') { 0 } else { 1 } }
+    else {
+        & python (Join-Path $PSScriptRoot 'check_audio.py') $log
+        $code = if ($LASTEXITCODE -eq 0) { 0 } else { 1 }
+    }
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

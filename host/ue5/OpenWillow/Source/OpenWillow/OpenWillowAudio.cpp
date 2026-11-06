@@ -3,6 +3,7 @@
 #include "Components/AudioComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
+#include "HAL/FileManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -23,21 +24,27 @@ bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& O
     const auto U32 = [&Bytes](int32 At) { return int64(uint32(Bytes[At]) | uint32(Bytes[At + 1]) << 8 | uint32(Bytes[At + 2]) << 16 | uint32(Bytes[At + 3]) << 24); };
     const auto Tag = [&Bytes](int32 At, const char* T) { return FMemory::Memcmp(&Bytes[At], T, 4) == 0; };
     if (Bytes.Num() < 12 || !Tag(0, "RIFF") || !Tag(8, "WAVE")) { OutError = TEXT("not a RIFF WAVE file"); return false; }
+    // The RIFF size counts everything after its own field. Bytes after the declared end are not part of the file's chunks.
+    const int64 RiffEnd = 8 + U32(4);
+    if (RiffEnd < 12) { OutError = TEXT("RIFF size too small"); return false; }
+    if (RiffEnd > Bytes.Num()) { OutError = TEXT("RIFF size runs past the end of the file"); return false; }
     bool bFormat = false;
-    for (int64 At = 12; At + 8 <= Bytes.Num();)
+    for (int64 At = 12; At + 8 <= RiffEnd;)
     {
         const int32 Chunk = int32(At);
         const int64 Size = U32(Chunk + 4);
-        if (At + 8 + Size > Bytes.Num()) { OutError = TEXT("chunk runs past the end of the file"); return false; }
+        if (At + 8 + Size > RiffEnd) { OutError = TEXT("chunk runs past the RIFF size"); return false; }
         if (Tag(Chunk, "fmt "))
         {
             if (Size < 16) { OutError = TEXT("fmt chunk too short"); return false; }
             const int32 Format = U16(Chunk + 8);
             Out.Channels = U16(Chunk + 10);
-            Out.SampleRate = int32(U32(Chunk + 12));
+            const int64 Rate = U32(Chunk + 12);
             const int32 Bits = U16(Chunk + 22);
             if (Format != 1 || Bits != 16) { OutError = TEXT("not 16-bit PCM"); return false; }
-            if ((Out.Channels != 1 && Out.Channels != 2) || Out.SampleRate <= 0) { OutError = TEXT("unsupported channels or rate"); return false; }
+            if (Out.Channels != 1 && Out.Channels != 2) { OutError = TEXT("unsupported channels"); return false; }
+            if (Rate < MinSampleRate || Rate > MaxSampleRate) { OutError = TEXT("unsupported sample rate"); return false; }
+            Out.SampleRate = int32(Rate);
             bFormat = true;
         }
         else if (Tag(Chunk, "data"))
@@ -48,10 +55,17 @@ bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& O
             Out.Pcm.Append(&Bytes[Chunk + 8], int32(Size));
             return true;
         }
-        At += 8 + Size + (Size & 1);
+        At += 8 + Size + (Size & 1);   // RIFF pads an odd chunk to a word; the pad is not in its size
     }
     OutError = TEXT("no data chunk");
     return false;
+}
+
+bool OpenWillowAudio::WithinLimits(int64 FileBytes, int64 UsedBytes, FString& OutError)
+{
+    if (FileBytes > MaxFileBytes) { OutError = FString::Printf(TEXT("file is %lld bytes, the limit is %lld"), FileBytes, MaxFileBytes); return false; }
+    if (UsedBytes + FileBytes > MaxTotalBytes) { OutError = FString::Printf(TEXT("%lld bytes already held plus %lld would pass the limit of %lld"), UsedBytes, FileBytes, MaxTotalBytes); return false; }
+    return true;
 }
 
 namespace OpenWillowAudioImpl
@@ -62,14 +76,22 @@ TMap<FString, TArray<OpenWillowAudio::FWav>>& Roles()
     return Map;
 }
 
+// Set once by Startup; the only thing an event pays while sound is off.
+bool GEnabled = false;
+
 // Reads the play map and its WAV files once. A bad file is logged and skipped; the rest of the map still works.
 void LoadOnce()
 {
     static bool bLoaded = false;
     if (bLoaded) return;
     bLoaded = true;
-    FString File, Text;
+    FString File, Text, LimitError;
     if (!FParse::Value(FCommandLine::Get(), TEXT("owaudioplay="), File)) return;
+    if (!OpenWillowAudio::WithinLimits(IFileManager::Get().FileSize(*File), 0, LimitError))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWAUDIO play map refused: %s: %s"), *File, *LimitError);
+        return;
+    }
     TSharedPtr<FJsonObject> Root;
     if (!FFileHelper::LoadFileToString(Text, *File) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root
         || Root->GetStringField(TEXT("schema")) != TEXT("ow-audio-play-v1"))
@@ -79,6 +101,7 @@ void LoadOnce()
     }
     const TSharedPtr<FJsonObject>* RoleObject = nullptr;
     if (!Root->TryGetObjectField(TEXT("roles"), RoleObject)) return;
+    int64 Used = 0;
     for (const auto& Pair : (*RoleObject)->Values)
     {
         const FString Role(Pair.Key);
@@ -90,10 +113,14 @@ void LoadOnce()
             TArray<uint8> Bytes;
             OpenWillowAudio::FWav Wav;
             FString Error;
-            if (!FFileHelper::LoadFileToArray(Bytes, *Path, FILEREAD_Silent)) Error = TEXT("cannot read file");
+            // Asked before reading, so an oversized file costs nothing. A missing file reports size -1 and fails at the read.
+            const int64 Size = IFileManager::Get().FileSize(*Path);
+            if (!OpenWillowAudio::WithinLimits(Size, Used, Error)) {}
+            else if (!FFileHelper::LoadFileToArray(Bytes, *Path, FILEREAD_Silent)) Error = TEXT("cannot read file");
             else OpenWillowAudio::ParseWav(Bytes, Wav, Error);
             if (Error.IsEmpty())
             {
+                Used += Size;
                 Roles().FindOrAdd(Role).Add(MoveTemp(Wav));
             }
             else
@@ -113,6 +140,7 @@ constexpr float StopMargin = 0.25f;
 bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
 {
     using namespace OpenWillowAudioImpl;
+    if (!GEnabled) return false;
     LoadOnce();
     const TArray<FWav>* Files = Roles().Find(Role);
     UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr;
@@ -122,7 +150,8 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
     USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>(GetTransientPackage());
     Wave->SetSampleRate(Wav.SampleRate);
     Wave->NumChannels = Wav.Channels;
-    const float Seconds = float(Wav.Pcm.Num()) / float(2 * Wav.Channels * Wav.SampleRate);
+    // ParseWav's limits keep this positive and small; computed wide so it cannot overflow on the way.
+    const float Seconds = float(double(Wav.Pcm.Num()) / (2.0 * Wav.Channels * Wav.SampleRate));
     Wave->Duration = Seconds;
     Wave->bLooping = false;
     Wave->SoundGroup = SOUNDGROUP_Default;
@@ -162,20 +191,34 @@ void RunTest(UWorld* World)
         (bOk ? Passed : Failed)++;
         UE_LOG(LogTemp, Display, TEXT("OWAUDIOTEST %s %s"), bOk ? TEXT("PASS") : TEXT("FAIL"), Name);
     };
-    OpenWillowAudio::FWav Wav;
+    using namespace OpenWillowAudio;
+    FWav Wav;
     FString Error;
-    TArray<uint8> Good = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0, 0x80, 0x3E, 0, 0, 0, 0x7D, 0, 0, 2, 0, 16, 0, 'd', 'a', 't', 'a', 4, 0, 0, 0, 1, 2, 3, 4};
-    Check(OpenWillowAudio::ParseWav(Good, Wav, Error) && Wav.Channels == 1 && Wav.SampleRate == 16000 && Wav.Pcm.Num() == 4, TEXT("parse_good_wav"));
+    // 16 kHz mono, four data bytes. The RIFF size at byte 4 is the 40 bytes after that field.
+    const TArray<uint8> Good = {'R', 'I', 'F', 'F', 40, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0, 0x80, 0x3E, 0, 0, 0, 0x7D, 0, 0, 2, 0, 16, 0, 'd', 'a', 't', 'a', 4, 0, 0, 0, 1, 2, 3, 4};
+    const auto Changed = [&Good](int32 At, uint8 Value) { TArray<uint8> Copy = Good; Copy[At] = Value; return Copy; };
+    Check(ParseWav(Good, Wav, Error) && Wav.Channels == 1 && Wav.SampleRate == 16000 && Wav.Pcm.Num() == 4, TEXT("parse_good_wav"));
+    // A 3-byte chunk and its pad byte before fmt: the walk must step over 4 bytes to land on the next chunk.
+    TArray<uint8> Odd = {'R', 'I', 'F', 'F', 52, 0, 0, 0, 'W', 'A', 'V', 'E', 'L', 'I', 'S', 'T', 3, 0, 0, 0, 7, 7, 7, 0};
+    Odd.Append(&Good[12], Good.Num() - 12);
+    Check(ParseWav(Odd, Wav, Error) && Wav.SampleRate == 16000 && Wav.Pcm.Num() == 4, TEXT("parse_odd_chunk_padded"));
     TArray<uint8> Truncated = Good;
     Truncated.SetNum(Good.Num() - 2);
-    Check(!OpenWillowAudio::ParseWav(Truncated, Wav, Error), TEXT("refuse_truncated_data"));
-    TArray<uint8> Float = Good;
-    Float[20] = 3;
-    Check(!OpenWillowAudio::ParseWav(Float, Wav, Error), TEXT("refuse_non_pcm"));
-    Check(!OpenWillowAudio::ParseWav(TArray<uint8>({'R', 'I', 'F', 'F'}), Wav, Error), TEXT("refuse_short_header"));
-    Check(!OpenWillowAudio::Play(World, TEXT("no_such_role")), TEXT("unknown_role_plays_nothing"));
-    Check(!OpenWillowAudio::Play(nullptr, TEXT("test_tone")), TEXT("null_world_plays_nothing"));
-    const bool bPlayed = OpenWillowAudio::Play(World, TEXT("test_tone"));
+    Check(!ParseWav(Truncated, Wav, Error), TEXT("refuse_truncated_data"));
+    Check(!ParseWav(Changed(4, 0), Wav, Error), TEXT("refuse_riff_size_zero"));
+    Check(!ParseWav(Changed(4, 38), Wav, Error), TEXT("refuse_chunk_past_riff_size"));
+    Check(!ParseWav(Changed(20, 3), Wav, Error), TEXT("refuse_non_pcm"));
+    TArray<uint8> ZeroRate = Good;
+    ZeroRate[24] = ZeroRate[25] = 0;
+    Check(!ParseWav(ZeroRate, Wav, Error), TEXT("refuse_zero_rate"));
+    Check(!ParseWav(Changed(27, 0x7F), Wav, Error), TEXT("refuse_extreme_rate"));
+    Check(!ParseWav(TArray<uint8>({'R', 'I', 'F', 'F'}), Wav, Error), TEXT("refuse_short_header"));
+    Check(WithinLimits(MaxFileBytes, MaxTotalBytes - MaxFileBytes, Error), TEXT("accept_at_the_limits"));
+    Check(!WithinLimits(MaxFileBytes + 1, 0, Error), TEXT("refuse_file_over_limit"));
+    Check(!WithinLimits(1, MaxTotalBytes, Error), TEXT("refuse_total_over_limit"));
+    Check(!Play(World, TEXT("no_such_role")), TEXT("unknown_role_plays_nothing"));
+    Check(!Play(nullptr, TEXT("test_tone")), TEXT("null_world_plays_nothing"));
+    const bool bPlayed = Play(World, TEXT("test_tone"));
     Check(bPlayed, TEXT("tone_accepted_by_engine"));
     const int32 Queued = GLastWave.IsValid() ? GLastWave->GetAvailableAudioByteCount() : 0;
     FTimerHandle Later;
@@ -190,22 +233,23 @@ void RunTest(UWorld* World)
     }), FMath::Max(0.1f, GLastWave.IsValid() ? GLastWave->Duration + StopMargin - 0.05f : 0.1f), false);
 }
 
-struct FRegister
+}
+
+void OpenWillowAudio::Startup()
 {
-    FRegister()
+    using namespace OpenWillowAudioImpl;
+    FString File;
+    GEnabled = FParse::Value(FCommandLine::Get(), TEXT("owaudioplay="), File);
+    if (!GEnabled) return;
+    OpenWillowHit::OnHit().AddStatic(&OnHit);
+    // Load with the map so the first shot does not hitch; the test waits a second for the world to be running.
+    FCoreUObjectDelegates::PostLoadMapWithWorld.AddLambda([](UWorld* World)
     {
-        OpenWillowHit::OnHit().AddStatic(&OnHit);
-        // Load with the map so the first shot does not hitch; the test waits a second for the world to be running.
-        FCoreUObjectDelegates::PostLoadMapWithWorld.AddLambda([](UWorld* World)
-        {
-            LoadOnce();
-            static bool bTestRan = false;
-            if (bTestRan || !World || !World->IsGameWorld() || !FParse::Param(FCommandLine::Get(), TEXT("owaudiotest"))) return;
-            bTestRan = true;
-            FTimerHandle Start;
-            World->GetTimerManager().SetTimer(Start, FTimerDelegate::CreateWeakLambda(World, [World] { RunTest(World); }), 1.f, false);
-        });
-    }
-};
-FRegister GRegister;
+        LoadOnce();
+        static bool bTestRan = false;
+        if (bTestRan || !World || !World->IsGameWorld() || !FParse::Param(FCommandLine::Get(), TEXT("owaudiotest"))) return;
+        bTestRan = true;
+        FTimerHandle Start;
+        World->GetTimerManager().SetTimer(Start, FTimerDelegate::CreateWeakLambda(World, [World] { RunTest(World); }), 1.f, false);
+    });
 }

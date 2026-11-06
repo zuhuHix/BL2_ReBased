@@ -23,6 +23,11 @@ PLAY_SCHEMA = 'ow-audio-play-v1'
 # Role -> manifest key. Roles with no key are not resolved from evidence yet, so they stay silent rather than guess.
 ROLE_KEYS = {'fire': 'weapon:fire', 'hit': None, 'phaselock_cast': None, 'pickup': None}
 DURATION_TOLERANCE_S = 0.05
+# The host's limits (OpenWillowAudio.h; a test compares them): a file past them would be mapped here and then refused there.
+MIN_SAMPLE_RATE = 8000
+MAX_SAMPLE_RATE = 96000
+MAX_FILE_BYTES = 64 * 1024 * 1024
+MAX_TOTAL_BYTES = 256 * 1024 * 1024
 
 
 def write_tone(path, seconds=1.0, rate=48000, hz=440.0):
@@ -36,15 +41,52 @@ def write_tone(path, seconds=1.0, rate=48000, hz=440.0):
         out.writeframes(frames)
 
 
+def read_wav_seconds(path):
+    """The length of a WAV by the same rules the host's ParseWav applies, from the bytes actually there (the `wave` module trusts the
+    header, so a truncated file would pass). Returns (seconds, None) or (None, reason)."""
+    try:
+        size = os.path.getsize(path)
+        if size > MAX_FILE_BYTES:
+            return None, 'file is %d bytes, the limit is %d' % (size, MAX_FILE_BYTES)
+        with open(path, 'rb') as fh:
+            data = fh.read()
+    except OSError as error:
+        return None, str(error)
+    if len(data) < 12 or data[:4] != b'RIFF' or data[8:12] != b'WAVE':
+        return None, 'not a RIFF WAVE file'
+    riff_end = 8 + struct.unpack_from('<I', data, 4)[0]
+    if riff_end < 12:
+        return None, 'RIFF size too small'
+    if riff_end > len(data):
+        return None, 'RIFF size runs past the end of the file'
+    at, fmt = 12, None
+    while at + 8 <= riff_end:
+        tag, chunk = data[at:at + 4], struct.unpack_from('<I', data, at + 4)[0]
+        if at + 8 + chunk > riff_end:
+            return None, 'chunk runs past the RIFF size'
+        if tag == b'fmt ':
+            if chunk < 16:
+                return None, 'fmt chunk too short'
+            fmt = struct.unpack_from('<HHIIHH', data, at + 8)
+            if fmt[0] != 1 or fmt[5] != 16 or fmt[1] not in (1, 2):
+                return None, 'not 16-bit mono or stereo PCM'
+            if not MIN_SAMPLE_RATE <= fmt[2] <= MAX_SAMPLE_RATE:
+                return None, 'unsupported sample rate %d' % fmt[2]
+        elif tag == b'data':
+            if fmt is None:
+                return None, 'data before fmt'
+            if chunk == 0 or chunk % (2 * fmt[1]):
+                return None, 'data is not whole sample frames'
+            return chunk / (2 * fmt[1] * fmt[2]), None
+        at += 8 + chunk + (chunk & 1)
+    return None, 'no data chunk'
+
+
 def check_wav(path, expected_duration):
     """None when the WAV is usable, else the reason it is not."""
-    try:
-        with wave.open(path, 'rb') as wav:
-            if wav.getsampwidth() != 2 or wav.getnchannels() not in (1, 2):
-                return 'not 16-bit mono or stereo PCM'
-            seconds = wav.getnframes() / wav.getframerate()
-    except (OSError, EOFError, wave.Error) as error:
-        return str(error)
+    seconds, reason = read_wav_seconds(path)
+    if reason:
+        return reason
     if expected_duration is not None and abs(seconds - expected_duration) > DURATION_TOLERANCE_S:
         return 'length %.3f s, header says %.3f s' % (seconds, expected_duration)
     return None
@@ -52,7 +94,7 @@ def check_wav(path, expected_duration):
 
 def build_play_map(manifest, decoded_dir):
     entries = {entry['key']: entry for entry in manifest['entries']}
-    roles, unresolved = {}, {}
+    roles, unresolved, used = {}, {}, 0
     for role, key in ROLE_KEYS.items():
         if key is None:
             unresolved[role] = 'no sound identified from evidence yet'
@@ -65,9 +107,12 @@ def build_play_map(manifest, decoded_dir):
         for media in entry['media']:
             path = os.path.abspath(os.path.join(decoded_dir, '%s.wav' % media['source']))
             reason = check_wav(path, media.get('duration_s'))
+            if not reason and used + os.path.getsize(path) > MAX_TOTAL_BYTES:
+                reason = 'the map would hold more than %d bytes' % MAX_TOTAL_BYTES
             if reason:
                 reasons.append('%s: %s' % (media['source'], reason))
             else:
+                used += os.path.getsize(path)
                 files.append(path)
         if files:
             roles[role] = files
