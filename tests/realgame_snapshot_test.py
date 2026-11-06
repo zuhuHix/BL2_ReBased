@@ -444,6 +444,71 @@ Set-Content '__TMP__\live\keep.txt' 'changed by the run'
     run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $false; Id = 1 }', setup, run_printed)
 
 
+# The capture's own two stages, on a stub Py: each case says what the game answers, and the result is the stages and problems.
+STAGES = r"""
+$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+$Out = '__TMP__'; $target = 'T'; $log = [ordered]@{ kill_attempt = 'kill' }
+$stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
+function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
+function Start-Sleep { }
+$script:waited = 0
+function Wait-Ready { $script:waited++; throw 'cooldown did not end' }
+$script:restoreCalls = 0
+function Py([string]$Code, [int]$Timeout = 30) {
+    if ($Code -match 'ash_start') { return __ASH__ }
+    if ($Code -match 'pi_stop') { __STOP__; return 'stopped' }
+    if ($Code -match 'pi_hud_evidence') { return __HUD__ }
+    if ($Code -match 'pi_shields\\(True\\)') { return '{"equipped":{"name":"Own"},"max_strength":181}' }
+    if ($Code -match 'pi_shield_try') { return '{"requested_level":1}' }
+    if ($Code -match 'pi_shield_read') { return __READ__ }
+    if ($Code -match 'pi_shield_restore|pi_shields_check') { $script:restoreCalls++; return __RESTORE__ }
+    if ($Code -match 'pi_shields') { return '{"max_strength":181}' }
+    throw "unexpected: $Code"
+}
+function Invoke-LiftCast { $log.kill = [pscustomobject]@{ frames = 10; shots = @{ 'kill-2.10' = 1; 'kill-2.50' = 1; 'kill-3.50' = 1; 'kill-5.00' = 1; 'kill-6.00' = 1 }; action = '{"killed":__KILLED__,"at":5.0}' }; [pscustomobject]@{ target_lifted = $true; skill_calls = @('EndSkill') } }
+__STAGES__
+"RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; rows = @($log.shield_levels).Count } | ConvertTo-Json -Compress)
+"""
+GOOD = {'__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
+        '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__KILLED__': 'true'}
+
+
+def run_stages(**changes):
+    text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
+    body = text[text.index('        # KILL STAGE.'):text.index('        # END SHIELD STAGE')]
+    with tempfile.TemporaryDirectory() as tmp:
+        code = STAGES.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp).replace('__STAGES__', body)
+        for key, value in {**GOOD, **changes}.items():
+            code = code.replace(key, value)
+        script = Path(tmp) / 'stages.ps1'
+        script.write_text(code, encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True,
+                              env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return json.loads(done.stdout[done.stdout.index('RESULT:') + 7:])
+
+
+def test_the_two_stages_stand_alone_and_set_their_result_last():
+    good = run_stages()
+    assert sorted(good['done']) == ['kill', 'shield_levels'] and good['problems'] == [] and good['rows'] == 6
+    assert good['waited'] == 0      # neither stage waits on the skill, so a cooldown that never ends cannot change either
+    r = run_stages(__STOP__="throw 'no reply'")
+    assert 'kill' not in r['done'] and 'shield_levels' in r['done'] and 'hooks not stopped' in r['problems'][0]
+    r = run_stages(__HUD__="""'{"usable":false,"before":0,"after":0}'""")
+    assert 'kill' not in r['done'] and 'shield_levels' in r['done'] and 'HUD' in r['problems'][0]
+    r = run_stages(__ASH__="""'{"movie":null}'""")
+    assert 'kill' not in r['done'] and 'HUD sampler' in r['problems'][0]
+    r = run_stages(__KILLED__='false')
+    assert 'kill' not in r['done'] and 'shield_levels' in r['done']
+    # A level that never counts keeps all six rows and fails only its own stage.
+    r = run_stages(__READ__="""'{"counts":false,"reason":"level 20, requested 50","max_strength":700}'""")
+    assert 'shield_levels' not in r['done'] and 'kill' in r['done'] and r['rows'] == 6 and '0 of 6' in r['problems'][0]
+    # A restore that does not take stops the sweep and says so plainly.
+    r = run_stages(__RESTORE__="""'{"ok":false}'""")
+    assert 'shield_levels' not in r['done'] and r['rows'] == 1 and 'SHIELD NOT RESTORED' in r['problems'][0]
+
+
 def test_the_capture_is_wired_to_the_safety_helpers():
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8')
     for call in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Restore-VerifiedRoots $bak $roots $snapshots', 'Save-VerifiedBackupRecord $bak $roots $snapshots',
@@ -471,4 +536,5 @@ if __name__ == '__main__':
     test_a_run_that_touched_nothing_has_nothing_to_recover()
     test_the_guards_refuse()
     test_the_capture_is_wired_to_the_safety_helpers()
+    test_the_two_stages_stand_alone_and_set_their_result_last()
     print('ok')

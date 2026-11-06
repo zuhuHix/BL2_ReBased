@@ -207,39 +207,78 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     }
 
     if ($KillAndShield) {
-        # Kill the lifted target 2.0 s after the cast, during the hold. The burst's frames and kill.jsonl show the skill, kill_hud.jsonl the emblem.
+        # KILL STAGE. Kill the lifted target 2.0 s after the cast, during the hold. The burst's frames and kill.jsonl show the skill, kill_hud.jsonl
+        # the emblem. The stage's result is set only after the hooks are stopped and the emblem samples are checked.
+        $killPassed = $false; $killWhy = 'did not finish'
         try {
             $killShots = @{ 'kill-2.10' = 2.1; 'kill-2.50' = 2.5; 'kill-3.50' = 3.5; 'kill-5.00' = 5.0; 'kill-6.00' = 6.0 }
-            Py "ash_start('kill_hud'); print('ok')" | Out-Null
+            $ash = Py "import json; print(json.dumps(ash_start('kill_hud'), default=str))" | ConvertFrom-Json
+            if (!$ash.movie) { throw "the HUD sampler did not start: $($ash | ConvertTo-Json -Compress)" }
             $kill = { Py "import json; print(json.dumps(pi_kill('$target'), default=str))" 15 }
             $killResult = Invoke-LiftCast 'kill' 1.0 8.0 $killShots 100 2.0 $kill
-            Py "ash_stop(); print('ok')" | Out-Null
             $killCapture = $log[$log.kill_attempt]
             $killAction = if ($killCapture.action) { $killCapture.action | ConvertFrom-Json } else { $null }
             "kill: $($killCapture.action); skill calls: $($killResult.skill_calls -join ',')"
-            Set-Stage 'kill' (($killResult.target_lifted -eq $true) -and ($killAction.killed -eq $true) -and (Test-CaptureComplete $killCapture $killShots)) 'target not lifted, not killed, or frames or shots missing'
-            $log.kill_ready = Wait-Ready 40
-        } catch { Set-Stage 'kill' $false "$_" }
+            $killPassed = ($killResult.target_lifted -eq $true) -and ($killAction.killed -eq $true) -and (Test-CaptureComplete $killCapture $killShots)
+            $killWhy = 'target not lifted, not killed, or frames or shots missing'
+        } catch { $killPassed = $false; $killWhy = "$_" }
+        finally {
+            try { Py 'pi_stop(); unmark_lock(); ash_stop(); print("stopped")' | Out-Null }
+            catch { $killPassed = $false; $killWhy = "$killWhy; hooks not stopped: $_" }
+        }
+        if ($killPassed) {
+            try {
+                $log.kill_hud = Py "import json; print(json.dumps(pi_hud_evidence($($killAction.at))))" | ConvertFrom-Json
+                if ($log.kill_hud.usable -ne $true) { $killPassed = $false; $killWhy = "no usable HUD samples around the kill ($($log.kill_hud.before) before, $($log.kill_hud.after) after)" }
+            } catch { $killPassed = $false; $killWhy = "HUD samples not checked: $_" }
+        }
+        Set-Stage 'kill' $killPassed $killWhy
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+        # END KILL STAGE
 
-        # The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped.
+        # SHIELD STAGE. The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped. Every
+        # row stays in the log. The stage needs each level measured and her own shield back; a clamped level is a finding, not a retry.
+        $shieldLevels = 1, 5, 8, 15, 30, 50
+        $shieldRows = @(); $shieldWhy = ''; $restored = $null
         try {
-            $log.shields_start = Py 'import json; print(json.dumps(pi_shields(), default=str))' | ConvertFrom-Json
-            $shieldRows = @()
-            foreach ($level in 1, 5, 8, 15, 30, 50) {
-                $tried = Py "import json; print(json.dumps(pi_shield_try('equipped', $level), default=str))" | ConvertFrom-Json
-                Start-Sleep 2
-                $shieldRows += [pscustomobject]@{ level = $level; tried = $tried; read = (Py 'import json; print(json.dumps(pi_shield_read(), default=str))' | ConvertFrom-Json) }
-                Py 'import json; print(json.dumps(pi_shield_restore(), default=str))' | Out-Null
-                Start-Sleep 1
+            $log.shields_start = Py 'import json; print(json.dumps(pi_shields(True), default=str))' | ConvertFrom-Json
+            foreach ($level in $shieldLevels) {
+                $row = [ordered]@{ level = $level }
+                $restoreOk = $false
+                try {
+                    $row.tried = Py "import json; print(json.dumps(pi_shield_try($level), default=str))" | ConvertFrom-Json
+                    if (!$row.tried.skipped) {
+                        $until = (Get-Date).AddSeconds(5)
+                        do {
+                            $row.read = Py 'import json; print(json.dumps(pi_shield_read(), default=str))' | ConvertFrom-Json
+                            if ($row.read.counts -eq $true) { break }
+                            Start-Sleep -Milliseconds 250
+                        } while ((Get-Date) -lt $until)
+                    }
+                } catch { $row.error = "$_" }
+                finally {
+                    try {
+                        $restored = Py 'import json; print(json.dumps(pi_shield_restore(), default=str))' | ConvertFrom-Json
+                        $until = (Get-Date).AddSeconds(5)
+                        while ($restored.ok -ne $true -and (Get-Date) -lt $until) {
+                            Start-Sleep -Milliseconds 250
+                            $restored = Py 'import json; print(json.dumps(pi_shields_check(), default=str))' | ConvertFrom-Json
+                        }
+                        $row.restore = $restored; $restoreOk = $restored.ok -eq $true
+                    } catch { $row.restore_error = "$_" }
+                }
+                $shieldRows += [pscustomobject]$row
+                if (!$restoreOk) { $shieldWhy = "SHIELD NOT RESTORED after level ${level}: the live character has the wrong shield until the game exits"; break }
             }
-            $log.shield_levels = $shieldRows
             $log.shields_end = Py 'import json; print(json.dumps(pi_shields(), default=str))' | ConvertFrom-Json
-            $measured = @($shieldRows | Where-Object { $_.read.equipped_is_test -eq $true -and $_.read.max_strength -gt 0 })
-            "shields: $($log.shields_start.equipped.name) capacity $($log.shields_start.max_strength); $($measured.Count) of $($shieldRows.Count) levels measured"
-            Set-Stage 'shield_levels' ($measured.Count -ge 2) "$($measured.Count) levels measured"
-        } catch { Set-Stage 'shield_levels' $false "$_" }
+        } catch { $shieldWhy = "$shieldWhy $_".Trim() }
+        $log.shield_levels = $shieldRows
+        $measured = @($shieldRows | Where-Object { $_.read.counts -eq $true })
+        "shields: $($log.shields_start.equipped.name) capacity $($log.shields_start.max_strength); $($measured.Count) of $($shieldLevels.Count) levels measured"
+        if (!$shieldWhy -and $measured.Count -ne $shieldLevels.Count) { $shieldWhy = "$($measured.Count) of $($shieldLevels.Count) levels measured" }
+        Set-Stage 'shield_levels' (!$shieldWhy) $shieldWhy
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+        # END SHIELD STAGE
     } else {
     # 1. Hit.
     $hitResult = Invoke-LiftCast 'hit' 1.0 8.0 $hostShots 50 -1 $null
@@ -341,6 +380,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
     $log.run_error = $runError
     $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
+    if ($stageProblems.Count -and $log.status -ne 'completed') { $log.status = "$($log.status) ($($stageProblems -join '; '))" }
     if ($evidenceError -and !$recovery) { $log.status = "failed: evidence not written ($evidenceError)" }
     $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
     try { $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json') }
