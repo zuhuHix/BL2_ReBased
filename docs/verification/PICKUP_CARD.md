@@ -76,7 +76,11 @@ the movie is absent.
 A 2026-11-06 scripted run had the card hide for about 0.25 s with Maya standing still and aimed at the drop, and E at that moment went to a strongbox. Reach, the view and the
 driver do not explain it. An enemy respawned about 60 uu from the drop 37 ms before the card hid, which fits an enemy on the sight line (timing only, not proof). The test stops at anything
 blocking `ECC_Visibility` except Maya and the pickup. `OWPICKUPCARD blocked by <actor> (<component>)` now names what it hit, at most twice a second, and changes nothing else.
-This is not a confirmed bug: `NATIVE_USE_INTERACTION.md` describes one ray and the first usable hit, so a body in the way may block in the game too (`UNVERIFIED`). Still open: a corpse lying on its own drop.
+This is not a confirmed bug: `NATIVE_USE_INTERACTION.md` describes one ray and the first usable hit, so a body in the way may block in the game too (`UNVERIFIED`).
+
+A corpse, read from the code and not run: from death to the ragdoll the enemy has no collision. After that its mesh has the engine's `Ragdoll` profile, which ignores `ECC_Visibility`, and its
+hit volume stays off, so only its crit sphere can block, a head-sized sphere on the floor, until it respawns (3 s after death by default). So a corpse on a drop should at most blank the card for a
+moment. A range gun lands on a ring at least 60 uu from the corpse's centre, not under it. A live enemy's hit volume is the larger case.
 
 ## Open, for a real-game session
 
