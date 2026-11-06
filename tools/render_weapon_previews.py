@@ -344,6 +344,7 @@ class Paint:
             self.pattern_channels = prepared.get("pattern_channels", "RGB")
             self.decal_channels = prepared.get("decal_channels", "RGB")
             decal_address = decal.get("address") if decal.get("used") else None
+            pattern_address = prepared.get("pattern_address")
         else:
             mic = str(recipe.get("material") or "").split(".")[-1]
             resolved = resolve_material(mic, materials_roots) if mic else None
@@ -360,13 +361,14 @@ class Paint:
             self.detail_channel = DETAIL_CHANNELS.get((leaf.get("p_Diffuse"), klass), 2)
             self.pattern_channels = self.decal_channels = "RGB"
             decal_address = None
+            pattern_address = None
         if detail_override is not None:
             self.detail_channel = detail_override
         self.chain = chain
         self.masks = texture("p_Masks")
         self.detail = texture("p_Diffuse")
         self.normal = texture("p_NormalScopesEmissive")
-        self.pattern = texture("p_Pattern") if patterns else None
+        self.pattern = texture("p_Pattern", address=pattern_address) if patterns else None
         self.decal = texture("p_Decal", decal_address) if prepared is not None and decal_address else None
         if self.masks is None:
             self.note = "missing p_Masks texture"
