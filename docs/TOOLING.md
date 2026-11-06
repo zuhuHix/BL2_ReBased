@@ -743,6 +743,7 @@ Python's own generator. The weapon parts census, the generator manifest and the 
 ```powershell
 python tools/weapon_catalog.py packages; python tools/weapon_catalog.py crosscheck; python tools/weapon_catalog.py summary
 python tools/weapon_gen_manifest.py            # -> local/weapons/gen/weapon_gen_manifest.txt (base game)
+python tools/weapon_gen_firing.py --game <BL2>  # -> local/weapons/gen/weapon_gen_firing.json (firing templates for rolled guns)
 ./build/Release/ow-weapongen.exe local/weapons/gen/weapon_gen_manifest.txt --balance <balance> --stage 30 --seed 1
 python tools/weapon_gen_parity.py              # Python vs C++ on every balance, stages and seeds; report under local/
 ```
