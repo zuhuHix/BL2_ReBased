@@ -49,6 +49,7 @@ bool UOpenWillowSkills::LoadTree(const FString& File)
     const FString EffectsFile = FPaths::Combine(FPaths::GetPath(File), FPaths::GetCleanFilename(File).Replace(TEXT("skilltree_"), TEXT("skilleffects_")));
     FString Error;
     GradesChanged();
+    bEffectsFileMissing = !FPaths::FileExists(EffectsFile);
     if (Effects.Load(EffectsFile, Error))
     {
         UE_LOG(LogTemp, Display, TEXT("OpenWillow skill effects: %d skills from %s"), Effects.GetSkills().Num(), *EffectsFile);

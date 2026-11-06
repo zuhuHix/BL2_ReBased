@@ -1062,14 +1062,25 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
         TestCheck(TEXT("popup_crit"), bCrit, FString::Printf(TEXT("last popup critical=%d"), bCrit ? 1 : 0));
         // Mind's Eye on a real crit (skills lane): a gun hit on the head through the shared dispatcher does the event's bonus,
         // 2.0 untrained and 2.0 x (1 + 0.05 x 5) = 2.5 at grade 5. Progression is put back in this same tick. 1 point of damage
-        // keeps the enemy's health for the later steps. SKIP without the local skill effects file.
+        // keeps the enemy's health for the later steps. SKIP only when the local skill effects file does not exist; anything else
+        // that stops the check is a FAIL.
         AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(Pawn);
         UOpenWillowSkills* Tree = Maya ? Maya->GetSkills() : nullptr;
+        if (Tree && Tree->IsEffectsFileMissing())
+        {
+            TestSkip(TEXT("crit_minds_eye"), TEXT("no local skill effects file"));
+            TestStep = 5;
+            return;
+        }
         const FOpenWillowSkillEffects::FSkill* MindsEye = Tree ? Tree->GetEffects().Find(TEXT("MindsEye")) : nullptr;
         int32 Branch = 0, Tier = 0, Cell = 0;
-        if (!MindsEye || !Tree->FindSkill(MindsEye->Id, Branch, Tier, Cell))
+        const TCHAR* Blocked = !Tree ? TEXT("no walker or skill tree")
+            : !Tree->GetEffects().IsLoaded() ? TEXT("the skill effects file exists but did not load")
+            : !MindsEye ? TEXT("no Mind's Eye in the loaded skill effects")
+            : !Tree->FindSkill(MindsEye->Id, Branch, Tier, Cell) ? TEXT("Mind's Eye's id is not in the skill tree") : nullptr;
+        if (Blocked)
         {
-            TestSkip(TEXT("crit_minds_eye"), TEXT("no skill effects data or no Mind's Eye in the tree"));
+            TestCheck(TEXT("crit_minds_eye"), false, Blocked);
             TestStep = 5;
             return;
         }
