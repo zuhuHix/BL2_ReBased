@@ -8,7 +8,8 @@ The bullymong's grey diffuse gets its colour from the material's zone vectors (p
 p_ColorD) through ``p_Masks``, whose layout is the citizens' one (left half light/dark map, right half zone mask, checked by
 eye on the exported texture). The citizens' ``M_OW_NPC_Zone`` (tools/ambient_npc_attach_editor.py) implements that mix;
 this step parents one instance to it. The mixing rule is applied by analogy (UNVERIFIED there, and so here); the vectors
-are the stock material instance's own (UModel props). When ``M_OW_NPC_Zone`` is missing the plain material is kept.
+are the stock material instance's own (UModel props). ``M_OW_NPC_Zone`` comes from the citizens pipeline; without it this step
+stops and names that prerequisite, because the attach step and the target's colours need the instance.
 Writes ``<slice_dir>/editor_report_zone.json``; only content under the job's ``dest`` folders is created or changed.
 """
 import json
@@ -41,9 +42,8 @@ def texture(path, folder, srgb):
 for npc in job['npcs']:
     entry = report.setdefault(npc['id'], {'status': 'kept plain material'})
     if not eal.does_asset_exist(ZONE):
-        entry['reason'] = f'{ZONE} missing (built by tools/ambient_npc_attach_editor.py)'
-        log(f'{npc["id"]}: {entry["reason"]}')
-        continue
+        raise RuntimeError(f'{ZONE} is missing. It comes from the citizens pipeline: run powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach '
+                           '(with -Compose <amb_compose json> if the default capture is absent), then this step again.')
     dest = npc['dest']
     mesh = unreal.load_asset(f'{dest}/Meshes/{npc["mesh_name"]}/SkeletalMeshes/{npc["mesh_name"]}')
     slots = mesh.get_editor_property('materials')

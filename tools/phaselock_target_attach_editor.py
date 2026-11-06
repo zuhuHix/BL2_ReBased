@@ -22,7 +22,7 @@ for npc in job['npcs']:
     for piece in npc['attachment_meshes']:
         material_path = f'{npc["dest"]}/Materials/MI_{piece["material"]}_Zone'
         if not eal.does_asset_exist(material_path):
-            raise RuntimeError(f'{piece["id"]}: {material_path} is missing (run the zone step first)')
+            raise RuntimeError(f'{piece["id"]}: {material_path} is missing (the zone step makes it; it stops and names its own prerequisite if it cannot)')
         material = unreal.load_asset(material_path)
         if material is None:
             raise RuntimeError(f'{piece["id"]}: {material_path} exists but did not load')
