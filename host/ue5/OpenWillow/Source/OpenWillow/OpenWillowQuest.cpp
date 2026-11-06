@@ -783,6 +783,12 @@ bool UOpenWillowQuest::TryUse()
 {
     if (!Impl || bFailed) return false;
     ++ScreenUsesSeen;
+    // Checked before Marcus's chain runs, so the VM opens no screen either. Without a page URL nothing changes.
+    if (ScreenPage && !ScreenPage->IsShown() && OtherPageOpen())
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page refused: another page is open"));
+        return false;
+    }
     if (Impl->Slice->rewardPending()) {
         // A reward left waiting (the page was closed by a fall): show it again rather than take the reward with no page.
         if (ScreenPage && ScreenPage->IsReady()) { ShowScreenPage(TEXT("reward")); return true; }
@@ -826,6 +832,15 @@ bool UOpenWillowQuest::TryUse()
     else if (bEligible) { Action = TEXT("accept"); bOk = Accept(); }
     UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d, interface %d)"), Action, bOk, int32(Current), Status(), bOpened);
     return bRedeemable || bEligible;
+}
+
+bool UOpenWillowQuest::OtherPageOpen() const
+{
+    const UWorld* World = GetWorld();
+    const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+    const auto* Hud = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
+    const auto* Shop = World ? World->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr;
+    return (Hud && Hud->IsSkillsOpen()) || (Shop && Shop->IsShopOpen());
 }
 
 void UOpenWillowQuest::ShowScreenPage(const TCHAR* Page)

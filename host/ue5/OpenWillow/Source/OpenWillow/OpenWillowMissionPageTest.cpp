@@ -4,6 +4,7 @@
 // docs/verification/MISSION_SCREEN.md.
 #include "OpenWillowQuest.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowMayaHUD.h"
 #include "OpenWillowMissionPage.h"
 #include "OpenWillowNpc.h"
 #include "OpenWillowWalker.h"
@@ -85,6 +86,15 @@ void UOpenWillowQuest::TickScreenPageTest()
             if (const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot)) Maya->DrawItemById(UOpenWillowInventory::StableId(*Item));
         for (int32 Item = 0; Item < Inventory->Items().Num() && !Maya->HasWeaponOut(); ++Item) Maya->EquipItem(Item, 0);
         Stand();
+        // A direct call, since no key reaches the quest under a status page: the mission page must refuse, and the VM must open no screen.
+        if (AOpenWillowMayaHUD* Hud = Cast<AOpenWillowMayaHUD>(PC->GetHUD()))
+        {
+            const bool bOpen = Hud->ToggleMissions() && Hud->IsSkillsOpen();
+            const bool bUsed = TryUse();
+            Row(TEXT("e_refused_under_a_status_page"), bOpen && !bUsed && !ScreenPage->IsShown() && !ScreenOpenInVm() && Status() == 0 && Hud->IsSkillsOpen(), State());
+            Hud->CloseSkills();
+        }
+        else Row(TEXT("e_refused_under_a_status_page"), false, TEXT("no HUD"));
         Wait = 2.;
         break;
     }
