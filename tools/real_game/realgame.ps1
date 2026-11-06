@@ -198,11 +198,12 @@ function Restore-VerifiedBackup([string]$Backup) {
 function Format-RestoreRows($Rows) { if (@($Rows).Count) { @($Rows) | Format-Table -AutoSize | Out-String -Width 200 } }
 
 # Why a finalizer must keep its locks: every reason a run leaves something for a person. Empty when nothing is left. Any reason holds both
-# locks: an unconfirmed game can overwrite restored files, a restore that is not clean needs recovery, and a leftover driver keeps its
-# save-block flag and command channel in the game's folder for the next launch.
-function Get-RecoveryReason([bool]$GameGone, [string]$GameState, $Restored, [string]$RestoreError, [string]$DriverState) {
+# locks: an unconfirmed or untracked game can overwrite restored files, a restore that is not clean needs recovery, and a leftover driver
+# keeps its save-block flag and command channel in the game's folder for the next launch.
+function Get-RecoveryReason([bool]$GameGone, [string]$GameState, $Restored, [string]$RestoreError, [string]$DriverState, [string]$UntrackedGames = '') {
     $reasons = @()
     if (!$GameGone) { $reasons += "game exit not confirmed ($GameState)" }
+    if ($UntrackedGames) { $reasons += "a game this run did not start is running (pid $UntrackedGames), and it can write the saves" }
     if ($RestoreError) { $reasons += "restore failed ($RestoreError)" }
     elseif ($Restored -and !$Restored.clean) { $reasons += "restore did not compare clean ($($Restored.summary))" }
     if ($GameGone -and $DriverState -match '^(STILL PRESENT|error)') { $reasons += "driver not removed ($DriverState)" }
@@ -213,7 +214,7 @@ function Format-ManualRecovery([string]$Reason, [string]$Backup, [string]$HubLoc
     $lines = @("MANUAL RECOVERY: $Reason. Both locks are held and the backup is kept at $Backup.",
         '  1. Make sure Borderlands 2 is closed.',
         "  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'")
-    if (Test-Path -LiteralPath $script:DriverDir) { $lines += "     Remove-Item -Recurse -Force '$script:DriverDir'" }
+    if (Test-Path -LiteralPath $script:DriverDir) { $lines += "     Remove-Item -Recurse -Force '$script:DriverDir'   # first check it is this driver's copy, not someone's" }
     if ($Backup) {
         $lines += "     Restore-VerifiedBackup '$Backup'"
         $lines += "     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand. A root reported as created or not backed up is yours to judge."
@@ -258,12 +259,26 @@ function Stop-OwnGame([Diagnostics.Process]$Started, [datetime]$StartTime, [stri
 
 function Start-Game([string[]]$Arguments = @()) {
     $exe = Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'
-    Start-Process -FilePath $exe -ArgumentList $Arguments -WorkingDirectory (Split-Path $exe) -PassThru
+    $script:OwnGame = Start-Process -FilePath $exe -ArgumentList $Arguments -WorkingDirectory (Split-Path $exe) -PassThru
+    $script:OwnGame
 }
 function Get-GameProcess { Get-Process Borderlands2 -ErrorAction SilentlyContinue | Select-Object -First 1 }
 
+# Every running game, and those that are not the one this run started. Reading only: nothing here stops a process.
+function Get-GameProcesses { @(Get-Process Borderlands2 -ErrorAction SilentlyContinue) }
+function Get-UntrackedGames($Own) { @(Get-GameProcesses | Where-Object { !$Own -or $_.Id -ne $Own.Id }) }
+# The game this run started while it lives, else (a script that attaches to a running game) the first by name.
+function Get-RunGameProcess {
+    if ($script:OwnGame) {
+        $script:OwnGame.Refresh()
+        if ($script:OwnGame.HasExited) { return $null }
+        return $script:OwnGame
+    }
+    Get-GameProcess
+}
+# Its Alt tap can activate the foreground app's menu when it is retried; Assert-GameForeground's three bounded tries accept that.
 function Focus-Game {
-    $p = Get-GameProcess; if (!$p) { throw 'game not running' }
+    $p = Get-RunGameProcess; if (!$p) { throw 'game not running' }
     $h = $p.MainWindowHandle
     # A harmless Alt tap lets SetForegroundWindow succeed from a background process.
     [OWRG.Native]::keybd_event(0x12, 0x38, 0, [UIntPtr]::Zero); [OWRG.Native]::keybd_event(0x12, 0x38, 2, [UIntPtr]::Zero)
@@ -278,7 +293,7 @@ function Get-ForegroundWindowHandle { [OWRG.Native]::GetForegroundWindow() }
 # foreground window, after up to three focus attempts, or the step fails.
 function Assert-GameForeground {
     for ($attempt = 0; $attempt -le 3; $attempt++) {
-        $p = Get-GameProcess
+        $p = Get-RunGameProcess
         if (!$p) { throw 'refusing to send input: the game is not running' }
         if ((Get-ForegroundWindowHandle) -eq $p.MainWindowHandle) { return }
         if ($attempt -lt 3) { Focus-Game | Out-Null }
@@ -320,7 +335,11 @@ function Send-KeyUp([string]$Key) {
     if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0xB, [UIntPtr]::Zero) }
     else { [OWRG.Native]::keybd_event(0, [byte]$script:Scan[$Key], 0xA, [UIntPtr]::Zero) }
 }
-function Send-Key([string]$Key, [int]$HoldMs = 60) { Send-KeyDown $Key; Start-Sleep -Milliseconds $HoldMs; Send-KeyUp $Key }
+function Send-Key([string]$Key, [int]$HoldMs = 60) {
+    Send-KeyDown $Key
+    try { Start-Sleep -Milliseconds $HoldMs } finally { Send-KeyUp $Key }   # a press is always released
+}
+function Send-MouseEvent([int]$Flags, [int]$Dx = 0, [int]$Dy = 0) { [OWRG.Native]::mouse_event($Flags, $Dx, $Dy, 0, [UIntPtr]::Zero) }
 # Move the cursor to a point given in game client pixels and left-click (menus).
 function Send-ClickAt([int]$X, [int]$Y) {
     Assert-GameForeground
@@ -334,13 +353,19 @@ function Send-Wheel([int]$Notches) {
 # Hold the left button and move in steps (inspect-view rotation).
 function Send-Drag([int]$Dx, [int]$Dy, [int]$Steps = 20) {
     Assert-GameForeground
-    [OWRG.Native]::mouse_event(0x2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 50
+    Send-MouseEvent 0x2
     try {
-        for ($i = 0; $i -lt $Steps; $i++) { Assert-GameForeground; [OWRG.Native]::mouse_event(0x1, [int]($Dx / $Steps), [int]($Dy / $Steps), 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 15 }
-    } finally { [OWRG.Native]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero) }   # the button is always let go
+        Start-Sleep -Milliseconds 50
+        for ($i = 0; $i -lt $Steps; $i++) { Assert-GameForeground; Send-MouseEvent 0x1 ([int]($Dx / $Steps)) ([int]($Dy / $Steps)); Start-Sleep -Milliseconds 15 }
+    } finally { Send-MouseEvent 0x4 }   # the button is always let go
 }
 function Send-Mouse([int]$Dx, [int]$Dy) { Assert-GameForeground; [OWRG.Native]::mouse_event(0x1, $Dx, $Dy, 0, [UIntPtr]::Zero) }
-function Send-Click([switch]$Right) { Assert-GameForeground; if ($Right) { [OWRG.Native]::mouse_event(0x8,0,0,0,[UIntPtr]::Zero); Start-Sleep -m 50; [OWRG.Native]::mouse_event(0x10,0,0,0,[UIntPtr]::Zero) } else { [OWRG.Native]::mouse_event(0x2,0,0,0,[UIntPtr]::Zero); Start-Sleep -m 50; [OWRG.Native]::mouse_event(0x4,0,0,0,[UIntPtr]::Zero) } }
+function Send-Click([switch]$Right) {
+    Assert-GameForeground
+    $down, $up = if ($Right) { 0x8, 0x10 } else { 0x2, 0x4 }
+    Send-MouseEvent $down
+    try { Start-Sleep -Milliseconds 50 } finally { Send-MouseEvent $up }   # a press is always released
+}
 
 # Run Python inside the game through the openwillow_realgame mod and return its printed output.
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
