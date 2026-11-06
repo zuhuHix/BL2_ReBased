@@ -128,8 +128,8 @@ for row, (region, pin) in enumerate((('A', 'R'), ('B', 'G'), ('C', 'B'))):
     tone = lerp(lerp(shadow, mid, low, '', -600, y), hilight, high, '', -450, y)
     weighted = binary(unreal.MaterialExpressionMultiply, tone, '', mask_sample, pin, -300, y)
     total = weighted if total is None else binary(unreal.MaterialExpressionAdd, total, '', weighted, '', -150, y)
-# Pattern: the MIC's p_PatternScalePosition (-1.4429, 30, 0.3671, 0.03) is
-# read as UV1 scale (R, G) and offset (B, A); p_PatternChannelScale (0.85, 1)
+# Pattern: the MIC's p_PatternScalePosition is
+# read as UV1 scale (R, G) and offset (B, A); p_PatternChannelScale
 # weights it into regions A and B; p_PatternColor tints it and the detail
 # channel shades it. Parameter semantics are UNVERIFIED guesses at Master_Gun.
 uv1 = node(unreal.MaterialExpressionTextureCoordinate, -1700, 1100)

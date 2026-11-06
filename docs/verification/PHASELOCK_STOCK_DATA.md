@@ -492,7 +492,7 @@ parent caps it at 1 / opacity. The global tone mapper is unchanged.
 |---|---|---|
 | Screen grade grey-brown at 1.5 and 3 s | Round 2's modulate divided the particle colour by its largest channel, which darkens the scene | Divide by its luminance (Rec. 709) instead: the tint keeps the scene's brightness and pushes it to blue. Burst `Time` is now read as seconds of emitter time (UNVERIFIED); only the screen burst moves (1.05 s -> 0.70 s), which fits the game's tint onset of about 0.82 s after the lift starts |
 | Cast flashes white | The `Mat_SirenGlowMOD` flashes multiply the view by an HDR blue-cyan colour (every channel above 1). Even UE3's clip would give near white there, while the game shows cobalt at 0.8 s (f018-f020) | `Mat_SirenGlowMOD` reads its colour as a brightness-keeping tint (colour / luminance, `HueOnly`). The 0.8 s frame is now a cobalt flash with radial streaks |
-| No dark burst at +0.27 s | Under the colour-only reading the hand orb's `ModulateBlack` (colour 1) did nothing | One reading of `Mat_SirenOrbBlackMOD` fits all three of its emitters: darkness = mask x (1 - alpha), towards black, colour unused. The bubble emitters have alpha scaled to 0 (dark core, as before). The hand emitter has alpha 0 at spawn (0.25 s) and 1 by 0.2 of its life: a large dark blob around the raised hand at 0.25-0.35 s, gone by 0.5 s, as in game f007-f009 |
+| No dark burst at +0.27 s | Under the colour-only reading the hand orb's `ModulateBlack` (a neutral white colour) did nothing | One reading of `Mat_SirenOrbBlackMOD` fits all three of its emitters: darkness = mask x (1 - alpha), towards black, colour unused. The bubble emitters have alpha scaled to 0 (dark core, as before). The hand emitter has alpha 0 at spawn (0.25 s) and 1 by 0.2 of its life: a large dark blob around the raised hand at 0.25-0.35 s, gone by 0.5 s, as in game f007-f009 |
 | Faint palm orb | The 0.5 s flash washed out the orb sprite (`Mat_SirenHandInnerOrb`, blue on `EnergyOrbCenter2_Dif_Tex`, 15 x size-over-life about 2 x hand scale 0.35, about 11 uu) | No size change. With the flash and clip changes a blue orb shows in the palm at 0.5 s. It looks smaller than the game's because the whole hand is about 2.5x smaller on screen in the host (arms placement or FOV, not the effect). Relative to the palm, the host orb is close to the game's |
 | Hard blue rim | Round 2's black disc (full to two thirds of the radius) also darkened the core sprite's magenta edge | Black disc full to half the radius (`RadialSharpness` 2): the hold shows a near-black core with a soft violet-magenta rim |
 
@@ -506,7 +506,7 @@ distance (about 650 uu), or the bullymong's bounds radius read from the game.
   the cast flashes reduces the end template's `Brighten` (a dim red with very strong green and blue) to about x2 blue. Round 2's plain multiply
   gave cyan-white there, but white cast flashes. One material reading does not fit both emitters, so neither was
   tuned per emitter.
-- The 0.6 s white starburst (`Mat_SirenHandGlowShattered`, colour 1).
+- The 0.6 s white starburst (`Mat_SirenHandGlowShattered`, a neutral white colour).
 - The lifted target's pose: the dummy has no `PhaseLock_*` clips in the stock data.
 - What `SphereCollapse` drives.
 

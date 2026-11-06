@@ -111,7 +111,7 @@ Status of the five open items after the terrain pass recorded in
 3. **Native HLS-to-RGB: not derivable from the data; fallback kept.** The
    surviving Sanc_HLS_Master expressions are parameters only: Color
    (SancBuilding_Roofs_HS), Luminosity (SancBuilding_Roofs_L), Mask
-   (SancBuilding_Masks), Diffuse_Modulation (1, .5, .4, 1), Color/Mask/
+   (SancBuilding_Masks), Diffuse_Modulation (a warm red-orange), Color/Mask/
    Luminosity UV scale-and-offset vectors, a StaticSwitch `Use_Modulation`
    with null A/B inputs and two StaticComponentMask records that the package
    truncates. No combine formula survives, so none was invented; the

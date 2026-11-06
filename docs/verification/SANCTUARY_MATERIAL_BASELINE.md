@@ -56,8 +56,8 @@ over the placed glacier family.
 `Sanctuary_P` export 1987, `Prop_Glacier.Materials.Mat_Glacier`, has 60 expression
 slots; 54 are null. Its six surviving parameter expressions retain:
 
-- `P_TexScalar_RGMain_BASnow`: default `(1,1,2,2)`; `Mati_Glacier2x` overrides
-  it with `(3,3,2,3)`.
+- `P_TexScalar_RGMain_BASnow`: `Mati_Glacier2x` overrides the default with larger
+  red, green and alpha scales.
 - `p_UseSecondUV`: static switch with stripped A/B expression references.
 - `P_SimpleReflect` and `P_SimpleReflectOffset`.
 - `p_GlowColor` and `p_GlowRadiusScale`.

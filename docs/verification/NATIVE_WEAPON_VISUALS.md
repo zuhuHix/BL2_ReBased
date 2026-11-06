@@ -36,8 +36,8 @@ slot mesh, so all views share it, and reads the instance's scalar named `WeaponT
 into `BaseGlowScale` (section 2).
 
 **Data seen.** In the installed packages exactly 24 weapon parts carry `MaterialVectorParameterValues`, all with one
-entry, `p_EmissiveColor`, on elemental parts. Linear values (not colour-managed, HDR above 1): assault-rifle Fire
-(4.02, 0.27, 0.0, 1), Corrosive (0.51, 3.07, 0.0, 1), Shock (0.12, 1.23, 3.62, 1). So the elemental glow colour is a
+entry, `p_EmissiveColor`, on elemental parts. Linear values (not colour-managed, HDR above 1): on the assault rifle, Fire is
+a strong red, Corrosive a strong green, Shock a strong blue. So the elemental glow colour is a
 linear HDR vector parameter named `p_EmissiveColor` on the instance; the paint (zones, pattern, decal, reflection) lives
 in the parent material instance chosen by the Material part (textures and its own parameters), not in this function.
 **sRGB / linear:** vector parameters are `FLinearColor` and pass through unconverted; the texture sRGB flags are a

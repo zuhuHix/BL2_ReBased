@@ -44,8 +44,7 @@ PART_ORDER = ['Body', 'Grip', 'Barrel', 'Sight', 'Stock', 'Elemental', 'Accessor
 def part_vector_overrides(recipe, facts):
     """{parameter name: (r, g, b, a)} from the recipe's parts, in slot order. Needs --reader (empty without it).
 
-    Only elemental parts carry any in the install, one p_EmissiveColor each (Fire 4.02, 0.27, 0; read from the cooked part and
-    seen on the live weapon's material instance on 2026-10-04, so two sources agree).
+    Only elemental parts carry any in the install, one p_EmissiveColor each.
     """
     found = {}
     if facts is None:

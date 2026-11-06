@@ -383,8 +383,7 @@ AI-assisted. Tooling and editor importer only; nothing compared against the runn
   `p_ShadowsIntensity`, moving the tone from Midtone toward Shadow; the zone mask is the lower half of `p_Masks`
   (97% of its texels are flat, against 74% in the upper half).
 - Numeric check (unlit model albedo against in-game wiki inspect screenshots, median sRGB of matching regions; the
-  references include the game's lighting): Jakobs wood (97, 90, 74) vs (91, 82, 67), Jakobs frame (173, 175, 179) vs
-  (168, 166, 167), Maliwan barrel (88, 99, 109) vs (148, 160, 171) (same tint, about 40% darker; reflection and
+  references include the game's lighting): the Jakobs wood and frame match closely; the Maliwan barrel has the same tint and is about 40% darker (reflection and
   lighting omitted in the render). So the blue cast seen in first person most likely comes from the host's lighting
   and its fixed metallic 0.35 / roughness 0.55, not from the paint formula (UNVERIFIED).
 - Checks: `tests/weapon_paint_test.py` 29 passed, six guns re-imported with 0 errors, quest suite 73/73 and resume 10/10
@@ -574,7 +573,7 @@ stops until the maintainer clears it.
 - Presentation (`OpenWillowPhaselockFx.*`, `OpenWillowCombatTarget.*`, `OpenWillowWalker.*`): the decoded emitter
   templates are played with plane/mesh components (no Niagara, no new module dependency). From data: hand orb at the
   0.25 s notify on `L_Weapon_Bone` with the socket offset and scale 0.35; bubble scaled by bounds radius / 66.7, 0.2 s
-  intro, collapse 0 -> 0.75 over the last 2 s; point light radius 500, brightness 4, colour (96,128,255); tattoo glow
+  intro, collapse 0 -> 0.75 over the last 2 s; point light radius 500, brightness 4, a blue-violet colour; tattoo glow
   curve over 1 s. Host stand-ins (UNVERIFIED): what each stripped material does with its textures, the tattoo mask
   channel, the screen effect as a full-view quad, UE3 brightness -> UE5 intensity, burst timing, the dummy's auto-aim
   radius/aim point. The dummy keeps its idle (it has no PhaseLock clips).
@@ -805,8 +804,7 @@ independent critic's score of 4.5/10 for the round-2 side-by-side. Details are i
 - **Measured in game (one enemy type, one level, one cast pair; not a rule).** The bubble is 404-427 px across on the 1280x720
   frame, about 0.32 of the width: radius 167-174 uu at 650 uu depth (horizontal FOV 77.55 degrees, focal length 796.7 px). That is
   about 1.1 times the target's collision radius (150) and 0.55-0.58 times its mesh bounding sphere (300.8; the sphere moves with
-  the animation: 241.9 and 315.3 on other reads). Inside the rim the view is deep violet-blue (mean about RGB 50/52/98, darkest tenth
-  about 8 of 255); the held target stays visible at roughly a third of its normal brightness. Timeline from the per-frame
+  the animation: 241.9 and 315.3 on other reads). Inside the rim the view is deep violet-blue, with a near-black darkest tenth; the held target stays visible at roughly a third of its normal brightness. Timeline from the per-frame
   sampler, measured from the skill start (15 ms after the key): lift to 0.70 s (target 190 uu higher), hold to 4.77 s, release to
   5.88 s; the screen vignette is up at 0.25 s, the hand orb at 0.5 s, a cyan-white burst at 0.8 s, the bubble from about 1.5 s,
   gone by 5.0 s. A second cast of the same setup (run1) agrees by eye.

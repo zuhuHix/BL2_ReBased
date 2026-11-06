@@ -33,7 +33,8 @@ import sys
 import unreal
 
 sys.path.insert(0, os.environ['OPENWILLOW_PHASELOCK_HOST_DIR'])   # set by tools/import_phaselock_fx.ps1
-from phaselock_fx_inputs import check_fx_inputs, load_fx_constants  # noqa: E402
+from phaselock_fx_inputs import (OPTIONAL_MATERIALS, check_fx_inputs, choose_texture, collect_uses, load_fx_constants, parse_mat_slots,  # noqa: E402
+                                 read_templates)
 
 destination = '/Game/OpenWillow/Phaselock'
 roots = [Path(p).resolve() for p in os.environ['OPENWILLOW_PHASELOCK_UMODEL'].split(';') if p]
@@ -100,11 +101,11 @@ textures = {}
 # graphs are stripped). Not listed: lerp(1, colour, mask), alpha ignored.
 MODULATE_READINGS = {
     # Its emitters author alpha curves (the end template's Brighten ramps from 0), so alpha weights the blend. Its
-    # colours ((3, 6, 12) on the cast flashes, (0.4, 16, 30) on the release) are read as a brightness-keeping tint
+    # HDR colours (blue-cyan on the cast flashes, strong green and blue on the release) are read as a brightness-keeping tint
     # (HueOnly). A plain multiply turns the view white even under UE3's per-channel clip, while the 2026-10-02 game
     # frames show cobalt flashes and a cyan release ring.
     'Mat_SirenGlowMOD': {'UseAlpha': 1.0, 'HueOnly': 1.0},
-    # Its emitter in the end template is named BlackSpikeys while its colour is 5: read as darkening by
+    # Its emitter in the end template is named BlackSpikeys while its colour is well above 1: read as darkening by
     # mask x alpha x colour rather than brightening five times.
     'Mat_SirenOrbEnergySpikesMOD': {'UseAlpha': 1.0, 'ColourGain': 1.0, 'Darken': 1.0},
     # Darkening by mask x (1 - alpha), colour unused. This one reading fits its three emitters: the loop and end
@@ -288,7 +289,7 @@ def build(name, blend, domain_fn=None):
                                                     mask(rgb, '', 'G', 0, 380), '', 150, 300), '',
                    mask(rgb, '', 'B', 0, 460), '', 300, 300)
     # LDR-like clip (host stand-in, UNVERIFIED): UE3 shows each channel of the final colour clipped at 1, so an
-    # HDR particle colour such as (0.5, 0.8, 20) reads as saturated blue, while UE5's filmic curve turns it white.
+    # HDR particle colour with a very strong blue channel reads as saturated blue, while UE5's filmic curve turns it white.
     # Each layer's contribution is therefore capped per channel at what the clip would let through: 1 for an
     # additive layer (exact for one layer over the scene) and 1 / opacity for a translucent one.
     if blend == unreal.BlendMode.BLEND_ADDITIVE:
@@ -572,7 +573,7 @@ return float4(min(1.0, Col.rgb * spikeShort), alpha);
 """)
 
 # Mat_SirenOrbEnergySpikesMOD (modulate): darkens the scene by (fade x particle colour x spike) per channel, a dark streak
-# under each blue one. The particle colour is (5, 5, 5), so the darkening is the same in all channels; it is drawn as
+# under each blue one. The particle colour is a uniform grey above 1, so the darkening is the same in all channels; it is drawn as
 # translucent black with that amount as opacity. NOT DRAWN by the host (see NOT_DRAWN): the game frames show no dark streaks.
 exact('Mat_SirenOrbEnergySpikesMOD', 'dark', ['Smoke2_GP_Dif', 'EnergyOrbSpikeys_Dif_Tex'], r"""
 float2 uv = UV;
@@ -874,8 +875,13 @@ def exact_material(name):
 
 # --- run -------------------------------------------------------------------------------------------------------------
 
+# Mat_SirenGlowMOD multiplies the scene by 1 + min(3, c), which an 8-bit target clamps to 1 (UNVERIFIED reading of the
+# target format): not drawn. Its emitters are reported as skipped and left out by the host.
+NOT_DRAWN = {
+    'Mat_SirenOrbEnergySpikesMOD': 'dark streaks under the blue spikes: the shader darkens (1 - fade x colour x spike) but the game frames show no dark streaks, cause not found; not drawn (UNVERIFIED)',
+}
 # Nothing is deleted unless the inputs are complete: a failed check leaves the imported effects as they are.
-input_problems = check_fx_inputs(emitter_dir, roots, {name: spec['textures'] for name, spec in EXACT.items()})
+input_problems = check_fx_inputs(emitter_dir, roots, {name: spec['textures'] for name, spec in EXACT.items()}, not_drawn=tuple(NOT_DRAWN))
 if input_problems:
     raise RuntimeError('OW_PLFX inputs incomplete, nothing changed: ' + '; '.join(input_problems))
 if eal.does_directory_exist(destination):
@@ -890,43 +896,7 @@ darken_parent = build('M_OW_PlDarken', unreal.BlendMode.BLEND_TRANSLUCENT, 'dark
 tattoo_material()
 
 # Stock materials and meshes named by the decoded templates, with the emitter layouts that use them.
-uses, blend, meshes = {}, {}, set()
-for template in sorted(emitter_dir.glob('Part_*.json')):
-    data = json.loads(template.read_text(encoding='utf-8'))
-    materials = data.get('materials') or {}
-
-    def blend_of(path, depth=0):
-        entry = materials.get(path) or {}
-        props = entry.get('properties') or {}
-        if props.get('BlendMode') or depth > 4:
-            return props.get('BlendMode')
-        return blend_of(props.get('Parent'), depth + 1) if props.get('Parent') else None
-
-    screen_templates = {'Part_PhaseLockScreenEffect'}
-    for emitter in data.get('digest') or []:
-        req = emitter['required']
-        path = req.get('Material')
-        if not path:
-            continue
-        name = path.rsplit('.', 1)[-1]
-        layout = uses.setdefault(name, {'subimages': False, 'mesh': False, 'screen': False, 'templates': set()})
-        layout['subimages'] |= (req.get('SubImages_Horizontal', 1) or 1) * (req.get('SubImages_Vertical', 1) or 1) > 1
-        layout['screen'] |= template.stem in screen_templates
-        layout['templates'].add(template.stem)
-        mesh = ((emitter.get('type_data') or {}).get('properties') or {}).get('Mesh')
-        if mesh:
-            layout['mesh'] = True
-            meshes.add(mesh.rsplit('.', 1)[-1])
-        blend[name] = blend_of(path)
-
-# Mat_SirenGlowMOD multiplies the scene by 1 + min(3, c), which an 8-bit target clamps to 1 (UNVERIFIED reading of the
-# target format): not drawn. Its emitters are reported as skipped and left out by the host.
-NOT_DRAWN = {
-    'Mat_SirenOrbEnergySpikesMOD': 'dark streaks under the blue spikes: the shader darkens (1 - fade x 5 x spike) but the game frames show no dark streaks, cause not found; not drawn (UNVERIFIED)',
-}
-# The slot guess of UModel's .mat names the wrong mask for the screen effect: the shader reads the second referenced
-# texture, PhaseLockScreenMask02_Dif_Tex (WillowGame.upk).
-TEXTURE_CHOICE = {'Mat_PhaseLockScreenEffect': 'PhaseLockScreenMask02_Dif_Tex'}
+uses, blend, meshes = collect_uses(read_templates(emitter_dir)[0])
 
 for name in sorted(uses):
     if name in NOT_DRAWN:
@@ -936,16 +906,9 @@ for name in sorted(uses):
         exact_material(name)
         continue
     layout = uses[name]
-    slots = {}
     mat_file = find(name, '.mat')
-    if mat_file:
-        for line in mat_file.read_text(encoding='utf-8', errors='replace').splitlines():
-            if '=' in line:
-                key, value = line.split('=', 1)
-                slots[key.strip()] = value.strip()
-    chosen = TEXTURE_CHOICE.get(name) or slots.get('Diffuse')
-    if layout['subimages']:
-        chosen = next((v for v in slots.values() if 'SubUV' in v), chosen)
+    slots = parse_mat_slots(mat_file.read_text(encoding='utf-8', errors='replace')) if mat_file else {}
+    chosen, mask_name = choose_texture(name, slots, layout['subimages'])
     mode = blend.get(name)
     entry = {'blend': mode, 'slots': slots, 'templates': sorted(layout['templates']), 'mat': str(mat_file) if mat_file else None}
     if mode not in parents:
@@ -966,8 +929,6 @@ for name in sorted(uses):
                                   unreal.MaterialInstanceConstantFactoryNew())
     mel.set_material_instance_parent(instance, parent)
     flags = {}
-    # A *_Mirror texture listed besides the colour texture is read as a soft mask over the quad (host reading).
-    mask_name = next((v for k, v in slots.items() if v != chosen and v.endswith('_Mirror')), None)
     mask = texture(mask_name) if mask_name else None
     if mask:
         mel.set_material_instance_texture_parameter_value(instance, 'Mask', mask[0])
@@ -1011,6 +972,9 @@ for name in sorted(meshes):
 
 for name, entry in report['skipped'].items():
     log(f'skipped {name}: {entry["reason"]}')
+unexpected = sorted(set(report['skipped']) - set(NOT_DRAWN) - set(OPTIONAL_MATERIALS))
+if unexpected:
+    raise RuntimeError(f'OW_PLFX unexpected skips after the input check: {unexpected}')
 report_path.parent.mkdir(parents=True, exist_ok=True)
 report_path.write_text(json.dumps(report, indent=1, default=list) + '\n', encoding='utf-8')
 log(f'done: {len(report["materials"])} material instances, {len(report["textures"])} textures, '

@@ -149,7 +149,7 @@ press, attached at the arms socket with the offsets above; no parameter to set.
   **unclamped**, set every tick (`UpdateEffects`) with `CollapseStartTime = spawn time + StateDuration - CollapseDuration
   - BubbleFXIntroTime` (CollapseDuration 2, MaxCollapseValue 0.75 in the defaults), so it is negative before the collapse
   starts. FadeIn and FadeOut get no parameters.
-* Light: the `PhaselockLight` component (class default component, radius 500, brightness 4, colour 96/128/255, no shadows)
+* Light: the `PhaselockLight` component (class default component, radius 500, brightness 4, a blue-violet colour, no shadows)
   is attached to the target in `BeginLifting`; every tick its brightness is the base brightness times a factor: elapsed /
   duration of the lift state while lifting, 1 while locked, 1 minus elapsed / duration during the outro.
 * Nothing native touches these emitters; colour and size come from the templates.

@@ -33,8 +33,8 @@ Read with `ow-package --scene-records` on the installed base game:
   Mat_MoonBase_02a` and no texture, scalar or vector parameter overrides.
 - `Mat_MoonBase_02a` (`Material`) is opaque, lit (no `LightingModel` or
   `BlendMode` property), not two-sided. Its surviving expressions are six
-  named constants only: vectors `MoonBase_Color` (0.118, 0.339, 0.762),
-  `Fog` (0.028, 0.054, 0.061), `RimLight_Color` (1, 1, 1); scalars
+  named constants only: vectors `MoonBase_Color` (a mid blue),
+  `Fog` (a very dark teal), `RimLight_Color` (white); scalars
   `Brightness` 0.75, `Fog_Intensity` 1, `Emissive_Mult` 10. There is no
   texture sample parameter, so Material v1's named-channel path finds nothing.
 - The cooked texture resource list of the base is, in order,
@@ -49,9 +49,9 @@ not fall through to the non-auxiliary rule either. This is the situation the
 `Mat_IceRoadSanctuary`.
 
 The extracted textures are the station's hull plating with the large lens
-(`_Dif`, mean RGB 71/82/83), cyan window and lens lights on black (`_Emis`,
-mean RGB 0.5/2/2, alpha fully opaque) and a tangent-space normal map (`_Nrm`,
-mean RGB 127/126/248).
+(`_Dif`, a dark grey on average), cyan window and lens lights on black (`_Emis`,
+nearly black on average, alpha fully opaque) and a tangent-space normal map (`_Nrm`,
+the usual flat-normal average).
 
 ## Policy
 
@@ -149,14 +149,14 @@ the cook:
 
 | Parameter | Kind | Default | Note |
 |---|---|---|---|
-| `p_moonColor` | vector | (4.02177477, 4.02177477, 4.02177477) | applied by this slice |
-| `p_Basecolor2` | vector | (4, 1.138, 0) | orange secondary color, omitted |
+| `p_moonColor` | vector | an HDR neutral grey, about 4 | applied by this slice |
+| `p_Basecolor2` | vector | an HDR orange | orange secondary color, omitted |
 | `p_DarkColor` | scalar | -0.05 | omitted |
 | `p_moonTime`, `p_moonRotation` | scalar | none | UV motion, omitted |
 | `p_moonTimeBaseShadow` | scalar | none | station-shadow phase, omitted |
 | `Time_of_Day` | scalar | 170 | omitted |
 | `Transition_Track` | texture sample | `Prop_Skybox.Textures.Transition`, desc "Sky color lookup" | omitted |
-| `Horizion_track_color_multiplier` | vector | (10, 10, 10), desc "Sky color Mod" | omitted |
+| `Horizion_track_color_multiplier` | vector | an HDR neutral grey, desc "Sky color Mod" | omitted |
 
 Its cooked texture list is `MoonBase02_GRP` (the H-shaped station
 silhouette on black, presumably the shadow the station casts on the moon),
@@ -182,7 +182,7 @@ manifest material record gains
 "unlit_color_multiplier": {"method": "unlit_color_multiplier_v1",
   "status": "partial_unverified", "parameter": "p_moonColor",
   "source_material": "Sanctuary_Light:Prop_MoonBase.Materials.Mat_Moon",
-  "rgb": [4.02177477, 4.02177477, 4.02177477], "omitted": [...]}
+  "rgb": ["<p_moonColor, from the package>"], "omitted": [...]}
 ```
 
 and the issue `Approximation: Unlit color scaled by p_moonColor; shadow
