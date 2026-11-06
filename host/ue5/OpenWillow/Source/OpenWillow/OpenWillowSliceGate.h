@@ -32,7 +32,7 @@ private:
     int32 Pass = 0, Failed = 0, NotAvailable = 0;
     bool bUseHeld = false;          // the simulated E key is down (released after 0.1 s)
     float UseHeldFor = 0.f;
-    bool bPlacedAtMarcus = false, bPlacedForTurnIn = false, bRolled = false;   // one-shot actions of their steps
+    bool bPlacedAtMarcus = false, bPlacedForTurnIn = false, bPickupStarted = false;   // one-shot actions of their steps
     bool bRangeMode = false;        // ow.Range existed and built the range
     bool bAcceptStarted = false;    // the accept step waited for the Phaselock to end
     float ShotClock = 0.f;
