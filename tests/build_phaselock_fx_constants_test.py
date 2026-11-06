@@ -30,7 +30,7 @@ def write(base, tint=(0.4, 0.5, 0.6), blue=BLUE, glow=GLOW):
 
 def expect_error(text, *args):
     try:
-        b.build(*args)
+        b.build(*args, local_root=Path(args[2]).parent)
     except b.BuildError as error:
         assert text in str(error), str(error)
         return
@@ -40,7 +40,7 @@ def expect_error(text, *args):
 def test_rebuilds_blue_and_glow_and_keeps_the_tint():
     with tempfile.TemporaryDirectory() as tmp:
         emitters, manifest, out = write(Path(tmp))
-        b.build(emitters, manifest, out)
+        b.build(emitters, manifest, out, local_root=out.parent)
         data = json.loads(out.read_text(encoding='utf-8'))
         assert data['Mat_SirenHandInnerOrb']['blue'] == [0.1, 0.2, 0.3]     # replaced
         assert data['Master_Player']['power_emissive'] == [1, 2, 3]
@@ -99,7 +99,7 @@ def test_wrong_shapes_are_named():
             emitters, manifest, out = write(Path(tmp))
             damage(emitters, manifest)
             try:
-                b.build(emitters, manifest, out)
+                b.build(emitters, manifest, out, local_root=out.parent)
             except b.BuildError:
                 continue
             raise AssertionError(label)
@@ -115,7 +115,33 @@ def test_non_finite_colour_stops():
 
 def test_cli_refuses_a_path_outside_local():
     with tempfile.TemporaryDirectory() as tmp:
-        assert b.main(['--out', str(Path(tmp) / 'x.json')]) == 2
+        assert b.main(['--out', str(Path(tmp) / 'x.json')]) == 1
+        assert not (Path(tmp) / 'x.json').exists()
+
+
+def test_build_refuses_a_tracked_path_with_its_default_root():
+    tracked = Path(__file__).resolve().parents[1] / 'docs' / 'fx_constants_refused.json'
+    with tempfile.TemporaryDirectory() as tmp:
+        emitters, manifest, _ = write(Path(tmp))
+        try:
+            b.build(emitters, manifest, tracked)
+        except b.BuildError as error:
+            assert 'outside' in str(error)
+        else:
+            raise AssertionError('a tracked path was accepted')
+    assert not tracked.exists() and not tracked.with_name(tracked.name + '.tmp').exists()
+    # A sibling folder whose name only starts like the root is outside it too.
+    with tempfile.TemporaryDirectory() as tmp:
+        emitters, manifest, _ = write(Path(tmp))
+        root = Path(tmp) / 'local'
+        root.mkdir()
+        sibling = Path(tmp) / 'local2'
+        sibling.mkdir()
+        try:
+            b.build(emitters, manifest, sibling / 'x.json', local_root=root)
+        except b.BuildError:
+            return
+        raise AssertionError('a sibling path was accepted')
 
 
 if __name__ == '__main__':
