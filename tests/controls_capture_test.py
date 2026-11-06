@@ -222,6 +222,8 @@ class ControlsCaptureTest(unittest.TestCase):
     def test_hooks_answer_must_be_exact(self):
         done, session = self.run_capture('hooks_traceback')
         self.assertIn('not stopped: Traceback', session['cleanup'].get('hooks', ''), session['cleanup'])
+
+    def test_hooks_are_stopped_when_a_run_fails_with_the_game_alive(self):
         done, session = self.run_capture('run_error')
         self.assertEqual(session['cleanup']['hooks'], 'stopped')
 
