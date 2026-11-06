@@ -136,14 +136,14 @@ for d, n, c, dead in list_ai():
     radius = p.CylinderComponent.CollisionRadius if p.CylinderComponent else 0
     rows.append({"name": n, "dist": d, "class": cls.split(".")[-1], "radius": radius, "dead": dead, "ctrl": p.Controller is not None})
 ok = [r for r in rows if not r["dead"] and r["ctrl"] and "PrimalBeast" in r["class"] and r["radius"] >= 120]
-ok.sort(key=lambda r: (not r["class"].endswith("CharClass_PrimalBeast"), r["dist"]))
-print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
+ok.sort(key=lambda r: pi_target_rank(r["class"], r["dist"]))
+print(json.dumps({"pick": ok[0]["name"] if ok else None, "pick_class": ok[0]["class"] if ok else None, "rows": rows[:30]}))
 '@
         $res = $pick | ConvertFrom-Json; $log.candidates = $res.rows; $target = $res.pick
         if (!$target) { Start-Sleep 5 }
     }
     if (!$target) { throw "no adult bullymong: $pick" }
-    $log.target = $target; "target $target"
+    $log.target = $target; $log.target_class = $res.pick_class; "target $target ($($res.pick_class))"
     $log.discover = Py 'import json; print(json.dumps(pi_discover(), default=str))' | ConvertFrom-Json
     # pi_flags() (CanPhaseLockTarget called from Python for every pawn) got no reply on 2026-11-02 and the session was lost; the
     # cast's own CanPhaseLockTarget result is marked by mark_lock() instead.
