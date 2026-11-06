@@ -237,6 +237,14 @@ AOpenWillowInventoryPickup* UOpenWillowSliceGate::DropRolledGun(uint32 Seed, con
     return Pickup;
 }
 
+// Why the test cannot roll its drops, or empty. This is the test's own setup or local data, not something the host lacks.
+FString UOpenWillowSliceGate::RollSetupGap() const
+{
+    if (RollSource.IsEmpty()) return TEXT("test setup gap, not a missing host capability: no ow.RollGun source (-owslicegategun or -owitems)");
+    if (!FOpenWillowWeaponGen::IsAvailable()) return TEXT("test setup gap, not a missing host capability: no weapon generator manifest on this machine");
+    return FString();
+}
+
 bool UOpenWillowSliceGate::PickupAccepted() const
 {
     const AOpenWillowWalker* W = Walker();
@@ -422,6 +430,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (StepTime < 3.f) return;   // the range spawns its targets
             Enemy = NearestLiveTarget(true);
             if (!Enemy) { FailLink(TEXT("reach_fight_area"), TEXT("ow.Range ran but no live target is in the world")); Finish(TEXT("no enemy")); return; }
+            // Stated up front: the fight and the Phaselock then run on the engine's shapes, not on the stock pawn.
+            if (!Enemy->IsStockPawn()) Fixture(TEXT("selected enemy on fallback shapes, no stock mesh"));
             PassLink(TEXT("reach_fight_area"), FString::Printf(TEXT("ow.Range: Maya at %s, target %s (%s) %.0f uu away"),
                 *W->GetActorLocation().ToCompactString(), *Enemy->GetName(), *Enemy->GetClass()->GetName(),
                 FVector::Dist(W->GetActorLocation(), Enemy->GetActorLocation())));
@@ -564,9 +574,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         bPickupStarted = true;
         if (!Drop && bFirstTick)
         {
-            if (RollSource.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
+            if (const FString Gap = RollSetupGap(); !Gap.IsEmpty())
             {
-                MissingLink(TEXT("pick_up_gun"), TEXT("no drop to pick up, and the ow.RollGun fallback has no source or generator manifest"));
+                MissingLink(TEXT("pick_up_gun"), Gap + TEXT(", and the kill left no drop to pick up"));
                 Next(EStep::Equip);
                 return;
             }
@@ -594,13 +604,12 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         // must take it (PR #101: an aimed pickup in reach wins over the nearest). Taking the decoy is a FAIL.
         if (!DecoyAimed)
         {
-            if (RollSource.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
+            if (const FString Gap = RollSetupGap(); !Gap.IsEmpty())
             {
-                MissingLink(TEXT("pick_up_aimed_not_nearest"), TEXT("no ow.RollGun source to make the two test drops"));
+                MissingLink(TEXT("pick_up_aimed_not_nearest"), Gap + TEXT(", so the two test drops cannot be made"));
                 Next(EStep::Equip);
                 return;
             }
-            Fixture(TEXT("two guns rolled and dropped by the test"));
             const FVector From = W->GetActorLocation();
             const FVector Forward = FRotator(0, W->GetControlRotation().Yaw, 0).Vector();
             FString Why;
@@ -611,10 +620,14 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             DecoyNear = DecoyAimed ? DropRolledGun(3, Stand + FRotator(0, W->GetControlRotation().Yaw + 90.f, 0).Vector() * 45.f, Why) : nullptr;
             if (!DecoyAimed || !DecoyNear)
             {
-                FailLink(TEXT("pick_up_aimed_not_nearest"), Why);
+                // Not the two-guns fixture: the pair was never complete. The detail says how far the setup got.
+                FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("test drops incomplete: aimed drop %s, nearer decoy not made: %s"),
+                    DecoyAimed ? *PickupId(DecoyAimed) : TEXT("not made"), *Why));
+                if (IsValid(DecoyAimed)) DecoyAimed->Destroy();
                 Next(EStep::Equip);
                 return;
             }
+            Fixture(TEXT("two guns rolled and dropped by the test"));
             NearId = PickupId(DecoyNear);
             // Rolled ids come from the balance and the seed: two rolls can share one, and then the ids cannot tell which
             // drop E took. No result is possible from such a pair.

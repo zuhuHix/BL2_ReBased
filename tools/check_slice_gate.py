@@ -10,7 +10,9 @@ Every link line must carry the fixtures field.
 Exit codes: 0 when no link is FAIL, the structure holds and the SUMMARY is there and agrees; 1 otherwise; 2 when the log
 has no `OWSLICEGATE start` line. NOT_AVAILABLE means a missing capability or precondition and does not fail the run, so
 it is overruled to FAIL where the capability is there: `enemy_attacks_maya` in a run with the range
-(`range_command=1` on the start line), and `loot_drop_on_kill` with the gun roll forced.
+(`range_command=1` on the start line), `loot_drop_on_kill` with the gun roll forced, and a card link whose ids show a
+pickup attempt was made. A NOT_AVAILABLE whose detail starts "test setup gap" is this test's own setup or local data, not
+something the host lacks: it is owned by slice-gate and counted on its own line.
 """
 import argparse
 import json
@@ -108,15 +110,20 @@ def parse_log(lines):
     return starts, logged, summary, errors
 
 
-# The pickup links name the card's item at the use-key press and the item E picked up (`card_id=... picked_id=...`). A
-# PASS needs both, and they must be the same item: the checker reads them itself rather than trusting the host's verdict.
+# The pickup links name the aimed drop, the card's item at the use-key press and the item E picked up
+# (`aimed_drop=... card_id=... picked_id=...`). A PASS needs all three to be the same item: the checker reads them itself
+# rather than trusting the host's verdict.
 CARD_LINKS = ('pick_up_gun', 'pick_up_aimed_not_nearest')
 CARD_IDS = re.compile(r'\bcard_id=(?P<card>\S+) .*?\bpicked_id=(?P<picked>[^\s:,]+)')
+AIMED_ID = re.compile(r'\baimed_drop=(?P<aimed>[^\s:,]+)')
 ACCEPTED = re.compile(r'\baccepted=1\b')
-DECOY_ID = re.compile(r'\bnearer_decoy=(?P<decoy>\S+)')
+DECOY_ID = re.compile(r'\bnearer_decoy=(?P<decoy>[^\s:,]+)')
 DECOY_LINK = 'pick_up_aimed_not_nearest'
 # The fixture that forces a gun from a kill.
 FORCED_LOOT = 'guaranteed loot roll'
+# A NOT_AVAILABLE from this test's own setup or local data, not from something the host lacks.
+SETUP_GAP = 'test setup gap'
+SETUP_GAP_OWNER = 'slice-gate'
 
 
 def card_link_problem(row):
@@ -126,15 +133,31 @@ def card_link_problem(row):
         return 'no card_id/picked_id in the detail'
     if match['card'] != match['picked'] or match['card'] == 'none':
         return f'card_id {match["card"]} is not picked_id {match["picked"]}'
+    aimed = AIMED_ID.search(row['detail'])
+    if not aimed:
+        return 'no aimed_drop in the detail'
+    if aimed['aimed'] != match['picked']:
+        return f'aimed_drop {aimed["aimed"]} is not picked_id {match["picked"]}'
     if not ACCEPTED.search(row['detail']):
         return 'the pickup was not accepted (no accepted=1 in the detail)'
     if row['name'] == DECOY_LINK:
         decoy = DECOY_ID.search(row['detail'])
-        if not decoy:
+        if not decoy or decoy['decoy'] == 'none':
             return 'no nearer_decoy id in the detail'
         if decoy['decoy'] == match['picked']:
             return f'nearer_decoy has the same id as the picked-up drop ({decoy["decoy"]})'
     return None
+
+
+def card_attempt_seen(row):
+    """Why a NOT_AVAILABLE on a card link cannot stand, or None: its ids show that the pickup attempt was made."""
+    match = CARD_IDS.search(row['detail'])
+    if not match:
+        return None
+    decoy = DECOY_ID.search(row['detail'])
+    if decoy and decoy['decoy'] == match['picked']:
+        return 'the ids show E took the nearer decoy'
+    return 'the ids show the pickup attempt was made'
 
 
 def cross_check(rows, errors, range_mode):
@@ -152,7 +175,11 @@ def cross_check(rows, errors, range_mode):
                 why = 'the range was there, so its enemies can attack'
             elif row['name'] == 'loot_drop_on_kill' and FORCED_LOOT in row['fixtures']:
                 why = 'the gun roll was forced'
+            elif row['name'] in CARD_LINKS:
+                why = card_attempt_seen(row)
             else:
+                why = None
+            if not why:
                 continue
             errors.append(f'link {row["name"]}: NOT_AVAILABLE overruled, {why}')
             row['result'] = 'FAIL'
@@ -164,6 +191,8 @@ def build_rows(logged):
     rows = []
     for index, (name, owner) in enumerate(LINKS, 1):
         result, detail, fixtures = logged.get(name, ('FAIL', NOT_REACHED, []))
+        if detail.startswith(SETUP_GAP):
+            owner = SETUP_GAP_OWNER
         rows.append({'index': index, 'name': name, 'result': result, 'fixtures': fixtures, 'owner': owner, 'detail': detail})
     return rows
 
@@ -230,6 +259,9 @@ def main(argv=None):
     print(table_text(rows))
     print(f'slice gate: {totals["PASS"]} PASS, {totals["FAIL"]} FAIL, '
           f'{totals["NOT_AVAILABLE"]} NOT_AVAILABLE of {len(LINKS)}')
+    gaps = sum(1 for row in rows if row['result'] == 'NOT_AVAILABLE' and row['detail'].startswith(SETUP_GAP))
+    if gaps:
+        print(f'{gaps} of those NOT_AVAILABLE are test setup gaps, not missing host capabilities: the link did not test the host')
     for error in errors:
         print(f'error: {error}')
 

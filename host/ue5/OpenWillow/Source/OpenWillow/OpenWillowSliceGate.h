@@ -78,6 +78,7 @@ private:
     bool RunAimedPickup(class AOpenWillowInventoryPickup* Target);
     int32 HitsBeforeFight = 0;      // the walker's hit count when the fight starts (its per-causer count starts empty there)
     bool PickupAccepted() const;    // the last press made a pickup attempt, and it was accepted
+    FString RollSetupGap() const;
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }
     void MissingLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("NOT_AVAILABLE"), Detail); }
