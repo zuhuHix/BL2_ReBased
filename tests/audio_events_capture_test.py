@@ -262,14 +262,16 @@ def test_no_pickup_means_no_target():
         assert ns['ae_pickup_gone']('anything') is True
 
 
-def run_tail(body, clean=True, proc='$null'):
+def run_tail(body, clean=True, proc='$null', owned='$true', attempted=None, launched='$true', stubs='function Remove-Driver { }', out=None, setup=''):
+    """This script's real tail, from its `} catch {` on, after a stub body: the harness of tests/realgame_snapshot_test.py."""
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
-        script.write_text(snapshot.TAIL.replace('__OUT__', tmp).replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__SETUP__', '').replace('__OWNED__', '$true').replace('__STUBS__', 'function Remove-Driver { }')
-                          .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+        script.write_text(snapshot.TAIL.replace('__OUT__', out or tmp).replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
+                          .replace('__SETUP__', setup.replace('__TMP__', tmp)).replace('__LAUNCHED__', launched).replace('__OWNED__', owned)
+                          .replace('__ATTEMPTED__', attempted or owned).replace('__STUBS__', stubs).replace('__BODY__', body)
+                          .replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
@@ -277,15 +279,18 @@ def run_tail(body, clean=True, proc='$null'):
         return done
 
 
+FINISH = "$stagesDone.Add('hit')"
+ALIVE = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
+NO_RESTORE = "function Remove-Driver { Write-Host 'driver removed' }\nfunction Restore-VerifiedRoots { throw 'must not run' }\n"
+
+
 def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
-    finish = "$stagesDone.Add('hit')"
-    never_exits = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
-    for body, clean, proc, code, status in ((finish, True, '$null', 0, 'completed'),
-                                            (finish + '; return', True, '$null', 0, 'completed'),
-                                            (finish, False, '$null', 1, 'recovery needed: restore'),
+    for body, clean, proc, code, status in ((FINISH, True, '$null', 0, 'completed'),
+                                            (FINISH + '; return', True, '$null', 0, 'completed'),
+                                            (FINISH, False, '$null', 1, 'recovery needed: restore'),
                                             ("'no stage'", True, '$null', 1, 'incomplete: hit'),
                                             ("throw 'x'", True, '$null', 1, 'failed: x'),
-                                            (finish, True, never_exits, 1, 'recovery needed: game exit')):
+                                            (FINISH, True, ALIVE, 1, 'recovery needed: game exit')):
         done = run_tail(body, clean, proc)
         assert done.returncode == code and f'status: {status}' in done.stdout, (body, clean, done.returncode, done.stdout, done.stderr)
         assert done.hub_lock_kept is status.startswith('recovery'), (body, done.stdout)
@@ -297,29 +302,63 @@ def test_a_bad_restore_prints_the_rows_and_the_one_recovery_command():
     assert -1 not in order and order == sorted(order), done.stdout
 
 
+def test_a_failed_run_stops_this_captures_hooks_on_the_exact_answer_only():
+    def reply(answer):
+        return "function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; " + answer + ' }'
+    done = run_tail("throw 'boom'", True, ALIVE, stubs=reply("'stopped'"))
+    assert 'py: ae_remove(); protect_player(False)' in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
+    done = run_tail("throw 'boom'", True, ALIVE, stubs=reply("'Traceback: stopped'"))
+    assert 'cleanup hooks: not stopped: Traceback: stopped' in done.stdout, done.stdout
+    done = run_tail("throw 'boom'", True, ALIVE, stubs=reply("throw 'no reply'"))
+    assert 'cleanup hooks: not stopped' in done.stdout and 'cleanup game:' in done.stdout, done.stdout
+
+
+def test_a_game_this_run_did_not_start_stops_the_restore_and_holds_the_locks():
+    foreign = NO_RESTORE + "function Get-GameProcesses { [pscustomobject]@{ Id = 77; StartTime = Get-Date; Path = 'x' } }"
+    done = run_tail(FINISH, stubs=foreign)
+    assert done.returncode == 1 and 'a game this run did not start is running (pid 77)' in done.stdout, done.stdout
+    assert done.hub_lock_kept is True and 'MANUAL RECOVERY' in done.stdout and 'NOT RESTORED' in done.stdout and 'driver removed' not in done.stdout, done.stdout
+
+
+def test_a_run_that_touched_nothing_has_nothing_to_recover():
+    done = run_tail("throw 'copy failed'", owned='$false', launched='$false', stubs=NO_RESTORE)
+    assert 'status: failed: copy failed' in done.stdout and 'cleanup saves: not touched' in done.stdout and done.hub_lock_kept is False, done.stdout
+    assert done.returncode == 1 and 'MANUAL RECOVERY' not in done.stdout, done.stdout
+
+
+def test_missing_evidence_cannot_exit_0():
+    done = run_tail(FINISH, setup="New-Item -ItemType Directory -Force '__TMP__\\session.json' | Out-Null")
+    assert done.returncode == 1 and 'status: failed: evidence not written' in done.stdout, done.stdout
+
+
 def test_the_tail_is_the_helper_branch_one_but_for_the_hooks_it_stops():
     def tail_of(path):
         text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
         return text[text.index('\n} catch {\n    $runError'):]
     ours, theirs = tail_of(CAPTURE), tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
-    # The one block that differs: this capture has no recorder to stop. If the other script's tail changes, this fails: re-copy it.
-    start, end = '    # A throw between pi_start and pi_stop', '    $gameGone = $true\n'
-    theirs_rest = theirs[:theirs.index(start)] + theirs[theirs.index(end):]
-    our_start = '    # Stop this run\'s logging hooks'
-    ours_rest = ours[:ours.index(our_start)] + ours[ours.index(end):]
-    assert ours_rest == theirs_rest
+    # The one difference: this capture has no recorder, so it stops its own hooks. If the other script's tail changes, this fails: re-copy it.
+    comment = ("    # A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.\n",
+               "    # A throw can leave this run's logging hooks and the player's protection on: stop them while the game can still answer.\n")
+    call = ("""Py 'pi_stop(); unmark_lock(); print("stopped")' 5""", """Py 'ae_remove(); protect_player(False); print("stopped")' 5""")
+    assert theirs.count(comment[0]) == 1 and theirs.count(call[0]) == 1
+    assert ours == theirs.replace(*comment).replace(*call)
     assert 'pi_stop' not in ours and 'ae_remove(); protect_player(False)' in ours
-    for needed in ('$recovery = Get-RecoveryReason', '$holdLocks = [bool]$recovery', 'Format-ManualRecovery'):
+    for needed in ('$recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked', '$holdLocks = [bool]$recovery',
+                   'Format-ManualRecovery', "$untracked = if ($touched) { Get-ForeignGamesSeen $proc } else { '' }", 'if ($restored) {'):
         assert needed in ours, needed
 
 
 def test_saves_are_proved_blocked_before_any_input_and_nothing_bypasses_the_focus_guard():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     body = text[:text.index('\n} catch {\n    $runError')]
-    order = [body.index(step) for step in ('Backup-Saves', 'Save-VerifiedBackupRecord', 'Install-Driver -BlockSavesAtStart -Exclusive', 'Start-Game $gameArgs',
+    order = [body.index(step) for step in ('# Stale evidence:', 'Enter-RunLock', 'Backup-Saves', 'Save-VerifiedBackupRecord', '$driverAttempted = $true', 'Install-Driver -BlockSavesAtStart -Exclusive',
+                                           '$foreign = Get-ForeignGamesSeen $null', '$launchAttempted = $true', 'Start-Game $gameArgs',
                                            "Assert-SavesBlocked (Py 'print(block_saves())')", 'Send-Key Enter', 'ae_throw()')]
     assert order == sorted(order), order
-    assert 'Focus-Game' not in body
+    assert 'Focus-Game' not in body and 'OWRG.Native' not in body     # all input goes through the guarded sends
+    reference = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
+    block = reference[reference.index('# Stale evidence:'):reference.index('# End of stale evidence.')]
+    assert block in body
 
 
 def test_all_four_roots_are_protected():
