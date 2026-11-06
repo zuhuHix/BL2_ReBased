@@ -1,7 +1,8 @@
 // Maya's behaviour skills in the host: the kill-skill timer, health regeneration from skill modifiers, and the
 // Phaselock variants that the stock behaviour graphs run (Helios, Converge, Ruin, Sweet Release). Rules and numbers are
 // from the own-words record docs/verification/NATIVE_SKILL_BEHAVIOURS.md (behaviour graphs and script read from the
-// install); none is confirmed in the running game. Phaselock events are read from the Walker's public state each tick,
+// install). Ruin's and Helios's damage and timing come from live reads at level 8 only; every other rule here is not confirmed in the
+// running game. Phaselock events are read from the Walker's public state each tick,
 // so the Phaselock code needs no hook; a kill comes from AOpenWillowWalker::NotifyKilledEnemy.
 #include "OpenWillowSkills.h"
 #include "OpenWillowCombatTarget.h"
@@ -190,7 +191,7 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
             // PlayerSkillDamage: fitted to the live read, checked at level 8 only (linear at grades 1 and 5); the data reading
             // gave 0.2, and the difference is not explained. The burn it applies is not modelled.
             if (const int32 G = GradeOfNamed(TEXT("Helios")))
-                Blast(CastAt + 0.75f, 650.f, 0.29f * G * SkillDamageAt(MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"), TEXT("Helios"));
+                Blast(CastAt + 0.75f, 650.f, HeliosDamageAt(G, MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"), TEXT("Helios"));
             // Converge: at +1.25 s a blast on the target, radius 2000, 1 x PlayerSkillDamage. The pull (momentum -110000
             // toward the target) is not applied by the host.
             if (GradeOfNamed(TEXT("Converge")) > 0)
@@ -201,7 +202,7 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
             if (GradeOfNamed(TEXT("Ruin")) > 0)
             {
                 const float LockedAt = CastAt + Maya->LastPhaselockTimeline().LockedAt;
-                const float Pulse = SkillDamageAt(MayaLevel);
+                const float Pulse = RuinPulseDamageAt(MayaLevel);
                 Blast(LockedAt + 1.f, 650.f, Pulse, TEXT("GD_Amp.DamageType.DmgType_Amp_Impact"), TEXT("Ruin"), TEXT("Ruin slag"));
                 Blast(LockedAt + 2.f, 650.f, Pulse, TEXT("GD_Shock.DamageType.DmgType_Shock_Impact"), TEXT("Ruin"), TEXT("Ruin shock"));
                 Blast(LockedAt + 3.f, 650.f, Pulse, TEXT("GD_Corrosive.DamageType.DmgType_Corrosive_Impact"), TEXT("Ruin"), TEXT("Ruin corrosive"));

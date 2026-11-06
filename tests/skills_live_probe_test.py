@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / 'tools' / 'real_game' / 'scripts' / 'skills_live.py'
 CAPTURE = ROOT / 'tools' / 'real_game' / 'skills_live_capture.ps1'
+REALGAME = ROOT / 'tools' / 'real_game' / 'realgame.ps1'
 
 
 class Struct:
@@ -150,6 +151,33 @@ def test_grade_not_confirmed_stops_the_step():
     assert row['status'] == 'not confirmed' and row['after'] == {'grade': 2}, row
 
 
+def test_unreadable_original_is_refused():
+    helios = Definition('Pkg.Cataclysm.Helios')
+
+    class BrokenTree(Tree):
+        def GetSkillState(self, defn, out):
+            raise TypeError('no state')
+
+    pc = Controller(BrokenTree({helios.path: 2}))
+    probe = load_probe(pc, {}, [helios])
+    row = probe['sl_set_grades']({'Helios': 5})['rows'][0]
+    assert row['status'] == 'original not readable', row
+    assert pc.calls == [], 'the grade was not touched'
+    assert probe['SL']['originals'] == {}
+
+
+def test_restore_is_read_back():
+    helios = Definition('Pkg.Cataclysm.Helios')
+    tree = Tree({helios.path: 2})
+    pc = Controller(tree)
+    probe = load_probe(pc, {}, [helios])
+    probe['sl_set_grades']({'Helios': 5})
+    pc.apply_grades = False  # the restoring call does nothing
+    row = probe['sl_restore_grades']()['rows'][0]
+    assert row['status'] == 'not restored' and row['after'] == {'grade': 5}, row
+    assert helios.path in probe['SL']['originals'], 'kept for another try'
+
+
 def test_bullymongs_leave_out_a_corpse():
     pawns = {'P1': Pawn('P1'), 'P2': Corpse('P2'), 'P3': Pawn('P3', health=1.0), 'P4': Pawn('P4', radius=50),
              'P5': Pawn('P5', controller=False), 'P6': Pawn('P6', deleted=True), 'P7': Pawn('P7')}
@@ -216,10 +244,11 @@ $ErrorActionPreference = 'Stop'
 $errors = $null; $tokens = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('%CAPTURE%', [ref]$tokens, [ref]$errors)
 foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
+    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
 }
 function global:Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'broken') { return "Traceback (most recent call last):`n  LookupError: WillowAIPawn_9" }
+    if ($global:BadRestore -and $Code -match 'sl_restore_grades') { return '{"rows":[{"path":"P","status":"not restored"}]}' }
     return '{}'
 }
 $Out = '%OUT%'
@@ -236,7 +265,25 @@ $script:FailedInARow = 0
 $Steps = @('picked')
 Invoke-Step 'not_picked' @{} { $script:ran += 'not_picked' }
 Invoke-Step 'picked' @{} { $script:ran += 'picked' }
-[ordered]@{ ran = $script:ran; steps = $summary.steps } | ConvertTo-Json -Depth 5 -Compress
+$Steps = @()
+$global:BadRestore = $true
+Invoke-Step 'grade_stuck' @{} { $script:ran += 'grade_stuck' }
+$global:BadRestore = $false
+Invoke-Step 'after_stuck' @{} { $script:ran += 'after_stuck' }
+$script:GradesBroken = $false
+# The backup guard, on real folders with the real hash compare.
+$realgame = [System.Management.Automation.Language.Parser]::ParseFile('%REALGAME%', [ref]$tokens, [ref]$errors)
+foreach ($f in $realgame.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($f.Name -eq 'Compare-TreeHashes') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
+}
+$src = Join-Path $Out 'src'; New-Item -ItemType Directory -Force (Join-Path $src 'a') | Out-Null; Set-Content (Join-Path $src 'a\f.txt') 'one'
+Copy-VerifiedRoot $src (Join-Path $Out 'good')
+$partial = Join-Path $Out 'partial'; New-Item -ItemType Directory -Force $partial | Out-Null
+$guard = 'no error'; try { Copy-VerifiedRoot $src $partial } catch { $guard = "$_" }
+$created = Get-SavesVerdict @([pscustomobject]@{ file = 'SanitySaver'; status = 'created during the run; left for the maintainer' }) 'BAK'
+$clean = Get-SavesVerdict @([pscustomobject]@{ file = 'x'; status = 'changed, restored' }) 'BAK'
+$failed = Get-SavesVerdict @([pscustomobject]@{ file = 'Config'; status = 'BACKUP FAILED; not restored, and nothing was started' }) 'BAK'
+[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed } | ConvertTo-Json -Depth 5 -Compress
 '''
 
 
@@ -247,18 +294,23 @@ def test_step_runner_keeps_the_traceback_and_stops():
         return
     with tempfile.TemporaryDirectory() as out:
         script = Path(out) / 'runner.ps1'
-        script.write_text(RUNNER.replace('%CAPTURE%', str(CAPTURE)).replace('%OUT%', out), encoding='utf-8-sig')
+        script.write_text(RUNNER.replace('%CAPTURE%', str(CAPTURE)).replace('%REALGAME%', str(REALGAME)).replace('%OUT%', out), encoding='utf-8-sig')
         done = subprocess.run([shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
                               capture_output=True, text=True, timeout=120)
         assert done.returncode == 0, done.stderr
         result = json.loads(done.stdout.strip().splitlines()[-1])
         record = json.loads((Path(out) / 'bad1.json').read_text(encoding='utf-8-sig'))
-    assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked'], result['ran']
+    assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked', 'grade_stuck'], result['ran']
+    assert 'differs from the original' in result['guard'], result['guard']
+    assert result['created'].startswith('NOT IDENTICAL') and 'SanitySaver' in result['created'], result['created']
+    assert result['failed'].startswith('NOT IDENTICAL') and 'Config' in result['failed'], result['failed']
+    assert result['clean'].startswith('identical'), result['clean']
     assert 'not_picked' not in {s['step'] for s in result['steps']}, '-Steps leaves the others out'
     by_step = {s['step']: s for s in result['steps']}
     assert record['ok'] is False and 'python: Traceback' in record['error'] and 'LookupError: WillowAIPawn_9' in record['error'], record
     assert by_step['good']['ok'] is True and by_step['recovers']['ok'] is True, 'a success resets the count'
     assert by_step['skipped']['error'] == 'not run: the two steps before it failed'
+    assert by_step['after_stuck']['error'] == 'not run: a grade from an earlier step did not restore'
 
 
 def test_capture_tolerates_the_quit_reply():

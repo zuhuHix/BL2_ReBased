@@ -39,10 +39,14 @@ public:
     // PlayerMeleeDamage = 2.5 x (8 x 1.13 ^ level + InstigatedMeleeDamageAddedBuff), the buff taken as 0 (no melee buffs
     // in the host). Init_PlayerMeleeDamage, read from data, UNVERIFIED in game.
     static float MeleeDamageAt(int32 AtLevel) { return 2.5f * SkillDamageAt(AtLevel); }
+    // A Helios blast and a Ruin pulse. Live values, checked at level 8 only; other levels are UNVERIFIED. 0.29 is fitted to the
+    // live read and its reason is not known (the data reading gave 0.2); a Ruin pulse is 1 x PlayerSkillDamage.
+    static float HeliosDamageAt(int32 Grade, int32 AtLevel) { return 0.29f * Grade * SkillDamageAt(AtLevel); }
+    static float RuinPulseDamageAt(int32 AtLevel) { return SkillDamageAt(AtLevel); }
     // Mind's Eye: what the skill adds to a hit's crit bonus, 2.0 x 0.05 x grade (0 when untrained or without effects data).
     // In game the skill's Scale joins the attribute's stack: (2.0 + PreAdd) x (1 + Scale sum), seen live to 4 decimals at
-    // grades 1, 3 and 5 with other modifiers on the stack. The host has none of those, so the base is 2.0 and this is the
-    // whole of the Scale's part. Cached; recomputed after any grade change.
+    // grades 1, 3 and 5 with other modifiers on the stack, at level 8 only; other levels are UNVERIFIED. The host has none of
+    // those modifiers, so the base is 2.0 and this is the whole of the Scale's part. Cached; recomputed after any grade change.
     float CritBonusAdd() const;
     // Recompense's proc roll, chance 0.1 x grade, from the component's own random stream (seed: -owskillseed=<n>, or
     // SetRandomSeed for tests).
