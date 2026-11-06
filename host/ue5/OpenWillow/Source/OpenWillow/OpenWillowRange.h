@@ -124,6 +124,7 @@ private:
     int32 TestSwingBase = 0;
     int32 TestResolvedBase = 0;
     float TestHealthBefore = 0.f;
+    FString TestWhere;                  // where PlaceInSight put Maya (for the step's log line)
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;
     // PR3 driver state (TickLootTest): the money pickup under test and its baseline, the first seeded trace, the last death.

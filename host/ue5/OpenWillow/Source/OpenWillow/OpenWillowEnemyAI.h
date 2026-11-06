@@ -91,6 +91,8 @@ public:
     FOpenWillowBrainOrders Tick(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool& bDamagedByMaya);
     // Drops the target and any swing in progress (death, respawn, passive, paused).
     void Stop();
+    // Test fixture: Stop, and the next tick runs a state update.
+    void ResetForTest() { Stop(); NextUpdateAt = 0.f; }
     // The enemy could not make progress toward its target: drop it, forget the last-known spot, and do not take a target
     // again for Seconds (host choice, UNVERIFIED).
     void GiveUp(float Now, float Seconds);

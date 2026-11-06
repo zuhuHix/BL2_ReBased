@@ -117,6 +117,7 @@ void FOpenWillowEnemyBrain::Stop()
     bTargeting = false;
     bHasTargetLocation = false;
     bSwingPending = false;
+    bExposedBefore = false;   // the sight rule reads a sample of this scene, not one from before the stop
 }
 
 void FOpenWillowEnemyBrain::UpdateThreat(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool bDamaged,

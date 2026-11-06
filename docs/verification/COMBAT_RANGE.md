@@ -169,3 +169,16 @@ generator manifest), loot_off, loot_seeded_roll.
 - **Drops at the origin (slice gate report).** The drop spot was taken from the enemy's collision centre, which reads zero once the death has
   turned the collision off, so every ring trace missed and the fall-back put a gun at the world origin, 5,894 uu from the corpse. The rings now
   centre on the actor's location (its floor point), and the test's new `loot_near_corpse` step checks every drop lies within 400 uu of the corpse.
+
+## Batch 7 (yorad PC, 2026-11-04, default spot: 24 pass, 3 fail, 2 skip)
+
+- **Sight at this spot.** approach stayed at level 1 with the enemy still. No notice fired: the ground between the enemy's home and the place "2000 uu in
+  front" blocks the one centre-to-centre line. notice_sight had passed there only on a stale sample from the step before (the rule reads the previous
+  update's exposure). A brain stop now forgets its sample, the exposure stand-in also tries the top of the body to Maya's eye height, and the test
+  places Maya where that sight line is verified clear (`PlaceInSight`, the place it took is in the step's log line). UNVERIFIED as the game's exposure.
+- **"No floor 6000 uu from the spot".** A fixed direction ran off the terrain. `PlaceFar` searches rings outside the den's ThreatRadius; provoked now really
+  hits from afar (it had silently stayed put).
+- **Guns at stage 1.** The stock `Pool_GunsAndGear` gives nothing at stage 1: `ow-weapongen --pool` with the same manifest prints empty drops there and guns
+  from stage 2, so a level-1 enemy's roll is empty. Normal mode keeps that; `always` mode (gun testing) rolls at stage 2 at least.
+- **"No room" on sloped snow.** The room sphere's bottom was 14 uu above the floor, and a 32 degree slope rises 19 uu over its 30 uu radius, so it met the
+  ground itself. Its bottom is 30 uu above the floor now.
