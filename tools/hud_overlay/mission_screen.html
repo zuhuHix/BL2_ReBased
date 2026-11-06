@@ -1,0 +1,30 @@
+<!doctype html>
+<!--
+  OpenWillow mission screen: BL2's mission movie in Ruffle, filled by mission_screen.js. Our own code; the movie, Ruffle and the strings are served from
+  ignored local/ by serve.py. Hidden by the host until a page is open; nothing here shows while body lacks .open.
+-->
+<html><head><meta charset="utf-8"><title>OpenWillow mission screen</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
+#stage{position:absolute;inset:0;visibility:hidden}
+body.open #stage{visibility:visible}
+ruffle-player{width:100%;height:100%;display:block}
+#panel{position:absolute;left:8%;top:12%;width:38%;padding:20px 24px;background:rgba(8,31,58,.92);color:#fff;font:16px/1.4 Arial,sans-serif;border:2px solid #6cc7e8}
+#panel[hidden]{display:none}
+#panel h2{margin:4px 0 10px;font-size:22px}
+#panel p{margin:8px 0}
+</style>
+<script>
+  window.RufflePlayer = window.RufflePlayer || {};
+  window.RufflePlayer.config = { autoplay: 'on', unmuteOverlay: 'hidden', splashScreen: false,
+    wmode: 'transparent', backgroundColor: null, letterbox: 'off', logLevel: 'error',
+    contextMenu: 'off', allowScriptAccess: true };
+</script>
+<script src="ruffle/ruffle.js"></script>
+</head><body>
+<div id="stage"></div>
+<div id="panel" role="status" hidden></div>
+<script src="movie_guard.js"></script>
+<script src="mission_screen_model.js"></script>
+<script src="mission_screen.js"></script>
+</body></html>

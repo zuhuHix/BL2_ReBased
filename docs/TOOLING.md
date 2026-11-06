@@ -765,6 +765,8 @@ data-derived and what is estimated.
 
 ## BL2's HUD movie over UE5 (browser-overlay prototype)
 
+Marcus's mission screen has its own step: `python tools/prepare_mission_screen.py --reader build/Release/ow-package.exe --game "$env:OPENWILLOW_BL2"` ([MISSION_SCREEN.md](verification/MISSION_SCREEN.md)).
+
 Convert the UI movies into `local/ui/run` first (DECISIONS.md 2026-09-26:
 `tools/extract_swfmovie.py`, then `tools/gfx_to_swf.py --localization
 <install>/WillowGame/Localization/INT --inline-font-imports`, font library

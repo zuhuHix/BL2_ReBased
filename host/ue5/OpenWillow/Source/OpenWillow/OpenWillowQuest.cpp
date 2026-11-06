@@ -24,6 +24,7 @@
 #include "InputKeyEventArgs.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
+#include "OpenWillowMissionPage.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
@@ -198,6 +199,8 @@ void UOpenWillowQuest::BeginPlay()
 
 void UOpenWillowQuest::EndPlay(const EEndPlayReason::Type Reason)
 {
+    if (ScreenPage) CloseScreenPage(TEXT("end of play"));
+    ScreenPage.Reset();
     UE_LOG(LogTemp, Display, TEXT("OWQUEST save calls=%d writes=%d write time %.1f ms total (%.3f ms per write)"),
         SaveCalls, SaveWrites, SaveWriteSeconds * 1000., SaveWrites ? SaveWriteSeconds * 1000. / SaveWrites : 0.);
     Impl.Reset();
@@ -780,6 +783,8 @@ bool UOpenWillowQuest::TryUse()
 {
     if (!Impl || bFailed) return false;
     if (Impl->Slice->rewardPending()) {
+        // A reward left waiting (the page was closed by a fall): show it again rather than take the reward with no page.
+        if (ScreenPage && ScreenPage->IsReady()) { ShowScreenPage(TEXT("reward")); return true; }
         // The reward page is up (the turn-in found Marcus's screen open): the page is modal and its key handler only takes the confirmation, so the use key is
         // that confirmation (the movie's Enter), and the screen then closes (the stand-in for Escape: the dismissal tag, the interface closed).
         const bool bReceived = Impl->Slice->confirmReward();
@@ -805,12 +810,116 @@ bool UOpenWillowQuest::TryUse()
     const bool bOpened = Use.interfaceOpened && MissionInterfacesOpened > OpenedBefore;
     bool bRedeemable = false, bEligible = false;
     if (bOpened) MissionScreen(bRedeemable, bEligible);
+    if (ScreenPage && (bRedeemable || bEligible))
+    {
+        if (ScreenPage->IsReady())
+        {
+            ShowScreenPage(bRedeemable ? TEXT("turnin") : TEXT("offer"));
+            return true;
+        }
+        UE_LOG(LogTemp, Warning, TEXT("OWQUEST mission page is not ready; confirming without a page"));
+    }
     const TCHAR* Action = TEXT("nothing to accept or turn in");
     bool bOk = true;
     if (bRedeemable) { Action = TEXT("turn in"); bOk = TurnIn(); }
     else if (bEligible) { Action = TEXT("accept"); bOk = Accept(); }
     UE_LOG(LogTemp, Display, TEXT("OWQUEST use near Marcus: %s (ok=%d, status %d -> %d, interface %d)"), Action, bOk, int32(Current), Status(), bOpened);
     return bRedeemable || bEligible;
+}
+
+void UOpenWillowQuest::ShowScreenPage(const TCHAR* Page)
+{
+    ScreenPageOn = Page;
+    ScreenPage->Show(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
+    ScreenPage->SendState(FString::Printf(TEXT("{\"page\":\"%s\",\"log\":%s}"), Page, *MissionLogJson()));
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page open: %s (status %d)"), Page, Status());
+}
+
+void UOpenWillowQuest::CloseScreenPage(const TCHAR* Why)
+{
+    if (!ScreenPage || !ScreenPage->IsShown()) return;
+    ScreenPage->SendState(TEXT("{\"page\":\"closed\"}"));
+    ScreenPage->Hide(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
+    ScreenPageOn.Reset();
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page closed: %s (status %d)"), Why, Status());
+}
+
+void UOpenWillowQuest::OnScreenKey(const FKey& Key)
+{
+    if (!Impl || bFailed || !ScreenPage || !ScreenPage->IsShown()) return;
+    if (Key == EKeys::PageUp) { ScreenPage->SendKey(TEXT("PageUp")); return; }
+    if (Key == EKeys::PageDown) { ScreenPage->SendKey(TEXT("PageDown")); return; }
+    const int32 Before = Status();
+    if (Key == EKeys::Escape)
+    {
+        if (ScreenPageOn == TEXT("reward")) { UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page: Escape does nothing on the reward page")); return; }
+        Impl->Slice->closeScreen();
+        Pump();
+        CloseScreenPage(TEXT("Escape"));
+        return;
+    }
+    if (Key != EKeys::Enter) { UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page: key %s does nothing on %s"), *Key.ToString(), *ScreenPageOn); return; }
+    if (ScreenPageOn == TEXT("reward"))
+    {
+        // The confirmation, then the screen's close (the slice has no next mission to list).
+        Impl->Slice->confirmReward();
+        Pump();
+        Impl->Slice->closeScreen();
+        Pump();
+        CloseScreenPage(TEXT("reward taken"));
+    }
+    else if (ScreenPageOn == TEXT("turnin"))
+    {
+        const bool bOk = TurnIn();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page: Enter turns in (ok=%d, status %d -> %d)"), bOk, Before, Status());
+        if (Impl->Slice->rewardPending()) ShowScreenPage(TEXT("reward"));
+        else { Impl->Slice->closeScreen(); Pump(); CloseScreenPage(TEXT("turned in with no reward page")); }
+    }
+    else
+    {
+        // The VM's accept closes the screen itself, as the live trace shows.
+        const bool bOk = Accept();
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page: Enter accepts (ok=%d, status %d -> %d)"), bOk, Before, Status());
+        if (Impl->Slice->screenOpen()) { Impl->Slice->closeScreen(); Pump(); }
+        CloseScreenPage(TEXT("accepted"));
+    }
+}
+
+void UOpenWillowQuest::TickScreenPage()
+{
+    if (!bScreenPageTried && !bTesting)
+    {
+        bScreenPageTried = true;
+        if (!FOpenWillowMissionPage::PageUrl().IsEmpty())
+        {
+            ScreenPage = MakeShared<FOpenWillowMissionPage>([this](const FKey& Key) { OnScreenKey(Key); });
+            ScreenPage->Preload();
+            bScreenPageTest = FParse::Param(FCommandLine::Get(), TEXT("owmissionpagetest"));
+        }
+    }
+    if (!ScreenPage) return;
+    if (ScreenPage->IsShown())
+    {
+        // A fall or a lost page closes it; a reward still waiting is shown again at the next use (TryUse).
+        const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+        if (!ScreenPage->IsReady() || !Walker || Walker->IsDown())
+        {
+            if (!Impl->Slice->rewardPending()) { Impl->Slice->closeScreen(); Pump(); }
+            CloseScreenPage(ScreenPage->IsReady() ? TEXT("Maya is down") : TEXT("the page was lost"));
+        }
+    }
+    TickScreenPageTest();
+}
+
+bool UOpenWillowQuest::ScreenOpenInVm() const { return Impl && Impl->Slice->screenOpen(); }
+bool UOpenWillowQuest::RewardPendingInVm() const { return Impl && Impl->Slice->rewardPending(); }
+
+void UOpenWillowQuest::TestAdvanceObjectives()
+{
+    Impl->Slice->enterRange();
+    Impl->Slice->spawnDummy();
+    Impl->Slice->hitDummy(true);
+    Pump();
 }
 
 void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FString& DamageType)
@@ -1039,6 +1148,7 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
     bHealthAdoptedThisTick = false;
     Impl->Slice->tick(Delta);
     Pump();
+    TickScreenPage();
     // A script level-up that sent no Health event (no health pool data): the walker's own refresh takes over after this tick.
     if (auto* HealthWalker = Cast<AOpenWillowWalker>(GetOwner()))
         if (HealthWalker->IsHealthHeldForScript() && !bHealthAdoptedThisTick && --HealthHoldTicks <= 0) {

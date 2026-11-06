@@ -88,8 +88,27 @@ public:
     // are the active set's (MissionSystem::trackerLines, the HUD tracker's view); "tracked" is true while the mission is Active or ReadyToTurnIn (the one
     // mission is the tracker's active mission then). Docs: docs/verification/MENUS_PARITY.md.
     FString MissionLogJson() const;
+    // A key pressed while the mission page is shown (FOpenWillowMissionPage takes them all). Enter confirms, Escape leaves the offer or the turn-in and is
+    // refused on the reward page, the scroll keys go to the page, and every other key does nothing, E included: the installed script binds no others to these
+    // pages (docs/verification/MISSION_SCREEN.md; UNVERIFIED in game until the live read).
+    void OnScreenKey(const FKey& Key);
 
 private:
+    // The page over Marcus's screen; null without a page URL (the suites on the canvas HUD), and TryUse then confirms with no page, as it always did.
+    TSharedPtr<class FOpenWillowMissionPage> ScreenPage;
+    FString ScreenPageOn;                // "offer", "turnin" or "reward" while shown
+    bool bScreenPageTried = false;
+    void ShowScreenPage(const TCHAR* Page);
+    void CloseScreenPage(const TCHAR* Why);
+    void TickScreenPage();
+    // -owmissionpagetest (OpenWillowMissionPageTest.cpp).
+    void TickScreenPageTest();
+    bool ScreenOpenInVm() const;
+    bool RewardPendingInVm() const;
+    void TestAdvanceObjectives();
+    bool bScreenPageTest = false;
+    double ScreenTestAt = 0.;
+    int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
     struct FImpl;
     TSharedPtr<FImpl> Impl;
     bool bEnabled = false;

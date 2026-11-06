@@ -1,0 +1,152 @@
+// AI-assisted (Claude). The mission page's in-engine suite: -owmissionpagetest, run by tools/test_mission_page.ps1. It presses real keys through Slate at the page
+// and prints OWMISSIONPAGETEST rows. A pass says what the host did, not that it matches the game. The objectives are completed by direct slice calls: the
+// objective path has its own suite (tools/test_quest.ps1); this one is about the page. docs/verification/MISSION_SCREEN.md.
+#include "OpenWillowQuest.h"
+#include "OpenWillowMissionPage.h"
+#include "OpenWillowNpc.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GameFramework/PlayerController.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "UnrealClient.h"
+
+namespace
+{
+// A press and release through Slate, as the keyboard sends them. The codes are Windows' (OpenWillowMayaHUD's SendSlateKey has the same ones).
+void PressKey(const FKey& Key)
+{
+    if (!FSlateApplication::IsInitialized()) return;
+    const uint32 Code = Key == EKeys::Enter ? 13 : Key == EKeys::Escape ? 27 : 'E';
+    const uint32 Char = Key == EKeys::Enter ? 13 : Key == EKeys::Escape ? 0 : 'e';
+    FSlateApplication& Slate = FSlateApplication::Get();
+    Slate.ProcessKeyDownEvent(FKeyEvent(Key, Slate.GetModifierKeys(), 0, false, Char, Code));
+    Slate.ProcessKeyUpEvent(FKeyEvent(Key, Slate.GetModifierKeys(), 0, false, Char, Code));
+}
+void Shot(const TCHAR* Name)
+{
+    FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWMissionPage_%s.png"), Name), true, false);
+}
+}
+
+void UOpenWillowQuest::TickScreenPageTest()
+{
+    if (!bScreenPageTest || !Impl || !ScreenPage.IsValid() || !GetWorld()) return;
+    const double Now = FPlatformTime::Seconds();
+    if (ScreenTestAt == 0.) ScreenTestAt = Now + 60.;   // the page's load limit
+    const auto Row = [this](const TCHAR* Name, bool bOk, const FString& Detail)
+    {
+        ++(bOk ? ScreenTestPassed : ScreenTestFailed);
+        UE_LOG(LogTemp, Display, TEXT("OWMISSIONPAGETEST %s %s %s"), Name, bOk ? TEXT("PASS") : TEXT("FAIL"), *Detail);
+    };
+    const auto State = [this] { return FString::Printf(TEXT("status=%d page=%s shown=%d screen=%d pending=%d report=%s"), Status(), *ScreenPageOn, ScreenPage->IsShown(),
+        ScreenOpenInVm(), RewardPendingInVm(), *ScreenPage->LastReport()); };
+    const auto Finish = [&]
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWMISSIONPAGETEST SUMMARY passed=%d failed=%d"), ScreenTestPassed, ScreenTestFailed);
+        bScreenPageTest = false;
+        if (APlayerController* PC = GetWorld()->GetFirstPlayerController()) PC->ConsoleCommand(TEXT("quit"));
+    };
+    const auto Stand = [this] { PlacePlayer(Marcus->GetActorLocation() + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), Marcus->GetActorLocation() + FVector(0, 0, 20)); };
+    const bool bExpectMovie = !FParse::Param(FCommandLine::Get(), TEXT("owmissionpagenomovie"));
+    const auto Drawn = [&] { const FString& R = ScreenPage->LastReport();
+        return R.Contains(TEXT("\"drawn\":true")) && R.Contains(bExpectMovie ? TEXT("\"movie\":true") : TEXT("\"movie\":false")); };
+    if (Now < ScreenTestAt && ScreenTestStep != 0 && ScreenTestStep != 7) return;
+    double Wait = 1.;
+    switch (ScreenTestStep)
+    {
+    case 0:   // wait for the page, then for the save's first frames to pass
+        if (!ScreenPage->IsReady())
+        {
+            if (Now >= ScreenTestAt) { Row(TEXT("page_ready"), false, TEXT("no OWMISSIONREADY in 60 s")); Finish(); }
+            return;
+        }
+        Row(TEXT("page_ready"), true, TEXT(""));
+        Stand();
+        break;
+    case 1:
+    {
+        const int32 Before = Status();
+        const bool bUsed = TryUse();
+        Row(TEXT("first_e_opens_the_page"), bUsed && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer") && Status() == 0 && Before == 0 && ScreenOpenInVm(), State());
+        Wait = 4.;
+        break;
+    }
+    case 2:
+        Shot(TEXT("1_Offer"));
+        Row(TEXT("offer_drawn"), Drawn(), State());
+        PressKey(EKeys::E);
+        break;
+    case 3:
+        Row(TEXT("offer_e_does_nothing"), Status() == 0 && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
+        PressKey(EKeys::Escape);
+        break;
+    case 4:
+        Shot(TEXT("2_AfterEscape"));
+        Row(TEXT("offer_escape_closes"), Status() == 0 && !ScreenPage->IsShown() && !ScreenOpenInVm(), State());
+        TryUse();
+        Wait = 3.;
+        break;
+    case 5:
+        PressKey(EKeys::Enter);
+        Wait = 1.5;
+        break;
+    case 6:
+        Shot(TEXT("3_Accepted"));
+        Row(TEXT("offer_enter_accepts_and_closes"), Status() == 1 && !ScreenPage->IsShown() && !ScreenOpenInVm() && RewardPages == 0, State());
+        ScreenTestRetries = 0;
+        Wait = 1.;
+        break;
+    case 7:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
+        if (Now < ScreenTestAt) return;
+        if (Status() != 2)
+        {
+            TestAdvanceObjectives();
+            ScreenTestAt = Now + 1.;
+            if (++ScreenTestRetries <= 30) return;
+        }
+        Row(TEXT("mission_ready_to_turn_in"), Status() == 2, State());
+        if (Status() != 2) { Finish(); return; }
+        Stand();
+        break;
+    case 8:
+    {
+        const bool bUsed = TryUse();
+        Row(TEXT("e_opens_the_turn_in"), bUsed && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
+        Wait = 4.;
+        break;
+    }
+    case 9:
+        Shot(TEXT("4_TurnIn"));
+        Row(TEXT("turn_in_drawn"), Drawn(), State());
+        PressKey(EKeys::E);
+        break;
+    case 10:
+        Row(TEXT("turn_in_e_does_nothing"), Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
+        PressKey(EKeys::Enter);
+        Wait = 5.;
+        break;
+    case 11:
+        Shot(TEXT("5_Reward"));
+        Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
+            && RewardPages == 1 && RewardsReceived == 0 && ScreenPage->LastReport().Contains(TEXT("\"page\":\"reward\"")) && Drawn(), State());
+        PressKey(EKeys::E);
+        break;
+    case 12:
+        PressKey(EKeys::Escape);
+        break;
+    case 13:
+        Row(TEXT("reward_waits_for_enter"), ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
+        PressKey(EKeys::Enter);
+        Wait = 1.5;
+        break;
+    case 14:
+        Shot(TEXT("6_Closed"));
+        Row(TEXT("enter_takes_the_reward_and_closes"), Status() == 3 && !ScreenPage->IsShown() && !ScreenOpenInVm() && !RewardPendingInVm() && RewardsReceived == 1, State());
+        Row(TEXT("e_afterwards_opens_nothing"), !TryUse() && !ScreenPage->IsShown(), State());
+        Finish();
+        return;
+    default: return;
+    }
+    ++ScreenTestStep;
+    ScreenTestAt = Now + Wait;
+}
