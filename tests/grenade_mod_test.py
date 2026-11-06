@@ -116,7 +116,7 @@ def graph(world_detonates=False):
     behaviors = [
         behavior(0, 'WillowGame.ProjectileBehavior_Bounce', {'ElasticityScaleFormula': const(0.3)}, link(1)),
         behavior(1, 'GearboxFramework.Behavior_Gate', {'GateCount': 1}, link(2)),
-        behavior(2, 'GearboxFramework.Behavior_ModifyTimer', {'NewTimerDelay': const(1.5)}),
+        behavior(2, 'GearboxFramework.Behavior_ModifyTimer', {'TimerId': 'BTIMER_2', 'NewTimerDelay': const(1.5)}),
         behavior(3, 'WillowGame.ProjectileBehavior_Bounce', {'ElasticityScaleFormula': const(0.6)}, link(1)),
         behavior(4, 'WillowGame.ProjectileBehavior_Detonate', {}),
         behavior(5, 'GearboxFramework.Behavior_ModifyTimer', {'NewTimerDelay': const(9)}),
@@ -126,7 +126,7 @@ def graph(world_detonates=False):
         return {'name': name, 'enabled': True, 'outputs': {}, 'links': list(links)}
     world = [link(3)] + ([link(4)] if world_detonates else [])
     return [{'name': 'Default', 'enabledOnSpawn': True, 'behaviors': behaviors, 'check': {}, 'events': [
-        event('TIMEREVENT_Timer1Elapsed', link(4)), event('OnExplode', link(6)), event('OnHitTheWorld', *world),
+        event('TIMEREVENT_Timer1Elapsed', link(4)), event('TIMEREVENT_Timer2Elapsed', link(4)), event('OnExplode', link(6)), event('OnHitTheWorld', *world),
         event('OnHitDamagableObject', link(0)), event('OnSpawn', link(5))]}]
 
 
@@ -150,6 +150,37 @@ class ContactRulesTest(unittest.TestCase):
         self.assertIsNone(self.rules([]))
         sequences = graph()
         sequences[0]['events'] = [e for e in sequences[0]['events'] if not e['name'].startswith('TIMEREVENT_')]
+        self.assertIsNone(self.rules(sequences))
+
+    def without_event(self, name):
+        sequences = graph()
+        sequences[0]['events'] = [e for e in sequences[0]['events'] if e['name'] != name]
+        return self.rules(sequences)
+
+    def test_timer_names_its_event(self):
+        self.assertEqual(grenade.timer_event(None), 'TIMEREVENT_Timer1Elapsed')
+        self.assertEqual(grenade.timer_event('BTIMER_2'), 'TIMEREVENT_Timer2Elapsed')
+        self.assertEqual(grenade.timer_event('BTIMER_3'), 'TIMEREVENT_Timer3Elapsed')
+
+    def test_contact_timer_event_missing_is_none(self):
+        self.assertIsNone(self.without_event('TIMEREVENT_Timer2Elapsed'))
+
+    def test_spawn_timer_event_missing_is_none(self):
+        self.assertIsNone(self.without_event('TIMEREVENT_Timer1Elapsed'))
+
+    def test_a_timer_event_that_does_not_detonate_is_none(self):
+        sequences = graph()
+        next(e for e in sequences[0]['events'] if e['name'] == 'TIMEREVENT_Timer2Elapsed')['links'] = []
+        self.assertIsNone(self.rules(sequences))
+
+    def test_an_event_of_another_timer_does_not_count(self):
+        sequences = graph()
+        next(b for b in sequences[0]['behaviors'] if b['index'] == 2)['properties']['TimerId'] = 'BTIMER_3'
+        self.assertIsNone(self.rules(sequences))
+
+    def test_one_timer_set_by_both_is_none(self):
+        sequences = graph()
+        next(b for b in sequences[0]['behaviors'] if b['index'] == 5)['properties']['TimerId'] = 'BTIMER_2'
         self.assertIsNone(self.rules(sequences))
 
     def test_resolve_writes_contact_and_full_damage_into_the_block(self):

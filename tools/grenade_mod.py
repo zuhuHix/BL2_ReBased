@@ -72,6 +72,7 @@ ELEMENT_SLOTS = {'IsExplosive': 'Explosive', 'IsIncendiary': 'Fire', 'IsCorrosiv
 ALWAYS_UNVERIFIED = [
     'slot grade: base grade 1 (GrenadeModDefinition has no AttributeSlotBaseGrade; the weapon default is used)',
     'FuseTime starts from 0 (the attribute has no base field in the mod); fuse = 0 + PreAdd slot total',
+    'each projectile timer fires the event of its own number, an omitted TimerId being the first (read from the packages)',
     'the FuseTime slot total is not applied to the projectile timers in contact (how a mod changes them is not measured)',
     'BlastRadius is added to the Behavior_Explode DamageRadiusFormula (PreAdd on that constant)',
     'GrenadeDamage is a multiplier on the projectile damage, starting at 1 (Scale of the Damage slot)',
@@ -220,15 +221,22 @@ def of_class(behaviors, name):
     return [b for b in behaviors if str(b['class']).rsplit('.', 1)[-1] == name]
 
 
+def timer_event(timer_id):
+    """The event a Behavior_ModifyTimer's timer fires when it runs out. Cooked data omits the id of the first timer. Read from
+    the pairing in the packages (omitted -> Timer1, BTIMER_2 -> Timer2, BTIMER_3 -> Timer3); not confirmed in the running game."""
+    return f"TIMEREVENT_Timer{(timer_id or 'BTIMER_1').rsplit('_', 1)[-1]}Elapsed"
+
+
 def contact_rules(source, sequences, known, unresolved):
     """What the projectile's behaviour graph does, by event: the elasticity of a bounce off the world and off a damagable
-    object, the timer the first contact starts, the timer the spawn starts, whether a contact detonates, whether a timer
-    does, and whether its explosion has no falloff. None when the graph holds no contact bounce and timers."""
+    object, the timer the first contact starts, the timer the spawn starts, whether a contact detonates, and whether its
+    explosion has no falloff. None unless the graph has both bounces and two different timers, each of which reaches a
+    Detonate through its own event: the host explodes at the earlier deadline of the two."""
     events = {}
     for sequence in sequences:
         for event in sequence['events']:
             if event['enabled']:
-                events[event['name']] = reachable(sequence, event['links'])
+                events.setdefault(event['name'], []).extend(reachable(sequence, event['links']))
 
     def value(behaviors, name, field):
         found = of_class(behaviors, name)
@@ -239,12 +247,19 @@ def contact_rules(source, sequences, known, unresolved):
     after_spawn = value(events.get('OnSpawn', []), 'Behavior_ModifyTimer', 'NewTimerDelay')
     world_bounce = value(world, 'ProjectileBehavior_Bounce', 'ElasticityScaleFormula')
     target_bounce = value(target, 'ProjectileBehavior_Bounce', 'ElasticityScaleFormula')
-    timers_detonate = any(of_class(behaviors, 'ProjectileBehavior_Detonate')
-                          for name, behaviors in events.items() if name.startswith('TIMEREVENT_'))
-    if None in (after_contact, after_spawn, world_bounce, target_bounce) or not timers_detonate:
+    if None in (after_contact, after_spawn, world_bounce, target_bounce):
         return None
-    if value(target, 'Behavior_ModifyTimer', 'NewTimerDelay') != after_contact:
+
+    def timer_id(behaviors):
+        return of_class(behaviors, 'Behavior_ModifyTimer')[0]['properties'].get('TimerId')
+
+    if value(target, 'Behavior_ModifyTimer', 'NewTimerDelay') != after_contact or timer_id(target) != timer_id(world):
         return None   # the two contacts start different timers: not the shape the host models
+    contact_timer, spawn_timer = timer_id(world), timer_id(events['OnSpawn'])
+    if timer_event(contact_timer) == timer_event(spawn_timer):
+        return None   # one timer set twice: a contact would replace the spawn's deadline, not race it
+    if not all(of_class(events.get(timer_event(timer), []), 'ProjectileBehavior_Detonate') for timer in (contact_timer, spawn_timer)):
+        return None
     explode = of_class(events.get('OnExplode', []), 'Behavior_Explode')
     return {
         'world_elasticity': world_bounce,
