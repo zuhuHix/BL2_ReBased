@@ -28,6 +28,12 @@ $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 if (!$Manifest) { $Manifest = Join-Path $repo 'local/range/range_manifest.json' }
 if (!(Test-Path -LiteralPath $Manifest)) { throw "No range manifest at $Manifest (run python tools/prepare_range.py)" }
 if ($Survey -and $At) { throw 'Pass -At or -Survey, not both (the survey picks its own spots).' }
+# A failed or old prepare_range.py must not lead to a green run at another spot: stop here, before any build or editor.
+$preflight = @((Join-Path $repo 'tools/check_range.py'), '--preflight', $Manifest, '--spot-json', (Join-Path $repo 'local/range/range.json'))
+if ($At) { $preflight += '--has-at' }
+if ($Survey) { $preflight += '--survey' }
+& python @preflight
+if ($LASTEXITCODE -ne 0) { throw "Range manifest not usable (see the line above): $Manifest" }
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'

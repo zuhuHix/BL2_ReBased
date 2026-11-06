@@ -9,6 +9,8 @@
 #
 # Usage: python tools/check_range.py <log> [--steps a,b,c]
 import argparse
+import json
+import os
 import re
 import sys
 
@@ -69,11 +71,57 @@ def grade(steps, summary, expected=EXPECTED):
     return ok, rows
 
 
+def spot_json_ok(path):
+    """True when local/range/range.json holds a spot the host can use (x, y and z numbers)."""
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            spot = json.load(f).get("spot")
+        return all(isinstance(spot.get(key), (int, float)) for key in ("x", "y", "z"))
+    except (ValueError, AttributeError):
+        return False
+
+
+def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
+    """Why a test run must not start on this manifest ("" when it may). A failed or old tools/prepare_range.py leaves a manifest without
+    the default spot: the host would then quietly fall through to another candidate and the run could go green at the wrong place."""
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError) as error:
+        return "cannot read the range manifest %s: %s" % (manifest_path, error)
+    candidates = manifest.get("spot_candidates") or []
+    if survey:
+        return "" if candidates else "the manifest %s has no spot_candidates to survey" % manifest_path
+    if has_at or spot_json_ok(spot_json):
+        return ""
+    index = manifest.get("default_spot_candidate")
+    if isinstance(index, int) and 0 <= index < len(candidates) and manifest.get("scout_centre"):
+        return ""
+    return ("the manifest %s has no default_spot_candidate and scout_centre (default_spot_candidate=%s, %d candidates): it is old, or "
+            "tools/prepare_range.py failed. Re-run it and read its message, or pass -At or a local/range/range.json"
+            % (manifest_path, index, len(candidates)))
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Grade a gun-range test log")
-    parser.add_argument("log")
+    parser = argparse.ArgumentParser(description="Grade a gun-range test log, or check a manifest before a run (--preflight)")
+    parser.add_argument("log", nargs="?")
     parser.add_argument("--steps", help="comma-separated expected steps (default: all of PR1's)")
+    parser.add_argument("--preflight", metavar="MANIFEST", help="check the range manifest before a run instead of grading a log")
+    parser.add_argument("--spot-json", help="with --preflight: local/range/range.json (a usable spot there is an explicit choice)")
+    parser.add_argument("--has-at", action="store_true", help="with --preflight: the run passes -At")
+    parser.add_argument("--survey", action="store_true", help="with --preflight: the run is a -Survey")
     args = parser.parse_args(argv)
+    if args.preflight:
+        problem = preflight(args.preflight, args.spot_json, args.has_at, args.survey)
+        if problem:
+            print("range preflight: FAIL: " + problem)
+            return 2
+        print("range preflight: ok")
+        return 0
+    if not args.log:
+        parser.error("a log to grade, or --preflight MANIFEST")
     with open(args.log, encoding="utf-8", errors="replace") as f:
         text = f.read()
     expected = args.steps.split(",") if args.steps else EXPECTED
