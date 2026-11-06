@@ -282,7 +282,7 @@ def check_grenade(line):
     if line.get('refused_empty') != '1':
         fails.append('a throw with an empty grenade pool was not refused')
     if int(line['splash_hits']) < 1:
-        fails.append('the grenade splashed nothing')
+        fails.append(f"the grenade splashed nothing (first contact: {line.get('first_contact', 'not logged')})")
     if line['grenade_hits'] != line['splash_hits']:
         fails.append(f"{line['grenade_hits']} grenade hit events for {line['splash_hits']} splash hits")
     if int(line['unknown_sources']):

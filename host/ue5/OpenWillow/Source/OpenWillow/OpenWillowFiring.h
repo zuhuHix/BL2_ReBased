@@ -174,6 +174,7 @@ struct FOpenWillowFiringStats
     int32 GrenadeHits = 0;             // hit events whose Source is Grenade
     float GrenadeContactAge = -1;      // s from the launch to the grenade's first contact; -1 = none
     float GrenadeFuseAge = -1;         // s from the launch to the grenade's explosion; -1 = none
+    FString GrenadeFirstContact;       // what the grenade touched first; empty = nothing
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 
