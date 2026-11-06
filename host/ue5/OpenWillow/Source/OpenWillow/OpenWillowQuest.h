@@ -109,6 +109,7 @@ private:
     bool bScreenPageTest = false;
     double ScreenTestAt = 0.;
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
+    int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0;   // presses that reached OnScreenKey and TryUse: the suite's no-op rows prove delivery with them
     struct FImpl;
     TSharedPtr<FImpl> Impl;
     bool bEnabled = false;
