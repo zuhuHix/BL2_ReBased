@@ -105,6 +105,7 @@ def good_log(spawned=3, sell=True, restock=True, first_ids=None, second_ids=None
     if sections:
         text += items_section(START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0])
         text += health_section(START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0] - AMMO_PRICE)
+        text += stale_log()
     return text
 
 
@@ -149,6 +150,38 @@ def run(log, automation=GOOD_AUTOMATION, doc=None, open_index=0):
 
 def by_name(results):
     return {name: (status, detail) for name, status, detail in results.rows}
+
+
+def stale_log(start=9, after_refusals=9, after_stale=9, refusal='Unknown item', kept='Unknown item', alone='Try again', opening=3,
+              refused=2, stale=2):
+    text = line('OWVENDOR buy id=no_such_row ok=0 money=1 error=Unknown item') * refused
+    text += line('OWVENDOR ignored stale buy (serial 8, current 9)') * stale
+    return text + line(f'OWVENDTEST stale_press start={start} after_refusals={after_refusals} after_stale={after_stale} '
+                       f'refusal=[{refusal}] kept=[{kept}] alone=[{alone}] opening={opening}')
+
+
+class StalePressTest(unittest.TestCase):
+    def grade(self, text):
+        out = cv.Results()
+        cv.grade_stale_press(text, out)
+        return out.rows[0]
+
+    def test_a_good_sequence_passes(self):
+        self.assertEqual(self.grade(stale_log())[1], 'PASS')
+
+    def test_no_line_is_missing(self):
+        self.assertEqual(self.grade('')[1], 'MISSING')
+
+    def test_each_wrong_result_fails(self):
+        for name, args in (('a refusal moved the serial', {'after_refusals': 10, 'after_stale': 10}),
+                           ('a stale press moved the serial', {'after_stale': 10}),
+                           ('the repeat was treated as stale', {'refused': 1, 'stale': 3}),
+                           ('a stale press replaced the refusal', {'kept': 'Try again'}),
+                           ('no refusal at all', {'refusal': '', 'kept': ''}),
+                           ('a stale press stayed silent', {'alone': ''}),
+                           ('the openings were not counted', {'opening': 0})):
+            with self.subTest(name):
+                self.assertEqual(self.grade(stale_log(**args))[1], 'FAIL')
 
 
 class PriceFormulaTest(unittest.TestCase):
@@ -331,7 +364,7 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=15 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=16 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
 
     def test_exit_one_on_any_fail(self):

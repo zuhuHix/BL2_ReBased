@@ -206,15 +206,90 @@ check('The opening count is checked when present', () => {
 check('Refusals show the stock labels; any other message is left alone', () => {
   assert.equal(model.refusalLabel('Insufficient funds'), 'INSUFFICIENT FUNDS');
   for (const reason of ['Ammo full', 'Health full', 'Backpack full']) assert.equal(model.refusalLabel(reason), 'FULL');
-  for (const other of ['', 'The stock changed', 'Equipped items cannot be sold', 'constructor']) assert.equal(model.refusalLabel(other), other);
+  for (const other of ['', 'Try again', 'Equipped items cannot be sold', 'constructor']) assert.equal(model.refusalLabel(other), other);
 });
 
-check('The page keeps a refusal across the host\'s one-second push', () => {
-  const glue = fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/vending.js'), 'utf8');
-  const receiver = glue.slice(glue.indexOf('window.owVending ='), glue.indexOf('window.owVendingReport'));
-  assert.match(receiver, /if \(model\.isNewOpening\(state, result\.state\)\) localMessage = '';/);
-  assert.equal((receiver.match(/localMessage = ''/g) || []).length, 1);
-  assert.match(receiver, /sel = model\.selectionAfterState\(sel, state, result\.state\);/);
+// The real vending.js, with stub DOM elements: what a key press and a host push actually do to the page.
+function loadPage() {
+  const elements = {}, lines = [];
+  const element = () => ({textContent: '', hidden: false, children: [], classList: {add() {}}, setAttribute() {}, addEventListener() {},
+    append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); }, replaceChildren(...c) { this.children = c; }});
+  let onKey = null;
+  const window = {OwVendingModel: model, RufflePlayer: {}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/vending.js'), 'utf8'), {
+    window, setTimeout, console: {log: line => lines.push(line)}, fetch: () => Promise.resolve({ok: false}),
+    document: {getElementById: id => (elements[id] = elements[id] || element()), createElement: element,
+      addEventListener: (_name, handler) => { onKey = handler; }}});
+  return {
+    push: raw => window.owVending(raw),
+    key: key => onKey({key, preventDefault() {}}),
+    message: () => elements.message.textContent,
+    selection: () => { window.owVendingReport(); return JSON.parse(lines[lines.length - 1].slice('OWVENDPAGE '.length)).selection; },
+    requests: () => lines.filter(line => line.startsWith('OWVEND ')).map(line => JSON.parse(line.slice(7)))};
+}
+const TOP = {column: 'shop', index: 0};
+
+check('Page: a push within one opening keeps the selection and a refusal the page made', () => {
+  const page = loadPage();
+  page.push(state({opening: 1}));
+  page.key('ArrowDown');                       // s2, which cannot be afforded
+  page.key('Enter');
+  assert.equal(page.message(), 'INSUFFICIENT FUNDS');
+  assert.deepEqual(page.requests(), []);       // the page refuses this one itself
+  page.push(state({opening: 1, serial: 5}));   // the host's one-second push
+  assert.equal(page.message(), 'INSUFFICIENT FUNDS');
+  assert.deepEqual(page.selection(), {column: 'shop', index: 1});
+});
+
+check('Page: moving clears a refusal the page made', () => {
+  const page = loadPage();
+  page.push(state({opening: 1}));
+  page.key('ArrowDown');
+  page.key('Enter');
+  page.key('ArrowUp');
+  assert.equal(page.message(), '');
+});
+
+check('Page: a reopen resets the selection and the refusal, on the same machine or another', () => {
+  for (const machine of [undefined, {id: 'machine_b', kind: 'items', title: 'Other'}]) {
+    const page = loadPage();
+    page.push(state({opening: 1}));
+    page.key('ArrowRight');                    // into the backpack
+    page.key('ArrowDown');                     // b2, which is worn
+    page.key('Enter');
+    assert.equal(page.message(), 'Equipped items cannot be sold');
+    page.push(state({opening: 2, serial: 5, ...(machine ? {machine} : {})}));
+    assert.deepEqual(page.selection(), TOP);
+    assert.equal(page.message(), '');
+  }
+});
+
+check('Page: a request carries the serial of the state it is pressed on', () => {
+  const page = loadPage();
+  page.push(state({opening: 1}));
+  page.key('Enter');
+  page.push(state({opening: 1, serial: 9}));
+  page.key('Enter');
+  assert.deepEqual(page.requests().map(request => [request.serial, request.action, request.id]), [[4, 'buy', 's1'], [9, 'buy', 's1']]);
+});
+
+check('Page: a host refusal shows in the stock label and a late, older state is ignored', () => {
+  const page = loadPage();
+  page.push(state({opening: 1, serial: 7, message: 'Ammo full'}));
+  assert.equal(page.message(), 'FULL');
+  page.push(state({opening: 1, serial: 6, message: ''}));
+  assert.equal(page.message(), 'FULL');
+  page.push(state({opening: 1, serial: 7, message: 'Try again'}));   // an equal serial is a current state: the timer's
+  assert.equal(page.message(), 'Try again');
+});
+
+check('Page: a bad state is reported, and the next good one clears that', () => {
+  const page = loadPage();
+  page.push(state({opening: 1}));
+  page.push({serial: 'x'});
+  assert.match(page.message(), /^Bad state from host/);
+  page.push(state({opening: 1, serial: 5}));
+  assert.equal(page.message(), '');
 });
 
 check('Request line has the serial, action and id', () => {

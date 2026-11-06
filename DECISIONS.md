@@ -3444,6 +3444,13 @@ AI-assisted (Claude). From a playtest. The page kept its selection between machi
 - **Read from script, not from the running game (`UNVERIFIED`):** `VendingMachineExGFxMovie` shows one label for "cannot afford" (`INSUFFICIENT FUNDS`) and one for "cannot carry or use" (`FULL`), and the shop status that picks between them is native. So mapping a full ammo pool, full health and a full backpack to `FULL` is a reading. The label is plain page text, not the movie's feedback clip, and its sound is not played.
 - **Verified:** synthetic page tests. The playtest's silent refusal was not reproduced, because the host path reads as sending its message; the causes above come from reading the code.
 
+## 2026-11-06: the shop's serial moves only when what a request refers to changed
+
+AI-assisted (Claude). From Luna's review of PR #127. A refusal bumped the serial, so a second press on a full pool looked stale and could say the stock changed when nothing had. The serial now moves on a success, a restock or an opening, and a refusal keeps it, so a repeat press gets the refusal again. A press that is really stale changes nothing: it keeps a refusal already showing, otherwise says "Try again", and does not move the serial, so a held key cannot keep missing. This replaces "The stock changed" from a stale press in the entry above; that text now only means a restock did happen.
+
+- **Verified:** synthetic tests, including the real page code in Node with stub elements. `tools/test_vendors.ps1` gains a `stale_press` row through the host's own message path, which has not run yet.
+- **`UNVERIFIED`:** real key input and how the text looks on screen.
+
 ## 2026-11-03: elemental impact explosions from the firing mode, the cooked muzzle flash and casing (Weapons parity 2)
 
 AI-assisted (Claude). Records: `docs/verification/WEAPON_PROJECTILES.md` section 8, `WEAPON_VISUALS.md` section 18,

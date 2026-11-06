@@ -1168,11 +1168,12 @@ void UOpenWillowVendorSubsystem::HandlePageMessage(const FString& Line)
     if (int64(ReceivedSerial) != Serial)
     {
         UE_LOG(LogTemp, Display, TEXT("OWVENDOR ignored stale %s (serial %lld, current %lld)"), *Action, int64(ReceivedSerial), Serial);
-        // A press aimed at a state that has changed did nothing: say so, rather than leave it silent.
+        // This press did nothing, and the page is about to catch up. A refusal already showing stays; otherwise say so. The
+        // serial does not move here, so the next press cannot keep missing.
         if (Action != TEXT("close") && ActiveMachine.IsValid())
         {
-            LastMessage = TEXT("The stock changed");
-            PushState();
+            if (LastMessage.IsEmpty()) LastMessage = TEXT("Try again");
+            PushTimerState();
         }
         return;
     }
@@ -1190,11 +1191,12 @@ bool UOpenWillowVendorSubsystem::Command(const FString& Action, FString Id, FStr
     AOpenWillowVendingMachine* Machine = ActiveMachine.Get();
     UOpenWillowInventory* Inventory = ActiveInventory.Get();
     bool bOk = false;
+    bool bRestocked = false;
     if (!Machine || !Inventory) OutError = TEXT("No shop is open");
     else if (Id.IsEmpty() && Action != TEXT("close")) OutError = TEXT("No item given");
     // A restock that fell due is applied before the action, never after it. A buy aimed at the old shelf is refused:
     // its id may now name a different gun.
-    else if (Machine->Stock.EnsureStocked(GetWorld()->GetTimeSeconds()) && Action == TEXT("buy"))
+    else if ((bRestocked = Machine->Stock.EnsureStocked(GetWorld()->GetTimeSeconds())) && Action == TEXT("buy"))
         OutError = TEXT("The stock changed");
     else if (Action == TEXT("buy"))
     {
@@ -1210,7 +1212,9 @@ bool UOpenWillowVendorSubsystem::Command(const FString& Action, FString Id, FStr
     UE_LOG(LogTemp, Display, TEXT("OWVENDOR %s id=%s ok=%d money=%d error=%s"), *Action, *Id, bOk ? 1 : 0, Money, *OutError);
     LastMessage = bOk ? FString() : OutError;
     if (bOk) SaveCurrency();
-    PushState();
+    // The serial moves only when what a request refers to changed. A refusal changes nothing, so a repeat press still gets it.
+    if (bOk || bRestocked) PushState();
+    else PushTimerState();
     return bOk;
 }
 
@@ -1505,6 +1509,26 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     case 15: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST heal buy refused: %s"), *Error); break;
     case 16: Report(); break;
     case 17:
+    {
+        // A refused press, the same press again, then one with an old serial, through the page's own message path (no page keys).
+        const auto Press = [this](int64 PressSerial)
+        {
+            HandlePageMessage(FString::Printf(TEXT("OWVEND {\"serial\":%lld,\"action\":\"buy\",\"id\":\"no_such_row\"}"), PressSerial));
+        };
+        const int64 Start = Serial;
+        Press(Serial);
+        Press(Serial);
+        const int64 AfterRefusals = Serial;
+        const FString Refusal = LastMessage;
+        Press(Serial - 1);
+        const FString AfterStale = LastMessage;
+        LastMessage.Reset();
+        Press(Serial - 1);
+        UE_LOG(LogTemp, Display, TEXT("OWVENDTEST stale_press start=%lld after_refusals=%lld after_stale=%lld refusal=[%s] kept=[%s] alone=[%s] opening=%lld"),
+            Start, AfterRefusals, Serial, *Refusal, *AfterStale, *LastMessage, Opening);
+        break;
+    }
+    case 18:
         if (Page.IsValid() && Page->IsShown()) CloseShop();
         UE_LOG(LogTemp, Display, TEXT("OWVENDTEST done"));
         World->GetTimerManager().ClearTimer(TestTimer);
