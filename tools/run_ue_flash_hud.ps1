@@ -21,6 +21,10 @@ $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
 $url = "http://127.0.0.1:$Port/"
+# A page does without a missing movie (movie_guard.js), so say here what this run lacks; the pickup card capture cannot do without its own.
+$overlayCheck = @(Join-Path $PSScriptRoot 'check_overlay_data.py')
+if ($Extra -contains '-owpickupcardshots') { & python @overlayCheck --fail-on UI_Inworld; if ($LASTEXITCODE -ne 0) { throw 'The pickup card capture needs its movie: see the lines above.' } }
+else { & python @overlayCheck --warn-only }
 
 # Reuse an overlay server that is already running, else start one. Another
 # checkout's server would serve its own (possibly older) pages, so refuse it.

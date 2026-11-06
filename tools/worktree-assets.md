@@ -14,6 +14,10 @@ into new worktrees before `git worktree add` returns:
 - `local/character/`
 - `local/ui/`
 
+The UI seed must hold every converted movie the overlay loads, including `local/ui/run/UI_Inworld/` (the world pickup
+card); `python tools/check_overlay_data.py` lists what a worktree lacks. Refresh a seed with real copies: `serve.py`
+refuses anything that resolves outside its root, so a junction answers 404 like a missing file.
+
 The UI seed includes the generated static weapon previews at
 `local/ui/run/previews/`. Rebuild them from the provisioned UModel glTF files
 with `python tools/render_weapon_previews.py` if they are missing.

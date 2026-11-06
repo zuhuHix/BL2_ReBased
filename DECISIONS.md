@@ -3971,3 +3971,14 @@ AI-assisted (Claude). Record: `docs/verification/SLICE_AUDIO_CHAIN.md` section 5
 
 AI-assisted (Claude). Record: `docs/verification/WEAPON_VISUALS.md` section 1. `DefaultEngine.ini` sets `r.DefaultFeature.MotionBlur=False`; the engine's source documents 0 as "sets MotionBlurAmount to 0", and no
 camera or volume in the host's code overrides that amount. The installed game's config has `MotionBlur=False`, a config read only. Host rendering only; no parsing change. In-engine frame: UNVERIFIED until the batch runs it.
+## 2026-11-06: A missing overlay movie no longer covers the game (inventory lane)
+
+AI-assisted (Claude). Record: `docs/verification/PICKUP_CARD.md`. Found by the scripted playtest on pc-hummer.
+
+- With its movie absent, Ruffle draws an opaque error page over its whole player and `load()` still resolves. The pickup card's player fills
+  the HUD, so aiming at a drop covered the game until the end of the run.
+- `tools/hud_overlay/movie_guard.js` checks a page's movie files with HEAD before Ruffle sees them, and removes a player that shows the panel
+  anyway. The HUD, Inventory, Skills, Missions, Map and pickup card use it; vending already had its own check. Each page shows its existing
+  message or nothing, and logs `OpenWillow movie missing`.
+- `tools/check_overlay_data.py` lists missing movies; the run script and the inventory suite print it, and stop only for the movie they
+  cannot do without. Tested with synthetic fixtures and with real Ruffle in headless Edge (movie absent and present). Not yet run in engine.
