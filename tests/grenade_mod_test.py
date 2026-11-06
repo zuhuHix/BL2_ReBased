@@ -2,6 +2,7 @@
 
 FakePackage stands in for skill_stats.Package (props(), index, classes). Paths and values are made up.
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -295,6 +296,33 @@ class InheritedFieldsTest(unittest.TestCase):
         package, class_defaults, _ = self.inherited()
         package.objects['Fake.Proj.P']['MaxLifespan'] = 2.5
         self.assertEqual(grenade.resolve(package, class_defaults, {}, 8, MOD)["projectile"]["max_lifespan"], 2.5)
+
+
+class WriteBlockTest(unittest.TestCase):
+    GOOD = {'damage': {'value': 5.0, 'reason': None}, 'projectile': {'contact': {'fuse_after_contact': 1.0}}}
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.out = Path(temp.name) / 'block.json'
+        self.out.write_bytes(b'the earlier good block')
+
+    def refused(self, block):
+        with self.assertRaises(SystemExit) as stop:
+            grenade.write_block(self.out, block)
+        self.assertTrue(stop.exception.code)   # a message: the process exits nonzero
+        self.assertEqual(self.out.read_bytes(), b'the earlier good block')
+
+    def test_no_damage_leaves_the_file_alone(self):
+        self.refused(dict(self.GOOD, damage={'value': None, 'reason': 'unresolved'}))
+        self.refused(dict(self.GOOD, damage={'value': 0.0, 'reason': None}))
+
+    def test_no_contact_rules_leave_the_file_alone(self):
+        self.refused(dict(self.GOOD, projectile={'contact': None}))
+
+    def test_a_good_block_is_written(self):
+        grenade.write_block(self.out, self.GOOD)
+        self.assertEqual(json.loads(self.out.read_text(encoding='utf-8')), {'grenade': self.GOOD})
 
 
 class OutputPathTest(unittest.TestCase):
