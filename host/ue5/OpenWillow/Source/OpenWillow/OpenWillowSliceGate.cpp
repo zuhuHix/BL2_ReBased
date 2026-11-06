@@ -454,7 +454,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 Held ? *Held->Name : TEXT("?"), StepTime));
         }
         else FailLink(TEXT("kill_enemy"), TEXT("the enemy disappeared before it died"));
-        // Only a hit whose causer is the selected enemy counts; others are reported, not credited.
+        // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,
+        // and this link relied on the shield too.
+        if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
         const FString Others = FString::Printf(TEXT("other hits: %d by other causers, %d with no causer"), OtherHits, UnattributedHits);
         if (EnemyHits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya caused by %s during the fight (%s), health %.0f/%.0f"),
             EnemyHits, *Enemy->GetName(), *Others, W->GetHealth(), W->GetMaxHealth()));
@@ -477,16 +479,29 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 GEngine->Exec(GetWorld(), TEXT("ow.RangeMode passive"));
                 Fixture(TEXT("range set passive after the fight"));
             }
+            // -owslicegatedownafterfight: a fight has never left Maya down (a kill gives her a second wind), so this puts
+            // her down here to run the revive below. The damage lands now; the next tick sees her Injured.
+            if (FParse::Param(FCommandLine::Get(), TEXT("owslicegatedownafterfight")) && !W->IsDown())
+            {
+                Fixture(TEXT("lethal damage at the end of the fight"));
+                FHitResult Hit;
+                UGameplayStatics::ApplyPointDamage(W, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+                return;
+            }
         }
         if (W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead && StepTime < BleedTimeout) return;   // respawn due
         FOpenWillowMayaState& State = W->GetMayaState();
-        // With a shield (-owslicegateshield) only a downed Maya is restored: her health after the fight is kept.
-        if (W->IsDown() || (ShieldFixture.IsEmpty() && W->GetHealth() < W->GetMaxHealth()))
+        const bool bWasDown = W->IsDown();
+        // With a shield (-owslicegateshield) only a downed Maya is restored: her health after the fight is kept. A Maya
+        // still Dead after the wait is not touched (SetHealth does not revive from Dead): the next links log NOT_AVAILABLE.
+        if (W->GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead && (bWasDown || (ShieldFixture.IsEmpty() && W->GetHealth() < W->GetMaxHealth())))
         {
-            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: Maya restored from %s, health %.0f/%.0f"),
-                W->IsDown() ? TEXT("down") : TEXT("up"), W->GetHealth(), W->GetMaxHealth());
-            Fixture(W->IsDown() ? TEXT("Maya revived to full health after the fight") : TEXT("Maya healed to full after the fight"));
+            const float FromHealth = W->GetHealth();
             State.SetHealth(State.Base.MaxHealth, State.Base.MaxHealth, GetWorld()->GetTimeSeconds());
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: Maya restored from %s, health %.0f -> %.0f/%.0f, down now %d"),
+                bWasDown ? TEXT("down") : TEXT("up"), FromHealth, W->GetHealth(), W->GetMaxHealth(), W->IsDown());
+            if (!bWasDown) Fixture(TEXT("Maya healed to full after the fight"));
+            else if (!W->IsDown()) Fixture(TEXT("Maya revived to full health after the fight"));
         }
         Next(EStep::Loot);
         break;
@@ -515,16 +530,21 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Pickup: {
-        // Until enemies drop loot: roll a gun and drop it 150 uu ahead of Maya (as -owpickupcardshots does), named as a
-        // fixture on the link, so the pickup path (card, use key) still runs. A real drop is used as it is.
-        if (!Drop && !bRolled)
+        // The roll source is read even when a real drop exists: the decoy link's two test drops always need it.
+        if (!bPickupStarted)
         {
-            bRolled = true;
             if (!FParse::Value(FCommandLine::Get(), TEXT("owslicegategun="), RollSource))
             {
                 FString ItemDir;
                 if (FParse::Value(FCommandLine::Get(), TEXT("owitems="), ItemDir)) RollSource = FOpenWillowWeaponGen::RewardSource(ItemDir);
             }
+        }
+        // Until enemies drop loot: roll a gun and drop it 150 uu ahead of Maya (as -owpickupcardshots does), named as a
+        // fixture on the link, so the pickup path (card, use key) still runs. A real drop is used as it is.
+        const bool bFirstTick = !bPickupStarted;
+        bPickupStarted = true;
+        if (!Drop && bFirstTick)
+        {
             if (RollSource.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
             {
                 MissingLink(TEXT("pick_up_gun"), TEXT("no drop to pick up, and the ow.RollGun fallback has no source or generator manifest"));
