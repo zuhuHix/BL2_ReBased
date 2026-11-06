@@ -132,6 +132,16 @@ def test_result_says_whether_the_target_was_lifted():
     assert ns['pi_result']()['target_lifted'] is True
 
 
+def test_the_pick_prefers_the_adult_over_a_nearer_variant():
+    rank = load()['pi_target_rank']
+    rows = [('CharClass_PrimalBeast_Ranged', 100), ('CharClass_PrimalBeast', 200), ('CharClass_PrimalBeastAdult', 900),
+            ('CharClass_PrimalBeastAdult', 800)]
+    rows.sort(key=lambda r: rank('Pkg.Group.' + r[0], r[1]))
+    assert rows == [('CharClass_PrimalBeastAdult', 800), ('CharClass_PrimalBeastAdult', 900), ('CharClass_PrimalBeast', 200),
+                    ('CharClass_PrimalBeast_Ranged', 100)]
+    assert rank('CharClass_PrimalBeastAdult', 1)[0] == 0    # the pick passes a bare class name too
+
+
 if __name__ == '__main__':
     for name, test in list(globals().items()):
         if name.startswith('test_'):
