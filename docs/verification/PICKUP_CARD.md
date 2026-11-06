@@ -71,6 +71,13 @@ the movie is absent.
   (E must take the aimed gun, not the nearer one); then E with a test block in front of the remaining gun (it must stay); then
   E again with the block removed (it must be taken); then a last gun aimed at and Maya put down (the card must be gone).
 
+## Open: what blocks the sight test
+
+A 2026-11-06 scripted run had the card hide for about 0.25 s with Maya standing still and aimed at the drop, and E at that moment went to a strongbox. Reach, the view and the
+driver do not explain it. An enemy respawned about 60 uu from the drop 37 ms before the card hid, which fits an enemy on the sight line (timing only, not proof). The test stops at anything
+blocking `ECC_Visibility` except Maya and the pickup. `OWPICKUPCARD blocked by <actor> (<component>)` now names what it hit, at most twice a second, and changes nothing else.
+This is not a confirmed bug: `NATIVE_USE_INTERACTION.md` describes one ray and the first usable hit, so a body in the way may block in the game too (`UNVERIFIED`). Still open: a corpse lying on its own drop.
+
 ## Open, for a real-game session
 
 The look-at reach, cone and sight test, which item a weapon is compared against, the card's on-screen size and placement relative to the item, its frame style, the in/out timing,
