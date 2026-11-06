@@ -33,7 +33,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (21, all made-up log lines).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (27, all made-up log lines).
 
 ### How a link is graded (review round 1)
 
@@ -48,15 +48,25 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   A shuffled, repeated or unknown link fails the run, and so does a link line before the start or after the SUMMARY.
 - **`enemy_attacks_maya` counts only the selected enemy's hits.** It counts only hits whose causer is the enemy the
   fight selected. The walker counts hits per causer where they land (`GetHitCountFrom`; a few lines in
-  `OpenWillowWalker.h/.cpp`), because several hits can land in one tick. Hits from other causers, or with no causer, are
-  reported in the detail and leave the link NOT_AVAILABLE.
+  `OpenWillowWalker.h/.cpp`), because several hits can land in one tick. It counts only while the gate tracks them, during
+  the fight; normal play keeps no such count. Hits from other causers, or with no causer, are reported in the detail. No
+  hit from the selected enemy is a FAIL in range mode, and the checker overrules a NOT_AVAILABLE there. It is
+  NOT_AVAILABLE only with the stand-in, which has no attack. The fight lasts about 2.4 s and the first hits land about
+  1.7 s in, so a much faster kill could FAIL this link: that would show up as a FAIL, not pass unnoticed.
+- **NOT_AVAILABLE means a missing capability or precondition**, never a miss. `loot_drop_on_kill` with the gun roll forced
+  FAILs if no drop comes, and the checker overrules a NOT_AVAILABLE there too.
+- **Every link line carries the fixtures field.** The checker fails a line without it. Logs older than these rules lack
+  `accepted=` and fail the current checker, so the tables below stand as graded at the time. A fixture is attached before any result its link can log.
 - **The pickup links (review of #98).** Each logs `card_id=<id> picked_id=<id>`: the card's item in the tick of the E
   press, once Maya is on the ground, and the item E put in the backpack.
   - `pick_up_gun` passes only when both are the aimed drop.
   - `pick_up_aimed_not_nearest` repeats the pickup with a nearer decoy 45 uu to Maya's side, about 90 degrees off her
     aim. E must take the aimed drop (#101). If E takes the decoy, the link FAILs. It runs whether or not the kill
-    dropped a real gun: the roll source for its two test drops is read before the check for a drop.
-  - The checker reads both ids itself: a PASS on either link with missing or different ids becomes a FAIL.
+    dropped a real gun: the roll source for its two test drops is read before the check for a drop. Rolled ids come from
+    the balance and the seed, so two rolls can share one: the link FAILs at setup if the two test drops do.
+  - Each link also logs `accepted=<0|1>`: the press made a pickup attempt and it was accepted.
+  - The checker reads the ids itself: a PASS on either link with missing or different ids, or without `accepted=1`,
+    becomes a FAIL, and so does a PASS on the decoy link whose `nearer_decoy` is missing or has the picked-up id.
   - A test drop with no floor within 450 uu below its point fails; it is never left in the air.
 - **A link never starts with Maya down.** If Maya is down when a link group is due to start, every link of that group
   is logged NOT_AVAILABLE ("Maya down from a previous link"), not a misleading FAIL.
@@ -134,7 +144,7 @@ in the code; the likely difference is that its enemies fell back to engine shape
 logs were not read. The cooldown data, the save and the range's AI are not involved: the cooldown read 13 s, the run
 starts from a fresh save, and the log has no cast before the gate's. Owner: the range lane.
 
-**Why `-Shield` used the stand-in.** All four shields in this PC's gear manifest are level 36 to 46, and
+**Why `-Shield` used the stand-in.** All the shields in this PC's gear manifest are well above Maya's level, and
 `EquipGearById` refuses an item above the player's level, which is 8 here. The old fixture text said "no shield in the
 gear manifest", which was wrong. The driver now equips the lowest of them by passing its own level to the call, named as
 the fixture `level rule overridden by the test: shield <id> of level <n> equipped on Maya of level <m>`. This is a test
@@ -146,7 +156,7 @@ the selected one included. In those two runs its hit landed in the same tick as 
 count once per tick and credited only the last causer, so it also counted 1 hit where there were 4. It passed in the
 `-Shield` run only because the selected enemy's hit came 0.03 s later. The walker now counts hits per causer where they
 land, and the driver reads those counts. Only the selected enemy's hits still count. No longer fight or fixture was
-needed. This has not run yet; the numbers in the table above are from the old counting.
+needed. This has not run yet; the numbers in the table above are from the old counting and the old grading.
 
 ### Before the range was on main
 

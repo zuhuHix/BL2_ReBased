@@ -172,7 +172,9 @@ public:
     // instigator's position).
     int32 GetHitCount() const { return HitsTaken; }
     FVector GetLastHitFrom() const { return LastHitFrom; }
-    // How many of those hits this causer made (null: none given). Several can land in one tick, so a last-causer read misses some.
+    // The slice gate only (off in normal play; switching either way clears it): how many of those hits each causer made
+    // (null: none given). Several can land in one tick, so a last-causer read misses some.
+    void SetHitCauserTracking(bool bOn) { bTrackHitCausers = bOn; HitsByCauser.Reset(); }
     int32 GetHitCountFrom(const AActor* Causer) const { const int32* Count = HitsByCauser.Find(TObjectKey<AActor>(Causer)); return Count ? *Count : 0; }
     // Maya killed an enemy (AOpenWillowCombatTarget calls it with her as the damage causer): while Injured, a second wind.
     void NotifyKilledEnemy();
@@ -287,6 +289,7 @@ private:
     void Respawn();
     int32 HitsTaken = 0;
     FVector LastHitFrom = FVector::ZeroVector;
+    bool bTrackHitCausers = false;
     TMap<TObjectKey<AActor>, int32> HitsByCauser;
     void OnWentDown();
     void TickDown(float Now, float DeltaSeconds);

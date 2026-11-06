@@ -237,6 +237,12 @@ AOpenWillowInventoryPickup* UOpenWillowSliceGate::DropRolledGun(uint32 Seed, con
     return Pickup;
 }
 
+bool UOpenWillowSliceGate::PickupAccepted() const
+{
+    const AOpenWillowWalker* W = Walker();
+    return W->PickupAttemptCount() != PickupAttemptsBefore && W->LastPickupAccepted();
+}
+
 // Stands Maya 80 uu from Target, aims at it until she is on the ground, then in one tick reads the card (the id in the
 // card state, OpenWillowPickupCard::StateField) and presses E. Sets DropId, CardId and PickedId ("none" when absent).
 // True once the press has been answered (or timed out).
@@ -437,8 +443,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
         HitsBeforeFight = W->GetHitCount();
-        EnemyHitsBeforeFight = W->GetHitCountFrom(Enemy.Get());
-        NoCauserHitsBeforeFight = W->GetHitCountFrom(nullptr);
+        W->SetHitCauserTracking(true);   // off again once link 4 has read it
         if (!ShieldFixture.IsEmpty())
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note Maya's shield at the start of the fight: %.0f/%.0f"), W->GetShield(), W->GetShieldCapacity());
         Next(EStep::Fight);
@@ -466,15 +471,16 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         // and this link relied on the shield too.
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
         // The fight's hits by causer: the selected enemy, another actor, or none given.
-        const int32 EnemyHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) - EnemyHitsBeforeFight : 0;
-        const int32 UnattributedHits = W->GetHitCountFrom(nullptr) - NoCauserHitsBeforeFight;
+        const int32 EnemyHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;
+        const int32 UnattributedHits = W->GetHitCountFrom(nullptr);
         const int32 OtherHits = W->GetHitCount() - HitsBeforeFight - EnemyHits - UnattributedHits;
+        W->SetHitCauserTracking(false);
         const FString Others = FString::Printf(TEXT("other hits: %d by other causers, %d with no causer"), OtherHits, UnattributedHits);
         if (EnemyHits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya caused by %s during the fight (%s), health %.0f/%.0f"),
             EnemyHits, *Enemy->GetName(), *Others, W->GetHealth(), W->GetMaxHealth()));
-        else if (OtherHits + UnattributedHits > 0) MissingLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("Maya was hit, but not by the selected enemy (%s)"), *Others));
-        else MissingLink(TEXT("enemy_attacks_maya"), bRangeMode ? TEXT("no enemy hit Maya during the fight (enemy AI: range lane, PR #83)")
-            : TEXT("the stand-in target has no attack; enemy AI is the range lane's PR #83"));
+        // The range's enemies attack, so no hit from the selected one is a real miss. Only the stand-in lacks an attack.
+        else if (bRangeMode) FailLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("no hit on Maya from the selected enemy during the fight (%s)"), *Others));
+        else MissingLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("the stand-in target has no attack (%s)"), *Others));
         Next(EStep::Recover);
         break;
     }
@@ -535,8 +541,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         else if (FarDrop) FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("a pickup \"%s\" appeared after the kill, but at %s, %.0f uu from the corpse at %s (more than %.0f)"),
             *FarDrop->DisplayName(), *FarDrop->GetActorLocation().ToCompactString(), FVector::Dist(FarDrop->GetActorLocation(), KillLocation),
             *KillLocation.ToCompactString(), LootRadius));
-        else MissingLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no pickup appeared within %.0f uu of the kill in %.0fs: no loot drop on kill yet (range lane, loot PR3)"),
-            LootRadius, LootWait));
+        // With the roll forced, a kill with no drop is a real miss; otherwise the build has no sure drop to wait for.
+        else if (bLootForced) FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no pickup appeared within %.0f uu of the kill in %.0fs, with the gun roll forced"), LootRadius, LootWait));
+        else MissingLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no pickup appeared within %.0f uu of the kill in %.0fs, and this build cannot force a gun roll"), LootRadius, LootWait));
         Next(EStep::Pickup);
         break;
     }
@@ -573,10 +580,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (bTestDrop) Fixture(TEXT("gun rolled and dropped by the test"));
         GunId = PickedId == TEXT("none") ? FString() : PickedId;
         // PASS only when the card named the aimed drop and E picked up that same item.
-        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s"), *DropId, *CardId, *PickedId);
-        if (CardId == DropId && PickedId == DropId && W->LastPickupAccepted())
+        const bool bAccepted = PickupAccepted();
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s accepted=%d"), *DropId, *CardId, *PickedId, bAccepted);
+        if (CardId == DropId && PickedId == DropId && bAccepted)
             PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the pickup card named the aimed drop at the use-key press and E picked it up (card state only; HUD drawing not checked)"), *Ids));
-        else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s, accepted %d: the card and the picked-up item must both be the aimed drop"), *Ids, W->LastPickupAccepted()));
+        else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the card and the picked-up item must both be the aimed drop"), *Ids));
         Next(EStep::PickupDecoy);
         break;
     }
@@ -592,6 +600,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 Next(EStep::Equip);
                 return;
             }
+            Fixture(TEXT("two guns rolled and dropped by the test"));
             const FVector From = W->GetActorLocation();
             const FVector Forward = FRotator(0, W->GetControlRotation().Yaw, 0).Vector();
             FString Why;
@@ -607,15 +616,25 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 return;
             }
             NearId = PickupId(DecoyNear);
+            // Rolled ids come from the balance and the seed: two rolls can share one, and then the ids cannot tell which
+            // drop E took. No result is possible from such a pair.
+            if (NearId == PickupId(DecoyAimed))
+            {
+                FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("the two test drops share the id %s, so E's pick cannot be told apart"), *NearId));
+                DecoyAimed->Destroy();
+                DecoyNear->Destroy();
+                Next(EStep::Equip);
+                return;
+            }
             return;
         }
         if (!RunAimedPickup(DecoyAimed)) return;
-        Fixture(TEXT("two guns rolled and dropped by the test"));
-        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s"), *DropId, *NearId, *CardId, *PickedId);
+        const bool bAccepted = PickupAccepted();
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s accepted=%d"), *DropId, *NearId, *CardId, *PickedId, bAccepted);
         if (CardId != DropId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": the card did not name the aimed drop"));
-        else if (PickedId == DropId) PassLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up the aimed drop, not the nearer decoy"));
+        else if (PickedId == DropId && NearId != DropId && bAccepted) PassLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up the aimed drop, not the nearer decoy"));
         else if (PickedId == NearId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E took the nearer decoy, not the aimed drop"));
-        else FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up neither"));
+        else FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E did not pick up the aimed drop"));
         for (AOpenWillowInventoryPickup* Left : {DecoyAimed.Get(), DecoyNear.Get()}) if (IsValid(Left)) Left->Destroy();
         Next(EStep::Equip);
         break;
@@ -632,6 +651,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Phaselock: {
+        // Before any result, so that a failing path names it too.
+        if (bPhaselockPointGranted) Fixture(TEXT("phaselock point granted"));
         // The killed enemy respawns (stand-in 3 s, range 8 s); any other live target near Maya serves too.
         AOpenWillowCombatTarget* Target = Enemy && Enemy->CanPhaseLockTarget() ? Enemy.Get() : NearestLiveTarget(true);
         if (StepTime < 1.f || (!W->LastPhaselockTarget() && !Target && StepTime < PhaselockTargetWait)) return;
@@ -657,7 +678,6 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             return;
         }
         // The cast went out on an earlier tick.
-        if (bPhaselockPointGranted) Fixture(TEXT("phaselock point granted"));
         if (W->LastPhaselockHit() && W->LastPhaselockTarget() == Enemy && Enemy->IsPhaselocked())
             PassLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("%s lifted, lock %.1fs left"), *Enemy->GetName(), W->PhaselockRemaining()));
         else FailLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("cast hit=%d blocked=%d target=%s"), W->LastPhaselockHit(), W->LastPhaselockBlocked(),

@@ -76,7 +76,8 @@ private:
     static FString PickupId(const class AOpenWillowInventoryPickup* Pickup);
     class AOpenWillowInventoryPickup* DropRolledGun(uint32 Seed, const FVector& Near, FString& OutWhy);
     bool RunAimedPickup(class AOpenWillowInventoryPickup* Target);
-    int32 HitsBeforeFight = 0, EnemyHitsBeforeFight = 0, NoCauserHitsBeforeFight = 0;   // the walker's hit counts when the fight starts
+    int32 HitsBeforeFight = 0;      // the walker's hit count when the fight starts (its per-causer count starts empty there)
+    bool PickupAccepted() const;    // the last press made a pickup attempt, and it was accepted
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }
     void MissingLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("NOT_AVAILABLE"), Detail); }
