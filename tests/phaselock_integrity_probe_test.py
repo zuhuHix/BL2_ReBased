@@ -156,6 +156,74 @@ def test_stopping_the_probe_lets_go_of_the_pawn():
     assert ns['pi']['pawn'] is None
 
 
+def test_the_kill_refuses_an_unlifted_target_and_reports_the_health():
+    ns = load()
+    health = [500.0]
+    damage = []
+
+    def take(*a):
+        damage.append(a)
+        health[0] = 0.0
+    pawn = Obj(Name='Target', Location=Obj(X=0, Y=0, Z=0), GetHealth=lambda: health[0], TakeDamage=take)
+    ns['ai_pawn'] = lambda name: pawn
+    ns['get_pc'] = lambda: Obj(WorldInfo=Obj(TimeSeconds=9.0))
+    ns['pi']['seen_lifted'] = set()
+    assert 'skipped' in ns['pi_kill']('Target') and not damage and health[0] == 500.0
+    ns['pi']['seen_lifted'] = {'Target'}
+    done = ns['pi_kill']('Target')
+    assert done['before'] == 500.0 and done['after'] == 0.0 and done['killed'] is True and len(damage) == 1
+    pawn.TakeDamage = lambda *a: (_ for _ in ()).throw(RuntimeError('no'))
+    health[0] = 7.0
+    assert ns['pi_kill']('Target')['killed'] is False
+
+
+def test_the_shield_reads_measure_only_an_equipped_test_shield():
+    ns = load()
+
+    def shield(name, level):
+        return Obj(Class=Obj(Name='WillowShield'), Inventory=None, Name=name, ExpLevel=level, GameStage=level, RarityLevel=1, MonetaryValue=5,
+                   bReadied=True, GetShortHumanReadableName=lambda: name, GetManufacturerGradeIndex=lambda: level,
+                   DefinitionData=Obj(BalanceDefinition=Obj(Name='Balance')))
+    own = shield('Own', 8)
+    test = shield('Test', 30)
+    gun = Obj(Class=Obj(Name='WillowWeapon'), Inventory=own)
+    calls = []
+    im = Obj(InventoryChain=gun, Backpack=[], AddInventoryToBackpack=lambda i: calls.append('add'), RemoveInventoryFromBackpack=lambda i: calls.append('remove'))
+    max_strength = [181.0]
+    pawn = Obj(GetMaxShieldStrength=lambda: max_strength[0], GetShieldStrength=lambda: 90.0)
+    pc = Obj(GetPawnInventoryManager=lambda: im, Pawn=pawn, PlayerReplicationInfo=Obj(ExpLevel=8))
+    ns['get_pc'] = lambda: pc
+    start = ns['pi_shields']()
+    assert start['equipped']['name'] == 'Own' and start['max_strength'] == 181.0 and start['player_level'] == 8 and len(start['held']) == 1
+
+    def ready(item):
+        calls.append('ready')
+        gun.Inventory = item
+    im.ReadyBackpackInventory = ready
+    pool = Obj(SpawnBalancedInventoryFromInventoryBalanceDefinition=lambda *a: (True, [test]))
+    ns['unrealsdk'].find_class = lambda name: Obj(ClassDefaultObject=pool)
+    tried = ns['pi_shield_try']('equipped', 30)
+    assert tried['requested_level'] == 30 and tried['item']['level'] == 30
+    max_strength[0] = 900.0
+    read = ns['pi_shield_read']()
+    assert read['equipped_is_test'] is True and read['max_strength'] == 900.0
+    back = ns['pi_shield_restore']()
+    assert back['equipped']['name'] == 'Own' and back['equipped_is_test'] is False and 'remove' in calls
+    # An equip that did not take: the read says so, and the capture does not count it.
+    pool.SpawnBalancedInventoryFromInventoryBalanceDefinition = lambda *a: (True, [test])
+    im.ReadyBackpackInventory = lambda item: None
+    ns['pi_shield_try']('equipped', 15)
+    assert ns['pi_shield_read']()['equipped_is_test'] is False
+    pool.SpawnBalancedInventoryFromInventoryBalanceDefinition = lambda *a: (True, [])
+    assert 'skipped' in ns['pi_shield_try']('equipped', 5)
+
+
+def test_the_two_reads_are_separate_stages():
+    text = (SCRIPT.parents[1] / 'phaselock_integrity_capture.ps1').read_text(encoding='utf-8')
+    assert "@('discover', 'kill', 'shield_levels')" in text
+    assert "Set-Stage 'kill' $false" in text and "Set-Stage 'shield_levels' $false" in text
+
+
 def test_giving_up_on_the_injure_does_not_count_as_down():
     ns = load()
     me = Obj(bIsInjured=False, Health=1)
