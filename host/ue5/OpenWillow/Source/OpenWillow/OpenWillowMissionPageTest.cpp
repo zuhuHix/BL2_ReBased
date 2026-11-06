@@ -32,7 +32,8 @@ void BindingKey(APlayerController* PC, const FKey& Key, EInputEvent Event)
 {
     if (PC) PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, Event, Event == IE_Pressed ? 1.f : 0.f));
 }
-void Shot(const TCHAR* Name)
+// With the UI: the page is a Slate widget. Not called Shot: inside the member function that name finds UOpenWillowQuest::Shot, whose frames leave Slate out.
+void PageShot(const TCHAR* Name)
 {
     FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWMissionPage_%s.png"), Name), true, false);
 }
@@ -71,8 +72,12 @@ void UOpenWillowQuest::TickScreenPageTest()
     const bool bExpectMovie = !FParse::Param(FCommandLine::Get(), TEXT("owmissionpagenomovie"));
     const auto Drawn = [&] { const FString& R = ScreenPage->LastReport();
         return R.Contains(TEXT("\"drawn\":true")) && R.Contains(bExpectMovie ? TEXT("\"movie\":true") : TEXT("\"movie\":false")); };
-    if (Now < ScreenTestAt && ScreenTestStep != 0 && ScreenTestStep != 9) return;
-    double Wait = 1.;
+    // Steps run after a time and a few ticks, and rows that need a state wait for it (Await): one frame can stall for many seconds, and everything due by the clock would then
+    // run in the frame after it, before the page has had a chance to answer.
+    ++ScreenStepTicks;
+    const auto Await = [&](bool bState) { return bState || (Now - ScreenStepAt >= 30. && ScreenStepTicks >= 30); };
+    if (ScreenTestStep != 0 && ScreenTestStep != 11 && (Now < ScreenTestAt || ScreenStepTicks < 5)) return;
+    double Wait = 0.;
     switch (ScreenTestStep)
     {
     case 0:   // wait for the page, then put a gun in her hands
@@ -105,48 +110,55 @@ void UOpenWillowQuest::TickScreenPageTest()
         Row(TEXT("control_gun_fires_before_the_page"), Maya->FireOnce() && Maya->AreArmsShown(), State());
         BindingKey(PC, EKeys::LeftMouseButton, IE_Pressed);   // held through the page's open, released under it
         UseE();
-        Wait = .5;
         break;
     case 2:
+        if (!Await(ScreenPage->IsShown())) return;
         Row(TEXT("first_e_opens_the_page"), UseArrived() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer") && Status() == 0 && ScreenOpenInVm(), State());
         StockMagazine();
-        Wait = 4.;
         break;
     case 3:
-    {
-        Shot(TEXT("1_Offer"));
+        if (!Await(Drawn())) return;
         Row(TEXT("offer_drawn"), Drawn(), State());
-        // Four seconds with the trigger held and a full magazine: the magazine has not moved, a direct shot is refused, and arms and gun are put away.
+        Wait = 2.;   // for the frame, and two seconds with the trigger held
+        break;
+    case 4:
+    {
+        PageShot(TEXT("1_Offer"));
+        // The trigger held and a full magazine: the magazine has not moved, a direct shot is refused, and arms and gun are put away.
         const int32 Left = Magazine();
         Row(TEXT("held_trigger_does_not_fire_under_the_page"), Left == -1 && !Maya->FireOnce() && !Maya->AreArmsShown(), FString::Printf(TEXT("magazine=%d %s"), Left, *State()));
         BindingKey(PC, EKeys::LeftMouseButton, IE_Released);
         Row(TEXT("offer_e_does_nothing"), PageKey(EKeys::E) && Status() == 0 && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
+        Wait = 1.;
         break;
     }
-    case 4:
+    case 5:
         Row(TEXT("offer_escape_closes"), PageKey(EKeys::Escape) && Status() == 0 && !ScreenPage->IsShown() && !ScreenOpenInVm(), State());
         Wait = 1.5;
         break;
-    case 5:
-        Shot(TEXT("2_AfterEscape"));
+    case 6:
+        PageShot(TEXT("2_AfterEscape"));
         StockMagazine();
         Row(TEXT("gun_fires_again_after_the_close"), Maya->AreArmsShown() && Maya->FireOnce(), State());
         UseE();
-        Wait = .5;
-        break;
-    case 6:
-        Row(TEXT("e_opens_the_offer_again"), UseArrived() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
-        Wait = 3.;
         break;
     case 7:
+        if (!Await(ScreenPage->IsShown())) return;
+        Row(TEXT("e_opens_the_offer_again"), UseArrived() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
+        break;
+    case 8:
+        if (!Await(Drawn())) return;
+        Wait = 1.;
+        break;
+    case 9:
         Row(TEXT("offer_enter_accepts_and_closes"), PageKey(EKeys::Enter) && Status() == 1 && !ScreenPage->IsShown() && !ScreenOpenInVm() && RewardPages == 0, State());
         Wait = 1.5;
         break;
-    case 8:
-        Shot(TEXT("3_Accepted"));
+    case 10:
+        PageShot(TEXT("3_Accepted"));
         ScreenTestRetries = 0;
         break;
-    case 9:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
+    case 11:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
         if (Now < ScreenTestAt) return;
         if (Status() != 2)
         {
@@ -157,39 +169,50 @@ void UOpenWillowQuest::TickScreenPageTest()
         Row(TEXT("mission_ready_to_turn_in"), Status() == 2, State());
         if (Status() != 2) { Finish(); return; }
         Stand();
-        break;
-    case 10:
-        UseE();
-        Wait = .5;
-        break;
-    case 11:
-        Row(TEXT("e_opens_the_turn_in"), UseArrived() && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
-        Wait = 4.;
+        Wait = 1.;
         break;
     case 12:
-        Shot(TEXT("4_TurnIn"));
-        Row(TEXT("turn_in_drawn"), Drawn(), State());
-        Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
-        PageKey(EKeys::Enter);
-        Wait = 5.;
+        UseE();
         break;
     case 13:
-        Shot(TEXT("5_Reward"));
-        Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
-            && RewardPages == 1 && RewardsReceived == 0 && ScreenPage->LastReport().Contains(TEXT("\"page\":\"reward\"")) && Drawn(), State());
-        Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
+        if (!Await(ScreenPage->IsShown())) return;
+        Row(TEXT("e_opens_the_turn_in"), UseArrived() && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
         break;
     case 14:
+        if (!Await(Drawn())) return;
+        Row(TEXT("turn_in_drawn"), Drawn(), State());
+        Wait = 1.;
+        break;
+    case 15:
+        PageShot(TEXT("4_TurnIn"));
+        Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
+        PageKey(EKeys::Enter);
+        break;
+    case 16:
+    {
+        const bool bRewardDrawn = ScreenPage->LastReport().Contains(TEXT("\"page\":\"reward\"")) && Drawn();
+        if (!Await(bRewardDrawn)) return;
+        Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
+            && RewardPages == 1 && RewardsReceived == 0 && bRewardDrawn, State());
+        Wait = 1.;
+        break;
+    }
+    case 17:
+        PageShot(TEXT("5_Reward"));
+        Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
+        break;
+    case 18:
         Row(TEXT("enter_takes_the_reward_and_closes"), PageKey(EKeys::Enter) && Status() == 3 && !ScreenPage->IsShown() && !ScreenOpenInVm() && !RewardPendingInVm() && RewardsReceived == 1, State());
         Wait = 1.5;
         break;
-    case 15:
-        Shot(TEXT("6_Closed"));
+    case 19:
+        PageShot(TEXT("6_Closed"));
         Row(TEXT("first_person_back_after_the_reward"), Maya->AreArmsShown(), State());
         UseE();
-        Wait = .5;
         break;
-    case 16:
+    case 20:
+        // Nothing here changes when the press lands, so the row waits for the press itself.
+        if (!Await(UseArrived())) return;
         Row(TEXT("e_afterwards_opens_nothing"), UseArrived() && !ScreenPage->IsShown(), State());
         Finish();
         return;
@@ -197,4 +220,6 @@ void UOpenWillowQuest::TickScreenPageTest()
     }
     ++ScreenTestStep;
     ScreenTestAt = Now + Wait;
+    ScreenStepAt = Now;
+    ScreenStepTicks = 0;
 }
