@@ -56,17 +56,44 @@ class ControllerClass:
                 Field('InstantHitCriticalHitBonusModifierStack', 'ArrayProperty'), Field('StartFire', 'Function'), Field('Other')]
 
 
+class RunningSkill:
+    """A running instance: its grade is separate from the tree's, as in the game (Skill.UpdateGrade keeps it at 1 or more)."""
+    def __init__(self, definition, grade, state=1):
+        self.Definition, self.Grade, self.SkillState = definition, grade, state
+
+
+class Manager:
+    def __init__(self, unreadable=False, deactivates=True):
+        self.running, self.unreadable, self.deactivates = [], unreadable, deactivates
+
+    @property
+    def ActiveSkills(self):
+        if self.unreadable:
+            raise AttributeError('no such list')
+        return self.running
+
+    def DeactivateSkill(self, _instigator, defn):
+        if self.deactivates:
+            for skill in self.running:
+                if skill.Definition == defn:
+                    skill.SkillState = 0
+
+
 class Controller(UObject):
     Class = ControllerClass()
 
     def __init__(self, tree, apply_grades=True):
         self.PlayerSkillTree, self.apply_grades = tree, apply_grades
+        self.manager = Manager()
         self.calls = []
         self.CurrentInstantHitCriticalHitBonus = 4.5
         self.CurrentInstantHitCriticalHitBonusBaseValue = 2.0
         self.InstantHitCriticalHitBonusModifierStack = [Struct(Type='MT_Scale', Value=0.15)]
         self.Pawn = Struct(Weapon=Struct(Name='Gun_1'))
         self.WorldInfo = Struct(TimeSeconds=12.5)
+
+    def GetSkillManager(self):
+        return self.manager
 
     def ServerSetSkillSaveGameData(self, defn, grade):
         self.calls.append((defn.path, grade))
@@ -178,6 +205,57 @@ def test_restore_is_read_back():
     assert helios.path in probe['SL']['originals'], 'kept for another try'
 
 
+def _restore_with(tree_grade, running_grade, **manager):
+    """Helios original `tree_grade`, set to 5 with a running instance, then restored; the running grade is left at running_grade."""
+    helios = Definition('Pkg.Cataclysm.Helios')
+    tree = Tree({helios.path: tree_grade})
+    pc = Controller(tree)
+    pc.manager = Manager(**manager)
+    probe = load_probe(pc, {}, [helios])
+    probe['sl_set_grades']({'Helios': 5})
+    pc.manager.running = [RunningSkill(helios, running_grade)]
+    return probe['sl_restore_grades']()['rows'][0], tree, helios, pc, probe
+
+
+def test_tree_back_at_zero_but_skill_still_running():
+    row, tree, helios, _pc, probe = _restore_with(0, 1, deactivates=False)
+    assert tree.grades[helios.path] == 0, 'the tree alone reads as restored'
+    assert row['status'] == 'not restored' and row['running'] == [1], row
+    assert helios.path in probe['SL']['originals']
+
+
+def test_running_skill_is_deactivated_at_zero():
+    row, tree, helios, pc, _probe = _restore_with(0, 1)
+    assert row['status'] == 'restored' and row['running'] == [], row
+    assert pc.manager.running[0].SkillState == 0
+
+
+def test_running_grade_must_match_above_zero():
+    assert _restore_with(3, 5)[0]['status'] == 'not restored'
+    assert _restore_with(3, 3)[0]['status'] == 'restored'
+
+
+def test_unreadable_running_state_is_not_restored_as_if_covered():
+    row, *_ = _restore_with(0, 1, unreadable=True)
+    assert row['status'] == 'tree only' and row['running'] is None, row
+
+
+def test_unexpected_active_reports_another_steps_skill():
+    helios, ruin = Definition('Pkg.Cataclysm.Helios'), Definition('Pkg.Cataclysm.Ruin')
+    eye = Definition('Pkg.Harmony.MindsEye')
+    tree = Tree({helios.path: 0, ruin.path: 0, eye.path: 3})
+    pc = Controller(tree)
+    pc.manager.running = [RunningSkill(eye, 3), RunningSkill(Definition('Pkg.NotInTheTree'), 1)]
+    probe = load_probe(pc, {}, [helios, ruin, eye])
+    assert probe['sl_mark_baseline']() == {'readable': True, 'skills': {eye.path: 3}}
+    assert probe['sl_unexpected_active'](['Ruin']) == {'readable': True, 'unexpected': []}
+    pc.manager.running.append(RunningSkill(helios, 1))
+    pc.manager.running.append(RunningSkill(ruin, 1))
+    assert probe['sl_unexpected_active'](['Ruin'])['unexpected'] == [helios.path], 'this step\'s own skill is expected'
+    pc.manager.unreadable = True
+    assert probe['sl_unexpected_active'](['Ruin'])['readable'] is False
+
+
 def test_bullymongs_leave_out_a_corpse():
     pawns = {'P1': Pawn('P1'), 'P2': Corpse('P2'), 'P3': Pawn('P3', health=1.0), 'P4': Pawn('P4', radius=50),
              'P5': Pawn('P5', controller=False), 'P6': Pawn('P6', deleted=True), 'P7': Pawn('P7')}
@@ -244,11 +322,13 @@ $ErrorActionPreference = 'Stop'
 $errors = $null; $tokens = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('%CAPTURE%', [ref]$tokens, [ref]$errors)
 foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
+    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict', 'Get-SessionComplete') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
 }
 function global:Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'broken') { return "Traceback (most recent call last):`n  LookupError: WillowAIPawn_9" }
     if ($global:BadRestore -and $Code -match 'sl_restore_grades') { return '{"rows":[{"path":"P","status":"not restored"}]}' }
+    if ($global:TreeOnly -and $Code -match 'sl_restore_grades') { return '{"rows":[{"path":"P","status":"tree only"}]}' }
+    if ($global:Mixed -and $Code -match 'sl_unexpected_active') { return '{"readable":true,"unexpected":["Pkg.Helios"]}' }
     return '{}'
 }
 $Out = '%OUT%'
@@ -271,6 +351,32 @@ Invoke-Step 'grade_stuck' @{} { $script:ran += 'grade_stuck' }
 $global:BadRestore = $false
 Invoke-Step 'after_stuck' @{} { $script:ran += 'after_stuck' }
 $script:GradesBroken = $false
+$global:Mixed = $true
+Invoke-Step 'mixed' @{} { $script:ran += 'mixed' }
+$global:Mixed = $false
+$global:TreeOnly = $true
+Invoke-Step 'tree_only' @{} { $script:ran += 'tree_only' }
+$global:TreeOnly = $false
+Invoke-Step 'after_tree_only' @{} { $script:ran += 'after_tree_only' }
+$unknownAfter = $script:RunningUnknown
+$script:RunningUnknown = $false
+# Complete needs every requested step passed and a clean cleanup.
+$cleanOk = @{ saves = 'identical to B after 2 restores'; driver = 'removed' }
+$passed = @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $false })
+$noError = [ordered]@{ started = 'x' }
+$complete = [ordered]@{
+    good = Get-SessionComplete $noError $passed @() $cleanOk $true $false $false
+    step_failed = Get-SessionComplete $noError @([pscustomobject]@{ step = 'a'; ok = $false; possibly_contaminated = $false }) @() $cleanOk $true $false $false
+    contaminated = Get-SessionComplete $noError @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $true }) @() $cleanOk $true $false $false
+    no_steps = Get-SessionComplete $noError @() @() $cleanOk $true $false $false
+    requested_missing = Get-SessionComplete $noError $passed @('a', 'typo') $cleanOk $true $false $false
+    driver_left = Get-SessionComplete $noError $passed @() @{ saves = 'identical to B'; driver = 'STILL PRESENT: D' } $true $false $false
+    saves_differ = Get-SessionComplete $noError $passed @() @{ saves = 'NOT IDENTICAL to B'; driver = 'removed' } $true $false $false
+    game_running = Get-SessionComplete $noError $passed @() $cleanOk $false $false $false
+    run_error = Get-SessionComplete ([ordered]@{ error = 'x' }) $passed @() $cleanOk $true $false $false
+    grades_broken = Get-SessionComplete $noError $passed @() $cleanOk $true $true $false
+    running_unknown = Get-SessionComplete $noError $passed @() $cleanOk $true $false $true
+}
 # The backup guard, on real folders with the real hash compare.
 $realgame = [System.Management.Automation.Language.Parser]::ParseFile('%REALGAME%', [ref]$tokens, [ref]$errors)
 foreach ($f in $realgame.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
@@ -283,7 +389,7 @@ $guard = 'no error'; try { Copy-VerifiedRoot $src $partial } catch { $guard = "$
 $created = Get-SavesVerdict @([pscustomobject]@{ file = 'SanitySaver'; status = 'created during the run; left for the maintainer' }) 'BAK'
 $clean = Get-SavesVerdict @([pscustomobject]@{ file = 'x'; status = 'changed, restored' }) 'BAK'
 $failed = Get-SavesVerdict @([pscustomobject]@{ file = 'Config'; status = 'BACKUP FAILED; not restored, and nothing was started' }) 'BAK'
-[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed } | ConvertTo-Json -Depth 5 -Compress
+[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed; complete = $complete; unknown_after = $unknownAfter } | ConvertTo-Json -Depth 5 -Compress
 '''
 
 
@@ -300,7 +406,10 @@ def test_step_runner_keeps_the_traceback_and_stops():
         assert done.returncode == 0, done.stderr
         result = json.loads(done.stdout.strip().splitlines()[-1])
         record = json.loads((Path(out) / 'bad1.json').read_text(encoding='utf-8-sig'))
-    assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked', 'grade_stuck'], result['ran']
+    assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked', 'grade_stuck', 'mixed', 'tree_only', 'after_tree_only'], result['ran']
+    assert result['unknown_after'] is True, 'tree only leaves the session marked'
+    assert result['complete'].pop('good') is True
+    assert not any(result['complete'].values()), result['complete']
     assert 'differs from the original' in result['guard'], result['guard']
     assert result['created'].startswith('NOT IDENTICAL') and 'SanitySaver' in result['created'], result['created']
     assert result['failed'].startswith('NOT IDENTICAL') and 'Config' in result['failed'], result['failed']
@@ -311,10 +420,14 @@ def test_step_runner_keeps_the_traceback_and_stops():
     assert by_step['good']['ok'] is True and by_step['recovers']['ok'] is True, 'a success resets the count'
     assert by_step['skipped']['error'] == 'not run: the two steps before it failed'
     assert by_step['after_stuck']['error'] == 'not run: a grade from an earlier step did not restore'
+    assert by_step['mixed']['ok'] is True and by_step['mixed']['possibly_contaminated'] is True
+    assert by_step['after_tree_only']['possibly_contaminated'] is True, 'after a tree-only restore every reading is in doubt'
+    assert by_step['good']['possibly_contaminated'] is False
 
 
 def test_capture_tolerates_the_quit_reply():
     text = CAPTURE.read_text(encoding='utf-8')
+    assert 'if ($log.complete -eq $true) { exit 0 } else { exit 1 }' in text, 'exit 0 only when complete'
     assert """try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null }""" in text
     assert """    Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)'""" not in text, 'the bare call has no reply to trim'
 

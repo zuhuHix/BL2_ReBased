@@ -117,6 +117,7 @@ function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
 # in the step's JSON. Two steps failing in a row end the run, so a broken setup cannot use up the slot.
 $script:FailedInARow = 0
 $script:GradesBroken = $false   # a grade did not go back: later steps would read under a wrong grade
+$script:RunningUnknown = $false   # the running skills cannot be read: "restored" could only speak for the tree
 function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
     if ($Steps -and $Name -notin $Steps) { return }
     $rec = [ordered]@{ step = $Name; grades = $Grades; started = (Get-Date).ToString('o') }
@@ -135,6 +136,10 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
             $bad = @($set.rows | Where-Object { $_.status -ne 'set' })
             if ($set.status -eq 'not implemented' -or $bad.Count) { throw "grades not set: $($set | ConvertTo-Json -Compress -Depth 6)" }
         }
+        # Could an earlier step's skill be in this reading? The record says so; the run goes on, and the session is not complete.
+        $keys = ($Grades.Keys | ForEach-Object { "'$_'" }) -join ', '
+        $rec.active_check = PyCall "sl_unexpected_active([$keys])"
+        $rec.possibly_contaminated = $script:RunningUnknown -or $rec.active_check.readable -eq $false -or @($rec.active_check.unexpected | Where-Object { $_ }).Count -gt 0
         $rec.result = & $Body
         $rec.ok = $true
         $script:FailedInARow = 0
@@ -146,12 +151,22 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
         catch { $rec.watch_cleanup_error = "$_" }
         try {
             $rec.grades_restored = PyCall 'sl_restore_grades()'
-            if (@($rec.grades_restored.rows | Where-Object { $_ -and $_.status -ne 'restored' }).Count) { $script:GradesBroken = $true }
+            # A running skill's grade can follow the tree a tick later: one more look before calling it stuck.
+            if (@($rec.grades_restored.rows | Where-Object { $_ -and $_.status -eq 'not restored' }).Count) {
+                Start-Sleep 1
+                $rec.grades_restored_first_try = $rec.grades_restored
+                $rec.grades_restored = PyCall 'sl_restore_grades()'
+            }
+            if (@($rec.grades_restored.rows | Where-Object { $_ -and $_.status -notin 'restored', 'tree only' }).Count) { $script:GradesBroken = $true }
+            if (@($rec.grades_restored.rows | Where-Object { $_ -and $_.status -eq 'tree only' }).Count) {
+                $script:RunningUnknown = $true
+                "WARNING: step $Name restored the tree's grades, but the running skills could not be read: later readings may include this step's skills"
+            }
         }
         catch { $rec.restore_error = "$_"; $script:GradesBroken = $true }
         $rec.finished = (Get-Date).ToString('o')
         $rec | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $Out "$Name.json")
-        $summary.steps += [pscustomobject]@{ step = $Name; ok = $rec.ok; error = $rec.error }
+        $summary.steps += [pscustomobject]@{ step = $Name; ok = $rec.ok; error = $rec.error; possibly_contaminated = [bool]$rec.possibly_contaminated }
     }
 }
 
@@ -182,6 +197,18 @@ function Get-SavesVerdict([object[]]$Rows, [string]$Backup) {
     $bad = @($Rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' -or $_.status -like 'BACKUP FAILED*' -or $_.status -like 'created during the run*' })
     if ($bad.Count) { "NOT IDENTICAL to $Backup ($($bad.Count) problems: $(($bad | ForEach-Object { $_.file }) -join ', '))" }
     else { "identical to $Backup after $(@($Rows).Count) restores" }
+}
+
+# Complete means every requested step passed without a possible mix-up from an earlier step, and everything is back as it was.
+function Get-SessionComplete($Log, [object[]]$StepRows, [string[]]$Requested, $Cleanup, [bool]$GameGone, [bool]$GradesBroken, [bool]$RunningUnknown) {
+    if ($Log.Contains('error') -or !$GameGone -or $GradesBroken -or $RunningUnknown) { return $false }
+    if ("$($Cleanup.saves)" -notlike 'identical*') { return $false }
+    if ($Cleanup.driver -notin 'removed', 'not installed by this run; untouched') { return $false }
+    $rows = @($StepRows | Where-Object { $_ })
+    if (!$rows.Count) { return $false }
+    if (@($rows | Where-Object { !$_.ok -or $_.possibly_contaminated }).Count) { return $false }
+    foreach ($name in $Requested) { if ($name -notin $rows.step) { return $false } }
+    $true
 }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
@@ -246,6 +273,11 @@ try {
     }
     # Immunity for the whole run, once: it refuses damage to Maya; nothing else about her changes.
     $log.protect = Py 'print(len(protect_player(True)))'
+    $log.baseline = PyCall 'sl_mark_baseline()'
+    if ($log.baseline.readable -eq $false) {
+        $script:RunningUnknown = $true
+        'WARNING: the running skills cannot be read: "restored" speaks only for the tree, and every reading may include an earlier step''s skills'
+    }
 
     Invoke-Step 'discover' @{} {
         PyCall "{'Helios': sl_find_skills('Helios'), 'Ruin': sl_find_skills('Ruin'), 'Converge': sl_find_skills('Converge'), 'SubSequence': sl_find_skills('Sub-Sequence'), 'SweetRelease': sl_find_skills('Sweet Release'), 'MindsEye': sl_find_skills('Minds Eye'), 'LifeTap': sl_find_skills('Life Tap'), 'Phaselock': sl_find_skills('Phaselock')}"
@@ -296,7 +328,8 @@ try {
         @{ target = $t; setup = $setup; maya_health = $health; watch_start = $watch; kill = $kill; result = $res; ready = $ready }
     }
 
-    # 4 and 5. Helios and Ruin last: Ruin's pulses kill the target, and one controlled target is all that is left by now.
+    # 4 and 5. Helios and Ruin last: Ruin's pulses kill the target, and one controlled target is all that is left by now. Helios
+    # goes first, so its restore has to deactivate it: if that fails, the restore check stops the run before Ruin's reading.
     Invoke-DamageCast 'helios' @{ Helios = 5 }
     Invoke-DamageCast 'ruin' @{ Ruin = 1 }
     # Normal end: the game quits itself (the finally block still stops it if it has not).
@@ -365,8 +398,7 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     }
     try {
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
-        # Complete only when nothing failed and everything is back as it was. A failed step is in `steps`, not here.
-        $log.complete = !$log.Contains('error') -and $gameGone -and "$($cleanup.saves)" -like 'identical*' -and !$script:GradesBroken
+        $log.complete = Get-SessionComplete $log $summary.steps $Steps $cleanup $gameGone $script:GradesBroken $script:RunningUnknown
         [ordered]@{ run = $log; steps = $summary.steps } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'summary.json')
         if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
     } catch { "log write failed: $_" }
@@ -376,3 +408,5 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     "session complete: $($log.complete)"
     $rows
 }
+# The exit code says the same: a failed step or an unclean cleanup is not a success.
+if ($log.complete -eq $true) { exit 0 } else { exit 1 }
