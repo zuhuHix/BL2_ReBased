@@ -1,9 +1,13 @@
 #include "OpenWillowMelee.h"
 #include "OpenWillowHitEvent.h"
+#include "OpenWillowInventoryWidget.h"
+#include "OpenWillowMayaHUD.h"
+#include "OpenWillowVendor.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowWalker.h"
 #include "Camera/CameraComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "CollisionQueryParams.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -60,7 +64,8 @@ void AOpenWillowWalker::MeleePressed()
         UE_LOG(LogTemp, Display, TEXT("OWMELEE press refused: grenade throw in progress t=%.2f"), Now);
         return;
     }
-    const float Duration = MeleeAnim ? MeleeAnim->GetPlayLength() : OpenWillowMelee::NoClipDuration;
+    // At least as long as the hit's delay, so the weapons stay busy until the hit has landed.
+    const float Duration = FMath::Max(MeleeAnim ? MeleeAnim->GetPlayLength() : OpenWillowMelee::NoClipDuration, OpenWillowMelee::HitDelay);
     if (!MeleeSwing.Press(Now, Duration))
     {
         UE_LOG(LogTemp, Display, TEXT("OWMELEE press refused: swing in progress t=%.2f"), Now);
@@ -69,6 +74,7 @@ void AOpenWillowWalker::MeleePressed()
     // PerformSharedWeaponActions: the reload stops and the aim ends for the action's length; the trigger waits (MeleeBusy).
     CancelReload();
     AimReleased();
+    Burst.interrupt();   // as a reload does: firing again needs a new press
     if (ArmsAnim && MeleeAnim) ArmsAnim->PlayAction(MeleeAnim, 1.f, 1.f, OpenWillowMelee::BlendIn, OpenWillowMelee::BlendOut);
     UE_LOG(LogTemp, Display, TEXT("OWMELEE press t=%.2f duration=%.2f clip=%d"), Now, Duration, MeleeAnim ? 1 : 0);
 }
@@ -80,10 +86,22 @@ bool AOpenWillowWalker::MeleeBusy() const
 
 void AOpenWillowWalker::TickMelee()
 {
-    if (!GetWorld() || !Camera) return;
+    if (!GetWorld() || !Camera || !MeleeBusy()) return;
     const float Now = GetWorld()->GetTimeSeconds();
+    // Going down, a status page or a shop ends the swing with its pending hit. A host rule, UNVERIFIED (CONTROLS.md).
+    const APlayerController* PC = Cast<APlayerController>(Controller);
+    const AOpenWillowMayaHUD* HUD = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
+    const UOpenWillowVendorSubsystem* Vendors = GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>();
+    const TCHAR* Cancel = IsDown() ? TEXT("Maya went down") : bInventoryPresentation || (HUD && HUD->IsSkillsOpen()) || IsInventoryWidgetOpen() ? TEXT("a status page opened")
+        : Vendors && Vendors->IsShopOpen() ? TEXT("a shop opened") : nullptr;
+    if (Cancel)
+    {
+        MeleeSwing.Reset();
+        if (ArmsAnim && MeleeAnim && ArmsAnim->Action == MeleeAnim) ArmsAnim->PlayAction(nullptr);
+        UE_LOG(LogTemp, Display, TEXT("OWMELEE swing cancelled: %s t=%.2f"), Cancel, Now);
+        return;
+    }
     if (!MeleeSwing.ConsumeHit(Now)) return;
-    if (IsDown()) { UE_LOG(LogTemp, Display, TEXT("OWMELEE swing ended: Maya went down")); return; }
 
     // The stock origin comes from a native the bytecode does not show; the view is the host's stand-in (UNVERIFIED).
     const FVector Forward = GetViewRotation().Vector();

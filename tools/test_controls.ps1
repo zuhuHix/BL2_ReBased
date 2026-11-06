@@ -29,6 +29,9 @@ foreach ($file in $manifests.Values) {
 $path = { param($key) (Resolve-Path -LiteralPath (Join-Path $repo $manifests[$key])).Path }
 $gear = & $path 'gear'
 $gearLevel = [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level
+# The grenade steps need the stock grenade's data, as test_weapon_firing.ps1 does.
+& python (Join-Path $repo 'tools/grenade_mod.py') --game $Game --level 8
+if ($LASTEXITCODE -ne 0) { throw 'tools/grenade_mod.py failed' }
 $outDir = Join-Path $repo 'local/menus/controls'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $save = Join-Path $outDir 'save.json'
