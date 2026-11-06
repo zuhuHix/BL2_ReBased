@@ -275,16 +275,37 @@ def finite(line, key):
     return value if math.isfinite(value) else None
 
 
+def rolled_pool_fails(name, line, must_differ):
+    """The held gun's accuracy pool against its card's. With must_differ the card must also be off the template's base, or this
+    gun could not show a skipped merge."""
+    triples = {which: [finite(line, f'{which}_{key}') for key in ('min', 'max', 'rate')] for which in ('pool', 'card', 'base')}
+    if None in triples['pool']:
+        return [f'{name}: no accuracy pool on the held gun']
+    if None in triples['card']:
+        return [f'{name}: no accuracy pool on its card, {MANIFEST_HINT}']
+
+    def near(a, b):
+        return abs(a - b) <= 1e-3 * max(abs(a), abs(b), 1.0)
+
+    fails = []
+    if not all(near(held, card) for held, card in zip(triples['pool'], triples['card'])):
+        fails.append(f"{name}: held pool {triples['pool']} is not its card's {triples['card']} (base {triples['base']})")
+    if must_differ and (None in triples['base'] or all(near(card, base) for card, base in zip(triples['card'], triples['base']))):
+        fails.append(f"{name}: card pool {triples['card']} is not off the base {triples['base']}, so it cannot show a skipped merge")
+    return fails
+
+
 def check_rolled(lines):
     """Generated guns' refire (OWFIRING rolled): a gun with burst count 1 gives exactly one shot from one hold and a gun with
     burst count 0 more than one. The burst values must come from the manifest, and each hold must have lasted at least two of
     the gun's fire intervals, so one shot cannot just mean a short hold. A third gun (want -1) must launch a projectile that lands
     (impacts and damage are counted by that gun's id, so another gun's status ticks cannot pass it), and
-    every gun's firing block must have loaded from its template."""
+    every gun's firing block must have loaded from its template. Every held gun's accuracy pool must equal its card's, read apart from
+    the item; a fourth gun (want -2) has a card pool off its template's base, so a skipped merge cannot pass."""
     fails = []
-    for want, rule in (('1', 'exactly one shot'), ('0', 'more than one shot'), ('-1', 'a launched projectile')):
+    for want, rule in (('1', 'exactly one shot'), ('0', 'more than one shot'), ('-1', 'a launched projectile'), ('-2', 'a pool off the base')):
         line = next((row for row in lines if row.get('want') == want), None)
-        label = 'rolled gun with a projectile' if want == '-1' else f'rolled gun with burst {want}'
+        label = {'-1': 'rolled gun with a projectile', '-2': 'rolled gun with a pool off the base'}.get(want, f'rolled gun with burst {want}')
         if line is None:
             fails.append(f'no OWFIRING rolled line for a {label}')
             continue
@@ -304,6 +325,9 @@ def check_rolled(lines):
             continue
         if line.get('firing_loaded') != '1':
             fails.append(f'{name}: no firing block from its template, {TEMPLATE_HINT}')
+        fails += rolled_pool_fails(name, line, want == '-2')
+        if want == '-2':
+            continue
         if want == '-1':
             launches, impacts, damage = finite(line, 'launches'), finite(line, 'impacts'), finite(line, 'damage')
             if launches is None or launches < 1:

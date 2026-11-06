@@ -364,18 +364,26 @@ class RolledDamage(unittest.TestCase):
         self.assertTrue(any('no number' in reason for reason in check.check_rolled_damage(line)))
 
 
-ROLLED_LINES = ('LogTemp: Display: OWFIRING rolled want=1 id=gen_a type=Pistol burst=1 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=6 shots=1 launches=0',
-                'LogTemp: Display: OWFIRING rolled want=0 id=gen_b type=Assault_Rifle burst=0 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=20 shots=4 launches=0',
-                'LogTemp: Display: OWFIRING rolled want=-1 id=gen_c type=Launcher burst=0 from_manifest=1 firing_loaded=1 interval=0.500 hold=1.600 magazine=4 shots=2 launches=2 impacts=2 damage=50.00')
+ROLLED_LINES = ('LogTemp: Display: OWFIRING rolled want=1 id=gen_a type=Pistol burst=1 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=6 shots=1 launches=0 pool_min=2.0000 pool_max=12.0000 pool_rate=-8.0000 card_min=2.0000 card_max=12.0000 card_rate=-8.0000 base_min=2.0000 base_max=12.0000 base_rate=-8.0000',
+                'LogTemp: Display: OWFIRING rolled want=0 id=gen_b type=Assault_Rifle burst=0 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=20 shots=4 launches=0 pool_min=2.0000 pool_max=12.0000 pool_rate=-8.0000 card_min=2.0000 card_max=12.0000 card_rate=-8.0000 base_min=2.0000 base_max=12.0000 base_rate=-8.0000',
+                'LogTemp: Display: OWFIRING rolled want=-1 id=gen_c type=Launcher burst=0 from_manifest=1 firing_loaded=1 interval=0.500 hold=1.600 magazine=4 shots=2 launches=2 impacts=2 damage=50.00 pool_min=2.0000 pool_max=12.0000 pool_rate=-8.0000 card_min=2.0000 card_max=12.0000 card_rate=-8.0000 base_min=2.0000 base_max=12.0000 base_rate=-8.0000',
+                'LogTemp: Display: OWFIRING rolled want=-2 id=gen_d type=Pistol burst=0 from_manifest=1 firing_loaded=1 interval=0.200 hold=0.700 magazine=9 shots=3 launches=3 impacts=3 damage=9.00 pool_min=1.5000 pool_max=15.0000 pool_rate=-6.4000 card_min=1.5000 card_max=15.0000 card_rate=-6.4000 base_min=2.0000 base_max=12.0000 base_rate=-8.0000')
+
+
+POOL_FIELDS = {'pool_min': '2.0000', 'pool_max': '12.0000', 'pool_rate': '-8.0000', 'card_min': '2.0000', 'card_max': '12.0000',
+               'card_rate': '-8.0000', 'base_min': '2.0000', 'base_max': '12.0000', 'base_rate': '-8.0000'}
 
 
 class RolledLines(unittest.TestCase):
-    ONE = {'want': '1', 'id': 'gen_a', 'type': 'Pistol', 'burst': '1', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '6', 'shots': '1', 'launches': '0'}
-    ZERO = {'want': '0', 'id': 'gen_b', 'type': 'Assault_Rifle', 'burst': '0', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '20', 'shots': '4', 'launches': '0'}
-    ROCKET = {'want': '-1', 'id': 'gen_c', 'type': 'Launcher', 'burst': '0', 'from_manifest': '1', 'interval': '0.500', 'hold': '1.600', 'firing_loaded': '1', 'magazine': '4', 'shots': '2', 'launches': '2', 'impacts': '2', 'damage': '50.00'}
+    ONE = {'want': '1', 'id': 'gen_a', 'type': 'Pistol', 'burst': '1', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '6', 'shots': '1', 'launches': '0', **POOL_FIELDS}
+    ZERO = {'want': '0', 'id': 'gen_b', 'type': 'Assault_Rifle', 'burst': '0', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '20', 'shots': '4', 'launches': '0', **POOL_FIELDS}
+    ROCKET = {'want': '-1', 'id': 'gen_c', 'type': 'Launcher', 'burst': '0', 'from_manifest': '1', 'interval': '0.500', 'hold': '1.600', 'firing_loaded': '1', 'magazine': '4', 'shots': '2', 'launches': '2', 'impacts': '2', 'damage': '50.00', **POOL_FIELDS}
+    MOVED = {'want': '-2', 'id': 'gen_d', 'type': 'Pistol', 'burst': '0', 'from_manifest': '1', 'interval': '0.200', 'hold': '0.700', 'firing_loaded': '1',
+             'magazine': '9', 'shots': '3', 'launches': '3', 'impacts': '3', 'damage': '9.00', 'pool_min': '1.5000', 'pool_max': '15.0000', 'pool_rate': '-6.4000',
+             'card_min': '1.5000', 'card_max': '15.0000', 'card_rate': '-6.4000', 'base_min': '2.0000', 'base_max': '12.0000', 'base_rate': '-8.0000'}
 
-    def fails(self, one=None, zero=None, rocket=None):
-        return check.check_rolled([dict(self.ONE, **(one or {})), dict(self.ZERO, **(zero or {})), dict(self.ROCKET, **(rocket or {}))])
+    def fails(self, one=None, zero=None, rocket=None, moved=None):
+        return check.check_rolled([dict(self.ONE, **(one or {})), dict(self.ZERO, **(zero or {})), dict(self.ROCKET, **(rocket or {})), dict(self.MOVED, **(moved or {}))])
 
     def test_good_lines_pass(self):
         self.assertEqual(self.fails(), [])
@@ -383,7 +391,7 @@ class RolledLines(unittest.TestCase):
     def test_read_from_the_log(self):
         extra = {}
         check.read_log('\n'.join(ROLLED_LINES) + '\n', extra)
-        self.assertEqual([row['want'] for row in extra['rolled']], ['1', '0', '-1'])
+        self.assertEqual([row['want'] for row in extra['rolled']], ['1', '0', '-1', '-2'])
         self.assertEqual(check.check_rolled(extra['rolled']), [])
 
     def test_the_original_bug_fails(self):
@@ -403,20 +411,41 @@ class RolledLines(unittest.TestCase):
 
     def test_stale_or_missing_manifest_names_the_tool(self):
         for reason in ('stale_manifest', 'no_manifest'):
-            fails = check.check_rolled([{'want': '1', 'unavailable': reason}, dict(self.ZERO), dict(self.ROCKET)])
+            fails = check.check_rolled([{'want': '1', 'unavailable': reason}, dict(self.ZERO), dict(self.ROCKET), dict(self.MOVED)])
             self.assertTrue(any('weapon_gen_manifest.py' in text and reason in text for text in fails), reason)
         self.assertTrue(any('weapon_gen_manifest.py' in text for text in self.fails(one={'from_manifest': '0'})))
 
     def test_other_unavailable_reasons_fail(self):
-        self.assertTrue(check.check_rolled([{'want': '1', 'unavailable': 'not_equipped'}, dict(self.ZERO), dict(self.ROCKET)]))
+        self.assertTrue(check.check_rolled([{'want': '1', 'unavailable': 'not_equipped'}, dict(self.ZERO), dict(self.ROCKET), dict(self.MOVED)]))
 
     def test_missing_templates_name_the_tool(self):
-        fails = check.check_rolled([{'want': '1', 'unavailable': 'no_firing_templates'}, dict(self.ZERO), dict(self.ROCKET)])
+        fails = check.check_rolled([{'want': '1', 'unavailable': 'no_firing_templates'}, dict(self.ZERO), dict(self.ROCKET), dict(self.MOVED)])
         self.assertTrue(any('weapon_gen_firing.py' in text for text in fails))
         self.assertTrue(any('weapon_gen_firing.py' in text for text in self.fails(zero={'firing_loaded': '0'})))
 
     def test_a_rolled_launcher_must_launch(self):
         self.assertTrue(any('projectiles launched' in text for text in self.fails(rocket={'launches': '0'})))
+
+    def test_a_skipped_pool_merge_fails(self):
+        # What the host does with -owrolledskippoolmerge: the held gun keeps the template's base.
+        skipped = {'pool_min': '2.0000', 'pool_max': '12.0000', 'pool_rate': '-8.0000'}
+        self.assertTrue(any('is not its card' in text and 'gen_d' in text for text in self.fails(moved=skipped)))
+
+    def test_a_gun_on_the_base_cannot_show_a_skipped_merge(self):
+        on_base = {'card_min': '2.0000', 'card_max': '12.0000', 'card_rate': '-8.0000', 'pool_min': '2.0000', 'pool_max': '12.0000', 'pool_rate': '-8.0000'}
+        self.assertTrue(any('cannot show' in text for text in self.fails(moved=on_base)))
+
+    def test_any_held_gun_off_its_card_fails(self):
+        self.assertTrue(any('is not its card' in text for text in self.fails(one={'pool_min': '3.0000'})))
+        self.assertTrue(any('is not its card' in text for text in self.fails(rocket={'pool_rate': '-1.0000'})))
+
+    def test_missing_pool_values_fail(self):
+        self.assertTrue(any('on the held gun' in text for text in self.fails(zero={'pool_max': 'nan'})))
+        self.assertTrue(any('weapon_gen_manifest.py' in text for text in self.fails(zero={'card_min': 'nan'})))
+        self.assertTrue(self.fails(moved={'base_min': 'nan'}))
+
+    def test_the_pool_gun_is_required(self):
+        self.assertTrue(any('off the base' in text for text in check.check_rolled([dict(self.ONE), dict(self.ZERO), dict(self.ROCKET)])))
 
     def test_a_launch_alone_is_not_enough(self):
         self.assertTrue(any('no impact or damage' in text for text in self.fails(rocket={'impacts': '0', 'damage': '0.00'})))

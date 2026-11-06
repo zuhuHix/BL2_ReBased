@@ -15,6 +15,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "weapon_gen.hpp"
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -402,7 +403,9 @@ bool FOpenWillowWeaponGen::MergeFiringTemplate(const FJsonObject& Template, cons
     Block->SetNumberField(TEXT("spin_up"), Item.SpinUp);
     // The roll's accuracy pool, with the template's delay and start rule; a manifest without the pool rows leaves the type's base.
     const TSharedPtr<FJsonObject>* TemplatePool = nullptr;
-    if (!Card.accuracyPool.empty() && Template.TryGetObjectField(TEXT("accuracy_pool"), TemplatePool))
+    // -owrolledskippoolmerge: for showing once that the firing test fails without this merge (tools/check_weapon_firing.py check_rolled).
+    static const bool bSkipPoolMerge = FParse::Param(FCommandLine::Get(), TEXT("owrolledskippoolmerge"));
+    if (!bSkipPoolMerge && !Card.accuracyPool.empty() && Template.TryGetObjectField(TEXT("accuracy_pool"), TemplatePool))
     {
         const TSharedRef<FJsonObject> Pool = MakeShared<FJsonObject>();
         Pool->Values = (*TemplatePool)->Values;
@@ -485,6 +488,35 @@ bool FOpenWillowWeaponGen::FindGunWithDamageStack(int32 Stage, float Scale, FOpe
     return false;
 }
 
+bool FOpenWillowWeaponGen::RolledPoolValues(const FString& Balance, int32 Stage, uint32 Seed, float OutCard[3], float OutBase[3])
+{
+    const float NotANumber = std::numeric_limits<float>::quiet_NaN();
+    for (int32 I = 0; I < 3; ++I) OutCard[I] = OutBase[I] = NotANumber;
+    const weapongen::WeaponGenManifest* M = Manifest();
+    const FJsonObject* Root = FiringTemplates();
+    if (!M || !Root) return false;
+    const weapongen::WeaponGenResult Result = weapongen::RollWeapon(*M, ToUtf8(Balance), Stage, Seed);
+    if (!Result.ok) return false;
+    const weapongen::WeaponGenCard& Card = Result.card;
+    const std::string Names[3] = {"min", "max", "idle_rate"};
+    for (const auto& [Name, Value] : Card.accuracyPool)
+        for (int32 I = 0; I < 3; ++I)
+            if (Name == Names[I]) OutCard[I] = float(Value);
+    const TSharedPtr<FJsonObject>* Templates = nullptr;
+    const TSharedPtr<FJsonObject>* Template = nullptr;
+    const TSharedPtr<FJsonObject>* Pool = nullptr;
+    if (!Root->TryGetObjectField(TEXT("templates"), Templates)
+        || !(*Templates)->TryGetObjectField(FromUtf8(Result.weaponType) + TEXT("|") + FromUtf8(Card.firingMode) + TEXT("|") + FromUtf8(Card.element), Template)
+        || !(*Template)->TryGetObjectField(TEXT("accuracy_pool"), Pool))
+        return false;
+    for (int32 I = 0; I < 3; ++I)
+    {
+        double Value = 0;
+        if ((*Pool)->TryGetNumberField(FromUtf8(Names[I]), Value)) OutBase[I] = float(Value);
+    }
+    return true;
+}
+
 bool FOpenWillowWeaponGen::FindGunForBurstTest(int32 WantedBurst, int32 Stage, FOpenWillowWeaponItem& OutItem, FString& OutReason)
 {
     const weapongen::WeaponGenManifest* M = Manifest();
@@ -496,7 +528,8 @@ bool FOpenWillowWeaponGen::FindGunForBurstTest(int32 WantedBurst, int32 Stage, F
     for (const weapongen::GenBalance& Balance : M->balances)
     {
         FOpenWillowWeaponItem Item;
-        if (!RollBalance(FromUtf8(M->objects[size_t(Balance.object)].path), Stage, 1u, Item)) continue;
+        const FString Path = FromUtf8(M->objects[size_t(Balance.object)].path);
+        if (!RollBalance(Path, Stage, 1u, Item)) continue;
         if (!Item.Firing.bBurstFromManifest)
         {
             OutReason = TEXT("stale_manifest");
@@ -508,7 +541,13 @@ bool FOpenWillowWeaponGen::FindGunForBurstTest(int32 WantedBurst, int32 Stage, F
             return false;
         }
         // BurstTestRocket wants any gun that launches a projectile, whatever its burst count.
-        const bool bWanted = WantedBurst == BurstTestRocket ? Item.Firing.Kind == EOpenWillowShotKind::Rocket : Item.Firing.BurstCount == WantedBurst;
+        bool bWanted = WantedBurst == BurstTestRocket ? Item.Firing.Kind == EOpenWillowShotKind::Rocket : Item.Firing.BurstCount == WantedBurst;
+        if (WantedBurst == BurstTestPool)
+        {
+            float Card[3], Base[3];
+            bWanted = RolledPoolValues(Path, Stage, 1u, Card, Base)
+                && (!FMath::IsNearlyEqual(Card[0], Base[0], 0.01f) || !FMath::IsNearlyEqual(Card[1], Base[1], 0.01f) || !FMath::IsNearlyEqual(Card[2], Base[2], 0.01f));
+        }
         // Three shots in the magazine, so that it is not what stops the shots, and a level Maya can equip.
         if (bWanted && Item.Magazine >= 3.f * FMath::Max(1.f, Item.ShotCost) && Item.Level <= Stage && Item.FireRate > 0.f)
         {
