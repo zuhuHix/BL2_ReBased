@@ -65,7 +65,15 @@ captures under ignored `local/inv24/mapshots/`. Nothing below was observed in th
   through `ToggleMap` (`-owmapshots` with `-owvendors`), the Map opened on top and closing it handed the input back to the
   game under the still-open shop (cursor hidden, shop still open). Since 2026-11-04 no status page opens while a shop is
   open (`UOpenWillowVendorSubsystem::IsShopOpen`), and the Walker's legacy inventory widget does not open in its place (PR
-  #101 review); the capture logs both refusals (`map_over_vending open=0`, `inventory_over_vending page=0 widget=0`).
+  #101 review). The capture logs both refusals (`map_over_vending open=0`, `inventory_over_vending page=0 widget=0`,
+  `refusals shop_open=1 result=PASS`), then that the shop survived (`after_map_close ... (expected 0 0 1 1)`), then closes the
+  shop and opens the Map as a control (`map_after_shop open=1`).
+- These lines mean something only with all the pages served. A 2026-11-06 run with `-owflashhud` alone on another port had no
+  status pages (`open=0`, `map_from_inventory=0`) and the vending page failed to load (the page defaults to port 8767) and
+  closed the shop 2 s after it opened, so `map_over_vending open=0` passed for the wrong reason and the legacy widget opened
+  correctly (`widget=1`). The capture now ends with `OWMAPSHOTS FAILED no_map_page` or `FAILED shop_not_open` in those cases.
+  Use `tools/run_ue_flash_hud.ps1` (its default port 8767 needs nothing more), or with `-Port N` add
+  `-owvendingpage=http://127.0.0.1:N/vending.html`; `-owvendors=<vendors.json>` and `local/ui/run/map.json` (`tools/prepare_map_screen.py`) are needed too.
 
 ## Open, for a real-game session
 

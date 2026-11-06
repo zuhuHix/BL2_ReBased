@@ -46,15 +46,27 @@ void OpenWillowMapScreen::TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& 
     // The movie HUD settles a few seconds after it is ready; each step then waits for the page (the map movie loads after
     // the StatusMenu movie).
     constexpr float Start = 10.f;
-    static const float Waits[] = {4.f, 1.5f, 1.5f, 1.5f, 1.5f, 1.5f, 6.f, 5.f, 4.f, 5.f, 2.f, 2.f};
+    static const float Waits[] = {4.f, 1.5f, 1.5f, 1.5f, 1.5f, 1.5f, 6.f, 5.f, 4.f, 5.f, 2.f, 2.f, 5.f};
     const float Now = Maya.GetWorld()->GetTimeSeconds();
     if (Now < Start) return;
     if (ShotStep > 0 && ShotStep <= int32(UE_ARRAY_COUNT(Waits)) && Now < ShotAt + Waits[ShotStep - 1]) return;
+    // A step whose precondition does not hold ends the run: its later lines would pass for the wrong reason.
+    auto Fail = [&Player](const TCHAR* Why)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWMAPSHOTS FAILED %s"), Why);
+        Player.ConsoleCommand(TEXT("quit"));
+        ShotStep = -1;
+    };
+    const UOpenWillowVendorSubsystem* Shop = Maya.GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>();
     switch (ShotStep)
     {
     case 0:
-        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS open=%d"), Hud.ToggleMap() ? 1 : 0);
+    {
+        const bool bOpened = Hud.ToggleMap();
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS open=%d"), bOpened ? 1 : 0);
+        if (!bOpened) { Fail(TEXT("no_map_page: the run needs -owflashskills=<server>skills.html or -owflashmap=<url>")); return; }
         break;
+    }
     case 1:
         Shot(1, TEXT("Open"), Now);
         // Turn Maya's view 90 degrees: the arrow turns, the map stays north up.
@@ -83,22 +95,42 @@ void OpenWillowMapScreen::TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& 
         break;
     }
     case 9:
+    {
         VendorReport(Maya, TEXT("vendor_open"));
-        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS map_over_vending open=%d (expected 0: refused over a shop)"), Hud.ToggleMap() ? 1 : 0);
+        // The vending page's load error closes the shop, so this is checked after the wait.
+        if (!Shop || !Shop->IsShopOpen())
+        {
+            Fail(TEXT("shop_not_open: refusals not tested; the run needs -owvendors=<vendors.json> and -owvendingpage=<server>vending.html"));
+            return;
+        }
+        const bool bMap = Hud.ToggleMap();
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS map_over_vending open=%d (expected 0: refused over a shop)"), bMap ? 1 : 0);
         // The same through the Walker, whose legacy inventory widget is its fallback when the HUD refuses.
         Maya.ToggleInventory();
-        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS inventory_over_vending page=%d widget=%d (expected 0 0)"), Hud.IsInventoryOpen() ? 1 : 0, Maya.IsInventoryWidgetOpen() ? 1 : 0);
+        const bool bPage = Hud.IsInventoryOpen(), bWidget = Maya.IsInventoryWidgetOpen();
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS inventory_over_vending page=%d widget=%d (expected 0 0)"), bPage ? 1 : 0, bWidget ? 1 : 0);
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS refusals shop_open=1 result=%s"), !bMap && !bPage && !bWidget ? TEXT("PASS") : TEXT("FAIL"));
         break;
+    }
     case 10:
         Shot(8, TEXT("MapOverVending"), Now);
         Hud.SendPageKey(TEXT("Escape"));
         break;
     case 11:
         Shot(9, TEXT("AfterMapClose"), Now);
-        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS after_map_close map_open=%d status_page_open=%d mouse_cursor=%d"),
-            Hud.IsMapOpen() ? 1 : 0, Hud.IsSkillsOpen() ? 1 : 0, Player.ShouldShowMouseCursor() ? 1 : 0);
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS after_map_close map_open=%d status_page_open=%d mouse_cursor=%d shop_open=%d (expected 0 0 1 1)"),
+            Hud.IsMapOpen() ? 1 : 0, Hud.IsSkillsOpen() ? 1 : 0, Player.ShouldShowMouseCursor() ? 1 : 0, Shop && Shop->IsShopOpen() ? 1 : 0);
         VendorReport(Maya, TEXT("vendor_after_map_close"));
+        UOpenWillowVendorSubsystem::TryUseNearest(Maya); // a use press closes the open shop
         break;
+    case 12:
+    {
+        // The control: the shop closed, the same call opens the Map, so only the shop can have refused it.
+        const bool bOpened = !(Shop && Shop->IsShopOpen()) && Hud.ToggleMap();
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS map_after_shop open=%d (expected 1)"), bOpened ? 1 : 0);
+        break;
+    }
+    case 13: Shot(10, TEXT("MapAfterShop"), Now); break;
     default:
         UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS done"));
         Player.ConsoleCommand(TEXT("quit"));
