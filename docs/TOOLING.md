@@ -786,9 +786,11 @@ it the inventory suite fails. Then:
 ```
 
 A switch that drives a run and quits, such as `-owinvshots`, needs `-GameWindow`: without it the script opens the editor, no game starts, and it refuses to run.
-With `-GameWindow` such a run is stopped after 20 minutes: the script stops the editor and any page server it started, by process id after checking the
+With `-GameWindow` such a run is stopped after 20 minutes (an estimate, not measured; an hour for `-owgunshots`, whose list has any length: pass `-TimeoutSeconds` for a long list): the script stops the editor and any page server it started, by process id after checking the
 command line, and fails with a nonzero exit; a game that exits with a nonzero code (a crash) gets the same. After a clean exit a server stays up for the next run. `-TimeoutSeconds N` sets the limit and `-TimeoutSeconds 0` removes it. Someone playing with `-GameWindow` and no
-such switch gets no limit, and without `-GameWindow` there is never one (`tools/run_limit.ps1`).
+such switch gets no limit, and without `-GameWindow` there is never one. The switches are a list in `tools/run_limit.ps1`, so a new driver has to be added there.
+
+Tests, with no editor: `python tests/run_limit_test.py` (the rules) and `python tests/run_ue_flash_hud_test.py` (the real launcher, a stand-in editor and the real `serve.py`: stall, crash, clean exit, a server it did not start, the lock released each time; it skips while a real editor runs).
 
 The script starts `tools/hud_overlay/serve.py` on port 8767 if it is not
 running and launches Sanctuary as Maya with `-owflashhud=<url>` and

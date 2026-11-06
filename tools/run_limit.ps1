@@ -1,14 +1,28 @@
-# The time limit for a launcher's scripted run, and how it stops what it started. Dot-sourced by run_ue_flash_hud.ps1; no editor
-# is needed to test it (tests/run_limit_test.py). Nothing here stops a process by image name.
+# The time limit for a launcher's scripted run, and how it stops what it started. Dot-sourced by run_ue_flash_hud.ps1. Tests:
+# tests/run_limit_test.py (the rules) and tests/run_ue_flash_hud_test.py (the real launcher with stubs). Nothing here stops a process by image name.
 
-$script:OwScriptedRunSeconds = 1200 # 20 minutes: a scripted capture takes about 5, a first run with shader work longer
+# An estimate, not measured: a scripted capture should take well under this, and a first run with shader work longer than a normal one.
+$script:OwScriptedRunSeconds = 1200
+# -owgunshots walks a list of any length (-owgunids), so it gets more. Also an estimate: for a long list pass -TimeoutSeconds.
+$script:OwGunShotsSeconds = 3600
 
-# The switches that drive a run and quit by themselves (-owinvshots, -owfiringtest, -owinventoryactions, -owinvopenbench=3, -owslicegate).
-# Launched with powershell -File, -Extra arrives as one comma-joined string.
+# The switches that run by themselves and quit, read from their code. This is a list on purpose: a new driver has to be added here. A pattern
+# on the name caught -owcombattest (it only spawns a target for play) and -owinventoryselftest (it only runs checks); neither quits.
+$script:OwScriptedSwitches = @(
+    'owinvshots', 'owcombatshots', 'owgunshots', 'owfiringshots', 'owphaselockshots', 'owpickupcardshots', 'owmapshots', 'owstatusshots', 'owminimapshots',
+    'owhudshots', 'owhuddownshots', 'owhudfxshots', 'owskillhudshots', 'owrangeshots', 'owambientshots', 'owinvopenbench', 'owfiringtest', 'owreloadphaselocktest',
+    'owmissionlogtest', 'owambienttest', 'owinteractivetest', 'owmovertest', 'owquesttest', 'owrangetest', 'owvendortest', 'owinventoryactions', 'owslicegate', 'owplaytest')
+
+# The -Extra switches, one each. Launched with powershell -File, -Extra arrives as one comma-joined string.
+function Get-OwSwitchNames {
+    param([string[]]$Extra = @())
+    foreach ($switch in ($Extra -split ',')) { ($switch.Trim() -replace '^-', '') -replace '=.*$', '' }
+}
+
 function Test-OwScriptedRun {
     param([string[]]$Extra = @())
-    foreach ($switch in ($Extra -split ',')) {
-        if ($switch.Trim() -match '^-ow[a-z0-9]*(shots|tests?|actions|bench|gate)(=|$)') { return $true }
+    foreach ($name in (Get-OwSwitchNames -Extra $Extra)) {
+        if ($script:OwScriptedSwitches -contains $name) { return $true }
     }
     return $false
 }
@@ -19,6 +33,7 @@ function Get-OwRunLimitSeconds {
     param([int]$TimeoutSeconds = -1, [string[]]$Extra = @(), [switch]$GameWindow)
     if (!$GameWindow) { return 0 }
     if ($TimeoutSeconds -ge 0) { return $TimeoutSeconds }
+    if ((Get-OwSwitchNames -Extra $Extra) -contains 'owgunshots') { return $script:OwGunShotsSeconds }
     if (Test-OwScriptedRun -Extra $Extra) { return $script:OwScriptedRunSeconds }
     return 0
 }
@@ -31,8 +46,8 @@ function Wait-OwStartedProcess {
     return $Process.WaitForExit($LimitSeconds * 1000)
 }
 
-# Stops one process this run started: by its id, and only when its command line still holds every expected piece, so a reused id or
-# someone else's process is left alone. True when it was stopped or had already gone.
+# Stops one process this run started, through its own Process object: that holds an open handle (the caller opens it right after the start), so it
+# cannot reach another process that was given the same id. The command line must also still hold every expected piece. True when stopped or already gone.
 function Stop-OwStartedProcess {
     param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [Parameter(Mandatory)][string[]]$Expected)
     if ($Process.HasExited) { return $true }
@@ -44,7 +59,7 @@ function Stop-OwStartedProcess {
             return $false
         }
     }
-    Stop-Process -Id $Process.Id -Force
+    $Process.Kill()
     [void]$Process.WaitForExit(10000)
     return $Process.HasExited
 }
