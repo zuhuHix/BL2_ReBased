@@ -59,6 +59,7 @@ SKIPPED = re.compile(r'OWFIRING skipped id=(\S+) reason=(.*)$')
 NO_WALL = re.compile(r'OWFIRING no wall in reach for id=(\S+)')
 PARSED = re.compile(r'firing test parsed \d+ recipe IDs: (\S+)')
 KV = re.compile(r'(\w+)=(\S+)')
+ROLLED_DAMAGE = re.compile(r'OWFIRING rolled_damage (.*)$')
 
 
 def fields(body):
@@ -76,8 +77,12 @@ def read_log(text, extra=None):
     extra.setdefault('wide', {})
     extra.setdefault('splash', {})
     extra.setdefault('swap', {})
+    extra.setdefault('rolled_damage', None)
     pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
+        if match := ROLLED_DAMAGE.search(line):
+            extra['rolled_damage'] = fields(match.group(1))
+            continue
         if match := SPLASH.search(line):
             pending_splash.append({'scale': float(match.group(2)), 'momentum': float(match.group(3)),
                                    'source': match.group(4)})
@@ -255,7 +260,7 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
 
 
 def finite(line, key):
-    """A grenade line field as a finite number, or None when it is missing or not one."""
+    """A line field as a finite number, or None when it is missing or not one."""
     try:
         value = float(line[key])
     except (KeyError, TypeError, ValueError):
@@ -310,6 +315,42 @@ def check_grenade(line):
     if int(line['unknown_sources']):
         fails.append(f"{line['unknown_sources']} grenade hit events with an Unknown source")
     return fails
+
+
+def check_rolled_damage(line):
+    """A generated gun's damage stack (OWFIRING rolled_damage): the terms ToItem filled rebuild its damage; ShotDamage returns the
+    card damage with no Scale and an expired one, and the stack formula under a running one, which must differ from the old stand-in
+    of card damage x (1 + Scale), or the check would not tell them apart."""
+    if line is None:
+        return ['no OWFIRING rolled_damage line (the rolled gun damage check did not run)']
+    if line.get('unavailable'):
+        return [f"rolled gun damage not tested ({line['unavailable']}): python tools/weapon_gen_manifest.py --game <BL2 folder> makes the manifest"]
+    if line.get('has_stack') != '1':
+        return [f"rolled gun {line.get('id')} has no damage stack"]
+    if line.get('skills_empty') != '1':
+        return [f"rolled gun {line.get('id')}: skill modifiers were running, so its numbers do not test the stack alone"]
+    values = {key: finite(line, key) for key in ('damage', 'rebuilt', 'zero', 'active', 'expired', 'expected', 'stand_in')}
+    missing = [key for key, value in values.items() if value is None]
+    if missing:
+        return [f"rolled gun {line.get('id')}: no number for {', '.join(missing)}"]
+    if values['damage'] <= 0:
+        return [f"rolled gun {line.get('id')}: damage {values['damage']} is not positive"]
+
+    def near(a, b):
+        return abs(a - b) <= 1e-3 * max(abs(a), abs(b), 1.0)
+
+    fails = []
+    if not near(values['rebuilt'], values['damage']):
+        fails.append(f"its terms rebuild {values['rebuilt']}, its damage is {values['damage']}")
+    if not near(values['zero'], values['damage']):
+        fails.append(f"with no Scale ShotDamage is {values['zero']}, its damage is {values['damage']}")
+    if not near(values['expired'], values['damage']):
+        fails.append(f"with an expired Scale ShotDamage is {values['expired']}, its damage is {values['damage']}")
+    if not near(values['active'], values['expected']):
+        fails.append(f"with a running Scale ShotDamage is {values['active']}, the stack formula gives {values['expected']}")
+    if near(values['expected'], values['stand_in']):
+        fails.append(f"the stack and the stand-in agree ({values['expected']}): this gun cannot tell them apart")
+    return [f"rolled gun {line.get('id')}: {reason}" for reason in fails]
 
 
 def check_hit_events(log, expected, throw=None, required=True, gun=None, swap=None):
@@ -561,6 +602,13 @@ def main(argv=None):
     if 'grenade' in extra and not grenade_fails:
         print('grenade: PASS')
     print(f'{len(guns) - failed} PASS, {failed} FAIL of {len(guns)} guns')
+    # Required; only --legacy grades a log from before this check without it.
+    if extra['rolled_damage'] is not None or not args.legacy:
+        rolled_damage = check_rolled_damage(extra['rolled_damage'])
+        for reason in rolled_damage:
+            print(f'rolled damage: FAIL {reason}')
+        print('rolled damage: FAIL' if rolled_damage else 'rolled damage: PASS')
+        failed += bool(rolled_damage)
     return 1 if failed or grenade_fails else 0
 
 

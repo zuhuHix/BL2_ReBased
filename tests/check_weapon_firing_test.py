@@ -297,18 +297,69 @@ class Cli(unittest.TestCase):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace'),
                                   'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 damage=9.00 splash_hits=1 splash=9.00 grenade_hits=1 '
-                                  'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 aimed=1 after=0.50'))
+                                  'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 aimed=1 after=0.50',
+                                  ROLLED_DAMAGE_LINE))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
         self.assertIn('grenade: PASS', out)
+        self.assertIn('rolled damage: PASS', out)
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace')))
         self.assertEqual(code, 1, out)
         self.assertIn('no OWFIRING grenade line', out)
+        self.assertIn('no OWFIRING rolled_damage line', out)
         code, out = self.main(log(result('made_trace', direct='1.00')), '--guns', 'made_trace')
         self.assertEqual(code, 1, out)
         code, _ = self.main('no firing lines here\n', '--guns', 'made_trace')
         self.assertEqual(code, 2)
+
+
+ROLLED_DAMAGE_LINE = ('LogTemp: Display: OWFIRING rolled_damage id=gen_a has_stack=1 skills_empty=1 damage=20.0000 rebuilt=20.0000 '
+                      'zero=20.0000 active=36.0000 expired=20.0000 expected=36.0000 stand_in=40.0000')
+
+
+class RolledDamage(unittest.TestCase):
+    GOOD = {'id': 'gen_a', 'has_stack': '1', 'skills_empty': '1', 'damage': '20.0000', 'rebuilt': '20.0000', 'zero': '20.0000',
+            'active': '36.0000', 'expired': '20.0000', 'expected': '36.0000', 'stand_in': '40.0000'}
+
+    def fails(self, **change):
+        return check.check_rolled_damage(dict(self.GOOD, **change))
+
+    def test_good_line_passes(self):
+        self.assertEqual(self.fails(), [])
+
+    def test_read_from_the_log(self):
+        extra = {}
+        check.read_log(ROLLED_DAMAGE_LINE + '\n', extra)
+        self.assertEqual(check.check_rolled_damage(extra['rolled_damage']), [])
+
+    def test_the_old_stand_in_fails(self):
+        # What rolled guns did before: card damage x (1 + Scale).
+        self.assertTrue(any('stack formula' in reason for reason in self.fails(active='40.0000')))
+
+    def test_a_missing_stack_fails(self):
+        self.assertTrue(any('no damage stack' in reason for reason in self.fails(has_stack='0')))
+
+    def test_terms_that_do_not_rebuild_fail(self):
+        self.assertTrue(any('rebuild' in reason for reason in self.fails(rebuilt='25.0000')))
+
+    def test_zero_and_expired_scales(self):
+        self.assertTrue(any('no Scale' in reason for reason in self.fails(zero='36.0000')))
+        self.assertTrue(any('expired' in reason for reason in self.fails(expired='36.0000')))
+
+    def test_a_gun_that_cannot_tell_them_apart_fails(self):
+        self.assertTrue(any('cannot tell' in reason for reason in self.fails(active='40.0000', expected='40.0000')))
+
+    def test_running_skills_fail(self):
+        self.assertTrue(any('skill' in reason for reason in self.fails(skills_empty='0')))
+
+    def test_missing_lines_and_numbers(self):
+        self.assertTrue(check.check_rolled_damage(None))
+        self.assertTrue(any('weapon_gen_manifest.py' in reason for reason in check.check_rolled_damage({'unavailable': 'no_manifest'})))
+        self.assertTrue(any('no number' in reason for reason in self.fails(active='nan')))
+        line = dict(self.GOOD)
+        del line['expired']
+        self.assertTrue(any('no number' in reason for reason in check.check_rolled_damage(line)))
 
 
 def push(gun, rule=1000, last=1000, hits=5, pushes=5, moved=0.4):
