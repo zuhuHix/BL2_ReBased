@@ -1,0 +1,857 @@
+// AI-assisted (Claude). See OpenWillowInteractive.h. Strict manifest reading and loot rolls first, then the lootable actor,
+// the pickup rules, the subsystem (spawn, open, nearest use, auto pickup) and the in-engine test sequence.
+#include "OpenWillowInteractive.h"
+#include "OpenWillowInteractivePickup.h"
+#include "OpenWillowWalker.h"
+#include "OpenWillowInventoryPickup.h"
+#include "OpenWillowWeaponGen.h"
+#include "Animation/AnimSequence.h"
+#include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/PlayerController.h"
+#include "HAL/FileManager.h"
+#include "Math/RandomStream.h"
+#include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
+#include "Misc/Paths.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "TimerManager.h"
+#include "UnrealClient.h"
+#include "GenericPlatform/GenericPlatformMisc.h"
+#include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+// Host choices (UNVERIFIED in game): the reach of a lootable is the vendor stand-in's 350 uu; a use-key pickup is reached
+// within 220 uu (the inventory pickups' reach); an auto pickup is taken within 120 uu.
+constexpr double LootableReach = 350.0;
+constexpr double UsePickupReach = 220.0;
+constexpr float AutoPickupRadius = 120.f;
+// Drops land a little in front of the lootable, fanned out across it (UNVERIFIED host choice).
+constexpr float DropDistance = 110.f;
+constexpr float DropSpacing = 45.f;
+const TCHAR* LootableAssetRoot = TEXT("/Game/OpenWillow/Lootables/");
+
+// A manifest number as an int32 in [Low, High]; false when it is not finite, not whole or out of range.
+bool ManifestInt(double Number, int32 Low, int32 High, int32& Out)
+{
+    if (!FMath::IsFinite(Number) || Number != FMath::FloorToDouble(Number) || Number < double(Low) || Number > double(High))
+        return false;
+    Out = int32(Number);
+    return true;
+}
+
+// A finite number field as a float; false when the field is missing, null or not finite.
+bool ReadFloat(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, float& Out)
+{
+    double Number = 0;
+    if (!Obj.IsValid() || !Obj->TryGetNumberField(Key, Number) || !FMath::IsFinite(Number)) return false;
+    Out = float(Number);
+    return true;
+}
+
+// A whole-number field in [Low, High].
+bool ReadInt(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, int32 Low, int32 High, int32& Out)
+{
+    double Number = 0;
+    return Obj.IsValid() && Obj->TryGetNumberField(Key, Number) && ManifestInt(Number, Low, High, Out);
+}
+
+// [x, y, z] of numbers, as-is.
+bool ReadVector(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key, FVector& Out)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+    if (!Obj->TryGetArrayField(Key, Values) || Values->Num() != 3) return false;
+    for (int32 I = 0; I < 3; ++I)
+    {
+        double N = 0;
+        if (!(*Values)[I].IsValid() || !(*Values)[I]->TryGetNumber(N) || !FMath::IsFinite(N)) return false;
+        Out[I] = N;
+    }
+    return true;
+}
+
+// The last dotted segment of a package path: "Prop_Lootables.Meshes.Skel_DahlChest" gives "Skel_DahlChest".
+FString TailName(const FString& Path)
+{
+    const int32 Dot = Path.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+    return Dot == INDEX_NONE ? Path : Path.Mid(Dot + 1);
+}
+
+// Calls Fn with each object of a JSON array (other entries are skipped).
+template <typename Fn>
+void ForEachObject(const TArray<TSharedPtr<FJsonValue>>& Values, Fn&& Callback)
+{
+    for (const TSharedPtr<FJsonValue>& Value : Values)
+    {
+        const TSharedPtr<FJsonObject>* Json = nullptr;
+        if (Value.IsValid() && Value->TryGetObject(Json) && Json->IsValid()) Callback(*Json);
+    }
+}
+
+// One leaf: a positive, finite weight; an empty balance is dropped.
+void ReadLeaves(const TSharedPtr<FJsonObject>& Attachment, FOpenWillowLootAttachment& Out)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+    if (!Attachment->TryGetArrayField(TEXT("items"), Items)) return;
+    ForEachObject(*Items, [&Out](const TSharedPtr<FJsonObject>& Json)
+    {
+        FOpenWillowLootLeaf Leaf;
+        Json->TryGetStringField(TEXT("balance"), Leaf.Balance);
+        Json->TryGetStringField(TEXT("class"), Leaf.Class);
+        if (!ReadFloat(Json, TEXT("weight"), Leaf.Weight) || Leaf.Weight <= 0 || Leaf.Balance.IsEmpty()) return;
+        Out.Leaves.Add(Leaf);
+    });
+}
+
+FOpenWillowLootAttachment ReadAttachment(const TSharedPtr<FJsonObject>& Json)
+{
+    FOpenWillowLootAttachment Attachment;
+    Json->TryGetStringField(TEXT("point"), Attachment.Point);
+    // A probability that is missing, not finite or outside [0, 1] never fires (UNVERIFIED reading of the manifest).
+    if (ReadFloat(Json, TEXT("probability"), Attachment.Probability) && Attachment.Probability >= 0 && Attachment.Probability <= 1)
+        ReadLeaves(Json, Attachment);
+    else
+        Attachment.Probability = 0;
+    return Attachment;
+}
+
+FOpenWillowLootConfig ReadConfig(const TSharedPtr<FJsonObject>& Json)
+{
+    FOpenWillowLootConfig Config;
+    Json->TryGetStringField(TEXT("name"), Config.Name);
+    // A null or negative weight is no weight: the configuration is never picked.
+    if (!ReadFloat(Json, TEXT("weight"), Config.Weight) || Config.Weight < 0) Config.Weight = 0;
+    const TArray<TSharedPtr<FJsonValue>>* Attachments = nullptr;
+    if (Json->TryGetArrayField(TEXT("attachments"), Attachments))
+    {
+        ForEachObject(*Attachments, [&Config](const TSharedPtr<FJsonObject>& Attachment)
+        {
+            Config.Attachments.Add(ReadAttachment(Attachment));
+        });
+    }
+    return Config;
+}
+
+// The first skeletal mesh component of the balance's visual (names only; the host imports them by tail name).
+void ReadVisual(const TSharedPtr<FJsonObject>& Balance, FOpenWillowLootTable& Table)
+{
+    const TSharedPtr<FJsonObject>* Visual = nullptr;
+    const TArray<TSharedPtr<FJsonValue>>* Components = nullptr;
+    if (!Balance->TryGetObjectField(TEXT("visual"), Visual) || !(*Visual)->TryGetArrayField(TEXT("components"), Components)
+        || Components->IsEmpty())
+        return;
+    const TSharedPtr<FJsonObject>* First = nullptr;
+    if (!(*Components)[0].IsValid() || !(*Components)[0]->TryGetObject(First) || !First->IsValid()) return;
+    FString Mesh;
+    if ((*First)->TryGetStringField(TEXT("skeletal_mesh"), Mesh)) Table.SkeletalMesh = TailName(Mesh);
+    float Scale = 0;
+    if (ReadFloat(*First, TEXT("scale"), Scale) && Scale > 0 && Scale <= 100.f) Table.VisualScale = Scale;
+    const TArray<TSharedPtr<FJsonValue>>* AnimSets = nullptr;
+    FString AnimSet;
+    if ((*First)->TryGetArrayField(TEXT("anim_sets"), AnimSets) && !AnimSets->IsEmpty() && (*AnimSets)[0].IsValid()
+        && (*AnimSets)[0]->TryGetString(AnimSet))
+        Table.AnimSet = TailName(AnimSet);
+}
+
+// The amount rule (the pickup block). Only the fields the host uses; a missing field keeps its zero.
+FOpenWillowPickupSpec ReadPickupSpec(const TSharedPtr<FJsonObject>& Pickup)
+{
+    FOpenWillowPickupSpec Spec;
+    Pickup->TryGetStringField(TEXT("kind"), Spec.Kind);
+    FString Mesh;
+    if (Pickup->TryGetStringField(TEXT("mesh"), Mesh)) Spec.Mesh = TailName(Mesh);
+    Pickup->TryGetBoolField(TEXT("auto_pickup"), Spec.bAutoPickup);
+    ReadInt(Pickup, TEXT("amount"), 0, MAX_int32, Spec.Amount);
+    Pickup->TryGetStringField(TEXT("ammo_type"), Spec.AmmoType);
+    const TSharedPtr<FJsonObject>* Heal = nullptr;
+    if (Pickup->TryGetObjectField(TEXT("heal"), Heal) && ReadFloat(*Heal, TEXT("fraction_of_max_health"), Spec.HealFraction))
+        Spec.HealFraction = FMath::Clamp(Spec.HealFraction, 0.f, 1.f);
+    const TSharedPtr<FJsonObject>* Cash = nullptr;
+    if (!Pickup->TryGetObjectField(TEXT("cash"), Cash)) return Spec;
+    const TSharedPtr<FJsonObject>* Constants = nullptr;
+    if ((*Cash)->TryGetObjectField(TEXT("constants"), Constants))
+    {
+        ReadFloat(*Constants, TEXT("Multiplier"), Spec.Multiplier);
+        ReadFloat(*Constants, TEXT("Level"), Spec.LevelBase);
+    }
+    ReadFloat(*Cash, TEXT("base_scale"), Spec.BaseScale);
+    ReadFloat(*Cash, TEXT("per_grade_scale"), Spec.PerGradeScale);
+    const TArray<TSharedPtr<FJsonValue>>* Range = nullptr;
+    double LowNumber = 0, HighNumber = 0;
+    int32 Low = 0, High = 0;
+    if ((*Cash)->TryGetArrayField(TEXT("grade_range"), Range) && Range->Num() == 2 && (*Range)[0].IsValid()
+        && (*Range)[1].IsValid() && (*Range)[0]->TryGetNumber(LowNumber) && (*Range)[1]->TryGetNumber(HighNumber)
+        && ManifestInt(LowNumber, 0, 1000, Low) && ManifestInt(HighNumber, 0, 1000, High) && Low <= High)
+    {
+        Spec.GradeMin = Low;
+        Spec.GradeMax = High;
+    }
+    return Spec;
+}
+
+FOpenWillowLootItem ReadItem(const FString& Balance, const TSharedPtr<FJsonObject>& Json)
+{
+    FOpenWillowLootItem Item;
+    Item.Balance = Balance;
+    Json->TryGetStringField(TEXT("kind"), Item.Kind);
+    Json->TryGetStringField(TEXT("name"), Item.Name);
+    const TSharedPtr<FJsonObject>* Value = nullptr;
+    if (Json->TryGetObjectField(TEXT("value"), Value) && ReadFloat(*Value, TEXT("base_cost"), Item.ValueBaseCost)
+        && ReadFloat(*Value, TEXT("scaler"), Item.ValueScaler))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Parts = nullptr;
+        double Part = 0;
+        if ((*Value)->TryGetArrayField(TEXT("part_totals"), Parts) && !Parts->IsEmpty() && (*Parts)[0].IsValid()
+            && (*Parts)[0]->TryGetNumber(Part) && FMath::IsFinite(Part) && Part >= 0)
+        {
+            Item.ValuePartTotal = float(Part);
+            Item.bHasValue = Item.ValueBaseCost > 0 && Item.ValueScaler > 0;
+        }
+    }
+    const TSharedPtr<FJsonObject>* Pickup = nullptr;
+    if (Json->TryGetObjectField(TEXT("pickup"), Pickup) && Pickup->IsValid()) Item.Pickup = ReadPickupSpec(*Pickup);
+    return Item;
+}
+
+FVector DropSlot(const AOpenWillowLootable& Lootable, int32 Index, int32 Count)
+{
+    const float Lateral = (float(Index) - float(Count - 1) * 0.5f) * DropSpacing;
+    return Lootable.GetActorLocation() + Lootable.GetActorForwardVector() * DropDistance + Lootable.GetActorRightVector() * Lateral
+        + FVector(0.f, 0.f, 20.f);
+}
+
+FActorSpawnParameters SpawnParams()
+{
+    FActorSpawnParameters Params;
+    Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    return Params;
+}
+}
+
+// ---- Loot tables and pickups (plain rules) ---------------------------------------------------------------------------
+
+bool FOpenWillowLootTable::Load(const TSharedPtr<FJsonObject>& Balance, FString& OutError)
+{
+    Configs.Reset();
+    SkeletalMesh.Reset();
+    AnimSet.Reset();
+    VisualScale = 1.f;
+    if (!Balance.IsValid())
+    {
+        OutError = TEXT("balance object missing");
+        return false;
+    }
+    const TArray<TSharedPtr<FJsonValue>>* ConfigValues = nullptr;
+    if (Balance->TryGetArrayField(TEXT("configurations"), ConfigValues))
+    {
+        ForEachObject(*ConfigValues, [this](const TSharedPtr<FJsonObject>& Json) { Configs.Add(ReadConfig(Json)); });
+    }
+    ReadVisual(Balance, *this);
+    if (Configs.IsEmpty())
+    {
+        OutError = TEXT("no configurations");
+        return false;
+    }
+    return true;
+}
+
+int32 FOpenWillowLootTable::WeightedIndex(const TArray<float>& Weights, float Unit)
+{
+    double Total = 0;
+    int32 Last = INDEX_NONE;
+    for (int32 I = 0; I < Weights.Num(); ++I)
+    {
+        if (!FMath::IsFinite(Weights[I]) || Weights[I] <= 0) continue;
+        Total += Weights[I];
+        Last = I;
+    }
+    if (Last == INDEX_NONE) return INDEX_NONE;
+    double Target = double(FMath::Clamp(Unit, 0.f, 1.f)) * Total;
+    for (int32 I = 0; I < Weights.Num(); ++I)
+    {
+        if (!FMath::IsFinite(Weights[I]) || Weights[I] <= 0) continue;
+        if (Target < Weights[I]) return I;
+        Target -= Weights[I];
+    }
+    return Last; // the total rounding left a sliver: the last weighted entry takes it
+}
+
+void FOpenWillowLootTable::Roll(FRandomStream& Rng, TArray<FOpenWillowLootLeaf>& OutLeaves, FString& OutConfig) const
+{
+    OutLeaves.Reset();
+    OutConfig = TEXT("none");
+    TArray<float> ConfigWeights;
+    for (const FOpenWillowLootConfig& Config : Configs) ConfigWeights.Add(Config.Weight);
+    const int32 Index = WeightedIndex(ConfigWeights, Rng.FRand());
+    if (Index == INDEX_NONE) return;
+    const FOpenWillowLootConfig& Config = Configs[Index];
+    OutConfig = Config.Name;
+    for (const FOpenWillowLootAttachment& Attachment : Config.Attachments)
+    {
+        // The probability draw comes first and is always made, so a point's chance does not shift the later rolls.
+        const bool bFires = Rng.FRand() < Attachment.Probability;
+        if (!bFires) continue;
+        TArray<float> LeafWeights;
+        for (const FOpenWillowLootLeaf& Leaf : Attachment.Leaves) LeafWeights.Add(Leaf.Weight);
+        const int32 Pick = WeightedIndex(LeafWeights, Rng.FRand());
+        if (Pick != INDEX_NONE) OutLeaves.Add(Attachment.Leaves[Pick]);
+    }
+}
+
+int32 FOpenWillowPickupSpec::CashAmount(int32 Level, int32 Grade) const
+{
+    if (Kind != TEXT("cash") || Multiplier <= 0 || LevelBase <= 0) return 0;
+    const double Calc = double(Multiplier) * FMath::Pow(double(LevelBase), double(Level));
+    const double Value = Calc * (double(BaseScale) + double(PerGradeScale) * double(Grade));
+    if (!FMath::IsFinite(Value) || Value < 0) return 0;
+    return int32(FMath::Min(Value, double(MAX_int32))); // the cast truncates a positive value, which is rounding down
+}
+
+int32 FOpenWillowLootItem::GearValueAt(int32 Level) const
+{
+    if (!bHasValue) return -1;
+    const double Value = double(ValuePartTotal) * FMath::Pow(double(ValueScaler), double(Level)) * double(ValueBaseCost);
+    if (!FMath::IsFinite(Value) || Value < 0 || Value >= 2147483520.0) return -1;
+    return int32(Value);
+}
+
+int32 OpenWillowInteractiveRules::SaturatingAdd(int32 A, int32 B)
+{
+    return int32(FMath::Clamp(int64(A) + int64(B), int64(0), int64(MAX_int32)));
+}
+
+bool OpenWillowInteractiveRules::AmmoAfter(int32 Current, int32 Max, int32 Amount, int32& OutAfter)
+{
+    if (Amount <= 0 || Max <= 0 || Current >= Max) return false;
+    OutAfter = int32(FMath::Min(int64(Max), int64(FMath::Max(Current, 0)) + int64(Amount)));
+    return true;
+}
+
+bool OpenWillowInteractiveRules::HealAfter(float Health, float MaxHealth, float Fraction, bool bDown, float& OutAfter)
+{
+    if (bDown || !FMath::IsFinite(Health) || !FMath::IsFinite(MaxHealth) || MaxHealth <= 0 || Fraction <= 0 || Health >= MaxHealth)
+        return false;
+    OutAfter = FMath::Min(MaxHealth, Health + Fraction * MaxHealth);
+    return true;
+}
+
+bool OpenWillowInteractiveRules::AmmoTypeFromName(const FString& Name, EOpenWillowAmmoType& OutType)
+{
+    if (Name == TEXT("pistol")) OutType = EOpenWillowAmmoType::Pistol;
+    else if (Name == TEXT("smg")) OutType = EOpenWillowAmmoType::SMG;
+    else if (Name == TEXT("ar")) OutType = EOpenWillowAmmoType::AssaultRifle;
+    else if (Name == TEXT("shotgun")) OutType = EOpenWillowAmmoType::Shotgun;
+    else if (Name == TEXT("sniper")) OutType = EOpenWillowAmmoType::Sniper;
+    else if (Name == TEXT("launcher")) OutType = EOpenWillowAmmoType::Launcher;
+    else if (Name == TEXT("grenade")) OutType = EOpenWillowAmmoType::Grenade;
+    else return false;
+    return true;
+}
+
+// ---- Lootable actor --------------------------------------------------------------------------------------------------
+
+AOpenWillowLootable::AOpenWillowLootable()
+{
+    PrimaryActorTick.bCanEverTick = false;
+    Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+    SetRootComponent(Root);
+    // UNVERIFIED stand-in: a 60 cm box with a lid on a back hinge, until the imported mesh loads.
+    Body = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaceholderBody"));
+    Body->SetupAttachment(Root);
+    Body->SetRelativeLocation(FVector(0.f, 0.f, 30.f));
+    Body->SetRelativeScale3D(FVector(0.6f, 0.6f, 0.6f));
+    LidPivot = CreateDefaultSubobject<USceneComponent>(TEXT("LidPivot"));
+    LidPivot->SetupAttachment(Root);
+    LidPivot->SetRelativeLocation(FVector(-30.f, 0.f, 60.f));
+    Lid = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaceholderLid"));
+    Lid->SetupAttachment(LidPivot);
+    Lid->SetRelativeLocation(FVector(30.f, 0.f, 0.f));
+    Lid->SetRelativeScale3D(FVector(0.6f, 0.6f, 0.05f));
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
+    if (Cube.Succeeded())
+    {
+        Body->SetStaticMesh(Cube.Object);
+        Lid->SetStaticMesh(Cube.Object);
+    }
+    Skeletal = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("ImportedMesh"));
+    Skeletal->SetupAttachment(Root);
+    Skeletal->SetVisibility(false);
+}
+
+void AOpenWillowLootable::Configure(const FString& InId, const FString& InBalance, const FString& InKind, int32 InStageMin,
+    int32 InStageMax, const FOpenWillowLootTable& Visual)
+{
+    Id = InId;
+    Balance = InBalance;
+    Kind = InKind;
+    StageMin = InStageMin;
+    StageMax = InStageMax;
+    ApplyVisual(Visual);
+}
+
+void AOpenWillowLootable::ApplyVisual(const FOpenWillowLootTable& Visual)
+{
+    if (Visual.SkeletalMesh.IsEmpty()) return;
+    const FString MeshPath = FString(LootableAssetRoot) + Visual.SkeletalMesh;
+    USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
+    if (!Mesh) return; // not imported: the placeholder stays
+    Skeletal->SetSkeletalMesh(Mesh);
+    Skeletal->SetRelativeScale3D(FVector(Visual.VisualScale));
+    Skeletal->SetVisibility(true);
+    Body->SetVisibility(false);
+    Lid->SetVisibility(false);
+    bSkeletalShown = true;
+    if (!Visual.AnimSet.IsEmpty())
+    {
+        const FString AnimPath = FString(LootableAssetRoot) + TEXT("Anims/") + Visual.AnimSet + TEXT("_Open");
+        OpenAnim = LoadObject<UAnimSequence>(nullptr, *AnimPath);
+    }
+}
+
+bool AOpenWillowLootable::Open()
+{
+    if (bOpened) return false;
+    bOpened = true;
+    if (bSkeletalShown)
+    {
+        // Plays the open sequence once (UNVERIFIED: the imported anim set is not checked in game).
+        if (OpenAnim) Skeletal->PlayAnimation(OpenAnim, false);
+    }
+    else
+    {
+        LidPivot->SetRelativeRotation(FRotator(-100.f, 0.f, 0.f)); // placeholder lid, UNVERIFIED stand-in
+    }
+    return true;
+}
+
+// ---- Subsystem -------------------------------------------------------------------------------------------------------
+
+UOpenWillowInteractiveSubsystem* UOpenWillowInteractiveSubsystem::SubsystemOf(UWorld* World)
+{
+    return World ? World->GetSubsystem<UOpenWillowInteractiveSubsystem>() : nullptr;
+}
+
+void UOpenWillowInteractiveSubsystem::OnWorldBeginPlay(UWorld& InWorld)
+{
+    Super::OnWorldBeginPlay(InWorld);
+    if (!InWorld.IsGameWorld()) return;
+    FString Path;
+    if (!FParse::Value(FCommandLine::Get(), TEXT("owinteractives="), Path))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: off (no -owinteractives=<interactives.json>)"));
+        return;
+    }
+    TSharedPtr<FJsonObject> Root;
+    if (!LoadManifest(Path, Root)) return;
+    ReadItems(Root);
+    ReadBalances(Root);
+    SpawnObjects(InWorld, Root);
+    bOn = true;
+    InWorld.GetTimerManager().SetTimer(AutoTimer,
+        FTimerDelegate::CreateUObject(this, &UOpenWillowInteractiveSubsystem::AutoCollectTick), 0.1f, true);
+    if (FParse::Param(FCommandLine::Get(), TEXT("owinteractivetest")))
+        InWorld.GetTimerManager().SetTimer(TestTimer,
+            FTimerDelegate::CreateUObject(this, &UOpenWillowInteractiveSubsystem::TickInteractiveTest), 2.f, true, 5.f);
+}
+
+void UOpenWillowInteractiveSubsystem::Deinitialize()
+{
+    if (UWorld* World = GetWorld())
+    {
+        World->GetTimerManager().ClearTimer(AutoTimer);
+        World->GetTimerManager().ClearTimer(TestTimer);
+    }
+    Lootables.Reset();
+    Tables.Reset();
+    Items.Reset();
+    Super::Deinitialize();
+}
+
+bool UOpenWillowInteractiveSubsystem::LoadManifest(const FString& Path, TSharedPtr<FJsonObject>& OutRoot)
+{
+    FString Text;
+    if (!FFileHelper::LoadFileToString(Text, *Path))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: cannot read %s; no lootables"), *Path);
+        return false;
+    }
+    if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), OutRoot) || !OutRoot.IsValid())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: %s is not JSON; no lootables"), *Path);
+        return false;
+    }
+    FString Schema;
+    OutRoot->TryGetStringField(TEXT("schema"), Schema);
+    if (Schema != TEXT("openwillow-interactives/1"))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: schema '%s' is not openwillow-interactives/1; no lootables"), *Schema);
+        return false;
+    }
+    return true;
+}
+
+void UOpenWillowInteractiveSubsystem::ReadItems(const TSharedPtr<FJsonObject>& Root)
+{
+    const TSharedPtr<FJsonObject>* ItemsObject = nullptr;
+    if (!Root->TryGetObjectField(TEXT("items"), ItemsObject)) return;
+    for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*ItemsObject)->Values)
+    {
+        const TSharedPtr<FJsonObject>* Json = nullptr;
+        if (Pair.Value.IsValid() && Pair.Value->TryGetObject(Json) && Json->IsValid())
+            Items.Add(Pair.Key, ReadItem(Pair.Key, *Json));
+    }
+}
+
+void UOpenWillowInteractiveSubsystem::ReadBalances(const TSharedPtr<FJsonObject>& Root)
+{
+    const TSharedPtr<FJsonObject>* BalancesObject = nullptr;
+    if (!Root->TryGetObjectField(TEXT("balances"), BalancesObject)) return;
+    for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*BalancesObject)->Values)
+    {
+        const TSharedPtr<FJsonObject>* Json = nullptr;
+        if (!Pair.Value.IsValid() || !Pair.Value->TryGetObject(Json) || !Json->IsValid()) continue;
+        FOpenWillowLootTable Table;
+        FString Error;
+        if (Table.Load(*Json, Error)) Tables.Add(Pair.Key, MoveTemp(Table));
+        else UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: balance %s not loaded: %s"), *Pair.Key, *Error);
+    }
+}
+
+void UOpenWillowInteractiveSubsystem::SpawnObjects(UWorld& World, const TSharedPtr<FJsonObject>& Root)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Objects = nullptr;
+    if (!Root->TryGetArrayField(TEXT("objects"), Objects))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: no objects list; no lootables"));
+        return;
+    }
+    int32 Unsupported = 0;
+    ForEachObject(*Objects, [this, &World, &Unsupported](const TSharedPtr<FJsonObject>& Json)
+    {
+        bool bSupported = false;
+        Json->TryGetBoolField(TEXT("supported"), bSupported);
+        if (!bSupported)
+        {
+            ++Unsupported;
+            FString Id;
+            Json->TryGetStringField(TEXT("id"), Id);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: %s is not supported yet; not spawned"), *Id);
+            return;
+        }
+        SpawnOne(World, Json);
+    });
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: %d lootable(s) spawned, %d unsupported not spawned"),
+        Lootables.Num(), Unsupported);
+}
+
+bool UOpenWillowInteractiveSubsystem::SpawnOne(UWorld& World, const TSharedPtr<FJsonObject>& Json)
+{
+    FString Id, Balance, Kind;
+    Json->TryGetStringField(TEXT("id"), Id);
+    Json->TryGetStringField(TEXT("balance"), Balance);
+    Json->TryGetStringField(TEXT("kind"), Kind);
+    const FOpenWillowLootTable* Table = Tables.Find(Balance);
+    if (Id.IsEmpty() || !Table)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: %s has no usable balance; not spawned"), *Id);
+        return false;
+    }
+    FVector Location, Rotation;
+    const TSharedPtr<FJsonObject>* Stage = nullptr;
+    int32 StageMin = 0, StageMax = 0;
+    if (!ReadVector(Json, TEXT("location"), Location) || !ReadVector(Json, TEXT("rotation"), Rotation)
+        || !Json->TryGetObjectField(TEXT("game_stage"), Stage) || !ReadInt(*Stage, TEXT("min"), 1, 1000, StageMin)
+        || !ReadInt(*Stage, TEXT("max"), 1, 1000, StageMax) || StageMin > StageMax)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: %s has no usable location, rotation or stage; not spawned"), *Id);
+        return false;
+    }
+    // Same convention as the vendors: location as-is, rotation in degrees [Pitch, Yaw, Roll].
+    const FTransform Pose(FRotator(Rotation.X, Rotation.Y, Rotation.Z), Location);
+    AOpenWillowLootable* Lootable = World.SpawnActor<AOpenWillowLootable>(AOpenWillowLootable::StaticClass(), Pose, SpawnParams());
+    if (!Lootable) return false;
+    Lootable->Configure(Id, Balance, Kind, StageMin, StageMax, *Table);
+    Lootables.Add(Lootable);
+    return true;
+}
+
+bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& From, AOpenWillowLootable*& OutLootable,
+    AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared)
+{
+    OutLootable = nullptr;
+    OutPickup = nullptr;
+    UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(World);
+    if (!Subsystem || !Subsystem->bOn) return false;
+    double BestLootable = FMath::Square(LootableReach);
+    for (const TWeakObjectPtr<AOpenWillowLootable>& Candidate : Subsystem->Lootables)
+    {
+        AOpenWillowLootable* Lootable = Candidate.Get();
+        if (!Lootable || Lootable->IsOpened()) continue;
+        const double D2 = FVector::DistSquared(From, Lootable->GetActorLocation());
+        if (D2 >= BestLootable) continue;
+        BestLootable = D2;
+        OutLootable = Lootable;
+    }
+    double BestPickup = FMath::Square(UsePickupReach);
+    for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It)
+    {
+        if (It->Spec().bAutoPickup) continue; // the tick takes these
+        const double D2 = FVector::DistSquared(From, It->GetActorLocation());
+        if (D2 >= BestPickup) continue;
+        BestPickup = D2;
+        OutPickup = *It;
+    }
+    if (OutLootable && (!OutPickup || BestLootable <= BestPickup))
+    {
+        OutDistanceSquared = BestLootable;
+        OutPickup = nullptr;
+        return true;
+    }
+    if (OutPickup)
+    {
+        OutDistanceSquared = BestPickup;
+        OutLootable = nullptr;
+        return true;
+    }
+    return false;
+}
+
+bool UOpenWillowInteractiveSubsystem::NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared)
+{
+    AOpenWillowLootable* Lootable = nullptr;
+    AOpenWillowLootPickup* Pickup = nullptr;
+    return FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, OutDistanceSquared);
+}
+
+bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
+{
+    UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(Walker.GetWorld());
+    AOpenWillowLootable* Lootable = nullptr;
+    AOpenWillowLootPickup* Pickup = nullptr;
+    double DistanceSquared = 0;
+    if (!Subsystem || !FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, DistanceSquared)) return false;
+    if (Lootable) return Subsystem->OpenLootable(Walker, *Lootable);
+    return Pickup && Pickup->TryCollect(Walker);
+}
+
+bool UOpenWillowInteractiveSubsystem::OpenLootable(AOpenWillowWalker& Walker, AOpenWillowLootable& Lootable)
+{
+    UOpenWillowInventory* Inventory = Walker.GetInventory();
+    const FOpenWillowLootTable* Table = Tables.Find(Lootable.Balance);
+    if (!Inventory || !Table || Lootable.IsOpened()) return false;
+    const uint32 Serial = ++OpenSerial;
+    FRandomStream Rng(static_cast<int32>(GetTypeHash(Lootable.Id) + Serial * 7919u));
+    const int32 Level = Rng.RandRange(Lootable.StageMin, Lootable.StageMax);
+    TArray<FOpenWillowLootLeaf> Leaves;
+    FString Config;
+    Table->Roll(Rng, Leaves, Config);
+    Lootable.Open();
+    UWorld* World = Walker.GetWorld();
+    int32 Spawned = 0;
+    for (int32 I = 0; World && I < Leaves.Num(); ++I)
+        SpawnLeaf(Walker, Lootable, Leaves[I], Level, I, Leaves.Num(), Rng, Spawned);
+    UE_LOG(LogTemp, Display, TEXT("OWLOOT open id=%s config=%s drops=%d"), *Lootable.Id, *Config, Spawned);
+    if (Spawned == 0)
+    {
+        const TCHAR* Reason = Config == TEXT("none") ? TEXT("no configuration has weight")
+            : Leaves.IsEmpty() ? TEXT("no attachment dropped") : TEXT("no drop could be spawned");
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT empty id=%s reason=%s"), *Lootable.Id, Reason);
+    }
+    return true;
+}
+
+void UOpenWillowInteractiveSubsystem::SpawnLeaf(AOpenWillowWalker& Walker, const AOpenWillowLootable& Lootable,
+    const FOpenWillowLootLeaf& Leaf, int32 Level, int32 Index, int32 Count, FRandomStream& Rng, int32& Spawned)
+{
+    UWorld* World = Walker.GetWorld();
+    if (!World) return;
+    const FVector Slot = DropSlot(Lootable, Index, Count);
+    if (Leaf.Class == TEXT("WeaponBalanceDefinition"))
+    {
+        SpawnWeapon(*World, Lootable, Leaf.Balance, Level, static_cast<uint32>(Rng.RandRange(1, MAX_int32)), Slot, Spawned);
+        return;
+    }
+    const FOpenWillowLootItem* Item = Items.Find(Leaf.Balance);
+    if (!Item)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=not in the items block"), *Lootable.Id, *Leaf.Balance);
+        return;
+    }
+    if (Item->IsPickup()) SpawnPickup(*World, Lootable, *Item, Level, Rng, Slot, Spawned);
+    else if (Item->IsGear()) SpawnGear(*World, Lootable, *Item, Level, Slot, Spawned);
+    else UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=no pickup or gear value"), *Lootable.Id, *Leaf.Balance);
+}
+
+void UOpenWillowInteractiveSubsystem::SpawnWeapon(UWorld& World, const AOpenWillowLootable& Lootable, const FString& Balance,
+    int32 Level, uint32 GunSeed, const FVector& Slot, int32& Spawned)
+{
+    FOpenWillowWeaponItem Gun;
+    if (!FOpenWillowWeaponGen::RollBalance(Balance, Level, GunSeed, Gun))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=weapon generator unavailable or balance unknown"),
+            *Lootable.Id, *Balance);
+        return;
+    }
+    FOpenWillowTakenInventoryItem Taken;
+    Taken.Weapon = Gun;
+    AOpenWillowInventoryPickup* Pickup = World.SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(),
+        FTransform(Slot), SpawnParams());
+    if (!Pickup) return;
+    Pickup->Initialize(Taken);
+    ++Spawned;
+    UE_LOG(LogTemp, Display, TEXT("OWLOOT drop id=%s kind=weapon balance=%s level=%d value=%d"), *Lootable.Id, *Balance, Level,
+        Gun.bHasSaleValue ? Gun.SaleValue : 0);
+}
+
+void UOpenWillowInteractiveSubsystem::SpawnGear(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item,
+    int32 Level, const FVector& Slot, int32& Spawned)
+{
+    const int32 Value = Item.GearValueAt(Level);
+    if (Value < 0)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=gear value formula does not resolve"), *Lootable.Id, *Item.Balance);
+        return;
+    }
+    // Stand-in gear: the name and value come from the manifest, the rarity is the lowest (UNVERIFIED host choice).
+    FOpenWillowGearItem Gear;
+    Gear.Id = FString::Printf(TEXT("loot_%s_%d"), *TailName(Item.Balance), Level);
+    Gear.ItemType = Item.Kind;
+    Gear.Name = Item.Name.IsEmpty() ? TailName(Item.Balance) : Item.Name;
+    Gear.Level = Level;
+    Gear.bLevelKnown = true;
+    Gear.Rarity = 1;
+    Gear.SaleValue = Value;
+    FOpenWillowTakenInventoryItem Taken;
+    Taken.bIsGear = true;
+    Taken.Gear = Gear;
+    AOpenWillowInventoryPickup* Pickup = World.SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(),
+        FTransform(Slot), SpawnParams());
+    if (!Pickup) return;
+    Pickup->Initialize(Taken);
+    ++Spawned;
+    UE_LOG(LogTemp, Display, TEXT("OWLOOT drop id=%s kind=gear balance=%s level=%d value=%d"), *Lootable.Id, *Item.Balance, Level, Value);
+}
+
+void UOpenWillowInteractiveSubsystem::SpawnPickup(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item,
+    int32 Level, FRandomStream& Rng, const FVector& Slot, int32& Spawned)
+{
+    const FOpenWillowPickupSpec& Spec = Item.Pickup;
+    const int32 Grade = Spec.Kind == TEXT("cash") ? Rng.RandRange(Spec.GradeMin, Spec.GradeMax) : 0;
+    const int32 Value = Spec.Kind == TEXT("cash") ? Spec.CashAmount(Level, Grade) : Spec.Amount;
+    if (Spec.Kind == TEXT("cash") && Value <= 0)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=cash constants not set"), *Lootable.Id, *Item.Balance);
+        return;
+    }
+    AOpenWillowLootPickup* Pickup = World.SpawnActor<AOpenWillowLootPickup>(AOpenWillowLootPickup::StaticClass(), FTransform(Slot),
+        SpawnParams());
+    if (!Pickup) return;
+    Pickup->Configure(Spec, Value, Item.Balance);
+    ++Spawned;
+    UE_LOG(LogTemp, Display, TEXT("OWLOOT drop id=%s kind=%s balance=%s level=%d value=%d"), *Lootable.Id, *Spec.Kind, *Item.Balance,
+        Level, Value);
+}
+
+void UOpenWillowInteractiveSubsystem::AutoCollectTick()
+{
+    UWorld* World = GetWorld();
+    APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+    AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr;
+    if (!Walker) return;
+    const double Now = World->GetTimeSeconds();
+    const FVector From = Walker->GetActorLocation();
+    // Collected first, then tried: a taken pickup is destroyed, which must not happen during the iteration.
+    TArray<AOpenWillowLootPickup*> Near;
+    for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It)
+    {
+        if (It->Spec().bAutoPickup && Now >= It->NextAutoTryAt
+            && FVector::DistSquared(From, It->GetActorLocation()) <= FMath::Square(double(AutoPickupRadius)))
+            Near.Add(*It);
+    }
+    for (AOpenWillowLootPickup* Pickup : Near)
+    {
+        if (!Pickup->TryCollect(*Walker)) Pickup->NextAutoTryAt = Now + 2.0; // a refusal is retried in two seconds
+    }
+}
+
+// ---- In-engine test (-owinteractivetest) -----------------------------------------------------------------------------
+
+void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
+{
+    UWorld* World = GetWorld();
+    APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+    AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr;
+    if (!Walker)
+    {
+        if (++TestWaits > 60)
+        {
+            UE_LOG(LogTemp, Error, TEXT("OWINTERACTIVETEST FAIL no walker after 60 s"));
+            FPlatformMisc::RequestExit(false);
+        }
+        return;
+    }
+    switch (TestStep++)
+    {
+    case 0: TestOpen(*Walker); break;
+    case 1:
+    {
+        // Half-empty pistol pool and half health, so the ammo and health pickups have something to refill.
+        if (UOpenWillowInventory* Inventory = Walker->GetInventory())
+        {
+            const int32 Max = Inventory->AmmoPool(EOpenWillowAmmoType::Pistol).Max;
+            Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Pistol, Max / 2);
+        }
+        Walker->GetMayaState().Health = Walker->GetMaxHealth() * 0.5f; // test fixture: current health only
+        UE_LOG(LogTemp, Display, TEXT("OWINTERACTIVETEST prepared pistol and health at half"));
+        break;
+    }
+    case 2:
+    {
+        // Every spawned loot pickup, through the same Collect the walker's use key and the tick use.
+        TArray<AOpenWillowLootPickup*> All;
+        for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It) All.Add(*It);
+        int32 Taken = 0;
+        for (AOpenWillowLootPickup* Pickup : All) if (Pickup->TryCollect(*Walker)) ++Taken;
+        UE_LOG(LogTemp, Display, TEXT("OWINTERACTIVETEST collected %d of %d pickup(s)"), Taken, All.Num());
+        break;
+    }
+    case 3:
+    {
+        int32 Opened = 0;
+        for (const TWeakObjectPtr<AOpenWillowLootable>& Candidate : Lootables) if (Candidate.IsValid() && Candidate->IsOpened()) ++Opened;
+        UE_LOG(LogTemp, Display, TEXT("OWINTERACTIVETEST done spawned=%d opened=%d"), Lootables.Num(), Opened);
+        break;
+    }
+    case 4: FScreenshotRequest::RequestScreenshot(TEXT("OWInteractive_open.png"), false, false); break;
+    case 6:
+        World->GetTimerManager().ClearTimer(TestTimer);
+        FPlatformMisc::RequestExit(false);
+        break;
+    default: break;
+    }
+}
+
+void UOpenWillowInteractiveSubsystem::TestOpen(AOpenWillowWalker& Walker)
+{
+    // The first three closed lootables with different balances, opened without the reach test (a test entry point).
+    TSet<FString> Seen;
+    int32 Opened = 0;
+    for (const TWeakObjectPtr<AOpenWillowLootable>& Candidate : Lootables)
+    {
+        AOpenWillowLootable* Lootable = Candidate.Get();
+        if (!Lootable || Opened >= 3 || Seen.Contains(Lootable->Balance)) continue;
+        Seen.Add(Lootable->Balance);
+        if (OpenLootable(Walker, *Lootable)) ++Opened;
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWINTERACTIVETEST opened %d lootable(s) of different balances"), Opened);
+}
