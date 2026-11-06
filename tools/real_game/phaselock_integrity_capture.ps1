@@ -123,8 +123,8 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'phaselock_integrity/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
-    $log.block_saves = Py 'print(block_saves())'
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'phaselock_integrity/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
@@ -170,7 +170,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         Start-Sleep 3
         $a = Py "import json; isolate('$target'); print(json.dumps({'pitch': aim('$target'), 'measure': measure('$target'), 'camera': camera(), 'bounds': bounds('$target')}))" | ConvertFrom-Json
         Py "mark_lock('$target'); print(json.dumps(pi_start('$Label', '$target'), default=str))" | Out-Null
-        Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
+        Assert-GameForeground; Start-Sleep -Milliseconds 500
         @{ setup = $s; aim = $a }
     }
 
@@ -202,7 +202,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     # 2. Miss: look away and up at the sky (yaw + 180, pitch 60 degrees), since looking away level lifted a second bullymong on
     # 2026-11-06. Whether it really was a miss is in miss_result ("lifted" empty).
     Py "import json; isolate('$target'); pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=10922, Yaw=(pc.Rotation.Yaw + 32768) & 0xFFFF, Roll=0); print(json.dumps(pi_start('miss', '$target'), default=str))" | Out-Null
-    Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
+    Assert-GameForeground; Start-Sleep -Milliseconds 500
     $missShots = @{ 'miss-0.20' = 0.2; 'miss-0.40' = 0.4; 'miss-0.70' = 0.7 }
     $log.miss = Invoke-CastCapture 'miss_burst' 0.5 3.0 $missShots
     $log.miss_result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
@@ -233,6 +233,10 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     # If the game's exit is not confirmed, a live game could overwrite restored files: nothing is removed or restored, the
     # backup is kept and manual-recovery steps are printed.
     $cleanup = [ordered]@{}
+    # A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.
+    if ($proc -and !$proc.HasExited) {
+        try { Py 'pi_stop(); unmark_lock(); print("stopped")' 5 | Out-Null; $cleanup.hooks = 'stopped' } catch { $cleanup.hooks = "not stopped: $_" }
+    }
     $gameGone = $true
     if ($proc) {
         try {
@@ -242,48 +246,41 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
             $proc.Refresh(); $gameGone = $proc.HasExited
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
-    $recovery = ''
-    # One way to restore by hand: this helper re-checks the backup against its record and refuses a root that changed.
-    $restoreCommand = "Restore-VerifiedBackup '$bak'"
+    $restored = $null; $restoreError = ''
     if (!$gameGone) {
         $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
         $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
-        $recovery = "game exit not confirmed ($($cleanup.game))"
-        @"
-MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored.
-  1. Close Borderlands 2 yourself.
-  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
-     Remove-Item -Recurse -Force '$script:DriverDir'
-     $restoreCommand
-     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand.
-  3. Then remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
-"@
-        $bak = $null; $driverOwned = $false; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
     }
     try {
-        if ($driverOwned) {
+        if ($driverOwned -and $gameGone) {
             Remove-Driver
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
-    $rows = @(); $holdLocks = $false
-    if ($bak) {
+    $rows = @()
+    # Before the driver is installed or the game started, nothing can have changed, so a partial backup is nothing to recover from.
+    if ($bak -and $gameGone -and !$driverOwned -and !$proc) { $cleanup.saves = 'not touched: the game never started' }
+    elseif ($bak -and $gameGone) {
         try {
             $restored = Restore-VerifiedRoots $bak $roots $snapshots
-            $rows = @($restored.rows); $cleanup.saves = $restored.summary; $holdLocks = !$restored.clean
-            if ($holdLocks) { $recovery = "restore did not compare clean ($($restored.summary))" }
-        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $holdLocks = $true; $recovery = "restore failed ($_)" }
+            $rows = @($restored.rows); $cleanup.saves = $restored.summary
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
     }
-    if (!$recovery -and $cleanup.driver -match '^(STILL PRESENT|error)') { $recovery = "driver not removed ($($cleanup.driver))" }
+    $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver
+    $holdLocks = [bool]$recovery
     try {
         $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
         $log.run_error = $runError
         $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-        if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
-    } catch { "log write failed: $_" }
-    # A failed restore keeps both locks, so no other run starts on files that still need recovery.
+        if ($bak -and $gameGone) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+    } catch {
+        # The evidence is missing, so this run cannot read as completed. The restore has already run, and recovery keeps its status.
+        "log write failed: $_"
+        if (!$recovery) { $log.status = "failed: evidence not written ($_)" }
+    }
+    # Anything left for a person keeps both locks, so no other run starts on it.
     if ($holdLocks) { $runLock = $false; $hub = $null }
     try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
     try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
@@ -291,15 +288,7 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     if ($runError) { "run error: $runError" }
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
     Format-RestoreRows $rows
-    if ($holdLocks) {
-        @"
-MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both locks are held and the backup is kept at $bak.
-  1. Make sure Borderlands 2 is closed. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
-     $restoreCommand
-     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand.
-  2. Only when no row reports a mismatch, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
-"@
-    }
+    if ($holdLocks) { Format-ManualRecovery $recovery $bak $HubLock $Lane }
     # Exit 0 only for a completed run with nothing left to recover. Here in the finally, so -ProbeOnly's return passes through it too.
     if ($log.status -ne 'completed') { exit 1 }
 }
