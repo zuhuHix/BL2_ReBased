@@ -3835,3 +3835,11 @@ one level-8 Maya: every formula here is checked at level 8 only. Raw reads stay 
 - **Not modelled yet, seen live:** status damage ticks about every 0.33 s; the target's resistances and scales change the health lost.
 - **Tools.** The capture takes `-Steps`, runs the timer first with unwounded, controlled targets, and lowers Maya's health for Sweet
   Release's heal; `python tests/skills_live_probe_test.py`.
+
+## 2026-11-06: skills live capture: verified backup and restored grades before the next run (Skills lane, #116 review)
+
+AI-assisted (Claude). Tool safety only; no game behaviour. Every root is copied and hash-compared before the driver or the game starts; any
+failure stops the run there and that root is never restored from. A root created during the run stays in place and makes the summary read
+NOT IDENTICAL, naming it. A grade whose original cannot be read is not changed, a restore is read back, and a failed restore stops the later
+steps. The summary says whether the session completed. `python tests/skills_live_probe_test.py`. This is the smallest guard: the snapshot
+helpers from the Maya lane can replace it once they land.
