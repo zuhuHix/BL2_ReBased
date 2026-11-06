@@ -136,42 +136,53 @@ try {
     Set-Stage 'turnin' ($row.open -eq $true) 'E at Marcus did not open the turn-in screen'
     if (!$row.open) { throw 'the screen did not open at the turn-in' }
     foreach ($key in 'E', 'W', 'Mouse') { Test-Key 'turnin' $key | Out-Null }
+    Py "print(ms_mark('turnin_enter'))" | Out-Null
     Focus-Game | Out-Null; Send-Key Enter
     foreach ($at in '0.5', '1.0', '1.5') { Read-After "reward_$at" 0.4 | Out-Null }
     Start-Sleep 2; $page = Read-After 'reward_page'
-    Set-Stage 'reward' ($page.status -eq 4) "Enter did not turn the mission in: status $($page.status)"
+    $log.reward_shown = PyJson 'ms_reward_shown()'
+    Set-Stage 'reward' ($log.reward_shown.ok -eq $true) "no reward page after the Enter: $($log.reward_shown | ConvertTo-Json -Compress)"
     if ($page.status -ne 4) { throw 'the turn-in did not complete' }
+    # Each press is marked, so the verdict can say which one took the reward, if a key test did.
+    Py "print(ms_mark('reward_shown'))" | Out-Null
     $last = $page
-    foreach ($key in 'E', 'W', 'Mouse', 'F', 'Esc') { if ($last.open) { $last = Test-Key 'reward' $key } }
+    foreach ($key in 'E', 'W', 'Mouse', 'F', 'Esc') {
+        if ($last.open) { Py "print(ms_mark('reward_press_$key'))" | Out-Null; $last = Test-Key 'reward' $key }
+    }
     $log.reward_closed_by_key_tests = !$last.open
     $after = $last
     if ($after.open) {
+        Py "print(ms_mark('reward_press_Enter'))" | Out-Null
         Focus-Game | Out-Null; Send-Key Enter
         foreach ($at in '0.5', '1.0') { $after = Read-After "reward_taken_$at" 0.4 }
     }
-    # A reward row in the trace, not the screen's state: this is what taking the reward means.
-    $received = Py "print(any(r.get('func', '').endswith('MissionRewardsReceived') for r in MS['rows']))"
-    Set-Stage 'reward_taken' ($received -eq 'True') 'no MissionRewardsReceived row'
+    $log.reward_taken = PyJson 'ms_reward_taken()'
+    Set-Stage 'reward_taken' ($log.reward_taken.ok -eq $true) "the reward was not taken once by a marked press: $($log.reward_taken | ConvertTo-Json -Compress)"
     # What is left: a list with the next mission, or nothing. Esc only on a screen that is still open.
     foreach ($key in 'E', 'Esc') { if ($after.open) { $after = Test-Key 'after' $key } }
     Set-Stage 'closed' ($after.open -eq $false) 'the screen is still open after Esc'
-    Read-After 'closed_world' 1.0 | Out-Null
+    $closed = Read-After 'closed_world' 1.0
     Py "print(ms_dump('screen'))" | Out-Null
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
 
     # 4. The respawn: down, bleed-out, the station, the dialog. A frame about each second; Enter once the dialog has stood for about three.
     if (!$SkipRespawn) {
-        $log.cash_before = (PyJson 'ms_down()').cash
+        # Downing Maya with the screen open is the crash risk: stop here unless the screen is confirmed closed.
+        if ($closed.open -ne $false -or $closed.movie_playing -eq $true -or 'closed' -notin $stagesDone) { throw "the screen is not confirmed closed (open $($closed.open), movie playing $($closed.movie_playing)); not going on to the respawn" }
+        $down = PyJson 'ms_down()'
+        if ($down.refused) { throw "ms_down refused: $($down.refused)" }
+        $log.cash_before = $down.read.cash
         $deadline = (Get-Date).AddSeconds(60); $n = 0; $dialogAt = $null; $row = $null
         while ((Get-Date) -lt $deadline) {
             $row = Read-After ('respawn_{0:D2}' -f $n) 0.8; $n++
-            if (!$dialogAt -and (Py "print(any(r.get('func', '').endswith('ClientShowRespawnDialog') for r in MS['rows']))") -eq 'True') { $dialogAt = $n }
+            if (!$dialogAt -and (PyJson 'ms_respawn()').dialog) { $dialogAt = $n }
             if ($dialogAt -and $n -eq $dialogAt + 4) { Focus-Game | Out-Null; Send-Key Enter }
             if ($dialogAt -and $n -gt $dialogAt + 8) { break }
         }
         $log.respawn_frames = $n; $log.dialog_frame = $dialogAt; $log.cash_after = $row.cash
+        $log.respawn = PyJson 'ms_respawn()'
         Py "print(ms_dump('screen'))" | Out-Null
-        Set-Stage 'respawn' ($null -ne $dialogAt) 'no respawn dialog call was seen in 60 s'
+        Set-Stage 'respawn' ($log.respawn.ok -eq $true) "no down, respawn, dialog and matching charge in order: $($log.respawn | ConvertTo-Json -Compress)"
     }
     Py 'print(ms_stop())' | Out-Null
     # The game may close before it answers this one.

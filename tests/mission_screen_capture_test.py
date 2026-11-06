@@ -82,6 +82,164 @@ def load_probe():
     return probe
 
 
+class Obj:
+    def __init__(self, path='Transient.Movie_1'):
+        self.path = path
+
+    def _path_name(self):
+        return self.path
+
+
+FUNC = types.SimpleNamespace(func=types.SimpleNamespace(_properties=lambda: []))
+
+
+def fresh(probe):
+    probe.MS.update(rows=[], t0=0.0, on=True, movie_path=None, down=None, missing=[], cash_before=None)
+
+
+def hook(probe, name, tag, ret=None, obj=None, cls='WillowGame.QuestAcceptGFxMovie'):
+    probe._ms_mk(f'{cls}:{name}', tag)(obj or Obj(), types.SimpleNamespace(), ret, FUNC)
+
+
+def read(probe, **fields):
+    probe.MS['rows'].append({'read': fields})
+
+
+def called(probe, name, cls='WillowPlayerController', **args):
+    probe.MS['rows'].append({'t': 0, 'tag': 'pre', 'func': f'{cls}:{name}', 'args': args})
+
+
+def test_the_movie_is_a_path_cleared_on_both_close_paths():
+    probe = load_probe()
+    for closer, tag in (('OnClose', 'post'), ('OnClosedOnDeath', 'pre')):
+        fresh(probe)
+        hook(probe, 'Start', 'post', True)
+        assert probe.MS['movie_path'] == 'Transient.Movie_1' and 'movie' not in {k for k, v in probe.MS.items() if isinstance(v, Obj)}
+        hook(probe, closer, tag)
+        assert probe.MS['movie_path'] is None, closer
+    # A Start that refused does not count as open.
+    fresh(probe)
+    hook(probe, 'Start', 'post', False)
+    assert probe.MS['movie_path'] is None
+    # The object is found again for each use, and a movie that is gone reads as closed instead of being used.
+    fresh(probe)
+    probe.MS['movie_path'] = 'Transient.Movie_1'
+
+    def gone(*a):
+        raise ValueError('no such object')
+    sys.modules['unrealsdk'].find_object = gone
+    probe.unrealsdk = sys.modules['unrealsdk']
+    assert probe._ms_movie() is None and probe.MS['movie_path'] is None
+    assert probe.ms_settings() == {'error': 'the screen is not open'}
+    text = (ROOT / 'tools/real_game/scripts/mission_screen_probe.py').read_text(encoding='utf-8')
+    assert 'MS["movie"]' not in text
+
+
+def test_a_mission_status_alone_is_not_a_reward_page():
+    probe = load_probe()
+    page = {'reward.rewardsHeader.text': 'H', 'reward.missionTitle.text': 'T'}
+    fresh(probe)
+    probe.ms_mark('turnin_enter')
+    read(probe, status=4, open=True, text={})     # complete, screen open, nothing drawn: the old check passed this
+    assert not probe.ms_reward_shown()['ok']
+    called(probe, 'DisplayRewardsPage', 'QuestAcceptGFxMovie')
+    read(probe, status=4, open=False, text=page)
+    assert not probe.ms_reward_shown()['ok']
+    read(probe, status=4, open=True, text=page)
+    assert probe.ms_reward_shown()['ok']
+    # A page call before the Enter does not count.
+    fresh(probe)
+    called(probe, 'DisplayRewardsPage', 'QuestAcceptGFxMovie')
+    probe.ms_mark('turnin_enter')
+    read(probe, status=4, open=True, text=page)
+    assert not probe.ms_reward_shown()['ok']
+    # A reward taken already is not a page waiting.
+    fresh(probe)
+    probe.ms_mark('turnin_enter')
+    called(probe, 'DisplayRewardsPage', 'QuestAcceptGFxMovie')
+    called(probe, 'MissionRewardsReceived')
+    read(probe, status=4, open=True, text=page)
+    assert not probe.ms_reward_shown()['ok']
+
+
+def test_the_reward_is_taken_once_by_a_marked_press_after_the_page():
+    probe = load_probe()
+    page = {'reward.rewardsHeader.text': 'H'}
+    fresh(probe)
+    called(probe, 'MissionRewardsReceived')       # earlier in the recording: the old check passed on this row
+    probe.ms_mark('reward_shown')
+    probe.ms_mark('reward_press_Enter')
+    read(probe, open=False)
+    assert not probe.ms_reward_taken()['ok']
+    # The call came, but the page is still up afterwards.
+    fresh(probe)
+    probe.ms_mark('reward_shown')
+    probe.ms_mark('reward_press_Enter')
+    called(probe, 'MissionRewardsReceived')
+    read(probe, open=True, text=page)
+    assert not probe.ms_reward_taken()['ok']
+    # Taken and gone: the verdict names the press, also when it was a key test, which is a finding.
+    for key in ('Enter', 'E'):
+        fresh(probe)
+        probe.ms_mark('reward_shown')
+        probe.ms_mark('reward_press_W')
+        probe.ms_mark(f'reward_press_{key}')
+        called(probe, 'MissionRewardsReceived')
+        read(probe, open=False)
+        probe.ms_mark('reward_press_F')
+        verdict = probe.ms_reward_taken()
+        assert verdict['ok'] and verdict['press'] == key, verdict
+    # Twice is not once.
+    called(probe, 'MissionRewardsReceived')
+    assert not probe.ms_reward_taken()['ok']
+
+
+def test_the_respawn_needs_the_order_and_the_money():
+    probe = load_probe()
+    pawn = 'WillowPlayerPawn'
+
+    def run(steps, cash_before=1000):
+        fresh(probe)
+        called(probe, 'ClientShowRespawnDialog', pawn, AmountCharged=70)   # before the mark: must not count
+        probe.ms_mark('down_requested')
+        probe.MS['cash_before'] = cash_before
+        for step in steps:
+            step()
+        return probe.ms_respawn()
+    down = lambda: probe.ms_mark('down')
+    back = lambda: called(probe, 'ResurrectAtLocation', pawn)
+    dialog = lambda: called(probe, 'ClientShowRespawnDialog', pawn, AmountCharged=70)
+    alive = lambda: read(probe, health=100.0, injured=False, cash=930)
+    assert run([down, back, dialog, alive])['ok']
+    assert not run([dialog, alive])['ok']                 # the dialog function alone: the old check passed on this
+    assert not run([back, dialog, alive])['ok']           # never went down
+    assert not run([down, dialog, back, alive])['ok']     # the dialog before the respawn
+    assert not run([down, back, dialog])['ok']            # no read after it
+    assert not run([down, back, dialog, lambda: read(probe, health=100.0, injured=False, cash=1000)])['ok']   # no money taken
+    assert not run([down, back, dialog, lambda: read(probe, health=0.0, injured=True, cash=930)])['ok']       # not alive
+
+
+def test_the_capture_stops_before_the_respawn_unless_the_screen_closed():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    gate, respawn = text.index('not going on to the respawn'), text.index("$down = PyJson 'ms_down()'")
+    assert gate < respawn
+    for needle in ("'closed' -notin $stagesDone", '$closed.open -ne $false', '$closed.movie_playing -eq $true'):
+        assert needle in text, needle
+    # The stages use the verdicts, not a bare status or any row since the start.
+    for needle in ("Set-Stage 'reward' ($log.reward_shown.ok -eq $true)", "Set-Stage 'reward_taken' ($log.reward_taken.ok -eq $true)", "Set-Stage 'respawn' ($log.respawn.ok -eq $true)"):
+        assert needle in text, needle
+    assert "for r in MS['rows']" not in text
+    # ms_down refuses by itself too.
+    probe = load_probe()
+    fresh(probe)
+    probe.ms_read = lambda label: {'open': True, 'cash': 5}
+    assert probe.ms_down()['refused'] and probe.MS['down'] is None and probe.MS['rows'] == []
+    probe.ms_read = lambda label: {'open': False, 'movie_playing': True, 'cash': 5}
+    assert probe.ms_down()['refused'] and probe.MS['down'] is None
+    probe.ms_read = lambda label: {'open': False, 'movie_playing': False, 'cash': 5}
+    assert not probe.ms_down()['refused'] and probe.MS['down'] and probe.MS['cash_before'] == 5
+
+
 def test_probe_helpers():
     probe = load_probe()
     first, second = probe.MS_TEXT[0], probe.MS_TEXT[1]
@@ -102,6 +260,11 @@ def test_probe_helpers():
 
 if __name__ == '__main__':
     test_probe_helpers()
+    test_the_movie_is_a_path_cleared_on_both_close_paths()
+    test_a_mission_status_alone_is_not_a_reward_page()
+    test_the_reward_is_taken_once_by_a_marked_press_after_the_page()
+    test_the_respawn_needs_the_order_and_the_money()
+    test_the_capture_stops_before_the_respawn_unless_the_screen_closed()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
     test_exit_0_only_for_a_completed_run_with_nothing_to_recover()

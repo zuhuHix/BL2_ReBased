@@ -7,9 +7,12 @@ the world keeps running behind it, what the reward page shows, and what the resp
 - ms_start() / ms_stop(): hooks on the screen's script functions and on what it writes to its movie. ms_dump(name) writes the rows.
 - ms_read(label): one row with the screen's state: open or not, the movie's text fields, and the player's position, view, clock and money,
   so that two reads show what a key changed. ms_settings(): the movie's and its definition's plain settings.
+- The movie is kept as a path and found again for each command, never as an object held across commands: it can be gone by then, and using a dead object
+  can take the game down. Both of the screen's close paths clear it.
+- ms_mark(name) puts a mark in the rows; the verdicts (ms_reward_shown, ms_reward_taken, ms_respawn) only count what came after their mark, and check the outcome.
 - ms_advance(): completes whichever of the mission's objectives is active, through MissionTracker.UpdateObjective; ms_force_ready() is the
   fallback (SetMissionStatus). These are a shortcut to reach the turn-in: the objective path is not what this run records.
-- ms_down(): a large hit on the player, repeated on the tick until she is down.
+- ms_down(): a large hit on the player, repeated on the tick until she is down. Refused while the screen is open.
 """
 import json
 import time
@@ -17,7 +20,7 @@ import time
 import unrealsdk
 from unrealsdk.hooks import Type, add_hook, remove_hook
 
-MS = globals().get("MS") or {"on": False, "rows": [], "hooks": [], "t0": None, "movie": None, "down": None, "missing": []}
+MS = globals().get("MS") or {"on": False, "rows": [], "hooks": [], "t0": None, "movie_path": None, "down": None, "missing": []}
 MS_MISSION = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire"
 MS_TICK = "WillowGame.WillowGameViewportClient:Tick"
 MS_MAX_HITS = 8
@@ -27,7 +30,7 @@ MS_FUNCS = [("WillowGame.QuestAcceptGFxMovie", name, post) for name, post in (
     ("Start", True), ("HandleInputKey", True), ("HandleRewardInputKey", True), ("extChoiceConfirmed", False), ("extChoiceCancelled", False),
     ("extAcceptConfirmed", False), ("extCompleteConfirmed", False), ("extGenericButtonClicked", False), ("extOnClickedChoice", False),
     ("GotoCorrectPartOfMovie", False), ("HideTopPanel", False), ("InitForPC", False), ("InitForConsole", False), ("DisplayRewardsPage", False),
-    ("ShowNoRewardScreen", False), ("AcceptReward", False), ("UpdateMissionList", False), ("OnClose", True), ("OnClosedOnDeath", False),
+    ("ShowNoRewardScreen", False), ("AcceptReward", False), ("UpdateMissionList", False), ("OnClose", True), ("OnClosedOnDeath", True),
     ("SetQuestTitle", False), ("SetPlayerXP", False), ("SetPlayerTotalCredits", False), ("SetRewardsXP", False), ("SetRewardsTotalCredits", False),
     ("SetRewardsItem", False), ("SetLevelAndDifficulty", False), ("SetScrollArrows", False), ("SetFocus", False))] + [
     ("WillowGame.MissionRewardGFxObject", "SetNoReward", False), ("WillowGame.MissionRewardGFxObject", "SetPendingMissionRewardData", False),
@@ -38,7 +41,8 @@ MS_FUNCS = [("WillowGame.QuestAcceptGFxMovie", name, post) for name, post in (
     ("WillowGame.WillowPlayerController", "MissionRewardsReceived", False), ("WillowGame.WillowPlayerController", "AcceptOrSaveUnclaimedReward", False),
     ("WillowGame.WillowPlayerPawn", "ShowRespawnDialog", False), ("WillowGame.WillowPlayerPawn", "ClientShowRespawnDialog", False),
     ("WillowGame.WillowPlayerPawn", "AwaitingRespawnDisplayRespawnCost", False), ("WillowGame.WillowPlayerPawn", "InjuredRespawn", False),
-    ("WillowGame.WillowPlayerPawn", "ResurrectAtLocation", False), ("WillowGame.WillowPlayerPawn", "GoFromInjuredToHealthy", False)]
+    ("WillowGame.WillowPlayerPawn", "ResurrectAtLocation", False), ("WillowGame.WillowPlayerPawn", "GoFromInjuredToHealthy", False),
+    ("WillowGame.WillowHUD", "ShowRespawnDialog", False)]
 # What the screen writes to its own movie (the host page has to write the same paths). Filtered to this movie: the HUD uses them too.
 MS_WRITES = ["SetVariableString", "SetVariableBool", "SetVariableNumber"]
 # Text fields of the two pages, read back while the screen is open. A path the current frame does not have reads empty.
@@ -65,6 +69,104 @@ def ms_pick_text(read_text):
 def ms_turnin_ready(status):
     """The tracker's status for ready to turn in, as read in the golden trace (3)."""
     return status == 3
+
+
+def _ms_truthy(ret):
+    """Start returns false when the screen refuses to open. Anything else counts as open, and the next read's find confirms it."""
+    return ret is not False
+
+
+def _ms_movie():
+    """The open screen's movie, found again now; None when it is closed or no longer there (and then it stays closed)."""
+    path = MS["movie_path"]
+    if not path:
+        return None
+    try:
+        movie = unrealsdk.find_object("QuestAcceptGFxMovie", path)
+    except Exception:
+        movie = None
+    if movie is None:
+        MS["movie_path"] = None
+    return movie
+
+
+def _ms_after(name):
+    """The rows after the last mark called name, and whether that mark exists."""
+    rows = MS["rows"]
+    for i in range(len(rows) - 1, -1, -1):
+        if rows[i].get("tag") == "mark" and rows[i].get("func") == name:
+            return rows[i + 1:], True
+    return [], False
+
+
+def _ms_called(rows, name):
+    return [r for r in rows if r.get("tag") == "pre" and r.get("func", "").endswith(":" + name)]
+
+
+def _ms_reads(rows):
+    return [r["read"] for r in rows if "read" in r]
+
+
+def ms_mark(name):
+    MS["rows"].append({"t": _ms_now(), "tag": "mark", "func": name, "args": {}})
+    return name
+
+
+def ms_reward_shown():
+    """After the Enter on the turn-in (mark turnin_enter): the mission complete, the page drawn, the screen open with the page's text, the reward not yet taken."""
+    rows, marked = _ms_after("turnin_enter")
+    reads = _ms_reads(rows)
+    last = reads[-1] if reads else {}
+    text = last.get("text") or {}
+    out = {"marked": marked, "page_called": bool(_ms_called(rows, "DisplayRewardsPage") or _ms_called(rows, "ShowNoRewardScreen")),
+           "open": last.get("open") is True, "status": last.get("status"), "header": text.get("reward.rewardsHeader.text", ""),
+           "title": text.get("reward.missionTitle.text", ""), "taken_already": bool(_ms_called(rows, "MissionRewardsReceived"))}
+    out["ok"] = (marked and out["page_called"] and out["open"] and out["status"] == 4 and bool(out["header"]) and bool(out["title"])
+                 and not out["taken_already"])
+    return out
+
+
+def ms_reward_taken():
+    """After the page was shown (mark reward_shown): exactly one MissionRewardsReceived, which press led to it (the last reward_press_* mark before it), and a later read
+    that no longer shows the reward page."""
+    rows, marked = _ms_after("reward_shown")
+    press, first, count = None, None, 0
+    for i, row in enumerate(rows):
+        if row.get("tag") == "mark" and row.get("func", "").startswith("reward_press_") and first is None:
+            press = row["func"][len("reward_press_"):]
+        if row.get("tag") == "pre" and row.get("func", "").endswith(":MissionRewardsReceived"):
+            count += 1
+            first = i if first is None else first
+    later = _ms_reads(rows[first + 1:]) if first is not None else []
+    gone = bool(later) and (later[-1].get("open") is False or not (later[-1].get("text") or {}).get("reward.rewardsHeader.text"))
+    out = {"marked": marked, "count": count, "press": press, "read_after": bool(later), "page_gone": gone}
+    out["ok"] = marked and count == 1 and press is not None and gone
+    return out
+
+
+def ms_respawn():
+    """After the down request (mark down_requested): she went down, was brought back, and only then the dialog came; the money changed by what the dialog was told,
+    and a read after that shows her alive. Seeing the dialog function alone proves none of this."""
+    rows, marked = _ms_after("down_requested")
+    out = {"marked": marked, "down": False, "respawned": False, "dialog": False, "charged": None, "cash_before": MS.get("cash_before"), "cash_after": None, "alive_after": False}
+    respawn_at = dialog_at = None
+    for i, row in enumerate(rows):
+        func = row.get("func", "")
+        if row.get("tag") == "mark" and func == "down":
+            out["down"] = True
+        if row.get("tag") == "pre" and func.endswith(":ResurrectAtLocation") and out["down"] and respawn_at is None:
+            respawn_at = i
+        if row.get("tag") == "pre" and func.endswith(":ClientShowRespawnDialog") and respawn_at is not None and dialog_at is None:
+            dialog_at = i
+            out["charged"] = row["args"].get("AmountCharged")
+    out["respawned"], out["dialog"] = respawn_at is not None, dialog_at is not None
+    reads = _ms_reads(rows[dialog_at + 1:]) if dialog_at is not None else []
+    if reads:
+        out["cash_after"] = reads[-1].get("cash")
+        out["alive_after"] = (reads[-1].get("health") or 0) > 0 and reads[-1].get("injured") is False
+    out["ok"] = (marked and out["down"] and out["respawned"] and out["dialog"] and out["alive_after"] and isinstance(out["charged"], int)
+                 and isinstance(out["cash_before"], int) and out["cash_after"] == out["cash_before"] - out["charged"])
+    return out
 
 
 def _ms_now():
@@ -108,7 +210,7 @@ def _ms_scalars(obj):
 
 
 def _ms_mk(path, tag):
-    is_start, is_close = path.endswith(":Start"), path.endswith(":OnClose")
+    is_start, is_close = path.endswith(":Start"), path.endswith((":OnClose", ":OnClosedOnDeath"))
 
     def hook(obj, args, ret, func):
         if not MS["on"]:
@@ -117,10 +219,10 @@ def _ms_mk(path, tag):
         if tag == "post":
             row["ret"] = _ms_p(ret)
         MS["rows"].append(row)
-        if tag == "post" and is_start:
-            MS["movie"] = obj
-        if tag == "post" and is_close:
-            MS["movie"] = None
+        if tag == "post" and is_start and _ms_truthy(ret):
+            MS["movie_path"] = obj._path_name()
+        if is_close:   # before the close runs too: nothing may use the movie from here on
+            MS["movie_path"] = None
 
     return hook
 
@@ -171,7 +273,7 @@ def ms_stop():
 
 def ms_start():
     ms_stop()
-    MS.update(rows=[], t0=time.perf_counter(), on=True, movie=None, down=None, missing=[])
+    MS.update(rows=[], t0=time.perf_counter(), on=True, movie_path=None, down=None, missing=[], cash_before=None)
     for cls, name, post in MS_FUNCS:
         path = f"{cls}:{name}"
         for typ, tag in [(Type.PRE, "pre")] + ([(Type.POST, "post")] if post else []):
@@ -193,7 +295,8 @@ def ms_start():
 def ms_read(label):
     pc = get_pc()
     world = pc.WorldInfo
-    row = {"label": label, "t": _ms_now(), "open": MS["movie"] is not None, "game_time": world.TimeSeconds, "real_time": world.RealTimeSeconds,
+    movie = _ms_movie()
+    row = {"label": label, "t": _ms_now(), "open": movie is not None, "game_time": world.TimeSeconds, "real_time": world.RealTimeSeconds,
            "paused": _ms_p(world.Pauser), "view": [pc.Rotation.Pitch, pc.Rotation.Yaw]}
     pawn = pc.Pawn
     if pawn is not None:
@@ -208,7 +311,6 @@ def ms_read(label):
             row[key] = fn()
         except Exception as e:
             row[key + "_error"] = repr(e)[:100]
-    movie = MS["movie"]
     if movie is not None:
         row["text"] = ms_pick_text(movie.GetVariableString)
         for key, fn in (("entries", lambda: len(movie.MissionList)), ("single", lambda: movie.bSingleMissionDisplay), ("redeemable", lambda: movie.RedeemableCount),
@@ -223,7 +325,7 @@ def ms_read(label):
 
 
 def ms_settings():
-    movie = MS["movie"]
+    movie = _ms_movie()
     if movie is None:
         return {"error": "the screen is not open"}
     return {"movie": _ms_scalars(movie), "definition": _ms_scalars(movie.MissionUIDef) if movie.MissionUIDef else None}
@@ -256,8 +358,13 @@ def ms_force_ready():
 
 
 def ms_down():
+    read = ms_read("before_down")
+    if read["open"] or read.get("movie_playing") is True:
+        return {"refused": "the screen is still open", "read": read}
+    MS["cash_before"] = read.get("cash")
+    ms_mark("down_requested")
     MS["down"] = {"hits": 0, "next": 0.0, "done": False, "injured": False}
-    return ms_read("down_requested")
+    return {"refused": None, "read": read}
 
 
 def ms_dump(name):
