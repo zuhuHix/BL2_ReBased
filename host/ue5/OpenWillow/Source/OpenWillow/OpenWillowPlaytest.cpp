@@ -307,6 +307,18 @@ void UOpenWillowPlaytest::RunCommand(const FString& Line)
         const bool bDrawn = bEquipped && W->DrawItemById(Id);
         UE_LOG(LogTemp, Display, TEXT("OWPLAY equiplast index=%d name=\"%s\" id=%s equipped=%d drawn=%d"), Last, *Name, *Id, bEquipped, bDrawn);
     }
+    else if (C == TEXT("tpmarker"))
+    {
+        // The quest's own markers (what the minimap shows): the index-th one, logged by name.
+        TArray<TPair<FString, FVector>> Markers;
+        if (const UOpenWillowQuest* Quest = W->GetQuest()) Quest->MinimapMarkers(Markers);
+        for (const TPair<FString, FVector>& Marker : Markers)
+            UE_LOG(LogTemp, Display, TEXT("OWPLAY marker %s at %s"), *Marker.Key, *Marker.Value.ToCompactString());
+        const int32 Index = N > 1 ? FCString::Atoi(*T[1]) : 0;
+        if (!Markers.IsValidIndex(Index)) { UE_LOG(LogTemp, Warning, TEXT("OWPLAY no marker %d of %d"), Index, Markers.Num()); return; }
+        W->SetActorLocation(Markers[Index].Value + FVector(0, 0, 100.f), false, nullptr, ETeleportType::TeleportPhysics);
+        W->NotifyTeleported();
+    }
     else if (C == TEXT("setlevel") && N > 1)
     {
         if (UOpenWillowSkills* Skills = W->GetSkills()) { Skills->SetLevel(FCString::Atoi(*T[1])); W->RefreshHealthForLevel(); }

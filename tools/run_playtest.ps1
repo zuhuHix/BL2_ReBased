@@ -57,7 +57,7 @@ try {
     $url = "http://127.0.0.1:$Port/"
     Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 $url | Out-Null
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url",
-        "-owvendingpage=${url}vending.html", "-owitems=`"$(Split-Path -Parent $gear)`"", "-owlevel=$Level", "-owmoney=$Money", '-owerid=7',
+        "-owflashskills=${url}skills.html", "-owflashinventory=${url}inventory.html", "-owvendingpage=${url}vending.html", "-owitems=`"$(Split-Path -Parent $gear)`"", "-owlevel=$Level", "-owmoney=$Money", '-owerid=7',
         '-owquest', "-owquestsave=`"$(Join-Path $out 'quest_save.json')`"", "-owcurrencysave=`"$(Join-Path $out 'currency.json')`"",
         "-owplaytest=`"$scriptPath`"") + $switches + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended', '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
