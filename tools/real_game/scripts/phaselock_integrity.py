@@ -52,6 +52,14 @@ def _safe(fn, default=None):
         return default if default is not None else f"<{type(error).__name__}>"
 
 
+def _null(fn):
+    """fn(), or None (JSON null) when it fails. _safe without a default returns an error-marker string instead."""
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
 def _r(x, n=4):
     return round(x, n) if isinstance(x, float) else x
 
@@ -222,12 +230,12 @@ def _on_tick(*_args):
                "skill_duration": _r(float(skill.SkillDuration)), "state_start": _r(float(skill.StateStartTime)),
                "state_duration": _r(float(skill.StateDuration)), "collapse_start": _r(float(skill.CollapseStartTime)),
                "lifted": _safe(lambda: skill.LiftedPawn.Name if skill.LiftedPawn else None),
-               "location": plain(pawn.Location), "rotation": plain(_safe(lambda: pawn.Rotation)), "mesh_rotation": plain(_safe(lambda: mesh.Rotation)),
+               "location": plain(pawn.Location), "rotation": plain(_null(lambda: pawn.Rotation)), "mesh_rotation": plain(_null(lambda: mesh.Rotation)),
                "mesh_translation": plain(mesh.Translation),
                # The target's size, for the held target's apparent scale: the mesh and actor scales and the mesh's bounds sphere.
-               "mesh_scale": _r(_safe(lambda: float(mesh.Scale))), "mesh_scale3d": plain(_safe(lambda: mesh.Scale3D)),
-               "draw_scale": _r(_safe(lambda: float(pawn.DrawScale))),
-               "bounds_radius": _r(_safe(lambda: float(mesh.Bounds.SphereRadius))),
+               "mesh_scale": _r(_null(lambda: float(mesh.Scale))), "mesh_scale3d": plain(_null(lambda: mesh.Scale3D)),
+               "draw_scale": _r(_null(lambda: float(pawn.DrawScale))),
+               "bounds_radius": _r(_null(lambda: float(mesh.Bounds.SphereRadius))),
                "collision": _collision(pawn), "pool": _pool_state(pc), "player": _player(me) if me else None,
                "seqs": [r for r in (_seq_row(n) for n in pi["seqs"]) if isinstance(r["weight"], float) and r["weight"] > 0.001],
                "arms": [r for r in (_seq_row(n) for n in pi["arms_seqs"]) if isinstance(r["weight"], float) and r["weight"] > 0.001],

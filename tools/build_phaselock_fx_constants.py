@@ -18,6 +18,7 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+LOCAL_ROOT = ROOT / 'local'
 sys.path.insert(0, str(ROOT / 'host' / 'ue5'))
 from phaselock_fx_inputs import load_fx_constants  # noqa: E402
 
@@ -86,9 +87,12 @@ def hand_kept_tint(out_path):
     return tint
 
 
-def build(emitter_dir, manifest_path, out_path):
-    """Rebuild out_path. Every input is read and the result checked before the file is replaced."""
-    out_path = Path(out_path)
+def build(emitter_dir, manifest_path, out_path, local_root=LOCAL_ROOT):
+    """Rebuild out_path, which must be under local_root (game-derived output stays in ignored local/; tests pass a temporary
+    root). Every input is read and the result checked before the file is replaced."""
+    out_path = Path(out_path).resolve()
+    if Path(local_root).resolve() not in out_path.parents:
+        raise BuildError(f'{out_path} is outside {local_root}; game-derived output stays there')
     constants = {'_source': SOURCE_NOTE,
                  'Mat_SirenHandInnerOrb': {'blue': orb_blue(emitter_dir)},
                  'Mat_PowerUpTwirls': {'tint': hand_kept_tint(out_path)},
@@ -113,9 +117,6 @@ def main(argv=None):
     parser.add_argument('--out', default=ROOT / 'local/phaselock/fx_constants.json')
     args = parser.parse_args(argv)
     out = Path(args.out).resolve()
-    if (ROOT / 'local').resolve() not in out.parents:
-        print(f'build_phaselock_fx_constants: {out} is outside local/; game-derived output stays there', file=sys.stderr)
-        return 2
     try:
         build(args.emitters, args.manifest, out)
     except BuildError as error:
