@@ -1,10 +1,85 @@
 """Synthetic checks for the cooked weapon view-manifest projection."""
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import weapon_view_model as view
+
+
+class ViewTableTests(unittest.TestCase):
+    TABLES = {
+        'types': {'WT.Gun': {'weapon_type': 'WT.Gun', 'first_person_fov': 40.0, 'muzzle_socket': 'Muzzle',
+                             'shell_casing_socket': 'Port', 'zoom_socket_preferred': 'Eye1',
+                             'zoom_socket_fallback': 'Eye2', 'socket_table': 'Mesh'}},
+        'sockets': {'Mesh': {'barrel_a_muzzle': {'name': 'Barrel_A_Muzzle', 'bone': 'B', 'fragment': ''},
+                             'port': {'name': 'Port', 'bone': 'R', 'fragment': ''},
+                             'scope_a_eye2': {'name': 'Scope_A_Eye2', 'bone': 'S', 'fragment': ''}}},
+        'parts': {'P.Barrel': {'fragments': ['Barrel_A'], 'scope_overlay': False},
+                  'P.Sight': {'fragments': ['Scope_A'], 'scope_overlay': True}},
+    }
+
+    def test_sockets_follow_the_parts_and_the_table_key_stays_out(self):
+        entry = view.compose_entry(self.TABLES, 'WT.Gun', {'Barrel': 'P.Barrel', 'Sight': 'P.Sight', 'Stock': 'P.Unknown'})
+        self.assertEqual(entry['first_person_fov'], 40.0)
+        self.assertNotIn('socket_table', entry)
+        self.assertEqual(entry['muzzle_socket_transform']['fragment'], 'Barrel_A')
+        self.assertEqual(entry['shell_casing_socket_transform']['name'], 'Port')
+        self.assertEqual(entry['zoom_socket_transform']['name'], 'Scope_A_Eye2')
+        self.assertTrue(entry['scope_overlay'])
+
+    def test_unresolved_socket_and_unknown_type(self):
+        entry = view.compose_entry(self.TABLES, 'WT.Gun', {})
+        self.assertIsNone(entry['muzzle_socket_transform'])
+        self.assertEqual(entry['muzzle_socket_transform_source'], 'unresolved')
+        self.assertFalse(entry['scope_overlay'])
+        self.assertIsNone(view.compose_entry(self.TABLES, 'WT.Other', {}))
+
+    def test_a_part_outside_the_table_gets_no_plain_socket_but_an_absent_one_does(self):
+        tables = dict(self.TABLES, sockets={'Mesh': dict(self.TABLES['sockets']['Mesh'],
+                                                         muzzle={'name': 'Muzzle', 'bone': 'M', 'fragment': ''})})
+        self.assertEqual(view.compose_entry(tables, 'WT.Gun', {})['muzzle_socket_transform']['name'], 'Muzzle')
+        unknown = view.compose_entry(tables, 'WT.Gun', {'Barrel': 'P.Unknown'})
+        self.assertIsNone(unknown['muzzle_socket_transform'])
+        self.assertEqual(unknown['muzzle_socket_transform_source'], 'unresolved')
+        self.assertEqual(view.compose_entry(tables, 'WT.Gun', {'Barrel': 'P.Barrel'})['muzzle_socket_transform']['fragment'], 'Barrel_A')
+        self.assertIsNone(view.compose_entry(tables, 'WT.Gun', {'Body': 'P.Unknown'})['shell_casing_socket_transform'])
+
+    def test_a_sight_outside_the_table_gets_no_plain_zoom_but_an_empty_slot_does(self):
+        tables = dict(self.TABLES, sockets={'Mesh': dict(self.TABLES['sockets']['Mesh'],
+                                                         eye2={'name': 'Eye2', 'bone': 'E', 'fragment': ''})})
+        self.assertEqual(view.compose_entry(tables, 'WT.Gun', {})['zoom_socket_transform']['name'], 'Eye2')
+        self.assertIsNone(view.compose_entry(tables, 'WT.Gun', {'Sight': 'P.Unknown'})['zoom_socket_transform'])
+        self.assertEqual(view.compose_entry(tables, 'WT.Gun', {'Sight': 'P.Sight'})['zoom_socket_transform']['name'], 'Scope_A_Eye2')
+
+    def check_folder(self, recipes, listed):
+        with tempfile.TemporaryDirectory() as name:
+            folder = Path(name)
+            for recipe_id, recipe in recipes.items():
+                (folder / f'{recipe_id}.json').write_text(json.dumps(recipe), encoding='utf-8')
+            (folder / 'weapon_view.json').write_text(json.dumps(listed), encoding='utf-8')
+            return view.check_folder(self.TABLES, folder)
+
+    def test_check_counts_recipes_and_sees_a_missing_line_or_recipe(self):
+        recipe = {'weapon_type': 'WT.Gun', 'parts': {'Barrel': {'part': 'P.Barrel'}}}
+        entry = view.compose_entry(self.TABLES, 'WT.Gun', {'Barrel': 'P.Barrel'})
+        self.assertEqual(self.check_folder({'gun': recipe, 'sample_index': {'guns': []}}, {'gun': entry}), (1, []))
+        self.assertEqual(self.check_folder({}, {}), (0, []))
+        total, problems = self.check_folder({'gun': recipe}, {})
+        self.assertEqual(total, 1)
+        self.assertIn('no line in weapon_view.json', problems[0])
+        total, problems = self.check_folder({}, {'gone': entry})
+        self.assertEqual(total, 1)
+        self.assertIn('no recipe in the folder', problems[0])
+
+    def test_oracle_names_a_difference_and_ignores_the_gun_only_fields(self):
+        recipe = {'parts': {'Barrel': {'part': 'P.Barrel'}}}
+        same = view.compose_entry(self.TABLES, 'WT.Gun', {'Barrel': 'P.Barrel'})
+        listed = dict(same, card_reload_time=2.0, weapon_reload_asset='anywhere')
+        self.assertEqual(view.oracle_differences(self.TABLES, recipe, listed), [])
+        self.assertEqual(view.oracle_differences(self.TABLES, recipe, dict(listed, first_person_fov=50.0)), ['first_person_fov'])
 
 
 class WeaponViewModelTests(unittest.TestCase):

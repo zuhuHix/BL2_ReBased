@@ -29,6 +29,7 @@
 #include "OpenWillowStatusEffect.h"
 #include "OpenWillowSkillEffects.h"
 #include "OpenWillowGunLook.h"
+#include "OpenWillowViewTypes.h"
 #include "OpenWillowWeaponAssembly.h"
 #include "OpenWillowInventoryPreviewActor.h"
 #include "HAL/FileManager.h"
@@ -956,6 +957,28 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
     if (!FFileHelper::LoadFileToString(Text, *FPaths::Combine(ItemDir, TEXT("weapon_view.json")))) return;
     TSharedPtr<FJsonObject> Root;
     if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid()) return;
+    AddViewModels(Root);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow view models: %d recipes from %s"), ViewModels.Num(), *ItemDir);
+}
+AOpenWillowWalker::FViewModel* AOpenWillowWalker::FindViewModel(const FOpenWillowWeaponItem* Item) const
+{
+    if (!Item) return nullptr;
+    if (FViewModel* Found = ViewModels.Find(Item->Id)) return Found;
+    const TSharedPtr<FJsonObject> Entry = OpenWillowViewTypes::ComposeEntry(Item->WeaponType, Item->Parts);
+    if (!Entry.IsValid()) return nullptr;
+    TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+    Root->SetObjectField(Item->Id, Entry);
+    AddViewModels(Root);
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow view model %s composed from weapon type %s"), *Item->Id, *Item->WeaponType);
+    return ViewModels.Find(Item->Id);
+}
+float AOpenWillowWalker::ViewModelFovForTests(const FOpenWillowWeaponItem& Item) const
+{
+    const FViewModel* Model = FindViewModel(&Item);
+    return Model ? Model->Fov : -1.f;
+}
+void AOpenWillowWalker::AddViewModels(const TSharedPtr<FJsonObject>& Root) const
+{
     for (const auto& Pair : Root->Values)
     {
         const TSharedPtr<FJsonObject>* Entry = nullptr;
@@ -1094,7 +1117,6 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
         ReadSocket(*Entry, TEXT("shell_casing_socket_transform"), Model.ShellSocket);
         ViewModels.FindOrAdd(FString(Pair.Key)) = Model;  // the key type of FJsonObject::Values is not FString in 5.8
     }
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow view models: %d recipes from %s"), ViewModels.Num(), *ItemDir);
 }
 void AOpenWillowWalker::ApplyViewModel(const FString& ItemId)
 {
@@ -1122,7 +1144,7 @@ void AOpenWillowWalker::ApplyViewModel(const FString& ItemId)
 const AOpenWillowWalker::FViewModel* AOpenWillowWalker::ActiveViewModel() const
 {
     const FOpenWillowWeaponItem* Item = Inventory ? Inventory->ActiveWeapon() : nullptr;
-    return Item ? ViewModels.Find(Item->Id) : nullptr;
+    return FindViewModel(Item);
 }
 namespace
 {
@@ -1188,7 +1210,7 @@ void AOpenWillowWalker::UpdateAim(float Now)
     if (ItemId != AimTransitionWeaponId) BeginAimTransition(Now);
     const float Progress = FMath::Clamp((Now - AimTransitionStart) / FMath::Max(0.01f, AimTransitionDuration), 0.f, 1.f);
     AimAlpha = FMath::Lerp(AimTransitionStartAlpha, AimTransitionTargetAlpha, Progress);
-    FViewModel* Model = Item ? ViewModels.Find(ItemId) : nullptr;
+    FViewModel* Model = FindViewModel(Item);
     // Use the measured ZoomedEndFOV directly as UE5's horizontal camera FOV. The previous 4:3-to-viewport
     // conversion made ADS visibly too wide on the 16:9 capture; this interpretation remains UNVERIFIED native behavior.
     const float ZoomFov = Model && Model->ZoomFov > 1.f ? Model->ZoomFov : WorldFovDefault;
@@ -1267,6 +1289,7 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
         OpenWillowGunLook::Apply(WeaponVisual);
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
+    FindViewModel(Item);  // compose it now, so ApplyViewModel finds a rolled gun's by id
     ApplyViewModel(Item->Id);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow gun sockets %s: Muzzle %s, EjectPort %s (no shell casings are spawned yet)"), *Item->Id,
         Item->Sockets.Contains(TEXT("Muzzle")) ? TEXT("decoded") : TEXT("missing (estimate used)"),
@@ -1596,7 +1619,7 @@ bool AOpenWillowWalker::StartReload(float Now)
     // Every reload path (the key, an empty magazine, test drivers) waits for the weapon while down (GoDown, DownWeaponReady).
     if (bReloading || MeleeBusy() || !Weapon || !DownWeaponReady() || !Inventory->CanReload(*Weapon)) return false;
     const float ReloadTime = FMath::Max(0.1f, OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::WeaponReloadSpeed, Weapon->ReloadTime));   // skills lane hook
-    const FViewModel* Model = ViewModels.Find(Weapon->Id);
+    const FViewModel* Model = FindViewModel(Weapon);
     bReloading = true;
     Burst.interrupt();   // a reload ends the burst in progress; firing again needs a new press
     ReloadEndsAt = Now + ReloadTime;

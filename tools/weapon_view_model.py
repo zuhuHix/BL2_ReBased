@@ -7,6 +7,7 @@ default unconditioned reload animation name together for the host importer.
   python tools/weapon_view_model.py --game "<BL2 install>" --dir local/items/slice
 """
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -564,11 +565,153 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
     return result
 
 
+def select_reload(entry, recipe_id):
+    """Pick the reload clip and name its asset; recipe_id is the asset's folder."""
+    selected = choose_reload_animation(entry.get('reload_animations', []),
+                                       entry.get('card_reload_time'),
+                                       entry.get('fast_reload_threshold'))
+    entry['reload_animation'] = selected
+    if selected:
+        entry['reload_animation_source'] = (
+            'cooked type clip names + live WeaponMaxFastReloadAnimTime vs recipe card ReloadTime; '
+            'expression interpretation UNVERIFIED'
+            if entry.get('fast_reload_threshold') is not None and entry.get('card_reload_time') is not None
+            else 'cooked type WeaponReloadAnimations; last unconditioned fallback (UNVERIFIED selection)')
+        asset_name = f'Anim_WeaponReload_{selected}'
+        asset_folder = f'/Game/OpenWillow/Weapons/Items/WeaponAnims/{recipe_id}'
+        entry['weapon_reload_asset'] = f'{asset_folder}/{asset_name}.{asset_name}'
+        entry['weapon_reload_asset_name'] = asset_name
+    else:
+        entry['reload_animation_source'] = 'no matching cooked type reload entry'
+        entry['weapon_reload_asset'] = None
+        entry['weapon_reload_asset_name'] = None
+
+
+# Bump with any change to the table's shape; OpenWillowViewTypes.cpp refuses another value, and a table for another library.json.
+VIEW_TYPES_SCHEMA = 1
+ZOOM_SLOTS = ('Sight', 'Body', 'Barrel', 'Stock', 'Grip', 'Elemental', 'Accessory1', 'Accessory2', 'Material')
+# Differ by gun for a reason outside the view data: the card's time, and the recipe id in the clip's folder.
+ORACLE_IGNORED = ('card_reload_time', 'weapon_reload_asset')
+
+
+def library_tables(weapon_types, part_paths, package, class_defaults):
+    """What a rolled gun's view entry is made from, per weapon type and per part (no per-gun list).
+
+    Within a weapon type only the sockets and the scope overlay differ between guns, and they follow the parts (a sample; counts in
+    WEAPON_VISUALS.md section 22). Types and parts outside the package are left out; such a gun keeps no view model, as before.
+    """
+    rows = [(t, {'weapon_type': t, 'parts': {}}) for t in weapon_types if t in package.index]
+    types = build_recipe_entries(rows, package, class_defaults)
+    sockets = {}
+    for weapon_type, entry in types.items():
+        select_reload(entry, 'library')
+        for name in ('muzzle_socket_transform', 'shell_casing_socket_transform', 'zoom_socket_transform'):
+            entry.pop(name, None)
+            entry.pop(name + '_source', None)
+        for name in ('scope_overlay', 'scope_overlay_source', 'card_reload_time'):
+            entry.pop(name, None)
+        gestalt = _property_path(package.props(weapon_type).get('GestaltMesh'))
+        mesh = _property_path(package.props(gestalt).get('GestaltSkeletalMesh')) if gestalt in package.index else None
+        entry['socket_table'] = mesh
+        if mesh and mesh not in sockets:
+            prefix = mesh + '.SkeletalMeshSocket_'
+            paths = [path for path in package.index if path.startswith(prefix)]
+            package.preload(paths)
+            sockets[mesh] = {}
+            for path in paths:
+                record = socket_record(package.cache[path], '', '')
+                sockets[mesh][record['name'].casefold()] = record
+    parts = {}
+    for path in part_paths:
+        if path in package.index:
+            parts[path] = {'fragments': [str(f).rsplit('.', 1)[-1] for f in weapon_recipe.part_fragments(package, path)],
+                           'scope_overlay': bool(package.props(path).get('FirstPersonParticle'))}
+    return {'schema': VIEW_TYPES_SCHEMA, 'types': types, 'sockets': sockets, 'parts': parts}
+
+
+def table_socket(table, fragments, generic_name, allow_plain=True):
+    """resolve_fragment_socket, on the table: the first fragment with its own socket, else the plain name.
+
+    allow_plain is False when a part it depends on is not in the table: that part's own socket cannot be ruled out, so a plain one
+    would look valid without belonging to the gun.
+    """
+    for fragment in fragments:
+        found = table.get(f'{fragment}_{generic_name}'.casefold())
+        if found is not None:
+            return dict(found, fragment=fragment)
+    found = table.get(str(generic_name).casefold()) if allow_plain else None
+    return dict(found, fragment='') if found is not None else None
+
+
+def compose_entry(tables, weapon_type, slot_parts):
+    """A gun's view entry from its weapon type and {slot: part path}. None when the type is unknown."""
+    base = tables['types'].get(weapon_type)
+    if base is None:
+        return None
+    entry = {k: v for k, v in base.items() if k != 'socket_table'}
+    table = tables['sockets'].get(base.get('socket_table')) or {}
+
+    def frags(slot):
+        return (tables['parts'].get(slot_parts.get(slot)) or {}).get('fragments', [])
+
+    def known(*slots):
+        return all(slot_parts.get(slot) is None or slot_parts[slot] in tables['parts'] for slot in slots)
+    zoom_frags = [f for slot in ZOOM_SLOTS for f in frags(slot)]
+    zoom_known = known(*ZOOM_SLOTS)
+    muzzle = table_socket(table, frags('Barrel'), entry['muzzle_socket'], known('Barrel')) if entry.get('muzzle_socket') else None
+    casing = (table_socket(table, frags('Body'), entry['shell_casing_socket'], known('Body'))
+              if entry.get('shell_casing_socket') else None)
+    zoom = table_socket(table, zoom_frags, entry['zoom_socket_preferred'], zoom_known) if entry.get('zoom_socket_preferred') else None
+    if zoom is None and entry.get('zoom_socket_fallback'):
+        zoom = table_socket(table, zoom_frags, entry['zoom_socket_fallback'], zoom_known)
+    for name, socket in (('muzzle_socket_transform', muzzle), ('shell_casing_socket_transform', casing),
+                         ('zoom_socket_transform', zoom)):
+        entry[name] = socket
+        entry[name + '_source'] = 'selected fragment SkeletalMeshSocket export' if socket else 'unresolved'
+    overlay = (tables['parts'].get(slot_parts.get('Sight')) or {}).get('scope_overlay', False)
+    entry['scope_overlay'] = overlay
+    entry['scope_overlay_source'] = ('cooked selected Sight.FirstPersonParticle; overlay interpretation UNVERIFIED'
+                                     if overlay else 'cooked selected Sight has no FirstPersonParticle')
+    return entry
+
+
+def oracle_differences(tables, recipe, listed):
+    """Fields of a generated per-recipe entry that composition does not reproduce (empty: exact)."""
+    slot_parts = {slot: (e.get('part') if isinstance(e, dict) else e) for slot, e in recipe['parts'].items()}
+    composed = compose_entry(tables, listed['weapon_type'], slot_parts)
+    if composed is None:
+        return ['unknown weapon type']
+    return sorted(k for k in set(composed) | set(listed) if k not in ORACLE_IGNORED and composed.get(k) != listed.get(k))
+
+
+def check_folder(tables, folder):
+    """Compare a folder's recipes with its weapon_view.json through compose_entry: (recipes checked, problems)."""
+    listed = json.loads((folder / 'weapon_view.json').read_text(encoding='utf-8'))
+    problems, total = [], 0
+    for path in sorted(folder.glob('*.json')):
+        if path.name == 'weapon_view.json':
+            continue
+        recipe = json.loads(path.read_text(encoding='utf-8-sig'))
+        if not (isinstance(recipe, dict) and recipe.get('weapon_type') and isinstance(recipe.get('parts'), dict)):
+            continue  # not a recipe: build_recipe_entries skips these too
+        total += 1
+        entry = listed.pop(path.stem, None)
+        diff = ['no line in weapon_view.json'] if entry is None else oracle_differences(tables, recipe, entry)
+        if diff:
+            problems.append(f'{path.stem}: {diff}')
+    total += len(listed)
+    problems += [f'{recipe_id}: no recipe in the folder' for recipe_id in sorted(listed)]
+    return total, problems
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
     parser.add_argument('--game', type=Path, required=True)
-    parser.add_argument('--dir', type=Path, nargs='+', required=True)
+    parser.add_argument('--dir', type=Path, nargs='+', default=[])
+    parser.add_argument('--library', type=Path, help='local/weapon_library/library.json: write view_types.json beside it')
+    parser.add_argument('--check', type=Path, nargs='*',
+                        help='folders with recipes and weapon_view.json: compare with what --library composes')
     parser.add_argument('--schema', type=Path, default=ROOT / 'local/items/slice/slice_gear.schema')
     parser.add_argument('--measurements', type=Path,
                         help='optional ignored local lane E live-measurements markdown')
@@ -579,6 +722,25 @@ def main():
     package = weapon_recipe.Package(str(Path(args.reader).resolve()), cooked / 'Startup.upk', str(schema.resolve()))
     defaults_package = weapon_recipe.Package(str(Path(args.reader).resolve()), cooked / 'WillowGame.upk', str(schema.resolve()))
     defaults = defaults_package.props('Default__WeaponTypeDefinition')
+    if args.library:
+        index = json.loads(args.library.read_text(encoding='utf-8'))
+        tables = library_tables(sorted(index['weapon_types']), sorted(index['parts']), package, defaults)
+        tables['library_md5'] = hashlib.md5(args.library.read_bytes()).hexdigest()
+        out = args.library.with_name('view_types.json')
+        out.write_text(json.dumps(tables, indent=1), encoding='utf-8')
+        print(f"{out}: {len(tables['types'])} of {len(index['weapon_types'])} types, {len(tables['parts'])} of "
+              f"{len(index['parts'])} parts, {len(tables['sockets'])} socket tables")
+        if args.check is not None:
+            bad = total = 0
+            for folder in args.check:
+                count, problems = check_folder(tables, folder)
+                total += count
+                bad += len(problems)
+                for problem in problems:
+                    print(f'  {problem}')
+            print(f'tool against tool: {total - bad} of {total} recipes reproduced (cooked data, not the game)')
+            if bad or not total:
+                return 1
     for folder in args.dir:
         recipe_rows = []
         for path in sorted(folder.glob('*.json')):
@@ -594,24 +756,7 @@ def main():
             if recipe_id in live:
                 view[recipe_id] = apply_live_measurement(entry, live[recipe_id])
             entry = view[recipe_id]
-            selected = choose_reload_animation(entry.get('reload_animations', []),
-                                               entry.get('card_reload_time'),
-                                               entry.get('fast_reload_threshold'))
-            entry['reload_animation'] = selected
-            if selected:
-                entry['reload_animation_source'] = (
-                    'cooked type clip names + live WeaponMaxFastReloadAnimTime vs recipe card ReloadTime; '
-                    'expression interpretation UNVERIFIED'
-                    if entry.get('fast_reload_threshold') is not None and entry.get('card_reload_time') is not None
-                    else 'cooked type WeaponReloadAnimations; last unconditioned fallback (UNVERIFIED selection)')
-                asset_name = f'Anim_WeaponReload_{selected}'
-                asset_folder = f'/Game/OpenWillow/Weapons/Items/WeaponAnims/{recipe_id}'
-                entry['weapon_reload_asset'] = f'{asset_folder}/{asset_name}.{asset_name}'
-                entry['weapon_reload_asset_name'] = asset_name
-            else:
-                entry['reload_animation_source'] = 'no matching cooked type reload entry'
-                entry['weapon_reload_asset'] = None
-                entry['weapon_reload_asset_name'] = None
+            select_reload(entry, recipe_id)
         out = folder / 'weapon_view.json'
         out.write_text(json.dumps(view, indent=1), encoding='utf-8')
         print(f'{out}: {len(view)} recipes; reload clips {sum(bool(v["reload_animation"]) for v in view.values())}; '
@@ -621,4 +766,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

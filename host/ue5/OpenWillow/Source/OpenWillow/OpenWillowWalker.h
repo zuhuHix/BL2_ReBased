@@ -44,6 +44,8 @@ public:
     int32 PickupAttemptCount() const { return PickupAttempts; }
     bool LastPickupAccepted() const { return bLastPickupAccepted; }
     class UOpenWillowInventory* GetInventory() { return Inventory; }
+    // For the view-model test: the foreground FOV of Item's view model, composed if need be; negative when it has none.
+    float ViewModelFovForTests(const struct FOpenWillowWeaponItem& Item) const;
     const class UOpenWillowInventory* GetInventory() const { return Inventory; }
     class UOpenWillowSkills* GetSkills() const { return Skills; }
     // Every use target in its own reach now (OpenWillowInteractive.h), and the nearest dropped item.
@@ -435,12 +437,15 @@ private:
         FString ReloadAnimation;
         FString ArmsAnimSet;
     };
-    TMap<FString, FViewModel> ViewModels;
+    mutable TMap<FString, FViewModel> ViewModels;
     bool bViewModelActive = false;      // foreground FOV on (the default; -owfpfov=0 turns it and the offsets off)
     bool bViewFovForced = false;        // -owfpfov=<n> given: that value for every weapon
     float ViewFovDefault = 45.f;        // horizontal degrees
     float FlashTextureFill = 0.5f;      // UNVERIFIED host fit: share of a cooked flash quad the real sprite covers
     void LoadViewModels(const FString& ItemDir);
+    void AddViewModels(const TSharedPtr<class FJsonObject>& Root) const;
+    // The item's view model: its weapon_view.json line, else one composed by weapon type and parts (OpenWillowViewTypes), kept by id.
+    FViewModel* FindViewModel(const struct FOpenWillowWeaponItem* Item) const;
     void ApplyViewModel(const FString& ItemId);
     // Weapon glow after shots (native rule, UNVERIFIED: +0.25 per shot, cap 5, decay 3.5/s from 0.2 s after the shot; the
     // emissive scale is the base times 1 + impulse). Drives the paint material's OW_Emissive.

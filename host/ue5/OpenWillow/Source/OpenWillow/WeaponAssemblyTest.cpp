@@ -11,6 +11,11 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "OpenWillowViewTypes.h"
+#include "Dom/JsonObject.h"
+#include "Misc/SecureHash.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "OpenWillowWeaponAssembly.h"
 
 // The library planning rules on a synthetic index (invented names, no game data): fragments in slot order, vectors with a
@@ -211,6 +216,133 @@ bool FOpenWillowDropActorTest::RunTest(const FString&)
     UOpenWillowInventory* Inventory = NewObject<UOpenWillowInventory>();
     TestTrue(TEXT("It can be picked up"), Pickup->TryPickup(Inventory));
     TestTrue(TEXT("It is gone after the pickup"), !IsValid(Pickup) || Pickup->IsActorBeingDestroyed());
+    return true;
+}
+
+// A rolled gun's view entry on a synthetic table (invented names, no game data): sockets follow the parts, an empty slot may use the
+// plain name and a part outside the table may not, the zoom socket falls back to its second name, the sight decides the overlay, an unknown type
+// gives nothing, a stale table is refused, and the composed entry goes through the Walker's own parser. Then the real table, if this machine has one.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowViewTypesTest, "OpenWillow.WeaponAssembly.ViewTypes",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FOpenWillowViewTypesTest::RunTest(const FString&)
+{
+    const FString Dir = FPaths::CreateTempFilename(*FPaths::ProjectSavedDir(), TEXT("ViewTypesTest"), TEXT(""));
+    const FString File = Dir / TEXT("view_types.json");
+    const FString Library = Dir / TEXT("library.json");
+    FFileHelper::SaveStringToFile(TEXT("{}"), *Library);
+    const FString Md5 = LexToString(FMD5Hash::HashFile(*Library));
+    auto WriteTable = [&File](int32 Schema, const FString& Hash)
+    {
+        const FString Text = FString(TEXT(R"({"schema": @S, "library_md5": "@M",
+          "types": {"WT.Gun": {"weapon_type": "WT.Gun", "first_person_fov": 40, "muzzle_socket": "Muzzle", "shell_casing_socket": "Port",
+                               "zoom_socket_preferred": "Eye1", "zoom_socket_fallback": "Eye2", "socket_table": "Mesh"}},
+          "sockets": {"Mesh": {"barrel_a_muzzle": {"name": "Barrel_A_Muzzle", "bone": "B", "fragment": ""},
+                               "muzzle": {"name": "Muzzle", "bone": "M", "fragment": ""},
+                               "port": {"name": "Port", "bone": "R", "fragment": ""},
+                               "eye2": {"name": "Eye2", "bone": "E", "fragment": ""},
+                               "scope_a_eye2": {"name": "Scope_A_Eye2", "bone": "S", "fragment": ""}}},
+          "parts": {"P.Barrel": {"fragments": ["Barrel_A"], "scope_overlay": false},
+                    "P.Sight": {"fragments": ["Scope_A"], "scope_overlay": true}}})"))
+            .Replace(TEXT("@S"), *FString::FromInt(Schema)).Replace(TEXT("@M"), *Hash);
+        FFileHelper::SaveStringToFile(Text, *File);
+        OpenWillowViewTypes::ResetForTests(File);
+    };
+    auto Part = [](const TCHAR* Slot, const TCHAR* Path)
+    {
+        FOpenWillowWeaponPart Out;
+        Out.Slot = Slot;
+        Out.Part = Path;
+        return Out;
+    };
+    auto SocketField = [](const TSharedPtr<FJsonObject>& Entry, const TCHAR* Socket, const TCHAR* Field)
+    {
+        return Entry->GetObjectField(Socket)->GetStringField(Field);
+    };
+
+    WriteTable(1, Md5);
+    const TSharedPtr<FJsonObject> Entry = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"),
+        {Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.Sight")), Part(TEXT("Stock"), TEXT("P.Unknown"))});
+    if (TestTrue(TEXT("A known type composes"), Entry.IsValid()))
+    {
+        TestEqual(TEXT("Type fields come along"), Entry->GetNumberField(TEXT("first_person_fov")), 40.0);
+        TestFalse(TEXT("The table's own key is not in the entry"), Entry->HasField(TEXT("socket_table")));
+        TestEqual(TEXT("Muzzle from the barrel"), SocketField(Entry, TEXT("muzzle_socket_transform"), TEXT("fragment")), FString(TEXT("Barrel_A")));
+        TestEqual(TEXT("An empty Body slot may use the plain name"), SocketField(Entry, TEXT("shell_casing_socket_transform"), TEXT("name")), FString(TEXT("Port")));
+        TestEqual(TEXT("Zoom falls back to its second name, whatever the unknown stock"), SocketField(Entry, TEXT("zoom_socket_transform"), TEXT("name")), FString(TEXT("Scope_A_Eye2")));
+        TestTrue(TEXT("The sight decides the overlay"), Entry->GetBoolField(TEXT("scope_overlay")));
+    }
+    const TSharedPtr<FJsonObject> Empty = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {});
+    if (TestTrue(TEXT("No parts still compose"), Empty.IsValid()))
+    {
+        TestEqual(TEXT("An empty Barrel slot may use the plain name"), SocketField(Empty, TEXT("muzzle_socket_transform"), TEXT("name")), FString(TEXT("Muzzle")));
+        TestEqual(TEXT("An empty Sight slot may use the plain fallback"), SocketField(Empty, TEXT("zoom_socket_transform"), TEXT("name")), FString(TEXT("Eye2")));
+    }
+    const TSharedPtr<FJsonObject> Unknown = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"),
+        {Part(TEXT("Barrel"), TEXT("P.Unknown")), Part(TEXT("Body"), TEXT("P.Unknown"))});
+    if (TestTrue(TEXT("Unknown parts still compose"), Unknown.IsValid()))
+    {
+        TestFalse(TEXT("An unknown barrel gets no plain muzzle"), Unknown->HasField(TEXT("muzzle_socket_transform")));
+        TestFalse(TEXT("An unknown body gets no plain port"), Unknown->HasField(TEXT("shell_casing_socket_transform")));
+    }
+    const TSharedPtr<FJsonObject> UnknownSight = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Sight"), TEXT("P.Unknown"))});
+    if (TestTrue(TEXT("An unknown sight still composes"), UnknownSight.IsValid()))
+        TestFalse(TEXT("An unknown sight gets no plain zoom socket"), UnknownSight->HasField(TEXT("zoom_socket_transform")));
+    TestFalse(TEXT("An unknown type gives nothing"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Other"), {}).IsValid());
+
+    // Through the Walker's parser; deferred and never finished, so its BeginPlay does not load the slice.
+    UWorld* World = nullptr;
+    for (const FWorldContext& Context : GEngine->GetWorldContexts())
+        if (Context.WorldType == EWorldType::Game || Context.WorldType == EWorldType::PIE) World = Context.World();
+    if (TestNotNull(TEXT("A game world"), World))
+    {
+        AOpenWillowWalker* Maya = World->SpawnActorDeferred<AOpenWillowWalker>(AOpenWillowWalker::StaticClass(), FTransform(FVector(0, 0, 200000)), nullptr,
+            nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+        if (TestNotNull(TEXT("A Walker"), Maya))
+        {
+            FOpenWillowWeaponItem Rolled;
+            Rolled.Id = TEXT("test_rolled");
+            Rolled.WeaponType = TEXT("WT.Gun");
+            TestEqual(TEXT("The parser reads the composed FOV"), Maya->ViewModelFovForTests(Rolled), 40.f);
+            Rolled.Id = TEXT("test_other");
+            Rolled.WeaponType = TEXT("WT.Other");
+            TestTrue(TEXT("An unknown type has no view model"), Maya->ViewModelFovForTests(Rolled) < 0.f);
+            Maya->Destroy();
+        }
+    }
+
+    AddExpectedError(TEXT("refusing"), EAutomationExpectedErrorFlags::Contains, 4);
+    WriteTable(2, Md5);
+    TestFalse(TEXT("Another schema is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    WriteTable(1, TEXT("00000000000000000000000000000000"));
+    TestFalse(TEXT("A table from another library is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    WriteTable(1, FString());
+    TestFalse(TEXT("A table with no library hash is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    IFileManager::Get().Delete(*Library);
+    WriteTable(1, FString());
+    TestFalse(TEXT("No hash and no library.json is refused, empty does not equal empty"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    OpenWillowViewTypes::ResetForTests(Dir / TEXT("missing.json"));
+    TestFalse(TEXT("A missing table gives nothing"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    IFileManager::Get().DeleteDirectory(*Dir, false, true);
+
+    // The real table, through the same loader, where this machine has one.
+    OpenWillowViewTypes::ResetForTests();
+    const FString RealFile = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/weapon_library/view_types.json")));
+    FString RealText;
+    TSharedPtr<FJsonObject> RealRoot;
+    if (FFileHelper::LoadFileToString(RealText, *RealFile) && FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(RealText), RealRoot) && RealRoot.IsValid())
+    {
+        const TSharedPtr<FJsonObject>* Types = nullptr;
+        if (TestTrue(TEXT("The real table has types"), RealRoot->TryGetObjectField(TEXT("types"), Types)) && (*Types)->Values.Num() > 0)
+        {
+            const FString FirstType((*Types)->Values.CreateConstIterator().Key());
+            TestTrue(TEXT("The real table composes its first type"), OpenWillowViewTypes::ComposeEntry(FirstType, {}).IsValid());
+        }
+    }
+    else
+    {
+        AddWarning(TEXT("No local view_types.json here: the real table was not read"));
+    }
+    OpenWillowViewTypes::ResetForTests();
     return true;
 }
 #endif
