@@ -95,6 +95,21 @@ class PrepareRangeTest(unittest.TestCase):
                 prepare_range.main(['--no-vm', '--terrain', missing, '--views', missing, '--out', out])
             self.assertFalse(os.path.exists(out))
 
+    def test_spot_data_message_names_the_plaza_views(self):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            views = os.path.join(folder, 'views.json')
+            with open(views, 'w', encoding='utf-8') as f:
+                json.dump({'views': [{'name': 'other', 'location': [1, 2, 3], 'rotation': [0, 90, 0]}]}, f)
+            out = os.path.join(prepare_range.REPO, 'local', 'range', 'test_should_not_exist.json')
+            with self.assertRaises(SystemExit) as stop:
+                prepare_range.main(['--no-vm', '--views', views, '--terrain', views, '--out', out])
+            self.assertIn('plaza_*', str(stop.exception))
+            self.assertIn('--views', str(stop.exception))
+            self.assertFalse(os.path.exists(out))
+
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
         clips = prepare_range.find_clips('/Game/X/Anims/Idle_Made.Idle_Made', names)
@@ -115,6 +130,54 @@ class PrepareRangeTest(unittest.TestCase):
 
 def log(*lines):
     return '\n'.join('[t] LogTemp: Display: ' + line for line in lines)
+
+
+class PreflightTest(unittest.TestCase):
+    def run_preflight(self, manifest, **kwargs):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'manifest.json')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f)
+            spot = kwargs.pop('spot', None)
+            spot_path = None
+            if spot is not None:
+                spot_path = os.path.join(folder, 'range.json')
+                with open(spot_path, 'w', encoding='utf-8') as f:
+                    json.dump(spot, f)
+            return check_range.preflight(path, spot_path, **kwargs)
+
+    GOOD = {'spot_candidates': [{'x': 1}, {'x': 2}], 'default_spot_candidate': 1, 'scout_centre': {'x': 0, 'y': 0}}
+
+    def test_good_manifest(self):
+        self.assertEqual(self.run_preflight(self.GOOD), '')
+
+    def test_old_manifest_stops_the_run(self):
+        self.assertIn('default_spot_candidate', self.run_preflight({'spot_candidates': [{'x': 1}]}))
+
+    def test_index_outside_or_none_stops_the_run(self):
+        for index in (-1, 2, None):
+            self.assertNotEqual(self.run_preflight(dict(self.GOOD, default_spot_candidate=index)), '')
+
+    def test_no_scout_centre_stops_the_run(self):
+        self.assertNotEqual(self.run_preflight(dict(self.GOOD, scout_centre=None)), '')
+
+    def test_explicit_spot_is_allowed(self):
+        self.assertEqual(self.run_preflight({}, has_at=True), '')
+        self.assertEqual(self.run_preflight({}, spot={'spot': {'x': 1, 'y': 2, 'z': 3}}), '')
+
+    def test_broken_spot_json_does_not_count(self):
+        self.assertNotEqual(self.run_preflight({}, spot={'spot': {'x': 1}}), '')
+        self.assertNotEqual(self.run_preflight({}, spot=[1, 2]), '')
+
+    def test_survey_needs_only_candidates(self):
+        self.assertEqual(self.run_preflight({'spot_candidates': [{'x': 1}]}, survey=True), '')
+        self.assertNotEqual(self.run_preflight({}, survey=True), '')
+
+    def test_unreadable_manifest(self):
+        self.assertIn('cannot read', check_range.preflight('does/not/exist.json'))
 
 
 class CheckRangeTest(unittest.TestCase):
