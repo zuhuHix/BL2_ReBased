@@ -240,8 +240,29 @@ class LidCaptureTest(unittest.TestCase):
         self.assertEqual(row[1], 'PASS')
         self.assertIn('UNVERIFIED', row[2])
 
+    def test_no_clear_view_is_named_in_the_result(self):
+        frames = ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        text = 'OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=0 yaw=-1\n' + frames
+        self.assertIn('no clear view of Synth', self.grade(text)[2])
+        clear = 'OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=1 yaw=45\n' + frames
+        self.assertNotIn('no clear view', self.grade(clear)[2])
+
     def test_a_missing_frame_fails(self):
         self.assertEqual(self.grade('OWLOOTLID queue=1\nOWLOOTLID shot balance=Synth phase=closed\n')[1], 'FAIL')
+
+    def test_no_clip_found_with_clips_imported_fails(self):
+        # The host's asset paths disagreeing with the importer's must not read as "nothing imported".
+        out = ci.Results()
+        ci.grade_lid_capture('OWLOOTLID queue=0\n', out, imported_clips=6)
+        self.assertEqual(out.rows[0][1], 'FAIL')
+
+    def test_imported_open_clips_counts_only_imported_open_rows(self):
+        report = {'assets': [{'kind': 'anim_sequence', 'imported': True, 'asset': '/G/Anim_A_Open'},
+                             {'kind': 'anim_sequence', 'imported': False, 'asset': '/G/Anim_B_Open'},
+                             {'kind': 'anim_sequence', 'imported': True, 'asset': '/G/Anim_A_Opened_Idle'},
+                             {'kind': 'skeletal_mesh', 'imported': True, 'asset': '/G/Mesh_Open'}]}
+        self.assertEqual(ci.imported_open_clips(report), 1)
+        self.assertIsNone(ci.imported_open_clips(None))
 
     def test_no_imported_clip_is_skipped(self):
         self.assertEqual(self.grade('OWLOOTLID queue=0\n')[1], 'SKIPPED')

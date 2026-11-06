@@ -34,6 +34,7 @@ DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
 LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
+LID_BLOCKED = re.compile(r'OWLOOTLID view balance=(\S+) clear=0')
 TEST_OPENED = re.compile(r'OWINTERACTIVETEST opened (\d+) lootable')
 TEST_DONE = re.compile(r'OWINTERACTIVETEST done spawned=(\d+) opened=(\d+)')
 TEST_FAIL = re.compile(r'OWINTERACTIVETEST FAIL (.*)$', re.M)
@@ -201,7 +202,7 @@ def grade_pickups(log_text, out):
         out.add('pickups', 'PASS', f'{len(rows)} pickup line(s) follow their rule ({accepted} taken, {refused} refused)')
 
 
-def grade_lid_capture(log_text, out):
+def grade_lid_capture(log_text, out, imported_clips=None):
     """The lid frames were taken. PASS means only that: whether a lid opens the right way is judged on the frames."""
     shots = LID_SHOT.findall(log_text)
     queue = LID_QUEUE.search(log_text)
@@ -209,7 +210,10 @@ def grade_lid_capture(log_text, out):
         out.add('lid_capture', 'MISSING', 'no "OWLOOTLID queue" line')
         return
     if int(queue.group(1)) == 0:
-        out.add('lid_capture', 'SKIPPED', 'no balance has an imported open clip (tools/import_lootables.ps1)')
+        if imported_clips:
+            out.add('lid_capture', 'FAIL', f'the host found no open clip, but the import report lists {imported_clips}: asset paths disagree?')
+        else:
+            out.add('lid_capture', 'SKIPPED', 'no balance has an imported open clip (tools/import_lootables.ps1)')
         return
     phases = {}
     for balance, phase in shots:
@@ -220,7 +224,9 @@ def grade_lid_capture(log_text, out):
     elif bad:
         out.add('lid_capture', 'FAIL', f'{len(bad)} type(s) without exactly one each of {LID_PHASES}; first: {bad[0]}')
     else:
-        out.add('lid_capture', 'PASS', f'{len(shots)} frames of {len(phases)} lootable types; lid direction UNVERIFIED until judged')
+        blocked = sorted(LID_BLOCKED.findall(log_text))
+        note = f'; no clear view of {", ".join(blocked)}' if blocked else ''
+        out.add('lid_capture', 'PASS', f'{len(shots)} frames of {len(phases)} lootable types{note}; lid direction UNVERIFIED until judged')
 
 
 def grade_test_sequence(log_text, supported, out):
@@ -265,7 +271,15 @@ def grade_automation(automation_text, out, skip=False):
         out.add('automation', 'PASS' if status in ('Success', 'Passed') else 'FAIL', f'{AUTOMATION_TEST} Result={status}')
 
 
-def grade(log_text, automation_text, doc, skip_automation=False):
+def imported_open_clips(report):
+    """How many Open clips an import_report.json says were imported; None without a report."""
+    if report is None:
+        return None
+    return sum(1 for row in report.get('assets') or [] if row.get('kind') == 'anim_sequence' and row.get('imported')
+               and str(row.get('asset', '')).endswith('_Open'))
+
+
+def grade(log_text, automation_text, doc, skip_automation=False, import_report=None):
     """Return a Results object with one row per check. doc is the parsed interactives.json."""
     out = Results()
     objects = supported_objects(doc)
@@ -274,7 +288,7 @@ def grade(log_text, automation_text, doc, skip_automation=False):
     grade_opens(log_text, objects_by_id, out)
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
     grade_pickups(log_text, out)
-    grade_lid_capture(log_text, out)
+    grade_lid_capture(log_text, out, imported_open_clips(import_report))
     grade_test_sequence(log_text, objects, out)
     grade_automation(automation_text, out, skip_automation)
     return out
@@ -285,17 +299,19 @@ def main(argv):
     parser.add_argument('--log', required=True, help='the game log of the -owinteractivetest run')
     parser.add_argument('--interactives', required=True, help='the interactives.json the run was given')
     parser.add_argument('--automation-log', help='the log of the UE automation run (OpenWillow.Interactive.Loot)')
+    parser.add_argument('--import-report', help="tools/import_lootables.ps1's import_report.json, when there is one")
     parser.add_argument('--skip-automation', action='store_true', help='report the automation test as skipped, not missing')
     args = parser.parse_args(argv)
     try:
         log_text = Path(args.log).read_text(encoding='utf-8', errors='replace')
         doc = json.loads(Path(args.interactives).read_text(encoding='utf-8'))
+        report = json.loads(Path(args.import_report).read_text(encoding='utf-8-sig')) if args.import_report else None
         automation_text = (Path(args.automation_log).read_text(encoding='utf-8', errors='replace')
                            if args.automation_log else None)
     except (OSError, json.JSONDecodeError) as error:
         print(f'cannot read the inputs: {error}', file=sys.stderr)
         return 2
-    return 1 if grade(log_text, automation_text, doc, args.skip_automation).print() else 0
+    return 1 if grade(log_text, automation_text, doc, args.skip_automation, report).print() else 0
 
 
 if __name__ == '__main__':

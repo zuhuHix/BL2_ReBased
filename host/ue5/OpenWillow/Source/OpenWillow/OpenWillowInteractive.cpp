@@ -403,7 +403,9 @@ void AOpenWillowLootable::Configure(const FString& InId, const FString& InBalanc
 void AOpenWillowLootable::ApplyVisual(const FOpenWillowLootTable& Visual)
 {
     if (Visual.SkeletalMesh.IsEmpty()) return;
-    const FString MeshPath = FString(LootableAssetRoot) + Visual.SkeletalMesh + TEXT(".") + Visual.SkeletalMesh;
+    // The importer's layout: <Name>/<Name>/SkeletalMeshes/<Name>.
+    const FString& MeshName = Visual.SkeletalMesh;
+    const FString MeshPath = FString::Printf(TEXT("%s%s/%s/SkeletalMeshes/%s.%s"), LootableAssetRoot, *MeshName, *MeshName, *MeshName, *MeshName);
     USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
     UAnimSequence* Clip = nullptr;
     if (!Visual.AnimSet.IsEmpty())
@@ -917,9 +919,27 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
     {
     case 0:
     {
-        // Test fixture: Maya stands 220 uu in front of the lootable, looking at it.
+        // Test fixture: Maya stands 220 uu from the lootable, looking at it: in front when that view is clear, else the first
+        // clear side of eight (many are placed against a wall). No clear side is logged, and the checker reports it.
         const FVector Target = Lootable->GetActorLocation() + FVector(0.f, 0.f, 50.f);
-        const FVector From = Lootable->GetActorLocation() + Lootable->GetActorForwardVector() * 220.f + FVector(0.f, 0.f, 100.f);
+        const FVector Offset = Lootable->GetActorForwardVector() * 220.f;
+        FVector From = Lootable->GetActorLocation() + Offset + FVector(0.f, 0.f, 100.f);
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(OWLidView), true);
+        Params.AddIgnoredActor(Lootable);
+        Params.AddIgnoredActor(&Walker);
+        int32 ClearYaw = -1;
+        for (int32 Side = 0; Side < 8 && ClearYaw < 0; ++Side)
+        {
+            const FVector Try = Lootable->GetActorLocation() + Offset.RotateAngleAxis(45.f * Side, FVector::UpVector) + FVector(0.f, 0.f, 100.f);
+            const bool bBlocked = World->SweepTestByChannel(Target, Try, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(25.f), Params);
+            const bool bFloor = World->LineTraceTestByChannel(Try, Try - FVector(0.f, 0.f, 400.f), ECC_Visibility, Params);
+            if (!bBlocked && bFloor)
+            {
+                ClearYaw = 45 * Side;
+                From = Try;
+            }
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d"), *Leaf, ClearYaw >= 0 ? 1 : 0, ClearYaw);
         Walker.SetActorLocation(From, false, nullptr, ETeleportType::TeleportPhysics);
         if (AController* Controller = Walker.GetController()) Controller->SetControlRotation((Target - From).Rotation());
         break;

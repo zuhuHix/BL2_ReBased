@@ -296,7 +296,7 @@ def cmd_report(args):
     for mesh in plan['skeletal_meshes']:
         status = (editor_meshes.get('meshes') or {}).get(mesh['name'], {})
         exports = f'gltf {export_status(jobs, "mesh." + mesh["name"] + ".gltf")}; md5 {export_status(jobs, "mesh." + mesh["name"] + ".md5")}'
-        row(f'{SKEL_DEST}/{mesh["name"]}', 'skeletal_mesh', status.get('imported'),
+        row(status.get('asset') or f'{SKEL_DEST}/{mesh["name"]}', 'skeletal_mesh', status.get('imported'),
             status.get('reason') or ('' if status.get('imported') else 'no editor result'), exports)
     for anim in plan['anim_sets']:
         clip_status = (editor_anims.get('anims') or {}).get(anim['id'], {}).get('clips', {})

@@ -216,13 +216,15 @@ this is not saved, and what the real game does here is `UNVERIFIED`.
 
 **Stand-ins.** Shield and grenade mod drops are gear with no stats and rarity 1.
 
-**Assets.** `tools/import_lootables.ps1` (UModel 1590, then two editor imports) imported 21 of 36 assets on 2026-11-06: the
-6 lootable meshes, the 12 pickup meshes and the cardboard box's 3 clips. The meshes have default material slots, so they
-are untextured. The other 15 clips were refused by the converter's check that the MD5-to-UE map is the expected mirror:
+**Assets.** `tools/import_lootables.ps1` (UModel 1590, then two editor imports) imported 36 of 36 assets on 2026-11-06: the
+6 lootable meshes, the 12 pickup meshes and 18 clips. The meshes are untextured: they render as plain pale surfaces. 15 of the
+clips were first refused by the converter's check that the MD5-to-UE map is the expected mirror:
 those skeletons have 2 or 3 bones, too few to determine the fitted map (rank 2 or 3 of 4), although the expected mirror
 matches each of their bones to within 0.00001 cm. `convert_subset_rank_deficient`, which only this import uses, now tests the mirror directly on those skeletons at the same 0.05
-tolerance and logs it per clip. All 6 anim sets convert with it; importing the 15 clips needs one more editor run. It proves
+tolerance and logs it per clip. It proves
 less than a fit, because directions the bones do not span are not tested, so these clips stay `UNVERIFIED` until a frame
 shows the lid opening the right way: `-owinteractivetest` captures `OWLootLid_<balance>_closed`, `_mid` and `_opened` for each
-type with a clip. A lootable shows its imported mesh only when both the mesh and its open clip load; otherwise the placeholder, with its own visible lid, stays. How the imported assets look and play is
+type with a clip. A lootable shows its imported mesh only when both the mesh and its open clip load; otherwise the placeholder, with its own visible lid, stays.
+
+The first full capture (2026-11-06) showed the DahlAmmo chest's and the dumpster's lids rising from a rear hinge and the storage locker's door swinging out. These are read from frames only and not compared with the real game, so they remain `UNVERIFIED` against it. The strong box, cardboard box and laundry machine frames showed no usable view, because the test's camera was blocked or misplaced, so their clips are not checked at all. The test now chooses a clear side of the object and logs it. How the imported assets look and play is
 `UNVERIFIED`.

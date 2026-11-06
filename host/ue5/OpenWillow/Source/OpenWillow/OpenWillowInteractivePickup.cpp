@@ -44,7 +44,7 @@ void AOpenWillowLootPickup::Configure(const FOpenWillowPickupSpec& InSpec, int32
     Balance_ = InBalance;
     if (!Spec_.Mesh.IsEmpty())
     {
-        if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *(FString(PickupAssetRoot) + Spec_.Mesh + TEXT(".") + Spec_.Mesh)))
+        if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *FString::Printf(TEXT("%s%s/%s/StaticMeshes/%s.%s"), PickupAssetRoot, *Spec_.Mesh, *Spec_.Mesh, *Spec_.Mesh, *Spec_.Mesh)))
         {
             Visual->SetStaticMesh(Mesh);
             Visual->SetRelativeScale3D(FVector(1.f));
