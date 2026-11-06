@@ -499,4 +499,6 @@ The queued fourth run takes the timer with unwounded, controlled targets first (
 Release, with Maya's health lowered so the heal can be seen (`-Steps` picks the steps).
 
 Reading a later step: `Skill.UpdateGrade` keeps an active skill at grade 1 or more, so a grade put back to 0 can leave that skill running
-at grade 1 for the rest of the session (Helios did, in the third run). A step's reads can therefore include an earlier step's skill.
+at grade 1 for the rest of the session (Helios did, in the third run). The capture now reads the running skills from
+`SkillEffectManager.ActiveSkills` as well as the tree, deactivates a skill whose grade goes back to 0, and stops if they still disagree.
+Each step records whether another step's skill could be in its reading. None of this has run in the game yet.
