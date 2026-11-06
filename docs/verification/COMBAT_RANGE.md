@@ -62,7 +62,7 @@ incomplete range is a failed build and nothing is left standing. The test's plac
 
 `tools/test_range.ps1 [-At X,Y,Z[,Yaw]] [-Shots]` (heavy: one editor, the machine-wide UE lock) starts Sanctuary_P with `-owrangetest`; the host's
 driver logs one `OWRANGETEST step=... result=PASS|FAIL|SKIP` line per step and `tools/check_range.py` grades them: teleport, placement, body_hit,
-crit_hit, crit_trace, shield_order, invulnerable, passive, patrol, death, ragdoll (may SKIP without a stock mesh or physics asset), respawn,
+crit_hit, crit_minds_eye (may SKIP without the local skill effects file), crit_trace, shield_order, invulnerable, passive, patrol, death, ragdoll (may SKIP without a stock mesh or physics asset), respawn,
 popup_crit, dummy_respawn. The hits are applied with `ApplyPointDamage` as a shot would apply them; crit_trace is a real camera trace at the head.
 `tests/range_tools_test.py` covers the two Python tools with synthetic data.
 
