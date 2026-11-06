@@ -1,0 +1,177 @@
+"""Synthetic tests for tools/check_interactives.py: invented ids, levels, money and pickups, no game data.
+
+Run: python -m pytest tests/check_interactives_test.py
+"""
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+import check_interactives as ci  # noqa: E402
+
+# Invented constants: calc(L) = 10 x 2^L; the amount at grade g is calc x (1 + 0.5 x g), grades 0..4.
+CASH_CONSTANTS = {'multiplier': 10.0, 'level': 2.0, 'base': 1.0, 'per_grade': 0.5, 'grade_max': 4}
+
+
+def document(supported=3, unsupported=1):
+    objects = []
+    for i in range(supported):
+        objects.append({'id': f'Map:Point_{i}', 'kind': 'lootable', 'balance': f'Balance.{i}', 'supported': True,
+                        'game_stage': {'region': 'Zone', 'min': 2, 'max': 4}})
+    for i in range(unsupported):
+        objects.append({'id': f'Map:Chest_{i}', 'kind': 'chest', 'supported': False, 'game_stage': {'min': 2, 'max': 4}})
+    items = {'Item.Cash': {'kind': 'usable', 'pickup': {'kind': 'cash', 'cash': {
+        'constants': {'Multiplier': 10.0, 'Level': 2.0}, 'base_scale': 1.0, 'per_grade_scale': 0.5,
+        'grade_range': [0, 4]}}}}
+    return {'schema': 'openwillow-interactives/1', 'objects': objects, 'balances': {}, 'items': items}
+
+
+def line(text):
+    return f'LogTemp: Display: {text}\n'
+
+
+def good_log(spawned=3, unsupported=1):
+    text = line(f'OpenWillow interactives: {spawned} lootable(s) spawned, {unsupported} unsupported not spawned')
+    text += line('OWLOOT open id=Map:Point_0 config=Cash_Box drops=2')
+    text += line('OWLOOT drop id=Map:Point_0 kind=cash balance=Item.Cash level=3 value=80')
+    text += line('OWLOOT drop id=Map:Point_0 kind=ammo balance=Item.Ammo level=3 value=18')
+    text += line('OWLOOT open id=Map:Point_1 config=Empty_Box drops=0')
+    text += line('OWLOOT empty id=Map:Point_1 reason=no attachment dropped')
+    text += line('OWPICKUP kind=cash amount=80.00 before=100.00 after=180.00 cap=2147483647.00 ok=1 reason=')
+    text += line('OWPICKUP kind=ammo amount=18.00 before=10.00 after=20.00 cap=20.00 ok=1 reason=')
+    text += line('OWPICKUP kind=ammo amount=18.00 before=20.00 after=20.00 cap=20.00 ok=0 reason=ammo pool full')
+    text += line('OWPICKUP kind=health amount=0.25 before=50.00 after=75.00 cap=100.00 ok=1 reason=')
+    text += line('OWPICKUP kind=eridium amount=4.00 before=1.00 after=5.00 cap=2147483647.00 ok=1 reason=')
+    text += line('OWINTERACTIVETEST done spawned=3 opened=2')
+    return text
+
+
+AUTOMATION_OK = 'LogAutomationController: Test Completed. Result={Success} Name={OpenWillow.Interactive.Loot}\n'
+
+
+def grade(log_text, automation=AUTOMATION_OK, doc=None):
+    return ci.grade(log_text, automation, doc or document())
+
+
+def status_of(results, name):
+    return next(s for n, s, _ in results.rows if n == name)
+
+
+class GoodRunTest(unittest.TestCase):
+    def test_a_complete_run_has_no_failures(self):
+        results = grade(good_log())
+        failed = [(n, d) for n, s, d in results.rows if s == 'FAIL']
+        self.assertEqual(failed, [])
+        self.assertEqual(status_of(results, 'lootables_spawned'), 'PASS')
+        self.assertEqual(status_of(results, 'opened_lootables'), 'PASS')
+        self.assertEqual(status_of(results, 'open_drops'), 'PASS')
+        self.assertEqual(status_of(results, 'cash_drops'), 'PASS')
+        self.assertEqual(status_of(results, 'pickups'), 'PASS')
+        self.assertEqual(status_of(results, 'test_sequence'), 'PASS')
+        self.assertEqual(status_of(results, 'automation'), 'PASS')
+
+
+class SpawnTest(unittest.TestCase):
+    def test_wrong_spawn_count_fails(self):
+        self.assertEqual(status_of(grade(good_log(spawned=2)), 'lootables_spawned'), 'FAIL')
+
+    def test_no_spawn_line_fails(self):
+        self.assertEqual(status_of(grade('nothing here\n'), 'lootables_spawned'), 'FAIL')
+
+    def test_unsupported_objects_are_not_counted(self):
+        # Two supported objects in the file: spawning three is a failure even though three is in the file's objects.
+        results = grade(good_log(spawned=3), doc=document(supported=2, unsupported=1))
+        self.assertEqual(status_of(results, 'lootables_spawned'), 'FAIL')
+
+
+class OpenTest(unittest.TestCase):
+    def test_open_of_an_unknown_id_fails(self):
+        log = good_log() + line('OWLOOT open id=Map:Ghost config=X drops=1')
+        self.assertEqual(status_of(grade(log), 'opened_lootables'), 'FAIL')
+
+    def test_empty_open_without_a_reason_fails(self):
+        log = good_log().replace('OWLOOT empty id=Map:Point_1 reason=no attachment dropped\n', '')
+        self.assertEqual(status_of(grade(log), 'open_drops'), 'FAIL')
+
+    def test_no_open_is_missing_not_failed(self):
+        results = grade('OpenWillow interactives: 3 lootable(s) spawned, 1 unsupported not spawned\n')
+        self.assertEqual(status_of(results, 'opened_lootables'), 'MISSING')
+
+
+class CashRangeTest(unittest.TestCase):
+    def test_cash_range_is_rounded_down(self):
+        self.assertEqual(ci.cash_range(CASH_CONSTANTS, 3), (80, 240))
+
+    def test_cash_outside_the_range_fails(self):
+        log = good_log().replace('kind=cash balance=Item.Cash level=3 value=80', 'kind=cash balance=Item.Cash level=3 value=999')
+        self.assertEqual(status_of(grade(log), 'cash_drops'), 'FAIL')
+
+    def test_level_outside_the_stage_fails(self):
+        log = good_log().replace('level=3 value=80', 'level=9 value=80')
+        self.assertEqual(status_of(grade(log), 'cash_drops'), 'FAIL')
+
+    def test_no_cash_drop_is_missing(self):
+        log = good_log().replace('kind=cash', 'kind=ammo')
+        self.assertEqual(status_of(grade(log), 'cash_drops'), 'MISSING')
+
+
+class PickupTest(unittest.TestCase):
+    def test_ammo_taken_past_the_cap_fails(self):
+        log = good_log().replace('before=10.00 after=20.00 cap=20.00', 'before=10.00 after=28.00 cap=20.00')
+        self.assertEqual(status_of(grade(log), 'pickups'), 'FAIL')
+
+    def test_health_past_the_max_fails(self):
+        log = good_log().replace('before=50.00 after=75.00 cap=100.00', 'before=50.00 after=95.00 cap=100.00')
+        self.assertEqual(status_of(grade(log), 'pickups'), 'FAIL')
+
+    def test_refused_pickup_that_moved_fails(self):
+        log = good_log().replace('before=20.00 after=20.00 cap=20.00 ok=0', 'before=20.00 after=21.00 cap=20.00 ok=0')
+        self.assertEqual(status_of(grade(log), 'pickups'), 'FAIL')
+
+    def test_cash_that_does_not_add_up_fails(self):
+        log = good_log().replace('before=100.00 after=180.00', 'before=100.00 after=170.00')
+        self.assertEqual(status_of(grade(log), 'pickups'), 'FAIL')
+
+    def test_no_pickup_line_is_missing(self):
+        log = '\n'.join(l for l in good_log().splitlines() if 'OWPICKUP' not in l) + '\n'
+        self.assertEqual(status_of(grade(log), 'pickups'), 'MISSING')
+
+
+class SequenceAndAutomationTest(unittest.TestCase):
+    def test_test_fail_line_fails_the_sequence(self):
+        log = good_log() + line('OWINTERACTIVETEST FAIL no walker after 60 s')
+        self.assertEqual(status_of(grade(log), 'test_sequence'), 'FAIL')
+
+    def test_unfinished_sequence_is_missing(self):
+        log = good_log().replace('OWINTERACTIVETEST done spawned=3 opened=2\n', '')
+        self.assertEqual(status_of(grade(log), 'test_sequence'), 'MISSING')
+
+    def test_failed_automation_fails(self):
+        automation = 'Result={Fail} Name={OpenWillow.Interactive.Loot}\n'
+        self.assertEqual(status_of(grade(good_log(), automation), 'automation'), 'FAIL')
+
+    def test_automation_absent_from_the_log_fails(self):
+        self.assertEqual(status_of(grade(good_log(), 'Result={Success} Name={OpenWillow.Vendor.Stock}\n'), 'automation'), 'FAIL')
+
+    def test_no_automation_log_is_missing(self):
+        self.assertEqual(status_of(grade(good_log(), None), 'automation'), 'MISSING')
+
+
+class CommandLineTest(unittest.TestCase):
+    def test_main_returns_one_on_a_failing_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'run.log'
+            log.write_text(good_log(spawned=2), encoding='utf-8')
+            interactives = Path(tmp) / 'interactives.json'
+            interactives.write_text(json.dumps(document()), encoding='utf-8')
+            self.assertEqual(ci.main(['--log', str(log), '--interactives', str(interactives)]), 1)
+
+    def test_main_returns_two_on_a_missing_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(ci.main(['--log', str(Path(tmp) / 'none.log'), '--interactives', str(Path(tmp) / 'x.json')]), 2)
+
+
+if __name__ == '__main__':
+    unittest.main()

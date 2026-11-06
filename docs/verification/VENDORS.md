@@ -187,3 +187,36 @@ upgrades). Their definition has no `MonetaryValue` calculator in the packages an
 
 Not settled here: the item's display name (the block gives the definition's base `ItemName`; the card name comes from
 name parts), part rolls and stats of shields and grenade mods, rarity, and the sale price (section 3).
+
+## 7. Lootables and pickups (PR 3)
+
+AI-assisted (Claude), 2026-11-06. Package data through `tools/prepare_interactives.py`, written to ignored
+`local/slice/interactives.json`. **Nothing in this section has been seen in the running game: every rule about how the
+game uses this data is `UNVERIFIED`.**
+
+**Placement.** 97 objects: 94 lootables (41 cardboard boxes, 22 strong boxes, 21 storage lockers, 7 laundry machines, 3
+dumpsters), 1 Dahl ammo crate and 2 chests. The host spawns 95. It does not spawn the golden chest (it costs a golden key)
+or the Bearer of Bad News chest (a mission object).
+
+**Loot, read from the balances.** One configuration is picked by weight. Each attachment then fires with its probability
+and gives one leaf by weight. Pools whose weights depend on runtime attributes (`DropODDS_Health`, `DropWeight_*_Need`)
+have no value in the packages, so they drop nothing here.
+
+**Cash.** `calc(L) = 1.25 * 1.12^L`; a little pickup is `calc(L) * (1 + 0.01 * grade)` and a big one
+`calc(L) * (10 + 0.1 * grade)`, with the grade 0 to 49 from the drawn parts. The constants are package data. Rounding
+down, the uniform grade and the item level (a seeded value in the point's game stage range, 7 to 9 in Sanctuary) are host
+choices.
+
+**Other pickups, package data.** Ammo amounts: pistol 18, assault rifle 18, SMG 24, shotgun 8, sniper 6, grenade 1,
+launcher 4. Eridium: stick 1, bar 4. Host choices: auto pickups collect within 120 uu and the others by the use key within
+220 uu. A full ammo pool, or full health or being down, leaves the pickup in place. Lootables open once per session;
+this is not saved.
+
+**Stand-ins.** Shield and grenade mod drops are gear with no stats and rarity 1.
+
+**Assets.** `tools/import_lootables.ps1` (UModel 1590, then two editor imports) imported 21 of 36 assets on 2026-11-06: the
+6 lootable meshes, the 12 pickup meshes and the cardboard box's 3 clips. The meshes have default material slots, so they
+are untextured. The other 15 clips were refused by the converter's check that the MD5-to-UE map is the expected mirror:
+those skeletons have 2 or 3 bones, too few to determine the fitted map (rank 2 or 3 of 4), although the expected mirror
+matches each of their bones to within 0.00001 cm. Those lootables open with no animation until this is settled. Anything
+not imported falls back to a placeholder. How the imported assets look and play is `UNVERIFIED`.

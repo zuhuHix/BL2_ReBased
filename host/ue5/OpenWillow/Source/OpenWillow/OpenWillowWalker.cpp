@@ -4,6 +4,7 @@
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowVendor.h"
+#include "OpenWillowInteractive.h"
 #include "OpenWillowCurrency.h"
 #include "Engine/DamageEvents.h"
 #include "GameFramework/WorldSettings.h"
@@ -1375,6 +1376,11 @@ void AOpenWillowWalker::PickupNearby()
     const bool bMover = Mover && Mover->InReach(GetActorLocation(), MoverDistance);
     if (bVendor && (!bMover || VendorDistance <= MoverDistance) && VendorDistance <= PickupDistance
         && UOpenWillowVendorSubsystem::TryUseNearest(*this)) return;
+    // Lootables and loot pickups (OpenWillowInteractive.cpp): the same nearest-in-reach rule as the vendors.
+    double InteractiveDistance = 0;
+    const bool bInteractive = UOpenWillowInteractiveSubsystem::NearestInReach(*this, InteractiveDistance);
+    if (bInteractive && (!bMover || InteractiveDistance <= MoverDistance) && InteractiveDistance <= PickupDistance
+        && UOpenWillowInteractiveSubsystem::TryUseNearest(*this)) return;
     if (bMover && MoverDistance <= PickupDistance && Mover->TryInteract()) return;
     if (Nearest) Take(Nearest);
 }
