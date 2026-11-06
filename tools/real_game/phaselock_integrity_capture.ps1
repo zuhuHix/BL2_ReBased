@@ -285,7 +285,7 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
     "status: $($log.status)"
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
-    $rows
+    Format-RestoreRows $rows
     if ($holdLocks) {
         @"
 MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both locks are held and the backup is kept at $bak.

@@ -149,6 +149,10 @@ function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
     [pscustomobject]@{ rows = $rows; summary = $summary; clean = ($bad.Count -eq 0) }
 }
 
+# The restore rows as text. Plain objects go through a deferred formatter: when a script ends on a rethrown error, they and every
+# string after them never reach the screen, and those can be the recovery steps. Text prints in order either way.
+function Format-RestoreRows($Rows) { if (@($Rows).Count) { @($Rows) | Format-Table -AutoSize | Out-String -Width 200 } }
+
 # A capture counts only when it holds frames and every named shot was saved.
 function Test-CaptureComplete($Capture, [hashtable]$Shots = @{}) {
     if (!$Capture -or $Capture.frames -le 0) { return $false }
