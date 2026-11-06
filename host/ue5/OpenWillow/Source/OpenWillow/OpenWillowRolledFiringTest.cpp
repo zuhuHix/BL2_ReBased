@@ -97,6 +97,17 @@ bool FOpenWillowRolledGunFiringTemplateTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("no multiplier: speed unchanged"), Item.Firing.ProjectileSpeed, 1000.f);
         TestFalse(TEXT("no status on the card"), Item.Firing.Status.bValid);
     }
+    // The document: right schema, right manifest, and a templates object.
+    FString Why;
+    TestTrue(TEXT("a good document"), FOpenWillowWeaponGen::FiringTemplatesUsable(*Json(TEXT(R"({"schema":2,"manifest_md5":"ABC","templates":{}})")), TEXT("abc"), Why));
+    TestFalse(TEXT("an older file schema"), FOpenWillowWeaponGen::FiringTemplatesUsable(*Json(TEXT(R"({"schema":1,"manifest_md5":"abc","templates":{}})")), TEXT("abc"), Why));
+    TestTrue(TEXT("older schema: the reason"), Why.Contains(TEXT("schema")));
+    TestFalse(TEXT("another manifest"), FOpenWillowWeaponGen::FiringTemplatesUsable(*Json(TEXT(R"({"schema":2,"manifest_md5":"abd","templates":{}})")), TEXT("abc"), Why));
+    TestTrue(TEXT("another manifest: the reason"), Why.Contains(TEXT("manifest")));
+    TestFalse(TEXT("no fingerprint"), FOpenWillowWeaponGen::FiringTemplatesUsable(*Json(TEXT(R"({"schema":2,"templates":{}})")), TEXT("abc"), Why));
+    TestFalse(TEXT("no templates"), FOpenWillowWeaponGen::FiringTemplatesUsable(*Json(TEXT(R"({"schema":2,"manifest_md5":"abc"})")), TEXT("abc"), Why));
+    TestEqual(TEXT("no templates: the reason"), Why, FString(TEXT("no templates object")));
+    TestFalse(TEXT("templates of the wrong type"), FOpenWillowWeaponGen::FiringTemplatesUsable(*Json(TEXT(R"({"schema":2,"manifest_md5":"abc","templates":[]})")), TEXT("abc"), Why));
     // Refusals: the item keeps what it had, and the reason names the field.
     const auto Refused = [&](const TCHAR* What, const TCHAR* Text, const TCHAR* Field)
     {

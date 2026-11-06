@@ -252,6 +252,7 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
     AActor* Other = Hit.GetActor();
     const FVector Velocity = ToVector(Flight.velocity);
     ++OpenWillowFiring::Counts.Impacts;
+    ++OpenWillowFiring::Counts.ImpactsByWeapon.FindOrAdd(WeaponId);
     // A hit target: anything that takes Maya's hits (the host dummy, range's enemies: IOpenWillowHitTarget).
     const bool bTarget = OpenWillowHit::AsTarget(Other) != nullptr;
     if (bTarget) ++OpenWillowFiring::Counts.TargetHits;

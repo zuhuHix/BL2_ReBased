@@ -174,6 +174,8 @@ struct FOpenWillowFiringStats
     int32 HitEvents = 0;     // hit events sent (ApplyShotDamage; any target)
     int32 HitKinds[4] = {0, 0, 0, 0}; // ... by EOpenWillowHitKind: direct, splash, status tick, throw
     TMap<FString, int32> TickWeapons;  // status tick events by the weapon id they carry
+    TMap<FString, int32> ImpactsByWeapon;   // projectiles that reached a surface or target, by the fired weapon's id
+    TMap<FString, float> DamageByWeapon;    // damage passed to combat targets, by the weapon id its hit event carries
     int32 UnknownSources = 0;          // hit events whose Source was left Unknown (every firing path sets one)
     int32 GrenadeHits = 0;             // hit events whose Source is Grenade
     float GrenadeContactAge = -1;      // s from the launch to the grenade's first contact; -1 = none

@@ -142,7 +142,9 @@ GOOD_AUTOMATION = ('LogAutomationController: Display: Test Completed. Result={Pa
                    'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Persist}'
                    '\tPath={OpenWillow.Vendor.Persist}\n'
                    'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Items}'
-                   '\tPath={OpenWillow.Vendor.Items}\n')
+                   '\tPath={OpenWillow.Vendor.Items}\n'
+                   'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.RolledGunFiringTemplate}'
+                   '\tPath={OpenWillow.Vendor.RolledGunFiringTemplate}\n')
 
 
 def run(log, automation=GOOD_AUTOMATION, doc=None, open_index=0):
@@ -228,7 +230,8 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(sum(1 for _, s, _ in results.rows if s == 'MISSING'), 0)
         checks = by_name(results)
         for name in ('machines_spawned', 'open_machine', 'open_shelf', 'prices', 'buy', 'sell', 'restock',
-                     'item_prices', 'ammo_buy', 'heal_buy', 'automation_stock', 'automation_persist', 'automation_items'):
+                     'item_prices', 'ammo_buy', 'heal_buy', 'automation_stock', 'automation_persist', 'automation_items',
+                     'automation_rolledgunfiringtemplate'):
             self.assertEqual(checks[name][0], 'PASS', f'{name}: {checks[name][1]}')
         self.assertEqual(checks['buy'][1], 'bought S1 for 550; money 5000 -> 4450')
         self.assertEqual(checks['sell'][1], 'sold G1 for 100; money 4450 -> 4550')
@@ -321,6 +324,16 @@ class GradeTest(unittest.TestCase):
         self.assertEqual(checks['automation_stock'][0], 'PASS')
         self.assertEqual(checks['automation_persist'][0], 'PASS')
 
+    def test_the_rolled_gun_template_test_is_required(self):
+        lines = [line for line in GOOD_AUTOMATION.splitlines(True) if 'RolledGunFiringTemplate' not in line]
+        checks = by_name(run(good_log(), automation=''.join(lines)))
+        self.assertEqual(checks['automation_rolledgunfiringtemplate'][0], 'FAIL')
+
+    def test_a_missing_automation_log_fails_when_required(self):
+        self.assertEqual(by_name(run(good_log(), automation=None))['automation'][0], 'MISSING')
+        results = cv.grade(good_log(), None, machines_doc(), 0, 'weapons', True)
+        self.assertEqual(by_name(results)['automation'][0], 'FAIL')
+
     def test_failed_automation_fails(self):
         failed = GOOD_AUTOMATION.replace('Result={Passed}', 'Result={Failed}', 1)   # the Stock line only
         checks = by_name(run(good_log(), automation=failed))
@@ -389,8 +402,20 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=16 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=17 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
+
+    def test_a_required_automation_log_that_is_missing_exits_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = self.write(folder, 'run.log', good_log())
+            vendors = self.write(folder, 'vendors.json', json.dumps(machines_doc()))
+            import io
+            from contextlib import redirect_stdout
+            with redirect_stdout(io.StringIO()):
+                required = cv.main(['--log', str(log), '--vendors', str(vendors), '--open-index', '0', '--require-automation'])
+                optional = cv.main(['--log', str(log), '--vendors', str(vendors), '--open-index', '0'])
+            self.assertNotEqual(required, 0)
+            self.assertEqual(optional, 0)
 
     def test_exit_one_on_any_fail(self):
         with tempfile.TemporaryDirectory() as folder:

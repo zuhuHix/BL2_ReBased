@@ -2044,7 +2044,11 @@ float AOpenWillowWalker::ApplyShotDamage(AActor* Target, const FOpenWillowHitEve
     const FVector OuterMomentum = ShotMomentumInFlight;
     ShotDamageTypeInFlight = DamageType;
     ShotMomentumInFlight = Momentum;
-    if (Cast<AOpenWillowCombatTarget>(Target)) OpenWillowFiring::Counts.Damage += Amount;
+    if (Cast<AOpenWillowCombatTarget>(Target))
+    {
+        OpenWillowFiring::Counts.Damage += Amount;
+        OpenWillowFiring::Counts.DamageByWeapon.FindOrAdd(E.WeaponId) += Amount;
+    }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow shot %s hits %s for %.2f (damage type %s)"), E.WeaponId.IsEmpty() ? TEXT("-") : *E.WeaponId,
         *Target->GetName(), Amount, DamageType.IsEmpty() ? TEXT("None") : *DamageType);
     // UGameplayStatics::ApplyPointDamage without the event: the same TakeDamage call, skipped for zero damage.

@@ -278,7 +278,8 @@ def finite(line, key):
 def check_rolled(lines):
     """Generated guns' refire (OWFIRING rolled): a gun with burst count 1 gives exactly one shot from one hold and a gun with
     burst count 0 more than one. The burst values must come from the manifest, and each hold must have lasted at least two of
-    the gun's fire intervals, so one shot cannot just mean a short hold. A third gun (want -1) must launch a projectile, and
+    the gun's fire intervals, so one shot cannot just mean a short hold. A third gun (want -1) must launch a projectile that lands
+    (impacts and damage are counted by that gun's id, so another gun's status ticks cannot pass it), and
     every gun's firing block must have loaded from its template."""
     fails = []
     for want, rule in (('1', 'exactly one shot'), ('0', 'more than one shot'), ('-1', 'a launched projectile')):

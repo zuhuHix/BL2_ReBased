@@ -64,6 +64,11 @@ def local_output(path, repo=ROOT):
     return given
 
 
+def output_paths(output, repo=ROOT):
+    """The output and the schema file written next to it, both checked before anything is created."""
+    return local_output(output, repo), local_output(Path(output).with_suffix('.schema'), repo)
+
+
 def fingerprint(manifest):
     """The MD5 of the manifest's bytes, or a stop naming the tool that makes it. The host hashes the same bytes."""
     try:
@@ -231,13 +236,12 @@ def main():
     parser.add_argument('--output', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_firing.json')
     parser.add_argument('--manifest', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_manifest.txt')
     args = parser.parse_args()
-    args.output = local_output(args.output)   # refused before anything is read, created or written
+    args.output, schema = output_paths(args.output)   # refused before anything is read, created or written
     manifest_md5 = fingerprint(args.manifest)
     cooked = args.game / 'WillowGame/CookedPCConsole'
     package = weapon_gen_manifest.open_package(args.reader, cooked / 'Startup.upk')
     localize = weapon_gen_manifest.make_localize(package, args.game)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    schema = args.output.with_suffix('.schema')
     schema.write_text('\n'.join(dict.fromkeys(weapon_firing.SCHEMA_LINES + weapon_projectile_fx.SCHEMA_LINES)) + '\n', encoding='utf-8')
     reader = str(Path(args.reader).resolve())
     source = weapon_firing.Source(skill_stats.Package(reader, cooked / 'Startup.upk', str(schema.resolve())),
