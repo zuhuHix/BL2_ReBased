@@ -79,6 +79,7 @@
       if (!found) { gone(); return; }
       const giveUpAt = Date.now() + READY_TIMEOUT_MS;
       const poll = () => {
+        if (!player) return; // the movie was lost while waiting for its clip
         let name = null;
         try { name = typeof player.ow === 'function' ? api.get(CARD, '_name') : null; } catch (e) { name = null; }
         if (!name && Date.now() > giveUpAt) {

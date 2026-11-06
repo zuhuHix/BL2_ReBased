@@ -125,13 +125,17 @@ function guardContext(answer, panicAfterLoad = false) {
   const panic = {shown:panicAfterLoad, classList:{contains:name => name === 'hidden' ? !panic.shown : false}};
   const player = {removed:0, loads:0, panic, remove() { this.removed++; }, shadowRoot:{querySelector:() => panic},
     ruffle() { return {load:() => { player.loads++; return Promise.resolve(); }}; }};
-  const context = vm.createContext({console:{log:line => logs.push(line)}, Promise, setTimeout:f => setImmediate(f),
+  // The abort timeout is held back: a test fires it by hand. Retry waits run at once.
+  const aborts = [];
+  const context = vm.createContext({console:{log:line => logs.push(line)}, Promise, clearTimeout() {},
+    setTimeout:(f, ms) => { if (ms >= 3000) aborts.push(f); else setImmediate(f); return 0; },
+    AbortController:class { constructor() { this.signal = {}; } abort() { if (this.signal.onabort) this.signal.onabort(); } },
     MutationObserver:class { constructor(callback) { this.callback = callback; this.live = false; observers.push(this); }
       observe() { this.live = true; } disconnect() { this.live = false; } },
-    fetch:(url, options) => { requests.push([url, options.method]); return answer(url, requests.length); }});
+    fetch:(url, options) => { requests.push([url, options.method]); return answer(url, requests.length, options.signal); }});
   context.window = context;
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/movie_guard.js'), 'utf8'), context);
-  return {context, player, logs, requests, observers};
+  return {context, player, logs, requests, observers, aborts};
 }
 const OPTIONS = {url:'UI_Inworld/harness.swf', base:'UI_Inworld/'};
 const reply = status => Promise.resolve({status});
@@ -171,6 +175,22 @@ const FILES = ['UI_Inworld/Weapon_Card.swf'];
     passed++; console.log('PASS No answer at all gives up after a few tries and says unavailable, not missing');
   }
   {
+    // A request that never answers: aborted by its timeout, counted as a try, and the load still ends.
+    const hung = (url, count, signal) => new Promise((resolve, reject) => { signal.onabort = () => reject(new Error('aborted')); });
+    const g = guardContext(hung);
+    let done = null;
+    g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card').then(found => { done = found; });
+    for (let round = 0; round < 40 && done === null; round++) {
+      for (const fire of g.aborts.splice(0)) fire();
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.strictEqual(done, false);
+    assert.strictEqual(g.requests.length, 4);
+    assert.strictEqual(g.player.removed, 1);
+    assert.ok(g.logs.some(line => /OpenWillow movie unavailable/.test(line)), g.logs.join(' | '));
+    passed++; console.log('PASS A request that hangs is aborted and retried, and the load ends without a player');
+  }
+  {
     const g = guardContext(() => reply(200));
     let lost = 0;
     assert.strictEqual(await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card', [], () => lost++), true);
@@ -188,10 +208,10 @@ const FILES = ['UI_Inworld/Weapon_Card.swf'];
   {
     const g = guardContext(() => reply(200), true);
     let lost = 0;
-    assert.strictEqual(await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card', [], () => lost++), true);
+    assert.strictEqual(await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card', [], () => lost++), false);
     assert.strictEqual(g.player.removed, 1);
-    assert.strictEqual(lost, 1);
-    passed++; console.log('PASS A panel already up when the load resolves is caught too');
+    assert.strictEqual(lost, 0, 'the false is the report: onLost as well would stop the page twice');
+    passed++; console.log('PASS A panel already up when the load resolves counts as not loaded, reported once');
   }
   {
     const g = guardContext(() => reply(200));
@@ -227,7 +247,7 @@ const FILES = ['UI_Inworld/Weapon_Card.swf'];
     for (const page of ['index', 'inventory', 'map', 'missions', 'skills', 'pickup_card'])
       assert.ok(fs.readFileSync(path.join(__dirname, `../tools/hud_overlay/${page}.html`), 'utf8').includes('<script src="movie_guard.js"></script>'), page);
     const hud = fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/index.html'), 'utf8');
-    assert.ok(hud.includes("console.log('OpenWillow HUD movie lost')"), 'the host goes back to the canvas HUD on this line');
+    assert.ok(hud.includes("console.log('OpenWillow HUD movie lost')"), 'the host goes back to the canvas HUD on this line (hud_movie_loss_test.js runs that page)');
     const host = fs.readFileSync(path.join(__dirname, '../host/ue5/OpenWillow/Source/OpenWillow/OpenWillowMayaHUD.cpp'), 'utf8');
     assert.ok(host.includes('TEXT("OpenWillow HUD movie lost")'));
     passed++; console.log('PASS Every page that loads a movie has the guard, serve.py routes it, and the HUD and host agree on the lost line');

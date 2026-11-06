@@ -23,8 +23,12 @@ class CheckOverlayData(unittest.TestCase):
             (Path(folder) / 'UI_Inworld' / 'harness.swf').unlink()
             self.assertEqual([entry[0] for entry in tool.missing(folder)], ['UI_Inworld/harness.swf'])
             self.assertEqual(tool.main(['--movies', folder]), 1)
-            self.assertEqual(tool.main(['--movies', folder, '--fail-on', 'UI_Inworld']), 1)
-            self.assertEqual(tool.main(['--movies', folder, '--fail-on', 'UI_HUD']), 0)  # still printed, not fatal
+            self.assertEqual(tool.main(['--movies', folder, '--fail-on', 'world pickup card']), 1)
+            self.assertEqual(tool.main(['--movies', folder, '--fail-on', 'Inventory']), 0)  # still printed, not fatal
+            (Path(folder) / 'UI_Inworld' / 'harness.swf').write_bytes(b'')
+            # The suite's feature: StatusMenu is there and a movie it imports is not. That must fail.
+            (Path(folder) / 'SharedWillowInventory' / 'SharedWillowInventory.swf').unlink()
+            self.assertEqual(tool.main(['--movies', folder, '--fail-on', 'Inventory']), 1)
             self.assertEqual(tool.main(['--movies', folder, '--warn-only']), 0)
 
     def fill(self, folder):

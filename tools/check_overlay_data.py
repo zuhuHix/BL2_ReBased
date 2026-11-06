@@ -45,8 +45,8 @@ def missing(movies):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--movies', default=str(Path(__file__).parents[1] / 'local' / 'ui' / 'run'))
-    parser.add_argument('--fail-on', action='append', default=None, metavar='PREFIX',
-                        help='exit 1 only for missing files under this prefix (a suite names what it depends on); default: any')
+    parser.add_argument('--fail-on', action='append', default=None, metavar='FEATURE',
+                        help='exit 1 only for missing files this feature needs, by the "needed by" text, so its imports count too (a suite names what it depends on); default: any')
     parser.add_argument('--warn-only', action='store_true', help='print what is missing, exit 0')
     args = parser.parse_args(argv)
     absent = missing(args.movies)
@@ -54,7 +54,7 @@ def main(argv=None):
         print(f'OVERLAY DATA MISSING: {name} (needed by: {needed_by}; get it: {how})')
     if not absent:
         print(f'Overlay data: all {len(REQUIRED)} files present')
-    fatal = [name for name, _, _ in absent if args.fail_on is None or any(name.startswith(prefix) for prefix in args.fail_on)]
+    fatal = [name for name, needed_by, _ in absent if args.fail_on is None or any(feature.lower() in needed_by.lower() for feature in args.fail_on)]
     return 1 if fatal and not args.warn_only else 0
 
 

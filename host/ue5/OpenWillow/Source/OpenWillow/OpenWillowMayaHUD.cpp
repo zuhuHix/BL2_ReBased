@@ -247,8 +247,8 @@ void AOpenWillowMayaHUD::BeginPlay()
             {
                 UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD console: %s (%s:%d)"), *Message, *Source, Line);
                 AOpenWillowMayaHUD* Hud = WeakThis.Get();
-                // The movie failed after it was ready (movie_guard.js removed its player): back to the canvas HUD.
-                if (Hud && Hud->bFlashHudReady && Message.StartsWith(TEXT("OpenWillow HUD movie lost")))
+                // The page has no movie (movie_guard.js): the canvas HUD, now and for good, whether or not ready was already accepted.
+                if (Hud && !Hud->bFlashHudFailed && Message.StartsWith(TEXT("OpenWillow HUD movie lost")))
                 {
                     Hud->bFlashHudReady = false;
                     Hud->bFlashHudFailed = true;
