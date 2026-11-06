@@ -1441,6 +1441,7 @@ std::string CardJson(const WeaponGenCard& c) {
     o.Num("shot_cost", c.shotCost);
     o.Num("burst_count", c.burstCount);
     o.Num("burst_interval", c.burstInterval);
+    o.Bool("burst_known", c.BurstKnown());
     o.Num("spin_up", c.spinUp);
     o.Str("spin_mode", c.spinMode);
     o.Num("spin_start_interval_scale", c.spinStartIntervalScale);

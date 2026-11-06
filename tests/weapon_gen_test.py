@@ -196,6 +196,14 @@ class WeaponGenTests(unittest.TestCase):
         card = self.gun(1, 1)['card']
         self.assertIsNone(card['burst_count'])
         self.assertIsNone(card['burst_interval'])
+        self.assertFalse(card['burst_known'])
+
+    def test_a_type_without_an_interval_is_not_stale(self):
+        count = ('F', 1, 'Base', 'AutomaticBurstCount', 'num', '0.0')
+        card = self.gun(1, 1, manifest=self.variant('burst_no_interval', [count]))['card']
+        self.assertEqual(card['burst_count'], 0.0)
+        self.assertIsNone(card['burst_interval'])
+        self.assertTrue(card['burst_known'])
 
     def test_modifier_stack_and_card_rounding(self):
         card = self.gun(1, 1)['card']
