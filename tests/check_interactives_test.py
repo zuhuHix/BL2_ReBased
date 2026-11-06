@@ -270,6 +270,12 @@ class QuickChangeTest(unittest.TestCase):
         rows = [r for r in QUICK_RUN if 'cancel' not in r]
         self.assertEqual(self.grade(rows)[1], 'FAIL')
 
+    def test_an_unknown_station_event_fails(self):
+        for row in ('OWQUICKCHANGE refund id=S cost=200', 'OWQUICKCHANGE prompt id=S cost=x money=5000'):
+            with self.subTest(row=row):
+                self.assertEqual(self.grade([*QUICK_RUN, row])[1], 'FAIL')
+                self.assertIn('unknown station event', self.grade([*QUICK_RUN, row])[2])
+
     def test_a_prompt_cancelled_for_another_reason_fails(self):
         row = self.changed(2, 'not the selected target', 'expired')
         self.assertEqual(row[1], 'FAIL')
