@@ -177,10 +177,18 @@ def test_a_kill_needs_the_target_lifted_now_and_alive_before():
     lifted[0] = Obj(Name='Other')
     assert 'skipped' in ns['pi_kill']('Target') and not damage
     lifted[0] = pawn
+    ns['pi']['pawn'] = pawn
     done = ns['pi_kill']('Target')
     assert done['before'] == 500.0 and done['after'] == 0.0 and done['killed'] is True and len(damage) == 1
-    health[0] = 0.0                             # already dead
-    assert ns['pi_kill']('Target')['killed'] is False
+    # The pawn is let go at once: the tick has none to touch, and the result still names and judges the target.
+    assert ns['pi']['pawn'] is None and ns['pi_result']()['target'] == 'Target' and ns['pi_result']()['target_lifted'] is True
+    damage.clear()
+    health[0] = 0.0                             # already dead: no damage is sent
+    done = ns['pi_kill']('Target')
+    assert 'skipped' in done and not damage
+    pawn.GetHealth = lambda: (_ for _ in ()).throw(RuntimeError('gone'))    # no real number: no damage is sent
+    assert 'skipped' in ns['pi_kill']('Target') and not damage
+    pawn.GetHealth = lambda: health[0]
     pawn.TakeDamage = lambda *a: None           # the hit did nothing
     health[0] = 7.0
     assert ns['pi_kill']('Target')['killed'] is False
@@ -198,8 +206,12 @@ def test_hud_evidence_needs_samples_on_both_sides_of_the_kill():
 
         def row(when, frame=3):
             return json.dumps({'game_t': when, 'hud': {'p1.activeAbility': {'frame': frame}}})
+        file.write_text('\n'.join([row(4.0, 0), row(6.0, 0)]), encoding='utf-8')
+        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # a path that did not resolve reads 0
+        file.write_text('\n'.join([row(4.0, 1), row(6.0, 1)]), encoding='utf-8')
+        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # the emblem never seen running
         file.write_text('\n'.join([row(4.0), json.dumps({'error': 'x'}), 'not json']), encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0) == {'before': 1, 'after': 0, 'usable': False}
+        assert ns['pi_hud_evidence'](5.0) == {'before': 1, 'running_before': 1, 'after': 0, 'usable': False}
         file.write_text('\n'.join([row(6.0), row(7.0, None)]), encoding='utf-8')
         assert ns['pi_hud_evidence'](5.0)['usable'] is False       # nothing before, and a sample with no frame
         file.write_text('\n'.join([row(4.0), row(6.0)]), encoding='utf-8')
@@ -207,15 +219,14 @@ def test_hud_evidence_needs_samples_on_both_sides_of_the_kill():
 
 
 def shield_world(ns, own_level=8, own_max=181.0):
-    """A stub inventory, looked up fresh as the probe does. world['ready'] decides what equipping does."""
-    def shield(name, level):
+    """A stub inventory, looked up fresh as the probe does. Paths identify; names need not."""
+    def shield(name, level, path=None):
         return Obj(Class=Obj(Name='WillowShield'), Inventory=None, Name=name, ExpLevel=level, GameStage=level, RarityLevel=1, MonetaryValue=5,
                    bReadied=True, GetShortHumanReadableName=lambda: name, GetManufacturerGradeIndex=lambda: level,
-                   DefinitionData=Obj(BalanceDefinition=Obj(Name='Balance')), Destroy=lambda: world['destroyed'].append(name))
-    world = {'max': own_max, 't': 1.0, 'destroyed': [], 'next': []}
+                   DefinitionData=Obj(BalanceDefinition=Obj(Name='Balance')), _path_name=lambda: path or 'Pkg.' + name)
+    world = {'max': own_max, 'next': [], 'shield': shield}
     own = shield('Own', own_level)
     gun = Obj(Class=Obj(Name='WillowWeapon'), Inventory=own)
-    world['gun'], world['shield'] = gun, shield
 
     def ready(item):
         if world.get('ready_takes', True):
@@ -226,11 +237,15 @@ def shield_world(ns, own_level=8, own_max=181.0):
                 im.Backpack.remove(item)
             gun.Inventory = item
 
-    im = Obj(InventoryChain=gun, Backpack=[], AddInventoryToBackpack=lambda i: im.Backpack.append(i),
-             RemoveInventoryFromBackpack=lambda i: im.Backpack.remove(i), ReadyBackpackInventory=ready)
+    def add(item):
+        im.Backpack.append(item)
+        if world.get('add_throws'):
+            raise RuntimeError('the add took effect, then failed')
+
+    im = Obj(InventoryChain=gun, Backpack=[], AddInventoryToBackpack=add, RemoveInventoryFromBackpack=lambda i: im.Backpack.remove(i), ReadyBackpackInventory=ready)
     pawn = Obj(GetMaxShieldStrength=lambda: world['max'], GetShieldStrength=lambda: 90.0)
     pc = Obj(GetPawnInventoryManager=lambda: im, Pawn=pawn, PlayerReplicationInfo=Obj(ExpLevel=8), WorldInfo=Obj(TimeSeconds=1.0))
-    world['pc'] = pc
+    world['pc'], world['im'] = pc, im
     ns['get_pc'] = lambda: pc
     pool = Obj(SpawnBalancedInventoryFromInventoryBalanceDefinition=lambda *a: (True, world['next']))
     ns['unrealsdk'].find_class = lambda name: Obj(ClassDefaultObject=pool)
@@ -241,21 +256,21 @@ def test_a_shield_row_counts_only_for_its_own_item_level_and_a_fresh_read():
     ns = load()
     world = shield_world(ns)
     start = ns['pi_shields'](True)
-    assert start['equipped']['key'] == 'Own' and start['max_strength'] == 181.0 and start['player_level'] == 8
+    assert start['equipped']['key'] == 'Pkg.Own' and start['max_strength'] == 181.0 and start['player_level'] == 8
     world['next'] = [world['shield']('Test30', 30)]
     tried = ns['pi_shield_try'](30)
     assert tried['requested_level'] == 30 and tried['item']['level'] == 30
     read = ns['pi_shield_read']()
-    assert read['counts'] is False and 'game time' in read['reason']        # no time has passed
+    assert read['counts'] is False and 'game time' in read['reason']        # no time has passed since the equip
     world['pc'].WorldInfo.TimeSeconds = 2.0
     read = ns['pi_shield_read']()
-    assert read['counts'] is False and 'not updated' in read['reason']      # a read that never updates
+    assert read['counts'] is False and read['inconclusive'] is False and 'not updated' in read['reason']   # a read that never updates
     world['max'] = 900.0
     read = ns['pi_shield_read']()
     assert read['counts'] is True and read['max_strength'] == 900.0
     ns['pi_shield_restore']()
     world['max'] = 181.0
-    assert ns['pi_shields_check']()['ok'] is True and world['destroyed'] == ['Test30']
+    assert ns['pi_shields_check']()['ok'] is True and not world['im'].Backpack
 
     # The level came back clamped: the row is kept and does not count.
     world['next'] = [world['shield']('Clamped', 20)]
@@ -267,12 +282,17 @@ def test_a_shield_row_counts_only_for_its_own_item_level_and_a_fresh_read():
     ns['pi_shield_restore']()
     world['max'] = 181.0
 
-    # The own level may rightly read the own maximum.
+    # Her own level: an equal maximum is inconclusive, a different one counts.
     world['next'] = [world['shield']('Same', 8)]
     ns['pi_shield_try'](8)
     world['pc'].WorldInfo.TimeSeconds = 4.0
-    assert ns['pi_shield_read']()['counts'] is True
+    read = ns['pi_shield_read']()
+    assert read['counts'] is False and read['inconclusive'] is True
+    world['max'] = 190.0
+    read = ns['pi_shield_read']()
+    assert read['counts'] is True and read['inconclusive'] is False
     ns['pi_shield_restore']()
+    world['max'] = 181.0
 
     # Nothing spawned, and an equip that does not take.
     world['next'] = []
@@ -283,7 +303,37 @@ def test_a_shield_row_counts_only_for_its_own_item_level_and_a_fresh_read():
     world['pc'].WorldInfo.TimeSeconds = 5.0
     read = ns['pi_shield_read']()
     assert read['counts'] is False and 'not equipped' in read['reason']
-    assert ns['pi_shield_restore']()['ok'] is True and 'NotTaken' in world['destroyed']
+    assert ns['pi_shield_restore']()['ok'] is True and not world['im'].Backpack
+
+
+def test_a_shield_is_found_by_its_path_not_its_name():
+    ns = load()
+    world = shield_world(ns)
+    twin = world['shield']('Own', 3, 'Other.Own')       # the same name as her own shield, first in the backpack
+    world['im'].Backpack.append(twin)
+    ns['pi_shields'](True)
+    world['next'] = [world['shield']('Test', 15)]
+    ns['pi_shield_try'](15)
+    ns['pi_shield_restore']()
+    equipped = world['im'].InventoryChain.Inventory
+    assert equipped._path_name() == 'Pkg.Own' and world['im'].Backpack == [twin]
+    assert ns['pi_shields_check']()['ok'] is True
+
+
+def test_an_add_that_throws_after_taking_effect_is_undone():
+    ns = load()
+    world = shield_world(ns)
+    ns['pi_shields'](True)
+    world['next'] = [world['shield']('Test', 15)]
+    world['add_throws'] = True
+    try:
+        ns['pi_shield_try'](15)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('the stub add did not throw')
+    assert [i.Name for i in world['im'].Backpack] == ['Test']
+    assert ns['pi_shield_restore']()['ok'] is True and not world['im'].Backpack
 
 
 def test_a_restore_that_does_not_take_is_reported():
@@ -294,12 +344,17 @@ def test_a_restore_that_does_not_take_is_reported():
     ns['pi_shield_try'](15)
     world['ready_takes'] = False
     check = ns['pi_shield_restore']()
-    assert check['ok'] is False and check['key'] == 'Test' and check['expected_key'] == 'Own'
-    assert 'Test' not in world['destroyed']     # still equipped: not destroyed under the character
+    assert check['ok'] is False and check['key'] == 'Pkg.Test' and check['expected_key'] == 'Pkg.Own'
     world['ready_takes'] = True
     world['max'] = 500.0
     ns['pi_shield_restore']()
     assert ns['pi_shields_check']()['ok'] is False      # the right item but the wrong maximum
+    world['max'] = 181.0
+    assert ns['pi_shields_check']()['ok'] is True
+    world['im'].Backpack.append(world['shield']('Leftover', 15))
+    check = ns['pi_shields_check']()
+    assert check['ok'] is False and check['backpack'] == ['Pkg.Leftover'] and check['expected_backpack'] == []
+    world['im'].Backpack.clear()
     # Her own shield gone: the error reaches the caller.
     ns['pi']['shield_base']['key'] = 'Gone'
     try:
