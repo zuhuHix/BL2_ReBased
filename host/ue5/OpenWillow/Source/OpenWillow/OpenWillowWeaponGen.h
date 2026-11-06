@@ -30,9 +30,9 @@ struct FOpenWillowWeaponGen
     // damage x (1 + Scale), so the check tells the stack from the old stand-in. The list comes from the local manifest, so no stock
     // path is in the code. False with OutReason no_manifest, no_stack or no_gun.
     static bool FindGunWithDamageStack(int32 Stage, float Scale, FOpenWillowWeaponItem& OutItem, FString& OutReason);
-    // Whether a parsed tools/weapon_gen_firing.py document can be used with this manifest: its file schema, the manifest's MD5 it
-    // was made with, and a templates object. False with why.
-    static bool FiringTemplatesUsable(const FJsonObject& Root, const FString& ManifestMd5, FString& OutWhy);
+    // Whether a parsed tools/weapon_gen_firing.py document can be used with this manifest: the manifest has the accuracy pool rows,
+    // its file schema, the manifest's MD5 it was made with, and a templates object. False with why.
+    static bool FiringTemplatesUsable(const FJsonObject& Root, const FString& ManifestMd5, bool bManifestHasPool, FString& OutWhy);
     // Fills Item.Firing from a firing template and what the card and the item know (pellets, spread, burst, spin, status, speed
     // multiplier). False with what is missing, leaving Item.Firing as it was, when the result could not fire as its shot kind.
     static bool MergeFiringTemplate(const FJsonObject& Template, const TArray<TSharedPtr<FJsonValue>>* LevelScales,

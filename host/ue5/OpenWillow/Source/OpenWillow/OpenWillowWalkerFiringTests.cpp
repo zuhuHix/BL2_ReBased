@@ -325,6 +325,8 @@ void AOpenWillowWalker::RunFiringTest(float Now)
     // firing template can make it do.
     static int32 RolledGun = 0, RolledStep = 0, RolledShotsBefore = 0, RolledLaunchesBefore = 0, RolledImpactsBefore = 0;
     static float RolledAt = 0.f, RolledHold = 0.f, RolledHeld = 0.f, RolledDamageBefore = 0.f;
+    static int32 RolledStage = 1;     // what the gun was rolled at: the card is re-read from the same roll
+    static bool bRolledDummyDied = false;
     if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun < 4 && CombatTarget.IsValid())
     {
         const int32 Wanted = RolledGun == 0 ? 1 : RolledGun == 1 ? 0 : RolledGun == 2 ? FOpenWillowWeaponGen::BurstTestRocket : FOpenWillowWeaponGen::BurstTestPool;
@@ -335,13 +337,15 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             RolledStep = 0;
         };
         const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        if (RolledStep >= 2 && CombatTarget->IsDead()) bRolledDummyDied = true;
         if (RolledStep == 0)
         {
             FireReleased();
             AimReleased();
             FOpenWillowWeaponItem Rolled;
             FString Reason;
-            if (!FOpenWillowWeaponGen::FindGunForBurstTest(Wanted, FMath::Max(1, Skills->GetLevel()), Rolled, Reason)) { Unavailable(*Reason); return; }
+            RolledStage = FMath::Max(1, Skills->GetLevel());
+            if (!FOpenWillowWeaponGen::FindGunForBurstTest(Wanted, RolledStage, Rolled, Reason)) { Unavailable(*Reason); return; }
             const FString RolledId = Rolled.Id;
             if (!Inventory->AddToBackpack(MoveTemp(Rolled))) { Unavailable(TEXT("backpack_full")); return; }
             int32 Index = INDEX_NONE;
@@ -358,6 +362,15 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         else if (!Held) Unavailable(TEXT("no_weapon"));   // the test must not wait for ever on a weapon that went away
         else if (RolledStep == 1 && Now >= RolledAt + Settle)
         {
+            // Each row stands alone: a living dummy at home and at full health. An earlier gun can have killed it (it respawns in 3 s).
+            if (CombatTarget->IsDead())
+            {
+                if (Now >= RolledAt + Settle + 10.f) Unavailable(TEXT("dummy_dead"));
+                return;
+            }
+            UOpenWillowStatusEffects::ClearAll(CombatTarget.Get());
+            CombatTarget->ResetForTest();
+            bRolledDummyDied = false;
             RolledHold = 3.f / Held->FireRate + 0.1f;
             RolledShotsBefore = OpenWillowFiring::Counts.Shots;
             RolledLaunchesBefore = OpenWillowFiring::Counts.Launches;
@@ -386,12 +399,19 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
             // The pool on the held gun against the card read apart from it: the only line tying those numbers to the running host.
             float PoolCard[3], PoolBase[3];
-            FOpenWillowWeaponGen::RolledPoolValues(Held->Balance, FMath::Max(1, Skills->GetLevel()), 1u, PoolCard, PoolBase);
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d impacts=%d damage=%.2f flying=%d pool_min=%.4f pool_max=%.4f pool_rate=%.4f card_min=%.4f card_max=%.4f card_rate=%.4f base_min=%.4f base_max=%.4f base_rate=%.4f"),
+            FOpenWillowWeaponGen::RolledPoolValues(Held->Balance, RolledStage, 1u, PoolCard, PoolBase);
+            // What one trigger shot should deal to one target: each pellet's direct hit, or a rocket's explosion, plus a bullet's impact
+            // explosion. -1 when it can't be said from these numbers (damage over time, or falloff with distance).
+            const FOpenWillowFiringData& Fired = Held->Firing;
+            const bool bRocketShot = Fired.Kind == EOpenWillowShotKind::Rocket;
+            const bool bSaid = !(Fired.Status.bValid && Fired.Status.Dps > 0.f) && (!Fired.Splash.bValid || Fired.Splash.bFullDamage);
+            const float PerShot = (bRocketShot ? 0.f : Held->Damage) + (Fired.Splash.bValid ? Fired.Splash.Damage : 0.f);
+            const float ExpectedDamage = bSaid ? (C.Shots - RolledShotsBefore) * FMath::Max(1, Fired.Pellets) * PerShot : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d impacts=%d damage=%.2f flying=%d expected_damage=%.2f dummy_died=%d dummy_max=%.2f pool_min=%.6f pool_max=%.6f pool_rate=%.6f card_min=%.6f card_max=%.6f card_rate=%.6f base_min=%.6f base_max=%.6f base_rate=%.6f"),
                 Wanted, *Held->Id, *Held->Type.Replace(TEXT(" "), TEXT("_")), Held->Firing.BurstCount, Held->Firing.bBurstFromManifest ? 1 : 0,
                 Held->Firing.bLoaded ? 1 : 0, 1.f / Held->FireRate, RolledHeld, Held->Magazine, C.Shots - RolledShotsBefore,
                 C.Launches - RolledLaunchesBefore, C.ImpactsByWeapon.FindRef(Held->Id) - RolledImpactsBefore,
-                C.DamageByWeapon.FindRef(Held->Id) - RolledDamageBefore, Flying,
+                C.DamageByWeapon.FindRef(Held->Id) - RolledDamageBefore, Flying, ExpectedDamage, bRolledDummyDied ? 1 : 0, CombatTarget->GetMaxHealth(),
                 float(Held->Firing.Pool.minValue), float(Held->Firing.Pool.maxValue), float(Held->Firing.Pool.idleRate),
                 PoolCard[0], PoolCard[1], PoolCard[2], PoolBase[0], PoolBase[1], PoolBase[2]);
             ++RolledGun;
