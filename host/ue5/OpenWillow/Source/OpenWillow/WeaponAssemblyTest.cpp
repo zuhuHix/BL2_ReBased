@@ -5,6 +5,12 @@
 #include "Misc/Paths.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryPickup.h"
+#include "OpenWillowPickupCard.h"
+#include "OpenWillowWalker.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "OpenWillowWeaponAssembly.h"
 
 // The library planning rules on a synthetic index (invented names, no game data): fragments in slot order, vectors with a
@@ -135,6 +141,76 @@ bool FOpenWillowDropBeamColorTest::RunTest(const FString&)
     Same(TEXT("The card's colour"), AOpenWillowInventoryPickup::RarityBeamColor(TEXT("#123456")), FColor(0x12, 0x34, 0x56));
     Same(TEXT("No colour is white"), AOpenWillowInventoryPickup::RarityBeamColor(FString()), FColor::White);
     Same(TEXT("A malformed colour is white"), AOpenWillowInventoryPickup::RarityBeamColor(TEXT("12345")), FColor::White);
+    return true;
+}
+
+// The dropped item as an actor (invented gear item, placed high above any map geometry): the beam is up and visible, nothing on it collides,
+// the pickup rule still finds it when aimed at, and it is gone once picked up. Needs the game world (-game) and the imported FX material:
+// without that the beam stays hidden, so the test fails rather than pass without seeing a beam. The Walker is spawned deferred and never
+// finished: its BeginPlay would load the slice.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowDropActorTest, "OpenWillow.WeaponAssembly.DropActor",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FOpenWillowDropActorTest::RunTest(const FString&)
+{
+    UWorld* World = nullptr;
+    for (const FWorldContext& Context : GEngine->GetWorldContexts())
+        if (Context.WorldType == EWorldType::Game || Context.WorldType == EWorldType::PIE) World = Context.World();
+    if (!TestNotNull(TEXT("A game world"), World)) return false;
+
+    const FVector Eye(0.f, 0.f, 200000.f);
+    const FVector Ahead = Eye + FVector(100.f, 0.f, 0.f);
+    FActorSpawnParameters Always;
+    Always.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+    AOpenWillowInventoryPickup* Pickup = World->SpawnActor<AOpenWillowInventoryPickup>(
+        AOpenWillowInventoryPickup::StaticClass(), FTransform(Ahead), Always);
+    if (!TestNotNull(TEXT("The drop spawns"), Pickup)) return false;
+    FOpenWillowTakenInventoryItem Item;
+    Item.bIsGear = true;
+    Item.Gear.Id = TEXT("test_drop");
+    Item.Gear.Name = TEXT("Test Drop");
+    Item.Gear.ItemType = TEXT("relic");
+    Item.Gear.RarityColor = TEXT("#123456");
+    Pickup->Initialize(MoveTemp(Item));
+
+    TInlineComponentArray<UPrimitiveComponent*> Primitives(Pickup);
+    UStaticMeshComponent* Beam = nullptr;
+    for (UPrimitiveComponent* Primitive : Primitives)
+    {
+        TestEqual(*FString::Printf(TEXT("%s does not collide"), *Primitive->GetName()),
+            Primitive->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+        if (Primitive->GetName() == TEXT("RarityBeam")) Beam = Cast<UStaticMeshComponent>(Primitive);
+    }
+    if (TestNotNull(TEXT("The beam component"), Beam))
+    {
+        TestNotNull(TEXT("The beam's material is imported (M_OW_FxAdditive)"),
+            LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/M_OW_FxAdditive.M_OW_FxAdditive")));
+        TestTrue(TEXT("The beam is visible"), Beam->IsVisible());
+        TestNotNull(TEXT("The beam has its mesh"), Beam->GetStaticMesh().Get());
+    }
+
+    AOpenWillowWalker* Maya = World->SpawnActorDeferred<AOpenWillowWalker>(AOpenWillowWalker::StaticClass(), FTransform(Eye), nullptr,
+        nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+    APlayerController* Player = World->SpawnActor<APlayerController>(APlayerController::StaticClass(), FTransform(Eye), Always);
+    if (TestNotNull(TEXT("A Walker"), Maya) && TestNotNull(TEXT("A controller"), Player))
+    {
+        // From wherever a controller with no pawn and no camera update reports its view, not from where it was spawned.
+        FVector View;
+        FRotator ViewRotation;
+        Player->GetPlayerViewPoint(View, ViewRotation);
+        const FVector Forward = ViewRotation.Vector();
+        Maya->SetActorLocation(View);
+        Pickup->SetActorLocation(View + Forward * 100.f);
+        AddInfo(FString::Printf(TEXT("View %s, forward %s"), *View.ToString(), *Forward.ToString()));
+        TestEqual(TEXT("Aimed at, the drop is found"), OpenWillowPickupCard::FindAimedPickup(*Maya, *Player), Pickup);
+        Pickup->SetActorLocation(View - Forward * 100.f);
+        TestNull(TEXT("Behind the view, it is not"), OpenWillowPickupCard::FindAimedPickup(*Maya, *Player));
+    }
+    if (Player) Player->Destroy();
+    if (Maya) Maya->Destroy();
+
+    UOpenWillowInventory* Inventory = NewObject<UOpenWillowInventory>();
+    TestTrue(TEXT("It can be picked up"), Pickup->TryPickup(Inventory));
+    TestTrue(TEXT("It is gone after the pickup"), !IsValid(Pickup) || Pickup->IsActorBeingDestroyed());
     return true;
 }
 #endif
