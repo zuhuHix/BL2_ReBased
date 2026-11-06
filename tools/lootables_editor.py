@@ -48,6 +48,24 @@ CLIPS = ('Closed_Idle', 'Open', 'Opened_Idle')   # the three sequences every loo
 PLAN_SCHEMA = 'openwillow-lootables-plan/1'
 
 
+def local_output(value, repo=ROOT):
+    """value as an absolute path, refused unless it lies inside the repository's ignored local/ (links followed):
+    everything this tool writes holds package-derived data (docs/LEGAL.md)."""
+    local = (Path(repo) / 'local').resolve()
+    path = Path(value)
+    path = (path if path.is_absolute() else Path(repo) / path).resolve()
+    if path == local or local not in path.parents:
+        raise ValueError(f'{value}: output must be inside {local}; game data stays in local/')
+    return path
+
+
+def load_plan(path):
+    """plan.json, its out_dir checked: a later step writes there, whoever wrote the plan."""
+    plan = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    plan['out_dir'] = str(local_output(plan['out_dir']))
+    return plan
+
+
 def safe(text):
     return re.sub(r'[^A-Za-z0-9_.-]', '_', text)
 
@@ -172,7 +190,7 @@ def cmd_plan(args):
         missing = resolve_cooked_packages(plan, data, args.reader, args.cooked)
         if missing:
             raise SystemExit(f'no cooked package holds: {", ".join(missing)}')
-    out = Path(args.out)
+    out = local_output(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(plan, indent=1), encoding='utf-8')
     print(f'plan: {len(plan["skeletal_meshes"])} skeletal meshes, {len(plan["anim_sets"])} anim sets, '
@@ -195,7 +213,7 @@ def find_one(folder, file_name):
 def cmd_tracks(args):
     sys.path.insert(0, str(ROOT / 'tools'))
     import slice_npc_assets as npc   # the fitted MD5 -> UE converter (numpy); imports no Unreal module
-    plan = json.loads(Path(args.plan).read_text(encoding='utf-8-sig'))
+    plan = load_plan(args.plan)
     meshes = {m['name']: m for m in plan['skeletal_meshes']}
     out = Path(plan['out_dir'])
     report = {}
@@ -258,7 +276,7 @@ def export_status(jobs, job_id):
 
 
 def cmd_report(args):
-    plan = json.loads(Path(args.plan).read_text(encoding='utf-8-sig'))
+    plan = load_plan(args.plan)
     out = Path(plan['out_dir'])
     jobs_list = load_optional(args.umodel_jobs) or []
     if isinstance(jobs_list, dict):   # ConvertTo-Json writes a one-element list as a bare object
@@ -298,7 +316,7 @@ def cmd_report(args):
               'imported_yes': counts['yes'], 'imported_no': counts['no'], 'assets': rows,
               'skipped_objects': plan['skipped_objects'],
               'verification': 'Import inventory only. Whether the game plays these assets correctly is UNVERIFIED.'}
-    target = Path(args.out)
+    target = local_output(args.out)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=1), encoding='utf-8')
     print(f'report: {counts["yes"]} imported, {counts["no"]} not imported, {len(plan["skipped_objects"])} skipped objects')
@@ -318,7 +336,7 @@ def run_editor(mode):
         raise SystemExit('OPENWILLOW_LOOT_MODE is set but the unreal module is not available')
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     eal = unreal.EditorAssetLibrary
-    plan = json.loads(Path(os.environ['OPENWILLOW_LOOT_PLAN']).read_text(encoding='utf-8-sig'))
+    plan = load_plan(os.environ['OPENWILLOW_LOOT_PLAN'])
     if mode == 'meshes':
         result = editor_meshes(plan)
     elif mode == 'anims':

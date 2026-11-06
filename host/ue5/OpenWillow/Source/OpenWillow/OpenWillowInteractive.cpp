@@ -405,19 +405,22 @@ void AOpenWillowLootable::ApplyVisual(const FOpenWillowLootTable& Visual)
     if (Visual.SkeletalMesh.IsEmpty()) return;
     const FString MeshPath = FString(LootableAssetRoot) + Visual.SkeletalMesh + TEXT(".") + Visual.SkeletalMesh;
     USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *MeshPath);
-    if (!Mesh) return; // not imported: the placeholder stays
+    UAnimSequence* Clip = nullptr;
+    if (!Visual.AnimSet.IsEmpty())
+    {
+        const FString AnimName = Visual.AnimSet + TEXT("_Open");
+        const FString AnimPath = FString(LootableAssetRoot) + TEXT("Anims/") + AnimName + TEXT(".") + AnimName;
+        Clip = LoadObject<UAnimSequence>(nullptr, *AnimPath);
+    }
+    // Both or neither: the placeholder's lid is the only visible opening when the clip is missing.
+    if (!Mesh || !Clip) return;
+    OpenAnim = Clip;
     Skeletal->SetSkeletalMesh(Mesh);
     Skeletal->SetRelativeScale3D(FVector(Visual.VisualScale));
     Skeletal->SetVisibility(true);
     Body->SetVisibility(false);
     Lid->SetVisibility(false);
     bSkeletalShown = true;
-    if (!Visual.AnimSet.IsEmpty())
-    {
-        const FString AnimName = Visual.AnimSet + TEXT("_Open");
-        const FString AnimPath = FString(LootableAssetRoot) + TEXT("Anims/") + AnimName + TEXT(".") + AnimName;
-        OpenAnim = LoadObject<UAnimSequence>(nullptr, *AnimPath);
-    }
 }
 
 bool AOpenWillowLootable::Open()
@@ -427,7 +430,7 @@ bool AOpenWillowLootable::Open()
     if (bSkeletalShown)
     {
         // Plays the open sequence once (UNVERIFIED: the imported anim set is not checked in game).
-        if (OpenAnim) Skeletal->PlayAnimation(OpenAnim, false);
+        Skeletal->PlayAnimation(OpenAnim, false);
     }
     else
     {
@@ -613,19 +616,42 @@ bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& 
         BestPickup = D2;
         OutPickup = *It;
     }
-    if (OutLootable && (!OutPickup || BestLootable <= BestPickup))
+    // The same rule as the walker's, so a lootable and a loot pickup compare as any two use targets do.
+    FOpenWillowUseDistances Targets;
+    if (OutLootable) Targets.Interactive = BestLootable;
+    if (OutPickup) Targets.Pickup = BestPickup;
+    switch (Targets.Nearest())
     {
+    case EOpenWillowUseTarget::Interactive:
         OutDistanceSquared = BestLootable;
         OutPickup = nullptr;
         return true;
-    }
-    if (OutPickup)
-    {
+    case EOpenWillowUseTarget::Pickup:
         OutDistanceSquared = BestPickup;
         OutLootable = nullptr;
         return true;
+    default:
+        return false;
     }
-    return false;
+}
+
+EOpenWillowUseTarget FOpenWillowUseDistances::Nearest() const
+{
+    EOpenWillowUseTarget Best = EOpenWillowUseTarget::None;
+    double BestDistance = TNumericLimits<double>::Max();
+    const auto Consider = [&](const TOptional<double>& Distance, EOpenWillowUseTarget Target)
+    {
+        if (Distance.IsSet() && Distance.GetValue() < BestDistance)
+        {
+            BestDistance = Distance.GetValue();
+            Best = Target;
+        }
+    };
+    Consider(Vendor, EOpenWillowUseTarget::Vendor);
+    Consider(Interactive, EOpenWillowUseTarget::Interactive);
+    Consider(Door, EOpenWillowUseTarget::Door);
+    Consider(Pickup, EOpenWillowUseTarget::Pickup);
+    return Best;
 }
 
 bool UOpenWillowInteractiveSubsystem::NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared)

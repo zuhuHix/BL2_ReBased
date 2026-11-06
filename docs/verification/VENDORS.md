@@ -210,7 +210,9 @@ choices.
 **Other pickups, package data.** Ammo amounts: pistol 18, assault rifle 18, SMG 24, shotgun 8, sniper 6, grenade 1,
 launcher 4. Eridium: stick 1, bar 4. Host choices: auto pickups collect within 120 uu and the others by the use key within
 220 uu. A full ammo pool, or full health or being down, leaves the pickup in place. Lootables open once per session;
-this is not saved.
+this is not saved, and what the real game does here is `UNVERIFIED`.
+
+**Use key.** Every target in its own reach is measured and the nearest takes the press: vending machine, lootable or loot pickup, door, dropped gun or gear. Marcus's talk is checked first on purpose, because it opens and turns in the slice's mission and his shop must not lose the press to a gun on the counter. All of this stands in for the native use trace (`UNVERIFIED`).
 
 **Stand-ins.** Shield and grenade mod drops are gear with no stats and rarity 1.
 
@@ -222,5 +224,5 @@ matches each of their bones to within 0.00001 cm. `convert_subset_rank_deficient
 tolerance and logs it per clip. All 6 anim sets convert with it; importing the 15 clips needs one more editor run. It proves
 less than a fit, because directions the bones do not span are not tested, so these clips stay `UNVERIFIED` until a frame
 shows the lid opening the right way: `-owinteractivetest` captures `OWLootLid_<balance>_closed`, `_mid` and `_opened` for each
-type with a clip. Anything not imported falls back to a placeholder. How the imported assets look and play is
+type with a clip. A lootable shows its imported mesh only when both the mesh and its open clip load; otherwise the placeholder, with its own visible lid, stays. How the imported assets look and play is
 `UNVERIFIED`.

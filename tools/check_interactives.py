@@ -29,6 +29,9 @@ EMPTY = re.compile(r'OWLOOT empty id=(\S+) reason=(.*)$', re.M)
 DROP = re.compile(r'OWLOOT drop id=(\S+) kind=(\S+) balance=(\S+) level=(\d+) value=(-?\d+)')
 PICKUP = re.compile(r'OWPICKUP kind=(\S+) amount=(-?[\d.]+) before=(-?[\d.]+) after=(-?[\d.]+) cap=(-?[\d.]+) '
                     r'ok=([01]) reason=(.*)$', re.M)
+LID_PHASES = ('closed', 'mid', 'opened')
+DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
+PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
 LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
 TEST_DONE = re.compile(r'OWINTERACTIVETEST done spawned=(\d+) opened=(\d+)')
@@ -49,10 +52,12 @@ class Results:
         passed = sum(1 for _, s, _ in self.rows if s == 'PASS')
         failed = sum(1 for _, s, _ in self.rows if s == 'FAIL')
         missing = sum(1 for _, s, _ in self.rows if s == 'MISSING')
+        skipped = sum(1 for _, s, _ in self.rows if s == 'SKIPPED')
         for name, status, detail in self.rows:
             print(f'CHECK {name} {status} {detail}')
-        print(f'SUMMARY passed={passed} failed={failed} missing={missing}')
-        return failed
+        print(f'SUMMARY passed={passed} failed={failed} missing={missing} skipped={skipped}')
+        # Required evidence that is absent fails the run. SKIPPED is only for what a run may legitimately not have.
+        return failed + missing
 
 
 def supported_objects(doc):
@@ -102,6 +107,8 @@ def grade_opens(log_text, objects_by_id, out):
     unknown = [oid for oid, _, _ in opens if oid not in objects_by_id]
     if unknown:
         out.add('opened_lootables', 'FAIL', f'{len(unknown)} open(s) of an id that is not a supported object, first: {unknown[0]}')
+    elif len({oid for oid, _, _ in opens}) != len(opens):
+        out.add('opened_lootables', 'FAIL', f'a lootable opened more than once: {len(opens)} opens of {len({oid for oid, _, _ in opens})} ids')
     else:
         out.add('opened_lootables', 'PASS', f'{len(opens)} lootable(s) opened, all supported objects')
     empty_reasons = {oid: reason for oid, reason in EMPTY.findall(log_text)}
@@ -120,10 +127,11 @@ def grade_drops(log_text, objects_by_id, constants, out):
     drops = DROP.findall(log_text)
     cash = [d for d in drops if d[1] == 'cash']
     if not cash:
-        out.add('cash_drops', 'MISSING', f'no cash drop among {len(drops)} drop line(s)')
+        # Loot is rolled: a run may legitimately have no cash.
+        out.add('cash_drops', 'SKIPPED', f'no cash drop among {len(drops)} drop line(s)')
         return
     if constants is None:
-        out.add('cash_drops', 'MISSING', 'the file has no cash item: the formula range cannot be checked')
+        out.add('cash_drops', 'FAIL', 'the file has no cash item: the formula range cannot be checked')
         return
     problems = []
     for oid, _, balance, level, value in cash:
@@ -160,7 +168,12 @@ def check_pickup(kind, amount, before, after, cap, ok):
 def grade_pickups(log_text, out):
     rows = PICKUP.findall(log_text)
     if not rows:
-        out.add('pickups', 'MISSING', 'no "OWPICKUP" line (no pickup was collected)')
+        # Required when a pickup dropped; a roll may legitimately drop only guns and gear.
+        dropped = [kind for _, kind in DROP_KIND.findall(log_text) if kind in PICKUP_KINDS]
+        if dropped:
+            out.add('pickups', 'MISSING', f'{len(dropped)} pickup drop(s) but no "OWPICKUP" line (none was collected)')
+        else:
+            out.add('pickups', 'SKIPPED', 'no cash, ammo, eridium or health pickup dropped in this run')
         return
     problems = []
     for kind, amount, before, after, cap, ok, reason in rows:
@@ -181,14 +194,20 @@ def grade_lid_capture(log_text, out):
     queue = LID_QUEUE.search(log_text)
     if queue is None:
         out.add('lid_capture', 'MISSING', 'no "OWLOOTLID queue" line')
-    elif int(queue.group(1)) == 0:
-        out.add('lid_capture', 'MISSING', 'no balance has an imported open clip (tools/import_lootables.ps1)')
+        return
+    if int(queue.group(1)) == 0:
+        out.add('lid_capture', 'SKIPPED', 'no balance has an imported open clip (tools/import_lootables.ps1)')
+        return
+    phases = {}
+    for balance, phase in shots:
+        phases.setdefault(balance, []).append(phase)
+    bad = [f'{balance}: {sorted(got)}' for balance, got in sorted(phases.items()) if sorted(got) != sorted(LID_PHASES)]
+    if len(phases) != int(queue.group(1)):
+        out.add('lid_capture', 'FAIL', f'frames of {len(phases)} lootable types, the queue had {queue.group(1)}')
+    elif bad:
+        out.add('lid_capture', 'FAIL', f'{len(bad)} type(s) without exactly one each of {LID_PHASES}; first: {bad[0]}')
     else:
-        expected = int(queue.group(1)) * 3
-        if len(shots) == expected:
-            out.add('lid_capture', 'PASS', f'{len(shots)} frames of {queue.group(1)} lootable types; lid direction UNVERIFIED until judged')
-        else:
-            out.add('lid_capture', 'FAIL', f'{len(shots)} lid frames, expected {expected}')
+        out.add('lid_capture', 'PASS', f'{len(shots)} frames of {len(phases)} lootable types; lid direction UNVERIFIED until judged')
 
 
 def grade_test_sequence(log_text, out):
@@ -211,7 +230,10 @@ def automation_status(text, name):
     return (found.group(1) or found.group(2)) if found else None
 
 
-def grade_automation(automation_text, out):
+def grade_automation(automation_text, out, skip=False):
+    if skip:
+        out.add('automation', 'SKIPPED', 'the run was told to skip the automation test (--skip-automation)')
+        return
     if automation_text is None:
         out.add('automation', 'MISSING', 'no automation log given')
         return
@@ -223,7 +245,7 @@ def grade_automation(automation_text, out):
         out.add('automation', 'PASS' if status in ('Success', 'Passed') else 'FAIL', f'{AUTOMATION_TEST} Result={status}')
 
 
-def grade(log_text, automation_text, doc):
+def grade(log_text, automation_text, doc, skip_automation=False):
     """Return a Results object with one row per check. doc is the parsed interactives.json."""
     out = Results()
     objects = supported_objects(doc)
@@ -234,7 +256,7 @@ def grade(log_text, automation_text, doc):
     grade_pickups(log_text, out)
     grade_lid_capture(log_text, out)
     grade_test_sequence(log_text, out)
-    grade_automation(automation_text, out)
+    grade_automation(automation_text, out, skip_automation)
     return out
 
 
@@ -243,6 +265,7 @@ def main(argv):
     parser.add_argument('--log', required=True, help='the game log of the -owinteractivetest run')
     parser.add_argument('--interactives', required=True, help='the interactives.json the run was given')
     parser.add_argument('--automation-log', help='the log of the UE automation run (OpenWillow.Interactive.Loot)')
+    parser.add_argument('--skip-automation', action='store_true', help='report the automation test as skipped, not missing')
     args = parser.parse_args(argv)
     try:
         log_text = Path(args.log).read_text(encoding='utf-8', errors='replace')
@@ -252,7 +275,7 @@ def main(argv):
     except (OSError, json.JSONDecodeError) as error:
         print(f'cannot read the inputs: {error}', file=sys.stderr)
         return 2
-    return 1 if grade(log_text, automation_text, doc).print() else 0
+    return 1 if grade(log_text, automation_text, doc, args.skip_automation).print() else 0
 
 
 if __name__ == '__main__':

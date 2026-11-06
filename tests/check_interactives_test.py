@@ -2,6 +2,8 @@
 
 Run: python -m pytest tests/check_interactives_test.py
 """
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -44,6 +46,9 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWPICKUP kind=ammo amount=18.00 before=20.00 after=20.00 cap=20.00 ok=0 reason=ammo pool full')
     text += line('OWPICKUP kind=health amount=0.25 before=50.00 after=75.00 cap=100.00 ok=1 reason=')
     text += line('OWPICKUP kind=eridium amount=4.00 before=1.00 after=5.00 cap=2147483647.00 ok=1 reason=')
+    text += line('OWLOOTLID queue=1')
+    for phase in ('closed', 'mid', 'opened'):
+        text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
     text += line('OWINTERACTIVETEST done spawned=3 opened=2')
     return text
 
@@ -95,9 +100,33 @@ class OpenTest(unittest.TestCase):
         log = good_log().replace('OWLOOT empty id=Map:Point_1 reason=no attachment dropped\n', '')
         self.assertEqual(status_of(grade(log), 'open_drops'), 'FAIL')
 
-    def test_no_open_is_missing_not_failed(self):
+    def test_no_open_is_missing(self):
         results = grade('OpenWillow interactives: 3 lootable(s) spawned, 1 unsupported not spawned\n')
         self.assertEqual(status_of(results, 'opened_lootables'), 'MISSING')
+
+    def test_the_same_lootable_opened_twice_fails(self):
+        first = next(line_ for line_ in good_log().splitlines() if 'OWLOOT open' in line_)
+        self.assertEqual(status_of(grade(good_log() + first + '\n'), 'opened_lootables'), 'FAIL')
+
+    def test_a_run_where_nothing_happened_fails_at_exit(self):
+        # One correct spawn line and nothing else must not exit 0 (review of PR #105).
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'run.log'
+            log.write_text('OpenWillow interactives: 3 lootable(s) spawned, 1 unsupported not spawned\n', encoding='utf-8')
+            interactives = Path(tmp) / 'i.json'
+            interactives.write_text(json.dumps(document()), encoding='utf-8')
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                code = ci.main(['--log', str(log), '--interactives', str(interactives), '--skip-automation'])
+        self.assertEqual(code, 1)
+        self.assertIn('missing=', printed.getvalue())
+
+    def test_skipped_checks_are_counted_apart_and_do_not_fail(self):
+        results = ci.Results()
+        results.add('x', 'PASS', '')
+        results.add('y', 'SKIPPED', 'optional')
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(results.print(), 0)
+        self.assertIn('passed=1 failed=0 missing=0 skipped=1', printed.getvalue())
 
 
 class CashRangeTest(unittest.TestCase):
@@ -112,9 +141,10 @@ class CashRangeTest(unittest.TestCase):
         log = good_log().replace('level=3 value=80', 'level=9 value=80')
         self.assertEqual(status_of(grade(log), 'cash_drops'), 'FAIL')
 
-    def test_no_cash_drop_is_missing(self):
+    def test_no_cash_drop_is_skipped(self):
+        # Loot is rolled, so a run may legitimately have no cash.
         log = good_log().replace('kind=cash', 'kind=ammo')
-        self.assertEqual(status_of(grade(log), 'cash_drops'), 'MISSING')
+        self.assertEqual(status_of(grade(log), 'cash_drops'), 'SKIPPED')
 
 
 class PickupTest(unittest.TestCase):
@@ -188,8 +218,21 @@ class LidCaptureTest(unittest.TestCase):
     def test_a_missing_frame_fails(self):
         self.assertEqual(self.grade('OWLOOTLID queue=1\nOWLOOTLID shot balance=Synth phase=closed\n')[1], 'FAIL')
 
-    def test_no_imported_clip_is_missing(self):
-        self.assertEqual(self.grade('OWLOOTLID queue=0\n')[1], 'MISSING')
+    def test_no_imported_clip_is_skipped(self):
+        self.assertEqual(self.grade('OWLOOTLID queue=0\n')[1], 'SKIPPED')
+
+    def test_no_queue_line_is_missing(self):
+        self.assertEqual(self.grade('')[1], 'MISSING')
+
+    def test_phases_are_checked_per_type_not_only_in_total(self):
+        # Six frames for two types, but one type has closed twice and no opened.
+        text = 'OWLOOTLID queue=2\n' + ''.join(f'OWLOOTLID shot balance=A phase={p}\n' for p in ('closed', 'closed', 'mid'))
+        text += ''.join(f'OWLOOTLID shot balance=B phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        self.assertEqual(self.grade(text)[1], 'FAIL')
+
+    def test_a_missing_type_fails(self):
+        text = 'OWLOOTLID queue=2\n' + ''.join(f'OWLOOTLID shot balance=A phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        self.assertEqual(self.grade(text)[1], 'FAIL')
 
 
 if __name__ == '__main__':

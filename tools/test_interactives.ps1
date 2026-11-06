@@ -124,7 +124,8 @@ try {
     Start-Sleep -Seconds 3
     if (!(Test-Path -LiteralPath $log)) { throw "No game log written: $log" }
     $checkArgs = @($checker, '--log', $log, '--interactives', (Resolve-Path -LiteralPath $Interactives).Path)
-    if (!$SkipAutomation -and (Test-Path -LiteralPath $autoLog)) { $checkArgs += @('--automation-log', $autoLog) }
+    if ($SkipAutomation) { $checkArgs += '--skip-automation' }
+    elseif (Test-Path -LiteralPath $autoLog) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs
     $exitCode = $LASTEXITCODE
     Write-Output "Log: $log"
