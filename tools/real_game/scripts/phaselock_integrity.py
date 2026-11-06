@@ -42,7 +42,7 @@ PI_TICK = "WillowGame.WillowGameViewportClient:Tick"
 PI_HOOK = "ow_pi_probe"
 pi = {"file": None, "pawn": None, "ended_at": None, "scan_at": -1.0, "seqs": [], "arms_seqs": [], "hooks": [],
       "emitter_fields": [], "light_fields": [], "bubble_scan_at": -1.0, "bubbles": [],
-      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None, "rows": 0, "calls": set()}
+      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None, "rows": 0, "calls": set(), "shield_base": None, "shield_try": None}
 
 # Key bones of the bullymong skeleton: the torso, the head, the four arms' hands and the feet.
 PI_BONES = ("Hips", "Spine2", "Neck", "Head", "lHand1", "lHand2", "rHand1", "rHand2", "LFoot", "RFoot")
@@ -471,89 +471,160 @@ def pi_result():
 
 
 def pi_kill(pawn_name):
-    """Kill the target while it is lifted, as the player's damage, to read what the skill and the HUD emblem then do. Refuses when
-    the target is not lifted, so a failed cast does not cost the target."""
+    """Kill the target while it is lifted now, as the player's damage, to read what the skill and the HUD emblem then do. Refuses
+    otherwise, so a failed cast does not cost the target. A kill counts only from above 0 health to 0 or below."""
     pc = get_pc()
     src = ai_pawn(pawn_name)
-    if not any(n == src.Name for n in pi["seen_lifted"]):
-        return {"skipped": "the target is not lifted", "seen_lifted": sorted(pi["seen_lifted"])}
+    lifted = _null(lambda: lift_skill().LiftedPawn.Name)
+    if lifted != src.Name:
+        return {"skipped": "the target is not lifted now", "lifted_now": lifted}
     before = _null(lambda: float(src.GetHealth()))
     zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
     call = _null(lambda: plain(src.TakeDamage(10000000, pc, src.Location, zero, unrealsdk.find_class("DamageType"))))
     after = _null(lambda: float(src.GetHealth()))
-    return {"before": before, "after": after, "call": call, "killed": isinstance(after, float) and after <= 0.0,
-            "at": pc.WorldInfo.TimeSeconds}
+    return {"before": before, "after": after, "call": call, "at": pc.WorldInfo.TimeSeconds,
+            "killed": isinstance(before, float) and isinstance(after, float) and before > 0.0 and after <= 0.0}
 
 
+def pi_hud_evidence(at):
+    """Whether kill_hud.jsonl (scripts/action_skill_hud.py) holds usable emblem samples on both sides of the kill at game time `at`."""
+    before = after = 0
+    try:
+        lines = (Path(RG_OUT) / "kill_hud.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+            frame = row["hud"]["p1.activeAbility"]["frame"]
+            when = row["game_t"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if isinstance(frame, (int, float)):
+            if when < at:
+                before += 1
+            else:
+                after += 1
+    return {"before": before, "after": after, "usable": before > 0 and after > 0}
+
+
+# Shield reads keep names, never objects: a reference kept across commands or an inventory change can crash the game
+# (openwillow_realgame/__init__.py). Each command looks its shields up again. An object's Name identifies it within the session.
 def _shield_row(item):
-    row = {"class": _null(lambda: item.Class.Name), "name": _null(lambda: item.GetShortHumanReadableName()),
-           "level": _null(lambda: int(item.ExpLevel)), "stage": _null(lambda: int(item.GameStage)),
-           "grade": _null(lambda: int(item.GetManufacturerGradeIndex())), "rarity": _null(lambda: int(item.RarityLevel)),
-           "value": _null(lambda: int(item.MonetaryValue)), "readied": _null(lambda: bool(item.bReadied)),
-           "balance": _null(lambda: item.DefinitionData.BalanceDefinition._path_name())}
-    return row
+    return {"key": _null(lambda: str(item.Name)), "class": _null(lambda: item.Class.Name), "name": _null(lambda: item.GetShortHumanReadableName()),
+            "level": _null(lambda: int(item.ExpLevel)), "stage": _null(lambda: int(item.GameStage)),
+            "grade": _null(lambda: int(item.GetManufacturerGradeIndex())), "rarity": _null(lambda: int(item.RarityLevel)),
+            "value": _null(lambda: int(item.MonetaryValue)), "readied": _null(lambda: bool(item.bReadied)),
+            "balance": _null(lambda: item.DefinitionData.BalanceDefinition._path_name())}
 
 
 def _shields():
-    """(the equipped shield or None, every shield held.)"""
+    """(the equipped shield or None, the shields in the backpack.)"""
     im = get_pc().GetPawnInventoryManager()
     chain, item = [], im.InventoryChain
     while item:
         chain.append(item)
         item = item.Inventory
-    held = [i for i in chain + list(im.Backpack) if i.Class.Name == "WillowShield"]
     equipped = [i for i in chain if i.Class.Name == "WillowShield"]
-    return (equipped[0] if equipped else None), held
+    return (equipped[0] if equipped else None), [i for i in im.Backpack if i.Class.Name == "WillowShield"]
 
 
-def pi_shields():
-    """What the character holds and what the shield pool reads, read-only. Remembers the equipped shield for pi_shield_restore."""
-    equipped, held = _shields()
-    pi["shield_own"] = equipped
-    pawn = get_pc().Pawn
-    return {"player_level": _null(lambda: int(get_pc().PlayerReplicationInfo.ExpLevel)),
-            "max_strength": _null(lambda: float(pawn.GetMaxShieldStrength())), "strength": _null(lambda: float(pawn.GetShieldStrength())),
-            "equipped": _shield_row(equipped) if equipped is not None else None, "held": [_shield_row(i) for i in held]}
+def _find_shield(key):
+    equipped, backpack = _shields()
+    return next((i for i in ([equipped] if equipped is not None else []) + backpack if str(i.Name) == key), None)
 
 
-def pi_shield_try(balance_path, level):
-    """Spawn one shield at this level ("equipped": from the equipped shield's balance) and equip it. Read with pi_shield_read a moment
-    later, when the pool has taken it. Saving is blocked and the saves are restored by the capture."""
+def _max_strength():
+    return _null(lambda: float(get_pc().Pawn.GetMaxShieldStrength()))
+
+
+def pi_shields(remember=False):
+    """What the character holds and what the shield pool reads, read-only. remember: this is the state to restore to."""
+    equipped, backpack = _shields()
+    row = _shield_row(equipped) if equipped is not None else None
+    maximum = _max_strength()
+    if remember:
+        pi["shield_base"] = {"key": row["key"] if row else None, "max": maximum, "level": row["level"] if row else None}
+    return {"player_level": _null(lambda: int(get_pc().PlayerReplicationInfo.ExpLevel)), "max_strength": maximum,
+            "strength": _null(lambda: float(get_pc().Pawn.GetShieldStrength())), "equipped": row,
+            "backpack": [_shield_row(i) for i in backpack]}
+
+
+def pi_shield_try(level):
+    """Spawn one shield of the equipped shield's balance at this level and equip it. Saving is blocked and the saves are restored by
+    the capture. UNVERIFIED: that ReadyBackpackInventory equips a shield; the read says whether it did."""
     im = get_pc().GetPawnInventoryManager()
-    own = pi.get("shield_own")
-    balance = own.DefinitionData.BalanceDefinition if balance_path == "equipped" else unrealsdk.find_object("InventoryBalanceDefinition", balance_path)
+    own = _find_shield(pi["shield_base"]["key"])
+    if own is None:
+        raise RuntimeError("the character's own shield was not found")
     pool = unrealsdk.find_class("ItemPool").ClassDefaultObject
-    result = pool.SpawnBalancedInventoryFromInventoryBalanceDefinition(balance, 1, level, 0, get_pc().Pawn, [])
+    result = pool.SpawnBalancedInventoryFromInventoryBalanceDefinition(own.DefinitionData.BalanceDefinition, 1, level, 0, get_pc().Pawn, [])
     spawned = list(result[1]) if isinstance(result, tuple) else []
     if not spawned:
         return {"skipped": "nothing spawned", "level": level}
-    item = spawned[0]
-    pi["shield_test"] = item
-    im.AddInventoryToBackpack(item)
+    key = str(spawned[0].Name)
+    im.AddInventoryToBackpack(spawned[0])
+    item = _find_shield(key)
+    if item is None:
+        raise RuntimeError("the spawned shield did not reach the backpack")
+    row = _shield_row(item)
+    pi["shield_try"] = {"key": key, "level": level, "game_t": get_pc().WorldInfo.TimeSeconds}
     im.ReadyBackpackInventory(item)
-    return {"requested_level": level, "item": _shield_row(item)}
+    return {"requested_level": level, "item": row}
 
 
 def pi_shield_read():
-    equipped, _held = _shields()
-    pawn = get_pc().Pawn
-    test = pi.get("shield_test")
-    return {"max_strength": _null(lambda: float(pawn.GetMaxShieldStrength())),
-            "equipped_is_test": equipped is not None and test is not None and equipped is test,
-            "equipped": _shield_row(equipped) if equipped is not None else None}
+    """The pool's maximum for this row's test shield. counts only when that shield is equipped, its level is the requested one, game
+    time has passed since the equip, and the maximum has left the character's own (or the row is at the own shield's level, where it may
+    rightly be the same)."""
+    equipped, _backpack = _shields()
+    base, tried = pi["shield_base"], pi.get("shield_try")
+    row = _shield_row(equipped) if equipped is not None else None
+    maximum = _max_strength()
+    reason = None
+    if not tried:
+        reason = "no test shield"
+    elif row is None or row["key"] != tried["key"]:
+        reason = "the test shield is not equipped"
+    elif row["level"] != tried["level"]:
+        reason = f"level {row['level']}, requested {tried['level']}"
+    elif not isinstance(maximum, float) or maximum <= 0.0:
+        reason = "no capacity"
+    elif get_pc().WorldInfo.TimeSeconds <= tried["game_t"]:
+        reason = "no game time since the equip"
+    elif maximum == base["max"] and tried["level"] != base["level"]:
+        reason = "the pool has not updated"
+    return {"max_strength": maximum, "equipped": row, "counts": reason is None, "reason": reason}
 
 
 def pi_shield_restore():
-    """Put the character's own shield back and remove the test shield."""
+    """Put the character's own shield back and remove the test shield. Errors reach the caller. The pool may take a moment:
+    pi_shields_check says when it has."""
     im = get_pc().GetPawnInventoryManager()
-    own, test = pi.get("shield_own"), pi.get("shield_test")
-    if own is not None:
-        _null(lambda: im.ReadyBackpackInventory(own))
-    if test is not None:
-        _null(lambda: im.RemoveInventoryFromBackpack(test))
-        _null(lambda: test.Destroy())
-    pi["shield_test"] = None
-    return pi_shield_read()
+    base, tried = pi["shield_base"], pi.get("shield_try")
+    pi["shield_try"] = None
+    equipped, _backpack = _shields()
+    if equipped is None or str(equipped.Name) != base["key"]:
+        own = _find_shield(base["key"])
+        if own is None:
+            raise RuntimeError("the character's own shield was not found")
+        im.ReadyBackpackInventory(own)
+    if tried:
+        _equipped, backpack = _shields()
+        test = next((i for i in backpack if str(i.Name) == tried["key"]), None)
+        if test is not None:
+            im.RemoveInventoryFromBackpack(test)
+            test.Destroy()
+    return pi_shields_check()
+
+
+def pi_shields_check():
+    """Whether the equipped shield and the pool's maximum are the ones remembered at the start."""
+    base = pi["shield_base"]
+    equipped, backpack = _shields()
+    key, maximum = (str(equipped.Name) if equipped is not None else None), _max_strength()
+    return {"ok": key == base["key"] and maximum == base["max"], "key": key, "max_strength": maximum,
+            "expected_key": base["key"], "expected_max": base["max"], "backpack_shields": len(backpack)}
 
 
 def pi_flags():
