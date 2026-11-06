@@ -171,6 +171,7 @@ exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.p
 - The real-game helpers (`Enter-RunLock` in `tools/real_game/realgame.ps1`) and `run_phaselock_shots.ps1`,
   `test_ambient.ps1` and `seed_ambient_npc_assets.ps1` also wait while `Borderlands2` runs, so real-game probes and
   Unreal runs never overlap.
+- **Not to be run until migrated to `Stop-OwnGame` and the guarded input:** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture` and `weapon_part_session` check only the name on a stored PID before stopping it; `projectiles_capture` and `weapon_parity2_capture` send raw right-clicks past the foreground guard, with no release in a `finally`. Nobody launches the game while a capture runs: a game started and closed between its checks goes unnoticed.
 - `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
   worktree and is rejected). The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.
 

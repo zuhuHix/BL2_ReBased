@@ -23,8 +23,10 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $Out = Join-Path $script:RG 'phaselock_integrity'
 New-Item -ItemType Directory -Force $Out | Out-Null
-# Stale evidence: a final write that fails must not leave an earlier run's completed behind.
-foreach ($stale in 'session.json', 'save_compare.json') { $file = Join-Path $Out $stale; if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force } }
+# Stale evidence: a final write that fails must not leave an earlier run's completed behind. Kept under a new name, not deleted: after a run that
+# needs recovery, its record is what names the backup and says what went wrong, and a rejected retry must not lose that.
+$keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
+foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
