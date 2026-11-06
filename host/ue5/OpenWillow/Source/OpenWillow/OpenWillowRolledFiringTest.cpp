@@ -20,8 +20,7 @@ TSharedPtr<FJsonObject> Json(const FString& Text)
     return Out;
 }
 
-const TCHAR* RocketTemplate = TEXT(R"({"schema":1,"firing_mode":"Fake.Mode","fire_type":"EWWFT_Rocket","bullet_speed":100,"trace_range":5000,
-    "projectile":{"speed":1000,"splash":{"radius":300,"damage":null,"damage_scale":0.5,"falloff":false}}})");
+const TCHAR* RocketTemplate = TEXT(R"({"schema":1,"firing_mode":"Fake.Mode","fire_type":"EWWFT_Rocket","bullet_speed":100,"trace_range":5000,"projectile":{"speed":1000,"splash":{"radius":300,"damage":null,"damage_scale":0.5,"falloff":false}}})");
 
 FOpenWillowWeaponItem RolledItem()
 {
@@ -64,7 +63,7 @@ bool FOpenWillowRolledGunFiringTemplateTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("a complete template merges"), FOpenWillowWeaponGen::MergeFiringTemplate(*Json(RocketTemplate), &Scales, RolledCard(), Item, Missing));
         const FOpenWillowFiringData& F = Item.Firing;
         TestTrue(TEXT("the block is loaded"), F.bLoaded);
-        TestEqual(TEXT("the kind comes from the template"), F.Kind, EOpenWillowShotKind::Rocket);
+        TestTrue(TEXT("the kind comes from the template"), F.Kind == EOpenWillowShotKind::Rocket);
         // Card and item overrides.
         TestEqual(TEXT("pellets"), F.Pellets, 3);
         TestEqual(TEXT("spread"), F.Spread, 0.5f);
