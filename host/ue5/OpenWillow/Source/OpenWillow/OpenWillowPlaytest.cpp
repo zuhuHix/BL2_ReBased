@@ -297,6 +297,16 @@ void UOpenWillowPlaytest::RunCommand(const FString& Line)
         const bool bDrawn = bEquipped && W->DrawItemById(Id);
         UE_LOG(LogTemp, Display, TEXT("OWPLAY equipname %s index=%d id=%s equipped=%d drawn=%d"), *T[1], Found, *Id, bEquipped, bDrawn);
     }
+    else if (C == TEXT("equiplast") && N > 1)
+    {
+        const UOpenWillowInventory* Inv = W->GetInventory();
+        const int32 Last = Inv ? Inv->Items().Num() - 1 : INDEX_NONE;
+        const FString Id = Last >= 0 ? Inv->Items()[Last].InstanceId : FString();
+        const FString Name = Last >= 0 ? Inv->Items()[Last].Name : FString();
+        const bool bEquipped = Last >= 0 && W->EquipItem(Last, FCString::Atoi(*T[1]));
+        const bool bDrawn = bEquipped && W->DrawItemById(Id);
+        UE_LOG(LogTemp, Display, TEXT("OWPLAY equiplast index=%d name=\"%s\" id=%s equipped=%d drawn=%d"), Last, *Name, *Id, bEquipped, bDrawn);
+    }
     else if (C == TEXT("setlevel") && N > 1)
     {
         if (UOpenWillowSkills* Skills = W->GetSkills()) { Skills->SetLevel(FCString::Atoi(*T[1])); W->RefreshHealthForLevel(); }

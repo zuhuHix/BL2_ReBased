@@ -3,8 +3,8 @@ param(
     [Parameter(Mandatory)][string]$Script,
     [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [string]$Game = $env:OPENWILLOW_BL2,
-    # X,Y,Z[,Yaw]: where ow.Range builds the range. Default: the spot the slice gate pinned (SLICE_GATE.md).
-    [string]$RangeAt = '-3345,3823,3024,165',
+    # X,Y,Z[,Yaw]: where ow.Range builds the range. Default: none, the host resolves the spot from the manifest.
+    [string]$RangeAt,
     [int]$Level = 0,
     [int]$Money = 5000,
     [int]$Port = 8767,
@@ -59,8 +59,9 @@ try {
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url",
         "-owvendingpage=${url}vending.html", "-owitems=`"$(Split-Path -Parent $gear)`"", "-owlevel=$Level", "-owmoney=$Money", '-owerid=7',
         '-owquest', "-owquestsave=`"$(Join-Path $out 'quest_save.json')`"", "-owcurrencysave=`"$(Join-Path $out 'currency.json')`"",
-        "-owrangeat=$RangeAt", "-owplaytest=`"$scriptPath`"") + $switches + $Extra + @(
+        "-owplaytest=`"$scriptPath`"") + $switches + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended', '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
+    if ($RangeAt) { $arguments += "-owrangeat=$RangeAt" }
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     $null = $process.Handle   # without this, Start-Process -PassThru does not populate ExitCode
     Write-Output "Launched pid $($process.Id); log: $log"
