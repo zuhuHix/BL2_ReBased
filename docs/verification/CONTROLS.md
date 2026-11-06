@@ -97,7 +97,14 @@ capture, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
 own wording, the stock reward screen's confirmation in the movie, not `p1.tools`: **UNVERIFIED**, and not built here. In the host the use key
 stands in for the movie's Enter.
 
-**Read from data:** the clip's frame labels and `desc` field (the HUD movie), and the words of the default icons (`GD_InteractionIcons`).
+**Read from data:** the clip's frame labels and `desc` field (the HUD movie), and the words of the default icons (`GD_InteractionIcons`); the
+words are short constants in `OpenWillowUsePrompt.cpp`, to change if the real-game read shows others. Which icon goes with which target is a
+host choice.
+
+**Writing the text:** `desc` is the field's instance name and also its bound variable. In the Ruffle bench a dot path to it read nothing, and
+writing through the path only took the first time, so a later prompt kept the first one's words. The page now writes and reads the variable on
+the clip, and a prompt counts as applied only when the label's frame and exactly the asked text read back. Ruffle's behaviour here, not
+Scaleform's.
 
 **Open, UNVERIFIED until the real-game read:** which icon the game gives each target (a host choice per target), how the stock prompt
 writes the key (`[E]` is a host choice), whether a lootable says something other than open, costs on the prompt, and the secondary prompt.

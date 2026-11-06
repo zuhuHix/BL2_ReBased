@@ -8,7 +8,6 @@
 #include "OpenWillowUsePrompt.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowQuest.h"
-#include "Engine/DamageEvents.h"
 #include "OpenWillowNpc.h"
 #include "Camera/CameraComponent.h"
 #include "OpenWillowMayaHUD.h"

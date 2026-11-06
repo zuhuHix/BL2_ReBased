@@ -111,31 +111,51 @@
   }
 
   // The use prompt: null, or {frame: a label of p1.tools, text: for its desc field} (OpenWillowUsePrompt.cpp). Which of these the game
-  // drives, and how, is native and was not read live (UNVERIFIED).
+  // drives, and how, is native and was not read live (UNVERIFIED). `desc` is both the field's instance name and its bound variable on the
+  // clip. Read in the Ruffle bench (2026-11-06): a dot path to it does not give the field, and writing through that path only took the first
+  // time, so a later prompt kept the first one's words. Writing and reading the variable on the clip tracks every change.
+  const TOOLS = P1 + '.tools', USE_RETRY_MS = 1000;
   function useCalls(prompt) {
-    if (!prompt || !prompt.frame) return [[P1 + '.tools', 'gotoAndStop', 'none']];
-    return [[P1 + '.tools', 'gotoAndStop', prompt.frame], textCall(P1 + '.tools.desc', prompt.text || '')];
+    if (!prompt || !prompt.frame) return [[TOOLS, 'gotoAndStop', 'none']];
+    return [[TOOLS, 'gotoAndStop', prompt.frame], [TOOLS, 'set', 'desc', prompt.text || '']];
   }
+  // The field is HTML: the variable reads back wrapped in its format tags.
+  function plainDesc(value) {
+    if (typeof value !== 'string') return null;
+    return value.replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  }
+  function newUseMemo() { return {line: null, failed: null, retryAt: 0, frames: {none: 1}}; }
 
-  // Applies the use prompt once per change. memo = {line, failed}: line is what the movie is known to show, so a call that throws or
-  // a clip that does not answer is tried again with the next state, and this can never stop the rest of the HUD. Logs once per problem.
-  function applyUse(call, prompt, memo, log) {
+  // Applies the use prompt once per change. A prompt counts as applied only when the clip reads back on that label's frame with exactly
+  // the text asked for; the frame of a label is learned from the first good read (`none` is the clip's first frame), and a new label must
+  // not be on another label's frame, which is where a jump that did nothing would leave it. A failure is logged once and tried again
+  // about a second later, and stays inside this function, so it can never stop the rest of the HUD.
+  function applyUse(call, prompt, memo, log, now) {
     const line = JSON.stringify(prompt);
     if (line === memo.line) return;
-    let frame, text, problem = '';
+    if (line === memo.failed && now < memo.retryAt) return;
+    const label = prompt && prompt.frame ? prompt.frame : 'none';
+    const wanted = label === 'none' ? null : prompt.text || '';
+    let frame, shown = '', problem = '';
     try {
       for (const c of useCalls(prompt)) call(c[0], c[1], c[2], c[3]);
-      frame = call(P1 + '.tools', 'get', '_currentframe');
-      text = prompt && prompt.frame ? call(P1 + '.tools.desc', 'get', 'text') : '';
+      frame = call(TOOLS, 'get', '_currentframe');
+      const known = memo.frames[label];
       if (!(Number(frame) > 0)) problem = 'no frame read back';
-      else if (prompt && prompt.frame && typeof text !== 'string') problem = 'no text read back';
+      else if (known !== undefined ? Number(frame) !== known : Object.values(memo.frames).includes(Number(frame))) problem = `the clip is on frame ${frame}, not ${label}`;
+      else if (wanted !== null) {
+        shown = plainDesc(call(TOOLS, 'get', 'desc'));
+        if (shown !== wanted) problem = `the text reads ${JSON.stringify(shown)}`;
+      }
     } catch (error) { problem = String(error); }
     if (problem) {
       if (memo.failed !== line) log(`OWUSEPROMPTPAGE failed asked=${line}: ${problem}`);
       memo.failed = line;
+      memo.retryAt = now + USE_RETRY_MS;
       return;
     }
-    log(`OWUSEPROMPTPAGE asked=${line} frame=${frame} text=${text}`);
+    memo.frames[label] = Number(frame);
+    log(`OWUSEPROMPTPAGE asked=${line} frame=${frame} text=${shown}`);
     memo.line = line;
     memo.failed = null;
   }
@@ -189,7 +209,7 @@
   }
 
   const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine, barFrame, downCalls, secondWindCalls, trackerCalls,
-    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine, useCalls, applyUse};
+    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine, useCalls, applyUse, newUseMemo};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
