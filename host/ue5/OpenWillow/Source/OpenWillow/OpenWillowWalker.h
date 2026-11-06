@@ -61,6 +61,9 @@ public:
     void ToggleInventory();
     bool IsInventoryWidgetOpen() const; // the legacy UMG inventory, used when the HUD has no inventory page
     void ToggleSkills();
+    // The map and missions keys (OpenWillowControls.cpp, docs/verification/CONTROLS.md).
+    void ToggleMapPage();
+    void ToggleMissionsPage();
     // Mission weapon lend/return (UOpenWillowQuest): the grant adds the item to the backpack (observed in the real game: not equipped; the player
     // readies it with EquipItem); the return removes it wherever it is and draws another weapon only if it was the held one.
     bool LendWeapon(const FOpenWillowWeaponItem& Item);
@@ -224,6 +227,7 @@ private:
     void SetMayaCrouched(bool bCrouch);
     void SelectSlot(int32 Slot);
     void Holster();
+    void ToggleMapOrMissionsPage(bool bMap);
     void SelectSlot1() { SelectSlot(0); }
     void SelectSlot2() { SelectSlot(1); }
     void SelectSlot3() { SelectSlot(2); }

@@ -902,6 +902,8 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWFire"), IE_Released, this, &AOpenWillowWalker::FireReleased);
     Input->BindAction(TEXT("OWPhaselock"), IE_Pressed, this, &AOpenWillowWalker::UsePhaselock);
     Input->BindAction(TEXT("OWGrenade"), IE_Pressed, this, &AOpenWillowWalker::ThrowGrenadeKey);
+    Input->BindAction(TEXT("OWMap"), IE_Pressed, this, &AOpenWillowWalker::ToggleMapPage);
+    Input->BindAction(TEXT("OWMissions"), IE_Pressed, this, &AOpenWillowWalker::ToggleMissionsPage);
 }
 void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
 {

@@ -1,4 +1,5 @@
 #include "OpenWillowMayaHUD.h"
+#include "OpenWillowControls.h"
 #include "OpenWillowMapScreen.h"
 #include "OpenWillowStatusShots.h"
 #include "OpenWillowVendor.h"
@@ -1472,6 +1473,8 @@ void AOpenWillowMayaHUD::DrawHUD()
     TickMissionLogTest();
     if (bFlashHudReady && PlayerOwner)
         if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn())) OpenWillowMapScreen::TickShots(*this, *Walker, *PlayerOwner);
+    if (PlayerOwner)
+        if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn())) OpenWillowControls::TickTest(*this, *Walker, *PlayerOwner);
     if (bFlashHudReady && GetWorld()) OpenWillowStatusShots::Tick(*this, *GetWorld());
     if (!bWeaponMeshesPreloaded && PlayerOwner)
         if (const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()))
