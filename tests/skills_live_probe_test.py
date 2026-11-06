@@ -180,6 +180,22 @@ def test_crit_bonus_reads_the_stack():
     assert out['weapon'] == 'Gun_1'
 
 
+def test_maya_health_set_and_sampled():
+    pc = Controller(Tree({}))
+    pc.Pawn = Pawn('Maya', health=200.0)
+    pc.Pawn.GetMaxHealth = lambda: 400.0
+    pc.Pawn.SetHealth = lambda value: setattr(pc.Pawn, 'health', value)
+    probe = load_probe(pc, {})
+    out = probe['sl_maya_health'](0.25)
+    assert (out['before'], out['max'], out['after']) == (200.0, 400.0, 100.0), out
+    watch = {'t0': 0.0, 'last': -1.0, 'rows': []}
+    probe['_sample_maya_health'](watch, 1.0)
+    probe['_sample_maya_health'](watch, 1.1)
+    pc.Pawn.health = 115.0
+    probe['_sample_maya_health'](watch, 1.2)
+    assert [r['health'] for r in watch['rows']] == [100.0, 115.0], watch['rows']
+
+
 def test_target_health_rows_only_on_change():
     pawns = {'P1': Pawn('P1')}
     probe = load_probe(Controller(Tree({})), pawns)
@@ -216,6 +232,10 @@ Invoke-Step 'recovers' @{} { $script:ran += 'recovers'; PyCall 'fine()' }
 Invoke-Step 'bad2' @{} { $script:ran += 'bad2'; PyCall 'broken()' }
 Invoke-Step 'bad3' @{} { $script:ran += 'bad3'; PyCall 'broken()' }
 Invoke-Step 'skipped' @{} { $script:ran += 'skipped' }
+$script:FailedInARow = 0
+$Steps = @('picked')
+Invoke-Step 'not_picked' @{} { $script:ran += 'not_picked' }
+Invoke-Step 'picked' @{} { $script:ran += 'picked' }
 [ordered]@{ ran = $script:ran; steps = $summary.steps } | ConvertTo-Json -Depth 5 -Compress
 '''
 
@@ -233,7 +253,8 @@ def test_step_runner_keeps_the_traceback_and_stops():
         assert done.returncode == 0, done.stderr
         result = json.loads(done.stdout.strip().splitlines()[-1])
         record = json.loads((Path(out) / 'bad1.json').read_text(encoding='utf-8-sig'))
-    assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3'], result['ran']
+    assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked'], result['ran']
+    assert 'not_picked' not in {s['step'] for s in result['steps']}, '-Steps leaves the others out'
     by_step = {s['step']: s for s in result['steps']}
     assert record['ok'] is False and 'python: Traceback' in record['error'] and 'LookupError: WillowAIPawn_9' in record['error'], record
     assert by_step['good']['ok'] is True and by_step['recovers']['ok'] is True, 'a success resets the count'
