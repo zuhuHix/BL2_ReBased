@@ -217,8 +217,8 @@ Test setup (only with `-owcombatshots`): level 36 unless `-owlevel` is given,
 so the level-30 recipes and the level-36 gear manifest item equip; slots take
 one weapon per ammo type first; demo purse and reserves are set (made up); the
 run sends the page Down, E, F key events and writes `OWCombat_7b_InventoryCompare`
-and `OWCombat_7c_InventoryInspect`, then closes the page and fires slot 2 from a 2-round magazine
-to exercise reload (the log line `combat firing exercise` says what it did). This also changes the level in the Skills capture.
+and `OWCombat_7c_InventoryInspect`, then closes the page and holds the trigger on slot 2. With the default slots that gun is an Infinity, which spends no rounds and cannot reload: the 2026-11-06 run's
+62 shots prove firing works after the page closes, not the reload, and its `magazine 2 -> 1` is the magazine size clamping the set value, not a shot. This also changes the level in the Skills capture.
 
 Automated (this pass): UE 5.8 build of `OpenWillowEditor` succeeded;
 `-owinventoryselftest` (synthetic add, duplicate ID, equip, locked-slot
@@ -1454,23 +1454,29 @@ scored nothing because it was not scored: a worktree provisioned by the hook is 
 the static previews, the full `Content/OpenWillow/Weapons` and `local/weapon_library`. Check the card rows and `menu weapon preview ... mesh=1` before a critic round.
 
 **Critic scores.** Round 1 **7.36** overall, **7.89** ignoring gun paint and render colour. Round 2, after the changes below and the weapon library, **7.79** and
-**8.21**. So the menu's own state passes the 8/10 target on that reading, and the overall score does not; the remaining overall gap is mostly gun paint and thumbnails
-(the gunlook lane, pattern placement in progress there). Round 3 pending. Different critics are not strictly comparable (see round 23).
+**8.21**. Round 3, the last (the cap), on the final frames: **7.79** and **8.21** again, with different per-pair scores, so the changes after round 2 show no measured gain: a fresh critic each round means
+the means are not strictly comparable (see round 23). **Target 8 not reached overall.** Ignoring gun colour the menu passes on this reading, though D5 still scores 6.8 there for the rifle's size and place.
+The overall gap is mostly gun paint and thumbnails (the gunlook lane, pattern placement in progress there).
 
 **Changed before round 2.** Every status page hides the first-person arms and gun, which stayed up behind Skills, Missions and Map. The menu's Maya also stands behind
 Skills, as in the real frames; Missions and Map get no Maya, because the game's behaviour there is not observed (UNVERIFIED). Mini Equipped panel, compare cards (with a separate left target
 when the compare starts from the Equipped panel) and the Skills side trees fitted to D20.
 
-**Changed after round 2 (not yet scored).** The compare cards' height corrections never reached the frame: the measured right card did not change when its correction did. The likely reason, inferred and
+**Changed after round 2.** The compare cards' height corrections never reached the frame: the measured right card did not change when its correction did. The likely reason, inferred and
 not traced, is that the movie's TweenCards rewrites the card's scales after the page's correction, which the page then believed was still applied; the page now re-applies it when the Y scale is not the one it left. With it really applied, the right card's first compensation overshot the frame, so its correction went back to the 6% it had in round 23.
 The focus view's rows are spaced slightly wider, so the last empty cell lands where it does in D2g. Inspect card fit. All UNVERIFIED beyond D20.
 
 **PR review.** Nothing fires while a status page hides the weapon, whatever opened the page: the page's opening lets go of the trigger and ends a burst (UI-only input never delivers the key-up), and the firing paths check it too.
 The action suite gains three steps: Missions and Map hide the arms and gun and show no menu Maya, no shot fires under the Map, and closing restores them (53 steps). Host calls, not the keys to those pages. `FireOnce` is asked before, under and after the pages with the same gun and a full magazine, so a refusal under the page can only be the page. The suite's own steps leave every slot empty, so the first of these steps equips a gun from the backpack; with no weapon or no gun mesh in the run's data the steps are NOT_RUN and say which.
 
+**Suite on the final code:** 53 PASS / 0 FAIL / 0 NOT_RUN on 73ce530, including the shot before, none under and a shot after the pages. Navigation test 44/44.
+
 **Still open, in the last critic's order.**
-1. Gun paint and thumbnails (gunlook lane); static thumbnails come from the offline renderer.
-2. D5 Inspect rifle smaller and further right than real since the guns come from the library. `InspectFrame` frames from the preview mesh's local bounds, which may not suit an assembled gun (not checked; gunlook lane).
-3. Zoom lines 0.1 high on two guns (`src/weapon_gen.cpp`, round 23's item 6).
-4. Skills tree widths; Backpack frame and the tab cluster a few pixels off.
-5. BRANDS tie order stays parked (native quick sort).
+1. D5 Inspect rifle smaller and further right than real since the guns come from the library. `InspectFrame` frames from the preview mesh's local bounds, which may not suit an assembled gun (not checked; gunlook lane).
+2. Gun paint and thumbnails (gunlook lane); static thumbnails come from the offline renderer.
+3. The right compare card's top edge is lower than real: the real card is turned and this one is not, so a flat fit cannot match the whole edge (D3, D4).
+4. Skills: the action-skill backing starts higher than real (D6, D6b, D7), and the Phaselock tooltip is a few pixels off (D6).
+5. D5: a plain ringed underlay where the real frame has a large dark emblem.
+6. D2g: a clipped `(EMPTY)` label shows under the Backpack heading where the real frame has a scroll arrow.
+7. Zoom lines 0.1 high on two guns (`src/weapon_gen.cpp`, round 23's item 6).
+8. BRANDS tie order stays parked (native quick sort).
