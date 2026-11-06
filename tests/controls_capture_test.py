@@ -105,6 +105,14 @@ class ControlsCaptureTest(unittest.TestCase):
         session = json.loads((self.work / 'rg/controls/session.json').read_text(encoding='utf-8-sig'))
         return done, session
 
+    def restore_by_hand(self):
+        """Runs the printed recovery command in a new PowerShell, with the real helpers, as the maintainer would."""
+        script = self.work / 'by_hand.ps1'
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\nRestore-VerifiedBackup '{self.backups()[0]}'\n", encoding='utf-8-sig')
+        env = dict(os.environ, OPENWILLOW_BL2=str(self.game))
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
+                              capture_output=True, text=True, env=env, timeout=120)
+
     def saves(self):
         return (self.work / 'willow/SaveData/save.sav').read_text(encoding='utf-8').strip()
 
@@ -165,8 +173,14 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertEqual(self.locks_held(), (True, True))
         self.assertTrue(self.backups())
         self.assertIn('MANUAL RECOVERY', done.stdout)
-        self.assertIn('Restore-Tree', done.stdout)
+        self.assertIn(f"Restore-VerifiedBackup '{self.backups()[0]}'", done.stdout)
+        self.assertNotIn('Restore-Tree', done.stdout)
         self.assertIn('MISMATCH after restore', done.stdout)   # the rows reach the screen too (they vanish as objects before `exit`)
+        self.assertEqual(self.saves(), 'changed by the run')
+        hand = self.restore_by_hand()
+        self.assertIn('identical', hand.stdout, hand.stdout + hand.stderr)
+        self.assertEqual(self.saves(), 'original save')
+        self.assertTrue((self.work / 'willow/Config/game.ini').exists())
 
     def test_a_restore_that_throws_keeps_locks_and_prints_recovery(self):
         done, session = self.run_capture('restore_throws')
@@ -183,10 +197,10 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertEqual(self.locks_held(), (True, True))
         self.assertTrue(self.backups())
         self.assertIn('BACKUP CHANGED', done.stdout)
-        self.assertIn('Do NOT restore SaveData', done.stdout)
-        commands = [line for line in done.stdout.splitlines() if 'Restore-Tree' in line]
-        self.assertFalse([line for line in commands if line.rstrip().endswith("'SaveData'")], commands)   # recovery must not offer the changed root
-        self.assertTrue([line for line in commands if line.rstrip().endswith("'Config'")], commands)
+        self.assertIn('Restore-VerifiedBackup', done.stdout)
+        hand = self.restore_by_hand()   # the command itself refuses the changed root, by hand as well
+        self.assertIn('BACKUP CHANGED', hand.stdout, hand.stdout + hand.stderr)
+        self.assertEqual(self.saves(), 'changed by the run')
         self.assertEqual(done.returncode, 1)
 
     def test_a_driver_that_stays_is_reported_as_recovery(self):
@@ -201,6 +215,8 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
         self.assertEqual(self.saves(), 'changed by the run')
         self.assertTrue((self.game / 'sdk_mods/openwillow_realgame').exists())
+        self.assertIn(f"Restore-VerifiedBackup '{self.backups()[0]}'", done.stdout)
+        self.assertTrue((self.backups()[0] / 'verified_hashes.json').exists())   # written before the game started
         self.assertEqual(self.locks_held(), (True, True))
         self.assertTrue(self.backups())
         self.assertIn('MANUAL RECOVERY', done.stdout)
