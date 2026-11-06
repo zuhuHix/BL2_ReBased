@@ -378,7 +378,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             {
                 const FOpenWillowMayaStats Defaults;
                 W->GetMayaState().EquipShield(W->GetMaxHealth(), Defaults.ShieldRechargeDelay, Defaults.ShieldRechargeRate, true, GetWorld()->GetTimeSeconds());
-                ShieldFixture = FString::Printf(TEXT("host stand-in shield of %.0f (no shield in the gear manifest; not stock data)"), W->GetShieldCapacity());
+                ShieldFixture = FString::Printf(TEXT("host stand-in shield of %.0f (no gear-manifest shield Maya's level %d can equip; not stock data)"), W->GetShieldCapacity(), W->GetSkills()->GetLevel());
             }
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: %s, shield %.0f/%.0f"), *ShieldFixture, W->GetShield(), W->GetShieldCapacity());
         }
@@ -631,12 +631,16 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (!W->CanCastPhaselock(Reason))
             {
                 if (StepTime < PhaselockTargetWait) return;   // e.g. still drawing the new gun
-                FailLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("cast refused: %s"), *Reason));
+                // A miss leaves no target and a short cooldown, so the retries can end inside that cooldown: say so.
+                FailLink(TEXT("phaselock_enemy"), PhaselockCasts > 0
+                    ? FString::Printf(TEXT("%d cast(s) went out and all missed, no preferred target (the log's \"Phaselock targeting\" line says why); the last retry was refused: %s"), PhaselockCasts, *Reason)
+                    : FString::Printf(TEXT("cast refused: %s"), *Reason));
                 Next(EStep::Accept);
                 return;
             }
             Enemy = Target;
             W->UsePhaselock();
+            ++PhaselockCasts;
             return;
         }
         // The cast went out on an earlier tick.

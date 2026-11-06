@@ -60,6 +60,7 @@ private:
     void Fixture(const FString& What) { Fixtures.AddUnique(What); }
     TArray<FString> Fixtures;
     bool bPhaselockPointGranted = false;
+    int32 PhaselockCasts = 0;       // casts the Phaselock link sent out
     bool bTestDrop = false;         // the pickup link: the test dropped the gun
     bool bLootForced = false;       // ow.RangeLoot always ran before the fight
     bool bRecoverStarted = false;
