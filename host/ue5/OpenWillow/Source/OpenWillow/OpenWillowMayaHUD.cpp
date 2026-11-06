@@ -44,6 +44,8 @@
 #include "InputCoreTypes.h"
 #include "GlobalRenderResources.h"
 
+void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Player);   // OpenWillowShieldCheck.cpp, test-only
+
 // Host HUD laid out after BL2's (slanted shield/health bottom-left, XP bar
 // bottom-centre, angled ammo panel bottom-right). The default gameplay HUD is
 // BL2's own movie (PushFlashHudState); this canvas drawing is the fallback
@@ -1719,6 +1721,8 @@ void AOpenWillowMayaHUD::DrawHUD()
         // overlay exists, so the page has it when it becomes ready.
         static const bool bSkillHudShots = FParse::Param(FCommandLine::Get(), TEXT("owskillhudshots"));
         if (bSkillHudShots && bFlashHudReady) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
+        static const bool bShieldCheck = FParse::Param(FCommandLine::Get(), TEXT("owshieldcheck"));
+        if (bShieldCheck && bFlashHudReady) OpenWillowTickShieldCheck(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         static const bool bHudShots = FParse::Param(FCommandLine::Get(), TEXT("owhudshots"));
         if (bHudShots && bFlashHudReady) TickHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
 #if WITH_EDITOR
