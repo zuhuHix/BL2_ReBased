@@ -8,6 +8,20 @@
 class AActor;
 class UObject;
 
+// The stand-in capacity of a shield whose card has no "Capacity" stat (vendor and loot shields are stand-in gear). A host rule, UNVERIFIED:
+// capacity = Capacity x Growth ^ (level - AtLevel), the same form as the item value's growth. The numbers are local data
+// (local/slice/stand_in_shield.json, {"at_level", "capacity", "growth_per_level"}), not tracked. Unset without that file: no capacity.
+struct OPENWILLOW_API FOpenWillowStandInShieldRule
+{
+    int32 AtLevel = 0;
+    float Capacity = 0.f;
+    float Growth = 1.f;
+    bool IsSet() const { return AtLevel > 0 && Capacity > 0.f; }
+    float CapacityAt(int32 Level) const;
+    // False, leaving the rule unset, unless the text holds all three numbers in range; OutError says why.
+    bool Parse(const FString& Json, FString& OutError);
+};
+
 // Every number the survival rules read, in one struct. `Base` is what the data gives (level formula, equipped shield,
 // the injured definition); the skills lane applies its modifiers in FOpenWillowMayaState::Effective(), the one place the
 // rules read stats from. Defaults are host stand-ins (UNVERIFIED unless the comment names the live read).

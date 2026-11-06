@@ -157,3 +157,13 @@ the walker passes game time in and does the presentation (weapon put-away, Phase
 - **Checks.** `OpenWillow.MayaState` (UE automation, `OpenWillowMayaStateTest.cpp`, invented numbers only) pins the arithmetic: shield then
   health, the delay and rate, the bleed-out cut for successive injuries, the second wind, the dead state, the respawn after the death camera,
   a revive on a refill, a swapped shield. The in-engine `-owhuddownshots` run and `tools/check_hud_down.py` keep checking the down timeline.
+
+## Stand-in shield capacity (2026-11-06, maya lane)
+
+AI-assisted (Claude). A first playtest logged capacity 0 on a bought shield: vendor and loot shields are stand-in gear with no stats, and the walker read capacity only from a card, so no shield obtained in normal play protected Maya.
+
+- **Rule, UNVERIFIED:** a shield whose card has no "Capacity" stat takes `capacity x growth ^ (item level - anchor level)` when equipped; a card's own capacity wins. The form is the host's choice, copied from how item value grows, and nothing shows real capacity follows it. It is not derived from the shield's parts, so every shield of one level is the same.
+- **Numbers:** ignored `local/slice/stand_in_shield.json` (`at_level`, `capacity`, `growth_per_level`), hand-kept like the twirl tint. The anchor is the shield value the real game's HUD showed for a level 8 Maya, whose shield's own level was not read. The growth is the price scaler. A planned bl-sdk read of capacity against level replaces them. Without the file a warning is logged and such a shield still protects nothing.
+- **Checked:** the synthetic `OpenWillow.MayaState` covers parsing, growth, a card's capacity winning, and a stand-in shield through equip, damage and recharge. The file read and the walker's equip path have not been run by that test; a playthrough has to show them.
+- **Not changed:** the card and backpack row still show no stats, and Maya starts with no shield until she gets one.
+

@@ -295,29 +295,60 @@ void AOpenWillowWalker::TickDown(float Now, float DeltaSeconds)
     }
 }
 
+AOpenWillowWalker::FShieldStats AOpenWillowWalker::ReadShieldStats(const FOpenWillowGearItem* Item, const FOpenWillowStandInShieldRule& Rule)
+{
+    // The card stats: "Capacity" (as the HUD reads it), "Recharge Rate" and "Recharge Delay" (labels as BL2's shield card shows them;
+    // the local card data was not seen with the last two, UNVERIFIED). A card without them keeps the live-read stand-ins of
+    // FOpenWillowMayaStats. A card without a capacity (stand-in gear) takes the stand-in rule's at the item's level.
+    const FOpenWillowMayaStats Defaults;
+    FShieldStats Out;
+    Out.RechargeDelay = Defaults.ShieldRechargeDelay;
+    Out.RechargeRate = Defaults.ShieldRechargeRate;
+    if (!Item) return Out;
+    bool bHasCapacity = false;
+    for (const FOpenWillowGearStat& Stat : Item->Stats)
+    {
+        const float Value = FCString::Atof(*Stat.Value.Replace(TEXT(","), TEXT("")));
+        if (Stat.Label.Equals(TEXT("Capacity"), ESearchCase::IgnoreCase)) { Out.Capacity = Value; bHasCapacity = true; }
+        else if (Stat.Label.Equals(TEXT("Recharge Rate"), ESearchCase::IgnoreCase) && Value > 0.f) Out.RechargeRate = Value;
+        else if (Stat.Label.Equals(TEXT("Recharge Delay"), ESearchCase::IgnoreCase) && Value > 0.f) Out.RechargeDelay = Value;
+    }
+    if (!bHasCapacity)
+    {
+        Out.Capacity = Rule.CapacityAt(Item->Level);
+        Out.bStandIn = Out.Capacity > 0.f;
+    }
+    return Out;
+}
+
 void AOpenWillowWalker::TickShield(float Now)
 {
-    // The equipped shield's card stats: "Capacity" (as the HUD reads it), "Recharge Rate" and "Recharge Delay" (labels as BL2's
-    // shield card shows them; the local card data was not seen with the last two, UNVERIFIED). A card without them keeps the
-    // live-read stand-ins of FOpenWillowMayaStats. A new shield is applied once, when the equipped id changes.
+    // A new shield is applied once, when the equipped id changes.
     const FOpenWillowGearItem* Item = Inventory ? Inventory->GearSlotItem(TEXT("shield")) : nullptr;
     const FString Id = Item ? Item->Id : FString();
     if (Id == EquippedShieldId) return;
     EquippedShieldId = Id;
-    const FOpenWillowMayaStats Defaults;
-    float Capacity = 0.f, Delay = Defaults.ShieldRechargeDelay, Rate = Defaults.ShieldRechargeRate;
-    if (Item)
-        for (const FOpenWillowGearStat& Stat : Item->Stats)
+    if (Item && !bStandInShieldRuleRead)
+    {
+        bStandInShieldRuleRead = true;
+        const FString File = FPaths::ConvertRelativePathToFull(
+            FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/slice/stand_in_shield.json")));
+        FString Text, Error;
+        if (!FFileHelper::LoadFileToString(Text, *File))
         {
-            const float Value = FCString::Atof(*Stat.Value.Replace(TEXT(","), TEXT("")));
-            if (Stat.Label.Equals(TEXT("Capacity"), ESearchCase::IgnoreCase)) Capacity = Value;
-            else if (Stat.Label.Equals(TEXT("Recharge Rate"), ESearchCase::IgnoreCase) && Value > 0.f) Rate = Value;
-            else if (Stat.Label.Equals(TEXT("Recharge Delay"), ESearchCase::IgnoreCase) && Value > 0.f) Delay = Value;
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: no %s, so a shield without a capacity stat protects nothing"), *File);
         }
-    MayaState.EquipShield(Capacity, Delay, Rate, !bShieldEverEquipped, Now);
-    bShieldEverEquipped |= Capacity > 0.f;
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya shield %s: capacity %.1f, recharge %.2f/s after %.3f s"),
-        Item ? *Item->Name : TEXT("none"), Capacity, Rate, Delay);
+        else if (!StandInShieldRule.Parse(Text, Error))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: %s ignored: %s"), *File, *Error);
+        }
+    }
+    const FShieldStats Stats = ReadShieldStats(Item, StandInShieldRule);
+    MayaState.EquipShield(Stats.Capacity, Stats.RechargeDelay, Stats.RechargeRate, !bShieldEverEquipped, Now);
+    bShieldEverEquipped |= Stats.Capacity > 0.f;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya shield %s: capacity %.1f%s, recharge %.2f/s after %.3f s"),
+        Item ? *Item->Name : TEXT("none"), Stats.Capacity, Stats.bStandIn ? TEXT(" (stand-in rule, UNVERIFIED)") : TEXT(""),
+        Stats.RechargeRate, Stats.RechargeDelay);
 }
 
 void AOpenWillowWalker::Respawn()

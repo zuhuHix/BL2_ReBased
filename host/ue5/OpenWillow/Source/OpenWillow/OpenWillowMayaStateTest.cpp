@@ -7,6 +7,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowMayaState.h"
+#include "OpenWillowInventory.h"
+#include "OpenWillowWalker.h"
 #include <limits>
 
 namespace
@@ -39,6 +41,44 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowMayaStateTest, "OpenWillow.MayaState
 bool FOpenWillowMayaStateTest::RunTest(const FString&)
 {
     using ETick = FOpenWillowMayaState::ETickEvent;
+    {
+        // The stand-in rule (invented numbers): parsing, growth by level, and a card without a capacity through equip, damage and recharge.
+        FOpenWillowStandInShieldRule Rule;
+        FString Error;
+        TestFalse(TEXT("an unset rule gives no capacity"), Rule.IsSet() || Rule.CapacityAt(5) != 0.f);
+        for (const TCHAR* Bad : {TEXT("not json"), TEXT("{}"), TEXT("{\"at_level\":0,\"capacity\":10,\"growth_per_level\":1.5}"),
+                                 TEXT("{\"at_level\":2.5,\"capacity\":10,\"growth_per_level\":1.5}"), TEXT("{\"at_level\":2,\"capacity\":0,\"growth_per_level\":1.5}"),
+                                 TEXT("{\"at_level\":2,\"capacity\":10,\"growth_per_level\":3}")})
+            TestTrue(TEXT("a malformed rule is refused and stays unset"), !Rule.Parse(Bad, Error) && !Error.IsEmpty() && !Rule.IsSet());
+        TestTrue(TEXT("a good rule parses"), Rule.Parse(TEXT("{\"at_level\":2,\"capacity\":100,\"growth_per_level\":1.5}"), Error));
+        TestEqual(TEXT("capacity at the anchor"), Rule.CapacityAt(2), 100.f);
+        TestEqual(TEXT("capacity grows per level"), Rule.CapacityAt(4), 225.f);
+        TestEqual(TEXT("capacity falls below the anchor"), Rule.CapacityAt(1), 67.f);
+
+        TestEqual(TEXT("no shield, no capacity"), AOpenWillowWalker::ReadShieldStats(nullptr, Rule).Capacity, 0.f);
+        FOpenWillowGearItem StandIn;
+        StandIn.ItemType = TEXT("shield");
+        StandIn.Level = 4;
+        const AOpenWillowWalker::FShieldStats FromRule = AOpenWillowWalker::ReadShieldStats(&StandIn, Rule);
+        TestTrue(TEXT("a card with no capacity takes the rule's"), FromRule.bStandIn && FromRule.Capacity == 225.f);
+        TestEqual(TEXT("without the rule it still gives nothing"), AOpenWillowWalker::ReadShieldStats(&StandIn, FOpenWillowStandInShieldRule()).Capacity, 0.f);
+        FOpenWillowGearItem Carded = StandIn;
+        FOpenWillowGearStat Stat;
+        Stat.Label = TEXT("Capacity");
+        Stat.Value = TEXT("1,250");
+        Carded.Stats.Add(Stat);
+        const AOpenWillowWalker::FShieldStats FromCard = AOpenWillowWalker::ReadShieldStats(&Carded, Rule);
+        TestTrue(TEXT("a card's own capacity wins"), !FromCard.bStandIn && FromCard.Capacity == 1250.f);
+
+        FOpenWillowMayaState Maya = Synthetic();
+        Maya.EquipShield(FromRule.Capacity, FromRule.RechargeDelay, FromRule.RechargeRate, true, 0.f);
+        TestEqual(TEXT("the first stand-in shield starts full"), Maya.Shield, 225.f);
+        const float HealthBefore = Maya.Health;
+        FOpenWillowDamageResult Hit = Maya.ApplyDamage(100.f, 1.f);
+        TestTrue(TEXT("the stand-in shield takes the hit"), Hit.ToShield == 100.f && Hit.ToHealth == 0.f && Maya.Health == HealthBefore);
+        Run(Maya, 1.f, 1.f + FromRule.RechargeDelay + 2.f);
+        TestTrue(TEXT("it recharges after the delay"), Maya.Shield > 125.f);
+    }
     {
         FOpenWillowMayaState S = Synthetic();
         TestEqual(TEXT("first shield starts full"), S.Shield, 50.f);
