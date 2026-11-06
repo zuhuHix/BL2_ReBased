@@ -38,6 +38,7 @@ enum class EOpenWillowHitSource : uint8
     Status,      // a status effect's damage over time
     Skill,       // a skill's own damage (set by the skills lane)
     Grenade,     // a thrown grenade mod's projectile and its explosion
+    Melee,       // Maya's melee swing (WillowDmgSource_Melee in the game)
 };
 
 enum class EOpenWillowElement : uint8

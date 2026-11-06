@@ -6,6 +6,7 @@
 #include "OpenWillowPhaselockFx.h"
 #include "OpenWillowFiring.h"
 #include "OpenWillowHitEvent.h"
+#include "OpenWillowMelee.h"
 #include "OpenWillowShotFx.h"
 #include "OpenWillowMayaState.h"
 #include "OpenWillowMayaMovement.h"
@@ -64,6 +65,7 @@ public:
     // The map and missions keys (OpenWillowControls.cpp, docs/verification/CONTROLS.md).
     void ToggleMapPage();
     void ToggleMissionsPage();
+    bool MeleeBusy() const;   // a swing holds the weapons until its clip ends
     // Mission weapon lend/return (UOpenWillowQuest): the grant adds the item to the backpack (observed in the real game: not equipped; the player
     // readies it with EquipItem); the return removes it wherever it is and draws another weapon only if it was the held one.
     bool LendWeapon(const FOpenWillowWeaponItem& Item);
@@ -228,6 +230,9 @@ private:
     void SelectSlot(int32 Slot);
     void Holster();
     void ToggleMapOrMissionsPage(bool bMap);
+    // The melee key (OpenWillowMelee.cpp).
+    void MeleePressed();
+    void TickMelee();
     void SelectSlot1() { SelectSlot(0); }
     void SelectSlot2() { SelectSlot(1); }
     void SelectSlot3() { SelectSlot(2); }
@@ -313,6 +318,8 @@ private:
     UPROPERTY() TObjectPtr<class UAnimSequence> PhaselockAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> PhaselockFailAnim;
     UPROPERTY() TObjectPtr<class UOpenWillowArmsAnimInstance> ArmsAnim;
+    UPROPERTY() TObjectPtr<class UAnimSequence> MeleeAnim;
+    OpenWillowMelee::FSwing MeleeSwing;
     TWeakObjectPtr<class AOpenWillowCombatTarget> CombatTarget;
     bool bSprintHeld = false;           // sprint key down
     OpenWillowMovement::FSprint Sprint;  // the script's sprint state machine (press, wait for the cone, want, active)

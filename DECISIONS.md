@@ -3880,3 +3880,9 @@ AI-assisted (Claude). Record: [docs/verification/CONTROLS.md](docs/verification/
 change. The keys come from the stock keyboard table (`GD_Input.Devices.InputDevice_Keyboard`, OpenBLCMM dump), not from a press in
 the running game: UNVERIFIED in game, as is what the stock menu refuses (`CanShowModalMenu` not read). The keys reuse the HUD's
 existing page toggles, so a vending shop still refuses them. A passing `tools/test_controls.ps1` means the host did this.
+
+## 2026-11-06: V swings Maya's melee, through the shots' damage path (controls lane)
+
+AI-assisted (Claude). Record: [docs/verification/CONTROLS.md](docs/verification/CONTROLS.md), "Melee". Host behaviour change, no parsing
+change. Numbers come from the game's data and script, not from a live swing: UNVERIFIED in game. The first-person clip is not imported
+yet, so a swing lands with no visible arm for now. A passing `tools/test_controls.ps1` means the host did this.

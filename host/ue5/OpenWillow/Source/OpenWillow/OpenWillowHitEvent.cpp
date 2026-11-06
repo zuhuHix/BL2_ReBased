@@ -66,6 +66,7 @@ const TCHAR* OpenWillowHit::SourceName(EOpenWillowHitSource Source)
     case EOpenWillowHitSource::Status: return TEXT("status");
     case EOpenWillowHitSource::Skill: return TEXT("skill");
     case EOpenWillowHitSource::Grenade: return TEXT("grenade");
+    case EOpenWillowHitSource::Melee: return TEXT("melee");
     default: return TEXT("unknown");
     }
 }

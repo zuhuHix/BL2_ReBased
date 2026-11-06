@@ -553,6 +553,8 @@ void AOpenWillowWalker::BeginPlay()
     FirePistolAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("ADD_Fire_Recoil"));
     PhaselockAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Lift"));
     PhaselockFailAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Fail"));
+    // Not imported until the real-game read names its set; a swing then still lands, without the clip (OpenWillowMelee.cpp).
+    MeleeAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("Melee"));
     // UE3 gestalt guns point along -Y; the hand's weapon bone expects X.
     // The yaw is an observed fit (see the barrel-axis log), not read data.
     float WeaponYaw = 90.f;
@@ -723,6 +725,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     bAimModel = OpenWillowFiring::AimModelEnabled();   // off in scripted test and capture modes unless -owaimmodel
     if (GrenadeReleaseAt > 0.f && GetWorld()->GetTimeSeconds() >= GrenadeReleaseAt) ReleaseGrenade();
+    TickMelee();
     if (bAimModel)
     {
         // Accuracy pool fall and view kick (live 2026-11-03): the kick is a view offset, added here as this frame's change.
@@ -838,7 +841,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         Spin.SpinPercent = float(weapon_firing::tickSpin(Spin.SpinPercent, DeltaSeconds, bTrigger && !bReloading,
             Weapon->Firing.SpinUpDuration, Weapon->Firing.SpinDownDuration));
     }
-    if (bMayaActive && bWeaponOut && Weapon && bTrigger && !bReloading && DownWeaponReady() && Now >= NextShotAt)
+    if (bMayaActive && !MeleeBusy() && bWeaponOut && Weapon && bTrigger && !bReloading && DownWeaponReady() && Now >= NextShotAt)
     {
         if (Inventory->ConsumeShot(*Weapon))
         {
@@ -904,6 +907,7 @@ void AOpenWillowWalker::SetupPlayerInputComponent(UInputComponent* Input)
     Input->BindAction(TEXT("OWGrenade"), IE_Pressed, this, &AOpenWillowWalker::ThrowGrenadeKey);
     Input->BindAction(TEXT("OWMap"), IE_Pressed, this, &AOpenWillowWalker::ToggleMapPage);
     Input->BindAction(TEXT("OWMissions"), IE_Pressed, this, &AOpenWillowWalker::ToggleMissionsPage);
+    Input->BindAction(TEXT("OWMelee"), IE_Pressed, this, &AOpenWillowWalker::MeleePressed);
 }
 void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
 {
@@ -1542,7 +1546,7 @@ bool AOpenWillowWalker::StartReload(float Now)
 {
     const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
     // Every reload path (the key, an empty magazine, test drivers) waits for the weapon while down (GoDown, DownWeaponReady).
-    if (bReloading || !Weapon || !DownWeaponReady() || !Inventory->CanReload(*Weapon)) return false;
+    if (bReloading || MeleeBusy() || !Weapon || !DownWeaponReady() || !Inventory->CanReload(*Weapon)) return false;
     const float ReloadTime = FMath::Max(0.1f, OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::WeaponReloadSpeed, Weapon->ReloadTime));   // skills lane hook
     const FViewModel* Model = ViewModels.Find(Weapon->Id);
     bReloading = true;
@@ -1838,7 +1842,7 @@ bool AOpenWillowWalker::ThrowGrenade()
     // during the 1.05 s lockout. Live (4 throws of the save's Sky Rocket mod, WEAPON_PROJECTILES.md section 12): the throw
     // completes 1.04-1.19 s after the press and the projectile appears 0.52-0.53 s after it; UNVERIFIED for the stock frag.
     const float Now = GetWorld()->GetTimeSeconds();
-    if (!bMayaActive || bInventoryPresentation || IsDown() || Now < ThrowLockUntil || !Inventory) return false;
+    if (!bMayaActive || bInventoryPresentation || IsDown() || Now < ThrowLockUntil || MeleeBusy() || !Inventory) return false;
     if (!bGrenadeTried)
     {
         bGrenadeTried = true;
@@ -1999,12 +2003,13 @@ bool AOpenWillowWalker::CanCastPhaselock(FString& OutReason) const
 FOpenWillowPhaselockGateState AOpenWillowWalker::PhaselockGateState() const
 {
     // Host mapping (UNVERIFIED): a weapon in any slot is the pawn's WillowWeapon; holstered (no weapon drawn) is its
-    // Inactive state; the host's weapon swaps have no put-away phase, and it has no melee, grenade, weapon
-    // restriction or vehicle, so those inputs stay false. A reload is reported but does not block. Injured: the down state.
+    // Inactive state; the host's weapon swaps have no put-away phase, and it has no weapon restriction or vehicle, so those
+    // inputs stay false. A melee swing is the shared weapon action; a grenade throw is not counted here yet. A reload is reported but does not block. Injured: the down state.
     FOpenWillowPhaselockGateState State;
     for (int32 Slot = 0; Inventory && Slot < UOpenWillowInventory::SlotCount; ++Slot)
         State.bHoldsWeapon |= Inventory->SlotItem(Slot) != nullptr;
     State.bWeaponInactive = State.bHoldsWeapon && !bWeaponOut;
+    State.bSharedWeaponAction = MeleeBusy();
     State.bReloading = bReloading;
     State.bAlive = GetHealth() > 0.f;
     State.bInjured = IsDown();
