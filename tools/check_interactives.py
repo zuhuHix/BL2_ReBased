@@ -34,6 +34,7 @@ DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
 LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
+TEST_OPENED = re.compile(r'OWINTERACTIVETEST opened (\d+) lootable')
 TEST_DONE = re.compile(r'OWINTERACTIVETEST done spawned=(\d+) opened=(\d+)')
 TEST_FAIL = re.compile(r'OWINTERACTIVETEST FAIL (.*)$', re.M)
 AUTOMATION_TEST = 'OpenWillow.Interactive.Loot'
@@ -111,6 +112,18 @@ def grade_opens(log_text, objects_by_id, out):
         out.add('opened_lootables', 'FAIL', f'a lootable opened more than once: {len(opens)} opens of {len({oid for oid, _, _ in opens})} ids')
     else:
         out.add('opened_lootables', 'PASS', f'{len(opens)} lootable(s) opened, all supported objects')
+    # The sequence aims at three different balances (fewer only when the file has fewer).
+    wanted = min(3, len({o.get('balance') for o in objects_by_id.values()}))
+    reported = TEST_OPENED.search(log_text)
+    balances = {objects_by_id[oid].get('balance') for oid, _, _ in opens if oid in objects_by_id}
+    if reported is None:
+        out.add('opened_balances', 'MISSING', 'no "OWINTERACTIVETEST opened" line')
+    elif int(reported.group(1)) != wanted:
+        out.add('opened_balances', 'FAIL', f'the sequence reports {reported.group(1)} balance(s) opened, it aims at {wanted}')
+    elif len(balances) < wanted:
+        out.add('opened_balances', 'FAIL', f'the opens cover {len(balances)} balance(s), expected at least {wanted}')
+    else:
+        out.add('opened_balances', 'PASS', f'{len(balances)} balances opened; the sequence reports {reported.group(1)}')
     empty_reasons = {oid: reason for oid, reason in EMPTY.findall(log_text)}
     bad = []
     for oid, config, drops in opens:
@@ -210,7 +223,7 @@ def grade_lid_capture(log_text, out):
         out.add('lid_capture', 'PASS', f'{len(shots)} frames of {len(phases)} lootable types; lid direction UNVERIFIED until judged')
 
 
-def grade_test_sequence(log_text, out):
+def grade_test_sequence(log_text, supported, out):
     if TEST_FAIL.search(log_text):
         out.add('test_sequence', 'FAIL', TEST_FAIL.search(log_text).group(1).strip())
         return
@@ -218,8 +231,15 @@ def grade_test_sequence(log_text, out):
     if not done:
         out.add('test_sequence', 'MISSING', 'no "OWINTERACTIVETEST done" line (the -owinteractivetest sequence did not finish)')
     else:
-        spawned, opened = done[-1]
-        out.add('test_sequence', 'PASS', f'sequence finished: {opened} opened of {spawned} spawned')
+        spawned, opened = (int(value) for value in done[-1])
+        lines = len(OPEN.findall(log_text))
+        expected = len(supported)
+        if spawned != expected:
+            out.add('test_sequence', 'FAIL', f'the sequence ended with {spawned} spawned, the file has {expected} supported')
+        elif opened != lines:
+            out.add('test_sequence', 'FAIL', f'the sequence counts {opened} opened, the log has {lines} "OWLOOT open" lines')
+        else:
+            out.add('test_sequence', 'PASS', f'sequence finished: {opened} opened of {spawned} spawned')
 
 
 def automation_status(text, name):
@@ -255,7 +275,7 @@ def grade(log_text, automation_text, doc, skip_automation=False):
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
     grade_pickups(log_text, out)
     grade_lid_capture(log_text, out)
-    grade_test_sequence(log_text, out)
+    grade_test_sequence(log_text, objects, out)
     grade_automation(automation_text, out, skip_automation)
     return out
 

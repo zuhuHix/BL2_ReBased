@@ -1,6 +1,7 @@
 """tools/lootables_editor.py writes only under the repository's ignored local/ (synthetic paths, nothing game-derived)."""
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,25 @@ class LocalOutputTest(unittest.TestCase):
                       str(Path(tempfile.gettempdir()) / 'local' / 'plan.json')):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'must be inside'):
                 editor.local_output(value)
+
+    def test_a_local_folder_that_is_a_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder) / 'repo'
+            (repo / 'docs').mkdir(parents=True)
+            made = subprocess.run(['cmd', '/c', 'mklink', '/J', str(repo / 'local'), str(repo / 'docs')], capture_output=True)
+            if made.returncode:
+                self.skipTest('could not make a junction here')
+            try:
+                with self.assertRaisesRegex(ValueError, 'is a link'):
+                    editor.local_output('local/plan.json', repo=repo)
+            finally:
+                (repo / 'local').rmdir()   # removes the junction, not its target
+
+    def test_a_real_local_folder_is_accepted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder) / 'repo'
+            (repo / 'local').mkdir(parents=True)
+            self.assertEqual(editor.local_output('local/plan.json', repo=repo), (repo / 'local/plan.json').resolve())
 
     def test_a_loaded_plan_cannot_point_its_output_at_a_tracked_folder(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -212,7 +212,7 @@ launcher 4. Eridium: stick 1, bar 4. Host choices: auto pickups collect within 1
 220 uu. A full ammo pool, or full health or being down, leaves the pickup in place. Lootables open once per session;
 this is not saved, and what the real game does here is `UNVERIFIED`.
 
-**Use key.** Every target in its own reach is measured and the nearest takes the press: vending machine, lootable or loot pickup, door, dropped gun or gear. Marcus's talk is checked first on purpose, because it opens and turns in the slice's mission and his shop must not lose the press to a gun on the counter. All of this stands in for the native use trace (`UNVERIFIED`).
+**Use key.** Every target in its own reach is measured and offered the press, nearest first: vending machine, lootable or loot pickup, door, dropped gun or gear (ties in that order). A target that refuses, such as an ammo pickup on a full pool, lets the next one try. A refused dropped gun still takes the press, because the player meant the gun and "backpack full" is its feedback. Marcus's talk is checked first on purpose, because it opens and turns in the slice's mission and his shop must not lose the press to a gun on the counter. All of this stands in for the native use trace (`UNVERIFIED`).
 
 **Stand-ins.** Shield and grenade mod drops are gear with no stats and rarity 1.
 

@@ -52,6 +52,9 @@ def local_output(value, repo=ROOT):
     """value as an absolute path, refused unless it lies inside the repository's ignored local/ (links followed):
     everything this tool writes holds package-derived data (docs/LEGAL.md)."""
     local = (Path(repo) / 'local').resolve()
+    # local/ itself must be the repository's own folder: a junction there could lead into a tracked one.
+    if local != Path(repo).resolve() / 'local':
+        raise ValueError(f'{Path(repo) / "local"} is a link to {local}; refused')
     path = Path(value)
     path = (path if path.is_absolute() else Path(repo) / path).resolve()
     if path == local or local not in path.parents:

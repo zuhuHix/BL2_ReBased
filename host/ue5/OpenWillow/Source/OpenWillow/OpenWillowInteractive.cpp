@@ -591,7 +591,7 @@ bool UOpenWillowInteractiveSubsystem::SpawnOne(UWorld& World, const TSharedPtr<F
 }
 
 bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& From, AOpenWillowLootable*& OutLootable,
-    AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared)
+    AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared, bool bSkipPickups)
 {
     OutLootable = nullptr;
     OutPickup = nullptr;
@@ -608,7 +608,7 @@ bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& 
         OutLootable = Lootable;
     }
     double BestPickup = FMath::Square(UsePickupReach);
-    for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It)
+    for (TActorIterator<AOpenWillowLootPickup> It(World); It && !bSkipPickups; ++It)
     {
         if (It->Spec().bAutoPickup) continue; // the tick takes these
         const double D2 = FVector::DistSquared(From, It->GetActorLocation());
@@ -635,23 +635,35 @@ bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& 
     }
 }
 
+TArray<EOpenWillowUseTarget> FOpenWillowUseDistances::Ordered() const
+{
+    struct FRow
+    {
+        double Distance;
+        EOpenWillowUseTarget Target;
+    };
+    TArray<FRow> Rows;
+    if (Vendor.IsSet()) Rows.Add({Vendor.GetValue(), EOpenWillowUseTarget::Vendor});
+    if (Interactive.IsSet()) Rows.Add({Interactive.GetValue(), EOpenWillowUseTarget::Interactive});
+    if (Door.IsSet()) Rows.Add({Door.GetValue(), EOpenWillowUseTarget::Door});
+    if (Pickup.IsSet()) Rows.Add({Pickup.GetValue(), EOpenWillowUseTarget::Pickup});
+    Rows.StableSort([](const FRow& A, const FRow& B) { return A.Distance < B.Distance; });
+    TArray<EOpenWillowUseTarget> Out;
+    for (const FRow& Row : Rows) Out.Add(Row.Target);
+    return Out;
+}
+
 EOpenWillowUseTarget FOpenWillowUseDistances::Nearest() const
 {
-    EOpenWillowUseTarget Best = EOpenWillowUseTarget::None;
-    double BestDistance = TNumericLimits<double>::Max();
-    const auto Consider = [&](const TOptional<double>& Distance, EOpenWillowUseTarget Target)
-    {
-        if (Distance.IsSet() && Distance.GetValue() < BestDistance)
-        {
-            BestDistance = Distance.GetValue();
-            Best = Target;
-        }
-    };
-    Consider(Vendor, EOpenWillowUseTarget::Vendor);
-    Consider(Interactive, EOpenWillowUseTarget::Interactive);
-    Consider(Door, EOpenWillowUseTarget::Door);
-    Consider(Pickup, EOpenWillowUseTarget::Pickup);
-    return Best;
+    const TArray<EOpenWillowUseTarget> Rows = Ordered();
+    return Rows.Num() > 0 ? Rows[0] : EOpenWillowUseTarget::None;
+}
+
+bool FOpenWillowUseDistances::Offer(TFunctionRef<bool(EOpenWillowUseTarget)> Use) const
+{
+    for (const EOpenWillowUseTarget Target : Ordered())
+        if (Use(Target)) return true;
+    return false;
 }
 
 bool UOpenWillowInteractiveSubsystem::NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared)
@@ -669,7 +681,10 @@ bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
     double DistanceSquared = 0;
     if (!Subsystem || !FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, DistanceSquared)) return false;
     if (Lootable) return Subsystem->OpenLootable(Walker, *Lootable);
-    return Pickup && Pickup->TryCollect(Walker);
+    if (Pickup && Pickup->TryCollect(Walker)) return true;
+    // The pickup refused (a full pool, full health): a closed lootable in reach may still take the press.
+    if (!FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, DistanceSquared, true) || !Lootable) return false;
+    return Subsystem->OpenLootable(Walker, *Lootable);
 }
 
 bool UOpenWillowInteractiveSubsystem::OpenLootable(AOpenWillowWalker& Walker, AOpenWillowLootable& Lootable)
@@ -939,7 +954,8 @@ void UOpenWillowInteractiveSubsystem::TestOpen(AOpenWillowWalker& Walker)
     for (const TWeakObjectPtr<AOpenWillowLootable>& Candidate : Lootables)
     {
         AOpenWillowLootable* Lootable = Candidate.Get();
-        if (!Lootable || Opened >= 3 || Seen.Contains(Lootable->Balance)) continue;
+        // Skip one the lid capture already opened (a balance with a single placed object), so three balances still open.
+        if (!Lootable || Opened >= 3 || Lootable->IsOpened() || Seen.Contains(Lootable->Balance)) continue;
         Seen.Add(Lootable->Balance);
         if (OpenLootable(Walker, *Lootable)) ++Opened;
     }
