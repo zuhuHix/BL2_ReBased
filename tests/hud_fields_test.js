@@ -18,6 +18,12 @@ assert.deepStrictEqual(fields.textCall(F, `<b>${NBSP}&`), [F, 'set', 'htmlText',
 // A character outside the BMP is one entity, not two surrogates.
 assert.deepStrictEqual(fields.textCall(F, 'x\u{1F600}'), [F, 'set', 'htmlText', 'x&#128512;']);
 
+// The use prompt: no prompt is the clip's none frame; a prompt sets the frame, then the text in the field that frame holds.
+assert.deepStrictEqual(fields.useCalls(null), [['_level1.p1.tools', 'gotoAndStop', 'none']]);
+assert.deepStrictEqual(fields.useCalls({}), [['_level1.p1.tools', 'gotoAndStop', 'none']]);
+assert.deepStrictEqual(fields.useCalls({frame: 'shop', text: '[E] SHOP'}),
+  [['_level1.p1.tools', 'gotoAndStop', 'shop'], ['_level1.p1.tools.desc', 'set', 'text', '[E] SHOP']]);
+
 // Observed types: crosshair style, idle spread and ammo icon.
 assert.deepStrictEqual(fields.weaponCalls('pistol'), [
   ['_level1.p1.crosshairs.outer', 'gotoAndStop', 3],

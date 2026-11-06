@@ -970,6 +970,18 @@ void UOpenWillowInteractiveSubsystem::CancelStationPrompts(UWorld* World, const 
             if (Station.IsValid()) Station->CancelPrompt(Reason);
 }
 
+FString UOpenWillowInteractiveSubsystem::UseVerb(const AOpenWillowWalker& Walker)
+{
+    const UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(Walker.GetWorld());
+    if (!Subsystem) return FString();
+    if (Subsystem->SelectedStation(Walker)) return TEXT("use");
+    AOpenWillowLootable* Lootable = nullptr;
+    AOpenWillowLootPickup* Pickup = nullptr;
+    double Distance = 0;
+    if (!FindNearest(Walker, Lootable, Pickup, Distance)) return FString();
+    return Pickup ? TEXT("pickup") : TEXT("open");
+}
+
 AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::SelectedStation(const AOpenWillowWalker& Walker) const
 {
     if (Walker.NearestUseTarget() != EOpenWillowUseTarget::Interactive) return nullptr;

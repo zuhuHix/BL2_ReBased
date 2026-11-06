@@ -110,6 +110,13 @@
     return calls;
   }
 
+  // The use prompt: null, or {frame: a label of p1.tools, text: for its desc field} (OpenWillowUsePrompt.cpp). Which of these the game
+  // drives, and how, is native and was not read live (UNVERIFIED).
+  function useCalls(prompt) {
+    if (!prompt || !prompt.frame) return [[P1 + '.tools', 'gotoAndStop', 'none']];
+    return [[P1 + '.tools', 'gotoAndStop', prompt.frame], textCall(P1 + '.tools.desc', prompt.text || '')];
+  }
+
   // OWHUDDOWNPAGE / OWHUDTRACKPAGE: what the page applied and what the movie shows for it (tools/check_hud_down.py).
   const esc = t => String(t ?? '').replace(/\r/g, '').replace(/[^\x21-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
   function downLine(shown, get) {
@@ -159,7 +166,7 @@
   }
 
   const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine, barFrame, downCalls, secondWindCalls, trackerCalls,
-    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine};
+    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine, useCalls};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

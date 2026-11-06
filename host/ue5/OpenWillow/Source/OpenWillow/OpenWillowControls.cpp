@@ -3,7 +3,9 @@
 #include "OpenWillowHitEvent.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowSkills.h"
+#include "OpenWillowInteractive.h"
 #include "OpenWillowInventoryWidget.h"
+#include "OpenWillowUsePrompt.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowWalker.h"
 #include "Engine/World.h"
@@ -154,6 +156,17 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
     case 4:
     {
         // The plain rules first, on invented numbers.
+        using OpenWillowUsePrompt::Describe;
+        const FString None;
+        const bool bPrompts = !Describe(EOpenWillowUseTarget::None, false, None).Frame
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, false, None).Frame, TEXT("shop")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Door, false, None).Frame, TEXT("open")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Pickup, false, None).Frame, TEXT("pickup")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Interactive, false, TEXT("use")).Frame, TEXT("use")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Interactive, false, TEXT("open")).Frame, TEXT("open")) == 0
+            && !Describe(EOpenWillowUseTarget::Interactive, false, None).Frame
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, true, None).Frame, TEXT("talk")) == 0;
+        Check(TEXT("use_prompt_rule"), bPrompts, TEXT("none, each target's frame, and talking outranks a nearer target"));
         Check(TEXT("melee_damage_rule"), FMath::IsNearlyEqual(OpenWillowMelee::DamageAtLevel(0), 20.f) && FMath::IsNearlyEqual(OpenWillowMelee::DamageAtLevel(2), 25.538f, 0.01f),
             FString::Printf(TEXT("level0=%.3f level2=%.3f"), OpenWillowMelee::DamageAtLevel(0), OpenWillowMelee::DamageAtLevel(2)));
         using OpenWillowMelee::FCandidate;

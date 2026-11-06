@@ -1,5 +1,6 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowControls.h"
+#include "OpenWillowUsePrompt.h"
 #include "OpenWillowMapScreen.h"
 #include "OpenWillowStatusShots.h"
 #include "OpenWillowVendor.h"
@@ -1141,6 +1142,7 @@ void AOpenWillowMayaHUD::PushFlashHudState(const AOpenWillowWalker& Maya)
     if (PlayerOwner) State = State.LeftChop(1) + TEXT(",\"pickupCard\":") + OpenWillowPickupCard::StateField(Maya, *PlayerOwner) + TEXT("}");
     State = State.LeftChop(1) + TEXT(",") + DownHudFields(Maya) + TEXT(",\"tracker\":") + TrackerHudField(Maya) + TEXT("}");
     State = State.LeftChop(1) + TEXT(",\"feedback\":") + FeedbackHudField(Maya) + TEXT("}");
+    State = State.LeftChop(1) + TEXT(",\"usePrompt\":") + OpenWillowUsePrompt::StateField(Maya) + TEXT("}");
     // One log line per change of the indicator's inputs, on the game clock the Phaselock timeline uses
     // (tools/check_action_skill_hud.py reads them).
     const FString SkillLine = FString::Printf(TEXT("active=%.2f cooldown=%.2f"), SkillActive, SkillCooldown);

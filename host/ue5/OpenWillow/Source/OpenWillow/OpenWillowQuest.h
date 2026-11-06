@@ -43,6 +43,7 @@ public:
     bool OwnsItem(const FOpenWillowWeaponItem& Item) const { return bWeaponLent && !MissionWeapon.Id.IsEmpty() && Item.Id == MissionWeapon.Id; }
     // The use key near Marcus: accept when not started, turn in when ready; true when it was consumed.
     bool TryUse();
+    bool CanTalkNow() const { return bTalkHintLogged; }   // the use key would talk to Marcus (UpdateHints, each tick)
     // Direct mission calls (the use key goes through these; kept callable for tests).
     bool Accept();
     bool TurnIn();

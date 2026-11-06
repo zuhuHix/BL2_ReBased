@@ -20,6 +20,7 @@
     down                       null when up, else {phase: 'injured' | 'dead', bleed: bleed-out left 0..1} (Fight For Your Life)
     secondWind                 how many second winds so far: the banner plays once per increase
     tracker                    null, or {mission, turnIn, lines: [{text, complete, optional}]}: the mission tracker
+    usePrompt                  null, or {frame, text}: the use prompt on p1.tools (hud_fields.js useCalls)
   Down state, second wind and tracker rules: hud_fields.js. Their texts come from UI_HUD/hud_strings.json
   (tools/prepare_hud_strings.py), loaded once at start.
   Clip names and frame directions were observed in the Ruffle bench
@@ -60,6 +61,7 @@
   let lastHudPage = '';   // the last OWHUDPAGE line (hud_fields.js pageLine)
   let bannersPlayed = 0;   // level-up banners played (OWHUDFXPAGE banners=)
   let lastFxPage = '', lastDownPage = '', lastTrackPage = '', lastSecondWind = 0, trackerStale = false;   // hud_fields.js downLine / trackerLine; the banners played
+  let lastUsePrompt = '';   // the use prompt last applied, as JSON
   let hudStrings = {};   // UI_HUD/hud_strings.json (the game's own texts, under local/); {} without it
   fetch('UI_HUD/hud_strings.json', {cache: 'no-store'}).then(r => (r.ok ? r.json() : {}), () => ({}))
     .then(j => { hudStrings = j || {}; trackerStale = true; console.log('OpenWillow HUD strings ' + (Object.keys(hudStrings).length || 'none')); });
@@ -103,6 +105,15 @@
     if ('minimap' in s) window.owMinimap.apply(call, s.minimap);
     if ('pickupCard' in s && window.owPickupCard) window.owPickupCard.apply(s.pickupCard);
     const F = window.owHudFields;
+    if ('usePrompt' in s) {
+      const line = JSON.stringify(s.usePrompt);
+      // Only on a change: gotoAndStop on the same label each frame would restart nothing, but the text call is not free.
+      if (line !== lastUsePrompt) {
+        for (const c of F.useCalls(s.usePrompt)) call(c[0], c[1], c[2], c[3]);
+        console.log(`OWUSEPROMPTPAGE asked=${line} frame=${call(P1 + '.tools', 'get', '_currentframe')} text=${call(P1 + '.tools.desc', 'get', 'text')}`);
+        lastUsePrompt = line;
+      }
+    }
     if ('down' in s) for (const c of F.downCalls(s.down, hudStrings)) call(c[0], c[1], c[2], c[3]);
     if ('secondWind' in s) {
       for (const c of F.secondWindCalls(s.secondWind, lastSecondWind, hudStrings)) call(c[0], c[1], c[2], c[3]);
