@@ -101,7 +101,6 @@ private:
     // A status page or a shop is up: the mission page must not open over it, because closing would give the game the input and bring the gun back under that page.
     bool OtherPageOpen() const;
     void ShowScreenPage(const TCHAR* Page);
-    void SendScreenState();
     void CloseScreenPage(const TCHAR* Why);
     void TickScreenPage();
     // -owmissionpagetest (OpenWillowMissionPageTest.cpp).
@@ -114,7 +113,8 @@ private:
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
     // Presses that reached OnScreenKey and TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
     int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0, ScreenTestUses = 0;
-    double ScreenStateSentAt = 0.;
+    int32 ScreenStepTicks = 0;   // the suite's ticks in the current step: a stalled frame must not count as time passing
+    double ScreenStepAt = 0.;
     struct FImpl;
     TSharedPtr<FImpl> Impl;
     bool bEnabled = false;

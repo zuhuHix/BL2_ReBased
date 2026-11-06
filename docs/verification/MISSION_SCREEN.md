@@ -57,6 +57,10 @@ It writes the two converted movies, the wrapper and `missionscreen.json` under i
 - Headless Edge with real Ruffle, on `?demo=offer`, `turnin` and `reward`: each page draws its text and prompt with the movie; with the movie folder absent, each shows the plain panel and no error panel. Sample data only.
 - `tools/test_mission_page.ps1` and `-NoMovie`: not run yet. E goes through the player's input binding, keys for the page through Slate, each no-op row checks the press arrived, and `tools/check_mission_page.py` requires the exact rows once each.
 
+## The stall on the first E (2026-11-06)
+
+H14 showed one frame of about 16 s on the first E, and none on the second; the page itself drew 0.4 s after it opened. The stall is not the page: it is in the VM's first `useMarcus`, which runs on the old path too. Timed on the zuhu PC with the core CLI (Release): the first use costs about 26 s and a second use almost nothing; no package is loaded for it. A timing trace puts all of it in two object loads in the dialog code, which caches them afterwards (`DialogSystem::load`, `instantiateExport` with depth 4): Marcus's dialog group about 15.5 s, then a talk act of that group about 17 s (this run's clock). Not fixed here.
+
 ## Open
 
 - The live read above; until then the key rules and the flat layout are the host's reading of the script.

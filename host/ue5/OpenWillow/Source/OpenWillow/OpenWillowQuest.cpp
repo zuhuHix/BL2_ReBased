@@ -849,14 +849,8 @@ void UOpenWillowQuest::ShowScreenPage(const TCHAR* Page)
     // The status pages' transition: the trigger and aim let go, arms and gun put away (and the firing gates that flag holds). Every close restores it, in CloseScreenPage.
     if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->SetInventoryPresentation(true);
     ScreenPage->Show(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
-    SendScreenState();
+    ScreenPage->SendState(FString::Printf(TEXT("{\"page\":\"%s\",\"log\":%s}"), Page, *MissionLogJson()));
     UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page open: %s (status %d)"), Page, Status());
-}
-
-void UOpenWillowQuest::SendScreenState()
-{
-    ScreenStateSentAt = FPlatformTime::Seconds();
-    ScreenPage->SendState(FString::Printf(TEXT("{\"page\":\"%s\",\"log\":%s}"), *ScreenPageOn, *MissionLogJson()));
 }
 
 void UOpenWillowQuest::CloseScreenPage(const TCHAR* Why)
@@ -932,12 +926,6 @@ void UOpenWillowQuest::TickScreenPage()
         {
             if (!Impl->Slice->rewardPending()) { Impl->Slice->closeScreen(); Pump(); }
             CloseScreenPage(ScreenPage->IsReady() ? TEXT("Maya is down") : TEXT("the page was lost"));
-        }
-        // The page has not said it drew this one yet: send it again. The page ignores a state it already has, so this cannot draw twice.
-        else if (!ScreenPage->LastReport().Contains(FString::Printf(TEXT("\"page\":\"%s\""), *ScreenPageOn)) && FPlatformTime::Seconds() - ScreenStateSentAt > 1.)
-        {
-            UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page has not reported %s yet; sending the state again"), *ScreenPageOn);
-            SendScreenState();
         }
     }
     TickScreenPageTest();
