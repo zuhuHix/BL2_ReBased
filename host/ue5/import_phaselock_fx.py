@@ -628,8 +628,12 @@ exact('Mat_SirenEnergyRibbons', 'add', ['EnergyRibbon_Dif_Tex'], r"""
 float2 uv = UV;
 float b = Texture2DSample(T0, T0Sampler, float2(2.0 * uv.x - Dyn, uv.y)).b;
 float amount = saturate(uv.x - 0.05) * b * (b * Col.a);
-return float4(min(1.0, amount * Col.rgb), 1.0);
-""", dyn=True)
+float3 OW_rgb = min(1.0, amount * Col.rgb);
+// Round 24 (UNVERIFIED): GammaOut 1 reads the layer's colour as a gamma-space value and converts it to linear (the hand-orb
+// emitters set it, OpenWillowPhaselockFx.cpp EmitterScalars); 0 (the default) keeps the linear reading for every other template.
+OW_rgb = lerp(OW_rgb, pow(saturate(OW_rgb), 2.2), GammaOut);
+return float4(OW_rgb, 1.0);
+""", dyn=True, params=(('GammaOut', 0.0),))
 
 # Mat_SirenEnergySwirl (translucent): the vortex arcs. Colour = the texture's blue channel x particle colour; alpha = the
 # texture's alpha x particle alpha.
@@ -637,8 +641,12 @@ return float4(min(1.0, amount * Col.rgb), 1.0);
 # vortex where the game's is thin, translucent blue ribbons.
 exact('Mat_SirenEnergySwirl', 'trans', ['EnergySwirl_Dif_Tex'], r"""
 float4 t = Texture2DSample(T0, T0Sampler, UV);
-return float4(min(1.0, t.b * Col.rgb * float3(0.25, 0.75, 1.3)), 0.8 * max(0.0, t.a * Col.a));
-""")
+float3 OW_rgb = min(1.0, t.b * Col.rgb * float3(0.25, 0.75, 1.3));
+// Round 24 (UNVERIFIED): GammaOut 1 reads the layer's colour as a gamma-space value and converts it to linear (the hand-orb
+// emitters set it, OpenWillowPhaselockFx.cpp EmitterScalars); 0 (the default) keeps the linear reading for every other template.
+OW_rgb = lerp(OW_rgb, pow(saturate(OW_rgb), 2.2), GammaOut);
+return float4(OW_rgb, 0.8 * max(0.0, t.a * Col.a));
+""", params=(('GammaOut', 0.0),))
 
 # Mat_SirenHandGlow (translucent): a soft glow. A mirrored soft mask read at twice the UV is both the colour weight and the
 # alpha weight; soft fade over 21 units.
@@ -653,8 +661,12 @@ return float4(min(1.0, g * Col.rgb), g * Col.a * saturate((SD - PD) / 21.0));
 # emitter gain, which removed the facets the game shows at 0.50 s); the C++ emitter gain holds the remaining fit (UNVERIFIED).
 exact('Mat_SirenHandGlowShattered', 'trans', ['EnergyShatter_Dif_Tex'], r"""
 float4 t = Texture2DSample(T0, T0Sampler, UV);
-return float4(min(1.0, Col.rgb * t.rgb), t.a * Col.a * saturate((SD - PD) / 21.0));
-""")
+float3 OW_rgb = min(1.0, Col.rgb * t.rgb);
+// Round 24 (UNVERIFIED): GammaOut 1 reads the layer's colour as a gamma-space value and converts it to linear (the hand-orb
+// emitters set it, OpenWillowPhaselockFx.cpp EmitterScalars); 0 (the default) keeps the linear reading for every other template.
+OW_rgb = lerp(OW_rgb, pow(saturate(OW_rgb), 2.2), GammaOut);
+return float4(OW_rgb, t.a * Col.a * saturate((SD - PD) / 21.0));
+""", params=(('GammaOut', 0.0),))
 
 # Mat_SirenHandInnerOrb (translucent): the blue palm orb. Four reads of a nebula texture in two rotating frames (0.18 rad/s
 # about 0.5 and -0.25 rad/s about 0.8, each with its own drift) are combined as (n3 - n4) + (n1 - n2) + 2; that number
