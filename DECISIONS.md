@@ -3761,3 +3761,13 @@ AI-assisted (Claude). The slice gate's `phaselock_enemy` link failed: `Preferred
 (written for the mission's dummy, 2026-10-02), so with `-owquest` and `ow.Range` no range pawn could be targeted. The rule now covers only the mission's dummy, the quest's one stock
 pawn by reading the code, which keeps it. Other targets count as registered, as they already did with the quest off (host stand-in, UNVERIFIED in game). Host behaviour only;
 no parsing change. Record: docs/verification/COMBAT_RANGE.md "Phaselock on range pawns".
+
+
+## 2026-11-06: the Phaselock stock colours' source, GammaOut removed (maya lane)
+
+AI-assisted (Claude), maintainer's decision. Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "The stock colour constants".
+
+- **Option C:** `tools/build_phaselock_fx_constants.py` rebuilds the orb's blue and the tattoo glow from regenerable local data; the bubble twirls' violet stays
+  hand-kept in the ignored `fx_constants.json`, because it exists only as a literal in the compiled shader. Without an existing value the tool stops. A tracked shader-map reader (option B) comes after the slice.
+- **`GammaOut` removed:** round 24 showed no gain.
+- **Probe:** the live read also records the target's mesh scale, draw scale and bounds radius; its rotation stays the priority.

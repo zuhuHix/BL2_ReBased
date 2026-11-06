@@ -14,6 +14,8 @@ RG_OUT (normally the ignored local/realgame/phaselock_integrity).
     Mesh.Animations and, every 0.25 s, by a scan of all AnimNodeSequence objects whose SkelComponent is that mesh, since
     the special-move node's players were not in AnimTickArray on 2026-10-21): sequence name, rate, time, length,
     playing / looping, weight; the same for the first-person arms;
+  * the target's rotation and its mesh's rotation (the open facing question), its mesh scale, actor draw scale and mesh bounds
+    radius (its apparent size);
   * the target's collision flags (actor and cylinder) and Physics;
   * every emitter the skill references and every WillowEmitter whose template names a Phaselock bubble: template, draw
     scale, LifeSpan and its component's InstanceParameters (name, scalar);
@@ -222,6 +224,10 @@ def _on_tick(*_args):
                "lifted": _safe(lambda: skill.LiftedPawn.Name if skill.LiftedPawn else None),
                "location": plain(pawn.Location), "rotation": plain(pawn.Rotation), "mesh_rotation": plain(_safe(lambda: mesh.Rotation)),
                "mesh_translation": plain(mesh.Translation),
+               # The target's size, for the held target's apparent scale: the mesh and actor scales and the mesh's bounds sphere.
+               "mesh_scale": _r(_safe(lambda: float(mesh.Scale))), "mesh_scale3d": plain(_safe(lambda: mesh.Scale3D)),
+               "draw_scale": _r(_safe(lambda: float(pawn.DrawScale))),
+               "bounds_radius": _r(_safe(lambda: float(mesh.Bounds.SphereRadius))),
                "collision": _collision(pawn), "pool": _pool_state(pc), "player": _player(me) if me else None,
                "seqs": [r for r in (_seq_row(n) for n in pi["seqs"]) if isinstance(r["weight"], float) and r["weight"] > 0.001],
                "arms": [r for r in (_seq_row(n) for n in pi["arms_seqs"]) if isinstance(r["weight"], float) and r["weight"] > 0.001],
