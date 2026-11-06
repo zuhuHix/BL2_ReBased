@@ -137,15 +137,20 @@
     const label = prompt && prompt.frame ? prompt.frame : 'none';
     const wanted = label === 'none' ? null : prompt.text || '';
     let frame, shown = '', problem = '';
+    memo.line = null;   // the clip is about to change: until a good read-back it is known to show nothing, so going back to A re-applies A
     try {
       for (const c of useCalls(prompt)) call(c[0], c[1], c[2], c[3]);
       frame = call(TOOLS, 'get', '_currentframe');
       const known = memo.frames[label];
       if (!(Number(frame) > 0)) problem = 'no frame read back';
       else if (known !== undefined ? Number(frame) !== known : Object.values(memo.frames).includes(Number(frame))) problem = `the clip is on frame ${frame}, not ${label}`;
-      else if (wanted !== null) {
-        shown = plainDesc(call(TOOLS, 'get', 'desc'));
-        if (shown !== wanted) problem = `the text reads ${JSON.stringify(shown)}`;
+      else {
+        // The jump landed, so this is the label's frame even if the text fails below: a later jump that does nothing cannot pass from here.
+        memo.frames[label] = Number(frame);
+        if (wanted !== null) {
+          shown = plainDesc(call(TOOLS, 'get', 'desc'));
+          if (shown !== wanted) problem = `the text reads ${JSON.stringify(shown)}`;
+        }
       }
     } catch (error) { problem = String(error); }
     if (problem) {
@@ -154,7 +159,6 @@
       memo.retryAt = now + USE_RETRY_MS;
       return;
     }
-    memo.frames[label] = Number(frame);
     log(`OWUSEPROMPTPAGE asked=${line} frame=${frame} text=${shown}`);
     memo.line = line;
     memo.failed = null;
