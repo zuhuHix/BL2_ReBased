@@ -44,6 +44,8 @@ public:
     // The use key near Marcus: accept when not started, turn in when ready; true when it was consumed.
     bool TryUse();
     bool CanTalkNow() const { return bTalkHintLogged; }   // the use key would talk to Marcus (UpdateHints, each tick)
+    bool IsRewardPending() const;   // the reward page is up: TryUse takes the press, before Marcus's reach
+    const class AOpenWillowNpc* GetMarcus() const { return Marcus; }
     // Direct mission calls (the use key goes through these; kept callable for tests).
     bool Accept();
     bool TurnIn();

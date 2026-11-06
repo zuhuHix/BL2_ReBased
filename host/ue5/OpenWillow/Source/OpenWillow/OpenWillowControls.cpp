@@ -6,6 +6,11 @@
 #include "OpenWillowInteractive.h"
 #include "OpenWillowInventoryWidget.h"
 #include "OpenWillowUsePrompt.h"
+#include "OpenWillowInventoryPickup.h"
+#include "OpenWillowQuest.h"
+#include "Engine/DamageEvents.h"
+#include "OpenWillowNpc.h"
+#include "Camera/CameraComponent.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowWalker.h"
 #include "Engine/World.h"
@@ -113,6 +118,37 @@ namespace
         Held->MagazineLeft = 1;
         return Held;
     }
+    // The selector rows: where Maya went, the Marcus fixture's gun, and a field with no throttle behind it.
+    FVector AirFrom = FVector::ZeroVector, MarcusAt = FVector::ZeroVector;
+    TWeakObjectPtr<AOpenWillowInventoryPickup> PromptDrop;
+    bool WasTalk = false;
+    FString FreshField(const AOpenWillowWalker& Maya)
+    {
+        OpenWillowUsePrompt::FState Fresh;
+        return OpenWillowUsePrompt::StateField(Maya, Fresh);
+    }
+    void ViewAt(const AOpenWillowWalker& Maya, APlayerController& Player, const FVector& Target)
+    {
+        const UCameraComponent* Camera = Maya.FindComponentByClass<UCameraComponent>();
+        if (Camera) Player.SetControlRotation((Target - Camera->GetComponentLocation()).Rotation());
+    }
+    // The held weapon on the floor below At, as a pickup.
+    void DropHeldWeapon(AOpenWillowWalker& Maya, const FVector& At)
+    {
+        const UOpenWillowInventory* Inventory = Maya.GetInventory();
+        const FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeapon() : nullptr;
+        FOpenWillowTakenInventoryItem Taken;
+        if (!Held || !Maya.TakeInventoryItemById(UOpenWillowInventory::StableId(*Held), Taken)) return;
+        FHitResult Ground;
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(OWControlsDrop), false, &Maya);
+        const bool bGround = Maya.GetWorld()->LineTraceSingleByChannel(Ground, At + FVector(0.f, 0.f, 100.f), At - FVector(0.f, 0.f, 450.f), ECC_WorldStatic, Query);
+        FActorSpawnParameters Spawn;
+        Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        AOpenWillowInventoryPickup* Pickup = Maya.GetWorld()->SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(),
+            FTransform(bGround ? Ground.ImpactPoint + FVector(0.f, 0.f, 12.f) : At), Spawn);
+        if (Pickup) Pickup->Initialize(MoveTemp(Taken));
+        PromptDrop = Pickup;
+    }
     int32 HeldMagazine(const AOpenWillowWalker& Maya)
     {
         const FOpenWillowWeaponItem* Held = Maya.GetInventory() ? Maya.GetInventory()->ActiveWeapon() : nullptr;
@@ -158,15 +194,16 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         // The plain rules first, on invented numbers.
         using OpenWillowUsePrompt::Describe;
         const FString None;
-        const bool bPrompts = !Describe(EOpenWillowUseTarget::None, false, None).Frame
-            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, false, None).Frame, TEXT("shop")) == 0
-            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Door, false, None).Frame, TEXT("open")) == 0
-            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Pickup, false, None).Frame, TEXT("pickup")) == 0
-            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Interactive, false, TEXT("use")).Frame, TEXT("use")) == 0
-            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Interactive, false, TEXT("open")).Frame, TEXT("open")) == 0
-            && !Describe(EOpenWillowUseTarget::Interactive, false, None).Frame
-            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, true, None).Frame, TEXT("talk")) == 0;
-        Check(TEXT("use_prompt_rule"), bPrompts, TEXT("none, each target's frame, and talking outranks a nearer target"));
+        const bool bPrompts = !Describe(EOpenWillowUseTarget::None, false, false, None).Frame
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, false, false, None).Frame, TEXT("shop")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Door, false, false, None).Frame, TEXT("open")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Pickup, false, false, None).Frame, TEXT("pickup")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Interactive, false, false, TEXT("use")).Frame, TEXT("use")) == 0
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Interactive, false, false, TEXT("open")).Frame, TEXT("open")) == 0
+            && !Describe(EOpenWillowUseTarget::Interactive, false, false, None).Frame
+            && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, true, false, None).Frame, TEXT("talk")) == 0
+            && !Describe(EOpenWillowUseTarget::Vendor, true, true, None).Frame;
+        Check(TEXT("use_prompt_rule"), bPrompts, TEXT("none, each target's frame, talking outranks a nearer target, and a reward page shows none"));
         Check(TEXT("melee_damage_rule"), FMath::IsNearlyEqual(OpenWillowMelee::DamageAtLevel(0), 20.f) && FMath::IsNearlyEqual(OpenWillowMelee::DamageAtLevel(2), 25.538f, 0.01f),
             FString::Printf(TEXT("level0=%.3f level2=%.3f"), OpenWillowMelee::DamageAtLevel(0), OpenWillowMelee::DamageAtLevel(2)));
         using OpenWillowMelee::FCandidate;
@@ -319,21 +356,77 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         if (FOpenWillowWeaponItem* Held = Maya.GetInventory() ? Maya.GetInventory()->ActiveWeaponMutable() : nullptr) Held->Firing.BurstCount = BurstCountBefore;
         break;
     }
-    case 27:   // last: going down inside the delay. She then bleeds out.
+    case 27:   // nothing to use, far above everything
+        AirFrom = Maya.GetActorLocation();
+        Maya.SetActorLocation(AirFrom + FVector(0.f, 0.f, 30000.f));
+        NextAt = Now;
+        break;
+    case 28:
+    {
+        const FString Field = FreshField(Maya);
+        Check(TEXT("prompt_nothing_in_open_air"), Maya.NearestUseTarget() == EOpenWillowUseTarget::None && Field == TEXT("null"), Field);
+        Maya.SetActorLocation(AirFrom);
+        break;
+    }
+    case 29:
+    {
+        // Before Marcus, with a dropped gun nearest and to one side: the world target is real, and he still takes the press.
+        const AActor* Marcus = Maya.GetQuest() ? Maya.GetQuest()->GetMarcus() : nullptr;
+        if (!Marcus)
+        {
+            Check(TEXT("prompt_marcus_over_world_target"), false, TEXT("no Marcus"));
+            Check(TEXT("prompt_aimed_pickup"), false, TEXT("no Marcus"));
+            Check(TEXT("e_takes_the_named_pickup"), false, TEXT("no Marcus"));
+            TestStep = 33;
+            return;
+        }
+        MarcusAt = Marcus->GetActorLocation();
+        const FVector Toward = (Maya.GetActorLocation() - MarcusAt).GetSafeNormal2D();
+        Maya.SetActorLocation(MarcusAt + Toward * 150.f + FVector(0.f, 0.f, 30.f));
+        ViewAt(Maya, Player, MarcusAt);
+        DropHeldWeapon(Maya, Maya.GetActorLocation() + FVector::CrossProduct(FVector::UpVector, Toward) * 120.f);
+        break;
+    }
+    case 30:
+    {
+        const FString Field = FreshField(Maya);
+        Check(TEXT("prompt_marcus_over_world_target"), PromptDrop.IsValid() && Maya.NearestUseTarget() != EOpenWillowUseTarget::None && Field.Contains(TEXT("\"talk\"")),
+            FString::Printf(TEXT("drop=%d target=%d %s"), PromptDrop.IsValid(), int32(Maya.NearestUseTarget()), *Field));
+        if (PromptDrop.IsValid()) ViewAt(Maya, Player, PromptDrop->GetActorLocation());
+        break;
+    }
+    case 31:
+    {
+        const FString Field = FreshField(Maya);
+        Check(TEXT("prompt_aimed_pickup"), Maya.NearestUseTarget() == EOpenWillowUseTarget::Pickup && Field.Contains(TEXT("\"pickup\"")),
+            FString::Printf(TEXT("target=%d %s"), int32(Maya.NearestUseTarget()), *Field));
+        Press(Player, EKeys::E);
+        break;
+    }
+    case 32:
+        Check(TEXT("e_takes_the_named_pickup"), !PromptDrop.IsValid(), FString::Printf(TEXT("drop_left=%d"), PromptDrop.IsValid()));
+        ViewAt(Maya, Player, MarcusAt);
+        break;
+    case 33:   // last: going down inside the delay, with Marcus in view: she then bleeds out.
+        WasTalk = FreshField(Maya).Contains(TEXT("\"talk\""));
         PlaceDummy(Maya, Player, 150.f, 0.f);
         PressV(Player, Now, false);
         NextAt = Now;
         break;
-    case 28:
+    case 34:
         if (!bSwingSeen) { NextAt = Now; return; }
         Maya.TakeDamage(Maya.GetShield() + Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
         NextAt = Now + OpenWillowMelee::HitDelay + .4f;
         break;
-    case 29:
+    case 35:
+    {
         Check(TEXT("down_cancels_swing"), Maya.IsDown() && !Maya.MeleeBusy() && MeleeEvents == 0 && Lost() == 0.f,
             FString::Printf(TEXT("down=%d busy=%d events=%d lost=%.2f"), Maya.IsDown(), Maya.MeleeBusy(), MeleeEvents, Lost()));
+        const FString Field = FreshField(Maya);
+        Check(TEXT("prompt_nothing_while_down"), WasTalk && Maya.IsDown() && Field == TEXT("null"), FString::Printf(TEXT("talk_before=%d down=%d %s"), WasTalk, Maya.IsDown(), *Field));
         if (MeleeDummy.IsValid()) MeleeDummy->Destroy();
         break;
+    }
     default:
         Check(TEXT("closed_at_end"), !Hud.IsSkillsOpen(), State());
         UE_LOG(LogTemp, Display, TEXT("OWCONTROLS SUMMARY passed=%d failed=%d"), Passed, Failed);

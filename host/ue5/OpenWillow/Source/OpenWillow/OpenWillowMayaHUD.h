@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "OpenWillowUsePrompt.h"
 #include "OpenWillowMayaHUD.generated.h"
 
 class SWebBrowser;
@@ -109,6 +110,7 @@ private:
     bool bFlashHudFailed = false;
     FString LastFlashState;
     FString LastSkillHudLine;
+    OpenWillowUsePrompt::FState UsePromptState;
     FString LastHudStateLine;
     // -owskillhudshots (with -owflashhud and -owcombattest): one unattended Phaselock cast with HUD captures
     // (OWSkillHud_*.png) through the cooldown, then quit.

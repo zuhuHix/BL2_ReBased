@@ -79,7 +79,8 @@ for Marcus. The movie's prompt clip `p1.tools` was not driven.
 
 **What the host does:** `OpenWillowUsePrompt::StateField` reads `NearestUseTarget` (and whether Marcus would take the press, as he
 outranks it) and sends the `usePrompt` field; the page moves `p1.tools` to that frame and fills its `desc` field. It only reads: what the
-use key does is unchanged. Nothing shows while Maya is down, when the key does nothing, or under a menu. The placement is the movie's own,
+use key does is unchanged. Nothing shows when a press would do nothing (`AOpenWillowWalker::CanUseNow`, the key's own check: Maya not
+active, down, or under a menu) or while the reward page is up. The placement is the movie's own,
 since the host only drives the clip.
 
 **The prompt and the key agree by construction, with one exception.** The prompt asks `NearestUseTarget`, which applies the same order as
@@ -91,6 +92,10 @@ ray along the view and takes the first usable thing it hits, with no distance ru
 pickupable wins the key. The host's nearest-target rule is a stand-in that also reaches things Maya is not looking at. This work does not
 change it; the capture reads the prompt with the view turned off a target. Aiming at a pickup with an interactive in reach is not in the
 capture, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
+
+**The reward page** takes the press before anything else (`UOpenWillowQuest::TryUse`), so no world prompt shows over it. It should carry its
+own wording, the stock reward screen's confirmation in the movie, not `p1.tools`: **UNVERIFIED**, and not built here. In the host the use key
+stands in for the movie's Enter.
 
 **Read from data:** the clip's frame labels and `desc` field (the HUD movie), and the words of the default icons (`GD_InteractionIcons`).
 
@@ -107,10 +112,13 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   `v_not_hit_before_the_delay` (the delay measured from the frames the swing started and the target lost health), `v_hits_target_ahead`
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_cancels_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
-  `v_keeps_refill_after_it`, `burst_ends_on_swing`, `down_cancels_swing`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=21 failed=0`.
+  `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=26 failed=0`.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop cancelling a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.
 - `tests/check_controls_test.py` (ctest `controls-check`): the grader on invented logs, including a short count, a renamed row, a
   repeated row and a missing summary.
 - `tests/hud_fields_test.js`: the use prompt's calls on the movie.
+- `tests/hud_use_prompt_page_test.js`: `index.html`'s real script with a stub player: a prompt reaches the clip, and a throwing clip does not stop
+  the rest of the HUD. No reward page is reached in the suite: only `use_prompt_rule` covers it.
