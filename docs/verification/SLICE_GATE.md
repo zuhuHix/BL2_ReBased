@@ -35,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (34, all made-up log lines).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (37, all made-up log lines).
 
 ### How a link is graded (review round 1)
 
@@ -54,11 +54,17 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   the fight; normal play keeps no such count. Hits from other causers, or with no causer, are reported in the detail. No
   hit from the selected enemy is a FAIL in range mode, and the checker overrules a NOT_AVAILABLE there. It is
   NOT_AVAILABLE only with the stand-in, which has no attack.
-- **Fire is held for the selected enemy's first hit (range mode, fixture `fire held until the selected enemy hit Maya`).**
-  Otherwise a quick kill could end the fight before that enemy attacks. The driver shoots until the enemy has lost health,
-  which alerts the den, then holds fire until the enemy has hit Maya. The hold ends after 15 s, or if Maya goes down, since a
-  kill can still give her a second wind. If the enemy never hit her, link 4 FAILs. A pack can down her before it does.
-  `kill_enemy`'s detail gives the seconds held. Not yet run in the host, so what it does to her health is not known yet.
+- **Fire is held for the selected enemy's first hit (range mode).** Otherwise a quick kill could end the fight before that
+  enemy attacks. The driver shoots until the enemy has lost health, which alerts the den, then holds fire until the enemy
+  has hit Maya. A run where the enemy hits before it is wounded never holds. Not yet run in the host, so what this does to
+  her health is not known yet. The hold ends one of three ways, and links 3 and 4 name which as a fixture; link 3's detail
+  also gives the seconds held:
+  - `fire held until the selected enemy hit Maya`: the enemy hit her.
+  - `fire held, ended by timeout`: 15 s passed. A real hit from the enemy after this is still a PASS, with this fixture.
+  - `fire held, ended by Maya down`: she went down first, and a kill can still give her a second wind.
+- **A down before the selected enemy's first hit FAILs link 4**, held or not, even if the enemy hits her later, when she is
+  Up again. The driver records this at her first down of the fight, and the checker overrules a PASS that names the
+  `ended by Maya down` fixture.
 - **NOT_AVAILABLE means a missing capability or precondition**, never a miss. `loot_drop_on_kill` with the gun roll forced
   FAILs if no drop comes, and the checker overrules a NOT_AVAILABLE there too.
 - **Every link line carries the fixtures field.** The checker fails a line without it. Logs older than these rules lack
@@ -119,6 +125,8 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     -DownAfterFight` (`-owslicegatedownafterfight`) applies lethal damage after the fight (fixture `lethal damage at the
     end of the fight`, named on the next link). In that run the log shows health 0 restored to full and Maya no longer
     down, and the later links ran. This shows the fixture works, not that a real fight reaches it.
+  - If the pack already has her down when the fight ends, the lethal fixture is skipped and the revive runs on that real
+    down: `Maya revived to full health after the fight` without `lethal damage at the end of the fight` means this.
 
 ## Current link table
 

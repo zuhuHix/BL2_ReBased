@@ -77,6 +77,9 @@ private:
     class AOpenWillowInventoryPickup* DropRolledGun(uint32 Seed, const FVector& Near, FString& OutWhy);
     bool RunAimedPickup(class AOpenWillowInventoryPickup* Target);
     float HeldFireFor = 0.f;        // seconds of the fight spent holding fire for the selected enemy's first hit
+    FString HoldEnd;                // what ended the hold: hit, timeout or Maya down ("" while running, or if it never ran)
+    FString HoldFixture() const;
+    bool bDownSeenInFight = false, bDownBeforeEnemyHit = false;   // her first down of the fight, and whether it came before the enemy's first hit
     int32 HitsBeforeFight = 0;     // the walker's hit count when the fight starts (its per-causer count starts empty there)
     bool PickupAccepted() const;    // the last press made a pickup attempt, and it was accepted
     FString RollSetupGap() const;

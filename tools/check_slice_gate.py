@@ -124,6 +124,8 @@ FORCED_LOOT = 'guaranteed loot roll'
 # A NOT_AVAILABLE from this test's own setup or local data, not from something the host lacks.
 SETUP_GAP = 'test setup gap'
 SETUP_GAP_OWNER = 'slice-gate'
+# The fixture on link 4 when Maya went down before the selected enemy had hit her: a later hit from it proves nothing.
+HOLD_ENDED_BY_DOWN = 'fire held, ended by Maya down'
 
 
 def card_link_problem(row):
@@ -170,6 +172,11 @@ def cross_check(rows, errors, range_mode):
                 errors.append(f'link {row["name"]}: PASS overruled, {why}')
                 row['result'] = 'FAIL'
                 row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
+        elif row['name'] == 'enemy_attacks_maya' and row['result'] == 'PASS' and HOLD_ENDED_BY_DOWN in row['fixtures']:
+            why = 'the hold on fire ended with Maya down before the selected enemy had hit her'
+            errors.append(f'link {row["name"]}: PASS overruled, {why}')
+            row['result'] = 'FAIL'
+            row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
         elif row['result'] == 'NOT_AVAILABLE':
             if row['name'] == 'enemy_attacks_maya' and range_mode:
                 why = 'the range was there, so its enemies can attack'

@@ -239,6 +239,14 @@ AOpenWillowInventoryPickup* UOpenWillowSliceGate::DropRolledGun(uint32 Seed, con
     return Pickup;
 }
 
+// How the hold on fire ended, as a fixture. Only a real hit says "until"; tools/check_slice_gate.py reads the Maya down text.
+FString UOpenWillowSliceGate::HoldFixture() const
+{
+    if (HoldEnd == TEXT("hit")) return TEXT("fire held until the selected enemy hit Maya");
+    if (HoldEnd.IsEmpty()) return TEXT("fire held for the selected enemy's first hit");
+    return FString::Printf(TEXT("fire held, ended by %s"), *HoldEnd);
+}
+
 // Why the test cannot roll its drops, or empty. This is the test's own setup or local data, not something the host lacks.
 FString UOpenWillowSliceGate::RollSetupGap() const
 {
@@ -471,20 +479,32 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
 
     case EStep::Fight: {
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
+        // The first down of the fight: had the selected enemy hit her by then? A hit after she is Up again does not undo this.
+        const int32 SelectedHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;
+        if (W->IsDown() && !bDownSeenInFight)
+        {
+            bDownSeenInFight = true;
+            bDownBeforeEnemyHit = SelectedHits == 0;
+        }
         if (Enemy && Enemy->IsAutoAimTarget())
         {
             LastEnemyLocation = Enemy->GetActorLocation();   // where it stands while alive (a dead actor may be moved away)
             // Range mode: wound the selected enemy so the den is alerted, then hold fire until it has hit Maya, so a quick
-            // kill cannot end the fight before it attacks. A test shortcut, named as a fixture. The hold ends if she goes
-            // down (a kill can still give her a second wind) or after AttackWait; link 4 then FAILs if it never hit her.
-            if (bRangeMode && Enemy->HealthFraction() < 1.f && W->GetHitCountFrom(Enemy.Get()) == 0 && StepTime < AttackWait && !W->IsDown())
+            // kill cannot end the fight before it attacks. A test shortcut, named as a fixture with how the hold ended. It
+            // ends if she goes down (a kill can still give her a second wind) or after AttackWait, and it never restarts.
+            if (bRangeMode && HoldEnd.IsEmpty() && Enemy->HealthFraction() < 1.f)
             {
-                AimAt(Enemy->AimPoint());
-                HeldFireFor += Delta;
-                Fixture(TEXT("fire held until the selected enemy hit Maya"));
-                return;
+                const TCHAR* Ended = SelectedHits > 0 ? TEXT("hit") : W->IsDown() ? TEXT("Maya down") : StepTime >= AttackWait ? TEXT("timeout") : nullptr;
+                if (!Ended)
+                {
+                    AimAt(Enemy->AimPoint());
+                    HeldFireFor += Delta;
+                    return;
+                }
+                if (HeldFireFor > 0.f) HoldEnd = Ended;
             }
             if (StepTime < KillTimeout) { if (ShootAt(Enemy, 0.f)) ++KillShots; return; }
+            if (HeldFireFor > 0.f) Fixture(HoldFixture());
             FailLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s still alive after %.0fs and %d shots (health %.0f%%)"),
                 *Enemy->GetName(), StepTime, KillShots, 100.f * Enemy->HealthFraction()));
         }
@@ -492,21 +512,24 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         {
             KillLocation = LastEnemyLocation;
             const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
-            PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs, %.1fs of it with fire held"), *Enemy->GetName(), KillShots,
-                Held ? *Held->Name : TEXT("?"), StepTime, HeldFireFor));
+            if (HeldFireFor > 0.f) Fixture(HoldFixture());
+            PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs, %.1fs of it with fire held (hold ended by: %s)"), *Enemy->GetName(), KillShots,
+                Held ? *Held->Name : TEXT("?"), StepTime, HeldFireFor, HoldEnd.IsEmpty() ? TEXT("no hold ended") : *HoldEnd));
         }
         else FailLink(TEXT("kill_enemy"), TEXT("the enemy disappeared before it died"));
         // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,
         // and this link relied on the shield too.
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
-        if (HeldFireFor > 0.f) Fixture(TEXT("fire held until the selected enemy hit Maya"));
+        if (HeldFireFor > 0.f) Fixture(HoldFixture());
         // The fight's hits by causer: the selected enemy, another actor, or none given.
         const int32 EnemyHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;
         const int32 UnattributedHits = W->GetHitCountFrom(nullptr);
         const int32 OtherHits = W->GetHitCount() - HitsBeforeFight - EnemyHits - UnattributedHits;
         W->SetHitCauserTracking(false);
         const FString Others = FString::Printf(TEXT("other hits: %d by other causers, %d with no causer"), OtherHits, UnattributedHits);
-        if (EnemyHits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya caused by %s during the fight (%s), health %.0f/%.0f"),
+        if (bDownBeforeEnemyHit) FailLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("Maya went down during the fight before the selected enemy had hit her (%d later hit(s) by it not credited; %s)"),
+            EnemyHits, *Others));
+        else if (EnemyHits > 0) PassLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("%d hit(s) on Maya caused by %s during the fight (%s), health %.0f/%.0f"),
             EnemyHits, *Enemy->GetName(), *Others, W->GetHealth(), W->GetMaxHealth()));
         // The range's enemies attack, so no hit from the selected one is a real miss. Only the stand-in lacks an attack.
         else if (bRangeMode) FailLink(TEXT("enemy_attacks_maya"), FString::Printf(TEXT("no hit on Maya from the selected enemy during the fight (%s)"), *Others));
