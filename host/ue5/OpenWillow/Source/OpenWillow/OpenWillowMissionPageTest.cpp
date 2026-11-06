@@ -63,13 +63,15 @@ void UOpenWillowQuest::TickScreenPageTest()
     // The gun with a full magazine, so the page is the only thing that changes between the shots.
     const auto StockMagazine = [Maya] { if (FOpenWillowWeaponItem* Held = Maya->GetInventory()->ActiveWeaponMutable()) Held->MagazineLeft = -1; };
     const auto Magazine = [Maya] { const FOpenWillowWeaponItem* Held = Maya->GetInventory()->ActiveWeapon(); return Held ? Held->MagazineLeft : -2; };
-    const auto UseE = [&] { const int32 Before = ScreenUsesSeen; BindingKey(PC, EKeys::E, IE_Pressed); BindingKey(PC, EKeys::E, IE_Released); return ScreenUsesSeen == Before + 1; };
+    // The binding fires on the player's next input tick, not inside InputKey: this only sends the press. The row that needs it runs at the next step, against ScreenTestUses.
+    const auto UseE = [&] { ScreenTestUses = ScreenUsesSeen; BindingKey(PC, EKeys::E, IE_Pressed); BindingKey(PC, EKeys::E, IE_Released); };
+    const auto UseArrived = [&] { return ScreenUsesSeen == ScreenTestUses + 1; };
     // A press the page must take: true when exactly one key reached OnScreenKey.
     const auto PageKey = [&](const FKey& Key) { const int32 Before = ScreenKeysSeen; PressKey(Key); return ScreenKeysSeen == Before + 1; };
     const bool bExpectMovie = !FParse::Param(FCommandLine::Get(), TEXT("owmissionpagenomovie"));
     const auto Drawn = [&] { const FString& R = ScreenPage->LastReport();
         return R.Contains(TEXT("\"drawn\":true")) && R.Contains(bExpectMovie ? TEXT("\"movie\":true") : TEXT("\"movie\":false")); };
-    if (Now < ScreenTestAt && ScreenTestStep != 0 && ScreenTestStep != 7) return;
+    if (Now < ScreenTestAt && ScreenTestStep != 0 && ScreenTestStep != 9) return;
     double Wait = 1.;
     switch (ScreenTestStep)
     {
@@ -99,18 +101,18 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     }
     case 1:
-    {
         StockMagazine();
-        const bool bFired = Maya->FireOnce();
-        Row(TEXT("control_gun_fires_before_the_page"), bFired && Maya->AreArmsShown(), State());
+        Row(TEXT("control_gun_fires_before_the_page"), Maya->FireOnce() && Maya->AreArmsShown(), State());
         BindingKey(PC, EKeys::LeftMouseButton, IE_Pressed);   // held through the page's open, released under it
-        const bool bDelivered = UseE();
-        Row(TEXT("first_e_opens_the_page"), bDelivered && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer") && Status() == 0 && ScreenOpenInVm(), State());
+        UseE();
+        Wait = .5;
+        break;
+    case 2:
+        Row(TEXT("first_e_opens_the_page"), UseArrived() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer") && Status() == 0 && ScreenOpenInVm(), State());
         StockMagazine();
         Wait = 4.;
         break;
-    }
-    case 2:
+    case 3:
     {
         Shot(TEXT("1_Offer"));
         Row(TEXT("offer_drawn"), Drawn(), State());
@@ -121,28 +123,30 @@ void UOpenWillowQuest::TickScreenPageTest()
         Row(TEXT("offer_e_does_nothing"), PageKey(EKeys::E) && Status() == 0 && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
         break;
     }
-    case 3:
+    case 4:
         Row(TEXT("offer_escape_closes"), PageKey(EKeys::Escape) && Status() == 0 && !ScreenPage->IsShown() && !ScreenOpenInVm(), State());
         Wait = 1.5;
         break;
-    case 4:
-    {
+    case 5:
         Shot(TEXT("2_AfterEscape"));
         StockMagazine();
         Row(TEXT("gun_fires_again_after_the_close"), Maya->AreArmsShown() && Maya->FireOnce(), State());
-        Row(TEXT("e_opens_the_offer_again"), UseE() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
+        UseE();
+        Wait = .5;
+        break;
+    case 6:
+        Row(TEXT("e_opens_the_offer_again"), UseArrived() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
         Wait = 3.;
         break;
-    }
-    case 5:
+    case 7:
         Row(TEXT("offer_enter_accepts_and_closes"), PageKey(EKeys::Enter) && Status() == 1 && !ScreenPage->IsShown() && !ScreenOpenInVm() && RewardPages == 0, State());
         Wait = 1.5;
         break;
-    case 6:
+    case 8:
         Shot(TEXT("3_Accepted"));
         ScreenTestRetries = 0;
         break;
-    case 7:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
+    case 9:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
         if (Now < ScreenTestAt) return;
         if (Status() != 2)
         {
@@ -154,31 +158,39 @@ void UOpenWillowQuest::TickScreenPageTest()
         if (Status() != 2) { Finish(); return; }
         Stand();
         break;
-    case 8:
-        Row(TEXT("e_opens_the_turn_in"), UseE() && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
+    case 10:
+        UseE();
+        Wait = .5;
+        break;
+    case 11:
+        Row(TEXT("e_opens_the_turn_in"), UseArrived() && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
         Wait = 4.;
         break;
-    case 9:
+    case 12:
         Shot(TEXT("4_TurnIn"));
         Row(TEXT("turn_in_drawn"), Drawn(), State());
         Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
         PageKey(EKeys::Enter);
         Wait = 5.;
         break;
-    case 10:
+    case 13:
         Shot(TEXT("5_Reward"));
         Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
             && RewardPages == 1 && RewardsReceived == 0 && ScreenPage->LastReport().Contains(TEXT("\"page\":\"reward\"")) && Drawn(), State());
         Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
         break;
-    case 11:
+    case 14:
         Row(TEXT("enter_takes_the_reward_and_closes"), PageKey(EKeys::Enter) && Status() == 3 && !ScreenPage->IsShown() && !ScreenOpenInVm() && !RewardPendingInVm() && RewardsReceived == 1, State());
         Wait = 1.5;
         break;
-    case 12:
+    case 15:
         Shot(TEXT("6_Closed"));
         Row(TEXT("first_person_back_after_the_reward"), Maya->AreArmsShown(), State());
-        Row(TEXT("e_afterwards_opens_nothing"), UseE() && !ScreenPage->IsShown(), State());
+        UseE();
+        Wait = .5;
+        break;
+    case 16:
+        Row(TEXT("e_afterwards_opens_nothing"), UseArrived() && !ScreenPage->IsShown(), State());
         Finish();
         return;
     default: return;
