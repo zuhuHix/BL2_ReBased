@@ -1237,6 +1237,12 @@ WeaponGenCard CardEvaluator::Run() {
     card.levelRequirement = (r_.balance->mission || !type_.usesLevelRequirement) ? 0 : std::max(level_, 1);
     card.levelLine = card.levelRequirement > 1;
     card.damage = Stat("WeaponDamage");
+    auto damageBase = base_.find(kAttr + "WeaponDamage");
+    if (damageBase != base_.end() && damageBase->second) {
+        auto damageMods = mods_.find(kAttr + "WeaponDamage");
+        const Modifiers terms = damageMods == mods_.end() ? Modifiers{} : damageMods->second;
+        card.damageStack = WeaponGenDamageStack{*damageBase->second, terms.pre, terms.post, terms.scaleUp, terms.scaleDown};
+    }
     auto interval = Stat("WeaponFireInterval");
     if (interval && *interval != 0) card.fireRate = F32(1.0 / *interval);  // the card shows 1 / FireInterval
     card.reloadTime = Stat("WeaponReloadSpeed");
@@ -1466,6 +1472,17 @@ std::string CardJson(const WeaponGenCard& c) {
         else display.Num(n.field, n.value);
     }
     o.Raw("display", display.Done());
+    if (c.damageStack) {
+        JsonObject stack;
+        stack.Num("base", c.damageStack->base);
+        stack.Num("pre_add", c.damageStack->preAdd);
+        stack.Num("post_add", c.damageStack->postAdd);
+        stack.Num("scale_up", c.damageStack->scaleUp);
+        stack.Num("scale_down", c.damageStack->scaleDown);
+        o.Raw("damage_stack", stack.Done());
+    } else {
+        o.Raw("damage_stack", "null");
+    }
     return o.Done();
 }
 
