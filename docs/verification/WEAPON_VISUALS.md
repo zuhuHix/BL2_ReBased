@@ -23,6 +23,11 @@ shotgun (parts: the slice recipes in `local/items/slice` and `local/items/infini
   (what each part definition names).
 - Camera: `PlayerController.FOVAngle` read 77.55 with the config's `FOVAngle=90`, `ForegroundFOV` 45 with `bForegroundFOV` true
   (the arms and gun use their own foreground FOV). Auto exposure is not used by the host (`r.DefaultFeature.AutoExposure=False`).
+- Camera motion blur (2026-11-06): the host's config had no blur setting, so UE's default applied (`r.DefaultFeature.MotionBlur` defaults to 1, and the Epic scalability group gives
+  `r.MotionBlurQuality` 4), and the first playtest's straight sprint showed heavy blur on the ground and the gun. The earlier fixes only turned off per-bone blur on two meshes, and two test paths
+  (`OpenWillowQuest`, the Phaselock shots) set `r.MotionBlurQuality 0` at run time, which hid it from those captures. `DefaultEngine.ini` now sets `r.DefaultFeature.MotionBlur=False`. The installed
+  game's own `WillowEngine.ini` on the zuhu PC has `MotionBlur=False` (a config read; no frame comparison). The sprint frame in the host after this change: UNVERIFIED until the batch runs it. If it still smears, UE's
+  temporal upscaler is the next suspect (the same config has `bAllowTemporalAA=False`; the host uses UE's default anti-aliasing).
 - The Sanctuary lighting seen outdoors in that save is a sunset set (orange), so no outdoor frame of the same daylight as the
   host could be taken; first-person pairs differ in lighting, which the matched-pair table says.
 
