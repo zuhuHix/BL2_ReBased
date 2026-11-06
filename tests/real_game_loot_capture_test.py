@@ -200,10 +200,10 @@ class CaptureScriptTest(unittest.TestCase):
         for start in ('function Capture-Type', 'function Capture-Pickup'):
             body = self.text[self.text.index(start):]
             first_key = min(i for i in (body.find('Send-Key'),) if i >= 0)
-            self.assertLess(body.index('Assert-Focus'), first_key)
+            self.assertLess(body.index('Assert-GameForeground'), first_key)
         for line in self.text.splitlines():
-            if line.lstrip().startswith(('Start-Sleep 5;', 'Assert-Focus;')) and 'Send-Key Enter' in line:
-                self.assertIn('Assert-Focus', line)
+            if line.lstrip().startswith(('Start-Sleep 5;', 'Assert-GameForeground;')) and 'Send-Key Enter' in line:
+                self.assertIn('Assert-GameForeground', line)
 
     def test_the_script_saves_nothing(self):
         code = SCRIPT.read_text(encoding='utf-8')

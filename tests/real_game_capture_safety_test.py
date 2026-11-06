@@ -9,6 +9,7 @@ Run: python tests/real_game_capture_safety_test.py
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -33,10 +34,11 @@ $scenario = $env:OW_TEST_SCENARIO
 function Start-Sleep { }
 function Enter-RunLock { Set-Content -LiteralPath $script:Lock 'test' }
 function Exit-RunLock { Remove-Item -LiteralPath $script:Lock }
-function Install-Driver { New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
-function Remove-Driver { Remove-Item -Recurse -Force $script:DriverDir }
+function Install-Driver { if ($scenario -eq 'install_fails') { throw 'install failed' }; New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
+function Remove-Driver { if ($scenario -ne 'driver_stuck') { Remove-Item -Recurse -Force $script:DriverDir } }
 function Get-GameProcess { $null }
-function Focus-Game { $env:OW_TEST_SCENARIO -ne 'focus_lost' }
+function Focus-Game { $true }
+function Assert-GameForeground { if ($scenario -eq 'focus_lost') { throw 'refusing to send input: Borderlands 2 is not the foreground window after 3 focus attempts (is someone using this PC?)' } }
 function Send-Key { }
 function Send-KeyDown { }
 function Send-KeyUp { }
@@ -62,7 +64,7 @@ function Start-Game {
 }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     if ($Code -match 'print\(get_pc\(\)\)') { if ($scenario -eq 'no_answer') { throw 'no reply' }; return 'pc' }
-    if ($Code -match 'block_saves') { return 'True' }
+    if ($Code -match 'block_saves') { if ($scenario -eq 'saves_not_blocked') { return 'True, but no hooks' }; return '4' }
     if ($Code -match 'GetStreamingPersistentMapName') { return 'Sanctuary_P WillowPlayerPawn' }
     if ($Code -match 'lc_discover') {
         $count = if ($scenario -eq 'type_missing') { 0 } else { 1 }
@@ -127,7 +129,33 @@ class CaptureSafetyBase:
         def tail(path):
             text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
             return text[text.index('\n} catch {\n    $runError'):]
-        self.assertEqual(tail(ROOT / f'tools/real_game/{self.script}.ps1'), tail(REFERENCE))
+        # All but phaselock's own per-frame hook, which these captures do not install.
+        reviewed, found = re.subn(r'    # A throw between pi_start.*?\n    if \(\$proc -and !\$proc\.HasExited\) \{\n.*?\n    \}\n', '', tail(REFERENCE), flags=re.S)
+        self.assertEqual(found, 1)
+        self.assertEqual(tail(ROOT / f'tools/real_game/{self.script}.ps1'), reviewed)
+
+    def test_saves_not_blocked_stops_before_any_gameplay_and_restores(self):
+        r = self.run_it('saves_not_blocked')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertTrue(r['session']['status'].startswith('failed: saves are not blocked'), r['out'])
+        self.assertEqual(r['files'], ORIGINAL)
+        self.assertEqual((r['hub'], r['run_lock'], r['driver']), (False, False, False), r['out'])
+
+    def test_a_driver_left_behind_holds_the_locks(self):
+        r = self.run_it('driver_stuck')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertTrue(r['session']['status'].startswith('recovery needed: driver not removed'), r['out'])
+        self.assertEqual(r['files'], ORIGINAL)   # the restore itself still ran
+        self.assertEqual((r['hub'], r['run_lock'], r['driver']), (True, True, True), r['out'])
+        self.assertIn('MANUAL RECOVERY', r['out'])
+
+    def test_a_run_that_stops_before_the_driver_touches_nothing_and_releases(self):
+        r = self.run_it('install_fails')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertTrue(r['session']['status'].startswith('failed: install failed'), r['out'])
+        self.assertEqual(r['session']['cleanup']['saves'], 'not touched: the game never started', r['out'])
+        self.assertEqual(r['files'], ORIGINAL)
+        self.assertEqual((r['hub'], r['run_lock'], r['driver']), (False, False, False), r['out'])
 
     def test_a_good_run_restores_everything_and_exits_0(self):
         r = self.run_it('good')
@@ -195,7 +223,7 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
     def test_a_lost_focus_stops_the_run_and_still_restores(self):
         r = self.run_it('focus_lost')
         self.assertEqual(r['code'], 1, r['out'])
-        self.assertTrue(r['session']['status'].startswith('failed:') and 'focus' in r['session']['status'], r['out'])
+        self.assertTrue(r['session']['status'].startswith('failed: refusing to send input'), r['out'])
         self.assertEqual(r['files'], ORIGINAL)
         self.assertEqual((r['hub'], r['run_lock'], r['driver']), (False, False, False), r['out'])
 
