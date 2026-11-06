@@ -237,7 +237,8 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         # END KILL STAGE
 
         # SHIELD STAGE. The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped. Every
-        # row stays in the log. The stage needs each level measured and her own shield back; a clamped level is a finding, not a retry.
+        # row stays in the log. The stage needs each level but her own shield's measured, and her own shield back; a clamped level is a finding,
+        # not a retry. Her own level's row can count but never fails the stage: an equal maximum there is inconclusive.
         $shieldLevels = 1, 5, 8, 15, 30, 50
         $shieldRows = @(); $shieldWhy = ''; $restored = $null
         try {
@@ -273,9 +274,11 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
             $log.shields_end = Py 'import json; print(json.dumps(pi_shields(), default=str))' | ConvertFrom-Json
         } catch { $shieldWhy = "$shieldWhy $_".Trim() }
         $log.shield_levels = $shieldRows
-        $measured = @($shieldRows | Where-Object { $_.read.counts -eq $true })
-        "shields: $($log.shields_start.equipped.name) capacity $($log.shields_start.max_strength); $($measured.Count) of $($shieldLevels.Count) levels measured"
-        if (!$shieldWhy -and $measured.Count -ne $shieldLevels.Count) { $shieldWhy = "$($measured.Count) of $($shieldLevels.Count) levels measured" }
+        $ownLevel = $log.shields_start.equipped.level
+        $required = @($shieldLevels | Where-Object { $_ -ne $ownLevel })
+        $measured = @($shieldRows | Where-Object { $_.read.counts -eq $true -and $_.level -in $required })
+        "shields: $($log.shields_start.equipped.name) level $ownLevel capacity $($log.shields_start.max_strength); $($measured.Count) of $($required.Count) required levels measured"
+        if (!$shieldWhy -and $measured.Count -ne $required.Count) { $shieldWhy = "$($measured.Count) of $($required.Count) required levels measured" }
         Set-Stage 'shield_levels' (!$shieldWhy) $shieldWhy
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
         # END SHIELD STAGE
