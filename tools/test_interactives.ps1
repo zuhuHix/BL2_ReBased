@@ -11,7 +11,10 @@ param(
     # Optional machine-wide hub lock file (OPENWILLOW_HUB_LOCK): the suite waits while it exists and never deletes it.
     [string]$HubLock = $env:OPENWILLOW_HUB_LOCK,
     [switch]$SkipBuild,
-    [switch]$SkipAutomation
+    [switch]$SkipAutomation,
+    # A machine without the lootable import: lid_capture and lootable_materials skip, and the summary says so. Without this, no
+    # imported lootable fails the run.
+    [switch]$AllowNoLootables
 )
 # In-engine check of the lootables, chests and loot pickups (OpenWillowInteractive*.cpp, PR 3 of the vendors lane). One
 # windowed host run in Sanctuary_P with Maya, -owinteractives=<interactives.json> and -owinteractivetest: once the walker
@@ -127,6 +130,8 @@ try {
     # The assets on disk now, not an earlier import's report: this run's content is what the host had to load.
     $checkArgs += @('--content-root', (Join-Path $repo 'host/ue5/OpenWillow/Content'))
     $checkArgs += @('--materials-plan', (Join-Path $repo 'local/lootables/materials_plan.json'))
+    $checkArgs += @('--frames', $shotsOut)
+    if ($AllowNoLootables) { $checkArgs += '--allow-no-lootables' }
     if ($SkipAutomation) { $checkArgs += '--skip-automation' }
     elseif (Test-Path -LiteralPath $autoLog) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs

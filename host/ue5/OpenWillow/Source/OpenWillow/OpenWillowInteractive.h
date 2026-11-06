@@ -231,7 +231,7 @@ private:
     void TickInteractiveTest();
     void TestOpen(AOpenWillowWalker& Walker);
     // The lid capture: one lootable per balance with an imported clip, Maya in front of it, frames closed, mid-open and
-    // opened (OWLootLid_<balance leaf>_<phase>.png). True while it is still working.
+    // opened (OWLootLid_<balance, dots as underscores>_<phase>.png). True while it is still working.
     bool TickLidShots(AOpenWillowWalker& Walker);
     // One balance's stop in the lid capture: the lootable chosen, and where Maya stands to see it.
     struct FLidStop

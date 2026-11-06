@@ -127,7 +127,7 @@ class FakeEditor:
     """The Unreal calls editor_materials makes. No Unreal: it records them, and each save can be told to fail."""
 
     def __init__(self, out, rows):
-        self.assets, self.created, self.fail_saves, self.directory_ok = {}, [], set(), True
+        self.assets, self.created, self.fail_saves, self.fail_folders, self.folders, self.fail_params = {}, [], set(), set(), [], set()
         (out / 'materials_plan.json').write_text(json.dumps({'meshes': rows, 'pickups': []}), encoding='utf-8')
         (out / 'editor_meshes.json').write_text(json.dumps({'mesh_assets': {r['mesh']: f'/Game/{r["mesh"]}' for r in rows}}), encoding='utf-8')
         self.meshes = {f'/Game/{r["mesh"]}': self.mesh(f'/Game/{r["mesh"]}') for r in rows}
@@ -145,8 +145,9 @@ class FakeEditor:
     def save_loaded_asset(self, asset, only_if_is_dirty=False):
         return asset.get_path_name() not in self.fail_saves
 
-    def save_directory(self, _folder, only_if_is_dirty=False, recursive=True):
-        return self.directory_ok
+    def save_directory(self, folder, only_if_is_dirty=False, recursive=True):
+        self.folders.append(folder)
+        return folder not in self.fail_folders
 
     # tools
     def create_asset(self, name, folder, _cls, _factory):
@@ -168,7 +169,10 @@ class FakeEditor:
         instance.cleared += 1
 
     def set_material_instance_texture_parameter_value(self, instance, parameter, texture):
+        if parameter in self.fail_params:
+            return False
         instance.params[parameter] = texture
+        return True
 
 
 class EditorMaterialsTest(unittest.TestCase):
@@ -198,8 +202,9 @@ class EditorMaterialsTest(unittest.TestCase):
         return fake, editor.editor_materials({'out_dir': str(self.out)})
 
     def test_a_good_bind_records_the_instance(self):
-        _, report = self.run_it([self.planned('A')])
+        fake, report = self.run_it([self.planned('A')])
         self.assertEqual(report['bound']['A']['bound'], True)
+        self.assertEqual(fake.meshes['/Game/A'].slots[0].material.path, f'{editor.MATERIAL_DEST}/Mat_1/Mat_1')
         self.assertEqual(report['bound']['A']['instance'], f'{editor.MATERIAL_DEST}/Mat_1/Mat_1')
 
     def test_a_failed_save_is_not_a_bind(self):
@@ -207,15 +212,29 @@ class EditorMaterialsTest(unittest.TestCase):
         for name, path in (('mesh', '/Game/A'), ('instance', f'{editor.MATERIAL_DEST}/Mat_1/Mat_1.Mat_1'),
                            ('texture', f'{editor.MATERIAL_DEST}/Mat_1/Mat_1_dif.tga.Mat_1_dif.tga')):
             with self.subTest(save=name):
-                _, report = self.run_it([self.planned('A')], lambda f, p=path: f.fail_saves.add(p))
+                fake, report = self.run_it([self.planned('A')], lambda f, p=path: f.fail_saves.add(p))
                 self.assertEqual(report['bound']['A']['bound'], False)
                 self.assertIn('could not save', report['bound']['A']['reason'])
                 self.assertEqual(editor.unbound_meshes({'meshes': [self.planned('A')]}, report)[0][0], 'A')
+                if name != 'mesh':   # what the mesh would point at is not safe yet: it is never touched
+                    self.assertIsNone(fake.meshes['/Game/A'].slots[0].material)
 
-    def test_a_failed_folder_save_unbinds_everything(self):
-        _, report = self.run_it([self.planned('A'), self.planned('B', 'Mat_2')], lambda f: setattr(f, 'directory_ok', False))
+    def test_a_failed_folder_save_touches_no_mesh(self):
+        rows = [self.planned('A'), self.planned('B', 'Mat_2')]
+        fake, report = self.run_it(rows, lambda f: f.fail_folders.add(f'{editor.MATERIAL_DEST}/Mat_2'))
         self.assertEqual({row['bound'] for row in report['bound'].values()}, {False})
-        self.assertIn('materials folder', report['bound']['B']['reason'])
+        self.assertIn('not changed', report['bound']['A']['reason'])
+        self.assertEqual([fake.meshes[f'/Game/{m}'].slots[0].material for m in 'AB'], [None, None])
+
+    def test_only_this_runs_folders_are_saved(self):
+        fake, _ = self.run_it([self.planned('A'), self.planned('B', 'Mat_2'), self.planned('C')])
+        self.assertEqual(sorted(fake.folders), [f'{editor.MATERIAL_DEST}/Mat_1', f'{editor.MATERIAL_DEST}/Mat_2'])
+
+    def test_a_texture_the_instance_refuses_fails_the_row(self):
+        fake, report = self.run_it([self.planned('A', normal='nrm.tga')], lambda f: f.fail_params.add('Normal'))
+        self.assertEqual(report['bound']['A']['bound'], False)
+        self.assertIn('did not take its Normal', report['bound']['A']['reason'])
+        self.assertIsNone(fake.meshes['/Game/A'].slots[0].material)
 
     def test_one_name_with_different_textures_makes_two_instances(self):
         fake, report = self.run_it([self.planned('A', 'Mat_1'), self.planned('B', 'Mat_2'), self.planned('C', 'Mat_1')])

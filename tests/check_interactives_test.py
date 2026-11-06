@@ -28,6 +28,11 @@ def document_with_visual():
     return doc
 
 
+def write_frames(folder, balance='Balance.0'):
+    for phase in ('closed', 'mid', 'opened'):
+        (Path(folder) / ci.lid_frame_name(balance, phase)).write_bytes(b'')
+
+
 def write_content(folder):
     root = Path(folder) / 'OpenWillow/Lootables'
     for path in (root / 'Skel_Synth/Skel_Synth/SkeletalMeshes/Skel_Synth.uasset', root / 'Anims/Anim_Synth_Open.uasset'):
@@ -119,19 +124,21 @@ class FullRunTest(unittest.TestCase):
     def test_a_good_run_with_both_sources_passes_every_row(self):
         with tempfile.TemporaryDirectory() as folder:
             write_content(folder)
-            results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual(), False, folder, MATERIAL_PLAN)
+            write_frames(folder)
+            results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual(), False, folder, MATERIAL_PLAN, folder)
         self.assertEqual([(n, s) for n, s, _ in results.rows if s != 'PASS'], [])
 
     def test_the_same_run_from_the_command_line(self):
         with tempfile.TemporaryDirectory() as folder:
             write_content(folder)
+            write_frames(folder)
             base = Path(folder)
             (base / 'run.log').write_text(good_log(), encoding='utf-8')
             (base / 'i.json').write_text(json.dumps(document_with_visual()), encoding='utf-8')
             (base / 'plan.json').write_text(json.dumps(MATERIAL_PLAN), encoding='utf-8')
             with contextlib.redirect_stdout(io.StringIO()):
                 code = ci.main(['--log', str(base / 'run.log'), '--interactives', str(base / 'i.json'), '--content-root', folder,
-                                '--materials-plan', str(base / 'plan.json'), '--skip-automation'])
+                                '--materials-plan', str(base / 'plan.json'), '--frames', folder, '--skip-automation'])
             self.assertEqual(code, 0)
 
     def test_no_content_folder_or_no_plan_cannot_pass(self):
@@ -141,9 +148,26 @@ class FullRunTest(unittest.TestCase):
         self.assertEqual(status_of(results, 'lootable_materials'), 'MISSING')
         with tempfile.TemporaryDirectory() as folder:
             write_content(folder)
-            results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual(), False, folder, None)
+            write_frames(folder)
+            results = ci.grade(good_log(), AUTOMATION_OK, document_with_visual(), False, folder, None, folder)
             self.assertEqual(status_of(results, 'lootable_materials'), 'MISSING')
             self.assertEqual(status_of(results, 'lid_capture'), 'PASS')
+
+    def test_no_lootables_fails_the_run_unless_the_run_allows_it(self):
+        # document() has no imported lootable, as on a machine without the import. The rest of the run is good.
+        log = good_log().replace('OWLOOTLID queue=1', 'OWLOOTLID queue=0')
+        lines = [row for row in log.splitlines(True) if 'OWLOOTLID shot' not in row and 'OWLOOTLID view' not in row and 'OWLOOTLID material' not in row]
+        with tempfile.TemporaryDirectory() as folder:
+            strict = ci.grade(''.join(lines), AUTOMATION_OK, document(), False, folder, MATERIAL_PLAN, folder)
+            allowed = ci.grade(''.join(lines), AUTOMATION_OK, document(), False, folder, MATERIAL_PLAN, folder, True)
+        self.assertEqual([status_of(strict, n) for n in ('lid_capture', 'lootable_materials')], ['FAIL', 'FAIL'])
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(strict.print(), 2)
+        self.assertNotIn('allow_no_lootables', printed.getvalue())
+        self.assertEqual([status_of(allowed, n) for n in ('lid_capture', 'lootable_materials')], ['SKIPPED', 'SKIPPED'])
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(allowed.print(), 0)
+        self.assertIn('allow_no_lootables=1', printed.getvalue())
 
 
 class SpawnTest(unittest.TestCase):
@@ -408,8 +432,11 @@ class LootableMaterialsTest(unittest.TestCase):
     def test_balances_sharing_a_short_name_are_not_one_line(self):
         self.assertEqual(self.grade(self.row('One.Leaf', self.A), {'One.Leaf': self.A, 'Two.Leaf': self.A})[1], 'MISSING')
 
-    def test_a_checkout_without_lootable_content_is_skipped(self):
-        self.assertEqual(self.grade('', {})[1], 'SKIPPED')
+    def test_a_checkout_without_lootable_content_fails_unless_allowed(self):
+        self.assertEqual(self.grade('', {})[1], 'FAIL')
+        out = ci.Results()
+        ci.grade_lootable_materials('', out, {}, True)
+        self.assertEqual(out.rows[0][1], 'SKIPPED')
 
     def test_a_missing_source_cannot_pass(self):
         self.assertEqual(self.grade(self.row('G.A', self.A), None)[1], 'MISSING')
@@ -426,17 +453,28 @@ class LootableMaterialsTest(unittest.TestCase):
 
 
 class LidCaptureTest(unittest.TestCase):
-    def grade(self, text, expected=('Synth',)):
+    def grade(self, text, expected=('Synth',), frames_dir=None):
         out = ci.Results()
-        ci.grade_lid_capture(text, out, expected)
+        ci.grade_lid_capture(text, out, expected, frames_dir)
         return out.rows[0]
 
     def test_all_three_frames_of_each_type_pass(self):
         text = 'OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=1 yaw=0\n' + ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
-        row = self.grade(text)
-        self.assertEqual(row[1], 'PASS')
-        self.assertIn('UNVERIFIED', row[2])
-        self.assertEqual(self.grade(text, None)[1], 'MISSING')   # no source says which types had to be captured
+        with tempfile.TemporaryDirectory() as folder:
+            write_frames(folder, 'Synth')
+            row = self.grade(text, ('Synth',), folder)
+            self.assertEqual(row[1], 'PASS')
+            self.assertIn('UNVERIFIED', row[2])
+            self.assertEqual(self.grade(text, None, folder)[1], 'MISSING')   # no source says which types had to be captured
+            self.assertEqual(self.grade(text, ('Synth',), None)[1], 'MISSING')   # nor that the frames were written
+            (Path(folder) / ci.lid_frame_name('Synth', 'mid')).unlink()
+            row = self.grade(text, ('Synth',), folder)
+            self.assertEqual(row[1], 'FAIL')
+            self.assertIn('Synth_mid', row[2])
+
+    def test_a_frame_name_is_unique_per_full_balance(self):
+        self.assertNotEqual(ci.lid_frame_name('One.Leaf', 'mid'), ci.lid_frame_name('Two.Leaf', 'mid'))
+        self.assertEqual(ci.lid_frame_name('Pkg.Grades.Leaf', 'mid'), 'OWLootLid_Pkg_Grades_Leaf_mid.png')
 
     def test_frames_of_another_balance_with_the_same_short_name_fail(self):
         frames = ''.join(f'OWLOOTLID shot balance=Other.Leaf phase={p}\n' for p in ('closed', 'mid', 'opened'))
@@ -500,9 +538,12 @@ class LidCaptureTest(unittest.TestCase):
             f'OWLOOTLID shot balance=A phase={p}\n' for p in ('closed', 'mid', 'opened')), out, ['A', 'B'])
         self.assertEqual(out.rows[0][1], 'FAIL')
 
-    def test_a_checkout_without_content_is_skipped_whatever_an_old_import_said(self):
+    def test_a_checkout_without_content_fails_unless_allowed(self):
         out = ci.Results()
         ci.grade_lid_capture('OWLOOTLID queue=0\n', out, [])
+        self.assertEqual(out.rows[0][1], 'FAIL')
+        out = ci.Results()
+        ci.grade_lid_capture('OWLOOTLID queue=0\n', out, [], None, True)
         self.assertEqual(out.rows[0][1], 'SKIPPED')
 
     def test_no_content_folder_given_cannot_skip(self):

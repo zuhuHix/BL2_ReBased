@@ -599,7 +599,8 @@ def material_instance(planned, parent):
         if parameter == 'Normal':
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
         save_required(texture)
-        mel.set_material_instance_texture_parameter_value(instance, parameter, texture)
+        if not mel.set_material_instance_texture_parameter_value(instance, parameter, texture):
+            raise RuntimeError(f'{name} did not take its {parameter} texture')
     save_required(instance)
     return instance
 
@@ -635,6 +636,8 @@ def editor_materials(plan):
     report = {'mode': 'materials', 'bound': {}}
     parent = lootable_master()
     instances = {}
+    ready = []
+    # First everything the meshes will point at, saved. Nothing has touched a mesh yet.
     for planned, bind in rows:
         entry = {'bound': False, 'reason': planned['reason']}
         report['bound'][planned['mesh']] = entry
@@ -648,20 +651,28 @@ def editor_materials(plan):
                 raise RuntimeError('the mesh is not imported')
             if planned['instance'] not in instances:
                 instances[planned['instance']] = material_instance(planned, parent)
-            instance = instances[planned['instance']]
+            ready.append((planned, bind, mesh, instances[planned['instance']], entry))
+        except Exception as error:   # recorded per mesh; the rest of the list still runs
+            entry['reason'] = f'{type(error).__name__}: {error}'
+            log(f'material {planned["mesh"]} failed: {entry["reason"]}')
+    # This run's folders only: an unused folder from an earlier run must not fail this one.
+    unsaved = [name for name in instances if not eal.save_directory(f'{MATERIAL_DEST}/{name}', only_if_is_dirty=False, recursive=True)]
+    if unsaved:
+        log(f'materials not saved: {unsaved}; no mesh was changed')
+        for _, _, _, _, entry in ready:
+            entry['reason'] = f'the materials could not be saved ({unsaved[0]}); this mesh was not changed'
+        return report
+    # A mesh whose own save fails changed only in memory, and this commandlet exits without saving it: what is on disk stays as it was.
+    for planned, bind, mesh, instance, entry in ready:
+        try:
             if bind(mesh, instance) != instance:
                 raise RuntimeError('the slot did not keep the instance')
             save_required(mesh)
-            entry.update(bound=True, instance=instance.get_path_name().split('.')[0], normal=bool(planned['normal']))
+            entry.update(bound=True, reason='', instance=instance.get_path_name().split('.')[0], normal=bool(planned['normal']))
             log(f'material {planned["mesh"]} bound {entry["instance"]} normal={1 if planned["normal"] else 0} source="{planned["source"]}"')
         except Exception as error:   # recorded per mesh; the rest of the list still runs
             entry['reason'] = f'{type(error).__name__}: {error}'
             log(f'material {planned["mesh"]} failed: {entry["reason"]}')
-    if not eal.save_directory(MATERIAL_DEST, only_if_is_dirty=False, recursive=True):
-        log('materials folder could not be saved')
-        for entry in report['bound'].values():
-            if entry['bound']:
-                entry.update(bound=False, reason='the materials folder could not be saved')
     return report
 
 
