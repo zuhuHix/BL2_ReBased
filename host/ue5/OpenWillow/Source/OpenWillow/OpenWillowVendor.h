@@ -237,6 +237,9 @@ private:
     bool UseNearest(AOpenWillowWalker& Walker);
     void CloseShop();
     void PushState();
+    // The one-second push while the shop is open. It keeps the serial unless the stock changed, so a press that crosses it is
+    // not refused as stale.
+    void PushTimerState();
     FString StateJson() const;
     // The walker the shop is open for (null when none); its health state is what a health purchase changes.
     AOpenWillowWalker* ActiveWalker() const;
@@ -271,5 +274,6 @@ private:
     int32 TestStep = 0;
     int32 TestWaits = 0;
     int64 Serial = 0;                 // counts the states pushed to the page
+    int64 Opening = 0;                // counts the shop's openings; the page starts its selection over on a new one
     FString LastMessage;             // the last action's refusal text, empty when it went through
 };

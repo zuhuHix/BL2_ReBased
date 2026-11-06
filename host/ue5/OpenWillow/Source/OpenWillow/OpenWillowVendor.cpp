@@ -1128,10 +1128,11 @@ bool UOpenWillowVendorSubsystem::OpenAt(AOpenWillowWalker& Walker, AOpenWillowVe
     const bool bRestocked = Machine.Stock.EnsureStocked(GetWorld()->GetTimeSeconds());
     if (bRestocked) SaveCurrency();
     Page->Show(PC);
+    ++Opening;
     PushState();
     // While open, push the state every second: the page's countdown is the host's world time, and a restock that falls
     // due while the shop is open shows at once.
-    GetWorld()->GetTimerManager().SetTimer(OpenTimer, FTimerDelegate::CreateUObject(this, &UOpenWillowVendorSubsystem::PushState), 1.f, true);
+    GetWorld()->GetTimerManager().SetTimer(OpenTimer, FTimerDelegate::CreateUObject(this, &UOpenWillowVendorSubsystem::PushTimerState), 1.f, true);
     UE_LOG(LogTemp, Display, TEXT("OWVENDOR open id=%s kind=%s restocked=%d"), *Machine.Id, *Machine.Kind, bRestocked ? 1 : 0);
     return true;
 }
@@ -1167,6 +1168,12 @@ void UOpenWillowVendorSubsystem::HandlePageMessage(const FString& Line)
     if (int64(ReceivedSerial) != Serial)
     {
         UE_LOG(LogTemp, Display, TEXT("OWVENDOR ignored stale %s (serial %lld, current %lld)"), *Action, int64(ReceivedSerial), Serial);
+        // A press aimed at a state that has changed did nothing: say so, rather than leave it silent.
+        if (Action != TEXT("close") && ActiveMachine.IsValid())
+        {
+            LastMessage = TEXT("The stock changed");
+            PushState();
+        }
         return;
     }
     if (Action == TEXT("close"))
@@ -1507,6 +1514,13 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     }
 }
 
+void UOpenWillowVendorSubsystem::PushTimerState()
+{
+    if (!Page.IsValid() || !Page->IsShown() || !ActiveMachine.IsValid()) return;
+    if (ActiveMachine->Stock.EnsureStocked(GetWorld()->GetTimeSeconds())) ++Serial;
+    Page->SendState(StateJson());
+}
+
 void UOpenWillowVendorSubsystem::PushState()
 {
     if (!Page.IsValid() || !Page->IsShown() || !ActiveMachine.IsValid()) return;
@@ -1604,6 +1618,7 @@ FString UOpenWillowVendorSubsystem::StateJson() const
     State->SetArrayField(TEXT("buyback"), BuybackJsonList);
 
     State->SetNumberField(TEXT("resetSeconds"), FMath::FloorToInt(Stock.SecondsToReset(Now)));
+    State->SetNumberField(TEXT("opening"), double(Opening));
     State->SetStringField(TEXT("message"), LastMessage.IsEmpty() ? Stock.Notice : LastMessage);
     return Compact(State);
 }

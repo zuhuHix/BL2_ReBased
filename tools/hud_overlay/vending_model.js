@@ -16,6 +16,10 @@
   const COLUMNS = ['shop', 'backpack', 'buyback'];
   // Host choice (UNVERIFIED): the buy-back list keeps at most this many sold items.
   const BUYBACK_LIMIT = 10;
+  // What the shop shows for a refusal, by the host's and the page's reasons. The stock shop movie has one label for "cannot
+  // afford" and one for "cannot carry or use" (read from script). Which reasons the game sends to the second is native:
+  // UNVERIFIED. Any other reason shows as it is.
+  const REFUSAL_LABELS = {'Insufficient funds': 'INSUFFICIENT FUNDS', 'Ammo full': 'FULL', 'Health full': 'FULL', 'Backpack full': 'FULL'};
 
   const isInt = (value, min = 0) => Number.isInteger(value) && value >= min;
   const isText = value => typeof value === 'string' && value.length > 0;
@@ -62,6 +66,7 @@
     }
     if (state.used > state.capacity) return fail('used is larger than capacity');
     if (typeof state.message !== 'string') return fail('message must be a string');
+    if (state.opening !== undefined && !isInt(state.opening)) return fail('opening must be a non-negative integer');
     // The ammo pools and the health (host numbers; health is a float on the host, so it is only checked as a number).
     if (state.ammo !== undefined) {
       if (!isObject(state.ammo)) return fail('ammo must be an object');
@@ -167,6 +172,19 @@
     return Math.min(Math.max(0, index), length - 1);
   }
 
+  // The selection a new state leaves. A new opening of the shop starts over at the top of the stock, whichever machine it
+  // is; a state within one opening keeps the selection (the host pushes one every second).
+  function selectionAfterState(sel, previous, next) {
+    return isNewOpening(previous, next) ? {column: 'shop', index: 0} : sel;
+  }
+  function isNewOpening(previous, next) {
+    return !previous || previous.opening !== next.opening || previous.machine.id !== next.machine.id;
+  }
+
+  function refusalLabel(message) {
+    return Object.prototype.hasOwnProperty.call(REFUSAL_LABELS, message) ? REFUSAL_LABELS[message] : message;
+  }
+
   // What Enter or E does with the selected row. Returns {ok:true, action, id} to send, or {ok:false, message}
   // for the page to show. Unaffordable buys, equipped sales and unsellable (mission) items are never sent.
   function actionFor(sel, lists, state) {
@@ -202,5 +220,6 @@
   }
 
   return {MACHINE_KINDS, ITEM_KINDS, ACTIONS, COLUMNS, BUYBACK_LIMIT, formatPrice, formatCountdown, validateState,
-    sortRows, buildLists, lengths, moveSelection, clampIndex, actionFor, buildRequest, keyCommand, poolNote, entersBackpack};
+    sortRows, buildLists, lengths, moveSelection, clampIndex, actionFor, buildRequest, keyCommand, poolNote, entersBackpack,
+    selectionAfterState, isNewOpening, refusalLabel};
 });

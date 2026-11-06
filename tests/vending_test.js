@@ -185,6 +185,38 @@ check('Key names map to page commands; unknown keys do nothing', () => {
   assert.equal(model.keyCommand('constructor'), null);
 });
 
+check('A new opening starts the selection over; a state within one opening keeps it', () => {
+  const moved = {column: 'backpack', index: 3};
+  const first = state({opening: 1});
+  assert.deepEqual(model.selectionAfterState(moved, null, first), {column: 'shop', index: 0});
+  assert.deepEqual(model.selectionAfterState(moved, first, state({opening: 1, serial: 5})), moved);
+  assert.deepEqual(model.selectionAfterState(moved, first, state({opening: 2})), {column: 'shop', index: 0});   // the same machine again
+  const other = state({opening: 2, machine: {id: 'machine_b', kind: 'items', title: 'Other'}});
+  assert.deepEqual(model.selectionAfterState(moved, state({opening: 2}), other), {column: 'shop', index: 0});
+  assert.equal(model.isNewOpening(first, state({opening: 1, serial: 5})), false);
+});
+
+check('The opening count is checked when present', () => {
+  assert.equal(model.validateState(state({opening: 2})).ok, true);
+  assert.equal(model.validateState(state()).ok, true);
+  assert.equal(model.validateState(state({opening: -1})).ok, false);
+  assert.equal(model.validateState(state({opening: '2'})).ok, false);
+});
+
+check('Refusals show the stock labels; any other message is left alone', () => {
+  assert.equal(model.refusalLabel('Insufficient funds'), 'INSUFFICIENT FUNDS');
+  for (const reason of ['Ammo full', 'Health full', 'Backpack full']) assert.equal(model.refusalLabel(reason), 'FULL');
+  for (const other of ['', 'The stock changed', 'Equipped items cannot be sold', 'constructor']) assert.equal(model.refusalLabel(other), other);
+});
+
+check('The page keeps a refusal across the host\'s one-second push', () => {
+  const glue = fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/vending.js'), 'utf8');
+  const receiver = glue.slice(glue.indexOf('window.owVending ='), glue.indexOf('window.owVendingReport'));
+  assert.match(receiver, /if \(model\.isNewOpening\(state, result\.state\)\) localMessage = '';/);
+  assert.equal((receiver.match(/localMessage = ''/g) || []).length, 1);
+  assert.match(receiver, /sel = model\.selectionAfterState\(sel, state, result\.state\);/);
+});
+
 check('Request line has the serial, action and id', () => {
   const line = model.buildRequest(4, 'buy', 'stock_3');
   assert.equal(line, 'OWVEND {"serial":4,"action":"buy","id":"stock_3"}');

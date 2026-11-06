@@ -9,7 +9,7 @@ const KIND_LABEL = {weapon: 'Weapon', item: 'Item', ammo: 'Ammo', health: 'Healt
 
 let state = null, lists = {shop: [], backpack: [], buyback: []};
 let sel = {column: 'shop', index: 0};
-let lastSerial = -1, localMessage = '', lastRequest = '', movieState = 'loading';
+let lastSerial = -1, localMessage = '', stateError = '', lastRequest = '', movieState = 'loading';
 
 // Stock movie as frame art. Any failure leaves the plain HTML panel, which works on its own, and removes the player:
 // Ruffle shows its own "Something went wrong" panel for a missing or broken movie, and its load() still resolves.
@@ -65,7 +65,7 @@ function rowElement(item, column, index) {
   price.className = 'price';
   price.textContent = model.formatPrice(item.price);
   el.append(name, price);
-  el.addEventListener('click', () => { sel = {column, index}; render(); });
+  el.addEventListener('click', () => { sel = {column, index}; localMessage = ''; render(); });
   el.addEventListener('dblclick', () => { sel = {column, index}; act(); });
   return el;
 }
@@ -107,7 +107,7 @@ function render() {
   const note = picked ? model.poolNote(state, picked) : '';
   $('detail').textContent = picked ? `${picked.name}: ${KIND_LABEL[picked.kind] || picked.kind}, rarity ${picked.rarity}`
     + (note ? `. ${note}` : '') : '';
-  $('message').textContent = localMessage || state.message;
+  $('message').textContent = stateError || model.refusalLabel(localMessage || state.message);
   tickCountdown();
 }
 
@@ -122,15 +122,18 @@ window.owVending = raw => {
   const result = model.validateState(raw);
   if (!result.ok) {
     console.log('OWVENDERR ' + JSON.stringify({error: result.error}));
-    localMessage = 'Bad state from host: ' + result.error;
+    stateError = 'Bad state from host: ' + result.error;
     if (state) render();
     return;
   }
   if (result.state.serial < lastSerial) return; // an older state arrived late
+  // The host pushes a state every second, so only a new opening clears the page's own refusal; moving or acting does too.
+  if (model.isNewOpening(state, result.state)) localMessage = '';
+  sel = model.selectionAfterState(sel, state, result.state);
+  stateError = '';
   state = result.state;
   lastSerial = state.serial;
   lists = model.buildLists(state);
-  localMessage = '';
   render();
 };
 
@@ -147,6 +150,7 @@ document.addEventListener('keydown', event => {
   else if (command === 'close') close();
   else {
     sel = model.moveSelection(sel, command, model.lengths(lists));
+    localMessage = '';
     render();
   }
 });
