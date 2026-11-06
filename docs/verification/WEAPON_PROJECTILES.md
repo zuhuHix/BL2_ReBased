@@ -207,7 +207,9 @@ hook); the critic aligned on the first visible effect.
   from the C++ generator's card (`OpenWillowWeaponGen::ToItem`). `tools/weapon_gen_firing.py` runs the one resolver,
   `tools/weapon_firing.py`, on sampled rolls of every balance and writes a template per weapon type, firing mode and element to ignored
   `local/weapons/gen/`; the host fills it from the card and uses the recipes' parser. The tool merges every roll back and refuses to write if
-  anything but the pool differs from the resolver (1494 rolls, 236 templates, 0 differences; a Python check of the rule, not the C++).
+  anything but the pool differs from the resolver (1494 rolls, 236 templates, 0 differences). That check is Python and does not cover the card
+  overrides; the automation test `OpenWillow.Vendor.RolledGunFiringTemplate` tests the C++ merge on an invented template. The file carries the
+  manifest's MD5: the host refuses templates from another manifest or an older schema, and any template lacking the speed its shot kind needs.
   **UNVERIFIED:** the accuracy pool is the type's base because parts are not applied; the spin-down duration is missing; a key the sampled rolls
   never reached fires the plain trace with a warning; nothing has been compared with a rolled gun in the running game. Their refire rule is resolved since 2026-11-06: the card carries the evaluated burst count and
   interval, so a type with count 1 fires once per press. Before that every generated gun fired while held. The firing test now

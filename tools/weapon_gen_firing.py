@@ -10,8 +10,12 @@ ROLL_FIELDS come from the card, not the template. Three other values vary inside
 - bullet and projectile speeds are stored before the WeaponProjectileSpeedMultiplier, which the host applies;
 - the accuracy pool keeps the type's base values only. Parts change it per roll, which is NOT modelled for generated guns yet.
 
-Structural oracle: every roll is merged back (apply_roll, the host's rule) and compared with the resolver's own block. Any
-difference outside the pool stops the tool before it writes, so a template cannot silently misdescribe a roll.
+Structural oracle: every roll is merged back (apply_roll) and compared with the resolver's own block. Any difference stops the
+tool before it writes. It covers the template's fields, speeds and splash damage in Python only. It does NOT cover the card
+overrides (pellets, spread, burst, status) or the C++ merge: the automation test OpenWillow.Vendor.RolledGunFiringTemplate does.
+
+The file carries the MD5 of the manifest it was made with; the host refuses templates whose manifest differs, or an older
+FILE_SCHEMA. So: weapon_gen_manifest.py first, then this tool. A template without the speed its shot needs stops the tool.
 
 UNVERIFIED: the sampled rolls may not reach every key (a missing key makes the host warn and fire its fallback trace), and
 nothing here has been compared with a generated gun in the running game.
@@ -20,7 +24,10 @@ nothing here has been compared with a generated gun in the running game.
 """
 import argparse
 import copy
+import hashlib
 import json
+import math
+import os
 import sys
 from pathlib import Path
 
@@ -41,6 +48,51 @@ ROLL_FIELDS = ('damage', 'pellets', 'spread', 'burst_count', 'burst_interval', '
 STAGES = (8, 30)
 SEEDS = (1, 2, 3)
 RATIO_TOLERANCE = 1e-3
+FILE_SCHEMA = 2   # the host's OpenWillowWeaponGen.cpp FiringTemplatesSchema
+COMPARED = ('compared: every field but the roll fields and the accuracy pool, with speeds and splash damage merged in Python; '
+            'NOT compared: the card overrides and the C++ merge (automation test OpenWillow.Vendor.RolledGunFiringTemplate)')
+
+
+def local_output(path, repo=ROOT):
+    """The path if it is strictly inside the repository's ignored local/ folder, or a refusal, before anything is created. Checked as
+    given and resolved: local/ itself may be a junction to another folder, but no path may leave it, through `..` or a nested link."""
+    given = Path(os.path.abspath(path))
+    local = Path(os.path.abspath(Path(repo) / 'local'))
+    resolved, resolved_local = Path(path).resolve(), (Path(repo) / 'local').resolve()
+    if local not in given.parents or resolved_local not in resolved.parents:
+        raise SystemExit(f'refusing {path}: output must be inside {local} (ignored game-derived data)')
+    return given
+
+
+def fingerprint(manifest):
+    """The MD5 of the manifest's bytes, or a stop naming the tool that makes it. The host hashes the same bytes."""
+    try:
+        return hashlib.md5(Path(manifest).read_bytes()).hexdigest()
+    except OSError as error:
+        raise SystemExit(f'no manifest at {manifest} ({error}): run python tools/weapon_gen_manifest.py --game <BL2 folder> first')
+
+
+def positive(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
+def incomplete(template):
+    """What a template lacks for its shot kind (the host's CompleteForShotKind): empty when it can fire."""
+    missing = []
+    if template.get('schema') != 1:
+        missing.append(f"schema {template.get('schema')}")
+    if not template.get('firing_mode'):
+        missing.append('firing_mode')
+    fire_type = template.get('fire_type')
+    if fire_type == 'EWWFT_Rocket':
+        if not positive((template.get('projectile') or {}).get('speed')):
+            missing.append('projectile.speed')
+    elif fire_type != 'EWWFT_HitScan' and not positive(template.get('bullet_speed')):
+        missing.append('bullet_speed')
+    thrown = template.get('reload_throw')
+    if thrown and not positive((thrown.get('projectile') or {}).get('speed')):
+        missing.append('reload_throw.projectile.speed')
+    return missing
 
 
 def key_of(weapon_type, firing_mode, element):
@@ -177,7 +229,10 @@ def main():
     parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--output', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_firing.json')
+    parser.add_argument('--manifest', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_manifest.txt')
     args = parser.parse_args()
+    args.output = local_output(args.output)   # refused before anything is read, created or written
+    manifest_md5 = fingerprint(args.manifest)
     cooked = args.game / 'WillowGame/CookedPCConsole'
     package = weapon_gen_manifest.open_package(args.reader, cooked / 'Startup.upk')
     localize = weapon_gen_manifest.make_localize(package, args.game)
@@ -190,13 +245,19 @@ def main():
     balances = sorted(p for p, c in package.classes.items() if c in weapon_gen_manifest.BALANCE_CLASSES)
     collector = collect(package, source, localize, balances)
     print(f'{collector.rolls} rolls, {len(collector.templates)} templates, {len(collector.problems)} merge differences')
+    print(COMPARED)
     if collector.problems:
         for problem in collector.problems[:40]:
             print('  ' + problem)
         raise SystemExit('templates do not reproduce the resolver: nothing written')
+    lacking = {key: incomplete(template) for key, template in collector.templates.items() if incomplete(template)}
+    if lacking:
+        for key, missing in list(lacking.items())[:40]:
+            print(f'  {key}: {", ".join(missing)}')
+        raise SystemExit(f'{len(lacking)} templates cannot fire: nothing written')
     add_fx(collector.templates, source.package)
     # Status rows come from the card, except the level-difference scale, which is global.
-    document = {'schema': 1, 'level_chance_scales': weapon_firing.level_chance_scales(source), 'templates': collector.templates}
+    document = {'schema': FILE_SCHEMA, 'manifest_md5': manifest_md5, 'level_chance_scales': weapon_firing.level_chance_scales(source), 'templates': collector.templates}
     args.output.write_text(json.dumps(document), encoding='utf-8')
     print(f'wrote {args.output}')
 

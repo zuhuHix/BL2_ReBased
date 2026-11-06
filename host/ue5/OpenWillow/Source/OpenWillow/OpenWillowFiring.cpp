@@ -128,6 +128,17 @@ const FOpenWillowExplosionBand* FOpenWillowFiringData::BandFor(float Radius, flo
     return Best;
 }
 
+bool FOpenWillowFiringData::CompleteForShotKind(FString& OutMissing) const
+{
+    const auto Positive = [](float Value) { return FMath::IsFinite(Value) && Value > 0.f; };
+    if (FiringMode.IsEmpty()) OutMissing = TEXT("firing_mode");
+    else if (Kind == EOpenWillowShotKind::Rocket && !Positive(ProjectileSpeed)) OutMissing = TEXT("projectile.speed");
+    else if (Kind == EOpenWillowShotKind::Bullet && !Positive(BulletSpeed)) OutMissing = TEXT("bullet_speed");
+    else if (ReloadThrow.IsValid() && !Positive(ReloadThrow->ProjectileSpeed)) OutMissing = TEXT("reload_throw.projectile.speed");
+    else return true;
+    return false;
+}
+
 bool FOpenWillowFiringData::ParseGrenade(const FJsonObject& Grenade, FOpenWillowFiringData& Out)
 {
     Out = FOpenWillowFiringData();

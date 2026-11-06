@@ -323,8 +323,8 @@ void AOpenWillowWalker::RunFiringTest(float Now)
     // from one hold, and one with burst count 0 more than one. The hold is long enough for further shots, derived from the gun's
     // own fire interval, so one shot cannot just mean a short hold. Third: one that launches a projectile, which only the
     // firing template can make it do.
-    static int32 RolledGun = 0, RolledStep = 0, RolledShotsBefore = 0, RolledLaunchesBefore = 0;
-    static float RolledAt = 0.f, RolledHold = 0.f;
+    static int32 RolledGun = 0, RolledStep = 0, RolledShotsBefore = 0, RolledLaunchesBefore = 0, RolledImpactsBefore = 0;
+    static float RolledAt = 0.f, RolledHold = 0.f, RolledHeld = 0.f, RolledDamageBefore = 0.f;
     if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun < 3 && CombatTarget.IsValid())
     {
         const int32 Wanted = RolledGun == 0 ? 1 : RolledGun == 1 ? 0 : FOpenWillowWeaponGen::BurstTestRocket;
@@ -361,18 +361,31 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             RolledHold = 3.f / Held->FireRate + 0.1f;
             RolledShotsBefore = OpenWillowFiring::Counts.Shots;
             RolledLaunchesBefore = OpenWillowFiring::Counts.Launches;
+            RolledImpactsBefore = OpenWillowFiring::Counts.Impacts;
+            RolledDamageBefore = OpenWillowFiring::Counts.Damage;
+            AimAt(CombatTarget->AimPoint());
             FirePressed();
             RolledAt = Now;
             RolledStep = 2;
         }
         else if (RolledStep == 2 && Now >= RolledAt + RolledHold)
         {
-            const float HeldSeconds = Now - RolledAt;
+            RolledHeld = Now - RolledAt;
             FireReleased();
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d"),
+            RolledAt = Now;
+            RolledStep = 3;
+        }
+        else if (RolledStep == 3)
+        {
+            // What was launched lands first (or the wait runs out): the checker needs its impact or damage, not only the launch.
+            int32 Flying = 0;
+            for (TActorIterator<AOpenWillowProjectile> It(GetWorld()); It; ++It) ++Flying;
+            if (Flying > 0 && Now < RolledAt + 10.f) return;
+            const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d impacts=%d damage=%.2f flying=%d"),
                 Wanted, *Held->Id, *Held->Type.Replace(TEXT(" "), TEXT("_")), Held->Firing.BurstCount, Held->Firing.bBurstFromManifest ? 1 : 0,
-                Held->Firing.bLoaded ? 1 : 0, 1.f / Held->FireRate, HeldSeconds, Held->Magazine, OpenWillowFiring::Counts.Shots - RolledShotsBefore,
-                OpenWillowFiring::Counts.Launches - RolledLaunchesBefore);
+                Held->Firing.bLoaded ? 1 : 0, 1.f / Held->FireRate, RolledHeld, Held->Magazine, C.Shots - RolledShotsBefore,
+                C.Launches - RolledLaunchesBefore, C.Impacts - RolledImpactsBefore, C.Damage - RolledDamageBefore, Flying);
             ++RolledGun;
             RolledStep = 0;
         }

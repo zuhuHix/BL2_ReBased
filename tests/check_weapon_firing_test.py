@@ -366,13 +366,13 @@ class RolledDamage(unittest.TestCase):
 
 ROLLED_LINES = ('LogTemp: Display: OWFIRING rolled want=1 id=gen_a type=Pistol burst=1 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=6 shots=1 launches=0',
                 'LogTemp: Display: OWFIRING rolled want=0 id=gen_b type=Assault_Rifle burst=0 from_manifest=1 interval=0.100 hold=0.400 firing_loaded=1 magazine=20 shots=4 launches=0',
-                'LogTemp: Display: OWFIRING rolled want=-1 id=gen_c type=Launcher burst=0 from_manifest=1 firing_loaded=1 interval=0.500 hold=1.600 magazine=4 shots=2 launches=2')
+                'LogTemp: Display: OWFIRING rolled want=-1 id=gen_c type=Launcher burst=0 from_manifest=1 firing_loaded=1 interval=0.500 hold=1.600 magazine=4 shots=2 launches=2 impacts=2 damage=50.00')
 
 
 class RolledLines(unittest.TestCase):
     ONE = {'want': '1', 'id': 'gen_a', 'type': 'Pistol', 'burst': '1', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '6', 'shots': '1', 'launches': '0'}
     ZERO = {'want': '0', 'id': 'gen_b', 'type': 'Assault_Rifle', 'burst': '0', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'firing_loaded': '1', 'magazine': '20', 'shots': '4', 'launches': '0'}
-    ROCKET = {'want': '-1', 'id': 'gen_c', 'type': 'Launcher', 'burst': '0', 'from_manifest': '1', 'interval': '0.500', 'hold': '1.600', 'firing_loaded': '1', 'magazine': '4', 'shots': '2', 'launches': '2'}
+    ROCKET = {'want': '-1', 'id': 'gen_c', 'type': 'Launcher', 'burst': '0', 'from_manifest': '1', 'interval': '0.500', 'hold': '1.600', 'firing_loaded': '1', 'magazine': '4', 'shots': '2', 'launches': '2', 'impacts': '2', 'damage': '50.00'}
 
     def fails(self, one=None, zero=None, rocket=None):
         return check.check_rolled([dict(self.ONE, **(one or {})), dict(self.ZERO, **(zero or {})), dict(self.ROCKET, **(rocket or {}))])
@@ -417,6 +417,14 @@ class RolledLines(unittest.TestCase):
 
     def test_a_rolled_launcher_must_launch(self):
         self.assertTrue(any('projectiles launched' in text for text in self.fails(rocket={'launches': '0'})))
+
+    def test_a_launch_alone_is_not_enough(self):
+        self.assertTrue(any('no impact or damage' in text for text in self.fails(rocket={'impacts': '0', 'damage': '0.00'})))
+        self.assertTrue(any('no impact or damage' in text for text in self.fails(rocket={'impacts': 'nan', 'damage': 'nan'})))
+        self.assertEqual(self.fails(rocket={'impacts': '1', 'damage': '0.00'}), [])
+        self.assertEqual(self.fails(rocket={'impacts': '0', 'damage': '5.00'}), [])
+
+    def test_the_launcher_line_still_needs_a_launch(self):
         self.assertTrue(check.check_rolled([dict(self.ONE), dict(self.ZERO)]))
 
     def test_a_missing_gun_fails(self):

@@ -304,9 +304,11 @@ def check_rolled(lines):
         if line.get('firing_loaded') != '1':
             fails.append(f'{name}: no firing block from its template, {TEMPLATE_HINT}')
         if want == '-1':
-            launches = finite(line, 'launches')
+            launches, impacts, damage = finite(line, 'launches'), finite(line, 'impacts'), finite(line, 'damage')
             if launches is None or launches < 1:
                 fails.append(f"{name}: {line.get('launches')} projectiles launched, expected {rule}")
+            elif (impacts is None or impacts < 1) and (damage is None or damage <= 0):
+                fails.append(f"{name}: launched but no impact or damage (impacts={line.get('impacts')}, damage={line.get('damage')})")
             continue
         if line.get('burst') != want:
             fails.append(f"{name}: burst is {line.get('burst')}")
