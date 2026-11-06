@@ -53,6 +53,13 @@ SKILL_FUNCS = ("BeginLifting", "LiftTarget", "LockTarget", "StartOutro", "Releas
 PLAYER_FUNCS = ("TakeDamage", "PlayInjured", "SetInjuredState", "GoToInjuredAndTargeted", "ServerDeactivateSkill")
 
 
+def pi_target_rank(ai_class, dist):
+    """Sort key for the capture's target pick: the Adult first (it is what the host's target stands for), then the plain
+    bullymong, then any other large one, each nearest first. A variant has its own archetype, attachments and material."""
+    leaf = ai_class.rsplit(".", 1)[-1]
+    return (0 if leaf == "CharClass_PrimalBeastAdult" else 1 if leaf == "CharClass_PrimalBeast" else 2, dist)
+
+
 def _safe(fn, default=None):
     try:
         return fn()
