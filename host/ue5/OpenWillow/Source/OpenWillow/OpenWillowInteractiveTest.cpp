@@ -109,6 +109,28 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("a plain add"), OpenWillowInteractiveRules::SaturatingAdd(100, 23), 123);
     TestEqual(TEXT("an add past int32 saturates"), OpenWillowInteractiveRules::SaturatingAdd(MAX_int32 - 5, 10), MAX_int32);
     TestEqual(TEXT("a negative sum floors at zero"), OpenWillowInteractiveRules::SaturatingAdd(0, -7), 0);
+    // The use key: the nearest target in its own reach wins, whichever kind it is. Squared distances are invented.
+    {
+        const auto Pick = [](TOptional<double> Vendor, TOptional<double> Interactive, TOptional<double> Door, TOptional<double> Pickup)
+        {
+            FOpenWillowUseDistances Targets;
+            Targets.Vendor = Vendor;
+            Targets.Interactive = Interactive;
+            Targets.Door = Door;
+            Targets.Pickup = Pickup;
+            return Targets.Nearest();
+        };
+        const TOptional<double> Unset;
+        TestTrue(TEXT("nothing in reach"), Pick(Unset, Unset, Unset, Unset) == EOpenWillowUseTarget::None);
+        TestTrue(TEXT("a lootable at 90 beats a vendor at 180"), Pick(180.0 * 180.0, 90.0 * 90.0, Unset, Unset) == EOpenWillowUseTarget::Interactive);
+        TestTrue(TEXT("a vendor at 90 beats a lootable at 180"), Pick(90.0 * 90.0, 180.0 * 180.0, Unset, Unset) == EOpenWillowUseTarget::Vendor);
+        TestTrue(TEXT("a lootable at 90 beats a door at 180"), Pick(Unset, 90.0 * 90.0, 180.0 * 180.0, Unset) == EOpenWillowUseTarget::Interactive);
+        TestTrue(TEXT("a door at 90 beats a lootable at 180"), Pick(Unset, 180.0 * 180.0, 90.0 * 90.0, Unset) == EOpenWillowUseTarget::Door);
+        TestTrue(TEXT("a dropped gun at 90 beats a lootable at 180"), Pick(Unset, 180.0 * 180.0, Unset, 90.0 * 90.0) == EOpenWillowUseTarget::Pickup);
+        TestTrue(TEXT("a lootable at 90 beats a dropped gun at 180"), Pick(Unset, 90.0 * 90.0, Unset, 180.0 * 180.0) == EOpenWillowUseTarget::Interactive);
+        TestTrue(TEXT("all four: the nearest wins"), Pick(300.0, 200.0, 400.0, 100.0) == EOpenWillowUseTarget::Pickup);
+    }
+
     return true;
 }
 #endif

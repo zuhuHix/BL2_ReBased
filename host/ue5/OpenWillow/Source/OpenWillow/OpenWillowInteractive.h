@@ -119,6 +119,15 @@ namespace OpenWillowInteractiveRules
 
 // The placed lootable: a chest, a box or a crate from the manifest. The body is the engine cube stand-in; the imported
 // skeletal mesh replaces it when it loads (UNVERIFIED: the assets are not imported yet). Opens once per session.
+// The use key's choice: every eligible target's squared distance (unset = not in its own reach), and the nearest wins. On
+// a tie the order below decides. A stand-in for the native use trace (UNVERIFIED).
+enum class EOpenWillowUseTarget : uint8 { None, Vendor, Interactive, Door, Pickup };
+struct FOpenWillowUseDistances
+{
+    TOptional<double> Vendor, Interactive, Door, Pickup;
+    EOpenWillowUseTarget Nearest() const;
+};
+
 UCLASS()
 class OPENWILLOW_API AOpenWillowLootable : public AActor
 {

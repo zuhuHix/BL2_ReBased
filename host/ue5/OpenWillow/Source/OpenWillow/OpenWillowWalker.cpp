@@ -1343,7 +1343,9 @@ bool AOpenWillowWalker::TakeInventoryItemById(const FString& Id, FOpenWillowTake
 void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
-    if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
+    // Marcus's talk outranks a nearer target on purpose: it opens and turns in the slice's mission, and in his shop the use
+    // key must not be taken by a gun lying on the counter. The quest's own reach test has no distance to compare, either.
+    if (Quest && Quest->TryUse()) return;
     const APlayerController* Player = Cast<APlayerController>(GetController());
     auto Take = [this](AOpenWillowInventoryPickup* Pickup)
     {
@@ -1369,20 +1371,27 @@ void AOpenWillowWalker::PickupNearby()
         BestDistanceSquared = DistanceSquared;
         Nearest = *It;
     }
-    // One rule for the rest: the nearest use target in its own reach wins (vending machine, door, pickup).
-    double VendorDistance = 0, MoverDistance = 0;
-    const double PickupDistance = Nearest ? double(BestDistanceSquared) : DBL_MAX;
-    const bool bVendor = UOpenWillowVendorSubsystem::NearestInReach(*this, VendorDistance);
-    const bool bMover = Mover && Mover->InReach(GetActorLocation(), MoverDistance);
-    if (bVendor && (!bMover || VendorDistance <= MoverDistance) && VendorDistance <= PickupDistance
-        && UOpenWillowVendorSubsystem::TryUseNearest(*this)) return;
-    // Lootables and loot pickups (OpenWillowInteractive.cpp): the same nearest-in-reach rule as the vendors.
-    double InteractiveDistance = 0;
-    const bool bInteractive = UOpenWillowInteractiveSubsystem::NearestInReach(*this, InteractiveDistance);
-    if (bInteractive && (!bMover || InteractiveDistance <= MoverDistance) && InteractiveDistance <= PickupDistance
-        && UOpenWillowInteractiveSubsystem::TryUseNearest(*this)) return;
-    if (bMover && MoverDistance <= PickupDistance && Mover->TryInteract()) return;
-    if (Nearest) Take(Nearest);
+    // One rule for the rest: every target in its own reach is measured, and the press goes nearest first.
+    FOpenWillowUseDistances Targets;
+    double Distance = 0;
+    if (UOpenWillowVendorSubsystem::NearestInReach(*this, Distance)) Targets.Vendor = Distance;
+    if (UOpenWillowInteractiveSubsystem::NearestInReach(*this, Distance)) Targets.Interactive = Distance;
+    if (Mover && Mover->InReach(GetActorLocation(), Distance)) Targets.Door = Distance;
+    if (Nearest) Targets.Pickup = double(BestDistanceSquared);
+    // Nearest first; a target that refuses (a full ammo pool, say) lets the next one try.
+    Targets.Offer([&](EOpenWillowUseTarget Target)
+    {
+        switch (Target)
+        {
+        case EOpenWillowUseTarget::Vendor: return UOpenWillowVendorSubsystem::TryUseNearest(*this);
+        case EOpenWillowUseTarget::Interactive: return UOpenWillowInteractiveSubsystem::TryUseNearest(*this);
+        case EOpenWillowUseTarget::Door: return Mover->TryInteract();
+        default: break;
+        }
+        // A refused dropped gun still takes the press: the player meant the gun, and the rejection is its feedback.
+        Take(Nearest);
+        return true;
+    });
 }
 void AOpenWillowWalker::SetInventoryPresentation(bool bShow)
 {
