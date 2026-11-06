@@ -76,6 +76,8 @@ the attribute falls back to its constant, 0. Implement as: `GradeOf(skill) = gra
   2. At +1.25 s: radius damage centred on the target: radius 2000, no falloff, no trace test, momentum -110000
      (negative = pulled toward the target), damage = 1 x PlayerSkillDamage, status chance 0, no damage type set,
      instigator Maya.
+     **Live correction (2026-11-06, level 8 only, one read): damage is 1.16 x PlayerSkillDamage, not 1 x. The reason is not known.
+     The 1.25 s delay was seen as written, and the pull was not read.**
   3. Right after: the target performs a melee "attack" with a MeleeDefinition of radius 2000, height 256, cone 360.
      Without Thoughtlock it uses `Converge_MeleeDefinition` (affects the target's *friends*, i.e. other enemies; on hit
      it only spawns a particle). With Thoughtlock (Maya has it) it uses `Converge_MeleeDefinition_WithThoughtlock`
@@ -387,7 +389,7 @@ Reading: gun damage +8 % per grade against targets above 50 % health. Applied in
 | Kill skills (3.1) | a kill (`AOpenWillowWalker::NotifyKilledEnemy`) restarts a 7 s timer; Kill skills' modifiers count while it runs. UNVERIFIED, with no live support: see the third run | refresh vs add, which kills count (guess) |
 | Inertia (3.3) | reload speed (through the PR 2 reload hook) | shield regeneration (no shield) |
 | Helios (1.7) | +0.75 s blast on the lifted target, radius 650, 0.29 x g x PlayerSkillDamage (live, checked at level 8 only) | burn status; the blocked-target chain |
-| Converge (1.1) | +1.25 s blast, radius 2000, 1 x PlayerSkillDamage | the pull, the melee definitions; blocked chain |
+| Converge (1.1) | +1.25 s blast, radius 2000, 1.16 x PlayerSkillDamage (one live read, level 8 only, UNVERIFIED beyond it) | the pull, the melee definitions; blocked chain |
 | Ruin (1.2) | slag, shock, corrosive blasts 1, 2, 3 s after the lock, radius 650, 1 x PlayerSkillDamage (live, checked at level 8 only) | the status effects; blocked chain |
 | Sweet Release (2.1) | when the held target dies, g orbs each heal 15 % of Maya's missing health after flight time at 800 uu/s | the orb actor and homing; other players |
 | Life Tap (3.4) | while the kill-skill timer runs, Maya heals `PlayerConvertDamageToHealingPercent` (0.012 x g) of each gun hit's applied damage | the native conversion rule (guess: applied damage x fraction) |
@@ -502,3 +504,39 @@ Reading a later step: `Skill.UpdateGrade` keeps an active skill at grade 1 or mo
 at grade 1 for the rest of the session (Helios did, in the third run). The capture now reads the running skills from
 `SkillEffectManager.ActiveSkills` as well as the tree, deactivates a skill whose grade goes back to 0, and stops if they still disagree.
 Each step records whether another step's skill could be in its reading. None of this has run in the game yet.
+
+### Fourth run (2026-11-06): Converge read; the timer and the heal not
+
+Saves, config, SDK settings and Sanity Saver identical to the backup afterwards, by a separate hash compare. One level-8 Maya, one cast
+per skill. The session reported itself complete, which overstated it: two of its three steps did not get what they came for (see below).
+
+- **Converge:** fired about 1.32 s after the key press, which fits the 1.25 s above plus input latency. It hit the target and three other
+  pawns, the farthest about 1,600 uu away, consistent with radius 2000 but not a test of it. The melee part did 0 damage. Damage is
+  1.16 x PlayerSkillDamage, the host's number now.
+- **Sub-Sequence:** `InterruptPhaseLock` fired once and `EndSkill` twice for one kill, so the second interrupt guessed in section 1.5 did not
+  happen in this cast. `OnKilledTarget`'s own count was not in the hook's rows, and no re-lock was seen; the other pawns were isolated, so
+  this is no test of the re-lock.
+- **Kill-skill timer: no result.** Neither unwounded target died in 20 s of held fire, and one of them was still at full health. With no kill,
+  the timer staying at 0 says nothing. What stopped the gun is **not known**. Two candidates, neither shown: the shots missed a moving target
+  (the aim helper was written for a standing one), or the gun is not automatic, so holding fire after one `StartFire` fired one shot. The
+  run recorded no shot count, weapon type or per-shot health.
+- **Sweet Release: heal not seen, and probably not observable in this run.** Maya stayed at her lowered health for 12 s. The immunity hook
+  refuses `TakeDamage` on her, and the heal is read in section 2.1 as healing damage, so the hook may have blocked it. Unproven.
+- **`DeactivateSkill`: not shown to work.** The running lists were empty after each restore, but the record keeps only the state after,
+  so neither the call nor its effect can be told. Nothing relies on it being shown. `Skill.Grade` reads as a plain integer.
+
+### What a useful fifth run needs
+
+Not queued until this is reviewed. Only the two things the fourth run failed to read:
+
+1. **Kill-skill timer: find out why the gun did nothing before relying on any kill.** A standing target that keeps its controller: `isolate` holds
+   its ground speed at 0 and detaches every other pawn. Each trigger pull separate (repeated `StartFire` and `StopFire`), with a per-tick health
+   row on the target, the weapon's name and type, the aim error, and a count of shots fired, so a miss and a single shot can be told apart.
+   Isolating one target leaves the others uncontrolled, so the second kill (refresh or add) needs a target that keeps its controller, or a
+   new spawn; if that is not possible, one kill still gives the duration. A kill counts only when it was the gun's.
+2. **Sweet Release: a heal that can arrive.** The immunity hook has to let the heal through. Narrowest first: refuse only damage from a non-player
+   instigator, or lift the hook only for this step with every other pawn already isolated. To keep this safe: saves stay blocked and are
+   restored; Maya can go down only if a pawn reaches her, which ends the step, and that is recorded rather than retried; the step's health is set
+   back at its end. The read is whose health the heal uses and how much.
+
+Each step then has to report what it came for (the capture's evidence rule), so a run without those reads says so.

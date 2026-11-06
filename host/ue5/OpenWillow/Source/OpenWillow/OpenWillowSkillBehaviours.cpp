@@ -1,7 +1,7 @@
 // Maya's behaviour skills in the host: the kill-skill timer, health regeneration from skill modifiers, and the
 // Phaselock variants that the stock behaviour graphs run (Helios, Converge, Ruin, Sweet Release). Rules and numbers are
 // from the own-words record docs/verification/NATIVE_SKILL_BEHAVIOURS.md (behaviour graphs and script read from the
-// install). Ruin's and Helios's damage and timing come from live reads at level 8 only; every other rule here is not confirmed in the
+// install). Ruin's, Helios's and Converge's damage and timing come from live reads at level 8 only; every other rule here is not confirmed in the
 // running game. Phaselock events are read from the Walker's public state each tick,
 // so the Phaselock code needs no hook; a kill comes from AOpenWillowWalker::NotifyKilledEnemy.
 #include "OpenWillowSkills.h"
@@ -192,10 +192,10 @@ void UOpenWillowSkills::TickBehaviours(float Now, float DeltaTime)
             // gave 0.2, and the difference is not explained. The burn it applies is not modelled.
             if (const int32 G = GradeOfNamed(TEXT("Helios")))
                 Blast(CastAt + 0.75f, 650.f, HeliosDamageAt(G, MayaLevel), TEXT("GD_Incendiary.DamageType.DmgType_Incendiary_Impact"), TEXT("Helios"), TEXT("Helios"));
-            // Converge: at +1.25 s a blast on the target, radius 2000, 1 x PlayerSkillDamage. The pull (momentum -110000
+            // Converge: at +1.25 s a blast on the target, radius 2000 (UNVERIFIED), ConvergeDamageAt (one live read, level 8). The pull (momentum -110000
             // toward the target) is not applied by the host.
             if (GradeOfNamed(TEXT("Converge")) > 0)
-                Blast(CastAt + 1.25f, 2000.f, SkillDamageAt(MayaLevel), TEXT(""), TEXT("Converge"), TEXT("Converge"));
+                Blast(CastAt + 1.25f, 2000.f, ConvergeDamageAt(MayaLevel), TEXT(""), TEXT("Converge"), TEXT("Converge"));
             // Ruin: 1, 2 and 3 s after the lock, slag, shock and corrosive pulses on the target, radius 650 (UNVERIFIED). Damage
             // 1 x PlayerSkillDamage each: the live value, checked at level 8 only (with the timing); the data reading gave
             // 7.2 x PlayerSkillStatusEffectDamage. Their status effects are not modelled.
