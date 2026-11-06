@@ -1,4 +1,5 @@
 #include "OpenWillowWalker.h"
+#include "OpenWillowAudio.h"
 #include "OpenWillowMayaMovement.h"
 #include "OpenWillowMover.h"
 #include "OpenWillowPickupCard.h"
@@ -1646,6 +1647,7 @@ void AOpenWillowWalker::CancelReload()
 void AOpenWillowWalker::FireWeapon()
 {
     ++OpenWillowFiring::Counts.Shots;
+    OpenWillowAudio::Play(this, TEXT("fire"));
     // ADD_Fire_Recoil is a UE3 additive clip; layer it on the held pose.
     const FViewModel* Model = ActiveViewModel();
     float RecoilWeight = Model ? Model->RecoilWeight : 0.45f;
@@ -2171,6 +2173,7 @@ void AOpenWillowWalker::UsePhaselock()
     // A miss or blocked target returns above and leaves the reload running.
     CancelReload();
     bPhaselockHit = true;
+    OpenWillowAudio::Play(this, TEXT("phaselock_cast"));
     PhaselockTarget = Target;
     // The cooldown manager holds the pool from OnSelectedTarget (the cast) to OnReleasedTarget.
     PhaselockHeldUntil = Now + PhaselockTimeline.ReleasedAt;
