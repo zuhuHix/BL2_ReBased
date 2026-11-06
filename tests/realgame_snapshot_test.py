@@ -61,7 +61,7 @@ $r = Restore-VerifiedRoots $bak (& $rootsOf @('new')) @{ new = 'absent' }
 $out.created_kept = Test-Path (Join-Path $tmp 'live_new/store.txt'); $out.created_summary = $r.summary; $out.created_clean = $r.clean
 Remove-Item -Recurse (Join-Path $tmp 'live_new')
 $r = Restore-VerifiedRoots $bak (& $rootsOf @('new')) @{ new = 'absent' }
-$out.still_absent_summary = $r.summary
+$out.still_absent_summary = $r.summary; $out.still_absent_clean = $r.clean
 
 # A restore that throws, or a compare that still differs, is not clean.
 function Restore-Tree { throw 'disk full' }
@@ -110,13 +110,13 @@ def test_helpers():
     r = run()
     assert r['good_snapshot'] is True
     assert 'differs' in r['partial_threw'] and r['partial_marked'] is False
-    assert r['unverified_kept'] is True and r['unverified_clean'] is True and 'NOT IDENTICAL' in r['unverified_summary'] and 'a not backed up' in r['unverified_summary']
+    assert r['unverified_kept'] is True and r['unverified_clean'] is False and 'NOT IDENTICAL' in r['unverified_summary'] and 'a not backed up' in r['unverified_summary']
     assert 'not backed up' in r['flag_is_not_enough']       # only the recorded hashes make a root restorable
     assert r['vanished_kept'] is True and r['vanished_clean'] is False and r['vanished_changed'] == ['b'] and r['vanished_row'].startswith('BACKUP CHANGED')
     assert r['status_recovery'] == 'recovery needed: restore did not compare clean' and r['status_recovery_first'] == 'recovery needed: game exit not confirmed'
     assert r['verified_clean'] is True and r['verified_removed'] is True and r['verified_summary'].startswith('identical')
-    assert r['created_kept'] is True and r['created_clean'] is True and 'NOT IDENTICAL' in r['created_summary'] and 'new created during the run' in r['created_summary']
-    assert r['still_absent_summary'].startswith('identical')
+    assert r['created_kept'] is True and r['created_clean'] is False and 'NOT IDENTICAL' in r['created_summary'] and 'new created during the run' in r['created_summary']
+    assert r['still_absent_summary'].startswith('identical') and r['still_absent_clean'] is True
     assert r['failed_clean'] is False and 'NOT IDENTICAL' in r['failed_summary'] and r['mismatch_clean'] is False
     assert r['status_all'] == 'completed' and r['status_missing'] == 'incomplete: hit' and r['status_none'] == 'incomplete: hit'
     assert r['status_error'] == 'failed: cooldown did not end'
@@ -134,25 +134,26 @@ function Restore-VerifiedRoots {
                               summary = 'NOT IDENTICAL to bak (1 problems)'; clean = $false } }
 }
 $roots = [ordered]@{ SaveData = '__TMP__\live' }
-$Out = '__TMP__'; $bak = '__TMP__'; $HubLock = '__TMP__\hub.lock'; $Lane = 'test'
+$Out = '__OUT__'; $bak = '__TMP__'; $HubLock = '__TMP__\hub.lock'; $Lane = 'test'
 Set-Content -LiteralPath $HubLock 'test now'
 $log = [ordered]@{}; $snapshots = @{ SaveData = @{} }; $extraRoots = [ordered]@{}; $stagesRequested = @('hit'); $runError = ''
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
 __SETUP__
-$hub = 'held'; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = $false; $marker = 'x'
+$hub = 'held'; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = __OWNED__; $marker = 'x'
+__STUBS__
 try {
     __BODY__
 __CAPTURE_TAIL__
 """
 
 
-def run_tail(body, clean=False, proc='$null', setup='', after=None):
+def run_tail(body, clean=False, proc='$null', setup='', after=None, owned='$true', stubs="function Remove-Driver { }", out='__TMP__'):
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
-        script.write_text(TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__SETUP__', setup.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+        script.write_text(TAIL.replace('__OUT__', out).replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
+                          .replace('__SETUP__', setup.replace('__TMP__', tmp)).replace('__OWNED__', owned).replace('__STUBS__', stubs.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
@@ -187,6 +188,89 @@ def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
         assert done.returncode == code and f'status: {status}' in done.stdout, (body, clean, proc, done.returncode, done.stdout, done.stderr)
         # A clean restore releases the hub lock; recovery keeps it.
         assert done.hub_lock_kept is status.startswith('recovery'), (body, clean, proc, done.stdout)
+
+
+def test_a_leftover_driver_holds_the_locks_and_says_what_to_do():
+    # Remove-Driver does nothing here, and the folder stays. The restore is clean.
+    make = "New-Item -ItemType Directory -Force (Join-Path $script:DriverDir 'x') | Out-Null"
+    done = run_tail("$stagesDone.Add('hit')", True, '$null', make)
+    assert done.returncode == 1 and 'status: recovery needed: driver not removed' in done.stdout and done.hub_lock_kept is True, done.stdout
+    assert 'MANUAL RECOVERY' in done.stdout and 'Remove-Item -Recurse -Force' in done.stdout, done.stdout
+    # Remove-Driver throws.
+    done = run_tail("$stagesDone.Add('hit')", True, stubs="function Remove-Driver { throw 'in use' }")
+    assert done.returncode == 1 and 'driver not removed (error: in use)' in done.stdout and done.hub_lock_kept is True, done.stdout
+
+
+def test_a_missing_evidence_file_cannot_exit_0_and_the_restore_still_runs():
+    marker = "function Restore-VerifiedRoots { Set-Content '__TMP__\\restored.txt' 'x'; [pscustomobject]@{ rows = @(); summary = 'identical'; clean = $true } }"
+    done = run_tail("$stagesDone.Add('hit')", True, stubs='function Remove-Driver { }\n' + marker, out='__TMP__\\no\\such\\folder',
+                    after=lambda tmp, d: setattr(d, 'restored', (Path(tmp) / 'restored.txt').exists()))
+    assert done.returncode == 1 and 'status: failed: evidence not written' in done.stdout and done.restored is True, done.stdout
+
+
+def test_a_failed_run_stops_the_hooks_while_the_game_is_alive():
+    alive = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
+    calls = "function Remove-Driver { }
+function Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; if (__FAILS__) { throw 'no reply' } }"
+    done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$false'))
+    assert 'py: pi_stop(); unmark_lock()' in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
+    done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$true'))
+    assert 'cleanup hooks: not stopped' in done.stdout and 'cleanup game:' in done.stdout, done.stdout    # the rest of the cleanup still runs
+    done = run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $true; Id = 1 }', stubs=calls.replace('__FAILS__', '$true'))
+    assert 'py:' not in done.stdout and 'cleanup hooks' not in done.stdout, done.stdout   # an exited game is not asked
+
+
+def test_a_run_that_touched_nothing_has_nothing_to_recover():
+    # The backup failed partway, before the driver or the game: no restore, no recovery, the locks released, and still not completed.
+    done = run_tail("throw 'copy failed'", True, owned='$false', stubs="function Restore-VerifiedRoots { throw 'must not run' }")
+    assert 'status: failed: copy failed' in done.stdout and 'cleanup saves: not touched' in done.stdout and done.hub_lock_kept is False, done.stdout
+    assert done.returncode == 1 and 'MANUAL RECOVERY' not in done.stdout, done.stdout
+
+
+GUARDS = r"""
+$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+$out = [ordered]@{}
+foreach ($reply in '4', ' 4', "4`n", 'True', 'block', '0', '-1', '', '4 saves', "4`n5", 'Traceback: block_saves failed') {
+    try { $out["saves [$reply]"] = Assert-SavesBlocked $reply } catch { $out["saves [$reply]"] = 'refused' }
+}
+try { $out['saves null'] = Assert-SavesBlocked $null } catch { $out['saves null'] = 'refused' }
+
+$script:focus = 0
+function Get-GameProcess { [pscustomobject]@{ MainWindowHandle = 123 } }
+function Focus-Game { $script:focus++; $false }
+function Get-ForegroundWindowHandle { 999 }
+foreach ($call in @{ n = 'KeyDown'; s = { Send-KeyDown F } }, @{ n = 'Key'; s = { Send-Key F } }, @{ n = 'ClickAt'; s = { Send-ClickAt 1 1 } }, @{ n = 'Wheel'; s = { Send-Wheel 1 } },
+                  @{ n = 'Drag'; s = { Send-Drag 1 1 } }, @{ n = 'Mouse'; s = { Send-Mouse 1 1 } }, @{ n = 'Click'; s = { Send-Click } }) {
+    try { & $call.s; $out["send $($call.n)"] = 'sent' } catch { $out["send $($call.n)"] = "$_" }
+}
+$out.focus_attempts_each = $script:focus / 7
+$script:focus = 0
+function Focus-Game { $script:focus++; $script:fg = 123; $true }
+$script:fg = 999
+function Get-ForegroundWindowHandle { $script:fg }
+try { Assert-GameForeground; $out.refocus = "ok after $script:focus" } catch { $out.refocus = "$_" }
+function Get-GameProcess { $null }
+try { Assert-GameForeground; $out.no_game = 'ok' } catch { $out.no_game = "$_" }
+$out | ConvertTo-Json -Depth 3
+"""
+
+
+def test_the_guards_refuse():
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'guards.ps1'
+        script.write_text(GUARDS.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')), encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True,
+                              env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+    assert done.returncode == 0, done.stdout + done.stderr
+    r = json.loads(done.stdout[done.stdout.index('{'):])
+    assert r['saves [4]'] == 4 and r['saves [ 4]'] == 4 and r['saves [4\n]'] == 4, r
+    for reply in ('True', 'block', '0', '-1', '', '4 saves', '4\n5', 'Traceback: block_saves failed'):
+        assert r[f'saves [{reply}]'] == 'refused', reply
+    assert r['saves null'] == 'refused'
+    for name in ('KeyDown', 'Key', 'ClickAt', 'Wheel', 'Drag', 'Mouse', 'Click'):
+        assert 'not the foreground window' in r[f'send {name}'], (name, r[f'send {name}'])
+    assert r['focus_attempts_each'] == 3 and r['refocus'] == 'ok after 1' and 'not running' in r['no_game'], r
 
 
 def test_the_printed_restore_refuses_a_backup_that_changed_after_an_unconfirmed_exit():
@@ -237,9 +321,11 @@ Set-Content '__TMP__\live\keep.txt' 'changed by the run'
 def test_the_capture_is_wired_to_the_safety_helpers():
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8')
     for call in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Restore-VerifiedRoots $bak $roots $snapshots', 'Save-VerifiedBackupRecord $bak $roots $snapshots',
-                 '$restoreCommand = "Restore-VerifiedBackup \'$bak\'"',
+                 'Format-ManualRecovery $recovery $bak $HubLock $Lane', '$recovery = Get-RecoveryReason', '$holdLocks = [bool]$recovery',
+                 "Assert-SavesBlocked (Py 'print(block_saves())')",
                  'if ($holdLocks) { $runLock = $false; $hub = $null }', 'Format-RestoreRows $rows', "if ($log.status -ne 'completed') { exit 1 }"):
         assert call in text, call
+    assert 'Focus-Game' not in text     # Assert-GameForeground checks what Focus-Game's answer only reported
 
 
 if __name__ == '__main__':
@@ -248,5 +334,10 @@ if __name__ == '__main__':
     test_exit_0_only_for_a_completed_run_with_nothing_to_recover()
     test_the_printed_restore_refuses_a_backup_that_changed_after_an_unconfirmed_exit()
     test_the_printed_restore_restores_an_intact_backup()
+    test_a_leftover_driver_holds_the_locks_and_says_what_to_do()
+    test_a_missing_evidence_file_cannot_exit_0_and_the_restore_still_runs()
+    test_a_failed_run_stops_the_hooks_while_the_game_is_alive()
+    test_a_run_that_touched_nothing_has_nothing_to_recover()
+    test_the_guards_refuse()
     test_the_capture_is_wired_to_the_safety_helpers()
     print('ok')

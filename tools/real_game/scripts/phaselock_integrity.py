@@ -455,6 +455,7 @@ def pi_stop():
     if pi["file"] is not None:
         pi["file"].close()
         pi["file"] = None
+    pi["pawn"] = None   # no reference kept once the probe stops; pi_start looks it up again
 
 
 def pi_result():

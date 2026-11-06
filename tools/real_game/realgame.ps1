@@ -135,8 +135,8 @@ function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) {
 # Restore each root from $Backup\<name>. $Roots maps name to live folder; $Snapshots says what the backup holds for it: the hashes
 # New-VerifiedSnapshot returned (re-checked first; a backup that changed since is not restored from), 'absent' (the root did not exist
 # at the backup) or anything else (no usable snapshot: never restored from). A root absent at the backup and present now is reported and
-# not deleted. Returns rows, a summary, changed (the roots whose backup changed) and clean: false when a backup changed, a restore failed
-# or a compare still differs. A root reported and left alone keeps clean true, but the summary does not say identical.
+# not deleted. Returns rows, a summary, changed (the roots whose backup changed) and clean: true only when every root is identical to its
+# backup or stayed absent. A root reported and left alone, or one with no usable snapshot, is not clean.
 function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
     $rows = @(); $notes = @(); $changed = @()
     foreach ($name in $Roots.Keys) {
@@ -164,7 +164,7 @@ function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
     $summary = if ($bad.Count) { "NOT IDENTICAL to $Backup ($($bad.Count) problems)" }
     elseif ($notes.Count) { "NOT IDENTICAL to ${Backup}: $($notes -join '; ')" }
     else { "identical to $Backup after $($rows.Count) restores" }
-    [pscustomobject]@{ rows = $rows; summary = $summary; changed = $changed; clean = ($bad.Count -eq 0) }
+    [pscustomobject]@{ rows = $rows; summary = $summary; changed = $changed; clean = ($bad.Count -eq 0 -and $notes.Count -eq 0) }
 }
 
 # The record that outlives this process: each root's live folder and its snapshot state, in the backup folder.
@@ -196,6 +196,39 @@ function Restore-VerifiedBackup([string]$Backup) {
 # The restore rows as text. Plain objects go through a deferred formatter: when a script ends on a rethrown error, they and every
 # string after them never reach the screen, and those can be the recovery steps. Text prints in order either way.
 function Format-RestoreRows($Rows) { if (@($Rows).Count) { @($Rows) | Format-Table -AutoSize | Out-String -Width 200 } }
+
+# Why a finalizer must keep its locks: every reason a run leaves something for a person. Empty when nothing is left. Any reason holds both
+# locks: an unconfirmed game can overwrite restored files, a restore that is not clean needs recovery, and a leftover driver keeps its
+# save-block flag and command channel in the game's folder for the next launch.
+function Get-RecoveryReason([bool]$GameGone, [string]$GameState, $Restored, [string]$RestoreError, [string]$DriverState) {
+    $reasons = @()
+    if (!$GameGone) { $reasons += "game exit not confirmed ($GameState)" }
+    if ($RestoreError) { $reasons += "restore failed ($RestoreError)" }
+    elseif ($Restored -and !$Restored.clean) { $reasons += "restore did not compare clean ($($Restored.summary))" }
+    if ($GameGone -and $DriverState -match '^(STILL PRESENT|error)') { $reasons += "driver not removed ($DriverState)" }
+    $reasons -join '; '
+}
+# The one recovery text: what happened, then only the steps this run needs. Restore-VerifiedBackup refuses a backup that changed.
+function Format-ManualRecovery([string]$Reason, [string]$Backup, [string]$HubLock, [string]$Lane) {
+    $lines = @("MANUAL RECOVERY: $Reason. Both locks are held and the backup is kept at $Backup.",
+        '  1. Make sure Borderlands 2 is closed.',
+        "  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'")
+    if (Test-Path -LiteralPath $script:DriverDir) { $lines += "     Remove-Item -Recurse -Force '$script:DriverDir'" }
+    if ($Backup) {
+        $lines += "     Restore-VerifiedBackup '$Backup'"
+        $lines += "     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand. A root reported as created or not backed up is yours to judge."
+    }
+    $lines += "  3. Only when nothing above reports a problem, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'."
+    $lines -join [Environment]::NewLine
+}
+
+# block_saves() answers the number of save functions it hooked. Only a positive whole number means it ran: anything else, a traceback that
+# happens to contain a word included, stops the run before any gameplay.
+function Assert-SavesBlocked($Reply) {
+    $text = "$Reply".Trim()
+    if ($text -notmatch '^[1-9][0-9]*$') { throw "saves are not blocked: block_saves() answered '$text'" }
+    [int]$text
+}
 
 # A capture counts only when it holds frames and every named shot was saved.
 function Test-CaptureComplete($Capture, [hashtable]$Shots = @{}) {
@@ -240,6 +273,19 @@ function Focus-Game {
     return ([OWRG.Native]::GetForegroundWindow() -eq $h)
 }
 
+function Get-ForegroundWindowHandle { [OWRG.Native]::GetForegroundWindow() }
+# Input goes to whatever has focus, on a PC someone may be using, so every key press and mouse action asks this first: the game must be the
+# foreground window, after up to three focus attempts, or the step fails.
+function Assert-GameForeground {
+    for ($attempt = 0; $attempt -le 3; $attempt++) {
+        $p = Get-GameProcess
+        if (!$p) { throw 'refusing to send input: the game is not running' }
+        if ((Get-ForegroundWindowHandle) -eq $p.MainWindowHandle) { return }
+        if ($attempt -lt 3) { Focus-Game | Out-Null }
+    }
+    throw 'refusing to send input: Borderlands 2 is not the foreground window after 3 focus attempts (is someone using this PC?)'
+}
+
 function Get-GameRect {
     $h = (Get-GameProcess).MainWindowHandle
     $r = New-Object OWRG.Native+RECT; [OWRG.Native]::GetClientRect($h, [ref]$r) | Out-Null
@@ -264,9 +310,11 @@ function Assert-Key([string]$Key) { if (-not ($script:Scan.ContainsKey($Key) -or
 $script:ScanExt = @{ Up=0x48; Down=0x50; Left=0x4B; Right=0x4D }
 function Send-KeyDown([string]$Key) {
     Assert-Key $Key
+    Assert-GameForeground
     if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0x9, [UIntPtr]::Zero) }
     else { [OWRG.Native]::keybd_event(0, [byte]$script:Scan[$Key], 0x8, [UIntPtr]::Zero) }
 }
+# A release is never refused: it only lets go of what a press took, wherever focus has gone.
 function Send-KeyUp([string]$Key) {
     Assert-Key $Key
     if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0xB, [UIntPtr]::Zero) }
@@ -275,20 +323,24 @@ function Send-KeyUp([string]$Key) {
 function Send-Key([string]$Key, [int]$HoldMs = 60) { Send-KeyDown $Key; Start-Sleep -Milliseconds $HoldMs; Send-KeyUp $Key }
 # Move the cursor to a point given in game client pixels and left-click (menus).
 function Send-ClickAt([int]$X, [int]$Y) {
+    Assert-GameForeground
     $r = Get-GameRect; [OWRG.Native]::SetCursorPos($r.X + $X, $r.Y + $Y) | Out-Null; Start-Sleep -Milliseconds 150; Send-Click
 }
 function Send-Wheel([int]$Notches) {
+    Assert-GameForeground
     $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32](120 * $Notches)), 0)  # negative = toward the user
     [OWRG.Native]::mouse_event(0x800, 0, 0, $data, [UIntPtr]::Zero)
 }
 # Hold the left button and move in steps (inspect-view rotation).
 function Send-Drag([int]$Dx, [int]$Dy, [int]$Steps = 20) {
+    Assert-GameForeground
     [OWRG.Native]::mouse_event(0x2, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 50
-    for ($i = 0; $i -lt $Steps; $i++) { [OWRG.Native]::mouse_event(0x1, [int]($Dx / $Steps), [int]($Dy / $Steps), 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 15 }
-    [OWRG.Native]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)
+    try {
+        for ($i = 0; $i -lt $Steps; $i++) { Assert-GameForeground; [OWRG.Native]::mouse_event(0x1, [int]($Dx / $Steps), [int]($Dy / $Steps), 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 15 }
+    } finally { [OWRG.Native]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero) }   # the button is always let go
 }
-function Send-Mouse([int]$Dx, [int]$Dy) { [OWRG.Native]::mouse_event(0x1, $Dx, $Dy, 0, [UIntPtr]::Zero) }
-function Send-Click([switch]$Right) { if ($Right) { [OWRG.Native]::mouse_event(0x8,0,0,0,[UIntPtr]::Zero); Start-Sleep -m 50; [OWRG.Native]::mouse_event(0x10,0,0,0,[UIntPtr]::Zero) } else { [OWRG.Native]::mouse_event(0x2,0,0,0,[UIntPtr]::Zero); Start-Sleep -m 50; [OWRG.Native]::mouse_event(0x4,0,0,0,[UIntPtr]::Zero) } }
+function Send-Mouse([int]$Dx, [int]$Dy) { Assert-GameForeground; [OWRG.Native]::mouse_event(0x1, $Dx, $Dy, 0, [UIntPtr]::Zero) }
+function Send-Click([switch]$Right) { Assert-GameForeground; if ($Right) { [OWRG.Native]::mouse_event(0x8,0,0,0,[UIntPtr]::Zero); Start-Sleep -m 50; [OWRG.Native]::mouse_event(0x10,0,0,0,[UIntPtr]::Zero) } else { [OWRG.Native]::mouse_event(0x2,0,0,0,[UIntPtr]::Zero); Start-Sleep -m 50; [OWRG.Native]::mouse_event(0x4,0,0,0,[UIntPtr]::Zero) } }
 
 # Run Python inside the game through the openwillow_realgame mod and return its printed output.
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
