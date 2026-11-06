@@ -1,5 +1,6 @@
-"""tools/check_audio.py on invented logs. No game data."""
+"""tools/check_audio.py on invented logs, and how tools/test_audio.ps1 gets the editor's exit code. No game data. Needs Windows PowerShell."""
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -33,10 +34,10 @@ class CheckAudioTest(unittest.TestCase):
         self.assertEqual(self.problems(log()), [])
 
     def test_a_summary_alone_does_not_pass(self):
-        self.assert_problem(log(rows=[], summary='result=PASS passed=16 failed=0'), 'appears 0 times')
+        self.assert_problem(log(rows=[], summary=f'result=PASS passed={len(ca.EXPECTED)} failed=0'), 'appears 0 times')
 
     def test_a_lost_row_fails_even_with_a_pass_summary(self):
-        text = log(list(ca.EXPECTED)[:-1], summary='result=PASS passed=16 failed=0')
+        text = log(list(ca.EXPECTED)[:-1], summary=f'result=PASS passed={len(ca.EXPECTED)} failed=0')
         self.assert_problem(text, 'appears 0 times')
 
     def test_a_renamed_row_fails(self):
@@ -51,9 +52,10 @@ class CheckAudioTest(unittest.TestCase):
         self.assert_problem(text, 'row refuse_non_pcm FAIL')
 
     def test_wrong_counts_fail(self):
-        self.assert_problem(log(summary='result=PASS passed=15 failed=0'), 'summary result=PASS passed=15')
-        self.assert_problem(log(summary='result=PASS passed=16 failed=1'), 'failed=1')
-        self.assert_problem(log(summary='result=FAIL passed=16 failed=0'), 'summary result=FAIL')
+        total = len(ca.EXPECTED)
+        self.assert_problem(log(summary=f'result=PASS passed={total - 1} failed=0'), f'summary result=PASS passed={total - 1}')
+        self.assert_problem(log(summary=f'result=PASS passed={total} failed=1'), 'failed=1')
+        self.assert_problem(log(summary=f'result=FAIL passed={total} failed=0'), 'summary result=FAIL')
 
     def test_a_missing_or_second_summary_fails(self):
         self.assert_problem(log(summary=''), '0 summaries')
@@ -61,6 +63,22 @@ class CheckAudioTest(unittest.TestCase):
 
     def test_the_tone_must_have_played_once(self):
         self.assert_problem(log(play=''), '0 tone play lines')
+
+    def test_every_row_passing_still_needs_a_clean_exit(self):
+        self.assertEqual(ca.grade(log(), '0')[1], [])
+        self.assertTrue(any('exited with -1073741819' in p for p in ca.grade(log(), '-1073741819')[1]))
+        self.assertTrue(any('did not exit' in p for p in ca.grade(log(), 'timeout')[1]))
+
+    def test_the_exit_code_comes_through_the_way_the_suite_reads_it(self):
+        # The same calls as tools/test_audio.ps1, on a child that exits 7. Without the Handle line ExitCode comes back empty.
+        command = ("$p = Start-Process -FilePath powershell -ArgumentList '-NoProfile','-Command','exit 7' -WindowStyle Hidden -PassThru; "
+                   "$null = $p.Handle; if (!$p.WaitForExit(60000)) { exit 99 }; exit $p.ExitCode")
+        self.assertEqual(subprocess.run(['powershell', '-NoProfile', '-Command', command], timeout=120).returncode, 7)
+
+    def test_the_suite_reads_the_exit_code_and_passes_it_on(self):
+        text = (Path(__file__).resolve().parent.parent / 'tools/test_audio.ps1').read_text(encoding='utf-8')
+        for needed in ('$null = $process.Handle', '$process.WaitForExit(', '$process.ExitCode', "check_audio.py') $log $editorEnd"):
+            self.assertIn(needed, text)
 
     def test_a_mixer_pass_needs_its_numbers(self):
         self.assert_problem(log(drained='queued=0 left=0'), 'mixer row')

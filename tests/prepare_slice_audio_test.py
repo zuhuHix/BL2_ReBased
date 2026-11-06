@@ -14,11 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import prepare_slice_audio as psa  # noqa: E402
 
 
-def wav_bytes(rate=48000, channels=1, frames=48000, data=None, riff_size=None, before_fmt=b''):
+def wav_bytes(rate=48000, channels=1, frames=48000, data=None, riff_size=None, before_fmt=b'', after_data=b''):
     """A WAV built by hand, so a test can make the header lie."""
     payload = bytes(2 * channels * frames) if data is None else data
     fmt = struct.pack('<4sIHHIIHH', b'fmt ', 16, 1, channels, rate, rate * 2 * channels & 0xFFFFFFFF, 2 * channels, 16)
-    body = b'WAVE' + before_fmt + fmt + struct.pack('<4sI', b'data', len(payload)) + payload
+    body = b'WAVE' + before_fmt + fmt + struct.pack('<4sI', b'data', len(payload)) + payload + after_data
     return b'RIFF' + struct.pack('<I', len(body) if riff_size is None else riff_size) + body
 
 
@@ -68,6 +68,25 @@ class PrepareSliceAudioTest(unittest.TestCase):
     def test_a_padded_odd_chunk_is_stepped_over(self):
         odd = struct.pack('<4sI', b'LIST', 3) + b'abc' + b'\0'
         self.assertIsNone(psa.check_wav(self.write('1.wav', wav_bytes(before_fmt=odd)), 1.0))
+
+    def test_a_second_fmt_is_refused(self):
+        second = struct.pack('<4sIHHIIHH', b'fmt ', 16, 1, 1, 8000, 16000, 2, 16)
+        self.assertIn('more than one fmt', psa.check_wav(self.write('1.wav', wav_bytes(before_fmt=second)), None))
+
+    def test_a_second_data_is_refused(self):
+        second = struct.pack('<4sI', b'data', 2) + b'\0\0'
+        self.assertIn('more than one data', psa.check_wav(self.write('1.wav', wav_bytes(after_data=second)), None))
+
+    def test_a_chunk_after_data_may_not_run_past_the_riff_size(self):
+        late = struct.pack('<4sI', b'LIST', 100)
+        self.assertIn('past the RIFF size', psa.check_wav(self.write('1.wav', wav_bytes(after_data=late)), None))
+
+    def test_a_partial_chunk_at_the_end_is_refused(self):
+        self.assertIn('partial chunk', psa.check_wav(self.write('1.wav', wav_bytes(after_data=b'LIST')), None))
+
+    def test_a_good_chunk_after_data_is_accepted(self):
+        late = struct.pack('<4sI', b'LIST', 2) + b'ab'
+        self.assertIsNone(psa.check_wav(self.write('1.wav', wav_bytes(after_data=late)), 1.0))
 
     def test_a_file_over_the_limit_is_refused_before_reading(self):
         path = self.write('1.wav', b'x')
