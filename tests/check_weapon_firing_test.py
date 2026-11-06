@@ -297,7 +297,7 @@ class Cli(unittest.TestCase):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace'),
                                   'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 damage=9.00 splash_hits=1 splash=9.00 grenade_hits=1 '
-                                  'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 after=0.50'))
+                                  'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 aimed=1 after=0.50'))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
         self.assertIn('grenade: PASS', out)
@@ -323,7 +323,7 @@ def wide(gun, line_hits=0, box_hits=1):
 class GrenadeLine(unittest.TestCase):
     GOOD = {'thrown': '1', 'ammo_before': '3', 'ammo_after': '2', 'refused_empty': '1', 'damage': '100.00', 'splash_hits': '1', 'splash': '100.00',
             'grenade_hits': '1', 'unknown_sources': '0', 'contact_age': '0.20', 'fuse_age': '2.00', 'contact_fuse': '1.80', 'first_contact': 'Dummy_0',
-            'dummy': 'Dummy_0', 'health_before': '500.00', 'health_after': '400.00', 'dummy_died': '0', 'after': '0.50'}
+            'dummy': 'Dummy_0', 'health_before': '500.00', 'health_after': '400.00', 'dummy_died': '0', 'aimed': '1', 'after': '0.50'}
 
     def test_good_line_passes(self):
         self.assertEqual(check.check_grenade(dict(self.GOOD)), [])
@@ -381,6 +381,13 @@ class GrenadeLine(unittest.TestCase):
             line = dict(self.GOOD)
             del line[field]
             self.assertTrue(any('no health read' in reason for reason in check.check_grenade(line)), field)
+
+    def test_a_skipped_aim_fails(self):
+        for bad in ('0', None):
+            line = dict(self.GOOD, aimed=bad)
+            if bad is None:
+                del line['aimed']
+            self.assertTrue(any('aim' in reason for reason in check.check_grenade(line)), bad)
 
     def test_falloff_fails(self):
         self.assertTrue(any('falloff' in reason for reason in check.check_grenade(dict(self.GOOD, splash='60.00'))))
