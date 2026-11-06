@@ -285,6 +285,10 @@ def test_earlier_evidence_is_gone_before_the_run_and_a_failed_final_write_cannot
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
         assert done.returncode == 0, done.stdout + done.stderr
         assert not (Path(tmp) / 'session.json').exists() and not (Path(tmp) / 'save_compare.json').exists()
+        # Kept under a new name, with what it held.
+        for name in ('session', 'save_compare'):
+            kept = list(Path(tmp).glob(f'{name}.*.json'))
+            assert len(kept) == 1 and 'completed' in kept[0].read_text(encoding='utf-8'), kept
     # The last write failing, with no earlier file: nothing says completed, and the exit is not 0.
     make = "New-Item -ItemType Directory -Force '__TMP__\\session.json' | Out-Null"
     done = run_tail("$stagesDone.Add('hit')", True, setup=make)
