@@ -104,34 +104,52 @@ function Restore-Tree([string]$Backup, [string]$Live, [string]$Label) {
 }
 # Relative paths whose presence or SHA-256 differs between two trees (empty when they are identical).
 function Compare-TreeHashes([string]$A, [string]$B) {
-    $A = [IO.Path]::GetFullPath($A).TrimEnd('\'); $B = [IO.Path]::GetFullPath($B).TrimEnd('\')
-    $hashes = { param($Root) $h = @{}; Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $h[$_.FullName.Substring($Root.Length + 1)] = (Get-FileHash -LiteralPath $_.FullName).Hash }; $h }
-    $ha = & $hashes $A; $hb = & $hashes $B
-    @($ha.Keys) + @($hb.Keys) | Sort-Object -Unique | Where-Object { $ha[$_] -ne $hb[$_] }
+    Compare-Hashes (Get-TreeHashes $A) (Get-TreeHashes $B)
+}
+# Relative path to SHA-256 for every file under $Root; empty when the folder is gone.
+function Get-TreeHashes([string]$Root) {
+    $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\'); $h = @{}
+    if (Test-Path -LiteralPath $Root) {
+        Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $h[$_.FullName.Substring($Root.Length + 1)] = (Get-FileHash -LiteralPath $_.FullName).Hash }
+    }
+    $h
+}
+function Compare-Hashes([hashtable]$A, [hashtable]$B) {
+    @($A.Keys) + @($B.Keys) | Sort-Object -Unique | Where-Object { $A[$_] -ne $B[$_] }
 }
 
-# Copy $Live to the new folder $Snapshot and prove the copy matches, or throw. Only a root that passed may be restored from:
-# Restore-Tree deletes live files absent from its backup, so a partial snapshot would lose them.
+# Copy $Live to the new folder $Snapshot and prove the copy matches, or throw. Returns the snapshot's hashes: store them for
+# Restore-VerifiedRoots, because only a root that passed may be restored from. Restore-Tree deletes live files absent from its backup,
+# so a partial snapshot, or one that changed later, would lose them.
 function New-VerifiedSnapshot([string]$Live, [string]$Snapshot) {
     Copy-Item -Recurse -Force -LiteralPath $Live $Snapshot
     Assert-SnapshotMatches $Live $Snapshot
 }
 function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) {
-    $diff = @(Compare-TreeHashes $Live $Snapshot)
+    $hashes = Get-TreeHashes $Snapshot
+    $diff = @(Compare-Hashes (Get-TreeHashes $Live) $hashes)
     if ($diff.Count) { throw "snapshot $Snapshot differs from $Live in $($diff.Count) files, first $($diff[0])" }
+    $hashes
 }
 
-# Restore each root from $Backup\<name>. $Roots maps name to live folder; $Snapshots says what the backup holds for it: 'verified'
-# (restored and compared), 'absent' (the root did not exist at the backup) or nothing (no usable snapshot: never restored from).
-# A root absent at the backup and present now is reported and not deleted. Returns rows, a summary, and clean: false when a restore
-# failed or a compare still differs. A root reported and left alone keeps clean true, but the summary does not say identical.
+# Restore each root from $Backup\<name>. $Roots maps name to live folder; $Snapshots says what the backup holds for it: the hashes
+# New-VerifiedSnapshot returned (re-checked first; a backup that changed since is not restored from), 'absent' (the root did not exist
+# at the backup) or anything else (no usable snapshot: never restored from). A root absent at the backup and present now is reported and
+# not deleted. Returns rows, a summary, changed (the roots whose backup changed) and clean: false when a backup changed, a restore failed
+# or a compare still differs. A root reported and left alone keeps clean true, but the summary does not say identical.
 function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
-    $rows = @(); $notes = @()
+    $rows = @(); $notes = @(); $changed = @()
     foreach ($name in $Roots.Keys) {
         $live = $Roots[$name]
         try {
-            if ($Snapshots[$name] -eq 'verified') { $rows += @(Restore-Tree (Join-Path $Backup $name) $live $name) }
-            elseif ($Snapshots[$name] -eq 'absent') {
+            if ($Snapshots[$name] -is [hashtable]) {
+                $b = Join-Path $Backup $name
+                $diff = @(Compare-Hashes $Snapshots[$name] (Get-TreeHashes $b))
+                if ($diff.Count) {
+                    $rows += [pscustomobject]@{ file = $name; status = "BACKUP CHANGED after verification ($($diff.Count) files, first $($diff[0])); not restored" }
+                    $changed += $name
+                } else { $rows += @(Restore-Tree $b $live $name) }
+            } elseif ($Snapshots[$name] -eq 'absent') {
                 if (Test-Path -LiteralPath $live) {
                     $rows += [pscustomobject]@{ file = $name; status = 'created during the run; left for the maintainer' }
                     $notes += "$name created during the run"
@@ -142,11 +160,11 @@ function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
             }
         } catch { $rows += [pscustomobject]@{ file = $name; status = "RESTORE FAILED: $_" } }
     }
-    $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
+    $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' -or $_.status -like 'BACKUP CHANGED*' })
     $summary = if ($bad.Count) { "NOT IDENTICAL to $Backup ($($bad.Count) problems)" }
     elseif ($notes.Count) { "NOT IDENTICAL to ${Backup}: $($notes -join '; ')" }
     else { "identical to $Backup after $($rows.Count) restores" }
-    [pscustomobject]@{ rows = $rows; summary = $summary; clean = ($bad.Count -eq 0) }
+    [pscustomobject]@{ rows = $rows; summary = $summary; changed = $changed; clean = ($bad.Count -eq 0) }
 }
 
 # The restore rows as text. Plain objects go through a deferred formatter: when a script ends on a rethrown error, they and every
@@ -159,8 +177,9 @@ function Test-CaptureComplete($Capture, [hashtable]$Shots = @{}) {
     foreach ($name in $Shots.Keys) { if (!$Capture.shots.ContainsKey($name)) { return $false } }
     $true
 }
-# 'completed' only when no error stopped the run and every requested stage passed.
-function Get-RunStatus([string[]]$Requested, [string[]]$Completed, [string]$RunError) {
+# 'completed' only when nothing needs recovery, no error stopped the run and every requested stage passed.
+function Get-RunStatus([string[]]$Requested, [string[]]$Completed, [string]$RunError, [string]$Recovery = '') {
+    if ($Recovery) { return "recovery needed: $Recovery" }
     if ($RunError) { return "failed: $RunError" }
     $missing = @($Requested | Where-Object { $_ -notin $Completed })
     if ($missing.Count) { "incomplete: $($missing -join ', ')" } else { 'completed' }
