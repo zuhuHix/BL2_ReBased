@@ -17,7 +17,8 @@ namespace OpenWillowMapScreen
 
     // -owmapshots (with the status pages): opens the Map screen, captures it (OWMap_<n>_<name>.png), turns Maya 90 degrees
     // and captures again, zooms in, closes it with Escape, opens the Inventory and presses 2 (the Map tab), captures; with
-    // -owvendors also opens a vending machine, opens the Map over it, closes the Map and logs both pages' state; then quits.
+    // -owvendors also opens a vending machine, tests that the Map and the inventory refuse to open over it, closes the shop
+    // and opens the Map as a control; then quits. Logs "OWMAPSHOTS FAILED ..." and quits when no map page or no shop is up.
     // Call every HUD frame once the HUD movie is ready; does nothing without the flag.
     void TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Maya, APlayerController& Player);
 }
