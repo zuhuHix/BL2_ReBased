@@ -206,6 +206,34 @@ class CheckRangeTest(unittest.TestCase):
         self.assertTrue(check_range.grade(*self.steps({'ragdoll': 'SKIP'}))[0])
         self.assertFalse(check_range.grade(*self.steps({'death': 'SKIP'}))[0])
 
+    def test_step_status_needs_a_boundary(self):
+        text = log(*['OWRANGETEST step=%s result=%s x=1' % (s, 'SKIP_typo' if s == 'ragdoll' else 'PASS') for s in check_range.EXPECTED],
+                   'OWRANGETEST SUMMARY result=PASS')
+        ok, rows = check_range.grade(*check_range.parse(text))
+        self.assertFalse(ok)
+        self.assertIn(('ragdoll', 'MISSING', ''), rows)
+
+    def test_summary_status_needs_a_boundary(self):
+        steps, summary = self.steps(summary='PASSED')
+        self.assertIsNone(summary)
+        self.assertFalse(check_range.grade(steps, summary)[0])
+
+    def test_status_at_the_end_of_a_line_counts(self):
+        steps, summary = check_range.parse(log('OWRANGETEST step=teleport result=PASS', 'OWRANGETEST SUMMARY result=PASS'))
+        self.assertEqual(steps['teleport'], [('PASS', '')])
+        self.assertEqual(summary, ('PASS', ''))
+
+    def crit_skip(self, reason):
+        lines = ['OWRANGETEST step=%s result=%s' % (s, ('SKIP ' + reason) if s == 'crit_minds_eye' else 'PASS') for s in check_range.EXPECTED]
+        return check_range.grade(*check_range.parse(log(*lines, 'OWRANGETEST SUMMARY result=PASS')))
+
+    def test_crit_minds_eye_skips_only_without_the_file(self):
+        ok, rows = self.crit_skip('reason=no local skill effects file')
+        self.assertTrue(ok)
+        self.assertIn(('crit_minds_eye', 'SKIP', 'reason=no local skill effects file'), rows)
+        self.assertFalse(self.crit_skip('reason=no walker or skill tree')[0])
+        self.assertFalse(self.crit_skip('')[0])
+
     def test_no_summary_fails(self):
         steps, _ = self.steps()
         self.assertFalse(check_range.grade(steps, None)[0])

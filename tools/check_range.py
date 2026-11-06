@@ -16,8 +16,8 @@ import sys
 
 # The steps of the driver, in order (OpenWillowRange.cpp): PR1's, then PR2's enemy AI (TickAITest, steps 16-36), then PR3's loot
 # on death (TickLootTest, steps 37-44).
-EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "crit_minds_eye", "crit_trace", "shield_order", "invulnerable", "passive",
-            "patrol", "death", "ragdoll", "respawn", "popup_crit", "dummy_respawn",
+EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "popup_crit", "crit_minds_eye", "crit_trace", "shield_order", "invulnerable",
+            "passive", "patrol", "death", "ragdoll", "respawn", "dummy_respawn",
             "notice_proximity", "notice_sight", "no_notice_far", "provoked", "approach", "melee_hit", "melee_interval",
             "melee_miss", "forget", "passive_no_melee",
             "loot_near_corpse", "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll"]
@@ -25,9 +25,12 @@ EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "crit_minds_eye", "
 # manifest (loot_weapon_item: no gun is rolled, the money checks still decide), and no local skill effects file
 # (crit_minds_eye: tools/prepare_skill_effects.py).
 MAY_SKIP = {"ragdoll", "loot_weapon_item", "crit_minds_eye"}
+# A step here may SKIP only for this reason; any other SKIP of it is a failure.
+SKIP_ONLY_FOR = {"crit_minds_eye": "reason=no local skill effects file"}
 
-LINE = re.compile(r"OWRANGETEST step=(\S+) result=(PASS|FAIL|SKIP)(.*)")
-SUMMARY = re.compile(r"OWRANGETEST SUMMARY result=(PASS|FAIL)(.*)")
+# The status ends at whitespace or the end of the line: result=SKIP_typo is no status, so its step counts as missing.
+LINE = re.compile(r"OWRANGETEST step=(\S+) result=(PASS|FAIL|SKIP)(?=\s|$)(.*)")
+SUMMARY = re.compile(r"OWRANGETEST SUMMARY result=(PASS|FAIL)(?=\s|$)(.*)")
 
 
 def parse(text):
@@ -56,6 +59,8 @@ def grade(steps, summary, expected=EXPECTED):
         verdict = "FAIL" if "FAIL" in verdicts else ("SKIP" if "SKIP" in verdicts else "PASS")
         detail = next((d for r, d in results if r == verdict), "")
         if verdict == "FAIL" or (verdict == "SKIP" and step not in MAY_SKIP):
+            ok = False
+        if verdict == "SKIP" and step in SKIP_ONLY_FOR and SKIP_ONLY_FOR[step] != detail:
             ok = False
         rows.append((step, verdict, detail))
     for step in sorted(set(steps) - set(expected)):

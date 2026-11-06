@@ -58,6 +58,8 @@ public:
     // The skill effects read beside the tree (OpenWillowSkillEffects.h); tests load their own with GetEffectsMutable.
     const FOpenWillowSkillEffects& GetEffects() const { return Effects; }
     FOpenWillowSkillEffects& GetEffectsMutable() { return Effects; }
+    // LoadTree found no skilleffects_<class>.json beside the tree: local data not generated, as opposed to a file that failed to load.
+    bool IsEffectsFileMissing() const { return bEffectsFileMissing; }
     // LoadTree uses these; tests build synthetic trees with them.
     void AddBranch(const TArray<FTier>& Tiers) { Branches.Add(Tiers); }
     void SetActionSkill(int32 MaxGrade, int32 PointsToUnlockTrees, const FString& Id = FString());
@@ -133,6 +135,7 @@ private:
 
     TArray<TArray<FTier>> Branches;
     FOpenWillowSkillEffects Effects;
+    bool bEffectsFileMissing = false;
     // Bumped by every grade change (spend, respec, load); caches compare against it. GradesChanged also makes Maya's
     // survival stats recompute.
     int32 GradeVersion = 0;
