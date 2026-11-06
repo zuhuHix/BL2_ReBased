@@ -11,7 +11,8 @@ import sys
 
 EXPECTED = ('parse_good_wav', 'parse_odd_chunk_padded', 'refuse_truncated_data', 'refuse_riff_size_zero', 'refuse_chunk_past_riff_size',
             'refuse_non_pcm', 'refuse_zero_rate', 'refuse_extreme_rate', 'refuse_short_header', 'refuse_duplicate_fmt', 'refuse_duplicate_data',
-            'refuse_chunk_after_data_past_riff_size', 'refuse_partial_chunk_at_riff_end', 'accept_at_the_limits', 'refuse_file_over_limit',
+            'refuse_chunk_after_data_past_riff_size', 'refuse_partial_chunk_at_riff_end', 'parse_odd_final_chunk_padded', 'refuse_odd_final_chunk_no_pad',
+            'accept_at_the_limits', 'refuse_file_over_limit',
             'refuse_total_over_limit', 'unknown_role_plays_nothing', 'null_world_plays_nothing', 'tone_accepted_by_engine', 'mixer_pulled_all_bytes')
 ROW = re.compile(r'OWAUDIOTEST (PASS|FAIL) (\S+)(.*)')
 SUMMARY = re.compile(r'OWAUDIOTEST SUMMARY result=(\S+) passed=(\d+) failed=(\d+)')
@@ -19,7 +20,7 @@ PLAY = re.compile(r'OWAUDIO play role=test_tone channels=\d+ rate=\d+ bytes=(\d+
 DRAINED = re.compile(r'queued=(-?\d+) left=(-?\d+)')
 
 
-def grade(text, editor='0'):
+def grade(text, editor):
     """Returns (rows, problems). rows: (name, result, detail) as logged, in order. editor: the editor's exit code, or 'timeout'."""
     rows = [(m.group(2), m.group(1), m.group(3).strip()) for m in ROW.finditer(text)]
     problems = []

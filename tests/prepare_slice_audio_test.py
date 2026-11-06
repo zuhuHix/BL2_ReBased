@@ -84,6 +84,14 @@ class PrepareSliceAudioTest(unittest.TestCase):
     def test_a_partial_chunk_at_the_end_is_refused(self):
         self.assertIn('partial chunk', psa.check_wav(self.write('1.wav', wav_bytes(after_data=b'LIST')), None))
 
+    def test_an_odd_final_chunk_needs_its_pad_inside_the_riff_size(self):
+        chunk = struct.pack('<4sI', b'LIST', 1) + b'a'
+        self.assertIsNone(psa.check_wav(self.write('1.wav', wav_bytes(after_data=chunk + b'\0')), 1.0))
+        self.assertIn('pad', psa.check_wav(self.write('2.wav', wav_bytes(after_data=chunk)), 1.0))
+        # The pad byte is in the file but outside the declared size: still refused.
+        whole = wav_bytes(after_data=chunk + b'\0')
+        self.assertIn('pad', psa.check_wav(self.write('3.wav', wav_bytes(after_data=chunk + b'\0', riff_size=len(whole) - 8 - 1)), 1.0))
+
     def test_a_good_chunk_after_data_is_accepted(self):
         late = struct.pack('<4sI', b'LIST', 2) + b'ab'
         self.assertIsNone(psa.check_wav(self.write('1.wav', wav_bytes(after_data=late)), 1.0))

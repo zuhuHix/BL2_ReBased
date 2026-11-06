@@ -36,7 +36,9 @@ bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& O
     {
         const int32 Chunk = int32(At);
         const int64 Size = U32(Chunk + 4);
-        if (At + 8 + Size > RiffEnd) { OutError = TEXT("chunk runs past the RIFF size"); return false; }
+        // RIFF pads an odd chunk to a word; the pad is not in its size, but it is inside the RIFF size.
+        const int64 Next = At + 8 + Size + (Size & 1);
+        if (Next > RiffEnd) { OutError = TEXT("chunk or its pad runs past the RIFF size"); return false; }
         if (Tag(Chunk, "fmt "))
         {
             if (bFormat) { OutError = TEXT("more than one fmt chunk"); return false; }
@@ -59,7 +61,7 @@ bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& O
             DataAt = At + 8;
             DataSize = Size;
         }
-        At += 8 + Size + (Size & 1);   // RIFF pads an odd chunk to a word; the pad is not in its size
+        At = Next;
     }
     // Stops short of the end only for fewer than 8 bytes left: a chunk header cut off inside the declared size.
     if (At < RiffEnd) { OutError = TEXT("partial chunk at the end of the RIFF size"); return false; }
@@ -238,6 +240,14 @@ void RunTest(UWorld* World)
     Partial[4] = 44;
     Partial.Append(TArray<uint8>({'L', 'I', 'S', 'T'}));
     Check(!ParseWav(Partial, Wav, Error), TEXT("refuse_partial_chunk_at_riff_end"));
+    // A 1-byte final chunk: with its pad inside the RIFF size it is fine, and without the pad it is not.
+    TArray<uint8> OddLast = Good;
+    OddLast[4] = 50;
+    OddLast.Append(TArray<uint8>({'L', 'I', 'S', 'T', 1, 0, 0, 0, 7, 0}));
+    Check(ParseWav(OddLast, Wav, Error) && Wav.Pcm.Num() == 4, TEXT("parse_odd_final_chunk_padded"));
+    OddLast[4] = 49;
+    OddLast.SetNum(OddLast.Num() - 1);
+    Check(!ParseWav(OddLast, Wav, Error), TEXT("refuse_odd_final_chunk_no_pad"));
     Check(WithinLimits(MaxFileBytes, MaxTotalBytes - MaxFileBytes, Error), TEXT("accept_at_the_limits"));
     Check(!WithinLimits(MaxFileBytes + 1, 0, Error), TEXT("refuse_file_over_limit"));
     Check(!WithinLimits(1, MaxTotalBytes, Error), TEXT("refuse_total_over_limit"));

@@ -62,8 +62,10 @@ def read_wav_seconds(path):
     at, fmt, data_bytes = 12, None, None
     while at + 8 <= riff_end:
         tag, chunk = data[at:at + 4], struct.unpack_from('<I', data, at + 4)[0]
-        if at + 8 + chunk > riff_end:
-            return None, 'chunk runs past the RIFF size'
+        # RIFF pads an odd chunk to a word; the pad is not in its size, but it is inside the RIFF size.
+        following = at + 8 + chunk + (chunk & 1)
+        if following > riff_end:
+            return None, 'chunk or its pad runs past the RIFF size'
         if tag == b'fmt ':
             if fmt is not None:
                 return None, 'more than one fmt chunk'
@@ -82,7 +84,7 @@ def read_wav_seconds(path):
             if chunk == 0 or chunk % (2 * fmt[1]):
                 return None, 'data is not whole sample frames'
             data_bytes = chunk
-        at += 8 + chunk + (chunk & 1)
+        at = following
     # Stops short of the end only for fewer than 8 bytes left: a chunk header cut off inside the declared size.
     if at < riff_end:
         return None, 'partial chunk at the end of the RIFF size'
