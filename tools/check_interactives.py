@@ -29,6 +29,8 @@ EMPTY = re.compile(r'OWLOOT empty id=(\S+) reason=(.*)$', re.M)
 DROP = re.compile(r'OWLOOT drop id=(\S+) kind=(\S+) balance=(\S+) level=(\d+) value=(-?\d+)')
 PICKUP = re.compile(r'OWPICKUP kind=(\S+) amount=(-?[\d.]+) before=(-?[\d.]+) after=(-?[\d.]+) cap=(-?[\d.]+) '
                     r'ok=([01]) reason=(.*)$', re.M)
+LID_QUEUE = re.compile(r'OWLOOTLID queue=(\d+)')
+LID_SHOT = re.compile(r'OWLOOTLID shot balance=(\S+) phase=(\w+)')
 TEST_DONE = re.compile(r'OWINTERACTIVETEST done spawned=(\d+) opened=(\d+)')
 TEST_FAIL = re.compile(r'OWINTERACTIVETEST FAIL (.*)$', re.M)
 AUTOMATION_TEST = 'OpenWillow.Interactive.Loot'
@@ -173,6 +175,22 @@ def grade_pickups(log_text, out):
         out.add('pickups', 'PASS', f'{len(rows)} pickup line(s) follow their rule ({accepted} taken, {refused} refused)')
 
 
+def grade_lid_capture(log_text, out):
+    """The lid frames were taken. PASS means only that: whether a lid opens the right way is judged on the frames."""
+    shots = LID_SHOT.findall(log_text)
+    queue = LID_QUEUE.search(log_text)
+    if queue is None:
+        out.add('lid_capture', 'MISSING', 'no "OWLOOTLID queue" line')
+    elif int(queue.group(1)) == 0:
+        out.add('lid_capture', 'MISSING', 'no balance has an imported open clip (tools/import_lootables.ps1)')
+    else:
+        expected = int(queue.group(1)) * 3
+        if len(shots) == expected:
+            out.add('lid_capture', 'PASS', f'{len(shots)} frames of {queue.group(1)} lootable types; lid direction UNVERIFIED until judged')
+        else:
+            out.add('lid_capture', 'FAIL', f'{len(shots)} lid frames, expected {expected}')
+
+
 def grade_test_sequence(log_text, out):
     if TEST_FAIL.search(log_text):
         out.add('test_sequence', 'FAIL', TEST_FAIL.search(log_text).group(1).strip())
@@ -214,6 +232,7 @@ def grade(log_text, automation_text, doc):
     grade_opens(log_text, objects_by_id, out)
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
     grade_pickups(log_text, out)
+    grade_lid_capture(log_text, out)
     grade_test_sequence(log_text, out)
     grade_automation(automation_text, out)
     return out
