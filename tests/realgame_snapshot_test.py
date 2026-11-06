@@ -460,15 +460,15 @@ function Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'pi_stop') { __STOP__; return 'stopped' }
     if ($Code -match 'pi_hud_evidence') { return __HUD__ }
     if ($Code -match 'pi_shields\(True\)') { return '{"equipped":{"name":"Own","level":8},"max_strength":181}' }
-    if ($Code -match 'pi_shield_try\((\d+)\)') { $script:level = [int]$Matches[1]; return '{"requested_level":1}' }
+    if ($Code -match 'pi_shield_try\((\d+)\)') { $script:level = [int]$Matches[1]; return "{`"requested_level`":$script:level}" }
     if ($Code -match 'pi_shield_read') { return __READ__ }
     if ($Code -match 'pi_shield_restore|pi_shields_check') { $script:restoreCalls++; return __RESTORE__ }
     if ($Code -match 'pi_shields') { return '{"max_strength":181}' }
     throw "unexpected: $Code"
 }
-function Invoke-LiftCast { $log.kill = [pscustomobject]@{ frames = 10; shots = @{ 'kill-2.10' = 1; 'kill-2.50' = 1; 'kill-3.50' = 1; 'kill-5.00' = 1; 'kill-6.00' = 1 }; action = '{"killed":__KILLED__,"at":5.0}' }; [pscustomobject]@{ target_lifted = $true; skill_calls = @('EndSkill') } }
+function Invoke-LiftCast { $log.kill = [pscustomobject]@{ frames = 10; shots = @{ 'kill-2.10' = 1; 'kill-2.50' = 1; 'kill-3.50' = 1; 'kill-5.00' = 1; 'kill-6.00' = 1 }; action = '{"killed":__KILLED__,"at":5.0,"since":1.0}' }; [pscustomobject]@{ target_lifted = $true; skill_calls = @('EndSkill') } }
 __STAGES__
-"RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; levels = @($log.shield_levels | ForEach-Object { $_.level }) } | ConvertTo-Json -Compress)
+"RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; levels = @($log.shield_levels | ForEach-Object { $_.level }); tried = @($log.shield_levels | ForEach-Object { $_.tried.requested_level }) } | ConvertTo-Json -Compress)
 """
 GOOD = {'__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
         '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__KILLED__': 'true'}
@@ -491,7 +491,7 @@ def run_stages(**changes):
 
 def test_the_two_stages_stand_alone_and_set_their_result_last():
     good = run_stages()
-    assert sorted(good['done']) == ['kill', 'shield_levels'] and good['problems'] == [] and good['levels'] == [1, 5, 8, 15, 30, 50]
+    assert sorted(good['done']) == ['kill', 'shield_levels'] and good['problems'] == [] and good['levels'] == [1, 5, 8, 15, 30, 50] and good['tried'] == good['levels']
     assert good['waited'] == 0      # neither stage waits on the skill, so a cooldown that never ends cannot change either
     r = run_stages(__STOP__="throw 'no reply'")
     assert 'kill' not in r['done'] and 'shield_levels' in r['done'] and 'hooks not stopped' in r['problems'][0]

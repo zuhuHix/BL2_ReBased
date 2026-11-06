@@ -188,6 +188,8 @@ def test_a_kill_needs_the_target_lifted_now_and_alive_before():
     assert 'skipped' in done and not damage
     pawn.GetHealth = lambda: (_ for _ in ()).throw(RuntimeError('gone'))    # no real number: no damage is sent
     assert 'skipped' in ns['pi_kill']('Target') and not damage
+    pawn.GetHealth = lambda: float('nan')       # not finite: no damage is sent
+    assert 'skipped' in ns['pi_kill']('Target') and not damage
     pawn.GetHealth = lambda: health[0]
     pawn.TakeDamage = lambda *a: None           # the hit did nothing
     health[0] = 7.0
@@ -199,23 +201,32 @@ def test_hud_evidence_needs_samples_on_both_sides_of_the_kill():
     ns = load()
     with tempfile.TemporaryDirectory() as tmp:
         ns['RG_OUT'] = tmp
-        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # no file
+        assert ns['pi_hud_evidence'](5.0, 0.0)['usable'] is False       # no file
         file = Path(tmp) / 'kill_hud.jsonl'
         file.write_text('', encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # an empty file
+        assert ns['pi_hud_evidence'](5.0, 0.0)['usable'] is False       # an empty file
 
         def row(when, frame=3):
             return json.dumps({'game_t': when, 'hud': {'p1.activeAbility': {'frame': frame}}})
         file.write_text('\n'.join([row(4.0, 0), row(6.0, 0)]), encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # a path that did not resolve reads 0
+        assert ns['pi_hud_evidence'](5.0, 0.0)['usable'] is False       # a path that did not resolve reads 0
         file.write_text('\n'.join([row(4.0, 1), row(6.0, 1)]), encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # the emblem never seen running
+        assert ns['pi_hud_evidence'](5.0, 0.0)['usable'] is False       # the emblem never seen running
         file.write_text('\n'.join([row(4.0), json.dumps({'error': 'x'}), 'not json']), encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0) == {'before': 1, 'running_before': 1, 'after': 0, 'usable': False}
+        assert ns['pi_hud_evidence'](5.0, 0.0) == {'before': 1, 'running_before': 1, 'after': 0, 'usable': False}
         file.write_text('\n'.join([row(6.0), row(7.0, None)]), encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0)['usable'] is False       # nothing before, and a sample with no frame
+        assert ns['pi_hud_evidence'](5.0, 0.0)['usable'] is False       # nothing before, and a sample with no frame
         file.write_text('\n'.join([row(4.0), row(6.0)]), encoding='utf-8')
-        assert ns['pi_hud_evidence'](5.0)['usable'] is True
+        assert ns['pi_hud_evidence'](5.0, 0.0)['usable'] is True
+        # A failed first cast raised the emblem; this attempt, from 3.0, never did.
+        file.write_text('\n'.join([row(2.0, 3), row(4.0, 1), row(6.0, 3)]), encoding='utf-8')
+        result = ns['pi_hud_evidence'](5.0, 3.0)
+        assert result['running_before'] == 0 and result['usable'] is False
+        assert ns['pi_hud_evidence'](5.0, 1.0)['usable'] is True    # the same samples, counted from the earlier start
+        # A sample at the kill's own game time is neither before nor after it.
+        file.write_text('\n'.join([row(4.0, 3), row(5.0, 3)]), encoding='utf-8')
+        result = ns['pi_hud_evidence'](5.0, 0.0)
+        assert result['before'] == 1 and result['after'] == 0 and result['usable'] is False
 
 
 def shield_world(ns, own_level=8, own_max=181.0):

@@ -228,7 +228,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         }
         if ($killPassed) {
             try {
-                $log.kill_hud = Py "import json; print(json.dumps(pi_hud_evidence($($killAction.at))))" | ConvertFrom-Json
+                $log.kill_hud = Py "import json; print(json.dumps(pi_hud_evidence($($killAction.at), $($killAction.since))))" | ConvertFrom-Json
                 if ($log.kill_hud.usable -ne $true) { $killPassed = $false; $killWhy = "no usable HUD samples around the kill ($($log.kill_hud.before) before, $($log.kill_hud.after) after)" }
             } catch { $killPassed = $false; $killWhy = "HUD samples not checked: $_" }
         }
