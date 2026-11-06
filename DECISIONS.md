@@ -4100,3 +4100,8 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/WEAPON_VISUALS.md` sec
 - **Why not a fit per weapon type:** the gap changes with the body and barrel, even within one type.
 - **Why only those classes:** a real capture of the same parts shows it about 110 px wrong on the slice shotgun, where the eye socket alone was about 12 px off, and right on a second pistol. It is a fit to frames, not the game's rule; the mechanism is unknown. Shotguns and SMGs stay on the eye socket.
 - **Checked:** two real pistol frames, one real rifle frame, one real shotgun frame by eye. The class limit: tool against tool and synthetic tests; its frames are still to come. UNVERIFIED on any other gun.
+## 2026-11-06: Generated guns carry the damage stack
+
+AI-assisted (Claude). `tools/weapon_gen_parity.py` reported `gun.card.damage_stack` as its only mismatch: the Python card has had the field since 529e8bb (2026-10-07), the C++ generator never did. It looked like a Python-only field to exclude, but `AOpenWillowWalker::ShotDamage` uses those terms to add the level-up's timed Scale and skill modifiers to the real sum. Without them rolled guns took the host's stand-in, card damage x (1 + s), which the code itself says overstates. So the generator now emits the terms and `ToItem` fills them; nothing is excluded.
+
+Verified: parity over all 249 balances, 2 seeds, 0 mismatches of 319,381 fields, `PARITY PASSED`; synthetic test that the terms rebuild the card damage. No manifest change. `UNVERIFIED`: a rolled gun's damage under a running Scale or skill in the host and the running game.

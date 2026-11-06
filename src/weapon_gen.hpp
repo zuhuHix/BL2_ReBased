@@ -237,6 +237,11 @@ struct WeaponGenNumber {
     bool integer = false;
 };
 
+// The WeaponDamage stack's terms (weapon_stats.damage_stack_of): the host adds later modifiers to the real sum, not to the card value.
+struct WeaponGenDamageStack {
+    double base = 0, preAdd = 0, postAdd = 0, scaleUp = 0, scaleDown = 0;
+};
+
 struct WeaponGenCard {
     std::string name;
     int level = 0, levelRequirement = 0;
@@ -259,6 +264,7 @@ struct WeaponGenCard {
     std::optional<double> statusChance, statusDps, statusDuration;
     std::vector<std::pair<std::string, double>> statusChanceBySurface;
     std::vector<WeaponGenNumber> display;
+    std::optional<WeaponGenDamageStack> damageStack;  // absent when the weapon has no damage base
 };
 
 struct WeaponGenResult {

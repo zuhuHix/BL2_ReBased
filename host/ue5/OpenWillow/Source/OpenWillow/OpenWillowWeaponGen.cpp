@@ -113,6 +113,16 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     Item.RarityColor = FromUtf8(Card.rarityColor);
     Item.Level = Card.level;
     Item.Damage = float(Card.damage.value_or(0));
+    if (Card.damageStack)
+    {
+        // The terms later modifiers join (AOpenWillowWalker::ShotDamage), as a recipe's card has them.
+        Item.bHasDamageStack = true;
+        Item.DamageBase = float(Card.damageStack->base);
+        Item.DamagePreAdd = float(Card.damageStack->preAdd);
+        Item.DamagePostAdd = float(Card.damageStack->postAdd);
+        Item.DamageScaleUp = float(Card.damageStack->scaleUp);
+        Item.DamageScaleDown = float(Card.damageStack->scaleDown);
+    }
     Item.FireRate = FMath::Max(0.1f, float(Card.fireRate.value_or(1)));
     Item.ReloadTime = float(Card.reloadTime.value_or(0));
     Item.Magazine = float(Card.magazine.value_or(0));

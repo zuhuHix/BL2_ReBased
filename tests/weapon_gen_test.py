@@ -173,6 +173,13 @@ class WeaponGenTests(unittest.TestCase):
         self.assertEqual(gun['title']['part'], 'Name.BodyTitle')
         self.assertEqual(self.gun(8, 1)['name'], 'Late Blaster')  # Late 0.9 beats Sharp from level 5
 
+    def test_damage_stack_terms_rebuild_the_card_damage(self):
+        card = self.gun(1, 1)['card']
+        stack = card['damage_stack']
+        self.assertEqual((stack['base'], stack['pre_add']), (10.0, 2.0))
+        rebuilt = (stack['base'] + stack['pre_add']) * (1 + stack['scale_up']) / (1 + stack['scale_down']) + stack['post_add']
+        self.assertAlmostEqual(rebuilt, card['damage'], places=4)
+
     def test_modifier_stack_and_card_rounding(self):
         card = self.gun(1, 1)['card']
         # Damage: (10 + 2) * (1 + 0.5) / (1 + 0.2f) + 3 (Weapon_Is_Acme * 3) = 17.99999996 -> float 18.
