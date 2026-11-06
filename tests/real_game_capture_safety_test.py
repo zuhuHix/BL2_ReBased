@@ -34,9 +34,20 @@ $scenario = $env:OW_TEST_SCENARIO
 function Start-Sleep { }
 function Enter-RunLock { Set-Content -LiteralPath $script:Lock 'test' }
 function Exit-RunLock { Remove-Item -LiteralPath $script:Lock }
-function Install-Driver { if ($scenario -eq 'install_fails') { throw 'install failed' }; New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
+function Install-Driver {
+    if ($scenario -eq 'install_leaves_folder') { New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
+    if ($scenario -in 'install_fails', 'install_leaves_folder') { throw 'install failed' }
+    New-Item -ItemType Directory -Force $script:DriverDir | Out-Null
+}
 function Remove-Driver { if ($scenario -ne 'driver_stuck') { Remove-Item -Recurse -Force $script:DriverDir } }
 function Get-GameProcess { $null }
+# Only a game this run did not start: the real helpers then decide what it means.
+function Get-GameProcesses {
+    if ($scenario -eq 'foreign_at_launch' -or ($scenario -eq 'foreign_later' -and $global:OwStarted)) {
+        return @([pscustomobject]@{ Id = 77; Path = 'C:\elsewhere\Borderlands2.exe'; StartTime = Get-Date })
+    }
+    @()
+}
 function Focus-Game { $true }
 function Assert-GameForeground { if ($scenario -eq 'focus_lost') { throw 'refusing to send input: Borderlands 2 is not the foreground window after 3 focus attempts (is someone using this PC?)' } }
 function Send-Key { }
@@ -48,6 +59,9 @@ function Stop-OwnGame { if ($scenario -eq 'game_stuck') { 'refused: test' } else
 function Invoke-GamePyFile { param($Path, $OutFolder) 'loaded' }
 # What a session does to the player's files, whatever the run does about it.
 function Start-Game {
+    $global:OwStarted = $true
+    if ($scenario -eq 'compare_unwritable') { New-Item -ItemType Directory -Force (Join-Path $Out 'save_compare.json') | Out-Null }
+    if ($scenario -eq 'session_unwritable') { New-Item -ItemType Directory -Force (Join-Path $Out 'session.json') | Out-Null }
     Set-Content -LiteralPath (Join-Path $script:WillowDir 'SaveData/slot.sav') 'changed by the session'
     Set-Content -LiteralPath (Join-Path $script:WillowDir 'Config/game.ini') 'changed by the session'
     Set-Content -LiteralPath (Join-Path $script:Game 'sdk_mods/settings/python-sdk.json') 'changed by the session'
@@ -89,7 +103,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
 """
 
 
-def run_script(script, scenario):
+def run_script(script, scenario, earlier_session=None):
     """Runs one copy of the script. Returns what a test needs, with the temporary tree still readable through a copy of its state."""
     with tempfile.TemporaryDirectory() as folder:
         tmp = Path(folder)
@@ -104,15 +118,20 @@ def run_script(script, scenario):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding='utf-8')
         hub = tmp / 'hub.lock'
+        if earlier_session:
+            (tmp / 'realgame' / SCRIPTS[script]).mkdir(parents=True)
+            (tmp / 'realgame' / SCRIPTS[script] / 'session.json').write_text(earlier_session, encoding='utf-8')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(tools / f'{script}.ps1'), '-HubLock', str(hub),
                                '-Character', 'test'], capture_output=True, text=True, timeout=180,
                               env=dict(os.environ, OPENWILLOW_BL2=str(game), OW_TEST_SCENARIO=scenario))
         session_path = tmp / 'realgame' / SCRIPTS[script] / 'session.json'
-        session = json.loads(session_path.read_text(encoding='utf-8-sig')) if session_path.exists() else {}
+        session = json.loads(session_path.read_text(encoding='utf-8-sig')) if session_path.is_file() else {}
+        kept = sorted(p.name for p in (tmp / 'realgame' / SCRIPTS[script]).glob('session.*.json'))
         contents = {path.name: path.read_text(encoding='utf-8-sig').strip() if path.exists() else None for path in files}
         backups = sorted(p.name for p in (tmp / 'realgame').glob('save-backup-*'))
         return {'code': done.returncode, 'out': done.stdout + done.stderr, 'session': session, 'files': contents, 'hub': hub.exists(),
-                'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups}
+                'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups,
+                'kept': kept, 'kept_text': [(tmp / 'realgame' / SCRIPTS[script] / name).read_text(encoding='utf-8') for name in kept]}
 
 
 ORIGINAL = {'slot.sav': 'original save', 'game.ini': 'original config', 'python-sdk.json': 'original settings', 'store.sav': 'original store'}
@@ -122,8 +141,8 @@ CHANGED = {name: 'changed by the session' for name in ORIGINAL}
 class CaptureSafetyBase:
     script = None
 
-    def run_it(self, scenario):
-        return run_script(self.script, scenario)
+    def run_it(self, scenario, earlier_session=None):
+        return run_script(self.script, scenario, earlier_session)
 
     def test_the_cleanup_tail_is_the_reviewed_one_word_for_word(self):
         def tail(path):
@@ -149,11 +168,56 @@ class CaptureSafetyBase:
         self.assertEqual((r['hub'], r['run_lock'], r['driver']), (True, True, True), r['out'])
         self.assertIn('MANUAL RECOVERY', r['out'])
 
+    def test_an_install_that_leaves_a_folder_holds_the_locks_and_does_not_remove_it(self):
+        r = self.run_it('install_leaves_folder')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertTrue(r['session']['status'].startswith('recovery needed: driver not removed'), r['out'])
+        self.assertEqual(r['session']['cleanup']['saves'], 'not touched: this run launched no game', r['out'])
+        self.assertEqual((r['hub'], r['run_lock'], r['driver']), (True, True, True), r['out'])
+
+    def test_a_game_already_running_stops_the_launch_and_nothing_is_removed_or_restored(self):
+        r = self.run_it('foreign_at_launch')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertIn('did not start', r['session']['status'], r['out'])
+        self.assertIn('NOT RESTORED', r['session']['cleanup']['saves'], r['out'])
+        self.assertEqual(r['files'], ORIGINAL)   # no game of ours ever ran
+        self.assertEqual((r['hub'], r['run_lock'], r['driver']), (True, True, True), r['out'])
+
+    def test_a_game_that_appears_during_the_run_stops_the_restore(self):
+        r = self.run_it('foreign_later')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertIn('did not start', r['session']['status'], r['out'])
+        self.assertEqual(r['files'], CHANGED, r['out'])   # restoring could erase what that game saved
+        self.assertEqual((r['hub'], r['run_lock'], r['driver']), (True, True, True), r['out'])
+        self.assertIn('MANUAL RECOVERY', r['out'])
+
+    def test_earlier_evidence_is_kept_under_a_new_name_not_overwritten_or_lost(self):
+        r = self.run_it('no_answer', '{"status": "completed"}')
+        self.assertEqual(r['session']['status'][:7], 'failed:', r['out'])
+        self.assertEqual(r['kept_text'], ['{"status": "completed"}'], r['out'])
+
+    def test_missing_evidence_cannot_read_as_completed(self):
+        for scenario in ('compare_unwritable', 'session_unwritable'):
+            with self.subTest(scenario):
+                r = self.run_it(scenario)
+                self.assertEqual(r['code'], 1, r['out'])
+                self.assertIn('status: failed: evidence not written', r['out'])
+                self.assertEqual(r['files'], ORIGINAL)   # the restore had already run
+                self.assertEqual((r['hub'], r['run_lock'], r['driver']), (False, False, False), r['out'])
+
+    def test_the_capture_declares_its_state_and_keeps_stale_evidence(self):
+        text = (ROOT / f'tools/real_game/{self.script}.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
+        order = [text.index(part) for part in ('# Stale evidence:', '$driverAttempted = $false', '$driverAttempted = $true', 'Install-Driver -BlockSavesAtStart',
+                                               '$foreign = Get-ForeignGamesSeen $null', '$launchAttempted = $true', '$proc = Start-Game @(', 'Assert-SavesBlocked (Py')]
+        self.assertEqual(order, sorted(order))
+        self.assertNotIn('Focus-Game', text)
+
     def test_a_run_that_stops_before_the_driver_touches_nothing_and_releases(self):
         r = self.run_it('install_fails')
         self.assertEqual(r['code'], 1, r['out'])
         self.assertTrue(r['session']['status'].startswith('failed: install failed'), r['out'])
-        self.assertEqual(r['session']['cleanup']['saves'], 'not touched: the game never started', r['out'])
+        self.assertEqual(r['session']['cleanup']['saves'], 'not touched: this run launched no game', r['out'])
+        self.assertEqual(r['session']['cleanup']['driver'], 'install failed; nothing left', r['out'])
         self.assertEqual(r['files'], ORIGINAL)
         self.assertEqual((r['hub'], r['run_lock'], r['driver']), (False, False, False), r['out'])
 
