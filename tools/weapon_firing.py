@@ -64,6 +64,7 @@ RECOIL_FIELDS = {
 # The player's accuracy pool (NATIVE_WEAPON_TRIGGER_AMMO section 4A) and the owner attributes the weapon's external slots
 # and effects modify while it is held (ApplyAllExternalAttributeEffects).
 ACCURACY_POOL = 'D_Resourcepools.PlayerPools.AccuracyPool'
+POOL_SCHEMA_LINES = ['ExternalAttributeEffects=StructProperty:AttributeEffectData']
 ACCURACY_ATTRIBUTES = {
     'D_Attributes.AccuracyResourcePool.AccuracyMinValue': 'min',
     'D_Attributes.AccuracyResourcePool.AccuracyMaxValue': 'max',

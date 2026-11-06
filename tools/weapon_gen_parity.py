@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import loot_pools  # noqa: E402
 import weapon_gen_manifest  # noqa: E402
 import weapon_recipe  # noqa: E402
+import weapon_firing  # noqa: E402
 import weapon_stats  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,12 @@ def python_gun(package, localize, balance, stage, seed, stage_cap=None):
     recipe = weapon_recipe.roll(package, balance, seed, stage, rng=weapon_recipe.CrtRand(seed), stage_cap=stage_cap)
     evaluated = weapon_stats.evaluate(package, recipe, recipe['game_stage'], localize)
     card = evaluated['card']
+    # The accuracy pool as the firing resolver gives it, for the same roll.
+    known = {weapon_stats.ATTR + 'WeaponLevel': float(card.get('level') or recipe.get('game_stage') or 1)}
+    if card.get('damage') is not None:
+        known[weapon_stats.ATTR + 'WeaponDamage'] = card['damage']
+    pool = weapon_firing.accuracy_pool_of(weapon_firing.Source(package, package), recipe, package.props(recipe['weapon_type']), known, set())
+    card['accuracy_pool'] = {key: pool[key] for key in ('min', 'max', 'idle_rate')} if pool else None
     # Not item-card rows: the C++ card also carries the refire rule the host fires by.
     card['burst_count'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponAutomaticBurstCount')
     card['burst_interval'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponBurstInterval')

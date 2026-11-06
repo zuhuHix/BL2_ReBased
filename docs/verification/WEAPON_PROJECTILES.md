@@ -210,7 +210,8 @@ hook); the critic aligned on the first visible effect.
   anything but the pool differs from the resolver (1494 rolls, 236 templates, 0 differences). That check is Python and does not cover the card
   overrides; the automation test `OpenWillow.Vendor.RolledGunFiringTemplate` tests the C++ merge on an invented template. The file carries the
   manifest's MD5: the host refuses templates from another manifest or an older schema, and any template lacking the speed its shot kind needs.
-  **UNVERIFIED:** the accuracy pool is the type's base because parts are not applied; the spin-down duration is missing; a key the sampled rolls
+  The accuracy pool is the roll's own: the generator evaluates the parts' and type's external effects and slots through its stack, compared
+  with the Python resolver by `tools/weapon_gen_parity.py`. **UNVERIFIED:** that resolver's external slot grading, and the pool in the running game for a rolled gun; the spin-down duration is missing; a key the sampled rolls
   never reached fires the plain trace with a warning; nothing has been compared with a rolled gun in the running game. Their refire rule is resolved since 2026-11-06: the card carries the evaluated burst count and
   interval, so a type with count 1 fires once per press. Before that every generated gun fired while held. The firing test now
   rolls one gun of each kind from the manifest and `tools/check_weapon_firing.py` requires one shot from one hold (burst 1) and more than

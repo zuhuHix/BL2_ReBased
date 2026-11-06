@@ -159,6 +159,8 @@ void ParseField(WeaponGenManifest& m, ParseState& state, const std::vector<std::
     };
     if (name == "Effect") {
         o.effects.push_back({Text(arg(0)), Text(arg(1)), Int(arg(2))});
+    } else if (name == "ExternalEffect") {
+        o.externalEffects.push_back({Text(arg(0)), Text(arg(1)), Int(arg(2))});
     } else if (name == "SlotUpgrade") {
         o.slotUpgrades.push_back({Text(arg(0)), Number(arg(1)), arg(2) == "1"});
     } else if (name == "PrefixList") {
@@ -391,6 +393,9 @@ void ParseLine(WeaponGenManifest& m, ParseState& state, const std::string& line)
             Need(f, 6);
             m.hasAccuracy = true;
             for (int i = 0; i < 4; ++i) m.accuracy[i] = Number(f[static_cast<size_t>(i) + 2]);
+        } else if (f[1] == "accuracy_pool") {
+            Need(f, 5);
+            m.accuracyPool.push_back({Text(f[2]), Text(f[3]), Int(f[4])});
         } else if (f[1] == "status_remap") {
             Need(f, 7);
             std::vector<double>& bounds = m.statusRemap[Text(f[2])];
@@ -453,6 +458,7 @@ void Validate(const WeaponGenManifest& m, const ParseState& state) {
     }
     for (const GenObject& o : m.objects) {
         for (const GenEffect& e : o.effects) init(e.init);
+        for (const GenEffect& e : o.externalEffects) init(e.init);
         for (const GenSlotEffect& e : o.slotEffects) init(e.baseInit), init(e.perGradeInit);
         for (const GenTypeBase& b : o.bases) optInit(b.init);
         for (int id : {o.slotBaseGrade, o.baseRarity, o.monetaryValue, o.rarity, o.spinUpDuration, o.baseDuration})
@@ -989,6 +995,7 @@ private:
     void Bases();
     void SlotEffects();
     std::optional<double> Stat(const char* name) const;
+    bool IsAccuracyPoolAttribute(const std::string& attribute) const;
     std::vector<int> OrderedParts() const;
     std::vector<int> PresentationSources() const;
     void SaleValue(WeaponGenCard& card) const;
@@ -1043,6 +1050,8 @@ void CardEvaluator::Bases() {
         auto& slot = base_[kAttr + name];
         if (!slot) slot = 1.0;
     }
+    // The player's accuracy pool while this weapon is held: its attributes join the same stack, under their own paths.
+    for (const GenAccuracyPoolValue& v : m_.accuracyPool) base_[v.attribute] = value_.Value(v.init);
     int barrel = r_.parts[2];
     if (barrel >= 0 && Obj(m_, barrel).spinning && Obj(m_, barrel).spinUpDuration >= 0)
         base_[kAttr + "WeaponBarrelSpinUpDuration"] = value_.Value(Obj(m_, barrel).spinUpDuration);
@@ -1051,6 +1060,11 @@ void CardEvaluator::Bases() {
 // Attribute slots (weapon_stats.slot_grade / slot_value): grade = round-half-up(type base grade, default 1)
 // + every GradeIncrease of the type and the parts, clamped by the maximum then the minimum; an activated
 // internal slot adds f32(f32((grade - 1) * PerGradeUpgrade) + BaseModifierValue).
+bool CardEvaluator::IsAccuracyPoolAttribute(const std::string& attribute) const {
+    return std::any_of(m_.accuracyPool.begin(), m_.accuracyPool.end(),
+                       [&](const GenAccuracyPoolValue& v) { return v.attribute == attribute; });
+}
+
 void CardEvaluator::SlotEffects() {
     std::map<std::string, double> grades;
     std::set<std::string> activated;
@@ -1059,6 +1073,8 @@ void CardEvaluator::SlotEffects() {
     for (size_t i = 0; i < owners.size(); ++i) {
         const GenObject& o = Obj(m_, owners[i]);
         if (i > 0) ApplyEffects(o);
+        for (const GenEffect& e : o.externalEffects)
+            if (IsAccuracyPoolAttribute(e.attribute)) AddModifier(e.attribute, e.modifier, value_.Value(e.init));
         for (const GenSlotUpgrade& u : o.slotUpgrades) {
             grades[u.slot] += u.grade;
             if (u.activate) activated.insert(u.slot);
@@ -1069,7 +1085,7 @@ void CardEvaluator::SlotEffects() {
     std::optional<double> slotBase = type_.slotBaseGrade >= 0 ? value_.Value(type_.slotBaseGrade) : std::nullopt;
     double baseGrade = std::floor(slotBase.value_or(1.0) + 0.5);
     for (const GenSlotEffect& e : type_.slotEffects) {
-        if (!activated.count(e.slot) || e.external) continue;
+        if (!activated.count(e.slot) || (e.external && !IsAccuracyPoolAttribute(e.attribute))) continue;
         double grade = baseGrade + (grades.count(e.slot) ? grades[e.slot] : 0.0);
         if (e.enforceMax && grade > e.maxGrade) grade = e.maxGrade;
         if (e.enforceMin && grade < e.minGrade) grade = e.minGrade;
@@ -1243,6 +1259,10 @@ WeaponGenCard CardEvaluator::Run() {
         auto damageMods = mods_.find(kAttr + "WeaponDamage");
         const Modifiers terms = damageMods == mods_.end() ? Modifiers{} : damageMods->second;
         card.damageStack = WeaponGenDamageStack{*damageBase->second, terms.pre, terms.post, terms.scaleUp, terms.scaleDown};
+    }
+    for (const GenAccuracyPoolValue& v : m_.accuracyPool) {
+        auto value = final_.find(v.attribute);
+        if (value != final_.end()) card.accuracyPool.push_back({v.key, value->second});
     }
     auto interval = Stat("WeaponFireInterval");
     if (interval && *interval != 0) card.fireRate = F32(1.0 / *interval);  // the card shows 1 / FireInterval
@@ -1490,6 +1510,13 @@ std::string CardJson(const WeaponGenCard& c) {
         o.Raw("damage_stack", stack.Done());
     } else {
         o.Raw("damage_stack", "null");
+    }
+    if (c.accuracyPool.empty()) {
+        o.Raw("accuracy_pool", "null");
+    } else {
+        JsonObject pool;
+        for (const auto& [key, value] : c.accuracyPool) pool.Num(key, value);
+        o.Raw("accuracy_pool", pool.Done());
     }
     return o.Done();
 }
