@@ -63,7 +63,7 @@ def colours(zones):
             for n, tone in enumerate(['Shadow', 'Midtone', 'Hilight'], 1)]
 
 
-def chain(root, parent_vectors, child_scalars=(), decal=True):
+def chain(root, parent_vectors, child_scalars=(), decal=True, pattern=False):
     mic = root / 'FakePkg' / 'MaterialInstanceConstant'
     tex = root / 'FakePkg' / 'Texture2D'
     mic.mkdir(parents=True)
@@ -71,6 +71,8 @@ def chain(root, parent_vectors, child_scalars=(), decal=True):
     textures = [('p_Masks', 'FakeMasks'), ('p_Diffuse', DETAIL), ('p_NormalScopesEmissive', 'FakeNormal')]
     if decal:
         textures.append(('p_Decal', 'FakeDecal'))
+    if pattern:
+        textures.append(('p_Pattern', 'FakePattern'))
     for leaf in [leaf for _, leaf in textures]:
         Image.new('RGB', (4, 4), (128, 128, 128)).save(tex / f'{leaf}.png')
     (mic / 'Mati_Fake.props.txt').write_text(props("MaterialInstanceConstant'Fake.Master.MasterMati_Fake'",
@@ -228,6 +230,20 @@ class StaticChoicesTest(unittest.TestCase):
             self.assertEqual(out['pattern_channels'], 'R')
             self.assertIn('Mati_Fake static parameters', out['channel_source'])
             self.assertIn('UNVERIFIED', out['reading'])
+
+    def test_pattern_records_its_address_only_when_drawn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            vectors = colours('ABC') + [('p_PatternChannelScale', (1, 0, 0, 0)), ('p_PatternColor', (1, 1, 1, 1)),
+                                        ('p_PatternScalePosition', (1, 1, 0, 0))]
+            root = chain(Path(folder), vectors, child_scalars=[('p_ReplacePattern', 0.0)], pattern=True)
+            out = paint.prepare(recipe(root), root, facts=FakeFacts())
+            self.assertTrue(out['pattern_used'])
+            self.assertEqual(out['pattern_address'], ['TA_Clamp', 'TA_Wrap'])
+        with tempfile.TemporaryDirectory() as folder:
+            root = chain(Path(folder), colours('ABC'))
+            out = paint.prepare(recipe(root), root, facts=FakeFacts())
+            self.assertFalse(out['pattern_used'])
+            self.assertIsNone(out['pattern_address'])
 
     def test_guess_without_static_parameters(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -422,6 +438,112 @@ class ColourSpaceAndReflectionTest(unittest.TestCase):
             Image.new('RGB', (2, 2), (128, 128, 128)).save(path)
             self.assertAlmostEqual(Texture(path).sample(0, 0)[0], 128 / 255)
             self.assertAlmostEqual(Texture(path, srgb=True).sample(0, 0)[0], 0.2158605, places=5)
+
+
+class TextureAddressTest(unittest.TestCase):
+    """The import rule on a stand-in asset, and the renderer's sampling, on invented textures."""
+
+    class Enum:
+        TA_WRAP, TA_CLAMP, TA_MIRROR = 'wrap', 'clamp', 'mirror'
+
+    class Asset:
+        def __init__(self, x='wrap', y='wrap'):
+            self.props = {'address_x': x, 'address_y': y}
+
+        def get_path_name(self):
+            return '/Game/T'
+
+        def get_editor_property(self, name):
+            return self.props[name]
+
+        def set_editor_property(self, name, value):
+            self.props[name] = value
+
+    CLAMP_X = ['TA_Clamp', 'TA_Wrap']
+
+    def run_addresses(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'host' / 'ue5'))
+        from weapon_texture_address import RunAddresses
+        return RunAddresses(self.Enum)
+
+    def test_first_without_modes_then_clamped_gets_clamped(self):
+        run, asset = self.run_addresses(), self.Asset()
+        self.assertFalse(run.apply('T', asset, None))
+        self.assertTrue(run.apply('T', asset, self.CLAMP_X))
+        self.assertEqual(asset.props, {'address_x': 'clamp', 'address_y': 'wrap'})
+
+    def test_clamped_then_a_role_without_modes_stays_clamped(self):
+        run, asset = self.run_addresses(), self.Asset()
+        run.apply('T', asset, self.CLAMP_X)
+        self.assertFalse(run.apply('T', asset, None))
+        self.assertEqual(asset.props['address_x'], 'clamp')
+
+    def test_a_clamp_left_by_an_earlier_run_goes_back_to_wrap(self):
+        run, asset = self.run_addresses(), self.Asset(x='clamp')
+        self.assertTrue(run.apply('T', asset, None))
+        self.assertEqual(asset.props, {'address_x': 'wrap', 'address_y': 'wrap'})
+
+    def test_textures_do_not_share_a_given_mode(self):
+        run, first, second = self.run_addresses(), self.Asset(), self.Asset(x='clamp')
+        run.apply('A', first, self.CLAMP_X)
+        run.apply('B', second, None)
+        self.assertEqual(second.props['address_x'], 'wrap')
+
+    def texture_cache(self, assets):
+        """The importer's own path, with stand-ins for the editor's load and save."""
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'host' / 'ue5'))
+        from weapon_texture_address import TextureCache
+        self.loads, self.saves = [], []
+
+        def load(source):
+            self.loads.append(source)
+            return assets[source]
+        return TextureCache(load, self.Enum, self.saves.append)
+
+    def test_importer_applies_modes_on_a_cache_hit(self):
+        asset = self.Asset()
+        cache = self.texture_cache({'a.png': asset})
+        self.assertIs(cache.get('a.png'), asset)
+        self.assertIs(cache.get('a.png', self.CLAMP_X), asset)
+        self.assertEqual(self.loads, ['a.png'])
+        self.assertEqual(asset.props['address_x'], 'clamp')
+        self.assertEqual(self.saves, [asset])
+
+    def test_importer_applies_modes_on_the_first_load(self):
+        asset = self.Asset()
+        self.texture_cache({'a.png': asset}).get('a.png', self.CLAMP_X)
+        self.assertEqual(asset.props['address_x'], 'clamp')
+        self.assertEqual(self.saves, [asset])
+
+    def test_importer_resets_an_old_clamp_without_modes_and_saves_only_on_change(self):
+        asset = self.Asset(x='clamp')
+        cache = self.texture_cache({'a.png': asset})
+        cache.get('a.png')
+        cache.get('a.png')
+        self.assertEqual(asset.props['address_x'], 'wrap')
+        self.assertEqual(self.saves, [asset])
+
+    def test_importer_keeps_a_given_mode_across_sources_of_one_asset(self):
+        asset = self.Asset()
+        cache = self.texture_cache({'skin1/a.png': asset, 'skin2/a.png': asset})
+        cache.get('skin1/a.png', self.CLAMP_X)
+        cache.get('skin2/a.png')
+        self.assertEqual(asset.props['address_x'], 'clamp')
+
+    def test_renderer_wraps_clamps_and_mirrors(self):
+        from render_weapon_previews import Texture
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'ramp.png'
+            image = Image.new('RGB', (4, 1))
+            for x in range(4):
+                image.putpixel((x, 0), (x * 50, 0, 0))
+            image.save(path)
+
+            def texel(u, mode):
+                return round(Texture(path, address=[mode, 'TA_Wrap']).sample(u, 0)[0] * 255 / 50)
+            self.assertEqual([texel(u, 'TA_Wrap') for u in (0.1, 1.1, -0.1)], [0, 0, 3])
+            self.assertEqual([texel(u, 'TA_Clamp') for u in (0.1, 1.1, -0.1)], [0, 3, 0])
+            self.assertEqual([texel(u, 'TA_Mirror') for u in (0.1, 1.1, 1.9, 2.1)], [0, 3, 0, 0])
 
 
 class BytecodeReaderTest(unittest.TestCase):

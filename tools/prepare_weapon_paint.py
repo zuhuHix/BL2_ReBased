@@ -317,6 +317,8 @@ def prepare_recipe(recipe, recipe_id, materials, mesh=None, facts=None):
     weights = params['vector'].get('p_PatternChannelScale')
     pattern_used = bool(params['texture'].get('p_Pattern')) and isinstance(weights, (tuple, list)) and any(
         isinstance(w, (int, float)) and w > 0 for w in weights[:3])
+    # Installed AddressX/AddressY of the pattern texture, or None without --reader (the importers then use wrap).
+    pattern_address = facts.texture_address(params['texture']['p_Pattern']) if pattern_used and facts is not None else None
     decal = decal_layer(params, texture_dir, facts)
     decal_used = bool(decal and decal['used'])
     paths = {}
@@ -350,7 +352,7 @@ def prepare_recipe(recipe, recipe_id, materials, mesh=None, facts=None):
             'parent_chain': chain, 'weapon_class': kind, 'detail_channel': channel,
             'pattern_channels': pattern_channels, 'decal_channels': decal_channels,
             'channel_source': channel_source, 'params': params, 'textures': paths, 'srgb': srgb,
-            'reflection': reflection, 'pattern_used': pattern_used,
+            'reflection': reflection, 'pattern_used': pattern_used, 'pattern_address': pattern_address,
             'decal': decal, 'mesh': mesh, 'reading': PAINT_READING, 'shader_verified': False}
 
 

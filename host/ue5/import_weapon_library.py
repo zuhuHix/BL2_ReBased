@@ -21,6 +21,7 @@ import unreal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.pop('OPENWILLOW_WEAPON_PAINT', None)  # import_weapon_paint only paints when this is set
 import import_weapon_paint as paint  # noqa: E402
+from weapon_texture_address import TextureCache  # noqa: E402
 
 ROOT = '/Game/OpenWillow/Weapons/Library'
 library = Path(os.environ['OPENWILLOW_WEAPON_LIBRARY']).resolve()
@@ -93,14 +94,14 @@ def import_mesh(kind):
     return result
 
 
-texture_assets = {}
 
 
 def import_texture(source, address=None):
     """One linear texture asset per source PNG; names collide only when two different files share a stem."""
-    source = Path(source)
-    if str(source) in texture_assets:
-        return texture_assets[str(source)]
+    return texture_cache.get(Path(source), address)
+
+
+def load_or_import_texture(source):
     stem = source.stem
     digest = hashlib.sha1(source.read_bytes()).hexdigest()[:8]
     name = f'T_{stem}'
@@ -125,14 +126,14 @@ def import_texture(source, address=None):
         asset = textures[0]
         asset.set_editor_property('srgb', False)
         asset.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_DEFAULT)
-        for prop, mode in zip(('address_x', 'address_y'), address or []):
-            asset.set_editor_property(prop, getattr(unreal.TextureAddress, mode.upper()))
         eal.save_loaded_asset(asset, only_if_is_dirty=False)
     known[name] = digest
     marker.write_text(json.dumps(known, indent=1), encoding='utf-8')
-    asset = unreal.load_asset(path)
-    texture_assets[str(source)] = asset
-    return asset
+    return unreal.load_asset(path)
+
+
+texture_cache = TextureCache(load_or_import_texture, unreal.TextureAddress,
+                             lambda asset: eal.save_loaded_asset(asset, only_if_is_dirty=False))
 
 
 def import_skin(master, data):
@@ -149,7 +150,8 @@ def import_skin(master, data):
     for name, value in vectors.items():
         v = list(value) + [0.0] * (4 - len(value))
         mel.set_material_instance_vector_parameter_value(instance, name, unreal.LinearColor(*map(float, v[:4])))
-    addresses = {'p_Decal': (data.get('decal') or {}).get('address'),
+    addresses = {'p_Pattern': data.get('pattern_address'),
+                 'p_Decal': (data.get('decal') or {}).get('address'),
                  'P_SimpleReflect': (data.get('reflection') or {}).get('address')}
     for name, source in textures.items():
         mel.set_material_instance_texture_parameter_value(instance, name, import_texture(source, addresses.get(name)))
