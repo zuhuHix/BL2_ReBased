@@ -62,6 +62,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             return '[{"key": "V"}]'
         }
         '*cp_melee_facts*' { return '{"definition": {}}' }
+        '*cp_page*' { return '{"movie": "m"}' }
+        '*cp_injure*' { return $(if ($scenario -eq 'not_down') { '{"injured": false}' } else { '{"injured": true}' }) }
         '*cp_melee_hooks*' { return '{}' }
         '*endswith*' { return $(if ($scenario -eq 'no_melee') { '0' } else { '2' }) }
         '*cp_targets*' { return '[{"class": "WillowAIPawn", "path": "a.b"}]' }
@@ -128,6 +130,11 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertEqual(session['status'], 'incomplete: melee_air')
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.saves(), 'original save')
+
+    def test_maya_not_going_down_is_incomplete(self):
+        done, session = self.run_capture('not_down')
+        self.assertEqual(session['status'], 'incomplete: page_down')
+        self.assertEqual(done.returncode, 1)
 
     def test_a_run_error_is_failed_and_still_restores(self):
         done, session = self.run_capture('run_error')

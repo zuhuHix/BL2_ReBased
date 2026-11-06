@@ -1,6 +1,6 @@
 # Controls lane ground truth (docs/verification/CONTROLS.md): one real-game session in Sanctuary with saves blocked from the first
 # frame. Reads the stock bindings and the melee definitions, presses the melee key with the chain hooked, reads the HUD's use prompt
-# at nearby usable things, quits. Takes the screen and keyboard; run it only with a granted heavy slot. Everything written is game
+# at nearby usable things, reads what M and L do on each open status page and while Maya is down, quits. Takes the screen and keyboard; run it only with a granted heavy slot. Everything written is game
 # data under ignored local/realgame/controls/.
 #
 # Data safety, on every exit:
@@ -30,7 +30,7 @@ function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $snapshots = @{}
-$stagesRequested = @('bindings', 'melee_facts', 'melee_air', 'prompts', 'melee_npc')
+$stagesRequested = @('bindings', 'melee_facts', 'melee_air', 'prompts', 'melee_npc', 'page_keys', 'page_down')
 $log.requested_stages = $stagesRequested
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -114,6 +114,46 @@ try {
         Py "print(cp_rows('melee_npc'))" | Out-Null
     }
     Set-Stage 'melee_npc' ($npc.Count -gt 0) 'no pawn to stand before'
+
+    # M and L on each open page: open it with its stock key, press one, read and capture, close. Tab and Esc are the page's own business.
+    $pageReads = @()
+    foreach ($page in 'M', 'L', 'I', 'K') {
+        foreach ($key in 'M', 'L') {
+            Focus-Game | Out-Null
+            Send-Key $page; Start-Sleep 2
+            $opened = Py 'print(json.dumps(cp_page(), default=str))' 15
+            Send-Key $key; Start-Sleep 2
+            $after = Py 'print(json.dumps(cp_page(), default=str))' 15
+            Save-Shot "controls/page_${page}_then_${key}.png" | Out-Null
+            $pageReads += "{`"page`": `"$page`", `"key`": `"$key`", `"opened`": $opened, `"after`": $after}"
+            Send-Key Esc; Start-Sleep 2
+            Send-Key Esc; Start-Sleep 1   # if the key left a page open under the first close
+            Save-Shot "controls/page_${page}_then_${key}_closed.png" | Out-Null
+        }
+    }
+    $pageReads | Set-Content (Join-Path $Out 'page_keys.jsonl')
+    Set-Stage 'page_keys' ($pageReads.Count -eq 8) 'not every page and key was read'
+    Py "print(cp_rows('page_keys'))" | Out-Null
+
+    # Last: Maya then bleeds out. Whether the map, the missions and a swing work while she is down.
+    $injured = ''
+    for ($i = 0; $i -lt 8 -and $injured -notmatch '"injured": true'; $i++) { $injured = Py 'print(json.dumps(cp_injure(), default=str))' 15; Start-Sleep 1 }
+    $log.injure = $injured; "injure: $injured"
+    if ($injured -match '"injured": true') {
+        $downReads = @()
+        foreach ($key in 'M', 'L') {
+            Focus-Game | Out-Null
+            Send-Key $key; Start-Sleep 1
+            $downReads += "{`"key`": `"$key`", `"after`": $(Py 'print(json.dumps(cp_page(), default=str))' 15)}"
+            Save-Shot "controls/down_$key.png" | Out-Null
+            Send-Key Esc; Start-Sleep 1
+        }
+        Send-Key V; Start-Sleep 1
+        Save-Shot 'controls/down_V.png' | Out-Null
+        $downReads | Set-Content (Join-Path $Out 'page_down.jsonl')
+        Py "print(cp_rows('page_down'))" | Out-Null
+    }
+    Set-Stage 'page_down' ($injured -match '"injured": true') "she did not go down: $injured"
     Py 'print(cp_unhook())' | Out-Null
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }

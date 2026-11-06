@@ -11,6 +11,8 @@ were not known when this was written, so each read is guarded and whole records 
   (usable object, icons) and what the HUD movie's two prompt clips show.
 - cp_prompt_read(): the same read at the current spot.
 - cp_melee_hooks() / cp_rows() / cp_unhook(): rows for the melee chain with the game clock.
+- cp_page(): whether the status menu is up and which screen it holds (with the screenshot, what a key on an open page did).
+- cp_injure(): one huge hit on the player, for the end of a session only: she then bleeds out. Returns whether she is down.
 - cp_melee_facts(): what the pawn's definitions say for the melee: the special moves, the first-person animation and its
   length, the camera anim, the live value of the player melee damage definition.
 """
@@ -28,6 +30,9 @@ CLIPS = ("p1.tools", "p1.toolsSecondary")
 FIELDS = ("desc", "text", "key", "cost", "amount", "button", "icon")
 CHAIN = [
     "WillowGame.WillowPlayerController:Behavior_Melee",
+    "WillowGame.WillowPlayerController:ShowStatusMenu",
+    "WillowGame.WillowPlayerController:CanShowModalMenu",
+    "WillowGame.WillowPlayerController:ShowCannotOpenMenu",
     "WillowGame.WillowPlayerController:MeleeAttack",
     "WillowGame.WillowPlayerController:MeleeAttackComplete",
     "WillowGame.WillowPlayerController:PerformSharedWeaponActions",
@@ -166,6 +171,27 @@ def cp_unhook():
     for path, typ, ident in CP["hooks"]:
         _try(lambda: remove_hook(path, typ, ident))
     CP["hooks"] = []
+
+
+def cp_page():
+    pc = _pc()
+    found = [m for m in unrealsdk.find_all("StatusMenuExGFxMovie", exact=False) if "Default__" not in m.Name]
+    movie = found[-1] if found else None
+    out = {"movie": _name(movie), "quick_screen": _try(lambda: int(pc.QuickAccessScreen))}
+    if movie is not None:
+        out["open"] = _try(lambda: bool(movie.bMovieIsOpen))
+        out["props"] = _try(lambda: {p.Name: str(getattr(movie, p.Name))[:80] for p in movie.Class._properties()
+                                     if any(word in p.Name.lower() for word in ("screen", "panel", "page", "current"))})
+    return out
+
+
+def cp_injure():
+    pc = _pc()
+    pawn = pc.Pawn
+    zero = pawn.Location
+    zero.X = zero.Y = zero.Z = 0.0
+    hit = _try(lambda: pawn.TakeDamage(1000000, None, pawn.Location, zero, unrealsdk.find_class("DamageType")))
+    return {"hit": str(hit), "injured": _try(lambda: bool(pawn.bIsInjured)), "health": _try(lambda: float(pawn.GetHealth()))}
 
 
 def cp_melee_facts():
