@@ -149,6 +149,13 @@ def test_an_empty_lift_list_is_a_miss_only_when_a_cast_was_observed():
     assert ns['pi_result']()['cast_observed'] is False      # a call but no rows
 
 
+def test_stopping_the_probe_lets_go_of_the_pawn():
+    ns = load()
+    ns['pi']['pawn'] = Obj(Name='Target')
+    ns['pi_stop']()
+    assert ns['pi']['pawn'] is None
+
+
 def test_giving_up_on_the_injure_does_not_count_as_down():
     ns = load()
     me = Obj(bIsInjured=False, Health=1)
