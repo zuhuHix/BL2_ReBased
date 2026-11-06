@@ -81,6 +81,7 @@ void LoadOnce()
     if (!Root->TryGetObjectField(TEXT("roles"), RoleObject)) return;
     for (const auto& Pair : (*RoleObject)->Values)
     {
+        const FString Role(Pair.Key);
         const TArray<TSharedPtr<FJsonValue>>* Files = nullptr;
         if (!Pair.Value->TryGetArray(Files)) continue;
         for (const TSharedPtr<FJsonValue>& Value : *Files)
@@ -91,10 +92,16 @@ void LoadOnce()
             FString Error;
             if (!FFileHelper::LoadFileToArray(Bytes, *Path, FILEREAD_Silent)) Error = TEXT("cannot read file");
             else OpenWillowAudio::ParseWav(Bytes, Wav, Error);
-            if (!Error.IsEmpty()) UE_LOG(LogTemp, Warning, TEXT("OWAUDIO skip role=%s file=%s: %s"), *Pair.Key, *FPaths::GetCleanFilename(Path), *Error);
-            else Roles().FindOrAdd(Pair.Key).Add(MoveTemp(Wav));
+            if (Error.IsEmpty())
+            {
+                Roles().FindOrAdd(Role).Add(MoveTemp(Wav));
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("OWAUDIO skip role=%s file=%s: %s"), *Role, *FPaths::GetCleanFilename(Path), *Error);
+            }
         }
-        UE_LOG(LogTemp, Display, TEXT("OWAUDIO role=%s files=%d"), *Pair.Key, Roles().Contains(Pair.Key) ? Roles()[Pair.Key].Num() : 0);
+        UE_LOG(LogTemp, Display, TEXT("OWAUDIO role=%s files=%d"), *Role, Roles().Contains(Role) ? Roles()[Role].Num() : 0);
     }
 }
 
