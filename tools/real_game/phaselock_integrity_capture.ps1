@@ -78,6 +78,8 @@ function Wait-Ready([double]$Timeout = 40) {
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $snapshots = @{}
+$roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
+foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
 $stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
@@ -109,6 +111,7 @@ try {
     foreach ($d in $extraRoots.Keys) {
         if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
+    Save-VerifiedBackupRecord $bak $roots $snapshots
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
     Install-Driver -BlockSavesAtStart -Exclusive
@@ -240,15 +243,8 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
     $recovery = ''
-    # The manual restore lists only roots whose backup is still good.
-    $makeRestoreCommand = { param($Names)
-        $list = @($Names | ForEach-Object { "'$_'" }) -join ', '
-        @"
-foreach (`$sub in @($list)) { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
-"@
-    }
-    $verifiedNames = @($snapshots.Keys | Where-Object { $snapshots[$_] -is [hashtable] })
-    $restoreCommand = & $makeRestoreCommand $verifiedNames
+    # One way to restore by hand: this helper re-checks the backup against its record and refuses a root that changed.
+    $restoreCommand = "Restore-VerifiedBackup '$bak'"
     if (!$gameGone) {
         $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
         $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
@@ -259,7 +255,7 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
   2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
      Remove-Item -Recurse -Force '$script:DriverDir'
      $restoreCommand
-     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'; a 'MISMATCH after restore' row means it failed.
+     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand.
   3. Then remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
 "@
         $bak = $null; $driverOwned = $false; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
@@ -273,8 +269,6 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     $rows = @(); $holdLocks = $false
     if ($bak) {
         try {
-            $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
-            foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
             $restored = Restore-VerifiedRoots $bak $roots $snapshots
             $rows = @($restored.rows); $cleanup.saves = $restored.summary; $holdLocks = !$restored.clean
             if ($holdLocks) { $recovery = "restore did not compare clean ($($restored.summary))" }
@@ -298,14 +292,11 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
     Format-RestoreRows $rows
     if ($holdLocks) {
-        $changedRoots = @($restored.changed | Where-Object { $_ })
-        $restoreCommand = & $makeRestoreCommand @($verifiedNames | Where-Object { $_ -notin $changedRoots })
-        if ($changedRoots.Count) { "Do NOT restore $($changedRoots -join ', '): the backup changed after it was verified. Compare it with the live files by hand." }
         @"
 MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both locks are held and the backup is kept at $bak.
   1. Make sure Borderlands 2 is closed. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
      $restoreCommand
-     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'; a 'MISMATCH after restore' row means it failed.
+     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand.
   2. Only when no row reports a mismatch, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
 "@
     }
