@@ -62,6 +62,7 @@ KV = re.compile(r'(\w+)=(\S+)')
 ROLLED_DAMAGE = re.compile(r'OWFIRING rolled_damage (.*)$')
 ROLLED = re.compile(r'OWFIRING rolled (.*)$')
 MANIFEST_HINT = 'rerun python tools/weapon_gen_manifest.py --game <BL2 folder>'
+TEMPLATE_HINT = 'run python tools/weapon_gen_firing.py --game <BL2 folder>'
 
 
 def fields(body):
@@ -277,11 +278,12 @@ def finite(line, key):
 def check_rolled(lines):
     """Generated guns' refire (OWFIRING rolled): a gun with burst count 1 gives exactly one shot from one hold and a gun with
     burst count 0 more than one. The burst values must come from the manifest, and each hold must have lasted at least two of
-    the gun's fire intervals, so one shot cannot just mean a short hold."""
+    the gun's fire intervals, so one shot cannot just mean a short hold. A third gun (want -1) must launch a projectile, and
+    every gun's firing block must have loaded from its template."""
     fails = []
-    for want, rule in (('1', 'exactly one shot'), ('0', 'more than one shot')):
+    for want, rule in (('1', 'exactly one shot'), ('0', 'more than one shot'), ('-1', 'a launched projectile')):
         line = next((row for row in lines if row.get('want') == want), None)
-        label = f'rolled gun with burst {want}'
+        label = 'rolled gun with a projectile' if want == '-1' else f'rolled gun with burst {want}'
         if line is None:
             fails.append(f'no OWFIRING rolled line for a {label}')
             continue
@@ -289,12 +291,22 @@ def check_rolled(lines):
         if reason in ('stale_manifest', 'no_manifest'):
             fails.append(f'{label}: {reason}: the weapon generator manifest has no burst data, {MANIFEST_HINT}')
             continue
+        if reason == 'no_firing_templates':
+            fails.append(f'{label}: {reason}: {TEMPLATE_HINT}')
+            continue
         if reason:
             fails.append(f'{label}: not tested ({reason})')
             continue
         name = f"{label} ({line.get('id')}, {line.get('type')})"
         if line.get('from_manifest') != '1':
             fails.append(f'{name}: its burst values did not come from the manifest, {MANIFEST_HINT}')
+            continue
+        if line.get('firing_loaded') != '1':
+            fails.append(f'{name}: no firing block from its template, {TEMPLATE_HINT}')
+        if want == '-1':
+            launches = finite(line, 'launches')
+            if launches is None or launches < 1:
+                fails.append(f"{name}: {line.get('launches')} projectiles launched, expected {rule}")
             continue
         if line.get('burst') != want:
             fails.append(f"{name}: burst is {line.get('burst')}")

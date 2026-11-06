@@ -203,10 +203,13 @@ hook); the critic aligned on the first visible effect.
 * **Dahl assault rifle card damage** (generation, `tools/weapon_stats.py`): the live gun with the same parts, prefix,
   title, stage and grade deals 21.463 per bullet, the card model 19.603 (+9.5 %); the recipe's "slot WeaponDamage grade
   -3" modifier is the suspect (UNVERIFIED).
-* **Generated guns have no firing block yet** (follow-up): `ow.RollGun`, the quest reward, vendors and loot build items from the C++
-  generator's card (`OpenWillowWeaponGen::ToItem`), which names the firing mode but does not resolve the projectile, splash,
-  status and pattern data that `tools/weapon_firing.py` writes for recipes. Those guns fire the host's fallback
-  trace (card pellets and spread). Their refire rule is resolved since 2026-11-06: the card carries the evaluated burst count and
+* **Generated guns take their firing block from templates (2026-11-06).** `ow.RollGun`, the quest reward, vendors and loot build items
+  from the C++ generator's card (`OpenWillowWeaponGen::ToItem`). `tools/weapon_gen_firing.py` runs the one resolver,
+  `tools/weapon_firing.py`, on sampled rolls of every balance and writes a template per weapon type, firing mode and element to ignored
+  `local/weapons/gen/`; the host fills it from the card and uses the recipes' parser. The tool merges every roll back and refuses to write if
+  anything but the pool differs from the resolver (1494 rolls, 236 templates, 0 differences; a Python check of the rule, not the C++).
+  **UNVERIFIED:** the accuracy pool is the type's base because parts are not applied; the spin-down duration is missing; a key the sampled rolls
+  never reached fires the plain trace with a warning; nothing has been compared with a rolled gun in the running game. Their refire rule is resolved since 2026-11-06: the card carries the evaluated burst count and
   interval, so a type with count 1 fires once per press. Before that every generated gun fired while held. The firing test now
   rolls one gun of each kind from the manifest and `tools/check_weapon_firing.py` requires one shot from one hold (burst 1) and more than
   one (burst 0), with a hold of at least two fire intervals. A stale manifest fails and names `tools/weapon_gen_manifest.py`; the burst count alone marks a fresh one. This check is about refire only: `from_manifest` is a data check, and a rolled gun with no imported mesh passes it on the host's stand-in, which says nothing about how that gun looks. Porting the resolution into `src/weapon_gen` (or calling a shared resolver) is the

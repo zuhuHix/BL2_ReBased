@@ -50,6 +50,7 @@ def python_gun(package, localize, balance, stage, seed, stage_cap=None):
     card['burst_count'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponAutomaticBurstCount')
     card['burst_interval'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponBurstInterval')
     card['burst_known'] = card['burst_count'] is not None
+    card['speed_multiplier'] = evaluated['attributes'].get(weapon_stats.ATTR + 'WeaponProjectileSpeedMultiplier')
     for field in FLOAT_PROPERTY_FIELDS:
         if isinstance(card.get(field), int):
             card[field] = float(card[field])

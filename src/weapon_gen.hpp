@@ -250,6 +250,7 @@ struct WeaponGenCard {
     // The refire rule, not shown on the item card. The builder writes a count for every type (default 0), so a card without one
     // comes from a manifest older than these bases. An interval is only what a type sets; it matters only for a count above 1.
     std::optional<double> burstCount, burstInterval;
+    std::optional<double> speedMultiplier;  // WeaponProjectileSpeedMultiplier: applied to a firing template's speeds
     bool BurstKnown() const { return burstCount.has_value(); }
     std::optional<std::string> spinMode, element, rarityRating, rarityColor, manufacturer, firingMode, damageType;
     std::optional<int> rarity;  // host scale 1 Common .. 5 Legendary
