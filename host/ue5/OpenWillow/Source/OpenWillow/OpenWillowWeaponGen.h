@@ -41,6 +41,11 @@ struct FOpenWillowWeaponGen
     // local manifest, so no stock path is in the code. False with OutReason no_manifest, stale_manifest (no burst data),
     // no_firing_templates or no_gun. BurstTestRocket asks for a gun that launches a projectile instead.
     static constexpr int32 BurstTestRocket = -1;
+    // BurstTestPool asks for a gun whose parts move its accuracy pool off the type's base, or a skipped merge could not show.
+    static constexpr int32 BurstTestPool = -2;
+    // A roll's accuracy pool as its card has it, and its template's base: min, max, idle rate, each NaN when absent. Read apart from
+    // the item, so the firing test can compare what the merge left on a held gun. False when the roll or its template cannot be read.
+    static bool RolledPoolValues(const FString& Balance, int32 Stage, uint32 Seed, float OutCard[3], float OutBase[3]);
     static bool FindGunForBurstTest(int32 WantedBurst, int32 Stage, FOpenWillowWeaponItem& OutItem, FString& OutReason);
     // A pool or source roll, as ow-weapongen --pool does: OutDrops gets every item balance dropped, in order. OutItem is
     // the first weapon dropped, rolled with Seed + its drop index. False when the feature is off or nothing dropped was
