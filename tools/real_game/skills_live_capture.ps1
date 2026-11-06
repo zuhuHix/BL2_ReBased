@@ -112,6 +112,13 @@ function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
     @{ target = $Target; place = $place; before = $before; dead = $dead; seconds = [math]::Round(((Get-Date) - $start).TotalSeconds, 2) }
 }
 
+# What a step came for, as named yes/no checks. A step whose body ran without an error can still have got nothing: no check, or a
+# check that is not true, means it did not. Returns the names that failed ("no evidence" when there are none).
+function Get-MissingEvidence($Evidence) {
+    if ($null -eq $Evidence -or !@($Evidence.Keys).Count) { return @('no evidence') }
+    @($Evidence.Keys | Where-Object { $Evidence[$_] -ne $true })
+}
+
 # Runs one step and writes its record. The grades are set first (a step whose grades cannot be set does not run), and always put
 # back, and any watch the step left open is stopped. A failure stops the step at once with its text (a Python traceback included)
 # in the step's JSON. Two steps failing in a row end the run, so a broken setup cannot use up the slot.
@@ -141,6 +148,10 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
         $rec.active_check = PyCall "sl_unexpected_active([$keys])"
         $rec.possibly_contaminated = $script:RunningUnknown -or $rec.active_check.readable -eq $false -or @($rec.active_check.unexpected | Where-Object { $_ }).Count -gt 0
         $rec.result = & $Body
+        # The body's last hashtable: a stray value it wrote to the pipeline must not lose the evidence.
+        $rec.evidence = (@($rec.result) | Where-Object { $_ -is [hashtable] } | Select-Object -Last 1).evidence
+        $rec.missing = @(Get-MissingEvidence $rec.evidence)
+        if ($rec.missing.Count) { "step $Name ran but did not get: $($rec.missing -join ', ')" }
         $rec.ok = $true
         $script:FailedInARow = 0
     } catch {
@@ -166,7 +177,7 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
         catch { $rec.restore_error = "$_"; $script:GradesBroken = $true }
         $rec.finished = (Get-Date).ToString('o')
         $rec | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $Out "$Name.json")
-        $summary.steps += [pscustomobject]@{ step = $Name; ok = $rec.ok; error = $rec.error; possibly_contaminated = [bool]$rec.possibly_contaminated }
+        $summary.steps += [pscustomobject]@{ step = $Name; ok = $rec.ok; error = $rec.error; possibly_contaminated = [bool]$rec.possibly_contaminated; missing = @($rec.missing) }
     }
 }
 
@@ -180,7 +191,9 @@ function Invoke-DamageCast([string]$Name, [hashtable]$Grades) {
         Start-Sleep 7
         $res = PyCall 'sl_watch_result("damage")'
         $ready = Wait-Ready
-        @{ target = $t; setup = $setup; watch_start = $watch; result = $res; ready = $ready }
+        $hits = @($res.rows | Where-Object { $_.victim -eq $t -and ($_.damage -as [double]) -gt 0 })
+        @{ target = $t; setup = $setup; watch_start = $watch; result = $res; ready = $ready
+           evidence = @{ target_took_damage = $hits.Count -gt 0 } }
     }
 }
 
@@ -199,7 +212,8 @@ function Get-SavesVerdict([object[]]$Rows, [string]$Backup) {
     else { "identical to $Backup after $(@($Rows).Count) restores" }
 }
 
-# Complete means every requested step passed without a possible mix-up from an earlier step, and everything is back as it was.
+# Complete means every requested step passed, got what it came for (its evidence) and had no possible mix-up from an earlier step, and
+# everything is back as it was. A step that ran without an error is not enough: that is how a run with no kills once reported complete.
 function Get-SessionComplete($Log, [object[]]$StepRows, [string[]]$Requested, $Cleanup, [bool]$GameGone, [bool]$GradesBroken, [bool]$RunningUnknown) {
     if ($Log.Contains('error') -or !$GameGone -or $GradesBroken -or $RunningUnknown) { return $false }
     if ("$($Cleanup.saves)" -notlike 'identical*') { return $false }
@@ -207,6 +221,7 @@ function Get-SessionComplete($Log, [object[]]$StepRows, [string[]]$Requested, $C
     $rows = @($StepRows | Where-Object { $_ })
     if (!$rows.Count) { return $false }
     if (@($rows | Where-Object { !$_.ok -or $_.possibly_contaminated }).Count) { return $false }
+    if (@($rows | Where-Object { @($_.missing).Count -or $null -eq $_.missing }).Count) { return $false }
     foreach ($name in $Requested) { if ($name -notin $rows.step) { return $false } }
     $true
 }
@@ -280,7 +295,8 @@ try {
     }
 
     Invoke-Step 'discover' @{} {
-        PyCall "{'Helios': sl_find_skills('Helios'), 'Ruin': sl_find_skills('Ruin'), 'Converge': sl_find_skills('Converge'), 'SubSequence': sl_find_skills('Sub-Sequence'), 'SweetRelease': sl_find_skills('Sweet Release'), 'MindsEye': sl_find_skills('Minds Eye'), 'LifeTap': sl_find_skills('Life Tap'), 'Phaselock': sl_find_skills('Phaselock')}"
+        $found = PyCall "{'Helios': sl_find_skills('Helios'), 'Ruin': sl_find_skills('Ruin'), 'Converge': sl_find_skills('Converge'), 'SubSequence': sl_find_skills('Sub-Sequence'), 'SweetRelease': sl_find_skills('Sweet Release'), 'MindsEye': sl_find_skills('Minds Eye'), 'LifeTap': sl_find_skills('Life Tap'), 'Phaselock': sl_find_skills('Phaselock')}"
+        @{ found = $found; evidence = @{ skills_found = @($found.PSObject.Properties | Where-Object { @($_.Value).Count -gt 0 }).Count -gt 0 } }
     }
 
     # 1. Kill-skill timer, first, before anything isolates a pawn. Life Tap (a Harmony kill skill) at grade 5 makes the kill-skill
@@ -294,7 +310,9 @@ try {
         $k2 = Invoke-FreshKill $targets[1]
         Start-Sleep 16
         $res = PyCall 'sl_watch_result("killskill")'
-        @{ targets = $targets; watch_start = $watch; kills = @($k1, $k2); result = $res }
+        $samples = @($res.rows | Where-Object { $null -ne $_.remaining })
+        @{ targets = $targets; watch_start = $watch; kills = @($k1, $k2); result = $res
+           evidence = @{ both_kills_happened = ($k1.dead -eq $true -and $k2.dead -eq $true); timer_sampled = $samples.Count -gt 0 } }
     }
 
     # 2. Converge: its blast leaves the target alive, so the next step can use it (isolate detaches every other pawn).
@@ -310,7 +328,9 @@ try {
         $set5 = PyCall "sl_set_grades({'MindsEye': 5})"
         Start-Sleep 2
         $at5 = PyCall 'sl_crit_bonus()'
-        @{ as_saved = $asSaved; grade1 = $at1; grade5 = $at5; set1 = $set1; set5 = $set5 }
+        $read = { param($r) ($r.values.CurrentInstantHitCriticalHitBonus -as [double]) -gt 0 }
+        @{ as_saved = $asSaved; grade1 = $at1; grade5 = $at5; set1 = $set1; set5 = $set5
+           evidence = @{ bonus_read_at_each_grade = ((& $read $asSaved) -and (& $read $at1) -and (& $read $at5)) } }
     }
 
     # 6. Sub-Sequence and Sweet Release: the lifted bullymong is killed 1.5 s after the F press, during the lock.
@@ -325,7 +345,13 @@ try {
         Start-Sleep 9
         $res = PyCall 'sl_watch_result("killedtarget")'
         $ready = Wait-Ready
-        @{ target = $t; setup = $setup; maya_health = $health; watch_start = $watch; kill = $kill; result = $res; ready = $ready }
+        $interrupts = @($res.rows | Where-Object { $_.func -eq 'InterruptPhaseLock' })
+        # The immunity hook is on for the whole run and refuses TakeDamage on Maya, and the heal is read as healing damage: a heal
+        # cannot be told from no heal until the hook lets it through (NATIVE_SKILL_BEHAVIOURS.md, "What a useful fifth run needs").
+        $immune = $true
+        @{ target = $t; setup = $setup; maya_health = $health; watch_start = $watch; kill = $kill; result = $res; ready = $ready
+           evidence = @{ held_target_killed_by_the_gun = "$($kill.how)" -like 'gun*'; interrupt_seen = $interrupts.Count -gt 0
+                         heal_could_be_observed = (!$immune -and ($health.after -as [double]) -lt ($health.max -as [double])) } }
     }
 
     # 4 and 5. Helios and Ruin last: Ruin's pulses kill the target, and one controlled target is all that is left by now. Helios

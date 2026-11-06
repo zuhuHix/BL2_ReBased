@@ -322,7 +322,7 @@ $ErrorActionPreference = 'Stop'
 $errors = $null; $tokens = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('%CAPTURE%', [ref]$tokens, [ref]$errors)
 foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict', 'Get-SessionComplete') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
+    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict', 'Get-SessionComplete', 'Get-MissingEvidence') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
 }
 function global:Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'broken') { return "Traceback (most recent call last):`n  LookupError: WillowAIPawn_9" }
@@ -362,10 +362,22 @@ $unknownAfter = $script:RunningUnknown
 $script:RunningUnknown = $false
 # Complete needs every requested step passed and a clean cleanup.
 $cleanOk = @{ saves = 'identical to B after 2 restores'; driver = 'removed' }
-$passed = @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $false })
+$passed = @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $false; missing = @() })
+# A step that ran and got nothing, through the real runner: the fourth run's shape (no kill, no error).
+$script:FailedInARow = 0
+Invoke-Step 'no_kills' @{} { @{ evidence = @{ both_kills_happened = $false; timer_sampled = $true } } }
+Invoke-Step 'got_it' @{} { @{ evidence = @{ both_kills_happened = $true; timer_sampled = $true } } }
+Invoke-Step 'no_claim' @{} { @{ something = 1 } }
+$noKills = @($summary.steps | Where-Object { $_.step -eq 'no_kills' })
+$gotIt = @($summary.steps | Where-Object { $_.step -eq 'got_it' })
+$noClaim = @($summary.steps | Where-Object { $_.step -eq 'no_claim' })
 $noError = [ordered]@{ started = 'x' }
+$completeWithEvidence = Get-SessionComplete $noError $gotIt @() $cleanOk $true $false $false
 $complete = [ordered]@{
     good = Get-SessionComplete $noError $passed @() $cleanOk $true $false $false
+    ran_but_no_kills = Get-SessionComplete $noError $noKills @() $cleanOk $true $false $false
+    no_evidence = Get-SessionComplete $noError $noClaim @() $cleanOk $true $false $false
+    missing_field_absent = Get-SessionComplete $noError @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $false }) @() $cleanOk $true $false $false
     step_failed = Get-SessionComplete $noError @([pscustomobject]@{ step = 'a'; ok = $false; possibly_contaminated = $false }) @() $cleanOk $true $false $false
     contaminated = Get-SessionComplete $noError @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $true }) @() $cleanOk $true $false $false
     no_steps = Get-SessionComplete $noError @() @() $cleanOk $true $false $false
@@ -389,7 +401,7 @@ $guard = 'no error'; try { Copy-VerifiedRoot $src $partial } catch { $guard = "$
 $created = Get-SavesVerdict @([pscustomobject]@{ file = 'SanitySaver'; status = 'created during the run; left for the maintainer' }) 'BAK'
 $clean = Get-SavesVerdict @([pscustomobject]@{ file = 'x'; status = 'changed, restored' }) 'BAK'
 $failed = Get-SavesVerdict @([pscustomobject]@{ file = 'Config'; status = 'BACKUP FAILED; not restored, and nothing was started' }) 'BAK'
-[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed; complete = $complete; unknown_after = $unknownAfter } | ConvertTo-Json -Depth 5 -Compress
+[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed; complete = $complete; complete_with_evidence = $completeWithEvidence; unknown_after = $unknownAfter; no_kills = $noKills[0] } | ConvertTo-Json -Depth 5 -Compress
 '''
 
 
@@ -409,6 +421,9 @@ def test_step_runner_keeps_the_traceback_and_stops():
     assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked', 'grade_stuck', 'mixed', 'tree_only', 'after_tree_only'], result['ran']
     assert result['unknown_after'] is True, 'tree only leaves the session marked'
     assert result['complete'].pop('good') is True
+    assert result['complete_with_evidence'] is True, 'a step with all its evidence can complete'
+    assert result['complete']['ran_but_no_kills'] is False, 'the fourth run: every step ran, no kill happened, and it said complete'
+    assert result['no_kills']['ok'] is True and result['no_kills']['missing'] == ['both_kills_happened'], result['no_kills']
     assert not any(result['complete'].values()), result['complete']
     assert 'differs from the original' in result['guard'], result['guard']
     assert result['created'].startswith('NOT IDENTICAL') and 'SanitySaver' in result['created'], result['created']

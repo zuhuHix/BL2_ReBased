@@ -43,6 +43,9 @@ public:
     // live read and its reason is not known (the data reading gave 0.2); a Ruin pulse is 1 x PlayerSkillDamage.
     static float HeliosDamageAt(int32 Grade, int32 AtLevel) { return 0.29f * Grade * SkillDamageAt(AtLevel); }
     static float RuinPulseDamageAt(int32 AtLevel) { return SkillDamageAt(AtLevel); }
+    // A Converge blast: 1.16 x PlayerSkillDamage, fitted to one live read at level 8, UNVERIFIED beyond it (the data reading gave 1 x
+    // and the reason for the difference is not known, as with Helios's 0.29).
+    static float ConvergeDamageAt(int32 AtLevel) { return 1.16f * SkillDamageAt(AtLevel); }
     // Mind's Eye: what the skill adds to a hit's crit bonus, 2.0 x 0.05 x grade (0 when untrained or without effects data).
     // In game the skill's Scale joins the attribute's stack: (2.0 + PreAdd) x (1 + Scale sum), seen live to 4 decimals at
     // grades 1, 3 and 5 with other modifiers on the stack, at level 8 only; other levels are UNVERIFIED. The host has none of

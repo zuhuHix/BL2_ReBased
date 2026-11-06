@@ -226,6 +226,7 @@ bool FOpenWillowSkillEffectsTest::RunTest(const FString&)
     // Helios 0.29 x grade x PlayerSkillDamage and a Ruin pulse 1 x PlayerSkillDamage, at a level no live read used: the formulas only.
     TestTrue(TEXT("Helios blast at grade 2, level 1"), FMath::IsNearlyEqual(UOpenWillowSkills::HeliosDamageAt(2, 1), 0.29f * 2.f * 9.04f, 1e-3f));
     TestEqual(TEXT("Helios blast at grade 0"), UOpenWillowSkills::HeliosDamageAt(0, 1), 0.f);
+    TestTrue(TEXT("Converge blast at level 1"), FMath::IsNearlyEqual(UOpenWillowSkills::ConvergeDamageAt(1), 1.16f * 9.04f, 1e-3f));
     TestTrue(TEXT("Ruin pulse at level 1"), FMath::IsNearlyEqual(UOpenWillowSkills::RuinPulseDamageAt(1), 9.04f, 1e-3f));
     // Skill damage formulas: 8 x 1.13 ^ level and 1.13 ^ level.
     TestTrue(TEXT("PlayerSkillDamage at level 1"), FMath::IsNearlyEqual(UOpenWillowSkills::SkillDamageAt(1), 9.04f, 1e-3f));
