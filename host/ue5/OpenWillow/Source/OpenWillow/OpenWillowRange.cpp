@@ -49,7 +49,6 @@ constexpr float WalkableNormalZ = 0.85f;
 constexpr float ProbeReach = 1500.f;
 constexpr float ProbeMaxRise = 250.f;
 constexpr float SlotMaxRise = 400.f;
-const FVector2D ScoutCentre(0.f, 0.f); // set from ignored local data later in this stack
 
 // -<Switch>=<path>, else the project-relative default.
 FString RangeFile(const TCHAR* Switch, const TCHAR* ProjectRelative)
@@ -132,9 +131,9 @@ bool FloorIsTextured(const FHitResult& Hit, FString& OutPath)
 }
 
 // The facing away from the town: the yaw from the plaza centre to Spot (only X and Y count for a yaw).
-float AwayFromTown(const FVector& Spot)
+float AwayFromTown(const FVector& Spot, const FVector2D& Centre)
 {
-    return FVector(Spot.X - ScoutCentre.X, Spot.Y - ScoutCentre.Y, 0.f).Rotation().Yaw;
+    return FVector(Spot.X - Centre.X, Spot.Y - Centre.Y, 0.f).Rotation().Yaw;
 }
 
 // The scout rules (host choice, UNVERIFIED): see UOpenWillowRangeSubsystem::ScoutSpot. The floor is the complex hit of a down
@@ -353,6 +352,18 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 Entry->TryGetBoolField(TEXT("gate_terrain"), Candidate.bGateTerrain);
                 Out.Candidates.Add(Candidate);
             }
+        const TSharedPtr<FJsonObject>* CentreObject = nullptr;
+        if (Root->TryGetObjectField(TEXT("scout_centre"), CentreObject))
+        {
+            double CentreX = 0.0, CentreY = 0.0;
+            if ((*CentreObject)->TryGetNumberField(TEXT("x"), CentreX) && (*CentreObject)->TryGetNumberField(TEXT("y"), CentreY))
+            {
+                Out.ScoutCentre = FVector2D(CentreX, CentreY);
+                Out.bHasScoutCentre = true;
+            }
+        }
+        double DefaultCandidate = -1.0;
+        if (Root->TryGetNumberField(TEXT("default_spot_candidate"), DefaultCandidate)) Out.DefaultSpotCandidate = int32(DefaultCandidate);
         const TSharedPtr<FJsonObject>* KindObjects = nullptr;
         if (Root->TryGetObjectField(TEXT("kinds"), KindObjects))
             for (const auto& Pair : (*KindObjects)->Values)
@@ -702,8 +713,23 @@ bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FSt
             return true;
         }
     }
-    // 3. The manifest's candidates, in manifest order (gate terrain first).
+    // 3. The default spot: the candidate the manifest names by index (the hub's pick from the survey frames; local data only). The
+    // candidate rules turn it into the point and yaw. The other candidates follow when it no longer fits.
     EnsureManifest();
+    if (Manifest.Candidates.IsValidIndex(Manifest.DefaultSpotCandidate))
+    {
+        FString Material, Why;
+        if (ResolveCandidate(Manifest.DefaultSpotCandidate, OutSpot, OutYaw, Material, Why))
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE spot source=default_candidate index=%d terrain=%s at=%.0f,%.0f,%.0f yaw=%.0f material=%s"),
+                Manifest.DefaultSpotCandidate, *Manifest.Candidates[Manifest.DefaultSpotCandidate].Source, OutSpot.X, OutSpot.Y, OutSpot.Z, OutYaw,
+                *Material);
+            OutSource = TEXT("default_candidate");
+            return true;
+        }
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE default candidate index=%d not accepted: %s"), Manifest.DefaultSpotCandidate, *Why);
+    }
+    // 4. The manifest's candidates, in manifest order (gate terrain first).
     for (int32 Index = 0; Index < Manifest.Candidates.Num(); ++Index)
     {
         FString Material, Why;
@@ -716,7 +742,7 @@ bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FSt
         }
         UE_LOG(LogTemp, Display, TEXT("OWRANGE candidate index=%d not accepted: %s"), Index, *Why);
     }
-    // 4. The scout.
+    // 5. The scout.
     FString Log;
     if (ScoutSpot(OutSpot, OutYaw, Log))
     {
@@ -730,6 +756,12 @@ bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FSt
 bool UOpenWillowRangeSubsystem::ScoutSpot(FVector& OutSpot, float& OutYaw, FString& OutLog)
 {
     EnsureManifest();   // the formation check needs the number of enemies
+    if (!Manifest.bHasScoutCentre)
+    {
+        OutLog = TEXT("the manifest has no scout centre (python tools/prepare_range.py)");
+        return false;
+    }
+    const FVector2D ScoutCentre = Manifest.ScoutCentre;
     UWorld* World = GetWorld();
     FHitResult Plaza;
     if (!World || !TraceVisibility(World, FVector(ScoutCentre.X, ScoutCentre.Y, 10000.f),
@@ -756,13 +788,13 @@ bool UOpenWillowRangeSubsystem::ScoutSpot(FVector& OutSpot, float& OutYaw, FStri
             const FVector Floor = FloorHit.Location;
             // The whole formation (dummy row and enemy arc, facing away from the town) must have textured floor too.
             TArray<FVector> DummySlots, EnemySlots;
-            if (!FormationSlots(Floor, AwayFromTown(Floor), DummySlots, EnemySlots, Why, true)) continue;
+            if (!FormationSlots(Floor, AwayFromTown(Floor, Manifest.ScoutCentre), DummySlots, EnemySlots, Why, true)) continue;
             ++Accepted;
             if (!bWon)
             {
                 bWon = true;
                 OutSpot = Floor;
-                OutYaw = AwayFromTown(Floor);   // facing away from the town
+                OutYaw = AwayFromTown(Floor, Manifest.ScoutCentre);   // facing away from the town
                 WonMaterial = Material;
             }
         }
@@ -812,10 +844,10 @@ bool UOpenWillowRangeSubsystem::ResolveCandidate(int32 Index, FVector& OutSpot, 
             {
                 TArray<FVector> DummySlots, EnemySlots;
                 const FVector Floor = FloorHit.Location;
-                if (FormationSlots(Floor, AwayFromTown(Floor), DummySlots, EnemySlots, Why, true))
+                if (FormationSlots(Floor, AwayFromTown(Floor, Manifest.ScoutCentre), DummySlots, EnemySlots, Why, true))
                 {
                     OutSpot = Floor;
-                    OutYaw = AwayFromTown(Floor);
+                    OutYaw = AwayFromTown(Floor, Manifest.ScoutCentre);
                     OutMaterial = Material;
                     return true;
                 }
@@ -1420,7 +1452,14 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         Reset(TEXT("provoked"));
         OnlyActive(E0);
-        PlaceFar();   // a hit from afar: only the damage can raise the level (near her, a notice rule could too)
+        // A hit from afar: only the damage can raise the level. Near her a notice rule could raise it too and the step would prove
+        // nothing, so without a far place the step fails before the hit.
+        if (!PlaceFar())
+        {
+            TestCheck(TEXT("provoked"), false, TEXT("no floor outside the den's threat radius: no hit made"));
+            TestStep = 24;
+            return;
+        }
         TestHit(E0, 1.f, E0->BodyComponent(), PC, Pawn);
         StepStart = Now;
         TestStep = 23;
@@ -1749,8 +1788,10 @@ void UOpenWillowRangeSubsystem::TickLootTest(float Now)
                 ++Drops;
                 Farthest = FMath::Max(Farthest, float(FVector::Dist(Drop->GetActorLocation(), Corpse)));
             }
-        TestCheck(TEXT("loot_near_corpse"), Drops > 0 && Farthest <= LootNearCorpse,
-            FString::Printf(TEXT("%d drop(s), farthest %.0f uu from the corpse (limit %.0f)"), Drops, Farthest, LootNearCorpse));
+        // No drop may have used the "no room" fall-back: the room test on sloped ground is what this step proves.
+        TestCheck(TEXT("loot_near_corpse"), Drops > 0 && Farthest <= LootNearCorpse && LastLoot.DropFallbacks == 0,
+            FString::Printf(TEXT("%d drop(s), farthest %.0f uu from the corpse (limit %.0f), %d at the no-room fall-back"), Drops, Farthest,
+                LootNearCorpse, LastLoot.DropFallbacks));
         const int32 MoneyCount = CountLivePickups(LastLoot, false);
         const int32 WeaponCount = CountLivePickups(LastLoot, true);
         const bool bOk = E0->IsDead() && MoneyCount >= 1 && (WeaponCount >= 1 || !bWeaponsAvailable);
@@ -1913,7 +1954,7 @@ void UOpenWillowRangeSubsystem::TickSurvey(float Now)
         ClearRange();
         const FString Terrain = Manifest.Candidates[SurveyIndex].Source;
         FVector Spot = Manifest.Candidates[SurveyIndex].Location;
-        float Yaw = AwayFromTown(Spot);
+        float Yaw = AwayFromTown(Spot, Manifest.ScoutCentre);
         FString Material = TEXT("none"), Why;
         bool bAccepted = false;
         FVector Found;

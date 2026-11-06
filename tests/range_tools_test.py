@@ -35,7 +35,7 @@ class PrepareRangeTest(unittest.TestCase):
         terrain = {'probes': [
             {'source': 'Made:Level.Terrain_9', 'stands': [{'point': [0.0, 1000.0, 10.0]}, {'point': [1.0]}]},
             {'source': prepare_range.GATE_TERRAIN, 'stands': [{'point': [-5000.0, 640.0, 20.0]}, {'point': [-1000.0, 640.0, 30.0]}]}]}
-        out = prepare_range.spot_candidates(terrain)
+        out = prepare_range.spot_candidates(terrain, {'x': 0.0, 'y': 0.0})
         self.assertEqual([c['x'] for c in out], [-1000.0, -5000.0, 0.0])   # gate terrain first, each group nearest first
         self.assertTrue(out[0]['gate_terrain'])
         self.assertFalse(out[2]['gate_terrain'])
@@ -74,6 +74,26 @@ class PrepareRangeTest(unittest.TestCase):
         row = prepare_range.loot_tables(run)['Beast'][3]
         self.assertEqual((row['item_stage'], row['item_stage_min'], row['item_stage_max']), (3, 1, 4))   # 3-2 = 1, 3+1 = 4
         self.assertEqual(prepare_range.loot_tables(run)['Beast'][20]['item_stage'], 18)   # the first kill of a level is its row
+
+    def test_scout_centre_from_axis_views(self):
+        views = {'views': [
+            {'name': 'plaza_a', 'location': [10.0, 500.0, 1.0], 'rotation': [5.0, 90.0, 0.0]},       # looks along Y: gives X
+            {'name': 'plaza_b', 'location': [900.0, 20.0, 1.0], 'rotation': [5.0, 0.0, 0.0]},        # looks along X: gives Y
+            {'name': 'plaza_c', 'location': [700.0, 40.0, 1.0], 'rotation': [5.0, 180.0, 0.0]},      # looks along X: gives Y
+            {'name': 'plaza_d', 'location': [1.0, 1.0, 1.0], 'rotation': [5.0, -114.0, 0.0]},        # diagonal: not used
+            {'name': 'other', 'location': [9.0, 9.0, 1.0], 'rotation': [5.0, 90.0, 0.0]}]}           # not a plaza view
+        self.assertEqual(prepare_range.scout_centre(views), {'x': 10.0, 'y': 30.0})
+        self.assertIsNone(prepare_range.scout_centre({'views': views['views'][:1]}))
+
+    def test_spot_data_is_required(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            missing = os.path.join(folder, 'none.json')
+            out = os.path.join(prepare_range.REPO, 'local', 'range', 'test_should_not_exist.json')
+            with self.assertRaises(SystemExit):
+                prepare_range.main(['--no-vm', '--terrain', missing, '--views', missing, '--out', out])
+            self.assertFalse(os.path.exists(out))
 
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']

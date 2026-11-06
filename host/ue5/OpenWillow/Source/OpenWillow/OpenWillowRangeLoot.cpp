@@ -52,7 +52,7 @@ FString PoolLeaf(const FString& Pool)
 // floor under it and room above it (no world geometry in a DropRoomRadius sphere just above the floor). The first point that has
 // both wins, DropLift above its floor; when none has, the corpse's feet. The corpse is the actor's location (its floor point):
 // the death turns the collision off, so the collision centre reads zero then (slice gate report: a gun dropped at the origin).
-FVector DropSpot(UWorld* World, const AOpenWillowEnemy* Enemy, int32 Index)
+FVector DropSpot(UWorld* World, const AOpenWillowEnemy* Enemy, int32 Index, FOpenWillowRangeLootResult& Result)
 {
     const FVector Feet = Enemy->GetActorLocation();
     const FVector Centre = Feet + FVector(0.f, 0.f, 100.f);   // the rings' traces start from here (above the floor point)
@@ -71,7 +71,8 @@ FVector DropSpot(UWorld* World, const AOpenWillowEnemy* Enemy, int32 Index)
         if (World->OverlapAnyTestByObjectType(Room, FQuat::Identity, Solid, FCollisionShape::MakeSphere(DropRoomRadius), Query)) continue;
         return Floor + FVector(0.f, 0.f, DropLift);
     }
-    UE_LOG(LogTemp, Display, TEXT("OWRANGE loot drop_spot no room near %s: at its feet"), *Enemy->GetName());
+    ++Result.DropFallbacks;
+    UE_LOG(LogTemp, Warning, TEXT("OWRANGE loot drop_spot no room near %s: at its feet"), *Enemy->GetName());
     return Feet + FVector(0.f, 0.f, DropLift);
 }
 
@@ -245,7 +246,7 @@ FOpenWillowRangeLootResult RollRangeLoot(UWorld* World, AOpenWillowEnemy* Enemy,
                 }
                 if (bRolled)
                 {
-                    const FVector At = DropSpot(World, Enemy, DropIndex++);
+                    const FVector At = DropSpot(World, Enemy, DropIndex++, Result);
                     SpawnWeaponPickup(World, At, Item, Result);
                     What = FString::Printf(TEXT("weapon %s"), *Item.Name);
                 }
@@ -261,7 +262,7 @@ FOpenWillowRangeLootResult RollRangeLoot(UWorld* World, AOpenWillowEnemy* Enemy,
             const int32 Quantity = FMath::Max(1, Stream.RandRange(-1, 2));
             const int32 Each = MoneyStandIn(Level);
             for (int32 Copy = 0; Copy < Quantity; ++Copy)
-                SpawnRangePickup(World, DropSpot(World, Enemy, DropIndex++), EOpenWillowRangePickupKind::Money, Each,
+                SpawnRangePickup(World, DropSpot(World, Enemy, DropIndex++, Result), EOpenWillowRangePickupKind::Money, Each,
                     EOpenWillowAmmoType::Pistol, Result);
             What = FString::Printf(TEXT("money x%d of %d"), Quantity, Each);
         }
@@ -277,7 +278,7 @@ FOpenWillowRangeLootResult RollRangeLoot(UWorld* World, AOpenWillowEnemy* Enemy,
                 const int32 Amount = UOpenWillowInventory::MagazineSize(*Weapon);
                 if (Reserve.Current * 2 < Reserve.Max && Amount > 0)
                 {
-                    SpawnRangePickup(World, DropSpot(World, Enemy, DropIndex++), EOpenWillowRangePickupKind::Ammo, Amount, AmmoType,
+                    SpawnRangePickup(World, DropSpot(World, Enemy, DropIndex++, Result), EOpenWillowRangePickupKind::Ammo, Amount, AmmoType,
                         Result);
                     What = FString::Printf(TEXT("ammo %s x%d"), UOpenWillowInventory::AmmoTypeKey(AmmoType), Amount);
                 }
