@@ -49,6 +49,7 @@ incomplete range is a failed build and nothing is left standing. The test's plac
 
 ## Data (all ignored, under `local/`)
 
+- **Before you prepare:** `local/sanctuary/inspection-views.json` is hand-written (no tool generates it) and `tools/prepare_range.py` needs its `plaza_*` views; a worktree's copy may not have them, so pass the main checkout's with `--views` (see "Where the spot comes from").
 - `python tools/prepare_range.py [--levels 1-50]` writes `local/range/range_manifest.json` (schema `ow-range-v1`): the health tables from one VM run
   (about 2 minutes, most of it the first load of Ice_Dynamic) and the enemy assets from `local/phaselock/target/host_target.json`
   (`tools/import_phaselock_target.ps1`, the bullymong). Walk, run, hit and melee clips are picked by name from the imported clips next to the idle
