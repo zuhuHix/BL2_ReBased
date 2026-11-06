@@ -539,4 +539,7 @@ Not queued until this is reviewed. Only the two things the fourth run failed to 
    restored; Maya can go down only if a pawn reaches her, which ends the step, and that is recorded rather than retried; the step's health is set
    back at its end. The read is whose health the heal uses and how much.
 
-Each step then has to report what it came for (the capture's evidence rule), so a run without those reads says so.
+Each step then has to report what it came for (the capture's evidence rule), so a run without those reads says so: a cast counts only with a new cast,
+a skill hit on the target and its health falling at or after that hit; a kill only when its last hit came from Maya's controller with a game damage
+source; the timer only when every sample is a number and it was seen running and running out; Mind's Eye only with both grades read back and the bonus
+moving with them. These checks are the capture's own reading of its rows, tested on invented rows, and none has yet passed in a real run.

@@ -322,7 +322,7 @@ $ErrorActionPreference = 'Stop'
 $errors = $null; $tokens = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('%CAPTURE%', [ref]$tokens, [ref]$errors)
 foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict', 'Get-SessionComplete', 'Get-MissingEvidence') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
+    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict', 'Get-SessionComplete', 'Get-MissingEvidence', 'Test-Number', 'Get-TargetHits', 'Test-KilledByMaya', 'Get-CastEvidence', 'Get-TimerEvidence', 'Get-CritEvidence', 'Get-DiscoverEvidence') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
 }
 function global:Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'broken') { return "Traceback (most recent call last):`n  LookupError: WillowAIPawn_9" }
@@ -363,6 +363,45 @@ $script:RunningUnknown = $false
 # Complete needs every requested step passed and a clean cleanup.
 $cleanOk = @{ saves = 'identical to B after 2 restores'; driver = 'removed' }
 $passed = @([pscustomobject]@{ step = 'a'; ok = $true; possibly_contaminated = $false; missing = @() })
+# The evidence gates, on invented rows. Each entry is what Get-MissingEvidence names.
+function global:Rows([string]$Json) { @($Json | ConvertFrom-Json) }
+function global:Missing($Evidence) { ,@(Get-MissingEvidence $Evidence | Sort-Object) }
+$hit = '{"t":1.3,"via":"WillowAIPawn","victim":"T","damage":25.0,"damage_type":"WillowDmgSource_Skill","instigator":"PC"}'
+$actor = '{"t":1.3,"via":"Actor","victim":"T","damage":"<AttributeError>","damage_type":"WillowDmgSource_Skill"}'
+$full = '{"t":0.0,"event":"target_health","health":700.0}'
+$less = '{"t":1.34,"event":"target_health","health":675.0}'
+$gates = [ordered]@{}
+$gates.cast_good = Missing (Get-CastEvidence (Rows "[$full,$actor,$hit,$less]") 'T' 'a' 'b')
+$gates.cast_rejected_hit = Missing (Get-CastEvidence (Rows "[$full,$hit]") 'T' 'a' 'b')
+$gates.cast_health_unchanged = Missing (Get-CastEvidence (Rows "[$full,$hit,$($less.Replace('675.0','700.0'))]") 'T' 'a' 'b')
+$gates.cast_other_victim = Missing (Get-CastEvidence (Rows "[$full,$($hit.Replace('"T"','"U"')),$less]") 'T' 'a' 'b')
+$gates.cast_not_a_skill = Missing (Get-CastEvidence (Rows "[$full,$($hit.Replace('_Skill','_Bullet')),$less]") 'T' 'a' 'b')
+$gates.cast_fell_before_the_hit = Missing (Get-CastEvidence (Rows "[$full,$($less.Replace('1.34','0.5')),$($hit)]") 'T' 'a' 'b')
+$gates.cast_no_new_cast = Missing (Get-CastEvidence (Rows "[$full,$hit,$less]") 'T' 'a' 'a')
+$gun = Rows '[{"t":1.0,"via":"WillowAIPawn","victim":"T","damage":30.0,"damage_type":"WillowDmgSource_Bullet","instigator":"PC"}]'
+$kill = @{ target = 'T'; dead = $true; hits = $gun; controller = 'PC' }
+$timer = '[{"t":0,"remaining":0.0},{"t":1,"remaining":6.5},{"t":2,"event":"UpdateKillSkills"},{"t":8,"remaining":0.0}]'
+$gates.timer_good = Missing (Get-TimerEvidence (Rows $timer) @($kill, $kill))
+$gates.timer_all_zero = Missing (Get-TimerEvidence (Rows '[{"t":0,"remaining":0.0},{"t":1,"remaining":0.0}]') @($kill))
+$gates.timer_marker = Missing (Get-TimerEvidence (Rows '[{"t":0,"remaining":"<AttributeError>"},{"t":1,"remaining":6.5},{"t":2,"remaining":0.0}]') @($kill))
+$gates.timer_never_ran_out = Missing (Get-TimerEvidence (Rows '[{"t":0,"remaining":6.5},{"t":1,"remaining":5.5}]') @($kill))
+$gates.timer_one_not_dead = Missing (Get-TimerEvidence (Rows $timer) @($kill, @{ target = 'T'; dead = $false; hits = $gun; controller = 'PC' }))
+$gates.timer_other_killer = Missing (Get-TimerEvidence (Rows $timer) @(@{ target = 'T'; dead = $true; hits = $gun; controller = 'OtherPC' }))
+$gates.timer_scripted_kill = Missing (Get-TimerEvidence (Rows $timer) @(@{ target = 'T'; dead = $true; controller = 'PC'; hits = (Rows '[{"t":1.0,"via":"WillowAIPawn","victim":"T","damage":1000000,"damage_type":"DamageType","instigator":"PC"}]') }))
+$gates.timer_dead_no_hit = Missing (Get-TimerEvidence (Rows $timer) @(@{ target = 'T'; dead = $true; hits = @(); controller = 'PC' }))
+$read = { param($v) [pscustomobject]@{ values = [pscustomobject]@{ CurrentInstantHitCriticalHitBonus = $v } } }
+$set = { param($g, $before, $status) [pscustomobject]@{ status = 'done'; rows = @([pscustomobject]@{ status = $status; before = [pscustomobject]@{ grade = $before }; after = [pscustomobject]@{ grade = $g } }) } }
+$gates.crit_good = Missing (Get-CritEvidence (& $read 2.3) (& $read 2.1) (& $read 2.5) (& $set 1 3 'set') (& $set 5 1 'set'))
+$gates.crit_set_failed = Missing (Get-CritEvidence (& $read 2.3) (& $read 2.1) (& $read 2.5) (& $set 1 3 'error') (& $set 5 1 'set'))
+$gates.crit_readback_differs = Missing (Get-CritEvidence (& $read 2.3) (& $read 2.1) (& $read 2.5) (& $set 1 3 'set') (& $set 4 1 'set'))
+$gates.crit_flat_bonus = Missing (Get-CritEvidence (& $read 2.3) (& $read 2.3) (& $read 2.3) (& $set 1 3 'set') (& $set 5 1 'set'))
+$gates.crit_flat_saved_at_an_end = Missing (Get-CritEvidence (& $read 2.3) (& $read 2.3) (& $read 2.3) (& $set 1 1 'set') (& $set 5 1 'set'))
+$gates.crit_saved_not_between = Missing (Get-CritEvidence (& $read 9.0) (& $read 2.1) (& $read 2.5) (& $set 1 3 'set') (& $set 5 1 'set'))
+$gates.crit_marker = Missing (Get-CritEvidence (& $read 2.3) (& $read '<AttributeError>') (& $read 2.5) (& $set 1 3 'set') (& $set 5 1 'set'))
+$names = @('A', 'B', 'C')
+$gates.discover_good = Missing (Get-DiscoverEvidence ('{"A":["x"],"B":["y"],"C":["z"]}' | ConvertFrom-Json) $names)
+$gates.discover_one_empty = Missing (Get-DiscoverEvidence ('{"A":["x"],"B":[],"C":["z"]}' | ConvertFrom-Json) $names)
+$gates.discover_one_absent = Missing (Get-DiscoverEvidence ('{"A":["x"],"B":["y"]}' | ConvertFrom-Json) $names)
 # A step that ran and got nothing, through the real runner: the fourth run's shape (no kill, no error).
 $script:FailedInARow = 0
 Invoke-Step 'no_kills' @{} { @{ evidence = @{ both_kills_happened = $false; timer_sampled = $true } } }
@@ -401,7 +440,7 @@ $guard = 'no error'; try { Copy-VerifiedRoot $src $partial } catch { $guard = "$
 $created = Get-SavesVerdict @([pscustomobject]@{ file = 'SanitySaver'; status = 'created during the run; left for the maintainer' }) 'BAK'
 $clean = Get-SavesVerdict @([pscustomobject]@{ file = 'x'; status = 'changed, restored' }) 'BAK'
 $failed = Get-SavesVerdict @([pscustomobject]@{ file = 'Config'; status = 'BACKUP FAILED; not restored, and nothing was started' }) 'BAK'
-[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed; complete = $complete; complete_with_evidence = $completeWithEvidence; unknown_after = $unknownAfter; no_kills = $noKills[0] } | ConvertTo-Json -Depth 5 -Compress
+[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed; complete = $complete; complete_with_evidence = $completeWithEvidence; gates = $gates; unknown_after = $unknownAfter; no_kills = $noKills[0] } | ConvertTo-Json -Depth 5 -Compress
 '''
 
 
@@ -421,6 +460,20 @@ def test_step_runner_keeps_the_traceback_and_stops():
     assert result['ran'] == ['good', 'bad1', 'recovers', 'bad2', 'bad3', 'picked', 'grade_stuck', 'mixed', 'tree_only', 'after_tree_only'], result['ran']
     assert result['unknown_after'] is True, 'tree only leaves the session marked'
     assert result['complete'].pop('good') is True
+    wanted = {
+        'cast_good': [], 'cast_rejected_hit': ['health_fell_after_the_hit'], 'cast_health_unchanged': ['health_fell_after_the_hit'], 'cast_fell_before_the_hit': ['health_fell_after_the_hit'],
+        'cast_other_victim': ['health_fell_after_the_hit', 'skill_hit_on_target'],
+        'cast_not_a_skill': ['health_fell_after_the_hit', 'skill_hit_on_target'], 'cast_no_new_cast': ['cast_started'],
+        'timer_good': [], 'timer_all_zero': ['timer_ran', 'timer_ran_out'], 'timer_never_ran_out': ['timer_ran_out'],
+        'timer_marker': ['timer_ran', 'timer_ran_out', 'timer_samples_numeric'], 'timer_one_not_dead': ['kills_by_maya'],
+        'timer_other_killer': ['kills_by_maya'], 'timer_scripted_kill': ['kills_by_maya'], 'timer_dead_no_hit': ['kills_by_maya'],
+        'crit_good': [], 'crit_set_failed': ['grade_1_set_and_read_back'], 'crit_readback_differs': ['grade_5_set_and_read_back'],
+        'crit_flat_bonus': ['bonus_moves_with_the_grade'], 'crit_flat_saved_at_an_end': ['bonus_moves_with_the_grade'], 'crit_saved_not_between': ['bonus_moves_with_the_grade'],
+        'crit_marker': ['bonus_moves_with_the_grade'],
+        'discover_good': [], 'discover_one_empty': ['found_B'], 'discover_one_absent': ['found_C'],
+    }
+    got = {name: ([] if value is None else [value] if isinstance(value, str) else value) for name, value in result['gates'].items()}
+    assert got == wanted, {k: (got.get(k), wanted.get(k)) for k in wanted if got.get(k) != wanted.get(k)}
     assert result['complete_with_evidence'] is True, 'a step with all its evidence can complete'
     assert result['complete']['ran_but_no_kills'] is False, 'the fourth run: every step ran, no kill happened, and it said complete'
     assert result['no_kills']['ok'] is True and result['no_kills']['missing'] == ['both_kills_happened'], result['no_kills']
