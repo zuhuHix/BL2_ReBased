@@ -60,6 +60,8 @@ NO_WALL = re.compile(r'OWFIRING no wall in reach for id=(\S+)')
 PARSED = re.compile(r'firing test parsed \d+ recipe IDs: (\S+)')
 KV = re.compile(r'(\w+)=(\S+)')
 ROLLED_DAMAGE = re.compile(r'OWFIRING rolled_damage (.*)$')
+ROLLED = re.compile(r'OWFIRING rolled (.*)$')
+MANIFEST_HINT = 'rerun python tools/weapon_gen_manifest.py --game <BL2 folder>'
 
 
 def fields(body):
@@ -78,10 +80,14 @@ def read_log(text, extra=None):
     extra.setdefault('splash', {})
     extra.setdefault('swap', {})
     extra.setdefault('rolled_damage', None)
+    extra.setdefault('rolled', [])
     pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
         if match := ROLLED_DAMAGE.search(line):
             extra['rolled_damage'] = fields(match.group(1))
+            continue
+        if match := ROLLED.search(line):
+            extra['rolled'].append(fields(match.group(1)))
             continue
         if match := SPLASH.search(line):
             pending_splash.append({'scale': float(match.group(2)), 'momentum': float(match.group(3)),
@@ -266,6 +272,43 @@ def finite(line, key):
     except (KeyError, TypeError, ValueError):
         return None
     return value if math.isfinite(value) else None
+
+
+def check_rolled(lines):
+    """Generated guns' refire (OWFIRING rolled): a gun with burst count 1 gives exactly one shot from one hold and a gun with
+    burst count 0 more than one. The burst values must come from the manifest, and each hold must have lasted at least two of
+    the gun's fire intervals, so one shot cannot just mean a short hold."""
+    fails = []
+    for want, rule in (('1', 'exactly one shot'), ('0', 'more than one shot')):
+        line = next((row for row in lines if row.get('want') == want), None)
+        label = f'rolled gun with burst {want}'
+        if line is None:
+            fails.append(f'no OWFIRING rolled line for a {label}')
+            continue
+        reason = line.get('unavailable')
+        if reason in ('stale_manifest', 'no_manifest'):
+            fails.append(f'{label}: {reason}: the weapon generator manifest has no burst data, {MANIFEST_HINT}')
+            continue
+        if reason:
+            fails.append(f'{label}: not tested ({reason})')
+            continue
+        name = f"{label} ({line.get('id')}, {line.get('type')})"
+        if line.get('from_manifest') != '1':
+            fails.append(f'{name}: its burst values did not come from the manifest, {MANIFEST_HINT}')
+            continue
+        if line.get('burst') != want:
+            fails.append(f"{name}: burst is {line.get('burst')}")
+        interval, hold = finite(line, 'interval'), finite(line, 'hold')
+        if interval is None or interval <= 0 or hold is None or hold < 2 * interval:
+            fails.append(f"{name}: the hold ({line.get('hold')} s) does not cover two fire intervals ({line.get('interval')} s)")
+        try:
+            shots = int(line['shots'])
+        except (KeyError, ValueError):
+            fails.append(f"{name}: no shot count ({line.get('shots')})")
+            continue
+        if (shots != 1) if want == '1' else (shots <= 1):
+            fails.append(f'{name}: {shots} shots from one hold, expected {rule}')
+    return fails
 
 
 def check_grenade(line):
@@ -609,6 +652,16 @@ def main(argv=None):
             print(f'rolled damage: FAIL {reason}')
         print('rolled damage: FAIL' if rolled_damage else 'rolled damage: PASS')
         failed += bool(rolled_damage)
+    # Required; only --legacy grades a log from before this check without it.
+    if extra['rolled'] or not args.legacy:
+        rolled = check_rolled(extra['rolled'])
+        for line in extra['rolled']:
+            if 'shots' in line:
+                print(f"rolled: {line.get('type')} {line.get('id')} burst {line.get('burst')}: {line.get('shots')} shots in {line.get('hold')} s")
+        for reason in rolled:
+            print(f'rolled: FAIL {reason}')
+        print('rolled: FAIL' if rolled else 'rolled: PASS')
+        failed += bool(rolled)
     return 1 if failed or grenade_fails else 0
 
 

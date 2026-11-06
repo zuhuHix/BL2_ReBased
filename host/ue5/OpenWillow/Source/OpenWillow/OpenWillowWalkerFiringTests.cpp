@@ -319,6 +319,62 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         }
         return;
     }
+    // After the last gun: rolled guns (tools/check_weapon_firing.py check_rolled). A gun with burst count 1 must fire one shot
+    // from one hold, and one with burst count 0 more than one. The hold is long enough for further shots, derived from the gun's
+    // own fire interval, so one shot cannot just mean a short hold.
+    static int32 RolledGun = 0, RolledStep = 0, RolledShotsBefore = 0;
+    static float RolledAt = 0.f, RolledHold = 0.f;
+    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun < 2 && CombatTarget.IsValid())
+    {
+        const int32 Wanted = RolledGun == 0 ? 1 : 0;
+        const auto Unavailable = [Wanted](const TCHAR* Reason)
+        {
+            UE_LOG(LogTemp, Error, TEXT("OWFIRING rolled unavailable=%s want=%d"), Reason, Wanted);
+            ++RolledGun;
+            RolledStep = 0;
+        };
+        const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        if (RolledStep == 0)
+        {
+            FireReleased();
+            AimReleased();
+            FOpenWillowWeaponItem Rolled;
+            FString Reason;
+            if (!FOpenWillowWeaponGen::FindGunForBurstTest(Wanted, FMath::Max(1, Skills->GetLevel()), Rolled, Reason)) { Unavailable(*Reason); return; }
+            const FString RolledId = Rolled.Id;
+            if (!Inventory->AddToBackpack(MoveTemp(Rolled))) { Unavailable(TEXT("backpack_full")); return; }
+            int32 Index = INDEX_NONE;
+            for (int32 I = Inventory->Items().Num() - 1; I >= 0 && Index == INDEX_NONE; --I)
+                if (Inventory->Items()[I].Id == RolledId) Index = I;
+            if (Index == INDEX_NONE || !EquipItem(Index, 0) || !bWeaponOut || !Inventory->ActiveWeapon() || Inventory->ActiveWeapon()->Id != RolledId)
+            {
+                Unavailable(TEXT("not_equipped"));
+                return;
+            }
+            RolledAt = Now;
+            RolledStep = 1;
+        }
+        else if (!Held) Unavailable(TEXT("no_weapon"));   // the test must not wait for ever on a weapon that went away
+        else if (RolledStep == 1 && Now >= RolledAt + Settle)
+        {
+            RolledHold = 3.f / Held->FireRate + 0.1f;
+            RolledShotsBefore = OpenWillowFiring::Counts.Shots;
+            FirePressed();
+            RolledAt = Now;
+            RolledStep = 2;
+        }
+        else if (RolledStep == 2 && Now >= RolledAt + RolledHold)
+        {
+            const float HeldSeconds = Now - RolledAt;
+            FireReleased();
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d"),
+                Wanted, *Held->Id, *Held->Type.Replace(TEXT(" "), TEXT("_")), Held->Firing.BurstCount, Held->Firing.bBurstFromManifest ? 1 : 0,
+                1.f / Held->FireRate, HeldSeconds, Held->Magazine, OpenWillowFiring::Counts.Shots - RolledShotsBefore);
+            ++RolledGun;
+            RolledStep = 0;
+        }
+        return;
+    }
     // After the last gun: a rolled gun's damage stack (tools/check_weapon_firing.py check_rolled_damage). Its terms must rebuild its
     // damage, and AOpenWillowWalker::ShotDamage must use them with no Scale, a running one and an expired one. The Scale lasts
     // 0.01 s, read within this tick, so it cannot reach anything fired after this.
