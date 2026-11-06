@@ -55,6 +55,8 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWLOOTLID view balance=Synth clear=1 yaw=45')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
+    text += line('OWQUICKCHANGE prompt id=S cost=200 money=5000')
+    text += line('OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4800 reason=')
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
 
@@ -229,6 +231,32 @@ class CommandLineTest(unittest.TestCase):
     def test_main_returns_two_on_a_missing_input(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(ci.main(['--log', str(Path(tmp) / 'none.log'), '--interactives', str(Path(tmp) / 'x.json')]), 2)
+
+
+class QuickChangeTest(unittest.TestCase):
+    PROMPT = 'OWQUICKCHANGE prompt id=S cost=200 money=5000\n'
+
+    def grade(self, text):
+        out = ci.Results()
+        ci.grade_quick_change(text, out)
+        return out.rows[0]
+
+    def test_prompt_then_exact_charge_passes(self):
+        self.assertEqual(self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4800 reason=\n')[1], 'PASS')
+
+    def test_a_wrong_charge_fails(self):
+        self.assertEqual(self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=5000 after=4700 reason=\n')[1], 'FAIL')
+
+    def test_money_changed_by_the_prompt_fails(self):
+        self.assertEqual(self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=4900 after=4700 reason=\n')[1], 'FAIL')
+
+    def test_a_refused_reset_fails(self):
+        row = self.grade(self.PROMPT + 'OWQUICKCHANGE reset id=S ok=0 cost=200 before=5000 after=5000 reason=respec costs\n')
+        self.assertEqual(row[1], 'FAIL')
+        self.assertIn('respec costs', row[2])
+
+    def test_no_lines_fail(self):
+        self.assertEqual(self.grade('')[1], 'FAIL')
 
 
 class LidCaptureTest(unittest.TestCase):

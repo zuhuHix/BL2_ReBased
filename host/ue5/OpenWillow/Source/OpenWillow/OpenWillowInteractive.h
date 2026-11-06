@@ -189,6 +189,7 @@ public:
     // Opens a closed lootable (its drops are spawned around it). False when it is open already or nothing can be rolled.
     bool OpenLootable(AOpenWillowWalker& Walker, AOpenWillowLootable& Lootable);
     int32 LootableCount() const { return Lootables.Num(); }
+    int32 NumStations() const { return Stations.Num(); }
     AOpenWillowLootable* LootableAt(int32 Index) const { return Lootables.IsValidIndex(Index) ? Lootables[Index].Get() : nullptr; }
 
 private:
@@ -200,6 +201,11 @@ private:
     void ReadItems(const TSharedPtr<FJsonObject>& Root);
     void ReadBalances(const TSharedPtr<FJsonObject>& Root);
     void SpawnObjects(UWorld& World, const TSharedPtr<FJsonObject>& Root);
+    void SpawnStations(UWorld& World, const TSharedPtr<FJsonObject>& Root);
+    // The nearest Quick Change station in reach, with its squared distance (reach as for lootables).
+    class AOpenWillowQuickChangeStation* NearestStation(const FVector& From, double& OutDistanceSquared) const;
+    TArray<TWeakObjectPtr<class AOpenWillowQuickChangeStation>> Stations;
+    int32 TestStationStep = 0;
     bool SpawnOne(UWorld& World, const TSharedPtr<FJsonObject>& Json);
     void SpawnLeaf(AOpenWillowWalker& Walker, const AOpenWillowLootable& Lootable, const FOpenWillowLootLeaf& Leaf,
         int32 Level, int32 Index, int32 Count, FRandomStream& Rng, int32& Spawned);
