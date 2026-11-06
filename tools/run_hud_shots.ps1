@@ -44,6 +44,7 @@ if (!(Test-Path -LiteralPath (Join-Path $repo 'local/ui/run/UI_HUD/hud_strings.j
 $level = if ($Level -gt 0) { $Level } else { [int](Get-Content -LiteralPath $gear -Raw | ConvertFrom-Json).level }
 if ($Shield) { $Extra += '-owhudshield' }
 if (@($Down, $Tracker, $Feedback, $StandInShield | Where-Object { $_ }).Count -gt 1) { throw 'Pick one of -Down, -Tracker, -Feedback, -StandInShield' }
+if ($StandInShield -and $Shield) { throw '-StandInShield equips its own stat-less shield; it does not take -Shield' }
 $mode = if ($Down) { @('-owhuddownshots', '-owcombattest') } elseif ($Tracker) {
     $sliceFiles = @((Join-Path $repo 'local/doors/mover.json'), (Join-Path $repo 'local/slice/world.json'),
         (Join-Path $repo 'local/slice/npc_assets.json'), (Join-Path $repo 'local/slice/audio.json'))
@@ -55,7 +56,8 @@ $mode = if ($Down) { @('-owhuddownshots', '-owcombattest') } elseif ($Tracker) {
 } elseif ($Feedback) { @('-owhudfxshots') } elseif ($StandInShield) { @('-owshieldcheck') } else { @('-owhudshots') }
 $shotFilter = if ($Down) { 'OWHudDown_*.png' } elseif ($Tracker) { 'OWHudTrack_*.png' } elseif ($Feedback) { 'OWHudFx_*.png' } elseif ($StandInShield) { 'OWShield_*.png' } else { 'OWHud_*.png' }
 if ($Tracker -and $TimeoutSeconds -lt 600) { $TimeoutSeconds = 600 }
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+# The PID and a short GUID keep a rerun in the same second from finding the last run's frames.
+$stamp = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 $outDir = Join-Path $repo "local/hudshots/$stamp"
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $log = Join-Path $outDir 'run.log'
@@ -76,6 +78,7 @@ try {
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
+    $null = $process.Handle   # without this, Start-Process -PassThru does not keep ExitCode
     Write-Host "Launched HUD shots pid $($process.Id); log: $log"
     $finished = $process.WaitForExit($TimeoutSeconds * 1000)
     if (Test-Path -LiteralPath $shots) {
@@ -93,6 +96,8 @@ try {
         if ($Shield -and -not ($Down -or $Tracker -or $Feedback)) { $checkArgs += '--expect-shield' }
         & python @checkArgs
         $code = $LASTEXITCODE
+        # A crash after a good log is still a failure. Only this mode for now: the other modes' exit codes have not been looked at.
+        if ($StandInShield -and $process.ExitCode -ne 0) { Write-Host "The game exited with $($process.ExitCode)"; $code = 1 }
     }
     Write-Host "Captures and log: $outDir (exit $code)"
 } finally {
