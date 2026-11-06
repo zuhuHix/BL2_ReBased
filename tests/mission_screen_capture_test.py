@@ -25,7 +25,7 @@ def run_tail(body, clean=True, proc='$null'):
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__OUT__', tmp).replace('__SETUP__', '').replace('__OWNED__', '$true').replace('__STUBS__', 'function Remove-Driver { }').replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+                          .replace('__OUT__', tmp).replace('__SETUP__', '').replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true').replace('__STUBS__', 'function Remove-Driver { }').replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
@@ -68,6 +68,26 @@ def test_the_capture_is_wired_to_the_safety_helpers():
         assert text.index(change, body) > start, change
     # The sends check focus themselves. Focus-Game's Alt tap would itself be a key press at an open screen, so the stages only assert.
     assert 'Focus-Game' not in text
+
+
+def test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed():
+    def tail_of(path):
+        text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
+        return text[text.index('\n} catch {\n    $runError') + 1:]
+    mine = tail_of(CAPTURE)
+    theirs = tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
+    for a, b in (('pi_stop(); unmark_lock(); print("stopped")', 'ms_stop(); print("stopped")'),
+                 ('A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.',
+                  'A throw between ms_start and ms_stop leaves the hooks and the per-frame down job running into shutdown: stop them while the game can still answer.'),
+                 ("so -ProbeOnly's return passes through it too", 'so an early return passes through it too')):
+        theirs = theirs.replace(a, b)
+    assert mine == theirs
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    # The order in the body and at the top.
+    order = ['New-Item -ItemType Directory -Force $Out', '# Stale evidence', '# End of stale evidence', '$driverAttempted = $false', '$driverAttempted = $true', 'Install-Driver -BlockSavesAtStart -Exclusive',
+             '$foreign = Get-ForeignGamesSeen $null', '$launchAttempted = $true', '$proc = Start-Game $gameArgs', "Assert-SavesBlocked (Py 'print(block_saves())')"]
+    places = [text.index(needle) for needle in order]
+    assert places == sorted(places), list(zip(order, places))
 
 
 def test_the_capture_parses_and_every_stage_is_marked():
@@ -280,5 +300,6 @@ if __name__ == '__main__':
     test_the_capture_stops_before_the_respawn_unless_the_screen_closed()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
+    test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed()
     test_exit_0_only_for_a_completed_run_with_nothing_to_recover()
     print('ok')
