@@ -32,7 +32,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
 $snapshots = @{}
-$stagesRequested = @('bindings', 'melee_facts', 'melee_air', 'prompts', 'melee_npc', 'page_keys', 'page_down')
+$stagesRequested = @('bindings', 'melee_facts', 'melee_air', 'melee_interrupted', 'prompts', 'melee_npc', 'page_keys', 'page_down')
 $log.requested_stages = $stagesRequested
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -94,6 +94,18 @@ try {
     Py "print(cp_rows('melee_air'))" | Out-Null
     $count = Py 'print(sum(1 for r in cp_rows() if r["fn"].endswith("MeleeAttack")))'
     Set-Stage 'melee_air' ([int]$count -gt 0) 'no melee call seen for the V presses'
+
+    # What interrupts a stock swing: the status menu opened inside the hit's delay, and a weapon key inside it. The rows show whether
+    # the hit behaviour still ran and whether the menu opened; the shots show what happened to the arm.
+    Send-Key V; Start-Sleep -Milliseconds 100; Send-Key Tab; Start-Sleep 2
+    $menu = Py 'print(json.dumps(cp_page(), default=str))' 15
+    Save-Shot 'controls/melee_then_menu.png' | Out-Null
+    Send-Key Esc; Start-Sleep 2
+    Send-Key V; Start-Sleep -Milliseconds 100; Send-Key '2'; Start-Sleep 3
+    Save-Shot 'controls/melee_then_weapon_key.png' | Out-Null
+    Py "print(cp_rows('melee_interrupted'))" | Out-Null
+    $log.melee_then_menu = $menu
+    Set-Stage 'melee_interrupted' ($menu -match '"movie"') 'no menu read after a press inside a swing'
 
     # Each candidate: stand before it, read the prompt with a screenshot.
     $targets = @(Py 'print(json.dumps(cp_targets()))' 60 | ConvertFrom-Json)
