@@ -53,8 +53,12 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   `OpenWillowWalker.h/.cpp`), because several hits can land in one tick. It counts only while the gate tracks them, during
   the fight; normal play keeps no such count. Hits from other causers, or with no causer, are reported in the detail. No
   hit from the selected enemy is a FAIL in range mode, and the checker overrules a NOT_AVAILABLE there. It is
-  NOT_AVAILABLE only with the stand-in, which has no attack. The fight lasts about 2.4 s and the first hits land about
-  1.7 s in, so a much faster kill could FAIL this link: that would show up as a FAIL, not pass unnoticed.
+  NOT_AVAILABLE only with the stand-in, which has no attack.
+- **Fire is held for the selected enemy's first hit (range mode, fixture `fire held until the selected enemy hit Maya`).**
+  Otherwise a quick kill could end the fight before that enemy attacks. The driver shoots until the enemy has lost health,
+  which alerts the den, then holds fire until the enemy has hit Maya. The hold ends after 15 s, or if Maya goes down, since a
+  kill can still give her a second wind. If the enemy never hit her, link 4 FAILs. A pack can down her before it does.
+  `kill_enemy`'s detail gives the seconds held. Not yet run in the host, so what it does to her health is not known yet.
 - **NOT_AVAILABLE means a missing capability or precondition**, never a miss. `loot_drop_on_kill` with the gun roll forced
   FAILs if no drop comes, and the checker overrules a NOT_AVAILABLE there too.
 - **Every link line carries the fixtures field.** The checker fails a line without it. Logs older than these rules lack
@@ -153,8 +157,8 @@ newer driver, but that has not been run.
 - **Loot is forced and mission travel is by teleport.** The pickup is checked on card state only (canvas HUD). The gate
   captures no frames, so nothing here was checked visually.
 - **Nothing is checked against the real game.** The three runs also vary little: the same 11-shot kill in about 2.4 s.
-- **Link 4's margin is small.** The first hits land about 0.6 to 0.7 s before the kill. It held here, so fire is not
-  held back. A faster kill would FAIL the link; the small fix then is to hold fire until the selected enemy has hit.
+- **Link 4's margin was small in these runs.** The first hits landed about 0.6 to 0.7 s before the kill, with fire not
+  held back. The driver now holds fire for that first hit (see the grading section), which these runs do not cover.
 
 ### Before the Phaselock targeting fix (#111)
 

@@ -27,6 +27,7 @@ namespace
 {
 constexpr float SpawnTimeout = 30.f;
 constexpr float KillTimeout = 240.f;      // the stand-in has 20,000 health (sized for level-30 guns)
+constexpr float AttackWait = 15.f;        // fire is held at most this long into the fight, for the selected enemy's first hit
 constexpr float LootWait = 4.f;           // a drop has this long after the kill to appear
 constexpr float LootRadius = 1500.f;      // ...within this distance of the corpse
 constexpr float PhaselockTargetWait = 12.f;
@@ -473,6 +474,16 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (Enemy && Enemy->IsAutoAimTarget())
         {
             LastEnemyLocation = Enemy->GetActorLocation();   // where it stands while alive (a dead actor may be moved away)
+            // Range mode: wound the selected enemy so the den is alerted, then hold fire until it has hit Maya, so a quick
+            // kill cannot end the fight before it attacks. A test shortcut, named as a fixture. The hold ends if she goes
+            // down (a kill can still give her a second wind) or after AttackWait; link 4 then FAILs if it never hit her.
+            if (bRangeMode && Enemy->HealthFraction() < 1.f && W->GetHitCountFrom(Enemy.Get()) == 0 && StepTime < AttackWait && !W->IsDown())
+            {
+                AimAt(Enemy->AimPoint());
+                HeldFireFor += Delta;
+                Fixture(TEXT("fire held until the selected enemy hit Maya"));
+                return;
+            }
             if (StepTime < KillTimeout) { if (ShootAt(Enemy, 0.f)) ++KillShots; return; }
             FailLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s still alive after %.0fs and %d shots (health %.0f%%)"),
                 *Enemy->GetName(), StepTime, KillShots, 100.f * Enemy->HealthFraction()));
@@ -481,13 +492,14 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         {
             KillLocation = LastEnemyLocation;
             const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
-            PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs"), *Enemy->GetName(), KillShots,
-                Held ? *Held->Name : TEXT("?"), StepTime));
+            PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs, %.1fs of it with fire held"), *Enemy->GetName(), KillShots,
+                Held ? *Held->Name : TEXT("?"), StepTime, HeldFireFor));
         }
         else FailLink(TEXT("kill_enemy"), TEXT("the enemy disappeared before it died"));
         // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,
         // and this link relied on the shield too.
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
+        if (HeldFireFor > 0.f) Fixture(TEXT("fire held until the selected enemy hit Maya"));
         // The fight's hits by causer: the selected enemy, another actor, or none given.
         const int32 EnemyHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;
         const int32 UnattributedHits = W->GetHitCountFrom(nullptr);
