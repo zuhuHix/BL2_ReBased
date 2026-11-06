@@ -84,7 +84,7 @@ $stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($SkipDown) { @('hit
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
-$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false
+$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false; $driverOwned = $false; $driverAttempted = $false; $launchAttempted = $false
 # A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the
 # image path and the start time before stopping a PID). Unknown switches are ignored by the game.
 $marker = "-owrun=$Lane-$PID"
@@ -114,11 +114,14 @@ try {
     Save-VerifiedBackupRecord $bak $roots $snapshots
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
+    $driverAttempted = $true   # before the call: a failed install can leave the folder behind
     Install-Driver -BlockSavesAtStart -Exclusive
     $driverOwned = $true
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }
+    if (Get-GameProcess) { throw 'Borderlands2 started during the setup; not launching a second one' }
+    $launchAttempted = $true
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
@@ -235,7 +238,9 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     $cleanup = [ordered]@{}
     # A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.
     if ($proc -and !$proc.HasExited) {
-        try { Py 'pi_stop(); unmark_lock(); print("stopped")' 5 | Out-Null; $cleanup.hooks = 'stopped' } catch { $cleanup.hooks = "not stopped: $_" }
+        # Py returns a traceback as text, so only the exact answer counts.
+        try { $reply = Py 'pi_stop(); unmark_lock(); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+        catch { $cleanup.hooks = "not stopped: $_" }
     }
     $gameGone = $true
     if ($proc) {
@@ -247,36 +252,53 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
     $restored = $null; $restoreError = ''
-    if (!$gameGone) {
-        $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
-        $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
+    # A run touched the game's files only from the install attempt on. Those flags are set before their calls, so a failure inside still counts.
+    $touched = $driverAttempted -or $launchAttempted -or $proc
+    # Reading only: a game this run did not start is never stopped, and nothing is removed or restored under it.
+    $untracked = if ($touched) { (@(Get-UntrackedGames $proc) | ForEach-Object { $_.Id }) -join ', ' } else { '' }
+    $safe = $gameGone -and !$untracked
+    if (!$safe) {
+        $cleanup.driver = "NOT REMOVED (a game may still run): $script:DriverDir"
+        $cleanup.saves = "NOT RESTORED (a game may still run); backup kept at $bak"
     }
     try {
-        if ($driverOwned -and $gameGone) {
+        if ($safe -and $driverOwned) {
             Remove-Driver
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
+        } elseif ($safe -and $driverAttempted) {
+            # The install failed. Its own rollback is best effort, and the folder may not be this run's, so it is reported, not removed.
+            $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT after a failed install: $script:DriverDir" } else { 'install failed; nothing left' }
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
     $rows = @()
     # Before the driver is installed or the game started, nothing can have changed, so a partial backup is nothing to recover from.
-    if ($bak -and $gameGone -and !$driverOwned -and !$proc) { $cleanup.saves = 'not touched: the game never started' }
-    elseif ($bak -and $gameGone) {
+    if ($bak -and !$touched) { $cleanup.saves = 'not touched: the game never started' }
+    elseif ($bak -and $safe) {
+        # Once more, immediately before the restore: a game launched during the cleanup could overwrite it.
+        $untracked = (@(Get-UntrackedGames $proc) | ForEach-Object { $_.Id }) -join ', '
+        if ($untracked) { $safe = $false; $cleanup.saves = "NOT RESTORED (a game may still run); backup kept at $bak" }
+    }
+    if ($bak -and $touched -and $safe) {
         try {
             $restored = Restore-VerifiedRoots $bak $roots $snapshots
             $rows = @($restored.rows); $cleanup.saves = $restored.summary
         } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
     }
-    $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver
+    $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
     $holdLocks = [bool]$recovery
+    # The evidence first and session.json last, so the status it holds accounts for the rest. Missing evidence cannot read as completed; the
+    # restore has already run, and recovery keeps its status.
+    $evidenceError = ''
     try {
-        $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
-        $log.run_error = $runError
-        $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
-        $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
-        $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-        if ($bak -and $gameGone) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
-    } catch {
-        # The evidence is missing, so this run cannot read as completed. The restore has already run, and recovery keeps its status.
+        if ($bak -and $safe) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+    } catch { $evidenceError = "$_" }
+    $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
+    $log.run_error = $runError
+    $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
+    if ($evidenceError -and !$recovery) { $log.status = "failed: evidence not written ($evidenceError)" }
+    $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
+    try { $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json') }
+    catch {
         "log write failed: $_"
         if (!$recovery) { $log.status = "failed: evidence not written ($_)" }
     }

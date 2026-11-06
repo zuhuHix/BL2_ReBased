@@ -139,7 +139,8 @@ Set-Content -LiteralPath $HubLock 'test now'
 $log = [ordered]@{}; $snapshots = @{ SaveData = @{} }; $extraRoots = [ordered]@{}; $stagesRequested = @('hit'); $runError = ''
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
 __SETUP__
-$hub = 'held'; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = __OWNED__; $marker = 'x'
+$hub = 'held'; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = __OWNED__; $driverAttempted = __ATTEMPTED__; $launchAttempted = $false; $marker = 'x'
+function Get-GameProcesses { }
 __STUBS__
 try {
     __BODY__
@@ -147,13 +148,13 @@ __CAPTURE_TAIL__
 """
 
 
-def run_tail(body, clean=False, proc='$null', setup='', after=None, owned='$true', stubs="function Remove-Driver { }", out='__TMP__'):
+def run_tail(body, clean=False, proc='$null', setup='', after=None, owned='$true', stubs="function Remove-Driver { }", out='__TMP__', attempted=None):
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(TAIL.replace('__OUT__', out).replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__SETUP__', setup.replace('__TMP__', tmp)).replace('__OWNED__', owned).replace('__STUBS__', stubs.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+                          .replace('__SETUP__', setup.replace('__TMP__', tmp)).replace('__OWNED__', owned).replace('__ATTEMPTED__', attempted or owned).replace('__STUBS__', stubs.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
@@ -210,13 +211,58 @@ def test_a_missing_evidence_file_cannot_exit_0_and_the_restore_still_runs():
 
 def test_a_failed_run_stops_the_hooks_while_the_game_is_alive():
     alive = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
-    calls = "function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; if (__FAILS__) { throw 'no reply' } }"
+    calls = "function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; if (__FAILS__) { throw 'no reply' }; 'stopped' }"
     done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$false'))
     assert 'py: pi_stop(); unmark_lock()' in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
     done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$true'))
     assert 'cleanup hooks: not stopped' in done.stdout and 'cleanup game:' in done.stdout, done.stdout    # the rest of the cleanup still runs
     done = run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $true; Id = 1 }', stubs=calls.replace('__FAILS__', '$true'))
     assert 'py:' not in done.stdout and 'cleanup hooks' not in done.stdout, done.stdout   # an exited game is not asked
+
+
+def test_a_game_this_run_did_not_start_stops_the_restore_and_holds_the_locks():
+    no_restore = "function Remove-Driver { Write-Host 'driver removed' }\nfunction Restore-VerifiedRoots { throw 'must not run' }\nfunction Get-GameProcesses { [pscustomobject]@{ Id = 77 } }"
+    done = run_tail("$stagesDone.Add('hit')", True, stubs=no_restore)
+    assert done.returncode == 1 and 'status: recovery needed: a game this run did not start is running (pid 77)' in done.stdout, done.stdout
+    assert done.hub_lock_kept is True and 'MANUAL RECOVERY' in done.stdout and 'NOT RESTORED' in done.stdout and 'driver removed' not in done.stdout, done.stdout
+    # Its own process is not untracked. A second one is, also when it starts during the cleanup, after the first check.
+    own = "function Remove-Driver { }\nfunction Get-GameProcesses { [pscustomobject]@{ Id = 1 } }"
+    done = run_tail("$stagesDone.Add('hit')", True, '([pscustomobject]@{ HasExited = $true; Id = 1 } | Add-Member -PassThru ScriptMethod Refresh { })', stubs=own)
+    assert done.returncode == 0 and 'status: completed' in done.stdout, done.stdout
+    late = "$script:checks = 0\nfunction Remove-Driver { }\nfunction Restore-VerifiedRoots { throw 'must not run' }\nfunction Get-GameProcesses { $script:checks++; if ($script:checks -gt 1) { [pscustomobject]@{ Id = 88 } } }"
+    done = run_tail("$stagesDone.Add('hit')", True, stubs=late)
+    assert done.returncode == 1 and '(pid 88)' in done.stdout and done.hub_lock_kept is True and 'NOT RESTORED' in done.stdout, done.stdout
+    # A launch that started a game but never gave back its process.
+    done = run_tail("$launchAttempted = $true; throw 'no process'", True, owned='$false', stubs="function Restore-VerifiedRoots { throw 'must not run' }\nfunction Get-GameProcesses { [pscustomobject]@{ Id = 99 } }")
+    assert '(pid 99)' in done.stdout and done.hub_lock_kept is True, done.stdout
+
+
+def test_a_failed_install_that_left_the_folder_holds_the_locks():
+    make = "New-Item -ItemType Directory -Force $script:DriverDir | Out-Null"
+    done = run_tail("throw 'install failed'", True, setup=make, owned='$false', attempted='$true', stubs="function Remove-Driver { throw 'must not run' }")
+    assert done.returncode == 1 and 'status: recovery needed: driver not removed (STILL PRESENT after a failed install' in done.stdout, done.stdout
+    assert done.hub_lock_kept is True and 'Remove-Item -Recurse -Force' in done.stdout, done.stdout
+    # The rollback worked: nothing left, and the restore still runs because the install was attempted.
+    done = run_tail("throw 'install failed'", True, owned='$false', attempted='$true', stubs="function Remove-Driver { throw 'must not run' }")
+    assert 'status: failed: install failed' in done.stdout and 'cleanup driver: install failed; nothing left' in done.stdout and done.hub_lock_kept is False, done.stdout
+    assert 'not touched' not in done.stdout, done.stdout
+
+
+def test_session_json_is_written_last_and_holds_the_final_status():
+    make = "New-Item -ItemType Directory -Force '__TMP__\\save_compare.json' | Out-Null"
+    seen = {}
+
+    def read(tmp, done):
+        seen['status'] = json.loads((Path(tmp) / 'session.json').read_text(encoding='utf-8-sig'))['status']
+    done = run_tail("$stagesDone.Add('hit')", True, setup=make, after=read)
+    assert done.returncode == 1 and 'status: failed: evidence not written' in done.stdout, done.stdout
+    assert seen['status'].startswith('failed: evidence not written'), seen
+
+
+def test_only_the_exact_answer_stops_the_hooks():
+    alive = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
+    done = run_tail("throw 'boom'", True, alive, stubs="function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { 'Traceback: stopped' }")
+    assert 'cleanup hooks: not stopped: Traceback: stopped' in done.stdout, done.stdout
 
 
 def test_a_run_that_touched_nothing_has_nothing_to_recover():
@@ -235,6 +281,21 @@ foreach ($reply in '4', ' 4', "4`n", 'True', 'block', '0', '-1', '', '4 saves', 
 }
 try { $out['saves null'] = Assert-SavesBlocked $null } catch { $out['saves null'] = 'refused' }
 
+# A release always goes, whatever happens between the press and it.
+$script:sent = @()
+& {
+function Assert-GameForeground { }
+function Send-KeyDown { $script:sent += 'keydown' }
+function Send-KeyUp { $script:sent += 'keyup' }
+function Send-MouseEvent([int]$Flags, [int]$Dx = 0, [int]$Dy = 0) { $script:sent += $Flags }
+function Start-Sleep { throw 'interrupted' }
+try { Send-Key F } catch { }
+try { Send-Click } catch { }
+try { Send-Click -Right } catch { }
+try { Send-Drag 10 10 } catch { }
+}
+$out.sent = @($script:sent)
+
 $script:focus = 0
 function Get-GameProcess { [pscustomobject]@{ MainWindowHandle = 123 } }
 function Focus-Game { $script:focus++; $false }
@@ -251,6 +312,16 @@ function Get-ForegroundWindowHandle { $script:fg }
 try { Assert-GameForeground; $out.refocus = "ok after $script:focus" } catch { $out.refocus = "$_" }
 function Get-GameProcess { $null }
 try { Assert-GameForeground; $out.no_game = 'ok' } catch { $out.no_game = "$_" }
+# This run's own game is what must be in front, not the first by name.
+$script:OwnGame = [pscustomobject]@{ MainWindowHandle = 555; HasExited = $false } | Add-Member -PassThru ScriptMethod Refresh { }
+function Get-GameProcess { [pscustomobject]@{ MainWindowHandle = 123 } }
+function Focus-Game { $false }
+$script:fg = 123
+try { Assert-GameForeground; $out.other_game = 'ok' } catch { $out.other_game = "$_" }
+$script:fg = 555
+try { Assert-GameForeground; $out.own_game = 'ok' } catch { $out.own_game = "$_" }
+$script:OwnGame.HasExited = $true
+try { Assert-GameForeground; $out.own_gone = 'ok' } catch { $out.own_gone = "$_" }
 $out | ConvertTo-Json -Depth 3
 """
 
@@ -269,6 +340,8 @@ def test_the_guards_refuse():
     assert r['saves null'] == 'refused'
     for name in ('KeyDown', 'Key', 'ClickAt', 'Wheel', 'Drag', 'Mouse', 'Click'):
         assert 'not the foreground window' in r[f'send {name}'], (name, r[f'send {name}'])
+    assert r['sent'] == ['keydown', 'keyup', 2, 4, 8, 16, 2, 4], r['sent']
+    assert 'not the foreground' in r['other_game'] and r['own_game'] == 'ok' and 'not running' in r['own_gone'], r
     assert r['focus_attempts_each'] == 3 and r['refocus'] == 'ok after 1' and 'not running' in r['no_game'], r
 
 
@@ -336,6 +409,10 @@ if __name__ == '__main__':
     test_a_leftover_driver_holds_the_locks_and_says_what_to_do()
     test_a_missing_evidence_file_cannot_exit_0_and_the_restore_still_runs()
     test_a_failed_run_stops_the_hooks_while_the_game_is_alive()
+    test_a_game_this_run_did_not_start_stops_the_restore_and_holds_the_locks()
+    test_a_failed_install_that_left_the_folder_holds_the_locks()
+    test_session_json_is_written_last_and_holds_the_final_status()
+    test_only_the_exact_answer_stops_the_hooks()
     test_a_run_that_touched_nothing_has_nothing_to_recover()
     test_the_guards_refuse()
     test_the_capture_is_wired_to_the_safety_helpers()
