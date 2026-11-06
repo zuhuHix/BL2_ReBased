@@ -80,7 +80,7 @@
   const player = root.RufflePlayer.newest().createPlayer();
   root.document.body.appendChild(player);
   const noMovie = () => showMessage('The status menu movie did not load (UI_StatusMenu in local/ui/run).');
-  root.owMovieGuard.load(player, {url:'UI_StatusMenu/harness.swf', base:'UI_StatusMenu/'}, 'Map', ['UI_StatusMenu/StatusMenu.swf'], noMovie).then(found => { if (!found) noMovie(); });
+  root.owMovieGuard.load(player, {url:'UI_StatusMenu/harness.swf', base:'UI_StatusMenu/'}, 'Map', root.owMovieGuard.FILES.statusMenu, noMovie).then(found => { if (!found) noMovie(); });
   root.owPlayer = player;
   const ROOT = '_level1', MAP = ROOT + '.map';
   const call = (path, method, ...args) => player.ow(path, 'apply', method, args);

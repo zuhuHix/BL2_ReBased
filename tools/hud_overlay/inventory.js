@@ -2058,7 +2058,7 @@ setInterval(() => {
 }, 80);
 
 let enteredInventory = false, movieConfigured = false, stableSince = 0, lastBounds = '';
-window.owMovieGuard.load(player, {url:'UI_StatusMenu/harness.swf',base:'UI_StatusMenu/'}, 'Inventory', ['UI_StatusMenu/StatusMenu.swf'], () => showError('the movie failed')).then(found => {
+window.owMovieGuard.load(player, {url:'UI_StatusMenu/harness.swf',base:'UI_StatusMenu/'}, 'Inventory', window.owMovieGuard.FILES.statusMenu, () => showError('the movie failed')).then(found => {
   if (!found) { showError('the movie is missing or failed'); return; }
   console.log(`OpenWillow Inventory StatusMenu loaded in ${Math.round(performance.now()-startupAt)}ms`);
   timeLog('statusmenu_loaded');

@@ -3,7 +3,7 @@
 const player = window.RufflePlayer.newest().createPlayer();
 document.body.appendChild(player);
 const noMovie = () => { document.querySelector('#loading small').textContent = 'Could not load the skill tree. Press Esc to return.'; };
-window.owMovieGuard.load(player, { url: 'UI_StatusMenu/harness.swf', base: 'UI_StatusMenu/' }, 'Skills', ['UI_StatusMenu/StatusMenu.swf'], noMovie).then(found => { if (!found) noMovie(); });
+window.owMovieGuard.load(player, { url: 'UI_StatusMenu/harness.swf', base: 'UI_StatusMenu/' }, 'Skills', window.owMovieGuard.FILES.statusMenu, noMovie).then(found => { if (!found) noMovie(); });
 
 const ROOT = '_level1'; // The harness loads StatusMenu at level 1.
 const SKILLS = ROOT + '.skills';

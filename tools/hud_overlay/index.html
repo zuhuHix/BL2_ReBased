@@ -51,7 +51,11 @@
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
   document.body.appendChild(player);
-  window.owMovieGuard.load(player, { url: 'UI_HUD/harness.swf', base: 'UI_HUD/' }, 'HUD', ['UI_HUD/HUD.swf']); // without it the page never reports ready and the host keeps its own HUD
+  // Without the movie the page never reports ready and the host keeps its own HUD. If it is lost later, the host is told so it goes back to that HUD.
+  window.owMovieGuard.load(player, { url: 'UI_HUD/harness.swf', base: 'UI_HUD/' }, 'HUD', window.owMovieGuard.FILES.hud, () => {
+    ready = false;
+    console.log('OpenWillow HUD movie lost');
+  });
 
   let ready = false;
   let pending = {};

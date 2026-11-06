@@ -74,7 +74,7 @@ function fakePage(owReply) {
     fetch:() => Promise.reject(new Error('no map.json')),
     location:{href:''},
     addEventListener:(type, f) => { if (type === 'keydown') keys.push(f); },
-    owMovieGuard:{load:() => new Promise(() => {})},
+    owMovieGuard:{FILES:{}, load:() => new Promise(() => {})},
     RufflePlayer:{newest:() => ({createPlayer:() => ({style:{}, ow:owReply, ruffle:() => ({load(){}})})})},
     document:{body:{appendChild(){}}, getElementById:() => loading, createElement:() => ({style:{}, setAttribute(){}, addEventListener(){}})}});
   page.window = page;
