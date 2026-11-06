@@ -36,6 +36,7 @@ function Install-Driver { New-Item -ItemType Directory -Force $script:DriverDir 
 function Remove-Driver { if ($scenario -ne 'driver_stuck') { Remove-Item -Recurse -Force $script:DriverDir } }
 function Save-Shot { 'shot' }
 function Focus-Game { $true }
+function Assert-GameForeground { if ($scenario -eq 'no_focus') { throw 'refusing to send input: stub' } }
 function Send-Key { }
 function Invoke-GamePyFile { 'ok' }
 function Stop-OwnGame { if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
@@ -175,8 +176,15 @@ class ControlsCaptureTest(unittest.TestCase):
     def test_saves_not_blocked_stops_the_run(self):
         for scenario in ('saves_traceback', 'saves_none'):
             done, session = self.run_capture(scenario)
-            self.assertTrue(session['status'].startswith('failed: saves not blocked'), session['status'])
+            self.assertTrue(session['status'].startswith('failed: saves are not blocked'), session['status'])
             self.setUp()
+
+    def test_no_focus_stops_the_run_and_still_restores(self):
+        done, session = self.run_capture('no_focus')
+        self.assertTrue(session['status'].startswith('failed: refusing to send input'), session['status'])
+        self.assertEqual(session['cleanup']['driver'], 'removed')
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.locks_held(), (False, False))
 
     def test_maya_not_going_down_is_incomplete(self):
         done, session = self.run_capture('not_down')
@@ -193,9 +201,10 @@ class ControlsCaptureTest(unittest.TestCase):
     def test_an_unverified_snapshot_is_never_restored_from(self):
         done, session = self.run_capture('bad_snapshot')
         self.assertTrue(session['status'].startswith('failed'), session['status'])
-        self.assertIn('NOT IDENTICAL', session['cleanup']['saves'])
-        self.assertIn('Config not backed up', session['cleanup']['saves'])
+        self.assertEqual(session['cleanup']['saves'], 'not touched: the game never started')
         self.assertTrue((self.work / 'willow/Config/game.ini').exists())
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.locks_held(), (False, False))
 
     def test_a_root_created_during_the_run_is_named_and_kept(self):
         done, session = self.run_capture('created_root')
@@ -203,6 +212,9 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertIn('SanitySaver created during the run', session['cleanup']['saves'])
         self.assertTrue((self.game / 'sdk_mods/SanitySaver/store.txt').exists())
         self.assertEqual(self.saves(), 'original save')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertIn('MANUAL RECOVERY', done.stdout)
 
     def test_a_restore_mismatch_keeps_locks_and_backup_and_prints_recovery(self):
         done, session = self.run_capture('mismatch')
@@ -245,6 +257,8 @@ class ControlsCaptureTest(unittest.TestCase):
     def test_a_driver_that_stays_is_reported_as_recovery(self):
         done, session = self.run_capture('driver_stuck')
         self.assertTrue(session['status'].startswith('recovery needed: driver not removed'), session['status'])
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertIn('MANUAL RECOVERY', done.stdout)
         self.assertEqual(session['run_status'], 'completed')
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.saves(), 'original save')

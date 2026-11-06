@@ -7,8 +7,11 @@
 # - A root is usable only after its copy compares identical; its hashes are stored and re-checked before any restore, and cleanup
 #   restores from no other root.
 # - The game must be confirmed gone before anything is removed or restored; otherwise nothing is touched.
-# - A restore that fails or still differs, or a backup that changed, keeps both locks and the backup, and prints the recovery steps.
+# - Anything left for a person (a restore that fails or differs, a changed backup, a root created during the run, a driver left behind)
+#   keeps both locks and the backup, and prints the recovery steps.
 # - A root created during the run is left in place, named, and the summary says NOT IDENTICAL.
+# - Keys and mouse refuse unless the game has focus. Nothing changes a file before the driver install and game start: a run with neither
+#   skips the restore.
 # - session.json has a real status: completed, incomplete, failed or "recovery needed". The exit code is 0 only for completed.
 # Only the game PID this run started is stopped (Stop-OwnGame checks its path, start time and marker).
 param(
@@ -68,10 +71,8 @@ try {
         try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 }
     }
     if (-not $ok) { Save-Shot 'controls/boot.png' | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
-    $log.block_saves = Py 'print(block_saves())'
-    # block_saves reports how many save functions it blocked. Until the shared helper replaces this: only a positive count passes.
-    if ($log.block_saves -notmatch '^\d+$' -or [int]$log.block_saves -le 0) { throw "saves not blocked: $($log.block_saves)" }
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = ''
     for ($i = 0; $i -lt 6 -and $map -notmatch 'WillowPlayerPawn'; $i++) {   # the level load can hold the command channel
         try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)' 30 }
@@ -92,7 +93,7 @@ try {
     $log.hooks = Py 'print(json.dumps(cp_melee_hooks()))' 60
 
     # The melee press: empty air first (the swing's own timing), then three presses 0.3 s apart (does a press in a swing count).
-    Focus-Game | Out-Null
+    Assert-GameForeground
     Send-Key V; Start-Sleep 3
     Save-Shot 'controls/after_melee.png' | Out-Null
     Send-Key V; Start-Sleep -Milliseconds 300; Send-Key V; Start-Sleep -Milliseconds 300; Send-Key V; Start-Sleep 3
@@ -141,7 +142,7 @@ try {
     if ($npc) {
         $beforeNpc = Get-MeleeCount
         Py "print(cp_prompt(r'$($npc[0].path)', 150.0))" | Out-Null
-        Start-Sleep 1; Focus-Game | Out-Null; Send-Key V; Start-Sleep 3
+        Start-Sleep 1; Assert-GameForeground; Send-Key V; Start-Sleep 3
         Py "print(cp_rows('melee_npc'))" | Out-Null
         $npcSwings = (Get-MeleeCount) - $beforeNpc
     }
@@ -151,7 +152,7 @@ try {
     $pageReads = @(); $pagesOpened = 0; $keysWithEffect = 0
     foreach ($page in 'M', 'L', 'I', 'K') {
         foreach ($key in 'M', 'L') {
-            Focus-Game | Out-Null
+            Assert-GameForeground
             Send-Key $page; Start-Sleep 2
             $opened = Py 'print(json.dumps(cp_page(), default=str))' 15
             Send-Key $key; Start-Sleep 2
@@ -179,7 +180,7 @@ try {
     if ($injured -match '"injured": true') {
         $downReads = @()
         foreach ($key in 'M', 'L') {
-            Focus-Game | Out-Null
+            Assert-GameForeground
             Send-Key $key; Start-Sleep 1
             $downReads += "{`"key`": `"$key`", `"after`": $(Py 'print(json.dumps(cp_page(), default=str))' 15)}"
             Save-Shot "controls/down_$key.png" | Out-Null
@@ -199,8 +200,13 @@ try {
     "run error: $runError"
 } finally {
     # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: stop our game, and only once it has
-    # exited remove our driver and restore and verify the roots; then write the logs and release the locks.
+    # exited remove our driver and restore and verify the roots; then write the logs and release the locks. If the game's exit is not
+    # confirmed, a live game could overwrite restored files: nothing is removed or restored, and the backup and both locks are kept.
     $cleanup = [ordered]@{}
+    # A throw between the hooks and their removal leaves them on into shutdown: take them off while the game can still answer.
+    if ($proc -and !$proc.HasExited) {
+        try { Py 'print(cp_unhook())' 5 | Out-Null; $cleanup.hooks = 'removed' } catch { $cleanup.hooks = "not removed: $_" }
+    }
     $gameGone = $true
     if ($proc) {
         try {
@@ -210,59 +216,44 @@ try {
             $proc.Refresh(); $gameGone = $proc.HasExited
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
-    # One way to restore by hand: the helper re-checks the backup against its record and refuses a root that changed.
-    $restoreCommand = "     Restore-VerifiedBackup '$bak'"
-    $openShell = "In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'"
-    $rowRule = "Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or " +
-        "'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand."
-    $recovery = ''
-    $holdLocks = $false
-    $restoring = [bool]$bak
+    $restored = $null; $restoreError = ''
     if (!$gameGone) {
-        # A live game could overwrite restored files: nothing is removed or restored, and the locks stay held.
         $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
         $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
-        $recovery = "game exit not confirmed ($($cleanup.game))"
-        $holdLocks = $true; $restoring = $false; $driverOwned = $false
-        @"
-MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored.
-  1. Close Borderlands 2 yourself.
-  2. $openShell
-     Remove-Item -Recurse -Force '$script:DriverDir'
-$restoreCommand
-     $rowRule
-  3. Only when no row reports a mismatch, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
-"@
     }
     try {
-        if ($driverOwned) {
+        if ($driverOwned -and $gameGone) {
             Remove-Driver
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
     $rows = @()
-    if ($restoring) {
+    # Before the driver is installed or the game started, nothing can have changed, so a partial backup is nothing to recover from.
+    if ($bak -and $gameGone -and !$driverOwned -and !$proc) { $cleanup.saves = 'not touched: the game never started' }
+    elseif ($bak -and $gameGone) {
         try {
             $restored = Restore-VerifiedRoots $bak $roots $snapshots
             $rows = @($restored.rows); $cleanup.saves = $restored.summary
-            if (!$restored.clean) { $holdLocks = $true; $recovery = "restore did not compare clean ($($restored.summary))" }
-        } catch {
-            $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"
-            $holdLocks = $true; $recovery = "restore failed ($_)"
-        }
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
     }
-    if (!$recovery -and $cleanup.driver -match '^(STILL PRESENT|error)') { $recovery = "driver not removed ($($cleanup.driver))" }
+    $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver
+    $holdLocks = [bool]$recovery
     try {
         $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
+        $log.run_error = $runError
         # The run's own result, and the status: recovery of the maintainer's files outranks the result.
         $log.run_status = Get-RunStatus $stagesRequested @($stagesDone) $runError
         $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
         $log.locks_held = $holdLocks
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-        if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
-    } catch { "log write failed: $_" }
-    # Held locks stop another run starting on files that still need recovery.
+        if ($bak -and $gameGone) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+    } catch {
+        # The evidence is missing, so this run cannot read as completed. The restore has already run, and recovery keeps its status.
+        "log write failed: $_"
+        if (!$recovery) { $log.status = "failed: evidence not written ($_)" }
+    }
+    # Anything left for a person keeps both locks, so no other run starts on it.
     if (!$holdLocks) {
         try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
         try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
@@ -270,14 +261,6 @@ $restoreCommand
     "status: $($log.status)"
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
     Format-RestoreRows $rows   # as text, so the rows and the steps below reach the screen before `exit`
-    if ($holdLocks -and $gameGone) {
-        @"
-MANUAL RECOVERY: $recovery. Both locks are held and the backup is kept at $bak.
-  1. Make sure Borderlands 2 is closed. $openShell
-$restoreCommand
-     $rowRule
-  2. Only when no row reports a mismatch, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
-"@
-    }
+    if ($holdLocks) { Format-ManualRecovery $recovery $bak $HubLock $Lane }
 }
 exit $(if ($log.status -eq 'completed') { 0 } else { 1 })
