@@ -13,7 +13,12 @@ param(
     [string]$StatusGun = 'status_maliwan_fire',
     [int]$StatusPresses = 120,
     # Only the status part (Ice_P); the guns' pool and kick runs are skipped.
-    [switch]$StatusOnly
+    [switch]$StatusOnly,
+    # Skills off in memory before the status run (fp3_no_skills), and the status-chance modifiers read around it.
+    [switch]$NoSkills,
+    # After the status run: throw this many grenades at the target (equipped mod, spawn, velocity, fuse, hits).
+    [switch]$Grenades,
+    [int]$GrenadeThrows = 4
 )
 $ErrorActionPreference = 'Stop'
 if (!$HubLock) {
@@ -184,6 +189,13 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     $log.maya_level = $mayaLevel
     $log.level_set = PyJson "wp2_try_level($(Q $target), $([int]$mayaLevel))" 60
     $log.hooks_fp3 = PyJson 'fp3_install_hooks()'
+    if ($NoSkills) {
+        # Skills, Badass Rank, shield and class-mod skills off in memory; what was active and the controller's instigated
+        # status-chance modifiers before and after are recorded.
+        $log.status_mods_before = PyJson 'pj_status_mods()'
+        $log.no_skills = PyJson 'fp3_no_skills()' 60
+        $log.status_mods_after = PyJson 'pj_status_mods()'
+    }
     "target $target maya $mayaLevel level set $($log.level_set | ConvertTo-Json -Compress)"
     $s = [ordered]@{}; $log.status = $s
     try {
@@ -200,12 +212,31 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         PyJson "wp2_autofire($StatusPresses, 0.08, 0.35)" | Out-Null
         Wait-Auto ($StatusPresses * 0.55); Start-Sleep 4
         $s.run_end = PyJson 'fp3_run_end()'
-        $s.level_after = PyJson "wp2_try_level($(Q $target), $([int]$mayaLevel))" 60
+        # Read-only: the target's level after the series.
+        $s.level_after = PyJson "fp3_levels($(Q $target))" 60
         PyJson 'wp2_infinite_ammo(False)' | Out-Null
     } catch { $s.error = "$_"; "status run failed: $_"; try { Py 'wp2_stop_autofire(); fp3_run_end(); print("ok")' | Out-Null } catch {} }
     $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
+    if ($Grenades) {
+        # A few grenades at the held bullymong: the equipped mod, spawn point, launch velocity, release delay, fuse, hits.
+        $gr = [ordered]@{}; $log.grenades = $gr
+        try {
+            $gr.mod = PyJson 'pj_grenade_mod()' 60
+            PyJson 'wp2_infinite_ammo(True)' | Out-Null
+            PyJson 'fp3_aim_target(0.0, True)' | Out-Null
+            $gr.start = PyJson 'pj_grenade_start("grenades")'
+            PyJson "fp3_run_begin($(Q 'grenades'), {'throws': $GrenadeThrows})" | Out-Null
+            for ($k = 0; $k -lt $GrenadeThrows; $k++) { Focus-Game | Out-Null; Send-Key G; Start-Sleep 5 }
+            Start-Sleep 3
+            $gr.run_end = PyJson 'fp3_run_end()'
+            $gr.stop = PyJson 'pj_grenade_stop()' 60
+            PyJson 'wp2_infinite_ammo(False)' | Out-Null
+        } catch { $gr.error = "$_"; "grenade run failed: $_"; try { Py 'pj_grenade_stop(); fp3_run_end(); print("ok")' | Out-Null } catch {} }
+        $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
+    }
     $log.cleanup = PyJson 'fp_cleanup()' 60
-    Py 'pj_stop(write=False); wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
+    # The quit ends the game before it can reply: no reply is the expected result here, not an error (Py would .Trim() it).
+    try { Invoke-GamePy 'pj_stop(write=False); wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 30 | Out-Null } catch { "quit sent; no reply: $_" }
     for ($i = 0; $i -lt 20 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
 } finally {
     # Order: stop our game; only once it has exited, remove our driver and restore and verify the saves, config and SDK stores

@@ -241,6 +241,40 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         Ids = GunIdsFromCommandLine(List);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow firing test parsed %d recipe IDs: %s"), Ids.Num(), *List);
     }
+    // After the last gun: one grenade at the dummy (ThrowGrenade: the ammo, the flight, the explosion and its hit events).
+    static int32 GrenadeStep = 0, GrenadeAmmoBefore = 0;
+    static float GrenadeAt = 0.f;
+    static bool bGrenadeThrown = false;
+    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && GrenadeStep < 3 && CombatTarget.IsValid())
+    {
+        const auto InFlight = [this]() { int32 Count = 0; for (TActorIterator<AOpenWillowProjectile> It(GetWorld()); It; ++It) ++Count; return Count; };
+        if (GrenadeStep == 0)
+        {
+            UOpenWillowStatusEffects::ClearAll(CombatTarget.Get());
+            CombatTarget->ResetForTest();
+            CombatTarget->RestoreHealth();
+            AimAt(CombatTarget->AimPoint());
+            OpenWillowFiring::Counts.Reset();
+            GrenadeAt = Now;
+            GrenadeStep = 1;
+        }
+        else if (GrenadeStep == 1 && Now >= GrenadeAt + 0.3f)
+        {
+            GrenadeAmmoBefore = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current;
+            bGrenadeThrown = ThrowGrenade();
+            GrenadeAt = Now;
+            GrenadeStep = 2;
+        }
+        else if (GrenadeStep == 2 && (!bGrenadeThrown || (Now >= GrenadeAt + 1.f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
+        {
+            const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d after=%.2f"),
+                bGrenadeThrown ? 1 : 0, GrenadeAmmoBefore, Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current, C.SplashHits, C.Splash,
+                C.GrenadeHits, C.UnknownSources, Now - GrenadeAt);
+            GrenadeStep = 3;
+        }
+        return;
+    }
     if (Ids[0] == TEXT("none") || Gun >= Ids.Num())
     {
         if (FinishedAt < 0.f) FinishedAt = Now;

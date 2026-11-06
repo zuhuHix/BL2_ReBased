@@ -82,6 +82,7 @@ struct FOpenWillowFiringData
     float ProjectileLifetime = 0; // MaxLifespan
     bool bFalls = false;         // gravity applies (thrown guns; weapon rockets fly straight, observed live)
     float Elasticity = 0.4f;     // speed kept on a bounce (the first Bounce behaviour's elasticity)
+    float FuseTime = 0;          // s from launch to the explosion (grenades); 0 = no fuse
     bool bExplodeOnImpact = false;
     int32 Bounces = 0;
     // Timing.
@@ -115,6 +116,9 @@ struct FOpenWillowFiringData
     // Fills Out from a recipe's "firing" object; card values (damage, spread, pellets) come from the item already read.
     static bool Parse(const FJsonObject& Firing, float CardDamage, FOpenWillowFiringData& Out);
     static void ParseProjectile(const FJsonObject& Projectile, float CardDamage, FOpenWillowFiringData& Out);
+    // A grenade mod (tools/grenade_mod.py "grenade" block): a falling projectile with the mod's speed, gravity, bounces,
+    // fuse, radius and damage, and its explosion bands. FiringMode is "grenade".
+    static bool ParseGrenade(const FJsonObject& Grenade, FOpenWillowFiringData& Out);
 };
 
 // Per-weapon state that the rules carry between shots.
@@ -164,6 +168,7 @@ struct FOpenWillowFiringStats
     int32 HitKinds[4] = {0, 0, 0, 0}; // ... by EOpenWillowHitKind: direct, splash, status tick, throw
     TMap<FString, int32> TickWeapons;  // status tick events by the weapon id they carry
     int32 UnknownSources = 0;          // hit events whose Source was left Unknown (every firing path sets one)
+    int32 GrenadeHits = 0;             // hit events whose Source is Grenade
     void Reset() { *this = FOpenWillowFiringStats(); }
 };
 

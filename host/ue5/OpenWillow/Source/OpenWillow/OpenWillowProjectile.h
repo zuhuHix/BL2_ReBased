@@ -52,6 +52,8 @@ public:
 
 private:
     void Impact(const FHitResult& Hit);
+    // What this projectile's explosion counts as (EOpenWillowHitSource): Throw, Grenade, Rocket, or a bullet's Explosion.
+    EOpenWillowHitSource SourceOfThis() const;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> Visual;
     UPROPERTY() TObjectPtr<class UPointLightComponent> Light;
     UPROPERTY() TObjectPtr<class UMaterialInstanceDynamic> Material;
