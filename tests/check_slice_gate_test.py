@@ -19,8 +19,8 @@ PREFIX = '[2026.11.04-10.00.00:000][123]LogTemp: Display: '
 TOTAL = len(chk.LINKS)
 
 
-CARD_DETAIL = 'card_id=item_x picked_id=item_x accepted=1 synthetic detail'
-DECOY_DETAIL = 'nearer_decoy=item_y ' + CARD_DETAIL
+CARD_DETAIL = 'aimed_drop=item_x card_id=item_x picked_id=item_x accepted=1 synthetic detail'
+DECOY_DETAIL = 'aimed_drop=item_x nearer_decoy=item_y card_id=item_x picked_id=item_x accepted=1 synthetic detail'
 
 
 def build(results=None, stop_after=None, summary='auto', start=True, extra=(), fixtures=None, order=None, range_mode=False):
@@ -175,7 +175,7 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('| 9 | phaselock_enemy | PASS (fixture: phaselock point granted) | - |', md_path.read_text(encoding='utf-8'))
 
     def test_card_link_pass_with_different_ids_is_overruled(self):
-        results = {'pick_up_gun': ('PASS', 'aimed_drop=item_a card_id=item_a picked_id=item_b: synthetic')}
+        results = {'pick_up_gun': ('PASS', 'aimed_drop=item_a card_id=item_a picked_id=item_b accepted=1: synthetic')}
         code, out = self.run_checker(self.write_log(build(results)))
         self.assertEqual(code, 1)
         self.assertIn('FAIL', self.row(out, 6))
@@ -188,13 +188,64 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('checker: no card_id/picked_id in the detail', self.row(out, 7))
 
-    def test_card_link_not_available_with_decoy_ids_is_kept(self):
+    def test_card_link_not_available_with_decoy_ids_is_overruled(self):
         detail = 'aimed_drop=item_a nearer_decoy=item_b card_id=item_a picked_id=item_b: E took the nearer decoy'
-        results = {'pick_up_aimed_not_nearest': ('NOT_AVAILABLE', detail)}
+        results = {chk.DECOY_LINK: ('NOT_AVAILABLE', detail)}
+        code, out = self.run_checker(self.write_log(build(results)))
+        self.assertEqual(code, 1)
+        self.assertIn('FAIL', self.row(out, 7))
+        self.assertIn('checker: the ids show E took the nearer decoy', self.row(out, 7))
+        self.assertIn('error: link pick_up_aimed_not_nearest: NOT_AVAILABLE overruled', out)
+
+    def test_card_link_not_available_after_an_attempt_is_overruled(self):
+        results = {'pick_up_gun': ('NOT_AVAILABLE', 'aimed_drop=item_a card_id=item_a picked_id=none accepted=0: synthetic')}
+        code, out = self.run_checker(self.write_log(build(results)))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: the ids show the pickup attempt was made', self.row(out, 6))
+
+    def test_card_link_not_available_without_an_attempt_is_kept(self):
+        results = {chk.DECOY_LINK: ('NOT_AVAILABLE', 'Maya down from a previous link, synthetic')}
         code, out = self.run_checker(self.write_log(build(results)))
         self.assertEqual(code, 0)
         self.assertIn('NOT_AVAILABLE', self.row(out, 7))
         self.assertIn('inventory', self.row(out, 7))
+        self.assertNotIn('test setup gaps', out)
+
+    def test_setup_gap_is_not_a_missing_host_capability(self):
+        results = {chk.DECOY_LINK: ('NOT_AVAILABLE', chk.SETUP_GAP + ', synthetic: no source')}
+        code, out = self.run_checker(self.write_log(build(results)))
+        self.assertEqual(code, 0)
+        self.assertIn('slice-gate', self.row(out, 7))
+        self.assertNotIn('inventory', self.row(out, 7))
+        self.assertIn('1 of those NOT_AVAILABLE are test setup gaps', out)
+
+    def test_card_link_pass_needs_the_aimed_drop(self):
+        for detail, message in (('card_id=item_b picked_id=item_b accepted=1: synthetic', 'checker: no aimed_drop in the detail'),
+                                ('aimed_drop=item_a card_id=item_b picked_id=item_b accepted=1: synthetic',
+                                 'checker: aimed_drop item_a is not picked_id item_b'),
+                                ('aimed_drop=none card_id=item_b picked_id=item_b accepted=1: synthetic',
+                                 'checker: aimed_drop none is not picked_id item_b')):
+            code, out = self.run_checker(self.write_log(build({'pick_up_gun': ('PASS', detail)})))
+            self.assertEqual(code, 1, detail)
+            self.assertIn(message, self.row(out, 6))
+
+    def test_decoy_link_pass_with_wrong_card_and_pick_is_overruled(self):
+        detail = 'aimed_drop=item_a card_id=item_b picked_id=item_b accepted=1 nearer_decoy=item_c: synthetic'
+        code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: aimed_drop item_a is not picked_id item_b', self.row(out, 7))
+
+    def test_card_link_pass_with_all_ids_none_is_overruled(self):
+        detail = 'aimed_drop=none card_id=none picked_id=none accepted=1: synthetic'
+        code, out = self.run_checker(self.write_log(build({'pick_up_gun': ('PASS', detail)})))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: card_id none is not picked_id none', self.row(out, 6))
+
+    def test_decoy_link_pass_with_decoy_none_is_overruled(self):
+        detail = 'aimed_drop=item_a nearer_decoy=none card_id=item_a picked_id=item_a accepted=1: synthetic'
+        code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: no nearer_decoy id in the detail', self.row(out, 7))
 
     def test_link_line_without_fixtures_field_fails(self):
         lines = build()
@@ -204,20 +255,20 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('link spawn_maya has no fixtures field', out)
 
     def test_card_link_pass_not_accepted_is_overruled(self):
-        for name, index, detail in (('pick_up_gun', 6, 'card_id=item_a picked_id=item_a accepted=0: synthetic'),
-                                    (chk.DECOY_LINK, 7, 'nearer_decoy=item_b card_id=item_a picked_id=item_a: synthetic')):
+        for name, index, detail in (('pick_up_gun', 6, 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=0: synthetic'),
+                                    (chk.DECOY_LINK, 7, 'aimed_drop=item_a nearer_decoy=item_b card_id=item_a picked_id=item_a: synthetic')):
             code, out = self.run_checker(self.write_log(build({name: ('PASS', detail)})))
             self.assertEqual(code, 1)
             self.assertIn('checker: the pickup was not accepted', self.row(out, index))
 
     def test_decoy_link_pass_with_shared_id_is_overruled(self):
-        detail = 'nearer_decoy=item_a card_id=item_a picked_id=item_a accepted=1: synthetic'
+        detail = 'aimed_drop=item_a nearer_decoy=item_a card_id=item_a picked_id=item_a accepted=1: synthetic'
         code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
         self.assertEqual(code, 1)
         self.assertIn('checker: nearer_decoy has the same id as the picked-up drop (item_a)', self.row(out, 7))
 
     def test_decoy_link_pass_without_decoy_id_is_overruled(self):
-        detail = 'card_id=item_a picked_id=item_a accepted=1: synthetic'
+        detail = 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1: synthetic'
         code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
         self.assertEqual(code, 1)
         self.assertIn('checker: no nearer_decoy id in the detail', self.row(out, 7))

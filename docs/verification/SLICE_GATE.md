@@ -11,8 +11,10 @@ ROADMAP.md's Phase 4 gate is one full loop on Sanctuary with Maya: spawn, fight,
 complete one mission, die, respawn. Other lanes build the pieces. This suite chains them in **one** editor session and
 reports each link as PASS, FAIL or NOT_AVAILABLE:
 
-- **NOT_AVAILABLE** means the host does not have that piece yet. The run then uses a stated fallback, so that the later
-  links still run.
+- **NOT_AVAILABLE** means the host does not have that piece yet, or a precondition is missing. The run then uses a stated
+  fallback, so that the later links still run. A detail starting "test setup gap" is this test's own setup or local data
+  (no `ow.RollGun` source, no weapon generator manifest), not something the host lacks: the link did not test the host.
+  The checker gives it to slice-gate and counts it on its own line.
 - A FAIL whose detail starts with "blocked:" failed only because an earlier link left it nothing to work with.
 
 - `tools/test_slice_gate.ps1` does the following:
@@ -33,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (27, all made-up log lines).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (34, all made-up log lines).
 
 ### How a link is graded (review round 1)
 
@@ -65,8 +67,12 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     dropped a real gun: the roll source for its two test drops is read before the check for a drop. Rolled ids come from
     the balance and the seed, so two rolls can share one: the link FAILs at setup if the two test drops do.
   - Each link also logs `accepted=<0|1>`: the press made a pickup attempt and it was accepted.
-  - The checker reads the ids itself: a PASS on either link with missing or different ids, or without `accepted=1`,
-    becomes a FAIL, and so does a PASS on the decoy link whose `nearer_decoy` is missing or has the picked-up id.
+  - The checker reads the ids itself. On either link, a PASS becomes a FAIL unless `aimed_drop`, `card_id` and `picked_id`
+    are all there, not `none`, and the same item, with `accepted=1`. On the decoy link, `nearer_decoy` must also be there,
+    not `none`, and a different item. A NOT_AVAILABLE on either link whose detail carries the ids also becomes a FAIL: the
+    pickup attempt was made, so nothing was missing.
+  - The two-guns fixture is named only once both test drops exist. If one could not be made, the link FAILs and its detail
+    says how far the setup got.
   - A test drop with no floor within 450 uu below its point fails; it is never left in the air.
 - **A link never starts with Maya down.** If Maya is down when a link group is due to start, every link of that group
   is logged NOT_AVAILABLE ("Maya down from a previous link"), not a misleading FAIL.
@@ -89,6 +95,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 - **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6), because no enemy can attack Maya yet. It is named on
   `go_down`, and `bleed_out_respawn` names the down state it started from.
 - The lent mission pistol is readied with `EquipItem` + `DrawItemById`, as in `test_quest`.
+- **Enemies on fallback shapes are stated up front.** If the selected range enemy has no stock mesh (the range's
+  `fallback=shapes`, for example a manifest with no mesh), `reach_fight_area` names the fixture `selected enemy on fallback
+  shapes, no stock mesh`. It does not stop the run.
 - **Range mode only** (when `ow.Range` exists):
   - `ow.RangeLoot always` before the fight (fixture `guaranteed loot roll`): a range kill rolls the stock 0.085 gun
     chance, and this switch retries up to 8 seeds until a gun comes.
@@ -128,6 +137,11 @@ FAIL, 0 NOT_AVAILABLE of 14 in all three**, graded by the current checker.
 | 12 | mission_turn_in | PASS: status 3, +395 XP, lent pistol taken back | `teleport` |
 | 13 | go_down | PASS | `lethal damage applied by the test` |
 | 14 | bleed_out_respawn | PASS | `down state from the test's lethal damage` |
+
+These runs came before #109's second review round. The current checker regrades their three logs to the same 14 / 0 / 0.
+The driver changed after them only in the setup-gap wording, the two-guns fixture's place and the fallback-shapes fixture.
+These runs had no setup gap and stock enemies, and both test drops were made, so the same logs would be expected on the
+newer driver, but that has not been run.
 
 **What this does not show:**
 - **Enemies have not downed Maya.** Every down state in these runs came from the test's lethal damage. The revive ran only
@@ -241,6 +255,10 @@ as fixtures, on `kill_enemy` and `enemy_attacks_maya`. If every manifest shield 
 equipped under a fixture that says the level rule was overridden (see "Why `-Shield` used the stand-in" above). The
 stock-shield path has run only under that override.
 
+**The two machines' `-Shield` runs do not exercise the same path.** Which one runs depends on the machine's gear
+manifest. On the yorad PC (zuhu), the run used a manifest shield under the level override. On pc-hummer, it used the host
+stand-in, which is not stock data. A PASS on one says nothing about the other's path.
+
 Earlier runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
 2026-11-04), not on main:
 - **With `-Shield`:** 13 PASS, 0 FAIL, 1 NOT_AVAILABLE of 14. The stand-in shield was 213; 3 hits were credited to the
@@ -281,6 +299,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-06 | main cdf05d7 + c365984, `-Shield`, yorad PC | 14 / 0 / 0 of 14 | the #109 review fixes' first run; a manifest shield under the level-override fixture; ctest 22/22, verify_packages exact, checker tests 27/27 |
 | 2026-11-06 | main cdf05d7 + c365984, no switch, yorad PC | 14 / 0 / 0 of 14 | link 4 PASS with per-causer counting; ended the fight at 60/213, healed by the fixture |
 | 2026-11-06 | main cdf05d7 + c365984, `-DownAfterFight`, yorad PC | 14 / 0 / 0 of 14 | revive fixture ran (forced) |
+| 2026-11-06 | combined build of this branch at 402d81e with #112 and #113, refreshed data, pc-hummer, all three variants | 14 / 0 / 0 of 14, each | reported by the hub; this lane did not read those logs. `-Shield` used the host stand-in, not a manifest shield |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
