@@ -3,7 +3,8 @@
 Reads the host's log lines (OpenWillowVendor.cpp): the spawn count, the open / buy / sell / restock OWVENDOR lines, the
 OWVENDSTATE {json} reports, and the automation result of OpenWillow.Vendor.Stock. Prints one line per check:
     CHECK <name> PASS|FAIL|MISSING <detail>
-then SUMMARY passed=N failed=M missing=K. Exit 0 when nothing FAILs, 1 on any FAIL, 2 on bad arguments.
+then SUMMARY passed=N failed=M missing=K. Exit 0 when nothing FAILs and no row in REQUIRED_ROWS is MISSING, else 1; 2 on bad
+arguments.
 
 MISSING means the log or the state does not carry the value a check needs (for example a sell that was not run, or a
 state row without "value"). It is reported, not counted as a failure.
@@ -72,6 +73,10 @@ def item_value(terms, level):
     return math.trunc(f32(partial * f32(float(terms['base_cost']))))
 
 
+# The sequence always produces these, so their absence is a failure. Other rows may legitimately be MISSING.
+REQUIRED_ROWS = ('stale_press',)
+
+
 class Results:
     def __init__(self):
         self.rows = []
@@ -86,7 +91,7 @@ class Results:
         for name, status, detail in self.rows:
             print(f'CHECK {name} {status} {detail}')
         print(f'SUMMARY passed={passed} failed={failed} missing={missing}')
-        return failed
+        return failed + sum(1 for name, s, _ in self.rows if s == 'MISSING' and name in REQUIRED_ROWS)
 
 
 def supported_machines(vendors):

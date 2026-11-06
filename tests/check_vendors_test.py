@@ -2,6 +2,8 @@
 
 Run: python -m pytest tests/check_vendors_test.py
 """
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -171,6 +173,29 @@ class StalePressTest(unittest.TestCase):
 
     def test_no_line_is_missing(self):
         self.assertEqual(self.grade('')[1], 'MISSING')
+
+    def run_main(self, log_text):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / 'run.log'
+            log.write_text(log_text, encoding='utf-8')
+            vendors = Path(folder) / 'vendors.json'
+            vendors.write_text(json.dumps(machines_doc()), encoding='utf-8')
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = cv.main(['--log', str(log), '--vendors', str(vendors), '--open-index', '0'])
+        return code, buffer.getvalue()
+
+    def test_a_missing_stale_press_line_exits_nonzero(self):
+        without = ''.join(row for row in good_log().splitlines(True) if 'OWVENDTEST stale_press' not in row)
+        code, printed = self.run_main(without)
+        self.assertEqual(code, 1)
+        self.assertIn('CHECK stale_press MISSING', printed)
+        self.assertIn('failed=0', printed)   # nothing failed: the missing row alone decides it
+
+    def test_other_missing_rows_still_exit_zero(self):
+        code, printed = self.run_main(good_log())
+        self.assertEqual(code, 0)   # no automation log was given, so that row is MISSING
+        self.assertIn('CHECK automation MISSING', printed)
 
     def test_each_wrong_result_fails(self):
         for name, args in (('a refusal moved the serial', {'after_refusals': 10, 'after_stale': 10}),
