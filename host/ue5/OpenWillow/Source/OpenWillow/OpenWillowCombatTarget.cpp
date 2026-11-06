@@ -166,7 +166,7 @@ void AOpenWillowCombatTarget::AttachWornMeshes(const FJsonObject& Pawn)
 {
     // The static meshes the stock body composition wears on its bones (spikes on the head, back and arms). The tool writes them
     // only after their import; a file without them leaves the bare body. They add nothing to StockMesh->Bounds, which the bubble's size
-    // rule reads. Their placement uses the citizens' rule (tools/prepare_ambient_world.py), UNVERIFIED on this pawn.
+    // rule reads. Each sits on its bone with the stock component's own transform: the live Adult's bone frames are the imported ones.
     const TArray<TSharedPtr<FJsonValue>>* Pieces = nullptr;
     if (!Pawn.TryGetArrayField(TEXT("attachments"), Pieces) || !Pieces) return;
     int32 Attached = 0;

@@ -42,9 +42,8 @@ def test_a_mesh_with_two_materials_stops():
 
 
 def test_host_rows_keep_the_transform_and_a_reflection():
-    import numpy as np
     worn = t.worn_attachments({'Attachments': [row('P.StaticMeshComponent_1', 'Head')]}, component)
-    rows = t.host_attachments(worn, {'Spike': '/Game/X/Spike.Spike'}, {'Head': np.eye(4)})
+    rows = t.host_attachments(worn, {'Spike': '/Game/X/Spike.Spike'})
     assert rows[0]['mesh'] == '/Game/X/Spike.Spike' and rows[0]['bone'] == 'Head' and rows[0]['location'] == [1.0, 0.0, 0.0]
     # A negative Scale3D is a reflection: exactly one size comes back negative, and the sizes keep the magnitudes.
     scale = rows[0]['scale']

@@ -20,7 +20,7 @@ Steps (``all`` runs identity, extract, editor-job; ``anims`` needs the editor's 
 * ``editor-job`` the job file for ``tools/slice_npc_editor.py`` (modes ``npcs`` then ``anims``), plus
                  ``host_target.json``: the UE asset paths and the pawn numbers the host reads.
 * ``anims``      convert the chosen MD5 clips to UE bone tracks (needs ``ref_pose_<Id>.json`` from the editor).
-* ``attachments`` add the worn static meshes to ``host_target.json`` (needs the editor's ``attach`` report and the ref pose).
+* ``attachments`` add the worn static meshes to ``host_target.json`` (needs the editor's ``attach`` report).
 
 Run the whole thing with ``tools/import_phaselock_target.ps1``.
 """
@@ -272,27 +272,26 @@ def anims_step(args):
     npc.write_json(OUT / 'anims.json', report)
 
 
-def host_attachments(worn, assets, frames):
-    """What the host attaches: the asset, the bone and the placement relative to the imported bone. The placement uses the citizens'
-    rule (prepare_ambient_world.component_transform), read from a live citizen and not checked on this pawn: UNVERIFIED here."""
+def host_attachments(worn, assets):
+    """What the host attaches: the asset, the bone and the component's own transform on that bone. The live Adult's bone matrices show
+    the imported bone frames are the live ones with no flip (2026-11-06, one cast), so the citizens' correction does not apply here.
+    That a piece's world placement is the component's transform on its bone is assumed: LocalToWorld could not be read."""
+    import numpy as np
     from prepare_ambient_world import component_transform
     out = []
     for att in worn:
-        location, quat, scale = component_transform(frames[att['bone']], att)
+        location, quat, scale = component_transform(np.eye(4), att)
         out.append({'mesh': assets[npc.leaf(att['static_mesh'])], 'bone': att['bone'], 'location': location, 'quat': quat, 'scale': scale})
     return out
 
 
 def attachments_step(args):
-    from prepare_ambient_world import attachment_frames
     identity = npc.read_json(OUT / 'identity.json')
     report = npc.read_json(OUT / 'editor_report_attach.json')
     hosts = npc.read_json(OUT / 'host_target.json')
     for name, target in identity['targets'].items():
         worn = target['attachments']
-        md5 = npc.find_output(name, npc.leaf(target['skeletal_mesh']['path']), ['md5mesh'])
-        frames = attachment_frames(md5, OUT / f'ref_pose_{name}.json', sorted({a['bone'] for a in worn}))
-        hosts[name]['attachments'] = host_attachments(worn, report[name], frames)
+        hosts[name]['attachments'] = host_attachments(worn, report[name])
         print(f'attachments: {name}: {len(worn)} pieces')
     npc.write_json(OUT / 'host_target.json', hosts)
 
