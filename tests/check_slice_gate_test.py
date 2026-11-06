@@ -295,6 +295,13 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('FAIL', self.row(out, 4))
         self.assertIn('error: link enemy_attacks_maya: PASS overruled, the hold on fire ended with Maya down', out)
 
+    def test_enemy_attack_pass_after_a_hold_ended_by_death_is_overruled(self):
+        results = {'enemy_attacks_maya': ('PASS', '1 hit(s), synthetic')}
+        fixtures = {'enemy_attacks_maya': chk.HOLD_ENDED_BY_DEATH}
+        code, out = self.run_checker(self.write_log(build(results, fixtures=fixtures, range_mode=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('error: link enemy_attacks_maya: PASS overruled, the hold on fire ended with the selected enemy dead', out)
+
     def test_enemy_attack_pass_after_other_hold_ends_is_kept(self):
         for fixture in ('fire held, ended by timeout', 'fire held until the selected enemy hit Maya'):
             results = {'enemy_attacks_maya': ('PASS', '1 hit(s), synthetic')}

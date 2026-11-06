@@ -470,6 +470,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
         HitsBeforeFight = W->GetHitCount();
+        FightStartedAt = GetWorld()->GetTimeSeconds();
         W->SetHitCauserTracking(true);   // off again once link 4 has read it
         if (!ShieldFixture.IsEmpty())
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note Maya's shield at the start of the fight: %.0f/%.0f"), W->GetShield(), W->GetShieldCapacity());
@@ -480,29 +481,32 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Fight: {
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
         // The first down of the fight: had the selected enemy hit her by then? A hit after she is Up again does not undo this.
+        // DownAt also catches a down and a second wind between two of these ticks; a down from before the fight is older.
         const int32 SelectedHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;
-        if (W->IsDown() && !bDownSeenInFight)
+        if ((W->IsDown() || W->GetMayaState().DownAt >= FightStartedAt) && !bDownSeenInFight)
         {
             bDownSeenInFight = true;
             bDownBeforeEnemyHit = SelectedHits == 0;
         }
-        if (Enemy && Enemy->IsAutoAimTarget())
+        const bool bEnemyAlive = Enemy && Enemy->IsAutoAimTarget();
+        if (bEnemyAlive) LastEnemyLocation = Enemy->GetActorLocation();   // where it stands while alive (a dead actor may be moved away)
+        // Range mode: wound the selected enemy so the den is alerted, then hold fire until it has hit Maya, so a quick kill
+        // cannot end the fight before it attacks. A test shortcut, named as a fixture with how the hold ended. It ends if she
+        // goes down (a kill can still give her a second wind), if the enemy dies, or after AttackWait, and it never restarts.
+        if (bRangeMode && Enemy && HoldEnd.IsEmpty() && Enemy->HealthFraction() < 1.f)
         {
-            LastEnemyLocation = Enemy->GetActorLocation();   // where it stands while alive (a dead actor may be moved away)
-            // Range mode: wound the selected enemy so the den is alerted, then hold fire until it has hit Maya, so a quick
-            // kill cannot end the fight before it attacks. A test shortcut, named as a fixture with how the hold ended. It
-            // ends if she goes down (a kill can still give her a second wind) or after AttackWait, and it never restarts.
-            if (bRangeMode && HoldEnd.IsEmpty() && Enemy->HealthFraction() < 1.f)
+            const TCHAR* Ended = SelectedHits > 0 ? TEXT("hit") : bDownSeenInFight ? TEXT("Maya down") : !bEnemyAlive ? TEXT("enemy died")
+                : StepTime >= AttackWait ? TEXT("timeout") : nullptr;
+            if (!Ended)
             {
-                const TCHAR* Ended = SelectedHits > 0 ? TEXT("hit") : W->IsDown() ? TEXT("Maya down") : StepTime >= AttackWait ? TEXT("timeout") : nullptr;
-                if (!Ended)
-                {
-                    AimAt(Enemy->AimPoint());
-                    HeldFireFor += Delta;
-                    return;
-                }
-                if (HeldFireFor > 0.f) HoldEnd = Ended;
+                AimAt(Enemy->AimPoint());
+                HeldFireFor += Delta;
+                return;
             }
+            if (HeldFireFor > 0.f) HoldEnd = Ended;
+        }
+        if (bEnemyAlive)
+        {
             if (StepTime < KillTimeout) { if (ShootAt(Enemy, 0.f)) ++KillShots; return; }
             if (HeldFireFor > 0.f) Fixture(HoldFixture());
             FailLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s still alive after %.0fs and %d shots (health %.0f%%)"),
@@ -514,7 +518,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
             if (HeldFireFor > 0.f) Fixture(HoldFixture());
             PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs, %.1fs of it with fire held (hold ended by: %s)"), *Enemy->GetName(), KillShots,
-                Held ? *Held->Name : TEXT("?"), StepTime, HeldFireFor, HoldEnd.IsEmpty() ? TEXT("no hold ended") : *HoldEnd));
+                Held ? *Held->Name : TEXT("?"), StepTime, HeldFireFor, HoldEnd.IsEmpty() ? TEXT("no hold") : *HoldEnd));
         }
         else FailLink(TEXT("kill_enemy"), TEXT("the enemy disappeared before it died"));
         // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,

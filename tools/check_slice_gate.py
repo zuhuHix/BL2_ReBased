@@ -126,6 +126,8 @@ SETUP_GAP = 'test setup gap'
 SETUP_GAP_OWNER = 'slice-gate'
 # The fixture on link 4 when Maya went down before the selected enemy had hit her: a later hit from it proves nothing.
 HOLD_ENDED_BY_DOWN = 'fire held, ended by Maya down'
+# The fixture on link 4 when the selected enemy died with no hit on her: a PASS would contradict it.
+HOLD_ENDED_BY_DEATH = 'fire held, ended by enemy died'
 
 
 def card_link_problem(row):
@@ -172,8 +174,9 @@ def cross_check(rows, errors, range_mode):
                 errors.append(f'link {row["name"]}: PASS overruled, {why}')
                 row['result'] = 'FAIL'
                 row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
-        elif row['name'] == 'enemy_attacks_maya' and row['result'] == 'PASS' and HOLD_ENDED_BY_DOWN in row['fixtures']:
-            why = 'the hold on fire ended with Maya down before the selected enemy had hit her'
+        elif row['name'] == 'enemy_attacks_maya' and row['result'] == 'PASS' and (HOLD_ENDED_BY_DOWN in row['fixtures'] or HOLD_ENDED_BY_DEATH in row['fixtures']):
+            why = ('the hold on fire ended with Maya down before the selected enemy had hit her' if HOLD_ENDED_BY_DOWN in row['fixtures']
+                   else 'the hold on fire ended with the selected enemy dead and no hit from it')
             errors.append(f'link {row["name"]}: PASS overruled, {why}')
             row['result'] = 'FAIL'
             row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
