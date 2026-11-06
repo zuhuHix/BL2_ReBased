@@ -129,6 +129,35 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("a dropped gun at 90 beats a lootable at 180"), Pick(Unset, 180.0 * 180.0, Unset, 90.0 * 90.0) == EOpenWillowUseTarget::Pickup);
         TestTrue(TEXT("a lootable at 90 beats a dropped gun at 180"), Pick(Unset, 90.0 * 90.0, Unset, 180.0 * 180.0) == EOpenWillowUseTarget::Interactive);
         TestTrue(TEXT("all four: the nearest wins"), Pick(300.0, 200.0, 400.0, 100.0) == EOpenWillowUseTarget::Pickup);
+
+        // Equal distances keep one fixed order.
+        FOpenWillowUseDistances Tied;
+        Tied.Vendor = Tied.Interactive = Tied.Door = Tied.Pickup = 100.0;
+        const TArray<EOpenWillowUseTarget> TieOrder = Tied.Ordered();
+        TestEqual(TEXT("all four tied are listed"), TieOrder.Num(), 4);
+        if (TieOrder.Num() == 4)
+        {
+            TestTrue(TEXT("tie: vendor first"), TieOrder[0] == EOpenWillowUseTarget::Vendor);
+            TestTrue(TEXT("tie: interactive second"), TieOrder[1] == EOpenWillowUseTarget::Interactive);
+            TestTrue(TEXT("tie: door third"), TieOrder[2] == EOpenWillowUseTarget::Door);
+            TestTrue(TEXT("tie: pickup last"), TieOrder[3] == EOpenWillowUseTarget::Pickup);
+        }
+
+        // A nearer target that refuses lets the next one take the press, and nothing further is tried.
+        FOpenWillowUseDistances Refusing;
+        Refusing.Interactive = 100.0; // an ammo pickup on a full pool
+        Refusing.Door = 200.0;
+        Refusing.Pickup = 300.0;
+        TArray<EOpenWillowUseTarget> Tried;
+        const bool bTaken = Refusing.Offer([&Tried](EOpenWillowUseTarget Target)
+        {
+            Tried.Add(Target);
+            return Target != EOpenWillowUseTarget::Interactive;
+        });
+        TestTrue(TEXT("the door behind a refusing pickup takes the press"), bTaken);
+        TestEqual(TEXT("the third target is not offered"), Tried.Num(), 2);
+        TestTrue(TEXT("the refusing target was offered first"), Tried.Num() > 0 && Tried[0] == EOpenWillowUseTarget::Interactive);
+        TestTrue(TEXT("every target refusing means nothing took it"), !Refusing.Offer([](EOpenWillowUseTarget) { return false; }));
     }
 
     return true;

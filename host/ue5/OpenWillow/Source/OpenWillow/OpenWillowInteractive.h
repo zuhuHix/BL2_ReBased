@@ -125,7 +125,11 @@ enum class EOpenWillowUseTarget : uint8 { None, Vendor, Interactive, Door, Picku
 struct FOpenWillowUseDistances
 {
     TOptional<double> Vendor, Interactive, Door, Pickup;
+    // The targets in reach, nearest first; equal distances keep the order vendor, interactive, door, pickup.
+    TArray<EOpenWillowUseTarget> Ordered() const;
     EOpenWillowUseTarget Nearest() const;
+    // Offers the press nearest first until one takes it (Use returns true). A target that refuses lets the next one try.
+    bool Offer(TFunctionRef<bool(EOpenWillowUseTarget)> Use) const;
 };
 
 UCLASS()
@@ -187,7 +191,7 @@ private:
     static UOpenWillowInteractiveSubsystem* SubsystemOf(UWorld* World);
     // The nearest closed lootable and the nearest use-key pickup in reach, with the squared distance of whichever is nearer.
     static bool FindNearest(UWorld* World, const FVector& From, AOpenWillowLootable*& OutLootable,
-        AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared);
+        AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared, bool bSkipPickups = false);
     bool LoadManifest(const FString& Path, TSharedPtr<FJsonObject>& OutRoot);
     void ReadItems(const TSharedPtr<FJsonObject>& Root);
     void ReadBalances(const TSharedPtr<FJsonObject>& Root);

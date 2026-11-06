@@ -41,6 +41,9 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWLOOT drop id=Map:Point_0 kind=ammo balance=Item.Ammo level=3 value=18')
     text += line('OWLOOT open id=Map:Point_1 config=Empty_Box drops=0')
     text += line('OWLOOT empty id=Map:Point_1 reason=no attachment dropped')
+    text += line('OWLOOT open id=Map:Point_2 config=Empty_Box drops=0')
+    text += line('OWLOOT empty id=Map:Point_2 reason=no attachment dropped')
+    text += line('OWINTERACTIVETEST opened 3 lootable(s) of different balances')
     text += line('OWPICKUP kind=cash amount=80.00 before=100.00 after=180.00 cap=2147483647.00 ok=1 reason=')
     text += line('OWPICKUP kind=ammo amount=18.00 before=10.00 after=20.00 cap=20.00 ok=1 reason=')
     text += line('OWPICKUP kind=ammo amount=18.00 before=20.00 after=20.00 cap=20.00 ok=0 reason=ammo pool full')
@@ -49,7 +52,7 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWLOOTLID queue=1')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
-    text += line('OWINTERACTIVETEST done spawned=3 opened=2')
+    text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
 
 
@@ -99,6 +102,28 @@ class OpenTest(unittest.TestCase):
     def test_empty_open_without_a_reason_fails(self):
         log = good_log().replace('OWLOOT empty id=Map:Point_1 reason=no attachment dropped\n', '')
         self.assertEqual(status_of(grade(log), 'open_drops'), 'FAIL')
+
+    def test_a_partial_run_fails_on_the_reported_count(self):
+        log = good_log().replace('OWINTERACTIVETEST opened 3 lootable(s)', 'OWINTERACTIVETEST opened 1 lootable(s)')
+        self.assertEqual(status_of(grade(log), 'opened_balances'), 'FAIL')
+
+    def test_opens_covering_fewer_balances_than_reported_fail(self):
+        doc = document()
+        doc['objects'][1]['balance'] = doc['objects'][2]['balance'] = doc['objects'][0]['balance']
+        # All three share a balance, so the sequence should aim at one: reporting three is wrong.
+        self.assertEqual(status_of(ci.grade(good_log(), AUTOMATION_OK, doc), 'opened_balances'), 'FAIL')
+
+    def test_no_reported_count_is_missing(self):
+        log = good_log().replace('OWINTERACTIVETEST opened 3 lootable(s) of different balances\n', '')
+        self.assertEqual(status_of(grade(log), 'opened_balances'), 'MISSING')
+
+    def test_a_done_line_with_the_wrong_open_count_fails(self):
+        log = good_log().replace('done spawned=3 opened=3', 'done spawned=3 opened=2')
+        self.assertEqual(status_of(grade(log), 'test_sequence'), 'FAIL')
+
+    def test_a_done_line_with_the_wrong_spawn_count_fails(self):
+        log = good_log().replace('done spawned=3 opened=3', 'done spawned=2 opened=3')
+        self.assertEqual(status_of(grade(log), 'test_sequence'), 'FAIL')
 
     def test_no_open_is_missing(self):
         results = grade('OpenWillow interactives: 3 lootable(s) spawned, 1 unsupported not spawned\n')
@@ -175,7 +200,7 @@ class SequenceAndAutomationTest(unittest.TestCase):
         self.assertEqual(status_of(grade(log), 'test_sequence'), 'FAIL')
 
     def test_unfinished_sequence_is_missing(self):
-        log = good_log().replace('OWINTERACTIVETEST done spawned=3 opened=2\n', '')
+        log = good_log().replace('OWINTERACTIVETEST done spawned=3 opened=3\n', '')
         self.assertEqual(status_of(grade(log), 'test_sequence'), 'MISSING')
 
     def test_failed_automation_fails(self):
