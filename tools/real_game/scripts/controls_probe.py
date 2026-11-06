@@ -116,6 +116,13 @@ def cp_prompt_read(label=""):
     return out
 
 
+def cp_turn(degrees):
+    """Turn the view without moving: whether the usable object follows the view or the distance."""
+    pc = _pc()
+    pc.Rotation.Yaw = pc.Rotation.Yaw + int(degrees * 65536.0 / 360.0)
+    return {"yaw": pc.Rotation.Yaw}
+
+
 def cp_prompt(path, distance=120.0, up=0.0):
     """Stand `distance` uu from the object on the player's side of it, level with the view, and look at it."""
     pc = _pc()

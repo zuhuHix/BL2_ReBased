@@ -105,6 +105,12 @@ try {
         Start-Sleep 1
         $reads += (Py "print(json.dumps(cp_prompt_read(r'$($t.path)'), default=str))")
         Save-Shot "controls/prompt_$n.png" | Out-Null
+        # The same spot with the view turned away: does the target follow the view or the distance? It decides what the prompt names.
+        foreach ($turn in 15, 30) {
+            Py "print(cp_turn($turn))" | Out-Null
+            Start-Sleep 1
+            $reads += (Py "print(json.dumps(cp_prompt_read(r'$($t.path) turned $turn more'), default=str))")
+        }
     }
     $reads | Set-Content (Join-Path $Out 'prompts.jsonl')
     "prompts: $($reads.Count)"; $log.prompts = $reads.Count
