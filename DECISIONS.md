@@ -3752,3 +3752,5 @@ AI-assisted (Claude). Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "Round
 - The hand orb's ribbons, swirl and star-burst read their colour as gamma-space values (a `GammaOut` material parameter, set by the hand
   template's emitters only). UNVERIFIED until the capture, which also retests the tone curve off on the corrected target.
 - Facing stays open: critics prefer 0 for the held frames, the default stays 180 as a choice, and the live probe now records the target's rotation.
+- Result (last critic round, each setting scored on its own): offset 0 about 5.7, the default offset 180 5.1, tone curve off 5.3; target 8 not reached.
+  `GammaOut` showed no gain over round 23.

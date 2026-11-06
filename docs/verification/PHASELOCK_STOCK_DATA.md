@@ -1366,3 +1366,24 @@ AI-assisted (Claude). The hand template's emitters and materials, read from the 
 `OpenWillowPhaselockFx.cpp` (`EmitterScalars`). Other templates that use the ribbon or swirl material (`Part_SirenASEnemyOrbBegin`, `Part_SirenASEnemyOrbEnd`,
 `Part_SirenASHandFizzle`, `Part_PhaseLock_Miss_Impact`, `Part_PhaseLock_EnemyCannotBeLocked`) keep 0. This lowers the layers' red and green, not their blue, so it
 cannot by itself remove the over-bright blue that the film curve desaturates. UNVERIFIED until the capture, which also retests `-owtonecurve=0` on the corrected target.
+
+### Round 24 results (2026-11-06: batch 9's re-import and captures, a Luna critic, the last critic round of three)
+
+The effects import exited 0 on the PR head with the input check, its first run in the editor; the only skips were the three allowed ones. Captures are in ignored
+`local/phaselock/r24/` (pairs in `critic/`). This critic scored each setting on its own, with no mixing across facings; it called the two offset-0 sets effectively tied and warned that small differences may be noise.
+
+| Setting | 0.25 s | 0.50 s | 0.80 s | 1.50 s | 3.00 s | 4.50 s | Mean |
+|---|---|---|---|---|---|---|---|
+| Round 24, offset 180 (the host default) | 5.2 | 5.1 | 4.4 | 5.3 | 5.4 | 5.2 | 5.1 |
+| Round 24, offset 0 | 5.4 | 5.9 | 4.7 | 5.9 | 6.0 | 6.0 | 5.7 |
+| Round 24, offset 0, tone curve off | 5.2 | 5.6 | 4.5 | 5.4 | 5.6 | 5.6 | 5.3 |
+| Round 23, offset 180 | 5.2 | 5.2 | 4.5 | 5.3 | 5.4 | 5.3 | 5.2 |
+| Round 23, offset 0 | 5.4 | 6.0 | 4.7 | 6.0 | 6.1 | 6.0 | 5.7 |
+
+Orb box at 0.50 s, host frames: offset 0 161, 210, 251; offset 180 162, 211, 251; tone curve off 10, 164, 255 (round 23, offset 0: 158, 208, 251).
+
+- **The 8/10 target is not reached.** The critic-round limit for this item is used up, so this is the recorded result: about 5.7 at the better facing, 5.1 at the default.
+- **`GammaOut` brought no visible or measured gain.** The orb box did not move toward the game, and the critic could not tell rounds 23 and 24 apart.
+- **Tone curve off stays a diagnostic.** With the fur corrected it is still farther overall: the orb's blue is slightly closer, but the bubble and the target are farther.
+- **Facing:** at the held times this critic again prefers offset 0, and at 0.25 s gives offset 180 only a slight, uncertain edge. The default costs about 0.6 here. It stays 180 until the live rotation read, as decided.
+- **Remaining, most visible first (critic):** the target too large in frame and pale; its pose (the game's face is clearly toward the camera at 1.50 s, and the host is more tightly curled); the 0.80 s blue-white flash that nearly hides the game's target; the bubble rim too smooth and bright; the palm orb a simpler sphere with a prominent X, without the game's layered streaks.
