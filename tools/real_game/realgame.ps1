@@ -266,15 +266,28 @@ function Get-GameProcess { Get-Process Borderlands2 -ErrorAction SilentlyContinu
 
 # Every running game, and those that are not the one this run started. Reading only: nothing here stops a process.
 function Get-GameProcesses { @(Get-Process Borderlands2 -ErrorAction SilentlyContinue) }
-function Get-UntrackedGames($Own) { @(Get-GameProcesses | Where-Object { !$Own -or $_.Id -ne $Own.Id }) }
-# The game this run started while it lives, else (a script that attaches to a running game) the first by name.
+# Is this live process the game this run started? Id, start time and image path, as Stop-OwnGame checks. Once ours has exited, nothing is:
+# Windows can give its id to another process.
+function Test-IsRunGame($Process, $Own) {
+    if (!$Own -or $Own.HasExited -or $Process.Id -ne $Own.Id -or !$Process.Path) { return $false }
+    if ([IO.Path]::GetFullPath($Process.Path) -ne [IO.Path]::GetFullPath((Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'))) { return $false }
+    [math]::Abs(($Process.StartTime - $Own.StartTime).TotalSeconds) -le 2
+}
+function Get-UntrackedGames($Own) { @(Get-GameProcesses | Where-Object { !(Test-IsRunGame $_ $Own) }) }
+# Every game seen so far that this run did not start, as ids joined by commas. It stays remembered once that game has gone, because it may have
+# saved, and restoring would roll that progress back. The limit: only these checks see a game, so one started and closed between them goes
+# unnoticed. The rule that covers that gap is that nobody launches the game while a capture runs.
+$script:ForeignGamesSeen = @()
+function Get-ForeignGamesSeen($Own) {
+    $script:ForeignGamesSeen = @(@($script:ForeignGamesSeen) + @(Get-UntrackedGames $Own | ForEach-Object { $_.Id }) | Select-Object -Unique)
+    $script:ForeignGamesSeen -join ', '
+}
+# The game this run started, while it lives. Every script that sends input starts its own game (Start-Game), so nothing attaches to one by name.
 function Get-RunGameProcess {
-    if ($script:OwnGame) {
-        $script:OwnGame.Refresh()
-        if ($script:OwnGame.HasExited) { return $null }
-        return $script:OwnGame
-    }
-    Get-GameProcess
+    if (!$script:OwnGame) { return $null }
+    $script:OwnGame.Refresh()
+    if ($script:OwnGame.HasExited) { return $null }
+    $script:OwnGame
 }
 # Its Alt tap can activate the foreground app's menu when it is retried; Assert-GameForeground's three bounded tries accept that.
 function Focus-Game {
@@ -329,7 +342,8 @@ function Send-KeyDown([string]$Key) {
     if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0x9, [UIntPtr]::Zero) }
     else { [OWRG.Native]::keybd_event(0, [byte]$script:Scan[$Key], 0x8, [UIntPtr]::Zero) }
 }
-# A release is never refused: it only lets go of what a press took, wherever focus has gone.
+# A release is never refused: it lets go of what a press took. It goes to whatever has focus then, which is not guaranteed harmless but is
+# better than a key left held.
 function Send-KeyUp([string]$Key) {
     Assert-Key $Key
     if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0xB, [UIntPtr]::Zero) }

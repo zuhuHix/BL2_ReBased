@@ -23,6 +23,9 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $Out = Join-Path $script:RG 'phaselock_integrity'
 New-Item -ItemType Directory -Force $Out | Out-Null
+# Stale evidence: a final write that fails must not leave an earlier run's completed behind.
+foreach ($stale in 'session.json', 'save_compare.json') { $file = Join-Path $Out $stale; if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force } }
+# End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
@@ -120,7 +123,8 @@ try {
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }
-    if (Get-GameProcess) { throw 'Borderlands2 started during the setup; not launching a second one' }
+    $foreign = Get-ForeignGamesSeen $null
+    if ($foreign) { throw "Borderlands2 (pid $foreign) started during the setup; not launching a second one" }
     $launchAttempted = $true
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
@@ -252,10 +256,12 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
     $restored = $null; $restoreError = ''
-    # A run touched the game's files only from the install attempt on. Those flags are set before their calls, so a failure inside still counts.
-    $touched = $driverAttempted -or $launchAttempted -or $proc
-    # Reading only: a game this run did not start is never stopped, and nothing is removed or restored under it.
-    $untracked = if ($touched) { (@(Get-UntrackedGames $proc) | ForEach-Object { $_.Id }) -join ', ' } else { '' }
+    # Those flags are set before their calls, so a failure inside still counts. An install can only need its folder cleaned up; only a launched
+    # game can have changed the saves, so only that calls for a restore, which could otherwise erase another writer's changes.
+    $launched = $launchAttempted -or $proc
+    $touched = $driverAttempted -or $launched
+    # Reading only: a game this run did not start is never stopped, and nothing is removed or restored under or after it.
+    $untracked = if ($touched) { Get-ForeignGamesSeen $proc } else { '' }
     $safe = $gameGone -and !$untracked
     if (!$safe) {
         $cleanup.driver = "NOT REMOVED (a game may still run): $script:DriverDir"
@@ -271,14 +277,13 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
     $rows = @()
-    # Before the driver is installed or the game started, nothing can have changed, so a partial backup is nothing to recover from.
-    if ($bak -and !$touched) { $cleanup.saves = 'not touched: the game never started' }
+    if ($bak -and $safe -and !$launched) { $cleanup.saves = 'not touched: this run launched no game' }
     elseif ($bak -and $safe) {
         # Once more, immediately before the restore: a game launched during the cleanup could overwrite it.
-        $untracked = (@(Get-UntrackedGames $proc) | ForEach-Object { $_.Id }) -join ', '
+        $untracked = Get-ForeignGamesSeen $proc
         if ($untracked) { $safe = $false; $cleanup.saves = "NOT RESTORED (a game may still run); backup kept at $bak" }
     }
-    if ($bak -and $touched -and $safe) {
+    if ($bak -and $launched -and $safe) {
         try {
             $restored = Restore-VerifiedRoots $bak $roots $snapshots
             $rows = @($restored.rows); $cleanup.saves = $restored.summary
@@ -290,7 +295,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     # restore has already run, and recovery keeps its status.
     $evidenceError = ''
     try {
-        if ($bak -and $safe) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+        if ($restored) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
     } catch { $evidenceError = "$_" }
     $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
     $log.run_error = $runError
