@@ -407,7 +407,7 @@ The hit-driven skills (PR 4) listen to `OpenWillowHit::OnHit()`; they ignore sta
 the broadcast. Every skill hit sets `Source = Skill` (the field from the projectiles lane, PR #88).
 PlayerMeleeDamage is taken as 2.5 x PlayerSkillDamage (no melee buff in the host).
 
-## Skills live capture (prepared 2026-11-04, not yet run)
+## Skills live capture (first run 2026-11-06, no rule settled; fixed, rerun pending)
 
 Two files prepare a bl-sdk capture of the questions in section 6. Neither has been run; nothing below is observed yet.
 
@@ -434,3 +434,21 @@ Not covered by this capture: question 1 (no blocked-target cast), question 4 (th
 
 Results are JSON under the ignored `local/realgame/skills_live/` (one file per step, `summary.json`, `save_compare.json`).
 Nothing from them is copied into this note until a run has been checked against the game.
+
+### First run (2026-11-06): no rule settled
+
+One session on the level-8 Maya, saves and config identical to the backup afterwards. No rule in this note was confirmed or
+contradicted.
+
+- **Not read:** Helios, Ruin, Converge, Sub-Sequence, Sweet Release. Those steps failed within about a second, before any cast, on a
+  Python error whose text the capture did not keep. The cause is unknown.
+- **Kill-skill timer:** it stayed at 0 for 9 s across two kills, and no `UpdateKillSkills` call was recorded. The kills were one direct
+  `TakeDamage` each, so this says nothing about the timer's rule: that kind of kill may not count.
+- **Mind's Eye:** `CurrentInstantHitCriticalHitBonus` did not change between its two grades, and sat well above what the host's rule gives for
+  this save, with its base value 2.0 as already known. The grade change did not reach the running skill, so this says nothing about the
+  scaling. The third run explains the value.
+- **Probe faults fixed after it:** `GetSkillState` was called without its out struct and read a wrong field name; grades now go through
+  `ServerSetSkillSaveGameData` and are read back, and a step does not run on an unconfirmed grade. Kills are a real gun shot at a target
+  wounded to 1 health, and the record names any fallback. The crit step dumps the bonus's modifier stack and the held weapon. A failed
+  step keeps its Python traceback, two failures in a row end the run, and the `quit` reply is tolerated.
+  `tests/skills_live_probe_test.py` checks these helpers and the step runner without the game, not that the game behaves as assumed.

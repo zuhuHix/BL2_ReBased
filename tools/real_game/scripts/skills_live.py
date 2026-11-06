@@ -1,4 +1,4 @@
-"""Skills live probe (prepared 2026-11-04, not yet run): skill grades, the kill-skill timer, damage taken, the instant-hit
+"""Skills live probe (first run 2026-11-06, fixed after it; see NATIVE_SKILL_BEHAVIOURS.md): skill grades, the kill-skill timer, damage taken, the instant-hit
 crit bonus and the Phaselock action skill's kill events, for the skills lane (docs/verification/NATIVE_SKILL_BEHAVIOURS.md
 section 6, questions 1 to 3 and 5 to 7).
 
@@ -7,17 +7,22 @@ protect_player() from their namespace). tools/real_game/skills_live_capture.ps1 
 save or config; what it returns goes into the capture's JSON under the ignored local/realgame/skills_live/.
 
 - sl_find_skills(match): SkillDefinition object paths containing `match` (discovery only).
-- sl_set_grades({key: grade}) / sl_restore_grades(): grades in memory only, through the controller's skill tree
-  (PlayerSkillTree.SetSkillGrade). The value read before the first change of each skill is kept and put back by
-  sl_restore_grades(). A key is a full object path or a skill name such as "Helios" or "Mind's Eye" (sl_resolve).
+- sl_set_grades({key: grade}) / sl_restore_grades(): grades in memory only, through the path a save load uses
+  (WillowPlayerController.ServerSetSkillSaveGameData: tree grade, the running skill's grade, activation), and read back. The
+  value read before the first change of each skill is kept and put back by sl_restore_grades(). A key is a full object path or
+  a skill name such as "Helios" or "Mind's Eye" (sl_resolve).
 - sl_killskill_watch(seconds): UpdateKillSkills calls and the controller's KillSkillTimeRemaining and
   DurationOfLastKillSkillActivation, sampled every 0.05 s.
 - sl_damage_watch(seconds): TakeDamage on every pawn: time, victim, damage, damage type, instigator, victim location.
 - sl_killedtarget_watch(seconds): the lift skill's RunCustomEvent (OnKilledTarget and the others), InterruptPhaseLock and
   EndSkill, counted per cast (a cast is keyed by the skill's SkillStartTime).
-- sl_crit_bonus(): CurrentInstantHitCriticalHitBonus and the base-value names, if the build exposes them.
-- sl_kill(name): one large TakeDamage on an AI pawn from the player's controller (the pattern scripts/phaselock_integrity.py
-  uses on the player).
+- sl_crit_bonus(): every controller property whose name holds CriticalHitBonus, modifier stacks as (type, value) rows, and the
+  held weapon's name (what else may sit on the stack).
+- sl_wound(name) / sl_fire(on) / sl_is_dead(name): leave a pawn at 1 health by one TakeDamage, fire the held gun through the
+  controller (the call the fire button makes), and whether it died: a real kill for the kill-skill timer.
+- sl_kill(name): one large TakeDamage on an AI pawn from the player's controller; the fallback when the gun missed (the
+  capture records which one killed).
+- sl_bullymongs(count): adult bullymongs to use; a pawn that cannot be read (a corpse) is left out, not an error.
 - sl_watch_result(name) / sl_stop_watches() / sl_shutdown(): read the rows and remove the hooks; shutdown also restores grades.
 
 A watch starts hooks and returns at once: a command runs inside a frame and must not sleep, so the capture waits between
@@ -91,8 +96,7 @@ def _defs():
 # ---------------------------------------------------------------- grades
 
 def _tree():
-    # TODO(live): the controller's property that holds the skill tree. PlayerSkillTree is the class name in NATIVE_INDEX.md
-    # (with SetSkillGrade); the property name on WillowPlayerController is not seen in any script yet.
+    # WillowPlayerController.PlayerSkillTree (WillowGame.upk; it read back on the first run).
     try:
         return get_pc().PlayerSkillTree
     except Exception:
@@ -122,10 +126,17 @@ def sl_resolve(key):
 
 
 def _read_grade(tree, defn):
-    # TODO(live): GetSkillState (NATIVE_INDEX.md) and its grade field are not seen in any script yet; the marker says which.
+    # GetSkillState(SkillDef, out OutSkillState) returns (found, state); SkillTreeSkillStateData.SkillGrade (WillowGame.upk).
     def grade():
-        return tree.GetSkillState(defn).Grade
+        found, state = tree.GetSkillState(defn, unrealsdk.make_struct("SkillTreeSkillStateData"))
+        return state.SkillGrade if found else None
     return {"grade": _try(grade)}
+
+
+def _apply_grade(tree, defn, grade):
+    """The save-load path sets the tree grade, the running skill's grade and activation. An integer read back is the proof."""
+    get_pc().ServerSetSkillSaveGameData(defn, int(grade))
+    return _read_grade(tree, defn)
 
 
 def sl_set_grades(grades):
@@ -146,15 +157,12 @@ def sl_set_grades(grades):
         SL["originals"].setdefault(path, before)
         row["before"] = before
         try:
-            tree.SetSkillGrade(defn, int(grade))  # TODO(live): signature from NATIVE_INDEX only; no script has called it yet
-            row["status"] = "set"
-        except AttributeError as error:
-            row["status"] = "not implemented"
-            row["error"] = repr(error)[:200]
+            row["after"] = _apply_grade(tree, defn, grade)
+            # "set" only when the read-back shows the grade: a step does not run on an unconfirmed grade.
+            row["status"] = "set" if row["after"].get("grade") == int(grade) else "not confirmed"
         except Exception as error:
             row["status"] = "error"
             row["error"] = repr(error)[:200]
-        row["after"] = _read_grade(tree, defn)
         rows.append(row)
     return {"status": "done", "rows": rows}
 
@@ -176,8 +184,7 @@ def sl_restore_grades():
             keep[path] = before
             continue
         try:
-            tree.SetSkillGrade(defn, grade)
-            rows.append({"path": path, "status": "restored", "grade": grade, "after": _read_grade(tree, defn)})
+            rows.append({"path": path, "status": "restored", "grade": grade, "after": _apply_grade(tree, defn, grade)})
         except Exception as error:
             rows.append({"path": path, "status": "error", "error": repr(error)[:200]})
             keep[path] = before
@@ -270,7 +277,7 @@ def _on_update_kill_skills(obj, args, ret, func):
     if watch is None:
         return
     now = time.perf_counter()
-    # TODO(live): the argument name bEnable comes from NATIVE_SKILL_BEHAVIOURS 3.1 (UpdateKillSkills(bEnable)); no hook has read it yet.
+    # The argument name is from NATIVE_SKILL_BEHAVIOURS 3.1; the marker says so if the hook cannot read it.
     watch["rows"].append({"t": round(now - watch["t0"], 4), "event": "UpdateKillSkills", "bEnable": _try(lambda: args.bEnable)})
 
 
@@ -302,14 +309,27 @@ def _damage_hook(path):
     return hook
 
 
-def sl_damage_watch(seconds=8.0):
+def _sample_target_health(name):
+    """Target health every 0.05 s, one row per change: damage the TakeDamage hooks may not see (native radius damage)."""
+    def sample(watch, now):
+        if now - watch["last"] < 0.05:
+            return
+        watch["last"] = now
+        health = _try(lambda: ai_pawn(name).GetHealth())
+        if health != watch.get("health"):
+            watch["health"] = health
+            watch["rows"].append({"t": round(now - watch["t0"], 4), "event": "target_health", "target": name, "health": health})
+    return sample
+
+
+def sl_damage_watch(seconds=8.0, target=None):
     hooks, seen = [], set()
     for cls in PAWN_CLASSES:
         for path in _declared_chain(cls, "TakeDamage"):
             if path not in seen:
                 seen.add(path)
                 hooks.append((path, Type.PRE, "ow_sl_damage", _damage_hook(path)))
-    return _watch_begin("damage", seconds, hooks)
+    return _watch_begin("damage", seconds, hooks, sample=_sample_target_health(target) if target else None)
 
 
 # Phaselock action skill events
@@ -353,19 +373,81 @@ def sl_killedtarget_watch(seconds=10.0):
 
 # crit bonus and kills
 
+def _plain_stack(value):
+    """A modifier stack as (type, value) rows; anything else as _p gives it."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    try:
+        rows = list(value)
+    except TypeError:
+        return _p(value)
+    return [{"type": _try(lambda m=mod: str(m.Type)), "value": _try(lambda m=mod: m.Value)} for mod in rows]
+
+
 def sl_crit_bonus():
+    """Every controller property named *CriticalHitBonus*, stacks included, and the gun in hand."""
     pc = get_pc()
+    names, cls = [], pc.Class
+    while cls:
+        names += [f.Name for f in cls._fields() if "CriticalHitBonus" in f.Name and f.Class.Name != "Function"]
+        cls = cls.SuperField
     values = {}
-    for suffix in ("", "BaseValue", "_BaseValue", "Base"):
-        attr = "CurrentInstantHitCriticalHitBonus" + suffix
-        values[attr] = _try(lambda: getattr(pc, attr))
+    for name in dict.fromkeys(names):
+        try:
+            values[name] = _plain_stack(getattr(pc, name))
+        except Exception as error:
+            values[name] = f"<{type(error).__name__}>"
     return {"game_t": _try(lambda: pc.WorldInfo.TimeSeconds), "values": values,
-            "note": "a marker means this build does not expose that name (the base value is TODO(live))"}
+            "weapon": _objname(lambda: pc.Pawn.Weapon)}
+
+
+def sl_is_dead(name):
+    """True when the pawn is gone, marked for deletion or at no health (a corpse may stop being readable)."""
+    try:
+        pawn = ai_pawn(name)
+        return bool(pawn.bDeleteMe) or pawn.GetHealth() <= 0
+    except Exception:
+        return True
+
+
+def sl_wound(name):
+    """Leaves the pawn at 1 health, so one real shot kills it."""
+    pc = get_pc()
+    victim = ai_pawn(name)
+    zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
+    before = victim.GetHealth()
+    if before > 1:
+        victim.TakeDamage(int(before - 1), pc, victim.Location, zero, unrealsdk.find_class("DamageType"))
+    return {"victim": name, "before": before, "after": victim.GetHealth()}
+
+
+def sl_fire(on):
+    """Hold or release the fire button's call (scripts/weapon_firing_probe.py fp_fire_start and fp_fire_stop)."""
+    pc = get_pc()
+    (pc.StartFire if on else pc.StopFire)(0)
+    return {"firing": bool(on)}
+
+
+def sl_bullymongs(count):
+    """Adult bullymongs (radius 120 or more), alive with a controller, nearest first. One row's failure (a corpse) drops only it."""
+    rows, skipped = [], []
+    for dist, name, _cls, dead in list_ai():
+        try:
+            pawn = ai_pawn(name)
+            cls = pawn.AIClass._path_name() if pawn.AIClass else ""
+            radius = pawn.CylinderComponent.CollisionRadius if pawn.CylinderComponent else 0
+            rows.append({"name": name, "dist": dist, "class": cls.split(".")[-1], "radius": radius, "dead": dead,
+                         "ctrl": pawn.Controller is not None, "hp": pawn.GetHealth()})
+        except Exception as error:
+            skipped.append({"name": name, "error": repr(error)[:120]})
+    ok = [r for r in rows if not r["dead"] and r["ctrl"] and r["hp"] > 1 and "PrimalBeast" in r["class"] and r["radius"] >= 120]
+    ok.sort(key=lambda r: (not r["class"].endswith("CharClass_PrimalBeast"), r["dist"]))
+    return {"picks": [r["name"] for r in ok[:int(count)]], "rows": rows[:30], "skipped": skipped}
 
 
 def sl_kill(name):
-    """One TakeDamage of 1,000,000 on an AI pawn, instigated by the player's controller.
-    TODO(live): whether a script-level TakeDamage starts the kill-skill timer and fires OnKilledTarget is not confirmed."""
+    """One TakeDamage of 1,000,000 on an AI pawn, instigated by the player's controller. The fallback after sl_fire: on the first
+    run this kind of kill did not start the kill-skill timer, so a step that used it says so."""
     pc = get_pc()
     victim = ai_pawn(name)
     zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
