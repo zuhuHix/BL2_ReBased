@@ -53,7 +53,7 @@ function bootPage(answer) {
 }
 
 const TOOLS = '_level1.p1.tools';
-const FRAMES = {none: 1, shop: 13, pickup: 55, talk: 9};
+const FRAMES = {none: 1, shop: 13, pickup: 55, talk: 9, open: 5};
 const wrap = text => `<TEXTFORMAT LEADING="-6"><P ALIGN="LEFT"><FONT FACE="WillowBody" SIZE="17">${text}</FONT></P></TEXTFORMAT>`;
 // The clip as the Ruffle bench showed it: a label moves the frame, the bound variable holds the text in format tags, and a dot path to desc
 // reads nothing. Faults: `goto` off ignores jumps, `write` off ignores the text.
@@ -109,6 +109,28 @@ const pass = name => { ++passed; console.log(`PASS ${name}`); };
   page.context.owHud({usePrompt: shopPrompt});
   assert.ok(page.logs.some(line => /OWUSEPROMPTPAGE failed.*frame 1, not shop/.test(line)), page.logs.join(' | '));
   pass('A jump that did nothing is not taken as applied');
+}
+{
+  const faults = {};
+  const m = movie(faults);
+  const page = bootPage(m.answer);
+  page.context.owHud({usePrompt: shopPrompt});
+  faults.write = true;
+  page.context.owHud({usePrompt: {frame: 'pickup', text: '[E] PICK UP'}});
+  assert.strictEqual(m.clip.frame, 55, 'the failed prompt did move the clip');
+  faults.write = false;
+  page.context.owHud({usePrompt: shopPrompt});
+  assert.strictEqual(m.clip.frame, 13, 'going back re-applies the first prompt');
+  assert.ok(m.clip.desc.includes('[E] SHOP'));
+  pass('A prompt, a failed one, then the first again: the first is applied again');
+
+  faults.write = true;
+  page.context.owHud({usePrompt: {frame: 'talk', text: '[E] TALK'}});   // lands on a new frame, and its text fails
+  faults.write = false;
+  faults.goto = true;
+  page.context.owHud({usePrompt: {frame: 'open', text: '[E] OPEN'}});   // a jump that does nothing, the text would succeed
+  assert.ok(page.logs.some(line => /OWUSEPROMPTPAGE failed.*open.*frame 9, not open/.test(line)), page.logs.join(' | '));
+  pass('A silent jump failure is caught on a frame only a failed prompt reached');
 }
 {
   const page = bootPage((target, op, a) => {
