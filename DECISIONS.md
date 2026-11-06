@@ -3754,3 +3754,10 @@ AI-assisted (Claude). Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "Round
 - Facing stays open: critics prefer 0 for the held frames, the default stays 180 as a choice, and the live probe now records the target's rotation.
 - Result (last critic round, each setting scored on its own): offset 0 about 5.7, the default offset 180 5.1, tone curve off 5.3; target 8 not reached.
   `GammaOut` showed no gain over round 23.
+
+## 2026-11-06: the Phaselock targetable-list rule applies only to the mission's dummy (range lane)
+
+AI-assisted (Claude). The slice gate's `phaselock_enemy` link failed: `PreferredPhaselockTarget` skipped every stock pawn the quest had not registered whenever the quest was on
+(written for the mission's dummy, 2026-10-02), so with `-owquest` and `ow.Range` no range pawn could be targeted. The rule now covers only the mission's dummy, the quest's one stock
+pawn by reading the code, which keeps it. Other targets count as registered, as they already did with the quest off (host stand-in, UNVERIFIED in game). Host behaviour only;
+no parsing change. Record: docs/verification/COMBAT_RANGE.md "Phaselock on range pawns".

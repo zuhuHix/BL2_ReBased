@@ -42,6 +42,15 @@ struct FOpenWillowPhaselockAim
 // Phaselock numbers read at run time from the ignored manifest local/character/action_skill_siren.json
 // (tools/prepare_action_skill.py; record docs/verification/PHASELOCK_STOCK_DATA.md). Nothing is compiled in: without
 // the manifest Phaselock is unavailable rather than falling back to invented values.
+// Whether the host's targetable list refuses a Phaselock candidate. The list is the stand-in for the game's global TargetableList, and
+// only the mission's stock dummy is ever put on it (Behavior_RegisterTargetable, UOpenWillowQuest): it stays refused until its own provider
+// registers it. Every other target (the engine-shape dummy, the range's dummies and enemies, a test pawn) counts as registered, quest
+// on or off (host stand-in: what the game does with those pawns is UNVERIFIED).
+inline bool OpenWillowPhaselockListRefuses(bool bQuestEnabled, bool bIsMissionDummy, bool bRegistered)
+{
+    return bQuestEnabled && bIsMissionDummy && !bRegistered;
+}
+
 struct FOpenWillowPhaselockData
 {
     bool bLoaded = false;

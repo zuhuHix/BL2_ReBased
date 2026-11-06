@@ -61,10 +61,11 @@ public:
     bool RestoreProgression(class UOpenWillowSkills& Skills);
     // The dummy's state written by its own provider's world behaviors (run in Pump):
     //  - Behavior_RegisterTargetable: whether the actor is in the host's targetable list (the stand-in for the global
-    //    TargetableList). Phaselock's target choice reads it: the stock dummy is a candidate only once registered
-    //    (AOpenWillowWalker::PreferredPhaselockTarget); host-made targets are not in this list and count as registered;
+    //    TargetableList). Phaselock's target choice reads it: the mission's dummy is a candidate only once registered
+    //    (AOpenWillowWalker::PreferredPhaselockTarget, OpenWillowPhaselockListRefuses); every other target counts as registered;
     //  - Behavior_Transform: WillowAIPawn.TransformType and the target name it selects (GetTargetName).
     bool IsRegisteredTargetable(const AActor* Actor) const;
+    bool IsMissionDummy(const AActor* Actor) const;
     FString DummyTargetName() const;
     // The mission's minimap icons (OpenWillowMinimap): Marcus's "eligible" mark before the mission is accepted and its
     // "turnin" mark once it is ready to turn in, and an "objective" mark on the active objective: the stock range

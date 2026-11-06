@@ -68,6 +68,13 @@ popup_crit, dummy_respawn. The hits are applied with `ApplyPointDamage` as a sho
 
 Results: none yet (the hub's integration run). Automated: ctest 21/21; verify_packages 9 packages, all class bodies exact.
 
+## Phaselock on range pawns
+
+The targetable-list rule of `AOpenWillowWalker::PreferredPhaselockTarget` applies only to the mission's dummy (`OpenWillowPhaselockListRefuses`). It used to cover every stock
+pawn while the quest was on, so with `-owquest` and `ow.Range` no range pawn could be targeted (slice gate link `phaselock_enemy`). By reading the code, the mission's dummy is the
+quest's only stock pawn, so nothing there loses the rule. Range dummies, which use the same stock data, are candidates too, as they already were with the quest off. Whether the
+game's auto-aim takes these pawns is UNVERIFIED; `OpenWillow.Phaselock` tests the host's choice only.
+
 ## Enemy AI (PR2): notice, approach, melee
 
 A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the stock AI tree. The rules and numbers are the live records'; each is
