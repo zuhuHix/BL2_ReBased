@@ -42,4 +42,5 @@ private:
     UPROPERTY() TObjectPtr<UPointLightComponent> FillLight;
     FString CurrentItemId;
     bool bHasPreview = false;
+    float FramingRadius = 20.f;
 };

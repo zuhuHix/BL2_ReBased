@@ -95,8 +95,8 @@ bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FOpenWillowWeaponIte
             PreviewWeapon->SetRelativeRotation(Turn);
             const FBoxSphereBounds Bounds = Report.Bounds.IsValid ? FBoxSphereBounds(Report.Bounds) : PreviewWeapon->GetLocalBounds();
             PreviewWeapon->SetRelativeLocation(Report.Bounds.IsValid ? -Turn.RotateVector(Bounds.Origin) : -Bounds.Origin);
-            const float Radius = FMath::Max(Bounds.SphereRadius, 20.f);
-            const FVector CameraOffset(Radius * 2.2f, -Radius * 5.2f, Radius * 1.2f);
+            FramingRadius = FMath::Max(Bounds.SphereRadius, 20.f);
+            const FVector CameraOffset(FramingRadius * 2.2f, -FramingRadius * 5.2f, FramingRadius * 1.2f);
             Capture->SetRelativeLocation(CameraOffset);
             Capture->SetRelativeRotation((-CameraOffset).Rotation());
             bHasPreview = true;
@@ -112,9 +112,9 @@ bool AOpenWillowInventoryPreviewActor::SetItemPreview(const FOpenWillowWeaponIte
 FString AOpenWillowInventoryPreviewActor::InspectFrame(float Yaw, float Pitch)
 {
     if (!bHasPreview || !RenderTarget || !FMath::IsFinite(Yaw) || !FMath::IsFinite(Pitch)) return FString();
-    const FBoxSphereBounds Bounds = PreviewWeapon->GetLocalBounds();
-    const float Radius = FMath::Max(Bounds.SphereRadius, 20.f);
-    const FVector BaseOffset(Radius * 2.2f, -Radius * 5.2f, Radius * 1.2f);
+    // The radius SetItemPreview framed the gun with: on an assembled gun the mesh's own bounds hold the whole gestalt, which
+    // would show the gun smaller here than on the card preview.
+    const FVector BaseOffset(FramingRadius * 2.2f, -FramingRadius * 5.2f, FramingRadius * 1.2f);
     const FVector Offset = FRotator(FMath::Clamp(Pitch, -80.f, 80.f), FMath::Fmod(Yaw, 360.f), 0.f).RotateVector(BaseOffset);
     Capture->SetRelativeLocation(Offset);
     Capture->SetRelativeRotation((-Offset).Rotation());
