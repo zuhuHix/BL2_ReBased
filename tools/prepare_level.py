@@ -670,7 +670,7 @@ INSPECTED_UNLIT_CONSTANT_COLORS = {
 # value; everything else in the stripped graph stays omitted. Keyed by the
 # placed material; the chain must end at the named base.
 INSPECTED_UNLIT_COLOR_MULTIPLIERS = {
-    # Elpis. Mat_Moon is additive Unlit with p_moonColor 4.02 gray; without
+    # Elpis. Mat_Moon is additive Unlit with an HDR grey p_moonColor; without
     # it the additive moon washes out against the dome. The H-shaped
     # MoonBase02_GRP mask, p_moonTimeBaseShadow, Moon_Comp relief and the
     # orange p_Basecolor2 are not placed by anything the package retains.

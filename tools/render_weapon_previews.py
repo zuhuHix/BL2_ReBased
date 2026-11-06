@@ -418,7 +418,7 @@ def to_byte(value):
 
 
 # Display grade, applied to the lit linear colour before sRGB encoding. The MIC colours are HDR
-# (values above 1, e.g. the Infinity's p_PatternColor 5.06/5.66/1.93) and the old clamp turned them
+# (values above 1, e.g. the Infinity's p_PatternColor) and the old clamp turned them
 # into near-white. The game's own tone mapping, bloom and post-process are not decoded, so this
 # grade is a look-alike chosen by eye against local reference captures of the real inventory
 # (darker, more saturated, higher contrast than the first pass). UNVERIFIED: it is not the game's

@@ -64,7 +64,7 @@ real Inspect frame of the Maliwan pistol, aligned by the gun's bounding box, has
 
 Runtime facts that fix the material inputs:
 
-- The game's weapon material instance carried exactly one parameter beyond the chain: `p_EmissiveColor` (4.02, 0.27, 0.0)
+- The game's weapon material instance carried exactly one parameter beyond the chain: `p_EmissiveColor` (an HDR red)
   for the fire pistol (`gun_runtime.json`), equal to the cooked `Pistol_Elemental_Fire` part's `MaterialVectorParameterValues`.
   Lane E's native note says the same: only elemental parts carry any such value, linear and unconverted.
   `tools/prepare_weapon_paint.py` now applies each part's `MaterialVectorParameterValues` in the native slot order.
@@ -190,7 +190,7 @@ Side view against the real Inspect view, median linear ratio host/real (p10 to p
 | Bandit shotgun | 20 | 0.86 | 0.57 to 1.03 | 2.8 deg (14) |
 
 (round 1: 0.77, 0.72, 1.06, 0.93, 1.08, 0.64; hue 3 to 13 degrees). The Jakobs wood cells read about 0.7 of the real brightness with the
-right hue (real about 150/140/120, host 100-119/95-114/80-95 sRGB); the metal cells match. Not tuned per gun.
+right hue (host 100-119/95-114/80-95 sRGB); the metal cells match. Not tuned per gun.
 
 Other round-2 changes:
 
@@ -506,11 +506,11 @@ the entry without an expression is the default; `Etec` systems are picked by `_I
 systems. `tools/weapon_muzzle_fx.py` reads each system's emitters (first LOD: required module, lifetime, size, location,
 colour, alpha, axis lock, velocity) and `tools/weapon_view_model.py` writes them per element into `weapon_view.json`
 (`muzzle_flash_fx`). Read values (cm in the muzzle's frame, X along the barrel; s; HDR colour):
-- SMG/pistol default: side and top flame rectangles 35-48 x 18 centred 25 cm ahead, 0.034 s, colour (1.5, 0.5, 0.09);
+- SMG/pistol default: side and top flame rectangles 35-48 x 18 centred 25 cm ahead, 0.034 s, an HDR orange;
   front and side glows with a modulate material; a smoke puff 0.28-0.37 s.
-- Assault rifle default: side and top rectangles 85 x 45 centred 42 cm ahead, 0.055 s, colour (3, 1, 0.17); an additive
+- Assault rifle default: side and top rectangles 85 x 45 centred 42 cm ahead, 0.055 s, a brighter HDR orange; an additive
   front sprite 48-68 cm square, 0.07 s.
-- Shock: blue (0.35, 0.45, 15); incendiary: red-orange (8, 0.15, 0.1) with a dark smoke. The flash is orange to yellow,
+- Shock: an HDR blue; incendiary: an HDR red-orange with a dark smoke. The flash is orange to yellow,
   not the host's earlier red, and each sprite lives 34-75 ms (the 0.33 s `MuzzleFlashDuration` is the component's life).
 The lookup-table layout (two header floats, then chunks; a uniform distribution's chunk is a low and a high half) is fitted
 to the data and `UNVERIFIED`; the values agree with what the burst frames show (gone 0.12-0.13 s after the last shot).
