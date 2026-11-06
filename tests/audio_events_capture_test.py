@@ -267,8 +267,9 @@ def run_tail(body, clean=True, proc='$null'):
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
-        script.write_text(snapshot.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__SETUP__', '').replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+        script.write_text(snapshot.TAIL.replace('__OUT__', tmp).replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
+                          .replace('__SETUP__', '').replace('__OWNED__', '$true').replace('__STUBS__', 'function Remove-Driver { }')
+                          .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
@@ -296,11 +297,32 @@ def test_a_bad_restore_prints_the_rows_and_the_one_recovery_command():
     assert -1 not in order and order == sorted(order), done.stdout
 
 
-def test_the_tail_is_the_one_that_ran_clean_and_all_four_roots_are_protected():
+def test_the_tail_is_the_helper_branch_one_but_for_the_hooks_it_stops():
     def tail_of(path):
         text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
         return text[text.index('\n} catch {\n    $runError'):]
-    assert tail_of(CAPTURE) == tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
+    ours, theirs = tail_of(CAPTURE), tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
+    # The one block that differs: this capture has no recorder to stop. If the other script's tail changes, this fails: re-copy it.
+    start, end = '    # A throw between pi_start and pi_stop', '    $gameGone = $true\n'
+    theirs_rest = theirs[:theirs.index(start)] + theirs[theirs.index(end):]
+    our_start = '    # Stop this run\'s logging hooks'
+    ours_rest = ours[:ours.index(our_start)] + ours[ours.index(end):]
+    assert ours_rest == theirs_rest
+    assert 'pi_stop' not in ours and 'ae_remove(); protect_player(False)' in ours
+    for needed in ('$recovery = Get-RecoveryReason', '$holdLocks = [bool]$recovery', 'Format-ManualRecovery'):
+        assert needed in ours, needed
+
+
+def test_saves_are_proved_blocked_before_any_input_and_nothing_bypasses_the_focus_guard():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    body = text[:text.index('\n} catch {\n    $runError')]
+    order = [body.index(step) for step in ('Backup-Saves', 'Save-VerifiedBackupRecord', 'Install-Driver -BlockSavesAtStart -Exclusive', 'Start-Game $gameArgs',
+                                           "Assert-SavesBlocked (Py 'print(block_saves())')", 'Send-Key Enter', 'ae_throw()')]
+    assert order == sorted(order), order
+    assert 'Focus-Game' not in body
+
+
+def test_all_four_roots_are_protected():
     text = CAPTURE.read_text(encoding='utf-8')
     for needed in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Save-VerifiedBackupRecord $bak $roots $snapshots',
                    "'SaveData', 'Config'", 'sdk_mods/settings', 'sdk_mods/SanitySaver', 'Install-Driver -BlockSavesAtStart -Exclusive', 'Enter-RunLock'):
