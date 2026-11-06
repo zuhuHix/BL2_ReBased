@@ -785,6 +785,11 @@ it the inventory suite fails. Then:
 ./tools/run_ue_flash_hud.ps1 -Engine $engine -Game $game -GameWindow
 ```
 
+A switch that drives a run and quits, such as `-owinvshots`, needs `-GameWindow`: without it the script opens the editor, no game starts, and it refuses to run.
+With `-GameWindow` such a run is stopped after 20 minutes: the script stops the editor and any page server it started, by process id after checking the
+command line, and fails with a nonzero exit. `-TimeoutSeconds N` sets the limit and `-TimeoutSeconds 0` removes it. Someone playing with `-GameWindow` and no
+such switch gets no limit, and without `-GameWindow` there is never one (`tools/run_limit.ps1`).
+
 The script starts `tools/hud_overlay/serve.py` on port 8767 if it is not
 running and launches Sanctuary as Maya with `-owflashhud=<url>` and
 `-owflashskills=<url>`. The HUD overlay logs "OpenWillow Flash HUD page loaded"
