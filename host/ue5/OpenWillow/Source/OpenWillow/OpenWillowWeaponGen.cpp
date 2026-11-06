@@ -132,7 +132,8 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     // (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"), so Firing stays not loaded: they fire the fallback trace.
     Item.Firing.BurstCount = FMath::Max(0, int32(Card.burstCount.value_or(0)));
     Item.Firing.BurstInterval = float(Card.burstInterval.value_or(0));
-    if (!Card.burstCount || !Card.burstInterval)
+    Item.Firing.bBurstFromManifest = Card.burstCount && Card.burstInterval;
+    if (!Item.Firing.bBurstFromManifest)
     {
         static bool bWarned = false;
         if (!bWarned) UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN the manifest has no burst data: rolled guns fire while held (rerun tools/weapon_gen_manifest.py)"));
@@ -366,6 +367,34 @@ bool FOpenWillowWeaponGen::FindGunWithDamageStack(int32 Stage, float Scale, FOpe
         }
     }
     OutReason = bAnyStack ? TEXT("no_gun") : TEXT("no_stack");
+    return false;
+}
+
+bool FOpenWillowWeaponGen::FindGunForBurstTest(int32 WantedBurst, int32 Stage, FOpenWillowWeaponItem& OutItem, FString& OutReason)
+{
+    const weapongen::WeaponGenManifest* M = Manifest();
+    if (!M)
+    {
+        OutReason = TEXT("no_manifest");
+        return false;
+    }
+    for (const weapongen::GenBalance& Balance : M->balances)
+    {
+        FOpenWillowWeaponItem Item;
+        if (!RollBalance(FromUtf8(M->objects[size_t(Balance.object)].path), Stage, 1u, Item)) continue;
+        if (!Item.Firing.bBurstFromManifest)
+        {
+            OutReason = TEXT("stale_manifest");
+            return false;
+        }
+        // Three shots in the magazine, so that it is not what stops the shots, and a level Maya can equip.
+        if (Item.Firing.BurstCount == WantedBurst && Item.Magazine >= 3.f * FMath::Max(1.f, Item.ShotCost) && Item.Level <= Stage && Item.FireRate > 0.f)
+        {
+            OutItem = MoveTemp(Item);
+            return true;
+        }
+    }
+    OutReason = TEXT("no_gun");
     return false;
 }
 

@@ -90,6 +90,7 @@ struct FOpenWillowFiringData
     int32 Bounces = 0;
     // Timing.
     int32 BurstCount = 0;        // AutomaticBurstCount; 0 = hold to fire
+    bool bBurstFromManifest = false; // a generated gun whose burst values came from the manifest (older manifests lack them)
     float BurstInterval = 0;
     float SpinUpDuration = 0;
     float SpinDownDuration = 0;

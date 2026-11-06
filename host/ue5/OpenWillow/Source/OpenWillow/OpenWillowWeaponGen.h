@@ -28,6 +28,9 @@ struct FOpenWillowWeaponGen
     // damage x (1 + Scale), so the check tells the stack from the old stand-in. The list comes from the local manifest, so no stock
     // path is in the code. False with OutReason no_manifest, no_stack or no_gun.
     static bool FindGunWithDamageStack(int32 Stage, float Scale, FOpenWillowWeaponItem& OutItem, FString& OutReason);
+    // For the firing test: the first gun of the manifest's list, rolled at Stage, with this burst count. The list comes from the
+    // local manifest, so no stock path is in the code. False with OutReason no_manifest, stale_manifest (no burst data) or no_gun.
+    static bool FindGunForBurstTest(int32 WantedBurst, int32 Stage, FOpenWillowWeaponItem& OutItem, FString& OutReason);
     // A pool or source roll, as ow-weapongen --pool does: OutDrops gets every item balance dropped, in order. OutItem is
     // the first weapon dropped, rolled with Seed + its drop index. False when the feature is off or nothing dropped was
     // a weapon.

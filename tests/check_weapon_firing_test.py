@@ -298,16 +298,18 @@ class Cli(unittest.TestCase):
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace'),
                                   'OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 damage=9.00 splash_hits=1 splash=9.00 grenade_hits=1 '
                                   'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 aimed=1 after=0.50',
-                                  ROLLED_DAMAGE_LINE))
+                                  *ROLLED_LINES, ROLLED_DAMAGE_LINE))
         self.assertEqual(code, 0, out)
         self.assertIn('1 PASS, 0 FAIL of 1 guns', out)
         self.assertIn('grenade: PASS', out)
         self.assertIn('rolled damage: PASS', out)
+        self.assertIn('rolled: PASS', out)
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
                                   segment('made_trace', 0, 0, 5), push('made_trace'), result('made_trace')))
         self.assertEqual(code, 1, out)
         self.assertIn('no OWFIRING grenade line', out)
         self.assertIn('no OWFIRING rolled_damage line', out)
+        self.assertIn('no OWFIRING rolled line', out)
         code, out = self.main(log(result('made_trace', direct='1.00')), '--guns', 'made_trace')
         self.assertEqual(code, 1, out)
         code, _ = self.main('no firing lines here\n', '--guns', 'made_trace')
@@ -360,6 +362,56 @@ class RolledDamage(unittest.TestCase):
         line = dict(self.GOOD)
         del line['expired']
         self.assertTrue(any('no number' in reason for reason in check.check_rolled_damage(line)))
+
+
+ROLLED_LINES = ('LogTemp: Display: OWFIRING rolled want=1 id=gen_a type=Pistol burst=1 from_manifest=1 interval=0.100 hold=0.400 magazine=6 shots=1',
+                'LogTemp: Display: OWFIRING rolled want=0 id=gen_b type=Assault_Rifle burst=0 from_manifest=1 interval=0.100 hold=0.400 magazine=20 shots=4')
+
+
+class RolledLines(unittest.TestCase):
+    ONE = {'want': '1', 'id': 'gen_a', 'type': 'Pistol', 'burst': '1', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'magazine': '6', 'shots': '1'}
+    ZERO = {'want': '0', 'id': 'gen_b', 'type': 'Assault_Rifle', 'burst': '0', 'from_manifest': '1', 'interval': '0.100', 'hold': '0.400', 'magazine': '20', 'shots': '4'}
+
+    def fails(self, one=None, zero=None):
+        return check.check_rolled([dict(self.ONE, **(one or {})), dict(self.ZERO, **(zero or {}))])
+
+    def test_good_lines_pass(self):
+        self.assertEqual(self.fails(), [])
+
+    def test_read_from_the_log(self):
+        extra = {}
+        check.read_log('\n'.join(ROLLED_LINES) + '\n', extra)
+        self.assertEqual([row['want'] for row in extra['rolled']], ['1', '0'])
+        self.assertEqual(check.check_rolled(extra['rolled']), [])
+
+    def test_the_original_bug_fails(self):
+        # What the playtest saw: a burst-1 type firing on while held.
+        self.assertTrue(any('8 shots' in reason for reason in self.fails(one={'shots': '8'})))
+
+    def test_burst_zero_needs_more_than_one(self):
+        self.assertTrue(any('1 shots' in reason for reason in self.fails(zero={'shots': '1'})))
+
+    def test_burst_one_needs_a_shot(self):
+        self.assertTrue(self.fails(one={'shots': '0'}))
+
+    def test_a_short_hold_fails_even_with_one_shot(self):
+        self.assertTrue(any('does not cover' in reason for reason in self.fails(one={'hold': '0.150'})))
+        for bad in ('nan', 'x', '0.000'):
+            self.assertTrue(self.fails(one={'interval': bad}), bad)
+
+    def test_stale_or_missing_manifest_names_the_tool(self):
+        for reason in ('stale_manifest', 'no_manifest'):
+            fails = check.check_rolled([{'want': '1', 'unavailable': reason}, dict(self.ZERO)])
+            self.assertTrue(any('weapon_gen_manifest.py' in text and reason in text for text in fails), reason)
+        self.assertTrue(any('weapon_gen_manifest.py' in text for text in self.fails(one={'from_manifest': '0'})))
+
+    def test_other_unavailable_reasons_fail(self):
+        self.assertTrue(check.check_rolled([{'want': '1', 'unavailable': 'not_equipped'}, dict(self.ZERO)]))
+
+    def test_a_missing_gun_fails(self):
+        self.assertTrue(check.check_rolled([dict(self.ZERO)]))
+        self.assertTrue(check.check_rolled([]))
+        self.assertTrue(self.fails(one={'burst': '0'}))
 
 
 def push(gun, rule=1000, last=1000, hits=5, pushes=5, moved=0.4):
