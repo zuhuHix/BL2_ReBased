@@ -53,8 +53,9 @@ python tools/gfx_to_swf.py --gfx local/ui/gfx/Weapon_Card.gfx --textures local/u
 python tools/hud_harness_swf.py --movie Weapon_Card.swf --output local/ui/run/UI_Inworld/harness.swf
 ```
 
-Without it there is no card: the frame logs `OpenWillow movie missing (...)` and `OpenWillow pickup card off: no movie`, and the
-game and the pickup itself carry on. A card at least 30 s later asks again, so a file that arrives later is picked up. Before 2026-11-06 a missing movie put Ruffle's opaque error page over the whole game
+Without it there is no card: the frame logs `OpenWillow movie missing (...)` and `OpenWillow pickup card off: no movie`. Seen on pc-hummer: no
+error page over the game. `UNVERIFIED`: that a pickup succeeds with the movie absent. In that run E went to a strongbox, because the aimed search failed at that moment (likely a
+respawned enemy on the sight line), so nothing has shown it yet; the E code does not read the page. A card at least 30 s later asks again, so a file that arrives later is picked up. Before 2026-11-06 a missing movie put Ruffle's opaque error page over the whole game
 (`tools/hud_overlay/movie_guard.js` now checks every page's movie first). `python tools/check_overlay_data.py` lists what is
 missing. `tools/test_slice_gate.ps1` runs with the canvas HUD and reads the card from the host's field, so it passes with no movie at
 all; only a run with the movie HUD (`tools/run_ue_flash_hud.ps1`, `-owpickupcardshots`) shows the card, and that capture now stops if

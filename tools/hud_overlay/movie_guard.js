@@ -5,7 +5,7 @@
 (function (root) {
   'use strict';
   // A server hiccup is not a missing file: these are asked again, a few times. Only a 404 counts as missing at once.
-  const HEAD_TRIES = 4, HEAD_RETRY_MS = 500;
+  const HEAD_TRIES = 4, HEAD_RETRY_MS = 500, HEAD_TIMEOUT_MS = 3000;
   // What each movie imports, from the converted movies' ImportAssets tags. tools/check_overlay_data.py checks the same files.
   const FILES = {
     statusMenu:['UI_StatusMenu/StatusMenu.swf', 'SharedComponents/ConsoleComponents.swf',
@@ -23,7 +23,10 @@
   const wait = ms => new Promise(resolve => root.setTimeout(resolve, ms));
   // 'present', 'missing' (the server said 404) or 'unavailable' (still no answer after the tries).
   function fileState(url, triesLeft = HEAD_TRIES) {
-    return root.fetch(url, {method:'HEAD'}).then(response => response.status, () => 0).then(status => {
+    const abort = new root.AbortController();
+    const timer = root.setTimeout(() => abort.abort(), HEAD_TIMEOUT_MS); // a request that never answers counts as a failed try
+    return root.fetch(url, {method:'HEAD', signal:abort.signal}).then(response => response.status, () => 0).then(status => {
+      root.clearTimeout(timer);
       if (status >= 200 && status < 300) return 'present';
       if (status === 404) return 'missing';
       return triesLeft > 1 ? wait(HEAD_RETRY_MS).then(() => fileState(url, triesLeft - 1)) : 'unavailable';
@@ -32,7 +35,7 @@
 
   // Resolves true when the movie is loading, false when the page must do without it (the player has then been removed).
   // `requires`: other files the movie loads itself (a harness loads the real movie, which imports others).
-  // onLost runs if the panel appears later, however much later, after this has resolved true.
+  // onLost runs only if the panel appears after this has resolved true, however much later. The page gets one or the other.
   function load(player, options, label, requires = [], onLost = null) {
     const drop = reason => {
       console.log(`OpenWillow movie ${reason}: ${label} (${options.url}); tools/check_overlay_data.py says how to get it`);
@@ -45,7 +48,7 @@
       if (states.includes('unavailable')) { drop(`unavailable (${named('unavailable')})`); return false; }
       return player.ruffle().load(options).then(() => {
         const lost = () => { drop('failed'); if (onLost) onLost(); };
-        if (panicShown(player)) { lost(); return true; }
+        if (panicShown(player)) { drop('failed'); return false; } // the caller handles a false; onLost is for later
         // The panel is a class change or a new element in the player's shadow DOM, on any later movie or runtime error.
         const observer = new root.MutationObserver(() => {
           if (!panicShown(player)) return;

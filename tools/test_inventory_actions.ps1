@@ -67,7 +67,7 @@ if (Get-Process UnrealEditor -ErrorAction SilentlyContinue) { throw 'An Unreal e
 Enter-OwUeLock -Owner 'test_inventory_actions' -TimeoutSeconds $LockWaitSeconds -PollSeconds 10
 try {
     # What this run lacks, in the suite's own output: a page does without a missing movie, so the steps alone would not say.
-    & python (Join-Path $PSScriptRoot 'check_overlay_data.py') --fail-on UI_StatusMenu
+    & python (Join-Path $PSScriptRoot 'check_overlay_data.py') --fail-on Inventory
     if ($LASTEXITCODE -ne 0) { throw 'The inventory suite needs the StatusMenu movie: see the lines above.' }
     # --- overlay server (the pages the game window loads) ---
     $url = "http://127.0.0.1:$Port/"

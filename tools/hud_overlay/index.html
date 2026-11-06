@@ -51,11 +51,17 @@
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
   document.body.appendChild(player);
-  // Without the movie the page never reports ready and the host keeps its own HUD. If it is lost later, the host is told so it goes back to that HUD.
-  window.owMovieGuard.load(player, { url: 'UI_HUD/harness.swf', base: 'UI_HUD/' }, 'HUD', window.owMovieGuard.FILES.hud, () => {
+  // Without the movie, or when it is lost later, the page tells the host, which keeps or goes back to its own HUD. A loss is final: no ready after it.
+  let movieLost = false;
+  function loseMovie() {
+    if (movieLost) return;
+    movieLost = true;
     ready = false;
+    clearInterval(boot);
     console.log('OpenWillow HUD movie lost');
-  });
+  }
+  window.owMovieGuard.load(player, { url: 'UI_HUD/harness.swf', base: 'UI_HUD/' }, 'HUD', window.owMovieGuard.FILES.hud, loseMovie)
+    .then(found => { if (!found) loseMovie(); });
 
   let ready = false;
   let pending = {};
@@ -200,7 +206,7 @@
     // The ready line echoes the host's per-run id (the host shows the movie only when it matches) and names the pages
     // directory the server serves (hud_fields.js, readyLine).
     fetch('hud_fields.js', {cache: 'no-store'}).then(r => r.headers.get('X-OpenWillow-Pages'), () => null)
-      .then(pages => console.log(window.owHudFields.readyLine(location.search, pages)));
+      .then(pages => { if (!movieLost) console.log(window.owHudFields.readyLine(location.search, pages)); });
     window.owHud({});
   }, 200);
 </script></body></html>
