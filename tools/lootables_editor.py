@@ -226,15 +226,16 @@ def cmd_tracks(args):
             entry['reason'] = 'no MD5 clip exported for this anim set'
             continue
         try:
-            tracks, details = npc.convert_subset(md5mesh, reference, clips)
+            tracks, details = npc.convert_subset_rank_deficient(md5mesh, reference, clips)
         except ValueError as error:
             entry['reason'] = f'conversion refused: {error}'
             continue
         target = out / 'tracks' / f'{anim["id"]}.json'
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(tracks, indent=1), encoding='utf-8')
-        entry.update(status='converted', fit_error=details['fit_error'],
-                     frames={label: d['frames'] for label, d in details.items() if label != 'fit_error'})
+        entry.update(status='converted', fit_error=details['fit_error'], rank=details.get('rank', 4),
+                     mirror_tested_directly=details.get('mirror_tested_directly', False),
+                     frames={label: details[label]['frames'] for label in clips})
         print(f'tracks: {anim["object"]} {len(clips)} clips, fit error {details["fit_error"]:.2e}')
     (out / 'tracks_report.json').write_text(json.dumps(report, indent=1), encoding='utf-8')
     failed = [k for k, v in report.items() if v['status'] != 'converted']
