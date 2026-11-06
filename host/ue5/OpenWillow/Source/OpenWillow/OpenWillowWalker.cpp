@@ -1343,6 +1343,7 @@ void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
     if (Quest && Quest->TryUse()) return;   // talk to Marcus (slice mission) when in reach
+    const APlayerController* Player = Cast<APlayerController>(GetController());
     auto Take = [this](AOpenWillowInventoryPickup* Pickup)
     {
         const FString Name = Pickup->DisplayName();
@@ -1354,7 +1355,7 @@ void AOpenWillowWalker::PickupNearby()
     };
     // An aimed pickup within reach wins, the one the world pickup card shows (OpenWillowPickupCard::FindAimedPickup: the
     // same 220 uu reach, a view cone, line of sight; UNVERIFIED host rule). Otherwise the nearest use target below.
-    if (const APlayerController* Player = Cast<APlayerController>(GetController()))
+    if (Player)
         if (AOpenWillowInventoryPickup* Aimed = OpenWillowPickupCard::FindAimedPickup(*this, *Player)) { Take(Aimed); return; }
     AOpenWillowInventoryPickup* Nearest = nullptr;
     float BestDistanceSquared = FMath::Square(220.f);
@@ -1362,6 +1363,8 @@ void AOpenWillowWalker::PickupNearby()
     {
         const float DistanceSquared = FVector::DistSquared(GetActorLocation(), It->GetActorLocation());
         if (DistanceSquared >= BestDistanceSquared) continue;
+        // The card's sight test here too: no pickup through a wall.
+        if (Player && !OpenWillowPickupCard::InSight(*this, *Player, **It)) continue;
         BestDistanceSquared = DistanceSquared;
         Nearest = *It;
     }
@@ -1400,6 +1403,9 @@ void AOpenWillowWalker::ToggleInventory()
         PC->SetShowMouseCursor(false);
         return;
     }
+    // Not over an open vending shop, as the HUD's status pages (OpenStatusMenu): closing the widget would hand the input
+    // back to the game under the still-open shop.
+    if (const UOpenWillowVendorSubsystem* Vendors = GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>(); Vendors && Vendors->IsShopOpen()) return;
     if (!InventoryScreen) InventoryScreen = CreateWidget<UOpenWillowInventoryWidget>(PC);
     InventoryScreen->Bind(this);
     InventoryScreen->AddToViewport(10);
@@ -1410,6 +1416,7 @@ void AOpenWillowWalker::ToggleInventory()
     PC->SetInputMode(Mode);
     PC->SetShowMouseCursor(true);
 }
+bool AOpenWillowWalker::IsInventoryWidgetOpen() const { return InventoryScreen && InventoryScreen->IsInViewport(); }
 void AOpenWillowWalker::ToggleSkills()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);

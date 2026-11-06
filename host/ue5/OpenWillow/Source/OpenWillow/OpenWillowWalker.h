@@ -51,6 +51,7 @@ public:
     // Removes by stable instance ID and preserves the payload for a pickup actor.
     bool TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem);
     void ToggleInventory();
+    bool IsInventoryWidgetOpen() const; // the legacy UMG inventory, used when the HUD has no inventory page
     void ToggleSkills();
     // Mission weapon lend/return (UOpenWillowQuest): the grant adds the item to the backpack (observed in the real game: not equipped; the player
     // readies it with EquipItem); the return removes it wherever it is and draws another weapon only if it was the held one.

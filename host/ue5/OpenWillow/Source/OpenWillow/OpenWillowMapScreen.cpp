@@ -85,6 +85,9 @@ void OpenWillowMapScreen::TickShots(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& 
     case 9:
         VendorReport(Maya, TEXT("vendor_open"));
         UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS map_over_vending open=%d (expected 0: refused over a shop)"), Hud.ToggleMap() ? 1 : 0);
+        // The same through the Walker, whose legacy inventory widget is its fallback when the HUD refuses.
+        Maya.ToggleInventory();
+        UE_LOG(LogTemp, Display, TEXT("OWMAPSHOTS inventory_over_vending page=%d widget=%d (expected 0 0)"), Hud.IsInventoryOpen() ? 1 : 0, Maya.IsInventoryWidgetOpen() ? 1 : 0);
         break;
     case 10:
         Shot(8, TEXT("MapOverVending"), Now);
