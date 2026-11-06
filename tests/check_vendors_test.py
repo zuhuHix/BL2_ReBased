@@ -399,6 +399,14 @@ class PersistTest(unittest.TestCase):
         checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS))
         self.assertEqual(checks['persist_eridium'][0], 'MISSING')
 
+    def test_refused_load_fails_and_names_the_cause(self):
+        # A stale backup with another manifest identity is refused in the first launch (batch 7): saving stays off.
+        first = line('OWCURRENCY load refused: x/currency.json (written against a different vendors.json); nothing applied') + good_log()
+        results = cv.grade_persist(first, second_launch(self.SAVED_MONEY, self.FIRST_IDS))
+        rows = {r[0]: (r[1], r[2]) for r in results.rows}
+        self.assertEqual(rows['persist_load'][0], 'FAIL')
+        self.assertIn('different vendors.json', rows['persist_load'][1])
+
     def test_missing_load_line_fails(self):
         checks = self.check(second_launch(self.SAVED_MONEY, self.FIRST_IDS, load=False))
         self.assertEqual(checks['persist_load'][0], 'FAIL')
