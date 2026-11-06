@@ -25,7 +25,7 @@ def run_tail(body, clean=True, proc='$null'):
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__SETUP__', '').replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+                          .replace('__OUT__', tmp).replace('__SETUP__', '').replace('__OWNED__', '$true').replace('__STUBS__', 'function Remove-Driver { }').replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
@@ -44,17 +44,30 @@ def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
         done = run_tail(body, clean, proc)
         assert done.returncode == code and f'status: {status}' in done.stdout, (body, clean, proc, done.returncode, done.stdout, done.stderr)
         assert done.hub_lock_kept is status.startswith('recovery'), (body, clean, proc, done.stdout)
+        # The real finalizer prints the one recovery text, and only when there is something to recover.
+        assert ('MANUAL RECOVERY' in done.stdout) is status.startswith('recovery'), (body, clean, proc, done.stdout)
 
 
 def test_the_capture_is_wired_to_the_safety_helpers():
     text = CAPTURE.read_text(encoding='utf-8')
     for call in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Restore-VerifiedRoots $bak $roots $snapshots',
-                 'Save-VerifiedBackupRecord $bak $roots $snapshots', "$restoreCommand = \"Restore-VerifiedBackup '$bak'\"", 'Get-RunStatus $stagesRequested',
+                 'Save-VerifiedBackupRecord $bak $roots $snapshots', 'Get-RunStatus $stagesRequested', "$log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')",
+                 'Get-RecoveryReason $gameGone', '$holdLocks = [bool]$recovery', 'Format-ManualRecovery $recovery $bak $HubLock $Lane',
                  'Install-Driver -BlockSavesAtStart -Exclusive', 'if ($holdLocks) { $runLock = $false; $hub = $null }', 'Format-RestoreRows $rows',
                  "if ($log.status -ne 'completed') { exit 1 }", "sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings')",
                  "SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver')"):
         assert call in text, call
     assert '-Name Borderlands2' not in text and 'taskkill' not in text
+    # Nothing changes a file before the driver install and the game start: a run with neither skips the restore.
+    install = text.index('Install-Driver -BlockSavesAtStart -Exclusive')
+    start = text.index('$proc = Start-Game $gameArgs')
+    assert install < start < text.index("$log.block_saves = Assert-SavesBlocked")
+    assert text.index('$log.block_saves = Assert-SavesBlocked') < text.index('Send-Key Enter')
+    body = text.index('try {\n    # Preflight')
+    for change in ('Send-Key', 'ms_advance', 'ms_force_ready', 'ms_down', 'ms_start'):
+        assert text.index(change, body) > start, change
+    # The sends check focus themselves. Focus-Game's Alt tap would itself be a key press at an open screen, so the stages only assert.
+    assert 'Focus-Game' not in text
 
 
 def test_the_capture_parses_and_every_stage_is_marked():
