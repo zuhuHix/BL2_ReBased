@@ -9,7 +9,8 @@ from pathlib import Path
 import re
 import sys
 
-EXPECTED = ('start_closed', 'm_opens_map', 'map_closed', 'l_opens_missions', 'closed_at_end')
+EXPECTED = ('start_closed', 'm_opens_map', 'map_closed', 'l_opens_missions', 'melee_damage_rule', 'melee_cone_rule', 'melee_swing_rule',
+            'v_not_hit_before_the_delay', 'v_hits_target_ahead', 'v_misses_target_behind', 'v_misses_target_out_of_reach', 'closed_at_end')
 ROW = re.compile(r'OWCONTROLS (\S+) (PASS|FAIL)\b(.*)')
 SUMMARY = re.compile(r'OWCONTROLS SUMMARY passed=(\d+) failed=(\d+)[ \t\r]*$', re.M)
 

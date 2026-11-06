@@ -41,6 +41,9 @@ class ControlsKeysTest(unittest.TestCase):
         self.assertIn(('OWMap', 'M'), self.mapped)
         self.assertIn(('OWMissions', 'L'), self.mapped)
 
+    def test_the_melee_key(self):
+        self.assertIn(('OWMelee', 'V'), self.mapped)
+
 
 if __name__ == '__main__':
     unittest.main()
