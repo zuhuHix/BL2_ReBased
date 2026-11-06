@@ -124,6 +124,8 @@ try {
     Start-Sleep -Seconds 3
     if (!(Test-Path -LiteralPath $log)) { throw "No game log written: $log" }
     $checkArgs = @($checker, '--log', $log, '--interactives', (Resolve-Path -LiteralPath $Interactives).Path)
+    $importReport = Join-Path $repo 'local/lootables/import_report.json'
+    if (Test-Path -LiteralPath $importReport) { $checkArgs += @('--import-report', $importReport) }
     if ($SkipAutomation) { $checkArgs += '--skip-automation' }
     elseif (Test-Path -LiteralPath $autoLog) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs
