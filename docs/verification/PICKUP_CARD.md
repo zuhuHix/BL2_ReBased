@@ -41,7 +41,7 @@ ignored `local/inv24/pickup/`.
   machine, door, pickup). Marcus's talk check still comes first. The nearest-pickup search uses the card's sight test too
   (`InSight`, PR #101 review), so E takes nothing through a wall. The decoy capture (a gun 70 uu to Maya's right, nearer and
   not aimed at, and one 150 uu ahead, aimed at) logs `decoy aimed_taken=1 nearer_left=1`; E with a test block in front of the
-  remaining gun logs `wall decoy_left=1`. The rule is the host's (UNVERIFIED: the game's use target is native).
+  remaining gun logs `wall decoy_left=1`, and E from the same spot with the block gone logs `wall_removed decoy_taken=1`. The rule is the host's (UNVERIFIED: the game's use target is native).
 
 ## Local data
 
@@ -62,7 +62,7 @@ Without it the frame logs `OpenWillow pickup card movie failed` and the HUD is u
 - In engine, `-owpickupcardshots` (with the movie HUD): rolls a gun (`ow.RollGun`, default the Hellfire balance at stage 34),
   drops it 150 uu ahead, and captures aimed away, aimed, aimed away, aimed again and after E picked it up; then the decoy
   (E must take the aimed gun, not the nearer one); then E with a test block in front of the remaining gun (it must stay); then
-  the block removed, the gun aimed at and Maya put down (the card must be gone).
+  E again with the block removed (it must be taken); then a last gun aimed at and Maya put down (the card must be gone).
 
 ## Open, for a real-game session
 
