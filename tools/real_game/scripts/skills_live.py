@@ -361,12 +361,32 @@ def _killedtarget_hook(path):
     return hook
 
 
+def _sample_maya_health(watch, now):
+    """Maya's health, one row per change: what Sweet Release's orbs heal."""
+    if now - watch["last"] < 0.05:
+        return
+    watch["last"] = now
+    health = _try(lambda: get_pc().Pawn.GetHealth())
+    if health != watch.get("maya_health"):
+        watch["maya_health"] = health
+        watch["rows"].append({"t": round(now - watch["t0"], 4), "event": "maya_health", "health": health})
+
+
+def sl_maya_health(fraction):
+    """Maya's health set to this fraction of her maximum (in memory), so a heal shows; a marker if the call does not exist."""
+    pawn = get_pc().Pawn
+    before = _try(lambda: pawn.GetHealth())
+    maximum = _try(lambda: pawn.GetMaxHealth())
+    call = _try(lambda: pawn.SetHealth(maximum * float(fraction)))
+    return {"before": before, "max": maximum, "call": call, "after": _try(lambda: pawn.GetHealth())}
+
+
 def sl_killedtarget_watch(seconds=10.0):
     hooks = []
     for fname in ("RunCustomEvent", "InterruptPhaseLock", "EndSkill"):
         for path in _declared_chain("LiftActionSkill", fname):
             hooks.append((path, Type.PRE, "ow_sl_killedtarget", _killedtarget_hook(path)))
-    out = _watch_begin("killedtarget", seconds, hooks)
+    out = _watch_begin("killedtarget", seconds, hooks, sample=_sample_maya_health)
     SL["watches"]["killedtarget"]["casts"] = {}
     return out
 

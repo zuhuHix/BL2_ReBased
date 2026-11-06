@@ -39,9 +39,11 @@ public:
     // PlayerMeleeDamage = 2.5 x (8 x 1.13 ^ level + InstigatedMeleeDamageAddedBuff), the buff taken as 0 (no melee buffs
     // in the host). Init_PlayerMeleeDamage, read from data, UNVERIFIED in game.
     static float MeleeDamageAt(int32 AtLevel) { return 2.5f * SkillDamageAt(AtLevel); }
-    // Mind's Eye: PlayerCriticalHitBonus over its live base 2.0, i.e. 1 + 0.05 x grade (1 when untrained or without
-    // effects data). Cached; recomputed after any grade change.
-    float CritBonusScale() const;
+    // Mind's Eye: what the skill adds to a hit's crit bonus, 2.0 x 0.05 x grade (0 when untrained or without effects data).
+    // In game the skill's Scale joins the attribute's stack: (2.0 + PreAdd) x (1 + Scale sum), seen live to 4 decimals at
+    // grades 1, 3 and 5 with other modifiers on the stack. The host has none of those, so the base is 2.0 and this is the
+    // whole of the Scale's part. Cached; recomputed after any grade change.
+    float CritBonusAdd() const;
     // Recompense's proc roll, chance 0.1 x grade, from the component's own random stream (seed: -owskillseed=<n>, or
     // SetRandomSeed for tests).
     bool RollRecompense(int32 Grade) { return Grade > 0 && Random.FRand() < 0.1f * Grade; }
@@ -140,8 +142,8 @@ private:
     // survival stats recompute.
     int32 GradeVersion = 0;
     void GradesChanged();
-    mutable int32 CritScaleVersion = -1;
-    mutable float CritScale = 1.f;
+    mutable int32 CritAddVersion = -1;
+    mutable float CritAdd = 0.f;
     FRandomStream Random;
     // Behaviour state (OpenWillowSkillBehaviours.cpp).
     struct FAction
