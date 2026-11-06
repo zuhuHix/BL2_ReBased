@@ -4,6 +4,7 @@ AI-assisted (Claude). Plain Python, no `unreal`, so tests/phaselock_fx_inputs_te
 host/ue5/import_phaselock_fx.py calls check_fx_inputs before delete_directory and stops on any problem.
 """
 import json
+import math
 from pathlib import Path
 
 # The templates the host plays (tools/prepare_phaselock_fx.py's manifest: the hand, the bubble, the screen effect).
@@ -15,7 +16,7 @@ REQUIRED_CONSTANTS = (('Mat_SirenHandInnerOrb', 'blue'), ('Mat_PowerUpTwirls', '
 
 
 def load_fx_constants(path):
-    """(constants, problems): the parsed file, and every required colour that is missing or is not three numbers."""
+    """(constants, problems): the parsed file, and every required colour that is missing or is not three finite numbers."""
     path = Path(path)
     if not path.is_file():
         return {}, [f'{path} is missing: the stock effect colour constants (ignored local input) are required']
@@ -23,12 +24,14 @@ def load_fx_constants(path):
         constants = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError) as error:
         return {}, [f'{path} is unreadable: {error}']
+    if not isinstance(constants, dict):
+        return {}, [f'{path} is not a JSON object']
     problems = []
     for material, name in REQUIRED_CONSTANTS:
         value = constants.get(material, {}).get(name) if isinstance(constants.get(material), dict) else None
         if not (isinstance(value, list) and len(value) == 3
-                and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in value)):
-            problems.append(f'{path}: {material}.{name} is missing or is not three numbers')
+                and all(isinstance(c, (int, float)) and not isinstance(c, bool) and math.isfinite(c) for c in value)):
+            problems.append(f'{path}: {material}.{name} is missing or is not three finite numbers')
     return constants, problems
 
 
