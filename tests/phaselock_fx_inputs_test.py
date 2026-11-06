@@ -86,7 +86,9 @@ def test_constants_complete_missing_and_malformed():
         path.write_text(json.dumps(good), encoding='utf-8')
         assert f.load_fx_constants(path) == (good, [])
         material, name = f.REQUIRED_CONSTANTS[0]
-        for bad in ([0.1, 0.2], [0.1, 0.2, 'x'], [0.1, 0.2, True], 'x'):
+        path.write_text('[1, 2, 3]', encoding='utf-8')
+        assert 'not a JSON object' in f.load_fx_constants(path)[1][0]
+        for bad in ([0.1, 0.2], [0.1, 0.2, 'x'], [0.1, 0.2, True], 'x', [0.1, 0.2, float('nan')]):
             changed = dict(good, **{material: {name: bad}})
             path.write_text(json.dumps(changed), encoding='utf-8')
             problems = f.load_fx_constants(path)[1]
