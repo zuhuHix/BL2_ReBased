@@ -105,9 +105,9 @@ try {
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     # The SDK's settings and Sanity Saver's private store are compared too (an earlier session saw Sanity Saver rewrite one).
     # A root is marked usable only after its copy compares identical; cleanup never restores from any other.
-    foreach ($d in 'SaveData', 'Config') { Assert-SnapshotMatches (Join-Path $script:WillowDir $d) (Join-Path $bak $d); $snapshots[$d] = 'verified' }
+    foreach ($d in 'SaveData', 'Config') { $snapshots[$d] = Assert-SnapshotMatches (Join-Path $script:WillowDir $d) (Join-Path $bak $d) }
     foreach ($d in $extraRoots.Keys) {
-        if (Test-Path -LiteralPath $extraRoots[$d]) { New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d); $snapshots[$d] = 'verified' } else { $snapshots[$d] = 'absent' }
+        if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
@@ -204,7 +204,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     $log.miss = Invoke-CastCapture 'miss_burst' 0.5 3.0 $missShots
     $log.miss_result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
     "miss: lifted '$($log.miss_result.lifted -join ',')' (empty is a real miss)"
-    Set-Stage 'miss' ((@($log.miss_result.lifted).Count -eq 0) -and (Test-CaptureComplete $log.miss $missShots)) 'a pawn was lifted, or frames or shots missing'
+    Set-Stage 'miss' (($log.miss_result.cast_observed -eq $true) -and (@($log.miss_result.lifted).Count -eq 0) -and (Test-CaptureComplete $log.miss $missShots)) 'no cast observed, a pawn was lifted, or frames or shots missing'
     Py 'pi_stop(); print("stopped")' | Out-Null
     $log.miss_ready = Wait-Ready 40
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
@@ -239,13 +239,20 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
             $proc.Refresh(); $gameGone = $proc.HasExited
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
-    $verifiedList = (@($snapshots.Keys | Where-Object { $snapshots[$_] -eq 'verified' }) | ForEach-Object { "'$_'" }) -join ', '
-    $restoreCommand = @"
-foreach (`$sub in $verifiedList) { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
+    $recovery = ''
+    # The manual restore lists only roots whose backup is still good.
+    $makeRestoreCommand = { param($Names)
+        $list = @($Names | ForEach-Object { "'$_'" }) -join ', '
+        @"
+foreach (`$sub in @($list)) { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
 "@
+    }
+    $verifiedNames = @($snapshots.Keys | Where-Object { $snapshots[$_] -is [hashtable] })
+    $restoreCommand = & $makeRestoreCommand $verifiedNames
     if (!$gameGone) {
         $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
         $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
+        $recovery = "game exit not confirmed ($($cleanup.game))"
         @"
 MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored.
   1. Close Borderlands 2 yourself.
@@ -270,11 +277,14 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
             foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
             $restored = Restore-VerifiedRoots $bak $roots $snapshots
             $rows = @($restored.rows); $cleanup.saves = $restored.summary; $holdLocks = !$restored.clean
-        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $holdLocks = $true }
+            if ($holdLocks) { $recovery = "restore did not compare clean ($($restored.summary))" }
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $holdLocks = $true; $recovery = "restore failed ($_)" }
     }
+    if (!$recovery -and $cleanup.driver -match '^(STILL PRESENT|error)') { $recovery = "driver not removed ($($cleanup.driver))" }
     try {
         $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
-        $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError
+        $log.run_error = $runError
+        $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
         if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
@@ -284,9 +294,13 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
     try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
     try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
     "status: $($log.status)"
+    if ($runError) { "run error: $runError" }
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
     Format-RestoreRows $rows
     if ($holdLocks) {
+        $changedRoots = @($restored.changed | Where-Object { $_ })
+        $restoreCommand = & $makeRestoreCommand @($verifiedNames | Where-Object { $_ -notin $changedRoots })
+        if ($changedRoots.Count) { "Do NOT restore $($changedRoots -join ', '): the backup changed after it was verified. Compare it with the live files by hand." }
         @"
 MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both locks are held and the backup is kept at $bak.
   1. Make sure Borderlands 2 is closed. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
@@ -296,5 +310,5 @@ MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both loc
 "@
     }
     # Exit 0 only for a completed run with nothing left to recover. Here in the finally, so -ProbeOnly's return passes through it too.
-    if ($log.status -ne 'completed' -or $holdLocks -or !$gameGone) { exit 1 }
+    if ($log.status -ne 'completed') { exit 1 }
 }

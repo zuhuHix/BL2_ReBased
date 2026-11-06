@@ -42,7 +42,7 @@ PI_TICK = "WillowGame.WillowGameViewportClient:Tick"
 PI_HOOK = "ow_pi_probe"
 pi = {"file": None, "pawn": None, "ended_at": None, "scan_at": -1.0, "seqs": [], "arms_seqs": [], "hooks": [],
       "emitter_fields": [], "light_fields": [], "bubble_scan_at": -1.0, "bubbles": [],
-      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None}
+      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None, "rows": 0, "calls": set()}
 
 # Key bones of the bullymong skeleton: the torso, the head, the four arms' hands and the feet.
 PI_BONES = ("Hips", "Spine2", "Neck", "Head", "lHand1", "lHand2", "rHand1", "rHand2", "LFoot", "RFoot")
@@ -367,6 +367,7 @@ def _on_tick(*_args):
         if injure:
             row["injure"] = injure
         pi["file"].write(json.dumps(row) + "\n")
+        pi["rows"] += 1
     except Exception as error:  # never break the game
         try:
             pi["file"].write(json.dumps({"event": "error", "error": repr(error)[:300]}) + "\n")
@@ -396,6 +397,8 @@ def _attachments(pawn):
 def _mk(tag):
     def hook(obj, args, _ret, func):
         try:
+            if func.func.Name in SKILL_FUNCS:
+                pi["calls"].add(func.func.Name)
             skill = lift_skill()
             now = get_pc().WorldInfo.TimeSeconds
             data = {"func": func.func.Name, "tag": tag, "game_t": now,
@@ -434,6 +437,7 @@ def pi_start(label, pawn_name):
     pi["file"] = (folder / f"{label}.jsonl").open("w", encoding="utf-8")
     pi["pawn"], pi["ended_at"], pi["scan_at"], pi["bubble_scan_at"] = ai_pawn(pawn_name), None, -1.0, -1.0
     pi["seen_lifted"], pi["assets_stage"], pi["bones_at"], pi["injure"] = set(), 0, -1.0, None
+    pi["rows"], pi["calls"] = 0, set()
     add_hook(PI_TICK, Type.POST_UNCONDITIONAL, PI_HOOK, _on_tick)
     for path in info["skill_hooks"] + info["player_hooks"]:
         add_hook(path, Type.PRE, PI_HOOK, _mk("pre"))
@@ -454,10 +458,13 @@ def pi_stop():
 
 
 def pi_result():
-    """After a cast: which pawns the skill lifted, and whether that included the target."""
+    """After a cast: which pawns the skill lifted, whether that included the target, and whether the probe saw a cast at all: an
+    empty "lifted" is a real miss only with cast_observed (frame rows written, and the skill's own end or fizzle function called)."""
     pawn = pi["pawn"]
     lifted = sorted(pi["seen_lifted"])
-    return {"target": _safe(lambda: pawn.Name), "lifted": lifted, "target_lifted": _safe(lambda: pawn.Name in lifted),
+    return {"rows": pi["rows"], "skill_calls": sorted(pi["calls"]),
+            "cast_observed": pi["rows"] > 0 and bool(pi["calls"] & {"FizzleOut", "Fizzled", "EndSkill"}),
+            "target": _safe(lambda: pawn.Name), "lifted": lifted, "target_lifted": _safe(lambda: pawn.Name in lifted),
             "target_has_controller": _safe(lambda: pawn.Controller is not None), "injure": _safe(lambda: {
                 k: v for k, v in pi["injure"].items() if k != "source"} if pi["injure"] else None)}
 

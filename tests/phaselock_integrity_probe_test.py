@@ -132,6 +132,23 @@ def test_result_says_whether_the_target_was_lifted():
     assert ns['pi_result']()['target_lifted'] is True
 
 
+def test_an_empty_lift_list_is_a_miss_only_when_a_cast_was_observed():
+    ns = load()
+    ns['pi']['pawn'] = Obj(Name='Target', Controller='ctrl')
+    assert ns['pi_result']()['cast_observed'] is False      # nothing ran: no rows, no calls
+    ns['pi']['rows'] = 5
+    assert ns['pi_result']()['cast_observed'] is False      # rows but the skill never ended or fizzled
+    hook = ns['_mk']('pre')
+    hook(Obj(), Obj(), None, Obj(func=Obj(Name='TakeDamage')))
+    hook(Obj(), Obj(), None, Obj(func=Obj(Name='BeginLifting')))
+    assert ns['pi_result']()['cast_observed'] is False      # a player call or a start does not count
+    hook(Obj(), Obj(), None, Obj(func=Obj(Name='Fizzled')))
+    result = ns['pi_result']()
+    assert result['cast_observed'] is True and result['skill_calls'] == ['BeginLifting', 'Fizzled'] and result['rows'] == 5
+    ns['pi']['rows'] = 0
+    assert ns['pi_result']()['cast_observed'] is False      # a call but no rows
+
+
 def test_giving_up_on_the_injure_does_not_count_as_down():
     ns = load()
     me = Obj(bIsInjured=False, Health=1)
