@@ -239,6 +239,6 @@ AI-assisted (Claude), 2026-11-06. `tools/prepare_interactives.py` lists the plac
 data by the skills lane and `UNVERIFIED` in game.
 
 The customization menu is not built. A two-press confirmation stands in for its dialog (host choice, `UNVERIFIED`): the
-first press shows the cost on a label, and a second within 5 s does the reset. An empty tree can still be bought back, as
+first press shows the cost on a label, and a second within 5 s does the reset. The second press counts only from the same walker at the price shown; a changed price asks again. The prompt and label end when it expires, or when the station stops being that walker's selected target, either by walking out of reach or because something else is now nearer. An empty tree can still be bought back, as
 the script allows; whether the game's dialog stops that was not read. Reach is 350 uu, as for lootables.
 

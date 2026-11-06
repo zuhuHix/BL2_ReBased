@@ -16,6 +16,8 @@ struct FOpenWillowWeaponItem;
 
 // Procedural scope mask and reticle for recipes whose selected sight carries a
 // first-person particle component. Its match to the stock scope presentation is UNVERIFIED.
+enum class EOpenWillowUseTarget : uint8; // OpenWillowInteractive.h
+
 UCLASS()
 class OPENWILLOW_API UOpenWillowScopeOverlay : public UUserWidget
 {
@@ -43,6 +45,12 @@ public:
     class UOpenWillowInventory* GetInventory() { return Inventory; }
     const class UOpenWillowInventory* GetInventory() const { return Inventory; }
     class UOpenWillowSkills* GetSkills() const { return Skills; }
+    // Every use target in its own reach now (OpenWillowInteractive.h), and the nearest dropped item.
+    struct FOpenWillowUseDistances UseDistances(class AOpenWillowInventoryPickup*& OutPickup) const;
+    // Which one the press would go to first.
+    EOpenWillowUseTarget NearestUseTarget() const;
+    // The use key's own path, for tests that must go through its routing.
+    void PressUseKey() { PickupNearby(); }
     // Puts backpack item Item into weapon slot Slot and draws it (inventory screen).
     bool EquipItem(int32 Item, int32 Slot);
     void SetInventoryPresentation(bool bShow);
