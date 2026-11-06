@@ -333,14 +333,14 @@ void AOpenWillowWalker::TickShield(float Now)
         bStandInShieldRuleRead = true;
         const FString File = FPaths::ConvertRelativePathToFull(
             FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/slice/stand_in_shield.json")));
-        FString Text, Error;
-        if (!FFileHelper::LoadFileToString(Text, *File))
+        FString Error;
+        if (StandInShieldRule.LoadFile(File, Error))
         {
-            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: no %s, so a shield without a capacity stat protects nothing"), *File);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya shield: stand-in rule read from %s"), *File);
         }
-        else if (!StandInShieldRule.Parse(Text, Error))
+        else
         {
-            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: %s ignored: %s"), *File, *Error);
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: %s"), *Error);
         }
     }
     const FShieldStats Stats = ReadShieldStats(Item, StandInShieldRule);

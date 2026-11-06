@@ -20,6 +20,8 @@ struct OPENWILLOW_API FOpenWillowStandInShieldRule
     float CapacityAt(int32 Level) const;
     // False, leaving the rule unset, unless the text holds all three numbers in range; OutError says why.
     bool Parse(const FString& Json, FString& OutError);
+    // Load and Parse, nothing else. False, leaving the rule unset, when the file is missing or bad; OutError says why and names the path.
+    bool LoadFile(const FString& Path, FString& OutError);
 };
 
 // Every number the survival rules read, in one struct. `Base` is what the data gives (level formula, equipped shield,

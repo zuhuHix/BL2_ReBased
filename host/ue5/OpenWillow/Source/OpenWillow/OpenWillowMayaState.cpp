@@ -2,6 +2,7 @@
 #include "OpenWillowMayaState.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/FileHelper.h"
 #include "OpenWillowWalker.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -32,6 +33,23 @@ bool FOpenWillowStandInShieldRule::Parse(const FString& Json, FString& OutError)
     AtLevel = int32(Level);
     Capacity = float(InCapacity);
     Growth = float(InGrowth);
+    return true;
+}
+
+bool FOpenWillowStandInShieldRule::LoadFile(const FString& Path, FString& OutError)
+{
+    *this = FOpenWillowStandInShieldRule();
+    FString Text, Error;
+    if (!FFileHelper::LoadFileToString(Text, *Path))
+    {
+        OutError = FString::Printf(TEXT("no %s, so a shield without a capacity stat protects nothing"), *Path);
+        return false;
+    }
+    if (!Parse(Text, Error))
+    {
+        OutError = FString::Printf(TEXT("%s ignored, so a shield without a capacity stat protects nothing: %s"), *Path, *Error);
+        return false;
+    }
     return true;
 }
 
