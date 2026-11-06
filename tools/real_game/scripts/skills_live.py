@@ -172,9 +172,67 @@ def sl_set_grades(grades):
     return {"status": "done", "rows": rows}
 
 
+def _active_skills():
+    """The running skills, from SkillEffectManager.ActiveSkills: [(definition, grade)], or None when that cannot be read."""
+    try:
+        rows = []
+        for skill in get_pc().GetSkillManager().ActiveSkills:
+            if skill is None or int(skill.SkillState) == 0:  # ESkillState: Deactivated 0
+                continue
+            grade = skill.Grade
+            if not isinstance(grade, int):
+                return None
+            rows.append((skill.Definition, grade))
+        return rows
+    except Exception:
+        return None
+
+
+def _running_grades(defn):
+    """Grades of this skill's running instances, or None when the running state cannot be read."""
+    rows = _active_skills()
+    return None if rows is None else [grade for definition, grade in rows if definition == defn]
+
+
+def _running_matches(running, grade):
+    """A skill's tree grade and what is running agree: nothing runs at 0; a running one (Skill.UpdateGrade keeps it at 1 or more)
+    has this grade. A skill may have no instance at a positive grade: kill skills and augments run only when they are switched on."""
+    return all(g == grade for g in running) if grade > 0 else not running
+
+
+def _tree_active():
+    """{path: grade} of the running skills that belong to Maya's tree, or None when that cannot be read."""
+    tree, rows = _tree(), _active_skills()
+    if tree is None or rows is None:
+        return None
+    out = {}
+    for definition, grade in rows:
+        if isinstance(_read_grade(tree, definition).get("grade"), int):
+            out[definition._path_name()] = grade
+    return out
+
+
+def sl_mark_baseline():
+    """What runs before any step changes a grade; sl_unexpected_active compares with it."""
+    SL["baseline"] = _tree_active()
+    return {"readable": SL["baseline"] is not None, "skills": SL["baseline"]}
+
+
+def sl_unexpected_active(keys=()):
+    """Running tree skills that the save did not start and this step did not ask for: an earlier step's skill could be in the reading."""
+    active, baseline = _tree_active(), SL.get("baseline")
+    if active is None or baseline is None:
+        return {"readable": False, "unexpected": []}
+    wanted = {defn._path_name() for defn, _how in (sl_resolve(key) for key in keys) if defn is not None}
+    return {"readable": True, "unexpected": [p for p, g in active.items() if p not in wanted and baseline.get(p) != g]}
+
+
 def sl_restore_grades():
-    """Puts back every grade recorded by sl_set_grades (the value read before the first change). A skill whose original
-    could not be read is reported as not restorable and kept for the next try."""
+    """Puts back every grade recorded by sl_set_grades (the value read before the first change), and checks both places: the tree
+    and the running skill. The tree alone is not enough: an active skill keeps a grade of at least 1 when the tree goes back to 0, so
+    that one is deactivated. Status: "restored" (both agree), "not restored" (they do not), or "tree only" (the tree is back but
+    the running state cannot be read, so this says nothing about it). A skill whose original could not be read is reported as
+    not restorable; those and "not restored" are kept for the next try."""
     tree = _tree()
     rows, keep = [], {}
     for path, before in list(SL["originals"].items()):
@@ -190,9 +248,16 @@ def sl_restore_grades():
             continue
         try:
             after = _apply_grade(tree, defn, grade)
-            confirmed = after.get("grade") == grade
-            rows.append({"path": path, "status": "restored" if confirmed else "not restored", "grade": grade, "after": after})
-            if not confirmed:
+            running = _running_grades(defn)
+            if grade == 0 and running:
+                get_pc().GetSkillManager().DeactivateSkill(get_pc(), defn)
+                running = _running_grades(defn)
+            status = ("not restored" if after.get("grade") != grade
+                      else "tree only" if running is None
+                      else "restored" if _running_matches(running, grade)
+                      else "not restored")
+            rows.append({"path": path, "status": status, "grade": grade, "after": after, "running": running})
+            if status == "not restored":
                 keep[path] = before
         except Exception as error:
             rows.append({"path": path, "status": "error", "error": repr(error)[:200]})
