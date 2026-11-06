@@ -217,8 +217,8 @@ Test setup (only with `-owcombatshots`): level 36 unless `-owlevel` is given,
 so the level-30 recipes and the level-36 gear manifest item equip; slots take
 one weapon per ammo type first; demo purse and reserves are set (made up); the
 run sends the page Down, E, F key events and writes `OWCombat_7b_InventoryCompare`
-and `OWCombat_7c_InventoryInspect`, then fires slot 2 from a 2-round magazine
-to exercise reload. This also changes the level in the Skills capture.
+and `OWCombat_7c_InventoryInspect`, then closes the page and fires slot 2 from a 2-round magazine
+to exercise reload (the log line `combat firing exercise` says what it did). This also changes the level in the Skills capture.
 
 Automated (this pass): UE 5.8 build of `OpenWillowEditor` succeeded;
 `-owinventoryselftest` (synthetic add, duplicate ID, equip, locked-slot
@@ -1466,7 +1466,7 @@ not traced, is that the movie's TweenCards rewrites the card's scales after the 
 The focus view's rows are spaced slightly wider, so the last empty cell lands where it does in D2g. Inspect card fit. All UNVERIFIED beyond D20.
 
 **PR review.** Nothing fires while a status page hides the weapon, whatever opened the page: the page's opening lets go of the trigger and ends a burst (UI-only input never delivers the key-up), and the firing paths check it too.
-The action suite gains three steps: Missions and Map hide the arms and gun and show no menu Maya, no shot fires under the Map, and closing restores them (53 steps). Host calls, not the keys to those pages.
+The action suite gains three steps: Missions and Map hide the arms and gun and show no menu Maya, no shot fires under the Map, and closing restores them (53 steps). Host calls, not the keys to those pages. `FireOnce` is asked before, under and after the pages with the same gun and a full magazine, so a refusal under the page can only be the page. Without a gun in hand the steps are NOT_RUN.
 
 **Still open, in the last critic's order.**
 1. Gun paint and thumbnails (gunlook lane); static thumbnails come from the offline renderer.

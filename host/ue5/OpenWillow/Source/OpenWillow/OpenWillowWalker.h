@@ -369,6 +369,7 @@ private:
     TWeakObjectPtr<class AOpenWillowInventoryPreviewActor> GunShotPreview;
     float NextShotAt = 0;
     bool bReloading = false;
+    int32 CombatShotsBeforeFiring = 0; // -owcombatshots: the shot count when its firing exercise starts
     float ReloadEndsAt = 0;
     float ReloadRefillAt = 0;
     float ReloadCompletePercent = 1.f; // missing view-model field preserves the old full-duration refill

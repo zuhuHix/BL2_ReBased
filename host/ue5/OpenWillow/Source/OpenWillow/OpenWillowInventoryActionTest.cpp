@@ -1383,8 +1383,13 @@ void UOpenWillowInventoryActionTest::BuildSteps()
     Pre(InventoryOpenPre, false);
 
     // Missions and Map hide the first-person arms and gun, show no menu Maya, allow no shot, and closing brings it all back.
-    // Host calls, not keys: this checks what the host does with a page open, not the route to it.
-    const TSharedRef<bool> bArmsBefore = MakeShared<bool>(false), bWeaponBefore = MakeShared<bool>(false);
+    // Host calls, not keys: this checks what the host does with a page open, not the route to it. FireOnce is asked three times,
+    // with the same gun and a full magazine, so the page is the only thing that changes: a shot before, none under it, a shot after.
+    const TSharedRef<bool> bArmsBefore = MakeShared<bool>(false), bFiredBefore = MakeShared<bool>(false);
+    const auto StockMagazine = [this]
+    {
+        if (FOpenWillowWeaponItem* Held = Walker->GetInventory()->ActiveWeaponMutable()) Held->MagazineLeft = -1; // full
+    };
     const auto FirstPersonHidden = [this](bool bPageOpen, const TCHAR* Page, FString& D)
     {
         int32 Displays = 0;
@@ -1394,33 +1399,46 @@ void UOpenWillowInventoryActionTest::BuildSteps()
         return bPageOpen && !bArms && !bWeapon && Displays == 0;
     };
     Add(TEXT("missions_hides_first_person"), false,
-        [this, bArmsBefore, bWeaponBefore]
+        [this, bArmsBefore, bFiredBefore, StockMagazine]
         {
             *bArmsBefore = Walker->AreArmsShown();
-            *bWeaponBefore = Walker->IsWeaponShown();
+            StockMagazine();
+            *bFiredBefore = Walker->FireOnce();
             Hud->ToggleMissions();
         },
-        [this, FirstPersonHidden](FString& D) { return FirstPersonHidden(Hud->IsMissionsOpen(), TEXT("missions"), D); }, 30.f, false, 1.f);
+        [this, FirstPersonHidden, bFiredBefore](FString& D)
+        {
+            if (!*bFiredBefore) { D = TEXT("control: the gun did not fire before the page opened"); return false; }
+            return FirstPersonHidden(Hud->IsMissionsOpen(), TEXT("missions"), D);
+        }, 30.f, false, 1.f);
     Pre([this](FString& Why)
         {
             if (Hud->IsSkillsOpen()) { Why = TEXT("a status page is still open"); return false; }
             if (!Walker->AreArmsShown()) { Why = TEXT("no first-person arms to hide (run without the arm meshes)"); return false; }
+            // The suite may have ended holding nothing: draw whatever is equipped.
+            for (int32 Slot = 0; Slot < UOpenWillowInventory::SlotCount && !Walker->IsWeaponShown(); ++Slot)
+                if (const FOpenWillowWeaponItem* Item = Walker->GetInventory()->SlotItem(Slot)) Walker->DrawItemById(UOpenWillowInventory::StableId(*Item));
+            if (!Walker->IsWeaponShown() || !Walker->GetInventory()->ActiveWeapon()) { Why = TEXT("no gun in hand to test firing with (no weapon or no mesh in this run's data)"); return false; }
             return true;
         }, false);
     Add(TEXT("map_hides_first_person_no_shot"), false, [this] { Hud->ToggleMap(); },
-        [this, FirstPersonHidden](FString& D)
+        [this, FirstPersonHidden, StockMagazine](FString& D)
         {
             if (!FirstPersonHidden(Hud->IsMapOpen(), TEXT("map"), D)) return false;
+            StockMagazine();
             if (Walker->FireOnce()) { D += TEXT(": a shot was fired under the page"); return false; }
             return true;
         }, 30.f, false, 1.f);
     Pre([this](FString& Why) { if (!Hud->IsMissionsOpen()) { Why = TEXT("the Missions page is not open"); return false; } return true; }, false);
     Add(TEXT("status_page_close_restores_first_person"), false, [this] { Hud->CloseSkills(); },
-        [this, bArmsBefore, bWeaponBefore](FString& D)
+        [this, bArmsBefore, StockMagazine](FString& D)
         {
             const bool bArms = Walker->AreArmsShown(), bWeapon = Walker->IsWeaponShown();
-            D = FString::Printf(TEXT("arms %d, wanted %d; weapon %d, wanted %d"), bArms ? 1 : 0, *bArmsBefore ? 1 : 0, bWeapon ? 1 : 0, *bWeaponBefore ? 1 : 0);
-            return !Hud->IsSkillsOpen() && bArms == *bArmsBefore && bWeapon == *bWeaponBefore;
+            D = FString::Printf(TEXT("arms %d, wanted %d; weapon %d, wanted 1"), bArms ? 1 : 0, *bArmsBefore ? 1 : 0, bWeapon ? 1 : 0);
+            if (Hud->IsSkillsOpen() || bArms != *bArmsBefore || !bWeapon) return false;
+            StockMagazine();
+            if (!Walker->FireOnce()) { D += TEXT(": the gun does not fire again after the page closed"); return false; }
+            return true;
         }, 6.f, false, 1.f);
     Pre([this](FString& Why) { if (!Hud->IsMapOpen()) { Why = TEXT("the Map page is not open"); return false; } return true; }, false);
 }

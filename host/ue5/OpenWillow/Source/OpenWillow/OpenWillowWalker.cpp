@@ -2427,13 +2427,32 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     case 20: if (Now < 20.2f) return; SendInventoryKey(TEXT("e")); SendInventoryKey(TEXT("f")); break;
     case 21: if (Now < 21.2f) return; Shot(TEXT("7c_InventoryInspect")); break;
     case 22: if (Now < 21.6f) return; SendInventoryKey(TEXT("f")); break;
-    // Exercise the real reload path: hold the slot-2 gun with a nearly empty
-    // magazine, fire until it auto-reloads from the pool, then log the state.
-    case 23: if (Now < 22.f) return; SelectSlot(1);
+    // Exercise the real reload path: close the page (nothing fires under a status page), hold the slot-2 gun with a nearly
+    // empty magazine, fire, then log the state and what the firing did.
+    case 23:
+    {
+        if (Now < 22.f) return;
+        const APlayerController* PC = Cast<APlayerController>(Controller);
+        const AOpenWillowMayaHUD* HUD = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
+        if ((HUD && HUD->IsInventoryOpen()) || IsInventoryWidgetOpen()) ToggleInventory();
+        SelectSlot(1);
         if (FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable()) Held->MagazineLeft = 2;
-        FirePressed(); break;
-    case 24: if (Now < 30.f) return; FireReleased();
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory snapshot after firing: %s"), *Inventory->StateJson(Skills->GetLevel())); break;
+        CombatShotsBeforeFiring = OpenWillowFiring::Counts.Shots;
+        FirePressed();
+        break;
+    }
+    case 24:
+    {
+        if (Now < 30.f) return;
+        FireReleased();
+        const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        const int32 Magazine = Held ? UOpenWillowInventory::MagazineLeft(*Held) : -1;
+        const int32 Fired = OpenWillowFiring::Counts.Shots - CombatShotsBeforeFiring;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow combat firing exercise: shots=%d magazine 2 -> %d changed=%d reloading=%d%s"), Fired, Magazine,
+            Magazine != 2 ? 1 : 0, bReloading ? 1 : 0, Fired > 0 ? TEXT("") : TEXT(" FAILED: nothing fired"));
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory snapshot after firing: %s"), *Inventory->StateJson(Skills->GetLevel()));
+        break;
+    }
     case 25: if (Now < 30.3f) return;
         if (FParse::Param(FCommandLine::Get(), TEXT("owskillshots"))) ToggleSkills();
         else if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
