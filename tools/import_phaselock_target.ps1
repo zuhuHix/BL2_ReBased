@@ -7,8 +7,9 @@ param(
     [string]$Python = 'python',
     # prepare: identity, UModel exports, editor job; mesh: editor import of mesh/materials + reference pose;
     # anims: MD5 clips -> bone tracks, then the editor creates the AnimSequences; zone: the zone-colour material
-    # (tools/phaselock_target_editor.py). 'all' runs them in order.
-    [ValidateSet('all', 'prepare', 'mesh', 'anims', 'zone')][string[]]$Steps = @('all')
+    # (tools/phaselock_target_editor.py); attach: the worn static meshes with that material (tools/phaselock_target_attach_editor.py),
+    # then their placement in host_target.json. 'all' runs them in order.
+    [ValidateSet('all', 'prepare', 'mesh', 'anims', 'zone', 'attach')][string[]]$Steps = @('all')
 )
 # AI-assisted. Imports a stock Phaselock target (the bullymong, tools/prepare_phaselock_target.py) into the ignored UE
 # content folder /Game/OpenWillow/Characters/PhaselockTarget, reusing the slice NPC editor script
@@ -65,3 +66,4 @@ if (& $run 'prepare') { Invoke-Tool 'all' }
 if (& $run 'mesh') { Invoke-Editor 'npcs' }
 if (& $run 'anims') { Invoke-Tool 'anims'; Invoke-Editor 'anims' }
 if (& $run 'zone') { Invoke-Editor 'zone' (Join-Path $PSScriptRoot 'phaselock_target_editor.py') }
+if (& $run 'attach') { Invoke-Editor 'attach' (Join-Path $PSScriptRoot 'phaselock_target_attach_editor.py'); Invoke-Tool 'attachments' }

@@ -3809,3 +3809,13 @@ AI-assisted (Claude). The range suite gains `crit_minds_eye`: a gun hit on an en
 `AOpenWillowWalker::ApplyShotDamage` does 2.0 x its damage untrained and 2.5 x at Mind's Eye 5; progression is restored in the
 same tick. It may SKIP without the local skill effects file. This checks the host's rule (the event's bonus scaled by the
 skill), not the game's crit damage, which stays UNVERIFIED until the live session. Test only; no behaviour change.
+
+## 2026-11-06: the Phaselock target can wear the Adult's six attachments; their placement is open (maya lane)
+
+AI-assisted (Claude). Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "The Adult's worn attachments". Host and tool change, no parsing change.
+
+- The tool reads the default-on static meshes from the Adult's body composition, the editor step imports them with the body's zone material, and the host attaches them to their bones. Without the local import the host keeps the bare body.
+- The list and material come from the archetype and were not read live on an Adult.
+- Placement uses the citizens' bone-frame rule and is UNVERIFIED on this pawn. An offline render speaks against it for the back piece, and no other simple frame fits all pieces. A live matrix read is the proposed check.
+- The attachments do not explain the width gap. The default facing stays yaw +180.
+
