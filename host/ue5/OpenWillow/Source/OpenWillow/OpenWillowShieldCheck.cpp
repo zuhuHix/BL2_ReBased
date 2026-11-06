@@ -4,6 +4,7 @@
 // Numbers here are read back from the host; docs/verification/COMBAT_DOWN_RESPAWN.md says what this does and does not show.
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Misc/Guid.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowMayaState.h"
 #include "OpenWillowSkills.h"
@@ -43,7 +44,8 @@ void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Playe
         UOpenWillowInventory* Inventory = Maya.GetInventory();
         const int32 Level = Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 1;
         FOpenWillowGearItem Gear;
-        Gear.Id = TEXT("owshieldcheck_standin");
+        // A new id each run: the inventory suffixes an id it already holds, and the equip below must name this item.
+        Gear.Id = FString::Printf(TEXT("owshieldcheck_%s"), *FGuid::NewGuid().ToString());
         Gear.ItemType = TEXT("shield");
         Gear.Name = TEXT("Shield Check Stand-in");
         Gear.Level = Level;
@@ -78,7 +80,7 @@ void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Playe
         AfterHit = Maya.GetShield();
         UE_LOG(LogTemp, Display, TEXT("OWSHIELDCHECK hit shield %.1f of %.1f, health %.1f"), AfterHit, Capacity, Maya.GetHealth());
         Shot(TEXT("hit"));
-        if (AfterHit >= Capacity || Maya.GetHealth() < HealthBefore)
+        if (AfterHit >= Capacity || Maya.GetHealth() != HealthBefore)
         {
             Finish(false, FString::Printf(TEXT("after the hit shield %.1f, health %.1f (was %.1f)"), AfterHit, Maya.GetHealth(), HealthBefore));
             return;
@@ -88,7 +90,7 @@ void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Playe
     }
     else
     {
-        UE_LOG(LogTemp, Display, TEXT("OWSHIELDCHECK recharge shield %.1f of %.1f"), Maya.GetShield(), Capacity);
+        UE_LOG(LogTemp, Display, TEXT("OWSHIELDCHECK recharge shield %.1f of %.1f, health %.1f"), Maya.GetShield(), Capacity, Maya.GetHealth());
         Shot(TEXT("recharge"));
         const bool bRose = Maya.GetShield() > AfterHit;
         Finish(bRose, bRose ? TEXT("full, hit and recharged") : TEXT("the shield did not recharge"));
