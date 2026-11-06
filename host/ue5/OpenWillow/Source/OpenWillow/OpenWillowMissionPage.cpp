@@ -78,7 +78,6 @@ void FOpenWillowMissionPage::Preload()
                 if (Message == TEXT("OWMISSIONREADY")) bReady = true;
                 else if (Message.StartsWith(TEXT("OWMISSIONPAGE "))) Report = Message.RightChop(14);
             });
-    // Never hit-tested: nothing on the page takes the mouse.
     RootWidget = SNew(SBox).Visibility(EVisibility::Hidden)[Browser.ToSharedRef()];
     GEngine->GameViewport->AddViewportWidgetContent(RootWidget.ToSharedRef(), MissionPageZOrder);
 }
@@ -86,7 +85,8 @@ void FOpenWillowMissionPage::Preload()
 void FOpenWillowMissionPage::Show(APlayerController* PC)
 {
     Preload();
-    if (RootWidget.IsValid()) RootWidget->SetVisibility(EVisibility::HitTestInvisible);
+    if (RootWidget.IsValid()) RootWidget->SetVisibility(EVisibility::Visible);   // as the shop and the status pages; the cursor is hidden and the page takes no mouse
+    Report.Reset();   // what the page says from here on is about this open
     bShown = true;
     if (!KeyProcessor.IsValid() && FSlateApplication::IsInitialized())
     {
