@@ -147,16 +147,17 @@ The full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/
 **State:** The inventory and status pages run in the host, with the game's own card movies. Card fit and some numbers still differ from the game.
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-game-2026-10-21.jpg" width="60%" alt="Game: inventory page">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-game-2026-10-21.jpg" width="48%" alt="Game: inventory page">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-11-06-r1.jpg" width="48%" alt="BL2_ReBased: inventory page, 2026-11-06">
 </p>
 
-<p align="center"><sub>The game's inventory page (2026-10-21). The host's inventory page is being recaptured on a fair baseline, so no host comparison is shown yet. The earlier host frames are withdrawn: their worktree data was missing, so that comparison was unfair, and the gap is bigger than those frames suggested.</sub></p>
+<p align="center"><sub>Left: the game's inventory page (2026-10-21). Right: BL2_ReBased on the same view (2026-11-06). The guns currently render near-white in this view, a known paint and preview problem.</sub></p>
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-10-09.jpg" width="60%" alt="Host inventory, 2026-10-09">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-10-09.jpg" width="48%" alt="Before: host inventory, 2026-10-09">
 </p>
 
-<p align="center"><sub>Host inventory, 2026-10-09: an older frame, silhouettes for guns, test money values. A current frame is coming.</sub></p>
+<p align="center"><sub>Before: the host's inventory page on 2026-10-09, an older frame. Guns are silhouettes and the money values are test values.</sub></p>
 
 ### Vendors and lootables
 
@@ -170,7 +171,7 @@ The full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/
 
 ## Where things stand
 
-*Updated 2026-11-06, from `main` at `dee84f6`. Pictures are from the progress gallery, and each one is dated.*
+*Updated 2026-11-06. Pictures are from the progress gallery, and each one is dated.*
 
 **Short version:** there's no game to play yet. The Sanctuary slice is a partial developer prototype: it runs in a developer harness, on stand-ins, and most of it has not been compared with the original game. The vending shop is not complete: the gun machines' stock and currency, and the Ammo Dump and Dr. Zed, are on `main` (#99), but lootables are an open PR (#105).
 
@@ -238,7 +239,7 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 - **Phase 5 · Fill it out.** The remaining ~79 maps and 5 Vault Hunters, plus the whole campaign with your real save file. Not started.
 - **Phase 6 · Beyond.** Co-op, DLC, The Pre-Sequel, mods, level editor. Not started.
 
-I work on this actively, and I'm not promising completion dates. As of 2026-11-06 the repository has 549 commits on `main`, since 2026-09-10. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
+I work on this actively, and I'm not promising completion dates. The project started on 2026-09-10. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
 
 ## Related project: BL2_RTSE
 
@@ -264,6 +265,7 @@ Yes. I take it seriously. The rules are the same as [OpenMW](https://openmw.org/
 2. **No leaked source, and no code copied from the game's binary.** I read file formats, watch what the real game does, and (since 2026-10-01) analyse the game executable on my own machine to understand how its native code behaves. Decompiler output and analysis databases are game-derived data and stay out of this repository; the code in it is written from understanding, not from listings. I'm not a lawyer and none of this is legal advice; the risks are spelled out in [docs/LEGAL.md](docs/LEGAL.md).
 3. **You need your own copy of BL2.** The engine refuses to start without it, and never modifies your install.
 4. **I don't make money from this.** No paid builds, no premium anything. Ever. It's a passion project.
+5. **Screenshots.** The git tree never holds screenshots of loaded game content. A small set of comparison screenshots, reviewed before upload, is published as assets on the `progress-gallery` prerelease, outside the tree. No game files or extracted assets are ever published, and any gallery asset is removed at the rights holder's request. This states what the project does, not a legal conclusion. Full scope: [docs/LEGAL.md](docs/LEGAL.md).
 
 Full policy: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE). Covers my code, nothing else.
 
