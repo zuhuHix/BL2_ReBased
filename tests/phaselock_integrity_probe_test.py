@@ -64,6 +64,18 @@ def test_assets_list_the_mesh_materials_lod_and_what_is_attached():
 def test_assets_survive_a_mesh_without_those_fields():
     row = load()['_asset_row'](Obj(), Obj())
     assert row['attachments'] == [] and row['components'] == []
+    # Failed reads are JSON null, not an error-marker string.
+    assert row['skeletal_mesh'] is None and row['materials'] is None and row['lod']['PredictedLODLevel'] is None
+
+
+def test_null_helper_and_rotation_reads():
+    ns = load()
+    assert ns['_null'](lambda: 1 / 0) is None and ns['_null'](lambda: 5) == 5
+    assert ns['_r'](None) is None
+    source = SCRIPT.read_text(encoding='utf-8')
+    for field in ('"rotation": plain(_null(', '"mesh_rotation": plain(_null(', '"mesh_scale": _r(_null(', '"mesh_scale3d": plain(_null(',
+                  '"draw_scale": _r(_null(', '"bounds_radius": _r(_null('):
+        assert field in source, field
 
 
 def injure_setup(ns):
