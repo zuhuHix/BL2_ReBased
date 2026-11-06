@@ -11,6 +11,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Dom/JsonObject.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/DamageEvents.h"
 #include "Engine/World.h"
@@ -1059,6 +1060,51 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
         TestCheck(TEXT("crit_hit"), FMath::IsNearlyEqual(Delta, 20.f, 0.01f) && bCrit,
             FString::Printf(TEXT("health delta %.2f, crit=%d"), Delta, bCrit ? 1 : 0));
         TestCheck(TEXT("popup_crit"), bCrit, FString::Printf(TEXT("last popup critical=%d"), bCrit ? 1 : 0));
+        // Mind's Eye on a real crit (skills lane): a gun hit on the head through the shared dispatcher does the event's bonus,
+        // 2.0 untrained and 2.0 x (1 + 0.05 x 5) = 2.5 at grade 5. Progression is put back in this same tick. 1 point of damage
+        // keeps the enemy's health for the later steps. SKIP without the local skill effects file.
+        AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(Pawn);
+        UOpenWillowSkills* Tree = Maya ? Maya->GetSkills() : nullptr;
+        const FOpenWillowSkillEffects::FSkill* MindsEye = Tree ? Tree->GetEffects().Find(TEXT("MindsEye")) : nullptr;
+        int32 Branch = 0, Tier = 0, Cell = 0;
+        if (!MindsEye || !Tree->FindSkill(MindsEye->Id, Branch, Tier, Cell))
+        {
+            TestSkip(TEXT("crit_minds_eye"), TEXT("no skill effects data or no Mind's Eye in the tree"));
+            TestStep = 5;
+            return;
+        }
+        auto GunCrit = [&]()
+        {
+            FHitResult Hit;
+            const FVector At = Crit->GetComponentLocation();
+            const FVector Direction = (FVector(At.X, At.Y, 0.f) - FVector(TestSpot.X, TestSpot.Y, 0.f)).GetSafeNormal();
+            Hit.Component = Crit;
+            Hit.Location = At;
+            Hit.ImpactPoint = At - Direction * 5.f;
+            FOpenWillowHitEvent Event;
+            Event.Kind = EOpenWillowHitKind::Direct;
+            Event.Source = EOpenWillowHitSource::Bullet;
+            Event.WeaponId = TEXT("test:crit_minds_eye");
+            Event.Damage = 1.f;
+            Event.DamageType = TEXT("GD_Impact.DamageType.DmgType_Normal");
+            Event.Direction = Direction.IsNearlyZero() ? FVector(1.f, 0.f, 0.f) : Direction;
+            Event.Origin = FVector(TestSpot.X, TestSpot.Y, At.Z);
+            const float HealthBefore = Enemy0->GetHealth();
+            Maya->ApplyShotDamage(Enemy0, Event, Hit);
+            return HealthBefore - Enemy0->GetHealth();
+        };
+        const TSharedPtr<FJsonObject> Saved = Tree->ProgressionJson();
+        Tree->ResetTree();
+        const float Untrained = GunCrit();
+        Tree->SetLevel(10);   // 6 points: the action skill, then Mind's Eye x 5 (tier 0 of its branch)
+        FString Why;
+        bool bSpent = Tree->TrySpend(-1, -1, -1, Why);
+        for (int32 Grade = 0; Grade < 5; ++Grade) bSpent = bSpent && Tree->TrySpend(Branch, Tier, Cell, Why);
+        const float Trained = GunCrit();
+        FString RestoreError;
+        const bool bRestored = Tree->RestoreProgression(*Saved, RestoreError);
+        TestCheck(TEXT("crit_minds_eye"), bSpent && bRestored && FMath::IsNearlyEqual(Untrained, 2.f, 0.01f) && FMath::IsNearlyEqual(Trained, 2.5f, 0.01f),
+            FString::Printf(TEXT("1 damage: untrained %.2f, Mind's Eye 5 %.2f, spent=%d %s, restored=%d %s"), Untrained, Trained, bSpent ? 1 : 0, *Why, bRestored ? 1 : 0, *RestoreError));
         TestStep = 5;
         return;
     }
