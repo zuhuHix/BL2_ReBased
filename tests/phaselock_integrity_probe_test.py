@@ -253,7 +253,7 @@ def test_a_shield_row_counts_only_for_its_own_item_level_and_a_fresh_read():
     world['max'] = 900.0
     read = ns['pi_shield_read']()
     assert read['counts'] is True and read['max_strength'] == 900.0
-    assert 'Test30' in str(ns['pi_shield_restore']()['key'] or '') or True
+    ns['pi_shield_restore']()
     world['max'] = 181.0
     assert ns['pi_shields_check']()['ok'] is True and world['destroyed'] == ['Test30']
 
