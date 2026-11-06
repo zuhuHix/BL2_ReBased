@@ -72,6 +72,7 @@ Invoke-OwUeLocked -Owner 'run_ue_flash_hud' -Body {
     # Crashed or stalled: stop what this run started, nothing else, and fail. A server this run did not start is left running.
     $stopped = $exited -or (Stop-OwStartedProcess -Process $process -Expected @($project))
     if ($server) { [void](Stop-OwStartedProcess -Process $server -Expected @('serve.py', "--port $Port")) }
+    Write-OwLeftChildren -Parent $process.Id
     if ($exited) { throw "run_ue_flash_hud: the game (pid $($process.Id)) exited with code $($process.ExitCode)." }
     throw "run_ue_flash_hud: the game (pid $($process.Id)) was still running after $limit s: " + $(if ($stopped) { 'stalled, stopped.' } else { 'stalled, and NOT stopped.' })
 }

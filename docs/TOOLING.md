@@ -790,7 +790,7 @@ With `-GameWindow` such a run is stopped after 20 minutes (an estimate, not meas
 command line, and fails with a nonzero exit; a game that exits with a nonzero code (a crash) gets the same. After a clean exit a server stays up for the next run. `-TimeoutSeconds N` sets the limit and `-TimeoutSeconds 0` removes it. Someone playing with `-GameWindow` and no
 such switch gets no limit, and without `-GameWindow` there is never one. The switches are a list in `tools/run_limit.ps1`, so a new driver has to be added there.
 
-Tests, with no editor: `python tests/run_limit_test.py` (the rules) and `python tests/run_ue_flash_hud_test.py` (the real launcher, a stand-in editor and the real `serve.py`: stall, crash, clean exit, a server it did not start, the lock released each time; it skips while a real editor runs).
+Tests, with no editor: `python tests/run_limit_test.py` (the rules) and `python tests/run_ue_flash_hud_test.py` (the real launcher, a stand-in editor and the real `serve.py`: stall, crash, clean exit, a server it did not start, the lock released each time). With a real editor running nothing can be tested: it prints `NOT RUN: an editor is running` and exits nonzero unless `--allow-skip` is given.
 
 The script starts `tools/hud_overlay/serve.py` on port 8767 if it is not
 running and launches Sanctuary as Maya with `-owflashhud=<url>` and
