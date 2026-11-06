@@ -38,6 +38,7 @@
     contextMenu: 'off', allowScriptAccess: true };
 </script>
 <!-- Before ruffle.js: hud_warp.js asks for Ruffle's WebGL context with preserveDrawingBuffer so it can be read. -->
+<script src="movie_guard.js"></script>
 <script src="hud_warp.js"></script>
 <script src="ruffle/ruffle.js"></script>
 <script src="action_skill.js"></script>
@@ -50,7 +51,7 @@
 <script>
   const player = window.RufflePlayer.newest().createPlayer();
   document.body.appendChild(player);
-  player.ruffle().load({ url: 'UI_HUD/harness.swf', base: 'UI_HUD/' });
+  window.owMovieGuard.load(player, { url: 'UI_HUD/harness.swf', base: 'UI_HUD/' }, 'HUD', ['UI_HUD/HUD.swf']); // without it the page never reports ready and the host keeps its own HUD
 
   let ready = false;
   let pending = {};

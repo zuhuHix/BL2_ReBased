@@ -106,11 +106,12 @@ check('Level requirement as SetItemCardEx sets it: shown above level 1, not met 
 check('A frame whose card clip never appears stops polling and logs why', () => {
   let now = 0, timers = 0;
   const logs = [];
-  const fakePlayer = {style:{}, ow:() => null, ruffle:() => ({load:() => ({then:ok => ok()})})};
+  const fakePlayer = {style:{}, ow:() => null};
   const ctx = load('/pickup_card.html', {
     console:{log:line => logs.push(line)},
     Date:{now:() => now},
     setTimeout:(f) => { timers++; now += 1000; if (timers < 100) f(); },
+    owMovieGuard:{load:() => ({then:ok => ok(true)})},
     RufflePlayer:{newest:() => ({createPlayer:() => fakePlayer})},
     document:{body:{appendChild(){}}}});
   ctx.owPickupCard.apply({id:'a', x:0.5, y:0.5, level:1, item:{id:'a'}, compare:null});
@@ -118,4 +119,75 @@ check('A frame whose card clip never appears stops polling and logs why', () => 
   assert.ok(logs.some(line => /pickup card movie failed: no .*card1 after 15 s/.test(line)), logs.join(' | '));
 });
 
-console.log(`${passed}/${passed} pickup card checks passed (synthetic items; card size, placement and timing UNVERIFIED)`);
+// The guard itself, with a fake fetch and player: what a missing or broken movie does.
+function guardContext(status, panicAfterLoad = false) {
+  const logs = [], requests = [], timers = [];
+  const panic = {classList:{contains:name => name === 'hidden' ? !panicAfterLoad : false}};
+  const player = {removed:0, loads:0, remove() { this.removed++; }, shadowRoot:{querySelector:() => panic},
+    ruffle() { return {load:() => { player.loads++; return Promise.resolve(); }}; }};
+  const context = vm.createContext({console:{log:line => logs.push(line)}, Promise, setTimeout:f => timers.push(f),
+    fetch:(url, options) => { requests.push([url, options.method]); return Promise.resolve({ok:status(url)}); }});
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/movie_guard.js'), 'utf8'), context);
+  return {context, player, logs, requests, timers};
+}
+const OPTIONS = {url:'UI_Inworld/harness.swf', base:'UI_Inworld/'};
+(async () => {
+  {
+    const g = guardContext(() => false);
+    const found = await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card', ['UI_Inworld/Weapon_Card.swf']);
+    assert.strictEqual(found, false);
+    assert.strictEqual(g.player.loads, 0, 'Ruffle must not be asked to load a missing movie: that is what draws the panel');
+    assert.strictEqual(g.player.removed, 1);
+    assert.ok(g.logs.some(line => /OpenWillow movie missing .*harness\.swf.*pickup card/.test(line)), g.logs.join(' | '));
+    assert.deepStrictEqual(g.requests[0], ['UI_Inworld/harness.swf', 'HEAD']);
+    passed++; console.log('PASS A missing movie is not loaded: the player is removed and the log names the file');
+  }
+  {
+    const g = guardContext(url => url !== 'UI_Inworld/Weapon_Card.swf');
+    assert.strictEqual(await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card', ['UI_Inworld/Weapon_Card.swf']), false);
+    assert.strictEqual(g.player.loads, 0);
+    passed++; console.log('PASS A harness whose real movie is missing is not loaded either');
+  }
+  {
+    const g = guardContext(() => true, true);
+    let lost = 0;
+    assert.strictEqual(await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card', [], () => lost++), true);
+    assert.strictEqual(g.player.removed, 1);
+    assert.strictEqual(lost, 1);
+    passed++; console.log('PASS A movie that shows the panel after loading is removed and the page told');
+  }
+  {
+    const g = guardContext(() => true);
+    assert.strictEqual(await g.context.owMovieGuard.load(g.player, OPTIONS, 'pickup card'), true);
+    assert.strictEqual(g.player.loads, 1);
+    assert.strictEqual(g.player.removed, 0);
+    passed++; console.log('PASS A present movie loads and the player stays');
+  }
+  {
+    // The card page: no movie, no card, no second try, and the state still reaches it harmlessly.
+    let created = 0;
+    const logs = [];
+    const ctx = load('/pickup_card.html', {console:{log:line => logs.push(line)}, Promise,
+      owMovieGuard:{load:() => Promise.resolve(false)},
+      RufflePlayer:{newest:() => ({createPlayer:() => { created++; return {style:{}, ow:() => null}; }})},
+      document:{body:{appendChild(){}}}});
+    const card = {id:'a', x:0.5, y:0.5, level:1, item:{id:'a'}, compare:null};
+    ctx.owPickupCard.apply(card);
+    await Promise.resolve(); await Promise.resolve();
+    ctx.owPickupCard.apply(card);
+    ctx.owPickupCard.apply(null);
+    assert.strictEqual(created, 1);
+    assert.ok(logs.some(line => line === 'OpenWillow pickup card off: no movie'), logs.join(' | '));
+    passed++; console.log('PASS Without its movie the card page shows nothing and does not try again');
+  }
+  {
+    // A page script served without a route is a 404 that takes the page down (round 21 hit this with skill_nav.js).
+    const serve = fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/serve.py'), 'utf8');
+    assert.ok(serve.includes("'/movie_guard.js': 'movie_guard.js'"));
+    for (const page of ['index', 'inventory', 'map', 'missions', 'skills', 'pickup_card'])
+      assert.ok(fs.readFileSync(path.join(__dirname, `../tools/hud_overlay/${page}.html`), 'utf8').includes('<script src="movie_guard.js"></script>'), page);
+    passed++; console.log('PASS Every page that loads a movie has the guard, and serve.py routes it');
+  }
+  console.log(`${passed}/${passed} pickup card checks passed (synthetic items; card size, placement and timing UNVERIFIED)`);
+})().catch(error => { console.error(error); process.exit(1); });

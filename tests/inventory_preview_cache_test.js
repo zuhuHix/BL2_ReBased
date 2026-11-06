@@ -33,7 +33,7 @@ const context = vm.createContext({console:{log(){}, error(){}}, performance:{now
   requestAnimationFrame(){}, setInterval(){}, setTimeout(){}, queueMicrotask(fn){ fn(); }, navigator:{}, location:{},
   document:{getElementById:getById, querySelector:getById, querySelectorAll:()=>[], addEventListener(){}, visibilityState:'visible',
     createElement:element, createElementNS:(ns, tag) => element(tag)},
-  window:{addEventListener(){}, RufflePlayer:{newest:()=>({createPlayer:()=>({ow(){}, ruffle:()=>({load:()=>new Promise(()=>{})})})})}}});
+  window:{addEventListener(){}, owMovieGuard:{load:()=>new Promise(()=>{})}, RufflePlayer:{newest:()=>({createPlayer:()=>({ow(){}, ruffle:()=>({load:()=>new Promise(()=>{})})})})}}});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/menu3d.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/item_card.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/inventory.js'), 'utf8'), context);
