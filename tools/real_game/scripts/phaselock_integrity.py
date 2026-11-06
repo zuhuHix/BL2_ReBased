@@ -19,13 +19,17 @@ RG_OUT (normally the ignored local/realgame/phaselock_integrity).
   * the target's collision flags (actor and cylinder) and Physics;
   * every emitter the skill references and every WillowEmitter whose template names a Phaselock bubble: template, draw
     scale, LifeSpan and its component's InstanceParameters (name, scalar);
-  * the PhaselockLight's brightness.
+  * the PhaselockLight's brightness;
+  * every 0.25 s, key bones' world locations and scales ("bones"), to compare the live pose with the converted clips;
+  * at the start and when the target is first lifted, its live mesh asset, materials, LOD and attached components ("assets").
+- pi_result(): after a cast, which pawns the skill lifted and whether it was the target (the capture retries on that).
 - Hooks (marked on the same clock): RunCustomEvent along the skill's class chain (the hand-orb event), the skill's
   state functions (BeginLifting, LockTarget, StartOutro, ReleaseTarget, EndSkill, InterruptPhaseLock, FizzleOut,
   TargetBlocked), and after a RunCustomEvent the first-person particle components attached to the player's meshes.
 - pi_flags(): for every live AI pawn, what CanPhaseLockTarget answers (read-only script function).
-- pi_injure(): put the player into Fight For Your Life during a lock (one large TakeDamage from the target), returning
-  what the pawn's injured fields read after it. Only for the end of a session: the player then bleeds out.
+- pi_injure(): put the player into Fight For Your Life during a lock: a large TakeDamage from the target, repeated on the
+  tick every 0.5 s of game time until the player is injured (at most 8), because on 2026-11-06 one hit left her at low
+  health and not injured. Refuses when the target is not lifted. Only for the end of a session: the player then bleeds out.
 """
 import json
 import time
@@ -37,7 +41,11 @@ from unrealsdk.hooks import Type, add_hook, remove_hook
 PI_TICK = "WillowGame.WillowGameViewportClient:Tick"
 PI_HOOK = "ow_pi_probe"
 pi = {"file": None, "pawn": None, "ended_at": None, "scan_at": -1.0, "seqs": [], "arms_seqs": [], "hooks": [],
-      "emitter_fields": [], "light_fields": [], "bubble_scan_at": -1.0, "bubbles": []}
+      "emitter_fields": [], "light_fields": [], "bubble_scan_at": -1.0, "bubbles": [],
+      "seen_lifted": set(), "assets_stage": 0, "bones_at": -1.0, "injure": None}
+
+# Key bones of the bullymong skeleton: the torso, the head, the four arms' hands and the feet.
+PI_BONES = ("Hips", "Spine2", "Neck", "Head", "lHand1", "lHand2", "rHand1", "rHand2", "LFoot", "RFoot")
 
 SKILL_FUNCS = ("BeginLifting", "LiftTarget", "LockTarget", "StartOutro", "ReleaseTarget", "EndSkill", "InterruptPhaseLock",
                "FizzleOut", "Fizzled", "TargetBlocked", "TransitionToBubbleFXLoop", "PhaseLockTarget", "SelectTarget",
@@ -193,6 +201,73 @@ def _player(pawn):
     return out
 
 
+def _bone_rows(mesh, pawn):
+    """World location relative to the pawn, and the bone matrix's axis lengths (its scale), for the key bones."""
+    rows = {}
+    origin = pawn.Location
+    for name in PI_BONES:
+        loc = _safe(lambda: mesh.GetBoneLocation(name), None)
+        if loc is None or isinstance(loc, str):
+            rows[name] = None
+            continue
+        row = {"rel": [_r(loc.X - origin.X), _r(loc.Y - origin.Y), _r(loc.Z - origin.Z)]}
+        index = _safe(lambda: mesh.MatchRefBone(name), None)
+        matrix = _safe(lambda: mesh.GetBoneMatrix(index), None) if isinstance(index, int) else None
+        if matrix is not None and not isinstance(matrix, str):
+            row["scale"] = _safe(lambda: [_r((p.X**2 + p.Y**2 + p.Z**2)**0.5) for p in (matrix.XPlane, matrix.YPlane, matrix.ZPlane)])
+        rows[name] = row
+    return rows
+
+
+def _component_row(comp):
+    row = {"class": _safe(lambda: comp.Class.Name), "name": _safe(lambda: comp.Name)}
+    for field in ("SkeletalMesh", "StaticMesh", "Template"):
+        asset = _safe(lambda: getattr(comp, field), None)
+        if asset is not None and not isinstance(asset, str):
+            row[field] = _safe(lambda: asset._path_name())
+    row["hidden"] = _safe(lambda: bool(comp.HiddenGame))
+    return row
+
+
+def _asset_row(pawn, mesh):
+    """What the live pawn draws: its mesh asset, materials, LOD and every attached or owned component that draws something."""
+    row = {"skeletal_mesh": _safe(lambda: mesh.SkeletalMesh._path_name()),
+           "materials": _safe(lambda: [m._path_name() if m else None for m in mesh.Materials]),
+           "lod": {f: _safe(lambda: int(getattr(mesh, f))) for f in ("PredictedLODLevel", "ForcedLodModel", "MinLodModel")},
+           "attachments": [], "components": [],
+           "attached_actors": _safe(lambda: [f"{a.Class.Name}:{a.Name}" for a in pawn.Attached][:32])}
+    for a in _safe(lambda: list(mesh.Attachments), []) or []:
+        comp = _safe(lambda: a.Component, None)
+        if comp is not None and not isinstance(comp, str):
+            row["attachments"].append({"socket": _safe(lambda: str(a.SocketName)), "bone": _safe(lambda: str(a.BoneName)), **_component_row(comp)})
+    for comp in _safe(lambda: list(pawn.Components), []) or []:
+        if comp is not None and not isinstance(comp, str):
+            row["components"].append(_component_row(comp))
+    return row
+
+
+def _hit_player(me, source):
+    zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
+    return plain(_safe(lambda: me.TakeDamage(1000000, source.Controller, me.Location, zero, unrealsdk.find_class("DamageType"))))
+
+
+def _tick_injure(me, now):
+    """Repeat the injure's hit until the player is injured; each attempt goes into the row."""
+    job = pi["injure"]
+    if job is None or me is None or job["done"] or now < job["next"]:
+        return None
+    if _safe(lambda: bool(me.bIsInjured)):
+        job["done"] = True
+        return {"injured_after_hits": job["hits"]}
+    if job["hits"] >= 8:
+        job["done"] = True
+        return {"gave_up_after_hits": job["hits"], "player": _player(me)}
+    _hit_player(me, job["source"])
+    job["hits"] += 1
+    job["next"] = now + 0.5
+    return {"hit": job["hits"], "player": _player(me)}
+
+
 def _on_tick(*_args):
     try:
         if pi["file"] is None:
@@ -254,6 +329,18 @@ def _on_tick(*_args):
                 lights[name] = {"brightness": _r(_safe(lambda: float(light.Brightness))),
                                 "radius": _r(_safe(lambda: float(light.Radius))), "enabled": _safe(lambda: bool(light.bEnabled))}
         row["lights"] = lights
+        if row["lifted"]:
+            pi["seen_lifted"].add(row["lifted"])
+        if now - pi["bones_at"] > 0.25:
+            pi["bones_at"] = now
+            row["bones"] = _bone_rows(mesh, pawn)
+        stage = 2 if row["lifted"] == pawn.Name else 1
+        if pi["assets_stage"] < stage:
+            pi["assets_stage"] = stage
+            row["assets"] = _asset_row(pawn, mesh)
+        injure = _tick_injure(me, now)
+        if injure:
+            row["injure"] = injure
         pi["file"].write(json.dumps(row) + "\n")
     except Exception as error:  # never break the game
         try:
@@ -321,6 +408,7 @@ def pi_start(label, pawn_name):
     folder.mkdir(parents=True, exist_ok=True)
     pi["file"] = (folder / f"{label}.jsonl").open("w", encoding="utf-8")
     pi["pawn"], pi["ended_at"], pi["scan_at"], pi["bubble_scan_at"] = ai_pawn(pawn_name), None, -1.0, -1.0
+    pi["seen_lifted"], pi["assets_stage"], pi["bones_at"], pi["injure"] = set(), 0, -1.0, None
     add_hook(PI_TICK, Type.POST_UNCONDITIONAL, PI_HOOK, _on_tick)
     for path in info["skill_hooks"] + info["player_hooks"]:
         add_hook(path, Type.PRE, PI_HOOK, _mk("pre"))
@@ -340,6 +428,15 @@ def pi_stop():
         pi["file"] = None
 
 
+def pi_result():
+    """After a cast: which pawns the skill lifted, and whether that included the target."""
+    pawn = pi["pawn"]
+    lifted = sorted(pi["seen_lifted"])
+    return {"target": _safe(lambda: pawn.Name), "lifted": lifted, "target_lifted": _safe(lambda: pawn.Name in lifted),
+            "target_has_controller": _safe(lambda: pawn.Controller is not None), "injure": _safe(lambda: {
+                k: v for k, v in pi["injure"].items() if k != "source"} if pi["injure"] else None)}
+
+
 def pi_flags():
     """Do not use in a session: on 2026-11-02 this call got no reply and the session was lost.
     CanPhaseLockTarget for every live AI pawn (a read-only script function), with its class and allegiance."""
@@ -355,10 +452,14 @@ def pi_flags():
 
 
 def pi_injure(pawn_name):
-    """One large TakeDamage on the player from the target pawn (it must be locked); the player is not protected."""
+    """Large TakeDamage on the player from the target pawn while it is lifted, repeated on the tick (_tick_injure) until she is
+    injured; the player is not protected. Refuses when the target is not lifted, so a failed cast does not cost the player."""
     me = get_pc().Pawn
     src = ai_pawn(pawn_name)
+    if not any(n == src.Name for n in pi["seen_lifted"]):
+        return {"skipped": "the target is not lifted", "seen_lifted": sorted(pi["seen_lifted"])}
     before = _player(me)
-    zero = unrealsdk.make_struct("Vector", X=0.0, Y=0.0, Z=0.0)
-    result = _safe(lambda: me.TakeDamage(1000000, src.Controller, me.Location, zero, unrealsdk.find_class("DamageType")))
-    return {"before": before, "after": _player(me), "call": plain(result)}
+    result = _hit_player(me, src)
+    now = get_pc().WorldInfo.TimeSeconds
+    pi["injure"] = {"source": src, "hits": 1, "next": now + 0.5, "done": False}
+    return {"before": before, "after": _player(me), "call": result}

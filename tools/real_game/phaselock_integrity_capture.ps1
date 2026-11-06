@@ -159,17 +159,36 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         @{ setup = $s; aim = $a }
     }
 
+    # A cast that did not lift the target (2026-11-06: the first was blocked, cause unknown) is retried, each attempt under its own
+    # label so nothing is overwritten. Returns the attempt's result; the last one is returned when none lifted it.
+    function Invoke-LiftCast([string]$Label, [double]$Before, [double]$After, [hashtable]$Shots, [int]$IntervalMs, [double]$ActionAt, [scriptblock]$Action, [int]$Attempts = 3) {
+        $result = $null
+        for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+            $name = if ($attempt -eq 1) { $Label } else { "${Label}_try$attempt" }
+            $log["${name}_setup"] = Set-Up $name
+            $log[$name] = Invoke-CastCapture "${name}_burst" $Before $After $Shots $IntervalMs $ActionAt $Action
+            $result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
+            $log["${name}_result"] = $result
+            Write-Host "$name press at $($log[$name].press); frames $($log[$name].frames); lifted: $($result.lifted -join ','); target lifted: $($result.target_lifted)"
+            Py 'pi_stop(); unmark_lock(); print("stopped")' | Out-Null
+            if ($result.target_lifted -eq $true) { return $result }
+            if ($attempt -lt $Attempts) { $log["${name}_ready"] = Wait-Ready 40 }
+        }
+        Write-Host "$Label`: the target was not lifted in $Attempts attempts"
+        $result
+    }
+
     # 1. Hit.
-    $log.hit_setup = Set-Up 'hit'
-    $log.hit = Invoke-CastCapture 'hit_burst' 1.0 8.0 $hostShots
-    "hit press at $($log.hit.press); frames $($log.hit.frames)"
-    Py 'pi_stop(); unmark_lock(); print("stopped")' | Out-Null
+    $null = Invoke-LiftCast 'hit' 1.0 8.0 $hostShots 50 -1 $null
     $log.hit_ready = Wait-Ready 40
 
-    # 2. Miss: look away from every pawn (yaw + 180, level).
-    Py "import json; pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=0, Yaw=(pc.Rotation.Yaw + 32768) & 0xFFFF, Roll=0); print(json.dumps(pi_start('miss', '$target'), default=str))" | Out-Null
+    # 2. Miss: look away and up at the sky (yaw + 180, pitch 60 degrees), since looking away level lifted a second bullymong on
+    # 2026-11-06. Whether it really was a miss is in miss_result ("lifted" empty).
+    Py "import json; isolate('$target'); pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=10922, Yaw=(pc.Rotation.Yaw + 32768) & 0xFFFF, Roll=0); print(json.dumps(pi_start('miss', '$target'), default=str))" | Out-Null
     Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
     $log.miss = Invoke-CastCapture 'miss_burst' 0.5 3.0 @{ 'miss-0.20' = 0.2; 'miss-0.40' = 0.4; 'miss-0.70' = 0.7 }
+    $log.miss_result = Py 'import json; print(json.dumps(pi_result(), default=str))' | ConvertFrom-Json
+    "miss: lifted '$($log.miss_result.lifted -join ',')' (empty is a real miss)"
     Py 'pi_stop(); print("stopped")' | Out-Null
     $log.miss_ready = Wait-Ready 40
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
@@ -177,13 +196,12 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     # 3. Down during the lock (last: Maya then bleeds out). Waits out the target's diminishing returns (25 s) is not
     # needed: the rule under test is the end of the lock, not its length.
     if (!$SkipDown) {
-        $log.down_setup = Set-Up 'down'
         $injure = { Py "import json; protect_player(False); print(json.dumps(pi_injure('$target'), default=str))" 15 }
-        $log.down = Invoke-CastCapture 'down_burst' 1.0 6.0 @{ 'down-1.90' = 1.9; 'down-2.50' = 2.5; 'down-3.50' = 3.5 } 100 2.0 $injure
+        $null = Invoke-LiftCast 'down' 1.0 6.0 @{ 'down-1.90' = 1.9; 'down-2.50' = 2.5; 'down-3.50' = 3.5 } 100 2.0 $injure
         "down: $($log.down.action)"
-        Py 'pi_stop(); unmark_lock(); print("stopped")' | Out-Null
     }
-    Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
+    # The game may close before it answers this one (2026-11-06: the empty reply stopped the script after all the casts).
+    try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } finally {
     # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: stop our game, and only once it
