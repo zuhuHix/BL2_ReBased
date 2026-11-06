@@ -126,6 +126,7 @@ try {
     $checkArgs = @($checker, '--log', $log, '--interactives', (Resolve-Path -LiteralPath $Interactives).Path)
     # The assets on disk now, not an earlier import's report: this run's content is what the host had to load.
     $checkArgs += @('--content-root', (Join-Path $repo 'host/ue5/OpenWillow/Content'))
+    $checkArgs += @('--materials-plan', (Join-Path $repo 'local/lootables/materials_plan.json'))
     if ($SkipAutomation) { $checkArgs += '--skip-automation' }
     elseif (Test-Path -LiteralPath $autoLog) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs

@@ -157,6 +157,8 @@ function Invoke-LootEditor([string]$Mode, [string]$ReportName) {
 
 $materialsFailed = $false
 New-Item -ItemType Directory -Force -Path $out, $logs | Out-Null
+# An earlier run's report must not outlive this one: if a step below fails, there is no report, not an old success.
+if (-not $DryRun -and (Test-Path -LiteralPath $reportPath)) { Remove-Item -LiteralPath $reportPath -Force }
 $plan = Invoke-Plan
 if ($DryRun) {
     Show-Plan $plan

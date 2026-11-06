@@ -29,6 +29,7 @@ Nothing here is verified in the running game: the rule for how a lootable's clip
 """
 import argparse
 import datetime
+import hashlib
 import json
 import subprocess
 import math
@@ -343,7 +344,20 @@ def plan_material(name, own_dir, search_dirs, slot_names, log_text):
             entry[key] = str(hits[0]) if hits else None
     if entry['diffuse'] is None:
         entry['reason'] = f'{entry["material"]} has no exported diffuse texture'
+    else:
+        entry['instance'] = instance_name(entry['material'], entry['diffuse'], entry['normal'])
     return entry
+
+
+def instance_name(material, diffuse, normal):
+    """The instance's name: the material and a hash of its textures. Two exports of one material with the same textures share
+    an instance, and two with one name and different textures do not."""
+    digest = hashlib.sha256(material.encode('utf-8'))
+    for source in (diffuse, normal):
+        digest.update(b'\0')
+        if source:
+            digest.update(Path(source).read_bytes())
+    return f'{material}_{digest.hexdigest()[:8]}'
 
 
 def export_root(path, folders):
@@ -417,13 +431,31 @@ def export_status(jobs, job_id):
     return 'exported' if record['exit_code'] == 0 and record['files'] > 0 else f'UModel exit {record["exit_code"]}, files {record["files"]}'
 
 
+def material_rows(plan, material_plan, editor_material):
+    """The report's rows for the materials step. Without a plan, every mesh gets a row saying the step did not run, so an import
+    report never reads as complete without it."""
+    if material_plan is None:
+        names = [m['name'] for m in plan['skeletal_meshes']] + [p['name'] for p in plan['pickup_meshes']]
+        return [{'asset': f'{MATERIAL_DEST}/{name}', 'kind': 'material', 'imported': False, 'reason': 'the materials step has not run',
+                 'export': 'not run', 'mesh': name} for name in names]
+    rows = []
+    for planned in (material_plan.get('meshes') or []) + (material_plan.get('pickups') or []):
+        status = (editor_material.get('bound') or {}).get(planned['mesh'], {})
+        fallback = planned.get('instance') or planned['material'] or planned['mesh']
+        # Two meshes can share an instance, so the same asset can have two rows: each names its mesh.
+        rows.append({'asset': status.get('instance') or f'{MATERIAL_DEST}/{fallback}', 'kind': 'material', 'imported': bool(status.get('bound')),
+                     'reason': status.get('reason') or planned['reason'] or ('' if status.get('bound') else 'no editor result'),
+                     'export': planned['source'] or 'no material found', 'mesh': planned['mesh']})
+    return rows
+
+
 def cmd_report(args):
     plan = load_plan(args.plan)
     out = Path(plan['out_dir'])
     jobs = load_jobs(args.umodel_jobs)
     editor_meshes = load_optional(out / 'editor_meshes.json') or {}
     editor_anims = load_optional(out / 'editor_anims.json') or {}
-    material_plan = load_optional(out / 'materials_plan.json') or {}
+    material_plan = load_optional(out / 'materials_plan.json')
     editor_material = load_optional(out / 'editor_materials.json') or {}
     tracks = load_optional(out / 'tracks_report.json') or {}
     rows = []
@@ -452,12 +484,8 @@ def cmd_report(args):
         row(status.get('asset') or f'{PICKUP_DEST}/{pickup["name"]}', 'pickup_mesh', status.get('imported'),
             status.get('reason') or ('' if status.get('imported') else 'no editor result'),
             f'gltf {export_status(jobs, "pickup." + pickup["name"] + ".gltf")}; psk {export_status(jobs, "pickup." + pickup["name"] + ".psk")}')
-    for planned in (material_plan.get('meshes') or []) + (material_plan.get('pickups') or []):
-        status = (editor_material.get('bound') or {}).get(planned['mesh'], {})
-        row(status.get('instance') or f'{MATERIAL_DEST}/{planned["material"] or planned["mesh"]}', 'material', status.get('bound'),
-            status.get('reason') or planned['reason'] or ('' if status.get('bound') else 'no editor result'),
-            planned['source'] or 'no material found')
-        rows[-1]['mesh'] = planned['mesh']   # two meshes can share a material, so the same asset can have two rows
+    for material_row in material_rows(plan, material_plan, editor_material):
+        rows.append(material_row)
     counts ={'yes': sum(1 for r in rows if r['imported']), 'no': sum(1 for r in rows if not r['imported'])}
     report = {'schema': 'openwillow-lootables-import/1', 'generated': datetime.datetime.now().isoformat(timespec='seconds'),
               'imported_yes': counts['yes'], 'imported_no': counts['no'], 'assets': rows,
@@ -516,6 +544,11 @@ def import_one(path, folder, expected):
     return found[0]
 
 
+def save_required(asset):
+    if not eal.save_loaded_asset(asset, only_if_is_dirty=False):
+        raise RuntimeError(f'could not save {asset.get_path_name()}')
+
+
 def lootable_master():
     """The parent material: diffuse and normal parameters, as in tools/slice_npc_editor.py, with no original graph."""
     name, path = 'M_OW_Lootable', f'{MATERIAL_DEST}/M_OW_Lootable'
@@ -540,7 +573,7 @@ def lootable_master():
     mel.connect_material_property(node(unreal.MaterialExpressionConstant, 600, r=0.7), '', unreal.MaterialProperty.MP_ROUGHNESS)
     material.set_editor_property('used_with_skeletal_mesh', True)
     mel.recompile_material(material)
-    eal.save_loaded_asset(material, only_if_is_dirty=False)
+    save_required(material)
     return material
 
 
@@ -548,13 +581,16 @@ def material_instance(planned, parent):
     """One instance per material (two meshes can share one), its textures in its own folder. On a rerun it is updated in
     place, because meshes already bound to it must not lose it."""
     mel = unreal.MaterialEditingLibrary
-    folder = f'{MATERIAL_DEST}/{planned["material"]}'
-    path = f'{folder}/{planned["material"]}'
+    name = planned['instance']
+    folder = f'{MATERIAL_DEST}/{name}'
+    path = f'{folder}/{name}'
     if eal.does_asset_exist(path):
         instance = unreal.load_asset(path)
     else:
-        instance = tools.create_asset(planned['material'], folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+        instance = tools.create_asset(name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
     mel.set_material_instance_parent(instance, parent)
+    # Nothing carries over from an earlier run: a texture the plan no longer has must not stay on the instance.
+    mel.clear_all_material_instance_parameters(instance)
     for parameter, source in (('Diffuse', planned['diffuse']), ('Normal', planned['normal'])):
         if not source:
             continue
@@ -562,9 +598,9 @@ def material_instance(planned, parent):
         texture.set_editor_property('srgb', parameter == 'Diffuse')
         if parameter == 'Normal':
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
-        eal.save_loaded_asset(texture, only_if_is_dirty=False)
+        save_required(texture)
         mel.set_material_instance_texture_parameter_value(instance, parameter, texture)
-    eal.save_loaded_asset(instance, only_if_is_dirty=False)
+    save_required(instance)
     return instance
 
 
@@ -610,18 +646,22 @@ def editor_materials(plan):
             mesh = unreal.load_asset(asset) if asset else None
             if mesh is None:
                 raise RuntimeError('the mesh is not imported')
-            if planned['material'] not in instances:
-                instances[planned['material']] = material_instance(planned, parent)
-            instance = instances[planned['material']]
+            if planned['instance'] not in instances:
+                instances[planned['instance']] = material_instance(planned, parent)
+            instance = instances[planned['instance']]
             if bind(mesh, instance) != instance:
                 raise RuntimeError('the slot did not keep the instance')
-            eal.save_loaded_asset(mesh, only_if_is_dirty=False)
+            save_required(mesh)
             entry.update(bound=True, instance=instance.get_path_name().split('.')[0], normal=bool(planned['normal']))
             log(f'material {planned["mesh"]} bound {entry["instance"]} normal={1 if planned["normal"] else 0} source="{planned["source"]}"')
         except Exception as error:   # recorded per mesh; the rest of the list still runs
             entry['reason'] = f'{type(error).__name__}: {error}'
             log(f'material {planned["mesh"]} failed: {entry["reason"]}')
-    eal.save_directory(MATERIAL_DEST, only_if_is_dirty=False, recursive=True)
+    if not eal.save_directory(MATERIAL_DEST, only_if_is_dirty=False, recursive=True):
+        log('materials folder could not be saved')
+        for entry in report['bound'].values():
+            if entry['bound']:
+                entry.update(bound=False, reason='the materials folder could not be saved')
     return report
 
 

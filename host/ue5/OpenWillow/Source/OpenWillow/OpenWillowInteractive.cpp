@@ -1100,7 +1100,6 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
         UE_LOG(LogTemp, Display, TEXT("OWLOOTLID queue=%d (balances with an imported open clip)"), ByBalance.Num());
         for (const TPair<FString, TArray<AOpenWillowLootable*>>& Row : ByBalance)
         {
-            const FString BalanceLeaf = Row.Key.RightChop(Row.Key.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd) + 1);
             const TArray<int32> Order = OpenWillowInteractiveRules::LidCandidateOrder(Row.Value.Num());
             FLidStop Stop;
             int32 ClearYaw = -1;
@@ -1114,7 +1113,7 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
                     FVector Stand;
                     if (const TCHAR* Failed = LidSideFailure(*World, Walker, *Candidate, Side, Stand))
                     {
-                        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID side balance=%s id=%s yaw=%d failed=%s"), *BalanceLeaf, *Candidate->Id, 45 * Side, Failed);
+                        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID side balance=%s id=%s yaw=%d failed=%s"), *Row.Key, *Candidate->Id, 45 * Side, Failed);
                         continue;
                     }
                     ClearYaw = 45 * Side;
@@ -1131,9 +1130,9 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
             }
             const AOpenWillowLootable* Chosen = Stop.Lootable.Get();
             // The slot lives on the mesh asset, which every lootable of a balance shares, so one line stands for them all.
-            UE_LOG(LogTemp, Display, TEXT("OWLOOTLID material balance=%s id=%s path=%s"), *BalanceLeaf, Chosen ? *Chosen->Id : TEXT("none"),
+            UE_LOG(LogTemp, Display, TEXT("OWLOOTLID material balance=%s id=%s path=%s"), *Row.Key, Chosen ? *Chosen->Id : TEXT("none"),
                 Chosen ? *Chosen->RenderedMaterialPath() : TEXT(""));
-            UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d id=%s tried=%d of %d"), *BalanceLeaf, ClearYaw >= 0 ? 1 : 0,
+            UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d id=%s tried=%d of %d"), *Row.Key, ClearYaw >= 0 ? 1 : 0,
                 ClearYaw, Chosen ? *Chosen->Id : TEXT("none"), Tried, Row.Value.Num());
             LidQueue.Add(Stop);
         }
@@ -1147,11 +1146,12 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
         return true;
     }
     const FString Leaf = Lootable->Balance.RightChop(Lootable->Balance.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd) + 1);
-    auto Shot = [&Leaf](const TCHAR* Phase)
+    const FString FullBalance = Lootable->Balance;   // the log's identity; the frames' file names keep the short name
+    auto Shot = [&Leaf, &FullBalance](const TCHAR* Phase)
     {
         const FString File = FString::Printf(TEXT("OWLootLid_%s_%s.png"), *Leaf, Phase);
         FScreenshotRequest::RequestScreenshot(File, false, false);
-        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=%s"), *Leaf, Phase);
+        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=%s"), *FullBalance, Phase);
     };
     switch (LidPhase++)
     {
@@ -1173,10 +1173,10 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
         OpenLootable(Walker, *Lootable);
         // A frame while the clip plays (the 2 s test step is longer than a lid's opening).
         const FString MidLeaf = Leaf;
-        World->GetTimerManager().SetTimer(LidMidTimer, FTimerDelegate::CreateLambda([MidLeaf]()
+        World->GetTimerManager().SetTimer(LidMidTimer, FTimerDelegate::CreateLambda([MidLeaf, FullBalance]()
             {
                 FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWLootLid_%s_mid.png"), *MidLeaf), false, false);
-                UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=mid"), *MidLeaf);
+                UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=mid"), *FullBalance);
             }), 0.4f, false);
         break;
     }

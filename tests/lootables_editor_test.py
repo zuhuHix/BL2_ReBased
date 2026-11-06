@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
@@ -105,6 +106,178 @@ class BindSkeletalTest(unittest.TestCase):
     def test_another_slot_count_is_refused(self):
         with self.assertRaisesRegex(RuntimeError, 'one material slot'):
             editor.bind_skeletal(FakeMesh(2), 'instance')
+
+
+class FakeAsset:
+    def __init__(self, path):
+        self.path = path
+        self.parent = None
+        self.params = {}
+        self.cleared = 0
+
+    def get_path_name(self):
+        name = self.path.rsplit('/', 1)[-1]
+        return f'{self.path}.{name}'
+
+    def set_editor_property(self, _name, _value):
+        pass
+
+
+class FakeEditor:
+    """The Unreal calls editor_materials makes. No Unreal: it records them, and each save can be told to fail."""
+
+    def __init__(self, out, rows):
+        self.assets, self.created, self.fail_saves, self.directory_ok = {}, [], set(), True
+        (out / 'materials_plan.json').write_text(json.dumps({'meshes': rows, 'pickups': []}), encoding='utf-8')
+        (out / 'editor_meshes.json').write_text(json.dumps({'mesh_assets': {r['mesh']: f'/Game/{r["mesh"]}' for r in rows}}), encoding='utf-8')
+        self.meshes = {f'/Game/{r["mesh"]}': self.mesh(f'/Game/{r["mesh"]}') for r in rows}
+        self.out = out
+
+    def mesh(self, path):
+        mesh = FakeMesh()
+        mesh.get_path_name = lambda: path
+        return mesh
+
+    # eal
+    def does_asset_exist(self, path):
+        return path in self.assets
+
+    def save_loaded_asset(self, asset, only_if_is_dirty=False):
+        return asset.get_path_name() not in self.fail_saves
+
+    def save_directory(self, _folder, only_if_is_dirty=False, recursive=True):
+        return self.directory_ok
+
+    # tools
+    def create_asset(self, name, folder, _cls, _factory):
+        asset = FakeAsset(f'{folder}/{name}')
+        self.assets[asset.path] = asset
+        self.created.append(asset.path)
+        return asset
+
+    # unreal
+    def load_asset(self, path):
+        return self.assets.get(path) or self.meshes.get(path)
+
+    # MaterialEditingLibrary
+    def set_material_instance_parent(self, instance, parent):
+        instance.parent = parent
+
+    def clear_all_material_instance_parameters(self, instance):
+        instance.params.clear()
+        instance.cleared += 1
+
+    def set_material_instance_texture_parameter_value(self, instance, parameter, texture):
+        instance.params[parameter] = texture
+
+
+class EditorMaterialsTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.out = Path(folder.name)
+
+    def planned(self, mesh, instance='Mat_1', normal=None):
+        return {'mesh': mesh, 'material': 'Mat', 'instance': instance, 'source': 'own export', 'diffuse': f'{instance}_dif.tga',
+                'normal': normal, 'reason': ''}
+
+    def run_it(self, rows, prepare=None, fake=None):
+        fake = fake or FakeEditor(self.out, rows)
+        if prepare:
+            prepare(fake)
+        saved = (editor.unreal, getattr(editor, 'eal', None), getattr(editor, 'tools', None), editor.lootable_master, editor.import_one)
+        self.addCleanup(lambda: (setattr(editor, 'unreal', saved[0]), setattr(editor, 'eal', saved[1]), setattr(editor, 'tools', saved[2]),
+                                 setattr(editor, 'lootable_master', saved[3]), setattr(editor, 'import_one', saved[4])))
+        editor.unreal = types.SimpleNamespace(
+            log=lambda _text: None, load_asset=fake.load_asset, MaterialEditingLibrary=fake, MaterialInstanceConstant=object,
+            MaterialInstanceConstantFactoryNew=lambda: None, Texture2D=object,
+            TextureCompressionSettings=types.SimpleNamespace(TC_NORMALMAP=1))
+        editor.eal, editor.tools = fake, fake
+        editor.lootable_master = lambda: 'parent'
+        editor.import_one = lambda source, folder, _cls: FakeAsset(f'{folder}/{source}')
+        return fake, editor.editor_materials({'out_dir': str(self.out)})
+
+    def test_a_good_bind_records_the_instance(self):
+        _, report = self.run_it([self.planned('A')])
+        self.assertEqual(report['bound']['A']['bound'], True)
+        self.assertEqual(report['bound']['A']['instance'], f'{editor.MATERIAL_DEST}/Mat_1/Mat_1')
+
+    def test_a_failed_save_is_not_a_bind(self):
+        # Each save the bind depends on: the mesh, the instance, a texture.
+        for name, path in (('mesh', '/Game/A'), ('instance', f'{editor.MATERIAL_DEST}/Mat_1/Mat_1.Mat_1'),
+                           ('texture', f'{editor.MATERIAL_DEST}/Mat_1/Mat_1_dif.tga.Mat_1_dif.tga')):
+            with self.subTest(save=name):
+                _, report = self.run_it([self.planned('A')], lambda f, p=path: f.fail_saves.add(p))
+                self.assertEqual(report['bound']['A']['bound'], False)
+                self.assertIn('could not save', report['bound']['A']['reason'])
+                self.assertEqual(editor.unbound_meshes({'meshes': [self.planned('A')]}, report)[0][0], 'A')
+
+    def test_a_failed_folder_save_unbinds_everything(self):
+        _, report = self.run_it([self.planned('A'), self.planned('B', 'Mat_2')], lambda f: setattr(f, 'directory_ok', False))
+        self.assertEqual({row['bound'] for row in report['bound'].values()}, {False})
+        self.assertIn('materials folder', report['bound']['B']['reason'])
+
+    def test_one_name_with_different_textures_makes_two_instances(self):
+        fake, report = self.run_it([self.planned('A', 'Mat_1'), self.planned('B', 'Mat_2'), self.planned('C', 'Mat_1')])
+        self.assertEqual(len(fake.created), 2)
+        self.assertEqual(report['bound']['A']['instance'], report['bound']['C']['instance'])
+        self.assertNotEqual(report['bound']['A']['instance'], report['bound']['B']['instance'])
+
+    def test_a_rerun_leaves_no_old_normal_on_the_instance(self):
+        # The first run has a normal; the plan no longer does.
+        fake, _ = self.run_it([self.planned('A', normal='nrm.tga')])
+        instance = fake.assets[f'{editor.MATERIAL_DEST}/Mat_1/Mat_1']
+        self.assertEqual(set(instance.params), {'Diffuse', 'Normal'})
+        (self.out / 'materials_plan.json').write_text(json.dumps({'meshes': [self.planned('A')], 'pickups': []}), encoding='utf-8')
+        fake, report = self.run_it([], fake=fake)
+        self.assertEqual(len(fake.created), 1)   # updated in place
+        self.assertEqual(set(instance.params), {'Diffuse'})
+        self.assertEqual(report['bound']['A']['normal'], False)
+
+
+class MaterialRowsTest(unittest.TestCase):
+    PLAN = {'skeletal_meshes': [{'name': 'A'}], 'pickup_meshes': [{'name': 'P'}]}
+
+    def test_no_materials_step_is_a_row_for_every_mesh_not_a_clean_report(self):
+        rows = editor.material_rows(self.PLAN, None, {})
+        self.assertEqual([(r['mesh'], r['imported']) for r in rows], [('A', False), ('P', False)])
+        self.assertIn('has not run', rows[0]['reason'])
+
+    def test_two_meshes_on_one_instance_each_have_a_row(self):
+        plan = {'meshes': [{'mesh': 'A', 'instance': 'I', 'material': 'M', 'source': 's', 'reason': ''},
+                           {'mesh': 'B', 'instance': 'I', 'material': 'M', 'source': 's', 'reason': ''}], 'pickups': []}
+        bound = {'bound': {'A': {'bound': True, 'instance': '/x/I'}, 'B': {'bound': True, 'instance': '/x/I'}}}
+        rows = editor.material_rows(self.PLAN, plan, bound)
+        self.assertEqual([(r['mesh'], r['asset'], r['imported']) for r in rows], [('A', '/x/I', True), ('B', '/x/I', True)])
+
+    def test_the_import_script_drops_the_old_report_before_any_step(self):
+        text = (editor.ROOT / 'tools/import_lootables.ps1').read_text(encoding='utf-8')
+        self.assertLess(text.index('Remove-Item -LiteralPath $reportPath'), text.index('$plan = Invoke-Plan'))
+
+
+class InstanceNameTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+
+    def texture(self, name, content):
+        path = self.root / name
+        path.write_bytes(content)
+        return str(path)
+
+    def test_the_same_textures_in_two_exports_share_a_name(self):
+        self.assertEqual(editor.instance_name('M', self.texture('a.tga', b'one'), None), editor.instance_name('M', self.texture('b.tga', b'one'), None))
+
+    def test_one_name_with_other_textures_differs(self):
+        first = editor.instance_name('M', self.texture('a.tga', b'one'), None)
+        self.assertNotEqual(first, editor.instance_name('M', self.texture('b.tga', b'two'), None))
+        self.assertNotEqual(first, editor.instance_name('M', self.texture('c.tga', b'one'), self.texture('n.tga', b'nrm')))
+        self.assertTrue(first.startswith('M_'))
+
+    def test_the_diffuse_and_normal_cannot_swap_places(self):
+        one, two = self.texture('a.tga', b'one'), self.texture('b.tga', b'two')
+        self.assertNotEqual(editor.instance_name('M', one, two), editor.instance_name('M', two, one))
 
 
 class UnboundMeshesTest(unittest.TestCase):
