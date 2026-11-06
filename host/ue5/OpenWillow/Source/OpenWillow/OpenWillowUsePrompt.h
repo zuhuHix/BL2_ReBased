@@ -15,11 +15,20 @@ namespace OpenWillowUsePrompt
         const TCHAR* Text = nullptr;    // for its desc field
     };
 
-    // What to show. bTalk: Marcus would take the press, which outranks the nearest-target rule (PickupNearby). InteractiveVerb is
-    // UOpenWillowInteractiveSubsystem::UseVerb: "use", "pickup" or "open".
-    FPrompt Describe(EOpenWillowUseTarget Target, bool bTalk, const FString& InteractiveVerb);
+    // What to show, in the order the key goes: a reward page up takes the press and has its own wording, so no world prompt; then Marcus,
+    // who outranks the nearest-target rule (PickupNearby); then the target. InteractiveVerb is UOpenWillowInteractiveSubsystem::UseVerb:
+    // "use", "pickup" or "open".
+    FPrompt Describe(EOpenWillowUseTarget Target, bool bTalk, bool bRewardPending, const FString& InteractiveVerb);
 
-    // JSON text for the "usePrompt" field of the Flash HUD state: null, or {frame, text}. Null while Maya is down (the key does nothing
-    // then) or a menu is up. The target is searched at most 10 times a second. Logs "OWUSEPROMPT ..." once per change.
-    FString StateField(const AOpenWillowWalker& Maya);
+    // The last field, kept by its owner so it ends with the world.
+    struct FState
+    {
+        double NextSearchAt = 0.;
+        FString Field = TEXT("null");
+    };
+
+    // JSON text for the "usePrompt" field of the Flash HUD state: null, or {frame, text}. Null at once when the use key would do nothing
+    // (AOpenWillowWalker::CanUseNow, the key's own check) or a reward page is up; the target itself is searched at most 10 times a
+    // second. Logs "OWUSEPROMPT ..." once per change.
+    FString StateField(const AOpenWillowWalker& Maya, FState& State);
 }

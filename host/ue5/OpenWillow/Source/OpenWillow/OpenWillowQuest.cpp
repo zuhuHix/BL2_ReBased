@@ -774,6 +774,8 @@ void UOpenWillowQuest::MissionScreen(bool& bRedeemable, bool& bEligible) const
     bEligible = Has(Lists.eligible);
 }
 
+bool UOpenWillowQuest::IsRewardPending() const { return Impl && !bFailed && Impl->Slice->rewardPending(); }
+
 bool UOpenWillowQuest::TryUse()
 {
     if (!Impl || bFailed) return false;

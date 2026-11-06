@@ -61,7 +61,7 @@
   let lastHudPage = '';   // the last OWHUDPAGE line (hud_fields.js pageLine)
   let bannersPlayed = 0;   // level-up banners played (OWHUDFXPAGE banners=)
   let lastFxPage = '', lastDownPage = '', lastTrackPage = '', lastSecondWind = 0, trackerStale = false;   // hud_fields.js downLine / trackerLine; the banners played
-  let lastUsePrompt = '';   // the use prompt last applied, as JSON
+  const useMemo = {line: null, failed: null};   // hud_fields.js applyUse
   let hudStrings = {};   // UI_HUD/hud_strings.json (the game's own texts, under local/); {} without it
   fetch('UI_HUD/hud_strings.json', {cache: 'no-store'}).then(r => (r.ok ? r.json() : {}), () => ({}))
     .then(j => { hudStrings = j || {}; trackerStale = true; console.log('OpenWillow HUD strings ' + (Object.keys(hudStrings).length || 'none')); });
@@ -105,15 +105,7 @@
     if ('minimap' in s) window.owMinimap.apply(call, s.minimap);
     if ('pickupCard' in s && window.owPickupCard) window.owPickupCard.apply(s.pickupCard);
     const F = window.owHudFields;
-    if ('usePrompt' in s) {
-      const line = JSON.stringify(s.usePrompt);
-      // Only on a change: gotoAndStop on the same label each frame would restart nothing, but the text call is not free.
-      if (line !== lastUsePrompt) {
-        for (const c of F.useCalls(s.usePrompt)) call(c[0], c[1], c[2], c[3]);
-        console.log(`OWUSEPROMPTPAGE asked=${line} frame=${call(P1 + '.tools', 'get', '_currentframe')} text=${call(P1 + '.tools.desc', 'get', 'text')}`);
-        lastUsePrompt = line;
-      }
-    }
+    if ('usePrompt' in s) F.applyUse(call, s.usePrompt, useMemo, line => console.log(line));
     if ('down' in s) for (const c of F.downCalls(s.down, hudStrings)) call(c[0], c[1], c[2], c[3]);
     if ('secondWind' in s) {
       for (const c of F.secondWindCalls(s.secondWind, lastSecondWind, hudStrings)) call(c[0], c[1], c[2], c[3]);

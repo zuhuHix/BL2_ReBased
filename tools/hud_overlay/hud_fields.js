@@ -117,6 +117,29 @@
     return [[P1 + '.tools', 'gotoAndStop', prompt.frame], textCall(P1 + '.tools.desc', prompt.text || '')];
   }
 
+  // Applies the use prompt once per change. memo = {line, failed}: line is what the movie is known to show, so a call that throws or
+  // a clip that does not answer is tried again with the next state, and this can never stop the rest of the HUD. Logs once per problem.
+  function applyUse(call, prompt, memo, log) {
+    const line = JSON.stringify(prompt);
+    if (line === memo.line) return;
+    let frame, text, problem = '';
+    try {
+      for (const c of useCalls(prompt)) call(c[0], c[1], c[2], c[3]);
+      frame = call(P1 + '.tools', 'get', '_currentframe');
+      text = prompt && prompt.frame ? call(P1 + '.tools.desc', 'get', 'text') : '';
+      if (!(Number(frame) > 0)) problem = 'no frame read back';
+      else if (prompt && prompt.frame && typeof text !== 'string') problem = 'no text read back';
+    } catch (error) { problem = String(error); }
+    if (problem) {
+      if (memo.failed !== line) log(`OWUSEPROMPTPAGE failed asked=${line}: ${problem}`);
+      memo.failed = line;
+      return;
+    }
+    log(`OWUSEPROMPTPAGE asked=${line} frame=${frame} text=${text}`);
+    memo.line = line;
+    memo.failed = null;
+  }
+
   // OWHUDDOWNPAGE / OWHUDTRACKPAGE: what the page applied and what the movie shows for it (tools/check_hud_down.py).
   const esc = t => String(t ?? '').replace(/\r/g, '').replace(/[^\x21-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
   function downLine(shown, get) {
@@ -166,7 +189,7 @@
   }
 
   const api = {WEAPON_FRAMES, textCall, weaponCalls, pageLine, readyLine, barFrame, downCalls, secondWindCalls, trackerCalls,
-    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine, useCalls};
+    downLine, trackerLine, TRACKER_MODULES, feedbackCalls, feedbackLine, useCalls, applyUse};
   root.owHudFields = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

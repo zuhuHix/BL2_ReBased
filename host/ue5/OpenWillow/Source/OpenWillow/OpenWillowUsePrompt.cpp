@@ -4,8 +4,9 @@
 #include "OpenWillowWalker.h"
 #include "HAL/PlatformTime.h"
 
-OpenWillowUsePrompt::FPrompt OpenWillowUsePrompt::Describe(EOpenWillowUseTarget Target, bool bTalk, const FString& InteractiveVerb)
+OpenWillowUsePrompt::FPrompt OpenWillowUsePrompt::Describe(EOpenWillowUseTarget Target, bool bTalk, bool bRewardPending, const FString& InteractiveVerb)
 {
+    if (bRewardPending) return {};
     if (bTalk) return {TEXT("talk"), TEXT("[E] TALK")};
     switch (Target)
     {
@@ -21,26 +22,30 @@ OpenWillowUsePrompt::FPrompt OpenWillowUsePrompt::Describe(EOpenWillowUseTarget 
     }
 }
 
-FString OpenWillowUsePrompt::StateField(const AOpenWillowWalker& Maya)
+namespace
 {
-    static double NextSearchAt = 0.;
-    static FString Field = TEXT("null");
-    const double Now = FPlatformTime::Seconds();
-    if (Now < NextSearchAt) return Field;
-    NextSearchAt = Now + .1;
+    const FString& SetUsePromptField(OpenWillowUsePrompt::FState& State, const FString& Next)
+    {
+        if (Next != State.Field)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWUSEPROMPT %s"), *Next);
+            State.Field = Next;
+        }
+        return State.Field;
+    }
+}
 
-    FPrompt Prompt;
-    if (!Maya.IsDown() && !Maya.IsInventoryPresented())
-    {
-        const EOpenWillowUseTarget Target = Maya.NearestUseTarget();
-        const UOpenWillowQuest* Quest = Maya.GetQuest();
-        Prompt = Describe(Target, Quest && Quest->CanTalkNow(), Target == EOpenWillowUseTarget::Interactive ? UOpenWillowInteractiveSubsystem::UseVerb(Maya) : FString());
-    }
-    const FString Next = Prompt.Frame ? FString::Printf(TEXT("{\"frame\":\"%s\",\"text\":\"%s\"}"), Prompt.Frame, Prompt.Text) : FString(TEXT("null"));
-    if (Next != Field)
-    {
-        UE_LOG(LogTemp, Display, TEXT("OWUSEPROMPT %s"), *Next);
-        Field = Next;
-    }
-    return Field;
+FString OpenWillowUsePrompt::StateField(const AOpenWillowWalker& Maya, FState& State)
+{
+    const UOpenWillowQuest* Quest = Maya.GetQuest();
+    const bool bReward = Quest && Quest->IsRewardPending();
+    // These first, so a prompt does not outlast them; only the search below is throttled.
+    if (!Maya.CanUseNow() || bReward) return SetUsePromptField(State, TEXT("null"));
+    const double Now = FPlatformTime::Seconds();
+    if (Now < State.NextSearchAt) return State.Field;
+    State.NextSearchAt = Now + .1;
+    const EOpenWillowUseTarget Target = Maya.NearestUseTarget();
+    const FPrompt Prompt = Describe(Target, Quest && Quest->CanTalkNow(), false,
+        Target == EOpenWillowUseTarget::Interactive ? UOpenWillowInteractiveSubsystem::UseVerb(Maya) : FString());
+    return SetUsePromptField(State, Prompt.Frame ? FString::Printf(TEXT("{\"frame\":\"%s\",\"text\":\"%s\"}"), Prompt.Frame, Prompt.Text) : FString(TEXT("null")));
 }

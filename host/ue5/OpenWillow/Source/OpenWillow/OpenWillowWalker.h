@@ -60,7 +60,8 @@ public:
     // Removes by stable instance ID and preserves the payload for a pickup actor.
     bool TakeInventoryItemById(const FString& Id, FOpenWillowTakenInventoryItem& OutItem);
     void ToggleInventory();
-    bool IsInventoryPresented() const { return bInventoryPresentation; }
+    // The use key's own check (PickupNearby), and the prompt's: false when a press would do nothing.
+    bool CanUseNow() const { return bMayaActive && Inventory && !bInventoryPresentation && !IsDown(); }
     bool IsInventoryWidgetOpen() const; // the legacy UMG inventory, used when the HUD has no inventory page
     void ToggleSkills();
     // The map and missions keys (OpenWillowControls.cpp, docs/verification/CONTROLS.md).
