@@ -1,4 +1,4 @@
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [string]$Game = $env:OPENWILLOW_BL2,
@@ -8,8 +8,8 @@ param(
     # prepare: identity, UModel exports, editor job; mesh: editor import of mesh/materials + reference pose;
     # anims: MD5 clips -> bone tracks, then the editor creates the AnimSequences; zone: the zone-colour material
     # (tools/phaselock_target_editor.py); attach: the worn static meshes with that material (tools/phaselock_target_attach_editor.py),
-    # then their placement in host_target.json. 'all' runs them in order.
-    [ValidateSet('all', 'prepare', 'mesh', 'anims', 'zone', 'attach')][string[]]$Steps = @('all')
+    # then their placement in host_target.json. 'all' runs them in order. Comma list: -Steps prepare,attach, also under powershell -File.
+    [string[]]$Steps = @('all')
 )
 # AI-assisted. Imports a stock Phaselock target (the bullymong, tools/prepare_phaselock_target.py) into the ignored UE
 # content folder /Game/OpenWillow/Characters/PhaselockTarget, reusing the slice NPC editor script
@@ -19,6 +19,10 @@ param(
 # The editor runs under the machine-wide UE run lock (tools/ue_lock.ps1), as tools/seed_slice_npc_assets.ps1 does. On a machine where
 # several lanes share UE, take the machine-wide lock first; this script does not manage it.
 $ErrorActionPreference = 'Stop'
+# powershell -File passes a comma list as one string, which a ValidateSet would reject, so the list is split and checked here.
+$Steps = @($Steps | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$unknownSteps = @($Steps | Where-Object { $_ -notin 'all', 'prepare', 'mesh', 'anims', 'zone', 'attach' })
+if ($unknownSteps.Count -or !$Steps.Count) { throw "Unknown or empty -Steps: '$($unknownSteps -join ',')'. Use any of all, prepare, mesh, anims, zone, attach." }
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
@@ -58,7 +62,10 @@ function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
     } finally {
         Exit-OwUeLock
     }
-    if ($code -ne 0 -or !(Test-Path -LiteralPath $report)) { throw "editor mode $Mode failed (exit $code); see $log" }
+    if ($code -ne 0 -or !(Test-Path -LiteralPath $report)) {
+        $why = Select-String -LiteralPath $log -Pattern 'RuntimeError: (.*)' -ErrorAction SilentlyContinue | Select-Object -Last 1
+        throw "editor mode $Mode failed (exit $code)$(if ($why) { ': ' + $why.Matches[0].Groups[1].Value }); see $log"
+    }
     Select-String -LiteralPath $log -Pattern 'LogPython: OW_' | ForEach-Object { $_.Line -replace '.*LogPython: ', '' }
 }
 
