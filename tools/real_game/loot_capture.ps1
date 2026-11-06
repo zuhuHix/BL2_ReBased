@@ -153,7 +153,9 @@ try {
 
     $log.materials = Py "print(json.dumps(lc_materials('materials')))" 60
     "materials: $($log.materials)"
-    Set-Stage 'materials' (Test-Shot 'materials.json') 'no materials.json written'
+    $materials = $log.materials | ConvertFrom-Json
+    # An absent list counts as a problem too: @($null) has one element.
+    Set-Stage 'materials' ((Test-Shot 'materials.json') -and (@($materials.problems).Count -eq 0)) "materials not read: $(@($materials.problems) -join '; ')"
     $log.ammo = Py 'print(json.dumps(lc_lower_ammo()))'
     "ammo: $($log.ammo)"
     $ammo = $log.ammo | ConvertFrom-Json
@@ -173,8 +175,8 @@ try {
     foreach ($kind in 'ammo', 'cash') {
         try {
             $row = Capture-Pickup $kind; $log.pickups[$kind] = $row; "$kind`: $($row.state)$($row.result)"
-            # Whether a message showed is judged on the frames. This says only that the pickup was walked over and taken.
-            Set-Stage "${kind}_pickup" ($row.state -and (($row.state | ConvertFrom-Json).gone -eq $true)) ($(if ($row.result) { $row.result } else { 'not collected' }))
+            # Whether a message showed is judged on the frames. This says only that the chosen pickup went and the ammo or money rose.
+            Set-Stage "${kind}_pickup" ($row.state -and (($row.state | ConvertFrom-Json).collected -eq $true)) ($(if ($row.result) { $row.result } else { "not collected: $($row.state)" }))
         } catch {
             if ($_.Exception.Message -match 'focus') { throw }
             $log.pickups[$kind] = "failed: $($_.Exception.Message)"; Set-Stage "${kind}_pickup" $false $_.Exception.Message; "$kind`: failed: $($_.Exception.Message)"

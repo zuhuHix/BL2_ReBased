@@ -13,7 +13,10 @@ pickup can be collected.
 - lc_after(mesh): the pickups near it and its use state, after the use key.
 - lc_lower_ammo(): halve the ammo pools, recording them.
 - lc_stand_pickup(kind): stand back from a pickup of that kind ('ammo' or 'cash') on its level, looking at it.
-- lc_pickup_state(): whether that pickup still exists, and the ammo pools and money.
+- lc_pickup_state(): whether that pickup is gone and the ammo or money rose. Collected only when both.
+
+Nothing here keeps a game object from one command to the next: the game may have moved or destroyed it, and using such a
+reference crashed the game once (openwillow_realgame/__init__.py). LC keeps path names, and each command looks the object up afresh.
 """
 import json
 import math
@@ -101,15 +104,13 @@ def lc_discover(label):
 
 
 def _pick(leaf):
-    """The first placed object with this mesh, kept for the run. A kept one is re-checked, since it may have been destroyed."""
-    actor = LC["picked"].get(leaf)
-    if actor is not None and _field(actor, "bDeleteMe") is False:
-        return actor
-    rows = [a for a in _live("WillowInteractiveObject") if (_row(a)["mesh"] or "").endswith("." + leaf)]
+    """The placed object with this mesh, looked up afresh: the one this run chose before, else the first by path."""
+    rows = sorted((a for a in _live("WillowInteractiveObject") if (_row(a)["mesh"] or "").endswith("." + leaf)), key=lambda a: a._path_name())
     if not rows:
         raise LookupError(f"no placed object with mesh {leaf}")
-    LC["picked"][leaf] = sorted(rows, key=lambda a: a._path_name())[0]
-    return LC["picked"][leaf]
+    chosen = next((a for a in rows if a._path_name() == LC["picked"].get(leaf)), rows[0])
+    LC["picked"][leaf] = chosen._path_name()
+    return chosen
 
 
 def lc_materials(label):
@@ -118,7 +119,7 @@ def lc_materials(label):
         mesh = next((m for m in unrealsdk.find_all("SkeletalMesh", False) if m._path_name().endswith("." + leaf)), None)
         materials = _field(mesh, "Materials") if mesh is not None else None
         meshes[leaf] = {"mesh": _path(mesh), "materials": [_path(m) for m in materials] if materials is not None and not isinstance(materials, str) else materials}
-    objects, rendered = [], {}
+    objects, rendered, problems = [], {}, []
     for actor in _live("WillowInteractiveObject"):
         component = _component(actor)
         mesh = _path(_field(component, "SkeletalMesh")) if component is not None else None
@@ -126,11 +127,21 @@ def lc_materials(label):
             continue
         material = _try(component.GetMaterial, 0)
         path = _path(material) or str(material)
+        if not _path(material):
+            problems.append(f"{actor._path_name()} renders no material: {path}")
         objects.append({"path": actor._path_name(), "mesh": mesh, "rendered": path})
         key = f"{mesh.rsplit('.', 1)[-1]} -> {path}"
         rendered[key] = rendered.get(key, 0) + 1
-    _write(label, {"meshes": meshes, "objects": objects, "rendered_counts": rendered})
-    return {"slots": {k: v["materials"] for k, v in meshes.items()}, "rendered_counts": rendered}
+    # Every mesh that has a placed object must have read a material from its slots. A type with no placed object is its own stage.
+    for leaf, row in meshes.items():
+        placed = any(item["mesh"].endswith("." + leaf) for item in objects)
+        materials = row["materials"]
+        if placed and not (isinstance(materials, list) and materials and all(materials)):
+            problems.append(f"{leaf} has no readable material slot: {materials}")
+    if not objects:
+        problems.append("no placed lootable to read")
+    _write(label, {"meshes": meshes, "objects": objects, "rendered_counts": rendered, "problems": problems})
+    return {"slots": {k: v["materials"] for k, v in meshes.items()}, "rendered_counts": rendered, "problems": problems}
 
 
 def _vector(x, y, z):
@@ -241,7 +252,22 @@ def _pool_values():
 
 
 def _money():
-    return _try(lambda: get_pc().PlayerReplicationInfo.GetCurrencyOnHand(0))  # noqa: F821
+    value = _try(lambda: get_pc().PlayerReplicationInfo.GetCurrencyOnHand(0))  # noqa: F821
+    return value[0] if isinstance(value, tuple) and value else value
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _value_rose(kind, before, after):
+    """Whether collecting this kind moved what it should. A value that could not be read is an error string: that is not a rise."""
+    if kind == "cash":
+        return _is_number(before["money"]) and _is_number(after["money"]) and after["money"] > before["money"]
+    if not (isinstance(before["pools"], dict) and isinstance(after["pools"], dict)):
+        return False
+    return any(_is_number(value) and _is_number(before["pools"].get(name)) and value > before["pools"][name]
+               for name, value in after["pools"].items())
 
 
 def lc_lower_ammo():
@@ -267,12 +293,18 @@ def lc_stand_pickup(kind, distance=260.0):
             break
     spot = chosen or (loc.X + distance, loc.Y, loc.Z + 70.0)
     _place(*spot, (loc.X, loc.Y, loc.Z))
-    LC["pickup"] = pickup
+    pools, money = _try(_pool_values), _money()
+    LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pools": pools, "money": money}
     return {"kind": kind, "pickup": pickup._path_name(), "definition": _kind(pickup)[1], "clear": chosen is not None,
-            "pools": _pool_values(), "money": _money()}
+            "pools": pools, "money": money}
 
 
 def lc_pickup_state():
-    pickup = LC["pickup"]
-    gone = pickup is None or _field(pickup, "bDeleteMe") is not False
-    return {"gone": gone, "pools": _pool_values(), "money": _money()}
+    chosen = LC["pickup"]
+    if chosen is None:
+        return {"gone": False, "changed": False, "collected": False, "reason": "no pickup was chosen"}
+    # A pickup whose state cannot be read stays in the list, so an unreadable one never counts as gone.
+    gone = not any(p._path_name() == chosen["path"] for p in _live("WillowPickup"))
+    after = {"pools": _try(_pool_values), "money": _money()}
+    changed = _value_rose(chosen["kind"], chosen, after)
+    return {"gone": gone, "changed": changed, "collected": gone and changed, "pools": after["pools"], "money": after["money"]}

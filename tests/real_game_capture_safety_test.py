@@ -68,10 +68,13 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         $count = if ($scenario -eq 'type_missing') { 0 } else { 1 }
         return (@{ Skel_DahlChest_Ammo = 1; Skel_Dumpster = 1; Skel_StorageLocker = 1; Skel_StrongBox = 1; Skel_CardboardBox = 1; Skel_LaundryMachine = $count } | ConvertTo-Json -Compress)
     }
-    if ($Code -match 'lc_materials') { Set-Content -LiteralPath (Join-Path $script:RG 'loot_capture/materials.json') '{}'; return '{"slots": {}}' }
+    if ($Code -match 'lc_materials') { Set-Content -LiteralPath (Join-Path $script:RG 'loot_capture/materials.json') '{}'; if ($scenario -eq 'materials_unread') { return '{"slots": {}, "problems": ["Skel_X has no readable material slot"]}' }; return '{"slots": {}, "problems": []}' }
     if ($Code -match 'lc_lower_ammo') { return '{"before": {"a": 10}, "after": {"a": 5}}' }
     if ($Code -match 'lc_stand_pickup') { return '{"pickup": "p"}' }
-    if ($Code -match 'lc_pickup_state') { return '{"gone": true}' }
+    if ($Code -match 'lc_pickup_state') {
+        if ($scenario -eq 'pickup_gone_only') { return '{"gone": true, "changed": false, "collected": false}' }
+        return '{"gone": true, "changed": true, "collected": true}'
+    }
     if ($Code -match 'lc_stand') {
         if ($scenario -eq 'script_error') { return "Traceback (most recent call last):`n LookupError" }
         return '{}'
@@ -177,6 +180,17 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         for row in r['session']['types'].values():   # a string: Capture-Type stopped at lc_stand, before any burst or key
             self.assertTrue(str(row).startswith('failed: game script failed'), r['out'])
         self.assertEqual(r['files'], ORIGINAL)
+
+    def test_a_pickup_that_went_without_the_value_rising_is_incomplete(self):
+        r = self.run_it('pickup_gone_only')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertEqual(r['session']['status'], 'incomplete: ammo_pickup, cash_pickup', r['out'])
+
+    def test_a_materials_file_without_values_is_incomplete(self):
+        r = self.run_it('materials_unread')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertEqual(r['session']['status'], 'incomplete: materials', r['out'])
+        self.assertTrue(any('no readable material slot' in p for p in r['session']['stage_problems']), r['out'])
 
     def test_a_lost_focus_stops_the_run_and_still_restores(self):
         r = self.run_it('focus_lost')
