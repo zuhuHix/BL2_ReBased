@@ -3742,3 +3742,15 @@ AI-assisted (Claude; host C++ drafted by a Claude Haiku sub-agent from a written
 - **Stand-ins (UNVERIFIED):** the money value per item (`round(4 x 1.13^level)`; the stock value is not decoded), the ammo rule
   (only below half the reserve, a magazine's worth), a pool pick that is not a gun drops nothing. Skins, eridium and health are
   not hosted.
+
+
+## 2026-11-06: Phaselock round 24: the hand orb's added layers read as gamma-space colours (maya lane)
+
+AI-assisted (Claude). Record: `docs/verification/PHASELOCK_STOCK_DATA.md` "Round 23 results" and "Round 24". Presentation change.
+
+- Round 23 scored 5.9 / 10 as a best-per-time mix of two facings (round 22 rescored 5.7); target 8 not reached. The target's fur now reads
+  tan and brown. The orb's blue-constant conversion had no measurable effect (40 px mean 159, 208, 251 to 158, 208, 251; game 107, 147, 249).
+- With the tone curve off the orb reads 10, 158, 253: most of its paleness is the film curve on an over-bright blue, not its own colour.
+- The hand orb's ribbons, swirl and star-burst read their colour as gamma-space values (a `GammaOut` material parameter, set by the hand
+  template's emitters only). UNVERIFIED until the capture, which also retests the tone curve off on the corrected target.
+- Facing stays open: critics prefer 0 for the held frames, the default stays 180 as a choice, and the live probe now records the target's rotation.

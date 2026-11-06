@@ -1320,3 +1320,50 @@ gamma. **Changes (UNVERIFIED until the capture):** `tools/phaselock_target_edito
 `host/ue5/import_phaselock_fx.py` is converted the same way (the old x0.7 compensation dropped), and the capture target faces Maya (+180) by
 default. If the target and the orb move toward the game, the same reading applies to the other effect constants (not changed yet: many
 round-2 to round-20 fits were made on top of the linear reading).
+
+### Round 23 results (2026-11-04: the hub's batch 5 re-import and captures, a Luna critic)
+
+The target import applied the zone vectors converted to linear (the report says `gamma_to_linear` true); the captures are in ignored
+`local/phaselock/r23/` (pairs in `r23/critic/`). **The target's fur now reads tan and brown** like the game's (round 22: white and olive).
+**The orb's blue-constant change had no measurable effect** (below). Critic (Luna, pairs only, the second critic round of three):
+
+| Round | 0.25 s | 0.50 s | 0.80 s | 1.50 s | 3.00 s | 4.50 s | Overall |
+|---|---|---|---|---|---|---|---|
+| 22 (offset 0, rescored) | 4.9 | 5.9 | 5.0 | 6.1 | 6.1 | 6.1 | 5.7 |
+| 23 (best offset per time) | 5.7 (180) | 5.9 (0) | 5.0 (0) | 6.1 (0) | 6.2 (0) | 6.2 (0) | 5.9 |
+
+The 5.9 is a best-per-time mix: no single host setting produces it. The critic preferred offset 0 at five of the six times while the host
+default is 180 (round 23), and the default was not scored separately at those times. The 8/10 target is not reached.
+
+**Facing is open.** The critic matched the standing target (0.25 s) to offset 180 and the held one (1.50 s on) to offset 0, so by its reading a
+fixed actor yaw cannot match both; two critics now prefer 0 for the held frames. The converted clips carry no root yaw (root rotation identity in
+all six; the hips only pitch, about 27 to 42 degrees), so nothing in the animation turns the body. Either the game turns the lifted pawn during
+the lift (not in the script read: `UpdateLiftedPawn` sets the location) or the curled pose is read differently by eye. A live read settles it:
+`tools/real_game/scripts/phaselock_integrity.py` now records the target's `Rotation` and its mesh's rotation every frame. bl-sdk is installed on this
+PC (round 21's note that it is not is out of date); the run needs a hub slot. The default stays 180 until then, which is a choice, not a finding.
+
+**What makes the palm orb pale (measured).** Mean of a 40 px box on the orb at 0.50 s, 8-bit:
+
+| Frame | R | G | B |
+|---|---|---|---|
+| Game | 107 | 147 | 249 |
+| Round 22, offset 0 | 159 | 208 | 251 |
+| Round 23, offset 0 (the blue constant converted) | 158 | 208 | 251 |
+| Round 22, tone curve off | 10 | 158 | 253 |
+
+The inner orb's texture branch alone is already saturated (about 86, 109, 243 at its centre, computed from the texture and the host's factors).
+With the tone curve off, green and blue nearly match the game and red falls far below it. So most of the paleness is UE's film curve desaturating
+an over-bright blue, not the orb's own colour; the red gap with the curve off (10 against 107) is unexplained. The round-22 verdict that tone off moves
+the fur farther predates the zone-colour fix, so round 24 retests it. **Remaining, most visible first (critic):** the facing above; the held target
+larger, paler and less tucked; the 0.80 s blue-white bloom that hides the game's target (the host shows crisp cyan rings); the palm orb; the bubble rim
+(the game's is brighter electric blue, with more turbulent purple-black smoke).
+
+## Round 24 (2026-11-04 to 11-06, maya lane): the hand orb's added layers read as gamma-space colours
+
+AI-assisted (Claude). The hand template's emitters and materials, read from the emitter data: three ribbon emitters (`Mat_SirenEnergyRibbons`), a swirl
+(`Mat_SirenEnergySwirl`), `Center` (`Mat_SirenHandInnerOrb`), `EndBrightness` (`Mat_SirenHandGlowShattered`), two `InitialFlash` (`Mat_SirenGlowMOD`),
+`ModulateBlack`, `After smoke` and the still-skipped `Suction`. The ribbon, swirl and star-burst materials get a `GammaOut` parameter (default 0: unchanged;
+1: the layer's colour, clipped at 1, is read as a gamma-space value and converted to linear), and the hand template's emitters set it in
+`OpenWillowPhaselockFx.cpp` (`EmitterScalars`). Other templates that use the ribbon or swirl material (`Part_SirenASEnemyOrbBegin`, `Part_SirenASEnemyOrbEnd`,
+`Part_SirenASHandFizzle`, `Part_PhaseLock_Miss_Impact`, `Part_PhaseLock_EnemyCannotBeLocked`) keep 0. This lowers the layers' red and green, not their blue, so it
+cannot by itself remove the over-bright blue that the film curve desaturates. UNVERIFIED until the capture, which also retests `-owtonecurve=0` on the corrected target.
