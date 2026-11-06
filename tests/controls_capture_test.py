@@ -19,6 +19,8 @@ STUB = r"""
 . '__REALGAME__'
 $work = '__WORK__'
 $scenario = $env:OW_SCENARIO
+$script:StubPageAsks = 0
+$script:StubMeleeCalls = 0
 $script:RG = Join-Path $work 'rg'
 $script:CmdDir = Join-Path $script:RG 'cmd'
 $script:WillowDir = Join-Path $work 'willow'
@@ -43,8 +45,8 @@ $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
-        '*block_saves*' { return 'True' }
-        '*GetStreamingPersistentMapName*' { return 'Sanctuary_P WillowPlayerPawn' }
+        '*block_saves*' { return $(if ($scenario -eq 'saves_traceback') { 'Traceback: block failed' } elseif ($scenario -eq 'saves_none') { '0' } else { '3' }) }
+        '*GetStreamingPersistentMapName*' { return $(if ($scenario -eq 'wrong_map') { 'Ice_P WillowPlayerPawn' } else { 'Sanctuary_P WillowPlayerPawn' }) }
         '*cp_bindings*' {
             # The run writes to the player's files: a restore must undo all of this.
             Set-Content -LiteralPath (Join-Path $script:WillowDir 'SaveData/save.sav') 'changed by the run'
@@ -62,10 +64,21 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             return '[{"key": "V"}]'
         }
         '*cp_melee_facts*' { return '{"definition": {}}' }
-        '*cp_page*' { return '{"movie": "m"}' }
+        '*cp_page*' {
+            # An old stage passed on the key "movie" alone, or on eight rows. The real read: open, and the screen the key left it on.
+            $script:StubPageAsks++
+            if ($scenario -eq 'page_closed') { return '{"movie": "m", "open": false, "quick_screen": 0}' }
+            if ($scenario -eq 'keys_no_effect') { return '{"movie": "m", "open": true, "quick_screen": 0}' }
+            return "{`"movie`": `"m`", `"open`": true, `"quick_screen`": $script:StubPageAsks}"
+        }
+        '*cp_count*' {
+            # Each ask after a V sees one more call, unless the press never reached the game.
+            if ($scenario -eq 'no_melee' -or ($scenario -eq 'no_npc_melee' -and $script:StubMeleeCalls -ge 3)) { return "$script:StubMeleeCalls" }
+            $script:StubMeleeCalls++
+            return "$script:StubMeleeCalls"
+        }
         '*cp_injure*' { return $(if ($scenario -eq 'not_down') { '{"injured": false}' } else { '{"injured": true}' }) }
         '*cp_melee_hooks*' { return '{}' }
-        '*endswith*' { return $(if ($scenario -eq 'no_melee') { '0' } else { '2' }) }
         '*cp_targets*' { return '[{"class": "WillowAIPawn", "path": "a.b"}]' }
         '*cp_prompt_read*' { return '{}' }
         '*quit*' { if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
@@ -135,9 +148,35 @@ class ControlsCaptureTest(unittest.TestCase):
 
     def test_a_missing_stage_is_incomplete_not_finished(self):
         done, session = self.run_capture('no_melee')
-        self.assertEqual(session['status'], 'incomplete: melee_air')
+        self.assertTrue(session['status'].startswith('incomplete: melee_air'), session['status'])
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.saves(), 'original save')
+
+    def test_a_page_that_never_opened_fails_its_stages(self):
+        done, session = self.run_capture('page_closed')
+        for stage in ('melee_interrupted', 'page_keys'):
+            self.assertIn(stage, session['status'])
+        self.assertEqual(done.returncode, 1)
+
+    def test_keys_that_change_nothing_fail_page_keys(self):
+        done, session = self.run_capture('keys_no_effect')
+        self.assertEqual(session['status'], 'incomplete: page_keys')
+
+    def test_a_press_that_never_reached_a_pawn_fails_melee_npc(self):
+        done, session = self.run_capture('no_npc_melee')
+        self.assertIn('melee_npc', session['status'])
+        self.assertTrue(any('melee_npc' in p and 'melee calls: 0' in p for p in session['stage_problems']), session['stage_problems'])
+
+    def test_another_map_stops_the_run(self):
+        done, session = self.run_capture('wrong_map')
+        self.assertTrue(session['status'].startswith('failed: not in Sanctuary'), session['status'])
+        self.assertEqual(self.saves(), 'original save')
+
+    def test_saves_not_blocked_stops_the_run(self):
+        for scenario in ('saves_traceback', 'saves_none'):
+            done, session = self.run_capture(scenario)
+            self.assertTrue(session['status'].startswith('failed: saves not blocked'), session['status'])
+            self.setUp()
 
     def test_maya_not_going_down_is_incomplete(self):
         done, session = self.run_capture('not_down')

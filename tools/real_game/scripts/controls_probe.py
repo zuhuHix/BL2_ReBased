@@ -174,6 +174,11 @@ def cp_rows(name=None):
     return CP["rows"]
 
 
+def cp_count():
+    """Melee calls seen so far, for a stage to tell whether a press reached the game."""
+    return sum(1 for row in CP["rows"] if row["tag"] == "pre" and row["fn"].endswith(":MeleeAttack"))
+
+
 def cp_unhook():
     for path, typ, ident in CP["hooks"]:
         _try(lambda: remove_hook(path, typ, ident))

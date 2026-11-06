@@ -27,6 +27,9 @@ $Out = Join-Path $script:RG 'controls'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); status = 'running' }
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+# Evidence for the stages: a status menu that is really up, and the melee calls the game has made so far.
+function Test-PageOpen([string]$Json) { try { (ConvertFrom-Json $Json).open -eq $true } catch { $false } }
+function Get-MeleeCount { [int](Py 'print(cp_count())') }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
@@ -66,7 +69,8 @@ try {
     }
     if (-not $ok) { Save-Shot 'controls/boot.png' | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
     $log.block_saves = Py 'print(block_saves())'
-    if ($log.block_saves -notmatch 'True|block') { throw "saves not blocked: $($log.block_saves)" }
+    # block_saves reports how many save functions it blocked. Until the shared helper replaces this: only a positive count passes.
+    if ($log.block_saves -notmatch '^\d+$' -or [int]$log.block_saves -le 0) { throw "saves not blocked: $($log.block_saves)" }
     Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
     $map = ''
     for ($i = 0; $i -lt 6 -and $map -notmatch 'WillowPlayerPawn'; $i++) {   # the level load can hold the command channel
@@ -75,6 +79,7 @@ try {
     }
     "map: $map"; $log.map = $map
     if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'controls/load_failed.png' | Out-Null; throw "no player pawn: $map" }
+    if ($map -notmatch '^Sanctuary') { Save-Shot 'controls/wrong_map.png' | Out-Null; throw "not in Sanctuary: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 10   # let the streamed levels spawn
     Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/controls_probe.py') controls | Out-Null
 
@@ -92,11 +97,12 @@ try {
     Save-Shot 'controls/after_melee.png' | Out-Null
     Send-Key V; Start-Sleep -Milliseconds 300; Send-Key V; Start-Sleep -Milliseconds 300; Send-Key V; Start-Sleep 3
     Py "print(cp_rows('melee_air'))" | Out-Null
-    $count = Py 'print(sum(1 for r in cp_rows() if r["fn"].endswith("MeleeAttack")))'
-    Set-Stage 'melee_air' ([int]$count -gt 0) 'no melee call seen for the V presses'
+    $count = Get-MeleeCount
+    Set-Stage 'melee_air' ($count -gt 0) 'no melee call seen for the V presses'
 
     # What interrupts a stock swing: the status menu opened inside the hit's delay, and a weapon key inside it. The rows show whether
     # the hit behaviour still ran and whether the menu opened; the shots show what happened to the arm.
+    $beforeInterrupted = Get-MeleeCount
     Send-Key V; Start-Sleep -Milliseconds 100; Send-Key Tab; Start-Sleep 2
     $menu = Py 'print(json.dumps(cp_page(), default=str))' 15
     Save-Shot 'controls/melee_then_menu.png' | Out-Null
@@ -105,7 +111,8 @@ try {
     Save-Shot 'controls/melee_then_weapon_key.png' | Out-Null
     Py "print(cp_rows('melee_interrupted'))" | Out-Null
     $log.melee_then_menu = $menu
-    Set-Stage 'melee_interrupted' ($menu -match '"movie"') 'no menu read after a press inside a swing'
+    $interruptedSwings = (Get-MeleeCount) - $beforeInterrupted
+    Set-Stage 'melee_interrupted' ((Test-PageOpen $menu) -and $interruptedSwings -gt 0) "menu open: $(Test-PageOpen $menu), melee calls: $interruptedSwings"
 
     # Each candidate: stand before it, read the prompt with a screenshot.
     $targets = @(Py 'print(json.dumps(cp_targets()))' 60 | ConvertFrom-Json)
@@ -130,15 +137,18 @@ try {
 
     # A melee press with the nearest pawn close ahead: whether a stock swing reaches something friendly.
     $npc = @($targets | Where-Object { $_.class -eq 'WillowAIPawn' } | Select-Object -First 1)
+    $npcSwings = 0
     if ($npc) {
+        $beforeNpc = Get-MeleeCount
         Py "print(cp_prompt(r'$($npc[0].path)', 150.0))" | Out-Null
         Start-Sleep 1; Focus-Game | Out-Null; Send-Key V; Start-Sleep 3
         Py "print(cp_rows('melee_npc'))" | Out-Null
+        $npcSwings = (Get-MeleeCount) - $beforeNpc
     }
-    Set-Stage 'melee_npc' ($npc.Count -gt 0) 'no pawn to stand before'
+    Set-Stage 'melee_npc' ($npcSwings -gt 0) "pawns: $($npc.Count), melee calls: $npcSwings"
 
     # M and L on each open page: open it with its stock key, press one, read and capture, close. Tab and Esc are the page's own business.
-    $pageReads = @()
+    $pageReads = @(); $pagesOpened = 0; $keysWithEffect = 0
     foreach ($page in 'M', 'L', 'I', 'K') {
         foreach ($key in 'M', 'L') {
             Focus-Game | Out-Null
@@ -146,6 +156,8 @@ try {
             $opened = Py 'print(json.dumps(cp_page(), default=str))' 15
             Send-Key $key; Start-Sleep 2
             $after = Py 'print(json.dumps(cp_page(), default=str))' 15
+            if (Test-PageOpen $opened) { $pagesOpened++ }
+            if ($after -ne $opened) { $keysWithEffect++ }
             Save-Shot "controls/page_${page}_then_${key}.png" | Out-Null
             $pageReads += "{`"page`": `"$page`", `"key`": `"$key`", `"opened`": $opened, `"after`": $after}"
             Send-Key Esc; Start-Sleep 2
@@ -154,10 +166,13 @@ try {
         }
     }
     $pageReads | Set-Content (Join-Path $Out 'page_keys.jsonl')
-    Set-Stage 'page_keys' ($pageReads.Count -eq 8) 'not every page and key was read'
+    # A key may do nothing on some page, which is what this reads; but every page must have opened, and some key must have done something.
+    Set-Stage 'page_keys' ($pagesOpened -eq 8 -and $keysWithEffect -gt 0) "pages opened: $pagesOpened of 8, keys with an effect: $keysWithEffect"
     Py "print(cp_rows('page_keys'))" | Out-Null
 
-    # Last: Maya then bleeds out. Whether the map, the missions and a swing work while she is down.
+    # Last: Maya then bleeds out. Whether the map, the missions and a swing work while she is down. The reads below take about 8 s against
+    # about 20 s of bleed-out, so normally the game quits first. A slow session can see her die and respawn in memory: saves stay blocked
+    # and everything is restored from the verified backup all the same, and only the last shots would show the respawn.
     $injured = ''
     for ($i = 0; $i -lt 8 -and $injured -notmatch '"injured": true'; $i++) { $injured = Py 'print(json.dumps(cp_injure(), default=str))' 15; Start-Sleep 1 }
     $log.injure = $injured; "injure: $injured"
