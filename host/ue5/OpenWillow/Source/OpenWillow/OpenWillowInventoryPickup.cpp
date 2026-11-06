@@ -1,4 +1,5 @@
 #include "OpenWillowInventoryPickup.h"
+#include "OpenWillowAudio.h"
 #include "OpenWillowWeaponAssembly.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -61,7 +62,11 @@ bool AOpenWillowInventoryPickup::TryPickup(UOpenWillowInventory* Inventory)
     const bool bAdded = Item.bIsGear
         ? Inventory->AddGearToBackpack(Item.Gear)
         : Inventory->AddToBackpack(Item.Weapon);
-    if (bAdded) Destroy();
+    if (bAdded)
+    {
+        OpenWillowAudio::Play(this, TEXT("pickup"));
+        Destroy();
+    }
     return bAdded;
 }
 

@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Synthetic tests for tools/prepare_slice_audio.py: every WAV and manifest here is generated, no game data."""
+import json
+import os
+import sys
+import tempfile
+import unittest
+import wave
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+import prepare_slice_audio as psa  # noqa: E402
+
+
+def manifest(media):
+    return {'schema': 'ow-audio-v1', 'entries': [{'key': 'weapon:fire', 'media': media}]}
+
+
+class PrepareSliceAudioTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.dir = self.temp.name
+
+    def tone(self, name, seconds=1.0):
+        path = os.path.join(self.dir, name)
+        psa.write_tone(path, seconds=seconds)
+        return path
+
+    def test_tone_is_16_bit_mono_of_the_asked_length(self):
+        with wave.open(self.tone('t.wav', seconds=0.5), 'rb') as wav:
+            self.assertEqual((wav.getnchannels(), wav.getsampwidth()), (1, 2))
+            self.assertAlmostEqual(wav.getnframes() / wav.getframerate(), 0.5)
+
+    def test_matching_length_is_mapped(self):
+        self.tone('1.wav')
+        roles, unresolved = psa.build_play_map(manifest([{'source': 1, 'duration_s': 1.0}]), self.dir)
+        self.assertEqual(roles['fire'], [os.path.abspath(os.path.join(self.dir, '1.wav'))])
+        self.assertNotIn('fire', unresolved)
+
+    def test_wrong_length_is_refused(self):
+        self.tone('1.wav')
+        roles, unresolved = psa.build_play_map(manifest([{'source': 1, 'duration_s': 2.0}]), self.dir)
+        self.assertNotIn('fire', roles)
+        self.assertIn('header says', unresolved['fire'])
+
+    def test_missing_file_leaves_the_role_silent(self):
+        roles, unresolved = psa.build_play_map(manifest([{'source': 1, 'duration_s': 1.0}]), self.dir)
+        self.assertNotIn('fire', roles)
+        self.assertIn('fire', unresolved)
+
+    def test_a_bad_file_does_not_drop_the_good_one(self):
+        self.tone('1.wav')
+        with open(os.path.join(self.dir, '2.wav'), 'wb') as fh:
+            fh.write(b'RIFFnot a wave')
+        roles, _ = psa.build_play_map(manifest([{'source': 1, 'duration_s': 1.0}, {'source': 2, 'duration_s': 1.0}]), self.dir)
+        self.assertEqual(len(roles['fire']), 1)
+
+    def test_eight_bit_is_refused(self):
+        path = os.path.join(self.dir, '1.wav')
+        with wave.open(path, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(1)
+            wav.setframerate(8000)
+            wav.writeframes(b'\x80' * 8000)
+        self.assertIn('16-bit', psa.check_wav(path, None))
+
+    def test_roles_without_evidence_stay_unresolved(self):
+        _, unresolved = psa.build_play_map(manifest([]), self.dir)
+        for role in ('hit', 'phaselock_cast', 'pickup'):
+            self.assertIn(role, unresolved)
+
+    def test_tone_only_writes_the_map_without_a_manifest(self):
+        out = os.path.join(self.dir, 'play.json')
+        self.assertEqual(psa.main(['--tone-only', '--out', out, '--tone', os.path.join(self.dir, 'tone.wav'), '--manifest', os.path.join(self.dir, 'absent.json')]), 0)
+        with open(out, encoding='utf-8') as fh:
+            data = json.load(fh)
+        self.assertEqual(data['schema'], psa.PLAY_SCHEMA)
+        self.assertEqual(list(data['roles']), ['test_tone'])
+
+    def test_wrong_manifest_schema_is_refused(self):
+        bad = os.path.join(self.dir, 'bad.json')
+        with open(bad, 'w', encoding='utf-8') as fh:
+            json.dump({'schema': 'other', 'entries': []}, fh)
+        with self.assertRaises(SystemExit):
+            psa.main(['--manifest', bad, '--out', os.path.join(self.dir, 'p.json'), '--tone', os.path.join(self.dir, 'tone.wav')])
+
+
+if __name__ == '__main__':
+    unittest.main()

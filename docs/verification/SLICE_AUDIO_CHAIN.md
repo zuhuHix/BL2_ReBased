@@ -165,6 +165,30 @@ ducking); `bVoice`, `FaceFXAnimSet` (lip sync) and `Priority` exist in the data 
 Out of scope here: decoding, UE5 `USoundWave` import, Wwise RTPC/state/switch/bus logic, music (`Ak_Play_Music_Act1_Sanctuary` etc.), ambient emitters
 (27 `AkAmbientSound` in `Sanctuary_Audio`), other languages, DLC banks, subtitles/echo UI.
 
+## 5. Host playback (2026-11-06, AI-assisted, Claude)
+
+**State: the host path exists and has only been written and compiled against a synthetic tone. No game sound has been decoded, played or heard.** Which decoder
+to use is a maintainer decision and is still open, so game sounds stay silent until then.
+
+Path: a decoder (not chosen yet, outside the repository) writes 16-bit PCM `<source>.wav` into ignored `local/audio/decoded/`. `tools/prepare_slice_audio.py` checks
+each file's format and its length against the manifest's header duration, then writes ignored `local/slice/audio_play.json` (`ow-audio-play-v1`, role -> files, plus
+`unresolved` with a reason per role). The host reads it with `-owaudioplay=` and plays through UE's own `USoundWaveProcedural` (`OpenWillowAudio.h/.cpp`; no new
+module or dependency). Without the option nothing changes.
+
+| Role | Hook | Sound | Evidence |
+|---|---|---|---|
+| `fire` | `AOpenWillowWalker::FireWeapon` | manifest `weapon:fire` | the lent pistol's `WeaponTypeDefinition.FireSounds` (section 2). The host plays it for every gun until other guns are resolved: a known gap |
+| `hit` | `OpenWillowHit::OnHit` (direct hits with damage applied; at most one per 50 ms, host choice) | none yet | nothing identified in installed data; needs a live read |
+| `phaselock_cast` | the successful lift in the Walker's Phaselock cast | none yet | candidate by name only, `Ak_Play_FX_Player_Phaselock_Activate` (PHASELOCK_STOCK_DATA.md); UNVERIFIED |
+| `pickup` | `AOpenWillowInventoryPickup::TryPickup` when the item was added | none yet | candidates by name only, the `Ake_Obj_Pickup.Obj_Pickup` events; UNVERIFIED. Cash and ammo pickups take other paths and are not hooked |
+
+A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state, attenuation or ducking: every sound is 2D at full
+volume. Dialog is not hooked; the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.
+
+Test: `python tools/prepare_slice_audio.py --tone-only`, then `tools/test_audio.ps1` (`-owaudiotest`, a synthetic tone through the real path). Its strongest check is
+that the mixer pulled every queued byte (`mixer_pulled_all_bytes`). That still says nothing about what a person hears. `OWAUDIO play` means the host called play.
+Python: `tests/prepare_slice_audio_test.py` (synthetic).
+
 ## UNVERIFIED list
 
 Container fields beyond the oracles above (the externals table, `block_size` use, the 678 longer play actions, 10 unresolved play targets, 1 unresolved
