@@ -2,8 +2,11 @@
 
 FakePackage stands in for skill_stats.Package (props(), index, classes). Paths and values are made up.
 """
+import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import grenade_mod as grenade
@@ -198,7 +201,44 @@ class OutputPathTest(unittest.TestCase):
 
     def test_path_inside_local_is_accepted(self):
         resolved = grenade.local_path(ROOT / 'local' / 'items' / 'grenades' / 'test.json')
-        self.assertIn(ROOT / 'local', resolved.parents)
+        # Resolved on both sides: local/ may itself be a junction into another folder.
+        self.assertIn((ROOT / 'local').resolve(), resolved.parents)
+
+
+@unittest.skipUnless(os.name == 'nt', 'junctions are a Windows feature')
+class JunctionPathTest(unittest.TestCase):
+    """The output check on real junctions: a worktree's local/ may be one (pc-hummer uses them)."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.base = Path(temp.name).resolve()
+        self.repo = self.base / 'repo'
+        self.store = self.base / 'store'
+        self.repo.mkdir()
+        self.store.mkdir()
+        self.junction(self.repo / 'local', self.store)
+
+    def junction(self, link, target):
+        subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], check=True, capture_output=True)
+        self.addCleanup(os.rmdir, link)   # removes the link only; runs before the folder's own cleanup
+
+    def test_output_behind_a_junctioned_local_is_accepted(self):
+        resolved = grenade.local_path(self.repo / 'local' / 'items' / 'test.json', repo=self.repo)
+        self.assertEqual(resolved, self.store / 'items' / 'test.json')
+
+    def test_path_outside_is_still_refused(self):
+        with self.assertRaises(SystemExit):
+            grenade.local_path(self.repo / 'tools' / 'test.json', repo=self.repo)
+        with self.assertRaises(SystemExit):
+            grenade.local_path(self.repo / 'local' / '..' / 'tools' / 'test.json', repo=self.repo)
+
+    def test_a_junction_that_leaves_local_is_refused(self):
+        outside = self.base / 'outside'
+        outside.mkdir()
+        self.junction(self.store / 'escape', outside)
+        with self.assertRaises(SystemExit):
+            grenade.local_path(self.repo / 'local' / 'escape' / 'test.json', repo=self.repo)
 
 
 if __name__ == '__main__':
