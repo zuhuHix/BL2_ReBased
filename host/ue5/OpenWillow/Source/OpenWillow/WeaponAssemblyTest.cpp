@@ -4,6 +4,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowInventoryPickup.h"
 #include "OpenWillowWeaponAssembly.h"
 
 // The library planning rules on a synthetic index (invented names, no game data): fragments in slot order, vectors with a
@@ -121,6 +122,19 @@ bool FOpenWillowWeaponAssemblyTest::RunTest(const FString&)
 
     OpenWillowWeaponAssembly::ResetLibraryForTests();
     IFileManager::Get().Delete(*File);
+    return true;
+}
+
+// The world drop's beam colour: the card's hex colour (an invented one here); white when there is none or it is malformed.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowDropBeamColorTest, "OpenWillow.WeaponAssembly.DropBeamColor",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FOpenWillowDropBeamColorTest::RunTest(const FString&)
+{
+    auto Same = [this](const TCHAR* What, const FLinearColor& Got, const FColor& Want)
+    { TestEqual(What, Got.ToFColor(true), Want); };
+    Same(TEXT("The card's colour"), AOpenWillowInventoryPickup::RarityBeamColor(TEXT("#123456")), FColor(0x12, 0x34, 0x56));
+    Same(TEXT("No colour is white"), AOpenWillowInventoryPickup::RarityBeamColor(FString()), FColor::White);
+    Same(TEXT("A malformed colour is white"), AOpenWillowInventoryPickup::RarityBeamColor(TEXT("12345")), FColor::White);
     return true;
 }
 #endif

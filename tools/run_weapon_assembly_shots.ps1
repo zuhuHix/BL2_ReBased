@@ -26,7 +26,7 @@ if (-not $Ids.Count) {
     $Ids = if (Test-Path $order) { Get-Content $order | ForEach-Object { $_.Trim() } | Where-Object { $_ } }
            else { Get-ChildItem $Items -Filter *.json | Where-Object { $_.BaseName -match '^[A-Za-z0-9_]+$' } | ForEach-Object BaseName }
 }
-$outDir = Join-Path $repo $Out
+$outDir = if ([IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $repo $Out }
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
@@ -57,9 +57,11 @@ try {
         Exit-OwUeLock
     }
     Get-ChildItem $shots -Filter 'OWGun_*.png' -ErrorAction SilentlyContinue | Copy-Item -Destination $outDir -Force
-    "frames: $((Get-ChildItem $outDir -Filter '*.png').Count) in $outDir"
+    $frames = (Get-ChildItem $outDir -Filter '*.png').Count
+    "frames: $frames in $outDir"
     "assembly reports: $((Select-String -LiteralPath $log -Pattern 'OpenWillow weapon assembly ').Count)"
     Select-String -LiteralPath $log -Pattern 'gunshots skipped|Error:|Fatal' | Select-Object -First 20 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }
 } finally {
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
 }
+if (-not $frames) { Write-Error 'no frames captured'; exit 1 }

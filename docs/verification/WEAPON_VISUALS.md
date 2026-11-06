@@ -598,3 +598,32 @@ the wood mid-tones are darker than real: a soft shoulder in the paint material r
 (host much darker than real); the real Inspect's thin pale silhouette rim; turntable frames covering the reverse side; a
 real-game reference session (Inspect and held frames of the 33 matrix guns, a dropped gun per rarity, the live Torgue glow
 colours), which on this PC needs the Steam account that owns the game.
+
+## 20. World drops (gunlook lane, 2026-11-06): a rarity beam, the gun on the ground
+
+AI-assisted (Claude Opus 5.5; critic Luna). `AOpenWillowInventoryPickup` only; its spawn signature is unchanged. Host frames only:
+no real frame of a dropped gun exists on these machines, so nothing here is compared with the game.
+
+**Read from the cooked data, UNVERIFIED in the running game.** The globals' pickup effect is a thin vertical stick, 3 x 120 units,
+tinted through a colour parameter; `RarityLevelColors` holds the colours. The spawn of that effect is native and was not read, so
+which tiers show it is not known: the host shows it on every tier. The pickup class has no light component in the data, so the host
+adds none. The scale of a dropped gun was not read. The game lands pickups with rigid-body physics; the host does not.
+
+**Host choices, UNVERIFIED.** The gun lies on its side at full size, centred on the beam, its shown parts' lowest point on the ground.
+The beam is an additive cylinder (`-owdropbeam=<n>` sets its strength, `-owdropnobeam` removes it). Its colour is the item card's
+`rarity_color`; an item without one gets a white beam. The floating text label is hidden, since the game shows no floating text
+and the item card appears on aim; `-owdroplabel` shows it for debugging (it drew mirrored).
+
+**Capture.** `-owdropshots` in the `-owgunshots` sequence spawns a copy of each gun 4.5 m ahead and saves `_drop` (the spawn frame) and
+`_droplate` (12 ticks later, still holding the same gun). Run with 9 guns, Jakobs pistols and Vladof rifles of each rarity:
+0 fallback lines, the gun on the ground and the beam in all 9 `_droplate`, held gun matching the file name. Uncommon, Rare and Epic
+colours came from a local test fixture that sets the card's colour, so they check the path, not how a gun gets its rarity. The
+Legendary and the Common guns used their own recipe values.
+
+**The first beam is late, not missing.** In a `-Quick` run, the first drop has no beam in its spawn frame and has one in `_droplate`.
+In a full run, which fires first, the first drop has it at once. The fired shots use the same effect material, so a first use of
+that material is the likely cause (inferred, UNVERIFIED). Loading the mesh and material with the class did not change it, and was taken
+out. Left as is: a beam some ticks late the first time, for a player who has not fired yet.
+
+**Open.** A real frame of a drop per rarity (tiers shown, stick size, gun scale and pose); physics and rest pose; a body glow, if the
+game has one (`Master_ColorizationPickup` not decoded).
