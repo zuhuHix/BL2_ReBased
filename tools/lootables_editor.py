@@ -372,6 +372,32 @@ def build_material_plan(plan, jobs):
     return {'schema': 'openwillow-lootables-materials/1', 'meshes': meshes, 'pickups': pickups}
 
 
+def unbound_meshes(material_plan, editor_report):
+    """(mesh, why) for every planned mesh that did not end bound. No editor report leaves them all unbound."""
+    bound = (editor_report or {}).get('bound') or {}
+    rows = []
+    for planned in (material_plan.get('meshes') or []) + (material_plan.get('pickups') or []):
+        status = bound.get(planned['mesh'], {})
+        if not status.get('bound'):
+            rows.append((planned['mesh'], status.get('reason') or planned.get('reason') or 'no editor result'))
+    return rows
+
+
+def cmd_check_materials(args):
+    plan = load_plan(args.plan)
+    out = Path(plan['out_dir'])
+    material_plan = load_optional(out / 'materials_plan.json')
+    if material_plan is None:
+        raise SystemExit('check-materials: no materials_plan.json (run the materials step)')
+    rows = unbound_meshes(material_plan, load_optional(out / 'editor_materials.json'))
+    total = len(material_plan.get('meshes') or []) + len(material_plan.get('pickups') or [])
+    for mesh, why in rows:
+        print(f'material {mesh}: NOT BOUND: {why}')
+    print(f'materials: {total - len(rows)} of {total} planned meshes bound')
+    if rows:
+        raise SystemExit(1)
+
+
 def cmd_materials(args):
     plan = load_plan(args.plan)
     result = build_material_plan(plan, load_jobs(args.umodel_jobs))
@@ -431,6 +457,7 @@ def cmd_report(args):
         row(status.get('instance') or f'{MATERIAL_DEST}/{planned["material"] or planned["mesh"]}', 'material', status.get('bound'),
             status.get('reason') or planned['reason'] or ('' if status.get('bound') else 'no editor result'),
             planned['source'] or 'no material found')
+        rows[-1]['mesh'] = planned['mesh']   # two meshes can share a material, so the same asset can have two rows
     counts ={'yes': sum(1 for r in rows if r['imported']), 'no': sum(1 for r in rows if not r['imported'])}
     report = {'schema': 'openwillow-lootables-import/1', 'generated': datetime.datetime.now().isoformat(timespec='seconds'),
               'imported_yes': counts['yes'], 'imported_no': counts['no'], 'assets': rows,
@@ -518,11 +545,15 @@ def lootable_master():
 
 
 def material_instance(planned, parent):
-    """One instance per material (two meshes can share one), its textures in its own folder."""
+    """One instance per material (two meshes can share one), its textures in its own folder. On a rerun it is updated in
+    place, because meshes already bound to it must not lose it."""
     mel = unreal.MaterialEditingLibrary
     folder = f'{MATERIAL_DEST}/{planned["material"]}'
-    clean(folder)
-    instance = tools.create_asset(planned['material'], folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    path = f'{folder}/{planned["material"]}'
+    if eal.does_asset_exist(path):
+        instance = unreal.load_asset(path)
+    else:
+        instance = tools.create_asset(planned['material'], folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
     mel.set_material_instance_parent(instance, parent)
     for parameter, source in (('Diffuse', planned['diffuse']), ('Normal', planned['normal'])):
         if not source:
@@ -541,7 +572,11 @@ def bind_skeletal(mesh, instance):
     slots = mesh.get_editor_property('materials')
     if len(slots) != 1:
         raise RuntimeError(f'expected one material slot, the asset has {len(slots)}')
-    slots[0].set_editor_property('material_interface', instance)
+    # Indexing gives a copy of the struct, so it must be written back (as tools/slice_npc_editor.py's assign does).
+    slot = slots[0]
+    slot.set_editor_property('material_interface', instance)
+    slots[0] = slot
+    mesh.modify()
     mesh.set_editor_property('materials', slots)
     return mesh.get_editor_property('materials')[0].get_editor_property('material_interface')
 
@@ -730,6 +765,9 @@ def main(argv):
     m.add_argument('--umodel-jobs', default=str(OUT / 'umodel_jobs.json'))
     m.add_argument('--out', default=str(OUT / 'materials_plan.json'))
     m.set_defaults(func=cmd_materials)
+    c = sub.add_parser('check-materials', help='exit 1 unless every planned mesh ended bound')
+    c.add_argument('--plan', default=str(OUT / 'plan.json'))
+    c.set_defaults(func=cmd_check_materials)
     r = sub.add_parser('report', help='write import_report.json')
     r.add_argument('--plan', default=str(OUT / 'plan.json'))
     r.add_argument('--umodel-jobs', default=str(OUT / 'umodel_jobs.json'))

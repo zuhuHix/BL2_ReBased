@@ -21,6 +21,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
+#include "Materials/MaterialInterface.h"
 #include "Math/RandomStream.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -604,6 +605,12 @@ bool UOpenWillowInteractiveSubsystem::SpawnOne(UWorld& World, const TSharedPtr<F
     return true;
 }
 
+FString AOpenWillowLootable::RenderedMaterialPath() const
+{
+    const UMaterialInterface* Material = Skeletal && Skeletal->GetSkeletalMeshAsset() ? Skeletal->GetMaterial(0) : nullptr;
+    return Material ? Material->GetPathName() : FString();
+}
+
 bool UOpenWillowInteractiveSubsystem::FindNearest(const AOpenWillowWalker& Walker, AOpenWillowLootable*& OutLootable,
     AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared)
 {
@@ -1123,6 +1130,9 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
                 Stop.Stand = Candidate->GetActorLocation() + Candidate->GetActorForwardVector() * 220.f + FVector(0.f, 0.f, 100.f);
             }
             const AOpenWillowLootable* Chosen = Stop.Lootable.Get();
+            // The slot lives on the mesh asset, which every lootable of a balance shares, so one line stands for them all.
+            UE_LOG(LogTemp, Display, TEXT("OWLOOTLID material balance=%s id=%s path=%s"), *BalanceLeaf, Chosen ? *Chosen->Id : TEXT("none"),
+                Chosen ? *Chosen->RenderedMaterialPath() : TEXT(""));
             UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d id=%s tried=%d of %d"), *BalanceLeaf, ClearYaw >= 0 ? 1 : 0,
                 ClearYaw, Chosen ? *Chosen->Id : TEXT("none"), Tried, Row.Value.Num());
             LidQueue.Add(Stop);

@@ -148,6 +148,8 @@ public:
     bool IsOpened() const { return bOpened; }
     // True when the imported open clip loaded (the lid-opening capture of -owinteractivetest uses these).
     bool HasOpenClip() const { return OpenAnim != nullptr; }
+    // The path of the material the imported mesh renders in its first slot; empty without one.
+    FString RenderedMaterialPath() const;
 
     FString Id;
     FString Balance;
