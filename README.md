@@ -151,7 +151,7 @@ The full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-11-06-r1.jpg" width="48%" alt="BL2_ReBased: inventory page, 2026-11-06">
 </p>
 
-<p align="center"><sub>Left: the game's inventory page (2026-10-21). Right: BL2_ReBased on the same view (2026-11-06). The guns currently render near-white in this view, a known paint and preview problem.</sub></p>
+<p align="center"><sub>Left: the game's inventory page (2026-10-21). Right: the same page in the host, with real card rows and rendered guns (2026-11-06). Some guns render too pale, a known paint and preview problem, and the backdrop and a few values still differ.</sub></p>
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-10-09.jpg" width="48%" alt="Before: host inventory, 2026-10-09">
