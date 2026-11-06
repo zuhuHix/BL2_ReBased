@@ -91,6 +91,11 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("a full pool refuses the pickup"), OpenWillowInteractiveRules::AmmoAfter(20, 20, 18, After));
     TestFalse(TEXT("a zero amount is refused"), OpenWillowInteractiveRules::AmmoAfter(5, 20, 0, After));
 
+    // The lid capture leaves a balance's first lootable to the test's own open, unless it is the only one.
+    TestTrue(TEXT("no lootable, no candidate"), OpenWillowInteractiveRules::LidCandidateOrder(0).IsEmpty());
+    TestTrue(TEXT("a lone lootable is its own candidate"), OpenWillowInteractiveRules::LidCandidateOrder(1) == TArray<int32>{0});
+    TestTrue(TEXT("last first, the first left out"), OpenWillowInteractiveRules::LidCandidateOrder(3) == TArray<int32>({2, 1}));
+
     EOpenWillowAmmoType Type = EOpenWillowAmmoType::Pistol;
     TestTrue(TEXT("ar maps to the assault rifle pool"), OpenWillowInteractiveRules::AmmoTypeFromName(TEXT("ar"), Type));
     TestEqual(TEXT("ar pool"), int32(Type), int32(EOpenWillowAmmoType::AssaultRifle));
