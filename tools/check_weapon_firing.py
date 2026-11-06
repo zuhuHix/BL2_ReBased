@@ -274,6 +274,8 @@ def check_grenade(line):
     fails = []
     if line.get('thrown') != '1':
         return ['the grenade was not thrown (no grenade data: tools/grenade_mod.py, or no grenade in the pool)']
+    if line.get('aimed') != '1':
+        fails.append(f"the test's aim for the grenade did not run before its release (aimed={line.get('aimed')})")
     if int(line['ammo_after']) != int(line['ammo_before']) - 1:
         fails.append(f"grenade ammo {line['ammo_before']} -> {line['ammo_after']}, expected one fewer")
     # The mod's loaded damage and what actually landed: a zero-damage explosion still counts as hit events.

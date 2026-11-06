@@ -248,7 +248,7 @@ void AOpenWillowWalker::RunFiringTest(float Now)
     // Then the pool is emptied and G pressed again: the throw must be refused.
     static int32 GrenadeStep = 0, GrenadeAmmoBefore = 0, GrenadeAmmoAfter = 0;
     static float GrenadeAt = 0.f, GrenadeHealthBefore = 0.f;
-    static bool bGrenadeDummyDied = false;
+    static bool bGrenadeDummyDied = false, bGrenadeAimed = false;
     if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && GrenadeStep < 5 && CombatTarget.IsValid())
     {
         APlayerController* KeyPC = Cast<APlayerController>(Controller);
@@ -271,22 +271,24 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             GrenadeAmmoBefore = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current;
             GrenadeHealthBefore = CombatTarget->GetHealth();
             PressG(IE_Pressed);
-            // The press loads the data; the release, 0.52 s later, reads the view. A throw at the dummy's centre passes over
-            // its torso: the upward bonus and gravity lift the lob, and it starts 80 uu ahead and 20 uu left of the eye
-            // (AOpenWillowWalker::ReleaseGrenade). So aim where the lob meets the dummy, as a player leads a throw.
-            if (GrenadeData.bLoaded)
-            {
-                const FVector Eye = Camera->GetComponentLocation();
-                FVector Aim = CombatTarget->AimPoint();
-                const FVector Toward = (Aim - Eye).GetSafeNormal2D();
-                const float Flight = (float(FVector::Dist2D(Eye, Aim)) - 80.f) / GrenadeData.ProjectileSpeed;
-                const float GravityZ = OpenWillowFiring::WorldGravityZ * GrenadeData.GravityScale;
-                Aim.Z -= GrenadeData.UpwardVelocity * Flight + 0.5f * GravityZ * Flight * Flight;
-                Aim += FVector::CrossProduct(FVector::UpVector, Toward) * 20.f;
-                AimAt(Aim);
-            }
             GrenadeAt = Now;
             GrenadeStep = 2;
+        }
+        else if (GrenadeStep == 2 && !bGrenadeAimed && GrenadeData.bLoaded)
+        {
+            // InputKey only queues the press: the data loads when the binding runs, a tick or so later. The release, 0.52 s after
+            // the press, reads the view. A throw at the dummy's centre passes over its torso: the upward bonus and gravity lift
+            // the lob, and it starts 80 uu ahead and 20 uu left of the eye (AOpenWillowWalker::ReleaseGrenade). So aim where the
+            // lob meets the dummy, as a player leads a throw. The grenade line says whether this ran.
+            const FVector Eye = Camera->GetComponentLocation();
+            FVector Aim = CombatTarget->AimPoint();
+            const FVector Toward = (Aim - Eye).GetSafeNormal2D();
+            const float Flight = (float(FVector::Dist2D(Eye, Aim)) - 80.f) / GrenadeData.ProjectileSpeed;
+            const float GravityZ = OpenWillowFiring::WorldGravityZ * GrenadeData.GravityScale;
+            Aim.Z -= GrenadeData.UpwardVelocity * Flight + 0.5f * GravityZ * Flight * Flight;
+            Aim += FVector::CrossProduct(FVector::UpVector, Toward) * 20.f;
+            AimAt(Aim);
+            bGrenadeAimed = GrenadeReleaseAt > 0.f;
         }
         else if (GrenadeStep == 2 && ((Now >= GrenadeAt + 1.2f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
         {
@@ -304,12 +306,12 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             const bool bRefusedEmpty = GrenadeReleaseAt == 0.f && InFlight() == 0 && Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current == 0;
             Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, GrenadeAmmoAfter);
             const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d damage=%.2f splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d contact_age=%.3f fuse_age=%.3f contact_fuse=%.3f first_contact=%s dummy=%s health_before=%.2f health_after=%.2f dummy_died=%d"),
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d damage=%.2f splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d contact_age=%.3f fuse_age=%.3f contact_fuse=%.3f first_contact=%s dummy=%s health_before=%.2f health_after=%.2f dummy_died=%d aimed=%d"),
                 GrenadeAmmoAfter < GrenadeAmmoBefore ? 1 : 0, GrenadeAmmoBefore, GrenadeAmmoAfter, bRefusedEmpty ? 1 : 0,
                 GrenadeData.bLoaded ? GrenadeData.Splash.Damage : 0.f, C.SplashHits, C.Splash, C.GrenadeHits, C.UnknownSources,
                 C.GrenadeContactAge, C.GrenadeFuseAge, GrenadeData.ContactFuse,
                 C.GrenadeFirstContact.IsEmpty() ? TEXT("none") : *C.GrenadeFirstContact,
-                *CombatTarget->GetName(), GrenadeHealthBefore, CombatTarget->GetHealth(), bGrenadeDummyDied ? 1 : 0);
+                *CombatTarget->GetName(), GrenadeHealthBefore, CombatTarget->GetHealth(), bGrenadeDummyDied ? 1 : 0, bGrenadeAimed ? 1 : 0);
             GrenadeStep = 5;
         }
         return;

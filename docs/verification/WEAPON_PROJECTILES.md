@@ -502,8 +502,9 @@ parts.** Host suite evidence below is pending; a passing suite will mean "the ho
   bonus applying in world Z on top of the projectile's speed along the aim, which is what the host does.
 - **The firing test's aim.** The first host run (at #115's f6fc289, pc-hummer) threw at the shapes dummy's centre and missed: about 180 uu
   up at the dummy, above its torso and 20 uu beside its head, then an explosion far past the radius. The fault was the test's, not the
-  flight: it aimed as if there were no bonus, gravity or start offset. The test now aims where the lob meets the dummy and logs
-  `first_contact`, so a miss names what the grenade touched. It also logs the dummy's health around the throw: the checker requires a
+  flight: it aimed as if there were no bonus, gravity or start offset. The test's first aim fix never ran on the next host run (its launch direction did not change): `InputKey` only queues the press,
+  so the grenade data was not loaded yet when the aim was computed. The test now aims once the data is loaded, where the lob meets the dummy, and logs
+  `aimed` and `first_contact`, so a skipped aim fails and a miss names what the grenade touched. It also logs the dummy's health around the throw: the checker requires a
   decrease or a death on that dummy, because an invulnerable target records hits without losing health. That a player must lead a throw follows from this flight; the
   real pawn is larger than the shapes dummy.
 - **Host.** `ParseGrenade` takes elasticities, both timers and no-falloff from the block's `projectile.contact` and refuses a block
