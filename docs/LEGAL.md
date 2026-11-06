@@ -54,7 +54,7 @@ The scope, in plain words:
 
 - The git tree never holds screenshots of loaded game content.
 - A small set of comparison screenshots is published as assets on the
-  `progress-gallery` GitHub prerelease. The maintainer reviews each one before
+  `progress-gallery` GitHub prerelease. Each one is reviewed before
   upload. Those assets live outside the git tree.
 - No game files and no extracted assets are ever published, in the tree or in
   the gallery.
