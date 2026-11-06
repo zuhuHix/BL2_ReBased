@@ -140,6 +140,7 @@ public:
     int32 HandFxParticles() const;
     int32 ScreenFxParticles() const;
     bool AreArmsShown() const;
+    bool IsWeaponShown() const;
     float LastTargetHitAt() const { return TargetHitAt; }
     class UOpenWillowMover* GetMover() const { return Mover; }
     class UOpenWillowQuest* GetQuest() const { return Quest; }

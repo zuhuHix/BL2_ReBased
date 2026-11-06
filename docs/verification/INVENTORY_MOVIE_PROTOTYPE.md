@@ -1465,6 +1465,9 @@ when the compare starts from the Equipped panel) and the Skills side trees fitte
 not traced, is that the movie's TweenCards rewrites the card's scales after the page's correction, which the page then believed was still applied; the page now re-applies it when the Y scale is not the one it left.
 The focus view's rows are spaced slightly wider, so the last empty cell lands where it does in D2g. Inspect card fit. All UNVERIFIED beyond D20.
 
+**PR review.** Nothing fires while a status page hides the weapon, whatever opened the page: the page's opening lets go of the trigger and ends a burst (UI-only input never delivers the key-up), and the firing paths check it too.
+The action suite gains three steps: Missions and Map hide the arms and gun and show no menu Maya, no shot fires under the Map, and closing restores them (53 steps). Host calls, not the keys to those pages.
+
 **Still open, in the last critic's order.**
 1. Gun paint and thumbnails (gunlook lane); static thumbnails come from the offline renderer.
 2. D5 Inspect rifle smaller and further right than real since the guns come from the library. `InspectFrame` frames from the preview mesh's local bounds, which may not suit an assembled gun (not checked; gunlook lane).

@@ -841,7 +841,8 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         Spin.SpinPercent = float(weapon_firing::tickSpin(Spin.SpinPercent, DeltaSeconds, bTrigger && !bReloading,
             Weapon->Firing.SpinUpDuration, Weapon->Firing.SpinDownDuration));
     }
-    if (bMayaActive && !MeleeBusy() && bWeaponOut && Weapon && bTrigger && !bReloading && DownWeaponReady() && Now >= NextShotAt)
+    // No shot while a status page hides the weapon, however that page was opened.
+    if (bMayaActive && !MeleeBusy() && bWeaponOut && !bInventoryPresentation && Weapon && bTrigger && !bReloading && DownWeaponReady() && Now >= NextShotAt)
     {
         if (Inventory->ConsumeShot(*Weapon))
         {
@@ -1327,7 +1328,7 @@ bool AOpenWillowWalker::FireOnce()
 {
     FOpenWillowWeaponItem* Weapon = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
     // DownWeaponReady: the weapon is put away for the first 2.28 s of the down state and gone while Dead (GoDown).
-    if (!bMayaActive || !bWeaponOut || !Weapon || bReloading || !DownWeaponReady() || !Inventory->ConsumeShot(*Weapon)) return false;
+    if (!bMayaActive || !bWeaponOut || bInventoryPresentation || !Weapon || bReloading || !DownWeaponReady() || !Inventory->ConsumeShot(*Weapon)) return false;
     FireWeapon();
     return true;
 }
@@ -1425,7 +1426,13 @@ void AOpenWillowWalker::PickupNearby()
 }
 void AOpenWillowWalker::SetInventoryPresentation(bool bShow)
 {
-    if (bShow) AimReleased();
+    if (bShow)
+    {
+        AimReleased();
+        // UI-only input never delivers the key-up: let go of the trigger here, and a burst in progress ends with it.
+        bFireHeld = false;
+        Burst.interrupt();
+    }
     bInventoryPresentation = bShow;
     UpdateArmsVisibility();
     if (WeaponVisual) WeaponVisual->SetHiddenInGame(bShow || !bWeaponOut);
@@ -1499,6 +1506,7 @@ FString AOpenWillowWalker::HeldWeaponMesh() const
 {
     return WeaponVisual && bWeaponOut && WeaponVisual->GetSkinnedAsset() ? WeaponVisual->GetSkinnedAsset()->GetPathName() : FString();
 }
+bool AOpenWillowWalker::IsWeaponShown() const { return WeaponVisual && WeaponVisual->GetSkinnedAsset() && !WeaponVisual->bHiddenInGame; }
 bool AOpenWillowWalker::AreArmsShown() const
 {
     const FViewModel* Model = ActiveViewModel();
