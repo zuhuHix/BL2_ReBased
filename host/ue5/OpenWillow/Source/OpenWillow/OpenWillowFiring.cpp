@@ -142,7 +142,9 @@ bool FOpenWillowFiringData::ParseGrenade(const FJsonObject& Grenade, FOpenWillow
     Out.bFalls = true;   // PHYS_Falling
     Out.Bounces = FMath::Max(0, int32(NumberOr(*Projectile, TEXT("bounces"), 0)));
     Projectile->TryGetBoolField(TEXT("explode_on_impact"), Out.bExplodeOnImpact);
-    Out.ProjectileLifetime = float(NumberOr(*Projectile, TEXT("max_lifespan"), 10));
+    Out.ProjectileLifetime = float(NumberOr(*Projectile, TEXT("max_lifespan"), 0));
+    // ProjectileDefinition.UpwardVelocityBonus: added to the launch velocity's Z (NATIVE_WEAPON_FIRING 2.1, read; UNVERIFIED).
+    Out.UpwardVelocity = float(NumberOr(*Projectile, TEXT("upward_velocity_bonus"), 0));
     if (const FJsonObject* Fuse = ObjectOrNull(Grenade, TEXT("fuse_time"))) Out.FuseTime = float(NumberOr(*Fuse, TEXT("value"), 0));
     Out.Splash.bValid = true;
     Out.Splash.Radius = float(weapon_firing::explosionRadius(NumberOr(*Radius, TEXT("value"), 0)));
@@ -150,7 +152,8 @@ bool FOpenWillowFiringData::ParseGrenade(const FJsonObject& Grenade, FOpenWillow
     Grenade.TryGetStringField(TEXT("damage_type"), Out.Splash.DamageType);
     // The grenade's falloff bands are not in the block: the class defaults (0.2 / 0.8 / 0.2) stand in (UNVERIFIED).
     ParseFx(Grenade, Out);
-    Out.bLoaded = Out.ProjectileSpeed > 0.f && Out.Splash.Radius > 0.f;
+    // A grenade without positive damage does not load: an unresolved value (null in the block) must not throw a harmless one.
+    Out.bLoaded = Out.ProjectileSpeed > 0.f && Out.Splash.Radius > 0.f && Out.Splash.Damage > 0.f;
     return Out.bLoaded;
 }
 

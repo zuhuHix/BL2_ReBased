@@ -83,6 +83,7 @@ struct FOpenWillowFiringData
     bool bFalls = false;         // gravity applies (thrown guns; weapon rockets fly straight, observed live)
     float Elasticity = 0.4f;     // speed kept on a bounce (the first Bounce behaviour's elasticity)
     float FuseTime = 0;          // s from launch to the explosion (grenades); 0 = no fuse
+    float UpwardVelocity = 0;    // uu/s added to the launch velocity's Z (grenades)
     bool bExplodeOnImpact = false;
     int32 Bounces = 0;
     // Timing.

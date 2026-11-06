@@ -164,6 +164,31 @@ class SlotResolutionTest(unittest.TestCase):
         self.assertTrue(block['unverified'])
 
 
+class InheritedFieldsTest(unittest.TestCase):
+    def inherited(self):
+        package, class_defaults = world(), defaults()
+        props = package.objects['Fake.Proj.P']
+        cls = package.classes['Fake.Proj.P'].rsplit('.', 1)[-1]
+        moved = {key: props.pop(key) for key in ('GravityScaling', 'Damage') if key in props}
+        class_defaults.add('Default__' + cls, package.classes['Fake.Proj.P'], dict(moved, MaxLifespan=33.0, UpwardVelocityBonus=44.0))
+        return package, class_defaults, moved
+
+    def test_gravity_lifespan_bonus_and_damage_from_the_class_default(self):
+        package, class_defaults, moved = self.inherited()
+        self.assertIn('Damage', moved)
+        block = grenade.resolve(package, class_defaults, {}, 8, MOD)
+        self.assertEqual(block['projectile']['gravity_scale'], moved.get('GravityScaling'))
+        self.assertEqual(block['projectile']['max_lifespan'], 33.0)
+        self.assertEqual(block['projectile']['upward_velocity_bonus'], 44.0)
+        self.assertGreater(block['damage']['value'], 0)
+        self.assertIsNone(block['damage']['reason'])
+
+    def test_the_projectile_own_value_wins_over_the_default(self):
+        package, class_defaults, _ = self.inherited()
+        package.objects['Fake.Proj.P']['MaxLifespan'] = 2.5
+        self.assertEqual(grenade.resolve(package, class_defaults, {}, 8, MOD)["projectile"]["max_lifespan"], 2.5)
+
+
 class OutputPathTest(unittest.TestCase):
     def test_path_outside_local_is_refused(self):
         with self.assertRaises(SystemExit):

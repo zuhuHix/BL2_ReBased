@@ -50,12 +50,11 @@ if ($stale.Count) {
     $stale = @(Get-RecipesWithoutFiring)
     if ($stale.Count) { throw "Still no firing block after regeneration: $($stale -join ', ')" }
 }
-# The grenade check at the end of the run needs the stock grenade mod's block (ignored local/; Python only).
+# The grenade check at the end of the run needs the stock grenade mod's block (ignored local/; Python only). Always
+# regenerated: it takes seconds, and a block from an older tool would run with its old fields.
 $grenade = Join-Path $repo 'local/items/grenades/grenade_mod_standard_l8.json'
-if (!(Test-Path -LiteralPath $grenade)) {
-    & python (Join-Path $repo 'tools/grenade_mod.py') --game $env:OPENWILLOW_BL2 --level 8
-    if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $grenade)) { throw "tools/grenade_mod.py did not write $grenade" }
-}
+& python (Join-Path $repo 'tools/grenade_mod.py') --game $env:OPENWILLOW_BL2 --level 8
+if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $grenade)) { throw "tools/grenade_mod.py failed for $grenade" }
 # Host fixture (ignored local/; built from the coverage Dahl AR): the same gun with burst_count 3, because no weapon type in
 # the data has an AutomaticBurstCount above 1 (Dahl's bursts come from zoom effects the host does not apply yet). It tests
 # the host's burst rule, not game data.
