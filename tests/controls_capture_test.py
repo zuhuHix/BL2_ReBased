@@ -30,9 +30,19 @@ $script:Lock = Join-Path $work 'run.lock'
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 function Start-Sleep { }
 function Get-GameProcess { $null }
+function Get-GameProcesses {
+    if ($scenario -eq 'foreign_before' -or ($scenario -eq 'foreign_during' -and $script:Fake.HasExited)) { @([pscustomobject]@{ Id = 999 }) } else { @() }
+}
+function ConvertTo-Json {
+    param([Parameter(ValueFromPipeline)]$InputObject, [int]$Depth = 2)
+    process {
+        if ($scenario -eq 'evidence_fails' -and $InputObject -is [hashtable] -and $InputObject.ContainsKey('compared')) { throw 'disk full' }
+        $InputObject | Microsoft.PowerShell.Utility\ConvertTo-Json -Depth $Depth
+    }
+}
 function Enter-RunLock { Set-Content -LiteralPath $script:Lock 'held' }
 function Exit-RunLock { Remove-Item -LiteralPath $script:Lock -Force }
-function Install-Driver { New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
+function Install-Driver { if ($scenario -eq 'install_fails') { throw 'install broke' }; New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
 function Remove-Driver { if ($scenario -ne 'driver_stuck') { Remove-Item -Recurse -Force $script:DriverDir } }
 function Save-Shot { 'shot' }
 function Focus-Game { $true }
@@ -46,6 +56,7 @@ $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
+        '*print("stopped")*' { return $(if ($scenario -eq 'hooks_traceback') { 'Traceback: no cp_unhook' } else { 'stopped' }) }
         '*block_saves*' { return $(if ($scenario -eq 'saves_traceback') { 'Traceback: block failed' } elseif ($scenario -eq 'saves_none') { '0' } else { '3' }) }
         '*GetStreamingPersistentMapName*' { return $(if ($scenario -eq 'wrong_map') { 'Ice_P WillowPlayerPawn' } else { 'Sanctuary_P WillowPlayerPawn' }) }
         '*cp_bindings*' {
@@ -61,7 +72,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
                 $saved = Get-ChildItem -LiteralPath $script:RG -Directory -Filter 'save-backup-*' | Select-Object -First 1
                 Set-Content -LiteralPath (Join-Path $saved.FullName 'SaveData/save.sav') 'backup damaged'
             }
-            if ($scenario -eq 'run_error') { throw 'channel lost' }
+            if ($scenario -eq 'run_error' -or $scenario -eq 'hooks_traceback') { throw 'channel lost' }
             return '[{"key": "V"}]'
         }
         '*cp_melee_facts*' { return '{"definition": {}}' }
@@ -186,6 +197,58 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertEqual(self.saves(), 'original save')
         self.assertEqual(self.locks_held(), (False, False))
 
+    def test_a_game_already_running_stops_the_launch_and_touches_nothing(self):
+        done, session = self.run_capture('foreign_before')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertIn('did not start', session['run_error'])
+        self.assertIn('NOT RESTORED', session['cleanup']['saves'])
+        self.assertTrue((self.game / 'sdk_mods/openwillow_realgame').exists())
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertIn('MANUAL RECOVERY', done.stdout)
+
+    def test_a_game_seen_during_the_run_blocks_the_restore(self):
+        done, session = self.run_capture('foreign_during')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertEqual(self.saves(), 'changed by the run')
+        self.assertEqual(self.locks_held(), (True, True))
+
+    def test_a_failed_install_restores_nothing_and_reports_the_folder(self):
+        done, session = self.run_capture('install_fails')
+        self.assertTrue(session['status'].startswith('failed: install broke'), session['status'])
+        self.assertEqual(session['cleanup']['driver'], 'install failed; nothing left')
+        self.assertEqual(session['cleanup']['saves'], 'not touched: this run launched no game')
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_hooks_answer_must_be_exact(self):
+        done, session = self.run_capture('hooks_traceback')
+        self.assertIn('not stopped: Traceback', session['cleanup'].get('hooks', ''), session['cleanup'])
+        done, session = self.run_capture('run_error')
+        self.assertEqual(session['cleanup']['hooks'], 'stopped')
+
+    def test_missing_evidence_cannot_read_as_completed(self):
+        done, session = self.run_capture('evidence_fails')
+        self.assertTrue(session['status'].startswith('failed: evidence not written'), session['status'])
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_an_earlier_runs_evidence_is_kept_under_a_new_name(self):
+        out = self.work / 'rg/controls'
+        out.mkdir(parents=True)
+        (out / 'session.json').write_text('{"status": "completed", "earlier": true}', encoding='utf-8')
+        done, session = self.run_capture('no_melee')
+        self.assertNotIn('earlier', session)
+        kept = list(out.glob('session.*.json'))
+        self.assertEqual(len(kept), 1, kept)
+        self.assertIn('earlier', kept[0].read_text(encoding='utf-8'))
+
+    def test_the_tail_starts_as_the_shared_test_expects_and_matches_the_pattern(self):
+        text = CAPTURE.read_text(encoding='utf-8')
+        self.assertEqual(text.count('\n} catch {\n    $runError'.replace('\n', '\r\n' if '\r\n' in text else '\n')), 1)
+        self.assertIn('Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked', text)
+        self.assertNotIn('Focus-Game', text)
+        self.assertNotIn('Start-Process', text)   # a game only comes from Start-Game
+
     def test_maya_not_going_down_is_incomplete(self):
         done, session = self.run_capture('not_down')
         self.assertEqual(session['status'], 'incomplete: page_down')
@@ -201,7 +264,7 @@ class ControlsCaptureTest(unittest.TestCase):
     def test_an_unverified_snapshot_is_never_restored_from(self):
         done, session = self.run_capture('bad_snapshot')
         self.assertTrue(session['status'].startswith('failed'), session['status'])
-        self.assertEqual(session['cleanup']['saves'], 'not touched: the game never started')
+        self.assertEqual(session['cleanup']['saves'], 'not touched: this run launched no game')
         self.assertTrue((self.work / 'willow/Config/game.ini').exists())
         self.assertEqual(self.saves(), 'original save')
         self.assertEqual(self.locks_held(), (False, False))
@@ -219,7 +282,7 @@ class ControlsCaptureTest(unittest.TestCase):
     def test_a_restore_mismatch_keeps_locks_and_backup_and_prints_recovery(self):
         done, session = self.run_capture('mismatch')
         self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
-        self.assertEqual(session['run_status'], 'completed')
+        self.assertEqual(session['run_error'], '')
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.locks_held(), (True, True))
         self.assertTrue(self.backups())
@@ -259,7 +322,7 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertTrue(session['status'].startswith('recovery needed: driver not removed'), session['status'])
         self.assertEqual(self.locks_held(), (True, True))
         self.assertIn('MANUAL RECOVERY', done.stdout)
-        self.assertEqual(session['run_status'], 'completed')
+        self.assertEqual(session['run_error'], '')
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.saves(), 'original save')
 
