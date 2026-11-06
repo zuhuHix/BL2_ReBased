@@ -23,6 +23,8 @@ public:
     // Applies the pickup to the walker and logs one OWPICKUP line. True when it was taken (the actor is then destroyed).
     // A refusal leaves the pickup where it is.
     bool TryCollect(AOpenWillowWalker& Walker);
+    // Whether TryCollect would take it now. One that would refuse (a full pool, full health) is not a use target at all.
+    bool WouldCollect(const AOpenWillowWalker& Walker) const;
 
     const FOpenWillowPickupSpec& Spec() const { return Spec_; }
     int32 Value() const { return Value_; }

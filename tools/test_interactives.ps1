@@ -24,7 +24,7 @@ param(
 # and the machine-wide UE run lock (tools/ue_lock.ps1); it waits while another UnrealEditor or the lock exists and never
 # touches them. The page server is not needed here. Only the game and automation processes this run started are stopped,
 # each by its own PID after its command line is checked. Logs and screenshots go to local/interactives/ (ignored).
-# Exit codes: the checker's (0 all PASS or MISSING only, 1 a FAIL), 2 no run / no logs.
+# Exit codes: the checker's (0 nothing failed, missing or incomplete, else 1), 2 no run / no logs.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (!$Game) { throw 'Set OPENWILLOW_BL2 or pass -Game (the installed Borderlands 2 folder).' }
@@ -124,8 +124,8 @@ try {
     Start-Sleep -Seconds 3
     if (!(Test-Path -LiteralPath $log)) { throw "No game log written: $log" }
     $checkArgs = @($checker, '--log', $log, '--interactives', (Resolve-Path -LiteralPath $Interactives).Path)
-    $importReport = Join-Path $repo 'local/lootables/import_report.json'
-    if (Test-Path -LiteralPath $importReport) { $checkArgs += @('--import-report', $importReport) }
+    # The assets on disk now, not an earlier import's report: this run's content is what the host had to load.
+    $checkArgs += @('--content-root', (Join-Path $repo 'host/ue5/OpenWillow/Content'))
     if ($SkipAutomation) { $checkArgs += '--skip-automation' }
     elseif (Test-Path -LiteralPath $autoLog) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs

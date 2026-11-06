@@ -311,7 +311,7 @@ def cmd_report(args):
                 'clip not in the package data for this anim set', 'not run')
     for pickup in plan['pickup_meshes']:
         status = (editor_meshes.get('pickups') or {}).get(pickup['name'], {})
-        row(f'{PICKUP_DEST}/{pickup["name"]}', 'pickup_mesh', status.get('imported'),
+        row(status.get('asset') or f'{PICKUP_DEST}/{pickup["name"]}', 'pickup_mesh', status.get('imported'),
             status.get('reason') or ('' if status.get('imported') else 'no editor result'),
             export_status(jobs, f'pickup.{pickup["name"]}.gltf'))
     counts = {'yes': sum(1 for r in rows if r['imported']), 'no': sum(1 for r in rows if not r['imported'])}

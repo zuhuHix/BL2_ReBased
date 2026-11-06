@@ -145,7 +145,7 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
 
         // A nearer target that refuses lets the next one take the press, and nothing further is tried.
         FOpenWillowUseDistances Refusing;
-        Refusing.Interactive = 100.0; // an ammo pickup on a full pool
+        Refusing.Interactive = 100.0; // a lootable that cannot be opened
         Refusing.Door = 200.0;
         Refusing.Pickup = 300.0;
         TArray<EOpenWillowUseTarget> Tried;
@@ -157,6 +157,14 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("the door behind a refusing pickup takes the press"), bTaken);
         TestEqual(TEXT("the third target is not offered"), Tried.Num(), 2);
         TestTrue(TEXT("the refusing target was offered first"), Tried.Num() > 0 && Tried[0] == EOpenWillowUseTarget::Interactive);
+        // A pickup that would refuse is not a target at all, so what is behind it keeps the global order: door, then chest.
+        FOpenWillowUseDistances BehindRefusing;
+        BehindRefusing.Door = 100.0;
+        BehindRefusing.Interactive = 150.0;
+        TestTrue(TEXT("the door is offered before the further chest"), BehindRefusing.Nearest() == EOpenWillowUseTarget::Door);
+        int32 HeldAmmoLeft = 0;
+        TestFalse(TEXT("a full pool would refuse, so the pickup is no target"),
+            OpenWillowInteractiveRules::AmmoAfter(20, 20, 5, HeldAmmoLeft));
         TestTrue(TEXT("every target refusing means nothing took it"), !Refusing.Offer([](EOpenWillowUseTarget) { return false; }));
     }
 

@@ -93,6 +93,27 @@ bool AOpenWillowLootPickup::TryCollect(AOpenWillowWalker& Walker)
     return bOk;
 }
 
+bool AOpenWillowLootPickup::WouldCollect(const AOpenWillowWalker& Walker) const
+{
+    const UOpenWillowInventory* Inventory = Walker.GetInventory();
+    int32 Number = 0;
+    if (Spec_.Kind == TEXT("cash")) return Inventory && Inventory->GetMoney(Number);
+    if (Spec_.Kind == TEXT("eridium")) return Inventory && Inventory->GetEridium(Number);
+    if (Spec_.Kind == TEXT("ammo"))
+    {
+        EOpenWillowAmmoType Type = EOpenWillowAmmoType::Pistol;
+        if (!Inventory || !OpenWillowInteractiveRules::AmmoTypeFromName(Spec_.AmmoType, Type)) return false;
+        const FOpenWillowAmmoPool& Pool = Inventory->AmmoPool(Type);
+        return OpenWillowInteractiveRules::AmmoAfter(Pool.Current, Pool.Max, Spec_.Amount, Number);
+    }
+    if (Spec_.Kind == TEXT("health"))
+    {
+        float After = 0.f;
+        return OpenWillowInteractiveRules::HealAfter(Walker.GetHealth(), Walker.GetMaxHealth(), Spec_.HealFraction, Walker.IsDown(), After);
+    }
+    return false;
+}
+
 bool AOpenWillowLootPickup::CollectMoney(AOpenWillowWalker& Walker, FString& OutReason, double& OutBefore, double& OutAfter,
     double& OutCap)
 {
