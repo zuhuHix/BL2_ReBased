@@ -62,6 +62,12 @@ def call(ns, fn, by, **values):
     ns['_ae_on_call'](Obj(Class=Obj(Name=by)), args(**values), None, Obj(Name=fn))
 
 
+def rows_at(ns, *timed):
+    """A window of (time, fn, event) rows, written directly so a test controls the clock."""
+    ns['ae_begin']('w')
+    ns['ae']['rows'] = [{'t': t, 'fn': fn, 'by': 'Actor', 'event': event} for t, fn, event in timed]
+
+
 def test_a_hook_records_and_never_raises():
     with tempfile.TemporaryDirectory() as tmp:
         ns = load(tmp)
@@ -92,7 +98,7 @@ def test_new_events_exclude_the_baselines_and_ignore_the_route():
         call(ns, 'PlayFiringSound', 'WillowWeapon')
         call(ns, 'WeaponPlayAkEvent', 'WillowWeapon', Event=event('Shot'))
         away = ns['ae_end'](['idle'])
-        assert away['new'] == ['Pkg.Shot'] and away['firing_calls'] == 1
+        assert away['new'] == ['Pkg.Shot'] and away['calls']['PlayFiringSound'] == 1
         ns['ae_begin']('fire_hit')
         call(ns, 'PostAkEvent', 'Actor', InAkEvent=event('Shot'))     # the same sound by another function is not new
         call(ns, 'PlayImpactEffectSound', 'WillowPhysicalMaterialProperty', Event=event('Impact'))
@@ -108,6 +114,76 @@ def test_no_new_event_gives_an_empty_list_for_the_stage_to_refuse():
         ns['ae_begin']('pickup')
         call(ns, 'PostAkEvent', 'Actor', InAkEvent=event('Wind'))
         assert ns['ae_end'](['idle'])['new'] == []
+
+
+def test_an_ambient_event_in_the_window_is_new_but_not_tied():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        # Shots at 10, 11, 12. The gun sound follows each; the wind blows once, 0.7 s after a shot.
+        rows_at(ns, (10.0, 'PlayFiringSound', None), (10.01, 'PostAkEvent', 'Shot'), (11.0, 'PlayFiringSound', None), (11.01, 'PostAkEvent', 'Shot'),
+                (11.7, 'PostAkEvent', 'Wind'), (12.0, 'PlayFiringSound', None), (12.01, 'PostAkEvent', 'Shot'))
+        result = ns['ae_end'](['idle'], [], 'PlayFiringSound', 0.4, 2)
+        assert result['new'] == ['Shot', 'Wind'] and result['tied'] == ['Shot'] and result['anchored_by'] == 'marker'
+
+
+def test_an_event_near_only_one_of_several_shots_is_not_tied():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        rows_at(ns, (10.0, 'PlayFiringSound', None), (10.1, 'PostAkEvent', 'Chirp'), (11.0, 'PlayFiringSound', None), (12.0, 'PlayFiringSound', None))
+        assert ns['ae_end'](['idle'], [], 'PlayFiringSound', 0.4, 2)['tied'] == []
+
+
+def test_an_event_before_the_action_is_not_tied():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        rows_at(ns, (9.9, 'PostAkEvent', 'Early'))
+        assert ns['ae_end']([], [10.0], '', 1.0, 1)['tied'] == []
+
+
+def test_one_event_firing_many_times_after_one_shot_counts_once():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        rows_at(ns, (10.0, 'PlayFiringSound', None), (10.1, 'PostAkEvent', 'Burst'), (10.2, 'PostAkEvent', 'Burst'), (11.0, 'PlayFiringSound', None))
+        assert ns['ae_end']([], [], 'PlayFiringSound', 0.4, 2)['tied'] == []
+
+
+def test_presses_are_used_when_the_marker_is_too_rare_and_the_result_says_so():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        rows_at(ns, (10.0, 'PlayFiringSound', None), (10.1, 'PostAkEvent', 'Shot'), (11.1, 'PostAkEvent', 'Shot'))
+        result = ns['ae_end']([], [10.0, 11.0], 'PlayFiringSound', 0.4, 2)
+        assert result['anchored_by'] == 'press' and result['anchors'] == 2 and result['tied'] == ['Shot']
+
+
+def test_no_moments_means_nothing_is_tied():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        rows_at(ns, (10.0, 'PostAkEvent', 'Wind'))
+        result = ns['ae_end']()
+        assert result['new'] == ['Wind'] and result['tied'] == []
+
+
+def test_overlap_names_the_other_windows_that_saw_a_tied_event():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        ns['ae_begin']('a')
+        ns['ae']['rows'] = [{'t': 10.1, 'fn': 'PostAkEvent', 'by': 'Actor', 'event': 'Shared'}]
+        ns['ae_end']([], [10.0], '', 0.5, 1)
+        ns['ae_begin']('b')
+        ns['ae']['rows'] = [{'t': 20.1, 'fn': 'PostAkEvent', 'by': 'Actor', 'event': 'Shared'}, {'t': 20.1, 'fn': 'PostAkEvent', 'by': 'Actor', 'event': 'Only'}]
+        ns['ae_end']([], [20.0], '', 0.5, 1)
+        overlap = ns['ae_overlap']()
+        assert overlap['b'] == {'Only': [], 'Shared': ['a']} and overlap['a'] == {'Shared': ['b']}
+
+
+def test_the_stages_accept_only_tied_events_and_no_pawn_is_held():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    body = text[:text.index('\n} catch {\n    $runError')]
+    stages = [line for line in body.splitlines() if line.strip().startswith('Set-Stage ') and "'hooks'" not in line]
+    assert len(stages) == 4 and all('.tied' in line or 'castTied' in line for line in stages), stages
+    assert '.new).Count' not in body
+    # The recorder holds a target pawn on every frame; this capture only needs the skill's own lock call.
+    assert 'pi_start' not in body and 'pi_result' not in body and 'mark_lock' not in body
 
 
 def test_rows_stop_at_the_limit_and_say_so():
