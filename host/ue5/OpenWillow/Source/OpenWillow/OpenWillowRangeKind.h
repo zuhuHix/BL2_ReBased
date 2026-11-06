@@ -101,7 +101,12 @@ struct FOpenWillowRangeManifest
     float RespawnSeconds = 8.f;
     TArray<FOpenWillowRangeSpawn> Spawns;
     TMap<FString, FOpenWillowRangeKind> Kinds;
-    TArray<FOpenWillowRangeCandidate> Candidates;   // empty for the stand-in manifest
+    TArray<FOpenWillowRangeCandidate> Candidates;
+    // From ignored local data only (tools/prepare_range.py): the plaza's centre (scout rings, "away from town"), and the index of the
+    // candidate that is the range's default spot (-1: none). No map coordinate is compiled in.
+    FVector2D ScoutCentre = FVector2D::ZeroVector;
+    bool bHasScoutCentre = false;
+    int32 DefaultSpotCandidate = -1;   // empty for the stand-in manifest
     bool bFromFile = false;
 
     static FOpenWillowRangeManifest Load(const FString& Path, FString& OutLog);

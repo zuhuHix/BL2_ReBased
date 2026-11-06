@@ -62,6 +62,7 @@ struct FOpenWillowRangeLootResult
 {
     int32 Weapons = 0, Money = 0, Ammo = 0;   // pickups spawned by the roll, by kind
     TArray<TWeakObjectPtr<AActor>> Spawned;   // every pickup the roll spawned, in spawn order
+    int32 DropFallbacks = 0;                  // drops that found no floor with room and lie at the corpse's feet
     FString Trace;                            // "pool:tried:roll;" for each pool, in order (the determinism check)
 };
 

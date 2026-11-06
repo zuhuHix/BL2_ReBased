@@ -18,7 +18,10 @@
 # 3. Spot candidates for the range: the standable terrain points of local/sanctuary/terrain-runtime.json (the terrain probes the
 #    level import wrote), with Sanctuary_P Terrain_2 first: the terrain the gate's floor lies in (SANCTUARY_ARTIFACT_PASS.md,
 #    "the void inside the gate lies within Sanctuary_P Terrain_2"), then the other terrains by distance from the plaza. The host
-#    tries them in order (a textured floor where the whole formation fits) before its ring scout.
+#    tries them in order (a textured floor where the whole formation fits) before its ring scout. The manifest also names the
+#    default candidate by its index (default_spot_candidate): an index reveals no coordinates, and the host's rules find the same
+#    point from it, so no map coordinate is ever written to a tracked file.
+# 4. The scout centre: the plaza's centre from the level import's inspection views (local/sanctuary/inspection-views.json).
 #
 # Usage: python tools/prepare_range.py [--reader build/Release/ow-package.exe] [--levels 1-50] [--no-vm]
 import argparse
@@ -190,11 +193,35 @@ def loot_tables(run_json):
     return out
 
 
-PLAZA = (0.0, 0.0)             # the scout centre; from ignored local data later in this stack
+# The range's default spot, as an index into spot_candidates: the candidate the hub picked from the batch 6 survey frames (open snowy
+# ground, no buildings). --spot-candidate overrides it.
+DEFAULT_SPOT_CANDIDATE = 1
+
+
+def scout_centre(views_json):
+    """The plaza's centre from the inspection views named plaza_*: a view looking along Y (yaw near 90 or -90) stands on the plaza's
+    X axis, one looking along X (yaw near 0 or 180) on its Y axis; the centre is where those axes cross. None without both kinds."""
+    xs, ys = [], []
+    for view in views_json.get("views", []):
+        if not view.get("name", "").startswith("plaza"):
+            continue
+        location, rotation = view.get("location"), view.get("rotation")
+        if not location or not rotation or len(location) < 2 or len(rotation) < 2:
+            continue
+        yaw = abs(float(rotation[1])) % 180.0
+        if abs(yaw - 90.0) < 1.0:
+            xs.append(float(location[0]))
+        elif yaw < 1.0 or yaw > 179.0:
+            ys.append(float(location[1]))
+    if not xs or not ys:
+        return None
+    return {"x": sum(xs) / len(xs), "y": sum(ys) / len(ys)}
+
+
 GATE_TERRAIN = "Sanctuary_P:TheWorld.PersistentLevel.Terrain_2"
 
 
-def spot_candidates(terrain_json):
+def spot_candidates(terrain_json, centre):
     """Standable terrain points as range spot candidates: the gate's terrain first, then the rest by distance from the plaza."""
     out = []
     for probe in terrain_json.get("probes", []):
@@ -204,7 +231,7 @@ def spot_candidates(terrain_json):
             if not point or len(point) != 3:
                 continue
             gate = source == GATE_TERRAIN
-            distance = ((point[0] - PLAZA[0]) ** 2 + (point[1] - PLAZA[1]) ** 2) ** 0.5
+            distance = ((point[0] - centre["x"]) ** 2 + (point[1] - centre["y"]) ** 2) ** 0.5
             out.append({"x": point[0], "y": point[1], "z": point[2], "source": source, "gate_terrain": gate,
                         "plaza_distance": round(distance, 1)})
     out.sort(key=lambda c: (not c["gate_terrain"], c["plaza_distance"]))
@@ -240,6 +267,12 @@ def main(argv=None):
     parser.add_argument("--out", default=os.path.join(REPO, "local", "range", "range_manifest.json"))
     parser.add_argument("--terrain", default=os.path.join(REPO, "local", "sanctuary", "terrain-runtime.json"),
                         help="terrain probes of the level import (spot candidates); missing: the host scouts rings only")
+    parser.add_argument("--views", default=os.path.join(REPO, "local", "sanctuary", "inspection-views.json"),
+                        help="inspection views of the level import (the scout centre)")
+    parser.add_argument("--spot-candidate", type=int, default=DEFAULT_SPOT_CANDIDATE,
+                        help="index into spot_candidates of the range's default spot")
+    parser.add_argument("--allow-missing-spot-data", action="store_true",
+                        help="write the manifest without candidates or a scout centre (the range then needs -owrangeat or range.json)")
     parser.add_argument("--no-vm", action="store_true", help="skip the VM run (empty health tables: the host uses its stand-in)")
     args = parser.parse_args(argv)
     args.out = local_output(args.out)
@@ -259,11 +292,21 @@ def main(argv=None):
         kinds[name] = kind_entry(name.replace("_", " ").title(), target, health, source,
                                  arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"),
                                  loot=loot.get(row_class))
-    candidates = []
-    if os.path.isfile(args.terrain):
+    # The spot comes only from ignored local data: both files are needed for the default spot to exist.
+    candidates, centre = [], None
+    if os.path.isfile(args.views):
+        with open(args.views, encoding="utf-8") as f:
+            centre = scout_centre(json.load(f))
+    if centre and os.path.isfile(args.terrain):
         with open(args.terrain, encoding="utf-8") as f:
-            candidates = spot_candidates(json.load(f))
+            candidates = spot_candidates(json.load(f), centre)
+    if not candidates and not args.allow_missing_spot_data:
+        raise SystemExit("no spot data: need %s and %s (the level import writes them; copy local/sanctuary from a prepared checkout, "
+                         "or pass --terrain and --views)" % (args.terrain, args.views))
+    if candidates and not 0 <= args.spot_candidate < len(candidates):
+        raise SystemExit("--spot-candidate %d is outside the %d candidates" % (args.spot_candidate, len(candidates)))
     manifest = {"schema": "ow-range-v1", "respawn_seconds": 8, "spawns": SPAWNS, "kinds": kinds, "spot_candidates": candidates,
+                "scout_centre": centre, "default_spot_candidate": args.spot_candidate if candidates else -1,
                 "assets": "imported" if target else "missing (run tools/import_phaselock_target.ps1)"}
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
@@ -272,7 +315,8 @@ def main(argv=None):
         levels = kind["health_by_level"]
         print("%s: %d health levels, %d melee levels, %d loot levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), len(kind["melee_arrival_by_level"]), len(kind["loot_by_level"]), "yes" if kind["mesh"] else "no",
               kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-"))
-    print("spot candidates: %d (%d on the gate terrain)" % (len(candidates), sum(c["gate_terrain"] for c in candidates)))
+    print("spot candidates: %d (%d on the gate terrain), default candidate index %d" % (len(candidates),
+          sum(c["gate_terrain"] for c in candidates), args.spot_candidate if candidates else -1))
     print("wrote " + args.out)
     return 0
 

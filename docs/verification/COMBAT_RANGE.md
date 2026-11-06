@@ -182,3 +182,16 @@ generator manifest), loot_off, loot_seeded_roll.
   from stage 2, so a level-1 enemy's roll is empty. Normal mode keeps that; `always` mode (gun testing) rolls at stage 2 at least.
 - **"No room" on sloped snow.** The room sphere's bottom was 14 uu above the floor, and a 32 degree slope rises 19 uu over its 30 uu radius, so it met the
   ground itself. Its bottom is 30 uu above the floor now.
+
+## Where the spot comes from (local data only)
+
+No map coordinate is in a tracked file. The spot is resolved at run time, in this order: `-owrangeat`, `local/range/range.json`, the manifest's default
+candidate, the other candidates, the ring scout. `tools/prepare_range.py` writes the manifest (ignored, under `local/`) from the level import's ignored files:
+the candidates from `local/sanctuary/terrain-runtime.json`, the scout centre from `local/sanctuary/inspection-views.json` (where the plaza views' axes cross),
+and `default_spot_candidate`, an index into the candidates: the one the hub picked from the batch 6 survey frames, on the gate's terrain, which the candidate
+rules turn into a point and a yaw. The tool stops when either file is missing, unless `--allow-missing-spot-data` is passed. Because the scout centre's
+definition changed, the yaw and so the accepted point may differ slightly from the surveyed one: the run's `OWRANGE spot source=default_candidate` line says what
+it found.
+
+The test's `provoked` step fails before its hit when Maya cannot be placed outside the den's radius (near her a notice rule could raise the level and the step
+would prove nothing), and `loot_near_corpse` also fails when a drop used the no-room fall-back at the corpse's feet (the fall-back is counted and logged).
