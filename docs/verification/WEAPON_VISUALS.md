@@ -654,3 +654,29 @@ checker whites and the logo's sharpness. It warns that a blanket reduction of th
 whose bright receiver already matches; that light (section 19) was fitted on that pistol alone. So one gun fits and another clips: a
 soft shoulder in the paint material, not another light value, is the candidate. Not changed here. On the reverse side the logo reads
 backwards; no real frame shows that side, so that is unsettled.
+## 22. Rolled guns get a view model from their weapon type and parts (gunlook lane, 2026-11-06)
+
+AI-assisted (Claude Opus 5.5). A playtest found rolled guns (shop, drops) with dead ADS, launchers filling the screen and muzzle fallbacks.
+Every view lookup went by item id, and `weapon_view.json` holds only the guns in a recipe folder, so a rolled gun had no view model: no arms
+offset, no zoom socket or zoom value, no reload clip, no flash layers.
+
+**Finding, from cooked data.** On 210 sample guns in 33 weapon types, only these differ within a type: the muzzle socket (barrel), the zoom
+socket and scope overlay (sight or body), the card's reload time, and the reload asset's path (only by the recipe id in it).
+
+**Change.** `tools/weapon_view_model.py --library` writes the ignored `local/weapon_library/view_types.json`: view fields per weapon type,
+sockets per gestalt mesh, fragments and overlay per part. `OpenWillowViewTypes::ComposeEntry` builds a gun's entry from it, and
+`AOpenWillowWalker::FindViewModel` uses that when the item has no line of its own, keeping it by id. The entry goes through the existing
+parser. No pose value changes, and guns with their own line are unaffected. A slot holding a part outside the table gets no plain-named socket,
+since the part's own socket cannot be ruled out; an empty slot may use one. The table records a schema number and the MD5 of the `library.json` it
+was built from, and the host refuses one that does not match, with a warning.
+
+**Checked.** Offline: `--check` composes each generated entry in Python: 210 of 210 equal, apart from the card's reload time and the reload
+asset's folder. That is Python tool against tool, not the host and not the game. The host's C++ composition is a second implementation of the
+rule, covered by synthetic tests (`OpenWillow.WeaponAssembly.ViewTypes`: parts in and out of the table, empty slots, fallbacks, a refused
+table, the Walker's parser on a composed entry) and by composing one type from the real table where a machine has it.
+
+**Not covered.** 33 of 68 weapon types and 658 of 904 parts are in the table: the rest are in DLC packages, whose guns stay without a view model.
+A rolled gun's reload asset falls to the library's clip by file name, which exists only where the clips were imported, and for pistol, SMG and
+assault rifle only. The launcher and sniper arm sets are not imported, so those stay without a matching hold pose; launchers filling the screen may
+need that as well. `zoom_fov` did not vary within a type on those 210 guns, though the card's zoom depends on parts, so ADS likely uses the wrong
+zoom for many guns: UNVERIFIED, needs the live read. All of it is UNVERIFIED in the running game.
