@@ -76,7 +76,7 @@ private:
     static FString PickupId(const class AOpenWillowInventoryPickup* Pickup);
     class AOpenWillowInventoryPickup* DropRolledGun(uint32 Seed, const FVector& Near, FString& OutWhy);
     bool RunAimedPickup(class AOpenWillowInventoryPickup* Target);
-    int32 LastHitCount = 0, EnemyHits = 0, OtherHits = 0, UnattributedHits = 0;   // Maya's hits during the fight, by causer
+    int32 HitsBeforeFight = 0, EnemyHitsBeforeFight = 0, NoCauserHitsBeforeFight = 0;   // the walker's hit counts when the fight starts
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }
     void MissingLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("NOT_AVAILABLE"), Detail); }
