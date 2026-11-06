@@ -35,6 +35,7 @@ DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)')
 QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
+QUICK_ANY = re.compile(r'OWQUICKCHANGE (.*)$', re.M)
 QUICK_AWAY = re.compile(r'OWQCTEST walked away')
 QUICK_REFUSAL = re.compile(r'OWQCTEST refusal money=(\d+) grades_same=(\d)')
 QUICK_GRADES = re.compile(r'OWQCTEST reset grades_changed=(\d)')
@@ -227,6 +228,11 @@ def quick_events(log_text):
 def grade_quick_change(log_text, out):
     """The -owinteractivetest sequence through the use key: ask, walk away (cancel), ask again, refused for lack of money,
     ask, reset. Each reset must answer the prompt just before it: same station, same price."""
+    unknown = [m.group(0).strip() for m in QUICK_ANY.finditer(log_text)
+               if not any(rule.match(log_text, m.start()) for rule in (QUICK_PROMPT, QUICK_CANCEL, QUICK_RESET))]
+    if unknown:
+        out.add('quick_change', 'FAIL', f'{len(unknown)} unknown station event(s), first: {unknown[0]}')
+        return
     events = quick_events(log_text)
     kinds = [kind for kind, _ in events]
     if kinds != ['prompt', 'cancel', 'prompt', 'reset', 'prompt', 'reset']:

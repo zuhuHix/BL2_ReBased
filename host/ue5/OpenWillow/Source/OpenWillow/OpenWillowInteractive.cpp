@@ -976,7 +976,7 @@ AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::SelectedStation(
     AOpenWillowLootable* Lootable = nullptr;
     AOpenWillowLootPickup* Pickup = nullptr;
     double LootDistance = 0, StationDistance = 0;
-    const bool bLoot = FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, LootDistance);
+    const bool bLoot = FindNearest(Walker, Lootable, Pickup, LootDistance);
     AOpenWillowQuickChangeStation* Station = NearestStation(Walker.GetActorLocation(), StationDistance);
     return Station && (!bLoot || StationDistance < LootDistance) ? Station : nullptr;
 }

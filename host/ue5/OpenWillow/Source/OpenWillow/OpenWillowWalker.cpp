@@ -1376,6 +1376,7 @@ void AOpenWillowWalker::PickupNearby()
 {
     if (!bMayaActive || bInventoryPresentation || !Inventory || !GetWorld()) return;
     // Down or dead: the use key does nothing, for every target (host rule, UNVERIFIED against the game's own use checks).
+    // A future partner revive must not route through here: that press belongs to the partner, and this guard would drop it.
     if (MayaState.IsDown()) return;
     // Marcus's talk outranks a nearer target on purpose: it opens and turns in the slice's mission, and in his shop the use
     // key must not be taken by a gun lying on the counter. The quest's own reach test has no distance to compare, either.
