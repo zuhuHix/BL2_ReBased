@@ -128,6 +128,16 @@ FOpenWillowWeaponItem ToItem(const weapongen::WeaponGenResult& Result)
     Item.Magazine = float(Card.magazine.value_or(0));
     Item.Spread = float(Card.spread.value_or(0));
     Item.ShotCost = float(Card.shotCost.value_or(1));
+    // The refire rule (weapon_firing::Burst). The rest of the firing block is not resolved for generated guns yet
+    // (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"), so Firing stays not loaded: they fire the fallback trace.
+    Item.Firing.BurstCount = FMath::Max(0, int32(Card.burstCount.value_or(0)));
+    Item.Firing.BurstInterval = float(Card.burstInterval.value_or(0));
+    if (!Card.burstCount || !Card.burstInterval)
+    {
+        static bool bWarned = false;
+        if (!bWarned) UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN the manifest has no burst data: rolled guns fire while held (rerun tools/weapon_gen_manifest.py)"));
+        bWarned = true;
+    }
     Item.SpinUp = float(Card.spinUp.value_or(0));
     Item.SpinMode = FromUtf8(Card.spinMode);
     Item.SpinStartIntervalScale = float(Card.spinStartIntervalScale.value_or(1));
@@ -187,6 +197,8 @@ TSharedPtr<FJsonObject> ItemJson(const FOpenWillowWeaponItem& Item)
     Json->SetNumberField(TEXT("magazine"), Item.Magazine);
     Json->SetNumberField(TEXT("spread"), Item.Spread);
     Json->SetNumberField(TEXT("shot_cost"), Item.ShotCost);
+    Json->SetNumberField(TEXT("burst_count"), Item.Firing.BurstCount);
+    Json->SetNumberField(TEXT("burst_interval"), Item.Firing.BurstInterval);
     Json->SetNumberField(TEXT("spin_up"), Item.SpinUp);
     Json->SetStringField(TEXT("spin_mode"), Item.SpinMode);
     Json->SetNumberField(TEXT("spin_start_interval_scale"), Item.SpinStartIntervalScale);
@@ -444,8 +456,8 @@ void FOpenWillowWeaponGen::RunSelfCheck(const FString& RewardSourcePath)
             UE_LOG(LogTemp, Warning, TEXT("OWWEAPONGEN check: %s did not roll"), *Case.Balance);
             continue;
         }
-        UE_LOG(LogTemp, Display, TEXT("OWWEAPONGEN check %s stage %d seed %u -> \"%s\" type %s level %d damage %.4f fire %.4f mag %.2f parts %d"),
-            *Case.Balance, Case.Stage, Case.Seed, *Item.Name, *Item.Type, Item.Level, Item.Damage, Item.FireRate, Item.Magazine, Item.Parts.Num());
+        UE_LOG(LogTemp, Display, TEXT("OWWEAPONGEN check %s stage %d seed %u -> \"%s\" type %s level %d damage %.4f fire %.4f mag %.2f burst %d parts %d"),
+            *Case.Balance, Case.Stage, Case.Seed, *Item.Name, *Item.Type, Item.Level, Item.Damage, Item.FireRate, Item.Magazine, Item.Firing.BurstCount, Item.Parts.Num());
         Items.Add(MakeShared<FJsonValueObject>(ItemJson(Item)));
     }
     // The reward source: its drops and the first weapon, as the quest turn-in would roll it at stage 8; then at stage
