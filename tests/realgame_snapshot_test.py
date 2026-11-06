@@ -113,39 +113,59 @@ def test_helpers():
 TAIL = r"""
 $ErrorActionPreference = 'Stop'
 . '__REALGAME__'
-function Restore-VerifiedRoots { [pscustomobject]@{ rows = @([pscustomobject]@{ file = 'SaveData\x'; status = 'MISMATCH after restore' });
-                                                    summary = 'NOT IDENTICAL to bak (1 problems)'; clean = $false } }
+function Restore-VerifiedRoots {
+    if (__CLEAN__) { [pscustomobject]@{ rows = @(); summary = 'identical to bak after 0 restores'; clean = $true } }
+    else { [pscustomobject]@{ rows = @([pscustomobject]@{ file = 'SaveData\x'; status = 'MISMATCH after restore' });
+                              summary = 'NOT IDENTICAL to bak (1 problems)'; clean = $false } }
+}
 $Out = '__TMP__'; $bak = '__TMP__'; $HubLock = '__TMP__\hub.lock'; $Lane = 'test'
 $log = [ordered]@{}; $snapshots = @{ SaveData = 'verified' }; $extraRoots = [ordered]@{}; $stagesRequested = @('hit'); $runError = ''
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
-$hub = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $marker = 'x'
+$hub = $null; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = $false; $marker = 'x'
 try {
     __BODY__
 __CAPTURE_TAIL__
 """
 
 
-def run_tail(body):
+def run_tail(body, clean=False, proc='$null'):
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail), encoding='utf-8-sig')
+                          .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+                          .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
 
 
 def test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery():
-    for body, code, status in (("throw 'cooldown did not end'", 1, 'status: failed: cooldown did not end'),
-                               ("'body finished'", 0, 'status: incomplete: hit')):
+    for body, status in (("throw 'cooldown did not end'", 'status: failed: cooldown did not end'),
+                         ("'body finished'", 'status: incomplete: hit')):
         done = run_tail(body)
-        assert done.returncode == code, done.stdout + done.stderr
+        assert done.returncode == 1, done.stdout + done.stderr
         order = [done.stdout.find(text) for text in (status, 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-Tree')]
         assert -1 not in order and order == sorted(order), done.stdout
+
+
+def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
+    finish = "$stagesDone.Add('hit')"
+    # (body, restore clean, game process, expected exit)
+    never_exits = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
+    for body, clean, proc, code in ((finish, True, '$null', 0),
+                                    (finish + '; return', True, '$null', 0),    # -ProbeOnly's return passes through the finally
+                                    (finish, False, '$null', 1),                # completed, bad restore
+                                    ("'no stage'", True, '$null', 1),           # incomplete
+                                    ("'no stage'; return", True, '$null', 1),
+                                    ("throw 'x'", True, '$null', 1),            # failed
+                                    (finish, True, never_exits, 1)):            # the game's exit not confirmed
+        done = run_tail(body, clean, proc)
+        assert done.returncode == code, (body, clean, proc, done.returncode, done.stdout, done.stderr)
 
 
 if __name__ == '__main__':
     test_helpers()
     test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery()
+    test_exit_0_only_for_a_completed_run_with_nothing_to_recover()
     print('ok')

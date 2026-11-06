@@ -295,4 +295,6 @@ MANUAL RECOVERY: the restore did not compare clean ($($cleanup.saves)). Both loc
   2. Only when no row reports a mismatch, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
 "@
     }
+    # Exit 0 only for a completed run with nothing left to recover. Here in the finally, so -ProbeOnly's return passes through it too.
+    if ($log.status -ne 'completed' -or $holdLocks -or !$gameGone) { exit 1 }
 }
