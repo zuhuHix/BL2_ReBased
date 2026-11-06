@@ -1463,9 +1463,9 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     case 8: FScreenshotRequest::RequestScreenshot(TEXT("OWVendor_open.png"), false, false); break;
     // Ammo: the first items machine, report, buy shelf row 0 (an ammo row), report.
     case 9: OpenFirstOfKind(TEXT("items")); break;
-    case 10: Report(); break;
-    case 11:
-        // Test fixture only: the pools start full, so half-empty the pool of shelf row 0 first (else "Ammo full").
+    case 10:
+        // Test fixture only: the pools start full, so half-empty the pool of shelf row 0 first (else "Ammo full"). It runs
+        // before the report, which the checker compares with the pool the buy starts from.
         if (const AOpenWillowVendingMachine* Machine = ActiveMachine.Get())
         {
             EOpenWillowAmmoType Type = EOpenWillowAmmoType::Pistol;
@@ -1477,14 +1477,15 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
                 UE_LOG(LogTemp, Display, TEXT("OWVENDTEST ammo %s set to %d for the ammo buy"), *Machine->Stock.Items[0].AmmoType, Half);
             }
         }
-        if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST ammo buy refused: %s"), *Error);
+        Report();
         break;
+    case 11: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST ammo buy refused: %s"), *Error); break;
     case 12: Report(); break;
     // Health: the first health machine, the same.
     case 13: OpenFirstOfKind(TEXT("health")); break;
-    case 14: Report(); break;
-    case 15:
-        // Test fixture only: half health first, so the heal can be measured ("Health full" refuses at full health).
+    case 14:
+        // Test fixture only: half health first, so the heal can be measured ("Health full" refuses at full health). Before
+        // the report, as for ammo.
         if (AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr)
         {
             FOpenWillowMayaState& State = Walker->GetMayaState();
@@ -1492,8 +1493,9 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
             State.Health = Max * 0.5f; // current health only (the base maximum stays as it is)
             UE_LOG(LogTemp, Display, TEXT("OWVENDTEST health set to %.1f of %.1f for the heal buy"), Max * 0.5f, Max);
         }
-        if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST heal buy refused: %s"), *Error);
+        Report();
         break;
+    case 15: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST heal buy refused: %s"), *Error); break;
     case 16: Report(); break;
     case 17:
         if (Page.IsValid() && Page->IsShown()) CloseShop();

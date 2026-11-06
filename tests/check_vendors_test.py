@@ -515,6 +515,19 @@ class ItemSectionTest(unittest.TestCase):
         self.assertEqual(checks['heal_buy'][0], 'FAIL')
         self.assertIn('Health full', checks['heal_buy'][1])
 
+    def test_report_before_heal_that_disagrees_fails(self):
+        # The report before the buy must show the health the buy starts from (a fixture applied after it would not).
+        section = health_section(4000).replace('OWVENDHEAL before=100.000 after=200.000', 'OWVENDHEAL before=150.000 after=250.000')
+        checks = by_name(cv.grade_heal_buy(good_log(sections=False) + section))
+        self.assertEqual(checks['heal_buy'][0], 'FAIL')
+        self.assertIn('the report said', checks['heal_buy'][1])
+
+    def test_report_before_ammo_buy_that_disagrees_fails(self):
+        section = items_section(4550).replace('OWVENDAMMO type=pistol before=0 after=54', 'OWVENDAMMO type=pistol before=1 after=55')
+        checks = by_name(cv.grade_ammo_buy(good_log(sections=False) + section))
+        self.assertEqual(checks['ammo_buy'][0], 'FAIL')
+        self.assertIn('the report said', checks['ammo_buy'][1])
+
     def test_report_after_heal_that_disagrees_fails(self):
         log = good_log(sections=False) + health_section(4000).replace('"current":200.0', '"current":100.0')
         checks = by_name(cv.grade_heal_buy(log))
