@@ -183,6 +183,9 @@ def cp_melee_facts():
                     "blend_in": float(move.BlendInTime), "blend_out": float(move.BlendOutTime),
                     "length": _try(lambda: float(move.GetAnimLength(pawn.Arms if key == "first" else pawn.Mesh))),
                     "sets": _try(lambda: [_name(s) for s in (pawn.Arms if key == "first" else pawn.Mesh).AnimSets])}
+    # Which arm anim set holds the melee clip, and its length: the import needs the set.
+    out["arm_melee_clips"] = _try(lambda: [{"set": _name(anim_set), "clips": [(str(s.SequenceName), float(s.SequenceLength)) for s in anim_set.Sequences
+                                            if "melee" in str(s.SequenceName).lower()]} for anim_set in pawn.Arms.AnimSets])
     melee = unrealsdk.find_object("MeleeDefinition", "GD_Siren_Streaming.Melee.BehaviorData_PlayerMeleeAttack_Siren")
     out["definition"] = {"trace": float(melee.TraceDistance), "cone": float(melee.ConeAngle), "use_cone": bool(melee.bUseTargetCone),
                          "use_radius": bool(melee.bUseDamageRadius)}
