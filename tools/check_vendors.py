@@ -93,6 +93,9 @@ def supported_machines(vendors):
     return [m for m in vendors.get('machines', []) if m.get('supported', True)]
 
 
+STALE_PRESS = re.compile(r'OWVENDTEST stale_press start=(-?\d+) after_refusals=(-?\d+) after_stale=(-?\d+) refusal=\[([^\]]*)\] kept=\[([^\]]*)\] alone=\[([^\]]*)\] opening=(\d+)')
+
+
 def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
     """Return a Results object with one row per check. vendors is the parsed vendors.json document."""
     out = Results()
@@ -248,6 +251,7 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons'):
     # The non-gun sections: the Ammo Dump's ammo buy and the health machine's heal (PR 2b).
     out.rows.extend(grade_ammo_buy(log_text).rows)
     out.rows.extend(grade_heal_buy(log_text).rows)
+    grade_stale_press(log_text, out)
 
     if automation_text is None:
         out.add('automation', 'MISSING', 'no automation log given')
@@ -336,6 +340,34 @@ def effect_line(pattern, log_text, opened, buy):
     OWVENDHEAL) inside the purchase, before the OWVENDOR buy line that reports the action."""
     found = list(pattern.finditer(log_text, opened.end(), buy.start()))
     return found[-1] if found else None
+
+
+def grade_stale_press(log_text, out):
+    """stale_press: the -owvendortest sequence's refused press, the same press again, and a press with an old serial, through the
+    page's message path. A refusal leaves the serial, so the repeat gets the refusal; an old serial leaves it too and keeps the
+    refusal, or says to try again; and the host counted the three openings the sequence makes."""
+    found = STALE_PRESS.search(log_text)
+    if found is None:
+        out.add('stale_press', 'MISSING', 'no "OWVENDTEST stale_press" line')
+        return
+    start, after_refusals, after_stale, refusal, kept, alone, opening = found.groups()
+    tail = log_text[:found.start()]
+    refused = len(re.findall(r'OWVENDOR buy id=no_such_row ok=0', tail))
+    stale = len(re.findall(r'OWVENDOR ignored stale buy', tail))
+    if refused != 2:
+        out.add('stale_press', 'FAIL', f'{refused} refused press(es) reached the shop, expected the press and its repeat')
+    elif stale != 2:
+        out.add('stale_press', 'FAIL', f'{stale} press(es) ignored as stale, expected 2')
+    elif len({start, after_refusals, after_stale}) != 1:
+        out.add('stale_press', 'FAIL', f'the serial moved: {start} -> {after_refusals} -> {after_stale}')
+    elif not refusal or kept != refusal:
+        out.add('stale_press', 'FAIL', f'the refusal [{refusal}] did not stay through a stale press: [{kept}]')
+    elif alone != 'Try again':
+        out.add('stale_press', 'FAIL', f'a stale press with no refusal showing said [{alone}]')
+    elif opening != '3':
+        out.add('stale_press', 'FAIL', f'{opening} openings counted, the sequence opens 3 machines')
+    else:
+        out.add('stale_press', 'PASS', f'serial stayed at {start}; the repeat was refused again, a stale press kept [{refusal}]; 3 openings counted')
 
 
 def grade_ammo_buy(log_text):

@@ -66,7 +66,7 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
 - `AOpenWillowVendingMachine` actors are spawned from it by `UOpenWillowVendorSubsystem` when `-owvendors=<file>` is
   given. The use key opens the nearest machine within 350 uu, a stand-in for the native use trace
   (NATIVE_USE_INTERACTION.md).
-- The page starts its selection over on each opening. A refusal shows in the stock shop's labels (`INSUFFICIENT FUNDS`, `FULL`), read from script; which reasons the game sends to `FULL` is native and `UNVERIFIED`. The stock feedback clip and its sound are not driven.
+- The page starts its selection over on each opening. A refusal shows in the stock shop's labels (`INSUFFICIENT FUNDS`, `FULL`), read from script; which reasons the game sends to `FULL` is native and `UNVERIFIED`. The stock feedback clip and its sound are not driven. The state's serial moves only on a success, a restock or an opening. A refusal keeps it, so a repeat press gets the refusal again; a stale press changes nothing, keeps a refusal already showing, and otherwise says "Try again".
 - The page `tools/hud_overlay/vending.html` runs the stock `UI_VendingMachine.VendingMachineInterface` movie in Ruffle
   as frame art (converted by `tools/prepare_vending_movie.py`) with HTML lists over it. The host pushes state with
   `window.owVending(state)`, and the page answers with `OWVEND {serial, action, id}` console lines.
