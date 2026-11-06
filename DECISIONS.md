@@ -3983,3 +3983,9 @@ AI-assisted (Claude). Record: `docs/verification/PICKUP_CARD.md`. Found by the s
   `OpenWillow movie missing`. A HUD movie lost, before or after ready, sends the host back to its canvas HUD for good (`UNVERIFIED` in engine: synthetic tests only). The card asks again later.
 - `tools/check_overlay_data.py` lists missing movies; the run script and the inventory suite print it, and stop only for the movie they
   cannot do without. Tested with synthetic fixtures and with real Ruffle in headless Edge (movie absent and present). Not yet run in engine.
+
+## 2026-11-06: Marcus's mission screen is a page, and the host owns its keys (mission UI lane)
+
+AI-assisted (Claude). Record: `docs/verification/MISSION_SCREEN.md`. With a page URL, E at Marcus now opens BL2's own movie under Ruffle (`FOpenWillowMissionPage`) instead of confirming by itself: Enter confirms on the offer, the turn-in and the reward
+page, Escape leaves the first two, and E does nothing there. The accept and the reward page's order were observed in the live trace; the key rules are read from the installed script and stay UNVERIFIED until the live read. The host takes the keys itself so a page cannot
+trap the player, and a missing movie gives a plain panel. Without a page URL or a ready page the old path runs, so `tools/test_quest.ps1` and the slice gate keep their flow. Host behaviour only; no parsing change.

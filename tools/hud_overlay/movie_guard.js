@@ -11,6 +11,8 @@
     statusMenu:['UI_StatusMenu/StatusMenu.swf', 'SharedComponents/ConsoleComponents.swf',
       'SharedWillowComponents/SharedWillowComponents.swf', 'SharedWillowInventory/SharedWillowInventory.swf'],
     hud:['UI_HUD/HUD.swf', 'SharedComponents/ConsoleComponents.swf', 'SharedWillowComponents/SharedWillowComponents.swf', 'gfxfontlib.swf'],
+    missionScreen:['UI_Mission/MissionInterface.swf', 'SharedWillowMission/SharedWillowMission.swf', 'SharedComponents/ConsoleComponents.swf',
+      'SharedWillowComponents/SharedWillowComponents.swf', 'SharedWillowInventory/SharedWillowInventory.swf'],
     pickupCard:['UI_Inworld/Weapon_Card.swf', 'SharedWillowComponents/SharedWillowComponents.swf']
   };
 

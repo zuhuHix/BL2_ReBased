@@ -12,6 +12,8 @@ from pathlib import Path
 UI_STEPS = 'DECISIONS.md 2026-09-26 (tools/gfx_to_swf.py, tools/hud_harness_swf.py)'
 STATUS_PAGES = 'Inventory, Skills, Missions, Map'
 PICKUP_STEPS = 'docs/verification/PICKUP_CARD.md "Local data"'
+MISSION_PAGE = 'mission screen (optional: the page has a plain panel without it)'
+MISSION_STEPS = 'python tools/prepare_mission_screen.py'
 REQUIRED = [
     ('ruffle/ruffle.js', 'every page', UI_STEPS),
     ('UI_HUD/harness.swf', 'HUD', UI_STEPS),
@@ -26,6 +28,10 @@ REQUIRED = [
     ('UI_Inworld/harness.swf', 'world pickup card', PICKUP_STEPS),
     ('UI_Inworld/Weapon_Card.swf', 'world pickup card', PICKUP_STEPS),
     ('UI_VendingMachine/VendingMachineInterface.swf', 'vending frame art (optional: the page works without it)', UI_STEPS),
+    ('UI_Mission/harness.swf', MISSION_PAGE, MISSION_STEPS),
+    ('UI_Mission/MissionInterface.swf', MISSION_PAGE, MISSION_STEPS),
+    ('SharedWillowMission/SharedWillowMission.swf', MISSION_PAGE, MISSION_STEPS),
+    ('missionscreen.json', 'mission screen prompts (optional: the page has neutral ones)', MISSION_STEPS),
     ('map.json', 'Map names', 'python tools/prepare_map_screen.py'),
 ]
 
