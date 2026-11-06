@@ -67,7 +67,7 @@ try {
         "-owmover=`"$(& $path 'mover')`"", "-owslice=`"$(& $path 'slice')`"", "-ownpcs=`"$(& $path 'npcs')`"",
         "-owaudio=`"$(& $path 'audio')`"", '-owquest', "-owquestsave=`"$save`"", "-owitems=`"$(Split-Path -Parent $gear)`"",
         "-owactionskill=`"$(& $path 'actionskill')`"", "-owlevel=$gearLevel",
-        "-owflashmissionscreen=${url}mission_screen.html", '-owmissionpagetest',
+        "-owflashmissionscreen=${url}mission_screen.html", "-owflashskills=${url}skills.html", '-owmissionpagetest',
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended', "-abslog=`"$log`"") + $Extra
     if ($NoMovie) { $arguments += '-owmissionpagenomovie' }
     $started = Get-Date

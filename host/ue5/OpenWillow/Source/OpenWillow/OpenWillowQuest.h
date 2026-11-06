@@ -98,6 +98,8 @@ private:
     TSharedPtr<class FOpenWillowMissionPage> ScreenPage;
     FString ScreenPageOn;                // "offer", "turnin" or "reward" while shown
     bool bScreenPageTried = false;
+    // A status page or a shop is up: the mission page must not open over it, because closing would give the game the input and bring the gun back under that page.
+    bool OtherPageOpen() const;
     void ShowScreenPage(const TCHAR* Page);
     void CloseScreenPage(const TCHAR* Why);
     void TickScreenPage();
@@ -109,7 +111,8 @@ private:
     bool bScreenPageTest = false;
     double ScreenTestAt = 0.;
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
-    int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0;   // presses that reached OnScreenKey and TryUse: the suite's no-op rows prove delivery with them
+    // Presses that reached OnScreenKey and TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
+    int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0;
     struct FImpl;
     TSharedPtr<FImpl> Impl;
     bool bEnabled = false;
