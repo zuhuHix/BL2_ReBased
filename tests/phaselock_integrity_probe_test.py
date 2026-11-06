@@ -156,9 +156,6 @@ def test_stopping_the_probe_lets_go_of_the_pawn():
     assert ns['pi']['pawn'] is None
 
 
-def test_the_kill_refuses_an_unlifted_target_and_reports_the_health():
-
-
 def test_a_kill_needs_the_target_lifted_now_and_alive_before():
     ns = load()
     health = [500.0]
