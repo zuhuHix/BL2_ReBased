@@ -167,6 +167,7 @@ public:
     // move ends (2.28 s after the injury); never while Dead (see GoDown, UNVERIFIED).
     bool DownWeaponReady() const;
     bool IsReloading() const { return bReloading; }
+    float ReloadRefillTime() const { return ReloadRefillAt; }   // the test's clock for the refill point
 #if WITH_EDITOR
     // Test drivers (-owhuddownshots, which runs as UnrealEditor -game): the same handlers the fire and reload input bindings
     // call. Editor builds only, so Shipping has no way to inject input.

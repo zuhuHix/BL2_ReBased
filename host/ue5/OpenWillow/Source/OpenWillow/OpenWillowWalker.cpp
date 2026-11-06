@@ -1208,7 +1208,7 @@ void AOpenWillowWalker::UpdateAim(float Now)
 }
 void AOpenWillowWalker::SelectSlot(int32 Slot)
 {
-    if (!bMayaActive || !ArmsAnim) return;
+    if (!bMayaActive || !ArmsAnim || MeleeBusy()) return;
     const FOpenWillowWeaponItem* Item = Inventory->SlotItem(Slot);
     if (!Item) return; // an empty slot keeps the current weapon, as in BL2
     CancelReload(); // before the active weapon changes, so a due refill reaches the reloading weapon
@@ -1479,7 +1479,7 @@ void AOpenWillowWalker::ToggleSkills()
 }
 void AOpenWillowWalker::Holster()
 {
-    if (!bMayaActive || !ArmsAnim) return;
+    if (!bMayaActive || !ArmsAnim || MeleeBusy()) return;
     AimReleased();
     bWeaponOut = false;
     CancelReload(); // before the active weapon changes
@@ -1528,7 +1528,7 @@ void AOpenWillowWalker::FirePressed()
 void AOpenWillowWalker::FireReleased() { bFireHeld = false; }
 void AOpenWillowWalker::AimPressed()
 {
-    if (!bMayaActive || !bWeaponOut || bInventoryPresentation || bAimHeld) return;
+    if (!bMayaActive || !bWeaponOut || bInventoryPresentation || bAimHeld || MeleeBusy()) return;
     bAimHeld = true;
     BeginAimTransition(GetWorld()->GetTimeSeconds());
 }
