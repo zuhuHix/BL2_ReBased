@@ -24,6 +24,7 @@ The host's second-E close was a stand-in, and the script says it is not how the 
 
 - **Page:** `tools/hud_overlay/mission_screen.html`, BL2's own movie `UI_Mission.MissionInterface` under Ruffle, created hidden at the start of play (`FOpenWillowMissionPage`).
 - **Keys:** the host owns them. While the page is shown, every key press goes to `UOpenWillowQuest::OnScreenKey`, so the page needs no focus and a broken page cannot take input away from the keys that close it.
+- **Maya:** the page uses the status pages' transition, `SetInventoryPresentation`: arms and gun put away, aim let go, and every close restores it (`CloseScreenPage`). The trigger's release and the firing gates that make this hold come with PR #118, so the row `held_trigger_does_not_fire_under_the_page` fails until it is merged.
 - **Flow:** E opens the offer or the turn-in, with nothing accepted yet. Enter on the offer accepts, and the VM's own close ends the page. Enter on the turn-in turns in and shows the reward page. Enter on the reward page takes the reward and closes. Escape closes the offer or the turn-in and is refused on the reward page. If Maya goes down, the page closes, and a reward still waiting is shown again at the next use.
 - **The page only draws:** it writes the fields and calls the movie functions listed under "The movie's interface", from the host's mission log snapshot.
 - **No page, old path:** without a page URL, or before the page is ready, `TryUse` confirms as it always did. That is what `tools/test_quest.ps1` and the slice gate run (both use `-owcanvashud`), so their flow is unchanged.
@@ -51,9 +52,9 @@ It writes the two converted movies, the wrapper and `missionscreen.json` under i
 
 ## Checks
 
-- `node tests/mission_screen_test.js`, `python tests/prepare_mission_screen_test.py`: synthetic.
+- `node tests/mission_screen_test.js` (the real page against a stub movie, DOM and guard), `python tests/prepare_mission_screen_test.py`, `python tests/check_mission_page_test.py`: synthetic.
 - Headless Edge with real Ruffle, on `?demo=offer`, `turnin` and `reward`: each page draws its text and prompt with the movie; with the movie folder absent, each shows the plain panel and no error panel. Sample data only.
-- `tools/test_mission_page.ps1` (real keys through Slate) and `-NoMovie`: not run yet.
+- `tools/test_mission_page.ps1` and `-NoMovie`: not run yet. E goes through the player's input binding, keys for the page through Slate, each no-op row checks the press arrived, and `tools/check_mission_page.py` requires the exact rows once each.
 
 ## Open
 

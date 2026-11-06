@@ -782,6 +782,7 @@ bool UOpenWillowQuest::IsRewardPending() const { return Impl && !bFailed && Impl
 bool UOpenWillowQuest::TryUse()
 {
     if (!Impl || bFailed) return false;
+    ++ScreenUsesSeen;
     if (Impl->Slice->rewardPending()) {
         // A reward left waiting (the page was closed by a fall): show it again rather than take the reward with no page.
         if (ScreenPage && ScreenPage->IsReady()) { ShowScreenPage(TEXT("reward")); return true; }
@@ -830,6 +831,8 @@ bool UOpenWillowQuest::TryUse()
 void UOpenWillowQuest::ShowScreenPage(const TCHAR* Page)
 {
     ScreenPageOn = Page;
+    // The status pages' transition: the trigger and aim let go, arms and gun put away (and the firing gates that flag holds). Every close restores it, in CloseScreenPage.
+    if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->SetInventoryPresentation(true);
     ScreenPage->Show(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
     ScreenPage->SendState(FString::Printf(TEXT("{\"page\":\"%s\",\"log\":%s}"), Page, *MissionLogJson()));
     UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page open: %s (status %d)"), Page, Status());
@@ -841,12 +844,14 @@ void UOpenWillowQuest::CloseScreenPage(const TCHAR* Why)
     ScreenPage->SendState(TEXT("{\"page\":\"closed\"}"));
     ScreenPage->Hide(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
     ScreenPageOn.Reset();
+    if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->SetInventoryPresentation(false);
     UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page closed: %s (status %d)"), Why, Status());
 }
 
 void UOpenWillowQuest::OnScreenKey(const FKey& Key)
 {
     if (!Impl || bFailed || !ScreenPage || !ScreenPage->IsShown()) return;
+    ++ScreenKeysSeen;
     if (Key == EKeys::PageUp) { ScreenPage->SendKey(TEXT("PageUp")); return; }
     if (Key == EKeys::PageDown) { ScreenPage->SendKey(TEXT("PageDown")); return; }
     const int32 Before = Status();

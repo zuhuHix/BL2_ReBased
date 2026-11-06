@@ -93,8 +93,9 @@ try {
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $outDir -Force }
     }
     if ($summary) {
-        Write-Output "OWMISSIONPAGETEST SUMMARY $summary"
-        $exitCode = if ($summary -match 'failed=0') { 0 } else { 1 }
+        # The checker requires the exact rows, each once: a failed=0 summary alone would pass a run that lost one.
+        & python (Join-Path $PSScriptRoot 'check_mission_page.py') $log
+        $exitCode = if ($LASTEXITCODE -eq 0) { 0 } else { 1 }
     } else {
         Write-Output "OWMISSIONPAGETEST SUMMARY result=FAIL reason=$(if ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
     }
