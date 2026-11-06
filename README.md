@@ -1,10 +1,17 @@
 <div align="center">
 
+<!-- Logo: pending hub decision. The untracked .github/assets/BL2_ReEngine-logo-512.png is the maintainer's file and is not used here. -->
+
 <img src=".github/assets/banner.png" alt="BL2_ReBased: Borderlands 2, re-based onto a modern engine" width="100%">
 
-[![CI](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReEngine/actions/workflows/ci.yml)
+[![CI](https://github.com/zuhuHix/BL2_ReBased/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReBased/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Discussions](https://img.shields.io/badge/chat-discussions-8250df)](https://github.com/zuhuHix/BL2_ReEngine/discussions)
+[![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)](#where-things-stand)
+[![Engine: UE 5.8](https://img.shields.io/badge/engine-Unreal%20Engine%205.8-black)](docs/OPENWILLOW_ENGINE_PLAN.md)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C)](CMakeLists.txt)
+[![Last commit](https://img.shields.io/github/last-commit/zuhuHix/BL2_ReBased)](https://github.com/zuhuHix/BL2_ReBased/commits/main)
+[![Discussions](https://img.shields.io/badge/chat-discussions-8250df)](https://github.com/zuhuHix/BL2_ReBased/discussions)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
 
 </div>
 
@@ -18,7 +25,7 @@ Borderlands 2 runs on Unreal Engine 3, a decade-old engine that Gearbox modified
 
 ---
 
-> **There is nothing to play yet.** Right now the engine can read the game's files, show three maps as frozen scenery in UE5, and run one bounded Sanctuary slice (Maya, a lent pistol, Phaselock, one mission) in a developer harness full of labelled stand-ins that has not been compared with the original game. No enemy fights back, no story. I put this up early so people can watch it grow, not because it's ready.
+> **There is no game to play yet.** The engine can read the game's files and show three maps as frozen scenery in UE5. A developer slice on Sanctuary lets Maya walk, shoot a lent pistol, use Phaselock and run one mission, all on labelled stand-ins that have **not** been compared with the original game. No enemy in the slice attacks Maya yet, and there's no story. I put this up early so people can watch it grow, not because it's ready.
 >
 > This is a fan project. Not affiliated with Gearbox, 2K or Take-Two. No game files and no Gearbox code live in this repo. It only works against **your own purchased copy** of Borderlands 2, and it never touches your install.
 
@@ -64,35 +71,67 @@ When it's done (see the roadmap; this isn't a remaster, not a remake) here's wha
 
 ## Where things stand
 
-*Updated 2026-10-02.*
+*Updated 2026-11-06, from `main` at `f5d5d60`.*
 
-Okay, Sanctuary is starting to actually look like Sanctuary.
+**Short version:** there's no game to play yet, but there is a working vertical slice on Sanctuary, run in a developer harness. The slice is one Vault Hunter (Maya), a few guns, Phaselock, a skills page, a vending shop and one Fire mission. Most of it runs on stand-ins, and most of it has not been compared with the original game.
 
-Three maps load in UE5 and you can fly around them as frozen scenery: **Ash**, **Sanctuary** and **Southpaw Factory**. On Sanctuary there is also a developer slice: Maya walks, holds a lent pistol, casts Phaselock and plays the stock "Rock, Paper, Genocide: Fire Weapons!" mission with Marcus, the range and the target dummy loaded from the game's own data. Many parts are labelled stand-ins and **most of it has not been compared with the original game yet**; the first real-game captures (2026-10-02) checked a handful of rules, listed below. There is no real combat against enemies and no story yet.
+### What works today (merged to `main`)
 
-Since 2026-10-01 (every item below is automated or by-eye evidence on one PC, not parity; the numbers are in [ROADMAP.md](ROADMAP.md#how-its-going)):
+Each item names the merged PR. Anything not checked against the running game is marked `UNVERIFIED` in its record.
 
-- **Native analysis started.** Analysing `Borderlands2.exe` locally is now allowed (see [Is this legal?](#is-this-legal)). The first notes cover mission, behavior and Kismet dispatch, progression and Phaselock targeting. The dispatch and progression notes are implemented. The progression rules (level curve, max health, skill points, the Fire mission's XP) and Phaselock's lift bob and reload/weapon-swap rules are now confirmed in the real game; everything else stays `UNVERIFIED`.
-- **Weapon paint** is rebuilt from the game's own compiled shader data in three passes. Against real captures of the same guns an independent reviewer scores it only 3-4.5/10 (far too dark, wrong Maliwan orange), so it is still an unverified reading.
-- **Inventory opens faster** (first open 443 ms to 234 ms on my PC; the original game shows its page about 130-160 ms after the key press, measured differently).
-- **A reader for Phaselock's particle templates** exists; nothing is rendered from it yet.
-- **First real-game captures.** The installed game is driven through the community mod SDK to record ground truth: 69 weapon cards with their exact parts, gun skins, Phaselock frame by frame, progression values ([record](docs/verification/REALGAME_GROUND_TRUTH.md)). Nothing game-derived enters the repository.
+- **Maya.** Movement numbers (speeds, sprint, crouch, bob, sprint FOV, falling damage) read from the stock data (#77). Shield, health and Fight For Your Life sit in one host state (#72). Her action-skill cooldown shows on BL2's own HUD movie (#47).
+- **Going down and respawning.** The down, bleed-out, second-wind and respawn rules run on the VM (#59, [COMBAT_DOWN_RESPAWN.md](docs/verification/COMBAT_DOWN_RESPAWN.md)). In the slice, the fight is only against a stand-in that can't hit back yet.
+- **HUD.** BL2's movie HUD is on by default with real values (#54). Fight For Your Life, second wind, respawn and the mission tracker are in the movie (#63). Damage-direction arrows and the level-up banner come from host state (#67). The shield bar follows Maya's live pool (#80). The minimap uses BL2's own clip (#53). The Map screen shows Sanctuary's tactical map with Maya's arrow and the quest marker (#97).
+- **Guns.** Four slice guns have ADS, reload clips and muzzle flash (#48, #68). Guns are assembled from the game's own part meshes and skins (#57, #58, #86). Firing comes from the parts: firing modes, pellets, rockets, splash and elemental explosions (#56, #70). Bullets carry momentum (#62). Weapon paint is still a guess: an independent reviewer scored it 3-4.5/10 against real captures.
+- **Pickups and item cards.** The world pickup card uses BL2's own card movie while you aim at a dropped item (#95). Item cards show the level-requirement strip only above level 1 (#96).
+- **Phaselock.** The skill's presentation and colour constants (#50, #94). Lift bob and reload/weapon-swap rules are confirmed in the real game (see [PHASELOCK_STOCK_DATA.md](docs/verification/PHASELOCK_STOCK_DATA.md)).
+- **Inventory and menus.** Comma and Period, and the number keys, switch status-menu tabs (#91, #92). VALUE thumbnails, Inspect and card fits (#69). An item set that would leave the backpack without room is refused (#71). The Missions log shows the four Fire mission states (#64, #100).
+- **Skills.** The skills page is imported and navigable with the keyboard (#35, #49). Respec and the skill effects are still open (see below).
+- **Vendors.** Currency and stock persist, and non-weapon item values were confirmed live (#87, [VENDORS.md](docs/verification/VENDORS.md)). The Ammo Dump and Dr. Zed selling is still open.
+- **The Fire mission.** Accept, objective and turn-in run in the host on stock world data, with labelled stand-ins. The turn-in gives XP only, as the stock data does ([SANCTUARY_RPG_MISSION.md](docs/verification/SANCTUARY_RPG_MISSION.md)).
+- **One scripted run of the Phase 4 loop.** `tools/test_slice_gate.ps1` chains 14 links in one editor session (#90). On `main` on 2026-11-04 it recorded **10 PASS, 0 FAIL, 4 NOT_AVAILABLE**. The table is in [SLICE_GATE.md](docs/verification/SLICE_GATE.md).
 
-Earlier, on 2026-09-23, Sanctuary got a lot of love:
+<details>
+<summary><b>The slice gate, link by link (on <code>main</code>, 2026-11-04)</b></summary>
+<br>
 
-- **The ground finally looks like ground.** Terrain layer blending is recovered, and BSP floors are coming through, backed by a new calibration check so they stay right.
-- **The moon base has textures now**, and the moon in the sky is scaled from the game's own `p_moonColor` value instead of a number I made up.
-- **The big central structure is fixed.** The pillar shells sit where they should and their textures aren't flipped anymore.
-- **Stuff that shouldn't be there is gone.** Every placement the game marks as hidden is now hidden, and oversized invisible blockers keep their collision without covering the city.
-- **The sky** still uses `Sky_Dome`'s own textures and settings (a labeled approximation, since the stripped sky graph isn't decoded yet).
+| # | Link | Result on `main` | What closes the gap |
+|:--:|---|:--|---|
+| 1 | Spawn Maya | PASS | |
+| 2 | Reach the fight area | NOT_AVAILABLE | The range (#76) |
+| 3 | Kill an enemy | PASS | |
+| 4 | Enemy attacks Maya | NOT_AVAILABLE | The range's enemy AI (#83) |
+| 5 | Loot drops on kill | NOT_AVAILABLE | The range's loot on death (#89) |
+| 6 | Pick up a gun | PASS | |
+| 7 | Pick up the aimed gun past a nearer one | NOT_AVAILABLE | E takes the aimed pickup (#101) |
+| 8 | Equip the gun | PASS | |
+| 9 | Phaselock an enemy | PASS | |
+| 10 | Accept the mission | PASS | |
+| 11 | Complete the objective | PASS | |
+| 12 | Turn in the mission | PASS | |
+| 13 | Go down | PASS | |
+| 14 | Bleed out and respawn | PASS | |
 
-Under the hood, the engine still reads all 2,008 packages from a full BL2 install (base game plus every DLC) with zero errors. Phase 2 now has a C++ bytecode loader, object model, interpreter and Core native implementations. Both disassemblers structurally decode 12,968 of 12,978 script functions ([record](docs/verification/SCRIPT_BYTECODE_DISASM.md)); ten still fail. Ordinary item-only backpack Up/Down now executes the installed navigation script in UE5, with two passing key-to-script-to-selection checks. The rest of the menu still uses the host adapter; full live-game semantics and gameplay integration remain UNVERIFIED ([VM record](docs/verification/SCRIPT_VM_PROTOTYPE.md)).
+Several links rely on named test fixtures (a teleport, a granted Phaselock point, a lethal-damage call). The checker prints each fixture next to its result. A PASS means the host did this in this order in one session. It does not mean the rule matches Borderlands 2.
 
-Honest caveats: it's not full visual parity yet, walking is still a placeholder, it runs slowly on my laptop, and 79 maps haven't been touched. Details are in the [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
+</details>
 
-The door and the mission: a Sanctuary Matinee door opens from its installed Kismet events ([mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md)), and the Fire mission runs in the host on stock world data with labelled stand-ins (for example Phaselock targeting; the turn-in gives XP only, as the stock data does). Audio is looked up and logged, never played. See the [mission record](docs/verification/SANCTUARY_RPG_MISSION.md).
+### In progress (open PRs, not on `main`)
 
-**Next up:** finishing Sanctuary's last visual gaps and comparing the host-run Fire mission slice (Maya, a lent pistol, Phaselock from stock data) against the original game, which has not been done yet. Full list in [ROADMAP.md](ROADMAP.md#now--next); the small ones are tagged *good first task*.
+These are not in the game yet, and the records above don't count them.
+
+- **Test range:** #76 (range with static dummies and moving enemies), #83 (enemy AI from the live records), #89 (loot on death from the VM's death roll). These close slice links 2 to 5.
+- **Skills:** #73 (respec in the host), #74 (effects from the stock SkillDefinitions), #93 (modifiers on survival stats), and the behaviour skills in #78, #82 and #85.
+- **Vendors, part 2b:** #99 (the Ammo Dump and Dr. Zed sell, and ammo purchases fill the pools).
+- **Pickups:** #101 (E takes the aimed pickup, not the nearest one). This closes slice link 7.
+
+### Not yet
+
+- **Parity with the original game.** Most of the slice has not been compared with BL2. Nothing here should be read as "it works like the real thing" unless its record says so.
+- **Enemies that fight back in the slice.** The stand-in has no attack on `main`.
+- **The rest of the game.** The other ~79 maps, the other Vault Hunters, the full campaign, co-op, your saves.
+
+Next up: the open PRs above, then a proper side-by-side comparison of the slice with the original game. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
 
 <details>
 <summary><b>Show me the numbers behind that</b></summary>
@@ -104,8 +143,9 @@ Every claim above comes from a dated verification record. Automated checks are r
 |---|---|
 | Phase 0 gated 2026-09-10 | Reader reads 2,008 / 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture extracted and rendered in UE 5.8. |
 | Phase 1 in progress | `Ash_P` (5,059 placements), `Sanctuary_P` (4,430 placements) and `SouthpawFactory_P` (3,987 placements) load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a Sanctuary `Sky_Dome` sky approximation built from the dome's own inputs (UE5 atmosphere kept for ambient light), an opt-in outer-hull import and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`); an in-game Tab list switches between imported scenes. Walking is an opt-in placeholder verified on Sanctuary only. Sanctuary runs at 12–15 FPS on an integrated-GPU laptop, GPU-bound in TSR. Sanctuary terrain floors are imported with corroborated topology and walkable triangle collision. Not done: native sky graph decode and parity, skeletal meshes, lightmaps, real material graphs, full collision, 79 more maps. |
+| Slice gate, 2026-11-04 | `tools/test_slice_gate.ps1` on `main`: 10 PASS, 0 FAIL, 4 NOT_AVAILABLE of 14 links. Host behaviour only. |
 
-Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md) · [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md) · [collision and walking](COLLISION_WALKING_VERIFICATION.md) · [performance / in-game selector](docs/verification/PERFORMANCE.md) · [umodel cross-check](docs/verification/UMODEL_CROSSCHECK.md) · [object-dump cross-check](docs/verification/BLCMM_DUMP_CROSSCHECK.md) · [BSP texture axes](docs/verification/BSP_TEXTURE_AXES.md).
+Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md) · [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md) · [collision and walking](COLLISION_WALKING_VERIFICATION.md) · [performance / in-game selector](docs/verification/PERFORMANCE.md) · [umodel cross-check](docs/verification/UMODEL_CROSSCHECK.md) · [object-dump cross-check](docs/verification/BLCMM_DUMP_CROSSCHECK.md) · [BSP texture axes](docs/verification/BSP_TEXTURE_AXES.md) · [slice gate](docs/verification/SLICE_GATE.md) · [gates and baseline](docs/verification/GATES.md).
 
 Screenshots of loaded maps are game-derived, so they stay out of the repository. Anyone with the game can reproduce them with the commands in [docs/TOOLING.md](docs/TOOLING.md).
 
@@ -120,14 +160,14 @@ Six phases. Each one ends with a gate (a thing you can actually see or do) so it
 | Phase | What you'll be able to do | So far (dates from git) | Status |
 |:--|:--|:--|:--|
 | **0 · Read the files** | The engine can open every BL2 file | Reads all 2,008 packages; gated 2026-09-10 | Done |
-| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now). 2026-10-02: the centre monolith is done; it has animations and state changes, which proves the approach further. Sanctuary looks close to the real game, still missing some lighting and NPCs |
+| **1 · See a map** | Fly around Sanctuary in UE5, verified against the real game. No enemies, no guns yet. Full 82-map coverage comes later, in phase 5 | Three maps load as frozen scenery since 2026-09-13; placeholder walking on Sanctuary since 2026-09-14; not yet compared with the real game | In progress (1 of 82 targeted for now). Sanctuary looks close to the real game, still missing some lighting and NPCs |
 | **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to Sanctuary and one Vault Hunter | Prototype since 2026-09-30: C++ bytecode loader, interpreter and Core natives; drives backpack navigation in UE5 since 2026-10-01 | In progress (prototype) |
-| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Only the placeholder UE5 walking controller | Maintainer-tested 2026-10-02: walking, jumping and collision work well (no verification record yet) |
-| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host with labelled stand-ins: Maya (2026-09-23), Phaselock (2026-09-25), the stock Fire mission loop (2026-10-01); compared with the actual game by the maintainer, roughly 6/10 for parity (no verification record) | In progress (slice pieces) |
+| **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to that same slice | Movement numbers from the stock data on Maya (#77); the placeholder UE5 walking controller before that | Maintainer-tested 2026-10-02: walking, jumping and collision work well (no verification record yet) |
+| **4 · One Vault Hunter, proven** | Spawn, fight, loot a gun, equip it, use a skill, complete one mission, die, respawn, on Sanctuary. ~3,800 of Gearbox's undocumented functions worked out by analysing the executable and watching the game (this is the mountain). This is the vertical slice | Slice pieces run in the host: Maya, Phaselock, the Fire mission, guns, pickups, down and respawn. One scripted run of the loop on `main` (2026-11-04): 10 of 14 links PASS. Not yet compared with the actual game (no verification record) | In progress (slice pieces; the range, enemy attacks and aimed pickups are open PRs) |
 | **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, deferred from phases 1 and 4, plus the whole campaign with your real save file | Nothing yet | Not started |
 | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Nothing yet | Not started |
 
-I work on this actively, and I'm not promising completion dates. As of 2026-11-02 the repository is 53 days old, with 401 commits on `origin/main` across 28 days. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
+I work on this actively, and I'm not promising completion dates. As of 2026-11-06 the repository has 504 commits on `main`, since 2026-09-10. The dated milestones are in [ROADMAP.md](ROADMAP.md#how-its-going). Phase 4 is the mountain: it's the unproven part, and where most of the effort goes.
 
 ## Related project: BL2_RTSE
 
@@ -161,7 +201,7 @@ Full policy: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE). Covers my 
 <br>
 
 **Can I play Borderlands 2 in this?**
-No. The first thing you'll be able to do is fly around the maps (Phase 1). Shooting things is Phase 4. The full campaign is Phase 5. It's gonna be a while...
+Not yet. You can fly around three maps (Phase 1), and the developer slice on Sanctuary lets Maya shoot a stand-in, pick up a gun and run one mission. That's a test harness, not the game. Shooting real enemies is Phase 4. The full campaign is Phase 5. It's gonna be a while...
 
 **Is this a remaster? A remake?**
 Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. This keeps the original stuff untouched and replaces only the *machine* that runs it. Remasters will follow later on when people enjoy their new modding capabilities.
@@ -198,7 +238,7 @@ Everything below is the technical layer. Click to expand.
 <summary><b>How it works: architecture</b></summary>
 <br>
 
-Measured directly from the installed game: 20,119 functions across the nine code packages. **12,978 (64.5%) are UnrealScript bytecode** and will run in our VM as-is. **7,141 (35.5%) were native C++** inside `Borderlands2.exe` and must be rebuilt. Of those, 286 are trivial builtins, 609 are online/save/DLC plumbing we replace rather than replicate, 512 bridge the Scaleform UI, 1,914 are stock UE3 natives whose contracts are public via UDK, and **3,803 are Gearbox's own, undocumented**. Full breakdown: [engine plan §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth--the-numbers-this-plan-rests-on).
+Measured directly from the installed game: 20,119 functions across the nine code packages. **12,978 (64.5%) are UnrealScript bytecode** and will run in our VM as-is. **7,141 (35.5%) were native C++** inside `Borderlands2.exe` and must be rebuilt. Of those, 286 are trivial builtins, 609 are online/save/DLC plumbing we replace rather than replicate, 512 bridge the Scaleform UI, 1,914 are stock UE3 natives whose contracts are public via UDK, and **3,803 are Gearbox's own, undocumented**. Full breakdown: [engine plan §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth-the-numbers-this-plan-rests-on).
 
 Three layers. The script VM and the asset pipeline are engine-agnostic C++; the native layer is where the host engine shows up.
 
@@ -224,7 +264,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
         runs the 12,978 inherited functions unchanged
 ```
 
-The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate; the plan rules out switching later. UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*, which is the whole reason it won out; all Phase 1 work targets UE 5.8. Full reasoning, and the alternative considered (Godot), is in [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision--decide-by-end-of-phase-0-never-after).
+The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate; the plan rules out switching later. UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*, which is the whole reason it won out; all Phase 1 work targets UE 5.8. Full reasoning, and the alternative considered (Godot), is in [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision-decide-by-end-of-phase-0-never-after).
 
 </details>
 
@@ -246,7 +286,7 @@ It's a one-person project, and I'm not quiet about the tooling. I own every arch
 <summary><b>Build and run it</b></summary>
 <br>
 
-You need: Windows, CMake, Visual Studio 2022 C++ build tools, Python 3, and an installed Borderlands 2. Unreal Engine 5.8 is only needed for the map viewer.
+You need: Windows, CMake, Visual Studio 2022 C++ build tools, Python 3, and an installed Borderlands 2. Unreal Engine 5.8 is only needed for the map viewer and the in-engine slice.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -256,7 +296,7 @@ python tools/verify_packages.py --reader build/Release/ow-package.exe   # needs 
 & ./build/Release/ow-package.exe "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/Core.upk"
 ```
 
-Inspecting properties, running the full-install census, extracting a texture or mesh, preparing and opening a map in the UE5 viewer: [docs/TOOLING.md](docs/TOOLING.md). Everything the tools produce lands under `local/`, which is git-ignored, so extracted assets never enter the tree.
+Inspecting properties, running the full-install census, extracting a texture or mesh, preparing and opening a map in the UE5 viewer: [docs/TOOLING.md](docs/TOOLING.md). Everything the tools produce lands under `local/`, which is git-ignored, so extracted assets never enter the tree. The current pass/fail baseline for each gate is in [docs/verification/GATES.md](docs/verification/GATES.md).
 
 The code keeps the working-title prefixes from before the rename: the reader is `ow-package`, the CMake option is `OPENWILLOW_LZO`, the UE host reads `OPENWILLOW_BL2`.
 
@@ -270,7 +310,9 @@ A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/i
 
 `tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest. `host/ue5/` is a minimal UE5 C++ project plus editor-Python importer/verifier that builds the scene, an inspection lighting rig and a free-flight spectator pawn, then reopens the saved scene and verifies it.
 
-Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer. Gameplay exists only as the Sanctuary slice described above, with stand-ins and unverified rules. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for Maya, Marcus and the dummy.)
+The Sanctuary slice lives in `host/`: Maya's movement, state, HUD, guns, pickups, Phaselock, the Fire mission and the skills and vending pages, all in the host, with labelled stand-ins and unverified rules where the records say so. The skills page and the vending currency and stock live there too. The slice gate (`tools/test_slice_gate.ps1`) drives it end to end.
+
+Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, real enemy combat in the slice, saves. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for Maya, Marcus and the dummy.)
 
 Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 
@@ -278,7 +320,6 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 
 <details>
 <summary><b>All the documents</b></summary>
-<br>
 
 | | |
 |---|---|
@@ -288,6 +329,8 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 | [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md) | Research: what players actually want, what modding can and cannot reach |
 | [docs/TOOLING.md](docs/TOOLING.md) | Every tool, flag and command, with what each check proves |
 | [docs/verification/](docs/verification/) | Dated verification records for each shipped slice |
+| [docs/verification/SLICE_GATE.md](docs/verification/SLICE_GATE.md) | The Phase 4 loop, run end to end, link by link |
+| [docs/verification/GATES.md](docs/verification/GATES.md) | Gate commands and the current baseline |
 | [docs/LEGAL.md](docs/LEGAL.md) | Working rules (analysis allowed, no game data or transcribed code in the repo), non-affiliation, contributor certification, license |
 | [docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md) | Analysing the game executable, and sharing local analysis between two machines |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Dependency and reference provenance |
