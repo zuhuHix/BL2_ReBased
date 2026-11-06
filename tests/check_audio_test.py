@@ -24,7 +24,7 @@ def log(rows=None, summary=None, play=PLAY, drained='queued=96000 left=0'):
 
 class CheckAudioTest(unittest.TestCase):
     def problems(self, text):
-        return ca.grade(text)[1]
+        return ca.grade(text, '0')[1]
 
     def assert_problem(self, text, words):
         problems = self.problems(text)
@@ -64,6 +64,10 @@ class CheckAudioTest(unittest.TestCase):
     def test_the_tone_must_have_played_once(self):
         self.assert_problem(log(play=''), '0 tone play lines')
 
+    def test_the_exit_status_has_no_default(self):
+        with self.assertRaises(TypeError):
+            ca.grade(log())
+
     def test_every_row_passing_still_needs_a_clean_exit(self):
         self.assertEqual(ca.grade(log(), '0')[1], [])
         self.assertTrue(any('exited with -1073741819' in p for p in ca.grade(log(), '-1073741819')[1]))
@@ -77,8 +81,9 @@ class CheckAudioTest(unittest.TestCase):
 
     def test_the_suite_reads_the_exit_code_and_passes_it_on(self):
         text = (Path(__file__).resolve().parent.parent / 'tools/test_audio.ps1').read_text(encoding='utf-8')
-        for needed in ('$null = $process.Handle', '$process.WaitForExit(', '$process.ExitCode', "check_audio.py') $log $editorEnd"):
+        for needed in ('$null = $process.Handle', '$process.WaitForExit(', '$process.ExitCode', "check_audio.py') $log $editorEnd", '$process.Kill()'):
             self.assertIn(needed, text)
+        self.assertNotIn('Stop-Process', text)     # it would look the PID up again
 
     def test_a_mixer_pass_needs_its_numbers(self):
         self.assert_problem(log(drained='queued=0 left=0'), 'mixer row')

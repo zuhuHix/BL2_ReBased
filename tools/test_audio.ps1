@@ -55,7 +55,8 @@ try {
     }
     Write-Output "Log: $log"
 } finally {
-    if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    # The retained handle, not a new lookup by PID: it can only ever be the process this run started.
+    if ($process -and !$process.HasExited) { try { $process.Kill() } catch { Write-Output "editor stop failed: $_" } }
     Exit-OwUeLock
 }
 exit $code
