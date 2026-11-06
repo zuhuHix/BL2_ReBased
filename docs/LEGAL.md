@@ -48,6 +48,13 @@ descriptively.
   git-ignored directories (`local/`, UE `Saved/`) on the contributor's
   machine only.
 
+The README's progress gallery is the one exception that shows game content, and
+it is not in the repository. Its screenshots are release assets on a
+`progress-gallery` GitHub prerelease, uploaded by the maintainer. No such image
+is ever committed to git. Any gallery asset will be removed at the rights
+holder's request, the same as the banner (see
+[Contact for rights holders](#contact-for-rights-holders)).
+
 The README banner is official Borderlands 2 promotional artwork. It is not a
 game file and is used solely to identify the game the engine is built for. It
 will be removed promptly at the request of the rights holder (see
