@@ -1,7 +1,8 @@
 """End-to-end test of tools/run_ue_flash_hud.ps1 with no editor: the real launcher, lock helper and serve.py, copied to a temporary repository with
 empty movie files, and a stand-in for the editor (-EditorExe): pythonw running the temporary project file, which is a small Python script. It is not named
 UnrealEditor.exe: on a shared PC that name would make other lanes' suites refuse to start. Windows only. The lock is a temporary file (OPENWILLOW_UE_LOCK), but
-Enter-OwUeLock also waits while a real Unreal editor runs, so this skips with a message when one is up. Stops only processes it started, by id."""
+Enter-OwUeLock also waits while a real Unreal editor runs, so with one up nothing can be tested: this prints NOT RUN and exits nonzero unless --allow-skip is given.
+Stops only processes it started, by id, after checking the command line."""
 import os
 import shutil
 import socket
@@ -14,10 +15,14 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-STUB = """import os, sys, time
+STUB = """import os, subprocess, sys, time
 open(os.environ['OW_STUB_PID'], 'w').write(str(os.getpid()))
 mode = os.environ['OW_STUB_MODE']
-if mode == 'stall': time.sleep(120)
+if mode == 'stall':
+    # A worker that outlives the editor; the launcher must name it and leave it. The marker is the temporary folder, for the cleanup's check.
+    child = subprocess.Popen([sys.executable, '-c', 'import sys, time; time.sleep(40)', os.environ['OW_STUB_PID']])
+    open(os.environ['OW_STUB_PID'] + '.child', 'w').write(str(child.pid))
+    time.sleep(120)
 sys.exit(3 if mode == 'crash' else 0)
 """
 
@@ -52,7 +57,7 @@ def alive(pid):
 class Launcher(unittest.TestCase):
     def setUp(self):
         if real_editor_running():
-            self.skipTest('a real Unreal editor is running: the launcher would wait for it')
+            self.fail('NOT RUN: an editor is running (the launcher would wait for it)')
         self.folder = Path(tempfile.mkdtemp(prefix='ow_launcher_'))
         self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
         tools = self.folder / 'tools'
@@ -71,16 +76,26 @@ class Launcher(unittest.TestCase):
         self.lock = self.folder / 'run.lock'
         self.pid_file = self.folder / 'stub.pid'
         self.port = free_port()
+        # Before anything starts, so a launcher that hangs or a test that times out leaves nothing behind.
+        self.addCleanup(self.stop_stubs)
+        self.addCleanup(self.stop_server_on_port)
 
-    def run_launcher(self, mode, *arguments):
+    def run_launcher(self, mode, *arguments, timeout=120, check_lock=True):
         environment = dict(os.environ, OPENWILLOW_UE_LOCK=str(self.lock), OW_STUB_MODE=mode, OW_STUB_PID=str(self.pid_file))
         stand_in = Path(sys.executable).with_name('pythonw.exe')
         done = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-File', str(self.folder / 'tools' / 'run_ue_flash_hud.ps1'),
                                '-Engine', 'not-used', '-Game', str(self.folder / 'game'), '-Port', str(self.port), '-EditorExe', str(stand_in),
-                               '-GameWindow', *arguments], capture_output=True, text=True, timeout=120, env=environment)
-        self.addCleanup(self.stop_server_on_port)
-        self.assertFalse(self.lock.exists(), 'the lock must be released')
+                               '-GameWindow', *arguments], capture_output=True, text=True, timeout=timeout, env=environment)
+        if check_lock:
+            self.assertFalse(self.lock.exists(), 'the lock must be released')
         return done
+
+    def stop_stubs(self):
+        # The stand-in editor and its child, by id, each only if its command line names this temporary folder.
+        for file in (self.pid_file, Path(str(self.pid_file) + '.child')):
+            if file.exists():
+                powershell(f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={file.read_text()}'; "
+                           f"if ($p -and $p.CommandLine -like '*{self.folder.name}*') {{ Stop-Process -Id $p.ProcessId -Force }}")
 
     def stop_server_on_port(self):
         # Only a server of this temporary repository, by id. A server this test started and handed to the launcher is its own business.
@@ -94,6 +109,18 @@ class Launcher(unittest.TestCase):
         self.assertIn('stalled, stopped', ' '.join((done.stdout + done.stderr).split()))
         self.assertFalse(alive(self.pid_file.read_text()), 'the stand-in editor must be stopped')
         self.assertFalse(serving(self.port), 'the page server it started must be stopped')
+        child = Path(str(self.pid_file) + '.child').read_text()
+        self.assertIn(f'pid {child} (not stopped)', ' '.join((done.stdout + done.stderr).split()))
+        self.assertTrue(alive(child), 'a child is named, not stopped')
+
+    def test_cleanup_works_when_the_launcher_itself_hangs(self):
+        with self.assertRaises(subprocess.TimeoutExpired):  # no limit on a stalled stand-in: the harness times out, and the launcher is gone
+            self.run_launcher('stall', '-Extra', '-owinvshots', '-TimeoutSeconds', '0', timeout=8, check_lock=False)
+        stand_in = self.pid_file.read_text()
+        self.assertTrue(alive(stand_in), 'the leak this guards against')
+        self.doCleanups()
+        self.assertFalse(alive(stand_in))
+        self.assertFalse(serving(self.port))
 
     def test_crash_fails_and_stops_the_server(self):
         done = self.run_launcher('crash', '-Extra', '-owinvshots')
@@ -124,4 +151,10 @@ class Launcher(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    allow_skip = '--allow-skip' in sys.argv
+    if allow_skip:
+        sys.argv.remove('--allow-skip')
+    if os.name == 'nt' and real_editor_running():
+        print('NOT RUN: an editor is running')
+        sys.exit(0 if allow_skip else 2)
     unittest.main()

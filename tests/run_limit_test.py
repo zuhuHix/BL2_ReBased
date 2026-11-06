@@ -54,9 +54,10 @@ class RunLimit(unittest.TestCase):
         return powershell(f'Test-OwScriptedRun -Extra {extra}')[0] == 'True'
 
     def test_which_switches_count_as_a_scripted_run(self):
-        for extra in ("'-owpickupcardshots'", "'-owinvshots'", "'-owcombatshots'", "'-owlevel=36','-owinvshots'", "'-owlevel=36,-owinvshots'"):
+        for extra in ("'-owpickupcardshots'", "'-owinvshots'", "'-owcombatshots'", "'-owlevel=36','-owinvshots'", "'-owlevel=36,-owinvshots'", "'-owrangesurvey'", "'-owslicegate'"):
             self.assertTrue(self.scripted(extra), extra)
-        for extra in ("'-owlevel=36'", "'-owitems=x','-owslots=2'", "'-owquest'", "''", "'-owcombattest'", "'-owinventoryselftest'"):
+        for extra in ("'-owlevel=36'", "'-owitems=x','-owslots=2'", "'-owquest'", "''", "'-owcombattest'", "'-owinventoryselftest'", "'-owrangeshots'",
+                      "'-owslicegate','-owslicegatestay'"):  # the gate does not quit with -stay; a person is watching it
             self.assertFalse(self.scripted(extra), extra)
 
     def run_launcher(self, *arguments):
