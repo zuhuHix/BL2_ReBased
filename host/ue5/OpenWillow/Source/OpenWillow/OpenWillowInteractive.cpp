@@ -1,12 +1,14 @@
 // AI-assisted (Claude). See OpenWillowInteractive.h. Strict manifest reading and loot rolls first, then the lootable actor,
 // the pickup rules, the subsystem (spawn, open, nearest use, auto pickup) and the in-engine test sequence.
 #include "OpenWillowInteractive.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 #include "OpenWillowInteractivePickup.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowWeaponGen.h"
 #include "Animation/AnimSequence.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -592,9 +594,11 @@ bool UOpenWillowInteractiveSubsystem::SpawnOne(UWorld& World, const TSharedPtr<F
     return true;
 }
 
-bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& From, AOpenWillowLootable*& OutLootable,
-    AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared, bool bSkipPickups)
+bool UOpenWillowInteractiveSubsystem::FindNearest(const AOpenWillowWalker& Walker, AOpenWillowLootable*& OutLootable,
+    AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared)
 {
+    UWorld* World = Walker.GetWorld();
+    const FVector From = Walker.GetActorLocation();
     OutLootable = nullptr;
     OutPickup = nullptr;
     UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(World);
@@ -610,9 +614,10 @@ bool UOpenWillowInteractiveSubsystem::FindNearest(UWorld* World, const FVector& 
         OutLootable = Lootable;
     }
     double BestPickup = FMath::Square(UsePickupReach);
-    for (TActorIterator<AOpenWillowLootPickup> It(World); It && !bSkipPickups; ++It)
+    for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It)
     {
         if (It->Spec().bAutoPickup) continue; // the tick takes these
+        if (!It->WouldCollect(Walker)) continue; // not a target: the press goes on in distance order
         const double D2 = FVector::DistSquared(From, It->GetActorLocation());
         if (D2 >= BestPickup) continue;
         BestPickup = D2;
@@ -672,7 +677,7 @@ bool UOpenWillowInteractiveSubsystem::NearestInReach(const AOpenWillowWalker& Wa
 {
     AOpenWillowLootable* Lootable = nullptr;
     AOpenWillowLootPickup* Pickup = nullptr;
-    return FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, OutDistanceSquared);
+    return FindNearest(Walker, Lootable, Pickup, OutDistanceSquared);
 }
 
 bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
@@ -681,12 +686,9 @@ bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
     AOpenWillowLootable* Lootable = nullptr;
     AOpenWillowLootPickup* Pickup = nullptr;
     double DistanceSquared = 0;
-    if (!Subsystem || !FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, DistanceSquared)) return false;
+    if (!Subsystem || !FindNearest(Walker, Lootable, Pickup, DistanceSquared)) return false;
     if (Lootable) return Subsystem->OpenLootable(Walker, *Lootable);
-    if (Pickup && Pickup->TryCollect(Walker)) return true;
-    // The pickup refused (a full pool, full health): a closed lootable in reach may still take the press.
-    if (!FindNearest(Walker.GetWorld(), Walker.GetActorLocation(), Lootable, Pickup, DistanceSquared, true) || !Lootable) return false;
-    return Subsystem->OpenLootable(Walker, *Lootable);
+    return Pickup && Pickup->TryCollect(Walker);
 }
 
 bool UOpenWillowInteractiveSubsystem::OpenLootable(AOpenWillowWalker& Walker, AOpenWillowLootable& Lootable)
@@ -919,29 +921,46 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
     {
     case 0:
     {
-        // Test fixture: Maya stands 220 uu from the lootable, looking at it: in front when that view is clear, else the first
-        // clear side of eight (many are placed against a wall). No clear side is logged, and the checker reports it.
-        const FVector Target = Lootable->GetActorLocation() + FVector(0.f, 0.f, 50.f);
+        // Test fixture: Maya stands 220 uu from the lootable, looking at it: in front when that spot works, else the first of
+        // eight sides where her capsule fits on walkable floor at the lootable's level and her view is clear. Many are placed
+        // against a wall. No such side is logged, and the checker reports that type as INCOMPLETE. What this leaves behind may
+        // stay: she stays at the last spot and these lootables stay open, TestOpen skips open ones, the later steps do not
+        // depend on where she stands, and the run exits at the end.
+        const UCapsuleComponent* Capsule = Walker.GetCapsuleComponent();
+        const float Radius = Capsule->GetScaledCapsuleRadius();
+        const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+        const ECollisionChannel PawnChannel = Capsule->GetCollisionObjectType();
+        const float WalkableZ = Walker.GetCharacterMovement()->GetWalkableFloorZ();
+        const FVector EyeOffset = Walker.GetPawnViewLocation() - Walker.GetActorLocation();
+        const FVector Base = Lootable->GetActorLocation();
+        const FVector Target = Base + FVector(0.f, 0.f, 50.f);
         const FVector Offset = Lootable->GetActorForwardVector() * 220.f;
-        FVector From = Lootable->GetActorLocation() + Offset + FVector(0.f, 0.f, 100.f);
+        FVector From = Base + Offset + FVector(0.f, 0.f, 100.f);
         FCollisionQueryParams Params(SCENE_QUERY_STAT(OWLidView), true);
         Params.AddIgnoredActor(Lootable);
         Params.AddIgnoredActor(&Walker);
         int32 ClearYaw = -1;
         for (int32 Side = 0; Side < 8 && ClearYaw < 0; ++Side)
         {
-            const FVector Try = Lootable->GetActorLocation() + Offset.RotateAngleAxis(45.f * Side, FVector::UpVector) + FVector(0.f, 0.f, 100.f);
-            const bool bBlocked = World->SweepTestByChannel(Target, Try, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(25.f), Params);
-            const bool bFloor = World->LineTraceTestByChannel(Try, Try - FVector(0.f, 0.f, 400.f), ECC_Visibility, Params);
-            if (!bBlocked && bFloor)
-            {
-                ClearYaw = 45 * Side;
-                From = Try;
-            }
+            const FVector Probe = Base + Offset.RotateAngleAxis(45.f * Side, FVector::UpVector);
+            FHitResult Floor;
+            if (!World->LineTraceSingleByChannel(Floor, Probe + FVector(0.f, 0.f, 120.f), Probe - FVector(0.f, 0.f, 120.f), PawnChannel, Params)
+                || Floor.ImpactNormal.Z < WalkableZ)
+                continue;
+            const FVector Stand = Floor.ImpactPoint + FVector(0.f, 0.f, HalfHeight + 2.f);
+            if (World->OverlapBlockingTestByChannel(Stand, FQuat::Identity, PawnChannel, FCollisionShape::MakeCapsule(Radius, HalfHeight), Params))
+                continue;
+            // The view, as wide as she is, stopping short of the lootable so a wall right behind it does not count.
+            const FVector Eye = Stand + EyeOffset;
+            const FVector Near = Target + (Eye - Target).GetSafeNormal() * (Radius + 30.f);
+            if (World->SweepTestByChannel(Eye, Near, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(Radius), Params))
+                continue;
+            ClearYaw = 45 * Side;
+            From = Stand;
         }
         UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d"), *Leaf, ClearYaw >= 0 ? 1 : 0, ClearYaw);
         Walker.SetActorLocation(From, false, nullptr, ETeleportType::TeleportPhysics);
-        if (AController* Controller = Walker.GetController()) Controller->SetControlRotation((Target - From).Rotation());
+        if (AController* Controller = Walker.GetController()) Controller->SetControlRotation((Target - (From + EyeOffset)).Rotation());
         break;
     }
     case 1: Shot(TEXT("closed")); break;
@@ -977,7 +996,11 @@ void UOpenWillowInteractiveSubsystem::TestOpen(AOpenWillowWalker& Walker)
         // Skip one the lid capture already opened (a balance with a single placed object), so three balances still open.
         if (!Lootable || Opened >= 3 || Lootable->IsOpened() || Seen.Contains(Lootable->Balance)) continue;
         Seen.Add(Lootable->Balance);
-        if (OpenLootable(Walker, *Lootable)) ++Opened;
+        if (OpenLootable(Walker, *Lootable))
+        {
+            ++Opened;
+            UE_LOG(LogTemp, Display, TEXT("OWINTERACTIVETEST test_open id=%s balance=%s"), *Lootable->Id, *Lootable->Balance);
+        }
     }
     UE_LOG(LogTemp, Display, TEXT("OWINTERACTIVETEST opened %d lootable(s) of different balances"), Opened);
 }

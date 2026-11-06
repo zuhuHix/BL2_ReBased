@@ -43,6 +43,8 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWLOOT empty id=Map:Point_1 reason=no attachment dropped')
     text += line('OWLOOT open id=Map:Point_2 config=Empty_Box drops=0')
     text += line('OWLOOT empty id=Map:Point_2 reason=no attachment dropped')
+    for i in range(3):
+        text += line(f'OWINTERACTIVETEST test_open id=Map:Point_{i} balance=Balance.{i}')
     text += line('OWINTERACTIVETEST opened 3 lootable(s) of different balances')
     text += line('OWPICKUP kind=cash amount=80.00 before=100.00 after=180.00 cap=2147483647.00 ok=1 reason=')
     text += line('OWPICKUP kind=ammo amount=18.00 before=10.00 after=20.00 cap=20.00 ok=1 reason=')
@@ -50,6 +52,7 @@ def good_log(spawned=3, unsupported=1):
     text += line('OWPICKUP kind=health amount=0.25 before=50.00 after=75.00 cap=100.00 ok=1 reason=')
     text += line('OWPICKUP kind=eridium amount=4.00 before=1.00 after=5.00 cap=2147483647.00 ok=1 reason=')
     text += line('OWLOOTLID queue=1')
+    text += line('OWLOOTLID view balance=Synth clear=1 yaw=45')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Synth phase={phase}')
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
@@ -235,37 +238,87 @@ class LidCaptureTest(unittest.TestCase):
         return out.rows[0]
 
     def test_all_three_frames_of_each_type_pass(self):
-        text = 'OWLOOTLID queue=1\n' + ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
+        text = 'OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=1 yaw=0\n' + ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
         row = self.grade(text)
         self.assertEqual(row[1], 'PASS')
         self.assertIn('UNVERIFIED', row[2])
 
-    def test_no_clear_view_is_named_in_the_result(self):
-        frames = ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
-        text = 'OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=0 yaw=-1\n' + frames
-        self.assertIn('no clear view of Synth', self.grade(text)[2])
-        clear = 'OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=1 yaw=45\n' + frames
-        self.assertNotIn('no clear view', self.grade(clear)[2])
+    FRAMES = ''.join(f'OWLOOTLID shot balance=Synth phase={p}\n' for p in ('closed', 'mid', 'opened'))
+
+    def test_no_clear_view_is_incomplete_and_fails_the_run(self):
+        row = self.grade('OWLOOTLID queue=1\nOWLOOTLID view balance=Synth clear=0 yaw=-1\n' + self.FRAMES)
+        self.assertEqual(row[1], 'INCOMPLETE')
+        self.assertIn('Synth', row[2])
+        out = ci.Results()
+        out.add('lid_capture', *row[1:])
+        self.assertEqual(out.print(), 1)
+
+    def test_frames_without_a_view_line_fail(self):
+        self.assertEqual(self.grade('OWLOOTLID queue=1\n' + self.FRAMES)[1], 'FAIL')
 
     def test_a_missing_frame_fails(self):
         self.assertEqual(self.grade('OWLOOTLID queue=1\nOWLOOTLID shot balance=Synth phase=closed\n')[1], 'FAIL')
 
-    def test_no_clip_found_with_clips_imported_fails(self):
-        # The host's asset paths disagreeing with the importer's must not read as "nothing imported".
+    def with_content(self, folder, meshes):
+        """A checkout's Content folder holding each named mesh and its open clip, and a manifest of those plus Bare (no assets)."""
+        root = Path(folder) / 'OpenWillow/Lootables'
+        balances = {}
+        objects = []
+        for name in (*meshes, 'Bare'):
+            balances[f'Grades.{name}'] = {'visual': {'components': [{'skeletal_mesh': f'Pkg.Meshes.Skel_{name}', 'anim_sets': [f'Pkg.Anims.Anim_{name}']}]}}
+            objects.append({'id': f'Map:{name}', 'balance': f'Grades.{name}', 'supported': True})
+        for name in meshes:
+            mesh = root / f'Skel_{name}/Skel_{name}/SkeletalMeshes/Skel_{name}.uasset'
+            mesh.parent.mkdir(parents=True)
+            mesh.write_bytes(b'')
+            clip = root / f'Anims/Anim_{name}_Open.uasset'
+            clip.parent.mkdir(parents=True, exist_ok=True)
+            clip.write_bytes(b'')
+        return {'objects': objects, 'balances': balances}
+
+    def test_expected_types_are_read_from_the_content_on_disk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            doc = self.with_content(folder, ['A', 'B'])
+            self.assertEqual(ci.expected_lid_types(doc, folder), ['A', 'B'])
+            self.assertIsNone(ci.expected_lid_types(doc, None))
+
+    def test_a_mesh_without_its_clip_is_not_expected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            doc = self.with_content(folder, ['A'])
+            (Path(folder) / 'OpenWillow/Lootables/Anims/Anim_A_Open.uasset').unlink()
+            self.assertEqual(ci.expected_lid_types(doc, folder), [])
+
+    def test_a_host_load_failure_fails_when_the_content_is_there(self):
+        # Not SKIPPED: the assets are on disk now, and the host did not load them.
         out = ci.Results()
-        ci.grade_lid_capture('OWLOOTLID queue=0\n', out, imported_clips=6)
+        ci.grade_lid_capture('OWLOOTLID queue=0\n', out, ['A', 'B'])
         self.assertEqual(out.rows[0][1], 'FAIL')
 
-    def test_imported_open_clips_counts_only_imported_open_rows(self):
-        report = {'assets': [{'kind': 'anim_sequence', 'imported': True, 'asset': '/G/Anim_A_Open'},
-                             {'kind': 'anim_sequence', 'imported': False, 'asset': '/G/Anim_B_Open'},
-                             {'kind': 'anim_sequence', 'imported': True, 'asset': '/G/Anim_A_Opened_Idle'},
-                             {'kind': 'skeletal_mesh', 'imported': True, 'asset': '/G/Mesh_Open'}]}
-        self.assertEqual(ci.imported_open_clips(report), 1)
-        self.assertIsNone(ci.imported_open_clips(None))
+    def test_a_partial_load_fails(self):
+        out = ci.Results()
+        ci.grade_lid_capture('OWLOOTLID queue=1\nOWLOOTLID view balance=A clear=1 yaw=0\n' + ''.join(
+            f'OWLOOTLID shot balance=A phase={p}\n' for p in ('closed', 'mid', 'opened')), out, ['A', 'B'])
+        self.assertEqual(out.rows[0][1], 'FAIL')
 
-    def test_no_imported_clip_is_skipped(self):
-        self.assertEqual(self.grade('OWLOOTLID queue=0\n')[1], 'SKIPPED')
+    def test_a_checkout_without_content_is_skipped_whatever_an_old_import_said(self):
+        out = ci.Results()
+        ci.grade_lid_capture('OWLOOTLID queue=0\n', out, [])
+        self.assertEqual(out.rows[0][1], 'SKIPPED')
+
+    def test_no_content_folder_given_cannot_skip(self):
+        out = ci.Results()
+        ci.grade_lid_capture('OWLOOTLID queue=0\n', out, None)
+        self.assertEqual(out.rows[0][1], 'MISSING')
+
+    def test_a_lid_capture_open_does_not_count_for_the_test_step(self):
+        # Three balances in the log, but only one came from the test step.
+        text = good_log().replace('OWINTERACTIVETEST test_open id=Map:Point_1 balance=Balance.1\n', 'x\n').replace(
+            'OWINTERACTIVETEST test_open id=Map:Point_2 balance=Balance.2\n', 'x\n')
+        self.assertEqual(status_of(grade(text), 'opened_balances'), 'FAIL')
+
+    def test_a_test_open_with_the_wrong_balance_fails(self):
+        text = good_log().replace('test_open id=Map:Point_0 balance=Balance.0', 'test_open id=Map:Point_0 balance=Balance.9')
+        self.assertEqual(status_of(grade(text), 'opened_balances'), 'FAIL')
 
     def test_no_queue_line_is_missing(self):
         self.assertEqual(self.grade('')[1], 'MISSING')

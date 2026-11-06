@@ -178,8 +178,9 @@ public:
 
     // Called from AOpenWillowWalker::PickupNearby. True when the press was used; false lets the other targets go on.
     static bool TryUseNearest(AOpenWillowWalker& Walker);
-    // The reach test of TryUseNearest on its own: the squared distance to the nearest closed lootable or use-key pickup in
-    // reach. The walker compares it with its other use targets.
+    // The reach test of TryUseNearest on its own: the squared distance to the nearest closed lootable, or use-key pickup that
+    // would be taken, in reach. The walker compares it with its other use targets, so a refusing pickup never holds the press
+    // back from a nearer door.
     static bool NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared);
 
     // Opens a closed lootable (its drops are spawned around it). False when it is open already or nothing can be rolled.
@@ -189,9 +190,9 @@ public:
 
 private:
     static UOpenWillowInteractiveSubsystem* SubsystemOf(UWorld* World);
-    // The nearest closed lootable and the nearest use-key pickup in reach, with the squared distance of whichever is nearer.
-    static bool FindNearest(UWorld* World, const FVector& From, AOpenWillowLootable*& OutLootable,
-        AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared, bool bSkipPickups = false);
+    // The nearer of the nearest closed lootable and the nearest use-key pickup the walker would take, both in reach.
+    static bool FindNearest(const AOpenWillowWalker& Walker, AOpenWillowLootable*& OutLootable,
+        AOpenWillowLootPickup*& OutPickup, double& OutDistanceSquared);
     bool LoadManifest(const FString& Path, TSharedPtr<FJsonObject>& OutRoot);
     void ReadItems(const TSharedPtr<FJsonObject>& Root);
     void ReadBalances(const TSharedPtr<FJsonObject>& Root);
