@@ -7,6 +7,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "OpenWillowInteractive.h"
 #include "OpenWillowQuickChange.h"
+#include "OpenWillowInventory.h"
 #include "Math/RandomStream.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowInteractiveLootTest, "OpenWillow.Interactive.Loot",
@@ -175,21 +176,34 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
     }
 
     // The Quick Change press: the first asks, a second inside the window confirms, a late one asks again.
-    int32 WalkerA = 0, WalkerB = 0; // only their addresses are used
+    const UObject* WalkerA = NewObject<UOpenWillowInventory>(GetTransientPackage()); // any two objects stand in for walkers
+    const UObject* WalkerB = NewObject<UOpenWillowInventory>(GetTransientPackage());
     FOpenWillowQuickChangePress QuickChange;
-    TestFalse(TEXT("the first press only asks"), QuickChange.Press(10.0, &WalkerA, 200));
-    TestTrue(TEXT("a second press within the window confirms"), QuickChange.Press(12.0, &WalkerA, 200));
-    TestFalse(TEXT("after a confirm the next press asks again"), QuickChange.Press(13.0, &WalkerA, 200));
-    TestFalse(TEXT("a press after the window asks again"), QuickChange.Press(13.0 + FOpenWillowQuickChangePress::ConfirmSeconds + 0.1, &WalkerA, 200));
-    TestFalse(TEXT("another walker's press does not confirm"), QuickChange.Press(19.0, &WalkerB, 200));
-    TestFalse(TEXT("nor does the first walker confirm the other's prompt"), QuickChange.Press(20.0, &WalkerA, 200));
-    TestFalse(TEXT("a changed price asks again"), QuickChange.Press(21.0, &WalkerA, 300));
+    TestFalse(TEXT("the first press only asks"), QuickChange.Press(10.0, WalkerA, 200));
+    TestTrue(TEXT("a second press within the window confirms"), QuickChange.Press(12.0, WalkerA, 200));
+    TestFalse(TEXT("after a confirm the next press asks again"), QuickChange.Press(13.0, WalkerA, 200));
+    TestFalse(TEXT("a press after the window asks again"), QuickChange.Press(13.0 + FOpenWillowQuickChangePress::ConfirmSeconds + 0.1, WalkerA, 200));
+    TestFalse(TEXT("another walker's press does not confirm"), QuickChange.Press(19.0, WalkerB, 200));
+    TestFalse(TEXT("nor does the first walker confirm the other's prompt"), QuickChange.Press(20.0, WalkerA, 200));
+    TestFalse(TEXT("a changed price asks again"), QuickChange.Press(21.0, WalkerA, 300));
     TestEqual(TEXT("the new prompt holds the new price"), QuickChange.PromptedCost, 300);
-    TestTrue(TEXT("the new price can then be confirmed"), QuickChange.Press(22.0, &WalkerA, 300));
+    TestTrue(TEXT("the new price can then be confirmed"), QuickChange.Press(22.0, WalkerA, 300));
     TestFalse(TEXT("a cancelled prompt leaves nothing open"), QuickChange.IsOpen());
-    QuickChange.Press(30.0, &WalkerA, 200);
+    QuickChange.Press(30.0, WalkerA, 200);
     QuickChange.Cancel();
-    TestFalse(TEXT("a press after a cancel only asks"), QuickChange.Press(31.0, &WalkerA, 200));
+    TestFalse(TEXT("a press after a cancel only asks"), QuickChange.Press(31.0, WalkerA, 200));
+    TestFalse(TEXT("a null walker never confirms"), QuickChange.Press(32.0, nullptr, 200));
+
+    // Why an open prompt ends. It is open for WalkerA from time 40 at price 200.
+    FOpenWillowQuickChangePress Open;
+    TestTrue(TEXT("no prompt, no reason"), Open.CancelReason(40.0, WalkerA, false, true) == nullptr);
+    Open.Press(40.0, WalkerA, 200);
+    TestTrue(TEXT("a selected, up walker keeps it"), Open.CancelReason(41.0, WalkerA, false, true) == nullptr);
+    TestEqual(TEXT("down ends it"), FString(Open.CancelReason(41.0, WalkerA, true, true)), FString(TEXT("down")));
+    TestEqual(TEXT("not selected ends it"), FString(Open.CancelReason(41.0, WalkerA, false, false)), FString(TEXT("not the selected target")));
+    TestEqual(TEXT("another walker ends it"), FString(Open.CancelReason(41.0, WalkerB, false, true)), FString(TEXT("another walker")));
+    TestEqual(TEXT("no current walker ends it"), FString(Open.CancelReason(41.0, nullptr, false, false)), FString(TEXT("no walker")));
+    TestEqual(TEXT("expiry needs no walker"), FString(Open.CancelReason(40.0 + FOpenWillowQuickChangePress::ConfirmSeconds + 0.1, nullptr, false, false)), FString(TEXT("expired")));
 
     return true;
 }

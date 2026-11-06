@@ -229,7 +229,7 @@ def grade_quick_change(log_text, out):
     ask, reset. Each reset must answer the prompt just before it: same station, same price."""
     events = quick_events(log_text)
     kinds = [kind for kind, _ in events]
-    if kinds[:6] != ['prompt', 'cancel', 'prompt', 'reset', 'prompt', 'reset']:
+    if kinds != ['prompt', 'cancel', 'prompt', 'reset', 'prompt', 'reset']:
         out.add('quick_change', 'FAIL', f'station events {kinds}, expected prompt, cancel, prompt, reset, prompt, reset')
         return
     away, refused, confirmed = events[1][1], events[3][1], events[5][1]
