@@ -109,8 +109,43 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 
 ## Current link table
 
+Main cdf05d7 plus this branch at c365984, yorad PC, 2026-11-06. Three runs, about 50 s of game time each. **14 PASS, 0
+FAIL, 0 NOT_AVAILABLE of 14 in all three**, graded by the current checker.
+
+| # | Link | Result in all three | Fixtures |
+|---|---|---|---|
+| 1 | spawn_maya | PASS | none |
+| 2 | reach_fight_area | PASS | none |
+| 3 | kill_enemy | PASS | `-Shield` only: `level rule overridden by the test: shield <id> of level <n> equipped on Maya of level 8` |
+| 4 | enemy_attacks_maya | PASS: 1 hit by the selected enemy, 3 by others | `-Shield` only: the same level-override fixture |
+| 5 | loot_drop_on_kill | PASS, 61 uu from the corpse | `range set passive after the fight`; `guaranteed loot roll`. No switch also: `Maya healed to full after the fight`. `-DownAfterFight` also: `lethal damage at the end of the fight`; `Maya revived to full health after the fight` |
+| 6 | pick_up_gun | PASS, the real drop, `accepted=1` | `teleport` |
+| 7 | pick_up_aimed_not_nearest | PASS, the aimed drop past the nearer decoy, different ids, `accepted=1` | `two guns rolled and dropped by the test`; `teleport` |
+| 8 | equip_gun | PASS | none |
+| 9 | phaselock_enemy | PASS: a range enemy lifted, 13 s lock | `phaselock point granted` |
+| 10 | mission_accept | PASS | `range cleared before the mission`; `teleport` |
+| 11 | mission_objective | PASS | `teleport` |
+| 12 | mission_turn_in | PASS: status 3, +395 XP, lent pistol taken back | `teleport` |
+| 13 | go_down | PASS | `lethal damage applied by the test` |
+| 14 | bleed_out_respawn | PASS | `down state from the test's lethal damage` |
+
+**What this does not show:**
+- **Enemies have not downed Maya.** Every down state in these runs came from the test's lethal damage. The revive ran only
+  when forced, and no real fight has reached it.
+- **No run shows Maya carrying on unaided after the fight.** Without the shield she ended the fight at 60/213 and a
+  fixture healed her. With the shield the hits never reached her health (213/213), but it is far above her level and much
+  stronger than a level-8 shield, so that run says little about a real fight. The fixture overrides the level rule, so
+  this is not normal equip behaviour. The recharge values read from its card are `UNVERIFIED`.
+- **Loot is forced and mission travel is by teleport.** The pickup is checked on card state only (canvas HUD). The gate
+  captures no frames, so nothing here was checked visually.
+- **Nothing is checked against the real game.** The three runs also vary little: the same 11-shot kill in about 2.4 s.
+- **Link 4's margin is small.** The first hits land about 0.6 to 0.7 s before the kill. It held here, so fire is not
+  held back. A faster kill would FAIL the link; the small fix then is to hold fire until the selected enemy has hit.
+
+### Before the Phaselock targeting fix (#111)
+
 Main dee84f6 (the range, #99 and #101 are on main) plus this branch at d5c9cfd, yorad PC, 2026-11-06. Three runs, about
-54 s of game time each. **The gate is not green: link 9 FAILs in all three.**
+54 s of game time each. Link 9 FAILed in all three, and these were graded by the checker of that time.
 
 | # | Link | `-Shield` | no switch | `-DownAfterFight` |
 |---|---|---|---|---|
@@ -130,7 +165,8 @@ Main dee84f6 (the range, #99 and #101 are on main) plus this branch at d5c9cfd, 
 Link 7 is the first real result for #101: E took the aimed drop past the nearer decoy, and the card and picked-up ids
 agree. Card state only: this run uses the canvas HUD. The gate captures no frames.
 
-**Why link 9 FAILs (read from the code and these logs; the fix has not been run).** The logged reason, "cast refused: on
+**Why link 9 FAILed (read from the code and these logs; #111 fixed it, and the runs above confirm it in the host).** The
+logged reason, "cast refused: on
 cooldown", was misleading, and the driver now reports what happened. Nothing cast before the gate did, and the first
 cast was not refused. It went out and missed, 11 times in the no-switch run ("no preferred target"), and each miss
 starts a 1 s cooldown; the retry at the 12 s limit fell inside one. The candidates are rejected because:
@@ -148,7 +184,8 @@ starts from a fresh save, and the log has no cast before the gate's. Owner: the 
 `EquipGearById` refuses an item above the player's level, which is 8 here. The old fixture text said "no shield in the
 gear manifest", which was wrong. The driver now equips the lowest of them by passing its own level to the call, named as
 the fixture `level rule overridden by the test: shield <id> of level <n> equipped on Maya of level <m>`. This is a test
-override, not how equipping works. It has not run yet, so the stock-shield path is still unproven.
+override, not how equipping works. It ran in the current table's `-Shield` run: a manifest shield was equipped and the
+walker read its capacity from the card.
 
 **Why link 4 was NOT_AVAILABLE in two runs.** This was a bug in this lane's driver, and its detail was false: "Maya was
 hit, but not by the selected enemy". The range log shows all four enemies hitting Maya before the kill in all three runs,
@@ -156,7 +193,7 @@ the selected one included. In those two runs its hit landed in the same tick as 
 count once per tick and credited only the last causer, so it also counted 1 hit where there were 4. It passed in the
 `-Shield` run only because the selected enemy's hit came 0.03 s later. The walker now counts hits per causer where they
 land, and the driver reads those counts. Only the selected enemy's hits still count. No longer fight or fixture was
-needed. This has not run yet; the numbers in the table above are from the old counting and the old grading.
+needed. The numbers in the table above are from the old counting and the old grading; the current table has the new ones.
 
 ### Before the range was on main
 
@@ -202,9 +239,9 @@ her health after the fight is kept. She gets a shield from the gear manifest whe
 stand-in with her maximum health as its capacity and the default recharge, which is **not stock data**. Both are named
 as fixtures, on `kill_enemy` and `enemy_attacks_maya`. If every manifest shield is above her level, the lowest is
 equipped under a fixture that says the level rule was overridden (see "Why `-Shield` used the stand-in" above). The
-stock-shield path has not run.
+stock-shield path has run only under that override.
 
-Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
+Earlier runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
 2026-11-04), not on main:
 - **With `-Shield`:** 13 PASS, 0 FAIL, 1 NOT_AVAILABLE of 14. The stand-in shield was 213; 3 hits were credited to the
   selected enemy and 4 came from other causers; Maya ended the fight at health 89/213, Up, with no restore.
@@ -216,11 +253,9 @@ Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/featur
 
 | Gap | Link(s) | Owner | What closes it |
 |---|---|---|---|
-| With the quest on, Phaselock rejects the range's stock pawns | 9 | range | The range's pawns count as targetable, or the walker's rule applies only to the mission's dummy (`Why link 9 FAILs` above) |
-| No fight has left Maya down | revive fixture | slice-gate | Only `-DownAfterFight` runs the revive so far |
+| No fight has left Maya down | revive fixture, 13, 14 | slice-gate | Only the test's lethal damage has downed her so far |
 | No low-level stock shield in the gear manifest | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8 would remove the level-override fixture. Maya still has no shield at spawn, so the restore fixture stays |
 | Generated guns have no firing block | 7 (not graded) | projectiles | `ow.RollGun` guns fire the host's fallback trace (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"). The equip link does not grade the gun's firing |
-| The stand-in is a 20,000-health dummy | 3 | range | Real enemy health per level comes with PR #76 (`range_manifest.json`) |
 
 Links that pass now but rest on rules still `UNVERIFIED` in game are covered in their own records:
 - Phaselock: PHASELOCK_STOCK_DATA.md, NATIVE_PHASELOCK_TARGETING.md.
@@ -243,6 +278,9 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-06 | main dee84f6 + d5c9cfd, `-Shield`, yorad PC | 13 / 1 / 0 of 14 | link 7 PASS; link 4 names the stand-in shield; link 9 FAIL; ctest 22/22, verify_packages exact, checker tests 21/21 |
 | 2026-11-06 | main dee84f6 + d5c9cfd, no switch, yorad PC | 12 / 1 / 1 of 14 | link 4 NOT_AVAILABLE (the one hit came from another enemy); link 9 FAIL |
 | 2026-11-06 | main dee84f6 + d5c9cfd, `-DownAfterFight`, yorad PC | 12 / 1 / 1 of 14 | revive fixture ran for the first time (forced); link 4 NOT_AVAILABLE; link 9 FAIL |
+| 2026-11-06 | main cdf05d7 + c365984, `-Shield`, yorad PC | 14 / 0 / 0 of 14 | the #109 review fixes' first run; a manifest shield under the level-override fixture; ctest 22/22, verify_packages exact, checker tests 27/27 |
+| 2026-11-06 | main cdf05d7 + c365984, no switch, yorad PC | 14 / 0 / 0 of 14 | link 4 PASS with per-causer counting; ended the fight at 60/213, healed by the fixture |
+| 2026-11-06 | main cdf05d7 + c365984, `-DownAfterFight`, yorad PC | 14 / 0 / 0 of 14 | revive fixture ran (forced) |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
