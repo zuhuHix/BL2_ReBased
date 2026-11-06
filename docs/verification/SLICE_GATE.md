@@ -54,8 +54,8 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   press, once Maya is on the ground, and the item E put in the backpack.
   - `pick_up_gun` passes only when both are the aimed drop.
   - `pick_up_aimed_not_nearest` repeats the pickup with a nearer decoy 45 uu to Maya's side, about 90 degrees off her
-    aim. If E takes the decoy, the link is NOT_AVAILABLE: E still uses `PickupNearby`, which takes the nearest pickup,
-    and the inventory lane is switching it to the aimed pickup. The link never passes until E takes the aimed drop.
+    aim. E must take the aimed drop (#101). If E takes the decoy, the link FAILs. It runs whether or not the kill
+    dropped a real gun: the roll source for its two test drops is read before the check for a drop.
   - The checker reads both ids itself: a PASS on either link with missing or different ids becomes a FAIL.
   - A test drop with no floor within 450 uu below its point fails; it is never left in the air.
 - **A link never starts with Maya down.** If Maya is down when a link group is due to start, every link of that group
@@ -91,14 +91,57 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - The fixture `Maya revived to full health after the fight` (or `healed`, if she is Up but hurt) sets her Up at full
     health through `FOpenWillowMayaState::SetHealth`.
   - If she has already bled out, the walker's own respawn is waited for.
-  - The revive path has not run in this lane's runs yet: each time, the kill gave her a second wind before the fight
-    ended.
+  - **No fight has left her down yet:** in every recorded run she was Up when the fight ended, because the kill gave her
+    a second wind or nothing downed her. So the revive has only run when forced: `tools/test_slice_gate.ps1
+    -DownAfterFight` (`-owslicegatedownafterfight`) applies lethal damage after the fight (fixture `lethal damage at the
+    end of the fight`, named on the next link). In that run the log shows health 0 restored to full and Maya no longer
+    down, and the later links ran. This shows the fixture works, not that a real fight reaches it.
 
 ## Current link table
 
+Main dee84f6 (the range, #99 and #101 are on main) plus this branch at d5c9cfd, yorad PC, 2026-11-06. Three runs, about
+54 s of game time each. **The gate is not green: link 9 FAILs in all three.**
+
+| # | Link | `-Shield` | no switch | `-DownAfterFight` |
+|---|---|---|---|---|
+| 1 | spawn_maya | PASS | PASS | PASS |
+| 2 | reach_fight_area | PASS | PASS | PASS |
+| 3 | kill_enemy | PASS (stand-in shield) | PASS | PASS |
+| 4 | enemy_attacks_maya | PASS (stand-in shield): 1 hit by the enemy, 1 by another | NOT_AVAILABLE: 1 hit, by another | NOT_AVAILABLE: 1 hit, by another |
+| 5 | loot_drop_on_kill | PASS, 61 uu from the corpse | PASS, 61 uu; healed fixture | PASS, 61 uu; lethal and revived fixtures |
+| 6 | pick_up_gun | PASS, the real drop | PASS, the real drop | PASS, the real drop |
+| 7 | pick_up_aimed_not_nearest | PASS | PASS | PASS |
+| 8 | equip_gun | PASS | PASS | PASS |
+| 9 | phaselock_enemy | FAIL | FAIL | FAIL |
+| 10-12 | mission accept, objective, turn-in | PASS | PASS | PASS |
+| 13-14 | go_down, bleed_out_respawn | PASS | PASS | PASS |
+| | **PASS / FAIL / NOT_AVAILABLE** | **13 / 1 / 0** | **12 / 1 / 1** | **12 / 1 / 1** |
+
+Link 7 is the first real result for #101: E took the aimed drop past the nearer decoy, and the card and picked-up ids
+agree. Card state only: this run uses the canvas HUD. The gate captures no frames.
+
+**Why link 9 FAILs (read from the code and these logs; the fix has not been run).** The logged reason, "cast refused: on
+cooldown", was misleading, and the driver now reports what happened. Nothing cast before the gate did, and the first
+cast was not refused. It went out and missed, 11 times in the no-switch run ("no preferred target"), and each miss
+starts a 1 s cooldown; the retry at the 12 s limit fell inside one. The candidates are rejected because:
+- `AOpenWillowWalker::PreferredPhaselockTarget` skips a stock pawn that the quest has not registered as targetable,
+  whenever the quest is enabled (5a4762f, 2026-10-02, written for the mission's stock dummy);
+- the range's enemies and dummies load stock meshes (72e020f, #76), and nothing registers them.
+
+So in any session with both the quest and `ow.Range`, Phaselock cannot target the range's stock pawns. The Phaselock and
+range suites do not pass `-owquest`, so they do not meet this. The pc-hummer runs did pass this link with the same rule
+in the code; the likely difference is that its enemies fell back to engine shapes, which is `UNVERIFIED` because those
+logs were not read. The cooldown data, the save and the range's AI are not involved: the cooldown read 13 s, the run
+starts from a fresh save, and the log has no cast before the gate's. Owner: the range lane.
+
+**Why `-Shield` used the stand-in.** All four shields in this PC's gear manifest are level 36 to 46, and
+`EquipGearById` refuses an item above the player's level, which is 8 here. The old fixture text said "no shield in the
+gear manifest", which was wrong; it now says none Maya's level can equip. The stock-shield path has still not run.
+
+### Before the range was on main
+
 Origin/main 195a016 (after #97, #81, #87) plus this branch, pc-hummer, 2026-11-04.
-**10 PASS, 0 FAIL, 4 NOT_AVAILABLE of 14**, about 185 s of game time. The range is not on main yet; the range-mode table
-follows this one.
+**10 PASS, 0 FAIL, 4 NOT_AVAILABLE of 14**, about 185 s of game time.
 
 | # | Link | Result | Detail (abridged) |
 |---|---|---|---|
@@ -137,8 +180,8 @@ This is not a merged state: the merge was local and was deleted after the run. *
 Maya fights with a shield, so the fight path can run without the restore fixture: only a downed Maya is restored, and
 her health after the fight is kept. She gets a shield from the gear manifest when it has one. Otherwise she gets a host
 stand-in with her maximum health as its capacity and the default recharge, which is **not stock data**. Both are named
-as fixtures. pc-hummer has no gear manifest, so the stock-shield path has not run; it needs a machine with
-`local/inventory/gear_manifest.json`.
+as fixtures, on `kill_enemy` and `enemy_attacks_maya`. The stock-shield path has not run: it needs a manifest shield at
+or below Maya's level (see "Why `-Shield` used the stand-in" above).
 
 Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
 2026-11-04), not on main:
@@ -148,21 +191,14 @@ Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/featur
 - **Both:** `loot_drop_on_kill` PASS (the drop 62-63 uu from the corpse, with the range's drop fix), and `pick_up_gun`
   PASS on that real drop, without the test-drop fixture.
 
-Open items found in these runs (not fixed; this lane stopped on pc-hummer on the maintainer's instruction):
-- **Link 7 does not test the decoy when a real drop exists.** `RollSource` is only read in the no-drop path, so link 7
-  reports NOT_AVAILABLE "no ow.RollGun source to make the two test drops", not the E-key result. Read the source before
-  the `!Drop` check; link 7 must run before the inventory lane's E-key switch can be seen to pass.
-- **`enemy_attacks_maya` does not name the shield fixture.** Only `kill_enemy` does, because `Link` clears the list.
-- **The revive-from-down path has not run on pc-hummer.** In each run Maya was Up by the end of the fight.
-
 ## Gaps, with the owning lane
 
 | Gap | Link(s) | Owner | What closes it |
 |---|---|---|---|
-| The range is not on main | 2, 3, 4 | range | #76, #83 and #89. Links 2 to 4 pass on the throwaway merge above |
-| A range gun drop spawns at the world origin | 5 (and 6's test drop) | range | #89: take the drop spot from the enemy's last live position, not from the collision centre of the dead enemy. With a drop at the corpse, link 6 uses it and the "gun rolled and dropped by the test" fixture goes away |
-| The use key takes the nearest pickup, not the aimed one | 7 | inventory | E-key switch to `FindAimedPickup` (in progress, per the hub). Link 7 passes once E takes the aimed drop past the nearer decoy |
-| Maya has no shield, so a range fight can down her | 4 to 14 (now fixtures) | maya / skills | A stock shield at spawn would let the later links run without the restore fixture |
+| With the quest on, Phaselock rejects the range's stock pawns | 9 | range | The range's pawns count as targetable, or the walker's rule applies only to the mission's dummy (`Why link 9 FAILs` above) |
+| The selected enemy does not always hit Maya in the 2.4 s fight | 4 | range | NOT_AVAILABLE in two of the three runs: the one hit came from another enemy. A longer fight or a provoked enemy would make it repeatable |
+| No fight has left Maya down | revive fixture | slice-gate | Only `-DownAfterFight` runs the revive so far |
+| No low-level stock shield in the gear manifest | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8. Maya still has no shield at spawn, so the restore fixture stays |
 | Generated guns have no firing block | 7 (not graded) | projectiles | `ow.RollGun` guns fire the host's fallback trace (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"). The equip link does not grade the gun's firing |
 | The stand-in is a 20,000-health dummy | 3 | range | Real enemy health per level comes with PR #76 (`range_manifest.json`) |
 
@@ -183,7 +219,10 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-04 | main 8bb74a0 (after #94, #88) | 10 / 0 / 3 | same links; ctest 22/22, verify_packages exact, checker tests 18/18 |
 | 2026-11-04 | main 195a016 (after #97, #81, #87), #98 review 1 and batch 6 fixes | 10 / 0 / 4 of 14 | new link 7 (aimed pickup past a nearer decoy) NOT_AVAILABLE; the card and picked ids are cross-checked; ctest 22/22, verify_packages exact, checker tests 21/21 |
 | 2026-11-04 | throwaway merge with the range stack | 12 / 1 / 1 of 14 | links 2 to 4 PASS with real range enemies; loot drop at the world origin (FAIL, range); passive, restore and clear fixtures named |
-| 2026-11-04 | throwaway merge with #89 90a7547, with and without `-Shield` | 13 / 0 / 1 of 14, both | loot drop at the corpse; link 7 did not test the decoy (see the shield variant's open items) |
+| 2026-11-04 | throwaway merge with #89 90a7547, with and without `-Shield` | 13 / 0 / 1 of 14, both | loot drop at the corpse; link 7 did not test the decoy (its roll source was not read with a real drop; fixed since) |
+| 2026-11-06 | main dee84f6 + d5c9cfd, `-Shield`, yorad PC | 13 / 1 / 0 of 14 | link 7 PASS; link 4 names the stand-in shield; link 9 FAIL; ctest 22/22, verify_packages exact, checker tests 21/21 |
+| 2026-11-06 | main dee84f6 + d5c9cfd, no switch, yorad PC | 12 / 1 / 1 of 14 | link 4 NOT_AVAILABLE (the one hit came from another enemy); link 9 FAIL |
+| 2026-11-06 | main dee84f6 + d5c9cfd, `-DownAfterFight`, yorad PC | 12 / 1 / 1 of 14 | revive fixture ran for the first time (forced); link 4 NOT_AVAILABLE; link 9 FAIL |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
