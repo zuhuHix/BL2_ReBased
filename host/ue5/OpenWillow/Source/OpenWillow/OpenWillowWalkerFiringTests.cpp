@@ -265,11 +265,16 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             GrenadeAt = Now;
             GrenadeStep = 2;
         }
-        else if (GrenadeStep == 2 && (!bGrenadeThrown || (Now >= GrenadeAt + 1.f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
+        else if (GrenadeStep == 2 && (!bGrenadeThrown || (Now >= GrenadeAt + 1.2f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
         {
             const FOpenWillowFiringStats& C = OpenWillowFiring::Counts;
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d after=%.2f"),
-                bGrenadeThrown ? 1 : 0, GrenadeAmmoBefore, Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current, C.SplashHits, C.Splash,
+            const int32 AmmoAfter = Inventory->AmmoPool(EOpenWillowAmmoType::Grenade).Current;
+            // Past the 1.05 s lockout, so an empty pool is the only reason left for a refusal.
+            Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, 0);
+            const bool bRefusedEmpty = !ThrowGrenade();
+            Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, AmmoAfter);
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING grenade thrown=%d ammo_before=%d ammo_after=%d refused_empty=%d splash_hits=%d splash=%.2f grenade_hits=%d unknown_sources=%d after=%.2f"),
+                bGrenadeThrown ? 1 : 0, GrenadeAmmoBefore, AmmoAfter, bRefusedEmpty ? 1 : 0, C.SplashHits, C.Splash,
                 C.GrenadeHits, C.UnknownSources, Now - GrenadeAt);
             GrenadeStep = 3;
         }
