@@ -110,6 +110,58 @@ function Compare-TreeHashes([string]$A, [string]$B) {
     @($ha.Keys) + @($hb.Keys) | Sort-Object -Unique | Where-Object { $ha[$_] -ne $hb[$_] }
 }
 
+# Copy $Live to the new folder $Snapshot and prove the copy matches, or throw. Only a root that passed may be restored from:
+# Restore-Tree deletes live files absent from its backup, so a partial snapshot would lose them.
+function New-VerifiedSnapshot([string]$Live, [string]$Snapshot) {
+    Copy-Item -Recurse -Force -LiteralPath $Live $Snapshot
+    Assert-SnapshotMatches $Live $Snapshot
+}
+function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) {
+    $diff = @(Compare-TreeHashes $Live $Snapshot)
+    if ($diff.Count) { throw "snapshot $Snapshot differs from $Live in $($diff.Count) files, first $($diff[0])" }
+}
+
+# Restore each root from $Backup\<name>. $Roots maps name to live folder; $Snapshots says what the backup holds for it: 'verified'
+# (restored and compared), 'absent' (the root did not exist at the backup) or nothing (no usable snapshot: never restored from).
+# A root absent at the backup and present now is reported and not deleted. Returns rows, a summary, and clean: false when a restore
+# failed or a compare still differs. A root reported and left alone keeps clean true, but the summary does not say identical.
+function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
+    $rows = @(); $notes = @()
+    foreach ($name in $Roots.Keys) {
+        $live = $Roots[$name]
+        try {
+            if ($Snapshots[$name] -eq 'verified') { $rows += @(Restore-Tree (Join-Path $Backup $name) $live $name) }
+            elseif ($Snapshots[$name] -eq 'absent') {
+                if (Test-Path -LiteralPath $live) {
+                    $rows += [pscustomobject]@{ file = $name; status = 'created during the run; left for the maintainer' }
+                    $notes += "$name created during the run"
+                }
+            } else {
+                $rows += [pscustomobject]@{ file = $name; status = 'no verified snapshot; not restored' }
+                $notes += "$name not backed up"
+            }
+        } catch { $rows += [pscustomobject]@{ file = $name; status = "RESTORE FAILED: $_" } }
+    }
+    $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
+    $summary = if ($bad.Count) { "NOT IDENTICAL to $Backup ($($bad.Count) problems)" }
+    elseif ($notes.Count) { "NOT IDENTICAL to ${Backup}: $($notes -join '; ')" }
+    else { "identical to $Backup after $($rows.Count) restores" }
+    [pscustomobject]@{ rows = $rows; summary = $summary; clean = ($bad.Count -eq 0) }
+}
+
+# A capture counts only when it holds frames and every named shot was saved.
+function Test-CaptureComplete($Capture, [hashtable]$Shots = @{}) {
+    if (!$Capture -or $Capture.frames -le 0) { return $false }
+    foreach ($name in $Shots.Keys) { if (!$Capture.shots.ContainsKey($name)) { return $false } }
+    $true
+}
+# 'completed' only when no error stopped the run and every requested stage passed.
+function Get-RunStatus([string[]]$Requested, [string[]]$Completed, [string]$RunError) {
+    if ($RunError) { return "failed: $RunError" }
+    $missing = @($Requested | Where-Object { $_ -notin $Completed })
+    if ($missing.Count) { "incomplete: $($missing -join ', ')" } else { 'completed' }
+}
+
 # Stop the game process this run started, only if the PID still names that process: same image path, same start time and
 # a command line containing $Marker. Returns what it did ('stopped', 'exited', or why it refused).
 function Stop-OwnGame([Diagnostics.Process]$Started, [datetime]$StartTime, [string]$Marker) {

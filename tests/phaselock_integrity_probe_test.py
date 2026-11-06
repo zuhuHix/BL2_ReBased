@@ -132,14 +132,32 @@ def test_result_says_whether_the_target_was_lifted():
     assert ns['pi_result']()['target_lifted'] is True
 
 
-def test_the_pick_prefers_the_adult_over_a_nearer_variant():
-    rank = load()['pi_target_rank']
-    rows = [('CharClass_PrimalBeast_Ranged', 100), ('CharClass_PrimalBeast', 200), ('CharClass_PrimalBeastAdult', 900),
-            ('CharClass_PrimalBeastAdult', 800)]
-    rows.sort(key=lambda r: rank('Pkg.Group.' + r[0], r[1]))
-    assert rows == [('CharClass_PrimalBeastAdult', 800), ('CharClass_PrimalBeastAdult', 900), ('CharClass_PrimalBeast', 200),
-                    ('CharClass_PrimalBeast_Ranged', 100)]
-    assert rank('CharClass_PrimalBeastAdult', 1)[0] == 0    # the pick passes a bare class name too
+def test_giving_up_on_the_injure_does_not_count_as_down():
+    ns = load()
+    me = Obj(bIsInjured=False, Health=1)
+    ns['pi']['injure'] = {'source': Obj(), 'hits': 8, 'next': 0.0, 'done': False, 'injured': False}
+    ns['_tick_injure'](me, 1.0)
+    assert ns['pi']['injure']['done'] is True and ns['pi']['injure']['injured'] is False
+    ns['pi']['injure'] = {'source': Obj(), 'hits': 2, 'next': 0.0, 'done': False, 'injured': False}
+    me.bIsInjured = True
+    ns['_tick_injure'](me, 1.0)
+    assert ns['pi']['injure']['injured'] is True
+
+
+def test_the_pick_takes_only_the_exact_adult():
+    pick = load()['pi_pick_target']
+
+    def row(name, cls, dist, dead=False, ctrl=True, radius=150):
+        return {'name': name, 'class': cls, 'dist': dist, 'dead': dead, 'ctrl': ctrl, 'radius': radius}
+    variants = [row('Ranged', 'CharClass_PrimalBeast_Ranged', 100), row('Plain', 'CharClass_PrimalBeast', 200)]
+    assert pick(variants) is None       # only variants: the capture keeps polling
+    assert pick([]) is None
+    assert pick(variants + [row('Far', 'CharClass_PrimalBeastAdult', 900), row('Near', 'CharClass_PrimalBeastAdult', 800)])['name'] == 'Near'
+    # A name that only starts like the Adult's is not the Adult, and an unusable Adult is not a candidate.
+    assert pick([row('Other', 'CharClass_PrimalBeastAdult_Fire', 100)]) is None
+    for bad in (row('Dead', 'CharClass_PrimalBeastAdult', 100, dead=True), row('Free', 'CharClass_PrimalBeastAdult', 100, ctrl=False),
+                row('Small', 'CharClass_PrimalBeastAdult', 100, radius=90)):
+        assert pick([bad]) is None
 
 
 def test_placement_reads_both_matrices_and_nulls_what_fails():
