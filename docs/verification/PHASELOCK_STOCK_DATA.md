@@ -662,7 +662,7 @@ alpha/colour; `fade(D)` as above.
 | `Mat_SirenOrbEnergySpikes` (translucent), the blue streaks | Smoke red at `uv + (P(0.25t), 0)` shifts the spike texture's UV by `0.05 x smoke` in both axes; colour `col x spike`; alpha `saturate(spike.r x (1 - 3 m)) x alpha x fade(51)` with `m` the soft mirror mask read at `(2u, 0.5v + 0.76)`, which cuts the middle of the sprite out. |
 | `Mat_SirenOrbEnergySpikesMOD` (modulate) | Scene multiplied by `1 - fade(51) x col x spike` per channel (the particle colour is a uniform grey well above 1): dark streaks under the blue ones. |
 | `Mat_SirenOrbBlackMOD` (modulate), the dark core | Scene multiplied by `1 - darkness`, `darkness = (1 - alpha) x (1 - A^2) x fade(21)`, `A = 1 - saturate(1.5 (1 - saturate(8 d2))^2)` (0 out to 0.15 of the quad, 1 from 0.354). The bubble loop scales the particle alpha to 0, so the core is a hole that is full black in the middle and clear at 0.354 of the quad. `_NoBias` (hand fizzle) has no depth fade. Because of the fade it darkens scenery behind the sprite plane, **not the lifted target's near surface**. |
-| `Mat_PowerUpTwirls` (translucent, sub-image) | The twirl atlas is read at a UV bent by two slowly rotating scroll-map reads (0.02 x); colour `(sqrt(t) - t) x col x (0.6, 0, 0.8)`, alpha `saturate(4 t.r^2) x alpha`. The loop template gives it a near-black blue particle colour, so these are dark wisps. |
+| `Mat_PowerUpTwirls` (translucent, sub-image) | The twirl atlas is read at a UV bent by two slowly rotating scroll-map reads (0.02 x); colour `(sqrt(t) - t) x col x` a stock violet (ignored `local/phaselock/fx_constants.json`), alpha `saturate(4 t.r^2) x alpha`. The loop template gives it a near-black blue particle colour, so these are dark wisps. |
 | `Mat_SirenEnergyRibbons` (additive, mesh) | Ribbon texture read at `(2u - dynamic parameter 0, v)`; colour `saturate(u - 0.05) x b^2 x alpha x col`, `b` its blue channel. |
 | `Mat_SirenEnergySwirl` (translucent) | Colour `blue x col`, alpha `texture alpha x alpha`. |
 | `Mat_SirenHandGlow` (translucent) | `g` = the soft mirror mask at `2uv`; colour `g x col`, alpha `g x alpha x fade(21)`. |
@@ -683,7 +683,7 @@ Textures (sampler state from the `Texture2D` exports): wrap addressing and sRGB 
 
 `Mati_Siren_Hands` is an instance of `Master_Player` with both static switches off; the cache holds that permutation (id and
 switch values match). The power-emissive term of its base-pass pixel shader is, in our words: glow colour `p_PowerEmissiveColor`
-(0, 14.55, 20) x `p_EnablePowerEmissive` x `(1 - f^2)` x mask x the diffuse texture, where `f` is the red channel of a fire-tile
+(an HDR cyan-blue with no red; ignored `local/phaselock/fx_constants.json`) x `p_EnablePowerEmissive` x `(1 - f^2)` x mask x the diffuse texture, where `f` is the red channel of a fire-tile
 texture read at `0.6 x uv + (P(0.00333 t), P(-0.0333 t))`, `mask` is the **B channel of `p_Masks` at (0.5 u, 0.5 v + 0.5)** and
 the diffuse is `p_Diffuse` at the UV. A second, always-on term uses `p_EmissiveColor` and the B channel at (0.5 u, 0.5 v).
 Rounds 1-5 read the mask at (0.5 u, v), the full-height left half, which also contains the glove silhouettes in B; that

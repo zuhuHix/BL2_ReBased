@@ -76,6 +76,25 @@ def test_no_root_and_a_missing_texture():
         assert len(problems) == 1 and 'Tex_A' in problems[0]
 
 
+def test_constants_complete_missing_and_malformed():
+    good = {material: {name: [0.1, 0.2, 0.3]} for material, name in f.REQUIRED_CONSTANTS}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'constants.json'
+        assert 'is missing' in f.load_fx_constants(path)[1][0]
+        path.write_text('{not json', encoding='utf-8')
+        assert 'unreadable' in f.load_fx_constants(path)[1][0]
+        path.write_text(json.dumps(good), encoding='utf-8')
+        assert f.load_fx_constants(path) == (good, [])
+        material, name = f.REQUIRED_CONSTANTS[0]
+        for bad in ([0.1, 0.2], [0.1, 0.2, 'x'], [0.1, 0.2, True], 'x'):
+            changed = dict(good, **{material: {name: bad}})
+            path.write_text(json.dumps(changed), encoding='utf-8')
+            problems = f.load_fx_constants(path)[1]
+            assert len(problems) == 1 and f'{material}.{name}' in problems[0]
+        path.write_text(json.dumps({'_source': 'note'}), encoding='utf-8')
+        assert len(f.load_fx_constants(path)[1]) == len(f.REQUIRED_CONSTANTS)
+
+
 if __name__ == '__main__':
     for name, test in list(globals().items()):
         if name.startswith('test_'):
