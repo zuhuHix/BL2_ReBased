@@ -53,7 +53,7 @@ function ToPyDict([hashtable]$Map) {
 function Get-Bullymongs([int]$Count) {
     $r = PyCall "sl_bullymongs($Count)"
     if (@($r.picks).Count -lt $Count) { throw "need $Count adult bullymongs, found $(@($r.picks).Count): $($r.rows | ConvertTo-Json -Compress -Depth 4)" }
-    @($r.picks)
+    @($r.picks)   # one name comes back as a plain string: callers wrap the call in @() before indexing it
 }
 
 # Put Maya 650 uu from the target, looking at it, with the target isolated and immune player; aim at its origin.
@@ -128,7 +128,7 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
 # One Phaselock cast (F key) on the lifted target with the damage watch running; the rows are the step's result.
 function Invoke-DamageCast([string]$Name, [hashtable]$Grades) {
     Invoke-Step $Name $Grades {
-        $t = (Get-Bullymongs 1)[0]
+        $t = @(Get-Bullymongs 1)[0]
         $setup = Set-Up $t
         $watch = PyCall "sl_damage_watch(7.0, '$t')"
         Send-Key F
@@ -232,7 +232,7 @@ try {
 
     # 6. Sub-Sequence and Sweet Release: the lifted bullymong is killed 1.5 s after the F press, during the lock.
     Invoke-Step 'subsequence_sweet_release' @{ SubSequence = 5; SweetRelease = 5 } {
-        $t = (Get-Bullymongs 1)[0]
+        $t = @(Get-Bullymongs 1)[0]
         $setup = Set-Up $t
         $watch = PyCall 'sl_killedtarget_watch(12.0)'
         Send-Key F

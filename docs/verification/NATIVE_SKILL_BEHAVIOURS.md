@@ -452,3 +452,17 @@ contradicted.
   wounded to 1 health, and the record names any fallback. The crit step dumps the bonus's modifier stack and the held weapon. A failed
   step keeps its Python traceback, two failures in a row end the run, and the `quit` reply is tolerated.
   `tests/skills_live_probe_test.py` checks these helpers and the step runner without the game, not that the game behaves as assumed.
+
+### Second run (2026-11-06): the grade path works; the casts and the crit stack not read
+
+Saves and config identical to the backup afterwards. The run ended at its two-failures rule on the capture's own bug: indexing a
+one-item result took the first letter of the pawn name. The same call failed the same steps in the first run, so its cause was this,
+not a corpse as first suspected.
+
+- **Confirmed live (probe mechanics):** `ServerSetSkillSaveGameData` sets a tree grade and `GetSkillState` reads it back, including the
+  restore; a target wounded to 1 health dies to a burst from the held gun.
+- **Against this note's best guess, not a verdict:** with Life Tap at grade 5, two gun kills about 5 s apart left
+  `KillSkillTimeRemaining` and `DurationOfLastKillSkillActivation` at 0 for 22 s, and no `UpdateKillSkills` call was recorded. The kills
+  were on targets wounded by a direct `TakeDamage`, the second with its controller detached, and a grade set this way may not count
+  until a refresh. The host's 7 s timer (section 3.1) stays UNVERIFIED and has no live support.
+- **Not read:** Helios, Ruin, Converge, Sub-Sequence, Sweet Release, Mind's Eye scaling and what makes up the crit bonus.
