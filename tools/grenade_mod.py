@@ -155,8 +155,9 @@ def init_attributes(package, resolver, init, attributes, unresolved):
         else:
             attributes[name] = value
     definition = init.get('InitializationDefinition')
-    if definition and definition in package.index:
-        props = package.props(definition)
+    owner = next((p for p in resolver.packages if definition and definition in p.index), None)
+    if owner is not None:
+        props = owner.props(definition)
         formula = props.get('ValueFormula') or {}
         for key in ('Multiplier', 'Level', 'Power', 'Offset'):
             init_attributes(package, resolver, formula.get(key), attributes, unresolved)
@@ -165,12 +166,14 @@ def init_attributes(package, resolver, init, attributes, unresolved):
             init_attributes(package, resolver, clamp.get(key), attributes, unresolved)
 
 
-def projectile_damage(package, projectile, level):
-    """(value, reason): the projectile's Damage at ProjectileLevel = level, before the mod's Damage slot."""
-    init = package.props(projectile).get('Damage') or {}
+def projectile_damage(source, projectile, level):
+    """(value, reason): the projectile's Damage at ProjectileLevel = level, before the mod's Damage slot. The field may
+    be inherited from the class default, and its attributes may live in either package."""
+    package = source.package
+    init = source.fields(projectile).get('Damage') or {}
     if not init.get('InitializationDefinition'):
         return None, 'the projectile has no Damage initialization'
-    resolver = skill_stats.Resolver([package])
+    resolver = skill_stats.Resolver([package, source.defaults])
     attributes = {PROJECTILE_LEVEL: float(level)}
     unresolved = set()
     init_attributes(package, resolver, init, attributes, unresolved)
@@ -193,7 +196,7 @@ def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
     projectile_path = mod.get('DefaultProjectileDefinition')
     known = {}
     projectile = weapon_firing.projectile_of(source, None, {}, projectile_path, None, None, known, unresolved)
-    pd = package.props(projectile_path)
+    pd = source.fields(projectile_path)   # with what the class default fills in (gravity, lifespan, behaviours)
     explosion = (projectile.get('splash') or {}).get('explosion')
     explode_radius = (projectile.get('splash') or {}).get('radius')
 
@@ -210,11 +213,10 @@ def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
         for path in weapon_firing.behaviours(source, part_provider).get('ProjectileBehavior_SetSpeed', []):
             speed_setters.append({'part': short(part), 'behaviour': short(path)})
 
-    value, reason = projectile_damage(package, projectile_path, level)
+    value, reason = projectile_damage(source, projectile_path, level)
     multiplier = modified(1.0, totals.get(DAMAGE_ATTRIBUTE, {}))
     damage = {'value': None if value is None else value * multiplier, 'reason': reason,
-              'projectile_initialization': (package.props(projectile_path).get('Damage') or {}).get(
-                  'InitializationDefinition'),
+              'projectile_initialization': (pd.get('Damage') or {}).get('InitializationDefinition'),
               'damage_multiplier': multiplier, 'slot': slots.get('Damage')}
     if reason is None and damage['value'] is None:
         damage['reason'] = 'not resolvable'
@@ -250,6 +252,7 @@ def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
             'gravity_scale': pd.get('GravityScaling'),
             'physics_mode': pd.get('PhysicsMode'),
             'max_lifespan': pd.get('MaxLifespan'),
+            'upward_velocity_bonus': pd.get('UpwardVelocityBonus'),
             'explode_on_impact': projectile.get('explode_on_impact'),
             'bounces': projectile.get('bounces', {}).get('count'),
         },
@@ -319,6 +322,9 @@ def main():
     print(f"wrote {out}")
     print(f"fuse {block['fuse_time']['value']}, damage {block['damage']['value']}, radius {block['radius']['value']}, "
           f"speed {block['projectile']['speed']}, gravity {block['projectile']['gravity_scale']}")
+    # The host refuses a grenade without positive damage: say so now rather than at the throw.
+    if not (block['damage']['value'] or 0) > 0:
+        raise SystemExit(f"no positive damage: {block['damage']['reason']}")
 
 
 if __name__ == '__main__':
