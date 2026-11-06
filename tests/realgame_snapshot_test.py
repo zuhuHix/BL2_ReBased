@@ -210,8 +210,7 @@ def test_a_missing_evidence_file_cannot_exit_0_and_the_restore_still_runs():
 
 def test_a_failed_run_stops_the_hooks_while_the_game_is_alive():
     alive = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
-    calls = "function Remove-Driver { }
-function Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; if (__FAILS__) { throw 'no reply' } }"
+    calls = "function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; if (__FAILS__) { throw 'no reply' } }"
     done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$false'))
     assert 'py: pi_stop(); unmark_lock()' in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
     done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$true'))
