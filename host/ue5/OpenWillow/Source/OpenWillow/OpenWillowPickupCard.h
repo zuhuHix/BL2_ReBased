@@ -18,6 +18,10 @@ namespace OpenWillowPickupCard
     // later, for E. Reach and cone are host choices (UNVERIFIED: the game's look-at test is native). Null when none.
     AOpenWillowInventoryPickup* FindAimedPickup(const AOpenWillowWalker& Maya, const APlayerController& Player);
 
+    // The sight test: a visibility trace from the view to the pickup, ignoring Maya and the pickup. E uses it for every
+    // pickup it may take, aimed or nearest.
+    bool InSight(const AOpenWillowWalker& Maya, const APlayerController& Player, const AOpenWillowInventoryPickup& Pickup);
+
     // JSON text for the "pickupCard" field: null (also while Maya is down or dead), or {id, level, item, compare, x, y}.
     // `item` and `compare` are the inventory page's item objects (UOpenWillowInventory::WeaponItemJson / GearItemJson);
     // `compare` is the equipped analogue (the held weapon, or the equipped gear of the item's slot) or null. x and y are
@@ -27,8 +31,9 @@ namespace OpenWillowPickupCard
 
     // -owpickupcardshots (with the movie HUD): rolls a gun with ow.RollGun, drops it ahead of Maya, captures the screen
     // aimed at it, aimed away, aimed again and after E picked it up; then the decoy case (a gun 70 uu to her right and one
-    // 150 uu ahead, aimed at: E must take the aimed one, logged "decoy aimed_taken=1 nearer_left=1"); then the decoy aimed
-    // at and Maya put down (the card must hide). Captures OWPickupCard_<n>_<name>.png and quits. Call every HUD frame once
+    // 150 uu ahead, aimed at: E must take the aimed one, logged "decoy aimed_taken=1 nearer_left=1"); then E with a test
+    // block between the view and the decoy (logged "wall decoy_left=1"); then the decoy aimed at and Maya put down (the card
+    // must hide). Captures OWPickupCard_<n>_<name>.png and quits. Call every HUD frame once
     // the movie is ready; does nothing without the flag.
     void TickShots(AOpenWillowWalker& Maya, APlayerController& Player);
 }

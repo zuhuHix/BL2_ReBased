@@ -4,9 +4,12 @@
 #include "OpenWillowMayaState.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
+#include "Components/StaticMeshComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
@@ -44,6 +47,19 @@ namespace
     }
 }
 
+bool OpenWillowPickupCard::InSight(const AOpenWillowWalker& Maya, const APlayerController& Player, const AOpenWillowInventoryPickup& Pickup)
+{
+    const UWorld* World = Maya.GetWorld();
+    if (!World) return false;
+    FVector ViewLocation;
+    FRotator ViewRotation;
+    Player.GetPlayerViewPoint(ViewLocation, ViewRotation);
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPickupCardSight), false, &Maya);
+    Query.AddIgnoredActor(&Pickup);
+    FHitResult Hit;
+    return !World->LineTraceSingleByChannel(Hit, ViewLocation, Pickup.GetActorLocation(), ECC_Visibility, Query);
+}
+
 AOpenWillowInventoryPickup* OpenWillowPickupCard::FindAimedPickup(const AOpenWillowWalker& Maya, const APlayerController& Player)
 {
     UWorld* World = Maya.GetWorld();
@@ -73,14 +89,7 @@ AOpenWillowInventoryPickup* OpenWillowPickupCard::FindAimedPickup(const AOpenWil
         return A.Name < B.Name;
     });
     for (const FCandidate& Candidate : Candidates)
-    {
-        // Line of sight from the view to the item, ignoring Maya and the pickup itself (no card through walls).
-        FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPickupCardSight), false, &Maya);
-        Query.AddIgnoredActor(Candidate.Pickup);
-        FHitResult Hit;
-        if (!World->LineTraceSingleByChannel(Hit, ViewLocation, Candidate.Pickup->GetActorLocation(), ECC_Visibility, Query))
-            return Candidate.Pickup;
-    }
+        if (InSight(Maya, Player, *Candidate.Pickup)) return Candidate.Pickup; // no card through walls
     return nullptr;
 }
 
@@ -175,7 +184,27 @@ namespace
     float ShotAt = 0.f;
     FVector DropLocation = FVector::ZeroVector, AimedAt = FVector::ZeroVector;
     TWeakObjectPtr<AOpenWillowInventoryPickup> Decoy, DecoyAimed;
+    TWeakObjectPtr<AStaticMeshActor> Wall;
     bool bReleaseUse = false;
+
+    // A 30 uu test block on the line from the view to Target, most of the way there. False when the engine cube did not load.
+    bool SpawnWall(UWorld& World, const APlayerController& Player, const FVector& Target)
+    {
+        UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+        if (!Cube) return false;
+        FVector ViewLocation;
+        FRotator ViewRotation;
+        Player.GetPlayerViewPoint(ViewLocation, ViewRotation);
+        FActorSpawnParameters Spawn;
+        Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        AStaticMeshActor* Block = World.SpawnActor<AStaticMeshActor>(FMath::Lerp(ViewLocation, Target, .7f), FRotator::ZeroRotator, Spawn);
+        if (!Block) return false;
+        Block->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+        Block->GetStaticMeshComponent()->SetStaticMesh(Cube);
+        Block->SetActorScale3D(FVector(.3f));
+        Wall = Block;
+        return true;
+    }
 
     void Aim(APlayerController& Player, const FVector& Target, float ExtraYaw = 0.f)
     {
@@ -286,15 +315,27 @@ void OpenWillowPickupCard::TickShots(AOpenWillowWalker& Maya, APlayerController&
     case 7:
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS decoy aimed_taken=%d nearer_left=%d"),
             DecoyAimed.IsValid() ? 0 : 1, Decoy.IsValid() ? 1 : 0);
-        // Then the decoy, aimed at, and Maya goes down: the card must hide.
+        // Then the decoy, aimed at, behind a block: E must leave it. Afterwards, the block gone, Maya goes down: the card must hide.
         if (Decoy.IsValid()) Aim(Player, Decoy->GetActorLocation());
         break;
     case 8:
+        if (Decoy.IsValid() && SpawnWall(*World, Player, Decoy->GetActorLocation()))
+        {
+            Player.InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::E, IE_Pressed, 1.f));
+            bReleaseUse = true;
+        }
+        else UE_LOG(LogTemp, Warning, TEXT("OWPICKUPCARDSHOTS wall check not run"));
+        break;
+    case 9:
+        UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS wall decoy_left=%d"), Decoy.IsValid() ? 1 : 0);
+        if (Wall.IsValid()) Wall->Destroy();
+        break;
+    case 10:
         Shot(7, TEXT("SecondAimed"), Now);
         OpenWillowApplyDamageToPlayer(World, 1.e6f);
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS down=%d"), Maya.IsDown() ? 1 : 0);
         break;
-    case 9: Shot(8, TEXT("Down"), Now); break;
+    case 11: Shot(8, TEXT("Down"), Now); break;
     default:
         UE_LOG(LogTemp, Display, TEXT("OWPICKUPCARDSHOTS done"));
         Fail();

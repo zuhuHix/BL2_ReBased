@@ -64,7 +64,8 @@ captures under ignored `local/inv24/mapshots/`. Nothing below was observed in th
 - Over the vending page (vendors #81): the shop page holds the keyboard, so no key opens a status page over it. Forced
   through `ToggleMap` (`-owmapshots` with `-owvendors`), the Map opened on top and closing it handed the input back to the
   game under the still-open shop (cursor hidden, shop still open). Since 2026-11-04 no status page opens while a shop is
-  open (`UOpenWillowVendorSubsystem::IsShopOpen`); the capture logs the refusal.
+  open (`UOpenWillowVendorSubsystem::IsShopOpen`), and the Walker's legacy inventory widget does not open in its place (PR
+  #101 review); the capture logs both refusals (`map_over_vending open=0`, `inventory_over_vending page=0 widget=0`).
 
 ## Open, for a real-game session
 
