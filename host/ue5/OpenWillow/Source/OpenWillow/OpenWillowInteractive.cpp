@@ -348,6 +348,13 @@ bool OpenWillowInteractiveRules::HealAfter(float Health, float MaxHealth, float 
     return true;
 }
 
+TArray<int32> OpenWillowInteractiveRules::LidCandidateOrder(int32 Count)
+{
+    TArray<int32> Order;
+    for (int32 Index = Count - 1; Index >= (Count > 1 ? 1 : 0); --Index) Order.Add(Index);
+    return Order;
+}
+
 bool OpenWillowInteractiveRules::AmmoTypeFromName(const FString& Name, EOpenWillowAmmoType& OutType)
 {
     if (Name == TEXT("pistol")) OutType = EOpenWillowAmmoType::Pistol;
@@ -889,21 +896,84 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
     }
 }
 
+namespace
+{
+    // Why Maya cannot view this lootable from this side (one of eight, 220 uu out, starting in front), or null when she can:
+    // her capsule fits on walkable floor at its level and her view, as wide as she is, is clear. The view stops short of the
+    // lootable, so a wall right behind it does not count. Many lootables are placed against a wall.
+    const TCHAR* LidSideFailure(const UWorld& World, const AOpenWillowWalker& Walker, const AOpenWillowLootable& Lootable, int32 Side, FVector& OutStand)
+    {
+        const UCapsuleComponent* Capsule = Walker.GetCapsuleComponent();
+        const float Radius = Capsule->GetScaledCapsuleRadius();
+        const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+        const ECollisionChannel PawnChannel = Capsule->GetCollisionObjectType();
+        const FVector Base = Lootable.GetActorLocation();
+        const FVector Probe = Base + (Lootable.GetActorForwardVector() * 220.f).RotateAngleAxis(45.f * Side, FVector::UpVector);
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(OWLidView), true);
+        Params.AddIgnoredActor(&Lootable);
+        Params.AddIgnoredActor(&Walker);
+        FHitResult Floor;
+        if (!World.LineTraceSingleByChannel(Floor, Probe + FVector(0.f, 0.f, 120.f), Probe - FVector(0.f, 0.f, 120.f), PawnChannel, Params)) return TEXT("no_floor");
+        if (Floor.ImpactNormal.Z < Walker.GetCharacterMovement()->GetWalkableFloorZ()) return TEXT("steep_floor");
+        OutStand = Floor.ImpactPoint + FVector(0.f, 0.f, HalfHeight + 2.f);
+        if (World.OverlapBlockingTestByChannel(OutStand, FQuat::Identity, PawnChannel, FCollisionShape::MakeCapsule(Radius, HalfHeight), Params)) return TEXT("capsule");
+        const FVector Eye = OutStand + (Walker.GetPawnViewLocation() - Walker.GetActorLocation());
+        const FVector Target = Base + FVector(0.f, 0.f, 50.f);
+        const FVector Near = Target + (Eye - Target).GetSafeNormal() * (Radius + 30.f);
+        if (World.SweepTestByChannel(Eye, Near, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(Radius), Params)) return TEXT("view");
+        return nullptr;
+    }
+}
+
 bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
 {
     UWorld* World = GetWorld();
     if (!bLidQueueBuilt)
     {
         bLidQueueBuilt = true;
-        // The LAST lootable of each balance, so TestOpen (which takes the first) still has its own to open.
-        TMap<FString, TWeakObjectPtr<AOpenWillowLootable>> ByBalance;
+        TMap<FString, TArray<AOpenWillowLootable*>> ByBalance;
         for (const TWeakObjectPtr<AOpenWillowLootable>& Candidate : Lootables)
-            if (Candidate.IsValid() && Candidate->HasOpenClip()) ByBalance.Add(Candidate->Balance, Candidate);
-        ByBalance.GenerateValueArray(LidQueue);
-        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID queue=%d (balances with an imported open clip)"), LidQueue.Num());
+            if (Candidate.IsValid() && Candidate->HasOpenClip()) ByBalance.FindOrAdd(Candidate->Balance).Add(Candidate.Get());
+        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID queue=%d (balances with an imported open clip)"), ByBalance.Num());
+        for (const TPair<FString, TArray<AOpenWillowLootable*>>& Row : ByBalance)
+        {
+            const FString BalanceLeaf = Row.Key.RightChop(Row.Key.Find(TEXT("."), ESearchCase::CaseSensitive, ESearchDir::FromEnd) + 1);
+            const TArray<int32> Order = OpenWillowInteractiveRules::LidCandidateOrder(Row.Value.Num());
+            FLidStop Stop;
+            int32 ClearYaw = -1;
+            int32 Tried = 0;
+            for (int32 Index = 0; Index < Order.Num() && ClearYaw < 0; ++Index)
+            {
+                AOpenWillowLootable* Candidate = Row.Value[Order[Index]];
+                ++Tried;
+                for (int32 Side = 0; Side < 8 && ClearYaw < 0; ++Side)
+                {
+                    FVector Stand;
+                    if (const TCHAR* Failed = LidSideFailure(*World, Walker, *Candidate, Side, Stand))
+                    {
+                        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID side balance=%s id=%s yaw=%d failed=%s"), *BalanceLeaf, *Candidate->Id, 45 * Side, Failed);
+                        continue;
+                    }
+                    ClearYaw = 45 * Side;
+                    Stop.Lootable = Candidate;
+                    Stop.Stand = Stand;
+                }
+            }
+            if (ClearYaw < 0)
+            {
+                // No lootable of this balance works: the frames are still taken, and the checker reports INCOMPLETE.
+                AOpenWillowLootable* Candidate = Row.Value[Order[0]];
+                Stop.Lootable = Candidate;
+                Stop.Stand = Candidate->GetActorLocation() + Candidate->GetActorForwardVector() * 220.f + FVector(0.f, 0.f, 100.f);
+            }
+            const AOpenWillowLootable* Chosen = Stop.Lootable.Get();
+            UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d id=%s tried=%d of %d"), *BalanceLeaf, ClearYaw >= 0 ? 1 : 0,
+                ClearYaw, Chosen ? *Chosen->Id : TEXT("none"), Tried, Row.Value.Num());
+            LidQueue.Add(Stop);
+        }
     }
     if (LidQueue.Num() == 0) return false;
-    AOpenWillowLootable* Lootable = LidQueue[0].Get();
+    AOpenWillowLootable* Lootable = LidQueue[0].Lootable.Get();
     if (!Lootable)
     {
         LidQueue.RemoveAt(0);
@@ -921,44 +991,12 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
     {
     case 0:
     {
-        // Test fixture: Maya stands 220 uu from the lootable, looking at it: in front when that spot works, else the first of
-        // eight sides where her capsule fits on walkable floor at the lootable's level and her view is clear. Many are placed
-        // against a wall. No such side is logged, and the checker reports that type as INCOMPLETE. What this leaves behind may
-        // stay: she stays at the last spot and these lootables stay open, TestOpen skips open ones, the later steps do not
-        // depend on where she stands, and the run exits at the end.
-        const UCapsuleComponent* Capsule = Walker.GetCapsuleComponent();
-        const float Radius = Capsule->GetScaledCapsuleRadius();
-        const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
-        const ECollisionChannel PawnChannel = Capsule->GetCollisionObjectType();
-        const float WalkableZ = Walker.GetCharacterMovement()->GetWalkableFloorZ();
+        // Test fixture: Maya goes to the spot the queue chose and looks at the lootable. What this leaves behind may stay: she
+        // stays at the last spot and these lootables stay open, TestOpen skips open ones, the later steps do not depend on
+        // where she stands, and the run exits at the end.
         const FVector EyeOffset = Walker.GetPawnViewLocation() - Walker.GetActorLocation();
-        const FVector Base = Lootable->GetActorLocation();
-        const FVector Target = Base + FVector(0.f, 0.f, 50.f);
-        const FVector Offset = Lootable->GetActorForwardVector() * 220.f;
-        FVector From = Base + Offset + FVector(0.f, 0.f, 100.f);
-        FCollisionQueryParams Params(SCENE_QUERY_STAT(OWLidView), true);
-        Params.AddIgnoredActor(Lootable);
-        Params.AddIgnoredActor(&Walker);
-        int32 ClearYaw = -1;
-        for (int32 Side = 0; Side < 8 && ClearYaw < 0; ++Side)
-        {
-            const FVector Probe = Base + Offset.RotateAngleAxis(45.f * Side, FVector::UpVector);
-            FHitResult Floor;
-            if (!World->LineTraceSingleByChannel(Floor, Probe + FVector(0.f, 0.f, 120.f), Probe - FVector(0.f, 0.f, 120.f), PawnChannel, Params)
-                || Floor.ImpactNormal.Z < WalkableZ)
-                continue;
-            const FVector Stand = Floor.ImpactPoint + FVector(0.f, 0.f, HalfHeight + 2.f);
-            if (World->OverlapBlockingTestByChannel(Stand, FQuat::Identity, PawnChannel, FCollisionShape::MakeCapsule(Radius, HalfHeight), Params))
-                continue;
-            // The view, as wide as she is, stopping short of the lootable so a wall right behind it does not count.
-            const FVector Eye = Stand + EyeOffset;
-            const FVector Near = Target + (Eye - Target).GetSafeNormal() * (Radius + 30.f);
-            if (World->SweepTestByChannel(Eye, Near, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(Radius), Params))
-                continue;
-            ClearYaw = 45 * Side;
-            From = Stand;
-        }
-        UE_LOG(LogTemp, Display, TEXT("OWLOOTLID view balance=%s clear=%d yaw=%d"), *Leaf, ClearYaw >= 0 ? 1 : 0, ClearYaw);
+        const FVector Target = Lootable->GetActorLocation() + FVector(0.f, 0.f, 50.f);
+        const FVector From = LidQueue[0].Stand;
         Walker.SetActorLocation(From, false, nullptr, ETeleportType::TeleportPhysics);
         if (AController* Controller = Walker.GetController()) Controller->SetControlRotation((Target - (From + EyeOffset)).Rotation());
         break;

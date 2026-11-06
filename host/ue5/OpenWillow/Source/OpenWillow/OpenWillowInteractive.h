@@ -115,6 +115,9 @@ namespace OpenWillowInteractiveRules
     bool HealAfter(float Health, float MaxHealth, float Fraction, bool bDown, float& OutAfter);
     // The manifest's ammo kind as the inventory's pool type. False for an unknown name.
     bool AmmoTypeFromName(const FString& Name, EOpenWillowAmmoType& OutType);
+    // The order the lid capture tries a balance's Count lootables: last placed first, leaving the first for the test's own
+    // open unless it is the only one.
+    TArray<int32> LidCandidateOrder(int32 Count);
 }
 
 // The placed lootable: a chest, a box or a crate from the manifest. The body is the engine cube stand-in; the imported
@@ -212,7 +215,13 @@ private:
     // The lid capture: one lootable per balance with an imported clip, Maya in front of it, frames closed, mid-open and
     // opened (OWLootLid_<balance leaf>_<phase>.png). True while it is still working.
     bool TickLidShots(AOpenWillowWalker& Walker);
-    TArray<TWeakObjectPtr<AOpenWillowLootable>> LidQueue;
+    // One balance's stop in the lid capture: the lootable chosen, and where Maya stands to see it.
+    struct FLidStop
+    {
+        TWeakObjectPtr<AOpenWillowLootable> Lootable;
+        FVector Stand = FVector::ZeroVector;
+    };
+    TArray<FLidStop> LidQueue;
     bool bLidQueueBuilt = false;
     int32 LidPhase = 0;
     FTimerHandle LidMidTimer;
