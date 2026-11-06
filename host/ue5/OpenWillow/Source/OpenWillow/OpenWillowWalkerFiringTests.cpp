@@ -256,6 +256,23 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         const auto InFlight = [this]() { int32 Count = 0; for (TActorIterator<AOpenWillowProjectile> It(GetWorld()); It; ++It) ++Count; return Count; };
         // A dummy that dies respawns with full health, so the health difference alone would not show the kill.
         if (GrenadeStep == 2 && CombatTarget->IsDead()) bGrenadeDummyDied = true;
+        // InputKey only queues the press: the data loads when the binding runs, a tick or so later, and that also sets the pending
+        // release, which reads the view 0.52 s after the press. A throw at the dummy's centre passes over its torso: the upward bonus
+        // and gravity lift the lob, and it starts 80 uu ahead and 20 uu left of the eye (AOpenWillowWalker::ReleaseGrenade). So aim where
+        // the lob meets the dummy, as a player leads a throw. Only while the release is pending, once, so aimed=1 means the aim came
+        // before it; and not in the steps below, whose timeout must always get its turn.
+        if (GrenadeStep == 2 && !bGrenadeAimed && GrenadeData.bLoaded && GrenadeReleaseAt > 0.f)
+        {
+            const FVector Eye = Camera->GetComponentLocation();
+            FVector Aim = CombatTarget->AimPoint();
+            const FVector Toward = (Aim - Eye).GetSafeNormal2D();
+            const float Flight = (float(FVector::Dist2D(Eye, Aim)) - 80.f) / GrenadeData.ProjectileSpeed;
+            const float GravityZ = OpenWillowFiring::WorldGravityZ * GrenadeData.GravityScale;
+            Aim.Z -= GrenadeData.UpwardVelocity * Flight + 0.5f * GravityZ * Flight * Flight;
+            Aim += FVector::CrossProduct(FVector::UpVector, Toward) * 20.f;
+            AimAt(Aim);
+            bGrenadeAimed = true;
+        }
         if (GrenadeStep == 0)
         {
             UOpenWillowStatusEffects::ClearAll(CombatTarget.Get());
@@ -273,22 +290,6 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             PressG(IE_Pressed);
             GrenadeAt = Now;
             GrenadeStep = 2;
-        }
-        else if (GrenadeStep == 2 && !bGrenadeAimed && GrenadeData.bLoaded)
-        {
-            // InputKey only queues the press: the data loads when the binding runs, a tick or so later. The release, 0.52 s after
-            // the press, reads the view. A throw at the dummy's centre passes over its torso: the upward bonus and gravity lift
-            // the lob, and it starts 80 uu ahead and 20 uu left of the eye (AOpenWillowWalker::ReleaseGrenade). So aim where the
-            // lob meets the dummy, as a player leads a throw. The grenade line says whether this ran.
-            const FVector Eye = Camera->GetComponentLocation();
-            FVector Aim = CombatTarget->AimPoint();
-            const FVector Toward = (Aim - Eye).GetSafeNormal2D();
-            const float Flight = (float(FVector::Dist2D(Eye, Aim)) - 80.f) / GrenadeData.ProjectileSpeed;
-            const float GravityZ = OpenWillowFiring::WorldGravityZ * GrenadeData.GravityScale;
-            Aim.Z -= GrenadeData.UpwardVelocity * Flight + 0.5f * GravityZ * Flight * Flight;
-            Aim += FVector::CrossProduct(FVector::UpVector, Toward) * 20.f;
-            AimAt(Aim);
-            bGrenadeAimed = GrenadeReleaseAt > 0.f;
         }
         else if (GrenadeStep == 2 && ((Now >= GrenadeAt + 1.2f && InFlight() == 0) || Now >= GrenadeAt + 15.f))
         {
