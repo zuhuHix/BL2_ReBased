@@ -3967,3 +3967,7 @@ AI-assisted (Claude). Record: `docs/verification/SLICE_AUDIO_CHAIN.md` section 5
 - **Limit:** `hit` is a surface sound, not shown to be the enemy, with 96 sources. The host picks at random, so a hit can sound like any surface until the switch value is read.
 - **Not stock:** one session on a modded install, Dialog Skipper included. No role here comes from a dialog event.
 - **Not verified:** nothing has been heard, and no game sound can play until a decoder is approved. No parsing behaviour changed.
+## 2026-11-06: no camera motion blur in the host (mission UI lane)
+
+AI-assisted (Claude). Record: `docs/verification/WEAPON_VISUALS.md` section 1. `DefaultEngine.ini` sets `r.DefaultFeature.MotionBlur=False`; the engine's source documents 0 as "sets MotionBlurAmount to 0", and no
+camera or volume in the host's code overrides that amount. The installed game's config has `MotionBlur=False`, a config read only. Host rendering only; no parsing change. In-engine frame: UNVERIFIED until the batch runs it.
