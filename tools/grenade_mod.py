@@ -374,6 +374,15 @@ def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
     }
 
 
+def write_block(out, block):
+    """Writes the block for the host, or stops first: a block the host refuses must not replace a good one."""
+    if not (block['damage']['value'] or 0) > 0:
+        raise SystemExit(f"no positive damage: {block['damage']['reason']}")
+    if not block['projectile']['contact']:
+        raise SystemExit('the projectile behaviour graph has no contact bounce and timers: the host does not load this grenade')
+    out.write_text(json.dumps({'grenade': block}, indent=1), encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
@@ -406,16 +415,11 @@ def main():
         block = resolve(package, defaults, overrides, args.level)
     finally:
         schema.unlink(missing_ok=True)
-    out.write_text(json.dumps({'grenade': block}, indent=1), encoding='utf-8')
+    write_block(out, block)
     print(f"wrote {out}")
     print(f"fuse {block['fuse_time']['value']}, damage {block['damage']['value']}, radius {block['radius']['value']}, "
           f"speed {block['projectile']['speed']}, gravity {block['projectile']['gravity_scale']}, "
           f"contact {block['projectile']['contact']}")
-    # The host refuses a grenade without positive damage: say so now rather than at the throw.
-    if not (block['damage']['value'] or 0) > 0:
-        raise SystemExit(f"no positive damage: {block['damage']['reason']}")
-    if not block['projectile']['contact']:
-        raise SystemExit('the projectile behaviour graph has no contact bounce and timers: the host does not load this grenade')
 
 
 if __name__ == '__main__':
