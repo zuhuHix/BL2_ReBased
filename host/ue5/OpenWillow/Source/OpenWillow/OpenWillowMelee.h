@@ -42,6 +42,7 @@ namespace OpenWillowMelee
         bool Press(float Now, float Duration);
         bool ConsumeHit(float Now);
         bool IsBusy(float Now) const { return Now < EndsAt; }
+        float StartedAt() const { return HitAt - HitDelay; }
         void Reset() { EndsAt = -1.f; HitAt = -1.f; bHitPending = false; }
     private:
         float EndsAt = -1.f;

@@ -8,6 +8,7 @@
 #include "OpenWillowWalker.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Engine/DamageEvents.h"
 #include "InputCoreTypes.h"
 #include "Misc/CommandLine.h"
 
@@ -40,16 +41,18 @@ namespace
     bool bKeyHeld = false;
     TWeakObjectPtr<AOpenWillowCombatTarget> MeleeDummy;
     float HealthBefore = 0.f;
-    // What the frames saw of the swing since the last V: when it started and when the target first lost health, on the world clock.
+    // What the frames saw of the swing since the last V: that it started, and when the target first lost health, on the world clock.
     bool bSwingSeen = false, bHitSeen = false;
-    float SwingAt = 0.f, HitAt = 0.f, WaitEndBy = 0.f;
+    float HitAt = 0.f, WaitEndBy = 0.f;
+    int32 MagazineAtSwing = -1;
     // The melee hit events since the last V.
     int32 MeleeEvents = 0;
     float EventDamage = 0.f, EventApplied = 0.f;
     FDelegateHandle HitHandle;
     int32 GrenadesBefore = 0;
-    float ReloadStartBy = 0.f;
-    bool bWeaponOutBefore = false;
+    float ReloadStartBy = 0.f, BurstBy = 0.f;
+    bool bWeaponOutBefore = false, bReloadStarted = false, bBeforeRefill = false, bBurstOwed = false;
+    int32 RefusedBefore = 0, GrenadesRefusedBefore = 0, HolstersRefusedBefore = 0, BurstCountBefore = 0, BurstMagazineBefore = 0;
 
     void Check(const TCHAR* Name, bool bOk, const FString& Detail)
     {
@@ -134,7 +137,7 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
             EventApplied = Event.Applied;
         });
     // Every frame, so the times are the frame the thing happened on rather than when a step happens to look.
-    if (Maya.MeleeBusy() && !bSwingSeen) { bSwingSeen = true; SwingAt = Now; }
+    if (Maya.MeleeBusy() && !bSwingSeen) { bSwingSeen = true; MagazineAtSwing = HeldMagazine(Maya); }
     if (MeleeDummy.IsValid() && !bHitSeen && MeleeDummy->GetHealth() < HealthBefore) { bHitSeen = true; HitAt = Now; }
     constexpr float Start = 10.f, Settle = 1.5f;
     if (Now < Start || Now < NextAt) return;
@@ -167,8 +170,8 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
     }
     case 5:
     {
-        // The delay, from the frames the swing started and the hit landed. The upper end only allows for a slow frame.
-        const float Delay = bSwingSeen && bHitSeen ? HitAt - SwingAt : -1.f;
+        // The delay, from when the press was taken to the frame the hit landed. The upper end only allows for a slow frame.
+        const float Delay = bSwingSeen && bHitSeen ? HitAt - Maya.MeleeStartedAt() : -1.f;
         Check(TEXT("v_not_hit_before_the_delay"), Delay >= OpenWillowMelee::HitDelay - 1e-3f && Delay < OpenWillowMelee::HitDelay + .5f, FString::Printf(TEXT("delay=%.3f"), Delay));
         const float Expected = OpenWillowMelee::DamageAtLevel(Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 1);
         Check(TEXT("v_hits_target_ahead"), MeleeEvents == 1 && FMath::IsNearlyEqual(EventDamage, Expected, .01f) && EventApplied > 0.f && FMath::IsNearlyEqual(Lost(), EventApplied, .01f),
@@ -206,18 +209,21 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         NextAt = Now + .2f;
         break;
     case 11:
+        RefusedBefore = Maya.MeleeRefusedByThrow;
         PressV(Player, Now, false);
         NextAt = Now + .3f;
         break;
     case 12:
-        Check(TEXT("v_refused_in_grenade_lockout"), GrenadesLeft(Maya) == GrenadesBefore - 1 && !bSwingSeen,
-            FString::Printf(TEXT("grenades=%d from %d swing=%d"), GrenadesLeft(Maya), GrenadesBefore, bSwingSeen));
+        Check(TEXT("v_refused_in_grenade_lockout"), GrenadesLeft(Maya) == GrenadesBefore - 1 && !bSwingSeen && Maya.MeleeRefusedByThrow == RefusedBefore + 1,
+            FString::Printf(TEXT("grenades=%d from %d swing=%d refused=%d"), GrenadesLeft(Maya), GrenadesBefore, bSwingSeen, Maya.MeleeRefusedByThrow - RefusedBefore));
         GrenadesBefore = GrenadesLeft(Maya);
         Press(Player, EKeys::One);   // a weapon in hand, for the holster and reload steps
         NextAt = Now + 2.f;   // the lockout ends
         break;
     case 13:   // G and the holster inside a swing
         bWeaponOutBefore = Maya.HasWeaponOut();
+        GrenadesRefusedBefore = Maya.GrenadesRefusedBySwing;
+        HolstersRefusedBefore = Maya.HolstersRefusedBySwing;
         PressV(Player, Now, false);
         NextAt = Now;
         break;
@@ -233,8 +239,9 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
     case 16:
     {
         const bool bStillSwinging = Maya.MeleeBusy();
-        Check(TEXT("g_refused_during_swing"), bStillSwinging && GrenadesLeft(Maya) == GrenadesBefore, FString::Printf(TEXT("busy=%d grenades=%d from %d"), bStillSwinging, GrenadesLeft(Maya), GrenadesBefore));
-        Check(TEXT("holster_refused_during_swing"), bStillSwinging && bWeaponOutBefore && Maya.HasWeaponOut(), FString::Printf(TEXT("busy=%d out_before=%d out=%d"), bStillSwinging, bWeaponOutBefore, Maya.HasWeaponOut()));
+        const int32 GrenadesRefused = Maya.GrenadesRefusedBySwing - GrenadesRefusedBefore, HolstersRefused = Maya.HolstersRefusedBySwing - HolstersRefusedBefore;
+        Check(TEXT("g_refused_during_swing"), bStillSwinging && GrenadesLeft(Maya) == GrenadesBefore && GrenadesRefused == 1, FString::Printf(TEXT("busy=%d grenades=%d from %d refused=%d"), bStillSwinging, GrenadesLeft(Maya), GrenadesBefore, GrenadesRefused));
+        Check(TEXT("holster_refused_during_swing"), bStillSwinging && bWeaponOutBefore && Maya.HasWeaponOut() && HolstersRefused == 1, FString::Printf(TEXT("busy=%d out_before=%d out=%d refused=%d"), bStillSwinging, bWeaponOutBefore, Maya.HasWeaponOut(), HolstersRefused));
         WaitEndBy = Now + 5.f;
         break;
     }
@@ -246,11 +253,13 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         break;
     case 18:
         if (!Maya.IsReloading() && Now < ReloadStartBy) { NextAt = Now; return; }
+        bReloadStarted = Maya.IsReloading();
+        bBeforeRefill = bReloadStarted && Now < Maya.ReloadRefillTime();
         PressV(Player, Now, true);
         break;
     case 19:
-        Check(TEXT("v_stops_reload_before_refill"), bSwingSeen && !Maya.IsReloading() && HeldMagazine(Maya) == 1,
-            FString::Printf(TEXT("started=%d reloading=%d magazine=%d"), bSwingSeen, Maya.IsReloading(), HeldMagazine(Maya)));
+        Check(TEXT("v_stops_reload_before_refill"), bReloadStarted && bBeforeRefill && bSwingSeen && !Maya.IsReloading() && HeldMagazine(Maya) == 1,
+            FString::Printf(TEXT("reload_started=%d before_refill=%d swing=%d reloading=%d magazine=%d"), bReloadStarted, bBeforeRefill, bSwingSeen, Maya.IsReloading(), HeldMagazine(Maya)));
         break;
     case 20:   // and after it
         if (!EmptyHeldWeapon(Maya)) { Check(TEXT("v_keeps_refill_after_it"), false, TEXT("no weapon in hand")); TestStep = 23; return; }
@@ -259,13 +268,58 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         NextAt = Now;
         break;
     case 21:
-        // Until the reload has started and passed its refill point. A reload that never starts falls through and fails the row.
-        if ((!Maya.IsReloading() && Now < ReloadStartBy) || (Maya.IsReloading() && Now < Maya.ReloadRefillTime())) { NextAt = Now; return; }
+        // Until the reload has started and passed its refill point. A reload that never starts fails the row.
+        if (!Maya.IsReloading() && Now < ReloadStartBy) { NextAt = Now; return; }
+        bReloadStarted = Maya.IsReloading();
+        if (bReloadStarted && Now < Maya.ReloadRefillTime()) { NextAt = Now; return; }
         PressV(Player, Now, true);
         break;
     case 22:
-        Check(TEXT("v_keeps_refill_after_it"), bSwingSeen && !Maya.IsReloading() && HeldMagazine(Maya) > 1,
-            FString::Printf(TEXT("started=%d reloading=%d magazine=%d"), bSwingSeen, Maya.IsReloading(), HeldMagazine(Maya)));
+        Check(TEXT("v_keeps_refill_after_it"), bReloadStarted && bSwingSeen && !Maya.IsReloading() && HeldMagazine(Maya) > 1,
+            FString::Printf(TEXT("reload_started=%d swing=%d reloading=%d magazine=%d"), bReloadStarted, bSwingSeen, Maya.IsReloading(), HeldMagazine(Maya)));
+        break;
+    case 23:   // a burst owing shots when the swing starts: the held gun as a three-round burst for this step
+    {
+        FOpenWillowWeaponItem* Held = Maya.GetInventory() ? Maya.GetInventory()->ActiveWeaponMutable() : nullptr;
+        if (!Held) { Check(TEXT("burst_ends_on_swing"), false, TEXT("no weapon in hand")); TestStep = 27; return; }
+        BurstCountBefore = Held->Firing.BurstCount;
+        Held->Firing.BurstCount = 3;
+        BurstMagazineBefore = HeldMagazine(Maya);
+        Maya.TestFireInput(true);
+        BurstBy = Now + 2.f;
+        NextAt = Now;
+        break;
+    }
+    case 24:
+        if (HeldMagazine(Maya) == BurstMagazineBefore && Now < BurstBy) { NextAt = Now; return; }
+        Maya.TestFireInput(false);
+        bBurstOwed = Maya.BurstActive();
+        PressV(Player, Now, true);
+        break;
+    case 25:   // past the end of the swing, when owed shots would have resumed
+        NextAt = Now + .6f;
+        break;
+    case 26:
+    {
+        Check(TEXT("burst_ends_on_swing"), bBurstOwed && bSwingSeen && !Maya.BurstActive() && HeldMagazine(Maya) == MagazineAtSwing,
+            FString::Printf(TEXT("owed_at_press=%d swing=%d active=%d magazine=%d at_swing=%d"), bBurstOwed, bSwingSeen, Maya.BurstActive(), HeldMagazine(Maya), MagazineAtSwing));
+        if (FOpenWillowWeaponItem* Held = Maya.GetInventory() ? Maya.GetInventory()->ActiveWeaponMutable() : nullptr) Held->Firing.BurstCount = BurstCountBefore;
+        break;
+    }
+    case 27:   // last: going down inside the delay. She then bleeds out.
+        PlaceDummy(Maya, Player, 150.f, 0.f);
+        PressV(Player, Now, false);
+        NextAt = Now;
+        break;
+    case 28:
+        if (!bSwingSeen) { NextAt = Now; return; }
+        Maya.TakeDamage(Maya.GetShield() + Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
+        NextAt = Now + OpenWillowMelee::HitDelay + .4f;
+        break;
+    case 29:
+        Check(TEXT("down_cancels_swing"), Maya.IsDown() && !Maya.MeleeBusy() && MeleeEvents == 0 && Lost() == 0.f,
+            FString::Printf(TEXT("down=%d busy=%d events=%d lost=%.2f"), Maya.IsDown(), Maya.MeleeBusy(), MeleeEvents, Lost()));
+        if (MeleeDummy.IsValid()) MeleeDummy->Destroy();
         break;
     default:
         Check(TEXT("closed_at_end"), !Hud.IsSkillsOpen(), State());

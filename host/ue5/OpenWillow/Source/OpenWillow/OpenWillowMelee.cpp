@@ -61,6 +61,7 @@ void AOpenWillowWalker::MeleePressed()
     const float Now = GetWorld()->GetTimeSeconds();
     if (Now < ThrowLockUntil)
     {
+        ++MeleeRefusedByThrow;
         UE_LOG(LogTemp, Display, TEXT("OWMELEE press refused: grenade throw in progress t=%.2f"), Now);
         return;
     }
