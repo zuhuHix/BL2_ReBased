@@ -246,6 +246,19 @@ def test_capture_tolerates_the_quit_reply():
     assert """    Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)'""" not in text, 'the bare call has no reply to trim'
 
 
+def test_one_target_is_a_whole_name():
+    """The rerun's LookupError "W": a function's one-item array unrolls to a string, and [0] then takes its first letter."""
+    text = CAPTURE.read_text(encoding='utf-8')
+    assert '(Get-Bullymongs 1)[0]' in text and '$t = (Get-Bullymongs' not in text
+    shell = shutil.which('powershell') or shutil.which('pwsh')
+    if not shell:
+        return
+    code = ("function Get-Bullymongs([int]$Count) { $r = [pscustomobject]@{ picks = @('WillowAIPawn_9') }; @($r.picks) }; "
+            "@(Get-Bullymongs 1)[0]")
+    done = subprocess.run([shell, '-NoProfile', '-Command', code], capture_output=True, text=True, timeout=60)
+    assert done.stdout.strip() == 'WillowAIPawn_9', done.stdout
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:
