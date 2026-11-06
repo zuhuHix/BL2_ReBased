@@ -571,8 +571,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
 
     case EStep::PickupDecoy: {
         // The aimed drop with a nearer decoy beside Maya, outside the card's cone: the card must name the aimed one, and E
-        // must take it. On this build E takes the nearest pickup (PickupNearby; PICKUP_CARD.md's known gap), so taking the
-        // decoy is NOT_AVAILABLE until the inventory lane's E-key switch, and it never passes.
+        // must take it (PR #101: an aimed pickup in reach wins over the nearest). Taking the decoy is a FAIL.
         if (!DecoyAimed)
         {
             if (RollSource.IsEmpty() || !FOpenWillowWeaponGen::IsAvailable())
@@ -603,8 +602,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s"), *DropId, *NearId, *CardId, *PickedId);
         if (CardId != DropId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": the card did not name the aimed drop"));
         else if (PickedId == DropId) PassLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up the aimed drop, not the nearer decoy"));
-        else if (PickedId == NearId) MissingLink(TEXT("pick_up_aimed_not_nearest"), Ids
-            + TEXT(": E took the nearer decoy, not the aimed drop (PickupNearby takes the nearest; the E-key switch to FindAimedPickup is the inventory lane's, PICKUP_CARD.md)"));
+        else if (PickedId == NearId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E took the nearer decoy, not the aimed drop"));
         else FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up neither"));
         for (AOpenWillowInventoryPickup* Left : {DecoyAimed.Get(), DecoyNear.Get()}) if (IsValid(Left)) Left->Destroy();
         Next(EStep::Equip);
