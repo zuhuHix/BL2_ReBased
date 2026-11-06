@@ -65,6 +65,7 @@ the movie is absent.
 
 - `tests/pickup_card_test.js` (synthetic): placement, the refill/show/hide plan, the HUD-to-frame forwarding and the shared
   card writer's rows and arrows.
+- Pass `-d3d11` with this capture. On pc-hummer one run with it passed and one without it crashed in the D3D12 runtime (`dxilconv.dll` under `D3D12Core.dll`), about 10 s in: one of each, so likely D3D12 on that PC, not proven. The launcher's default is unchanged because it could change how frames look.
 - In engine, `-owpickupcardshots` (with the movie HUD): rolls a gun (`ow.RollGun`, default the Hellfire balance at stage 34),
   drops it 150 uu ahead, and captures aimed away, aimed, aimed away, aimed again and after E picked it up; then the decoy
   (E must take the aimed gun, not the nearer one); then E with a test block in front of the remaining gun (it must stay); then

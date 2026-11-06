@@ -26,6 +26,7 @@ function Get-OwRunLimitSeconds {
 # Waits for the process. True when it exited, false when the limit passed with it still running. 0: no limit.
 function Wait-OwStartedProcess {
     param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [int]$LimitSeconds = 0)
+    [void]$Process.Handle # without an open handle, ExitCode reads empty after the process has gone
     if ($LimitSeconds -le 0) { $Process.WaitForExit(); return $true }
     return $Process.WaitForExit($LimitSeconds * 1000)
 }

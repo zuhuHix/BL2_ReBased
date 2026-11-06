@@ -62,9 +62,12 @@ Invoke-OwUeLocked -Owner 'run_ue_flash_hud' -Body {
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Output "Editor pid $($process.Id); the UE run lock is held until it closes."
     if ($limit -gt 0) { Write-Output "Time limit $limit s (-TimeoutSeconds 0 for none)." }
-    if (Wait-OwStartedProcess -Process $process -LimitSeconds $limit) { return }
-    # Stalled: stop what this run started, nothing else, and fail. A server this run did not start is left running.
-    $stopped = Stop-OwStartedProcess -Process $process -Expected @($project)
+    $exited = Wait-OwStartedProcess -Process $process -LimitSeconds $limit
+    # A clean exit leaves things as they always were: a later run reuses the server. Without -GameWindow this is the maintainer's editor: unchanged.
+    if (!$GameWindow -or ($exited -and $process.ExitCode -eq 0)) { return }
+    # Crashed or stalled: stop what this run started, nothing else, and fail. A server this run did not start is left running.
+    $stopped = $exited -or (Stop-OwStartedProcess -Process $process -Expected @($project))
     if ($server) { [void](Stop-OwStartedProcess -Process $server -Expected @('serve.py', "--port $Port")) }
-    throw "run_ue_flash_hud: the editor (pid $($process.Id)) was still running after $limit s: " + $(if ($stopped) { 'stalled, stopped.' } else { 'stalled, and NOT stopped.' })
+    if ($exited) { throw "run_ue_flash_hud: the game (pid $($process.Id)) exited with code $($process.ExitCode)." }
+    throw "run_ue_flash_hud: the game (pid $($process.Id)) was still running after $limit s: " + $(if ($stopped) { 'stalled, stopped.' } else { 'stalled, and NOT stopped.' })
 }
