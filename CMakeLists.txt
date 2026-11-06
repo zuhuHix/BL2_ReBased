@@ -57,6 +57,7 @@ add_test(NAME audio-slice-chain-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_
 add_test(NAME prepare-slice-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prepare_slice_audio_test.py)
 add_test(NAME check-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_audio_test.py)
 add_test(NAME ue-lock-machine-wide COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ue_lock_test.py)
+add_test(NAME audio-events-capture-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/audio_events_capture_test.py)
 add_executable(ow-weapon-firing-test tests/weapon_firing_math_test.cpp)
 target_link_libraries(ow-weapon-firing-test PRIVATE ow-core)
 target_compile_features(ow-weapon-firing-test PRIVATE cxx_std_20)
