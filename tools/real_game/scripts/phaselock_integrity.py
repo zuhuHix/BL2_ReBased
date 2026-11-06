@@ -222,7 +222,7 @@ def _on_tick(*_args):
                "skill_duration": _r(float(skill.SkillDuration)), "state_start": _r(float(skill.StateStartTime)),
                "state_duration": _r(float(skill.StateDuration)), "collapse_start": _r(float(skill.CollapseStartTime)),
                "lifted": _safe(lambda: skill.LiftedPawn.Name if skill.LiftedPawn else None),
-               "location": plain(pawn.Location), "rotation": plain(pawn.Rotation), "mesh_rotation": plain(_safe(lambda: mesh.Rotation)),
+               "location": plain(pawn.Location), "rotation": plain(_safe(lambda: pawn.Rotation)), "mesh_rotation": plain(_safe(lambda: mesh.Rotation)),
                "mesh_translation": plain(mesh.Translation),
                # The target's size, for the held target's apparent scale: the mesh and actor scales and the mesh's bounds sphere.
                "mesh_scale": _r(_safe(lambda: float(mesh.Scale))), "mesh_scale3d": plain(_safe(lambda: mesh.Scale3D)),
