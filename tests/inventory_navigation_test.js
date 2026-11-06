@@ -387,6 +387,10 @@ check('An empty selection scrolls into the last visible row (D20 D2g, placement 
   assert.equal(relative, 7); // eighth cell row, with the next cell clipped
   assert.ok((relative + 1) * run('rowPitch()') <= run('viewHeight()+listPeekHeight()+1'));
   assert.ok((relative + 1) * run('rowPitch()') + run('rowPitch()') > run('viewHeight()+listPeekHeight()'));
+  assert.equal(run('rowPitch()'), 63.2); // the focus view's fitted pitch (ROW_PITCH_FOCUS), not the other views' 61
+  assert.equal(run('entryHeight({})'), 63.2);
+  run("navigationPanel='equipped'");
+  assert.equal(run('rowPitch()'), run('ROW_PITCH'));
 });
 check('The VM is not asked to move onto or between empty cells', () => {
   run("reset(); window.owInventory({...state, backpackCapacity:15}); inventoryVm.enabled = true; inventoryVm.failed = false; select('spare'); navigationPanel = 'backpack'");

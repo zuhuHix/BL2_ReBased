@@ -1381,6 +1381,48 @@ void UOpenWillowInventoryActionTest::BuildSteps()
     // The page closes itself on Tab as well as Escape.
     Add(TEXT("close_inventory_final"), false, [this] { PressKey(TEXT("Tab")); }, CloseVerify, 6.f, false);
     Pre(InventoryOpenPre, false);
+
+    // Missions and Map hide the first-person arms and gun, show no menu Maya, allow no shot, and closing brings it all back.
+    // Host calls, not keys: this checks what the host does with a page open, not the route to it.
+    const TSharedRef<bool> bArmsBefore = MakeShared<bool>(false), bWeaponBefore = MakeShared<bool>(false);
+    const auto FirstPersonHidden = [this](bool bPageOpen, const TCHAR* Page, FString& D)
+    {
+        int32 Displays = 0;
+        for (TActorIterator<AOpenWillowInventoryMayaDisplay> It(GetWorld()); It; ++It) ++Displays;
+        const bool bArms = Walker->AreArmsShown(), bWeapon = Walker->IsWeaponShown();
+        D = FString::Printf(TEXT("%s open=%d arms=%d weapon=%d menu_maya=%d"), Page, bPageOpen ? 1 : 0, bArms ? 1 : 0, bWeapon ? 1 : 0, Displays);
+        return bPageOpen && !bArms && !bWeapon && Displays == 0;
+    };
+    Add(TEXT("missions_hides_first_person"), false,
+        [this, bArmsBefore, bWeaponBefore]
+        {
+            *bArmsBefore = Walker->AreArmsShown();
+            *bWeaponBefore = Walker->IsWeaponShown();
+            Hud->ToggleMissions();
+        },
+        [this, FirstPersonHidden](FString& D) { return FirstPersonHidden(Hud->IsMissionsOpen(), TEXT("missions"), D); }, 30.f, false, 1.f);
+    Pre([this](FString& Why)
+        {
+            if (Hud->IsSkillsOpen()) { Why = TEXT("a status page is still open"); return false; }
+            if (!Walker->AreArmsShown()) { Why = TEXT("no first-person arms to hide (run without the arm meshes)"); return false; }
+            return true;
+        }, false);
+    Add(TEXT("map_hides_first_person_no_shot"), false, [this] { Hud->ToggleMap(); },
+        [this, FirstPersonHidden](FString& D)
+        {
+            if (!FirstPersonHidden(Hud->IsMapOpen(), TEXT("map"), D)) return false;
+            if (Walker->FireOnce()) { D += TEXT(": a shot was fired under the page"); return false; }
+            return true;
+        }, 30.f, false, 1.f);
+    Pre([this](FString& Why) { if (!Hud->IsMissionsOpen()) { Why = TEXT("the Missions page is not open"); return false; } return true; }, false);
+    Add(TEXT("status_page_close_restores_first_person"), false, [this] { Hud->CloseSkills(); },
+        [this, bArmsBefore, bWeaponBefore](FString& D)
+        {
+            const bool bArms = Walker->AreArmsShown(), bWeapon = Walker->IsWeaponShown();
+            D = FString::Printf(TEXT("arms %d, wanted %d; weapon %d, wanted %d"), bArms ? 1 : 0, *bArmsBefore ? 1 : 0, bWeapon ? 1 : 0, *bWeaponBefore ? 1 : 0);
+            return !Hud->IsSkillsOpen() && bArms == *bArmsBefore && bWeapon == *bWeaponBefore;
+        }, 6.f, false, 1.f);
+    Pre([this](FString& Why) { if (!Hud->IsMapOpen()) { Why = TEXT("the Map page is not open"); return false; } return true; }, false);
 }
 
 void UOpenWillowInventoryActionTest::BeginStep(float Now)
