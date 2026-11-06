@@ -116,9 +116,14 @@ function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
 # back, and any watch the step left open is stopped. A failure stops the step at once with its text (a Python traceback included)
 # in the step's JSON. Two steps failing in a row end the run, so a broken setup cannot use up the slot.
 $script:FailedInARow = 0
+$script:GradesBroken = $false   # a grade did not go back: later steps would read under a wrong grade
 function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
     if ($Steps -and $Name -notin $Steps) { return }
     $rec = [ordered]@{ step = $Name; grades = $Grades; started = (Get-Date).ToString('o') }
+    if ($script:GradesBroken) {
+        $summary.steps += [pscustomobject]@{ step = $Name; ok = $false; error = 'not run: a grade from an earlier step did not restore' }
+        return
+    }
     if ($script:FailedInARow -ge 2) {
         $summary.steps += [pscustomobject]@{ step = $Name; ok = $false; error = 'not run: the two steps before it failed' }
         return
@@ -139,8 +144,11 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
     } finally {
         try { $left = PyCall 'sl_stop_watches()'; if (@($left.PSObject.Properties).Count) { $rec.watches_left_open = $left } }
         catch { $rec.watch_cleanup_error = "$_" }
-        try { $rec.grades_restored = PyCall 'sl_restore_grades()' }
-        catch { $rec.restore_error = "$_" }
+        try {
+            $rec.grades_restored = PyCall 'sl_restore_grades()'
+            if (@($rec.grades_restored.rows | Where-Object { $_ -and $_.status -ne 'restored' }).Count) { $script:GradesBroken = $true }
+        }
+        catch { $rec.restore_error = "$_"; $script:GradesBroken = $true }
         $rec.finished = (Get-Date).ToString('o')
         $rec | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $Out "$Name.json")
         $summary.steps += [pscustomobject]@{ step = $Name; ok = $rec.ok; error = $rec.error }
@@ -161,7 +169,23 @@ function Invoke-DamageCast([string]$Name, [hashtable]$Grades) {
     }
 }
 
+# One root into the backup, verified by hash. Any failure stops the run before the game starts; a root that did not verify is never
+# restored from, because Restore-Tree deletes live files that a partial backup lacks.
+function Copy-VerifiedRoot([string]$Source, [string]$Backup) {
+    if (!(Test-Path -LiteralPath $Backup)) { Copy-Item -Recurse -LiteralPath $Source -Destination $Backup -ErrorAction Stop }
+    $different = @(Compare-TreeHashes $Source $Backup)
+    if ($different.Count) { throw "backup of $Source differs from the original in $($different.Count) files, first: $($different[0])" }
+}
+
+# The line for the summary. A root created during the run is left in place for the maintainer, and it does mean "not identical".
+function Get-SavesVerdict([object[]]$Rows, [string]$Backup) {
+    $bad = @($Rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' -or $_.status -like 'BACKUP FAILED*' -or $_.status -like 'created during the run*' })
+    if ($bad.Count) { "NOT IDENTICAL to $Backup ($($bad.Count) problems: $(($bad | ForEach-Object { $_.file }) -join ', '))" }
+    else { "identical to $Backup after $(@($Rows).Count) restores" }
+}
+
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
+$rootState = @{}   # backup state per root: verified, absent (no such folder at the backup) or failed
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false
 # A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the
 # image path and the start time before stopping a PID). Unknown switches are ignored by the game.
@@ -183,7 +207,15 @@ try {
     Enter-RunLock 1800; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     # The SDK's settings and Sanity Saver's private store are compared too (an earlier session saw Sanity Saver rewrite one).
-    foreach ($d in $extraRoots.Keys) { if (Test-Path $extraRoots[$d]) { Copy-Item -Recurse $extraRoots[$d] (Join-Path $bak $d) } }
+    # Verified before anything can change them; a failure ends the run here, before the driver and the game.
+    $backupRoots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
+    foreach ($d in $extraRoots.Keys) { $backupRoots[$d] = $extraRoots[$d] }
+    foreach ($d in $backupRoots.Keys) { $rootState[$d] = 'failed' }
+    foreach ($d in $backupRoots.Keys) {
+        if (!(Test-Path -LiteralPath $backupRoots[$d])) { $rootState[$d] = 'absent'; continue }
+        Copy-VerifiedRoot $backupRoots[$d] (Join-Path $bak $d)
+        $rootState[$d] = 'verified'
+    }
     # -Exclusive re-checks that the folder is absent and removes its own partial install on failure.
     Install-Driver -BlockSavesAtStart -Exclusive
     $driverOwned = $true
@@ -320,24 +352,27 @@ MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cl
             foreach ($sub in $roots.Keys) {
                 $b = Join-Path $bak $sub; $live = $roots[$sub]
                 try {
-                    if (Test-Path -LiteralPath $b) { $rows += @(Restore-Tree $b $live $sub) }
-                    elseif (Test-Path -LiteralPath $live) {
+                    if ($rootState[$sub] -eq 'verified') { $rows += @(Restore-Tree $b $live $sub) }
+                    elseif ($rootState[$sub] -eq 'absent') {
                         # Absent at the backup and created during the run (an SDK mod's own store): reported, not deleted.
-                        $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' }
+                        if (Test-Path -LiteralPath $live) { $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' } }
                     }
+                    else { $rows += [pscustomobject]@{ file = $sub; status = 'BACKUP FAILED; not restored, and nothing was started' } }
                 } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
             }
-            $bad = @($rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' })
-            $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
+            $cleanup.saves = Get-SavesVerdict $rows $bak
         } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)" }
     }
     try {
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
+        # Complete only when nothing failed and everything is back as it was. A failed step is in `steps`, not here.
+        $log.complete = !$log.Contains('error') -and $gameGone -and "$($cleanup.saves)" -like 'identical*' -and !$script:GradesBroken
         [ordered]@{ run = $log; steps = $summary.steps } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'summary.json')
         if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
     } catch { "log write failed: $_" }
     try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
     try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
+    "session complete: $($log.complete)"
     $rows
 }

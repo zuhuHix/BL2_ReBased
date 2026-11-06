@@ -154,8 +154,13 @@ def sl_set_grades(grades):
             continue
         path = defn._path_name()
         before = _read_grade(tree, defn)
-        SL["originals"].setdefault(path, before)
         row["before"] = before
+        # No grade is changed unless its original can be put back and checked.
+        if path not in SL["originals"] and not isinstance(before.get("grade"), int):
+            row["status"] = "original not readable"
+            rows.append(row)
+            continue
+        SL["originals"].setdefault(path, before)
         try:
             row["after"] = _apply_grade(tree, defn, grade)
             # "set" only when the read-back shows the grade: a step does not run on an unconfirmed grade.
@@ -184,7 +189,11 @@ def sl_restore_grades():
             keep[path] = before
             continue
         try:
-            rows.append({"path": path, "status": "restored", "grade": grade, "after": _apply_grade(tree, defn, grade)})
+            after = _apply_grade(tree, defn, grade)
+            confirmed = after.get("grade") == grade
+            rows.append({"path": path, "status": "restored" if confirmed else "not restored", "grade": grade, "after": after})
+            if not confirmed:
+                keep[path] = before
         except Exception as error:
             rows.append({"path": path, "status": "error", "error": repr(error)[:200]})
             keep[path] = before
