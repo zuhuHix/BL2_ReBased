@@ -788,7 +788,7 @@ const fitTarget = (visible, left, top) => ({width:visible / FRAME_INSET, x:left 
 // larger when the compare started from the Equipped panel (D4) than from the Backpack (D3); these targets are fits to the rows of
 // those two frames (the real cards are turned and these are not, so the edges cannot match along their whole length). UNVERIFIED.
 const CARD_FIT = {single:{...fitTarget(309, 214, 86), heightScale:1.06}, left:{...fitTarget(276, 211, 90)},
-  leftFromEquipped:{...fitTarget(281, 205, 74), heightScale:1.05}, right:{...fitTarget(253, 600, 105), heightScale:1.12},
+  leftFromEquipped:{...fitTarget(281, 205, 74), heightScale:1.05}, right:{...fitTarget(253, 600, 105), heightScale:1.06},
   inspect:{...fitTarget(303, 52, 41), aspect:1.40}}; // D20 D5: UNVERIFIED fit (with the menu turn on)
 const cardYCorrection = new Map();
 // The Y scale this page last left on each card. The movie's TweenCards writes the card's scales, which drops the correction;

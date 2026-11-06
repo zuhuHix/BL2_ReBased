@@ -457,7 +457,7 @@ check('Round-23 card and plate fits keep the measured D20 targets (UNVERIFIED)',
   assert.equal(run('CARD_FIT.single.y'), 86);
   assert.equal(run('CARD_FIT.single.heightScale'), 1.06);
   assert.equal(run('CARD_FIT.right.y'), 105);
-  assert.equal(run('CARD_FIT.right.heightScale'), 1.12);
+  assert.equal(run('CARD_FIT.right.heightScale'), 1.06);
   assert.equal(run('CARD_FIT.leftFromEquipped.y'), 74);
   assert.equal(run('CARD_FIT.left.y'), 90);
   assert.equal(run('FOCUS_EQUIPPED.centreY'), 346);
