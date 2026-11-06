@@ -133,10 +133,12 @@ function Restore-VerifiedRoots {
     else { [pscustomobject]@{ rows = @([pscustomobject]@{ file = 'SaveData\x'; status = 'MISMATCH after restore' });
                               summary = 'NOT IDENTICAL to bak (1 problems)'; clean = $false } }
 }
+$roots = [ordered]@{ SaveData = '__TMP__\live' }
 $Out = '__TMP__'; $bak = '__TMP__'; $HubLock = '__TMP__\hub.lock'; $Lane = 'test'
 Set-Content -LiteralPath $HubLock 'test now'
 $log = [ordered]@{}; $snapshots = @{ SaveData = @{} }; $extraRoots = [ordered]@{}; $stagesRequested = @('hit'); $runError = ''
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
+__SETUP__
 $hub = 'held'; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = $false; $marker = 'x'
 try {
     __BODY__
@@ -144,17 +146,19 @@ __CAPTURE_TAIL__
 """
 
 
-def run_tail(body, clean=False, proc='$null'):
+def run_tail(body, clean=False, proc='$null', setup='', after=None):
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+                          .replace('__SETUP__', setup.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
         done.hub_lock_kept = (Path(tmp) / 'hub.lock').exists()
+        if after:
+            after(tmp, done)
         return done
 
 
@@ -164,9 +168,8 @@ def test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery(
         done = run_tail(body)
         assert done.returncode == 1, done.stdout + done.stderr
         assert done.hub_lock_kept is True       # the lock stays while the restore needs recovery
-        order = [done.stdout.find(text) for text in (status, 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-Tree')]
+        order = [done.stdout.find(text) for text in (status, 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-VerifiedBackup')]
         assert -1 not in order and order == sorted(order), done.stdout
-        assert 'Do NOT restore' not in done.stdout, done.stdout    # only when a backup really changed
 
 
 def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
@@ -186,9 +189,55 @@ def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
         assert done.hub_lock_kept is status.startswith('recovery'), (body, clean, proc, done.stdout)
 
 
+def test_the_printed_restore_refuses_a_backup_that_changed_after_an_unconfirmed_exit():
+    # A real record and backup, a backup file that vanishes, and the game's exit unconfirmed. Then the printed command, in a new
+    # process as a person would run it: the in-memory hashes are gone by then.
+    setup = r"""
+New-Item -ItemType Directory -Force '__TMP__\live' | Out-Null
+Set-Content '__TMP__\live\keep.txt' 'kept'; Set-Content '__TMP__\live\other.txt' 'other'
+$snapshots = @{ SaveData = New-VerifiedSnapshot '__TMP__\live' '__TMP__\SaveData' }
+Save-VerifiedBackupRecord '__TMP__' $roots $snapshots
+Remove-Item '__TMP__\SaveData\keep.txt'
+"""
+
+    def run_printed(tmp, done):
+        line = next(l.strip() for l in done.stdout.splitlines() if l.strip().startswith('Restore-VerifiedBackup'))
+        script = Path(tmp) / 'by_hand.ps1'
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\n{line}\n", encoding='utf-8-sig')
+        hand = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
+                              text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+        assert 'BACKUP CHANGED' in hand.stdout and 'NOT IDENTICAL' in hand.stdout, hand.stdout + hand.stderr
+        assert (Path(tmp) / 'live/keep.txt').exists(), 'the live file was deleted'
+        assert (Path(tmp) / 'live/other.txt').exists()
+
+    done = run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $false; Id = 1 }', setup, run_printed)
+    assert 'status: recovery needed: game exit' in done.stdout and 'Restore-Tree' not in done.stdout, done.stdout
+
+
+def test_the_printed_restore_restores_an_intact_backup():
+    setup = r"""
+New-Item -ItemType Directory -Force '__TMP__\live' | Out-Null
+Set-Content '__TMP__\live\keep.txt' 'kept'
+$snapshots = @{ SaveData = New-VerifiedSnapshot '__TMP__\live' '__TMP__\SaveData' }
+Save-VerifiedBackupRecord '__TMP__' $roots $snapshots
+Set-Content '__TMP__\live\keep.txt' 'changed by the run'
+"""
+
+    def run_printed(tmp, done):
+        script = Path(tmp) / 'by_hand.ps1'
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\nRestore-VerifiedBackup '{tmp}'\n", encoding='utf-8-sig')
+        hand = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
+                              text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+        assert 'changed, restored' in hand.stdout and 'identical to' in hand.stdout, hand.stdout + hand.stderr
+        assert (Path(tmp) / 'live/keep.txt').read_text(encoding='utf-8-sig').strip() == 'kept'
+
+    run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $false; Id = 1 }', setup, run_printed)
+
+
 def test_the_capture_is_wired_to_the_safety_helpers():
     text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8')
-    for call in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Restore-VerifiedRoots $bak $roots $snapshots',
+    for call in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Restore-VerifiedRoots $bak $roots $snapshots', 'Save-VerifiedBackupRecord $bak $roots $snapshots',
+                 '$restoreCommand = "Restore-VerifiedBackup \'$bak\'"',
                  'if ($holdLocks) { $runLock = $false; $hub = $null }', 'Format-RestoreRows $rows', "if ($log.status -ne 'completed') { exit 1 }"):
         assert call in text, call
 
@@ -197,5 +246,7 @@ if __name__ == '__main__':
     test_helpers()
     test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery()
     test_exit_0_only_for_a_completed_run_with_nothing_to_recover()
+    test_the_printed_restore_refuses_a_backup_that_changed_after_an_unconfirmed_exit()
+    test_the_printed_restore_restores_an_intact_backup()
     test_the_capture_is_wired_to_the_safety_helpers()
     print('ok')

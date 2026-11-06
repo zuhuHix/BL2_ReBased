@@ -167,6 +167,32 @@ function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
     [pscustomobject]@{ rows = $rows; summary = $summary; changed = $changed; clean = ($bad.Count -eq 0) }
 }
 
+# The record that outlives this process: each root's live folder and its snapshot state, in the backup folder.
+function Save-VerifiedBackupRecord([string]$Backup, $Roots, $Snapshots) {
+    $record = [ordered]@{}
+    foreach ($name in $Roots.Keys) { $record[$name] = [ordered]@{ live = $Roots[$name]; snapshot = $Snapshots[$name] } }
+    $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Backup 'verified_hashes.json') -Encoding UTF8
+}
+# The one way to restore by hand: from that record, through Restore-VerifiedRoots, so a backup that changed since is refused.
+function Restore-VerifiedBackup([string]$Backup) {
+    $file = Join-Path $Backup 'verified_hashes.json'
+    if (!(Test-Path -LiteralPath $file)) { throw "no verified_hashes.json in $Backup; not restoring from it" }
+    $roots = [ordered]@{}; $snapshots = @{}
+    foreach ($root in (Get-Content -Raw -LiteralPath $file | ConvertFrom-Json).PSObject.Properties) {
+        $roots[$root.Name] = $root.Value.live
+        $state = $root.Value.snapshot
+        if ($state -is [string]) { $snapshots[$root.Name] = $state }
+        elseif ($null -ne $state) {
+            $hashes = @{}
+            foreach ($f in $state.PSObject.Properties) { $hashes[$f.Name] = $f.Value }
+            $snapshots[$root.Name] = $hashes
+        }
+    }
+    $restored = Restore-VerifiedRoots $Backup $roots $snapshots
+    Format-RestoreRows $restored.rows
+    $restored.summary
+}
+
 # The restore rows as text. Plain objects go through a deferred formatter: when a script ends on a rethrown error, they and every
 # string after them never reach the screen, and those can be the recovery steps. Text prints in order either way.
 function Format-RestoreRows($Rows) { if (@($Rows).Count) { @($Rows) | Format-Table -AutoSize | Out-String -Width 200 } }
