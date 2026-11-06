@@ -6,6 +6,10 @@
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
+#include "Misc/Paths.h"
 #include "OpenWillowMayaState.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowWalker.h"
@@ -54,6 +58,23 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestEqual(TEXT("capacity at the anchor"), Rule.CapacityAt(2), 100.f);
         TestEqual(TEXT("capacity grows per level"), Rule.CapacityAt(4), 225.f);
         TestEqual(TEXT("capacity falls below the anchor"), Rule.CapacityAt(1), 67.f);
+
+        // The file read, on a temporary file with a new name each run, so a leftover cannot make this pass. Rule is still set here: the
+        // failures must clear it.
+        const FString RuleFile = FPaths::Combine(FPaths::AutomationTransientDir(), FString::Printf(TEXT("stand_in_shield_%s.json"), *FGuid::NewGuid().ToString()));
+        {
+            FOpenWillowStandInShieldRule Loaded = Rule;
+            TestFalse(TEXT("a missing file is refused"), Loaded.LoadFile(RuleFile, Error));
+            TestTrue(TEXT("a missing file names the path and leaves the rule unset"), Error.Contains(RuleFile) && !Loaded.IsSet());
+            TestTrue(TEXT("the temporary file is written"), FFileHelper::SaveStringToFile(TEXT("{\"at_level\":3,\"capacity\":40,\"growth_per_level\":2}"), *RuleFile));
+            TestTrue(TEXT("a good file loads"), Loaded.LoadFile(RuleFile, Error));
+            TestEqual(TEXT("the good file's numbers are used"), Loaded.CapacityAt(4), 80.f);
+            TestTrue(TEXT("the temporary file is rewritten"), FFileHelper::SaveStringToFile(TEXT("{\"at_level\":3}"), *RuleFile));
+            TestFalse(TEXT("a bad file is refused"), Loaded.LoadFile(RuleFile, Error));
+            TestTrue(TEXT("a bad file names the path and leaves the rule unset"), Error.Contains(RuleFile) && !Loaded.IsSet() && Loaded.CapacityAt(4) == 0.f);
+            IFileManager::Get().Delete(*RuleFile);
+            TestFalse(TEXT("the temporary file is gone"), FPaths::FileExists(RuleFile));
+        }
 
         TestEqual(TEXT("no shield, no capacity"), AOpenWillowWalker::ReadShieldStats(nullptr, Rule).Capacity, 0.f);
         FOpenWillowGearItem StandIn;
