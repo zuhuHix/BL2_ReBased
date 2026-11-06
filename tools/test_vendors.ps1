@@ -114,7 +114,9 @@ try {
     # stopped. $log is the run in progress; $firstLog keeps run 1's log for the checker.
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
     $currency = Join-Path $outDir 'currency.json'
-    Remove-Item -LiteralPath $currency -Force -ErrorAction SilentlyContinue
+    # Run 1 starts clean: the save and its backup. A load reads the backup when the save is missing, so a backup left by an
+    # older build is refused (other manifest identity) and turns saving off for both launches.
+    Remove-Item -LiteralPath $currency, "$currency.bak" -Force -ErrorAction SilentlyContinue
     $firstLog = $log
     $persistLog = Join-Path $outDir "persist-$stamp.log"
     $passes = if ($SkipPersist) { @(1) } else { @(1, 2) }

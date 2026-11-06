@@ -46,6 +46,7 @@ PAGE_ERROR = re.compile(r'OWVENDERR (.*)$', re.M)   # the page refused a host st
 AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist', 'OpenWillow.Vendor.Items')
 AMMO_LINE = re.compile(r'OWVENDAMMO type=(\w+) before=(-?\d+) after=(-?\d+) max=(-?\d+)')
 HEAL_LINE = re.compile(r'OWVENDHEAL before=(-?[\d.]+) after=(-?[\d.]+) max=(-?[\d.]+)')
+CURRENCY_REFUSED = re.compile(r'OWCURRENCY load refused: (.*)$', re.M)
 CURRENCY_LOAD = re.compile(r'OWCURRENCY load money=(-?\d+) eridium=(-?\d+) machines=(\d+)')
 # The second run starts its clock from the saved seconds; a few seconds of world time pass before its first report.
 RESET_TOLERANCE_SECONDS = 120
@@ -462,7 +463,11 @@ def grade_persist(first_text, second_text):
     gun_before = next((state for state in reversed(first) if is_gun_state(state)), before)
 
     load = CURRENCY_LOAD.search(second_text)
-    if not load:
+    refused = CURRENCY_REFUSED.search(first_text) or CURRENCY_REFUSED.search(second_text)
+    if refused:
+        # A refused load turns saving off for that session, so name the cause rather than only its effects.
+        out.add('persist_load', 'FAIL', f'a load was refused: {refused.group(1).strip()[:200]}')
+    elif not load:
         out.add('persist_load', 'FAIL', 'no "OWCURRENCY load" line in the second launch (-owcurrencysave did not load)')
     elif before.get('money') is None or int(load.group(1)) != int(before['money']):
         out.add('persist_load', 'FAIL', f'loaded money {load.group(1)}, the first launch ended with {before.get("money")}')
