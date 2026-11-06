@@ -494,8 +494,15 @@ parts.** Host suite evidence below is pending; a passing suite will mean "the ho
 - **UNVERIFIED.** That a thrown stock mod uses level 8 and the -120 slot (the block's 148.87 and 380): naming a definition applied
   neither, and the equipped mod's attributes did not reach the frag's radius or fuse, so a throw with the stock mod equipped is
   still needed. What the first contact at 0.2 s was (the target is the suspect: about 70-100 uu from its location, no wall event).
-  The 6 s timer (no throw went without a contact). The FuseTime slot's effect on these timers. An upward bonus (the view read failed
-  again). Release delay, lockout and offset stay from the Sky Rocket.
+  The 6 s timer (no throw went without a contact). The FuseTime slot's effect on these timers. Release delay, lockout and offset stay from the Sky Rocket.
+- **Upward bonus: inferred, still UNVERIFIED.** The view read failed again, so the aim is not known. But the launch speeds of the 4
+  throws differ (1650-1672 uu/s) and become steady (1705-1708 uu/s) once the data's 270 uu/s is taken off Z. That points to the
+  bonus applying in world Z on top of the projectile's speed along the aim, which is what the host does.
+- **The firing test's aim.** The first host run (at #115's f6fc289, pc-hummer) threw at the shapes dummy's centre and missed: about 180 uu
+  up at the dummy, above its torso and 20 uu beside its head, then an explosion far past the radius. The fault was the test's, not the
+  flight: it aimed as if there were no bonus, gravity or start offset. The test now aims where the lob meets the dummy and logs
+  `first_contact`, so a miss names what the grenade touched. That a player must lead a throw follows from this flight; the
+  real pawn is larger than the shapes dummy.
 - **Host.** `ParseGrenade` takes elasticities, both timers and no-falloff from the block's `projectile.contact` and refuses a block
   without it. `AOpenWillowProjectile::Impact`: every contact bounces, a target takes no direct damage, the first contact starts the
   timer once and the earlier timer wins. **Stand-in:** below 20 uu/s on ground-like normals the grenade stops; the limit is ours.

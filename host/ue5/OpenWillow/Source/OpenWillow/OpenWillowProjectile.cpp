@@ -275,7 +275,11 @@ void AOpenWillowProjectile::Impact(const FHitResult& Hit)
         {
             bContactFuseStarted = true;
             FuseAt = FMath::Min(FuseAt, float(Flight.age) + Data.ContactFuse);
-            if (Data.FiringMode == TEXT("grenade")) OpenWillowFiring::Counts.GrenadeContactAge = float(Flight.age);
+            if (Data.FiringMode == TEXT("grenade"))
+            {
+                OpenWillowFiring::Counts.GrenadeContactAge = float(Flight.age);
+                OpenWillowFiring::Counts.GrenadeFirstContact = Other ? Other->GetName() : TEXT("world");
+            }
         }
         const FVector Bounced = Velocity.MirrorByVector(Hit.ImpactNormal) * (bTarget ? Data.TargetElasticity : Data.Elasticity);
         Flight.position = ToVec(Hit.ImpactPoint + Hit.ImpactNormal * 2.f);

@@ -1870,7 +1870,7 @@ void AOpenWillowWalker::ReleaseGrenade()
     GrenadeReleaseAt = 0.f;
     if (!Camera || !GrenadeData.bLoaded) return;
     // Live, same 4 Sky Rocket throws: first seen 84-110 uu ahead of the eye (up to one frame of flight included), about
-    // 20 uu to its left, along the aim at the projectile's speed. UNVERIFIED for the stock frag; any upward bonus is unsettled.
+    // 20 uu to its left, along the aim at the projectile's speed. UNVERIFIED for the stock frag. The data's upward bonus applies at launch (WEAPON_PROJECTILES.md section 14).
     AOpenWillowProjectile::FLaunch Launch;
     Launch.Data = &GrenadeData;
     Launch.Shooter = this;
