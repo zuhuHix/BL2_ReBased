@@ -109,6 +109,43 @@ def test_helpers():
     assert r['capture_parse_errors'] == 0
 
 
+# The capture script's own tail, from its catch to its end, after a body that fails or finishes, with a restore that reports a mismatch.
+TAIL = r"""
+$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+function Restore-VerifiedRoots { [pscustomobject]@{ rows = @([pscustomobject]@{ file = 'SaveData\x'; status = 'MISMATCH after restore' });
+                                                    summary = 'NOT IDENTICAL to bak (1 problems)'; clean = $false } }
+$Out = '__TMP__'; $bak = '__TMP__'; $HubLock = '__TMP__\hub.lock'; $Lane = 'test'
+$log = [ordered]@{}; $snapshots = @{ SaveData = 'verified' }; $extraRoots = [ordered]@{}; $stagesRequested = @('hit'); $runError = ''
+$stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
+$hub = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $marker = 'x'
+try {
+    __BODY__
+__CAPTURE_TAIL__
+"""
+
+
+def run_tail(body):
+    text = (ROOT / 'tools/real_game/phaselock_integrity_capture.ps1').read_text(encoding='utf-8').replace('\r\n', '\n')
+    tail = text[text.index('\n} catch {\n    $runError') + 1:]
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'driver.ps1'
+        script.write_text(TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
+                          .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail), encoding='utf-8-sig')
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
+                              text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+
+
+def test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery():
+    for body, code, status in (("throw 'cooldown did not end'", 1, 'status: failed: cooldown did not end'),
+                               ("'body finished'", 0, 'status: incomplete: hit')):
+        done = run_tail(body)
+        assert done.returncode == code, done.stdout + done.stderr
+        order = [done.stdout.find(text) for text in (status, 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-Tree')]
+        assert -1 not in order and order == sorted(order), done.stdout
+
+
 if __name__ == '__main__':
     test_helpers()
+    test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery()
     print('ok')
