@@ -880,15 +880,16 @@ void UOpenWillowInteractiveSubsystem::AutoCollectTick()
     UWorld* World = GetWorld();
     APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
     AOpenWillowWalker* Walker = PC ? Cast<AOpenWillowWalker>(PC->GetPawn()) : nullptr;
-    if (!Walker) return;
-    const double Now = World->GetTimeSeconds();
-    const FVector From = Walker->GetActorLocation();
-    if (Stations.Num() > 0)
+    const double Now = World ? World->GetTimeSeconds() : 0.0;
+    // Before the walker check: a prompt must still expire, and its label clear, with no current walker.
+    if (World && Stations.Num() > 0)
     {
-        const AOpenWillowQuickChangeStation* Selected = SelectedStation(*Walker);
+        const AOpenWillowQuickChangeStation* Selected = Walker ? SelectedStation(*Walker) : nullptr;
         for (const TWeakObjectPtr<AOpenWillowQuickChangeStation>& Station : Stations)
-            if (Station.IsValid()) Station->TickPrompt(Now, *Walker, Station.Get() == Selected);
+            if (Station.IsValid()) Station->TickPrompt(Now, Walker, Station.Get() == Selected);
     }
+    if (!Walker) return;
+    const FVector From = Walker->GetActorLocation();
     // Collected first, then tried: a taken pickup is destroyed, which must not happen during the iteration.
     TArray<AOpenWillowLootPickup*> Near;
     for (TActorIterator<AOpenWillowLootPickup> It(World); It; ++It)
@@ -960,6 +961,13 @@ void UOpenWillowInteractiveSubsystem::TickInteractiveTest()
         break;
     default: break;
     }
+}
+
+void UOpenWillowInteractiveSubsystem::CancelStationPrompts(UWorld* World, const TCHAR* Reason)
+{
+    if (UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(World))
+        for (const TWeakObjectPtr<AOpenWillowQuickChangeStation>& Station : Subsystem->Stations)
+            if (Station.IsValid()) Station->CancelPrompt(Reason);
 }
 
 AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::SelectedStation(const AOpenWillowWalker& Walker) const

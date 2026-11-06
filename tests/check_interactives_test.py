@@ -261,6 +261,10 @@ class QuickChangeTest(unittest.TestCase):
     def test_no_lines_fail(self):
         self.assertEqual(self.grade([])[1], 'FAIL')
 
+    def test_an_extra_reset_after_the_sequence_fails(self):
+        extra = 'OWQUICKCHANGE reset id=S ok=1 cost=200 before=4800 after=4600 reason='
+        self.assertEqual(self.grade(QUICK_RUN + [extra])[1], 'FAIL')
+
     def test_a_reset_with_no_cancel_after_walking_away_fails(self):
         # The stale-confirm bug: one press after coming back resets.
         rows = [r for r in QUICK_RUN if 'cancel' not in r]

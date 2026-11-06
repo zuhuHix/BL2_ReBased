@@ -18,13 +18,15 @@ struct FOpenWillowQuickChangePress
     static constexpr double ConfirmSeconds = 5.0;
     double PromptedAt = -1.0;           // world time of the open prompt, negative when there is none
     int32 PromptedCost = 0;             // the price the prompt showed
-    const void* PromptedBy = nullptr;   // the walker it asked
+    TWeakObjectPtr<const UObject> PromptedBy;   // the walker it asked; a destroyed walker's prompt can never confirm
     // True when this press confirms the open prompt (the prompt is used up). False when it opens one: there was none, it
     // expired, another walker pressed, or the price is no longer the one shown.
-    bool Press(double Now, const void* Who, int32 Cost);
+    bool Press(double Now, const UObject* Who, int32 Cost);
+    // Why an open prompt must end now, or null when it may stay. Current: the current walker, null when there is none.
+    const TCHAR* CancelReason(double Now, const UObject* Current, bool bCurrentIsDown, bool bSelected) const;
     bool IsOpen() const { return PromptedAt >= 0.0; }
     bool Expired(double Now) const { return IsOpen() && Now - PromptedAt > ConfirmSeconds; }
-    void Cancel() { PromptedAt = -1.0; PromptedCost = 0; PromptedBy = nullptr; }
+    void Cancel() { PromptedAt = -1.0; PromptedCost = 0; PromptedBy.Reset(); }
 };
 
 UCLASS()
@@ -36,9 +38,12 @@ public:
     void Configure(const FString& InId) { Id = InId; }
     // One use press from this walker. True: the press was used, whatever it did.
     bool Use(AOpenWillowWalker& Walker);
-    // Called often while a prompt may be open: it ends when it expires, or when this station stops being that walker's
-    // selected use target (bSelected false: walked out of reach, or something else is now nearer). The label clears too.
-    void TickPrompt(double Now, const AOpenWillowWalker& Walker, bool bSelected);
+    // Called often while a prompt may be open, with or without a current walker: it ends when it expires, when that walker
+    // is gone or down, or when this station stops being its selected use target (bSelected false: walked out of reach, or
+    // something else is now nearer). The label clears too.
+    void TickPrompt(double Now, const AOpenWillowWalker* Walker, bool bSelected);
+    // Ends an open prompt now: the press went elsewhere (Marcus's talk takes the use key before the nearest-target rule).
+    void CancelPrompt(const TCHAR* Reason);
 
     FString Id;
 

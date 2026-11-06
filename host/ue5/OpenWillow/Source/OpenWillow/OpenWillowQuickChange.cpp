@@ -7,9 +7,19 @@
 #include "Components/TextRenderComponent.h"
 #include "Engine/World.h"
 
-bool FOpenWillowQuickChangePress::Press(double Now, const void* Who, int32 Cost)
+const TCHAR* FOpenWillowQuickChangePress::CancelReason(double Now, const UObject* Current, bool bCurrentIsDown, bool bSelected) const
 {
-    const bool bConfirmed = IsOpen() && !Expired(Now) && PromptedBy == Who && PromptedCost == Cost;
+    if (!IsOpen()) return nullptr;
+    if (Expired(Now)) return TEXT("expired");
+    if (!PromptedBy.IsValid() || !Current) return TEXT("no walker");
+    if (PromptedBy.Get() != Current) return TEXT("another walker");
+    if (bCurrentIsDown) return TEXT("down");
+    return bSelected ? nullptr : TEXT("not the selected target");
+}
+
+bool FOpenWillowQuickChangePress::Press(double Now, const UObject* Who, int32 Cost)
+{
+    const bool bConfirmed = IsOpen() && !Expired(Now) && Who && PromptedBy.Get() == Who && PromptedCost == Cost;
     Cancel();
     if (!bConfirmed)
     {
@@ -37,6 +47,12 @@ bool AOpenWillowQuickChangeStation::Use(AOpenWillowWalker& Walker)
     UOpenWillowSkills* Skills = Walker.GetSkills();
     UOpenWillowInventory* Inventory = Walker.GetInventory();
     if (!Skills || !Inventory) return false;
+    // No respec while down or dead, and an open prompt ends: the press must not answer it.
+    if (Walker.GetMayaState().IsDown())
+    {
+        CancelPrompt(TEXT("down"));
+        return false;
+    }
     int32 Money = 0;
     Inventory->GetMoney(Money); // unknown money counts as 0
     const int32 Cost = UOpenWillowSkills::ResetCost(Skills->GetLevel());
@@ -57,13 +73,15 @@ bool AOpenWillowQuickChangeStation::Use(AOpenWillowWalker& Walker)
     return true;
 }
 
-void AOpenWillowQuickChangeStation::TickPrompt(double Now, const AOpenWillowWalker& Walker, bool bSelected)
+void AOpenWillowQuickChangeStation::TickPrompt(double Now, const AOpenWillowWalker* Walker, bool bSelected)
+{
+    if (const TCHAR* Reason = Press.CancelReason(Now, Walker, Walker && Walker->GetMayaState().IsDown(), bSelected))
+        CancelPrompt(Reason);
+}
+
+void AOpenWillowQuickChangeStation::CancelPrompt(const TCHAR* Reason)
 {
     if (!Press.IsOpen()) return;
-    const TCHAR* Reason = Press.Expired(Now) ? TEXT("expired")
-        : Press.PromptedBy != &Walker ? TEXT("another walker")
-        : !bSelected ? TEXT("not the selected target") : nullptr;
-    if (!Reason) return;
     Press.Cancel();
     Label->SetText(FText::GetEmpty());
     UE_LOG(LogTemp, Display, TEXT("OWQUICKCHANGE cancel id=%s reason=%s"), *Id, Reason);
