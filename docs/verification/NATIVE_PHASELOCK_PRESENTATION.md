@@ -169,6 +169,8 @@ run yet (2026-11-03: the first session was lost, and the second PC has no bl-sdk
 | Bubble parameter values | Trace of the loop emitter's two instance parameters |
 | Collision (non-blocking while rising) | Walk into a rising target |
 
+**Update (2026-11-06):** one live cast showed the actor's rotation constant through the lift, lock and outro, and scale 1.0 (PHASELOCK_STOCK_DATA.md "Live read of the held target's facing and size"). The probe ran its first full session; its rows hold clip order, weights and hook times not yet analysed, so the table above is unchanged.
+
 ## 6. What was not read
 
 How the special-move node starts a queued move (`Queue` ordering, callback timing), the exact blend curve shape, the
