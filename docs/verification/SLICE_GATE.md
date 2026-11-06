@@ -132,6 +132,29 @@ This is not a merged state: the merge was local and was deleted after the run. *
   range lane through the hub.
 - `pick_up_aimed_not_nearest` NOT_AVAILABLE: as on main.
 
+### Shield variant (`-owslicegateshield`, `tools/test_slice_gate.ps1 -Shield`)
+
+Maya fights with a shield, so the fight path can run without the restore fixture: only a downed Maya is restored, and
+her health after the fight is kept. She gets a shield from the gear manifest when it has one. Otherwise she gets a host
+stand-in with her maximum health as its capacity and the default recharge, which is **not stock data**. Both are named
+as fixtures. pc-hummer has no gear manifest, so the stock-shield path has not run; it needs a machine with
+`local/inventory/gear_manifest.json`.
+
+Last runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
+2026-11-04), not on main:
+- **With `-Shield`:** 13 PASS, 0 FAIL, 1 NOT_AVAILABLE of 14. The stand-in shield was 213; 3 hits were credited to the
+  selected enemy and 4 came from other causers; Maya ended the fight at health 89/213, Up, with no restore.
+- **Without it:** 13 PASS, 0 FAIL, 1 NOT_AVAILABLE of 14; `Maya healed to full after the fight` fixture.
+- **Both:** `loot_drop_on_kill` PASS (the drop 62-63 uu from the corpse, with the range's drop fix), and `pick_up_gun`
+  PASS on that real drop, without the test-drop fixture.
+
+Open items found in these runs (not fixed; this lane stopped on pc-hummer on the maintainer's instruction):
+- **Link 7 does not test the decoy when a real drop exists.** `RollSource` is only read in the no-drop path, so link 7
+  reports NOT_AVAILABLE "no ow.RollGun source to make the two test drops", not the E-key result. Read the source before
+  the `!Drop` check; link 7 must run before the inventory lane's E-key switch can be seen to pass.
+- **`enemy_attacks_maya` does not name the shield fixture.** Only `kill_enemy` does, because `Link` clears the list.
+- **The revive-from-down path has not run on pc-hummer.** In each run Maya was Up by the end of the fight.
+
 ## Gaps, with the owning lane
 
 | Gap | Link(s) | Owner | What closes it |
@@ -160,6 +183,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-04 | main 8bb74a0 (after #94, #88) | 10 / 0 / 3 | same links; ctest 22/22, verify_packages exact, checker tests 18/18 |
 | 2026-11-04 | main 195a016 (after #97, #81, #87), #98 review 1 and batch 6 fixes | 10 / 0 / 4 of 14 | new link 7 (aimed pickup past a nearer decoy) NOT_AVAILABLE; the card and picked ids are cross-checked; ctest 22/22, verify_packages exact, checker tests 21/21 |
 | 2026-11-04 | throwaway merge with the range stack | 12 / 1 / 1 of 14 | links 2 to 4 PASS with real range enemies; loot drop at the world origin (FAIL, range); passive, restore and clear fixtures named |
+| 2026-11-04 | throwaway merge with #89 90a7547, with and without `-Shield` | 13 / 0 / 1 of 14, both | loot drop at the corpse; link 7 did not test the decoy (see the shield variant's open items) |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
