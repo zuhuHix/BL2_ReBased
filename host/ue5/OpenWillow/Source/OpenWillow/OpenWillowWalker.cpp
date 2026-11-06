@@ -1971,10 +1971,11 @@ AOpenWillowCombatTarget* AOpenWillowWalker::PreferredPhaselockTarget(FString* Ou
     float BestScore = 0.f;
     for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It)
     {
-        // Candidates: live targets in the targetable list. The stock dummy joins it through its installed
-        // Behavior_RegisterTargetable (UOpenWillowQuest); host-made targets count as registered (host stand-in).
+        // Candidates: live targets in the targetable list. The mission's dummy joins it through its installed
+        // Behavior_RegisterTargetable (UOpenWillowQuest); every other target counts as registered (host stand-in, UNVERIFIED):
+        // the rule was once on every stock pawn, which left the range's enemies untargetable whenever the quest was on.
         if (!It->IsAutoAimTarget()) continue;
-        if (It->IsStockPawn() && Quest && Quest->Enabled() && !Quest->IsRegisteredTargetable(*It))
+        if (Quest && OpenWillowPhaselockListRefuses(Quest->Enabled(), Quest->IsMissionDummy(*It), Quest->IsRegisteredTargetable(*It)))
         {
             if (OutLog) *OutLog += FString::Printf(TEXT("%s not in the targetable list; "), *It->GetName());
             continue;

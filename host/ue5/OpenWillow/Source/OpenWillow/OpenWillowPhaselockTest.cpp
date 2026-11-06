@@ -79,6 +79,13 @@ bool FOpenWillowPhaselockTest::RunTest(const FString& Parameters)
     Vehicle.bInVehicle = true;
     TestTrue(TEXT("a vehicle refuses the cast"), !D.GateOpen(Vehicle, true, Failed) && Failed == FOpenWillowPhaselockData::VehiclePassengerEvaluator);
 
+    // The targetable list: only the mission's dummy can be refused, and only while unregistered with the quest on. A range pawn is
+    // not the mission's dummy, so it stays a candidate with the quest on.
+    TestTrue(TEXT("the mission's unregistered dummy is refused"), OpenWillowPhaselockListRefuses(true, true, false));
+    TestFalse(TEXT("the mission's registered dummy is a candidate"), OpenWillowPhaselockListRefuses(true, true, true));
+    TestFalse(TEXT("a range pawn is a candidate with the quest on"), OpenWillowPhaselockListRefuses(true, false, false));
+    TestFalse(TEXT("nothing is refused with the quest off"), OpenWillowPhaselockListRefuses(false, true, false));
+
     // Duration and timeline: lift + lock x time scale; outro LockFadeOutTime before the release; end after the buffer.
     TestTrue(TEXT("lock duration adds the grade's PostAdd"), FMath::IsNearlyEqual(D.LockDuration(2), 5.f) && FMath::IsNearlyEqual(D.LockDuration(7), 4.f));
     const FOpenWillowPhaselockTimeline T = D.Timeline(D.LockDuration(1), D.TargetTimeScale(false));

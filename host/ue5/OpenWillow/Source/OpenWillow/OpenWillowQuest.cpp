@@ -899,6 +899,11 @@ bool UOpenWillowQuest::RestoreProgression(UOpenWillowSkills& Skills)
     return bProgressionRestored;
 }
 
+bool UOpenWillowQuest::IsMissionDummy(const AActor* Actor) const
+{
+    return Actor && Actor == Dummy;
+}
+
 bool UOpenWillowQuest::IsRegisteredTargetable(const AActor* Actor) const
 {
     return Actor && Actor == Dummy && bDummyTargetable;
