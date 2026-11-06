@@ -46,7 +46,7 @@ swing, so all of it is **UNVERIFIED** until the real-game read in `tools/real_ga
 - Damage is `Init_PlayerMeleeDamage`: 2.5 x (8 x 1.13^level) plus a melee buff attribute. Normal damage type, melee damage source.
 
 **What the host does:** V starts a swing (`OpenWillowMelee.cpp`). It stops a reload, ends the aim and blocks the trigger, reload and
-Phaselock and a throw until the clip's length ends, and ends a burst in progress. 0.30 s after the press the hit lands through `ApplyShotDamage`, so targets and listeners see
+Phaselock and a throw until the clip's length ends (they are refused, not queued), and ends a burst in progress. 0.30 s after the press the hit lands through `ApplyShotDamage`, so targets and listeners see
 it as any hit, with the new source `Melee`. Only actors that take hits (`IOpenWillowHitTarget`) can be struck. A trace that strikes
 a wall ends the swing there.
 
@@ -65,7 +65,9 @@ a wall ends the swing there.
   it: Life Tap applies to any hit that is neither a skill's nor a status effect's, and a melee kill reaches the generic kill
   notification. What the game does for these is unread.
 - What interrupts a swing is a host rule. Going down, a status page or a shop cancels it and clears the pending hit. Switching weapons,
-  holstering, aiming, reloading, firing, a grenade and Phaselock wait for it, because the script holds the weapon in a busy state.
+  holstering, aiming, reloading, firing, a grenade and Phaselock are refused during it, not queued: a press in the swing is dropped,
+  and only a trigger still held fires afterwards. The script does hold the weapon in a busy state, but what the game does with these
+  presses is **UNVERIFIED**.
   The capture reads a status page opened inside a stock swing.
 - A swing and a grenade throw refuse each other, as both are shared weapon actions. Enemy melee belongs to the range lane.
 
@@ -79,7 +81,9 @@ a wall ends the swing there.
   `v_not_hit_before_the_delay` (the delay measured from the frames the swing started and the target lost health), `v_hits_target_ahead`
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_cancels_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
-  `v_keeps_refill_after_it`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=18 failed=0`. Ending a burst is not covered by a row.
+  `v_keeps_refill_after_it`, `burst_ends_on_swing`, `down_cancels_swing`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=20 failed=0`.
+  Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
+  A shop cancelling a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.
 - `tests/check_controls_test.py` (ctest `controls-check`): the grader on invented logs, including a short count, a renamed row, a
   repeated row and a missing summary.

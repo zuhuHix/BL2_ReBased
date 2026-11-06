@@ -1479,7 +1479,8 @@ void AOpenWillowWalker::ToggleSkills()
 }
 void AOpenWillowWalker::Holster()
 {
-    if (!bMayaActive || !ArmsAnim || MeleeBusy()) return;
+    if (!bMayaActive || !ArmsAnim) return;
+    if (MeleeBusy()) { ++HolstersRefusedBySwing; return; }
     AimReleased();
     bWeaponOut = false;
     CancelReload(); // before the active weapon changes
@@ -1842,7 +1843,8 @@ bool AOpenWillowWalker::ThrowGrenade()
     // during the 1.05 s lockout. Live (4 throws of the save's Sky Rocket mod, WEAPON_PROJECTILES.md section 12): the throw
     // completes 1.04-1.19 s after the press and the projectile appears 0.52-0.53 s after it; UNVERIFIED for the stock frag.
     const float Now = GetWorld()->GetTimeSeconds();
-    if (!bMayaActive || bInventoryPresentation || IsDown() || Now < ThrowLockUntil || MeleeBusy() || !Inventory) return false;
+    if (!bMayaActive || bInventoryPresentation || IsDown() || Now < ThrowLockUntil || !Inventory) return false;
+    if (MeleeBusy()) { ++GrenadesRefusedBySwing; return false; }
     if (!bGrenadeTried)
     {
         bGrenadeTried = true;
