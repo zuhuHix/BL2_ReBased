@@ -97,7 +97,7 @@ void UOpenWillowPlaytest::SendKey(const FString& Name, bool bDown, bool bUp)
     const uint32* KeyCode = nullptr;
     const uint32* CharCode = nullptr;
     FInputKeyManager::Get().GetCodesFromKey(Key, KeyCode, CharCode);
-    const FKeyEvent Event(Key, FModifierKeysState(), uint32(0), false, CharCode ? *CharCode : 0, KeyCode ? *KeyCode : 0);
+    const FKeyEvent Event(Key, FModifierKeysState(), uint32(0), false, CharCode ? *CharCode : 0, KeyCode && *KeyCode ? *KeyCode : (CharCode ? *CharCode : 0));
     FSlateApplication& Slate = FSlateApplication::Get();
     const TSharedPtr<SWidget> Focus = Slate.GetKeyboardFocusedWidget();
     bool bHandledDown = false, bHandledUp = false;
