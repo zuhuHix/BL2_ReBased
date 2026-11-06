@@ -30,14 +30,20 @@ class RunLimit(unittest.TestCase):
         return int(powershell(f'Get-OwRunLimitSeconds {arguments}')[0])
 
     def test_scripted_game_runs_get_the_default(self):
-        for switch in ('-owinvshots', '-owstatusshots=map', '-owfiringtest', '-owinventoryactions', '-owinvopenbench=3', '-owslicegate'):
+        for switch in ('-owinvshots', '-owcombatshots', '-owstatusshots=map', '-owfiringtest', '-owinventoryactions', '-owinvopenbench=3', '-owslicegate'):
             self.assertEqual(self.limit(f"-GameWindow -Extra '-owlevel=36','{switch}'"), 1200, switch)
+
+    def test_a_gun_list_of_any_length_gets_longer(self):
+        self.assertEqual(self.limit("-GameWindow -Extra '-owgunshots','-owgunids=a,b'"), 3600)
+        self.assertEqual(self.limit("-TimeoutSeconds 90 -GameWindow -Extra '-owgunshots'"), 90)
 
     def test_people_are_not_stopped_by_a_clock(self):
         self.assertEqual(self.limit(''), 0)                                    # the editor
         self.assertEqual(self.limit('-Extra -owinvshots'), 0)                  # the editor waits for Play
         self.assertEqual(self.limit('-GameWindow'), 0)                         # playing
         self.assertEqual(self.limit("-GameWindow -Extra '-owlevel=36'"), 0)    # playing with a setup switch
+        self.assertEqual(self.limit("-GameWindow -Extra '-owcombattest'"), 0)  # spawns a target for play, and does not quit
+        self.assertEqual(self.limit("-GameWindow -Extra '-owinventoryselftest'"), 0)  # only runs checks, and does not quit
 
     def test_an_explicit_limit_wins(self):
         self.assertEqual(self.limit('-TimeoutSeconds 60 -GameWindow'), 60)
@@ -50,7 +56,7 @@ class RunLimit(unittest.TestCase):
     def test_which_switches_count_as_a_scripted_run(self):
         for extra in ("'-owpickupcardshots'", "'-owinvshots'", "'-owcombatshots'", "'-owlevel=36','-owinvshots'", "'-owlevel=36,-owinvshots'"):
             self.assertTrue(self.scripted(extra), extra)
-        for extra in ("'-owlevel=36'", "'-owitems=x','-owslots=2'", "'-owquest'", "''"):
+        for extra in ("'-owlevel=36'", "'-owitems=x','-owslots=2'", "'-owquest'", "''", "'-owcombattest'", "'-owinventoryselftest'"):
             self.assertFalse(self.scripted(extra), extra)
 
     def run_launcher(self, *arguments):
@@ -65,7 +71,7 @@ class RunLimit(unittest.TestCase):
 
     def test_a_stalled_process_is_reported_and_stopped_by_its_id(self):
         out, code = powershell(start_sleeper('owlimittest') +
-            "$exited = Wait-OwStartedProcess -Process $p -LimitSeconds 1; "
+            "[void]$p.Handle; $exited = Wait-OwStartedProcess -Process $p -LimitSeconds 1; "
             "$stopped = Stop-OwStartedProcess -Process $p -Expected @('owlimittest'); "
             "Write-Output \"$exited $stopped $($p.HasExited)\"")
         self.assertEqual(code, 0, out)

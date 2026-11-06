@@ -12,7 +12,9 @@
     [int]$Port = 8767,
     # With -GameWindow: seconds before a stalled run is stopped and this script fails. 0: no limit. Default: 20 minutes for a scripted
     # run (a switch that drives it and quits), none for a person playing. Never a limit without -GameWindow (tools/run_limit.ps1).
-    [int]$TimeoutSeconds = -1
+    [int]$TimeoutSeconds = -1,
+    # For tests/run_ue_flash_hud_test.py only: start this instead of the engine's editor.
+    [string]$EditorExe
 )
 # Prototype: walk Sanctuary as Maya with BL2's own HUD movie drawn by Ruffle in
 # a transparent web page over the viewport (-owflashhud). Needs the converted
@@ -21,7 +23,7 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
-$editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
+$editor = if ($EditorExe) { $EditorExe } else { Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe' }
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
 . (Join-Path $PSScriptRoot 'run_limit.ps1')
 # Without -GameWindow this opens the full editor, with no game until someone presses Play, so an unattended capture would wait for ever.
@@ -48,6 +50,7 @@ if ($running) {
 } else {
     $server = Start-Process -PassThru -WindowStyle Hidden -FilePath python -ArgumentList @(
         "`"$(Join-Path $PSScriptRoot 'hud_overlay/serve.py')`"", '--port', $Port)
+    [void]$server.Handle # open now: stopping it later goes through this object (run_limit.ps1)
     Start-Sleep 2
     Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 $url | Out-Null
 }
@@ -60,6 +63,7 @@ if ($GameWindow) { $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=72
 # Holds the machine-wide UE run lock until the editor window is closed.
 Invoke-OwUeLocked -Owner 'run_ue_flash_hud' -Body {
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
+    [void]$process.Handle # open now: the exit code and stopping it later go through this object (run_limit.ps1)
     Write-Output "Editor pid $($process.Id); the UE run lock is held until it closes."
     if ($limit -gt 0) { Write-Output "Time limit $limit s (-TimeoutSeconds 0 for none)." }
     $exited = Wait-OwStartedProcess -Process $process -LimitSeconds $limit
