@@ -435,9 +435,9 @@ hash-compared) threw 4 grenades, but the save's equipped mod is the Sky Rocket (
   of each) at a level into a block under ignored `local/items/grenades/`: `Grenade_DefaultFrag`'s speed, gravity scale,
   lifespan and upward bonus (with what its class default fills in) and bounces, the radius (the explosion's formula plus the BlastRadius slot), the damage (`Init_ProjectileDamage` x the projectile's
   scale x the Damage slot), the element and the explosion bands. Its own `unverified` list names each inferred rule.
-- **Fuse: open.** The default Trigger part gives the FuseTime slot a total of 0, while the projectile's behaviours hold two
-  timers (a shorter and a longer delay). Which one detonates needs a live throw of the frag itself. The block's fuse is
-  therefore 0, which the host reads as "no fuse": until then the grenade bursts on the impact after its bounces.
+- **Fuse: settled in section 14.** The default Trigger part gives the FuseTime slot a total of 0; the fuse comes from the
+  projectile's behaviour graph, not from that slot. The bounce, fuse and falloff statements below are as first shipped; section 14
+  replaces them.
 - **The key.** `OWGrenade` is bound to G next to the other gameplay keys. The game's input config files do not hold gameplay keys as
   text, so the evidence is the live read: on this profile each of 4 G presses was followed by a logged `ThrowGrenade`. Whether
   G is the shipped default, rather than this profile's setting, is UNVERIFIED.
@@ -470,3 +470,36 @@ held Badass Rank's +1.0175 in that run and is empty in this one. But the control
 fields read 1.0 both before and after skills were switched off, so the factor is not in those fields; `fp3_no_skills` also
 listed no active skills before it ran, so its list cannot name the cause. **The higher-level scale (x2 at 6+ levels) is
 unmeasured:** the older x2 against level-7 targets is no evidence for it, since that profile's skills were on.
+
+## 14. The frag itself: contact, fuse, falloff (2026-11-06, slice projectiles lane)
+
+AI-assisted (Claude). One real-game session threw `Grenade_DefaultFrag` 4 times by naming it in `ThrowGrenade`
+(`tools/real_game/projectiles_capture.ps1 -StatusOnly -NoSkills -Grenades -GrenadeDefinition ...`, a runner mode on branch `feature/slice-projectiles-frag-throw` @ d96b842, not in this change; saves, config and SDK settings
+restored and hash-compared). **The Sky Rocket mod was still equipped, so this is the frag's definition without the stock mod's
+parts.** Host suite evidence below is pending; a passing suite will mean "the host did this", not parity.
+
+- **The graph (read from the packages, tool: `tools/grenade_mod.py` `contact_rules`).** Hitting the world bounces at elasticity 0.4;
+  hitting a damagable object bounces at 0.2. Either then passes a once-only gate and sets a 1.8 s timer. The spawn sets a 6 s
+  timer. Either timer running out detonates; no contact does. The explosion has `bDisableRadiusDamageFalloff`. The earlier block
+  was wrong here: it counted the two Bounce behaviours as "2 bounces" and read the Detonate as an impact fuse.
+- **Confirmed live against that graph (4 of 4 throws, small sample).** No throw exploded on a contact: each hit a target's collision
+  or something else without a `HitWall` at about 0.2 s (speed x 0.2, no `TakeDamage`), then touched the terrain 4 to 5 more times
+  (tangential speed x about 0.4 each) and came to rest. The explosion came 2.00-2.06 s after spawn and 1.80-1.88 s after that first
+  contact: these frame-sampled ranges agree with the 1.8 s timer but do not separately prove it starts at contact. Falling gravity
+  read -800 uu/s^2 (scale 0.8 of 1000) on all 4.
+- **Damage and radius in this session.** `TakeRadiusDamage` read base damage 63.28 and radius 500, `bFullDamage` true, and all 7 pawn
+  hits took 63.28 at distances from 313 to 523 uu (centre distance; measured to the pawn's location, so past 500 is possible). The
+  projectile was initialised with `InExpLevel` 1, and `tools/grenade_mod.py --level 1` gives 63.28: the damage formula is confirmed
+  **at level 1 only**. 500 is the `Behavior_Explode` formula without the stock mod's -120 slot.
+- **UNVERIFIED.** That a thrown stock mod uses level 8 and the -120 slot (the block's 148.87 and 380): naming a definition applied
+  neither, and the equipped mod's attributes did not reach the frag's radius or fuse, so a throw with the stock mod equipped is
+  still needed. What the first contact at 0.2 s was (the target is the suspect: about 70-100 uu from its location, no wall event).
+  The 6 s timer (no throw went without a contact). The FuseTime slot's effect on these timers. An upward bonus (the view read failed
+  again). Release delay, lockout and offset stay from the Sky Rocket.
+- **Host.** `ParseGrenade` takes elasticities, both timers and no-falloff from the block's `projectile.contact` and refuses a block
+  without it. `AOpenWillowProjectile::Impact`: every contact bounces, a target takes no direct damage, the first contact starts the
+  timer once and the earlier timer wins. **Stand-in:** below 20 uu/s on ground-like normals the grenade stops; the limit is ours.
+  The firing test reports `contact_age`, `fuse_age` and `contact_fuse`; `tools/check_weapon_firing.py` requires full damage and the
+  explosion within 0.2 s of the contact fuse.
+- **Open.** `tools/weapon_firing.py` `projectile_of` still derives `explode_on_impact` and bounce counts for weapon projectiles by
+  counting behaviours. That is unchanged and may have the same weakness for a bouncing rocket; no slice gun is known to be affected.

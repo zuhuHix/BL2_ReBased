@@ -10,8 +10,9 @@ GD_GrenadeMods.A_Item.GrenadeMod_Standard (WillowGame.GrenadeModDefinition). One
 - slots: each chosen part's AttributeSlotUpgrades adds GradeIncrease to its slot's grade and activates it. Every
   activated AttributeSlotEffects entry of the mod gives slot_value(grade, base, per grade) (weapon_stats rules:
   grade = round-half-up(base grade 1) + increases; value = (grade - 1) x PerGradeUpgrade + BaseModifierValue).
-- fuse_time: the FuseTime slot total, starting from 0. The projectile's Behavior_ModifyTimer delays are listed
-  beside it; which one detonates the grenade is not decided here.
+- fuse_time: the FuseTime slot total, starting from 0, with the projectile's Behavior_ModifyTimer delays listed beside it.
+- contact (under projectile): what the projectile's behaviour graph does on contact and at spawn, read by event, see
+  contact_rules(). Counting behaviours does not say this: a Detonate that only a timer reaches is not an impact fuse.
 - radius: the Behavior_Explode DamageRadiusFormula, plus the BlastRadius slot total (MT_PreAdd).
 - damage: Init_ProjectileDamage evaluated with ProjectileLevel = --level, times the projectile's Damage
   BaseValueScaleConstant, then x (1 + the GrenadeDamage Scale total of the Damage slot).
@@ -38,8 +39,19 @@ import weapon_firing  # noqa: E402
 import weapon_projectile_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
+from prepare_action_skill import read_provider  # noqa: E402
 
-SCHEMA_LINES = list(dict.fromkeys(weapon_firing.SCHEMA_LINES + weapon_projectile_fx.SCHEMA_LINES))
+# The projectile's behaviour graph (prepare_action_skill.read_provider decodes it).
+PROVIDER_SCHEMA_LINES = [
+    'BehaviorSequences=StructProperty:BehaviorSequenceData',
+    'EventData2=StructProperty:BehaviorEventData',
+    'BehaviorData2=StructProperty:BehaviorData',
+    'ConsolidatedOutputLinkData=StructProperty:BehaviorOutputLinkData',
+    'VariableData=StructProperty:BehaviorVariableData',
+    'ConsolidatedVariableLinkData=StructProperty:BehaviorVariableLinkData',
+    'ConsolidatedLinkedVariables=IntProperty',
+]
+SCHEMA_LINES = list(dict.fromkeys(weapon_firing.SCHEMA_LINES + weapon_projectile_fx.SCHEMA_LINES + PROVIDER_SCHEMA_LINES))
 GRENADE_MOD = 'GD_GrenadeMods.A_Item.GrenadeMod_Standard'
 # Part kind (the --part key) -> the GrenadeModDefinition field that names its part list.
 PART_LISTS = {
@@ -60,7 +72,7 @@ ELEMENT_SLOTS = {'IsExplosive': 'Explosive', 'IsIncendiary': 'Fire', 'IsCorrosiv
 ALWAYS_UNVERIFIED = [
     'slot grade: base grade 1 (GrenadeModDefinition has no AttributeSlotBaseGrade; the weapon default is used)',
     'FuseTime starts from 0 (the attribute has no base field in the mod); fuse = 0 + PreAdd slot total',
-    'fuse source: the FuseTime slot total or a projectile timer; the detonating timer is not decided here',
+    'the FuseTime slot total is not applied to the projectile timers in contact (how a mod changes them is not measured)',
     'BlastRadius is added to the Behavior_Explode DamageRadiusFormula (PreAdd on that constant)',
     'GrenadeDamage is a multiplier on the projectile damage, starting at 1 (Scale of the Damage slot)',
     'ProjectileLevel equals --level (the attribute has no constant resolver)',
@@ -171,9 +183,15 @@ def projectile_damage(source, projectile, level):
     be inherited from the class default, and its attributes may live in either package."""
     package = source.package
     init = source.fields(projectile).get('Damage') or {}
-    if not init.get('InitializationDefinition'):
+    definition = init.get('InitializationDefinition')
+    if not definition:
         return None, 'the projectile has no Damage initialization'
     resolver = skill_stats.Resolver([package, source.defaults])
+    # An inherited definition may exist only in the class defaults' package.
+    if definition not in package.index:
+        package = source.defaults
+    if definition not in package.index:
+        return None, f'the Damage initialization {definition} is in neither package'
     attributes = {PROJECTILE_LEVEL: float(level)}
     unresolved = set()
     init_attributes(package, resolver, init, attributes, unresolved)
@@ -183,6 +201,59 @@ def projectile_damage(source, projectile, level):
     if value is None:
         return None, 'Damage initialization needs runtime state'
     return value, None
+
+
+def reachable(sequence, links):
+    """The behaviours a link list reaches, each once, nearest first."""
+    found, queue, seen = [], [link['behavior'] for link in links], set()
+    while queue:
+        index = queue.pop(0)
+        if index not in seen:
+            seen.add(index)
+            behavior = sequence['behaviors'][index]
+            found.append(behavior)
+            queue.extend(link['behavior'] for link in behavior['links'])
+    return found
+
+
+def of_class(behaviors, name):
+    return [b for b in behaviors if str(b['class']).rsplit('.', 1)[-1] == name]
+
+
+def contact_rules(source, sequences, known, unresolved):
+    """What the projectile's behaviour graph does, by event: the elasticity of a bounce off the world and off a damagable
+    object, the timer the first contact starts, the timer the spawn starts, whether a contact detonates, whether a timer
+    does, and whether its explosion has no falloff. None when the graph holds no contact bounce and timers."""
+    events = {}
+    for sequence in sequences:
+        for event in sequence['events']:
+            if event['enabled']:
+                events[event['name']] = reachable(sequence, event['links'])
+
+    def value(behaviors, name, field):
+        found = of_class(behaviors, name)
+        return weapon_firing.formula(source, found[0]['properties'].get(field), known, unresolved) if found else None
+
+    world, target = events.get('OnHitTheWorld', []), events.get('OnHitDamagableObject', [])
+    after_contact = value(world, 'Behavior_ModifyTimer', 'NewTimerDelay')
+    after_spawn = value(events.get('OnSpawn', []), 'Behavior_ModifyTimer', 'NewTimerDelay')
+    world_bounce = value(world, 'ProjectileBehavior_Bounce', 'ElasticityScaleFormula')
+    target_bounce = value(target, 'ProjectileBehavior_Bounce', 'ElasticityScaleFormula')
+    timers_detonate = any(of_class(behaviors, 'ProjectileBehavior_Detonate')
+                          for name, behaviors in events.items() if name.startswith('TIMEREVENT_'))
+    if None in (after_contact, after_spawn, world_bounce, target_bounce) or not timers_detonate:
+        return None
+    if value(target, 'Behavior_ModifyTimer', 'NewTimerDelay') != after_contact:
+        return None   # the two contacts start different timers: not the shape the host models
+    explode = of_class(events.get('OnExplode', []), 'Behavior_Explode')
+    return {
+        'world_elasticity': world_bounce,
+        'target_elasticity': target_bounce,
+        'fuse_after_contact': after_contact,
+        'fuse_after_spawn': after_spawn,
+        'contact_detonates': bool(of_class(world + target, 'ProjectileBehavior_Detonate')),
+        'full_damage': bool(explode and explode[0]['properties'].get('bDisableRadiusDamageFalloff')),
+    }
 
 
 def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
@@ -207,6 +278,8 @@ def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
         props = package.props(path)
         timers.append({'behaviour': short(path), 'timer': props.get('TimerId'),
                        'delay': weapon_firing.formula(source, props.get('NewTimerDelay'), known, unresolved)})
+    sequences = read_provider(package, provider)['sequences'] if provider else []
+    contact = contact_rules(source, sequences, known, unresolved)
     speed_setters = []
     for part in chosen:
         part_provider = package.props(part).get('BehaviorProviderDefinition')
@@ -253,8 +326,8 @@ def resolve(package, defaults, overrides, level, mod_path=GRENADE_MOD):
             'physics_mode': pd.get('PhysicsMode'),
             'max_lifespan': pd.get('MaxLifespan'),
             'upward_velocity_bonus': pd.get('UpwardVelocityBonus'),
-            'explode_on_impact': projectile.get('explode_on_impact'),
-            'bounces': projectile.get('bounces', {}).get('count'),
+            'explode_on_impact': contact['contact_detonates'] if contact else projectile.get('explode_on_impact'),
+            'contact': contact,
         },
         'fuse_time': {
             'value': fuse,
@@ -321,10 +394,13 @@ def main():
     out.write_text(json.dumps({'grenade': block}, indent=1), encoding='utf-8')
     print(f"wrote {out}")
     print(f"fuse {block['fuse_time']['value']}, damage {block['damage']['value']}, radius {block['radius']['value']}, "
-          f"speed {block['projectile']['speed']}, gravity {block['projectile']['gravity_scale']}")
+          f"speed {block['projectile']['speed']}, gravity {block['projectile']['gravity_scale']}, "
+          f"contact {block['projectile']['contact']}")
     # The host refuses a grenade without positive damage: say so now rather than at the throw.
     if not (block['damage']['value'] or 0) > 0:
         raise SystemExit(f"no positive damage: {block['damage']['reason']}")
+    if not block['projectile']['contact']:
+        raise SystemExit('the projectile behaviour graph has no contact bounce and timers: the host does not load this grenade')
 
 
 if __name__ == '__main__':

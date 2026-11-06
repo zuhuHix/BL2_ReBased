@@ -66,6 +66,9 @@ private:
     FString DamageType;
     float MaxAge = 5;
     int32 BouncesLeft = 0;
+    float FuseAt = 0;                           // flight age the fuse runs out at; 0 = no fuse
+    bool bContactFuseStarted = false;           // the first contact started its timer (it happens once)
+    bool bAtRest = false;                       // a grenade that stopped on the ground: no flight, its fuse still runs
     bool bRocket = false;
     bool bDrawStreak = true;
     FString Element;

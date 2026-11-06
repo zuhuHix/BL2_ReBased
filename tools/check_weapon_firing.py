@@ -256,8 +256,9 @@ def check_momentum(push, wide, expected, phase_a_hits, splash_lines=None, splash
 
 def check_grenade(line):
     """The firing test's one grenade at the dummy, thrown by pressing G (OWFIRING grenade): it was thrown, took one grenade
-    from the pool, has positive damage, exploded on the dummy with positive damage, every splash hit is a hit event with
-    Source Grenade, and with the pool emptied a second press is refused."""
+    from the pool, has positive damage, exploded on the dummy with positive damage and no falloff, its first contact started
+    the fuse it then exploded on, every splash hit is a hit event with Source Grenade, and with the pool emptied a second
+    press is refused."""
     if line is None:
         return ['no OWFIRING grenade line (the grenade check did not run)']
     fails = []
@@ -270,6 +271,14 @@ def check_grenade(line):
         fails.append(f"the grenade's damage is not positive ({line.get('damage')})")
     if float(line.get('splash') or 0) <= 0:
         fails.append(f"the grenade's splash damage is not positive ({line.get('splash')})")
+    expected = float(line.get('damage') or 0) * int(line['splash_hits'])
+    if abs(float(line.get('splash') or 0) - expected) > 0.01 * max(expected, 1.0):
+        fails.append(f"the grenade's splash {line.get('splash')} is not its full damage ({expected:.2f}): it has no falloff")
+    contact, fuse = float(line.get('contact_age', -1)), float(line.get('fuse_age', -1))
+    if contact < 0 or fuse < 0:
+        fails.append(f'no grenade contact or fuse explosion (contact_age={contact}, fuse_age={fuse})')
+    elif abs(fuse - contact - float(line.get('contact_fuse', 0))) > 0.2:
+        fails.append(f"the grenade exploded {fuse - contact:.2f} s after its first contact, its fuse is {line.get('contact_fuse')} s")
     if line.get('refused_empty') != '1':
         fails.append('a throw with an empty grenade pool was not refused')
     if int(line['splash_hits']) < 1:

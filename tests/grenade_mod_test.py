@@ -101,6 +101,65 @@ def defaults():
     return FakePackage()
 
 
+# FakePackage has no reader: its provider holds the decoded sequences directly (none unless a test adds them).
+grenade.read_provider = lambda package, path: {'sequences': package.objects[path].get('sequences', [])}
+
+
+def link(index, output=0):
+    return {'behavior': index, 'outputId': output, 'delay': 0.0}
+
+
+def graph(world_detonates=False):
+    """An invented behaviour graph with the shape of prepare_action_skill.read_provider."""
+    def behavior(index, cls, props, *links):
+        return {'index': index, 'id': f'Fake.B{index}', 'class': cls, 'properties': props, 'variables': {}, 'links': list(links)}
+    behaviors = [
+        behavior(0, 'WillowGame.ProjectileBehavior_Bounce', {'ElasticityScaleFormula': const(0.3)}, link(1)),
+        behavior(1, 'GearboxFramework.Behavior_Gate', {'GateCount': 1}, link(2)),
+        behavior(2, 'GearboxFramework.Behavior_ModifyTimer', {'NewTimerDelay': const(1.5)}),
+        behavior(3, 'WillowGame.ProjectileBehavior_Bounce', {'ElasticityScaleFormula': const(0.6)}, link(1)),
+        behavior(4, 'WillowGame.ProjectileBehavior_Detonate', {}),
+        behavior(5, 'GearboxFramework.Behavior_ModifyTimer', {'NewTimerDelay': const(9)}),
+        behavior(6, 'WillowGame.Behavior_Explode', {'bDisableRadiusDamageFalloff': True}),
+    ]
+    def event(name, *links):
+        return {'name': name, 'enabled': True, 'outputs': {}, 'links': list(links)}
+    world = [link(3)] + ([link(4)] if world_detonates else [])
+    return [{'name': 'Default', 'enabledOnSpawn': True, 'behaviors': behaviors, 'check': {}, 'events': [
+        event('TIMEREVENT_Timer1Elapsed', link(4)), event('OnExplode', link(6)), event('OnHitTheWorld', *world),
+        event('OnHitDamagableObject', link(0)), event('OnSpawn', link(5))]}]
+
+
+class ContactRulesTest(unittest.TestCase):
+    def rules(self, sequences):
+        return grenade.contact_rules(weapon_firing.Source(FakePackage(), defaults()), sequences, {}, set())
+
+    def test_read_by_event(self):
+        rules = self.rules(graph())
+        self.assertAlmostEqual(rules['world_elasticity'], 0.6)
+        self.assertAlmostEqual(rules['target_elasticity'], 0.3)
+        self.assertAlmostEqual(rules['fuse_after_contact'], 1.5)
+        self.assertAlmostEqual(rules['fuse_after_spawn'], 9)
+        self.assertFalse(rules['contact_detonates'])
+        self.assertTrue(rules['full_damage'])
+
+    def test_a_detonate_only_a_timer_reaches_is_no_impact_fuse(self):
+        self.assertTrue(self.rules(graph(world_detonates=True))['contact_detonates'])
+
+    def test_graph_without_the_shape_is_none(self):
+        self.assertIsNone(self.rules([]))
+        sequences = graph()
+        sequences[0]['events'] = [e for e in sequences[0]['events'] if not e['name'].startswith('TIMEREVENT_')]
+        self.assertIsNone(self.rules(sequences))
+
+    def test_resolve_writes_contact_and_full_damage_into_the_block(self):
+        package = world()
+        package.objects['Fake.Proj.P.BPD']['sequences'] = graph()
+        block = grenade.resolve(package, defaults(), {}, 2, MOD)
+        self.assertAlmostEqual(block['projectile']['contact']['fuse_after_contact'], 1.5)
+        self.assertFalse(block['projectile']['explode_on_impact'])
+
+
 class PartChoiceTest(unittest.TestCase):
     def test_first_entry_is_default(self):
         package = world()
@@ -185,6 +244,21 @@ class InheritedFieldsTest(unittest.TestCase):
         self.assertEqual(block['projectile']['upward_velocity_bonus'], 44.0)
         self.assertGreater(block['damage']['value'], 0)
         self.assertIsNone(block['damage']['reason'])
+
+    def test_damage_definition_only_in_the_class_defaults_package(self):
+        package, class_defaults, _ = self.inherited()
+        for path in ('Fake.Init.Dmg', 'Fake.Attr.Scaler.ConstantAttributeValueResolver_0'):
+            class_defaults.add(path, package.classes[path], package.objects.pop(path))
+        block = grenade.resolve(package, class_defaults, {}, 8, MOD)
+        self.assertGreater(block['damage']['value'], 0)
+        self.assertIsNone(block['damage']['reason'])
+
+    def test_damage_definition_in_neither_package_is_a_reason(self):
+        package, class_defaults, _ = self.inherited()
+        del package.objects['Fake.Init.Dmg']
+        block = grenade.resolve(package, class_defaults, {}, 8, MOD)
+        self.assertIsNone(block['damage']['value'])
+        self.assertIn('neither package', block['damage']['reason'])
 
     def test_the_projectile_own_value_wins_over_the_default(self):
         package, class_defaults, _ = self.inherited()
