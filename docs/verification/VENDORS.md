@@ -231,6 +231,12 @@ Frames of the 2026-11-06 capture, judged by eye by the hub, frames only and `UNV
 For each type the test tries its lootables, leaving the first to the test's own open unless it is the only one, and on each of eight sides needs Maya's capsule to fit on walkable floor with a clear view as wide as she is. It logs which lootable it used and what failed on each side. With no such side on any of them, the checker reports that type `INCOMPLETE`, which fails the run. Which types must reach the capture is read from the assets on disk at grading, not from an earlier import's report. How the imported assets look and play is
 `UNVERIFIED`.
 
+**Materials.** `tools/import_lootables.ps1 -Steps materials` binds the diffuse and normal textures of UModel's export to each mesh's one slot, through one instance per material of a minimal lootable material (the method of `tools/slice_npc_editor.py`, no original graph). It does not re-import a mesh, so clips stay valid. Emissive is left out, because some of UModel's bindings there look wrong. Other inputs are not reproduced either: the health vial's material is masked, and the eridium materials have pattern and energy textures. Pickup meshes get a second UModel export (`-psk`), because their glTF job brings no materials or textures.
+
+The glTF slot names the material. `Skel_StorageLocker`'s slot is a dummy, since it was cooked into `Sanctuary_Dynamic.upk` while the material is exported from `Sanctuary_P.upk`. Its import table holds `Prop_Lootables_02.PhAT.Mati_StorageLocker` and UModel's log names that import as unloadable while loading the mesh, so it takes the same material as `Skel_StrongBox`. That comes from package data, not from the running game; a live read of both slots is queued. The package also exports `Mati_StorageLocker_GreenGlow`, whose use was not read.
+
+**Pickup labels.** The floating text on a loot pickup is a host stand-in that tells placeholder spheres apart. It is hidden once the real mesh loads. Whether the game shows any text on cash and ammo pickups is `UNVERIFIED`; a real-game frame is queued.
+
 ## 8. Quick Change respec
 
 AI-assisted (Claude), 2026-11-06. `tools/prepare_interactives.py` lists the placed `CharacterCustomizationMachine` under

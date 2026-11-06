@@ -62,5 +62,84 @@ class LocalOutputTest(unittest.TestCase):
             self.assertFalse((editor.ROOT / 'docs/plan.json').exists())
 
 
+class MaterialPlanTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+
+    def export(self, mesh, materials=(), inputs='Diffuse=Tex_Dif\n', textures=('Tex_Dif',)):
+        out = self.root / mesh
+        out.mkdir(parents=True, exist_ok=True)
+        for material in materials:
+            (out / f'{material}.mat').write_text(inputs, encoding='utf-8')
+        for name in textures:
+            (out / f'{name}.tga').write_bytes(b'')
+        return out
+
+    def plan(self, own, others=(), slots=('Mat_A',), log=''):
+        return editor.plan_material(own.name, own, [own, *others], list(slots), log)
+
+    def test_a_mesh_uses_its_own_export(self):
+        row = self.plan(self.export('A', ['Mat_A'], 'Diffuse=Tex_Dif\nNormal=Tex_Nrm\n', ('Tex_Dif', 'Tex_Nrm')))
+        self.assertEqual((row['material'], row['source'], row['reason']), ('Mat_A', 'own export', ''))
+        self.assertTrue(row['diffuse'].endswith('Tex_Dif.tga'))
+        self.assertTrue(row['normal'].endswith('Tex_Nrm.tga'))
+
+    def test_the_slot_name_selects_the_instance_over_its_parent(self):
+        row = self.plan(self.export('A', ['Mat_Parent', 'Mat_Inst']), slots=['Mat_Inst'])
+        self.assertEqual(row['material'], 'Mat_Inst')
+
+    def test_a_named_slot_without_its_material_is_left_unbound(self):
+        row = self.plan(self.export('A', ['Mat_Other']), slots=['Mat_A'])
+        self.assertIsNone(row['material'])
+        self.assertIn('no exported material', row['reason'])
+
+    def test_emissive_is_out_of_scope(self):
+        row = self.plan(self.export('A', ['Mat_A'], 'Diffuse=Tex_Dif\nEmissive=Tex_Dif\n'))
+        self.assertNotIn('emissive', row)
+        self.assertIsNone(row['normal'])
+
+    def test_a_cooked_elsewhere_material_comes_from_the_import_in_the_log(self):
+        other = self.export('Other', ['Mat_Shared'])
+        row = self.plan(self.export('A', textures=()), [other], ['dummy_material_0'],
+                        'WARNING: Import(Pkg.Mat_Shared) was not found\nWARNING: Import(Common.Master) was not found\n')
+        self.assertEqual(row['material'], 'Mat_Shared')
+        self.assertIn('Other', row['source'])
+        self.assertTrue(row['diffuse'].endswith('Tex_Dif.tga'))
+
+    def test_a_similar_name_alone_does_not_bind_a_material(self):
+        other = self.export('Other', ['Mat_A'])
+        row = self.plan(self.export('A', textures=()), [other], ['dummy_material_0'], '')
+        self.assertIsNone(row['material'])
+        self.assertIn('names 0', row['reason'])
+
+    def test_two_named_imports_do_not_bind_a_guess(self):
+        others = [self.export('B', ['Mat_B']), self.export('C', ['Mat_C'])]
+        log = 'Import(P.Mat_B) was not found\nImport(P.Mat_C) was not found\n'
+        row = self.plan(self.export('A', textures=()), others, ['dummy_material_0'], log)
+        self.assertIsNone(row['material'])
+        self.assertIn('names 2', row['reason'])
+
+    def test_a_mesh_with_another_slot_count_is_left_unbound(self):
+        for slots in ([], ['Mat_A', 'Mat_B']):
+            with self.subTest(slots=slots):
+                row = self.plan(self.export('A', ['Mat_A']), slots=slots)
+                self.assertIsNone(row['material'])
+                self.assertIn('material slot', row['reason'])
+
+    def test_a_missing_diffuse_leaves_the_mesh_unbound(self):
+        row = self.plan(self.export('A', ['Mat_A'], textures=()))
+        self.assertIsNone(row['diffuse'])
+        self.assertIn('no exported diffuse', row['reason'])
+
+    def test_umodels_utf16_log_is_read(self):
+        path = self.root / 'job.log'
+        path.write_bytes('Import(P.Mat_A) was not found'.encode('utf-16'))
+        self.assertEqual(editor.MISSING_IMPORT.findall(editor.read_umodel_log(path)), ['P.Mat_A'])
+        self.assertEqual(editor.read_umodel_log(self.root / 'none.log'), '')
+        self.assertEqual(editor.read_umodel_log(None), '')
+
+
 if __name__ == '__main__':
     unittest.main()
