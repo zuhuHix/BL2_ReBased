@@ -195,7 +195,10 @@ Test: `python tools/prepare_slice_audio.py --tone-only`, then `tools/test_audio.
 `tools/check_audio.py` grades that run's own log: each expected row exactly once and PASS, the tone's play line, the mixer row's own numbers, a summary with matching
 counts, and the editor's exit code, which must be 0 within a short wait, so a crash during teardown fails the suite. Its strongest check on sound is that the mixer pulled every queued byte (`mixer_pulled_all_bytes`). That still says nothing about what a person hears.
 
-Run at 701af65 (runner1, 2026-11-06, before the exit and whole-walk checks existed): 16 of 16 rows, `mixer_pulled_all_bytes` queued=96000 left=0, exit 0. Nobody has reported hearing the tone. `OWAUDIO play` means
+Runs: at 701af65 (runner1, 2026-11-06, before the exit and whole-walk checks existed) 16 of 16 rows, `mixer_pulled_all_bytes` queued=96000 left=0, exit 0. At d547e85 21 of 22, `editor=0`,
+the same row failing with left=7936. Cause, read from the two logs: the row took one sample about 1.04 s of real time after the play, not the intended 1.2 s (the world timer's first step probably absorbs the frame in progress; inferred),
+and the mixer starts roughly 0.12 s after the play, so the earlier pass, sampled 12 ms later, was close to luck. `Play`'s fixed-time stop had the same weakness and could cut off the end of a sound, so
+it now stops once the queue has drained plus a margin, on real time, with a limit of the sound's length plus 2 s, and the row polls under that limit and logs how long it took. Nobody has reported hearing the tone. `OWAUDIO play` means
 the host called play. Python: `tests/prepare_slice_audio_test.py`, `tests/check_audio_test.py` (synthetic).
 
 ## UNVERIFIED list

@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformTime.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -144,7 +145,11 @@ void LoadOnce()
 
 // The wave a test can look at after the play: bytes the mixer has not pulled yet.
 TWeakObjectPtr<USoundWaveProcedural> GLastWave;
+// Seconds of sound the mixer may still hold after it has pulled the whole queue.
 constexpr float StopMargin = 0.25f;
+// How long past its length a sound may take to drain before it counts as stuck: a start can be late on a busy machine.
+constexpr float DrainLimit = 2.f;
+constexpr float DrainPoll = 0.05f;
 }
 
 bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
@@ -173,9 +178,25 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
         return false;
     }
     GLastWave = Wave;
-    // A procedural source keeps outputting silence after its queue runs dry, so end it at the sound's length.
+    // A procedural source keeps outputting silence after its queue runs dry, so it has to be ended. Not at a fixed time: the mixer can start
+    // late, and a stop by the clock would cut off the end of the sound. Real time, not world time, because the audio thread runs on real time.
+    const double Started = FPlatformTime::Seconds();
     FTimerHandle Stop;
-    World->GetTimerManager().SetTimer(Stop, FTimerDelegate::CreateWeakLambda(Component, [Component] { Component->Stop(); }), Seconds + StopMargin, false);
+    World->GetTimerManager().SetTimer(Stop, FTimerDelegate::CreateWeakLambda(Component, [Component, Seconds, Started, DrainedAt = -1.0, bStopped = false]() mutable
+    {
+        if (bStopped) return;
+        const double Now = FPlatformTime::Seconds();
+        const USoundWaveProcedural* Sound = Cast<USoundWaveProcedural>(Component->Sound);
+        const int32 Left = Sound ? const_cast<USoundWaveProcedural*>(Sound)->GetAvailableAudioByteCount() : 0;
+        if (Left == 0 && DrainedAt < 0) DrainedAt = Now;
+        const bool bStuck = Left > 0 && Now - Started > Seconds + DrainLimit;
+        if (bStuck) UE_LOG(LogTemp, Warning, TEXT("OWAUDIO sound stopped with %d bytes never pulled after %.2f s"), Left, Now - Started);
+        if (bStuck || (DrainedAt >= 0 && Now - DrainedAt >= StopMargin))
+        {
+            bStopped = true;
+            Component->Stop();
+        }
+    }), DrainPoll, true);
     UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num());
     return true;
 }
@@ -256,18 +277,24 @@ void RunTest(UWorld* World)
     const bool bPlayed = Play(World, TEXT("test_tone"));
     Check(bPlayed, TEXT("tone_accepted_by_engine"));
     const int32 Queued = GLastWave.IsValid() ? GLastWave->GetAvailableAudioByteCount() : 0;
-    FTimerHandle Later;
-    World->GetTimerManager().SetTimer(Later, FTimerDelegate::CreateWeakLambda(World, [Passed, Failed, Queued, bPlayed]() mutable
+    const double Started = FPlatformTime::Seconds();
+    const double Limit = (GLastWave.IsValid() ? GLastWave->Duration : 0.f) + DrainLimit;
+    // Polled, because when the mixer starts varies: one sample at a fixed time would pass or fail on a few milliseconds.
+    const TSharedRef<FTimerHandle> Poll = MakeShared<FTimerHandle>();
+    World->GetTimerManager().SetTimer(*Poll, FTimerDelegate::CreateWeakLambda(World, [World, Poll, Passed, Failed, Queued, bPlayed, Started, Limit]() mutable
     {
         const int32 Left = GLastWave.IsValid() ? GLastWave->GetAvailableAudioByteCount() : -1;
+        const double Took = FPlatformTime::Seconds() - Started;
+        if (Left > 0 && Took < Limit) return;
+        World->GetTimerManager().ClearTimer(*Poll);
         // The mixer pulling the queue dry is the strongest check here; it still says nothing about what a person hears.
         const bool bDrained = bPlayed && Queued > 0 && Left == 0;
         (bDrained ? Passed : Failed)++;
-        UE_LOG(LogTemp, Display, TEXT("OWAUDIOTEST %s mixer_pulled_all_bytes queued=%d left=%d"), bDrained ? TEXT("PASS") : TEXT("FAIL"), Queued, Left);
+        UE_LOG(LogTemp, Display, TEXT("OWAUDIOTEST %s mixer_pulled_all_bytes queued=%d left=%d took_s=%.3f limit_s=%.2f"), bDrained ? TEXT("PASS") : TEXT("FAIL"), Queued, Left, Took, Limit);
         UE_LOG(LogTemp, Display, TEXT("OWAUDIOTEST SUMMARY result=%s passed=%d failed=%d (nothing was listened to)"), Failed == 0 ? TEXT("PASS") : TEXT("FAIL"), Passed, Failed);
         // A clean exit, because teardown is where a wave's lifetime would go wrong: tools/test_audio.ps1 requires exit code 0.
         FPlatformMisc::RequestExit(false);
-    }), FMath::Max(0.1f, GLastWave.IsValid() ? GLastWave->Duration + StopMargin - 0.05f : 0.1f), false);
+    }), DrainPoll, true);
 }
 
 }

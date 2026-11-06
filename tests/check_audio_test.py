@@ -10,7 +10,7 @@ import check_audio as ca  # noqa: E402
 PLAY = 'LogTemp: Display: OWAUDIO play role=test_tone channels=1 rate=48000 bytes=96000 (the host called play; not heard)'
 
 
-def log(rows=None, summary=None, play=PLAY, drained='queued=96000 left=0'):
+def log(rows=None, summary=None, play=PLAY, drained='queued=96000 left=0 took_s=1.124 limit_s=3.00'):
     rows = list(ca.EXPECTED) if rows is None else rows
     lines = [play] if play else []
     for name in rows:
@@ -88,6 +88,7 @@ class CheckAudioTest(unittest.TestCase):
     def test_a_mixer_pass_needs_its_numbers(self):
         self.assert_problem(log(drained='queued=0 left=0'), 'mixer row')
         self.assert_problem(log(drained='queued=96000 left=512'), 'mixer row')
+        self.assert_problem(log(drained='queued=96000 left=7936 took_s=3.001 limit_s=3.00'), 'mixer row')
         self.assert_problem(log(drained=''), 'mixer row')
 
 
