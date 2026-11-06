@@ -41,6 +41,7 @@ add_test(NAME natives-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR
 add_test(NAME vm-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/vm_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME script-disasm-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/script_disasm_test.py)
 add_test(NAME controls-keys COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/controls_keys_test.py)
+add_test(NAME controls-check COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_controls_test.py)
 add_test(NAME kismet-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/kismet_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME weapon-gen-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_gen_test.py $<TARGET_FILE:ow-weapongen>)
 add_test(NAME weapon-gen-parity-logic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_gen_parity_test.py)

@@ -5,20 +5,9 @@ AI-assisted (Claude). Host work so a person at the keyboard can do the slice's b
 
 ## Where the stock keys come from
 
-The stock keyboard table is the data object `GD_Input.Devices.InputDevice_Keyboard`, read through the OpenBLCMM object dump
-(`tools/blcmm_dumps.py`, which is the game's own `obj dump` output). Its `Buttons` list pairs a key with input actions. The
-`.ini` files do not hold these keys: `DefaultInput.ini` has only engine and debug bindings, and `DefaultGame.ini` only the menu
-labels (`GBA_Map` and so on). The table is the default layout; a player's rebinds live elsewhere and were not read.
-
-| Key | Stock action | Stock command | Host |
-|---|---|---|---|
-| M | `InputAction_ShowMap` | `ShowMap` | `OWMap`, since this lane |
-| L | `InputAction_ShowLogs` | `ShowStatusMenu_Logs` | `OWMissions`, since this lane |
-| V | `InputAction_Melee` | `PlayerBehavior_Melee` | none yet |
-| G | `InputAction_ThrowGrenade` | `PlayerBehavior_ThrowGrenade` | projectiles lane |
-
-Read from data, not pressed in the running game: **UNVERIFIED** that a stock profile behaves this way, though the table leaves
-little room.
+In the default keyboard layout, M and L map to the stock map and logs actions, and V and G to melee and grenade. That was read from
+the game's data (the keyboard input device object, through the OpenBLCMM dump, `tools/blcmm_dumps.py`), not pressed in the running game:
+**UNVERIFIED** in play. The `.ini` files do not hold these keys, and a player's rebinds live elsewhere and were not read.
 
 ## Map and missions keys
 
@@ -32,20 +21,21 @@ logs `OWCONTROLS map page did not open`.
 
 Host rules, **UNVERIFIED**:
 
-- A press with another status page open switches to the asked page, and a press on the same page closes it. The script reaches
-  the stock menu through `ShowStatusMenu` with a chosen first screen (`WillowPlayerController.ShowMap`), and it refuses through
-  `CanShowModalMenu`, whose conditions were not read. So the host also opens these pages while Maya is down, as its
-  inventory and skills keys already do.
-- With a page holding the keyboard, the page's own script answers the key. `map.js` closes on M and goes to the Missions on L;
-  `missions.js` closes on L but has no M route, and `inventory.js` and `skills.js` have neither. Not changed here: the status
-  pages' internal keys are a separate question, and `inventory.js` belongs to the inventory lane.
+- With every page closed, the key opens its page. The script reaches the stock menu through `ShowStatusMenu` with a chosen first
+  screen (`WillowPlayerController.ShowMap`), and it refuses through `CanShowModalMenu`, whose conditions were not read. So the host
+  also opens these pages while Maya is down, as its inventory and skills keys already do.
+- With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. `map.js` closes on M and goes to
+  the Missions on L; `missions.js` closes on L but has no M route; `inventory.js` and `skills.js` have neither. Not changed here: what
+  M and L do on an open page in the real game is for the real-game capture to read, and the routes follow from that (`inventory.js`
+  stays with the inventory lane).
 
 ## Checks
 
 - `tests/controls_keys_test.py` (ctest `controls-keys`): every `BindAction` has a mapping and every mapping a binding (UE ignores
   a mismatch silently), no key runs two actions, M and L are as above. Our own config and source only.
 - `tools/test_controls.ps1` (`-owcontrolstest`, in engine): presses through the player controller's input path, as the inventory
-  suite does. Rows: `start_closed`, `m_opens_map`, `m_again_closes_map`, `l_opens_missions`, `m_over_missions_is_map`,
-  `l_over_map_is_missions`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=7 failed=0`. A simulated press reaches the bindings
-  even while a page has the keyboard, which a real key does not, so the switch rows test the Walker and HUD path, not what
-  a real press on an open page does (see above).
+  suite does, with every page closed, because a simulated press reaches the bindings even where a real key could not. Rows:
+  `start_closed`, `m_opens_map`, `map_closed`, `l_opens_missions`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=5 failed=0`.
+  `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.
+- `tests/check_controls_test.py` (ctest `controls-check`): the grader on invented logs, including a short count, a renamed row, a
+  repeated row and a missing summary.
