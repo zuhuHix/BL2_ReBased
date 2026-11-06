@@ -1,4 +1,4 @@
-# Skills live capture (prepared 2026-11-04, not yet run). One real-game session in Three Horns Divide (Ice_P) that drives
+# Skills live capture (first run 2026-11-06; fixed after it, see NATIVE_SKILL_BEHAVIOURS.md). One real-game session in Three Horns Divide (Ice_P) that drives
 # scripts/skills_live.py through the openwillow_realgame command channel. Steps, in order; each sets its grades in memory,
 # runs, then puts them back. A failed step is recorded and the run moves on:
 #   discover                   the SkillDefinition paths that match each skill name (sl_find_skills)
@@ -35,7 +35,11 @@ $log = [ordered]@{ started = (Get-Date).ToString('o'); lane = $Lane; character =
 $summary = [ordered]@{ steps = @() }
 
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
-function PyJson([string]$Code, [int]$Timeout = 30) { Py $Code $Timeout | ConvertFrom-Json }
+# The driver prints a Python traceback as its reply; that text goes into the error instead of a JSON parse message.
+function PyJson([string]$Code, [int]$Timeout = 30) {
+    $raw = Py $Code $Timeout
+    try { $raw | ConvertFrom-Json -ErrorAction Stop } catch { throw "python: $raw" }
+}
 # One scripts/skills_live.py (or phaselock) function call, its return value printed as JSON.
 function PyCall([string]$Expr, [int]$Timeout = 30) { PyJson "import json; print(json.dumps($Expr, default=str))" $Timeout }
 
@@ -47,25 +51,14 @@ function ToPyDict([hashtable]$Map) {
 
 # Adult bullymongs (radius 120 or more) near Maya, alive, not yet killed: the names of the first $Count, Ice_P only.
 function Get-Bullymongs([int]$Count) {
-    $r = PyJson @"
-import json
-rows = []
-for d, n, c, dead in list_ai():
-    p = ai_pawn(n)
-    cls = p.AIClass._path_name() if p.AIClass else ""
-    radius = p.CylinderComponent.CollisionRadius if p.CylinderComponent else 0
-    rows.append({"name": n, "dist": d, "class": cls.split(".")[-1], "radius": radius, "dead": dead, "ctrl": p.Controller is not None, "hp": p.GetHealth()})
-ok = [r for r in rows if not r["dead"] and r["ctrl"] and r["hp"] > 0 and "PrimalBeast" in r["class"] and r["radius"] >= 120]
-ok.sort(key=lambda r: (not r["class"].endswith("CharClass_PrimalBeast"), r["dist"]))
-print(json.dumps({"picks": [r["name"] for r in ok[:$Count]], "rows": rows[:30]}))
-"@
+    $r = PyCall "sl_bullymongs($Count)"
     if (@($r.picks).Count -lt $Count) { throw "need $Count adult bullymongs, found $(@($r.picks).Count): $($r.rows | ConvertTo-Json -Compress -Depth 4)" }
     @($r.picks)
 }
 
 # Put Maya 650 uu from the target, looking at it, with the target isolated and immune player; aim at its origin.
 function Set-Up([string]$Target) {
-    $s = PyCall "{'protect': len(protect_player(True)), 'isolate': isolate('$Target'), 'place': place('$Target', 650.0)}"
+    $s = PyCall "{'isolate': isolate('$Target'), 'place': place('$Target', 650.0)}"
     Start-Sleep 3
     $a = PyCall "{'isolate': isolate('$Target'), 'pitch': aim('$Target'), 'measure': measure('$Target'), 'camera': camera(), 'bounds': bounds('$Target')}"
     Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
@@ -83,10 +76,31 @@ function Wait-Ready([double]$Timeout = 60) {
     throw 'cooldown did not end'
 }
 
+# A real kill: the target wounded to 1 health, then the held gun fired at it, up to three short bursts. The last resort is the
+# one large TakeDamage, which the record names, because the first run's kills of that kind did not start the kill-skill timer.
+function Invoke-GunKill([string]$Target) {
+    $wound = PyCall "sl_wound('$Target')"
+    $how = 'not dead'
+    for ($try = 1; $try -le 3; $try++) {
+        PyCall "aim('$Target')" | Out-Null
+        PyCall 'sl_fire(True)' | Out-Null; Start-Sleep -Milliseconds 400; PyCall 'sl_fire(False)' | Out-Null
+        Start-Sleep -Milliseconds 300
+        if ((PyCall "sl_is_dead('$Target')") -eq $true) { $how = "gun, burst $try"; break }
+    }
+    if ($how -eq 'not dead') { PyCall "sl_kill('$Target')" | Out-Null; $how = 'TakeDamage fallback (the gun missed)' }
+    @{ target = $Target; wound = $wound; how = $how }
+}
+
 # Runs one step and writes its record. The grades are set first (a step whose grades cannot be set does not run), and always put
-# back, and any watch the step left open is stopped. A failure is recorded in the step's JSON and the run moves on.
+# back, and any watch the step left open is stopped. A failure stops the step at once with its text (a Python traceback included)
+# in the step's JSON. Two steps failing in a row end the run, so a broken setup cannot use up the slot.
+$script:FailedInARow = 0
 function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
     $rec = [ordered]@{ step = $Name; grades = $Grades; started = (Get-Date).ToString('o') }
+    if ($script:FailedInARow -ge 2) {
+        $summary.steps += [pscustomobject]@{ step = $Name; ok = $false; error = 'not run: the two steps before it failed' }
+        return
+    }
     try {
         if ($Grades.Count) {
             $set = PyCall "sl_set_grades($(ToPyDict $Grades))"
@@ -96,12 +110,14 @@ function Invoke-Step([string]$Name, [hashtable]$Grades, [scriptblock]$Body) {
         }
         $rec.result = & $Body
         $rec.ok = $true
+        $script:FailedInARow = 0
     } catch {
         $rec.ok = $false; $rec.error = "$_"
+        $script:FailedInARow++
     } finally {
         try { $left = PyCall 'sl_stop_watches()'; if (@($left.PSObject.Properties).Count) { $rec.watches_left_open = $left } }
         catch { $rec.watch_cleanup_error = "$_" }
-        try { if ($Grades.Count) { $rec.grades_restored = PyCall 'sl_restore_grades()' } }
+        try { $rec.grades_restored = PyCall 'sl_restore_grades()' }
         catch { $rec.restore_error = "$_" }
         $rec.finished = (Get-Date).ToString('o')
         $rec | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $Out "$Name.json")
@@ -114,7 +130,7 @@ function Invoke-DamageCast([string]$Name, [hashtable]$Grades) {
     Invoke-Step $Name $Grades {
         $t = (Get-Bullymongs 1)[0]
         $setup = Set-Up $t
-        $watch = PyCall 'sl_damage_watch(7.0)'
+        $watch = PyCall "sl_damage_watch(7.0, '$t')"
         Send-Key F
         Start-Sleep 7
         $res = PyCall 'sl_watch_result("damage")'
@@ -170,24 +186,30 @@ try {
     }
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
-    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'skills_live.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") skills_live | Out-Null }
-    # Immunity: protect_player(True) (in Set-Up) refuses damage to Maya; nothing else about her changes.
+    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'skills_live.py') {
+        $reply = Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") skills_live
+        if ("$reply" -match 'Traceback') { throw "loading $f failed: $reply" }
+    }
+    # Immunity for the whole run, once: it refuses damage to Maya; nothing else about her changes.
+    $log.protect = Py 'print(len(protect_player(True)))'
 
     Invoke-Step 'discover' @{} {
         PyCall "{'Helios': sl_find_skills('Helios'), 'Ruin': sl_find_skills('Ruin'), 'Converge': sl_find_skills('Converge'), 'SubSequence': sl_find_skills('Sub-Sequence'), 'SweetRelease': sl_find_skills('Sweet Release'), 'MindsEye': sl_find_skills('Minds Eye'), 'LifeTap': sl_find_skills('Life Tap'), 'Phaselock': sl_find_skills('Phaselock')}"
     }
 
-    # 1. Kill-skill timer. Life Tap (a Harmony kill skill) at grade 5 makes the kill-skill switch run; two kills, about 2 s apart.
+    # 1. Kill-skill timer. Life Tap (a Harmony kill skill) at grade 5 makes the kill-skill switch run; two real gun kills a few
+    # seconds apart, then long enough to see it run out (refresh or add, and the duration).
     Invoke-Step 'killskill_timer' @{ LifeTap = 5 } {
         $targets = Get-Bullymongs 2
-        $watch = PyCall 'sl_killskill_watch(9.0)'
+        $setup = Set-Up $targets[0]
+        $watch = PyCall 'sl_killskill_watch(22.0)'
         Start-Sleep 1
-        $k1 = PyCall "sl_kill('$($targets[0])')"
-        Start-Sleep 2
-        $k2 = PyCall "sl_kill('$($targets[1])')"
-        Start-Sleep 7
+        $k1 = Invoke-GunKill $targets[0]
+        $setup2 = Set-Up $targets[1]
+        $k2 = Invoke-GunKill $targets[1]
+        Start-Sleep 16
         $res = PyCall 'sl_watch_result("killskill")'
-        @{ targets = $targets; watch_start = $watch; kills = @($k1, $k2); result = $res }
+        @{ targets = $targets; setup = @($setup, $setup2); watch_start = $watch; kills = @($k1, $k2); result = $res }
     }
 
     # 2 to 4. One Phaselock cast per skill, each with its own grade set.
@@ -195,14 +217,17 @@ try {
     Invoke-DamageCast 'ruin' @{ Ruin = 1 }
     Invoke-DamageCast 'converge' @{ Converge = 1 }
 
-    # 5. Mind's Eye: the crit bonus at grade 0 (set by Invoke-Step), then at grade 5 (set here; restored at the end of the step).
-    Invoke-Step 'minds_eye_crit' @{ MindsEye = 0 } {
-        Start-Sleep 1
-        $at0 = PyCall 'sl_crit_bonus()'
+    # 5. Mind's Eye: the crit bonus and its stack as the save has it, at grade 1 and at grade 5. Grade 0 cannot be read this way:
+    # an active skill keeps a grade of at least 1 (Skill.UpdateGrade). Restored at the end of the step.
+    Invoke-Step 'minds_eye_crit' @{} {
+        $asSaved = PyCall 'sl_crit_bonus()'
+        $set1 = PyCall "sl_set_grades({'MindsEye': 1})"
+        Start-Sleep 2
+        $at1 = PyCall 'sl_crit_bonus()'
         $set5 = PyCall "sl_set_grades({'MindsEye': 5})"
-        Start-Sleep 1
+        Start-Sleep 2
         $at5 = PyCall 'sl_crit_bonus()'
-        @{ grade0 = $at0; grade5 = $at5; set5 = $set5 }
+        @{ as_saved = $asSaved; grade1 = $at1; grade5 = $at5; set1 = $set1; set5 = $set5 }
     }
 
     # 6. Sub-Sequence and Sweet Release: the lifted bullymong is killed 1.5 s after the F press, during the lock.
@@ -212,14 +237,15 @@ try {
         $watch = PyCall 'sl_killedtarget_watch(12.0)'
         Send-Key F
         Start-Sleep -Milliseconds 1500
-        $kill = PyCall "sl_kill('$t')"
+        $kill = Invoke-GunKill $t
         Start-Sleep 9
         $res = PyCall 'sl_watch_result("killedtarget")'
         $ready = Wait-Ready
         @{ target = $t; setup = $setup; watch_start = $watch; kill = $kill; result = $res; ready = $ready }
     }
     # Normal end: the game quits itself (the finally block still stops it if it has not).
-    Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
+    # The game may be gone before it answers: no reply, or an empty one, is the expected end here.
+    try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { 'quit sent (no reply)' }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } catch {
     $log.error = "$_"
