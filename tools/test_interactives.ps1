@@ -43,7 +43,8 @@ $checker = Join-Path $repo 'tools/check_interactives.py'
 
 $outDir = Join-Path $repo 'local/interactives'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+# Unique per run, so two runs in one second cannot share a log or a frames folder, and a missed frame cannot be met by an earlier copy.
+$stamp = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 $log = Join-Path $outDir "run-$stamp.log"
 $autoLog = Join-Path $outDir "automation-$stamp.log"
 $shotsSource = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'

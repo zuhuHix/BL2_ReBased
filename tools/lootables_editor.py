@@ -591,15 +591,20 @@ def material_instance(planned, parent):
     mel.set_material_instance_parent(instance, parent)
     # Nothing carries over from an earlier run: a texture the plan no longer has must not stay on the instance.
     mel.clear_all_material_instance_parameters(instance)
+    parameters = {str(found) for found in mel.get_texture_parameter_names(parent)}
     for parameter, source in (('Diffuse', planned['diffuse']), ('Normal', planned['normal'])):
         if not source:
             continue
+        if parameter not in parameters:
+            raise RuntimeError(f'the parent material has no {parameter} parameter')
         texture = import_one(source, folder, unreal.Texture2D)
         texture.set_editor_property('srgb', parameter == 'Diffuse')
         if parameter == 'Normal':
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
         save_required(texture)
-        if not mel.set_material_instance_texture_parameter_value(instance, parameter, texture):
+        # Read back: in UE 5.8 the setter's bool is always false (MaterialEditingLibrary.cpp never sets it, whatever happened).
+        mel.set_material_instance_texture_parameter_value(instance, parameter, texture)
+        if mel.get_material_instance_texture_parameter_value(instance, parameter) != texture:
             raise RuntimeError(f'{name} did not take its {parameter} texture')
     save_required(instance)
     return instance

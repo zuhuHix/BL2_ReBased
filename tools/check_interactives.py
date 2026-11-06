@@ -342,7 +342,11 @@ def grade_lid_capture(log_text, out, expected=None, frames_dir=None, allow_no_lo
     for balance, phase in shots:
         phases.setdefault(balance, []).append(phase)
     bad = [f'{balance}: {sorted(got)}' for balance, got in sorted(phases.items()) if sorted(got) != sorted(LID_PHASES)]
-    if len(phases) != int(queue.group(1)):
+    # Dots become underscores in a frame's name, so two balances can share a file: the frames could not then tell them apart.
+    frame_names = [lid_frame_name(balance, LID_PHASES[0]) for balance in phases]
+    if len(set(frame_names)) != len(frame_names):
+        out.add('lid_capture', 'FAIL', f'two balances share one frame name: {sorted(phases)[:3]}')
+    elif len(phases) != int(queue.group(1)):
         out.add('lid_capture', 'FAIL', f'frames of {len(phases)} lootable types, the queue had {queue.group(1)}')
     elif expected is not None and set(phases) != set(expected):
         out.add('lid_capture', 'FAIL', f'the frames are of other types than the content on disk gives: {sorted(set(phases) ^ set(expected))[:3]}')

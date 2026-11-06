@@ -128,6 +128,7 @@ class FakeEditor:
 
     def __init__(self, out, rows):
         self.assets, self.created, self.fail_saves, self.fail_folders, self.folders, self.fail_params = {}, [], set(), set(), [], set()
+        self.parent_parameters = ['Diffuse', 'Normal']
         (out / 'materials_plan.json').write_text(json.dumps({'meshes': rows, 'pickups': []}), encoding='utf-8')
         (out / 'editor_meshes.json').write_text(json.dumps({'mesh_assets': {r['mesh']: f'/Game/{r["mesh"]}' for r in rows}}), encoding='utf-8')
         self.meshes = {f'/Game/{r["mesh"]}': self.mesh(f'/Game/{r["mesh"]}') for r in rows}
@@ -168,11 +169,16 @@ class FakeEditor:
         instance.params.clear()
         instance.cleared += 1
 
+    def get_texture_parameter_names(self, _parent):
+        return self.parent_parameters
+
     def set_material_instance_texture_parameter_value(self, instance, parameter, texture):
-        if parameter in self.fail_params:
-            return False
-        instance.params[parameter] = texture
-        return True
+        if parameter not in self.fail_params:
+            instance.params[parameter] = texture
+        return False   # always, as in UE 5.8: MaterialEditingLibrary.cpp never sets the bool it returns
+
+    def get_material_instance_texture_parameter_value(self, instance, parameter):
+        return instance.params.get(parameter)
 
 
 class EditorMaterialsTest(unittest.TestCase):
@@ -229,6 +235,17 @@ class EditorMaterialsTest(unittest.TestCase):
     def test_only_this_runs_folders_are_saved(self):
         fake, _ = self.run_it([self.planned('A'), self.planned('B', 'Mat_2'), self.planned('C')])
         self.assertEqual(sorted(fake.folders), [f'{editor.MATERIAL_DEST}/Mat_1', f'{editor.MATERIAL_DEST}/Mat_2'])
+
+    def test_the_setters_false_is_not_a_failure(self):
+        # What the first real editor run found: the setter returned false and the value was set.
+        _, report = self.run_it([self.planned('A', normal='nrm.tga')])
+        self.assertEqual(report['bound']['A']['bound'], True)
+
+    def test_a_parent_without_the_parameter_fails_the_row(self):
+        fake, report = self.run_it([self.planned('A', normal='nrm.tga')], lambda f: setattr(f, 'parent_parameters', ['Diffuse']))
+        self.assertEqual(report['bound']['A']['bound'], False)
+        self.assertIn('no Normal parameter', report['bound']['A']['reason'])
+        self.assertIsNone(fake.meshes['/Game/A'].slots[0].material)
 
     def test_a_texture_the_instance_refuses_fails_the_row(self):
         fake, report = self.run_it([self.planned('A', normal='nrm.tga')], lambda f: f.fail_params.add('Normal'))
