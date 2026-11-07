@@ -29,6 +29,24 @@ class MeleeClipTest(unittest.TestCase):
     def test_a_clip_of_another_length_fails(self):
         self.assertTrue(cc.grade_melee_clip(self.PRESS.format('1.20', 1)))
 
+    def test_a_duration_that_is_not_finite_fails(self):
+        for duration in ('nan', 'NaN', 'inf', '-inf'):
+            self.assertTrue(cc.grade_melee_clip(self.PRESS.format(duration, 1)), duration)
+
+    def test_a_malformed_press_fails_beside_a_valid_one(self):
+        good = self.PRESS.format('0.70', 1)
+        for bad in ('OWMELEE press t=12.50 duration=0.70\n', 'OWMELEE press t=12.50 duration=abc clip=1\n', 'OWMELEE press t=nan duration=0.70 clip=1\n',
+                    'OWMELEE press t=12.50 duration=0.70 clip=1 extra\n', 'OWMELEE press t=12.50 duration=0.70 clip=2\n', 'OWMELEE press\n'):
+            self.assertTrue(cc.grade_melee_clip(good + f'LogTemp: Display: {bad}' + good), bad)
+
+    def test_a_refusal_line_is_not_a_press(self):
+        refused = 'LogTemp: Display: OWMELEE press refused: swing in progress t=12.60\n'
+        self.assertEqual(cc.grade_melee_clip(self.PRESS.format('0.70', 1) + refused), [])
+        self.assertTrue(cc.grade_melee_clip(refused))
+
+    def test_a_windows_line_ending_is_not_malformed(self):
+        self.assertEqual(cc.grade_melee_clip(self.PRESS.format('0.70', 1).replace('\n', '\r\n')), [])
+
     def test_no_press_fails(self):
         self.assertTrue(cc.grade_melee_clip('LogTemp: Display: nothing\n'))
 
