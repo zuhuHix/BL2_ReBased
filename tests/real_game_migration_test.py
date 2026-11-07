@@ -64,7 +64,7 @@ try {{ Right-Hold 800 }} catch {{ "refused: $($script:sent.Count)" }}
         path = Path(tmp) / 'hold.ps1'
         path.write_text(script, encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path)], capture_output=True, text=True, timeout=120)
-    assert 'held: 8,16' in done.stdout and 'refused: 0' in done.stdout, done.stdout + done.stderr
+    assert done.returncode == 0 and 'held: 8,16' in done.stdout and 'refused: 0' in done.stdout, done.stdout + done.stderr
 
 
 def test_each_script_parses():
@@ -72,20 +72,71 @@ def test_each_script_parses():
     script = f"""foreach ($f in {names}) {{ $e = $null; [void][Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$e); "$f $(@($e).Count)" }}"""
     done = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True, timeout=120, env=dict(os.environ))
     lines = [l for l in done.stdout.splitlines() if l.strip()]
-    assert len(lines) == 7 and all(l.endswith(' 0') for l in lines), done.stdout + done.stderr
+    assert done.returncode == 0 and len(lines) == 7 and all(l.endswith(' 0') for l in lines), done.stdout + done.stderr
 
 
-def test_the_doc_bars_exactly_the_five_without_a_restore():
+def test_the_doc_bars_exactly_the_seven():
     doc = (ROOT / 'docs/TOOLING.md').read_text(encoding='utf-8')
     line = next(l for l in doc.splitlines() if l.startswith('- **Not to be run:**'))
-    barred = line[:line.index('They report')]
+    barred = re.findall(r'`([^`]+)`', line.split('. ', 1)[0])
+    assert len(barred) == 7 and set(barred) == set(SEVEN), barred
+    # The first five really have no restore, which is the reason given for them; when one gains it, its bar should lift.
     for name in SEVEN[:5]:
-        assert f'`{name}`' in barred, name
-    for name in SEVEN[5:]:
-        assert name not in barred and f'`{name}`' in line, name
-    # Each of the five really has no restore, which is the reason given; when one gains it, its bar should lift.
-    for name in SEVEN[:5]:
-        assert 'Restore-' not in text(name), name
+        assert not re.search('restore-', text(name), flags=re.I), name
+
+
+def helper(name):
+    """One function's text from the shared realgame.ps1."""
+    body = text('realgame')
+    start = body.index(f'function {name}(')
+    return body[start:body.index('\n}\n', start) + 3]
+
+
+def run_stubbed(script):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'stub.ps1'
+        path.write_text(script.replace('@TMP@', tmp), encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path)], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return done.stdout
+
+
+def test_the_marker_is_compared_literally():
+    out = run_stubbed("""$ErrorActionPreference = 'Stop'
+$script:Game = 'C:/G'
+$script:start = Get-Date
+function Get-CimInstance {{ [pscustomobject]@{{ ExecutablePath = 'C:\\G\\Binaries\\Win32\\Borderlands2.exe'; CreationDate = $script:start; CommandLine = $script:line }} }}
+function Stop-Process {{ }}
+{}
+$me = Get-Process -Id $PID
+$script:line = 'game -owrun=[a]-1'; "brackets: $(Stop-OwnGame $me $script:start '-owrun=[a]-1')"
+$script:line = 'game -owrun=other'; "star: $(Stop-OwnGame $me $script:start '-owrun=*')"
+$script:line = $null; "unreadable: $(Stop-OwnGame $me $script:start '-owrun=x')"
+""".format(helper('Stop-OwnGame')))
+    assert 'brackets: stopped' in out, out      # a pattern match would refuse this: [a] matches the letter a
+    assert 'star: refused' in out, out          # and would stop this one: * matches anything
+    assert 'unreadable: refused' in out, out
+
+
+def test_an_old_reply_cannot_answer_a_new_command():
+    out = run_stubbed("""$ErrorActionPreference = 'Stop'
+$script:CmdDir = '@TMP@'
+function New-Guid {{ [guid]'00000000-0000-0000-0000-000000000001' }}
+function Get-Date {{ param($Format) if ($Format) {{ 'T' }} else {{ Microsoft.PowerShell.Utility\\Get-Date }} }}
+# Stands for the driver: at the moment the command is published, says whether an old reply is there, then answers.
+function Move-Item($From, $To) {{
+    Microsoft.PowerShell.Management\\Move-Item -LiteralPath $From -Destination $To
+    "old reply at publish: $(Test-Path -LiteralPath ($To -replace '[.]py$', '.out'))"
+    [IO.File]::WriteAllText(($To -replace '[.]py$', '.out'), 'fresh')
+}}
+{}
+$old = Join-Path $script:CmdDir 'cT-00000000000000000000000000000001.out'
+[IO.File]::WriteAllText($old, 'stale')
+"reply: $(Invoke-GamePy 'print(1)' 5)"
+""".format(helper('Invoke-GamePy')))
+    assert 'old reply at publish: False' in out and 'fresh' in out and 'stale' not in out, out
+    # Two real GUID names in a row differ even inside one millisecond.
+    assert '(New-Guid)' in helper('Invoke-GamePy')
 
 
 if __name__ == '__main__':

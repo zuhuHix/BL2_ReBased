@@ -172,7 +172,7 @@ exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.p
   `test_ambient.ps1` and `seed_ambient_npc_assets.ps1` also wait while `Borderlands2` runs, so real-game probes and
   Unreal runs never overlap.
 - Nobody launches the game while a capture runs: a game started and closed between its checks goes unnoticed.
-- **Not to be run:** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture` and `weapon_part_session`. They report save differences without restoring them, so they must not run against the maintainer's saves. Each moves to the shared tail in `phaselock_integrity_capture.ps1` when next needed, and the bar lifts for that one then. `projectiles_capture` and `weapon_parity2_capture` keep their own verified cleanup and stay runnable.
+- **Not to be run:** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture`, `weapon_part_session`, `projectiles_capture` and `weapon_parity2_capture`. The first five report save differences without restoring them. The last two record a failed restore or a mismatch and still release both locks, so a later capture can start on changed saves. None of them may run against the maintainer's saves. Each moves to the shared tail in `phaselock_integrity_capture.ps1` when next needed, and the bar lifts for that one then.
 - `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
   worktree and is rejected). The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.
 
@@ -1367,7 +1367,7 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   named recipe in Sanctuary, lane E's way, with the live zoom state read back, output under ignored `local/realgame/gun_ads/`. Default guns: the slice shotgun and a Hyperion pistol on iron sights
   (`WEAPON_VISUALS.md` section 23). `-MeasureFov` adds, per gun at hip and at full zoom, the view's horizontal FOV from known directions projected through the HUD canvas and two frames 4 degrees apart under `fov/`, so the turn can be measured from pixels too. Each gun is made at Maya's level. The finalizer is the migrated one, which `tests/gun_ads_capture_test.py` holds equal to `phaselock_integrity_capture.ps1`'s. Do not add `slice_mission_pistol_fire`:
   readying it made it vanish in lane E (cause UNVERIFIED).
-- `pwsh tools/real_game/weapon_parity2_capture.ps1` (real game, hub lock, saves backed up and compared): the world FOV
+- `pwsh tools/real_game/weapon_parity2_capture.ps1` (barred for now, see "Not to be run"; real game, hub lock, saves backed up and compared): the world FOV
   through the HUD canvas, the flash/casing particle systems and impact-explosion hooks per gun, an equal-level status
   series and hip/ADS/reload frames of the slice guns (`scripts/weapon_parity2_probe.py`). Written 2026-11-03; it has not
   run to completion yet (the game stopped at a Steam message box).

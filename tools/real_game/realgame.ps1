@@ -253,7 +253,7 @@ function Stop-OwnGame([Diagnostics.Process]$Started, [datetime]$StartTime, [stri
     if (!$c) { return 'exited' }
     if (!$c.ExecutablePath -or [IO.Path]::GetFullPath($c.ExecutablePath) -ne $exe) { return "refused: pid $($Started.Id) is $($c.ExecutablePath)" }
     if ([math]::Abs(($c.CreationDate - $StartTime).TotalSeconds) -gt 2) { return "refused: pid $($Started.Id) started $($c.CreationDate), ours $StartTime" }
-    if ($c.CommandLine -notlike "*$Marker*") { return "refused: pid $($Started.Id) command line lacks '$Marker'" }
+    if (!$c.CommandLine -or !$c.CommandLine.Contains($Marker)) { return "refused: pid $($Started.Id) command line lacks '$Marker'" }
     Stop-Process -Id $Started.Id -Force; 'stopped'
 }
 
@@ -383,8 +383,11 @@ function Send-Click([switch]$Right) {
 
 # Run Python inside the game through the openwillow_realgame mod and return its printed output.
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
-    $name = 'c' + (Get-Date -Format 'HHmmssfff')
+    # The time first: the driver runs pending commands in name order. The GUID makes the name this call's own, and any reply already under it is removed before
+    # the command is published, so an old reply can't pass as the answer to this one.
+    $name = 'c' + (Get-Date -Format 'HHmmssfff') + '-' + (New-Guid).ToString('N')
     $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
+    if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force -ErrorAction Stop }
     [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (!(Test-Path $out)) { if ((Get-Date) -gt $deadline) { throw "no reply to $name" }; Start-Sleep -Milliseconds 100 }
