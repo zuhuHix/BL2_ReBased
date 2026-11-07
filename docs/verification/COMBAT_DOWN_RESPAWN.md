@@ -168,3 +168,12 @@ AI-assisted (Claude). A first playtest logged capacity 0 on a bought shield: ven
 - **Live check, test-only:** `powershell -File tools/run_hud_shots.ps1 -StandInShield` starts the host with `-owshieldcheck`, adds a stat-less shield, equips it through the inventory's own call, hits Maya through `OpenWillowApplyDamageToPlayer` and waits for the recharge, then `tools/check_shield_check.py` grades the log and frames. It shows the real path, `TickShield`, the damage entry point, the recharge and the HUD frames in a live host. It does not show a real buy or a loot pickup (the Vendor suite covers the buy; both make the same stat-less item) or the rule's numbers against the game.
 - **Not changed:** the card and backpack row still show no stats, and Maya starts with no shield until she gets one.
 
+## The host's fee and message (2026-11-07)
+
+AI-assisted (Claude). `FOpenWillowRespawnFee`. The first playtest found a respawn with no fee and no message, against the live record above.
+
+**Observed in the real game, one capture (`tools/real_game/mission_screen_capture.ps1`, level 8, the zuhu PC, SDK mods loaded; a text search found none hooking this path):** after the respawn, `AwaitingRespawnDisplayRespawnCost` at 9.81 s and `ShowRespawnDialog` 2.0 s later, 11.80 s in all, as recorded above. The charge comes first: 190 on 2,715, the same as L3's row. The script then calls `WillowHUDGFxMovie.AddTrainingText`, not a dialog box, with a duration of 7.0, `PausesGame` false. The panel was up 1.7 s after the call and gone at 8.3 s, with no key pressed.
+
+**What the host does:** 11.8 s after a respawn it charges `0.07 x cash` rounded half up, at most the cash, and shows a timed panel for 7 s: no pause, no key. With no fee it shows the waived text. A second respawn before the charge replaces it (host rule, UNVERIFIED). The text is the game's, read at run time from the install's `WillowGame.int`, and none of it is in this repository; without the install a neutral text stands in.
+
+**Open:** the panel is a plain stand-in, not the game's look. Not done: the death camera, the digital tunnel and Maya's digistruct effect at the station, input staying locked until about 11 s after the respawn, and the HUD's red fee line and money counter. The other-player and waived-for-a-partner strings are not used; the slice has one player.

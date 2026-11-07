@@ -13,6 +13,7 @@
 #include "OpenWillowMayaState.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowRespawnFee.h"
 #include <limits>
 
 namespace
@@ -99,6 +100,25 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestTrue(TEXT("the stand-in shield takes the hit"), Hit.ToShield == 100.f && Hit.ToHealth == 0.f && Maya.Health == HealthBefore);
         Run(Maya, 1.f, 1.f + FromRule.RechargeDelay + 2.f);
         TestTrue(TEXT("it recharges after the delay"), Maya.Shield > 125.f);
+        // The fee's rule, with invented cash values and text.
+        TestEqual(TEXT("fee rounds half up"), FOpenWillowRespawnFee::FeeFor(50), 4);
+        TestEqual(TEXT("fee rounds down below a half"), FOpenWillowRespawnFee::FeeFor(1000), 70);
+        TestEqual(TEXT("fee of nothing"), FOpenWillowRespawnFee::FeeFor(0), 0);
+        TestEqual(TEXT("fee of a little rounds to nothing"), FOpenWillowRespawnFee::FeeFor(7), 0);
+        const FOpenWillowRespawnFee::FStrings None = FOpenWillowRespawnFee::ParseStrings(TEXT("[Other]\nRespawnDialogString=wrong section\n"));
+        TestEqual(TEXT("another section is not read"), FOpenWillowRespawnFee::Message(None, 5), FString(TEXT("Fee: $5")));
+        const FOpenWillowRespawnFee::FStrings Read = FOpenWillowRespawnFee::ParseStrings(TEXT("[WillowHUD]\r\nRespawnDialogTitleString=T\r\nRespawnDialogString=Paid %c\\n\\nDone\r\nRespawnDialogFeeWaivedString=Free\r\n"));
+        TestEqual(TEXT("the title is read"), Read.Title, FString(TEXT("T")));
+        TestEqual(TEXT("the fee goes in and line breaks are real"), FOpenWillowRespawnFee::Message(Read, 9), FString(TEXT("Paid 9\n\nDone")));
+        TestEqual(TEXT("no fee uses the waived text"), FOpenWillowRespawnFee::Message(Read, 0), FString(TEXT("Free")));
+        const TArray<FString> Lines = FOpenWillowRespawnFee::WrapLines(TEXT("aa bb cc\n\ndd"), 5);
+        TestTrue(TEXT("wrap at spaces, keeping the blank line"), Lines == TArray<FString>({TEXT("aa bb"), TEXT("cc"), TEXT(""), TEXT("dd")}));
+        FOpenWillowRespawnFee Fee;
+        Fee.Schedule(10.f);
+        Fee.Tick(21.f, nullptr);
+        TestEqual(TEXT("not due before the delay"), Fee.LastFee(), -1);
+        Fee.Tick(21.9f, nullptr);
+        TestFalse(TEXT("an unknown purse charges nothing and shows nothing"), Fee.LastFee() >= 0 || Fee.IsMessageShown(21.9f));
     }
     {
         FOpenWillowMayaState S = Synthetic();

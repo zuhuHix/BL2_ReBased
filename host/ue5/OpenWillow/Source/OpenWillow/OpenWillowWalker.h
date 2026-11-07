@@ -9,6 +9,7 @@
 #include "OpenWillowMelee.h"
 #include "OpenWillowShotFx.h"
 #include "OpenWillowMayaState.h"
+#include "OpenWillowRespawnFee.h"
 #include "OpenWillowMayaMovement.h"
 #include "OpenWillowWalker.generated.h"
 
@@ -187,6 +188,8 @@ public:
     float LastDownAt() const { return MayaState.DownAt; }
     float LastSecondWindAt() const { return MayaState.SecondWindAt; }
     float LastRespawnAt() const { return MayaState.RespawnAt; }
+    // The fee and message after a respawn (the HUD draws the message; the suite reads the fee).
+    const FOpenWillowRespawnFee& GetRespawnFee() const { return RespawnFee; }
     // Hits that took health and came from a known place (the HUD's damage-direction arrows): how many so far, and the world
     // direction from Maya toward the last one's source (a point hit's shot direction reversed, else the causer's or the
     // instigator's position).
@@ -318,6 +321,7 @@ private:
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;
     void Respawn();
+    FOpenWillowRespawnFee RespawnFee;
     int32 HitsTaken = 0;
     FVector LastHitFrom = FVector::ZeroVector;
     bool bTrackHitCausers = false;

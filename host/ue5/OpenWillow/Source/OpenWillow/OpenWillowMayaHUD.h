@@ -206,6 +206,7 @@ private:
     // "OWMISSIONTEST <step> PASS|FAIL <detail>" and "OWMISSIONTEST SUMMARY passed=<n> failed=<n>", screenshots
     // OWMission_*.png, then quits. tools/test_mission_log.ps1 runs it.
     void TickMissionLogTest();
+    void DrawRespawnMessage(const class AOpenWillowWalker& Maya, class UFont* Font);
     bool bMissionLogTest = false, bMissionsPageReady = false;
     int32 MissionTestStep = 0, MissionTestPassed = 0, MissionTestFailed = 0;
     double MissionTestAt = 0;
