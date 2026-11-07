@@ -39,8 +39,11 @@ Host rules, **UNVERIFIED**:
 - With every page closed, the key opens its page. The script reaches the stock menu through `ShowStatusMenu` with a chosen first
   screen (`WillowPlayerController.ShowMap`), and it refuses through `CanShowModalMenu`, whose conditions were not read.
 - While Maya is down M and L refuse. In the real game neither opened anything (twice each), and the set of actions allowed while down holds no menu. I and K refuse too, by
-  that set only: they were not pressed while down in the real game. A page already open when she went down cannot route to another page either, the same rule, and it can still be
-  closed (host choices: a stock page over going down was not read).
+  that set only: they were not pressed while down in the real game. A page open while she is down cannot route to another page either, the same rule. The suite opens that page after she is down, by the HUD's own call;
+  no row opens one before she goes down, though the refusal reads only the down state. Going down leaves a page open, and a respawn closes it and gives the input back to the game (host choices). What the real game does
+  on going down with a page open is **UNVERIFIED**: a real-game read is queued.
+- A focused page takes its keys in its own script, so the host's closing branch in `ToggleInventory` and `ToggleSkills` runs only when a key reaches the game's bindings. With #158, I and K stay on a focused page while she is
+  down, as they do when she is up, and Escape and Tab close it.
 - With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. In the real game M stayed on the Map (twice) and went to the Map
   from the log (twice) and from Skills (once); L went to the log from the Map, the Inventory and Skills (once each) and stayed on the log (once). So `map.js`, `missions.js`
   and `skills.js` follow that. `inventory.js` routes L too; M on the Inventory was not read live, as a dialog took the key, so that route is from the script below.
@@ -155,8 +158,10 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
-  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=31 failed=0`.
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `escape_closes_page_while_down`, `respawn_closes_page`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=33 failed=0`.
   `route_refused_while_down` sends its key as a keydown event into the page: it tests the page's handler and the host's refusal, not real key delivery, which skips Slate.
+  `escape_closes_page_while_down` sends Escape as a synthetic Slate event to the focused page, so it does cross Slate, but it is not an OS key press. `respawn_closes_page` reads the page and the player controller's input mode on both
+  sides of the respawn, and the mode string is the engine's debug text for what was last set, so it does not prove a key then moves her.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop during a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.

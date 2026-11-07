@@ -18,6 +18,19 @@
 #include "InputCoreTypes.h"
 #include "Misc/CommandLine.h"
 
+// The longest a respawn can take from going down: the bleed-out and the death camera, with room to spare.
+static constexpr float OpenWillowRespawnWait = FOpenWillowMayaState::BaseBleedout + FOpenWillowMayaState::DeathCamera + 12.f;
+
+// The engine's debug text for the input mode last set; the getter exists only in builds with debug drawing.
+static FString InputModeText(const APlayerController& Player)
+{
+#if UE_ENABLE_DEBUG_DRAWING
+    return Player.GetCurrentInputModeDebugString();
+#else
+    return TEXT("not readable in this build");
+#endif
+}
+
 void AOpenWillowWalker::ToggleMapOrMissionsPage(bool bMap)
 {
     // The same steps as ToggleSkills: the trigger and the aim end, and a legacy inventory widget gives way to the page.
@@ -63,7 +76,8 @@ namespace
     float EventDamage = 0.f, EventApplied = 0.f;
     FDelegateHandle HitHandle;
     int32 GrenadesBefore = 0;
-    float ReloadStartBy = 0.f, BurstBy = 0.f, RouteBy = 0.f;
+    float ReloadStartBy = 0.f, BurstBy = 0.f, RouteBy = 0.f, RespawnBefore = 0.f;
+    bool bPageUpBeforeRespawn = false, bUiInputBeforeRespawn = false;
     bool bWeaponOutBefore = false, bReloadStarted = false, bBeforeRefill = false, bBurstOwed = false;
     int32 PagesRefusedBefore = 0, RefusedBefore = 0, GrenadesRefusedBefore = 0, HolstersRefusedBefore = 0, BurstCountBefore = 0, BurstMagazineBefore = 0;
 
@@ -450,7 +464,9 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
     case 39:
         Check(TEXT("k_refused_while_down"), !Hud.IsSkillsOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 4, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
         Hud.ForgetMissionsReport();
-        Hud.ToggleMissions();   // a page already up when she went down, by the HUD's own call
+        // Opened by the HUD's own call with her already down, since the key refuses. So the route row shows a page open while she is down
+        // cannot route; the refusal reads only the down state, but no row opens a page before she goes down.
+        Hud.ToggleMissions();
         RouteBy = Now + 12.f;
         NextAt = Now;
         break;
@@ -462,7 +478,7 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
             if (Now < RouteBy) { NextAt = Now + .2f; return; }
             Check(TEXT("route_refused_while_down"), false, TEXT("the Missions page never said it was ready"));
             Hud.CloseSkills();
-            TestStep = 42;
+            TestStep = 45;
             return;
         }
         PagesRefusedBefore = Hud.TabRoutesRefusedWhileDown;
@@ -474,8 +490,42 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         if (Hud.TabRoutesRefusedWhileDown == PagesRefusedBefore && Now < RouteBy) { NextAt = Now + .1f; return; }
         Check(TEXT("route_refused_while_down"), Hud.IsMissionsOpen() && !Hud.IsMapOpen() && Hud.TabRoutesRefusedWhileDown == PagesRefusedBefore + 1,
             FString::Printf(TEXT("%s refused=%d"), *State(), Hud.TabRoutesRefusedWhileDown - PagesRefusedBefore));
+        // Through Slate to the focused page, as the keyboard sends it (a synthetic Slate event, not an OS key press): its script closes it.
+        Hud.SendSlateKey(TEXT("Escape"));
+        RouteBy = Now + 5.f;
+        NextAt = Now;
+        break;
+    case 42:
+        if (Hud.IsSkillsOpen() && Now < RouteBy) { NextAt = Now + .1f; return; }
+        Check(TEXT("escape_closes_page_while_down"), !Hud.IsSkillsOpen() && Maya.IsDown(), FString::Printf(TEXT("%s down=%d"), *State(), Maya.IsDown()));
         Hud.CloseSkills();
         break;
+    case 43:
+        // A page open when she respawns. She may have respawned already on a slow machine: send her down again, so the row always sees one.
+        if (!Maya.IsDown()) Maya.TakeDamage(Maya.GetShield() + Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
+        RespawnBefore = Maya.LastRespawnAt();
+        Hud.ToggleMissions();
+        bPageUpBeforeRespawn = bUiInputBeforeRespawn = false;
+        RouteBy = Now + OpenWillowRespawnWait;
+        NextAt = Now;
+        break;
+    case 44:
+    {
+        if (Maya.LastRespawnAt() == RespawnBefore && Now < RouteBy)
+        {
+            bPageUpBeforeRespawn = Hud.IsMissionsOpen();
+            bUiInputBeforeRespawn = InputModeText(Player).StartsWith(TEXT("UI Only"));
+            NextAt = Now + .1f;
+            return;
+        }
+        const FString Mode = InputModeText(Player);
+        Check(TEXT("respawn_closes_page"), Maya.LastRespawnAt() != RespawnBefore && !Maya.IsDown() && bPageUpBeforeRespawn && bUiInputBeforeRespawn && !Hud.IsSkillsOpen()
+            && Mode.StartsWith(TEXT("Game Only")) && !Player.ShouldShowMouseCursor(),
+            FString::Printf(TEXT("%s respawned=%d down=%d page_before=%d ui_before=%d cursor=%d mode=%s"), *State(), Maya.LastRespawnAt() != RespawnBefore, Maya.IsDown(),
+                bPageUpBeforeRespawn, bUiInputBeforeRespawn, Player.ShouldShowMouseCursor(), *Mode));
+        Hud.CloseSkills();
+        break;
+    }
     default:
         Check(TEXT("closed_at_end"), !Hud.IsSkillsOpen(), State());
         UE_LOG(LogTemp, Display, TEXT("OWCONTROLS SUMMARY passed=%d failed=%d"), Passed, Failed);
