@@ -1,6 +1,8 @@
 # Which sound events the running game posts (slice audio; AI-assisted, Claude; 2026-11-06)
 
-**State: script written and tested with the game stubbed. It has not run in the game, so this file holds no result yet.**
+**State: no result yet.** One run so far (2026-11-07, at 8e0e8bf) recorded no sound events, because of a bug in the probe: a hook's `func` is a bound function, so reading `func.Name`
+threw on all 42 calls during the casts and shots, and the error was only counted. Nothing about which sound plays for what came from it; its "not locked" and "no event" lines are empty for that reason. The
+data protection held: saves compared identical after the restore. The probe is fixed and its stub now has the real shape, but the fix has not run in the game. A window with hook errors now fails its stage with the first error's text.
 
 `tools/real_game/audio_events_capture.ps1` logs the game's sound calls (`scripts/audio_events.py`) in labelled windows: `idle` (baseline), `phaselock`, `fire_away`
 (shots at the sky), `fire_hit` (shots at a target) and `pickup`. A window's `new` list holds events its baselines did not see; `tied` is the part of `new` that followed

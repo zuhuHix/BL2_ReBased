@@ -43,7 +43,14 @@ function Invoke-Window([string]$Label, [string[]]$Baselines, [scriptblock]$Act, 
     $times = ($script:Presses | ForEach-Object { $_.ToString('R', [Globalization.CultureInfo]::InvariantCulture) }) -join ', '
     $result = Py "import json; print(json.dumps(ae_end([$names], [$times], '$Marker', $Within, $Need), default=str))" | ConvertFrom-Json
     $log["window_$Label"] = $result
-    "$Label`: rows $($result.rows), new events: $($result.new -join ' '); tied to the action ($($result.anchored_by), $($result.anchors) moments): $($result.tied -join ' ')"
+    "$Label`: rows $($result.rows), errors $($result.errors), new events: $($result.new -join ' '); tied to the action ($($result.anchored_by), $($result.anchors) moments): $($result.tied -join ' ')"
+}
+
+# Why a window cannot count: a hook that failed lost calls, so "no event" would mean nothing. Empty when none failed.
+function Get-HookErrors($Window) {
+    if (!$Window) { return 'no window; ' }
+    if ($Window.errors -gt 0) { return "hooks failed $($Window.errors) times, first: $($Window.first_error); " }
+    ''
 }
 
 function Send-Shots([int]$Count) {
@@ -67,7 +74,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = if ($ProbeOnly) { @('hooks') } else { @('hooks', 'phaselock', 'fire_away', 'fire_hit', 'pickup') }
+$stagesRequested = if ($ProbeOnly) { @('hooks') } else { @('hooks', 'baseline', 'phaselock', 'fire_away', 'fire_hit', 'pickup') }
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -161,6 +168,9 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
 
     # Baseline: what the world posts with nobody acting.
     Invoke-Window 'idle' @() { Start-Sleep 3 }
+    # Failed hooks here would empty the baseline, and every later event would look new.
+    $idleErrors = Get-HookErrors $log.window_idle
+    Set-Stage 'baseline' (!$idleErrors) $idleErrors
 
     # 1. Phaselock. A cast that did not lock the target is retried, each attempt in its own window. Whether it locked comes from the skill's
     # own LockTarget call: no recorder, so no pawn is held across commands.
@@ -173,21 +183,26 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
         $log["${name}_locked"] = $lifted
         if ($lifted) { $castTied = @($log["window_$name"].tied) }
     }
-    Set-Stage 'phaselock' ($lifted -and $castTied.Count -gt 0) 'target not locked, or no new sound event followed the cast'
+    $castErrors = Get-HookErrors $log["window_$name"]
+    Set-Stage 'phaselock' (!$castErrors -and $lifted -and $castTied.Count -gt 0) "${castErrors}target not locked, or no new sound event followed the cast"
     Start-Sleep 6     # the lock ends and the target lands
 
     # 2. Shots at the sky: the gun's own sound, with nothing hit.
     Py "pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=10922, Yaw=pc.Rotation.Yaw, Roll=0); print('ok')" | Out-Null
     Invoke-Window 'fire_away' @('idle') { Send-Shots 3 } 'PlayFiringSound' 0.4 2
-    Set-Stage 'fire_away' (@($log.window_fire_away.tied).Count -gt 0) 'no new sound event followed at least 2 shots'
+    $awayErrors = Get-HookErrors $log.window_fire_away
+    Set-Stage 'fire_away' (!$awayErrors -and @($log.window_fire_away.tied).Count -gt 0) "${awayErrors}no new sound event followed at least 2 shots"
 
     # 3. Shots at the target: what the hit adds to the shots above. The health says whether a shot landed.
     Set-Up
-    $before = [double](Py "print(ae_health('$target'))")
+    $before = Py "import json; print(json.dumps(ae_target('$target')))" | ConvertFrom-Json
     Invoke-Window 'fire_hit' @('idle', 'fire_away') { Send-Shots 5 } 'PlayFiringSound' 0.5 2
-    $after = [double](Py "print(ae_health('$target'))")
-    $log.fire_hit_health = @{ before = $before; after = $after }
-    Set-Stage 'fire_hit' (($after -lt $before) -and @($log.window_fire_hit.tied).Count -gt 0) "health $before -> $after, or no new sound event followed at least 2 shots"
+    $after = Py "import json; print(json.dumps(ae_target('$target')))" | ConvertFrom-Json
+    $log.fire_hit_target = @{ before = $before; after = $after }
+    # A target gone after the shots counts as landed, and $log says it was gone rather than at zero.
+    $landed = ($before.gone -eq $false) -and (($after.gone -eq $true) -or ($after.health -lt $before.health))
+    $hitErrors = Get-HookErrors $log.window_fire_hit
+    Set-Stage 'fire_hit' (!$hitErrors -and $landed -and @($log.window_fire_hit.tied).Count -gt 0) "${hitErrors}no shot shown to land (health $($before.health) -> $($after.health), gone $($after.gone)), or no new sound event followed at least 2 shots"
 
     # 4. Pickup: drop a backpack item, stand at it and press use.
     $log.thrown = Py 'import json; print(json.dumps(ae_throw(), default=str))' | ConvertFrom-Json
@@ -201,7 +216,8 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
         $gone = (Py "print(ae_pickup_gone('$pickup'))") -eq 'True'
     }
     $log.pickup_gone = $gone
-    Set-Stage 'pickup' ($gone -and @($log.window_pickup.tied).Count -gt 0) "pickup '$pickup' gone: $gone, or no new sound event followed the press"
+    $pickupErrors = Get-HookErrors $log.window_pickup
+    Set-Stage 'pickup' (!$pickupErrors -and $gone -and @($log.window_pickup.tied).Count -gt 0) "${pickupErrors}pickup '$pickup' of '$($log.thrown.thrown)' gone: $gone, or no new sound event followed the press"
     # A tied event that other windows also saw is weaker evidence: kept beside the results rather than decided here.
     $log.event_overlap = Py 'import json; print(json.dumps(ae_overlap()))' | ConvertFrom-Json
     # The game may close before it answers this one.

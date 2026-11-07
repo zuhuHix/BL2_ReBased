@@ -6,6 +6,7 @@ Run: python tests/audio_events_capture_test.py
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,8 +59,13 @@ def load(tmp, functions=None):
     return namespace
 
 
+def bound(name):
+    """The shape the SDK really passes a hook: a bound function, with the function itself under .func. It has no .Name of its own."""
+    return Obj(func=Obj(Name=name), object=None)
+
+
 def call(ns, fn, by, **values):
-    ns['_ae_on_call'](Obj(Class=Obj(Name=by)), args(**values), None, Obj(Name=fn))
+    ns['_ae_on_call'](Obj(Class=Obj(Name=by)), args(**values), None, bound(fn))
 
 
 def rows_at(ns, *timed):
@@ -77,10 +83,74 @@ def test_a_hook_records_and_never_raises():
         ns['_ae_on_call'](None, None, None, None)                     # a read that fails is counted, not raised into the game
         call(ns, 'PostAkEvent', 'Actor', InAkEvent=event('Shot'), Other=Obj(Name='notasound'))
         result = ns['ae_end']()
-        assert result['errors'] == 1 and result['rows'] == 1
+        assert result['errors'] == 1 and result['rows'] == 1 and 'AttributeError' in result['first_error']
         assert result['counts'] == {'PostAkEvent|Actor|Pkg.Shot': 1}
         rows = (Path(tmp) / 'events_w.jsonl').read_text(encoding='utf-8').splitlines()
         assert json.loads(rows[0])['event'] == 'Pkg.Shot'
+
+
+def test_the_first_runs_mistake_is_counted_with_its_text_and_not_in_the_source():
+    # A function object with a name but no .func is what the old code wanted and the real hook never sends: the first run lost all its calls this way.
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        ns['ae_begin']('w')
+        ns['_ae_on_call'](Obj(Class=Obj(Name='Actor')), args(), None, Obj(Name='PostAkEvent'))
+        result = ns['ae_end']()
+        assert result['rows'] == 0 and result['errors'] == 1 and "'func'" in result['first_error']
+    assert not re.search(r'(?<!func\.)func\.Name', SCRIPT.read_text(encoding='utf-8').replace('`func.Name`', ''))
+
+
+def test_errors_and_their_text_reset_with_each_window():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        ns['ae_begin']('a')
+        ns['_ae_on_call'](None, None, None, None)
+        ns['ae_end']()
+        ns['ae_begin']('b')
+        result = ns['ae_end']()
+        assert result['errors'] == 0 and result['first_error'] is None
+
+
+def test_a_bad_event_read_keeps_the_row_and_counts_the_error():
+    def broken():
+        raise RuntimeError('no such type')
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        ns['ae_begin']('w')
+        ns['_ae_on_call'](Obj(Class=Obj(Name='WillowWeapon')), Obj(_type=Obj(_properties=broken)), None, bound('PlayFiringSound'))
+        result = ns['ae_end']()
+        assert result['rows'] == 1 and result['calls'] == {'PlayFiringSound': 1} and result['errors'] == 1 and 'no such type' in result['first_error']
+
+
+def test_a_call_with_no_arguments_struct_is_a_row():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        ns['ae_begin']('w')
+        ns['_ae_on_call'](Obj(Class=Obj(Name='WillowWeapon')), None, None, bound('PlayFiringSound'))
+        result = ns['ae_end']()
+        assert result['rows'] == 1 and result['errors'] == 0
+
+
+def test_a_window_with_hook_errors_fails_its_stage_with_the_first_errors_text():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    start = text.index('function Get-HookErrors')
+    function = text[start:text.index('function Send-Shots')]
+    body = function + r"""
+$bad = '{"errors": 42, "first_error": "AttributeError(boom)", "tied": ["Pkg.Shot"]}' | ConvertFrom-Json
+$good = '{"errors": 0, "first_error": null, "tied": []}' | ConvertFrom-Json
+"BAD=" + (Get-HookErrors $bad)
+"GOOD=[" + (Get-HookErrors $good) + "]"
+"NONE=" + (Get-HookErrors $null)
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'errors.ps1'
+        script.write_text(body, encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+    assert 'BAD=hooks failed 42 times, first: AttributeError(boom)' in done.stdout, done.stdout + done.stderr
+    assert 'GOOD=[]' in done.stdout and 'NONE=no window' in done.stdout, done.stdout
+    # Every stage asks it, and a tied event cannot outvote it.
+    assert text.count('(!$castErrors -and') == 1 and text.count('(!$awayErrors -and') == 1
+    assert text.count('(!$hitErrors -and') == 1 and text.count('(!$pickupErrors -and') == 1 and "Set-Stage 'baseline' (!$idleErrors)" in text
 
 
 def test_a_behavior_gives_its_own_event_and_a_marker_gives_none():
@@ -179,7 +249,7 @@ def test_overlap_names_the_other_windows_that_saw_a_tied_event():
 def test_the_stages_accept_only_tied_events_and_no_pawn_is_held():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     body = text[:text.index('\n} catch {\n    $runError')]
-    stages = [line for line in body.splitlines() if line.strip().startswith('Set-Stage ') and "'hooks'" not in line]
+    stages = [line for line in body.splitlines() if line.strip().startswith('Set-Stage ') and "'hooks'" not in line and "'baseline'" not in line]
     assert len(stages) == 4 and all('.tied' in line or 'castTied' in line for line in stages), stages
     assert '.new).Count' not in body
     # The recorder holds a target pawn on every frame; this capture only needs the skill's own lock call.
@@ -211,30 +281,74 @@ def test_a_hook_has_no_way_to_change_the_call():
     assert 'Block' not in source and 'Type.POST' not in source
 
 
-def test_health_falls_back_to_the_field():
+def test_target_reads_health_with_a_fallback():
     with tempfile.TemporaryDirectory() as tmp:
         ns = load(tmp)
         ns['ai_pawn'] = lambda name: Obj(Health=7)
-        assert ns['ae_health']('x') == 7.0
+        assert ns['ae_target']('x') == {'gone': False, 'health': 7.0}
         ns['ai_pawn'] = lambda name: Obj(GetHealth=lambda: 3)
-        assert ns['ae_health']('x') == 3.0
+        assert ns['ae_target']('x') == {'gone': False, 'health': 3.0}
 
 
-def test_a_target_that_is_gone_counts_as_health_zero():
+def test_gone_and_zero_health_are_different_answers():
     with tempfile.TemporaryDirectory() as tmp:
         ns = load(tmp)
 
         def gone(name):
             raise LookupError(name)
         ns['ai_pawn'] = gone
-        assert ns['ae_health']('x') == 0.0
+        assert ns['ae_target']('x') == {'gone': True, 'health': None}
+        ns['ai_pawn'] = lambda name: Obj(bDeleteMe=True, Health=5)
+        assert ns['ae_target']('x') == {'gone': True, 'health': None}
+        ns['ai_pawn'] = lambda name: Obj(bDeleteMe=False, Health=0)
+        assert ns['ae_target']('x') == {'gone': False, 'health': 0.0}
 
 
 def test_throw_with_an_empty_backpack_throws_nothing():
     with tempfile.TemporaryDirectory() as tmp:
         ns = load(tmp)
         ns['get_pc'] = lambda: Obj(GetPawnInventoryManager=lambda: Obj(Backpack=[]))
-        assert ns['ae_throw']() == {'thrown': None}
+        assert ns['ae_throw']()['thrown'] is None
+
+
+def named(cls, name):
+    return Obj(Class=Obj(Name=cls), GetShortHumanReadableName=lambda: name, Name=name)
+
+
+def throw_setup(ns, items):
+    thrown = []
+    manager = Obj(Backpack=items, ThrowBackpackInventory=thrown.append)
+    ns['get_pc'] = lambda: Obj(GetPawnInventoryManager=lambda: manager, Pawn=Obj(Location=Obj(X=0.0, Y=0.0, Z=0.0), BaseEyeHeight=60.0))
+    return thrown
+
+
+def test_throw_prefers_a_gun_and_never_a_usable_item():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        diary, shield, gun = named('WillowUsableItem', 'Diary'), named('WillowShield', 'Shield'), named('WillowWeapon', 'Gun')
+        thrown = throw_setup(ns, [diary, shield, gun])
+        assert ns['ae_throw']()['thrown'] == 'WillowWeapon:Gun' and thrown == [gun] and ns['ae']['thrown'] == 'WillowWeapon:Gun'
+        thrown = throw_setup(ns, [diary, shield])
+        result = ns['ae_throw']()
+        assert result['thrown'] == 'WillowShield:Shield' and result['is_gun'] is False and thrown == [shield]
+        thrown = throw_setup(ns, [diary])
+        assert ns['ae_throw']()['thrown'] is None and thrown == [] and ns['ae']['thrown'] is None
+
+
+def pickup(name, inventory, x):
+    return Obj(Name=name, Inventory=inventory, bDeleteMe=False, Location=Obj(X=x, Y=0.0, Z=0.0))
+
+
+def test_face_goes_to_the_thrown_items_pickup_not_the_nearest():
+    with tempfile.TemporaryDirectory() as tmp:
+        ns = load(tmp)
+        throw_setup(ns, [named('WillowWeapon', 'Gun')])
+        ns['ae_throw']()
+        near, own = pickup('Near', named('WillowWeapon', 'Loot'), 10.0), pickup('Own', named('WillowWeapon', 'Gun'), 500.0)
+        sys.modules['unrealsdk'].find_all = lambda *a, **k: [near, own]
+        assert ns['ae_face_pickup']() == 'Own'
+        sys.modules['unrealsdk'].find_all = lambda *a, **k: [near]     # another item's pickup answers another question
+        assert ns['ae_face_pickup']() is None
 
 
 def test_a_failed_read_costs_a_stage_not_the_session():
