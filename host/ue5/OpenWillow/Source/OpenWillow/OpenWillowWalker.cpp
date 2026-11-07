@@ -1278,6 +1278,14 @@ void AOpenWillowWalker::UpdateAim(float Now)
     }
     UpdateArmsVisibility();
 }
+void AOpenWillowWalker::EndPlay(const EEndPlayReason::Type Reason)
+{
+    if (!ProxyGunIds.IsEmpty())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow weapon mesh: %d guns showed the Infinity proxy this run: %s"), ProxyGunIds.Num(), *FString::Join(ProxyGunIds.Array(), TEXT(", ")));
+    }
+    Super::EndPlay(Reason);
+}
 void AOpenWillowWalker::SelectSlot(int32 Slot)
 {
     if (!bMayaActive || !ArmsAnim || MeleeBusy()) return;
@@ -1296,6 +1304,10 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
         WeaponMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/OpenWillow/Weapons/InfinityProxy/SK_InfinityProxy.SK_InfinityProxy"));
         WeaponVisual->SetSkeletalMesh(WeaponMesh);
         OpenWillowGunLook::Apply(WeaponVisual);
+        // Every gun then looks the same and nothing else fails: a frame of it says nothing about that gun's look.
+        ProxyGunIds.Add(Item->Id);
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow weapon mesh for %s: no library or pre-built mesh, showing the Infinity proxy (%d guns so far); import the part library (WEAPON_VISUALS.md, data steps)"),
+            *Item->Id, ProxyGunIds.Num());
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow weapon mesh for %s: %s"), *Item->Id, WeaponMesh ? *WeaponMesh->GetPathName() : TEXT("none"));
     FindViewModel(Item);  // compose it now, so ApplyViewModel finds a rolled gun's by id
