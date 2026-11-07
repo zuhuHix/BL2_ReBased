@@ -1361,6 +1361,10 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   from the cooked particle systems by `tools/weapon_muzzle_fx.py` (`--system <ParticleSystem>` / `--collection <path>`
   print one as JSON; the lookup-table layout is fitted, see WEAPON_VISUALS.md section 18). `-owflashfill=<f>` sets the
   host's flash-quad fill (default 0.5).
+- `pwsh tools/real_game/gun_ads_capture.ps1` (real game, hub lock, saves backed up and compared, written 2026-11-07, never run): an idle and an ADS still of each
+  named recipe in Sanctuary, lane E's way, with the live zoom state read back, output under ignored `local/realgame/gun_ads/`. Default guns: the slice shotgun and a Hyperion pistol on iron sights
+  (`WEAPON_VISUALS.md` section 23). Each gun is made at Maya's level. The finalizer is the migrated one, which `tests/gun_ads_capture_test.py` holds equal to `phaselock_integrity_capture.ps1`'s. Do not add `slice_mission_pistol_fire`:
+  readying it made it vanish in lane E (cause UNVERIFIED).
 - `pwsh tools/real_game/weapon_parity2_capture.ps1` (real game, hub lock, saves backed up and compared): the world FOV
   through the HUD canvas, the flash/casing particle systems and impact-explosion hooks per gun, an equal-level status
   series and hip/ADS/reload frames of the slice guns (`scripts/weapon_parity2_probe.py`). Written 2026-11-03; it has not
