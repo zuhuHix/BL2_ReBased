@@ -220,6 +220,7 @@ bool FOpenWillowDropActorTest::RunTest(const FString&)
 }
 
 // Which arms set a gun plays (invented clip tables): the view data first, then the item type, then the pistol; a set counts only if it is whole.
+// The two helpers only: this would still pass if the Walker's equip stopped calling them. That wiring shows in a capture's "arms idle set" log lines.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowArmsSetTest, "OpenWillow.WeaponAssembly.ArmsSet",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FOpenWillowArmsSetTest::RunTest(const FString&)

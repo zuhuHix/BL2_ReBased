@@ -19,7 +19,8 @@ namespace OpenWillowViewTypes
 TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOpenWillowWeaponPart>& Parts);
 
 // Which arms clip set a gun plays. Wanted: the view data's set, else by item type, else Pistol. Resolved: Wanted only if ClipExists finds every
-// clip an equip needs, else Pistol, with the missing clips in OutMissing: a partly imported set must not leave some clips null. Pistol is always whole.
+// clip an equip needs, else Pistol, with the missing clips in OutMissing: a partly imported set must not leave some clips null. The pistol is not checked:
+// its Idle to Jump_End and PistolCombat's Draw and ADD_Fire_Recoil are required, from the character import. If one is absent, LoadArmsAnim warns and that clip stays null.
 FString WantedArmsSet(const FString& ViewSet, const FString& ItemType);
 FString ResolveArmsSet(const FString& Wanted, TFunctionRef<bool(const FString& Clip)> ClipExists, TArray<FString>& OutMissing);
 
