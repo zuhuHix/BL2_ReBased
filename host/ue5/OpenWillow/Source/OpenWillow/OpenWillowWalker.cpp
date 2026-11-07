@@ -1299,15 +1299,19 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     WeaponVisual->SetHiddenInGame(WeaponMesh == nullptr || bInventoryPresentation);
     // The arms play the clip set of the weapon's type (the running game's AnimSet Anim_1st_Person.<type>); a type whose
     // clips were not imported keeps the pistol set. Imported by tools/prepare_character_anims.py + import_character_anims.py.
-    FString ArmsSet = TEXT("Pistol");
-    if (Item->Type == TEXT("Assault Rifle")) ArmsSet = TEXT("AssaultRifle");
-    else if (Item->Type == TEXT("Sub-Machine Gun") || Item->Type == TEXT("SMG")) ArmsSet = TEXT("SMG");
-    else if (Item->Type == TEXT("Shotgun")) ArmsSet = TEXT("Shotgun");
-    // The view data names the set outright, for the types the checks above do not cover (launchers, sniper rifles).
-    if (const FViewModel* View = FindViewModel(Item); View && !View->ArmsAnimSet.IsEmpty()) ArmsSet = View->ArmsAnimSet;
-    const bool bOwnSet = ArmsSet != TEXT("Pistol")
-        && FPackageName::DoesPackageExist(FString::Printf(TEXT("%s/FirstPerson/Anim_%s_Idle"), MayaRoot, *ArmsSet));
-    if (!bOwnSet) ArmsSet = TEXT("Pistol");
+    const FViewModel* View = FindViewModel(Item);
+    const FString WantedSet = OpenWillowViewTypes::WantedArmsSet(View ? View->ArmsAnimSet : FString(), Item->Type);
+    TArray<FString> MissingClips;
+    const FString ArmsSet = OpenWillowViewTypes::ResolveArmsSet(WantedSet, [&WantedSet](const FString& Clip)
+    {
+        return FPackageName::DoesPackageExist(FString::Printf(TEXT("%s/FirstPerson/Anim_%s_%s"), MayaRoot, *WantedSet, *Clip));
+    }, MissingClips);
+    const bool bOwnSet = ArmsSet != TEXT("Pistol");
+    HeldArmsSet = ArmsSet;
+    if (!MissingClips.IsEmpty())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms set %s for %s is missing %s; using the pistol set"), *WantedSet, *Item->Id, *FString::Join(MissingClips, TEXT(", ")));
+    }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow arms idle set %s for %s (item type %s)"), *ArmsSet, *Item->Id, *Item->Type);
     IdleAnim = LoadArmsAnim(*ArmsSet, TEXT("Idle"));
     RunAnim = LoadArmsAnim(*ArmsSet, TEXT("Run_F"));
@@ -1646,8 +1650,7 @@ bool AOpenWillowWalker::StartReload(float Now)
             if (FPackageName::DoesPackageExist(FPackageName::ObjectPathToPackageName(Library))) ReloadAsset = Library;
         }
         WeaponReloadAnim = LoadObject<UAnimSequence>(nullptr, *ReloadAsset);
-        ArmsReloadAnim = (!Model->ArmsAnimSet.IsEmpty() && !Model->ReloadAnimation.IsEmpty())
-            ? LoadArmsAnim(*Model->ArmsAnimSet, *Model->ReloadAnimation) : nullptr;
+        ArmsReloadAnim = !Model->ReloadAnimation.IsEmpty() ? LoadArmsAnim(*HeldArmsSet, *Model->ReloadAnimation) : nullptr;
         const float Rate = WeaponReloadAnim
             ? WeaponReloadAnim->GetPlayLength() / FMath::Max(0.1f, Weapon->ReloadTime) : 1.f;
         if (WeaponReloadAnim && WeaponVisual)
@@ -1664,12 +1667,12 @@ bool AOpenWillowWalker::StartReload(float Now)
         {
             ArmsAnim->PlayAction(ArmsReloadAnim, 1.f, Rate);
             UE_LOG(LogTemp, Display, TEXT("OpenWillow arms reload clip %s/%s rate %.3f"),
-                *Model->ArmsAnimSet, *Model->ReloadAnimation, Rate);
+                *HeldArmsSet, *Model->ReloadAnimation, Rate);
         }
         else
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms reload animation missing: %s/%s"),
-                *Model->ArmsAnimSet, *Model->ReloadAnimation);
+                *HeldArmsSet, *Model->ReloadAnimation);
         }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload started: %s, %.1f s"), *Weapon->Name, Weapon->ReloadTime);

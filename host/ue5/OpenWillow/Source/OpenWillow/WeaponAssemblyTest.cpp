@@ -219,6 +219,31 @@ bool FOpenWillowDropActorTest::RunTest(const FString&)
     return true;
 }
 
+// Which arms set a gun plays (invented clip tables): the view data first, then the item type, then the pistol; a set counts only if it is whole.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowArmsSetTest, "OpenWillow.WeaponAssembly.ArmsSet",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FOpenWillowArmsSetTest::RunTest(const FString&)
+{
+    TestEqual(TEXT("The view data wins"), OpenWillowViewTypes::WantedArmsSet(TEXT("RocketLauncher"), TEXT("Shotgun")), FString(TEXT("RocketLauncher")));
+    TestEqual(TEXT("No view data: by item type"), OpenWillowViewTypes::WantedArmsSet(FString(), TEXT("Shotgun")), FString(TEXT("Shotgun")));
+    TestEqual(TEXT("No view data, a type with no mapping: the pistol"), OpenWillowViewTypes::WantedArmsSet(FString(), TEXT("Launcher")), FString(TEXT("Pistol")));
+    TArray<FString> Missing;
+    auto Exists = [](const FString&) { return true; };
+    auto None = [](const FString&) { return false; };
+    auto NoDraw = [](const FString& Clip) { return Clip != TEXT("Draw"); };
+    TestEqual(TEXT("A whole set is used"), OpenWillowViewTypes::ResolveArmsSet(TEXT("Shotgun"), Exists, Missing), FString(TEXT("Shotgun")));
+    TestEqual(TEXT("It misses nothing"), Missing.Num(), 0);
+    TestEqual(TEXT("An unknown set falls back"), OpenWillowViewTypes::ResolveArmsSet(TEXT("Nothing"), None, Missing), FString(TEXT("Pistol")));
+    TestEqual(TEXT("It misses every clip"), Missing.Num(), 7);
+    TestEqual(TEXT("A partial set falls back"), OpenWillowViewTypes::ResolveArmsSet(TEXT("Shotgun"), NoDraw, Missing), FString(TEXT("Pistol")));
+    TestEqual(TEXT("Only that clip is missing"), Missing.Num(), 1);
+    TestTrue(TEXT("It names the clip"), Missing.Contains(TEXT("Draw")));
+    TestEqual(TEXT("An empty set is the pistol"), OpenWillowViewTypes::ResolveArmsSet(FString(), None, Missing), FString(TEXT("Pistol")));
+    TestEqual(TEXT("The pistol needs no check"), OpenWillowViewTypes::ResolveArmsSet(TEXT("Pistol"), None, Missing), FString(TEXT("Pistol")));
+    TestEqual(TEXT("And misses nothing"), Missing.Num(), 0);
+    return true;
+}
+
 // A rolled gun's view entry on a synthetic table (invented names, no game data): sockets follow the parts, an empty slot may use the
 // plain name and a part outside the table may not, the zoom socket falls back to its second name, the sight decides the overlay, an unknown type
 // gives nothing, a stale table is refused, and the composed entry goes through the Walker's own parser. Then the real table, if this machine has one.
