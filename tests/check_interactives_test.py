@@ -57,7 +57,9 @@ def line(text):
     return f'LogTemp: Display: {text}\n'
 
 
-QUICK_LOOKED = 'OWQCTEST looked away selected=0'
+QUICK_LOOKED = 'OWQCTEST looked away selected=0 target=none'
+VIEW_BLOCKED = 'OWQCTEST blocked selected=0 target=none fixture=1'
+VIEW_CLEAR = 'OWQCTEST clear selected=1 target=interactive'
 QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
              'OWQCTEST walked away',
              'OWQUICKCHANGE cancel id=S reason=not the selected target',
@@ -93,7 +95,7 @@ def good_log(spawned=3, unsupported=1):
     text += line(f'OWLOOTLID material balance=Balance.0 id=Map:Point_2 path={PLANNED_PATH}')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Balance.0 phase={phase}')
-    text += ''.join(line(row) for row in [QUICK_LOOKED, *QUICK_RUN])
+    text += ''.join(line(row) for row in [QUICK_LOOKED, VIEW_BLOCKED, VIEW_CLEAR, *QUICK_RUN])
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
 
@@ -352,6 +354,38 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(ci.main(['--log', str(Path(tmp) / 'none.log'), '--interactives', str(Path(tmp) / 'x.json')]), 2)
 
 
+class ViewBlockerTest(unittest.TestCase):
+    def grade(self, *rows):
+        out = ci.Results()
+        ci.grade_view_blocker('\n'.join([*rows, QUICK_RUN[0]]) + '\n', out)
+        return out.rows[0][1]
+
+    def test_blocked_then_clear_passes(self):
+        self.assertEqual(self.grade(VIEW_BLOCKED, VIEW_CLEAR), 'PASS')
+
+    def test_the_target_kept_behind_the_blocker_fails(self):
+        self.assertEqual(self.grade('OWQCTEST blocked selected=1 target=interactive fixture=1', VIEW_CLEAR), 'FAIL')
+
+    def test_another_target_behind_the_blocker_fails(self):
+        self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=door fixture=1', VIEW_CLEAR), 'FAIL')
+
+    def test_no_fixture_shows_nothing(self):
+        self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=none fixture=0', VIEW_CLEAR), 'FAIL')
+
+    def test_the_clear_ray_must_select_it(self):
+        self.assertEqual(self.grade(VIEW_BLOCKED, 'OWQCTEST clear selected=0 target=none'), 'FAIL')
+
+    def test_a_clear_ray_taken_by_another_target_fails(self):
+        self.assertEqual(self.grade(VIEW_BLOCKED, 'OWQCTEST clear selected=0 target=vendor'), 'FAIL')
+
+    def test_a_lost_line_fails(self):
+        self.assertEqual(self.grade(VIEW_BLOCKED), 'FAIL')
+        self.assertEqual(self.grade(VIEW_CLEAR), 'FAIL')
+
+    def test_the_wrong_order_fails(self):
+        self.assertEqual(self.grade(VIEW_CLEAR, VIEW_BLOCKED), 'FAIL')
+
+
 class QuickChangeTest(unittest.TestCase):
     def grade(self, rows=None):
         out = ci.Results()
@@ -368,6 +402,10 @@ class QuickChangeTest(unittest.TestCase):
 
     def test_a_station_selected_while_looking_away_fails(self):
         self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=1', *QUICK_RUN])[1], 'FAIL')
+
+    def test_another_target_while_looking_away_fails(self):
+        # The station is not selected, but the press would still go to something.
+        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=0 target=vendor', *QUICK_RUN])[1], 'FAIL')
 
     def test_a_prompt_before_the_look_away_line_fails(self):
         self.assertEqual(self.graded_as_is([QUICK_RUN[0], QUICK_LOOKED, *QUICK_RUN[1:]])[1], 'FAIL')

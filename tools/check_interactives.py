@@ -41,7 +41,9 @@ QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)
 QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
 QUICK_ANY = re.compile(r'OWQUICKCHANGE (.*)$', re.M)
 QUICK_AWAY = re.compile(r'OWQCTEST walked away')
-QUICK_LOOKED = re.compile(r'OWQCTEST looked away selected=(\d+)')
+QUICK_LOOKED = re.compile(r'OWQCTEST looked away selected=(\d+) target=(\S+)')
+VIEW_BLOCKED = re.compile(r'OWQCTEST blocked selected=(\d+) target=(\S+) fixture=(\d+)')
+VIEW_CLEAR = re.compile(r'OWQCTEST clear selected=(\d+) target=(\S+)')
 QUICK_REFUSAL = re.compile(r'OWQCTEST refusal money=(\d+) grades_same=(\d)')
 QUICK_GRADES = re.compile(r'OWQCTEST reset grades_changed=(\d)')
 QUICK_RESET = re.compile(r'OWQUICKCHANGE reset id=(\S+) ok=(\d) cost=(\d+) before=(\d+) after=(\d+) reason=(.*)$', re.M)
@@ -275,8 +277,8 @@ def grade_quick_change(log_text, out):
         out.add('quick_change', 'FAIL', f'station events {kinds}, expected prompt, cancel, prompt, reset, prompt, reset')
         return
     looked = list(QUICK_LOOKED.finditer(log_text))
-    if len(looked) != 1 or looked[0].group(1) != '0' or looked[0].end() > events[0][1].start():
-        out.add('quick_change', 'FAIL', f'in reach and looking away must select nothing and ask nothing, before the first prompt: {[m.group(0) for m in looked]}')
+    if len(looked) != 1 or looked[0].groups() != ('0', 'none') or looked[0].end() > events[0][1].start():
+        out.add('quick_change', 'FAIL', f'in reach and looking away, the press must have no target at all, before the first prompt: {[m.group(0) for m in looked]}')
         return
     away, refused, confirmed = events[1][1], events[3][1], events[5][1]
     if QUICK_AWAY.search(log_text, events[0][1].end(), away.start()) is None or away.group(2).strip() != 'not the selected target':
@@ -305,6 +307,27 @@ def grade_quick_change(log_text, out):
     else:
         out.add('quick_change', 'PASS', f'walk-away cancelled, low money refused, reset for {confirmed.group(3)}; '
                                         f'money {confirmed.group(4)} -> {confirmed.group(5)}')
+
+
+def grade_view_blocker(log_text, out):
+    """The same spot, the station in reach and looked at: with something solid on the ray it is not the target, and with a clear ray it is.
+    Before the first prompt, so nothing the station did since can explain either."""
+    blocked = list(VIEW_BLOCKED.finditer(log_text))
+    clear = list(VIEW_CLEAR.finditer(log_text))
+    if len(blocked) != 1 or len(clear) != 1:
+        out.add('use_view_blocker', 'FAIL', f'{len(blocked)} blocked and {len(clear)} clear lines, expected one each')
+        return
+    first_prompt = QUICK_PROMPT.search(log_text)
+    if blocked[0].end() > clear[0].start() or first_prompt is None or clear[0].end() > first_prompt.start():
+        out.add('use_view_blocker', 'FAIL', 'expected blocked, then clear, then the first station prompt')
+    elif blocked[0].group(3) != '1':
+        out.add('use_view_blocker', 'FAIL', 'the blocking fixture did not spawn, so this shows nothing')
+    elif blocked[0].group(1, 2) != ('0', 'none'):
+        out.add('use_view_blocker', 'FAIL', f'something solid on the ray, yet: {blocked[0].group(0)}')
+    elif clear[0].groups() != ('1', 'interactive'):
+        out.add('use_view_blocker', 'FAIL', f'a clear ray, yet: {clear[0].group(0)}')
+    else:
+        out.add('use_view_blocker', 'PASS', 'not the target with something solid on the ray, the target with it gone')
 
 
 def expected_lid_types(doc, content_root):
@@ -485,6 +508,7 @@ def grade(log_text, automation_text, doc, skip_automation=False, content_root=No
     grade_slots(log_text, out)
     grade_pickups(log_text, out)
     grade_quick_change(log_text, out)
+    grade_view_blocker(log_text, out)
     grade_lid_capture(log_text, out, expected_lid_types(doc, content_root), frames_dir, allow_no_lootables)
     grade_lootable_materials(log_text, out, expected_lid_materials(doc, content_root, material_plan), allow_no_lootables)
     grade_test_sequence(log_text, objects, out)

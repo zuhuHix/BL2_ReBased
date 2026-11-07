@@ -11,6 +11,7 @@
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowWeaponGen.h"
 #include "Animation/AnimSequence.h"
+#include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -1081,7 +1082,7 @@ AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::SelectedStation(
 
 bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
 {
-    if (Stations.Num() == 0 || !Stations[0].IsValid() || TestStationStep > 7) return false;
+    if (Stations.Num() == 0 || !Stations[0].IsValid() || TestStationStep > 8) return false;
     AOpenWillowQuickChangeStation& Station = *Stations[0].Get();
     UOpenWillowSkills* Skills = Walker.GetSkills();
     UOpenWillowInventory* Inventory = Walker.GetInventory();
@@ -1099,6 +1100,19 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
             Controller->SetControlRotation((Station.UseBox().GetCenter() - OpenWillowUseView::EyeOf(Walker)).Rotation() + FRotator(0.f, Turn, 0.f));
     };
     Face(0.f);   // again at each step: Maya may still be landing
+    // What the press would go to now, whichever kind; the station not being selected does not say the press goes nowhere.
+    const auto TargetNow = [&Walker]() -> const TCHAR*
+    {
+        switch (Walker.NearestUseTarget())
+        {
+        case EOpenWillowUseTarget::None: return TEXT("none");
+        case EOpenWillowUseTarget::Vendor: return TEXT("vendor");
+        case EOpenWillowUseTarget::Interactive: return TEXT("interactive");
+        case EOpenWillowUseTarget::Door: return TEXT("door");
+        case EOpenWillowUseTarget::Pickup: return TEXT("pickup");
+        }
+        return TEXT("unknown");
+    };
     int32 Money = 0;
     Inventory->GetMoney(Money);
     switch (TestStationStep++)
@@ -1113,39 +1127,67 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
         // In reach with the station behind her: not the target, and a press asks nothing.
         Face(180.f);
         const bool bSelectedAway = SelectedStation(Walker) != nullptr;
+        const TCHAR* TargetAway = TargetNow();
         Walker.PressUseKey();
-        UE_LOG(LogTemp, Display, TEXT("OWQCTEST looked away selected=%d"), bSelectedAway ? 1 : 0);
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST looked away selected=%d target=%s"), bSelectedAway ? 1 : 0, TargetAway);
         Face(0.f);
+        // Test fixture: a sheet across the ray, halfway to the station, for the next step. Only the visibility channel sees it, so it cannot move her.
+        const FVector Eye = OpenWillowUseView::EyeOf(Walker);
+        const FVector Direction = Walker.GetViewRotation().Vector();
+        double ToStation = 0;
+        OpenWillowUseView::RayEntersBox(Eye, Direction, Station.UseBox(), ToStation);
+        const FVector Halfway = Eye + Direction * (ToStation * .5);
+        AActor* Blocker = GetWorld()->SpawnActor<AActor>(Halfway, Direction.Rotation());
+        if (Blocker)
+        {
+            UBoxComponent* Sheet = NewObject<UBoxComponent>(Blocker, TEXT("ViewBlockerFixture"));
+            Sheet->SetBoxExtent(FVector(2.f, 150.f, 150.f));
+            Sheet->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+            Sheet->SetCollisionResponseToAllChannels(ECR_Ignore);
+            Sheet->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+            Blocker->SetRootComponent(Sheet);
+            Sheet->RegisterComponent();
+            Sheet->SetWorldLocationAndRotation(Halfway, Direction.Rotation());
+        }
+        TestViewBlocker = Blocker;
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST ready money=%d"), Money);
         break;
     }
-    case 1: Walker.PressUseKey(); break; // through the use-key path: asks
+    case 1:
+        // In reach and looked at, with the sheet in the way: not the target. The next step is the same spot without it.
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST blocked selected=%d target=%s fixture=%d"), SelectedStation(Walker) ? 1 : 0, TargetNow(), TestViewBlocker.IsValid() ? 1 : 0);
+        if (TestViewBlocker.IsValid()) TestViewBlocker->Destroy();
+        break;
     case 2:
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST clear selected=%d target=%s"), SelectedStation(Walker) ? 1 : 0, TargetNow());
+        Walker.PressUseKey(); // through the use-key path: asks
+        break;
+    case 3:
         // Walks away; the subsystem's tick must end the prompt.
         Walker.SetActorLocation(Station.GetActorLocation() + FVector(1000.f, 0.f, 100.f), false, nullptr, ETeleportType::TeleportPhysics);
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST walked away"));
         break;
-    case 3:
+    case 4:
         // Back inside the 5 s window: one press must ask again, not reset.
         Beside();
         Face(0.f);
         Walker.PressUseKey();
         break;
-    case 4:
+    case 5:
         // Too little money: the confirm is refused and changes nothing.
         TestSavedMoney = Money;
         TestStateBefore = Skills->StateJson();
         Inventory->SetMoney(0);
         Walker.PressUseKey();
         break;
-    case 5:
+    case 6:
     {
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST refusal money=%d grades_same=%d"), Money, Skills->StateJson() == TestStateBefore ? 1 : 0);
         Inventory->SetMoney(TestSavedMoney);
         Walker.PressUseKey(); // asks
         break;
     }
-    case 6: TestStateBefore = Skills->StateJson(); Walker.PressUseKey(); break; // confirms
+    case 7: TestStateBefore = Skills->StateJson(); Walker.PressUseKey(); break; // confirms
     default:
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST reset grades_changed=%d"), Skills->StateJson() == TestStateBefore ? 0 : 1);
         break;
