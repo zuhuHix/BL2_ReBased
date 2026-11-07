@@ -107,7 +107,7 @@ prices as level 30, not as the level 42 real cards.
 
 The red line is the title part's `CustomPresentations`
 (`AttributePresentationDefinition`): `NoConstraintText` is the line and
-`TextColor` is a red, the same one the real cards' HTML uses (`local/gunlook/measured_colours.md`, ignored). Among the
+`TextColor` is red, the same red the real cards' HTML uses (`local/gunlook/measured_colours.md`, ignored). Among the
 74 legendary and unique weapon titles in `Startup.upk`, 73 have exactly one such
 presentation and one has none. All nine red lines seen on real cards exist
 verbatim in the cooked data (Conference Call "Let's just ping everyone all at
