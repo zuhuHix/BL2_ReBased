@@ -21,4 +21,7 @@ namespace OpenWillowUseView
 
     // The ray from Walker's current view enters Box, and nothing but Walker and Target blocks it on the way.
     bool LooksAt(const AOpenWillowWalker& Walker, const FBox& Box, const AActor* Target);
+
+    // For a test's log: the same ray and trace as LooksAt, spelled out: where it starts, where it points, the box, and what stopped it.
+    FString Describe(const AOpenWillowWalker& Walker, const FBox& Box, const AActor* Target);
 }
