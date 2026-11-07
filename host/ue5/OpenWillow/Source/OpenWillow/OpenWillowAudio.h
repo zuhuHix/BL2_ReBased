@@ -12,7 +12,7 @@
 // An "OWAUDIO play" log line means the host asked the engine to play, not that anyone has heard it or that it is right.
 //
 // Off really is off: without -owaudioplay no delegate is bound, nothing is read and Play returns on one cached flag. The flag exists
-// because no game sound can play yet. Once a decoder is approved, the intent is that it becomes "a play map was given or found at its
+// because no game sound has been listened to yet. Once one has, the intent is that it becomes "a play map was given or found at its
 // prepared path", so sound is on by default for a prepared machine and a machine with no map stays silent.
 
 namespace OpenWillowAudio
