@@ -689,3 +689,29 @@ Without the set a launcher falls back to the pistol's and fills the screen. With
 lower right; so the missing set was the cause, for these two. Compared by eye with real first-person frames of the same two types: placement is close, and
 no hand shows in either. Those are other rolls in other light, so this checks placement only. The sniper, assault rifle, SMG and shotgun sets are not
 imported on the zuhu PC, and the sniper's is not captured. Reload clips are not imported.
+
+**Reload clips and arms sets for every type (gunlook lane, 2026-11-07).** `tools/weapon_reload_library.py` is one data step: from `view_types.json` it exports each
+type's weapon AnimSet, gestalt mesh and arms AnimSet with UModel, converts each type's default reload clip onto the library skeleton and onto Maya's arms, adds the
+base clips of each arms set but the pistol's, and prints the two imports. It stops at the default clips: the fast variants depend on a live threshold no table holds.
+It needs a UE reference pose per library type (`--references`, `<kind>.json`, the `local/laneE/weapon-refs` of a recipe of that type). Each reload clip is played at
+clip length / the card's reload time, a timing rule that stays UNVERIFIED.
+
+**Data steps a machine needs for the gun look, in order** (all output under ignored `local/` or `Content/`; the commands are in TOOLING.md "weapon part" or in each tool's help):
+1. Part library: `export_weapon_skins.py`, `weapon_library.py meshes`, `skins --game`, `index`, then `import_weapon_library.ps1`. Without it guns fall back to pre-built meshes and may paint wrong (section 21).
+2. `weapon_gen_manifest.py`: without it `ow.RollGun`, shops and drops roll nothing.
+3. `weapon_view_model.py --library local/weapon_library/library.json`: rolled guns' view models. Re-run when `library.json` changes; the host refuses a stale table.
+4. Weapon reference poses (`import_weapon_items.py` with `OPENWILLOW_WEAPON_REFERENCES`, then copied per library type), then `weapon_reload_library.py`, then the two imports it prints: reload clips and all arms sets.
+5. `host/ue5/import_weapon_fx.py`: the soft muzzle flame; without it flashes have hard edges.
+
+**Checked on the zuhu PC (run Z19; frames under ignored `local/gunlook/rl1`).** Reload clips play on the four slice guns and two rolled guns, with no missing-clip lines. The firing suite passes 14 of 14, and
+ammo refills at the cooked fraction. The assault rifle, SMG and shotgun moved from the pistol's arms set to their own, so slice frames changed on this PC. They were compared with lane E's real idle
+frames, and with its real reload sequences at the frame where the pose is nearest. Those were captured under a live modifier that about halves reload time, and in other light; the same guns by name, not checked part by part.
+
+| critic (Luna, one round; pose and framing, not paint) | pistol | assault rifle | SMG |
+|---|---|---|---|
+| idle | 8.4 | 8.8 | 8.0 |
+| reload, one host frame at half the clip | 8.3 | 5.8 | 4.5 |
+
+Earlier rows (section 18: idle 7.0, reload 5.6) are from other critic runs and another machine, so they are not comparable. The target of 8 is reached on idle and on the pistol's reload only. The rifle's reload frame is larger and higher than
+real. The SMG's frame matches an early real pose, not the middle of the motion. That may be timing: the real run's halved reload time is under the fast-clip threshold, and the host plays the default clip at the card's base time (inferred, UNVERIFIED). The Torgue launcher
+leaves the frame at half its reload; no real frame compares that. A still does not show motion. Ammo counts during a reload differ too: the real magazine count rises through the reload, the host's stays 0 until the refill.

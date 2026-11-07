@@ -4079,3 +4079,10 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/WEAPON_VISUALS.md` sec
 - **Behaviour change:** the Walker takes the arms' clip set from the view data's `weapon_anim_set`; a set not imported still falls back to the pistol's.
 - **Checked:** two rolled launchers no longer fill the view once the set is imported; placement close to real frames of those types, by eye, on other
   rolls. Local data step per machine. Reload clips and the other arm sets stay open.
+
+## 2026-11-07: reload clips and arms sets for every weapon type, as one data step (gunlook)
+
+AI-assisted (Claude Opus 5.5; critic Luna). Record: `docs/verification/WEAPON_VISUALS.md` section 22.
+
+- **New tool:** `tools/weapon_reload_library.py`. No host code; a clip is found by file name as before. On a machine that runs it, guns get reload motion and the assault rifle, SMG, shotgun and sniper get their own arms sets instead of the pistol's, so slice frames move.
+- **Checked:** host frames against lane E's real idle and reload frames; critic idle 8.0-8.8, reload 8.3 / 5.8 / 4.5 (pistol, rifle, SMG), target reached on idle and the pistol's reload only. The firing suite passes. UNVERIFIED beyond those frames; each type's default clip only, the fast variants are not imported.
