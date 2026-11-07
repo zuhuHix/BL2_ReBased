@@ -1,5 +1,6 @@
 #pragma once
 
+#include <unordered_map>
 #include "container.hpp"
 
 #include <cstdint>
@@ -107,8 +108,15 @@ private:
     std::map<std::string, std::pair<std::filesystem::path, int32_t>> globalMatches_;
     std::map<std::string, std::filesystem::path> globalRootMatches_;
     std::set<std::string> globalMisses_;
+    // The global fallback's candidates (buildGlobalIndex). Positions in indexedPaths_, ascending: a lookup walks them in the order the full scan would.
+    bool globalIndexBuilt_ = false;
+    std::unordered_map<std::string, std::vector<uint32_t>> filesByRoot_;   // the first path segment, folded -> the files that could hold a path starting with it
+    std::vector<uint32_t> filesForAnyRoot_;                                // a broken outer chain: its roots are not known, so it stays a candidate for every path
 
     static std::string key(std::string_view value);
     std::filesystem::path choosePath(const std::string& packageName) const;
     ResolvedObject resolveLoaded(const std::shared_ptr<const Package>& source, int32_t reference);
+    void buildGlobalIndex();
+    ResolvedObject findGlobal(const std::string& globalPath);
+    ResolvedObject scanGlobal(const std::string& globalPath) const;
 };

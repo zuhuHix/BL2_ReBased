@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <iostream>
 #include "package.hpp"
 
 #include <algorithm>
@@ -452,6 +454,9 @@ void PackageStore::scan() {
     globalMatches_.clear();
     globalRootMatches_.clear();
     globalMisses_.clear();
+    globalIndexBuilt_ = false;
+    filesByRoot_.clear();
+    filesForAnyRoot_.clear();
     std::error_code error;
     std::filesystem::recursive_directory_iterator iterator(
         cookedRoot_, std::filesystem::directory_options::skip_permission_denied, error);
@@ -562,28 +567,99 @@ ResolvedObject PackageStore::resolveLoaded(const std::shared_ptr<const Package>&
         if (!targetIndex) targetIndex = target->findExport(globalPath);
     }
     if (!targetIndex && !globalMisses_.contains(globalKey)) {
-        for (const auto& candidate : indexedPaths_) {
-            try {
-                // The global-path fallback is deliberately uncached for
-                // non-matches; a package tree can contain hundreds of files.
-                auto candidatePackage = Package::load(candidate);
-                const auto candidateIndex = candidatePackage->findExport(globalPath);
-                if (candidateIndex) {
-                    target = std::move(candidatePackage);
-                    targetIndex = candidateIndex;
-                    globalMatches_[globalKey] = {candidate, candidateIndex};
-                    globalRootMatches_[key(packageName)] = candidate;
-                    break;
-                }
-            } catch (const std::exception&) {
-                // A sidecar or otherwise non-package file is not a candidate.
-            }
+        auto found = findGlobal(globalPath);
+        // OPENWILLOW_RESOLVE_CHECK: run the full scan as well and stop on any difference (the oracle for the index; docs/verification/PACKAGE_GLOBAL_INDEX.md).
+        if (std::getenv("OPENWILLOW_RESOLVE_CHECK")) {
+            const auto scanned = scanGlobal(globalPath);
+            const bool same = scanned.index == found.index && (!scanned.package || scanned.package->sourcePath == found.package->sourcePath);
+            if (!same) throw std::logic_error("global index disagrees with the full scan: " + globalPath);
+            std::cerr << "OWRESOLVECHECK same " << globalPath << " -> " << (found.package ? found.package->packageName : "none") << ' ' << found.index << '\n';
         }
-        if (!targetIndex) globalMisses_.insert(globalKey);
+        if (found.index) {
+            target = std::move(found.package);
+            targetIndex = found.index;
+            globalMatches_[globalKey] = {target->sourcePath, targetIndex};
+            globalRootMatches_[key(packageName)] = target->sourcePath;
+        } else {
+            globalMisses_.insert(globalKey);
+        }
     }
     if (!targetIndex)
         throw std::runtime_error("import target not found: " + packageName + "." + objectPath);
     return {std::move(target), targetIndex};
+}
+
+namespace {
+// The first segment of an object path, folded. Package::findExport compares whole folded paths, so a path can only match an export whose own path starts with this segment.
+std::string firstSegment(std::string_view path) {
+    return folded(path.substr(0, path.find('.')));
+}
+}
+
+// Which files could answer which paths, from one pass over the tree. A path is listed under its first segment; findExport(path) matches in a file only if
+// - an export's path equals it, and then that export's path has the same first segment (taken from its outermost object's name, which may itself hold a dot), or
+// - the file's stem prefixes it and is stripped first, so the file is listed under its stem's first segment too.
+// A file with an outer chain that cannot be walked is a candidate for everything, and a file that does not load is a candidate for nothing, as in a scan. Listing a file
+// too often costs time and cannot change an answer: only the same findExport, in the same order, decides.
+void PackageStore::buildGlobalIndex() {
+    globalIndexBuilt_ = true;
+    constexpr int maxOuterChain = 256;
+    for (uint32_t position = 0; position < indexedPaths_.size(); ++position) {
+        std::shared_ptr<const Package> package;
+        try { package = Package::load(indexedPaths_[position]); }
+        catch (const std::exception&) { continue; }
+        std::unordered_set<std::string> roots{firstSegment(package->packageName)};
+        bool walkable = true;
+        for (int32_t index = 1; walkable && index <= int32_t(package->exports.size()); ++index) {
+            try {
+                int32_t cursor = index;
+                int steps = 0;
+                while (package->object(cursor).outer && ++steps < maxOuterChain) cursor = package->object(cursor).outer;
+                if (package->object(cursor).outer) walkable = false;
+                else roots.insert(firstSegment(package->object(cursor).name));
+            } catch (const std::exception&) { walkable = false; }
+        }
+        if (!walkable) { filesForAnyRoot_.push_back(position); continue; }
+        for (const auto& root : roots) filesByRoot_[root].push_back(position);
+    }
+    if (std::getenv("OPENWILLOW_RESOLVE_CHECK")) {
+        size_t entries = 0;
+        for (const auto& [root, files] : filesByRoot_) entries += files.size();
+        std::cerr << "OWRESOLVECHECK index files=" << indexedPaths_.size() << " roots=" << filesByRoot_.size() << " entries=" << entries << " any_root=" << filesForAnyRoot_.size() << std::endl;
+    }
+}
+
+// The first file in index order that has the path, among the files that can have it.
+ResolvedObject PackageStore::findGlobal(const std::string& globalPath) {
+    if (!globalIndexBuilt_) buildGlobalIndex();
+    static const std::vector<uint32_t> none;
+    const auto listed = filesByRoot_.find(firstSegment(globalPath));
+    const auto& rooted = listed == filesByRoot_.end() ? none : listed->second;
+    std::vector<uint32_t> positions;
+    positions.reserve(rooted.size() + filesForAnyRoot_.size());
+    std::merge(rooted.begin(), rooted.end(), filesForAnyRoot_.begin(), filesForAnyRoot_.end(), std::back_inserter(positions));
+    for (const uint32_t position : positions) {
+        try {
+            auto candidate = Package::load(indexedPaths_[position]);
+            if (const auto index = candidate->findExport(globalPath)) return {std::move(candidate), index};
+        } catch (const std::exception&) {
+            // Not a candidate, as in a scan.
+        }
+    }
+    return {};
+}
+
+// What the fallback did before the index: every file in order. Only OPENWILLOW_RESOLVE_CHECK runs it now.
+ResolvedObject PackageStore::scanGlobal(const std::string& globalPath) const {
+    for (const auto& candidate : indexedPaths_) {
+        try {
+            auto package = Package::load(candidate);
+            if (const auto index = package->findExport(globalPath)) return {std::move(package), index};
+        } catch (const std::exception&) {
+            // A sidecar or otherwise non-package file is not a candidate.
+        }
+    }
+    return {};
 }
 
 ResolvedObject PackageStore::resolvePath(const std::string& packageName, const std::string& objectPath) {
