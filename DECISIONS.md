@@ -4100,3 +4100,13 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/WEAPON_VISUALS.md` sec
 - **Why not a fit per weapon type:** the gap changes with the body and barrel, even within one type.
 - **Why only those classes:** a real capture of the same parts shows it about 110 px wrong on the slice shotgun, where the eye socket alone was about 12 px off, and right on a second pistol. It is a fit to frames, not the game's rule; the mechanism is unknown. Shotguns and SMGs stay on the eye socket.
 - **Checked:** two real pistol frames, one real rifle frame, one real shotgun frame by eye. The class limit: tool against tool and synthetic tests; its frames are still to come. UNVERIFIED on any other gun.
+
+## 2026-11-07: A swing holds for the game's clip length, a frame longer than UE's (controls)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/CONTROLS.md`, "Melee".
+
+- **Change:** with the first-person `Melee` clip imported, a swing holds the weapons for the clip's UE length plus one frame interval, not for its UE length.
+- **Why:** the first row after the import graded 0.67 s against 0.70 s. The package gives the clip 21 keys and a length of 0.70 s, and gives all 5 first-person Siren clips read a length of keys / 30. The md5anim has 21 frames at 30 fps. The importer keeps 21 keys, and UE counts 20 intervals, 0.667 s, which the host's `GetPlayLength` returned. It is the right clip; the two engines count length differently.
+- **Not changed:** the grader's 0.70 s and its tolerance, which come from the live reads and the package. The importer's interval count, which is what UE needs for those keys. Other clips the host times by `GetPlayLength` are also a frame short: not changed here.
+- **Not known:** how the game spaces the keys inside its 0.70 s. **UNVERIFIED**, at most one frame.
+- **Checked:** `tests.check_controls_test` only. The host change is not compiled or run.

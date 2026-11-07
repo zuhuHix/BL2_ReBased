@@ -86,6 +86,10 @@ a wall ends the swing there.
   `tools/import_maya_combat_anims.ps1 -Engine <UE> -Game <BL2> -ArmsMesh <arms .md5mesh> -PistolAnimSet <folder of .md5anim> -SirenAnimSet <folder of .md5anim, the Siren first-person set>`, then `tools/test_controls.ps1` and
   `python tools/check_controls.py --melee-clip <log>`. That asks for no "not found" warning on the clip, and every `OWMELEE press` with `clip=1` and a duration of 0.70 (within 0.02).
   It says the clip loads and has the live length, not that the swing looks right: that takes a look at the arms next to the game's.
+- A clip's length differs by one frame between the game and UE. The package gives every first-person Siren clip read (5 of them, `Melee` among them) a length of its keys / 30, so `Melee`'s 21 keys are 0.70 s,
+  as the live reads saw. The import keeps those 21 keys and UE counts their 20 gaps, 0.667 s. So a swing holds for the clip's length plus one frame interval (`HeldSeconds`). The clip itself still ends one frame
+  before the hold does. Where the game places the keys inside its 0.70 s, evenly or with a last frame held, was not read: **UNVERIFIED**, at most one frame. The import does this to every clip, so other clips the
+  host times by `GetPlayLength` are a frame short too; that is not changed here.
 - The swing's origin and direction use the camera, since the stock source is a native interface call.
 - The cone's use of the angle (not halved) is the low-confidence reading in `NATIVE_AI_MELEE.md`.
 - While down the host applies the trigger's weapon-ready rule. A stock swing does work down (twice, about 6 s after going down); how soon is unread.
