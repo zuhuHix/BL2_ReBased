@@ -4032,3 +4032,6 @@ host, and no rule here is confirmed in the running game.
 - One way in: `tools/play_range.ps1` and `-owrangestart`, Sanctuary only. The name is not `-owrange`, which already passes the manifest path.
 - `tools/real_game/cash_capture.ps1` gains a `den_read` stage with its own result, after the cash read. It has not run.
 
+## 2026-11-07: the store's global fallback uses an index; the resolution order is unchanged (mission UI lane)
+
+AI-assisted (Claude), design corrected by the hub's review. Record: `docs/verification/PACKAGE_GLOBAL_INDEX.md`. `PackageStore`'s fallback for an import whose root is not a file scanned the tree per path, 13 to 15 s each, and caused the first E's freeze. One pass now maps a path's first segment to the ordered files that could hold it, and a lookup runs the same `findExport` over those, in the same order, so the first match is the same file. **Parsing behaviour is meant to be unchanged:** no bounds check touched. Checked on the Fire step list with `OPENWILLOW_RESOLVE_CHECK`, which also runs the old scan: 5 lookups, 5 the same; `--slice-run` output identical before and after. That covers these runs' lookups, not every path; the argument for the rest is in the record. First use about 27.6 s to 5.5 s, setup about 4 s slower, core CLI on one PC; not measured in UE.
