@@ -6,7 +6,10 @@ param(
     [int]$TimeoutSeconds = 360,
     # How long to wait for the UE run lock (tools/ue_lock.ps1) or a running editor before giving up.
     [int]$LockWaitSeconds = 900,
-    [string[]]$Extra = @('-ddc=InstalledNoZenLocalFallback', '-d3d11')
+    [string[]]$Extra = @('-ddc=InstalledNoZenLocalFallback', '-d3d11'),
+    # -MovieHud (test-only): BL2's HUD movie instead of the canvas HUD: -owflashhud=<the page server this suite already uses>; the suite fails if its log does not show
+    # the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
+    [switch]$MovieHud
 )
 # In-engine check of the Missions log page (tools/hud_overlay/missions.html) with the -owquest slice mission:
 # -owmissionlogtest (AOpenWillowMayaHUD::TickMissionLogTest) opens the page, checks it lists nothing before the mission is
@@ -38,6 +41,7 @@ if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 # --- lock: the machine-wide UE run lock (tools/ue_lock.ps1; waits while any editor runs), released in finally ---
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 $exitCode = 2
 $process = $null
 $server = $null
@@ -56,7 +60,8 @@ try {
     }
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud',
+    $hudSwitch = if ($MovieHud) { "-owflashhud=$url" } else { '-owcanvashud' }
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', $hudSwitch,
         "-owmover=`"$(& $path 'mover')`"", "-owslice=`"$(& $path 'slice')`"", "-ownpcs=`"$(& $path 'npcs')`"",
         "-owaudio=`"$(& $path 'audio')`"", '-owquest', "-owquestsave=`"$save`"", "-owitems=`"$(Split-Path -Parent $gear)`"",
         "-owactionskill=`"$(& $path 'actionskill')`"", "-owlevel=$gearLevel",
@@ -90,6 +95,7 @@ try {
     } else {
         Write-Output "OWMISSIONTEST SUMMARY result=FAIL reason=$(if ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
     }
+    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log) -and $exitCode -eq 0) { $exitCode = 1 }
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

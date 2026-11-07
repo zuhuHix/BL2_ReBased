@@ -13,6 +13,10 @@ param(
     [switch]$Shots,
     # The run fails when it exercised no psycho (for a batch that imported one).
     [switch]$RequirePsycho,
+    # -MovieHud (test-only): BL2's HUD movie instead of the canvas HUD: starts tools/hud_overlay/serve.py on -MovieHudPort and passes -owflashhud=<url>; the run fails
+    # if its log does not show the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
+    [switch]$MovieHud,
+    [int]$MovieHudPort = 8796,
     [switch]$SkipBuild
 )
 # AI-assisted (Claude). Unattended gun-range test in the host (Sanctuary_P, -owrangetest): the range is built outside the
@@ -41,8 +45,10 @@ $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
 $checker = Join-Path $repo 'tools/check_range.py'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under $Engine" }
 $code = 2
+$movie = $null
 Enter-OwUeLock -Owner 'test_range' -TimeoutSeconds $WaitForEditorSeconds
 try {
     if (!$SkipBuild) {
@@ -53,7 +59,9 @@ try {
     New-Item -ItemType Directory -Force $logDir | Out-Null
     $log = Join-Path $logDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
     $mode = if ($Survey) { '-owrangesurvey' } else { '-owrangetest' }
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', $mode,
+    $hudSwitch = '-owcanvashud'
+    if ($MovieHud) { $movie = Start-OwMovieHud -Port $MovieHudPort; $hudSwitch = "-owflashhud=$($movie.Url)" }
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', $hudSwitch, $mode,
         "-owrange=`"$Manifest`"", '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     # The Fire mission's stock dummy (local/slice manifests, as tools/test_quest.ps1 uses them); without them the host
@@ -89,8 +97,10 @@ try {
         if ($RequirePsycho) { & python $checker $log --require-psycho } else { & python $checker $log }
         $code = $LASTEXITCODE
     }
+    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log)) { $code = 1 }
     Write-Host "Log: $log"
 } finally {
+    Stop-OwMovieHud $movie
     Exit-OwUeLock
 }
 exit $code

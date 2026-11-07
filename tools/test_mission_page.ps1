@@ -7,7 +7,10 @@ param(
     # How long to wait for the UE run lock (tools/ue_lock.ps1) or a running editor before giving up.
     [int]$LockWaitSeconds = 900,
     [string[]]$Extra = @('-ddc=InstalledNoZenLocalFallback', '-d3d11'),
-    [switch]$NoMovie
+    [switch]$NoMovie,
+    # -MovieHud (test-only): BL2's HUD movie instead of the canvas HUD: -owflashhud=<the page server this suite already uses>; the suite fails if its log does not show
+    # the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
+    [switch]$MovieHud
 )
 # In-engine check of Marcus's mission page (tools/hud_overlay/mission_screen.html): real keys through Slate at the offer, the turn-in and the reward page. Prints each
 # OWMISSIONPAGETEST row and the summary; screenshots go to local/menus/missionpage/. -NoMovie serves a folder without the mission movie: the page must show its plain panel.
@@ -37,6 +40,7 @@ if (Test-Path -LiteralPath $save) { Remove-Item -LiteralPath $save -Force }
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 # --- lock: the machine-wide UE run lock (tools/ue_lock.ps1; waits while any editor runs), released in finally ---
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 $exitCode = 2
 $process = $null
 $server = $null
@@ -63,7 +67,8 @@ try {
     }
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud',
+    $hudSwitch = if ($MovieHud) { "-owflashhud=$url" } else { '-owcanvashud' }
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', $hudSwitch,
         "-owmover=`"$(& $path 'mover')`"", "-owslice=`"$(& $path 'slice')`"", "-ownpcs=`"$(& $path 'npcs')`"",
         "-owaudio=`"$(& $path 'audio')`"", '-owquest', "-owquestsave=`"$save`"", "-owitems=`"$(Split-Path -Parent $gear)`"",
         "-owactionskill=`"$(& $path 'actionskill')`"", "-owlevel=$gearLevel",
@@ -106,6 +111,7 @@ try {
     } else {
         Write-Output "OWMISSIONPAGETEST SUMMARY result=FAIL reason=$(if ($staleBuild) { 'OWQUEST READY but no page_ready row in 120 s: is the UE module built from this branch?' } elseif ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
     }
+    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log) -and $exitCode -eq 0) { $exitCode = 1 }
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

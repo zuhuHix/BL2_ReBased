@@ -11,6 +11,22 @@
 #include "OpenWillowWalker.h"
 #include "UnrealClient.h"
 
+// A shield with no stats, added and equipped as the inventory screen does. Also used by -owstandinshield (OpenWillowMayaHUD.cpp).
+bool OpenWillowEquipStandInShield(AOpenWillowWalker& Maya)
+{
+    UOpenWillowInventory* Inventory = Maya.GetInventory();
+    const int32 Level = Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 1;
+    FOpenWillowGearItem Gear;
+    // A new id each run: the inventory suffixes an id it already holds, and the equip below must name this item.
+    Gear.Id = FString::Printf(TEXT("owshieldcheck_%s"), *FGuid::NewGuid().ToString());
+    Gear.ItemType = TEXT("shield");
+    Gear.Name = TEXT("Shield Check Stand-in");
+    Gear.Level = Level;
+    Gear.bLevelKnown = true;
+    Gear.Rarity = 1;
+    return Inventory && Inventory->AddGearToBackpack(Gear) && Inventory->EquipGearById(Gear.Id, TEXT("shield"), Level);
+}
+
 void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Player)
 {
     static int32 Step = 0;
@@ -41,22 +57,12 @@ void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Playe
     {
         // After the HUD has settled, as -owhudshots waits.
         if (At == 0.f) { At = FMath::Max(Now + 4.f, 8.f); return; }
-        UOpenWillowInventory* Inventory = Maya.GetInventory();
-        const int32 Level = Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 1;
-        FOpenWillowGearItem Gear;
-        // A new id each run: the inventory suffixes an id it already holds, and the equip below must name this item.
-        Gear.Id = FString::Printf(TEXT("owshieldcheck_%s"), *FGuid::NewGuid().ToString());
-        Gear.ItemType = TEXT("shield");
-        Gear.Name = TEXT("Shield Check Stand-in");
-        Gear.Level = Level;
-        Gear.bLevelKnown = true;
-        Gear.Rarity = 1;
-        if (!Inventory || !Inventory->AddGearToBackpack(Gear) || !Inventory->EquipGearById(Gear.Id, TEXT("shield"), Level))
+        if (!OpenWillowEquipStandInShield(Maya))
         {
             Finish(false, TEXT("the shield could not be added or equipped"));
             return;
         }
-        UE_LOG(LogTemp, Display, TEXT("OWSHIELDCHECK equipped a stat-less shield at level %d"), Level);
+        UE_LOG(LogTemp, Display, TEXT("OWSHIELDCHECK equipped a stat-less shield at level %d"), Maya.GetSkills() ? Maya.GetSkills()->GetLevel() : 1);
         Step = 1;
         At = Now + 2.f;
     }

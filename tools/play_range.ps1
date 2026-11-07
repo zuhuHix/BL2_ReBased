@@ -9,6 +9,10 @@ param(
     # Unattended: a rolled pistol and a rolled shotgun each kill a stock enemy with real shots (passive enemies, no input). Frames go to
     # local/range/shots/kill_<gun>_<a|b>.png, 1.4 s and 3 s after each death. Exit 0 when each gun killed one and its corpse was measured.
     [switch]$KillRow,
+    # -MovieHud (test-only): BL2's HUD movie instead of the canvas HUD: starts tools/hud_overlay/serve.py on -MovieHudPort and passes -owflashhud=<url>; the run fails
+    # if its log does not show the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
+    [switch]$MovieHud,
+    [int]$MovieHudPort = 8796,
     [int]$WaitForEditorSeconds = 3600,
     [switch]$Build
 )
@@ -28,7 +32,9 @@ $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under $Engine" }
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 $code = 0
+$movie = $null
 Enter-OwUeLock -Owner 'play_range' -TimeoutSeconds $WaitForEditorSeconds
 try {
     if ($Build) {
@@ -38,7 +44,9 @@ try {
     $logDir = Join-Path $repo 'local/range'
     New-Item -ItemType Directory -Force $logDir | Out-Null
     $log = Join-Path $logDir ('play-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', '-owrangestart',
+    $hudSwitch = '-owcanvashud'
+    if ($MovieHud) { $movie = Start-OwMovieHud -Port $MovieHudPort; $hudSwitch = "-owflashhud=$($movie.Url)" }
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', $hudSwitch, '-owrangestart',
         "-owrangemode=$Mode", "-owrange=`"$Manifest`"", '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     # The Fire mission's stock dummy (as tools/test_range.ps1); without these manifests the host stands engine-shape dummies and says so.
@@ -66,10 +74,12 @@ try {
         $built = Select-String -LiteralPath $log -Pattern 'OWRANGE start switch: built=1' -Quiet
         Write-Host $(if ($built) { 'Range check: the switch built the range.' } else { 'Range check: FAIL, no "built=1" line in the log.' })
         if (!$built) { $code = 1 }
+        if ($MovieHud -and !(Test-OwMovieHudLog -Log $log)) { $code = 1 }
     } else {
         $process.WaitForExit()
     }
 } finally {
+    Stop-OwMovieHud $movie
     Exit-OwUeLock
 }
 exit $code
