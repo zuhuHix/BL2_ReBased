@@ -107,6 +107,14 @@ check('Comma and Period switch tabs during a transfer and during a compare too',
   press(','); assert.equal(run('lastTabRequest'), 'Map'); assert.equal(run('location.href'), '/__ow_tab_map');
   press('.'); assert.equal(run('lastTabRequest'), 'Skills'); assert.equal(run('location.href'), '/__ow_tab_skills');
 });
+check('I stays on the Inventory; L and M go to the log and the Map; Tab and Escape still close', () => {
+  run('reset(); location.href = ""'); press('i');
+  assert.equal(run('location.href'), ''); assert.equal(run('lastTabRequest === "Skills" || location.href !== ""'), false);
+  run('reset()'); press('l'); assert.equal(run('location.href'), '/__ow_tab_missions');
+  run('reset()'); press('m'); assert.equal(run('location.href'), '/__ow_tab_map');
+  run('reset(); location.href = ""'); press('Tab'); assert.ok(run('location.href').includes('close'));
+  run('reset(); location.href = ""'); press('Escape'); assert.ok(run('location.href').includes('close'));
+});
 check('Backpack keeps its row when re-entered and stops at the top', () => {
   run('reset()'); press('ArrowRight', 'ArrowUp'); assert.equal(selected(), 'b0');
   press('ArrowDown', 'ArrowDown', 'ArrowDown'); assert.equal(selected(), 'b3');

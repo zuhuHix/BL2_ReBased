@@ -50,3 +50,6 @@ for (const [key, route] of [['m', '/__ow_tab_map'], ['l', '/__ow_tab_missions']]
   const at = skills.indexOf(`event.key.toLowerCase() === '${key}'`);
   assert.ok(at > 0 && skills.slice(at, at + 200).includes(route), `Skills: ${key} routes to ${route}`);
 }
+// K is Skills' own key: it stays, and it is not in the closing branch.
+const closing = skills.slice(skills.indexOf("if (event.key === 'Escape'"), skills.indexOf('closeSkills();', skills.indexOf("if (event.key === 'Escape'")));
+assert.ok(closing.includes("'Tab'") && !closing.includes("'k'"), 'Skills: K does not close');

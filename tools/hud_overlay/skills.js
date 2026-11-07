@@ -431,9 +431,11 @@ function closeSkills() {
 }
 
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' || event.key.toLowerCase() === 'k' || event.key === 'Tab') {
+  if (event.key === 'Escape' || event.key === 'Tab') {
     event.preventDefault();
     closeSkills();
+  } else if (event.key.toLowerCase() === 'k') {   // Skills' own key stays here, by the script (UNVERIFIED live: docs/verification/CONTROLS.md)
+    event.preventDefault();
   } else if (event.key.toLowerCase() === 'q') {
     event.preventDefault();
     toggleOverview();

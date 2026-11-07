@@ -43,7 +43,10 @@ Host rules, **UNVERIFIED**:
   inventory and skills keys still open while down; those belong to the inventory lane.
 - With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. In the real game M stayed on the Map (twice) and went to the Map
   from the log (twice) and from Skills (once); L went to the log from the Map, the Inventory and Skills (once each) and stayed on the log (once). So `map.js`, `missions.js`
-  and `skills.js` follow that. `inventory.js` has no L route yet, which belongs to the inventory lane; M on the Inventory was not read, as a dialog took the key.
+  and `skills.js` follow that. `inventory.js` routes L too; M on the Inventory was not read live, as a dialog took the key, so that route is from the script below.
+- From the script (`StatusMenuExGFxMovie.HandleInputKey`, read 2026-11-07), a released key equal to `ScreenExitKey` hides the menu, and `Start` sets that key from the `StatusMenu` action. The pressed keys for the Logs, Map,
+  Inventory, Skills and Challenges actions then call `TrySwitchToScreen` for their screen, also the one already showing. So I stays on the Inventory and K on Skills, rather than closing: `inventory.js` and `skills.js` do that now.
+  **UNVERIFIED** live, and the mods above don't name those keys there per the search, though that was not a full reading. Tab closes on the host as before: that the `StatusMenu` action is on Tab was not read here.
 
 ## Melee
 
