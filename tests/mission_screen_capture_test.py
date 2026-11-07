@@ -78,7 +78,7 @@ def test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed():
     mine = tail_of(CAPTURE)
     start = mine.index('    # Mod setting: the root restore above')
     mine = mine[:start] + mine[mine.index('    $recovery = Get-RecoveryReason'):]
-    mod_line = '    if ($modProblem) { $recovery = (@($recovery, "mod setting not restored ($modProblem)") | Where-Object { $_ }) -join \'; \' }\n'
+    mod_line = '    if ($modProblem) { $recovery = (@($recovery, "mod setting $modProblem") | Where-Object { $_ }) -join \'; \' }\n'
     assert mod_line in mine
     mine = mine.replace(mod_line, '')
     theirs = tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
@@ -463,21 +463,201 @@ def test_a_refusal_before_the_launch_does_not_restore_the_roots():
         assert (Path(tmp) / 'mod.json').read_bytes() == bytes([1, 2, 3]) and 'cleanup mod_setting: restored, identical' in done.stdout, done.stdout
 
 
-def test_a_killed_run_leaves_a_record_and_the_next_one_refuses_and_says_how():
-    done = run_ps(r"""
-$env:LOCALAPPDATA = $tmp
+def test_a_killed_run_is_recovered_by_following_the_refusal():
+    # The state a kill leaves: setting off, driver folder there, a save changed, both locks. Only the lines the refusal prints are then run, in a fresh process.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        env = dict(os.environ, OPENWILLOW_BL2=str(tmp_path / 'game'), LOCALAPPDATA=str(tmp_path / 'appdata'))
+        env.pop('OPENWILLOW_UE_LOCK', None)
+        (tmp_path / 'game/sdk_mods/settings').mkdir(parents=True)
+        (tmp_path / 'appdata').mkdir()
+        live_saves = tmp_path / 'live_saves'
+        live_saves.mkdir()
+        (live_saves / 'one.sav').write_bytes(b'before')
+        prior = b'{\r\n    "enabled": true\r\n}'
+        setting = tmp_path / 'game/sdk_mods/settings/BetterUIControls.json'
+        setting.write_bytes(prior)
+        kill = tmp_path / 'kill.ps1'
+        kill.write_text(f""". '{ROOT / 'tools/real_game/realgame.ps1'}'
+{mod_functions()}
+$bak = '{tmp}\\bak'; New-Item -ItemType Directory $bak | Out-Null
+$roots = [ordered]@{{ SaveData = '{live_saves}'; sdk_settings = '{setting.parent}' }}
+$snapshots = @{{}}; foreach ($d in $roots.Keys) {{ $snapshots[$d] = New-VerifiedSnapshot $roots[$d] (Join-Path $bak $d) }}
+Save-VerifiedBackupRecord $bak $roots $snapshots
+Save-ModPending '{setting}' ([IO.File]::ReadAllBytes('{setting}')) $bak 'test' '{tmp}\\hub.lock' '{ROOT / 'tools/real_game/realgame.ps1'}'
+[IO.File]::WriteAllBytes('{setting}', (Get-ModOffBytes ([IO.File]::ReadAllBytes('{setting}'))))
+New-Item -ItemType Directory -Force $script:DriverDir | Out-Null
+Set-Content '{live_saves}\\one.sav' 'after'
+Set-Content '{tmp}\\hub.lock' 'test now'
+Set-Content -LiteralPath $script:Lock '{{"pid": 999999, "process_start_utc_filetime": 1}}'
+try {{ Assert-NoModPending; Write-Output 'NOT REFUSED' }} catch {{ [IO.File]::WriteAllText('{tmp}\\refusal.txt', "$_") }}
+""", encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(kill)], capture_output=True, text=True, env=env, timeout=120)
+        assert done.returncode == 0 and 'NOT REFUSED' not in done.stdout, done.stdout + done.stderr
+        assert setting.read_bytes() != prior, 'the refusal restored by itself'
+        lock = tmp_path / 'appdata/OpenWillow/ue_run.lock'
+        record = tmp_path / 'appdata/OpenWillow/mission_screen_mod_pending.json'
+        driver = tmp_path / 'game/sdk_mods/openwillow_realgame'
+        assert lock.exists() and record.exists() and driver.exists() and (tmp_path / 'hub.lock').exists()
+        refusal = (tmp_path / 'refusal.txt').read_text(encoding='utf-8')
+        commands = [line[4:] for line in refusal.splitlines() if line.startswith('    ')]
+        assert len(commands) == 7, refusal
+        # In the right order: the restore rewrites the settings folder, so the exact bytes come after it, and the locks and the record only after both.
+        order = ['OPENWILLOW_BL2', 'Remove-Item -Recurse', 'Restore-VerifiedBackup', 'WriteAllBytes', 'hub.lock', 'Test-OwUeLockStale', 'mission_screen_mod_pending']
+        assert all(needle in command for needle, command in zip(order, commands)), commands
+        follow = tmp_path / 'follow.ps1'
+        follow.write_text('\n'.join(commands) + '\n', encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(follow)], capture_output=True, text=True, env=env, timeout=120)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert 'changed, restored' in done.stdout, done.stdout
+        assert setting.read_bytes() == prior and (live_saves / 'one.sav').read_bytes() == b'before', done.stdout
+        assert not driver.exists() and not (tmp_path / 'hub.lock').exists() and not lock.exists() and not record.exists(), done.stdout
+        # The next run goes ahead.
+        rerun = tmp_path / 'rerun.ps1'
+        rerun.write_text(f""". '{ROOT / 'tools/real_game/realgame.ps1'}'
+{mod_functions()}
 Assert-NoModPending
 Write-Output 'no record, no refusal'
-$file = Join-Path $tmp 'mod.json'
-[IO.File]::WriteAllBytes($file, [byte[]](9))
-Save-ModPending $file ([byte[]](1, 2, 3)) 'C:\\some\\backup' 'test'
-try { Assert-NoModPending; Write-Output 'NOT REFUSED' } catch { Write-Output "refused: $_" }
-Write-Output ('file untouched: ' + (Test-SameBytes ([IO.File]::ReadAllBytes($file)) ([byte[]](9))))
+""", encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(rerun)], capture_output=True, text=True, env=env, timeout=120)
+        assert 'no record, no refusal' in done.stdout, done.stdout + done.stderr
+        # A hub lock naming another lane stays.
+        (tmp_path / 'hub.lock').write_text('other now')
+        keep = tmp_path / 'keep.ps1'
+        hub_line = next(c for c in commands if 'hub.lock' in c)
+        keep.write_text(hub_line + '\n', encoding='utf-8-sig')
+        subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(keep)], capture_output=True, text=True, env=env, timeout=60)
+        assert (tmp_path / 'hub.lock').exists(), 'a hub lock naming another lane was removed'
+
+
+def tail_driver(tmp, setup, body, proc='$null', launched='$false', attempted='$false', owned='$false', stubs='function Remove-Driver { }'):
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    tail = text[text.index('\n} catch {\n    $runError') + 1:]
+    script = Path(tmp) / 'driver.ps1'
+    script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp).replace('__OUT__', tmp).replace('__SETUP__', setup)
+                      .replace('__LAUNCHED__', launched).replace('__OWNED__', owned).replace('__ATTEMPTED__', attempted).replace('__STUBS__', stubs)
+                      .replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc).replace('__CLEAN__', '$true'), encoding='utf-8-sig')
+    return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp, LOCALAPPDATA=tmp), timeout=180)
+
+
+def test_the_record_is_the_refusal_even_with_the_driver_folder_there():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    preflight = text[text.index('    # Preflight before any lock'):text.index('    # What was loaded:')]
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / 'sdk_mods/openwillow_realgame').mkdir(parents=True)
+        setup = mod_functions() + f"$env:LOCALAPPDATA = '{tmp}'; Save-ModPending '{tmp}\\mod.json' ([byte[]](1, 2, 3)) 'bak' 'test' 'hub' 'realgame'\n"
+        done = tail_driver(tmp, setup, preflight)
+        assert done.returncode == 1 and 'Recovery, in this order' in done.stdout and 'already exists' not in done.stdout, done.stdout + done.stderr
+
+
+def launch_lines():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    return text[text.index('    $launchAttempted = $true\n'):text.index('    $ok = $false\n')]
+
+
+def test_a_launch_that_throws_is_judged_by_whether_a_game_exists():
+    throwing = "function Start-Game { throw 'launch failed' }\n"
+    marks = "function Remove-Driver { }\nfunction Restore-VerifiedRoots { Set-Content '__TMP__\\ROOTS' x; [pscustomobject]@{ rows = @(); summary = 'identical'; clean = $true } }\nfunction Stop-OwnGame { Set-Content '__TMP__\\STOPPED' $args[2]; 'refused' }\n"
+    gone = "[pscustomobject]@{ HasExited = $true; Id = 1; StartTime = (Get-Date) } | Add-Member ScriptMethod Refresh { } -PassThru"
+    alive = "[pscustomobject]@{ HasExited = $false; Id = 1; StartTime = (Get-Date) } | Add-Member ScriptMethod Refresh { } -PassThru"
+    def run(find, expect_roots, expect_stop):
+        with tempfile.TemporaryDirectory() as tmp:
+            setup = mod_functions() + f"$modFile = '{tmp}\\mod.json'; $modWritten = $true; $modPrior = [byte[]](1, 2, 3)\n[IO.File]::WriteAllBytes($modFile, [byte[]](9))\n"
+            done = tail_driver(tmp, setup, launch_lines(), attempted='$true', stubs=(marks + throwing + find).replace('__TMP__', tmp))
+            assert done.returncode == 1 and 'launch failed' in done.stdout, done.stdout + done.stderr
+            assert (Path(tmp) / 'ROOTS').exists() is expect_roots, done.stdout
+            assert (Path(tmp) / 'STOPPED').exists() is expect_stop, done.stdout
+            return done, (Path(tmp) / 'mod.json').read_bytes()
+    # None found: nothing launched, the roots stay, the one file comes back.
+    done, data = run("function Find-GameByMarker { }\n", False, False)
+    assert data == bytes([1, 2, 3]) and 'not touched: this run launched no game' in done.stdout, done.stdout
+    # Found and already gone: treated as launched.
+    done, data = run("function Find-GameByMarker { " + gone + " }\n", True, False)
+    assert data == bytes([1, 2, 3]), done.stdout
+    # Found and alive: the finalizer tries to stop it, and holds when that is refused.
+    done, data = run("function Find-GameByMarker { " + alive + " }\n", False, True)
+    assert data == bytes([9]) and 'MANUAL RECOVERY' in done.stdout, done.stdout
+    # The search failed: the launch's own error still reports, and the flag stays set.
+    done, data = run("function Find-GameByMarker { throw 'no cim' }\n", True, False)
+    assert data == bytes([1, 2, 3]), done.stdout
+    # The marker must match whole: this run's pid must not match a longer one.
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    finder = text[text.index('function Find-GameByMarker('):text.index('function Py(')]
+    done = run_ps(finder + r"""
+function Get-CimInstance { [pscustomobject]@{ ProcessId = 7; CommandLine = 'game.exe -windowed -owrun=a-123 -x' } }
+function Get-Process { param($Id) "pid $Id" }
+Write-Output ('short=[' + (Find-GameByMarker '-owrun=a-12') + ']')
+Write-Output ('whole=[' + (Find-GameByMarker '-owrun=a-123') + ']')
+""")
+    assert 'short=[]' in done.stdout and 'whole=[pid 7]' in done.stdout, done.stdout + done.stderr
+
+
+def test_a_record_that_will_not_go_is_a_cleanup_problem():
+    with tempfile.TemporaryDirectory() as tmp:
+        setup = mod_functions() + f"$env:LOCALAPPDATA = '{tmp}'; $modFile = '{tmp}\\mod.json'; $modWritten = $true; $modPrior = [byte[]](1, 2, 3)\n[IO.File]::WriteAllBytes($modFile, [byte[]](9))\nSave-ModPending $modFile $modPrior 'bak' 'test' 'hub' 'realgame'\n(Get-Item (Get-ModPendingFile)).IsReadOnly = $true\n"
+        done = tail_driver(tmp, setup, "$stagesDone.Add('hit')", launched='$true', attempted='$true', owned='$true')
+        assert done.returncode == 1 and 'status: completed' not in done.stdout, done.stdout + done.stderr
+        assert 'could not be removed' in done.stdout and 'MANUAL RECOVERY' in done.stdout and (Path(tmp) / 'hub.lock').exists(), done.stdout
+        assert (Path(tmp) / 'mod.json').read_bytes() == bytes([1, 2, 3]), done.stdout
+
+
+def open_screen_run(body):
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    start = text.index('function Open-Screen(')
+    function = text[start:text.index('# Which of these keys never reached')]
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'open.ps1'
+        script.write_text(r"""$ErrorActionPreference = 'Stop'
+$log = @{}; $script:calls = New-Object Collections.Generic.List[string]; $script:open = $false; $script:opensAt = -1; $script:polls = 0
+function Start-Sleep { }
+function Assert-GameForeground { }
+function Py($Code) { $script:calls.Add('mark') }
+function Send-Key($Key) { $script:calls.Add("key $Key") }
+function Read-After($Label, $Wait) { $script:calls.Add("read $Label"); [pscustomobject]@{ open = $script:open; status = 0 } }
+function PyJson($Expr) {
+    if ($Expr -like 'fm_stand*') { $script:calls.Add('stand'); return [pscustomobject]@{} }
+    if ($Expr -like 'ms_read*') { $script:calls.Add('baseline'); return [pscustomobject]@{ open = $script:open } }
+    $script:polls++
+    if ($script:opensAt -ge 0 -and $script:polls -ge $script:opensAt) { $script:open = $true; return [pscustomobject]@{ opened = $true } }
+    [pscustomobject]@{ opened = $false }
+}
+""" + function + body, encoding='utf-8-sig')
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=60)
+
+
+def test_a_slow_open_is_a_read_and_moves_nothing():
+    # Opens on the third poll: one press, one stand, and a read after it.
+    done = open_screen_run(r"""
+$script:opensAt = 3
+$row = Open-Screen 'x'
+Write-Output ('open=' + $row.open); Write-Output ('calls=' + ($script:calls -join ','))
+Write-Output ('late=' + $log['x_opened_late'])
 """)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert 'no record, no refusal' in done.stdout and 'NOT REFUSED' not in done.stdout, done.stdout
-    for needle in ('refused: A previous mission screen run', 'mod.json', 'AQID', 'some', 'WriteAllBytes', 'Then delete', 'file untouched: True'):
-        assert needle in done.stdout, (needle, done.stdout)
+    assert 'open=True' in done.stdout and 'late=1' in done.stdout, done.stdout
+    assert 'calls=baseline,stand,mark,key E,read x,read x_late_1' in done.stdout, done.stdout
+    # Opens after the wait, seen at the next baseline: still this press, and no second stand.
+    done = open_screen_run(r"""
+$script:opensAt = 999
+function Start-Sleep { if ($script:polls -eq 10) { $script:open = $true; $script:opensAt = 11 } }
+$row = Open-Screen 'x'
+Write-Output ('open=' + $row.open); Write-Output ('calls=' + ($script:calls -join ','))
+""")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert 'open=True' in done.stdout and 'calls=baseline,stand,mark,key E,read x,baseline,read x_late_1' in done.stdout, done.stdout
+    # Open with no press of ours: refused before anything moves.
+    done = open_screen_run(r"""
+$script:open = $true
+try { Open-Screen 'x' | Out-Null; Write-Output 'NOT REFUSED' } catch { Write-Output "refused: $_" }
+Write-Output ('calls=' + ($script:calls -join ','))
+""")
+    assert 'refused: the screen is already open' in done.stdout and 'calls=baseline' in done.stdout and 'stand' not in done.stdout, done.stdout + done.stderr
+    # Never opens: four presses, reported closed.
+    done = open_screen_run(r"""
+$row = Open-Screen 'x'
+Write-Output ('open=' + $row.open); Write-Output ('presses=' + @($script:calls | Where-Object { $_ -eq 'key E' }).Count)
+""")
+    assert 'open=False' in done.stdout and 'presses=4' in done.stdout, done.stdout + done.stderr
 
 
 def test_the_finalizer_removes_the_record_only_when_the_bytes_are_back():
@@ -527,7 +707,7 @@ def test_an_open_needs_a_closed_baseline_and_its_own_mark():
     assert probe.ms_opened('no_such_mark')['opened'] is False
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     opening = text[text.index('function Open-Screen('):text.index('function Get-KeysNotDelivered')]
-    places = [opening.index(n) for n in ("ms_read('${Label}_baseline_$try')", 'if ($base.open -ne $false) { throw', "ms_mark('$mark')", 'Send-Key E', "ms_opened('$mark')", ".opened -eq $true) { return $row }")]
+    places = [opening.index(n) for n in ("ms_read('${Label}_baseline_$try')", 'if ($base.open -ne $false) {', "fm_stand_in_front", '$mark = "open_', "ms_mark('$mark')", 'Send-Key E')]
     assert places == sorted(places), places
 
 
@@ -551,13 +731,13 @@ Write-Output ('count=' + @(Get-KeysNotDelivered 'x' @('W')).Count)
 def test_the_capture_refuses_and_proves_before_any_key():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     # Refused before any lock or backup; written after the launch flag, so the restore covers it, and last before the launch; proved in the game before any key.
-    order = ['Assert-NoModPending', '$null = Get-ModOffBytes', '$hubDeadline = (Get-Date)', 'Backup-Saves', "$driverAttempted = $true", "sdk_settings\\BetterUIControls.json", '$log.mod_setting_prior_base64', 'Save-ModPending $modFile', '$modWritten = $true',
+    order = ['Assert-NoModPending', 'bl-sdk is not installed', 'already exists; this run', '$null = Get-ModOffBytes', '$hubDeadline = (Get-Date)', 'Backup-Saves', "$driverAttempted = $true", "sdk_settings\\BetterUIControls.json", '$log.mod_setting_prior_base64', 'Save-ModPending $modFile $modPrior $bak $Lane $HubLock', '$modWritten = $true',
              '[IO.File]::WriteAllBytes($modFile, $modOff)', '$launchAttempted = $true', '$proc = Start-Game $gameArgs', 'Assert-SavesBlocked (Py', '$log.mod_off = PyJson', 'Send-Key Enter; Start-Sleep 45']
     body = text.index('try {\n    # Preflight')
     places = [text.index(needle, body) for needle in order]
     assert places == sorted(places), list(zip(order, places))
     # Only this file: no other settings file is written.
-    assert text.count('[IO.File]::WriteAllBytes($') == 2   # the recovery message only names the call, for a person to run
+    assert len(re.findall(r'\[IO\.File\]::WriteAllBytes\(\$(?:File|modFile),', text)) == 2 and text.count('[IO.File]::WriteAllBytes(') == 3   # the third is in the recovery text, for a person to run
 
 
 def test_the_session_records_the_mods():
@@ -615,7 +795,11 @@ if __name__ == '__main__':
     test_the_finalizer_restores_the_setting_or_holds_for_recovery()
     test_the_capture_refuses_and_proves_before_any_key()
     test_a_refusal_before_the_launch_does_not_restore_the_roots()
-    test_a_killed_run_leaves_a_record_and_the_next_one_refuses_and_says_how()
+    test_a_killed_run_is_recovered_by_following_the_refusal()
+    test_the_record_is_the_refusal_even_with_the_driver_folder_there()
+    test_a_launch_that_throws_is_judged_by_whether_a_game_exists()
+    test_a_record_that_will_not_go_is_a_cleanup_problem()
+    test_a_slow_open_is_a_read_and_moves_nothing()
     test_the_finalizer_removes_the_record_only_when_the_bytes_are_back()
     test_the_mod_proof_runs_against_the_real_shape()
     test_an_open_needs_a_closed_baseline_and_its_own_mark()

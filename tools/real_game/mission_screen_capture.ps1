@@ -46,22 +46,42 @@ function Restore-ModSetting([string]$File, [byte[]]$Prior) {
 }
 # A durable record, written before the setting is, so that a run killed before its finally leaves the way back. Outside the install and any worktree, next to the machine's run lock.
 function Get-ModPendingFile { Join-Path $env:LOCALAPPDATA 'OpenWillow\mission_screen_mod_pending.json' }
-function Save-ModPending([string]$File, [byte[]]$Prior, [string]$Backup, [string]$Lane) {
+function Save-ModPending([string]$File, [byte[]]$Prior, [string]$Backup, [string]$Lane, [string]$HubLock, [string]$Realgame) {
     $pending = Get-ModPendingFile
     New-Item -ItemType Directory -Force (Split-Path -Parent $pending) | Out-Null
-    [ordered]@{ file = $File; prior_base64 = [Convert]::ToBase64String($Prior); backup = $Backup; lane = $Lane; written = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding UTF8
+    [ordered]@{ file = $File; prior_base64 = [Convert]::ToBase64String($Prior); backup = $Backup; lane = $Lane; hub_lock = $HubLock; run_lock = $script:Lock; driver = $script:DriverDir; game = $env:OPENWILLOW_BL2; realgame = $Realgame; written = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding UTF8
     if ((Get-Content -Raw -LiteralPath $pending | ConvertFrom-Json).prior_base64 -cne [Convert]::ToBase64String($Prior)) { throw "the pending record $pending did not read back" }
 }
-# Refuses while a record is there, and says exactly how to recover. It restores nothing itself: the setting may have been changed on purpose since.
+function Format-PsQuoted([string]$Text) { "'" + $Text.Replace("'", "''") + "'" }
+# Refuses while a record is there, and prints the whole way back. It restores nothing itself: the setting or the saves may have been changed on purpose since. The lines with four spaces are commands, and a test runs them.
 function Assert-NoModPending {
     $pending = Get-ModPendingFile
     if (!(Test-Path -LiteralPath $pending)) { return }
-    $record = Get-Content -Raw -LiteralPath $pending
-    $file = try { ($record | ConvertFrom-Json).file } catch { '(unreadable)' }
-    throw ("A previous mission screen run did not finish putting back $file, or was killed first. Nothing was changed by this run. The record is $pending :" + [Environment]::NewLine + $record + [Environment]::NewLine +
-        "Recovery, with Borderlands 2 closed: decide whether the setting should be put back, then in PowerShell: [IO.File]::WriteAllBytes('$file', [Convert]::FromBase64String('<prior_base64 from the record>')). The backup named in the record holds the same bytes. Then delete $pending and run again.")
+    $text = Get-Content -Raw -LiteralPath $pending
+    $record = try { $text | ConvertFrom-Json } catch { $null }
+    $nl = [Environment]::NewLine
+    if (!$record -or !$record.file) { throw "A mission screen run left the record $pending and it cannot be read, so no recovery can be printed. This run changed nothing. Its contents:$nl$text" }
+    $hub = Format-PsQuoted $record.hub_lock; $lock = Format-PsQuoted $record.run_lock; $driver = Format-PsQuoted $record.driver; $q = Format-PsQuoted $pending
+    throw (@(
+        "A mission screen run changed $($record.file) and did not finish putting it back: it was killed, or it held for recovery. This run changed nothing. If that run is still going, wait for it and do nothing here. Record: $pending",
+        "Recovery, in this order. 1. Make sure Borderlands 2 is closed. The record is from $($record.written): the restore below takes the saves, config and SDK settings back to the backup, so if anything was played or changed on purpose since, compare first.",
+        "2. In a new PowerShell window, one line at a time. Stop at any problem: every restore row must read 'added, removed', 'missing, restored' or 'changed, restored'.",
+        "    `$env:OPENWILLOW_BL2 = $(Format-PsQuoted $record.game); . $(Format-PsQuoted $record.realgame)",
+        "    if (Test-Path -LiteralPath $driver) { Remove-Item -Recurse -Force -LiteralPath $driver }   # first check it is this driver's copy, not someone's",
+        "    Restore-VerifiedBackup $(Format-PsQuoted $record.backup)",
+        "    [IO.File]::WriteAllBytes($(Format-PsQuoted $record.file), [Convert]::FromBase64String($(Format-PsQuoted $record.prior_base64)))   # the setting's prior bytes",
+        "    if ((Get-Content -Raw -LiteralPath $hub -ErrorAction SilentlyContinue) -like $(Format-PsQuoted "$($record.lane) *")) { Remove-Item -Force -LiteralPath $hub }   # the hub lock, only if it names that run's lane",
+        "    if (Test-OwUeLockStale $lock) { Remove-Item -Force -LiteralPath $lock }   # the run lock, only if its owner is gone",
+        "    Remove-Item -LiteralPath $q   # last: this record",
+        "3. Run again. A lock still there after this is not that run's: its owner or the maintainer removes it."
+    ) -join $nl)
 }
 # Mod setting end.
+# The game whose command line holds this run's whole marker, or nothing. Reading only.
+function Find-GameByMarker([string]$Marker) {
+    $found = @(Get-CimInstance Win32_Process -Filter "Name='Borderlands2.exe'" -ErrorAction Stop | Where-Object { $_.CommandLine -match "(^|\s)$([regex]::Escape($Marker))(\s|$)" })
+    if ($found.Count) { Get-Process -Id $found[0].ProcessId -ErrorAction Stop }
+}
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
 function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json.dumps($Expr, default=str))" $Timeout | ConvertFrom-Json }
 function Shot([string]$Name) { Save-Shot "mission_screen/$Name.png" | Out-Null }
@@ -103,18 +123,30 @@ function Test-Keys([string]$Stage, [string[]]$Keys, [int]$Status) {
 # Stand in front of Marcus and press E until his screen opens.
 # The screen must be closed first, and must open after this press: a screen already open would read as this E having opened it.
 function Open-Screen([string]$Label) {
-    $row = $null
+    $row = $null; $mark = $null
     for ($try = 1; $try -le 4; $try++) {
-        $log["stand_$Label"] = PyJson 'fm_stand_in_front()'
+        # Before the stand, which moves the player. Open here is either the last press, slower than the wait below, which is a valid read, or something this run did not do.
         $base = PyJson "ms_read('${Label}_baseline_$try')"
-        if ($base.open -ne $false) { throw "the screen is already open before the E for $Label (open $($base.open))" }
+        if ($base.open -ne $false) {
+            if ($mark -and (PyJson "ms_opened('$mark')").opened -eq $true) { $log["${Label}_opened_late"] = $try - 1; return (Read-After "${Label}_late_$($try - 1)") }
+            throw "the screen is already open before the E for $Label (open $($base.open))"
+        }
+        $log["stand_$Label"] = PyJson 'fm_stand_in_front()'
         $mark = "open_${Label}_$try"
         Py "print(ms_mark('$mark'))" | Out-Null
         Start-Sleep -Milliseconds 800; Assert-GameForeground; $null = Send-Key E
         $row = Read-After $Label 1.0
-        $log["opened_${Label}_$try"] = PyJson "ms_opened('$mark')"
-        if ($row.open -and $log["opened_${Label}_$try"].opened -eq $true) { return $row }
-        Start-Sleep 2
+        # Up to 3 s more for this press to open it, before another try moves anything.
+        for ($poll = 0; $poll -lt 10; $poll++) {
+            $opened = PyJson "ms_opened('$mark')"
+            if ($opened.opened -eq $true) { break }
+            Start-Sleep -Milliseconds 300
+        }
+        $log["opened_${Label}_$try"] = $opened
+        if ($opened.opened -eq $true) {
+            if (!$row.open) { $log["${Label}_opened_late"] = $try; $row = Read-After "${Label}_late_$try" }
+            if ($row.open) { return $row }
+        }
     }
     $row | Add-Member -Force -NotePropertyName open -NotePropertyValue $false
     $row
@@ -139,7 +171,8 @@ $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false
 # image path and the start time before stopping a PID). Unknown switches are ignored by the game.
 $marker = "-owrun=$Lane-$PID"
 try {
-    # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
+    # Preflight before any lock or backup: first a run that did not finish, whose driver folder would otherwise be the refusal and hide the way back; then bl-sdk present, our driver folder not already there.
+    Assert-NoModPending
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2); not installing it" }
     if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
     # What was loaded: mods can change what a run sees (2026-11-07: Better UI Controls turned E into Enter on this screen). Reading only; a run without this record is not one to trust.
@@ -150,7 +183,6 @@ try {
         try { $log.sdk_mods_settings[$file.BaseName] = (Get-Content -Raw -LiteralPath $file.FullName | ConvertFrom-Json) } catch { $log.sdk_mods_settings[$file.BaseName] = "unreadable: $_" }
     }
     # Refuse before any lock or backup if the setting cannot be changed: reading only.
-    Assert-NoModPending
     $modFile = Join-Path $modsRoot 'settings\BetterUIControls.json'
     if (!(Test-Path -LiteralPath $modFile)) { throw "no ${modFile}: not changing anything" }
     $null = Get-ModOffBytes ([IO.File]::ReadAllBytes($modFile))
@@ -189,12 +221,23 @@ try {
     if (!(Test-SameBytes ([IO.File]::ReadAllBytes((Join-Path $bak 'sdk_settings\BetterUIControls.json'))) $modPrior)) { throw 'the mod setting differs from its verified backup; not changing it' }
     $modOff = Get-ModOffBytes $modPrior
     $log.mod_setting_prior_base64 = [Convert]::ToBase64String($modPrior)
-    Save-ModPending $modFile $modPrior $bak $Lane
+    Save-ModPending $modFile $modPrior $bak $Lane $HubLock (Join-Path $PSScriptRoot 'realgame.ps1')
     $modWritten = $true   # before the write: a failure inside still restores
     [IO.File]::WriteAllBytes($modFile, $modOff)
     if (!(Test-SameBytes ([IO.File]::ReadAllBytes($modFile)) $modOff)) { throw 'the mod setting did not take the change' }
     $launchAttempted = $true
-    $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
+    # If the launch throws, what counts is whether a game exists: one found by the marker is stopped by the finalizer like any other; with none, nothing launched and the roots stay as they are.
+    # A search that fails leaves the flag set; a game it missed is still seen as foreign by the finalizer, which then holds.
+    try { $proc = Start-Game $gameArgs }
+    catch {
+        $startError = $_
+        try {
+            $found = Find-GameByMarker $marker
+            if ($found) { $proc = $found; $procStart = $proc.StartTime } else { $launchAttempted = $false }
+        } catch { $log.launch_search_error = "$_" }
+        throw $startError
+    }
+    $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'mission_screen/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
@@ -382,13 +425,16 @@ try {
             try {
                 $cleanup.mod_setting = Restore-ModSetting $modFile $modPrior
                 Remove-Item -LiteralPath (Get-ModPendingFile) -ErrorAction SilentlyContinue
-                if (Test-Path -LiteralPath (Get-ModPendingFile)) { $cleanup.mod_setting += "; the pending record could not be removed: $(Get-ModPendingFile)" }
+                if (Test-Path -LiteralPath (Get-ModPendingFile)) {
+                    $modProblem = "restored, but the pending record could not be removed, and the next run refuses until it is: $(Get-ModPendingFile)"
+                    $cleanup.mod_setting += "; $modProblem"
+                }
             }
-            catch { $modProblem = "$_"; $cleanup.mod_setting = "RESTORE FAILED: $_ (the record stays: $(Get-ModPendingFile))" }
+            catch { $modProblem = "not restored: $_"; $cleanup.mod_setting = "RESTORE FAILED: $_ (the record stays: $(Get-ModPendingFile))" }
         } else { $cleanup.mod_setting = "NOT RESTORED (a game may still run; the record stays: $(Get-ModPendingFile))" }
     }
     $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
-    if ($modProblem) { $recovery = (@($recovery, "mod setting not restored ($modProblem)") | Where-Object { $_ }) -join '; ' }
+    if ($modProblem) { $recovery = (@($recovery, "mod setting $modProblem") | Where-Object { $_ }) -join '; ' }
     $holdLocks = [bool]$recovery
     # The evidence first and session.json last, so the status it holds accounts for the rest. Missing evidence cannot read as completed; the
     # restore has already run, and recovery keeps its status.
