@@ -242,3 +242,17 @@ The customization menu is not built. A two-press confirmation stands in for its 
 first press shows the cost on a label, and a second within 5 s does the reset. The second press counts only from the same walker at the price shown; a changed price asks again. The prompt and label end when it expires, or when the station stops being that walker's selected target, either by walking out of reach or because something else is now nearer. It also ends when Maya is down or dead, and when a press goes to Marcus, whose talk takes the use key first. The use key does nothing at all while she is down or dead, for every target (host rule, `UNVERIFIED` against the game's own checks). An empty tree can still be bought back, as
 the script allows; whether the game's dialog stops that was not read. Reach is 350 uu, as for lootables.
 
+## 9. Real-game lootable capture
+
+AI-assisted (Claude), 2026-11-07. `tools/real_game/loot_capture.ps1` drives the installed game, in Sanctuary with saves blocked, and restores and compares the player's files afterwards. Output stays under ignored `local/realgame/loot_capture/`.
+
+**SDK mods stay on.** `Install-Driver -Exclusive` only refuses a driver folder that already exists. It does not disable other SDK mods, so a beam or icon on loot could be `ItemLights`' and not the game's. The capture records which mods are loaded and disables nothing.
+
+**What the first run showed, read by eye from frames and from live reads:**
+
+- **Material slots, read live:** the storage locker and the strong box both have `Prop_Lootables_02.PhAT.Mati_StorageLocker` in their first slot, which agrees with what PR #120 took from package data. The cardboard box, laundry machine, dumpster and DahlAmmo chest render their slot's material directly.
+- **Per-object instances, `UNVERIFIED`:** placed lockers and strong boxes render a `MaterialInstanceConstant` of their own, not the slot's material. Their parents were not read, so whether `Mati_StorageLocker_GreenGlow` is involved is unknown, and the host's plain instance may differ from them.
+- **No labels:** no frame read shows floating text on loot, which agrees with PR #120 hiding the host's stand-in labels once the real mesh loads. The frames do show a use prompt and a beam, some with an icon. Those two are `UNVERIFIED` as stock, because of the mods above.
+- **Lids:** the DahlAmmo chest, storage locker and cardboard box opened, as the host's do. The strong box, dumpster and laundry machine did not open in that run. The likely cause is the capture's aim, which is not proven, so their lids stay unjudged.
+- **Where loot lies:** in those three that opened, the loot lies inside the container. Comparing this with the host's placement is a follow-up after PR #120.
+- **Collecting a pickup:** neither pickup was collected, and the use key was not tried. Whether touch collects one, and any message, stays `UNVERIFIED`.

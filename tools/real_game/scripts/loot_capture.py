@@ -8,11 +8,13 @@ pickup can be collected.
 - lc_discover(label): every placed interactive object (class, definition, balance, mesh, position), with a count per type.
 - lc_materials(label): each lootable mesh's Materials[0], and what each placed object's mesh component renders, GetMaterial(0).
 - lc_goto(x, y, z): put the player near a position (from the ignored local data), for a type not found from the start.
-- lc_stand(mesh): stand near the first object with that mesh, on the first clear side of eight, looking at it.
-- lc_side(mesh): the same object from a quarter turn further round.
-- lc_after(mesh): the pickups near it and its use state, after the use key.
+- lc_stand(mesh, side): stand near the object on that side, keeping its state from the first time. lc_aim(mesh): look at it from where the
+  player landed. lc_side(mesh): the same from a quarter turn further round.
+- lc_opened(mesh): whether its state fields changed since then. Scalars that moved and the pickups near it go in the record.
+- lc_mods(): the SDK mods loaded, for the record. Reads only; nothing is disabled.
 - lc_lower_ammo(): halve the ammo pools, recording them.
-- lc_stand_pickup(kind): stand back from a pickup of that kind ('ammo' or 'cash') on its level, looking at it.
+- lc_choose_pickup(kind): the nearest pickup of that kind ('ammo' or 'cash'). lc_over_pickup(): fall onto it. lc_stand_pickup(kind) and
+  lc_aim_pickup(): stand beside it and look at it, for the use key.
 - lc_pickup_state(): whether that pickup is gone and the ammo or money rose. Collected only when both.
 
 Nothing here keeps a game object from one command to the next: the game may have moved or destroyed it, and using such a
@@ -28,7 +30,10 @@ import unrealsdk
 LC_MESHES = ("Skel_DahlChest_Ammo", "Skel_Dumpster", "Skel_StorageLocker", "Skel_StrongBox", "Skel_CardboardBox",
              "Skel_LaundryMachine")
 LC_MESH_PACKAGE = "Prop_Lootables_02.Meshes."   # most live here; the read reports a miss rather than guessing
-LC = globals().get("LC") or {"picked": {}, "side": {}, "pickup": None}
+LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "pickup": None}
+# The fields on WillowInteractiveObject that describe its state (names from the package). Which of them opening changes has not been observed.
+OPEN_FIELDS = ("SimpleAnimState", "RepSimpleAnimState", "bCanBeUsed")
+SCALAR_KINDS = ("BoolProperty", "ByteProperty", "IntProperty", "FloatProperty", "NameProperty", "StrProperty")
 
 
 def lc_root():
@@ -170,40 +175,100 @@ def lc_goto(x, y, z):
     return True
 
 
-def _clear(start, end):
-    """FastTrace: True when nothing blocks start to end. A failed call counts as blocked, and is reported by the caller's side."""
-    result = _try(get_pc().FastTrace, _vector(*end), _vector(*start))  # noqa: F821
-    return result is True
-
-
-def _stand_at(actor, side, distance=170.0, height=70.0, look_up=45.0):
+def _center(actor):
+    """Where the object really is, and how big: its mesh's bounds. A small box on a shelf is not at its actor's origin plus a guess."""
+    component = _component(actor)
+    bounds = _field(component, "Bounds") if component is not None else None
+    origin, radius = _field(bounds, "Origin"), _field(bounds, "SphereRadius")
+    if _is_number(_field(origin, "X")) and _is_number(radius) and radius > 0:
+        return (origin.X, origin.Y, origin.Z), radius
     loc = actor.Location
+    return (loc.X, loc.Y, loc.Z + 45.0), 60.0
+
+
+def _stand_at(actor, side, height=70.0):
+    center, radius = _center(actor)
     facing = (actor.Rotation.Yaw % 65536) * 360.0 / 65536.0
     a = math.radians(facing + 45.0 * side)
-    x, y, z = loc.X + math.cos(a) * distance, loc.Y + math.sin(a) * distance, loc.Z + height
-    return (x, y, z), (loc.X, loc.Y, loc.Z + look_up)
+    distance = max(170.0, radius + 120.0)
+    return (center[0] + math.cos(a) * distance, center[1] + math.sin(a) * distance, actor.Location.Z + height), center
 
 
-def lc_stand(leaf):
+def _state_value(value):
+    """A read as something comparable. A failed read is an error string: it is no value, so it can show no change."""
+    if isinstance(value, str) and value.startswith("<error"):
+        return None
+    return value if isinstance(value, (bool, int, float, str)) else str(value)
+
+
+def _open_state(actor):
+    return {name: _state_value(_field(actor, name)) for name in OPEN_FIELDS}
+
+
+def _scalars(actor, limit=300):
+    """Every scalar property the object has, for the record: which of them opening changes has not been observed."""
+    out, cls = {}, _field(actor, "Class")
+    while cls is not None and not isinstance(cls, str) and len(out) < limit:
+        fields = _try(lambda c=cls: list(c._fields()))
+        for field in fields if isinstance(fields, list) else []:
+            name = _field(field, "Name")
+            kind = _field(_field(field, "Class"), "Name")
+            if isinstance(name, str) and kind in SCALAR_KINDS and name not in out:
+                out[name] = _state_value(_field(actor, name))
+        cls = _field(cls, "SuperField")
+    return out
+
+
+def _use_target():
+    return _path(_field(get_pc(), "CachedUsableObject"))  # noqa: F821
+
+
+def lc_stand(leaf, side=0):
+    """Near the object on this side (in eighths of a turn from its front). Its state is kept from the first time, so a later side still compares with the start."""
     actor = _pick(leaf)
-    chosen, clear = 0, False
-    for side in range(8):
-        spot, target = _stand_at(actor, side)
-        if _clear(spot, target) and _clear(spot, (spot[0], spot[1], spot[2] - 300.0)) is False:
-            chosen, clear = side, True   # a clear view, and something under the feet
-            break
-    spot, target = _stand_at(actor, chosen)
+    LC["before"].setdefault(leaf, {"state": _open_state(actor), "scalars": _scalars(actor)})
+    spot, target = _stand_at(actor, side)
     _place(*spot, target)
-    LC["side"][leaf] = chosen
-    return {"object": actor._path_name(), "side": chosen, "clear": clear}
+    LC["side"][leaf] = side
+    return {"object": actor._path_name(), "side": side}
+
+
+def lc_aim(leaf):
+    """Once the player has landed: look at the object from where they really are. The fall changes the angle."""
+    actor = _pick(leaf)
+    me = get_pc().Pawn.Location  # noqa: F821
+    center, radius = _center(actor)
+    _aim(center, me.X, me.Y, me.Z)
+    return {"object": actor._path_name(), "radius": radius, "use_target": _use_target()}
 
 
 def lc_side(leaf):
-    actor = _pick(leaf)
     side = LC["side"].get(leaf, 0) + 2
-    spot, target = _stand_at(actor, side)
-    _place(*spot, target)
-    return {"object": actor._path_name(), "side": side, "clear": _clear(spot, target)}
+    return lc_stand(leaf, side)
+
+
+def lc_opened(leaf, radius=600.0):
+    """Whether this object changed since the first stand, in the fields that describe its state. Loot nearby is recorded, but is not
+    evidence: a neighbour opened by a stray press drops loot too. Every scalar that moved is recorded, because which field opening
+    moves has not been observed. No change, or an unreadable field, is not opened."""
+    actor = _pick(leaf)
+    before = LC["before"].get(leaf) or {"state": {}, "scalars": {}}
+    state = _open_state(actor)
+    changed = {name: [before["state"].get(name), value] for name, value in state.items()
+               if before["state"].get(name) is not None and value is not None and before["state"].get(name) != value}
+    scalars = _scalars(actor)
+    moved = {name: [before["scalars"].get(name), value] for name, value in scalars.items() if before["scalars"].get(name) != value}
+    loc = actor.Location
+    return {"object": actor._path_name(), "opened": bool(changed), "changed": changed, "state": state, "scalars_moved": moved,
+            "pickups": _near((loc.X, loc.Y, loc.Z), radius), "use_target": _use_target()}
+
+
+def lc_mods():
+    """Which SDK mods are loaded and enabled, for the record: a beam or icon on loot could be one of theirs. Reads only."""
+    def read():
+        from mods_base import get_ordered_mod_list
+        return [{"name": _field(mod, "name"), "enabled": _field(mod, "is_enabled")} for mod in get_ordered_mod_list()]
+    return _try(read)
 
 
 def _kind(pickup):
@@ -227,13 +292,6 @@ def _near(origin, radius):
             kind, definition = _kind(pickup)
             rows.append({"path": pickup._path_name(), "kind": kind, "definition": definition, "distance": round(distance)})
     return rows
-
-
-def lc_after(leaf, radius=600.0):
-    actor = _pick(leaf)
-    loc = actor.Location
-    return {"object": actor._path_name(), "pickups": _near((loc.X, loc.Y, loc.Z), radius),
-            "usable": _path(_field(get_pc(), "CurrentUsableObject"))}  # noqa: F821
 
 
 def _ammo_pools():
@@ -277,26 +335,67 @@ def lc_lower_ammo():
     return {"before": before, "after": _pool_values()}
 
 
-def lc_stand_pickup(kind, distance=260.0):
+def _chosen_pickup():
+    chosen = LC["pickup"]
+    return next((p for p in _live("WillowPickup") if chosen and p._path_name() == chosen["path"]), None)
+
+
+def lc_choose_pickup(kind):
+    """The nearest pickup of this kind that is in the open: loot lies inside some containers, where neither a fall nor a clear look reaches it.
+    Inside means within the bounds of a lootable, since a line-of-sight trace never answered in this game. The record says which it got.
+    What it should move is kept with its path, so that one pickup is judged through both tries."""
     me = get_pc().Pawn.Location  # noqa: F821
     rows = [p for p in _live("WillowPickup") if _kind(p)[0] == kind]
     if not rows:
+        LC["pickup"] = None
         return {"kind": kind, "pickup": None}
-    pickup = min(rows, key=lambda p: math.dist((p.Location.X, p.Location.Y, p.Location.Z), (me.X, me.Y, me.Z)))
-    loc = pickup.Location
-    chosen = None
-    for side in range(8):
-        a = math.radians(45.0 * side)
-        spot = (loc.X + math.cos(a) * distance, loc.Y + math.sin(a) * distance, loc.Z + 70.0)
-        if _clear(spot, (loc.X, loc.Y, loc.Z + 10.0)):
-            chosen = spot
-            break
-    spot = chosen or (loc.X + distance, loc.Y, loc.Z + 70.0)
-    _place(*spot, (loc.X, loc.Y, loc.Z))
+    lootables = [_center(actor) for actor in _live("WillowInteractiveObject")]
+
+    def inside(p):
+        spot = (p.Location.X, p.Location.Y, p.Location.Z)
+        return any(math.dist(center, spot) < radius for center, radius in lootables)
+
+    def rank(p):
+        return inside(p), math.dist((p.Location.X, p.Location.Y, p.Location.Z), (me.X, me.Y, me.Z))
+
+    pickup = min(rows, key=rank)
     pools, money = _try(_pool_values), _money()
     LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pools": pools, "money": money}
-    return {"kind": kind, "pickup": pickup._path_name(), "definition": _kind(pickup)[1], "clear": chosen is not None,
+    return {"kind": kind, "pickup": pickup._path_name(), "definition": _kind(pickup)[1], "in_the_open": not inside(pickup),
             "pools": pools, "money": money}
+
+
+def lc_stand_pickup(kind, distance=150.0):
+    """Beside the chosen pickup, looking at it, so the use key can reach it."""
+    if not (LC["pickup"] and LC["pickup"]["kind"] == kind) or _chosen_pickup() is None:
+        lc_choose_pickup(kind)
+    pickup = _chosen_pickup()
+    if pickup is None:
+        return {"kind": kind, "pickup": None}
+    loc = pickup.Location
+    _place(loc.X + distance, loc.Y, loc.Z + 70.0, (loc.X, loc.Y, loc.Z))
+    return {"kind": kind, "pickup": pickup._path_name()}
+
+
+def lc_over_pickup():
+    """The walk-over: straight above the chosen pickup, falling onto it, so nothing around it can block the way. Whether touching
+    collects it is the question."""
+    pickup = _chosen_pickup()
+    if pickup is None:
+        return {"pickup": None}
+    loc = pickup.Location
+    _place(loc.X, loc.Y, loc.Z + 120.0, (loc.X + 100.0, loc.Y, loc.Z))
+    return {"pickup": pickup._path_name()}
+
+
+def lc_aim_pickup():
+    pickup = _chosen_pickup()
+    if pickup is None:
+        return {"pickup": None}
+    me = get_pc().Pawn.Location  # noqa: F821
+    loc = pickup.Location
+    _aim((loc.X, loc.Y, loc.Z), me.X, me.Y, me.Z)
+    return {"pickup": pickup._path_name(), "use_target": _use_target()}
 
 
 def lc_pickup_state():

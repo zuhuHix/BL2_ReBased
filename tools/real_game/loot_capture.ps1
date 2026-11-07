@@ -48,33 +48,53 @@ $stagesRequested = @('objects', 'materials', 'ammo') + @($types.Keys) + @('ammo_
 
 function Test-Shot([string]$Name) { Test-Path -LiteralPath (Join-Path $Out $Name) }
 
+# Front, back, then the two sides, until the object's own state says it opened. A press that opens nothing moves on to the next side.
 function Capture-Type([string]$Mesh) {
-    $row = [ordered]@{}
-    $row.stand = Py "print(json.dumps(lc_stand('$Mesh')))"
-    Start-Sleep 2
-    Assert-GameForeground
-    $row.closed = Save-Shot "$Folder/${Mesh}_closed.png"
-    $row.burst = (Invoke-Burst "$Folder/${Mesh}_open" 3 100 { Send-Key E } 1.0).frames
-    $row.opened = Save-Shot "$Folder/${Mesh}_opened.png"
-    $row.after = Py "print(json.dumps(lc_after('$Mesh')))"
+    $row = [ordered]@{ opened = $false; tries = @() }
+    foreach ($side in 0, 4, 2, 6) {
+        $try = [ordered]@{ side = $side; stand = Py "print(json.dumps(lc_stand('$Mesh', $side)))" }
+        Start-Sleep 2
+        $try.aim = Py "print(json.dumps(lc_aim('$Mesh')))"
+        Start-Sleep 1
+        Assert-GameForeground
+        $try.closed = Save-Shot "$Folder/${Mesh}_${side}_closed.png"
+        $try.burst = (Invoke-Burst "$Folder/${Mesh}_${side}_open" 3 100 { Send-Key E } 1.0).frames
+        $try.after_shot = Save-Shot "$Folder/${Mesh}_${side}_after.png"
+        $try.result = Py "print(json.dumps(lc_opened('$Mesh')))" 60
+        $row.tries += $try
+        if (($try.result | ConvertFrom-Json).opened -eq $true) { $row.opened = $true; break }
+    }
     $row.side = Py "print(json.dumps(lc_side('$Mesh')))"
     Start-Sleep 2
-    $row.side_shot = Save-Shot "$Folder/${Mesh}_opened_side.png"
+    $row.side_aim = Py "print(json.dumps(lc_aim('$Mesh')))"
+    Start-Sleep 1
+    $row.side_shot = Save-Shot "$Folder/${Mesh}_side.png"
     $row
 }
 
+# One pickup, two ways, so its answer is about the game and not about the way there: falling onto it, then the use key beside it.
 function Capture-Pickup([string]$Kind) {
-    $row = [ordered]@{}
+    $row = [ordered]@{ collected = $false; method = 'none' }
+    $row.choose = Py "print(json.dumps(lc_choose_pickup('$Kind')))" 60
+    if ($row.choose -match '"pickup": null') { $row.result = 'none on the ground'; return $row }
     $row.stand = Py "print(json.dumps(lc_stand_pickup('$Kind')))"
-    if ($row.stand -match '"pickup": null') { $row.result = 'none on the ground'; return $row }
     Start-Sleep 2
+    $row.aim = Py 'print(json.dumps(lc_aim_pickup()))'
+    Start-Sleep 1
     Assert-GameForeground
     $row.before = Save-Shot "$Folder/${Kind}_before.png"
-    try {
-        $row.walk = (Invoke-Burst "$Folder/${Kind}_collect_walk" 2 100 { Send-KeyDown W } 1.0).frames
-    } finally { Send-KeyUp W }
-    $row.after_burst = (Invoke-Burst "$Folder/${Kind}_collect_after" 2 100 $null 1.0).frames
-    $row.state = Py 'print(json.dumps(lc_pickup_state()))'
+    # Both tries are bursts, because a message may show only for a moment.
+    $row.over_burst = (Invoke-Burst "$Folder/${Kind}_over" 4 100 { Py 'print(json.dumps(lc_over_pickup()))' | Out-Null } 1.0).frames
+    $row.over_state = Py 'print(json.dumps(lc_pickup_state()))'
+    if (($row.over_state | ConvertFrom-Json).collected -eq $true) { $row.collected = $true; $row.method = 'touch'; return $row }
+    $row.stand_again = Py "print(json.dumps(lc_stand_pickup('$Kind')))"
+    Start-Sleep 2
+    $row.aim_again = Py 'print(json.dumps(lc_aim_pickup()))'
+    Start-Sleep 1
+    Assert-GameForeground
+    $row.use_burst = (Invoke-Burst "$Folder/${Kind}_use" 3 100 { Send-Key E } 1.0).frames
+    $row.use_state = Py 'print(json.dumps(lc_pickup_state()))'
+    if (($row.use_state | ConvertFrom-Json).collected -eq $true) { $row.collected = $true; $row.method = 'use key' }
     $row
 }
 
@@ -158,6 +178,10 @@ try {
     }
     Set-Stage 'objects' $true ''
 
+    # -Exclusive only keeps this run's driver folder its own; it does not disable other SDK mods, so a beam or icon on loot could be theirs.
+    # This reads which are loaded, and disables nothing.
+    $log.sdk_mods = Py 'print(json.dumps(lc_mods()))'
+    "sdk mods: $($log.sdk_mods)"
     $log.materials = Py "print(json.dumps(lc_materials('materials')))" 60
     "materials: $($log.materials)"
     $materials = $log.materials | ConvertFrom-Json
@@ -172,8 +196,9 @@ try {
     foreach ($mesh in $types.Keys) {
         if (-not ($counts.$mesh -gt 0)) { $log.types[$mesh] = 'not in the world'; Set-Stage $mesh $false 'not in the world'; "$mesh`: not in the world"; continue }
         try {
-            $row = Capture-Type $mesh; $log.types[$mesh] = $row; "$mesh`: done"
-            Set-Stage $mesh (($row.burst -gt 0) -and (Test-Shot "${mesh}_closed.png") -and (Test-Shot "${mesh}_opened.png")) 'frames missing'
+            $row = Capture-Type $mesh; $log.types[$mesh] = $row; "$mesh`: opened=$($row.opened) after $(@($row.tries).Count) side(s)"
+            # Frames alone are not enough: the first run counted lootables that never opened. The object's own state must have changed.
+            Set-Stage $mesh ($row.opened -eq $true) "did not open from $(@($row.tries).Count) side(s); no state field changed"
         } catch {
             if ($_.Exception.Message -match 'refusing to send input') { throw }
             $log.types[$mesh] = "failed: $($_.Exception.Message)"; Set-Stage $mesh $false $_.Exception.Message; "$mesh`: failed: $($_.Exception.Message)"
@@ -181,9 +206,9 @@ try {
     }
     foreach ($kind in 'ammo', 'cash') {
         try {
-            $row = Capture-Pickup $kind; $log.pickups[$kind] = $row; "$kind`: $($row.state)$($row.result)"
+            $row = Capture-Pickup $kind; $log.pickups[$kind] = $row; "$kind`: collected=$($row.collected) by $($row.method) $($row.result)"
             # Whether a message showed is judged on the frames. This says only that the chosen pickup went and the ammo or money rose.
-            Set-Stage "${kind}_pickup" ($row.state -and (($row.state | ConvertFrom-Json).collected -eq $true)) ($(if ($row.result) { $row.result } else { "not collected: $($row.state)" }))
+            Set-Stage "${kind}_pickup" ($row.collected -eq $true) ($(if ($row.result) { $row.result } else { "not collected: touch $($row.over_state); use key $($row.use_state)" }))
         } catch {
             if ($_.Exception.Message -match 'refusing to send input') { throw }
             $log.pickups[$kind] = "failed: $($_.Exception.Message)"; Set-Stage "${kind}_pickup" $false $_.Exception.Message; "$kind`: failed: $($_.Exception.Message)"

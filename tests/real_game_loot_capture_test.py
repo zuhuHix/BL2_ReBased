@@ -35,6 +35,8 @@ class Thing:
         self.path = path
         self.__dict__.update(fields)
         self.Location = types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0)
+        self.Rotation = types.SimpleNamespace(Yaw=0)
+        self.Class = types.SimpleNamespace(Name='Thing', _fields=lambda: [], SuperField=None)
 
     def _path_name(self):
         return self.path
@@ -51,8 +53,9 @@ class FakeWorld:
         self.pickups = [self.pickup('Map.Pick_1', 'GD.Ammo_Item'), self.pickup('Map.Pick_2', 'GD.Cash_Money')]
         self.objects = []
         state = types.SimpleNamespace(GetCurrencyOnHand=lambda _kind: self.money)
+        self.aims = []
         self.pc = Thing('Map.PC', Pawn=Thing('Map.Pawn', SetPhysics=lambda _physics: None), PlayerReplicationInfo=state,
-                        FastTrace=lambda _end, _start: True, ClientSetRotation=lambda _rotation: None)
+                        CachedUsableObject=None, ClientSetRotation=self.aims.append)
         self.lc.get_pc = lambda: self.pc
         sdk = sys.modules['unrealsdk']
         sdk.make_struct = lambda _name, **fields: types.SimpleNamespace(**fields)
@@ -72,6 +75,28 @@ class PickupStateTest(unittest.TestCase):
     def collect(self, chosen=0):
         """The pickup goes, and leaves a destroyed object behind for anything still holding it."""
         self.world.pickups = [p for i, p in enumerate(self.world.pickups) if i != chosen]
+
+    def test_a_pickup_in_the_open_is_chosen_over_a_nearer_one_inside_a_lootable(self):
+        bounds = types.SimpleNamespace(Origin=types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0), SphereRadius=50.0)
+        self.world.objects.append(Thing('Map.Box', Mesh=Thing('c', SkeletalMesh=Thing('Pkg.Skel_Box'), Bounds=bounds), bDeleteMe=False))
+        self.assertEqual(self.lc.lc_choose_pickup('ammo')['in_the_open'], False)   # the only one: taken, and the record says so
+        far = self.world.pickup('Map.Pick_3', 'GD.Ammo_Item')
+        far.Location = types.SimpleNamespace(X=500.0, Y=0.0, Z=0.0)
+        self.world.pickups.append(far)
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['in_the_open']), ('Map.Pick_3', True))
+
+    def test_the_walk_over_lands_on_the_pickup_and_the_chosen_one_is_judged(self):
+        self.lc.lc_choose_pickup('ammo')
+        self.world.pickups[0].Location = types.SimpleNamespace(X=7.0, Y=8.0, Z=9.0)
+        self.assertEqual(self.lc.lc_over_pickup()['pickup'], 'Map.Pick_1')
+        self.assertEqual((self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y), (7.0, 8.0))
+
+    def test_a_chosen_pickup_that_went_has_nothing_to_stand_by(self):
+        self.lc.lc_choose_pickup('ammo')
+        self.collect()
+        self.assertEqual(self.lc.lc_over_pickup(), {'pickup': None})
+        self.assertEqual(self.lc.lc_aim_pickup(), {'pickup': None})
 
     def test_nothing_kept_between_commands_is_a_game_object(self):
         self.lc.lc_stand_pickup('ammo')
@@ -127,6 +152,60 @@ class PickupStateTest(unittest.TestCase):
 
     def test_no_pickup_chosen_is_not_collected(self):
         self.assertEqual(self.lc.lc_pickup_state()['collected'], False)
+
+
+class OpenedTest(unittest.TestCase):
+    def setUp(self):
+        self.world = FakeWorld()
+        self.lc = self.world.lc
+        mesh = Thing('Pkg.Meshes.Skel_Box')
+        bounds = types.SimpleNamespace(Origin=types.SimpleNamespace(X=10.0, Y=20.0, Z=30.0), SphereRadius=25.0)
+        self.box = Thing('Map.Box', Mesh=Thing('c', SkeletalMesh=mesh, Bounds=bounds), bDeleteMe=False, SimpleAnimState=0, RepSimpleAnimState=0, bCanBeUsed=True)
+        self.world.objects.append(self.box)
+
+    def test_a_state_field_that_changed_is_opened(self):
+        self.lc.lc_stand('Skel_Box')
+        self.assertEqual(self.lc.lc_opened('Skel_Box')['opened'], False)
+        self.box.bCanBeUsed = False
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertEqual((result['opened'], result['changed']), (True, {'bCanBeUsed': [True, False]}))
+
+    def test_loot_nearby_alone_is_not_opened(self):
+        # A stray press on a neighbour drops loot here too. The old stage counted frames, and loot is no better.
+        self.lc.lc_stand('Skel_Box')
+        self.world.pickups.append(self.world.pickup('Map.Pick_9', 'GD.Ammo_Item'))
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertEqual(result['opened'], False)
+        self.assertEqual(len(result['pickups']), 3)
+
+    def test_an_unreadable_field_is_not_evidence(self):
+        self.lc.lc_stand('Skel_Box')
+        del self.box.__dict__['SimpleAnimState']   # now it reads as an error string
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertEqual((result['opened'], result['changed']), (False, {}))
+
+    def test_a_later_side_compares_with_the_first_state(self):
+        self.lc.lc_stand('Skel_Box', 0)
+        self.box.SimpleAnimState = 2     # opened from the first side; only read after a later stand
+        self.lc.lc_stand('Skel_Box', 4)
+        self.assertEqual(self.lc.lc_opened('Skel_Box')['opened'], True)
+
+    def test_it_aims_at_the_mesh_not_a_guess_above_the_origin(self):
+        # The strong box: a small mesh under a shelf, missed by looking at a height above the actor.
+        self.world.pc.Pawn.BaseEyeHeight = 64.0
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-200.0, Z=30.0)
+        self.lc.lc_aim('Skel_Box')
+        yaw = self.world.aims[-1].Yaw * 360.0 / 65536.0
+        self.assertAlmostEqual(yaw, 90.0, delta=0.1)   # straight at Y=20 from Y=-200, at X=10: the bounds' origin
+
+    def test_each_side_stands_around_the_mesh(self):
+        spots = {side: self.lc._stand_at(self.box, side)[0] for side in (0, 4)}
+        self.assertAlmostEqual(spots[0][0], 180.0)
+        self.assertAlmostEqual(spots[4][0], -160.0)
+        self.assertAlmostEqual(self.lc._stand_at(self.box, 0)[1][2], 30.0)
+
+    def test_a_read_of_the_mods_changes_nothing_and_survives_failing(self):
+        self.assertTrue(str(self.lc.lc_mods()).startswith('<error'))   # no mods_base here: recorded, not raised
 
 
 class MaterialsTest(unittest.TestCase):

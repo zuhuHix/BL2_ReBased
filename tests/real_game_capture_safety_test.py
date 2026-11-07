@@ -50,7 +50,7 @@ function Get-GameProcesses {
 }
 function Focus-Game { $true }
 function Assert-GameForeground { if ($scenario -eq 'focus_lost') { throw 'refusing to send input: Borderlands 2 is not the foreground window after 3 focus attempts (is someone using this PC?)' } }
-function Send-Key { }
+function Send-Key { $global:OwUseKeySent = $true }
 function Send-KeyDown { }
 function Send-KeyUp { }
 function Save-Shot([string]$Name) { $f = Join-Path $script:RG $Name; New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null; Set-Content -LiteralPath $f 'frame'; $f }
@@ -86,16 +86,29 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     }
     if ($Code -match 'lc_materials') { Set-Content -LiteralPath (Join-Path $script:RG 'loot_capture/materials.json') '{}'; if ($scenario -eq 'materials_unread') { return '{"slots": {}, "problems": ["Skel_X has no readable material slot"]}' }; return '{"slots": {}, "problems": []}' }
     if ($Code -match 'lc_lower_ammo') { return '{"before": {"a": 10}, "after": {"a": 5}}' }
-    if ($Code -match 'lc_stand_pickup') { return '{"pickup": "p"}' }
+    if ($Code -match 'lc_mods') { return '[{"name": "SomeMod", "enabled": true}]' }
+    if ($Code -match 'lc_choose_pickup') { $global:OwFellOn = $false; $global:OwUseKeySent = $false }
+    if ($Code -match 'lc_over_pickup') { $global:OwFellOn = $true }
+    if ($Code -match 'lc_choose_pickup|lc_stand_pickup|lc_over_pickup|lc_aim_pickup') { return '{"pickup": "p"}' }
     if ($Code -match 'lc_pickup_state') {
         if ($scenario -eq 'pickup_gone_only') { return '{"gone": true, "changed": false, "collected": false}' }
+        # Collected only once the thing that collects it was really sent.
+        $sent = if ($scenario -eq 'collected_by_use_key') { $global:OwUseKeySent } else { $global:OwFellOn }
+        if (-not $sent) { return '{"gone": false, "changed": false, "collected": false}' }
         return '{"gone": true, "changed": true, "collected": true}'
     }
+    if ($Code -match 'lc_opened') {
+        $global:OwOpenReads = 1 + [int]$global:OwOpenReads
+        if ($scenario -eq 'never_opens') { return '{"opened": false, "changed": {}}' }
+        if ($scenario -eq 'opens_on_third_side' -and $global:OwOpenReads -lt 3) { return '{"opened": false, "changed": {}}' }
+        return '{"opened": true, "changed": {"bCanBeUsed": [true, false]}}'
+    }
+    if ($Code -match 'lc_aim') { return '{}' }
     if ($Code -match 'lc_stand') {
         if ($scenario -eq 'script_error') { return "Traceback (most recent call last):`n LookupError" }
         return '{}'
     }
-    if ($Code -match 'lc_after|lc_side') { return '{}' }
+    if ($Code -match 'lc_side') { return '{}' }
     if ($Code -match 'vp_dump') { if ($scenario -eq 'script_error') { return "Traceback (most recent call last):`n LookupError" }; return '7 [10, 12]' }
     if ($Code -match 'quit') { if ($scenario -ne 'game_stuck') { $global:OwGameGone = $true }; return '' }
     throw "unplanned game call: $Code"
@@ -277,6 +290,32 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         r = self.run_it('pickup_gone_only')
         self.assertEqual(r['code'], 1, r['out'])
         self.assertEqual(r['session']['status'], 'incomplete: ammo_pickup, cash_pickup', r['out'])
+
+    def test_frames_without_an_opening_do_not_complete_a_lootable(self):
+        # The false pass of the first real run: all frames taken, three lootables never opened.
+        r = self.run_it('never_opens')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertIn('incomplete: Skel_DahlChest_Ammo, Skel_Dumpster, Skel_StorageLocker, Skel_StrongBox, Skel_CardboardBox, Skel_LaundryMachine', r['session']['status'], r['out'])
+        self.assertEqual(len(r['session']['types']['Skel_StrongBox']['tries']), 4, r['out'])   # every side was tried
+        self.assertTrue(any('did not open from 4 side(s)' in p for p in r['session']['stage_problems']), r['out'])
+
+    def test_it_stops_at_the_side_that_opens(self):
+        r = self.run_it('opens_on_third_side')
+        self.assertEqual(r['session']['status'], 'completed', r['out'])
+        self.assertEqual([t['side'] for t in r['session']['types']['Skel_DahlChest_Ammo']['tries']], [0, 4, 2], r['out'])
+        self.assertEqual(len(r['session']['types']['Skel_Dumpster']['tries']), 1, r['out'])
+
+    def test_a_pickup_is_tried_by_touch_then_by_the_use_key(self):
+        r = self.run_it('good')
+        self.assertEqual(r['session']['pickups']['ammo']['method'], 'touch', r['out'])
+        self.assertNotIn('use_burst', r['session']['pickups']['ammo'], r['out'])
+        r = self.run_it('collected_by_use_key')
+        self.assertEqual(r['code'], 0, r['out'])
+        self.assertEqual(r['session']['pickups']['cash']['method'], 'use key', r['out'])
+
+    def test_the_loaded_mods_are_in_the_record(self):
+        r = self.run_it('good')
+        self.assertIn('SomeMod', r['session']['sdk_mods'], r['out'])
 
     def test_a_materials_file_without_values_is_incomplete(self):
         r = self.run_it('materials_unread')
