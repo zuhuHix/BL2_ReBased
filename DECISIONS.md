@@ -4228,3 +4228,13 @@ Maintainer decision; AI-assisted (Claude). Provenance: `THIRD_PARTY.md`. Benchma
 - **Added:** `tools/decode_slice_audio.py` drives `vgmstream-cli` from an explicit path or `OPENWILLOW_VGMSTREAM`, writing PCM WAV to ignored `local/`. It keeps a file only after the host's parser rules and a length check, and refuses a folder elsewhere in the repository. Nothing links or vendors the tool, and the script never downloads it. `tools/test_slice_gate.ps1` gains an optional `-AudioPlay`.
 - **Measured here:** 153 of 153 slice sources and 30 of 30 others decoded, with frame counts equal to the `.wem` headers on the 153, none silent.
 - **Not verified:** nobody has listened. Length and signal do not show that a sound is right, and the roles behind them stay as recorded. No parsing behaviour changed.
+
+## 2026-11-07: A swing holds for the game's clip length, a frame longer than UE's (controls)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/CONTROLS.md`, "Melee".
+
+- **Change:** with the first-person `Melee` clip imported, a swing holds the weapons for the clip's UE length plus one frame interval, not for its UE length.
+- **Why:** the first row after the import graded 0.67 s against 0.70 s. The package gives the clip 21 keys and a length of 0.70 s, and gives all 5 first-person Siren clips read a length of keys / 30. The md5anim has 21 frames at 30 fps. The importer keeps 21 keys, and UE counts 20 intervals, 0.667 s, which the host's `GetPlayLength` returned. It is the right clip; the two engines count length differently.
+- **Not changed:** the grader's 0.70 s and its tolerance, which come from the live reads and the package. The importer's interval count, which is what UE needs for those keys. Other clips the host times by `GetPlayLength` are also a frame short: not changed here.
+- **Not known:** how the game spaces the keys inside its 0.70 s. **UNVERIFIED**, at most one frame.
+- **Checked:** `tests.check_controls_test` only. The host change is not compiled or run.
