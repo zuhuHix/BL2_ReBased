@@ -444,7 +444,7 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         Press(Player, EKeys::I);
         break;
     case 38:
-        Check(TEXT("i_refused_while_down"), !Hud.IsSkillsOpen() && !Maya.IsInventoryWidgetOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 3, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
+        Check(TEXT("i_refused_while_down"), !Hud.IsSkillsOpen() && !Hud.IsInventoryOpen() && !Maya.IsInventoryWidgetOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 3, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
         Press(Player, EKeys::K);
         break;
     case 39:
