@@ -76,7 +76,23 @@ def block_saves():
     Call it at the main menu before loading a character. On 2026-10-02 it held for character loads,
     a map travel, disconnects and quitting; game start and character selection still write
     profile.bin and a .bak copy. Back the saves up first and remove anything spawned before quitting.
+
+    add_hook accepts any name, so each function is first shown to exist: a save function that is missing raises and blocks nothing,
+    and the capture's Assert-SavesBlocked then stops the run on the answer.
     """
+    missing = []
+    for name in SAVE_FUNCTIONS:
+        path = "WillowGame.WillowSaveGameManager:" + name
+        try:
+            unrealsdk.find_object("Function", path)
+        except ValueError:
+            missing.append(path)
+    if missing:
+        raise RuntimeError(f"saves are not blocked: no such function: {', '.join(missing)}")
+    return _add_save_hooks()
+
+
+def _add_save_hooks():
     for name in SAVE_FUNCTIONS:
         add_hook("WillowGame.WillowSaveGameManager:" + name, Type.PRE, "openwillow_block_save", _block_save)
     return len(SAVE_FUNCTIONS)
@@ -119,8 +135,9 @@ add_hook(TICK, Type.POST_UNCONDITIONAL, HOOK_ID, on_tick)
 
 # Install-Driver -BlockSavesAtStart writes this flag: the game then refuses save calls from the first frame, which is
 # needed when a startup mod loads a character before any command can run (the main-menu call is too late).
+# Hooks only, as the mod may load before the class does; the capture's own block_saves() call is the proof, before any gameplay.
 if Path(__file__).with_name("autoblock.flag").is_file():
-    block_saves()
+    _add_save_hooks()
 
 mod = build_mod(cls=Library, name="OpenWillow Real Game Driver", author="OpenWillow",
                 description="Local command channel for OpenWillow ground-truth captures.",
