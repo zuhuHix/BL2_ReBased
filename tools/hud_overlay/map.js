@@ -91,7 +91,7 @@
   const placed = new Map(); // landmark key -> clip name the movie gave it
 
   function close() { root.location.href = '/__ow_close_map'; }
-  // The loading panel stays up until the map movie has loaded; on a failure it shows why (Escape, Tab and M still close).
+  // The loading panel stays up until the map movie has loaded; on a failure it shows why (Escape and Tab still close).
   let lastMessage = '';
   function showMessage(text) {
     if (text === lastMessage) return; // the host pushes its state every second

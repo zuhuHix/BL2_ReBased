@@ -1,5 +1,5 @@
-// M on the Map and Missions pages, with each page's real key handler and invented surroundings: what the handlers do with the key.
-// The behaviour is from one press each in the real game (docs/verification/CONTROLS.md). Run: node tests/status_page_keys_test.js
+// M and L on the Missions page with its real key handler and invented surroundings, and on Skills by source (the Map page: map_screen_test.js).
+// The behaviour is from the real-game reads and the stock script (docs/verification/CONTROLS.md, with sample counts). Run: node tests/status_page_keys_test.js
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
