@@ -275,6 +275,7 @@ private:
     void RunCombatShots(float Now);
     // -owgunshots -owgunids=a,b,c: captures idle, ADS, firing, reload and side-view frames per named item.
     void RunGunShots(float Now);
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     // -owfiringtest -owgunids=a,b,c (with -owcombattest): fires each named gun at the dummy, at a wall and (status guns)
     // at the dummy again, then logs one OWFIRING result line per gun (tools/test_weapon_firing.ps1).
     void RunFiringTest(float Now);
@@ -524,6 +525,7 @@ private:
     bool bBarrelAxisLogged = false;
     // Muzzle fallbacks used (shots), and the item/socket pairs whose socket check was already logged.
     mutable int32 MuzzleFallbackShots = 0;
+    TSet<FString> ProxyGunIds;  // guns that had no mesh of their own this run, reported again at the end
     mutable TSet<FString> GunSocketLogged;
     // Look-input weapon sway, in degrees (yaw, pitch).
     FVector2D LookInput = FVector2D::ZeroVector;
