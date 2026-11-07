@@ -1303,6 +1303,8 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     if (Item->Type == TEXT("Assault Rifle")) ArmsSet = TEXT("AssaultRifle");
     else if (Item->Type == TEXT("Sub-Machine Gun") || Item->Type == TEXT("SMG")) ArmsSet = TEXT("SMG");
     else if (Item->Type == TEXT("Shotgun")) ArmsSet = TEXT("Shotgun");
+    // The view data names the set outright, for the types the checks above do not cover (launchers, sniper rifles).
+    if (const FViewModel* View = FindViewModel(Item); View && !View->ArmsAnimSet.IsEmpty()) ArmsSet = View->ArmsAnimSet;
     const bool bOwnSet = ArmsSet != TEXT("Pistol")
         && FPackageName::DoesPackageExist(FString::Printf(TEXT("%s/FirstPerson/Anim_%s_Idle"), MayaRoot, *ArmsSet));
     if (!bOwnSet) ArmsSet = TEXT("Pistol");

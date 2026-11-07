@@ -681,3 +681,11 @@ A rolled gun's reload asset falls to the library's clip by file name, which exis
 assault rifle only. The launcher and sniper arm sets are not imported, so those stay without a matching hold pose; launchers filling the screen may
 need that as well. `zoom_fov` did not vary within a type on those 210 guns, though the card's zoom depends on parts, so ADS likely uses the wrong
 zoom for many guns: UNVERIFIED, needs the live read. All of it is UNVERIFIED in the running game.
+
+**Launcher hold (gunlook lane, 2026-11-07).** The Walker now takes the arms' clip set from the view data's `weapon_anim_set`, so launchers and sniper
+rifles ask for their own set; the older mapping by item type is the fallback, and a set that was not imported still falls back to the pistol's.
+`1st_Person_RocketLauncher` is converted like the others (`tools/prepare_character_anims.py`) and imported with `OPENWILLOW_CHARACTER_ANIMS=RocketLauncher=<json>`.
+Without the set a launcher falls back to the pistol's and fills the screen. With it, and the same view offset, two rolled launchers (Torgue, Maliwan) sit
+lower right; so the missing set was the cause, for these two. Compared by eye with real first-person frames of the same two types: placement is close, and
+no hand shows in either. Those are other rolls in other light, so this checks placement only. The sniper, assault rifle, SMG and shotgun sets are not
+imported on the zuhu PC, and the sniper's is not captured. Reload clips are not imported.
