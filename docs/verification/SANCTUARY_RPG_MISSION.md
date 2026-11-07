@@ -296,7 +296,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/run_quest.ps1 -Fresh  
 ```
 
 The script waits for and holds `local/ue_run.lock`, saves to `local/quest/manual-save.json` and logs to
-`local/quest/manual-*.log`. An on-screen line shows the objective, plus "E: talk to Marcus" when in reach (otherwise his
+`local/quest/manual-*.log`. An on-screen line (since 2026-11-07 only while the canvas HUD draws and no page is open) shows the objective, plus "E: talk to Marcus" when in reach (otherwise his
 distance). The log prints `OWQUEST hint: press E (use) to talk to Marcus`.
 
 Keys:

@@ -46,6 +46,8 @@ public:
     bool IsMapOpen() const { return SkillsBrowser.IsValid() && bMapOpen; }
     // For the mission page suite: the gameplay HUD as the last DrawHUD left it. Back means shown again (the movie, once it is ready, else the canvas).
     bool IsGameplayHudHidden() const;
+    // The movie HUD is in use, so the quest's on-screen debug text stays off.
+    bool IsMovieHudReady() const { return bFlashHudReady; }
     bool IsGameplayHudBack() const;
     FString GameplayHudReport() const;
     void CloseSkills();

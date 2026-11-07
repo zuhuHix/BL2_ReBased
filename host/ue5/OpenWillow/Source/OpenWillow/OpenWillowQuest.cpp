@@ -1126,12 +1126,14 @@ void UOpenWillowQuest::UpdateHints()
     if (bCanTalk && !bTalkHintLogged) UE_LOG(LogTemp, Display, TEXT("OWQUEST hint: press E (use) to talk to Marcus"));
     bTalkHintLogged = bCanTalk;
     if (!GEngine || bTesting) return;
-    // The text is a debug overlay drawn over everything; the status pages (inventory, skills, missions, map) and the vending
-    // shop cover the gameplay HUD, so it is not posted while one is open (each line lasts one frame).
+    // The text is a debug overlay drawn over everything; the status pages (inventory, skills, missions, map), the mission page and
+    // the vending shop cover the gameplay HUD, so it is not posted while one is open (each line lasts one frame). The movie HUD has its
+    // own tracker and prompt, so this is for the canvas fallback only.
+    if (IsScreenPageShown()) return;
     const APawn* Pawn = Cast<APawn>(GetOwner());
     const APlayerController* Player = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
     if (const AOpenWillowMayaHUD* Hud = Player ? Cast<AOpenWillowMayaHUD>(Player->GetHUD()) : nullptr)
-        if (Hud->IsSkillsOpen()) return;
+        if (Hud->IsSkillsOpen() || Hud->IsMovieHudReady()) return;
     if (const UOpenWillowVendorSubsystem* Vendors = GetWorld() ? GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr)
         if (Vendors->IsShopOpen()) return;
     FString Line = TEXT("Rock, Paper, Genocide: Fire Weapons! - ");
