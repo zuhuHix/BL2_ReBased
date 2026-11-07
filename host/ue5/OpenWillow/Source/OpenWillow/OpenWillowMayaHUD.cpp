@@ -340,6 +340,13 @@ void AOpenWillowMayaHUD::CaptureShot(const TCHAR* Driver, const FString& File)
     FScreenshotRequest::RequestScreenshot(File, true, false);
 }
 
+void AOpenWillowMayaHUD::ToggleSkills()
+{
+    if (SkillsBrowser && !bInventoryOpen && !bMissionsOpen && !bMapOpen) { CloseSkills(); return; }
+    CloseSkills();
+    OpenStatusMenu(EOpenWillowStatusPage::Skills);
+}
+
 bool AOpenWillowMayaHUD::IsGameplayHudHidden() const
 {
     return bHiddenBehindMissionPage && !(FlashHudRoot && FlashHudRoot->GetVisibility() == EVisibility::HitTestInvisible);
@@ -354,13 +361,6 @@ FString AOpenWillowMayaHUD::GameplayHudReport() const
 {
     return FString::Printf(TEXT("hud: behind_page=%d movie_ready=%d movie_shown=%d"), bHiddenBehindMissionPage ? 1 : 0, bFlashHudReady ? 1 : 0,
         FlashHudRoot && FlashHudRoot->GetVisibility() == EVisibility::HitTestInvisible ? 1 : 0);
-}
-
-void AOpenWillowMayaHUD::ToggleSkills()
-{
-    if (SkillsBrowser && !bInventoryOpen && !bMissionsOpen && !bMapOpen) { CloseSkills(); return; }
-    CloseSkills();
-    OpenStatusMenu(EOpenWillowStatusPage::Skills);
 }
 
 bool AOpenWillowMayaHUD::ToggleMissions()
