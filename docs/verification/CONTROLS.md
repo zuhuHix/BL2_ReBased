@@ -38,9 +38,9 @@ Host rules, **UNVERIFIED**:
 
 - With every page closed, the key opens its page. The script reaches the stock menu through `ShowStatusMenu` with a chosen first
   screen (`WillowPlayerController.ShowMap`), and it refuses through `CanShowModalMenu`, whose conditions were not read.
-- While Maya is down M and L refuse. In the real game neither opened anything (twice each), and the set of actions allowed while down holds no menu. A page
-  already open when she went down cannot route to the Map or Missions either, the same rule (a host choice: a stock page over going down was not read). The host's
-  inventory and skills keys still open while down; those belong to the inventory lane.
+- While Maya is down M and L refuse. In the real game neither opened anything (twice each), and the set of actions allowed while down holds no menu. I and K refuse too, by
+  that set only: they were not pressed while down in the real game. A page already open when she went down cannot route to another page either, the same rule, and it can still be
+  closed (host choices: a stock page over going down was not read).
 - With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. In the real game M stayed on the Map (twice) and went to the Map
   from the log (twice) and from Skills (once); L went to the log from the Map, the Inventory and Skills (once each) and stayed on the log (once). So `map.js`, `missions.js`
   and `skills.js` follow that. `inventory.js` routes L too; M on the Inventory was not read live, as a dialog took the key, so that route is from the script below.
@@ -155,7 +155,7 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
-  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=29 failed=0`.
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=29 failed=0`.
   `route_refused_while_down` sends its key as a keydown event into the page: it tests the page's handler and the host's refusal, not real key delivery, which skips Slate.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop during a swing has no row.
