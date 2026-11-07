@@ -26,6 +26,12 @@ FTable& Table()
     return Instance;
 }
 
+// Exactly the current schema: a cast first would pass 2.9 and values that wrap.
+bool IsCurrentSchema(double Value)
+{
+    return FMath::IsFinite(Value) && Value == double(Schema);
+}
+
 const TSharedPtr<FJsonObject>& Loaded()
 {
     FTable& T = Table();
@@ -37,7 +43,7 @@ const TSharedPtr<FJsonObject>& Loaded()
     if (!FFileHelper::LoadFileToString(Text, *T.File) || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), T.Root))
     {
         T.Root.Reset();
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow view types: no table at %s; a gun without a weapon_view.json line has no view model"), *T.File);
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow view types: no table at %s; a gun without a weapon_view.json line has no view model"), *T.File);
         return T.Root;
     }
     // Refuse a table from another shape or another library: its parts and sockets would not be the ones the guns are built from.
@@ -48,10 +54,10 @@ const TSharedPtr<FJsonObject>& Loaded()
     const FString Library = FPaths::Combine(FPaths::GetPath(T.File), TEXT("library.json"));
     const FMD5Hash LibraryHash = FMD5Hash::HashFile(*Library);
     const FString LibraryMd5 = LibraryHash.IsValid() ? LexToString(LibraryHash) : FString();
-    if (int32(FileSchema) != Schema || Md5.IsEmpty() || LibraryMd5.IsEmpty() || !Md5.Equals(LibraryMd5, ESearchCase::IgnoreCase))
+    if (!IsCurrentSchema(FileSchema) || Md5.IsEmpty() || LibraryMd5.IsEmpty() || !Md5.Equals(LibraryMd5, ESearchCase::IgnoreCase))
     {
-        UE_LOG(LogTemp, Warning, TEXT("OpenWillow view types: refusing %s (schema %d, want %d; library md5 %s, %s has %s); rebuild it with weapon_view_model.py --library"),
-            *T.File, int32(FileSchema), Schema, *Md5, *Library, *LibraryMd5);
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow view types: refusing %s (schema %g, want %d; library md5 %s, %s has %s); rebuild it with weapon_view_model.py --library"),
+            *T.File, FileSchema, Schema, *Md5, *Library, *LibraryMd5);
         T.Root.Reset();
     }
     return T.Root;
@@ -185,7 +191,7 @@ int32 DropStaleLines(const TSharedPtr<FJsonObject>& Root)
     {
         const TSharedPtr<FJsonObject>* Line = nullptr;
         double LineSchema = 0.0;
-        if (Pair.Value.IsValid() && Pair.Value->TryGetObject(Line) && Line && (!(*Line)->TryGetNumberField(TEXT("view_schema"), LineSchema) || int32(LineSchema) != Schema))
+        if (Pair.Value.IsValid() && Pair.Value->TryGetObject(Line) && Line && (!(*Line)->TryGetNumberField(TEXT("view_schema"), LineSchema) || !IsCurrentSchema(LineSchema)))
             Stale.Add(FString(Pair.Key));  // the key type of FJsonObject::Values is not FString in 5.8
     }
     for (const FString& Key : Stale) Root->RemoveField(Key);
