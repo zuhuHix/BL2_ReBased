@@ -245,12 +245,14 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         # SHIELD STAGE. The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped. Every
         # row stays in the log. The stage needs each level but her own shield's measured, and her own shield back; a clamped level is a finding,
         # not a retry. Her own level is refused: the key could not tell the two shields apart.
-        $shieldLevels = 1, 5, 8, 15, 30, 50
+        $shieldLevels = @(1, 5, 8, 15, 30, 50)
         $shieldRows = @(); $shieldWhy = ''; $restored = $null
         try {
             $log.shields_start = Py 'import json; print(json.dumps(pi_shields(True), default=str))' | ConvertFrom-Json
             # With no equipped shield found, nothing is spawned or changed, so there is nothing to restore either.
             if (!$log.shields_start.equipped) { $shieldLevels = @(); $shieldWhy = 'no equipped shield found: nothing was changed' }
+            # The game did not equip a shield above the player's level (live, 2026-11-07, reason not read), so those levels cannot be measured.
+            $shieldLevels = @($shieldLevels | Where-Object { $_ -le $log.shields_start.player_level })
             foreach ($level in $shieldLevels) {
                 $row = [ordered]@{ level = $level }
                 $restoreOk = $false
@@ -286,6 +288,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         $required = @($shieldLevels | Where-Object { $_ -ne $ownLevel })
         $measured = @($shieldRows | Where-Object { $_.read.counts -eq $true -and $_.level -in $required })
         "shields: $($log.shields_start.equipped.name) level $ownLevel capacity $($log.shields_start.max_strength); $($measured.Count) of $($required.Count) required levels measured"
+        if (!$shieldWhy -and !$required.Count) { $shieldWhy = 'no level to measure' }
         if (!$shieldWhy -and $measured.Count -ne $required.Count) { $shieldWhy = "$($measured.Count) of $($required.Count) required levels measured" }
         Set-Stage 'shield_levels' (!$shieldWhy) $shieldWhy
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
