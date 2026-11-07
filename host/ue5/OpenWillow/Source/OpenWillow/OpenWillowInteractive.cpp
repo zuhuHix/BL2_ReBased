@@ -741,7 +741,7 @@ AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::NearestStation(c
         AOpenWillowQuickChangeStation* Station = Candidate.Get();
         if (!Station) continue;
         const double D2 = FVector::DistSquared(From, Station->GetActorLocation());
-        if (D2 >= Best || !OpenWillowUseView::LooksAt(Walker, Station->UseBox(), Station)) continue;
+        if (D2 >= Best || !OpenWillowUseView::LooksAt(Walker, Station->UseBox(), Station, Station->GetPlacedBody())) continue;
         Best = D2;
         Nearest = Station;
     }
@@ -770,6 +770,12 @@ void UOpenWillowInteractiveSubsystem::SpawnStations(UWorld& World, const TShared
         AOpenWillowQuickChangeStation* Station = World.SpawnActor<AOpenWillowQuickChangeStation>(AOpenWillowQuickChangeStation::StaticClass(), Pose, Params);
         if (!Station) continue;
         Station->Configure(Id);
+        FString ObjectName;
+        FBox BodyBox(ForceInit);
+        Id.Split(TEXT(":"), nullptr, &ObjectName);
+        AActor* Body = OpenWillowUseView::FindPlacedBody(World, ObjectName, Location, BodyBox);
+        Station->SetPlacedBody(Body, BodyBox);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: station %s use box from %s"), *Id, Body ? *Body->GetName() : TEXT("the stand-in, no imported machine found"));
         Stations.Add(Station);
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: %d Quick Change station(s) spawned"), Stations.Num());
@@ -1089,8 +1095,12 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
     if (!Skills || !Inventory) return false;
     const auto Beside = [&Station, &Walker]()
     {
-        // Far enough to stand outside the station's use box, where the view decides.
-        const FVector At = Station.GetActorLocation() + Station.GetActorForwardVector() * 120.f + FVector(0.f, 0.f, 100.f);
+        // In front of the machine and clear of it, where a player can stand; a little to its side, as a pillar stands straight in front. Inside its collision the
+        // eye starts in the machine, and she stays stuck there. Dropped from above the floor, so she lands.
+        const FBox Box = Station.UseBox();
+        const float Along = Box.GetExtent().Size2D() + Walker.GetCapsuleComponent()->GetScaledCapsuleRadius() + 20.f;
+        FVector At = Box.GetCenter() + Station.GetActorForwardVector() * Along - Station.GetActorRightVector() * 30.f;
+        At.Z = Station.GetActorLocation().Z + 100.f;
         Walker.SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics);
     };
     // Aims at the station, or Turn degrees to the side of it.
@@ -1156,12 +1166,12 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
     case 1:
         // In reach and looked at, with the sheet in the way: not the target. The next step is the same spot without it.
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST blocked selected=%d target=%s fixture=%d"), SelectedStation(Walker) ? 1 : 0, TargetNow(), TestViewBlocker.IsValid() ? 1 : 0);
-        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray blocked %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station));
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray blocked %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station, Station.GetPlacedBody()));
         if (TestViewBlocker.IsValid()) TestViewBlocker->Destroy();
         break;
     case 2:
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST clear selected=%d target=%s"), SelectedStation(Walker) ? 1 : 0, TargetNow());
-        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray clear %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station));
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray clear %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station, Station.GetPlacedBody()));
         Walker.PressUseKey(); // through the use-key path: asks
         break;
     case 3:

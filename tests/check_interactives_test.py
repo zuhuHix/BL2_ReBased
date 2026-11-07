@@ -60,6 +60,9 @@ def line(text):
 QUICK_LOOKED = 'OWQCTEST looked away selected=0 target=none'
 VIEW_BLOCKED = 'OWQCTEST blocked selected=0 target=none fixture=1'
 VIEW_CLEAR = 'OWQCTEST clear selected=1 target=interactive'
+RAY_START = 'walker=(V(X=1, Y=2, Z=3)) eye=(V(X=1, Y=2, Z=4)) dir=(V(X=-1, Y=0, Z=0)) box=(IsValid=true, Min=(X=0 Y=0 Z=0), Max=(X=1 Y=1 Z=1))'
+RAY_BLOCKED = f'OWQCTEST ray blocked {RAY_START} enters=1 distance=50.0 blocked=1 start_penetrating=0 hit=Actor_1/ViewBlockerFixture hit_distance=25.0'
+RAY_CLEAR = f'OWQCTEST ray clear {RAY_START} enters=1 distance=50.0 blocked=0 start_penetrating=0 hit=none/none hit_distance=0.0'
 QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
              'OWQCTEST walked away',
              'OWQUICKCHANGE cancel id=S reason=not the selected target',
@@ -95,7 +98,7 @@ def good_log(spawned=3, unsupported=1):
     text += line(f'OWLOOTLID material balance=Balance.0 id=Map:Point_2 path={PLANNED_PATH}')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Balance.0 phase={phase}')
-    text += ''.join(line(row) for row in [QUICK_LOOKED, VIEW_BLOCKED, VIEW_CLEAR, *QUICK_RUN])
+    text += ''.join(line(row) for row in [QUICK_LOOKED, VIEW_BLOCKED, RAY_BLOCKED, VIEW_CLEAR, RAY_CLEAR, *QUICK_RUN])
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
 
@@ -361,29 +364,44 @@ class ViewBlockerTest(unittest.TestCase):
         return out.rows[0][1]
 
     def test_blocked_then_clear_passes(self):
-        self.assertEqual(self.grade(VIEW_BLOCKED, VIEW_CLEAR), 'PASS')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, VIEW_CLEAR, RAY_CLEAR), 'PASS')
+
+    def test_a_ray_line_lost_fails(self):
+        self.assertEqual(self.grade(VIEW_BLOCKED, VIEW_CLEAR, RAY_CLEAR), 'FAIL')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, VIEW_CLEAR), 'FAIL')
+
+    def test_blocked_by_anything_but_the_sheet_proves_nothing(self):
+        # hummer's first run: the eye inside another mesh, so the sheet never was what stopped the ray.
+        for other in ('start_penetrating=1 hit=StaticMeshActor_1/StaticMeshComponent0', 'start_penetrating=0 hit=StaticMeshActor_1/StaticMeshComponent0',
+                      'start_penetrating=1 hit=Actor_1/ViewBlockerFixture'):
+            ray = RAY_BLOCKED.replace('start_penetrating=0 hit=Actor_1/ViewBlockerFixture', other)
+            self.assertEqual(self.grade(VIEW_BLOCKED, ray, VIEW_CLEAR, RAY_CLEAR), 'FAIL', other)
+
+    def test_a_clear_line_with_a_blocked_ray_fails(self):
+        ray = RAY_CLEAR.replace('blocked=0 start_penetrating=0 hit=none/none', 'blocked=1 start_penetrating=0 hit=Actor/Component')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, VIEW_CLEAR, ray), 'FAIL')
 
     def test_the_target_kept_behind_the_blocker_fails(self):
-        self.assertEqual(self.grade('OWQCTEST blocked selected=1 target=interactive fixture=1', VIEW_CLEAR), 'FAIL')
+        self.assertEqual(self.grade('OWQCTEST blocked selected=1 target=interactive fixture=1', RAY_BLOCKED, VIEW_CLEAR, RAY_CLEAR), 'FAIL')
 
     def test_another_target_behind_the_blocker_fails(self):
-        self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=door fixture=1', VIEW_CLEAR), 'FAIL')
+        self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=door fixture=1', RAY_BLOCKED, VIEW_CLEAR, RAY_CLEAR), 'FAIL')
 
     def test_no_fixture_shows_nothing(self):
-        self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=none fixture=0', VIEW_CLEAR), 'FAIL')
+        self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=none fixture=0', RAY_BLOCKED, VIEW_CLEAR, RAY_CLEAR), 'FAIL')
 
     def test_the_clear_ray_must_select_it(self):
-        self.assertEqual(self.grade(VIEW_BLOCKED, 'OWQCTEST clear selected=0 target=none'), 'FAIL')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=0 target=none', RAY_CLEAR), 'FAIL')
 
     def test_a_clear_ray_taken_by_another_target_fails(self):
-        self.assertEqual(self.grade(VIEW_BLOCKED, 'OWQCTEST clear selected=0 target=vendor'), 'FAIL')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=0 target=vendor', RAY_CLEAR), 'FAIL')
 
     def test_a_lost_line_fails(self):
         self.assertEqual(self.grade(VIEW_BLOCKED), 'FAIL')
         self.assertEqual(self.grade(VIEW_CLEAR), 'FAIL')
 
     def test_the_wrong_order_fails(self):
-        self.assertEqual(self.grade(VIEW_CLEAR, VIEW_BLOCKED), 'FAIL')
+        self.assertEqual(self.grade(VIEW_CLEAR, RAY_CLEAR, VIEW_BLOCKED, RAY_BLOCKED), 'FAIL')
 
 
 class QuickChangeTest(unittest.TestCase):
