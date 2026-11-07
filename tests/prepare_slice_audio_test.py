@@ -160,10 +160,23 @@ class PrepareSliceAudioTest(unittest.TestCase):
             wav.writeframes(b'\x80' * 8000)
         self.assertIn('16-bit', psa.check_wav(path, None))
 
-    def test_roles_without_evidence_stay_unresolved(self):
+    def test_a_role_without_evidence_stays_unresolved(self):
         _, unresolved = psa.build_play_map(manifest([]), self.dir)
-        for role in ('hit', 'phaselock_cast', 'pickup'):
-            self.assertIn(role, unresolved)
+        self.assertEqual(unresolved['pickup'], 'no sound identified from evidence yet')
+
+    def test_a_manifest_older_than_the_roles_leaves_them_unresolved_with_a_reason(self):
+        _, unresolved = psa.build_play_map(manifest([]), self.dir)
+        for role, key in (('hit', 'role:hit'), ('phaselock_cast', 'role:phaselock_cast')):
+            self.assertEqual(unresolved[role], 'manifest has no ' + key)
+
+    def test_the_live_roles_map_when_the_manifest_has_them(self):
+        self.tone('1.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [{'key': 'role:hit', 'media': [{'source': 1, 'duration_s': 1.0}]},
+                                                     {'key': 'role:phaselock_cast', 'media': [{'source': 1, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertEqual(len(roles['hit']), 1)
+        self.assertEqual(len(roles['phaselock_cast']), 1)
+        self.assertNotIn('hit', unresolved)
 
     def test_tone_only_writes_the_map_without_a_manifest(self):
         out = os.path.join(self.dir, 'play.json')

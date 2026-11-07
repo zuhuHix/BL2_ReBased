@@ -26,6 +26,14 @@ DOOR_TRACKS = ['TheWorld.PersistentLevel.Main_Sequence.RocksPaperGenocide.Interp
 WEAPON_TYPE = 'GD_Weap_Pistol.A_Weapons.WeaponType_Maliwan_Pistol'
 ANIM_SET = 'Anim_1st_Person.Pistol'
 MARCUS_GROUP = 'GD_Dialog_NPCImplementation.Groups.DialogGroup_NPC_Marcus'
+# Seen in one real-game session on a modded install (feature/slice-audio-capture, docs/verification/SLICE_AUDIO_LIVE.md), not read from a data reference.
+# UNVERIFIED. The hit event is a switch container with many sources, one per surface presumably, and which plays for an enemy is unknown.
+LIVE_ROLES = (
+    {'key': 'role:phaselock_cast', 'event': 'Ake_FX_Player_Siren.Ak_Play_FX_Player_Phaselock_Activate',
+     'seen': 'posted in the same millisecond as LiftActionSkill.PhaseLockTarget, one cast'},
+    {'key': 'role:hit', 'event': 'Ake_Imp_Bullets.Ak_Play_Imp_Bullets',
+     'seen': 'PlayImpactEffectSound 33 to 34 ms after 2 of 3 shots at a target; a surface sound, not shown to be the enemy'},
+)
 
 
 class Ue3:
@@ -163,6 +171,21 @@ def weapon_chain(ue3):
     return rows
 
 
+def live_role_ak(role):
+    """An AkEvent summary from a name seen live. The object was not read from a package, so ShortId and the durations are unknown and the FNV-1 check
+    cannot run (None, not True). The Wwise name is the object's name without its Ak_ prefix: a rule that holds for every event this tool reads from a package."""
+    name = role['event'].split('.')[-1]
+    if not name.startswith('Ak_'):
+        raise ValueError('not an Ak_ event name: ' + role['event'])
+    wwise = name[3:]
+    return {'ue3_path': role['event'], 'package': None, 'wwise_name': wwise, 'short_id': ac.fnv1_32(wwise), 'fnv1_matches_short_id': None,
+            'min_duration': None, 'max_duration': None, 'required_bank': None}
+
+
+def live_role_chain():
+    return [{'key': role['key'], 'seen': role['seen'], 'ak_event': live_role_ak(role)} for role in LIVE_ROLES]
+
+
 def wwise_side(inst, ak, out_wem):
     """Resolve one AkEvent summary in the Wwise banks, copy the raw .wem files, peek at the RIFF headers."""
     res = ac.resolve(inst, '0x%x' % ak['short_id'])
@@ -227,6 +250,8 @@ def build_manifest(chain, decoded_dir):
     for row in chain['weapon']:
         role = row['role'].split(' (')[0].replace(' ', '_').replace('@', 'at_')
         add('weapon:' + role, 'weapon', {'role': row['role']}, row['ak_event'])
+    for row in chain.get('live_roles', []):
+        add(row['key'], 'live_role', {'seen': row['seen']}, row['ak_event'], evidence='UNVERIFIED: one session on a modded install; not from a data reference')
     return {'schema': 'ow-audio-v1', 'note': 'game-derived, ignored; state values: unresolved | extracted_undecoded | decoded_not_listened',
             'entries': entries}
 
@@ -243,7 +268,7 @@ def main():
     # Windows CreateProcess does not find a relative path written with forward slashes (build/Release/...).
     ue3 = Ue3(os.path.abspath(args.reader), os.path.join(args.game, 'WillowGame', 'CookedPCConsole'))
     inst = ac.Install(args.game)
-    chain = {'dialog': dialog_chain(ue3), 'marcus_group': marcus_group_chain(ue3), 'door': door_chain(ue3), 'weapon': weapon_chain(ue3)}
+    chain = {'dialog': dialog_chain(ue3), 'marcus_group': marcus_group_chain(ue3), 'door': door_chain(ue3), 'weapon': weapon_chain(ue3), 'live_roles': live_role_chain()}
     wem = os.path.join(root, 'local', 'audio', 'wem')
     seen = {}
     for section in chain.values():

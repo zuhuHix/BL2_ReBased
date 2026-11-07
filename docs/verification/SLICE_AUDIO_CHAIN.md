@@ -178,9 +178,13 @@ module or dependency). Without the option nothing changes.
 | Role | Hook | Sound | Evidence |
 |---|---|---|---|
 | `fire` | `AOpenWillowWalker::FireWeapon` | manifest `weapon:fire` | the lent pistol's `WeaponTypeDefinition.FireSounds` (section 2). The host plays it for every gun until other guns are resolved: a known gap |
-| `hit` | `OpenWillowHit::OnHit` (direct hits with damage applied; at most one per 50 ms, host choice) | none yet | nothing identified in installed data; needs a live read |
-| `phaselock_cast` | the successful lift in the Walker's Phaselock cast | none yet | candidate by name only, `Ak_Play_FX_Player_Phaselock_Activate` (PHASELOCK_STOCK_DATA.md); UNVERIFIED |
+| `hit` | `OpenWillowHit::OnHit` (direct hits with damage applied; at most one per 50 ms, host choice) | manifest `role:hit`, `Ak_Play_Imp_Bullets` | **UNVERIFIED**, one live session (below). A surface sound, not shown to be the enemy, and a switch container with 96 distinct sources: the host picks at random, so a hit can sound like any surface until the switch value is known |
+| `phaselock_cast` | the successful lift in the Walker's Phaselock cast | manifest `role:phaselock_cast`, `Ak_Play_FX_Player_Phaselock_Activate` | **UNVERIFIED**, one live session (below): posted in the same millisecond as the skill's `PhaseLockTarget`, one cast. Its name also matches PHASELOCK_STOCK_DATA.md |
 | `pickup` | `AOpenWillowInventoryPickup::TryPickup` when the item was added | none yet | candidates by name only, the `Ake_Obj_Pickup.Obj_Pickup` events; UNVERIFIED. Cash and ammo pickups take other paths and are not hooked |
+
+The two live roles were seen in one real-game session (2026-11-07, `feature/slice-audio-capture`, `docs/verification/SLICE_AUDIO_LIVE.md`, with the session's conditions and limits). That install is modded: other SDK mods were
+enabled, among them RTSE and Dialog Skipper with `Autoskip Dialog` on, which blocks dialog events from friendly NPCs, so heard lines and timing around lines from a live session are not stock. Neither role comes from a dialog event. They are not read
+from a package reference: the Wwise name is the object name without `Ak_` (holds for all 18 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`. Nothing here has been heard, and no game sound can play until a decoder is approved.
 
 A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state, attenuation or ducking: every sound is 2D at full
 volume. Dialog is not hooked; the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.
