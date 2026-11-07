@@ -2,6 +2,7 @@
 // ow.Vendor.* console commands.
 #include "OpenWillowVendor.h"
 #include "OpenWillowVendorPage.h"
+#include "OpenWillowMayaHUD.h"
 #include "OpenWillowUseView.h"
 #include "OpenWillowCurrency.h"
 #include "OpenWillowWalker.h"
@@ -1456,6 +1457,18 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
         if (++TestWaits > 60) { UE_LOG(LogTemp, Error, TEXT("OWVENDTEST FAIL no walker after 60 s")); FPlatformMisc::RequestExit(false); }
         return; // wait for the walker
     }
+    // A run that asked for the movie HUD holds the test until it is ready. If it fails, the test's own exit, with no frames.
+    if (TestStep == 0)
+    {
+        const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(World, TEXT("vendor"));
+        if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+        if (MovieHud == EOpenWillowCaptureHud::Failed)
+        {
+            World->GetTimerManager().ClearTimer(TestTimer);
+            FPlatformMisc::RequestExit(false);
+            return;
+        }
+    }
     FString Error;
     auto Report = [this]() { UE_LOG(LogTemp, Display, TEXT("OWVENDSTATE %s"), *ReportJson()); };
     // Closes any open shop, then opens the first spawned machine of the kind (the page stays the same widget).
@@ -1477,7 +1490,7 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     case 5: Report(); break;
     case 6: RestockOpen(); break;
     case 7: Report(); break;
-    case 8: FScreenshotRequest::RequestScreenshot(TEXT("OWVendor_open.png"), true, false); break; // UI on: the shop page is a Slate widget
+    case 8: AOpenWillowMayaHUD::CaptureShot(TEXT("vendor"), TEXT("OWVendor_open.png")); break; // UI on: the shop page is a Slate widget
     // Ammo: the first items machine, report, buy shelf row 0 (an ammo row), report.
     case 9: OpenFirstOfKind(TEXT("items")); break;
     case 10:

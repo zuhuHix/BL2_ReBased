@@ -54,7 +54,7 @@ try {
             Write-Host "Screenshot: $(Join-Path $outDir ($_.BaseName + '-' + $stamp + '.png'))"
         }
     }
-    if ($MovieHud) { $movieOk = Test-OwMovieHudLog -Log $log }
+    if ($MovieHud) { $movieOk = Test-OwMovieHudLog -Log $log -Driver 'phaselock' -RequireShot }
 } finally {
     Stop-OwMovieHud $movie
     Exit-OwUeLock

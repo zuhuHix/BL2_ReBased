@@ -37,15 +37,28 @@ function Stop-OwMovieHud {
     catch { Write-Warning "Could not stop the page server pid $($MovieHud.Server.Id): $_" }
 }
 
-# True when the log proves the run's frames had the movie to show: the host accepted the movie, never fell back to the canvas, and no capture gave up on it.
-# It does not prove the frames show it: someone still looks at them. Prints the reason when false.
+# True when the log proves the run's frames had the movie to show: the host accepted the movie, never fell back to the canvas, no capture gave up on it, and each
+# frame's "OWCAPTUREHUD shot" line follows that driver's "OWCAPTUREHUD ready" line. -Driver: this driver must have reached its ready line. -RequireShot: and taken a frame.
+# It does not prove the frames show the movie: someone still looks at them. Prints the reason when false.
 function Test-OwMovieHudLog {
-    param([Parameter(Mandatory)][string]$Log)
-    $text = if (Test-Path -LiteralPath $Log) { Get-Content -LiteralPath $Log -Raw } else { '' }
-    $why = if ("$text" -match 'OWCAPTUREHUD FAIL[^\r\n]*') { $Matches[0] }
-        elseif ("$text" -match 'OpenWillow HUD path: canvas[^\r\n]*') { $Matches[0] }
-        elseif ("$text" -notmatch 'OpenWillow HUD path: movie') { 'no "OpenWillow HUD path: movie" line' }
+    param([Parameter(Mandatory)][string]$Log, [string]$Driver, [switch]$RequireShot)
+    $text = if (Test-Path -LiteralPath $Log) { "$(Get-Content -LiteralPath $Log -Raw)" } else { '' }
+    $ready = @{}
+    $shots = @{}
+    $early = $null
+    foreach ($line in [regex]::Matches($text, 'OWCAPTUREHUD (ready|shot) driver=(\S+)[^\r\n]*')) {
+        $name = $line.Groups[2].Value
+        if ($line.Groups[1].Value -eq 'ready') { $ready[$name] = $true; continue }
+        $shots[$name] = $true
+        if (!$ready[$name] -and !$early) { $early = "a frame before its driver's ready line: $($line.Value)" }
+    }
+    $why = if ($text -match 'OWCAPTUREHUD FAIL[^\r\n]*') { $Matches[0] }
+        elseif ($text -match 'OpenWillow HUD path: canvas[^\r\n]*') { $Matches[0] }
+        elseif ($text -notmatch 'OpenWillow HUD path: movie') { 'no "OpenWillow HUD path: movie" line' }
+        elseif ($early) { $early }
+        elseif ($Driver -and !$ready[$Driver]) { "no ""OWCAPTUREHUD ready driver=$Driver"" line" }
+        elseif ($Driver -and $RequireShot -and !$shots[$Driver]) { "no ""OWCAPTUREHUD shot driver=$Driver"" line" }
     if ($why) { Write-Host "MOVIE HUD FAIL: $why ($Log)"; return $false }
-    Write-Host "MOVIE HUD ok: the host accepted the movie and did not fall back ($Log)"
+    Write-Host "MOVIE HUD ok: the host accepted the movie, did not fall back, and every frame logged came after its driver's ready line ($Log)"
     return $true
 }

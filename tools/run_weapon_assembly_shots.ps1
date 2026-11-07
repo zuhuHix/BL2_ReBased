@@ -72,7 +72,7 @@ try {
     "frames: $frames in $outDir"
     "assembly reports: $((Select-String -LiteralPath $log -Pattern 'OpenWillow weapon assembly ').Count)"
     Select-String -LiteralPath $log -Pattern 'gunshots skipped|Error:|Fatal' | Select-Object -First 20 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }
-    if ($MovieHud) { $movieOk = Test-OwMovieHudLog -Log $log }
+    if ($MovieHud) { $movieOk = Test-OwMovieHudLog -Log $log -Driver 'gunshots' -RequireShot }
 } finally {
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
 }

@@ -57,10 +57,10 @@ class Helper(unittest.TestCase):
         script.write_text(f"$ErrorActionPreference = 'Stop'\n. '{self.tools / 'movie_hud.ps1'}'\n{body}\n", encoding='utf-8')
         return subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-File', str(script)], capture_output=True, text=True, timeout=60)
 
-    def verdict(self, log_text):
+    def verdict(self, log_text, arguments=''):
         log = self.folder / 'run.log'
         log.write_text(log_text, encoding='utf-8')
-        done = self.powershell(f"if (Test-OwMovieHudLog -Log '{log}') {{ 'PROVED' }} else {{ 'REFUSED' }}")
+        done = self.powershell(f"if (Test-OwMovieHudLog -Log '{log}' {arguments}) {{ 'PROVED' }} else {{ 'REFUSED' }}")
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout
 
@@ -86,6 +86,30 @@ class Helper(unittest.TestCase):
             output = self.verdict(text)
             self.assertIn('REFUSED', output, text)
             self.assertIn(why, output, text)
+
+    def test_a_frame_must_follow_its_own_drivers_ready_line(self):
+        movie = 'OpenWillow HUD path: movie (page reported ready)\n'
+        ready = 'OWCAPTUREHUD ready driver=range after 12.0 s\n'
+        shot = 'OWCAPTUREHUD shot driver=range file=a.png\n'
+        self.assertIn('PROVED', self.verdict(movie + ready + shot, "-Driver 'range' -RequireShot"))
+        output = self.verdict(movie + shot + ready, "-Driver 'range' -RequireShot")
+        self.assertIn('REFUSED', output)
+        self.assertIn('a frame before', output)
+        # Another driver's ready line does not count, even with no -Driver named.
+        output = self.verdict(movie + 'OWCAPTUREHUD ready driver=lid after 12.0 s\n' + shot)
+        self.assertIn('REFUSED', output)
+        self.assertIn('a frame before', output)
+
+    def test_a_named_driver_must_have_reached_the_gate(self):
+        movie = 'OpenWillow HUD path: movie (page reported ready)\n'
+        ready = 'OWCAPTUREHUD ready driver=range after 12.0 s\n'
+        output = self.verdict(movie, "-Driver 'range'")
+        self.assertIn('REFUSED', output)
+        self.assertIn('OWCAPTUREHUD ready driver=range', output)
+        self.assertIn('PROVED', self.verdict(movie + ready, "-Driver 'range'"))
+        output = self.verdict(movie + ready, "-Driver 'range' -RequireShot")
+        self.assertIn('REFUSED', output)
+        self.assertIn('OWCAPTUREHUD shot driver=range', output)
 
     def test_a_missing_log_is_refused(self):
         done = self.powershell(f"if (Test-OwMovieHudLog -Log '{self.folder / 'none.log'}') {{ 'PROVED' }} else {{ 'REFUSED' }}")
@@ -125,7 +149,7 @@ class ToolText(unittest.TestCase):
             self.assertIn('[switch]$MovieHud', text, name)
             self.assertEqual(len(re.findall(r"'-owcanvashud'", text)), 1, name)
             self.assertRegex(text, r"if \(\$MovieHud\).*-owflashhud=|'-owcanvashud'\s*\n\s*if \(\$MovieHud\)", name)
-            self.assertIn('Test-OwMovieHudLog -Log $log', text, name)
+            self.assertIn(f"Test-OwMovieHudLog -Log $log -Driver ", text, name)
             self.assertIn("'-owmaya', $hudSwitch,", text, name)
 
     def test_the_weapon_tool_keeps_its_level_and_passes_no_hud_switch_by_default(self):
@@ -146,15 +170,24 @@ class HostText(unittest.TestCase):
     def source(self, name):
         return (SOURCE / name).read_text(encoding='utf-8')
 
-    def test_each_driver_asks_the_gate_and_shoots_with_ui_on(self):
-        for name, driver in (('OpenWillowWalker.cpp', 'phaselock'), ('OpenWillowWalker.cpp', 'gunshots'), ('OpenWillowInteractive.cpp', 'lid capture')):
-            self.assertIn('CaptureHudGate(', self.source(name), name)
-            self.assertIn(f'TEXT("{driver}")', self.source(name), driver)
-        self.assertIn('RequestScreenshot(Name, true, false)', self.source('OpenWillowWalker.cpp'))
-        interactive = self.source('OpenWillowInteractive.cpp')
-        self.assertIn('RequestScreenshot(File, true, false)', interactive)
-        self.assertIn('_mid.png"), *FileKey), true, false)', interactive)
-        self.assertIn('RequestScreenshot(TEXT("OWVendor_open.png"), true, false)', self.source('OpenWillowVendor.cpp'))
+    def test_each_driver_asks_the_gate_and_logs_its_frames(self):
+        for name, driver in (('OpenWillowWalker.cpp', 'phaselock'), ('OpenWillowWalker.cpp', 'gunshots'), ('OpenWillowWalker.cpp', 'combat'),
+                             ('OpenWillowWalkerFiringTests.cpp', 'firing'), ('OpenWillowInteractive.cpp', 'lid'), ('OpenWillowRange.cpp', 'range'),
+                             ('OpenWillowVendor.cpp', 'vendor'), ('OpenWillowMissionPageTest.cpp', 'missionpage'),
+                             ('OpenWillowMayaHUD.cpp', 'missionlog'), ('OpenWillowMayaHUD.cpp', 'inv')):
+            source = self.source(name)
+            self.assertRegex(source, rf'CaptureHudGate\([^;]*TEXT\("{driver}"\)\)', driver)
+            self.assertIn(f'CaptureShot(TEXT("{driver}"), ', source, driver)
+
+    def test_a_gated_drivers_frames_all_go_through_the_shot_line(self):
+        for name, frames in (('OpenWillowWalker.cpp', ('OWGun_', 'OWCombat_')), ('OpenWillowWalkerFiringTests.cpp', ('OWFiring_',)), ('OpenWillowInteractive.cpp', ('OWLootLid_',)),
+                             ('OpenWillowVendor.cpp', ('OWVendor_',)), ('OpenWillowMissionPageTest.cpp', ('OWMissionPage_',)),
+                             ('OpenWillowMayaHUD.cpp', ('OWMission_', 'OWCombat_'))):
+            for frame in frames:
+                self.assertNotRegex(self.source(name), rf'RequestScreenshot\([^;]*{frame}', frame)
+        self.assertNotIn('RequestScreenshot(Name, ', self.source('OpenWillowWalker.cpp').split('void AOpenWillowWalker::RunPhaselockShots')[1].split('float AOpenWillowWalker::PhaselockRemaining')[0])
+        self.assertNotIn('RequestScreenshot', self.source('OpenWillowRange.cpp'))
+        self.assertNotIn('RequestScreenshot(File', self.source('OpenWillowInteractive.cpp'))
 
     def test_the_gate_only_applies_when_a_movie_was_asked_for(self):
         body = self.source('OpenWillowMayaHUD.cpp').split('AOpenWillowMayaHUD::CaptureHudGate', 1)[1]
