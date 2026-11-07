@@ -4212,3 +4212,11 @@ AI-assisted (Claude Opus 5.5). Maintainer's decision, through the hub. Record: `
 - **The host's own, not the game's:** the boxes stand in for usable collision; the old reaches stay and the press still goes nearest first among what she looks at, where the game takes the first hit along the ray; a station's open prompt also ends on looking away.
 - **Left alone:** pickups (the native note gives them their own path, and they win the key) and Marcus (his own ray). A pickup against an interactive in reach was not read.
 - **Checked:** the graders' synthetic tests only. The host code was **not compiled or run** when this was written: both machines were held by a batch. The new checks (`use_view_rule`, `quick_change` with `OWQCTEST looked away selected=0 target=none`, and `use_view_blocker`, the same spot with something solid on the ray and without it) have never run.
+
+
+## 2026-11-07: the stand-in shield rule takes the maintainer's numbers (maya lane)
+
+AI-assisted (Claude). Record: `docs/verification/COMBAT_DOWN_RESPAWN.md` "Stand-in shield capacity". Local data and docs, no code or parsing change.
+
+- About 383 at level 8, growth 1.14 per level, adopted by the maintainer. A log fit over five live reads, levels 1 to 8, one balance, one session of runs: UNVERIFIED at other levels.
+- It replaces 181 at level 8, which was a level 3 shield's value.
