@@ -14,7 +14,8 @@ pickup can be collected.
 - lc_mods(): the SDK mods loaded, for the record. Reads only; nothing is disabled.
 - lc_lower_ammo(): halve the ammo pools, recording them.
 - lc_choose_pickup(kind): the nearest pickup of that kind ('ammo' or 'cash'). lc_over_pickup(): fall onto it. lc_stand_pickup(kind) and
-  lc_aim_pickup(): stand beside it and look at it, for the use key.
+  lc_aim_pickup(): stand beside it and look at it, for the use key. lc_pickup_baseline(): right before an attempt, that it is still there and
+  what the attempt starts from.
 - lc_pickup_state(): whether that pickup is gone and the ammo or money rose. Collected only when both.
 
 Nothing here keeps a game object from one command to the next: the game may have moved or destroyed it, and using such a
@@ -33,6 +34,9 @@ LC_MESH_PACKAGE = "Prop_Lootables_02.Meshes."   # most live here; the read repor
 LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "pickup": None}
 # The fields on WillowInteractiveObject that describe its state. The second real run saw all three move on every opening and none on a failed try.
 OPEN_FIELDS = ("SimpleAnimState", "RepSimpleAnimState", "bCanBeUsed")
+# Which ammo pool a pickup fills, matched on the names of its definition and of the pool (read live; only the grenade pair has been seen to move).
+AMMO_POOLS = (("grenade", "Grenade"), ("assault_rifle", "Combat_Rifle"), ("shotgun", "Combat_Shotgun"), ("repeater_pistol", "Repeater_Pistol"),
+              ("smg", "Patrol_SMG"), ("sniper", "Sniper"), ("rocket", "Rocket"))
 SCALAR_KINDS = ("BoolProperty", "ByteProperty", "IntProperty", "FloatProperty", "NameProperty", "StrProperty")
 
 
@@ -318,13 +322,20 @@ def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _value_rose(kind, before, after):
-    """Whether collecting this kind moved what it should. A value that could not be read is an error string: that is not a rise."""
-    if kind == "cash":
+def _ammo_pool_of(definition):
+    """The part of a pool's name this ammo pickup fills, or None. An unknown type credits no pool."""
+    return next((pool for word, pool in AMMO_POOLS if word in definition), None)
+
+
+def _value_rose(chosen, before, after):
+    """Whether collecting this pickup moved what it should: money, or its own ammo pool. A value that could not be read is an error
+    string: that is not a rise. Another pool rising says another pickup was touched."""
+    if chosen["kind"] == "cash":
         return _is_number(before["money"]) and _is_number(after["money"]) and after["money"] > before["money"]
-    if not (isinstance(before["pools"], dict) and isinstance(after["pools"], dict)):
+    pool = chosen.get("pool")
+    if not (pool and isinstance(before["pools"], dict) and isinstance(after["pools"], dict)):
         return False
-    return any(_is_number(value) and _is_number(before["pools"].get(name)) and value > before["pools"][name]
+    return any(pool in name and _is_number(value) and _is_number(before["pools"].get(name)) and value > before["pools"][name]
                for name, value in after["pools"].items())
 
 
@@ -332,7 +343,8 @@ def lc_lower_ammo():
     before = _pool_values()
     for pool in _ammo_pools():
         _try(pool.SetCurrentValue, pool.CurrentValue * 0.5)
-    return {"before": before, "after": _pool_values()}
+    after = _pool_values()
+    return {"before": before, "after": after, "fallen": sorted(name for name, value in after.items() if value < before.get(name, value))}
 
 
 def _chosen_pickup():
@@ -343,7 +355,7 @@ def _chosen_pickup():
 def lc_choose_pickup(kind):
     """The nearest pickup of this kind that is in the open: loot lies inside some containers, where neither a fall nor a clear look reaches it.
     Inside means within the bounds of a lootable, since a line-of-sight trace never answered in this game. The record says which it got.
-    What it should move is kept with its path, so that one pickup is judged through both tries."""
+    Its path and the ammo pool it fills are kept, so that one pickup is judged through both tries."""
     me = get_pc().Pawn.Location  # noqa: F821
     rows = [p for p in _live("WillowPickup") if _kind(p)[0] == kind]
     if not rows:
@@ -359,10 +371,10 @@ def lc_choose_pickup(kind):
         return inside(p), math.dist((p.Location.X, p.Location.Y, p.Location.Z), (me.X, me.Y, me.Z))
 
     pickup = min(rows, key=rank)
-    pools, money = _try(_pool_values), _money()
-    LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pools": pools, "money": money}
-    return {"kind": kind, "pickup": pickup._path_name(), "definition": _kind(pickup)[1], "in_the_open": not inside(pickup),
-            "pools": pools, "money": money}
+    definition = _kind(pickup)[1]
+    pool = _ammo_pool_of(definition) if kind == "ammo" else None
+    LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pool": pool, "baseline": None}
+    return {"kind": kind, "pickup": pickup._path_name(), "definition": definition, "pool": pool, "in_the_open": not inside(pickup)}
 
 
 def lc_stand_pickup(kind, distance=150.0):
@@ -372,6 +384,7 @@ def lc_stand_pickup(kind, distance=150.0):
     pickup = _chosen_pickup()
     if pickup is None:
         return {"kind": kind, "pickup": None}
+    LC["pickup"]["baseline"] = None   # getting here may touch something: the attempt's baseline comes after
     loc = pickup.Location
     _place(loc.X + distance, loc.Y, loc.Z + 70.0, (loc.X, loc.Y, loc.Z))
     return {"kind": kind, "pickup": pickup._path_name()}
@@ -398,12 +411,27 @@ def lc_aim_pickup():
     return {"pickup": pickup._path_name(), "use_target": _use_target()}
 
 
+def lc_pickup_baseline():
+    """Right before an attempt: that the chosen pickup is still there, and what the attempt starts from. Nothing that moved on the way here
+    can then be credited to the attempt."""
+    chosen = LC["pickup"]
+    if chosen is None:
+        return {"present": False, "reason": "no pickup was chosen"}
+    chosen["baseline"] = None
+    if _chosen_pickup() is None:
+        return {"present": False, "reason": "the chosen pickup went before this attempt"}
+    chosen["baseline"] = {"pools": _try(_pool_values), "money": _money()}
+    return {"present": True, **chosen["baseline"]}
+
+
 def lc_pickup_state():
     chosen = LC["pickup"]
     if chosen is None:
         return {"gone": False, "changed": False, "collected": False, "reason": "no pickup was chosen"}
+    if chosen.get("baseline") is None:
+        return {"gone": False, "changed": False, "collected": False, "reason": "no baseline was taken for this attempt"}
     # A pickup whose state cannot be read stays in the list, so an unreadable one never counts as gone.
     gone = not any(p._path_name() == chosen["path"] for p in _live("WillowPickup"))
     after = {"pools": _try(_pool_values), "money": _money()}
-    changed = _value_rose(chosen["kind"], chosen, after)
+    changed = _value_rose(chosen, chosen["baseline"], after)
     return {"gone": gone, "changed": changed, "collected": gone and changed, "pools": after["pools"], "money": after["money"]}

@@ -83,7 +83,9 @@ function Capture-Pickup([string]$Kind) {
     Start-Sleep 1
     Assert-GameForeground
     $row.before = Save-Shot "$Folder/${Kind}_before.png"
-    # Both tries are bursts, because a message may show only for a moment.
+    # Both tries are bursts, because a message may show only for a moment. Each starts from a fresh baseline, with the chosen pickup still there.
+    $row.over_baseline = Py 'print(json.dumps(lc_pickup_baseline()))'
+    if (($row.over_baseline | ConvertFrom-Json).present -ne $true) { $row.result = "no walk-over: $($row.over_baseline)"; return $row }
     $row.over_burst = (Invoke-Burst "$Folder/${Kind}_over" 4 100 { Py 'print(json.dumps(lc_over_pickup()))' | Out-Null } 1.0).frames
     $row.over_state = Py 'print(json.dumps(lc_pickup_state()))'
     if (($row.over_state | ConvertFrom-Json).collected -eq $true) { $row.collected = $true; $row.method = 'touch'; return $row }
@@ -92,6 +94,8 @@ function Capture-Pickup([string]$Kind) {
     $row.aim_again = Py 'print(json.dumps(lc_aim_pickup()))'
     Start-Sleep 1
     Assert-GameForeground
+    $row.use_baseline = Py 'print(json.dumps(lc_pickup_baseline()))'
+    if (($row.use_baseline | ConvertFrom-Json).present -ne $true) { $row.result = "no use key: $($row.use_baseline)"; return $row }
     $row.use_burst = (Invoke-Burst "$Folder/${Kind}_use" 3 100 { Send-Key E } 1.0).frames
     $row.use_state = Py 'print(json.dumps(lc_pickup_state()))'
     if (($row.use_state | ConvertFrom-Json).collected -eq $true) { $row.collected = $true; $row.method = 'use key' }
@@ -190,7 +194,8 @@ try {
     $log.ammo = Py 'print(json.dumps(lc_lower_ammo()))'
     "ammo: $($log.ammo)"
     $ammo = $log.ammo | ConvertFrom-Json
-    Set-Stage 'ammo' (@($ammo.after.PSObject.Properties).Count -gt 0) 'no ammo pool found to lower'
+    # At least one pool must have fallen: a setter that failed leaves a full map behind. Where-Object because @($null) has one element.
+    Set-Stage 'ammo' (@($ammo.fallen | Where-Object { $_ }).Count -gt 0) "no ammo pool fell: $($log.ammo)"
 
     # One failed type must not lose the others. A refused key press (no focus, no game) stops the run, since nothing after it can work.
     foreach ($mesh in $types.Keys) {
