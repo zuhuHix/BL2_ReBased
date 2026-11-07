@@ -12,7 +12,8 @@ import sys
 EXPECTED = ('page_ready', 'e_refused_under_a_status_page', 'control_gun_fires_before_the_page', 'first_e_opens_the_page', 'offer_drawn', 'held_trigger_does_not_fire_under_the_page',
             'offer_e_does_nothing', 'offer_escape_closes', 'gun_fires_again_after_the_close', 'e_opens_the_offer_again', 'offer_drawn_again', 'offer_enter_accepts_and_closes',
             'mission_ready_to_turn_in', 'e_opens_the_turn_in', 'turn_in_drawn', 'turn_in_e_does_nothing', 'enter_shows_the_reward_page', 'reward_waits_for_enter',
-            'enter_takes_the_reward_and_closes', 'first_person_back_after_the_reward', 'e_afterwards_opens_nothing')
+            'enter_takes_the_reward_and_closes', 'first_person_back_after_the_reward', 'e_afterwards_opens_nothing',
+            'hud_hidden_behind_the_offer', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_the_reward')
 ROW = re.compile(r'OWMISSIONPAGETEST (\S+) (PASS|FAIL)\b(.*)')
 SUMMARY = re.compile(r'OWMISSIONPAGETEST SUMMARY passed=(\d+) failed=(\d+)[ \t\r]*$', re.M)
 

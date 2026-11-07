@@ -936,6 +936,7 @@ void UOpenWillowQuest::TickScreenPage()
     TickScreenPageTest();
 }
 
+bool UOpenWillowQuest::IsScreenPageShown() const { return ScreenPage && ScreenPage->IsShown(); }
 bool UOpenWillowQuest::ScreenOpenInVm() const { return Impl && Impl->Slice->screenOpen(); }
 bool UOpenWillowQuest::RewardPendingInVm() const { return Impl && Impl->Slice->rewardPending(); }
 

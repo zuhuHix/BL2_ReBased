@@ -340,6 +340,22 @@ void AOpenWillowMayaHUD::CaptureShot(const TCHAR* Driver, const FString& File)
     FScreenshotRequest::RequestScreenshot(File, true, false);
 }
 
+bool AOpenWillowMayaHUD::IsGameplayHudHidden() const
+{
+    return bHiddenBehindMissionPage && !(FlashHudRoot && FlashHudRoot->GetVisibility() == EVisibility::HitTestInvisible);
+}
+
+bool AOpenWillowMayaHUD::IsGameplayHudBack() const
+{
+    return !bHiddenBehindMissionPage && (!bFlashHudReady || (FlashHudRoot && FlashHudRoot->GetVisibility() == EVisibility::HitTestInvisible));
+}
+
+FString AOpenWillowMayaHUD::GameplayHudReport() const
+{
+    return FString::Printf(TEXT("hud: behind_page=%d movie_ready=%d movie_shown=%d"), bHiddenBehindMissionPage ? 1 : 0, bFlashHudReady ? 1 : 0,
+        FlashHudRoot && FlashHudRoot->GetVisibility() == EVisibility::HitTestInvisible ? 1 : 0);
+}
+
 void AOpenWillowMayaHUD::ToggleSkills()
 {
     if (SkillsBrowser && !bInventoryOpen && !bMissionsOpen && !bMapOpen) { CloseSkills(); return; }
@@ -1809,6 +1825,15 @@ void AOpenWillowMayaHUD::DrawHUD()
     if (!Canvas || !PlayerOwner) return;
     const AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
     if (!Maya) return;
+    // The real mission screen shows no gameplay HUD (MISSION_SCREEN.md). This reads the page itself each frame and stores nothing else, so every way the page closes
+    // brings the HUD back: the movie below, in the place that shows it. Hidden, not Collapsed: a movie that is not ready yet keeps loading, as at the start of play.
+    const UOpenWillowQuest* PageQuest = Maya->GetQuest();
+    bHiddenBehindMissionPage = PageQuest && PageQuest->IsScreenPageShown();
+    if (bHiddenBehindMissionPage)
+    {
+        if (FlashHudRoot) FlashHudRoot->SetVisibility(EVisibility::Hidden);
+        return;
+    }
     UFont* Small = GEngine->GetSmallFont();
     UFont* Large = GEngine->GetLargeFont();
     if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn())) DrawRespawnMessage(*Walker, Small);

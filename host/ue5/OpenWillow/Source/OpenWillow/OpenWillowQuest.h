@@ -95,6 +95,8 @@ public:
     // pages (docs/verification/MISSION_SCREEN.md; UNVERIFIED in game until the live read).
     void OnScreenKey(const FKey& Key);
 
+    // The mission page is on screen: the HUD reads this every frame to stay hidden behind it.
+    bool IsScreenPageShown() const;
 private:
     // The page over Marcus's screen; null without a page URL (the suites on the canvas HUD), and TryUse then confirms with no page, as it always did.
     TSharedPtr<class FOpenWillowMissionPage> ScreenPage;
