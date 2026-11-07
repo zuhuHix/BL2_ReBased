@@ -75,12 +75,19 @@ try {
     Write-Output "Launched UnrealEditor pid $($process.Id); log: $log"
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $summary = $null
+    $readyAt = $null
+    $staleBuild = $false
     while (!$process.HasExited -and (Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
         if (Test-Path -LiteralPath $log) {
             $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
             $m = [regex]::Match("$text", 'OWMISSIONPAGETEST SUMMARY (.*)')
             if ($m.Success) { $summary = $m.Groups[1].Value.Trim(); break }
+            # The suite logs page_ready, pass or fail, within 60 s of its first tick (OWQUEST READY comes first). Without it the build has no page suite: a stale DLL (2026-11-07: 360 s of silence).
+            if ("$text" -match 'OWQUEST READY' -and "$text" -notmatch 'OWMISSIONPAGETEST page_ready') {
+                if (!$readyAt) { $readyAt = Get-Date }
+                if (((Get-Date) - $readyAt).TotalSeconds -gt 120) { $staleBuild = $true; break }
+            }
         }
     }
     if ($summary) { [void]$process.WaitForExit(20000) }
@@ -97,7 +104,7 @@ try {
         & python (Join-Path $PSScriptRoot 'check_mission_page.py') $log
         $exitCode = if ($LASTEXITCODE -eq 0) { 0 } else { 1 }
     } else {
-        Write-Output "OWMISSIONPAGETEST SUMMARY result=FAIL reason=$(if ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
+        Write-Output "OWMISSIONPAGETEST SUMMARY result=FAIL reason=$(if ($staleBuild) { 'OWQUEST READY but no page_ready row in 120 s: is the UE module built from this branch?' } elseif ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
     }
     Write-Output "Log: $log"
 } finally {
