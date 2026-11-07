@@ -46,11 +46,11 @@ captures under ignored `local/inv24/mapshots/`. Nothing below was observed in th
   Enter (custom waypoint), mouse drag, the info box and the player list's names are not driven.
 - Failures are visible (PR #97 review 1): the loading panel stays up until the map movie has loaded and says why when the
   host sent no state or no map movie (no minimap manifest), when the map movie does not load within 10 s, or when the
-  StatusMenu movie is not ready within 15 s (the polling then stops); Escape, Tab and M close the page in every case.
+  StatusMenu movie is not ready within 15 s (the polling then stops); Escape and Tab close the page in every case.
 - Pan is limited so the map point under the crosshairs stays inside the map movie's own rectangle (`getRect`) at the current
   zoom, re-applied after a zoom and when Maya moves (host rule; the game clamps natively, UNVERIFIED).
 - Tabs from the Map: 1 Missions, 3 Inventory, 4 Skills, 5 nothing (no Challenges page), Comma Missions, Period Inventory,
-  Escape / Tab / M close; I, K, L as on the other pages. The Inventory's key 2, Comma and its Map tab now open this page.
+  Escape / Tab close, and M does nothing (one press in the real game, CONTROLS.md); I, K, L as on the other pages. The Inventory's key 2, Comma and its Map tab now open this page.
 
 ## Checks
 

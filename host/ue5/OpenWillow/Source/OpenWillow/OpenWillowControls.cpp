@@ -23,6 +23,13 @@ void AOpenWillowWalker::ToggleMapOrMissionsPage(bool bMap)
     // The same steps as ToggleSkills: the trigger and the aim end, and a legacy inventory widget gives way to the page.
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
+    // The stock keys did nothing while down (read live, one press each), and the set of actions allowed while down has no menu in it.
+    if (IsDown())
+    {
+        ++PagesRefusedWhileDown;
+        UE_LOG(LogTemp, Display, TEXT("OWCONTROLS %s page refused: Maya is down"), bMap ? TEXT("map") : TEXT("missions"));
+        return;
+    }
     bFireHeld = false;
     AimReleased();
     if (InventoryScreen && InventoryScreen->IsInViewport())
@@ -58,7 +65,7 @@ namespace
     int32 GrenadesBefore = 0;
     float ReloadStartBy = 0.f, BurstBy = 0.f;
     bool bWeaponOutBefore = false, bReloadStarted = false, bBeforeRefill = false, bBurstOwed = false;
-    int32 RefusedBefore = 0, GrenadesRefusedBefore = 0, HolstersRefusedBefore = 0, BurstCountBefore = 0, BurstMagazineBefore = 0;
+    int32 PagesRefusedBefore = 0, RefusedBefore = 0, GrenadesRefusedBefore = 0, HolstersRefusedBefore = 0, BurstCountBefore = 0, BurstMagazineBefore = 0;
 
     void Check(const TCHAR* Name, bool bOk, const FString& Detail)
     {
@@ -246,8 +253,8 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         NextAt = Now + OpenWillowMelee::HitDelay + .4f;
         break;
     case 9:
-        Check(TEXT("page_cancels_swing"), Hud.IsMapOpen() && !Maya.MeleeBusy() && MeleeEvents == 0 && Lost() == 0.f,
-            FString::Printf(TEXT("%s busy=%d events=%d lost=%.2f"), *State(), Maya.MeleeBusy(), MeleeEvents, Lost()));
+        Check(TEXT("page_does_not_cancel_swing"), Hud.IsMapOpen() && MeleeEvents == 1 && Lost() > 0.f,
+            FString::Printf(TEXT("%s events=%d lost=%.2f"), *State(), MeleeEvents, Lost()));
         Hud.CloseSkills();
         if (MeleeDummy.IsValid()) MeleeDummy->Destroy();   // clear of the grenade below
         if (UOpenWillowInventory* Inventory = Maya.GetInventory()) Inventory->SetAmmoCurrent(EOpenWillowAmmoType::Grenade, 3);
@@ -424,8 +431,17 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         const FString Field = FreshField(Maya);
         Check(TEXT("prompt_nothing_while_down"), WasTalk && Maya.IsDown() && Field == TEXT("null"), FString::Printf(TEXT("talk_before=%d down=%d %s"), WasTalk, Maya.IsDown(), *Field));
         if (MeleeDummy.IsValid()) MeleeDummy->Destroy();
+        PagesRefusedBefore = Maya.PagesRefusedWhileDown;
+        Press(Player, EKeys::M);
         break;
     }
+    case 36:
+        Check(TEXT("m_refused_while_down"), !Hud.IsSkillsOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 1, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
+        Press(Player, EKeys::L);
+        break;
+    case 37:
+        Check(TEXT("l_refused_while_down"), !Hud.IsSkillsOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 2, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
+        break;
     default:
         Check(TEXT("closed_at_end"), !Hud.IsSkillsOpen(), State());
         UE_LOG(LogTemp, Display, TEXT("OWCONTROLS SUMMARY passed=%d failed=%d"), Passed, Failed);

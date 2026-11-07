@@ -205,6 +205,8 @@ window.addEventListener('keydown', event => {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
   const key = event.key.toLowerCase();
   if (key === 'escape' || key === 'tab' || key === 'l') { event.preventDefault(); close(); return; }
+  // M on the stock log went to the Map (read live, one press).
+  if (key === 'm') { event.preventDefault(); location.href = '/__ow_tab_map'; return; }
   if (!ready || !snapshot) return;
   if (key === 'arrowup') { event.preventDefault(); window.extLogUp(); }
   else if (key === 'arrowdown') { event.preventDefault(); window.extLogDown(); }

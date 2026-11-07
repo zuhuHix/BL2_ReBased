@@ -11,14 +11,14 @@ namespace OpenWillowMelee
     constexpr float HitStartOffset = -30.f;      // along the attacker's forward axis
     constexpr float Knockback = 0.1f;
     constexpr float KnockbackScale = 100000.f;   // live for the bullymong's radius melee (AI_MELEE_TARGETING_LIVE.md); UNVERIFIED here
-    // WeaponAnim_Melee: the hit lands this long after the press. The Siren's move says 0.30 and the shared one 0.20; which one Maya
-    // plays is unread, and the Siren's is the one naming her melee definition.
+    // WeaponAnim_Melee: the hit lands this long after the press. The Siren's move says 0.30 and the shared one 0.20; a live read saw about
+    // 0.29 s over 5 swings, with the Siren's definition (CONTROLS.md).
     constexpr float HitDelay = 0.30f;
     // The first-person move's blends (GD_PlayerShared.Anims1st.WeaponAnim_Melee).
     constexpr float BlendIn = 0.1f;
     constexpr float BlendOut = 0.15f;
-    // Host choice, used only without the clip: the game holds the weapons for the clip's length, which is not read yet.
-    constexpr float NoClipDuration = 1.f;
+    // The game holds the weapons for the first-person clip's length: 0.70 s, read live. Used only until that clip is imported.
+    constexpr float NoClipDuration = .7f;
 
     // Init_PlayerMeleeDamage: 2.5 x (8 x 1.13^level). The buff the definition adds (InstigatedMeleeDamageAddedBuff) is not modelled.
     float DamageAtLevel(int32 Level);

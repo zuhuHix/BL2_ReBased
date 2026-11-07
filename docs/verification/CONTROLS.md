@@ -22,12 +22,13 @@ logs `OWCONTROLS map page did not open`.
 Host rules, **UNVERIFIED**:
 
 - With every page closed, the key opens its page. The script reaches the stock menu through `ShowStatusMenu` with a chosen first
-  screen (`WillowPlayerController.ShowMap`), and it refuses through `CanShowModalMenu`, whose conditions were not read. So the host
-  also opens these pages while Maya is down, as its inventory and skills keys already do.
-- With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. `map.js` closes on M and goes to
-  the Missions on L; `missions.js` closes on L but has no M route; `inventory.js` and `skills.js` have neither. Not changed here: what
-  M and L do on an open page in the real game is for the real-game capture to read, and the routes follow from that (`inventory.js`
-  stays with the inventory lane).
+  screen (`WillowPlayerController.ShowMap`), and it refuses through `CanShowModalMenu`, whose conditions were not read.
+- While Maya is down M and L refuse. In the real game neither opened anything (one press each), and the set of actions allowed while down
+  holds no menu. The host's inventory and skills keys still open while down; those belong to the inventory lane.
+- With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. In the real game M on the open Map left it open,
+  and M on the log went to the Map (one press each; the log itself was not seen, only the screen asked for). So `map.js` no longer closes on M and
+  `missions.js` goes to the Map on it. L on the Map and M or L on the Inventory and Skills were not read: the capture's later rows were spoiled by a
+  pause menu and a dialog, and those pages' keys are unchanged.
 
 ## Melee
 
@@ -45,6 +46,17 @@ swing, so all of it is **UNVERIFIED** until the real-game read in `tools/real_ga
   best-lined candidate in range with a clear line. Its numbers are in `OpenWillowMelee.h`.
 - Damage is `Init_PlayerMeleeDamage`: 2.5 x (8 x 1.13^level) plus a melee buff attribute. Normal damage type, melee damage source.
 
+**What the real-game read says** (`tools/real_game/controls_capture.ps1`, one session, 2026-11-07, few samples; data under ignored `local/`):
+
+- Confirmed by pressing: V reaches the melee behaviour, M and L the status menu on the Map and on the log. The hit ran about 0.29 s after the press
+  over 5 swings, through the Siren's definition. A press 0.37 s into a swing started nothing and was not queued, and one just after a swing ended
+  started another (one sample each). A swing ran while Maya was down (one sample).
+- A swing holds the weapons for 0.70 s, on every swing seen, which is the length of the `Melee` clip in the Siren's first-person anim set.
+- A status menu opened 0.18 s into a swing did not cancel it, and the hit behaviour still ran, 0.30 s after the press (one sample). The game clock then
+  nearly stopped under the menu, and the swing ended once it had closed.
+- Not read: damage, knockback, reach and cone against a target, and whether a weapon key is refused in a swing. The attempt to swing at a pawn did not
+  move Maya to it (a bug in the capture).
+
 **What the host does:** V starts a swing (`OpenWillowMelee.cpp`). It stops a reload, ends the aim and blocks the trigger, reload and
 Phaselock and a throw until the clip's length ends (they are refused, not queued), and ends a burst in progress. 0.30 s after the press the hit lands through `ApplyShotDamage`, so targets and listeners see
 it as any hit, with the new source `Melee`. Only actors that take hits (`IOpenWillowHitTarget`) can be struck. A trace that strikes
@@ -52,9 +64,8 @@ a wall ends the swing there.
 
 **Open, host stand-ins, UNVERIFIED:**
 
-- Two body moves exist: the Siren's hits at 0.30 s and the shared one at 0.20 s. Which Maya plays is unread; the host uses the Siren's.
-- The first-person clip is **not imported**: the anim set that holds it is unread. `MeleeAnim` looks in `PistolCombat`, logs the
-  usual "arms animation not found" warning, and the swing then has no visible arm and lasts 1 s (`NoClipDuration`, a host choice).
+- The first-person clip is **not imported** yet: `tools/import_maya_combat_anims.ps1` now names it, and running that (an editor run) is the step left.
+  Until then `MeleeAnim` logs the usual "arms animation not found" warning and the swing has no visible arm, for the 0.70 s the game holds the weapons.
 - The swing's origin and direction use the camera, since the stock source is a native interface call.
 - The cone's use of the angle (not halved) is the low-confidence reading in `NATIVE_AI_MELEE.md`, and the knockback factor is from
   a bullymong's radius melee.
@@ -64,11 +75,12 @@ a wall ends the swing there.
   overrides. Cloud Kill and Immolate act only on Bullet and Rocket sources, so a swing does not proc them. Other hit handling does see
   it: Life Tap applies to any hit that is neither a skill's nor a status effect's, and a melee kill reaches the generic kill
   notification. What the game does for these is unread.
-- What interrupts a swing is a host rule. Going down, a status page or a shop cancels it and clears the pending hit. Switching weapons,
+- What interrupts a swing: going down cancels it and clears the pending hit (host rule). A status page does not, per the one read above. The game
+  pauses under its menu and the host does not, so a hit due after the page opened lands under it here: **UNVERIFIED** against the game. A shop is
+  treated the same, unread. Switching weapons,
   holstering, aiming, reloading, firing, a grenade and Phaselock are refused during it, not queued: a press in the swing is dropped,
   and only a trigger still held fires afterwards. The script does hold the weapon in a busy state, but what the game does with these
   presses is **UNVERIFIED**.
-  The capture reads a status page opened inside a stock swing.
 - A swing and a grenade throw refuse each other, as both are shared weapon actions. Enemy melee belongs to the range lane.
 
 ## Use prompt
@@ -118,11 +130,11 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   `start_closed`, `m_opens_map`, `map_closed`, `l_opens_missions`, `melee_damage_rule`, `melee_cone_rule`, `melee_swing_rule`, `use_prompt_rule`,
   `v_not_hit_before_the_delay` (the delay measured from the frames the swing started and the target lost health), `v_hits_target_ahead`
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
-  `page_cancels_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
+  `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
-  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=26 failed=0`.
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=28 failed=0`.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
-  A shop cancelling a swing has no row.
+  A shop during a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.
 - `tests/check_controls_test.py` (ctest `controls-check`): the grader on invented logs, including a short count, a renamed row, a
   repeated row and a missing summary.
