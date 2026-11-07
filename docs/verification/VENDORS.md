@@ -252,6 +252,8 @@ AI-assisted (Claude), 2026-11-07. `tools/real_game/loot_capture.ps1` drives the 
 
 Loot Collector, Better UI Controls, Dialog Skipper, Item Lights and Apple's Borderlands Cheats may affect what was read here, and whether any of them did has not been checked. So everything below about pickups and prompts is `UNVERIFIED` as stock behaviour, including the use prompt, the beams, the icons and the item card. That a press collected a pickup is what happened with these mods on.
 
+**Shop keys are not stock.** The page's keys in `vending_model.js` (W, S and arrows move, Enter or E acts, Tab, Escape closes) are host choices, and `tests/vending_test.js` only holds them in place. No live session opened a shop, so the stock shop's keys are unobserved. Per another lane's read of its code, Better UI Controls makes E and WASD work in shop menus, so seeing them work on this install would not confirm them.
+
 **What opening changes.** On each of the five types that opened, `SimpleAnimState` and `RepSimpleAnimState` went from 4 to 7 and `bCanBeUsed` went from true to false. On the seven tries that did not open, none of the three moved. This is what those types did in this one run, not a rule for every lootable.
 
 **A signal before the press.** `CachedUsableObject` on the player controller was that object on all five tries that opened, and empty on all seven that did not. It stays empty for a pickup even with the prompt showing, so it says nothing about pickups.
