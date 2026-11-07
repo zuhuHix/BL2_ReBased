@@ -518,7 +518,7 @@ fixed times after `SkillStartTime`). The host shots ran with `-owfov=62.15`, whi
 77.55 degrees at 16:9, with its dummy also 650 uu away. Frames: ignored `local/phaselock/b2/*-20261003-195308.png`.
 Side-by-side at 0.25, 0.5, 0.8, 1.5, 3.0, 4.5, 4.8 and 5.0 s: `local/phaselock/compare/phaselock_host_vs_matched_r4_20261003-195308.jpg`.
 
-**FOV check.** In the capture's pre-cast frame the bullymong's feet sit about 252 px below the horizon. The cylinder
+**FOV check** (superseded: a view turn on real frames later showed the live FOV is vertical, about 110 degrees horizontal at 16:9; `WEAPON_VISUALS.md` section 24. This rough estimate from one pawn's height pointed the other way). In the capture's pre-cast frame the bullymong's feet sit about 252 px below the horizon. The cylinder
 bottom is 222 uu below the eye at 650 uu, which gives f of about 738 px (82 degrees horizontal). That is near the
 capture's 77.55 degrees (f 797) and far from the 93.9 degrees that the host's maintain-Y reading of `FOVAngle` 77.55
 would give. The host's default capture FOV (BL2 setting 90, 106 degrees at 16:9) is much wider than the game's. That

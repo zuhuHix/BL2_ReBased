@@ -321,7 +321,7 @@ or reload frames.
 - **SMG scope:** the selected Tediore sight has a live `FirstPersonParticle` field and `ZoomedEndFOV` 25.2809. A procedural dark side mask and
   yellow ring/ticks now appear only while aiming with that sight. The mask extent, reticle geometry, and interpretation of the particle field
   are `UNVERIFIED`; the host still shows more of the gun behind the ring than the real scope frame.
-- **ADS framing:** the host now passes the measured `ZoomedEndFOV` directly as UE5's horizontal camera FOV (50 pistol, 45 rifle, 25.2809 SMG),
+- **ADS framing (replaced in section 24):** the host now passes the measured `ZoomedEndFOV` directly as UE5's horizontal camera FOV (50 pistol, 45 rifle, 25.2809 SMG),
   replacing the previous 4:3 conversion. Base foreground FOV and arm placement continue to use the live `FirstPersonMeshFOV` and
   `PlayerViewOffset`. Selected cooked eye-socket transforms drive aim translation; if the imported mesh omits that socket's parent bone, the host
   composes it against `Root`. The horizontal-FOV reading and parent fallback are `UNVERIFIED`. The round-2 AR sight still sits low and small versus
@@ -769,3 +769,32 @@ The gap is about 110 px wrong on the shotgun and the eye socket alone about 12 p
 **Checked.** The first version: `--check` composed 39 of 39 guns the same as their generated lines on the zuhu PC, `OpenWillow.WeaponAssembly` passed, and reload rates and arms sets were as in Z19. This version: `--check` offline (see the PR), synthetic tests of the class limit, and a new capture still to come.
 
 **Not covered.** A gameplay suite can still pass on a machine with no view data; counting those fallbacks is a later job the hub holds. No real ADS frame exists for a Maliwan pistol, other shotguns, an SMG on iron sights, a sniper without an overlay or a launcher. The gun's size is untouched: the real rifle stands about 1.4 times wider (section 18). Rotation is untouched: the host's gun stays turned where the real one points straight. The real and host SMG reticles also differ in the same frames (the lower triangle looks upside down, and the rings differ); not looked into.
+
+## 24. The aimed world FOV follows the live vertical angle (gunlook lane, 2026-11-07)
+
+AI-assisted (Claude Opus 5.5). The host passed a weapon's zoom value straight to its camera as a horizontal angle, so aiming narrowed the world far too much (section 23's measurement). Section 12 had chosen that over a 4:3 conversion by comparing framing, before anyone measured the view.
+
+**Rule, in `OpenWillowMovement::AimedFov`.** Scale the zoom value in tangent by the live default over the global default of 70, which gives a vertical angle, then widen it by the aspect to the horizontal angle UE5 takes. The foreground FOV, so the gun's size and position, and the hip FOV are not changed.
+
+**How it was confirmed**, all on the real game at 1280x720, in one profile with its FOV setting at 90 (`tools/real_game/gun_ads_capture.ps1 -MeasureFov`; frames under ignored `local/realgame/gun_ads/`), on the slice rifle (zoom 45) and shotgun (zoom 60):
+
+| Check | Rifle | Shotgun |
+|---|---|---|
+| Live camera value, against the rule's scale | fits to 4 places on all five guns read | same |
+| Hip-to-zoom magnification from one view's frames: measured, and from the live values | 1.71, 1.69 | 1.21, 1.21 |
+| World shift over a 4-degree turn at full zoom: measured, if vertical, if horizontal | 54, 53, 94 px | 38.5, 38, 68 px |
+| Horizontal angle from that shift, and from the rule | about 79.5, 80.4 | about 98.5, 99.3 |
+
+The tangent-scale form also matches the native note on `GetFOVAngle` (`NATIVE_PLAYER_MOVEMENT.md`). UNVERIFIED: other zoom values (sniper and SMG scopes are far from these two), other aspects, and scaling with another FOV setting, which is the host's assumption.
+
+**Effects to expect.** Every aimed world frame moves: the rifle's world about 80 degrees where it was 45, and an SMG scope about 49 where it was 25. Hand-drawn scope overlays do not change. The view kick scales with the camera's FOV (`OpenWillowWalker.cpp`, the `FovRatio` term), so it changes while aiming, on a rifle from about 0.31 of hip to about 0.63, against about 0.59 in the real game's values. The hip FOV stays about 4 degrees narrower than the real one; not part of this change.
+
+**Checked in the host (all-in-one build, zuhu PC, frames under ignored `local/all-in-one/guns`).** It compiled, and the firing suite passes 14 of 14 with no row moved. Hip-to-ADS world scale, measured on one view's host frames by scaling hip about the centre:
+
+| Gun | Host measured | The rule, from the host's hip | Host before | Real |
+|---|---|---|---|---|
+| Rifle | 1.58 | 1.578 | 3.22 | 1.69 |
+| Shotgun | 1.13 | 1.132 | 2.31 | 1.21 |
+| Pistol | 1.40 | 1.402 | 2.86 | 1.50, computed from the live values, not measured |
+
+The remaining gap, about 7 percent, is the hip FOV's: the host's about 106 degrees against the real about 110. No real frame compares a scene at the same place, so that is the view's scale, not its content.

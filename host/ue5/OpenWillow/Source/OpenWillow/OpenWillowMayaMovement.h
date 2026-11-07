@@ -28,6 +28,7 @@ constexpr float SprintEyeHeightModifier = -0.02f;
 constexpr float BobAmplitude = 0.005f;                  // Default__WillowPawn
 constexpr float SprintBobScalar = 0.01f;       // SprintDefinition class default (the amplitude while sprinting: Bob x this)
 constexpr float SprintFovModifier = 0.35f;     // FOVModifier
+constexpr float LiveDefaultFov = 77.552f;      // the running game's DefaultFOV, a vertical angle, at FOV setting 90 (WEAPON_VISUALS.md section 24)
 constexpr float FovModifierSpeed = 10.f;       // InitialFOVModifierSpeed
 constexpr float GlobalDefaultFov = 70.f;       // GD_Globals DefaultFOV (horizontal, at the 16:9 reference)
 constexpr float FallingDamageFraction = 0.1f;  // GlobalFallingDamageScale = max health x 0.1
@@ -109,6 +110,10 @@ struct FEyeHeight
 // tan(1.35 x V / 2) / tan(V / 2) with V the vertical angle of the 70-degree global default at 16:9. The factor is the same on
 // either axis, so it is applied to the host's horizontal angle.
 float SprintFov(float BaseFovDegrees);
+// The horizontal camera angle at full zoom. The weapon's zoom value is scaled in tangent by the live default over the global default, which gives a
+// vertical angle, then widened by the aspect (confirmed at 1280x720, setting 90, zoom values 45 and 60: WEAPON_VISUALS.md section 24). Scaling with
+// another FOV setting is the host's assumption, UNVERIFIED, as are other zoom values.
+float AimedFov(float ZoomFovDegrees, float Aspect, float Bl2FovSetting);
 // Section 19: AdjustFOV's easing: lerp by dt x speed, snapping once it would overshoot.
 float EaseFov(float Current, float Target, float DeltaSeconds);
 

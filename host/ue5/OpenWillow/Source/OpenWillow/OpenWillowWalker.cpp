@@ -1232,9 +1232,8 @@ void AOpenWillowWalker::UpdateAim(float Now)
     const float Progress = FMath::Clamp((Now - AimTransitionStart) / FMath::Max(0.01f, AimTransitionDuration), 0.f, 1.f);
     AimAlpha = FMath::Lerp(AimTransitionStartAlpha, AimTransitionTargetAlpha, Progress);
     FViewModel* Model = FindViewModel(Item);
-    // Use the measured ZoomedEndFOV directly as UE5's horizontal camera FOV. The previous 4:3-to-viewport
-    // conversion made ADS visibly too wide on the 16:9 capture; this interpretation remains UNVERIFIED native behavior.
-    const float ZoomFov = Model && Model->ZoomFov > 1.f ? Model->ZoomFov : WorldFovDefault;
+    // The world's FOV only; the arms and gun keep the foreground FOV. The rule and how it was confirmed: OpenWillowMovement::AimedFov.
+    const float ZoomFov = Model && Model->ZoomFov > 1.f ? OpenWillowMovement::AimedFov(Model->ZoomFov, CameraAspect, Bl2FovSetting) : WorldFovDefault;
     const float BaseFov = BaseFovNow > 1.f ? BaseFovNow : WorldFovDefault;   // the sprint FOV eases this (TickMovement)
     Camera->SetFieldOfView(FMath::Lerp(BaseFov, ZoomFov, AimAlpha));
     if (ScopeOverlayWidget)
