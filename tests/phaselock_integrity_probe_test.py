@@ -234,23 +234,24 @@ def shield_world(ns, own_level=8, own_max=181.0):
                    DefinitionData=Obj(BalanceDefinition=Obj(Name='Balance')), _path_name=lambda: path or 'Pkg.' + name)
     world = {'max': own_max, 'next': [], 'shield': shield}
     own = shield('Own', own_level)
-    gun = Obj(Class=Obj(Name='WillowWeapon'), Inventory=own)
+    gun = Obj(Class=Obj(Name='WillowWeapon'), Inventory=None)
 
     def ready(item):
         if world.get('ready_takes', True):
-            old = gun.Inventory
+            old = im.ItemChain
             if old is not None:
                 im.Backpack.append(old)
             if item in im.Backpack:
                 im.Backpack.remove(item)
-            gun.Inventory = item
+            im.ItemChain = item
 
     def add(item):
         im.Backpack.append(item)
         if world.get('add_throws'):
             raise RuntimeError('the add took effect, then failed')
 
-    im = Obj(InventoryChain=gun, Backpack=[], AddInventoryToBackpack=add, RemoveInventoryFromBackpack=lambda i: im.Backpack.remove(i), ReadyBackpackInventory=ready)
+    # As in the game: the weapons in InventoryChain, the worn shield in ItemChain.
+    im = Obj(InventoryChain=gun, ItemChain=own, Backpack=[], Class=Obj(_fields=lambda: [Obj(Name='ItemChain'), Obj(Name='Backpack')]), AddInventoryToBackpack=add, RemoveInventoryFromBackpack=lambda i: im.Backpack.remove(i), ReadyBackpackInventory=ready)
     pawn = Obj(GetMaxShieldStrength=lambda: world['max'], GetShieldStrength=lambda: 90.0)
     pc = Obj(GetPawnInventoryManager=lambda: im, Pawn=pawn, PlayerReplicationInfo=Obj(ExpLevel=8), WorldInfo=Obj(TimeSeconds=1.0))
     world['pc'], world['im'] = pc, im
@@ -265,6 +266,7 @@ def test_a_shield_row_counts_only_for_its_own_item_level_and_a_fresh_read():
     world = shield_world(ns)
     start = ns['pi_shields'](True)
     assert start['equipped']['key'] == 'Pkg.Own' and start['max_strength'] == 181.0 and start['player_level'] == 8
+    assert start['manager_fields'] == ['ItemChain']
     world['next'] = [world['shield']('Test30', 30)]
     tried = ns['pi_shield_try'](30)
     assert tried['requested_level'] == 30 and tried['item']['level'] == 30
@@ -314,6 +316,14 @@ def test_a_shield_row_counts_only_for_its_own_item_level_and_a_fresh_read():
     assert ns['pi_shield_restore']()['ok'] is True and not world['im'].Backpack
 
 
+def test_a_manager_without_an_item_chain_finds_no_shield_and_says_so():
+    ns = load()
+    world = shield_world(ns)
+    del world['im'].__dict__['ItemChain']
+    start = ns['pi_shields'](True)
+    assert start['equipped'] is None and start['max_strength'] == 181.0
+
+
 def test_a_shield_is_found_by_its_path_not_its_name():
     ns = load()
     world = shield_world(ns)
@@ -323,7 +333,7 @@ def test_a_shield_is_found_by_its_path_not_its_name():
     world['next'] = [world['shield']('Test', 15)]
     ns['pi_shield_try'](15)
     ns['pi_shield_restore']()
-    equipped = world['im'].InventoryChain.Inventory
+    equipped = world['im'].ItemChain
     assert equipped._path_name() == 'Pkg.Own' and world['im'].Backpack == [twin]
     assert ns['pi_shields_check']()['ok'] is True
 
