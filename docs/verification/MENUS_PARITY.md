@@ -83,7 +83,7 @@ Rules read from script (implemented in `tools/hud_overlay/mission_log.js`, own w
   tracked); scroll while the description scrolls. Ignore/Unignore (`CanToggleHighlightedMissionFilter`) is left out.
 - **Input**: the movie's own list events (`extLogListRollover`, `extLogListTrack`, `extLogUp`, `extLogDown`) select and
   track; keys Up/Down, Enter (track: `OWMISSION {"track":id}`, nothing to change with one mission), Page Up/Down scroll the
-  description, Escape / Tab / L close, I and K switch tabs. The PC key for the log itself and the Sort action were not observed.
+  description, Escape / Tab close, L stays, I and K switch tabs. The PC key for the log itself and the Sort action were not observed.
 - The root frame script turns and scales the missions clip; the page applies the turn with `menu3d.js`, as the other two pages
   do.
 

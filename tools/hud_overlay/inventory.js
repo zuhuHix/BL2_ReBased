@@ -1972,13 +1972,18 @@ function handleKey(event) {
   // The menu grabs the mouse and keyboard the moment it opens, so leaving must work even while the
   // movie is still loading (before ready/state).
   if (!ready || !state) {
-    if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
+    if (key === 'escape' || key === 'tab') { event.preventDefault(); closeInventory(); }
     return;
   }
   if (key === 'escape' && inspectMode) { event.preventDefault(); toggleInspect(); }
   else if (key === 'escape' && transferSourceId) { event.preventDefault(); finishTransfer(true); syncSelection(); }
-  else if (key === 'escape' || key === 'i' || key === 'tab') { event.preventDefault(); closeInventory(); }
+  else if (key === 'escape' || key === 'tab') { event.preventDefault(); closeInventory(); }
+  // From StatusMenuExGFxMovie.HandleInputKey: each screen's own key switches to that screen, so I stays here; the menu's exit key is the
+  // one bound to its StatusMenu action. L went to the log live (one press); M, I and K are from the script (UNVERIFIED live: docs/verification/CONTROLS.md).
+  else if (key === 'i') { event.preventDefault(); }
   else if (key === 'k') { event.preventDefault(); switchTab(headerTabs[3]); }
+  else if (key === 'l') { event.preventDefault(); switchTab(headerTabs[0]); }
+  else if (key === 'm') { event.preventDefault(); switchTab(headerTabs[1]); }
   // StatusMenuExGFxMovie.HandleInputKey sends One..Five (on press, when no panel used the key) to
   // TrySwitchToScreen 1..5: Missions, Map, Inventory, Skills, Challenges. No inventory panel handles digits,
   // also not during a transfer. Read from the script; not yet seen in the running game (UNVERIFIED).
