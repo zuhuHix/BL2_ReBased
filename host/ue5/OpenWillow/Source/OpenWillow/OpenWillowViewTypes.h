@@ -24,6 +24,10 @@ TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOp
 FString WantedArmsSet(const FString& ViewSet, const FString& ItemType);
 FString ResolveArmsSet(const FString& Wanted, TFunctionRef<bool(const FString& Clip)> ClipExists, TArray<FString>& OutMissing);
 
+// Removes the lines a weapon_view.json holds from another version of the tool, returning how many: their fits would be stale, and nothing else would notice.
+// Such a gun then goes by the view table, or has no view model until the file is regenerated.
+int32 DropStaleLines(const TSharedPtr<FJsonObject>& Root);
+
 // For tests: drop the cached table (it is read once per process) and read it from File instead.
 void ResetForTests(const FString& File = FString());
 }

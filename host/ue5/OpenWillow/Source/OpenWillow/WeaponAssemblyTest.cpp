@@ -267,6 +267,9 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
                                "body_a_eye2": {"name": "Body_A_Eye2", "bone": "R", "fragment": "", "location": [0, 9, 19]},
                                "barrel_a_frontsight": {"name": "Barrel_A_FrontSight", "bone": "R", "fragment": "", "location": [0, -9, 13]},
                                "barrel_b_frontsight": {"name": "Barrel_B_FrontSight", "bone": "Q", "fragment": "", "location": [0, -9, 13]},
+                               "barrel_c_frontsight": {"name": "Barrel_C_FrontSight", "bone": "R", "fragment": "", "location": [0, -9, 21]},
+                               "body_c_eye1": {"name": "Body_C_Eye1", "bone": "R", "fragment": "", "location": [0, 9, 19]},
+                               "scope_c_eye2": {"name": "Scope_C_Eye2", "bone": "R", "fragment": "", "location": [0, 9, 18]},
                                "scope_b_eye1": {"name": "Scope_B_Eye1", "bone": "R", "fragment": "", "location": [0, 9, 15]},
                                "muzzle": {"name": "Muzzle", "bone": "M", "fragment": ""},
                                "port": {"name": "Port", "bone": "R", "fragment": ""},
@@ -274,6 +277,10 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
                                "scope_a_eye2": {"name": "Scope_A_Eye2", "bone": "S", "fragment": ""}}},
           "parts": {"P.Barrel": {"fragments": ["Barrel_A"], "scope_overlay": false},
                     "P.BarrelB": {"fragments": ["Barrel_B"], "scope_overlay": false},
+                    "P.BarrelC": {"fragments": ["Barrel_C"], "scope_overlay": false},
+                    "P.BodyC": {"fragments": ["Body_C"], "scope_overlay": false},
+                    "P.SightFallback": {"fragments": ["Scope_C"], "scope_overlay": false},
+                    "P.Overlay": {"fragments": ["Scope_D"], "scope_overlay": true},
                     "P.Body": {"fragments": ["Body_A"], "scope_overlay": false},
                     "P.ScopeB": {"fragments": ["Scope_B"], "scope_overlay": true},
                     "P.Sight": {"fragments": ["Scope_A"], "scope_overlay": true}}})"))
@@ -293,7 +300,7 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
         return Entry->GetObjectField(Socket)->GetStringField(Field);
     };
 
-    WriteTable(1, Md5);
+    WriteTable(2, Md5);
     const TSharedPtr<FJsonObject> Entry = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"),
         {Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.Sight")), Part(TEXT("Stock"), TEXT("P.Unknown"))});
     if (TestTrue(TEXT("A known type composes"), Entry.IsValid()))
@@ -329,6 +336,25 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     const TSharedPtr<FJsonObject> Iron = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel"))});
     if (TestTrue(TEXT("Iron sights compose"), Iron.IsValid()))
         TestEqual(TEXT("Iron sights raise the gun by the gap, on top of the type's fit"), FitOf(Iron), FVector(0, 1, 6));
+    auto Fit = [&](const TArray<FOpenWillowWeaponPart>& GunParts)
+    {
+        const TSharedPtr<FJsonObject> Composed = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), GunParts);
+        return Composed.IsValid() ? FitOf(Composed) : FVector(-999.0);
+    };
+    TestEqual(TEXT("A sight part's own fallback-named socket: no gap"), Fit({Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.SightFallback"))}), FVector(0, 1, 0));
+    TestEqual(TEXT("No sight part, the preferred name found on the body: the gap"), Fit({Part(TEXT("Body"), TEXT("P.BodyC")), Part(TEXT("Barrel"), TEXT("P.Barrel"))}), FVector(0, 1, 6));
+    TestEqual(TEXT("An overlay hides the gun: no gap"), Fit({Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.Overlay"))}), FVector(0, 1, 0));
+    TestEqual(TEXT("A front sight above the eye socket lowers the gun"), Fit({Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.BarrelC"))}), FVector(0, 1, -2));
+    TestEqual(TEXT("A sight outside the table may have its own socket: no gap"), Fit({Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.Unknown"))}), FVector(0, 1, 0));
+    {
+        TSharedPtr<FJsonObject> Lines;
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(TEXT(R"({"fresh": {"view_schema": 2}, "old": {"view_schema": 1}, "none": {"first_person_fov": 40}, "note": 1})")), Lines);
+        TestEqual(TEXT("The stale and unmarked lines are dropped"), OpenWillowViewTypes::DropStaleLines(Lines), 2);
+        TestTrue(TEXT("The current line stays"), Lines->HasField(TEXT("fresh")));
+        TestFalse(TEXT("The old line goes"), Lines->HasField(TEXT("old")));
+        TestFalse(TEXT("The unmarked line goes"), Lines->HasField(TEXT("none")));
+        TestTrue(TEXT("A value that is no line is left alone"), Lines->HasField(TEXT("note")));
+    }
     const TSharedPtr<FJsonObject> Plain = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Plain"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel"))});
     if (TestTrue(TEXT("A class outside the fit composes"), Plain.IsValid()))
         TestEqual(TEXT("A class outside the fit stays on the eye socket"), FitOf(Plain), FVector(0, 1, 0));
@@ -365,14 +391,14 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     }
 
     AddExpectedError(TEXT("refusing"), EAutomationExpectedErrorFlags::Contains, 4);
-    WriteTable(2, Md5);
+    WriteTable(1, Md5);
     TestFalse(TEXT("Another schema is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
-    WriteTable(1, TEXT("00000000000000000000000000000000"));
+    WriteTable(2, TEXT("00000000000000000000000000000000"));
     TestFalse(TEXT("A table from another library is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
-    WriteTable(1, FString());
+    WriteTable(2, FString());
     TestFalse(TEXT("A table with no library hash is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
     IFileManager::Get().Delete(*Library);
-    WriteTable(1, FString());
+    WriteTable(2, FString());
     TestFalse(TEXT("No hash and no library.json is refused, empty does not equal empty"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
     OpenWillowViewTypes::ResetForTests(Dir / TEXT("missing.json"));
     TestFalse(TEXT("A missing table gives nothing"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());

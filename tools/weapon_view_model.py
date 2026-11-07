@@ -89,13 +89,16 @@ def zoom_position_fit_cm(weapon_type):
     return [float(value) for value in fit or (0.0, 0.0, 0.0)], source
 
 
-def add_sight_line_height(entry, eye, front_sight):
-    """On a gun of a marked class aiming down iron sights (the fallback eye socket), raise it by how far that socket sits above the barrel's front sight.
+def add_sight_line_height(entry, eye, front_sight, sight_fragments, overlay):
+    """On a gun of a marked class aiming down iron sights, raise it by how far its eye socket sits above the barrel's front sight (below: lower it).
 
+    Iron sights: no overlay, and the eye socket does not come from a sight part, whichever of the type's two socket names it answered to.
     A fit to real frames, not the game's rule, whose mechanism is unknown: it holds on two pistols and a rifle and is about 110 px wrong on a
     shotgun (WEAPON_VISUALS.md section 23). UNVERIFIED on any other gun. Sockets on different bones are not compared.
     """
-    if not entry.get('zoom_sight_line') or not (eye and front_sight) or eye.get('bone') != front_sight.get('bone'):
+    if not entry.get('zoom_sight_line') or overlay or not (eye and front_sight):
+        return
+    if eye.get('fragment') in sight_fragments or eye.get('bone') != front_sight.get('bone'):
         return
     fit = list(entry.get('zoom_position_fit_cm') or (0.0, 0.0, 0.0))
     fit[2] += eye['location'][2] - front_sight['location'][2]
@@ -513,6 +516,7 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
         if entry is None:
             continue
         entry['weapon_type'] = weapon_type
+        entry['view_schema'] = VIEW_TYPES_SCHEMA  # the host refuses a line from another version of this tool: its fits would be stale
         entry['zoom_position_fit_cm'], entry['zoom_position_fit_source'] = zoom_position_fit_cm(weapon_type)
         entry['zoom_sight_line'] = str(weapon_type).split('.')[0] in ZOOM_SIGHT_LINE_CLASSES
         stats = recipe.get('stats') if isinstance(recipe.get('stats'), dict) else {}
@@ -564,7 +568,8 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
         zoom_socket = resolve_fragment_socket(sockets, zoom_fragments, entry['zoom_socket_preferred']) if entry['zoom_socket_preferred'] else None
         if zoom_socket is None and entry['zoom_socket_fallback']:
             zoom_socket = resolve_fragment_socket(sockets, zoom_fragments, entry['zoom_socket_fallback'])
-            add_sight_line_height(entry, zoom_socket, resolve_fragment_socket(sockets, selected_fragments.get('Barrel', []), FRONT_SIGHT_SOCKET))
+        add_sight_line_height(entry, zoom_socket, resolve_fragment_socket(sockets, selected_fragments.get('Barrel', []), FRONT_SIGHT_SOCKET),
+                              [str(f).rsplit('.', 1)[-1] for f in selected_fragments.get('Sight', [])], entry.get('scope_overlay'))
         entry['muzzle_socket_transform'] = muzzle
         entry['muzzle_socket_transform_source'] = 'selected fragment SkeletalMeshSocket export' if muzzle else 'unresolved'
         entry['shell_casing_socket_transform'] = casing
@@ -604,7 +609,7 @@ def select_reload(entry, recipe_id):
 
 
 # Bump with any change to the table's shape; OpenWillowViewTypes.cpp refuses another value, and a table for another library.json.
-VIEW_TYPES_SCHEMA = 1
+VIEW_TYPES_SCHEMA = 2
 ZOOM_SLOTS = ('Sight', 'Body', 'Barrel', 'Stock', 'Grip', 'Elemental', 'Accessory1', 'Accessory2', 'Material')
 # Differ by gun for a reason outside the view data: the card's time, and the recipe id in the clip's folder.
 ORACLE_IGNORED = ('card_reload_time', 'weapon_reload_asset')
@@ -680,12 +685,13 @@ def compose_entry(tables, weapon_type, slot_parts):
     zoom = table_socket(table, zoom_frags, entry['zoom_socket_preferred'], zoom_known) if entry.get('zoom_socket_preferred') else None
     if zoom is None and entry.get('zoom_socket_fallback'):
         zoom = table_socket(table, zoom_frags, entry['zoom_socket_fallback'], zoom_known)
-        add_sight_line_height(entry, zoom, table_socket(table, frags('Barrel'), FRONT_SIGHT_SOCKET, known('Barrel')))
     for name, socket in (('muzzle_socket_transform', muzzle), ('shell_casing_socket_transform', casing),
                          ('zoom_socket_transform', zoom)):
         entry[name] = socket
         entry[name + '_source'] = 'selected fragment SkeletalMeshSocket export' if socket else 'unresolved'
     overlay = (tables['parts'].get(slot_parts.get('Sight')) or {}).get('scope_overlay', False)
+    if known('Sight'):  # a sight outside the table may have its own socket
+        add_sight_line_height(entry, zoom, table_socket(table, frags('Barrel'), FRONT_SIGHT_SOCKET, known('Barrel')), frags('Sight'), overlay)
     entry['scope_overlay'] = overlay
     entry['scope_overlay_source'] = ('cooked selected Sight.FirstPersonParticle; overlay interpretation UNVERIFIED'
                                      if overlay else 'cooked selected Sight has no FirstPersonParticle')
