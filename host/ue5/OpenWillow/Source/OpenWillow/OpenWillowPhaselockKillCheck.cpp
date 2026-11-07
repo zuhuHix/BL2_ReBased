@@ -1,11 +1,14 @@
 // AI-assisted (Claude). Test-only, runs only with -owphaselockkillcheck (tools/test_action_skill_hud.ps1 -KillHeld): casts Phaselock at the
-// -owcombattest dummy and kills it during the hold, through the target's ordinary damage entry point, then reads what the skill does.
+// -owcombattest dummy and kills it during the hold, through the target's ordinary damage entry point, then reads what the skill does. With
+// -owphaselockkilldestroy (-DestroyHeld) the held actor is destroyed instead.
 // tools/check_phaselock_kill.py grades these lines with the HUD state lines on the same clock (docs/verification/ACTION_SKILL_HUD.md).
 #include "CoreMinimal.h"
 #include "EngineUtils.h"
 #include "GameFramework/DamageType.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowWalker.h"
 #include "UnrealClient.h"
@@ -59,10 +62,18 @@ void OpenWillowTickPhaselockKillCheck(AOpenWillowWalker& Maya, APlayerController
             Finish(false, TEXT("the target is not held 2 s after the cast"));
             return;
         }
-        Target->SetInvulnerable(false);
-        UGameplayStatics::ApplyDamage(Target.Get(), 1.e7f, &Player, &Maya, UDamageType::StaticClass());
-        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL kill t=%.3f dead=%d"), Now, Target->IsDead() ? 1 : 0);
-        if (!Target->IsDead())
+        if (FParse::Param(FCommandLine::Get(), TEXT("owphaselockkilldestroy")))
+        {
+            Target->Destroy();
+        }
+        else
+        {
+            Target->SetInvulnerable(false);
+            UGameplayStatics::ApplyDamage(Target.Get(), 1.e7f, &Player, &Maya, UDamageType::StaticClass());
+        }
+        const bool bEnded = !Target.IsValid() || Target->IsDead();
+        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL kill t=%.3f dead=%d"), Now, bEnded ? 1 : 0);
+        if (!bEnded)
         {
             Finish(false, TEXT("the hit did not kill the target"));
             return;
@@ -74,8 +85,8 @@ void OpenWillowTickPhaselockKillCheck(AOpenWillowWalker& Maya, APlayerController
     {
         const bool bActive = Maya.IsPhaselockActive();
         RemainingAfter = Maya.PhaselockRemaining();
-        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL after active=%d reason=%s remaining=%.3f since_cast=%.3f"), bActive ? 1 : 0,
-            *Maya.LastPhaselockEndReason(), RemainingAfter, Now - CastAt);
+        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL after active=%d reason=%s remaining=%.3f since_cast=%.3f t=%.3f"), bActive ? 1 : 0,
+            *Maya.LastPhaselockEndReason(), RemainingAfter, Now - CastAt, Now);
         FScreenshotRequest::RequestScreenshot(TEXT("OWPhaselockKill_after.png"), true, false);
         if (bActive)
         {
@@ -89,7 +100,7 @@ void OpenWillowTickPhaselockKillCheck(AOpenWillowWalker& Maya, APlayerController
     {
         // The cooldown drains from the release at the base rate; it does not wait for the timeline's end.
         const float Remaining = Maya.PhaselockRemaining();
-        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL drain remaining=%.3f was=%.3f"), Remaining, RemainingAfter);
+        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL drain remaining=%.3f was=%.3f t=%.3f"), Remaining, RemainingAfter, Now);
         Finish(Remaining < RemainingAfter, Remaining < RemainingAfter ? TEXT("ended on the kill, cooldown draining") : TEXT("the cooldown did not drain after the kill"));
     }
     else
