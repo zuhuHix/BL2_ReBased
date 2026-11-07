@@ -362,6 +362,18 @@ void AOpenWillowWalker::Respawn()
     Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
     CancelReload();
+    // A new body at a station: no status page stays up over it, and the page's UI-only input goes with it. Going down leaves a
+    // page alone (what the game does then is UNVERIFIED: docs/verification/CONTROLS.md).
+    if (APlayerController* PC = Cast<APlayerController>(Controller))
+    {
+        if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD())) HUD->CloseSkills();
+        if (IsInventoryWidgetOpen())
+        {
+            InventoryScreen->RemoveFromParent();
+            PC->SetInputMode(FInputModeGameOnly());
+            PC->SetShowMouseCursor(false);
+        }
+    }
     FVector Location = RespawnLocation;
     FRotator Rotation = RespawnRotation;
     FTransform Station;
@@ -1531,7 +1543,9 @@ void AOpenWillowWalker::ToggleInventory()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
-    // As M and L (ToggleMapOrMissionsPage): the set of actions allowed while down has no menu in it. Closing still works.
+    // As M and L (ToggleMapOrMissionsPage): the set of actions allowed while down has no menu in it. The branch past this refusal closes
+    // a page only when the key reaches this binding. A focused page takes its keys in its own script instead, so there inventory.js and
+    // skills.js decide: with #158 I and K stay on the page, and Escape and Tab close it, down or not.
     const AOpenWillowMayaHUD* OpenHud = Cast<AOpenWillowMayaHUD>(PC->GetHUD());
     if (IsDown() && !IsInventoryWidgetOpen() && !(OpenHud && OpenHud->IsInventoryOpen()))
     {
@@ -1571,7 +1585,7 @@ void AOpenWillowWalker::ToggleSkills()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
-    // As ToggleInventory: refused while down, and closing the Skills page still works.
+    // As ToggleInventory: refused while down; a focused page takes its own keys in its script and never gets here.
     const AOpenWillowMayaHUD* OpenHud = Cast<AOpenWillowMayaHUD>(PC->GetHUD());
     const bool bSkillsOpen = OpenHud && OpenHud->IsSkillsOpen() && !OpenHud->IsInventoryOpen() && !OpenHud->IsMissionsOpen() && !OpenHud->IsMapOpen();
     if (IsDown() && !bSkillsOpen)

@@ -13,7 +13,7 @@ EXPECTED = ('start_closed', 'm_opens_map', 'map_closed', 'l_opens_missions', 'me
             'v_not_hit_before_the_delay', 'v_hits_target_ahead', 'v_misses_target_behind', 'v_misses_target_out_of_reach',
             'page_does_not_cancel_swing', 'v_refused_in_grenade_lockout', 'g_refused_during_swing', 'holster_refused_during_swing', 'v_stops_reload_before_refill',
             'v_keeps_refill_after_it', 'burst_ends_on_swing', 'prompt_nothing_in_open_air', 'prompt_marcus_over_world_target', 'prompt_aimed_pickup',
-            'e_takes_the_named_pickup', 'down_cancels_swing', 'prompt_nothing_while_down', 'm_refused_while_down', 'l_refused_while_down', 'i_refused_while_down', 'k_refused_while_down', 'route_refused_while_down', 'closed_at_end')
+            'e_takes_the_named_pickup', 'down_cancels_swing', 'prompt_nothing_while_down', 'm_refused_while_down', 'l_refused_while_down', 'i_refused_while_down', 'k_refused_while_down', 'route_refused_while_down', 'escape_closes_page_while_down', 'respawn_closes_page', 'closed_at_end')
 ROW = re.compile(r'OWCONTROLS (\S+) (PASS|FAIL)\b(.*)')
 SUMMARY = re.compile(r'OWCONTROLS SUMMARY passed=(\d+) failed=(\d+)[ \t\r]*$', re.M)
 
