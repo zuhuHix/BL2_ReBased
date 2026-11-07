@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 220" width="1000" height="220" role="img" aria-label="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed Unreal Engine 5.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f5a623"/>
+    </marker>
+    <style>
+      .box { fill: #161b22; stroke: #f5a623; stroke-width: 2; }
+      .host { fill: #3a2606; stroke: #f5a623; stroke-width: 2; }
+      .line { fill: none; stroke: #f5a623; stroke-width: 2; }
+      .title { font: 700 16px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #f0f6fc; text-anchor: middle; }
+      .sub { font: 400 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #c9d1d9; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <path class="line" marker-end="url(#arrow)" d="M170 110 H205"/>
+  <path class="line" marker-end="url(#arrow)" d="M365 110 H385 V45 H415"/>
+  <path class="line" marker-end="url(#arrow)" d="M365 110 H385 V175 H415"/>
+  <path class="line" marker-end="url(#arrow)" d="M610 175 H645"/>
+  <path class="line" marker-end="url(#arrow)" d="M610 45 H835 V75"/>
+  <path class="line" marker-end="url(#arrow)" d="M795 175 H835 V145"/>
+
+  <rect class="box" x="10" y="75" width="160" height="70" rx="8"/>
+  <text class="title" x="90" y="105">Your copy of BL2</text>
+  <text class="sub" x="90" y="126">maps, guns, script, UI</text>
+
+  <rect class="box" x="207" y="75" width="158" height="70" rx="8"/>
+  <text class="title" x="286" y="105">ow-package</text>
+  <text class="sub" x="286" y="126">reads every package</text>
+
+  <rect class="box" x="417" y="10" width="193" height="70" rx="8"/>
+  <text class="title" x="513" y="40">Asset pipeline</text>
+  <text class="sub" x="513" y="61">meshes, textures, animation</text>
+
+  <rect class="box" x="417" y="140" width="193" height="70" rx="8"/>
+  <text class="title" x="513" y="170">Script VM</text>
+  <text class="sub" x="513" y="191">BL2's own bytecode</text>
+
+  <rect class="box" x="647" y="140" width="148" height="70" rx="8"/>
+  <text class="title" x="721" y="170">Native layer</text>
+  <text class="sub" x="721" y="191">what the .exe did</text>
+
+  <rect class="host" x="785" y="77" width="205" height="66" rx="8"/>
+  <text class="title" x="887" y="105">Unreal Engine 5</text>
+  <text class="sub" x="887" y="126">renderer, physics, audio</text>
+</svg>
