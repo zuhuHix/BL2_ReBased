@@ -25,7 +25,7 @@ LINES = ['LogTemp: Display: OWPHASELOCKKILL cast t=10.000 hit=1',
          page(1, -1.0),
          'LogTemp: Display: OWPHASELOCKKILL after active=0 reason=the held target died remaining=12.800 since_cast=2.200 t=12.200',
          hud(12.500, -1.0, 0.8),
-         'LogTemp: Display: OWPHASELOCKKILL drain remaining=11.800 was=12.800 t=13.200',
+         'LogTemp: Display: OWPHASELOCKKILL drain remaining=11.800 was=12.800 t=13.200 rate=1.000',
          'LogTemp: Display: OWPHASELOCKKILL result pass: ended on the kill, cooldown draining']
 GOOD = '\n'.join(LINES)
 SHOTS = {c.SHOT}
@@ -66,8 +66,18 @@ def test_the_numbers_must_agree():
 
 def test_the_movie_must_read_back_its_frames():
     fails(GOOD.replace(page(3), page(1)), 'running emblem frame')
-    fails(GOOD.replace(page(1, -1.0), page(3)), 'off emblem frame')
+    fails(GOOD.replace(page(3), page(3, -1.0)), 'running emblem frame')       # frame 3 with the emblem said to be off
+    fails(GOOD.replace(page(1, -1.0), page(3, -1.0)), 'off emblem frame')
+    fails(GOOD.replace(page(1, -1.0), page(1, 0.5)), 'off emblem frame')      # frame 1 with the emblem said to be active
     fails('\n'.join(l for l in LINES if 'OWSKILLPAGE' not in l or 'emblem=3' in l), 'off emblem frame')
+
+
+def test_the_drain_is_judged_at_the_logged_rate():
+    # A cooldown modifier: half the rate drains half as much, and starts from the kill at that rate.
+    slow = GOOD.replace('rate=1.000', 'rate=0.500').replace('remaining=12.800 since_cast', 'remaining=12.900 since_cast').replace('was=12.800', 'was=12.900').replace('drain remaining=11.800', 'drain remaining=12.400')
+    assert c.problems(slow, SHOTS) == []
+    fails(GOOD.replace('rate=1.000', 'rate=0.500'), 'the cooldown drained')    # the same numbers at a rate they don't fit
+    fails(GOOD.replace('rate=1.000', 'rate=0.000'), 'logged rate')
 
 
 def test_a_destroyed_target_names_its_own_reason():

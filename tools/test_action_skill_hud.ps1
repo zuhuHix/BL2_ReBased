@@ -17,6 +17,7 @@ param(
 # (docs/verification/ACTION_SKILL_HUD.md). Screenshots go to local/skillhud/<stamp>/. Needs the converted movies under
 # local/ui/run (tools/prepare_hud_icons.py for the icon) and the action-skill manifest.
 $ErrorActionPreference = 'Stop'
+if ($DestroyHeld -and !$KillHeld) { throw '-DestroyHeld needs -KillHeld' }
 $repo = Split-Path -Parent $PSScriptRoot
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'

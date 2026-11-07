@@ -10,6 +10,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowSkillEffects.h"
 #include "OpenWillowWalker.h"
 #include "UnrealClient.h"
 
@@ -100,7 +101,8 @@ void OpenWillowTickPhaselockKillCheck(AOpenWillowWalker& Maya, APlayerController
     {
         // The cooldown drains from the release at the base rate; it does not wait for the timeline's end.
         const float Remaining = Maya.PhaselockRemaining();
-        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL drain remaining=%.3f was=%.3f t=%.3f"), Remaining, RemainingAfter, Now);
+        UE_LOG(LogTemp, Display, TEXT("OWPHASELOCKKILL drain remaining=%.3f was=%.3f t=%.3f rate=%.3f"), Remaining, RemainingAfter, Now,
+            OpenWillowSkillEffects::Apply(&Maya, OpenWillowSkillEffects::Attr::CooldownRate, Maya.GetPhaselockData().CooldownRate));
         Finish(Remaining < RemainingAfter, Remaining < RemainingAfter ? TEXT("ended on the kill, cooldown draining") : TEXT("the cooldown did not drain after the kill"));
     }
     else

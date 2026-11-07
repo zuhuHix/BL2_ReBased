@@ -15,14 +15,14 @@ STEPS = (('cast', re.compile(rf'OWPHASELOCKKILL cast t={NUMBER} hit=(\d)')),
          ('held', re.compile(rf'OWPHASELOCKKILL held=(\d) t={NUMBER} remaining={NUMBER}')),
          ('kill', re.compile(rf'OWPHASELOCKKILL kill t={NUMBER} dead=(\d)')),
          ('after', re.compile(rf'OWPHASELOCKKILL after active=(\d) reason=(.*) remaining={NUMBER} since_cast={NUMBER} t={NUMBER}')),
-         ('drain', re.compile(rf'OWPHASELOCKKILL drain remaining={NUMBER} was={NUMBER} t={NUMBER}')),
+         ('drain', re.compile(rf'OWPHASELOCKKILL drain remaining={NUMBER} was={NUMBER} t={NUMBER} rate={NUMBER}')),
          ('result', re.compile(r'OWPHASELOCKKILL result (pass|fail): (.*)')))
 SHOT = 'OWPhaselockKill_after.png'
 # The HUD state goes out with the frame that ended the skill. The real game's emblem left about 0.05 s after its release (one kill).
 EMBLEM_WITHIN = 0.25
 SKILL_END = 5.7     # the full timeline: nothing here may wait for it
-# The cooldown after the release: the pool's base rate, 1 per second (live read, ACTION_SKILL_HUD.md). The bounds catch a late start too.
-DRAIN_RATE, DRAIN_SLACK, START_SLACK = 1.0, 0.2, 0.15
+# The cooldown after the release runs at the walker's effective rate, which the drain line logs. The bounds catch a late start too.
+DRAIN_SLACK, START_SLACK = 0.2, 0.15
 
 
 def read_steps(log):
@@ -67,14 +67,16 @@ def problems(log, shot_names, reason='held target died'):
     remaining_after, since_cast, after_t = float(values['after'][2]), float(values['after'][3]), float(values['after'][4])
     if since_cast >= SKILL_END:
         found.append(f'the after step came {since_cast} s after the cast, past the timeline')
-    drained, was, drain_t = map(float, values['drain'])
+    drained, was, drain_t, rate = map(float, values['drain'])
     if was != remaining_after:
         found.append(f'the drain step read {was}, not the {remaining_after} the after step logged')
-    expected = (drain_t - after_t) * DRAIN_RATE
+    if rate <= 0:
+        found.append(f'the drain line logged rate {rate}')
+    expected = (drain_t - after_t) * rate
     if abs((was - drained) - expected) > expected * DRAIN_SLACK:
         found.append(f'the cooldown drained {was - drained:.3f} over {drain_t - after_t:.3f} s, expected about {expected:.3f}')
     # It starts at the kill: by the after step it has lost only that interval.
-    since_kill = (float(values['held'][2]) - remaining_after) - (after_t - kill_t) * DRAIN_RATE
+    since_kill = (float(values['held'][2]) - remaining_after) - (after_t - kill_t) * rate
     if abs(since_kill) > START_SLACK:
         found.append(f'the cooldown at the after step is {since_kill:+.3f} from a drain starting at the kill')
     # The HUD: the emblem state as the page was given it, on the same clock.
@@ -92,12 +94,12 @@ def problems(log, shot_names, reason='held target died'):
     # What the movie itself shows, as the page reads it back: on its running frame before the kill, off after (log order).
     lines = log.splitlines()
     kill_line = next(i for i, line in enumerate(lines) if 'OWPHASELOCKKILL kill' in line)
-    frames = [(i, int(m[3])) for i, line in enumerate(lines) for m in [PAGE.search(line)] if m]
-    if not any(frame == 3 for i, frame in frames if i < kill_line):
-        found.append('the movie never read back its running emblem frame before the kill')
-    after = [frame for i, frame in frames if i > kill_line]
+    frames = [(i, float(m[1]), int(m[3])) for i, line in enumerate(lines) for m in [PAGE.search(line)] if m]
+    if not any(frame == 3 and active >= 0 for i, active, frame in frames if i < kill_line):
+        found.append('the movie never read back its running emblem frame, with the emblem active, before the kill')
+    after = [frame for i, active, frame in frames if i > kill_line and active < 0]
     if not after or after[-1] != 1:
-        found.append(f'the movie did not read back its off emblem frame after the kill: {after[-3:]}')
+        found.append(f'the movie did not read back its off emblem frame, with the emblem off, after the kill: {after[-3:]}')
     return found
 
 
