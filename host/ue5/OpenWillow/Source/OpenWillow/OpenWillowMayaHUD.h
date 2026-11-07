@@ -14,6 +14,8 @@ class FOpenWillowInventoryVm;
 
 // The StatusMenu pages the host shows (each its own page over the same movie): Skills, Inventory, the Missions log and the Map.
 enum class EOpenWillowStatusPage : uint8 { Skills, Inventory, Missions, Map };
+// Test-only: what a capture driver does next (AOpenWillowMayaHUD::CaptureHudGate).
+enum class EOpenWillowCaptureHud : uint8 { Go, Wait, Failed };
 
 UCLASS()
 class OPENWILLOW_API AOpenWillowMayaHUD : public AHUD
@@ -23,6 +25,13 @@ public:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void DrawHUD() override;
+    // Test-only, for the capture drivers (docs/verification/HUD_PARITY.md, "Captures with the movie").
+    bool IsFlashHudReady() const { return bFlashHudReady; }
+    // True when this run named a movie page (-owflashhud=<url>), so its frames must show the movie.
+    static bool CaptureAskedForMovie();
+    // No movie asked for: Go at once, as before. Asked for: Wait until the page is ready and has settled, Failed (logged as
+    // an error, once) if the page failed, was lost, or is not ready in time. A driver stops taking frames on Failed.
+    static EOpenWillowCaptureHud CaptureHudGate(const UWorld* World, const TCHAR* Driver);
     void ToggleSkills();
     bool ToggleInventory();
     // The Missions log page (tools/hud_overlay/missions.html); false without a page URL.

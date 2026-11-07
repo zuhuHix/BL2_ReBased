@@ -2422,13 +2422,18 @@ int32 AOpenWillowWalker::HandFxParticles() const { return HandFx ? HandFx->LiveP
 int32 AOpenWillowWalker::ScreenFxParticles() const { return ScreenFx ? ScreenFx->LiveParticles() : 0; }
 void AOpenWillowWalker::RunPhaselockShots(float Now)
 {
-    // Captures of the cast at fixed times after it (screen space, no UI), then a miss for the fizzle hand effect.
+    // Captures of the cast at fixed times after it (UI on, so a movie HUD is in the frame), then a miss for the fizzle hand effect.
     static const float HitShots[] = {0.12f, 0.25f, 0.30f, 0.35f, 0.40f, 0.45f, 0.5f, 0.55f, 0.6f, 0.65f, 0.70f, 0.75f, 0.8f, 1.2f, 1.5f, 2.0f, 3.0f, 3.6f, 4.2f, 4.5f, 4.8f, 5.0f, 5.3f, 6.2f};
     static const float MissShots[] = {0.08f, 0.2f, 0.4f, 0.7f};
+    static float CastNotBefore = 8.f;
+    static double CastRealAt = 0.0;
     auto Shot = [this, Now](const TCHAR* Kind, float At)
     {
         const FString Name = FString::Printf(TEXT("OWPhaselock_%s_%04d.png"), Kind, FMath::RoundToInt(At * 1000.f));
-        FScreenshotRequest::RequestScreenshot(Name, false, false);
+        FScreenshotRequest::RequestScreenshot(Name, true, false);
+        // Game time is clamped below and the movie page runs in real time, so a stall shows only in the real offset.
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s offset: requested +%.3f s, actual +%.3f s, real +%.3f s"),
+            *Name, At, Now - PhaselockShotCastAt, FPlatformTime::Seconds() - CastRealAt);
         const AOpenWillowCombatTarget* T = PhaselockTarget.Get();
         // The name carries the scheduled time; a long frame can take the shot later, so the actual time is logged too.
         UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s at +%.3f s: glow %.3f, hand particles %d, screen particles %d, bubble stage %d, collapse %.3f, light %.2f, lift %.1f"),
@@ -2438,6 +2443,9 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
             HandFx ? *HandFx->Describe() : TEXT("-"), ScreenFx ? *ScreenFx->Describe() : TEXT("-"), T ? *T->PresentationReport() : TEXT("-"));
     };
     const int32 HitCount = UE_ARRAY_COUNT(HitShots), MissCount = UE_ARRAY_COUNT(MissShots);
+    // A run that asked for the movie HUD holds the cast until it is ready. If it fails, on to the quit below, with no more frames.
+    const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(GetWorld(), TEXT("phaselock"));
+    if (MovieHud == EOpenWillowCaptureHud::Failed && PhaselockShotStep < 4 + HitCount + MissCount) PhaselockShotStep = 4 + HitCount + MissCount;
     if (PhaselockShotStep == 0)
     {
         // Captures only: game time advances at most 1/60 s per frame, so that a screenshot's write stall (0.1-0.4 s,
@@ -2446,16 +2454,19 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
         if (AWorldSettings* Settings = GetWorld()->GetWorldSettings()) Settings->MaxUndilatedFrameTime = 1.f / 60.f;
         static bool bBlurOff = false;   // Borderlands 2 draws no motion blur (UE5's smeared the lifted target)
         if (!bBlurOff && GEngine) bBlurOff = GEngine->Exec(GetWorld(), TEXT("r.MotionBlurQuality 0"));
-        if (Now < 7.f || !CombatTarget.IsValid()) return;
+        if (Now < 7.f || !CombatTarget.IsValid() || MovieHud == EOpenWillowCaptureHud::Wait) return;
         const FVector Aim = CombatTarget->AimPoint();
         AimAt(CombatTarget->IsStockPawn() ? FVector(Aim.X, Aim.Y, Camera->GetComponentLocation().Z) : Aim - FVector(0, 0, 20));
+        // The same second between aim and cast when the gate held it past the usual game time.
+        if (AOpenWillowMayaHUD::CaptureAskedForMovie()) CastNotBefore = Now + 1.f;
         ++PhaselockShotStep;
     }
     else if (PhaselockShotStep == 1)
     {
-        if (Now < 8.f) return;
+        if (Now < CastNotBefore) return;
         UsePhaselock();
         PhaselockShotCastAt = Now;
+        CastRealAt = FPlatformTime::Seconds();
         // Capture-only pitch offset in degrees (UNVERIFIED fit): the matched 2026-10-21 frame's ground/wash boundary is
         // about 50 px lower than the host at 720 px, roughly 3.5 degrees with the matched FOV. Positive UE pitch moves
         // the ground and target down. Apply after target selection so the capture framing does not alter the cast result.
@@ -2483,6 +2494,7 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
     {
         UsePhaselock();
         PhaselockShotCastAt = Now;
+        CastRealAt = FPlatformTime::Seconds();
         ++PhaselockShotStep;
     }
     else if (PhaselockShotStep < 4 + HitCount + MissCount)
@@ -2688,6 +2700,10 @@ void AOpenWillowWalker::RunGunShots(float Now)
         }
         return;
     }
+    // A run that asked for the movie HUD holds its first frame until it is ready. If it fails, on to the quit below, with no more frames.
+    const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(GetWorld(), TEXT("gunshots"));
+    if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+    if (MovieHud == EOpenWillowCaptureHud::Failed) GunShotStep = Ids.Num() * 8;
     const int32 Gun = GunShotStep / 8, Phase = GunShotStep % 8;
     if (Ids[0] == TEXT("none") || Gun >= Ids.Num())
     {
