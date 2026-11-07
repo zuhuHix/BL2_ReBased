@@ -26,6 +26,8 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); mode = $Mode; character = $Character }
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
 
+$marker = "-owrun=$Lane-$PID"   # with the image path and start time, what Stop-OwnGame checks before stopping a PID
+$procStart = $null
 $hub = $null; $bak = $null; $proc = $null; $runLock = $false
 try {
     while (!$hub) {
@@ -39,23 +41,23 @@ try {
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     Install-Driver
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-    $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character")
+    $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'wpa/boot.png' | Out-Null; throw 'driver did not answer' }
-    $log.block_saves = Py 'print(block_saves())'
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     if ($Mode -eq 'Census') {
         # The definitions are loaded with Startup at the title screen; no need to enter the world.
         Start-Sleep 10
         $log.census = Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/weapon_visual_census.py') wpa 300
         "census: $($log.census)"
     } else {
-        Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+        Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
         $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
         "map: $map"; $log.map = $map
         if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'wpa/load_failed.png' | Out-Null; throw "no player pawn: $map" }
         Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 3
-        Focus-Game | Out-Null; Start-Sleep 2
+        Assert-GameForeground; Start-Sleep 2
         $rect = Get-GameRect
         if ($rect.Width -ne 1280 -or $rect.Height -ne 720) { throw "client area is $($rect.Width)x$($rect.Height), not 1280x720" }
         $list = ($Recipes | ForEach-Object { "r'" + ((Resolve-Path $_).Path -replace '\\', '/') + "'" }) -join ', '
@@ -83,7 +85,7 @@ try {
             if (-not $r.ok) { "$id : $($r.error)"; $log.guns += @{ id = $id; error = $r.error }; continue }
             $slot = [string]$r.slot
             $log.hold = Py "print(wpc_hold('$id'))" 30
-            Focus-Game | Out-Null
+            Assert-GameForeground
             for ($w = 0; $w -lt 30; $w++) {  # put-away + draw take a few seconds: wait until this gun is in hand
                 Start-Sleep -Milliseconds 500
                 if ((Py "print(wpc_holding('$id'))" 15 | ConvertFrom-Json).held) { break }
@@ -117,13 +119,14 @@ try {
     }
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
     for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
-    $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
-    if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force; Start-Sleep 3 }
+    $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
+    if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }
+    if ($stopped -eq 'stopped') { Start-Sleep 3 }
     $proc = $null
 } finally {
     $log.finished = (Get-Date).ToString('o')
     $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out "session_$($Mode.ToLower()).json")
-    if ($proc) { Start-Sleep 2; $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force } }
+    if ($proc) { Start-Sleep 2; "cleanup game: $(Stop-OwnGame $proc $procStart $marker)"; Start-Sleep 3 }
     try { Remove-Driver } catch { "Remove-Driver failed: $_" }
     if ($runLock) { Exit-RunLock }
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }

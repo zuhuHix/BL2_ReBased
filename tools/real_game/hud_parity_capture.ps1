@@ -46,6 +46,8 @@ function Row([string]$Name, $s) {
     }
 }
 
+$marker = "-owrun=$Lane-$PID"   # with the image path and start time, what Stop-OwnGame checks before stopping a PID
+$procStart = $null
 $hub = $null; $bak = $null; $proc = $null; $runLock = $false
 try {
     while (!$hub) {
@@ -57,17 +59,17 @@ try {
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     Install-Driver
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-    $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character")
+    $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'hud_parity/boot.png' | Out-Null; throw 'driver did not answer' }
-    $log.block_saves = Py 'print(block_saves())'
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; $log.map = $map
     if ($map -notmatch 'Sanctuary' -or $map -notmatch 'WillowPlayerPawn') { Save-Shot 'hud_parity/load_failed.png' | Out-Null; throw "not Sanctuary with a player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 3
-    Focus-Game | Out-Null; Start-Sleep 2
+    Assert-GameForeground; Start-Sleep 2
     $rect = Get-GameRect; $log.client = @{ x = $rect.X; y = $rect.Y; width = $rect.Width; height = $rect.Height }
     if ($rect.Width -ne 1280 -or $rect.Height -ne 720) { throw "client area is $($rect.Width)x$($rect.Height), not 1280x720" }
     Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/hud_parity.py') hud_parity | Out-Null
@@ -90,7 +92,7 @@ try {
     else { "starting weapon is not in quick slots 1-4; firing with the weapon in hand" }
 
     # Crosshair while moving (hold W for about 0.6 s), then at rest, then while firing three shots at nothing.
-    Focus-Game | Out-Null
+    Assert-GameForeground
     $movement = @()
     Send-KeyDown 'W'
     for ($i = 0; $i -lt 6; $i++) { $movement += Quick "move$i"; Start-Sleep -Milliseconds 100 }
@@ -118,13 +120,14 @@ try {
 
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
     for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
-    $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
-    if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force; Start-Sleep 3 }
+    $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
+    if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }
+    if ($stopped -eq 'stopped') { Start-Sleep 3 }
     $proc = $null
 } finally {
     $log.finished = (Get-Date).ToString('o')
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-    if ($proc) { Start-Sleep 2; $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force } }
+    if ($proc) { Start-Sleep 2; "cleanup game: $(Stop-OwnGame $proc $procStart $marker)"; Start-Sleep 3 }
     try { Remove-Driver } catch { "Remove-Driver failed: $_" }
     if ($runLock) { Exit-RunLock }
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }

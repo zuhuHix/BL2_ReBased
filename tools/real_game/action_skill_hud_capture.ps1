@@ -95,6 +95,8 @@ function Wait-Cooldown([string]$Jsonl, [string]$Prefix, [double]$Press, [double]
     $res.timeout = $true; $res
 }
 
+$marker = "-owrun=$Lane-$PID"   # with the image path and start time, what Stop-OwnGame checks before stopping a PID
+$procStart = $null
 $hub = $null; $bak = $null; $proc = $null; $target = $null; $runLock = $false   # not $game: that is realgame.ps1's $script:Game
 try {
     while (!$hub) {
@@ -106,14 +108,14 @@ try {
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     Install-Driver
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-    $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies')
+    $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }   # the quick_startup mod puts this slot on the menu's Continue
-    $proc = Start-Game $gameArgs
+    $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'action_skill_hud/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
-    $log.block_saves = Py 'print(block_saves())'
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'action_skill_hud/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
@@ -157,7 +159,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     Start-Sleep 3
     $log.aim = Py "import json; isolate('$target'); print(json.dumps({'pitch': aim('$target'), 'measure': measure('$target'), 'camera': camera()}))" | ConvertFrom-Json
     Py "mark_lock('$target'); print(json.dumps(ash_start('hit', '$prefix')))" | Out-Null
-    Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
+    Assert-GameForeground; Start-Sleep -Milliseconds 500
     $shots = @{ 'hit-ready' = -0.2; 'hit-plus-0.5s' = 0.5; 'hit-plus-1.0s' = 1.0; 'hit-mid-hold' = 2.65; 'hit-just-after-release' = 4.9 }
     # 'ready' is a frame before the press: take it with Save-Shot, the rest come from the capture loop.
     Save-Shot 'action_skill_hud/shots/hit-ready.png' | Out-Null; $shots.Remove('hit-ready')
@@ -170,7 +172,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     if (!$SkipMiss) {
         # Miss: look away from every pawn (yaw + 180, level) so the cast finds no target.
         $log.miss_aim = Py "import json; pc = get_pc(); pc.Rotation = unrealsdk.make_struct('Rotator', Pitch=0, Yaw=(pc.Rotation.Yaw + 32768) & 0xFFFF, Roll=0); print(json.dumps(ash_start('miss', '$prefix')))"
-        Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
+        Assert-GameForeground; Start-Sleep -Milliseconds 500
         Save-Shot 'action_skill_hud/shots/miss-ready.png' | Out-Null
         $log.miss = Invoke-CastCapture 'miss_burst' 1.0 3.0 @{ 'miss-plus-0.5s' = 0.5; 'miss-plus-1.0s' = 1.0 }
         $log.miss_cooldown = Wait-Cooldown (Join-Path $Out 'miss.jsonl') 'miss' $log.miss.press 60
@@ -182,7 +184,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
 } finally {
     $log.finished = (Get-Date).ToString('o')
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-    if ($proc) { Start-Sleep 2; $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force } }
+    if ($proc) { Start-Sleep 2; "cleanup game: $(Stop-OwnGame $proc $procStart $marker)"; Start-Sleep 3 }
     try { Remove-Driver } catch { "Remove-Driver failed: $_" }
     if ($runLock) { Exit-RunLock }
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
