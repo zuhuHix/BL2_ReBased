@@ -45,6 +45,7 @@
 #include "GlobalRenderResources.h"
 
 void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Player);   // OpenWillowShieldCheck.cpp, test-only
+void OpenWillowTickPhaselockKillCheck(AOpenWillowWalker& Maya, APlayerController& Player);   // OpenWillowPhaselockKillCheck.cpp, test-only
 
 // Host HUD laid out after BL2's (slanted shield/health bottom-left, XP bar
 // bottom-centre, angled ammo panel bottom-right). The default gameplay HUD is
@@ -1723,6 +1724,8 @@ void AOpenWillowMayaHUD::DrawHUD()
         if (bSkillHudShots && bFlashHudReady) TickSkillHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
         static const bool bShieldCheck = FParse::Param(FCommandLine::Get(), TEXT("owshieldcheck"));
         if (bShieldCheck && bFlashHudReady) OpenWillowTickShieldCheck(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
+        static const bool bKillCheck = FParse::Param(FCommandLine::Get(), TEXT("owphaselockkillcheck"));
+        if (bKillCheck && bFlashHudReady) OpenWillowTickPhaselockKillCheck(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()), *PlayerOwner);
         static const bool bHudShots = FParse::Param(FCommandLine::Get(), TEXT("owhudshots"));
         if (bHudShots && bFlashHudReady) TickHudShots(*Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()));
 #if WITH_EDITOR

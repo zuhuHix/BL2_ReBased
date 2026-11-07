@@ -812,6 +812,13 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         FString Failed;
         if (IsPhaselockActive() && !Phaselock.GateOpen(PhaselockGateState(), false, Failed))
             EndPhaselockEarly(TEXT("skill constraint ") + Failed);
+        // The held target's death ends the skill at once, so the HUD emblem goes and the cooldown starts draining: the game's
+        // InterruptPhaseLock and ReleaseTarget (live, one Adult killed by one large hit during the hold; a gun kill and a kill during the
+        // lift are UNVERIFIED). ACTION_SKILL_HUD.md.
+        if (IsPhaselockActive() && PhaselockTarget.IsValid() && PhaselockTarget->IsDead())
+        {
+            EndPhaselockEarly(TEXT("the held target died"));
+        }
         UpdatePhaselockPresentation(Now);
     }
     if (bMayaActive && !bBarrelAxisLogged && Now > 6.f && WeaponVisual->GetSkinnedAsset())
