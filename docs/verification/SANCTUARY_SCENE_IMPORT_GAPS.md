@@ -59,8 +59,8 @@ moves by a few tenths between rounds; these scores are not a measured improvemen
 - **Moxxi string lights and bulbs.** Three `LightStrip_02` placements use `light_strip_component_emissive_v1` from
   `LightStrip_Comp`. The calibration is 4.0; round 4a records an effective scale of 8.0, which is consistent with that
   4.0 applied to the recipe's [2, 2, 2] drive (an inference, not checked). The host strips still do not show clearly in
-  cams 05 and 07. `WiringMesh_14` (`MAT_WireXMasWhite`) uses `xmas_bulb_emissive_v1`: a warm colour times
-  4.0, from its `XmasLightBulbs_Dif` atlas (`local/gunlook/measured_colours.md`, ignored). The bulbs are still faint on the host. Bulb palette, strength and bloom
+  cams 05 and 07. `WiringMesh_14` (`MAT_WireXMasWhite`) uses `xmas_bulb_emissive_v1`: a host-chosen warm tint `[1.0, 0.62, 0.28]` times
+  4.0, on its `XmasLightBulbs_Dif` atlas (a hand calibration, not decoded from the game). The bulbs are still faint on the host. Bulb palette, strength and bloom
   are `UNVERIFIED`.
 - **HQ map table (Roland's).** `world_map_mask_colorization_v2` uses the three inspected `WorldMap_Comp` channels
   (R land/contours, G grid, B markers) over a pale-cyan backing with darker teal grid and marker layers. Cams 03 and
