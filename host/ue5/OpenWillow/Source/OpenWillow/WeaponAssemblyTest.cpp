@@ -257,7 +257,7 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     const FString Library = Dir / TEXT("library.json");
     FFileHelper::SaveStringToFile(TEXT("{}"), *Library);
     const FString Md5 = LexToString(FMD5Hash::HashFile(*Library));
-    auto WriteTable = [&File](int32 Schema, const FString& Hash)
+    auto WriteSchema = [&File](const FString& Schema, const FString& Hash)
     {
         const FString Text = FString(TEXT(R"({"schema": @S, "library_md5": "@M",
           "types": {"WT.Gun": {"weapon_type": "WT.Gun", "first_person_fov": 40, "muzzle_socket": "Muzzle", "shell_casing_socket": "Port",
@@ -284,10 +284,11 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
                     "P.Body": {"fragments": ["Body_A"], "scope_overlay": false},
                     "P.ScopeB": {"fragments": ["Scope_B"], "scope_overlay": true},
                     "P.Sight": {"fragments": ["Scope_A"], "scope_overlay": true}}})"))
-            .Replace(TEXT("@S"), *FString::FromInt(Schema)).Replace(TEXT("@M"), *Hash);
+            .Replace(TEXT("@S"), *Schema).Replace(TEXT("@M"), *Hash);
         FFileHelper::SaveStringToFile(Text, *File);
         OpenWillowViewTypes::ResetForTests(File);
     };
+    auto WriteTable = [&WriteSchema](int32 Schema, const FString& Hash) { WriteSchema(FString::FromInt(Schema), Hash); };
     auto Part = [](const TCHAR* Slot, const TCHAR* Path)
     {
         FOpenWillowWeaponPart Out;
@@ -348,8 +349,10 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     TestEqual(TEXT("A sight outside the table may have its own socket: no gap"), Fit({Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.Unknown"))}), FVector(0, 1, 0));
     {
         TSharedPtr<FJsonObject> Lines;
-        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(TEXT(R"({"fresh": {"view_schema": 2}, "old": {"view_schema": 1}, "none": {"first_person_fov": 40}, "note": 1})")), Lines);
-        TestEqual(TEXT("The stale and unmarked lines are dropped"), OpenWillowViewTypes::DropStaleLines(Lines), 2);
+        FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(TEXT(R"({"fresh": {"view_schema": 2}, "old": {"view_schema": 1}, "none": {"first_person_fov": 40}, "note": 1, "part": {"view_schema": 2.9}, "wrap": {"view_schema": 4294967298}})")), Lines);
+        TestEqual(TEXT("The stale, unmarked, fractional and wrapping lines are dropped"), OpenWillowViewTypes::DropStaleLines(Lines), 4);
+        TestFalse(TEXT("A fractional schema goes"), Lines->HasField(TEXT("part")));
+        TestFalse(TEXT("A value that would wrap to the schema goes"), Lines->HasField(TEXT("wrap")));
         TestTrue(TEXT("The current line stays"), Lines->HasField(TEXT("fresh")));
         TestFalse(TEXT("The old line goes"), Lines->HasField(TEXT("old")));
         TestFalse(TEXT("The unmarked line goes"), Lines->HasField(TEXT("none")));
@@ -390,9 +393,14 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
         }
     }
 
-    AddExpectedError(TEXT("refusing"), EAutomationExpectedErrorFlags::Contains, 4);
+    AddExpectedError(TEXT("refusing"), EAutomationExpectedErrorFlags::Contains, 6);
+    AddExpectedError(TEXT("no table at"), EAutomationExpectedErrorFlags::Contains, 0);  // 0: any number; the real table below may be absent too
     WriteTable(1, Md5);
     TestFalse(TEXT("Another schema is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    WriteSchema(TEXT("2.9"), Md5);
+    TestFalse(TEXT("A fractional schema is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
+    WriteSchema(TEXT("4294967298"), Md5);
+    TestFalse(TEXT("A schema that would wrap to the current one is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
     WriteTable(2, TEXT("00000000000000000000000000000000"));
     TestFalse(TEXT("A table from another library is refused"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {}).IsValid());
     WriteTable(2, FString());
