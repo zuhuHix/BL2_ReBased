@@ -1,6 +1,6 @@
 # Slice audio chain: stock event -> Wwise bank -> `.wem` bytes (2026-10-01)
 
-AI-assisted (Claude Sonnet 5.5, directed by the maintainer). Identification and feasibility only: **no audio was
+AI-assisted (Claude Sonnet 5.5, directed by the maintainer). Sections 1 and 2 are identification and feasibility, as of 2026-10-01; the decoder and host playback came later (sections 3 and 5). As first written: **no audio was
 decoded or played, nothing was heard, and no original-game capture was taken.** Extraction (ours), oracle checks and
 the decode benchmark are reported separately. Generated output is game-derived and lives under ignored `local/`.
 Reproduce: `python tools/audio_census.py census`, `python tools/audio_slice_chain.py` (about 5 minutes; most of it is
@@ -134,25 +134,37 @@ UModel/animation import already has to carry.
   error "no decoder found" (FFmpeg has no demuxer-level mapping for the `0xFFFF` Wwise tag even though both builds have the generic `vorbis`
   decoder). `soundfile`: "Malformed 'fmt ' chunk". **Result: nothing already installed can decode these files.** No new tool was downloaded or run.
 
-### Candidates for the maintainer (not installed, not run; licences from upstream pages and memory, confirm before use)
+### Decoder: vgmstream r2168 (maintainer decision 2026-11-07)
 
-| Candidate | Upstream | Licence | Covers | Risks |
-|---|---|---|---|---|
-| vgmstream (`vgmstream-cli`) | https://github.com/vgmstream/vgmstream | open source (`COPYING`; commonly stated as ISC for the core, bundled codec libraries differ) | decodes Wwise `.wem` directly to WAV, Windows CLI release | prebuilt binary bundles third-party libs; needs benchmark + provenance entry |
-| ww2ogg + revorb | https://github.com/hcs64/ww2ogg (BSD-3-Clause) ; revorb (separate author, licence to confirm) | BSD-3-Clause / to confirm | rewraps Wwise Vorbis to standard Ogg (needs `packed_codebooks*.bin`; the 66-byte `fmt` variant must be tried) | two tools, a codebook data file; some `.wem` revisions fail |
-| FFmpeg (already installed) | - | - | **ruled out above** | - |
-| Own converter | - | ours | Wwise Vorbis header repack + `libsndfile` for the Ogg | substantial code and clean-room care; not worth it for the slice |
+Provenance and licences are in `THIRD_PARTY.md`. ww2ogg with revorb and an own converter were the other options; FFmpeg was ruled out above.
 
-Recommendation (mine, UNVERIFIED): benchmark vgmstream-cli on exactly the 16 files above plus a handful of others; it is the shortest path and the
-duration oracle gives a ready success check (decoded length vs header duration).
+Decode: `python tools/decode_slice_audio.py --vgmstream <path to vgmstream-cli.exe>` (or `OPENWILLOW_VGMSTREAM`), which runs `vgmstream-cli -i -o <source>.wav <source>.wem` per distinct source. `-i` ignores loop points: without it a
+looped file would come out longer than its header says. It keeps a file only when the decoder exited 0, the WAV passes the host's parser rules, and the length matches the `.wem` header. Output goes to ignored `local/audio/decoded/`, and the script refuses a folder elsewhere in the repository.
+
+**Benchmark (2026-11-07, zuhu PC, a few minutes of a 30-minute timebox):**
+
+| Set | Command | Elapsed | OK / failed | In | Out |
+|---|---|---|---|---|---|
+| Slice manifest, 153 distinct sources (in bank and streamed, sfx and English VO) | as above | 8.1 s | 153 / 0 | 4.1 MB | 26.8 MB |
+| 30 streamed sources beyond the slice, seeded sample, 15 from each base-game `Audio_Streaming.pck`; 424 s of audio; 24 to 48 kHz, mono and stereo | as above | 2.3 s | 30 / 0 | 7.0 MB | 67.0 MB |
+
+No unsupported types or duplicates in these sets (the tool decodes each source once); the whole install was not tried. On the 153:
+
+- every WAV's frame count equals the `.wem` header's sample count exactly, and channels and rate match. This is the first decode to confirm that header reading, previously only a duration oracle;
+- none is silent: lowest peak 12,533 of 32,767, median 32,632. This shows signal, not the right sound;
+- each holds only `fmt ` and `data`, so the WAV rules on padded chunks do not come into play for this output;
+- a second decode of 10 was byte-identical;
+- the CLI exits `0xC0000135` (DLL not found) with only `libvorbis.dll` beside it, or with none: the bundled DLLs stay with it. The sound path itself uses Vorbis; which other DLLs it really calls was not measured.
+
+**Nobody has listened to any of this.** Length and signal do not show that a sound is right. Many files peak at full scale, and the host has no game mix (no bus, attenuation or ducking), so expect them to be loud. Keep the volume low at the first listen.
 
 ## 4. Host plan
 
 Manifest `local/slice/audio.json` (schema `ow-audio-v1`, written by `tools/audio_slice_chain.py`; 49 entries on 2026-11-07): per entry `key`, `kind`,
 `trigger`, `ak_event {ue3_path, wwise_name, short_id}`, `banks`, `media[] {source, wem, bytes, codec, channels, sample_rate, duration_s, decoded}`,
 `duration_range_from_akevent`, `checks {fnv1_matches_short_id, wem_header_duration_within_akevent_range}`, `state`. In `checks`, `null` means not compared and `false` means a comparison failed. States: `unresolved |
-extracted_undecoded | decoded_not_listened`; **all are `extracted_undecoded` that day** and nothing is marked verified. Once a decoder is approved, drop
-`<source>.wav` into `local/audio/decoded/` (or pass `--decoded-dir`) and re-run to fill `decoded`.
+extracted_undecoded | decoded_not_listened`; **all are `extracted_undecoded` that day** and nothing is marked verified. After `tools/decode_slice_audio.py` (section 3), re-run with
+`local/audio/decoded/` in place (or `--decoded-dir`) to fill `decoded`; `tools/prepare_slice_audio.py` reads that folder either way.
 
 Keys the host can use directly: `dialog:<event tag from --mission-run effect.a>`, `door:open` / `door:close`, `weapon:fire`, `weapon:equip`,
 `weapon:reload_anim_<sequence>_at_<time>s`, `marcus_group:<event tag>`. Multiple `media` entries mean a random/switch container: pick any (rule UNVERIFIED).
@@ -167,10 +179,9 @@ Out of scope here: decoding, UE5 `USoundWave` import, Wwise RTPC/state/switch/bu
 
 ## 5. Host playback (2026-11-06, AI-assisted, Claude)
 
-**State: the host path exists and has only been written and compiled against a synthetic tone. No game sound has been decoded, played or heard.** Which decoder
-to use is a maintainer decision and is still open, so game sounds stay silent until then.
+**State: the host path has run with a synthetic tone, and game sounds now decode (section 3). No game sound has been heard, by anyone.**
 
-Path: a decoder (not chosen yet, outside the repository) writes 16-bit PCM `<source>.wav` into ignored `local/audio/decoded/`. `tools/prepare_slice_audio.py` checks
+Path: the decoder (vgmstream, outside the repository; section 3) writes 16-bit PCM `<source>.wav` into ignored `local/audio/decoded/`. `tools/prepare_slice_audio.py` checks
 each file's format and its length against the manifest's header duration, then writes ignored `local/slice/audio_play.json` (`ow-audio-play-v1`, role -> files, plus
 `unresolved` with a reason per role). The host reads it with `-owaudioplay=` and plays through UE's own `USoundWaveProcedural` (`OpenWillowAudio.h/.cpp`; no new
 module or dependency). Without the option nothing changes.
@@ -184,7 +195,7 @@ module or dependency). Without the option nothing changes.
 
 The two live roles were seen in one real-game session (2026-11-07): one map (Ice_P), one target, one Phaselock cast and the save's shotgun (`SG_Jakobs_2_Uncommon`), not the lent pistol, with logging-only hooks on the game's sound functions. A call made from native code to native code passes no hook, and these hooks saw no event for the shot itself, so an absence means "not seen there". That install is modded: other SDK mods were
 enabled, among them RTSE and Dialog Skipper with `Autoskip Dialog` on, which blocks dialog events from friendly NPCs, so heard lines and timing around lines from a live session are not stock. Neither role comes from a dialog event. They are not read
-from a package reference: the Wwise name is the object name without `Ak_` (holds for all 47 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`, and with no AkEvent range to compare with, so is the duration check. Nothing here has been heard, and no game sound can play until a decoder is approved.
+from a package reference: the Wwise name is the object name without `Ak_` (holds for all 47 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`, and with no AkEvent range to compare with, so is the duration check. Nothing here has been heard.
 
 A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state, attenuation or ducking: every sound is 2D at full
 volume. Dialog is not hooked; the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.

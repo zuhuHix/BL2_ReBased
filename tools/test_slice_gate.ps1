@@ -8,7 +8,8 @@ param(
     [int]$MaxParallelActions = 12,
     [switch]$SkipBuild,
     [switch]$Shield,                    # -owslicegateshield: Maya fights with a shield (a fixture; see SLICE_GATE.md)
-    [switch]$DownAfterFight             # -owslicegatedownafterfight: lethal damage after the fight, to run the revive fixture
+    [switch]$DownAfterFight,            # -owslicegatedownafterfight: lethal damage after the fight, to run the revive fixture
+    [string]$AudioPlay                  # -owaudioplay=<audio_play.json>: the host's sounds on during the run (tools/prepare_slice_audio.py); off when absent
 )
 # The Phase 4 slice gate as one unattended run (ROADMAP.md): Maya in Sanctuary_P with the Fire mission (-owquest, the
 # same manifests as tools/test_quest.ps1) and -owslicegate, the host sequence in OpenWillowSliceGate.cpp. It spawns Maya,
@@ -69,6 +70,7 @@ try {
     if ($Gun) { $arguments += "-owslicegategun=$Gun" }
     if ($Shield) { $arguments += '-owslicegateshield' }
     if ($DownAfterFight) { $arguments += '-owslicegatedownafterfight' }
+    if ($AudioPlay) { $arguments += "-owaudioplay=`"$AudioPlay`"" }
     $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru

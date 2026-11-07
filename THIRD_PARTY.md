@@ -207,6 +207,18 @@ decision before implementation.
   repository; raw results stay under ignored `local/` or REA's own store outside the repository; notes are written in
   our own words. No REA code is copied into the repository.
 
+### vgmstream (decoder for the game's Wwise audio; maintainer decision 2026-11-07)
+
+- **vgmstream** r2168 (published 2026-10-25, tag commit `d9875b1fff307e4759dfb85e49e3d5e6fb196f7c`), https://github.com/vgmstream/vgmstream. Release asset
+  `vgmstream-win64.zip`, 4,574,355 bytes, SHA-256 `692d45070852a35c1fa42726aa3c9de528e44eec925d37d99b1074256b99a229`, matching the digest GitHub publishes for
+  that asset. `vgmstream-cli.exe` SHA-256 `10fb0691538d3133f0115a071f89775fc99f32210b7e5991cfc3c2869247e4b2` (not digitally signed; Smart App Control did not block it on the
+  development machine). Unpacked outside the repository at `C:\Users\yorad\Tools\vgmstream\r2168\bin`.
+- **Licence:** ISC-style permission notice, per the bundled `COPYING`. The CLI needs the DLLs bundled with it (it does not start with only `libvorbis.dll`), and they keep their own
+  licences, per `ext_libs/licenses` at that tag: libvorbis and libogg (BSD-style), speex and celt (BSD-style), mpg123 (LGPL-2.1), and FFmpeg-derived libraries (LGPL files for FFmpeg 9.0.2).
+- **Use:** external execution only. `tools/decode_slice_audio.py` runs it on the player's own game files, with an explicit path or `OPENWILLOW_VGMSTREAM`, to write PCM WAV under ignored
+  `local/` for the UE5 host. Not a dependency of the build: nothing links it, no binary or code from it is in the repository, the script never downloads it, and no decoded output is tracked.
+  Each player obtains it themselves. Benchmark: `docs/verification/SLICE_AUDIO_CHAIN.md` section 3.
+
 ### gameswf - benchmark candidate (pending)
 
 - tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
