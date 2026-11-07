@@ -8,7 +8,8 @@ every command, since a reference kept from an earlier command can crash the game
   ads_read()                 the live zoom state, the field that told lane E's frames apart
   ads_character()            the level, and whether Phaselock's skill is loaded (only Maya has it)
   ads_fov_arm() / ads_fov_read()  hook the HUD's PostRender once, project known view directions through its canvas, and fit the view's FOV
-  ads_turn(degrees)          the view that many degrees from the one chosen by wp_face_wall, at level pitch, for the turn test
+  ads_turn(degrees)          the view that many degrees from the one chosen by wp_face_wall, at level pitch, for the turn test (ClientSetRotation: _set_view's SetRotation moved nothing here)
+  ads_view() / ads_turned_by(from, degrees)  the rendered camera's yaw, and whether it now stands that many degrees from an earlier yaw
   ads_foreground()           the controller's foreground FOV getter, if script can call it (None otherwise; a getter never tried before)
 """
 import json
@@ -68,7 +69,7 @@ def ads_read():
 
 
 ADS_FOV_DIRECTIONS = [(a, 0.0) for a in (-30, -20, -10, 0, 10, 20, 30)] + [(0.0, b) for b in (-15, -5, 5, 15)]
-ads_fov_state = globals().setdefault("ads_fov_state", {"result": None, "hooks": []})
+ads_fov_state = globals().setdefault("ads_fov_state", {"result": None, "hooks": [], "fired": 0})
 
 
 def ads_fit_fov(rows, clip_x):
@@ -85,6 +86,7 @@ def ads_fit_fov(rows, clip_x):
 
 def _ads_fov_post_render(obj, _args, _ret, _func):
     """Runs inside rendering: never lets an error out, and measures one frame only."""
+    ads_fov_state["fired"] += 1
     if ads_fov_state["result"] is not None:
         return
     try:
@@ -114,6 +116,7 @@ def _ads_axes(pitch_units, yaw_units):
 def ads_fov_arm():
     from unrealsdk.hooks import Type, add_hook
     ads_fov_state["result"] = None
+    ads_fov_state["fired"] = 0
     for path in ("WillowGame.WillowHUD:PostRender", "Engine.HUD:PostRender"):
         try:
             add_hook(path, Type.POST, "ow_gun_ads_fov", _ads_fov_post_render)
@@ -131,12 +134,24 @@ def ads_fov_read():
         except Exception:
             pass
     ads_fov_state["hooks"] = []
-    return ads_fov_state["result"]
+    return dict(ads_fov_state["result"] or {}, fired=ads_fov_state["fired"])
 
 
 def ads_turn(degrees):
-    _set_view(wp_state["view"]["yaw"] + float(degrees), 0.0)
-    return {"yaw": wp_state["view"]["yaw"] + float(degrees)}
+    yaw = wp_state["view"]["yaw"] + float(degrees)
+    get_pc().ClientSetRotation(unrealsdk.make_struct("Rotator", Pitch=0, Yaw=int(yaw * 65536 / 360) % 65536, Roll=0))
+    return {"yaw": yaw}
+
+
+def ads_view():
+    return {"camera_yaw_units": get_pc().PlayerCamera.CameraCache.POV.Rotation.Yaw}
+
+
+def ads_turned_by(from_units, degrees):
+    """Has the rendered camera turned this many degrees from an earlier yaw, within half a degree? Yaw is in 65536ths of a turn, and may wrap."""
+    now = get_pc().PlayerCamera.CameraCache.POV.Rotation.Yaw
+    gap = ((now - int(from_units) + 32768) % 65536 - 32768) * 360.0 / 65536
+    return {"from_units": int(from_units), "now_units": now, "degrees": gap, "moved": abs(abs(gap) - abs(float(degrees))) <= 0.5}
 
 
 def ads_foreground():

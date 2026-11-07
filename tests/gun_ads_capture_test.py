@@ -103,9 +103,38 @@ class ProbeTests(unittest.TestCase):
         first = ns['ads_fov_state']['result']
         callback(types.SimpleNamespace(Canvas=object()), None, None, None)
         self.assertIs(ns['ads_fov_state']['result'], first, 'one frame only')
-        self.assertIs(ns['ads_fov_read'](), first)
+        self.assertEqual(ns['ads_fov_read'](), dict(first, fired=3))
         self.assertEqual(len(removed), 2)
         self.assertEqual(ns['ads_fov_state']['hooks'], [])
+
+    def test_a_hook_that_never_fires_says_so(self):
+        ns = probe_namespace(self.repo)
+        hooks = types.ModuleType('unrealsdk.hooks')
+        hooks.Type = types.SimpleNamespace(POST=1)
+        hooks.add_hook = hooks.remove_hook = lambda *a: None
+        sys.modules['unrealsdk.hooks'] = hooks
+        self.addCleanup(sys.modules.pop, 'unrealsdk.hooks', None)
+        ns['ads_fov_arm']()
+        self.assertEqual(ns['ads_fov_read'](), {'fired': 0})
+
+    def test_the_turn_is_read_back_from_the_camera(self):
+        ns = probe_namespace(self.repo)
+        pov = types.SimpleNamespace(Rotation=types.SimpleNamespace(Yaw=16384))
+        ns['pc'].PlayerCamera = types.SimpleNamespace(CameraCache=types.SimpleNamespace(POV=pov))
+        turns = []
+        ns['pc'].ClientSetRotation = lambda rotator: turns.append(rotator)
+        ns['wp_state']['view'] = {'yaw': 359.0}
+        ns['ads_turn'](4)
+        self.assertEqual(turns[-1], {'Pitch': 0, 'Yaw': int(363.0 * 65536 / 360) % 65536, 'Roll': 0}, 'wraps into 16 bits')
+        self.assertEqual(ns['ads_view'](), {'camera_yaw_units': 16384})
+        four = int(4 * 65536 / 360)
+        self.assertFalse(ns['ads_turned_by'](16384, 4)['moved'], 'the camera did not move')
+        pov.Rotation.Yaw = 16384 + four
+        self.assertTrue(ns['ads_turned_by'](16384, 4)['moved'])
+        pov.Rotation.Yaw = (65000 + four) % 65536
+        self.assertTrue(ns['ads_turned_by'](65000, 4)['moved'], 'across the wrap')
+        pov.Rotation.Yaw = 16384 + 3 * four
+        self.assertFalse(ns['ads_turned_by'](16384, 4)['moved'], 'too far is not the measured turn')
 
     def test_a_getter_script_cannot_call_reads_as_none(self):
         ns = probe_namespace(self.repo)
@@ -192,6 +221,8 @@ class CaptureTests(unittest.TestCase):
     def test_the_fov_stage_is_asked_for_only_with_its_switch_and_cleans_up_after_itself(self):
         text = text_of(CAPTURE)
         self.assertIn('$(if ($MeasureFov) { @($guns.Keys | ForEach-Object { "${_}_fov" }) } else { @() })', text)
+        self.assertIn('$turned = ($g.fov_hip.turned.moved -eq $true) -and ($g.fov_zoom.measured.turned.moved -eq $true)', text)
+        self.assertIn('Set-Stage "${id}_fov" ($states -and $turned)', text)
         measure = text[text.index('function Measure-ViewFov'):text.index('$Recipes') if text.index('$Recipes') > text.index('function Measure-ViewFov') else text.index('$extraRoots = ')]
         self.assertRegex(measure, r"try \{ Start-Sleep -Milliseconds 500 \} finally \{ \$result\.canvas = PyJson 'ads_fov_read\(\)' \}")
         self.assertRegex(measure, r"finally \{ PyJson 'ads_turn\(0\)' \| Out-Null \}")
