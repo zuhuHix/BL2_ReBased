@@ -49,7 +49,7 @@ function Get-ModPendingFile { Join-Path $env:LOCALAPPDATA 'OpenWillow\mission_sc
 function Save-ModPending([string]$File, [byte[]]$Prior, [string]$Backup, [string]$Lane, [string]$HubLock, [string]$Realgame) {
     $pending = Get-ModPendingFile
     New-Item -ItemType Directory -Force (Split-Path -Parent $pending) | Out-Null
-    [ordered]@{ file = $File; prior_base64 = [Convert]::ToBase64String($Prior); backup = $Backup; lane = $Lane; hub_lock = $HubLock; run_lock = $script:Lock; driver = $script:DriverDir; game = $env:OPENWILLOW_BL2; realgame = $Realgame; written = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding UTF8
+    [ordered]@{ file = $File; prior_base64 = [Convert]::ToBase64String($Prior); backup = $Backup; lane = $Lane; hub_lock = $HubLock; hub_lock_content = [IO.File]::ReadAllText($HubLock); run_lock = $script:Lock; driver = $script:DriverDir; game = $env:OPENWILLOW_BL2; realgame = $Realgame; written = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding UTF8
     if ((Get-Content -Raw -LiteralPath $pending | ConvertFrom-Json).prior_base64 -cne [Convert]::ToBase64String($Prior)) { throw "the pending record $pending did not read back" }
 }
 function Format-PsQuoted([string]$Text) { "'" + $Text.Replace("'", "''") + "'" }
@@ -63,17 +63,18 @@ function Assert-NoModPending {
     if (!$record -or !$record.file) { throw "A mission screen run left the record $pending and it cannot be read, so no recovery can be printed. This run changed nothing. Its contents:$nl$text" }
     $hub = Format-PsQuoted $record.hub_lock; $lock = Format-PsQuoted $record.run_lock; $driver = Format-PsQuoted $record.driver; $q = Format-PsQuoted $pending
     throw (@(
+        "STOP FIRST: no capture, editor or suite may be running while you follow this. Restore-VerifiedBackup checks neither for a live game nor for newer files: it takes the saves, config and SDK settings back to the backup named below (record written $($record.written)), so if anything was played or changed on purpose since, compare first.",
         "A mission screen run changed $($record.file) and did not finish putting it back: it was killed, or it held for recovery. This run changed nothing. If that run is still going, wait for it and do nothing here. Record: $pending",
-        "Recovery, in this order. 1. Make sure Borderlands 2 is closed. The record is from $($record.written): the restore below takes the saves, config and SDK settings back to the backup, so if anything was played or changed on purpose since, compare first.",
-        "2. In a new PowerShell window, one line at a time. Stop at any problem: every restore row must read 'added, removed', 'missing, restored' or 'changed, restored'.",
+        "Recovery, in this order, in a new PowerShell window, one line at a time. The second line is the check: if it throws, stop. Stop too unless every restore row reads 'added, removed', 'missing, restored' or 'changed, restored'.",
         "    `$env:OPENWILLOW_BL2 = $(Format-PsQuoted $record.game); . $(Format-PsQuoted $record.realgame)",
+        "    if (Get-OwUeBusyProcess @('Borderlands2')) { throw 'An editor or the game is running: stop here.' }; if ((Test-Path -LiteralPath $lock) -and !(Test-OwUeLockStale $lock)) { throw 'The run lock has a live owner, or one that cannot be judged: stop here.' }",
         "    if (Test-Path -LiteralPath $driver) { Remove-Item -Recurse -Force -LiteralPath $driver }   # first check it is this driver's copy, not someone's",
         "    Restore-VerifiedBackup $(Format-PsQuoted $record.backup)",
         "    [IO.File]::WriteAllBytes($(Format-PsQuoted $record.file), [Convert]::FromBase64String($(Format-PsQuoted $record.prior_base64)))   # the setting's prior bytes",
-        "    if ((Get-Content -Raw -LiteralPath $hub -ErrorAction SilentlyContinue) -like $(Format-PsQuoted "$($record.lane) *")) { Remove-Item -Force -LiteralPath $hub }   # the hub lock, only if it names that run's lane",
+        "    if ((Test-Path -LiteralPath $hub) -and [IO.File]::ReadAllText($hub) -ceq $(Format-PsQuoted $record.hub_lock_content)) { Remove-Item -Force -LiteralPath $hub }   # the hub lock, only if it is still exactly that run's",
         "    if (Test-OwUeLockStale $lock) { Remove-Item -Force -LiteralPath $lock }   # the run lock, only if its owner is gone",
         "    Remove-Item -LiteralPath $q   # last: this record",
-        "3. Run again. A lock still there after this is not that run's: its owner or the maintainer removes it."
+        "Then run again. A lock still there after this is not that run's: its owner or the maintainer removes it."
     ) -join $nl)
 }
 # Mod setting end.
@@ -226,14 +227,14 @@ try {
     [IO.File]::WriteAllBytes($modFile, $modOff)
     if (!(Test-SameBytes ([IO.File]::ReadAllBytes($modFile)) $modOff)) { throw 'the mod setting did not take the change' }
     $launchAttempted = $true
-    # If the launch throws, what counts is whether a game exists: one found by the marker is stopped by the finalizer like any other; with none, nothing launched and the roots stay as they are.
-    # A search that fails leaves the flag set; a game it missed is still seen as foreign by the finalizer, which then holds.
+    # If the launch throws, the flag stays set: a game that started and exited unseen is the risk, and restoring a backup verified moments before costs nothing.
+    # A live one found by the marker goes to the finalizer to stop. One the search misses is still seen as foreign there, which then holds.
     try { $proc = Start-Game $gameArgs }
     catch {
         $startError = $_
         try {
             $found = Find-GameByMarker $marker
-            if ($found) { $proc = $found; $procStart = $proc.StartTime } else { $launchAttempted = $false }
+            if ($found) { $proc = $found; $procStart = $proc.StartTime }
         } catch { $log.launch_search_error = "$_" }
         throw $startError
     }
