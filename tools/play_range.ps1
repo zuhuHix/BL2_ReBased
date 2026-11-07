@@ -55,7 +55,7 @@ try {
         foreach ($key in $slice.Keys) { $arguments += "-$key=`"$(Join-Path $repo $slice[$key])`"" }
     }
     # Level 8, as the playtest that saw the flung corpses: the guns roll at that stage, and Maya can use them.
-    if ($KillRow) { $arguments += '-owrangekillrow', '-owlevel=8'; $Mode = 'passive'; $arguments = $arguments -replace '^-owrangemode=.*$', '-owrangemode=passive'; if ($CheckSeconds -le 0) { $CheckSeconds = 180 } }
+    if ($KillRow) { $arguments += '-owrangekillrow', '-owlevel=8'; $Mode = 'passive'; $arguments = $arguments -replace '^-owrangemode=.*$', '-owrangemode=passive'; if ($CheckSeconds -le 0) { $CheckSeconds = if ($MovieHud) { 305 } else { 180 } } }
     if ($CheckSeconds -gt 0) { $arguments += '-unattended' }
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
     Write-Host "Range started: pid $($process.Id); log: $log"

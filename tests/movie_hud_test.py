@@ -100,6 +100,12 @@ class Helper(unittest.TestCase):
         self.assertIn('REFUSED', output)
         self.assertIn('a frame before', output)
 
+    def test_a_movie_lost_after_ready_is_refused(self):
+        output = self.verdict('OpenWillow HUD path: movie (page reported ready)\nOWCAPTUREHUD ready driver=vendor after 12.0 s\n'
+                              'LogTemp: Error: OWCAPTUREHUD FAIL driver=vendor movie lost: no frame a.png; quitting\n', "-Driver 'vendor'")
+        self.assertIn('REFUSED', output)
+        self.assertIn('movie lost', output)
+
     def test_a_named_driver_must_have_reached_the_gate(self):
         movie = 'OpenWillow HUD path: movie (page reported ready)\n'
         ready = 'OWCAPTUREHUD ready driver=range after 12.0 s\n'
@@ -152,6 +158,9 @@ class ToolText(unittest.TestCase):
             self.assertIn(f"Test-OwMovieHudLog -Log $log -Driver ", text, name)
             self.assertIn("'-owmaya', $hudSwitch,", text, name)
 
+    def test_the_kill_rows_time_limit_grows_only_with_the_switch(self):
+        self.assertIn('$CheckSeconds = if ($MovieHud) { 305 } else { 180 }', self.text('play_range'))
+
     def test_the_weapon_tool_keeps_its_level_and_passes_no_hud_switch_by_default(self):
         text = self.text('run_weapon_assembly_shots')
         self.assertIn('[int]$Level = 40', text)
@@ -188,6 +197,15 @@ class HostText(unittest.TestCase):
         self.assertNotIn('RequestScreenshot(Name, ', self.source('OpenWillowWalker.cpp').split('void AOpenWillowWalker::RunPhaselockShots')[1].split('float AOpenWillowWalker::PhaselockRemaining')[0])
         self.assertNotIn('RequestScreenshot', self.source('OpenWillowRange.cpp'))
         self.assertNotIn('RequestScreenshot(File', self.source('OpenWillowInteractive.cpp'))
+
+    def test_a_shot_takes_no_frame_once_the_movie_is_lost(self):
+        body = self.source('OpenWillowMayaHUD.cpp').split('void AOpenWillowMayaHUD::CaptureShot', 1)[1].split('\n}\n', 1)[0]
+        check, shot = body.index('!Hud->IsFlashHudReady()'), body.index('RequestScreenshot')
+        lost = body.index('OWCAPTUREHUD FAIL driver=%s movie lost')
+        self.assertLess(check, lost)
+        self.assertLess(lost, shot)
+        self.assertLess(body.index('return;'), shot)
+        self.assertLess(body.index('CaptureAskedForMovie()'), check, 'without -owflashhud nothing changes')
 
     def test_the_gate_only_applies_when_a_movie_was_asked_for(self):
         body = self.source('OpenWillowMayaHUD.cpp').split('AOpenWillowMayaHUD::CaptureHudGate', 1)[1]
