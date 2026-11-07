@@ -51,8 +51,9 @@ bool OpenWillowMelee::FSwing::ConsumeHit(float Now)
 
 void AOpenWillowWalker::MeleePressed()
 {
-    // The input set for going down includes the melee action, so the down state does not refuse it by itself; the host uses the same
-    // weapon-ready rule as the trigger (UNVERIFIED while down). A menu holds the keyboard, so only the presentation check is needed.
+    // A swing works while down: the input set allows it, and it ran about 6 s after going down (read live, twice). The host uses the same
+    // weapon-ready rule as the trigger; how soon after going down the game allows it is UNVERIFIED. A menu holds the keyboard, so only the
+    // presentation check is needed.
     if (!bMayaActive || bInventoryPresentation || !DownWeaponReady() || !GetWorld()) return;
     const float Now = GetWorld()->GetTimeSeconds();
     if (Now < ThrowLockUntil)

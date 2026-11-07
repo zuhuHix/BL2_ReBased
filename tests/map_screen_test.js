@@ -88,6 +88,14 @@ function fakePage(owReply) {
   const press = key => keys.forEach(f => f({key, preventDefault(){}}));
   return {page, small, loading, advance, press, intervals};
 }
+check('Keys on the Map page: M does nothing, L goes to the Missions, Escape and Tab close', () => {
+  const p = fakePage(() => undefined);
+  const after = key => { p.page.location.href = ''; p.press(key); return p.page.location.href; };
+  assert.strictEqual(after('m'), '');
+  assert.strictEqual(after('l'), '/__ow_tab_missions');
+  assert.strictEqual(after('Escape'), '/__ow_close_map');
+  assert.strictEqual(after('Tab'), '/__ow_close_map');
+});
 check('A status menu that never loads stops the polling at 15 s and says so; Escape still closes', () => {
   const p = fakePage(() => undefined);
   p.advance(14000);

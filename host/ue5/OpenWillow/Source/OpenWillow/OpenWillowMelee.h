@@ -11,8 +11,8 @@ namespace OpenWillowMelee
     constexpr float HitStartOffset = -30.f;      // along the attacker's forward axis
     constexpr float Knockback = 0.1f;
     constexpr float KnockbackScale = 100000.f;   // live for the bullymong's radius melee (AI_MELEE_TARGETING_LIVE.md); UNVERIFIED here
-    // WeaponAnim_Melee: the hit lands this long after the press. The Siren's move says 0.30 and the shared one 0.20; a live read saw about
-    // 0.29 s over 5 swings, with the Siren's definition (CONTROLS.md).
+    // WeaponAnim_Melee: the hit lands this long after the press. The Siren's move says 0.30 and the shared one 0.20; two live reads saw 0.29 to
+    // 0.30 s, with the Siren's definition (CONTROLS.md).
     constexpr float HitDelay = 0.30f;
     // The first-person move's blends (GD_PlayerShared.Anims1st.WeaponAnim_Melee).
     constexpr float BlendIn = 0.1f;

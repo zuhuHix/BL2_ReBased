@@ -36,6 +36,7 @@ public:
     bool IsSkillsOpen() const { return SkillsBrowser.IsValid(); }
     // Capture-only: dispatches a keydown on the open status-menu page.
     void SendPageKey(const FString& Key);
+    int32 TabRoutesRefusedWhileDown = 0;   // for the suite: a page asked for the Map or Missions with Maya down
 
     // Test hooks for -owinventoryactions (UOpenWillowInventoryActionTest).
     // What the host did with the page's OWITEM requests, in order.

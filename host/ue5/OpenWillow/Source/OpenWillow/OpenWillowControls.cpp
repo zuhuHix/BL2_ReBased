@@ -441,6 +441,17 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         break;
     case 37:
         Check(TEXT("l_refused_while_down"), !Hud.IsSkillsOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 2, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
+        Hud.ToggleMissions();   // a page already up when she went down, by the HUD's own call
+        NextAt = Now + 3.f;     // the page's script answers keys once loaded
+        break;
+    case 38:
+        PagesRefusedBefore = Hud.TabRoutesRefusedWhileDown;
+        Hud.SendPageKey(TEXT("m"));   // the page's own handler, as a real key on an open page
+        break;
+    case 39:
+        Check(TEXT("route_refused_while_down"), Hud.IsMissionsOpen() && !Hud.IsMapOpen() && Hud.TabRoutesRefusedWhileDown == PagesRefusedBefore + 1,
+            FString::Printf(TEXT("%s refused=%d"), *State(), Hud.TabRoutesRefusedWhileDown - PagesRefusedBefore));
+        Hud.CloseSkills();
         break;
     default:
         Check(TEXT("closed_at_end"), !Hud.IsSkillsOpen(), State());

@@ -111,7 +111,7 @@
   root.addEventListener('keydown', event => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const key = event.key.toLowerCase();
-    // M does not close the stock map (read live, one press); its hint offers Escape.
+    // M does not close the stock map (read live, twice); its hint offers Escape.
     if (key === 'escape' || key === 'tab') { event.preventDefault(); close(); return; }
     if (key === 'm') { event.preventDefault(); return; }
     const route = tabRoute(event.key);
