@@ -470,7 +470,7 @@ function Invoke-LiftCast { $log.kill = [pscustomobject]@{ frames = 10; shots = @
 __STAGES__
 "RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; levels = @($log.shield_levels | ForEach-Object { $_.level }); tried = @($log.shield_levels | ForEach-Object { $_.tried.requested_level }) } | ConvertTo-Json -Compress)
 """
-GOOD = {'__SHIELD_ONLY__': '$false', '__START__': """'{"equipped":{"name":"Own","level":8},"max_strength":181}'""", '__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
+GOOD = {'__SHIELD_ONLY__': '$false', '__START__': """'{"equipped":{"name":"Own","level":8},"max_strength":181,"player_level":50}'""", '__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
         '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__KILLED__': 'true'}
 
 
@@ -511,6 +511,12 @@ def test_the_two_stages_stand_alone_and_set_their_result_last():
     other = """$(if ($script:level -eq 15) { '{"counts":false}' } else { '{"counts":true}' })"""
     r = run_stages(__READ__=other)
     assert 'shield_levels' not in r['done'] and '4 of 5' in r['problems'][0]
+    # Only levels at or below the player's are asked for. Her own is tried but not required, and the stage can pass.
+    r = run_stages(__START__="""'{"equipped":{"name":"Own","level":3},"max_strength":181,"player_level":8}'""")
+    assert r['levels'] == [1, 5, 8] and 'shield_levels' in r['done'] and r['problems'] == []
+    # No level left to measure does not pass quietly.
+    r = run_stages(__START__="""'{"equipped":{"name":"Own","level":1},"max_strength":181,"player_level":1}'""")
+    assert 'shield_levels' not in r['done'] and 'no level to measure' in r['problems'][0]
     # No equipped shield found: nothing is tried or restored, and the status says nothing changed.
     r = run_stages(__START__="""'{"equipped":null,"max_strength":181}'""")
     assert 'shield_levels' not in r['done'] and r['levels'] == [] and r['restores'] == 0 and 'nothing was changed' in r['problems'][0] and 'NOT RESTORED' not in r['problems'][0]
