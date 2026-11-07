@@ -132,3 +132,12 @@ Gunzerker dual wield or vehicles.
   narrower: the missing 3D layout); round 2, with `hud3d.js`, **9/10**. Remaining, ranked: the emblem's outer haze and
   streaks slightly tighter and fainter (5-10 px), the ready icon's green 5-10 % brighter. Both look like Ruffle's
   rendering of the movie's own art (filters and blending), not the state mapping; not pursued.
+
+## The held target's death (2026-11-07, maya lane)
+
+AI-assisted (Claude). **Real game, confirmed live for one kill:** one Adult, killed about 2 s after the cast, during the hold, by one large `TakeDamage` with the player as instigator (`phaselock_integrity_capture.ps1 -KillAndShield`, bl-sdk hooks and HUD samples; values under ignored `local/`). The lift ends with `InterruptPhaseLock` and `ReleaseTarget` and no `StartOutro`. The emblem returns to its `none` frame almost at once rather than running to the skill's end, and the cooldown starts draining at the release. `EndSkill` follows about a second later. **UNVERIFIED:** a kill by a gun, a kill during the lift, and whether that later `EndSkill` matters to anything visible.
+
+**Host:** a held target's death ends the skill through `EndPhaselockEarly`, so the emblem goes and the cooldown drains. Before this, both ran to the timeline's end. A first playtest saw that.
+
+**Check:** `powershell -File tools/test_action_skill_hud.ps1 -KillHeld` kills the held dummy (`-owphaselockkillcheck`, test-only), and `tools/check_phaselock_kill.py` grades the steps, the numbers and the HUD state lines. It shows the host did this on its dummy, not parity.
+

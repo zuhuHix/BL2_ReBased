@@ -4035,3 +4035,11 @@ host, and no rule here is confirmed in the running game.
 ## 2026-11-07: the store's global fallback uses an index; the resolution order is unchanged (mission UI lane)
 
 AI-assisted (Claude), design corrected by the hub's review. Record: `docs/verification/PACKAGE_GLOBAL_INDEX.md`. `PackageStore`'s fallback for an import whose root is not a file scanned the tree per path, 13 to 15 s each, and caused the first E's freeze. One pass now maps a path's first segment to the ordered files that could hold it, and a lookup runs the same `findExport` over those, in the same order, so the first match is the same file. **Parsing behaviour is meant to be unchanged:** no bounds check touched. Checked on the Fire step list with `OPENWILLOW_RESOLVE_CHECK`, which also runs the old scan: 5 lookups, 5 the same; `--slice-run` output identical before and after. That covers these runs' lookups, not every path; the argument for the rest is in the record. First use about 27.6 s to 5.5 s, setup about 4 s slower, core CLI on one PC; not measured in UE.
+
+## 2026-11-07: a held target's death ends Phaselock at once (maya lane)
+
+AI-assisted (Claude). Record: `docs/verification/ACTION_SKILL_HUD.md` "The held target's death". Host behaviour, no parsing change.
+
+- Live on one Adult killed by one large hit during the hold, the game releases at once, the emblem goes and the cooldown drains. The host ran them to the timeline's end. It now ends through `EndPhaselockEarly`.
+- A gun kill and a kill during the lift are UNVERIFIED; the host treats them the same.
+
