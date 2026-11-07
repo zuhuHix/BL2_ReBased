@@ -155,7 +155,7 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
-  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=29 failed=0`.
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=31 failed=0`.
   `route_refused_while_down` sends its key as a keydown event into the page: it tests the page's handler and the host's refusal, not real key delivery, which skips Slate.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop during a swing has no row.
