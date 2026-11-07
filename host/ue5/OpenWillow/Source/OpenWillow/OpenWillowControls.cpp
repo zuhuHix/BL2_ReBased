@@ -441,12 +441,20 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         break;
     case 37:
         Check(TEXT("l_refused_while_down"), !Hud.IsSkillsOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 2, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
+        Press(Player, EKeys::I);
+        break;
+    case 38:
+        Check(TEXT("i_refused_while_down"), !Hud.IsSkillsOpen() && !Maya.IsInventoryWidgetOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 3, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
+        Press(Player, EKeys::K);
+        break;
+    case 39:
+        Check(TEXT("k_refused_while_down"), !Hud.IsSkillsOpen() && Maya.PagesRefusedWhileDown == PagesRefusedBefore + 4, FString::Printf(TEXT("%s refused=%d"), *State(), Maya.PagesRefusedWhileDown - PagesRefusedBefore));
         Hud.ForgetMissionsReport();
         Hud.ToggleMissions();   // a page already up when she went down, by the HUD's own call
         RouteBy = Now + 12.f;
         NextAt = Now;
         break;
-    case 38:
+    case 40:
         // Once the page says it is ready. The key is a keydown event sent into the page, which tests the page's handler and the host's refusal
         // of its route; it does not prove a real key press reaches the page, since it skips Slate.
         if (!Hud.AskMissionsReady())
@@ -454,7 +462,7 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
             if (Now < RouteBy) { NextAt = Now + .2f; return; }
             Check(TEXT("route_refused_while_down"), false, TEXT("the Missions page never said it was ready"));
             Hud.CloseSkills();
-            TestStep = 40;
+            TestStep = 42;
             return;
         }
         PagesRefusedBefore = Hud.TabRoutesRefusedWhileDown;
@@ -462,7 +470,7 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         RouteBy = Now + 5.f;
         NextAt = Now;
         break;
-    case 39:
+    case 41:
         if (Hud.TabRoutesRefusedWhileDown == PagesRefusedBefore && Now < RouteBy) { NextAt = Now + .1f; return; }
         Check(TEXT("route_refused_while_down"), Hud.IsMissionsOpen() && !Hud.IsMapOpen() && Hud.TabRoutesRefusedWhileDown == PagesRefusedBefore + 1,
             FString::Printf(TEXT("%s refused=%d"), *State(), Hud.TabRoutesRefusedWhileDown - PagesRefusedBefore));

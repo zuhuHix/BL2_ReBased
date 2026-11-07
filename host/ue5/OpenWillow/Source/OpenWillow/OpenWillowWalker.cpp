@@ -1531,6 +1531,14 @@ void AOpenWillowWalker::ToggleInventory()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
+    // As M and L (ToggleMapOrMissionsPage): the set of actions allowed while down has no menu in it. Closing still works.
+    const AOpenWillowMayaHUD* OpenHud = Cast<AOpenWillowMayaHUD>(PC->GetHUD());
+    if (IsDown() && !IsInventoryWidgetOpen() && !(OpenHud && OpenHud->IsInventoryOpen()))
+    {
+        ++PagesRefusedWhileDown;
+        UE_LOG(LogTemp, Display, TEXT("OWCONTROLS inventory page refused: Maya is down"));
+        return;
+    }
     bFireHeld = false;
     AimReleased();
     if (AOpenWillowMayaHUD* HUD = Cast<AOpenWillowMayaHUD>(PC->GetHUD()))
@@ -1563,6 +1571,15 @@ void AOpenWillowWalker::ToggleSkills()
 {
     APlayerController* PC = Cast<APlayerController>(Controller);
     if (!bMayaActive || !PC) return;
+    // As ToggleInventory: refused while down, and closing the Skills page still works.
+    const AOpenWillowMayaHUD* OpenHud = Cast<AOpenWillowMayaHUD>(PC->GetHUD());
+    const bool bSkillsOpen = OpenHud && OpenHud->IsSkillsOpen() && !OpenHud->IsInventoryOpen() && !OpenHud->IsMissionsOpen() && !OpenHud->IsMapOpen();
+    if (IsDown() && !bSkillsOpen)
+    {
+        ++PagesRefusedWhileDown;
+        UE_LOG(LogTemp, Display, TEXT("OWCONTROLS skills page refused: Maya is down"));
+        return;
+    }
     bFireHeld = false;
     AimReleased();
     if (InventoryScreen && InventoryScreen->IsInViewport())
