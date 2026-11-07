@@ -462,7 +462,8 @@ function Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'pi_shields\(True\)') { return __START__ }
     if ($Code -match 'pi_shield_try\((\d+)\)') { $script:level = [int]$Matches[1]; return "{`"requested_level`":$script:level}" }
     if ($Code -match 'pi_shield_read') { return __READ__ }
-    if ($Code -match 'pi_shield_restore|pi_shields_check') { $script:restoreCalls++; return __RESTORE__ }
+    if ($Code -match 'pi_shield_restore') { $script:restoreCalls++; return __RESTORE__ }
+    if ($Code -match 'pi_shields_check') { return __CHECK__ }
     if ($Code -match 'pi_shields') { return '{"max_strength":181}' }
     throw "unexpected: $Code"
 }
@@ -471,7 +472,7 @@ __STAGES__
 "RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; levels = @($log.shield_levels | ForEach-Object { $_.level }); tried = @($log.shield_levels | ForEach-Object { $_.tried.requested_level }) } | ConvertTo-Json -Compress)
 """
 GOOD = {'__SHIELD_ONLY__': '$false', '__START__': """'{"equipped":{"name":"Own","level":8},"max_strength":181,"player_level":50}'""", '__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
-        '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__KILLED__': 'true'}
+        '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__CHECK__': """'{"ok":true}'""", '__KILLED__': 'true'}
 
 
 def run_stages(**changes):
@@ -524,6 +525,13 @@ def test_the_two_stages_stand_alone_and_set_their_result_last():
     r = run_stages(__SHIELD_ONLY__='$true', __ASH__="$(throw 'kill stage ran')")
     assert r['done'] == ['shield_levels'] and r['problems'] == []
     # A restore that does not take stops the sweep and says so plainly.
+    # A failed restore command is not evidence by itself: the check decides, and an unanswered check is said to be unknown.
+    r = run_stages(__RESTORE__="'Traceback (most recent call last)'")
+    assert 'shield_levels' in r['done'] and r['problems'] == [] and r['levels'] == [1, 5, 8, 15, 30, 50]
+    r = run_stages(__RESTORE__="'Traceback (most recent call last)'", __CHECK__="""'{"ok":false}'""")
+    assert 'shield_levels' not in r['done'] and r['levels'] == [1] and 'SHIELD NOT RESTORED after level 1: confirmed' in r['problems'][0]
+    r = run_stages(__RESTORE__="'Traceback (most recent call last)'", __CHECK__="$(throw 'no reply')")
+    assert 'shield_levels' not in r['done'] and r['levels'] == [1] and 'SHIELD STATE UNKNOWN' in r['problems'][0] and 'NOT RESTORED' not in r['problems'][0]
     r = run_stages(__RESTORE__="""'{"ok":false}'""")
     assert 'shield_levels' not in r['done'] and r['levels'] == [1] and 'SHIELD NOT RESTORED' in r['problems'][0]
 

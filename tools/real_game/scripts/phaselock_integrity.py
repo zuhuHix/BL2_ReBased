@@ -589,6 +589,9 @@ def pi_shield_try(level):
     if not spawned:
         return {"skipped": "nothing spawned", "level": level}
     key, path = _shield_key(spawned[0]), spawned[0]._path_name()
+    # A spawn that reads as one of her shields (a clamped level with the same name) could be taken for hers later: it is not used at all.
+    if key == base["key"] or key in base["backpack"]:
+        return {"skipped": f"the spawned shield has the identity of a starting shield: {key}", "level": level}
     pi["shield_try"] = {"key": key, "level": level, "game_t": None, "own_sent": False}    # before the add, so a restore can undo an add that then throws
     im.AddInventoryToBackpack(spawned[0])
     _equipped, backpack = _shields()
@@ -612,7 +615,7 @@ def pi_shield_read():
     reason = None
     if not tried:
         reason = "no test shield"
-    elif row is None or row["key"] == base["key"]:
+    elif row is None or row["key"] != tried["key"]:
         reason = "the test shield is not equipped"
     elif row["level"] != tried["level"]:
         reason = f"level {row['level']}, requested {tried['level']}"
@@ -643,11 +646,12 @@ def pi_shield_restore():
         im.ReadyBackpackInventory(matches[0])
         equipped, backpack = _shields()
     if tried:
-        # The test shield, now in the backpack as a new object: one with its key that was not there at the start.
-        test = next((i for i in backpack if _shield_key(i) == tried["key"] and i._path_name() not in base["backpack_paths"]), None)
-        if test is not None:
-            im.RemoveInventoryFromBackpack(test)    # no Destroy: the game quits within minutes and saves are blocked
-        elif equipped is not None and _shield_key(equipped) == base["key"]:
+        # The test shield, now in the backpack as a new object: only the one shield with its key that was not there at the start. Its key
+        # cannot be one of hers (pi_shield_try), and anything else stays, for pi_shields_check to report.
+        tests = [i for i in backpack if _shield_key(i) == tried["key"] and i._path_name() not in base["backpack_paths"]]
+        if len(tests) == 1:
+            im.RemoveInventoryFromBackpack(tests[0])    # no Destroy: the game quits within minutes and saves are blocked
+        elif not tests and equipped is not None and _shield_key(equipped) == base["key"]:
             pi["shield_try"] = None     # gone
     return pi_shields_check()
 

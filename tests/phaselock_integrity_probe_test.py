@@ -317,6 +317,48 @@ def test_a_shield_row_counts_only_for_its_own_level_and_a_fresh_read():
     assert ns['pi_shield_restore']()['ok'] is True and not world['im'].Backpack
 
 
+def test_a_spawn_with_her_shields_identity_is_refused_and_she_keeps_it():
+    ns = load()
+    world = shield_world(ns)
+    world['im'].Backpack.append(world['shield']('Kept', 3))
+    ns['pi_shields'](True)
+    readied = world.get('readied', 0)
+    # A clamped level with her shield's name, then with the backpack shield's: not added, not equipped, nothing to remove.
+    for name in ('Own', 'Kept'):
+        world['next'] = [world['shield'](name, 3)]
+        tried = ns['pi_shield_try'](15)
+        assert 'skipped' in tried and 'identity' in tried['skipped'], tried
+        assert world.get('readied', 0) == readied and len(world['im'].Backpack) == 1
+    check = ns['pi_shield_restore']()
+    assert check['ok'] is True and world['im'].ItemChain.GetShortHumanReadableName() == 'Own'
+
+
+def test_the_equipped_row_must_be_this_attempts_shield():
+    ns = load()
+    world = shield_world(ns)
+    ns['pi_shields'](True)
+    world['next'] = [world['shield']('Test', 15)]
+    ns['pi_shield_try'](15)
+    world['pc'].WorldInfo.TimeSeconds = 2.0
+    world['max'] = 900.0
+    world['im'].ItemChain = world['shield']('Something Else', 15)      # of the right level, but not what this row spawned
+    read = ns['pi_shield_read']()
+    assert read['counts'] is False and 'not equipped' in read['reason']
+
+
+def test_an_unclear_backpack_is_left_alone_and_reported():
+    ns = load()
+    world = shield_world(ns)
+    ns['pi_shields'](True)
+    world['next'] = [world['shield']('Test', 15)]
+    ns['pi_shield_try'](15)
+    # Two shields fit the test's key: neither is positively the spawned one.
+    world['im'].Backpack.append(world['shield']('Test', 15))
+    check = ns['pi_shield_restore']()
+    assert world['im'].ItemChain.GetShortHumanReadableName() == 'Own'
+    assert check['ok'] is False and len(world['im'].Backpack) == 2
+
+
 def test_a_manager_without_an_item_chain_finds_no_shield_and_says_so():
     ns = load()
     world = shield_world(ns)

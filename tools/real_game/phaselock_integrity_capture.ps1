@@ -255,7 +255,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
             $shieldLevels = @($shieldLevels | Where-Object { $_ -le $log.shields_start.player_level })
             foreach ($level in $shieldLevels) {
                 $row = [ordered]@{ level = $level }
-                $restoreOk = $false
+                $restoreState = 'unknown'
                 try {
                     $row.tried = Py "import json; print(json.dumps(pi_shield_try($level), default=str))" | ConvertFrom-Json
                     if ($row.tried -and !$row.tried.skipped) {
@@ -275,11 +275,19 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
                             Start-Sleep -Milliseconds 250
                             $restored = Py 'import json; print(json.dumps(pi_shield_restore(), default=str))' | ConvertFrom-Json
                         }
-                        $row.restore = $restored; $restoreOk = $restored.ok -eq $true
-                    } catch { $row.restore_error = "$_" }
+                        $row.restore = $restored; $restoreState = if ($restored.ok -eq $true) { 'ok' } else { 'not restored' }
+                    } catch {
+                        # A failed command or a traceback says nothing about the shield: ask what is there before saying.
+                        $row.restore_error = "$_"
+                        try {
+                            $row.restore_check = Py 'import json; print(json.dumps(pi_shields_check(), default=str))' | ConvertFrom-Json
+                            $restoreState = if ($row.restore_check.ok -eq $true) { 'ok' } else { 'not restored' }
+                        } catch { $row.restore_check_error = "$_" }
+                    }
                 }
                 $shieldRows += [pscustomobject]$row
-                if (!$restoreOk) { $shieldWhy = "SHIELD NOT RESTORED after level ${level}: the live character has the wrong shield until the game exits"; break }
+                if ($restoreState -eq 'not restored') { $shieldWhy = "SHIELD NOT RESTORED after level ${level}: confirmed; the live character keeps the wrong shield or backpack until the game exits"; break }
+                if ($restoreState -eq 'unknown') { $shieldWhy = "SHIELD STATE UNKNOWN after level ${level}: neither the restore nor its check answered, so treat the live character as changed until the game exits"; break }
             }
             $log.shields_end = Py 'import json; print(json.dumps(pi_shields(), default=str))' | ConvertFrom-Json
         } catch { $shieldWhy = "$shieldWhy $_".Trim() }
