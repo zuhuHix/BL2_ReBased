@@ -28,7 +28,7 @@ constexpr float MeleeBackOffset = 100.f;     // the origin is this far behind th
 constexpr float MeleeHalfAngleDegrees = 64.f;
 constexpr float MeleeBelow = -143.f;         // Maya's centre Z minus the enemy's Z, lowest and highest
 constexpr float MeleeAbove = 339.f;
-constexpr float MeleeStopMargin = 60.f;      // host choice: the enemy stops running this far inside the reach
+constexpr float MeleeStopMargin = 60.f;      // host choice: the enemy stops running this far inside its swing range (or the reach)
 constexpr float DefaultCollisionRadius = 50.f;  // host stand-in when the kind's collision radius is 0
 constexpr float SearchArrival = 100.f;       // host choice: a lost target's last-known spot counts as reached this close
 }
@@ -71,6 +71,7 @@ struct FOpenWillowBrainInput
     int32 EnemyLevel = 1;
     float ArrivalDamage = 0.f;                 // manifest melee_arrival_by_level at the enemy's level (0 = no melee)
     float Ratio = 0.f;                         // manifest melee_ratio_by_level at the enemy's level (0 = no melee)
+    float SwingStartRange = 0.f;               // manifest melee_start_range, the stock attack range (0 = an old manifest: the reach decides)
 };
 
 // What the brain asks the enemy to do this tick.
@@ -112,6 +113,7 @@ public:
     float LastRatio = 0.f;
     float LastScale = 1.f;
     float LastApplied = 0.f;        // what the delivery applied (0 on a miss)
+    float LastSwingDistance = -1.f; // the horizontal distance to Maya at the last swing start
 
 private:
     void UpdateThreat(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool bDamaged, bool bSightBefore);

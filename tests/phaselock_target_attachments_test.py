@@ -81,7 +81,7 @@ class Mesh(Named):
         return self.set.get(slot)
 
 
-def run_editor(mesh, loads=True, exists=True, saves=True):
+def run_editor(mesh, loads=True, exists=True, saves=True, material='Fur'):
     """Run the editor script against a stub unreal module. Returns the report path, and the error if it stopped."""
     stub = types.ModuleType('unreal')
 
@@ -99,7 +99,7 @@ def run_editor(mesh, loads=True, exists=True, saves=True):
     with tempfile.TemporaryDirectory() as tmp:
         job = Path(tmp) / 'job.json'
         job.write_text(json.dumps({'slice_dir': tmp, 'npcs': [{'id': 'T', 'dest': '/Game/X', 'attachment_meshes': [
-            {'id': 'Spike', 'gltf': 'Spike.gltf', 'material': 'Fur'}]}]}), encoding='utf-8')
+            {'id': 'Spike', 'gltf': 'Spike.gltf', 'material': material}]}]}), encoding='utf-8')
         os.environ['OPENWILLOW_SLICE_JOB'] = str(job)
         sys.modules['unreal'] = stub
         error = None
@@ -121,6 +121,28 @@ def test_the_editor_step_reports_only_after_every_check_passed():
                                 ('failed', Mesh(), {'saves': False})):
         report, error = run_editor(mesh, **options)
         assert report is None and error and text in error, (text, report, error)
+
+
+def test_a_piece_with_no_material_keeps_what_its_import_made():
+    mesh = Mesh()
+    report, error = run_editor(mesh, exists=False, material=None)
+    assert error is None and report == {'T': {'Spike': '/Game/X/Attachments/Spike.Spike'}} and mesh.set == {}
+
+
+def test_a_piece_comes_from_a_package_that_exports_it():
+    assert t.piece_package(['Ash_P', 'Ice_Dynamic', 'Ice_P'], 'Ice_Dynamic') == 'Ice_Dynamic'
+    assert t.piece_package(['Ash_P', 'IceCanyon_P', 'Ice_P'], 'Ice_Dynamic') == 'Ice_P'    # the same map, not a similar name
+    assert t.piece_package(['Cove_P', 'Ash_P'], 'Ice_Dynamic') == 'Ash_P'
+    try:
+        t.piece_package([], 'Ice_Dynamic')
+    except SystemExit as stop:
+        assert 'no package' in str(stop)
+    else:
+        raise AssertionError('a piece no package exports was accepted')
+    worn = [{'static_mesh': 'A.Mask', 'materials': ['A.Head']}, {'static_mesh': 'B.Axe', 'materials': []}]
+    t.locate_pieces(worn, 'Ice_Dynamic', {'A.Mask': ['Ice_P'], 'A.Head': ['Ash_P', 'Ice_P'], 'B.Axe': ['Ice_Dynamic']}.__getitem__)
+    assert (worn[0]['package'], worn[0]['material_package']) == ('Ice_P', 'Ice_P')
+    assert (worn[1]['package'], worn[1]['material_package']) == ('Ice_Dynamic', None)
 
 
 def test_a_mesh_with_two_materials_stops():

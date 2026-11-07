@@ -15,8 +15,10 @@ so each is `UNVERIFIED` unless a line says which record it reproduces.
 - Three **static dummies** in a row 900 uu ahead: the Fire mission's stock target dummy (`AOpenWillowCombatTarget::UseStockPawn` with the slice
   manifests, as the quest spawns it), else the engine-shape dummy. On the range they respawn (the mission's dummy still does not).
 - **Moving enemies** (`AOpenWillowEnemy`, a subclass of the combat target, so every existing hit path reaches them): the manifest's spawns on an
-  arc 1,600 uu ahead. PR1 gives them a patrol (random floor spots within 500 uu of home, 150 uu/s, pauses of 1 to 3 s); noticing Maya,
-  approaching and melee are PR2.
+  arc 1,600 uu ahead, facing away from the spot (a host layout, not a game rule, see "The first playtest's fight"). PR1 gives them a patrol
+  (random floor spots within 500 uu of home, 150 uu/s, pauses of 1 to 3 s); noticing Maya, approaching and melee are PR2.
+- **One way in:** `tools/play_range.ps1 [-Mode normal|passive|invulnerable|both]` starts the host with `-owrangestart`, which builds the range
+  and moves Maya to it once she stands. Sanctuary only: the host has no other map, and the spot rules read Sanctuary's terrain.
 - `ow.RangeMode normal|invulnerable|passive|both`: invulnerable targets record every hit (damage number, flash, log) but keep their health
   and shield; passive enemies stand still. `ow.RangeLevel N` (0 = Maya's level) rebuilds with that enemy level. `ow.RangeClear`, `ow.RangeReport`.
 
@@ -69,6 +71,15 @@ dummy_respawn. The body_hit and crit_hit hits are applied with `ApplyPointDamage
 
 Results: none yet (the hub's integration run). Automated: ctest 21/21; verify_packages 9 packages, all class bodies exact.
 
+## The psycho
+
+`tools/prepare_range.py` adds the psycho as a range kind: health, melee and loot chances per level from the VM's spawn of the stock pawn. Only the bullymongs' melee numbers
+reproduce live rows; the psycho's are the VM's answer alone, and its manifest entry says so (`melee_status`: VM only, UNVERIFIED). It uses its own imported asset, never the
+bullymong's, and joins the range's spawns only when that asset exists, last, so the enemies the test uses by index don't change. `tools/prepare_phaselock_target.py` imports its mesh
+and clips (idle, a death, walk, run, melee, a flinch, the four PhaseLock clips): no live read of this pawn exists, so its collision cylinder and scale are the archetype's, and the set's
+only clip named as a death is `Death_Shield`, which may not be what the game plays. It melees with the range's brain, which is a host stand-in for its stock AI tree (its leaps, signals
+and suicide runs are not modelled). The manifest also carries what a pawn wears on its bones (the psycho's mask and axe, the adult bullymong's spikes), and range enemies attach it as a test pawn does, with the same UNVERIFIED placement. The test's `psycho_melee` step checks a swing lands for the psycho's own table value; it may SKIP without the imported mesh.
+
 ## Phaselock on range pawns
 
 The targetable-list rule of `AOpenWillowWalker::PreferredPhaselockTarget` applies only to the mission's dummy (`OpenWillowPhaselockListRefuses`). It used to cover every stock
@@ -94,7 +105,8 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Own target, apart from the threat record | each enemy keeps its own target: valid while the den level is 2 or more and Maya is within the den's ThreatRadius of its centre; it goes for where it last saw her (line of sight) or heard her (proximity), and after losing the target it walks to that spot once, then patrols | AI_AWARENESS_LIVE 2 (targets drop at the member's next update once its rules fail); the validity rule is a host stand-in |
 | Approach | turn at 360 deg/s, run at `run_speed` (400 uu/s, stand-in) with the run clip (walk as fallback) | host stand-in |
 | Blocked chase | under 10 uu of progress in 1 s counts as blocked: side-steps (70 degrees, alternating sides); blocked for 3 s, the enemy drops the target for 5 s | host choice |
-| Melee volume | horizontal 640 from a point 100 uu behind the enemy, 64 degree half angle, Maya's centre -143 to +339 uu from the enemy's location | AI_MELEE_TARGETING_LIVE 5 (fitted) |
+| Melee volume (does a swing land) | horizontal 640 from a point 100 uu behind the enemy, 64 degree half angle, Maya's centre -143 to +339 uu from the enemy's location | AI_MELEE_TARGETING_LIVE 5 (fitted) |
+| Swing start (may a swing begin) | Maya inside the volume and within the kind's `melee_start_range`, the farthest range of its plain melee attack actions, read by `tools/prepare_range.py` from the stock AI definition; it stops running 60 uu inside it | the stock attack range is data; the horizontal measure from the enemy's location and the choice of actions by animation name are UNVERIFIED. The live swings had the player within about 300 uu |
 | Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing 1.25 s after the previous start | AI_MELEE_TARGETING_LIVE 4 |
 | Melee damage | the VM's swing rows per kind and level (`arrival` x `ratio`, both from `ow-package --combat-run maya:L spawn:<kind>:L swing:<n>:melee`), x the level scale (1.0 at or below Maya, 1.1 / 1.2 one / two levels up; a straight line to 3.0 at sixteen beyond that, stand-in) | COMBAT_MELEE (the VM rows reproduce adult L5/6/7 73.6974 / 83.2781 / 94.1042, regular L6 24.9834, baby L6 12.4917, ratios 0.715 / 0.728 / 0.741) |
 | Delivery | one function, `RangeDamagePlayer`: the maya lane's `OpenWillowApplyDamageToPlayer` (PR #72), shield first, then health, then Fight For Your Life; the test's melee checks compare health plus shield | host |
@@ -111,7 +123,58 @@ Not modelled: momentum on Maya (75,000 for the adult swing), leaps and the sling
 the stock AI tree's perch, random and leap nodes.
 
 Test steps added to `-owrangetest` and `tools/check_range.py`: notice_proximity, notice_sight, no_notice_far, provoked, approach, melee_hit, melee_interval,
-melee_miss, forget, passive_no_melee.
+melee_miss, forget, passive_no_melee, swing_range (the first enemy's kind only), corpse_limp and corpse_cap (SKIP only when the manifest names no stock mesh).
+The host builds no range, says why on screen and has the slice gate report `range refused: <reason>` on `reach_fight_area`, when any spawn has no kind, no melee tables or no swing range (an old or `--no-vm` manifest), however it was started, so no
+tool can pass on the old rule. `tools/check_range.py --preflight` refuses the same manifests. A run with no psycho reads "no Psycho exercised" in its result, and `-RequirePsycho`
+makes it fail.
+
+## The first playtest's fight (2026-11-06)
+
+The scripted playtest (Maya level 8, 213 health, no shield, no input) saw all four enemies deliver on one tick 3.31 s after the build and Maya down at 4.56 s.
+What the records and the data say, with no game run for this note:
+
+- **All engaging at once is in the records.** One member noticing alerts the den, and the members acquire at their next update (AI_AWARENESS_LIVE 0, 3). Nothing
+  here limits how many attack: no attacker limit was found in the targeting data read so far. The range keeps this.
+- **The one tick was the host's.** The enemies spawned facing Maya, so sight fired at the first update; they stood at equal distance and ran at one speed on one
+  clock. The arithmetic matches: 1,060 uu at 400 uu/s, plus 0.1 s of awareness and 0.41 s to the blow.
+- **Swings started too far out.** The host started them at the damage reach, about 540 uu ahead. The stock attack actions have their own, much shorter ranges.
+- **Not changed, because the data does not say to:** the damage (stock numbers, the adult's multiplier included), and the run speed. 400 uu/s is a stand-in, and the
+  stock `GroundSpeed` field is 500 for the bullymongs, so slowing them has no support.
+- **First-update lockstep addressed; the fight is not staggered.** No stagger number was invented: the record of four members acquiring together does not show that
+  update clocks differ. The change delays the first notice and lets the patrol move the den a little before it. Once the den is alerted, the other members take their
+  target with no facing check, and enemies of one kind at similar distances can still converge and land together. About 152 damage a round still takes an unshielded
+  Maya down in two rounds once they arrive. That is the missing shield and standing still, not the timing.
+- The `level_scale` 1.84 on a line with hit=0 was a logging artefact: Maya's level was only read while she was up. It applied no damage. Fixed.
+
+**Critical hits from behind.** With the den facing away, `crit_trace` failed on a shot through the back at the head: the check followed the shot only a capsule's width past the
+impact, and the head stands further than that from behind. Any shot from behind had that gap; the old layout's test only shot from the front. The check now reaches the head from
+any side, but the shot's line, followed on from the impact, must still cross the head sphere itself (radius from the manifest, on the head bone). `crit_trace` now shoots from directly
+behind, from 500 uu with the enemy at home, turned until both lines are clear (a patrol can walk it behind a rock, and a low shot from Maya can meet the ground). It requires the head to
+stand past the old reach, so putting that reach back fails the step, and a shot at the small of the back must hit the body and not count. Against a capsule, this can count a head hidden by the back as hit (a host stand-in, UNVERIFIED: the game's hit regions aren't read).
+
+First host read of the no-input fight (one run, 2026-11-06, the batch's baseline in brackets): first notice t=6.32 (8.31), swings at 9.54, 9.57, 9.61 and 9.75 (all four at 11.06),
+first blows at 9.95 and 9.98 (all at 11.47). So they no longer swing as one, with a spread of 0.21 s. This is host behaviour only, not parity with the game. The slice gate passed all
+14 links in that run, plain, with a shield and going down after the fight, with #126's hold-fire.
+
+Open, for the den read below: the first-blow spread of a real den, the real chase speed, and where real swings start.
+
+**Corpses.** The playtest suspected shot momentum. The code hands the ragdoll no velocity (the death zeroes the knock), so that is not the path. The suspect is the
+moment physics takes over with bodies overlapping each other or the floor (UNVERIFIED). The host limits that push (`SetMaxDepenetrationVelocity`), caps how fast a
+body may rise or travel sideways (a fall stays free), and logs each corpse's rise, drift, fastest body and number of caps. These limits are host stand-ins for a limp
+body, not game values, and the stock momentum on a ragdoll (`RigidBodyMomentumScale`, NATIVE_DAMAGE_DEATH) is not modelled. `corpse_limp` checks a body rises at most
+200 uu and drifts at most 500 uu, after a test kill without a shot; the integration run's frames decide whether real kills look right.
+
+`corpse_cap` throws one body upward at a known speed and requires the cap to act: it shows the cap runs, not that it is what real kills need.
+
+First host read (one run, 2026-11-06, a test kill with no shot): the body rose 19 uu and drifted 52 uu, its fastest body reached 2,101 uu/s, and the caps acted 278 times. So
+bodies are thrown with no shot behind them. The cause in the physics is UNVERIFIED, and whether real kills now look right is still for the frames.
+
+`tools/play_range.ps1 -KillRow` is the row for real kills: a rolled pistol and a rolled shotgun each kill a stock enemy from about 700 uu, with frames 1.4 s and 3 s after each death and
+the corpse's numbers in the log. It has not run yet.
+
+**The den read.** `tools/real_game/cash_capture.ps1` has a `den_read` stage after the cash read, with its own result (`stage_results` in `session.json`): the player
+stands immune 1,600 uu from an enemy with no input, and `scripts/den_probe.py` records melee calls, blows and positions. It reads one map's dens at one level; its
+numbers don't speak for others. It has not run yet.
 
 ## Range spot: candidates and the textured-floor rule (PR2 follow-up)
 

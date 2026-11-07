@@ -19,16 +19,40 @@ import sys
 EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "popup_crit", "crit_minds_eye", "crit_trace", "shield_order", "invulnerable",
             "passive", "patrol", "death", "ragdoll", "respawn", "dummy_respawn",
             "notice_proximity", "notice_sight", "no_notice_far", "provoked", "approach", "melee_hit", "melee_interval",
-            "melee_miss", "forget", "passive_no_melee",
-            "loot_near_corpse", "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll"]
+            "melee_miss", "forget", "passive_no_melee", "swing_range", "corpse_limp", "corpse_cap", "psycho_melee",
+            "loot_near_corpse", "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll", "refusal_no_spot"]
 # Steps that may be SKIP when their data is absent: no imported stock mesh / physics asset (ragdoll), and no weapon generator
-# manifest (loot_weapon_item: no gun is rolled, the money checks still decide), and no local skill effects file
-# (crit_minds_eye: tools/prepare_skill_effects.py).
-MAY_SKIP = {"ragdoll", "loot_weapon_item", "crit_minds_eye"}
+# manifest (loot_weapon_item: no gun is rolled, the money checks still decide), no imported psycho (psycho_melee: it isn't spawned then),
+# and no local skill effects file (crit_minds_eye: tools/prepare_skill_effects.py).
+MAY_SKIP = {"ragdoll", "corpse_limp", "corpse_cap", "loot_weapon_item", "psycho_melee", "crit_minds_eye"}
 # A step here may SKIP only for this reason; any other SKIP of it is a failure.
-SKIP_ONLY_FOR = {"crit_minds_eye": "reason=no local skill effects file"}
+NO_STOCK_MESH = "reason=the manifest names no stock mesh"
+NO_PSYCHO = "reason=no psycho on this range (its mesh is not imported)"
+SKIP_ONLY_FOR = {"crit_minds_eye": "reason=no local skill effects file", "ragdoll": NO_STOCK_MESH, "corpse_limp": NO_STOCK_MESH, "corpse_cap": NO_STOCK_MESH,
+                 "psycho_melee": NO_PSYCHO}
 
 # The status ends at whitespace or the end of the line: result=SKIP_typo is no status, so its step counts as missing.
+SURVEY_DONE = re.compile(r"OWRANGESURVEY done candidates=\d+ accepted=([1-9]\d*)(?:\s|$)", re.M)
+KILL_RESULT = re.compile(r"OWRANGEKILL gun=(\d+) result=(PASS|FAIL) .*?: (\d+) shots", re.M)
+KILL_GUNS = 2
+
+
+def survey_ok(text):
+    """A survey counts when it finished and built a range on at least one candidate."""
+    return bool(SURVEY_DONE.search(text))
+
+
+def kills_ok(text):
+    """(ok, why) for tools/play_range.ps1 -KillRow: every gun has its own PASS line with shots fired, and the row finished with no failure."""
+    if "OWRANGEKILL done guns=%d fail=0" % KILL_GUNS not in text:
+        return False, "no \"OWRANGEKILL done guns=%d fail=0\" line" % KILL_GUNS
+    found = {int(gun): (result, int(shots)) for gun, result, shots in KILL_RESULT.findall(text)}
+    for gun in range(KILL_GUNS):
+        if found.get(gun, ("", 0))[0] != "PASS" or found[gun][1] <= 0:
+            return False, "gun %d: %s" % (gun, found.get(gun, "no result line"))
+    return True, ""
+
+
 LINE = re.compile(r"OWRANGETEST step=(\S+) result=(PASS|FAIL|SKIP)(?=\s|$)(.*)")
 SUMMARY = re.compile(r"OWRANGETEST SUMMARY result=(PASS|FAIL)(?=\s|$)(.*)")
 
@@ -98,6 +122,17 @@ def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
     except (OSError, ValueError) as error:
         return "cannot read the range manifest %s: %s" % (manifest_path, error)
     candidates = manifest.get("spot_candidates") or []
+    # A survey builds a range on each candidate too, so the same rule applies.
+    spawned = {spawn.get("kind") for spawn in manifest.get("spawns") or []}
+    # Every range kind melees: without these its enemies approach and never swing (a --no-vm manifest), or swing at the full reach (an old
+    # one). A spawn with no kind is refused too. The host checks the same (UOpenWillowRangeSubsystem::ManifestProblem).
+    kinds = manifest.get("kinds") or {}
+    stale = sorted(str(name) for name in spawned if not (kinds.get(name, {}).get("melee_arrival_by_level") and kinds.get(name, {}).get("melee_ratio_by_level")
+                                                         and (kinds.get(name, {}).get("melee_start_range") or 0) > 0))
+    if stale:
+        return ("the manifest %s lacks melee_arrival_by_level, melee_ratio_by_level or a positive melee_start_range for %s: it is old, written "
+                "with --no-vm, or tools/prepare_range.py could not read them. Re-run it without --no-vm and read its message"
+                % (manifest_path, ", ".join(stale)))
     if survey:
         return "" if candidates else "the manifest %s has no spot_candidates to survey" % manifest_path
     if has_at or spot_json_ok(spot_json):
@@ -113,6 +148,9 @@ def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Grade a gun-range test log, or check a manifest before a run (--preflight)")
     parser.add_argument("log", nargs="?")
+    parser.add_argument("--survey-log", action="store_true", help="the log is a -Survey run: pass when it built a range on at least one candidate")
+    parser.add_argument("--kill-log", action="store_true", help="the log is a tools/play_range.ps1 -KillRow run: pass when each gun fired, killed and its corpse was measured")
+    parser.add_argument("--require-psycho", action="store_true", help="a run that exercised no psycho fails (a batch that means to test it)")
     parser.add_argument("--steps", help="comma-separated expected steps (default: all of PR1's)")
     parser.add_argument("--preflight", metavar="MANIFEST", help="check the range manifest before a run instead of grading a log")
     parser.add_argument("--spot-json", help="with --preflight: local/range/range.json (a usable spot there is an explicit choice)")
@@ -130,12 +168,22 @@ def main(argv=None):
         parser.error("a log to grade, or --preflight MANIFEST")
     with open(args.log, encoding="utf-8", errors="replace") as f:
         text = f.read()
+    if args.survey_log:
+        print("range survey: %s" % ("PASS" if survey_ok(text) else "FAIL, no candidate was accepted (or it did not finish)"))
+        return 0 if survey_ok(text) else 2
+    if args.kill_log:
+        ok, why = kills_ok(text)
+        print("kill row: %s" % ("PASS" if ok else "FAIL, " + why))
+        return 0 if ok else 1
     expected = args.steps.split(",") if args.steps else EXPECTED
     ok, rows = grade(*parse(text), expected=expected)
+    no_psycho = any(step == "psycho_melee" and verdict == "SKIP" for step, verdict, _ in rows)
+    if no_psycho and args.require_psycho:
+        ok = False
     for step, verdict, detail in rows:
         print("%-14s %-8s %s" % (step, verdict, detail))
     counts = {v: sum(1 for _, r, _ in rows if r == v) for v in ("PASS", "FAIL", "SKIP", "MISSING")}
-    print("range check: %s (pass %d, fail %d, skip %d, missing %d)" % ("PASS" if ok else "FAIL", counts["PASS"],
+    print("range check: %s%s (pass %d, fail %d, skip %d, missing %d)" % ("PASS" if ok else "FAIL", ", no Psycho exercised" if no_psycho else "", counts["PASS"],
           counts["FAIL"], counts["SKIP"], counts["MISSING"]))
     return 0 if ok else 1
 

@@ -72,6 +72,21 @@ TARGETS = {
                      'host_mesh_scale': 1.0,
                      'host_mesh_scale_source': 'local/realgame/phaselock/size_rule/adult68 (2026-10-21 SDK read)'},
     },
+    # The range's psycho (tools/prepare_range.py). Its set also has walk, run, melee and flinch clips, which the range's enemy plays
+    # (the host finds them by role name next to the idle). No live read of this pawn exists: the cylinder and the scale are the archetype's
+    # (host_target's fallback). The set's only clip named as a death is Death_Shield; which death the game plays is UNVERIFIED.
+    'Psycho': {
+        'package': 'Ice_Dynamic',
+        'pawn': 'GD_Psycho.Character.Pawn_Psycho',
+        'dest': '/Game/OpenWillow/Characters/PhaselockTarget/Psycho',
+        'roles': [('Idle', 'Idle'), ('Death', 'Death_Shield'), ('Walk', 'Patrol_F'), ('Run', 'Run_F_var1'),
+                  ('Melee', 'Attack_Melee_var1'), ('Hit', 'HardFlinch_L_var1'),
+                  ('PhaseLock_Lift', 'PhaseLock_Lift'), ('PhaseLock_Loop', 'PhaseLock_Loop'),
+                  ('PhaseLock_Fall', 'PhaseLock_Fall'), ('PhaseLock_Land', 'PhaseLock_Land')],
+        # What the body composition wears by default (read with our reader): a mask and an axe.
+        'attachments': [('StaticMeshComponent_14878', 'Head'), ('StaticMeshComponent_14884', 'R_Hand')],
+        'observed': {'source': 'archetype collision cylinder (our reader); no live read of this pawn'},
+    },
 }
 
 
@@ -107,6 +122,24 @@ def worn_attachments(composition, read_component):
                      'comp_scale': float(props.get('scale', 1.0)),
                      'comp_scale3d': [float(scale3d.get(k, 1.0)) for k in 'XYZ']})
     return worn
+
+
+def piece_package(packages, preferred):
+    """The package to export a worn piece from: a piece need not be an export of the pawn's package (it can be an import there). The pawn's
+    package when it holds it, else another package of the same map, else the first by name. Stops when no package exports it."""
+    if not packages:
+        sys.exit(f'a worn piece is exported by no package (preferred {preferred}): check the census index')
+    if preferred in packages:
+        return preferred
+    prefix = preferred.split('_')[0] + '_'
+    return next((p for p in sorted(packages) if p.startswith(prefix)), sorted(packages)[0])
+
+
+def locate_pieces(worn, preferred, packages_of):
+    """Writes where each piece's mesh and material are exported into its row. packages_of(path) lists the packages exporting a path."""
+    for att in worn:
+        att['package'] = piece_package(packages_of(att['static_mesh']), preferred)
+        att['material_package'] = piece_package(packages_of(att['materials'][0]), preferred) if att['materials'] else None
 
 
 def check_worn(name, worn, expected):
@@ -153,6 +186,7 @@ def identity_step(args):
         body = reader.dump(pawn['bodyclass'], package)
         entry['attachments'] = worn_attachments(body.get('bodycomposition') or {}, lambda path: reader.dump(path, package))
         check_worn(name, entry['attachments'], spec['attachments'])
+        locate_pieces(entry['attachments'], package, lambda path: [row[0] for row in reader.rows(path)])
         if len(entry['anim_sets']) != 1:
             sys.exit(f'{name}: expected one AnimSet on the mesh component, got {component.get("animsets")}')
         result['targets'][name] = entry
@@ -197,8 +231,18 @@ def extract_step(args):
             slots.append({'name': default_mic, 'material': mic, 'package': mic_package, 'props': str(props) if props else None,
                           **info, 'export_record': record['id']})
         target['mesh_material_slots'] = slots
-        for mesh_name in attachment_meshes(target['attachments']):
-            go(f'{name}.attachment.{mesh_name}', name, package, mesh_name, 'StaticMesh', ['gltf'])
+        pieces = {npc.leaf(att['static_mesh']): att for att in target['attachments']}
+        for mesh_name, material in attachment_meshes(target['attachments']).items():
+            go(f'{name}.attachment.{mesh_name}', name, pieces[mesh_name]['package'], mesh_name, 'StaticMesh', ['gltf'])
+            # A piece with its own material: exported like the body's, so the zone step makes its instance. A piece that names none keeps what
+            # its import makes (phaselock_target_attach_editor.py).
+            if material and material not in [s['material'] for s in slots]:
+                mic_package = pieces[mesh_name]['material_package']
+                record = go(f'{name}.material.{material}', name, mic_package, material, 'MaterialInstanceConstant', ['png'])
+                props = npc.find_output(name, material, ['props.txt'])
+                info = npc.mic_textures(props) if props else {'textures': []}
+                slots.append({'name': material, 'material': material, 'package': mic_package, 'props': str(props) if props else None,
+                              **info, 'export_record': record['id']})
         anim_set = target['anim_sets'][0]
         group, set_name = group_of(anim_set['path'])
         go(f'{name}.animset', name, anim_set['package'], set_name, 'AnimSet', ['md5'], want_group=group)
@@ -232,12 +276,16 @@ def host_target(name, target):
     # Prefer the live component read when available; otherwise use the archetype's package scale. The rendering decision
     # is UNVERIFIED, but Round 20's corrected-FOV comparison favoured the live 1.0 read over the smaller package value.
     scale = float(observed.get('host_mesh_scale', props.get('scale', 1.0)))
+    # A live read of the cylinder wins; without one, the archetype's.
+    cylinder = target.get('archetype_cylinder', {})
+    radius = float(observed.get('collision_radius', cylinder.get('collisionradius', 0.0)))
+    height = float(observed.get('collision_height', cylinder.get('collisionheight', 0.0)))
     # Translation is in the pawn's frame (not scaled by the mesh's own Scale).
-    z = observed['collision_height'] + float(props.get('translation', {}).get('Z', 0.0))
+    z = height + float(props.get('translation', {}).get('Z', 0.0))
     anim = lambda role: f'{dest}/Animations/Anim_{name}_{role}.Anim_{name}_{role}'  # noqa: E731
     return {'id': name, 'mesh': f'{dest}/Meshes/{mesh}/SkeletalMeshes/{mesh}.{mesh}',
             'idle': anim('Idle'), 'death': anim('Death'), 'mesh_offset_z': z, 'mesh_scale': scale,
-            'collision_radius': observed['collision_radius'], 'collision_height': observed['collision_height'],
+            'collision_radius': radius, 'collision_height': height,
             'centre_bias': observed.get('centre_bias', 0.0),
             'source': {'translation': 'archetype mesh component (our reader)',
                        'mesh_scale': observed.get('host_mesh_scale_source', 'archetype mesh component (our reader)'),

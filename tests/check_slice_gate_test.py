@@ -103,6 +103,13 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('slice gate: 13 PASS, 1 FAIL, 0 NOT_AVAILABLE of 14', out)
         self.assertIn('range', self.row(out, 3))
 
+    def test_a_refused_range_is_a_failure_that_keeps_its_reason(self):
+        reason = 'range refused: kind made has no melee tables or swing range (an old or --no-vm manifest)'
+        results = {'reach_fight_area': ('FAIL', reason)}
+        code, out = self.run_checker(self.write_log(build(results, stop_after=chk.NAMES.index('reach_fight_area') + 1)))
+        self.assertEqual(code, 1)
+        self.assertIn(reason, out)
+
     def test_run_stopped_after_link_5_fails_the_rest(self):
         path = self.write_log(build(stop_after=5, summary=None))
         code, out = self.run_checker(path, '--json', str(self.dir / 'run.json'))

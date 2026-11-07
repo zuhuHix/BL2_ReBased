@@ -36,15 +36,35 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Range kind -> (combat-run kind, the VM's row class). The bandit and psycho are not among the VM's spawnable kinds yet.
+# Range kind -> (combat-run kind or package/archetype path, the VM's row class). The marauder and the nomad shoot, which the range's
+# brain does not do; they are not here.
 KINDS = {
     "bullymong": ("regular", "PrimalBeast"),
     "bullymong_adult": ("adult", "PrimalBeastAdult"),
     "bullymong_baby": ("baby", "PrimalBeastBaby"),
     "bullymong_slinger": ("ranged", "PrimalBeast_Ranged"),
+    "psycho": ("Ice_Dynamic/GD_Psycho.Character.Pawn_Psycho", "Psycho"),
 }
-# The swing kind of each (combat-run swing:<pawn>:<kind>): the melee blow, the slinger's rock.
-SWINGS = {"regular": "melee", "adult": "melee", "baby": "melee", "ranged": "slinger"}
+# What each swings (combat-run swing:<pawn>:<kind or melee definition path>): the bullymongs' named blows, the slinger's rock, the
+# psycho's melee definition.
+SWINGS = {"regular": "melee", "adult": "melee", "baby": "melee", "ranged": "slinger",
+          "Ice_Dynamic/GD_Psycho.Character.Pawn_Psycho": "GD_PsychoShared.Melee.MeleeDef_PsychoShared_Melee"}
+# The pawn balance of an archetype given by path (the named kinds carry theirs in the VM).
+BALANCES = {"Ice_Dynamic/GD_Psycho.Character.Pawn_Psycho": "GD_Population_Psycho.Balance.PawnBalance_Psycho"}
+# How far a kind's melee numbers are checked. Only the bullymongs have live rows (COMBAT_MELEE.md); others are the VM's answer alone.
+MELEE_LIVE_KINDS = {"bullymong", "bullymong_adult", "bullymong_baby", "bullymong_slinger"}
+# Where a kind's stock attack ranges are read (the swing-start rule, melee_start_range): its AI definition's melee actions.
+AI_PACKAGE = "Ice_Dynamic"
+AI_DEFINITIONS = {"bullymong": "GD_PrimalBeast.Character.AIDef_PrimalBeast", "bullymong_adult": "GD_PrimalBeastAdult.Character.AIDef_PrimalBeastAdult",
+                  "bullymong_baby": "GD_PrimalBeastBaby.Character.AIDef_PrimalBeastBaby",
+                  "bullymong_slinger": "GD_PrimalBeast_Ranged.Character.AIDef_PrimalBeast_Ranged", "psycho": "GD_Psycho.Character.AIDef_Psycho"}
+# Which imported asset (local/phaselock/target/host_target.json) a kind uses. One imported bullymong serves every bullymong kind (host
+# stand-in: the adult, baby and slinger have their own stock meshes, which are not imported). A kind without its asset stays on the host's
+# engine shapes.
+KIND_ASSETS = {"bullymong": "Bullymong", "bullymong_adult": "Bullymong", "bullymong_baby": "Bullymong", "bullymong_slinger": "Bullymong",
+               "psycho": "Psycho"}
+# Extra spawns of kinds that join the range only once their own mesh is imported (an engine-shape psycho would prove nothing).
+SPAWNS_WITH_ASSET = [{"kind": "psycho", "count": 1}]
 # The range's default population (host choice).
 SPAWNS = [{"kind": "bullymong", "count": 3}, {"kind": "bullymong_adult", "count": 1}]
 # Clip roles -> name patterns tried in order against the imported AnimSequence file names (host choice, UNVERIFIED).
@@ -119,6 +139,10 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
     if target:
         for key in ("mesh", "idle", "death"):
             entry[key] = target.get(key, "")
+        # What the pawn wears on its bones (the import writes them once the pieces are imported; the host attaches them as it does for a
+        # test pawn).
+        if target.get("attachments"):
+            entry["attachments"] = target["attachments"]
         for key in ("mesh_offset_z", "mesh_scale", "collision_radius", "collision_height"):
             if key in target:
                 entry[key] = float(target[key])
@@ -141,6 +165,7 @@ LETHAL = "GD_Impact.DamageType.DmgType_Normal:Shotgun"   # the kill shot of COMB
 # SAMPLE_KILLS kills of fresh pawns at SAMPLE_LEVEL, and the offset's range is applied to every level.
 SAMPLE_LEVEL = 20
 SAMPLE_KILLS = 24
+COMMAND_LIMIT = 30000   # a Windows command line holds 32,767 characters; the psycho's spawn steps name long paths
 # What the host does with a pool of the death roll, by the pool's name (host choice): a weapon pool goes to the weapon
 # generator (ow.RollGun's roll), money and ammo pools to the range's own pickups; anything else is logged as not hosted.
 POOL_KINDS = (("GunsAndGear", "weapon"), ("Money", "money"), ("Ammo", "ammo"))
@@ -241,25 +266,148 @@ def spot_candidates(terrain_json, centre):
     return out
 
 
+def spawns_for(kinds):
+    """The range's population: the default spawns, then each kind in SPAWNS_WITH_ASSET whose asset is imported. New ones go last, so the
+    enemies the range test's steps use by index stay the same."""
+    return SPAWNS + [s for s in SPAWNS_WITH_ASSET if kinds.get(s["kind"], {}).get("mesh")]
+
+
+def melee_status(kind):
+    """How far a kind's melee numbers are checked (written to the manifest with the numbers)."""
+    if kind in MELEE_LIVE_KINDS:
+        return "VM rows reproduce live rows (COMBAT_MELEE.md)"
+    return "VM only, UNVERIFIED (no live row)"
+
+
+def spawn_step(vm_kind, level):
+    """The combat-run spawn step: a named kind, or an archetype path with its stage and pawn balance."""
+    balance = BALANCES.get(vm_kind)
+    return "spawn:%s:%d:%d:%s" % (vm_kind, level, level, balance) if balance else "spawn:%s:%d" % (vm_kind, level)
+
+
+def kind_steps(vm_kind, levels, first_pawn):
+    """The steps of one kind. Per level: a Maya of that level (refilled), the pawn, its swing at her, the kill; then the stage-offset
+    sample, more kills of fresh pawns at one level. Pawn indices count up from first_pawn."""
+    steps, pawn = [], first_pawn
+    for level in levels:
+        steps += ["maya:%d" % level, spawn_step(vm_kind, level), "swing:%d:%s" % (pawn, SWINGS[vm_kind]),
+                  "hit:%d:999999:%s" % (pawn, LETHAL)]
+        pawn += 1
+    steps.append("maya:%d" % SAMPLE_LEVEL)
+    for _ in range(SAMPLE_KILLS):
+        steps += [spawn_step(vm_kind, SAMPLE_LEVEL), "hit:%d:999999:%s" % (pawn, LETHAL)]
+        pawn += 1
+    return steps
+
+
+def step_batches(levels, base_length, limit=COMMAND_LIMIT):
+    """The kinds grouped into VM runs that fit one Windows command line (each run loads the packages, so as few as fit)."""
+    batches, current, length = [], [], base_length
+    for vm_kind, _ in KINDS.values():
+        size = sum(len(step) + 3 for step in kind_steps(vm_kind, levels, 0)) + 200   # + room for longer pawn indices
+        if current and length + size > limit:
+            batches.append(current)
+            current, length = [], base_length
+        current.append(vm_kind)
+        length += size
+    if current:
+        batches.append(current)
+    return batches
+
+
+def merge_runs(runs):
+    """One result from several VM runs: rows together, pawns in order, and each hit step's pawn index moved to match."""
+    merged = {"rows": {}, "pawns": [], "steps": []}
+    for run in runs:
+        offset = len(merged["pawns"])
+        merged["rows"].update(run.get("rows", {}))
+        merged["pawns"] += run.get("pawns", [])
+        for step in run.get("steps", []):
+            parts = step.get("step", "").split(":")
+            if parts[0] == "hit":
+                parts[1] = str(int(parts[1]) + offset)
+            merged["steps"].append(dict(step, step=":".join(parts)))
+    return merged
+
+
+def melee_start_range(actions):
+    """The farthest a kind's plain melee actions start from, given (animation name, range maximum) per attack action. By the animation's
+    name (a host choice, UNVERIFIED as the tree's own choice): element variants and the throws are not the swing the range plays."""
+    ranges = [high for anim, high in actions if high and "melee" in anim.lower() and "slag" not in anim.lower()]
+    return max(ranges) if ranges else 0.0
+
+
+def read_attack_actions(ai_definition, dump):
+    """(animation name, range maximum) of each attack action of an AI definition; dump(path) gives an object's properties."""
+    actions, seen = [], set()
+    for node in dump(ai_definition).get("nodelist") or []:
+        action = node.get("Action")
+        if not action or action in seen or "AnimAttack" not in action.rsplit(".", 1)[-1]:
+            continue
+        seen.add(action)
+        props = dump(action)
+        high = 0.0
+        for limit in props.get("limits") or []:
+            if "range" in limit.rsplit(".", 1)[-1].lower():
+                high = float((dump(limit).get("range") or {}).get("MaxVal") or 0.0)
+        actions.append((str(props.get("attackanim") or "").rsplit(".", 1)[-1], high))
+    return actions
+
+
+def object_reader(reader, package_path, cooked):
+    """dump(path): an object's properties by path, through ow-package (its export list, then --object-dump with the established prefixes)."""
+    listing = subprocess.run([reader, package_path, "--exports"], capture_output=True, text=True, encoding="utf-8", check=True)
+    index = {row["path"]: row["index"] for row in json.loads(listing.stdout)}
+
+    def dump(path):
+        if path not in index:
+            raise KeyError(path)
+        problem = ""
+        for prefix in ("4", "8"):
+            run = subprocess.run([reader, package_path, "--object-dump", str(index[path]), prefix, "--cooked", cooked],
+                                 capture_output=True, text=True, encoding="utf-8")
+            if run.returncode == 0:
+                return json.loads(run.stdout)["properties"]
+            problem = run.stderr.strip()
+        raise RuntimeError("%s: %s" % (path, problem))
+    return dump
+
+
+def start_ranges(reader):
+    """Kind -> melee_start_range. A kind that cannot be read is left out and named: tools/check_range.py then stops a test run on it."""
+    cooked = os.path.join(os.environ.get("OPENWILLOW_BL2", ""), "WillowGame", "CookedPCConsole")
+    out = {}
+    try:
+        dump = object_reader(reader, os.path.join(cooked, AI_PACKAGE + ".upk"), cooked)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        print("stock attack ranges not read (%s)" % error)
+        return out
+    for kind, definition in AI_DEFINITIONS.items():
+        try:
+            found = melee_start_range(read_attack_actions(definition, dump))
+        except (KeyError, RuntimeError, OSError, ValueError) as error:
+            print("%s: stock attack range not read (%s)" % (kind, error))
+            continue
+        if found:
+            out[kind] = found
+        else:
+            print("%s: no melee attack action with a range in %s" % (kind, definition))
+    return out
+
+
 def run_vm(reader, levels):
     cooked = os.path.join(os.environ.get("OPENWILLOW_BL2", ""), "WillowGame", "CookedPCConsole")
     if not os.path.isdir(cooked):
         raise SystemExit("set OPENWILLOW_BL2 to the installed Borderlands 2 folder")
-    # Per kind and level: a Maya of that level (refilled), the pawn, its swing at her. Pawn indices count up from 0.
-    steps, pawn = [], 0
-    for vm_kind, _ in KINDS.values():
-        for level in levels:
-            steps += ["maya:%d" % level, "spawn:%s:%d" % (vm_kind, level), "swing:%d:%s" % (pawn, SWINGS[vm_kind]),
-                      "hit:%d:999999:%s" % (pawn, LETHAL)]
-            pawn += 1
-        # The stage-offset sample: more kills of fresh pawns of this kind at one level.
-        steps.append("maya:%d" % SAMPLE_LEVEL)
-        for _ in range(SAMPLE_KILLS):
-            steps += ["spawn:%s:%d" % (vm_kind, SAMPLE_LEVEL), "hit:%d:999999:%s" % (pawn, LETHAL)]
-            pawn += 1
-    command = [reader, os.path.join(cooked, "Sanctuary_Dynamic.upk"), "--combat-run", "--cooked", cooked] + steps
-    out = subprocess.run(command, capture_output=True, text=True, check=True)
-    return json.loads(out.stdout)
+    base = [reader, os.path.join(cooked, "Sanctuary_Dynamic.upk"), "--combat-run", "--cooked", cooked]
+    runs = []
+    for vm_kinds in step_batches(levels, len(" ".join(base))):
+        steps = []
+        for vm_kind in vm_kinds:
+            steps += kind_steps(vm_kind, levels, sum(1 for s in steps if s.startswith("spawn:")))
+        out = subprocess.run(base + steps, capture_output=True, text=True, check=True)
+        runs.append(json.loads(out.stdout))
+    return merge_runs(runs)
 
 
 def main(argv=None):
@@ -284,17 +432,18 @@ def main(argv=None):
     if os.path.isfile(args.target):
         with open(args.target, encoding="utf-8") as f:
             targets = json.load(f)
-    # One imported bullymong asset serves every bullymong kind (host stand-in: the adult, baby and slinger have their own
-    # stock meshes, which are not imported yet).
-    target = next(iter(targets.values()), None)
     kinds = {}
+    ranges = {} if args.no_vm else start_ranges(args.reader)
     loot = loot_tables(run)
     for name, (vm_kind, row_class) in KINDS.items():
         health = health_table(run, row_class)
         source = "combat-run spawn:%s (VM spawn health, UNVERIFIED)" % vm_kind if health else "no VM run"
-        kinds[name] = kind_entry(name.replace("_", " ").title(), target, health, source,
+        kinds[name] = kind_entry(name.replace("_", " ").title(), targets.get(KIND_ASSETS.get(name)), health, source,
                                  arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"),
                                  loot=loot.get(row_class))
+        kinds[name]["melee_status"] = melee_status(name)
+        if name in ranges:
+            kinds[name]["melee_start_range"] = ranges[name]
     # The spot comes only from ignored local data: both files are needed for the default spot to exist.
     candidates, centre, problem = [], None, ""
     if not os.path.isfile(args.views):
@@ -316,9 +465,13 @@ def main(argv=None):
                          "a copy that has them (the main checkout's local/sanctuary/inspection-views.json), and --terrain if needed.")
     if candidates and not 0 <= args.spot_candidate < len(candidates):
         raise SystemExit("--spot-candidate %d is outside the %d candidates" % (args.spot_candidate, len(candidates)))
-    manifest = {"schema": "ow-range-v1", "respawn_seconds": 8, "spawns": SPAWNS, "kinds": kinds, "spot_candidates": candidates,
+    manifest = {"schema": "ow-range-v1", "respawn_seconds": 8, "spawns": spawns_for(kinds), "kinds": kinds, "spot_candidates": candidates,
                 "scout_centre": centre, "default_spot_candidate": args.spot_candidate if candidates else -1,
-                "assets": "imported" if target else "missing (run tools/import_phaselock_target.ps1)"}
+                "assets": "imported" if targets else "missing (run tools/import_phaselock_target.ps1)"}
+    for spawn in SPAWNS_WITH_ASSET:
+        if spawn not in manifest["spawns"]:
+            print("NOTE: no %s on the range: %s has no imported %s (tools/import_phaselock_target.ps1 stops at its first failed step: read its output)"
+                  % (spawn["kind"], args.target, KIND_ASSETS[spawn["kind"]]))
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)

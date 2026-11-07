@@ -39,6 +39,14 @@ public:
     // The spot for ow.Range without arguments: -owrangeat=X,Y,Z[,Yaw], else local/range/range.json "spot", else the manifest's
     // candidates (PR2 follow-up), else the scout.
     bool ResolveSpot(FVector& OutSpot, float& OutYaw, FString& OutSource);
+    // The whole way in: resolve the spot, build the range there and move Maya to it (ow.Range without arguments, -owrangestart).
+    bool BuildAtResolvedSpot();
+    // Why this manifest cannot make a range that fights ("" when it can): every spawn needs a known kind with melee tables and a swing range.
+    FString ManifestProblem() const;
+    // Why the last build was refused for its manifest ("" when it was not): the slice gate names it instead of reporting a missing target.
+    const FString& LastRefusal() const { return BuildRefusal; }
+    // Records why no range was built, for the log, the person who asked (on screen) and the slice gate. Any build that does not finish says why here.
+    void RefuseBuild(const FString& Why);
     // Scout (PR1 host choice, UNVERIFIED): the first open, flat, textured spot around the town centre that passes the rules in the .cpp.
     bool ScoutSpot(FVector& OutSpot, float& OutYaw, FString& OutLog);
     // The floor of every formation slot at Spot facing Yaw (3 dummies, one slot per manifest enemy). False, with the first
@@ -108,6 +116,30 @@ private:
 
     // -owrangetest driver (Tick state machine; see TickTest).
     bool bTestMode = false;
+    // -owrangestart: the range builds by itself once Maya stands, the one way in for a player (tools/play_range.ps1).
+    FString BuildRefusal;
+    bool bTestNoSpot = false;           // the test's way to reach the "no spot" refusal: ResolveSpot finds nothing while it is set
+    int32 SurveyAccepted = 0;           // candidates the survey built a range on
+    bool bStartSwitch = false;
+    bool bStartSwitchDone = false;
+    float StartSwitchArmedAt = -1.f;
+    // The corpse steps of the test: 0 not checked, 1 kicked and waiting for the cap, 2 done.
+    int32 TestCorpseStage = 0;
+    int32 TestCorpseCaps = 0;
+    float TestCorpseKickAt = 0.f;
+    void TickStartSwitch(float Now);
+    // -owrangekillrow (needs -owrangestart): real shots from rolled guns kill stock enemies, with frames of each corpse (tools/play_range.ps1 -KillRow).
+    bool bKillRow = false;
+    bool bKillRowDone = false;
+    int32 KillGun = 0;
+    int32 KillStage = 0;
+    int32 KillShots = 0;
+    int32 KillFailed = 0;
+    float KillAt = 0.f;
+    FString KillGunName;
+    TWeakObjectPtr<AOpenWillowEnemy> KillTarget;
+    void TickKillRow(float Now);
+    void FinishKill(bool bOk, const FString& Why);
     bool bTestDone = false;
     int32 TestStep = 0;
     float TestArmedAt = -1.f;
@@ -124,6 +156,7 @@ private:
     int32 TestSwingBase = 0;
     int32 TestResolvedBase = 0;
     float TestHealthBefore = 0.f;
+    TWeakObjectPtr<AOpenWillowEnemy> TestPsycho;   // the psycho of the psycho_melee step
     FString TestWhere;                  // where PlaceInSight put Maya (for the step's log line)
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;

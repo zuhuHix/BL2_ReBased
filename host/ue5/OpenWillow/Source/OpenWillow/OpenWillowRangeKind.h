@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Dom/JsonObject.h"
 
 // The entry of the nearest level at or below Level (an entry of 0 counts as missing). False when there is none, and then
 // OutValue is not written.
@@ -41,6 +42,7 @@ struct FOpenWillowRangeLoot
 // Host stand-ins (UNVERIFIED in game) are labelled where they are used.
 struct FOpenWillowRangeKind
 {
+    TSharedPtr<FJsonObject> Json;        // the manifest's entry, for what is read straight from it (the worn meshes)
     FString Name;                        // the manifest key, e.g. "bullymong"
     FString Label;
     FString Mesh, Idle, Death;           // UE object paths; the stock pawn needs all three
@@ -54,6 +56,7 @@ struct FOpenWillowRangeKind
     float WalkSpeed = 150.f;             // uu/s, host stand-in for the patrol walk
     float PatrolRadius = 500.f;          // uu around the home spot
     float RunSpeed = 400.f;              // uu/s, host stand-in for the chase run (manifest run_speed)
+    float MeleeStartRange = 0.f;         // uu, the stock attack action's range: a swing starts inside it (0 = an old manifest)
     float Shield = 0.f;
     float ShieldDelay = 0.f;             // seconds without a hit before the shield regenerates
     float ShieldRate = 0.f;              // shield per second once regenerating (0 = none)

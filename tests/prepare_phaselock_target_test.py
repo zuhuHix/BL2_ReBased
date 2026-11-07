@@ -43,6 +43,24 @@ def test_host_target():
     assert host['idle'].replace('Idle', 'PhaseLock_Lift').endswith('Anim_Beast_PhaseLock_Lift.Anim_Beast_PhaseLock_Lift')
 
 
+def test_every_target_has_what_identity_requires():
+    # identity_step reads these for every target: a real import stops late if one is missing.
+    for name, spec in t.TARGETS.items():
+        for key in ('package', 'pawn', 'dest', 'roles', 'attachments', 'observed'):
+            assert key in spec, f'{name} lacks {key}'
+        assert 'source' in spec['observed'], name
+        assert {'Idle', 'Death'} <= {role for role, _ in spec['roles']}, name
+
+
+def test_host_target_takes_the_archetype_cylinder_without_a_live_read():
+    target = {'dest': '/Game/X', 'skeletal_mesh': {'path': 'Pkg.Mesh.Made'},
+              'mesh_component_properties': {'translation': {'X': 3.0, 'Y': 0.0, 'Z': -10.0}},
+              'archetype_cylinder': {'collisionradius': 30.0, 'collisionheight': 50.0},
+              'observed': {'source': 'made up: no live read'}}
+    host = t.host_target('Beast', target)
+    assert (host['collision_radius'], host['collision_height'], host['mesh_offset_z'], host['mesh_scale']) == (30.0, 50.0, 40.0, 1.0)
+
+
 def test_host_target_uses_component_scale_without_visual_fit():
     target = {'dest': '/Game/X/Beast', 'skeletal_mesh': {'path': 'Char_Fake.Mesh.Skel_Fake'},
               'mesh_component_properties': {'translation': {'Z': 0}, 'scale': 0.8},
