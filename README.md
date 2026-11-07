@@ -75,15 +75,9 @@ Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawi
 
 Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those work. Nobody's done it for BL2 yet. That's the challenge.
 
-```mermaid
-flowchart LR
-    A["Your copy of BL2<br/>maps, guns, script, UI"] --> B["ow-package<br/>reads every package"]
-    B --> C["Asset pipeline<br/>meshes, textures, animation"]
-    B --> D["Script VM<br/>BL2's own bytecode"]
-    D --> E["Native layer<br/>what the .exe did"]
-    C --> F["Unreal Engine 5<br/>renderer, physics, audio"]
-    E --> F
-```
+<p align="center">
+  <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed Unreal Engine 5.">
+</p>
 
 <sub>The target design. Today only parts of the slice run on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run). The rest is C++ in the UE5 project (the "host" in the docs), with labelled stand-ins.</sub>
 
@@ -249,14 +243,16 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 
 An independent AI critic, one that didn't build the thing, gets our frames and matched frames from the real game and scores them out of 10. **The target is 8.** The first rule is that a score isn't parity: it's a judgement, it moves by a few tenths between rounds, and each row only covers what its record says.
 
-| Part | Latest | Score | What it covers |
-|:--|:--|--:|:--|
-| Gun at the hip | `████████░░` | 8.0 to 8.8 | Idle pose and framing of three guns, not paint ([record](docs/verification/WEAPON_VISUALS.md)) |
-| Inventory and menus | `███████░░░` | 7.79 | Round 25. 8.21 if you ignore gun paint ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)) |
-| Gun paint | `██████░░░░` | 6.5 | Side views against the real Inspect frame ([record](docs/verification/WEAPON_VISUALS.md)) |
-| Phaselock | `█████░░░░░` | 5.1 | Round 24 at the default facing ([record](docs/verification/PHASELOCK_STOCK_DATA.md)) |
-| Sanctuary | `█████░░░░░` | 5.0 | Eight matched cameras ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md)) |
-| Aiming down sights | `████░░░░░░` | 4.0 to 6.0 | Pose and framing of four guns ([record](docs/verification/WEAPON_VISUALS.md)) |
+| Part | Score | What it covers |
+|:--|:-:|:--|
+| Gun at the hip | ![8.0 to 8.8](https://img.shields.io/badge/8.0%20to%208.8-brightgreen) | Idle pose and framing of three guns, not paint ([record](docs/verification/WEAPON_VISUALS.md)) |
+| Inventory and menus | ![7.79](https://img.shields.io/badge/7.79-yellowgreen) | Round 25. 8.21 if you ignore gun paint ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)) |
+| Gun paint | ![6.5](https://img.shields.io/badge/6.5-yellow) | Side views against the real Inspect frame ([record](docs/verification/WEAPON_VISUALS.md)) |
+| Phaselock | ![5.1](https://img.shields.io/badge/5.1-orange) | Round 24 at the default facing ([record](docs/verification/PHASELOCK_STOCK_DATA.md)) |
+| Sanctuary | ![5.0](https://img.shields.io/badge/5.0-orange) | Eight matched cameras ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md)) |
+| Aiming down sights | ![4.0 to 6.0](https://img.shields.io/badge/4.0%20to%206.0-orange) | Pose and framing of four guns ([record](docs/verification/WEAPON_VISUALS.md)) |
+
+<sub>Green means the target is reached. Only the hip pose gets there, and only for pose and framing.</sub>
 
 **Measured in the real game itself.** I drive the installed game through the community mod SDK and record what it actually does, the same kind of live read my mod [BL2_RTSE](https://github.com/zuhuHix/Bl2_RTSE) uses. That's how these became fact instead of guesses: the level curve, maximum health, skill points, the Fire mission's XP, Phaselock's lift bob and cast rules, and 69 weapon cards with their exact parts ([record](docs/verification/REALGAME_GROUND_TRUTH.md)). Anything not confirmed like this stays labelled `UNVERIFIED` in the code and docs.
 
@@ -326,15 +322,15 @@ Six phases. Each one ends with a gate, a thing you can actually see or do, so it
 
 **Current priority: a vertical slice, not breadth.** Porting all 82 maps is the easy part. The hard, unproven part is phases 2 through 4, actually running the game's code. So the goal right now is proving those on **one map and one Vault Hunter**, end to end, before spending more time on anything else ([why](ROADMAP.md#priority-the-vertical-slice)).
 
-| | Phase | What you'll be able to do | Where it is |
-|:-:|:--|:--|:--|
-| <img src=".github/assets/icons/done.svg" width="20" alt="Done"> | **0 · Read the files** | The engine can open every BL2 file | Done: 2,008 packages, gated 2026-09-10 |
-| <img src=".github/assets/icons/now.svg" width="20" alt="In progress"> | **1 · See a map** | Walk around Sanctuary in UE5, verified against the real game. The rest of the 82 maps come in phase 5 | Three maps load as scenery. Sanctuary has matched-camera rounds against the game, and still lacks lighting and NPCs |
-| <img src=".github/assets/icons/now.svg" width="20" alt="In progress"> | **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to the slice | A C++ bytecode loader, interpreter and Core natives since 2026-09-30. It drives backpack navigation and pieces of the mission and combat rules |
-| <img src=".github/assets/icons/now.svg" width="20" alt="In progress"> | **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to the slice | Movement numbers from stock data (#77). Maintainer-tested on 2026-10-02, no verification record yet |
-| <img src=".github/assets/icons/now.svg" width="20" alt="In progress"> | **4 · One Vault Hunter, proven** | The full loop on Sanctuary. About 3,800 of Gearbox's undocumented functions have to be worked out. **This is the mountain** | The pieces run with stand-ins, and the scripted loop passes 14 of 14. Not yet compared as a whole with the actual game |
-| <img src=".github/assets/icons/todo.svg" width="20" alt="Not started"> | **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, plus the whole campaign with your real save file | Not started |
-| <img src=".github/assets/icons/todo.svg" width="20" alt="Not started"> | **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | Not started |
+| Phase | What you'll be able to do | Where it is |
+|:--|:--|:--|
+| <img src=".github/assets/icons/done.svg" width="18" height="18" align="absmiddle" alt="Done"> **0 · Read the files** | The engine can open every BL2 file | **Done.** 2,008 packages, gated 2026-09-10 |
+| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **1 · See a map** | Walk around Sanctuary in UE5, verified against the real game. The rest of the 82 maps come in phase 5 | **In progress.** Three maps load as scenery. Sanctuary has matched-camera rounds against the game, and still lacks lighting and NPCs |
+| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to the slice | **In progress.** A C++ bytecode loader, interpreter and Core natives since 2026-09-30. It drives backpack navigation and pieces of the mission and combat rules |
+| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to the slice | **In progress.** Movement numbers from stock data (#77). Maintainer-tested on 2026-10-02, no verification record yet |
+| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **4 · One Vault Hunter, proven** | The full loop on Sanctuary. About 3,800 of Gearbox's undocumented functions have to be worked out. **This is the mountain** | **In progress.** The pieces run with stand-ins, and the scripted loop passes 14 of 14. Not yet compared as a whole with the actual game |
+| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, plus the whole campaign with your real save file | **Not started** |
+| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | **Not started** |
 
 I work on this actively, and I'm not promising completion dates. Checkbox-level detail is in [ROADMAP.md](ROADMAP.md).
 
