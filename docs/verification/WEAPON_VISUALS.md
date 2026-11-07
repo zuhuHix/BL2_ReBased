@@ -690,17 +690,19 @@ lower right; so the missing set was the cause, for these two. Compared by eye wi
 no hand shows in either. Those are other rolls in other light, so this checks placement only. The sniper, assault rifle, SMG and shotgun sets are not
 imported on the zuhu PC, and the sniper's is not captured. Reload clips are not imported.
 
-**Reload clips and arms sets for every type (gunlook lane, 2026-11-07).** `tools/weapon_reload_library.py` is one data step: from `view_types.json` it exports each
-type's weapon AnimSet, gestalt mesh and arms AnimSet with UModel, converts each type's default reload clip onto the library skeleton and onto Maya's arms, adds the
+**Reload clips and arms sets for the table's types (gunlook lane, 2026-11-07).** "Every type" here means the 33 of 68 weapon types in `view_types.json`; those in DLC packages get nothing from this step.
+`tools/weapon_reload_library.py` is one data step: from `view_types.json` it exports each type's weapon AnimSet, gestalt mesh and arms AnimSet with UModel, converts each type's default reload clip onto the library skeleton and onto Maya's arms, adds the
 base clips of each arms set but the pistol's, and prints the two imports. It stops at the default clips: the fast variants depend on a live threshold no table holds.
-It needs a UE reference pose per library type (`--references`, `<kind>.json`, the `local/laneE/weapon-refs` of a recipe of that type). Each reload clip is played at
-clip length / the card's reload time, a timing rule that stays UNVERIFIED.
+It needs a UE reference pose per library type (`--references`, `<kind>.json`, the `local/laneE/weapon-refs` of a recipe of that type) and Maya's arms reference pose. It writes only inside
+ignored `local/`, empties its export and result folders first, and fails before writing anything if a set has no reload clip or a reference pose is absent. Each reload clip is played at clip length / the
+reload time after skills, the same time the refill timer uses; before this the clip used the card's time, so a reload-speed bonus refilled ammo before the clip ended. With no bonus the rate is the same as before.
+The timing rule stays UNVERIFIED. So do the fast rates this leaves in place, such as about 2 on the slice SMG's default clip.
 
 **Data steps a machine needs for the gun look, in order** (all output under ignored `local/` or `Content/`; the commands are in TOOLING.md "weapon part" or in each tool's help):
 1. Part library: `export_weapon_skins.py`, `weapon_library.py meshes`, `skins --game`, `index`, then `import_weapon_library.ps1`. Without it guns fall back to pre-built meshes and may paint wrong (section 21).
 2. `weapon_gen_manifest.py`: without it `ow.RollGun`, shops and drops roll nothing.
 3. `weapon_view_model.py --library local/weapon_library/library.json`: rolled guns' view models. Re-run when `library.json` changes; the host refuses a stale table.
-4. Weapon reference poses (`import_weapon_items.py` with `OPENWILLOW_WEAPON_REFERENCES`, then copied per library type), then `weapon_reload_library.py`, then the two imports it prints: reload clips and all arms sets.
+4. Weapon reference poses, then `weapon_reload_library.py`, then the two imports it prints: reload clips and all arms sets. The poses come from `host/ue5/import_weapon_items.py` with `OPENWILLOW_WEAPON_REFERENCES` set and `OPENWILLOW_ITEMS` naming a folder of `weapon_recipe.py` recipes (`<id>.json`) that each have a `filter_gestalt_gltf.py --recipe` output (`<id>.gltf`), one recipe per library type; copy each pose to `<kind>.json`. The arms pose, `local/character/anim/ref_pose.json`, must already exist: importing Maya writes it (`OPENWILLOW_CHARACTER_REFERENCE`).
 5. `host/ue5/import_weapon_fx.py`: the soft muzzle flame; without it flashes have hard edges.
 
 **Checked on the zuhu PC (run Z19; frames under ignored `local/gunlook/rl1`).** Reload clips play on the four slice guns and two rolled guns, with no missing-clip lines. The firing suite passes 14 of 14, and

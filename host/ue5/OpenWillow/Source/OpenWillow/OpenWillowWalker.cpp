@@ -1652,10 +1652,10 @@ bool AOpenWillowWalker::StartReload(float Now)
         WeaponReloadAnim = LoadObject<UAnimSequence>(nullptr, *ReloadAsset);
         ArmsReloadAnim = !Model->ReloadAnimation.IsEmpty() ? LoadArmsAnim(*HeldArmsSet, *Model->ReloadAnimation) : nullptr;
         const float Rate = WeaponReloadAnim
-            ? WeaponReloadAnim->GetPlayLength() / FMath::Max(0.1f, Weapon->ReloadTime) : 1.f;
+            ? WeaponReloadAnim->GetPlayLength() / ReloadTime : 1.f;   // the time the timers above use, skills included
         if (WeaponReloadAnim && WeaponVisual)
         {
-            // No stock animation-rate scalar is present in the selected type data. ClipLength / item ReloadTime is an
+            // No stock animation-rate scalar is present in the selected type data. ClipLength / the reload time is an
             // UNVERIFIED timing rule inferred from the requested whole-reload span.
             WeaponVisual->PlayAnimation(WeaponReloadAnim, false);
             WeaponVisual->SetPlayRate(Rate);
