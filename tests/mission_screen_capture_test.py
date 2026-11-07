@@ -76,6 +76,11 @@ def test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed():
         text = path.read_text(encoding='utf-8').replace('\r\n', '\n')
         return text[text.index('\n} catch {\n    $runError') + 1:]
     mine = tail_of(CAPTURE)
+    start = mine.index('    # Mod setting: the root restore above')
+    mine = mine[:start] + mine[mine.index('    $recovery = Get-RecoveryReason'):]
+    mod_line = '    if ($modProblem) { $recovery = (@($recovery, "mod setting not restored ($modProblem)") | Where-Object { $_ }) -join \'; \' }\n'
+    assert mod_line in mine
+    mine = mine.replace(mod_line, '')
     theirs = tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
     for a, b in (('pi_stop(); unmark_lock(); print("stopped")', 'ms_stop(); print("stopped")'),
                  ('A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.',
@@ -350,28 +355,107 @@ def test_a_key_that_changes_the_status_ends_the_key_tests():
     assert 'keys=W,Mouse,F' in out and 'log=\n' in out.replace('\r', '') and 'count=1 status=0' in out, out
 
 
-def test_no_key_the_mod_handles_goes_to_the_screen():
-    # Better UI Controls: on this screen the use key's release becomes Enter, the use key's press takes the reward, and the movement keys become arrows. Those would be its behaviour.
+def test_the_stock_read_presses_e_and_wasd():
+    # Better UI Controls is off in this run, so those keys are the game's. E comes last among the tests.
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
     keys = re.findall(r"Test-Keys '\w+' @\(([^)]*)\)|Test-Key '\w+' '(\w+)'|foreach \(\$key in ('[^)]*)\) \{\n\s+if \(\$last\.open\)", stages)
     pressed = {name for group in keys for part in group for name in re.findall(r"'(\w+)'", part) + ([part] if part.isalpha() else [])}
-    assert pressed == {'Mouse', 'F', 'Esc', 'Enter'}, pressed
-    for mod_key in ('E', 'W', 'A', 'S', 'D'):
-        assert mod_key not in pressed
-    # The only E is the one that opens the screen from the world, and an open that moved the status stops the run.
-    assert stages.count('Send-Key E') == 0 and 'Send-Key E' in text[:text.index("$extraRoots = [ordered]@{")]
-    assert "Set-Stage 'offer' ($row.open -eq $true -and $row.status -eq 0)" in stages
-    # F is left out of the reward page: the script inspects the selected item, and there is none.
-    assert "foreach ($key in 'Mouse', 'Esc')" in stages
-    # A key that accepts or turns in does not end the run: it carries on from the new status.
-    assert 'a key test changed' not in stages and "if ($row.status -eq 0) { $accept = Test-Key 'offer' 'Enter' }" in stages and "Test-Key 'offer' 'Esc'" not in stages and 'if ($row.status -eq 3) { $turned' in stages
-    # Enter goes through Test-Key, so it is marked and its delivery read, and the respawn presses nothing.
-    assert 'Send-Key Enter' not in stages
-    order = ["Test-Keys 'offer' @('Mouse', 'F') 0", "$accept = Test-Key 'offer' 'Enter'", "ms_mark('turnin_enter')", "Test-Keys 'turnin' @('Mouse') 3",
-             "$turned = Test-Key 'turnin' 'Enter'", "foreach ($key in 'Mouse', 'Esc')", "ms_mark('reward_press_Enter')", "$after = Test-Key 'after' 'Esc'"]
+    assert pressed == {'Mouse', 'W', 'A', 'S', 'D', 'F', 'E', 'Esc', 'Enter'}, pressed
+    assert 'Send-Key Enter' not in stages and 'Send-Key Esc' not in stages
+    order = ["Test-Keys 'offer' @('Mouse', 'W', 'A', 'S', 'D', 'F', 'E') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'Enter'", "ms_mark('turnin_enter')",
+             "Test-Keys 'turnin' @('Mouse', 'W', 'S', 'E') 3", "$turned = Test-Key 'turnin' 'Enter'", "foreach ($key in 'Mouse', 'W', 'S', 'E', 'Esc')", "ms_mark('reward_press_Enter')", "$after = Test-Key 'after' 'Esc'"]
     places = [stages.index(needle) for needle in order]
     assert places == sorted(places), list(zip(order, places))
+    # The mod's own Enter after E would fail the stage, so a mod still on cannot read as stock.
+    assert "@($log.delivered_offer_E.seen) -notcontains 'Enter'" in stages
+
+
+MOD_BLOCK_RE = re.compile(r'# Mod setting start\..*?# Mod setting end\.\n', re.S)
+
+
+def mod_functions():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    return MOD_BLOCK_RE.search(text).group(0)
+
+
+def run_ps(body):
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'mod.ps1'
+        script.write_text("$ErrorActionPreference = 'Stop'\n$tmp = '" + tmp + "'\n" + mod_functions() + body, encoding='utf-8-sig')
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+
+
+def test_the_mod_setting_changes_only_that_value():
+    done = run_ps(r"""
+$prior = [Text.Encoding]::ASCII.GetBytes("{`r`n    `"enabled`": true`r`n}")
+$off = Get-ModOffBytes $prior
+Write-Output ([Text.Encoding]::ASCII.GetString($off).Replace("`r", 'CR').Replace("`n", 'LF'))
+foreach ($bad in '{"enabled": false}', '{}', 'not json', '{"enabled": true, "x": {"enabled": true}}') {
+    try { $null = Get-ModOffBytes ([Text.Encoding]::ASCII.GetBytes($bad)); Write-Output "ACCEPTED $bad" } catch { Write-Output 'refused' }
+}
+try { $null = Get-ModOffBytes ([byte[]](0x7B, 0xFF, 0x7D)); Write-Output 'ACCEPTED bad utf8' } catch { Write-Output 'refused' }
+""")
+    assert done.returncode == 0, done.stdout + done.stderr
+    lines = done.stdout.splitlines()
+    assert lines[0] == '{CRLF    "enabled": falseCRLF}', lines
+    assert lines[1:] == ['refused'] * 5, lines
+
+
+def test_the_mod_setting_comes_back_byte_identical():
+    done = run_ps(r"""
+$file = Join-Path $tmp 'mod.json'
+$prior = [byte[]](1, 2, 3, 200)
+[IO.File]::WriteAllBytes($file, $prior)
+Write-Output (Restore-ModSetting $file $prior)
+[IO.File]::WriteAllBytes($file, [byte[]](9))
+Write-Output (Restore-ModSetting $file $prior)
+Write-Output (Test-SameBytes ([IO.File]::ReadAllBytes($file)) $prior)
+Remove-Item $file
+Write-Output (Restore-ModSetting $file $prior)
+""")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.split() == ['identical', 'restored,', 'identical', 'True', 'restored,', 'identical'], done.stdout
+
+
+def test_the_finalizer_restores_the_setting_or_holds_for_recovery():
+    never_exits = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
+    finish = "$stagesDone.Add('hit')"
+    base_setup = mod_functions() + "$modFile = '__TMP__\\mod.json'; $modWritten = $true; $modPrior = [byte[]](1, 2, 3)\n[IO.File]::WriteAllBytes($modFile, [byte[]](9))\n"
+    def run(setup, proc='$null', extra=''):
+        text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+        tail = text[text.index('\n} catch {\n    $runError') + 1:]
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / 'driver.ps1'
+            script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
+                              .replace('__OUT__', tmp).replace('__SETUP__', setup.replace('__TMP__', tmp) + extra).replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true')
+                              .replace('__STUBS__', 'function Remove-Driver { }').replace('__BODY__', finish).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc).replace('__CLEAN__', '$true'), encoding='utf-8-sig')
+            done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+            done.file_bytes = (Path(tmp) / 'mod.json').read_bytes()
+            done.hub_lock_kept = (Path(tmp) / 'hub.lock').exists()
+            return done
+    done = run(base_setup)
+    assert done.returncode == 0 and 'status: completed' in done.stdout and 'cleanup mod_setting: restored, identical' in done.stdout, done.stdout + done.stderr
+    assert done.file_bytes == bytes([1, 2, 3]) and done.hub_lock_kept is False, done.stdout
+    # It cannot restore: not completed, the locks stay, and the recovery text prints.
+    done = run(base_setup, extra="function Restore-ModSetting { throw 'disk full' }\n")
+    assert done.returncode == 1 and 'recovery needed' in done.stdout and 'mod setting not restored' in done.stdout and 'MANUAL RECOVERY' in done.stdout and done.hub_lock_kept is True, done.stdout + done.stderr
+    # A game that may still run: nothing is written under it.
+    done = run(base_setup, never_exits)
+    assert done.returncode == 1 and 'cleanup mod_setting: NOT RESTORED' in done.stdout and done.file_bytes == bytes([9]) and done.hub_lock_kept is True, done.stdout + done.stderr
+
+
+def test_the_capture_refuses_and_proves_before_any_key():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    # Refused before any lock or backup; written after the launch flag, so the restore covers it, and last before the launch; proved in the game before any key.
+    order = ['$null = Get-ModOffBytes', '$hubDeadline = (Get-Date)', 'Backup-Saves', "$driverAttempted = $true", "$launchAttempted = $true", "sdk_settings\\BetterUIControls.json", '$log.mod_setting_prior_base64', '$modWritten = $true',
+             '[IO.File]::WriteAllBytes($modFile, $modOff)', '$proc = Start-Game $gameArgs', 'Assert-SavesBlocked (Py', '$log.mod_off = PyJson', 'Send-Key Enter; Start-Sleep 45']
+    body = text.index('try {\n    # Preflight')
+    places = [text.index(needle, body) for needle in order]
+    assert places == sorted(places), list(zip(order, places))
+    assert "m.settings_file.name == 'BetterUIControls.json'" in text and "@($log.mod_off.enabled)[0] -ne $false" in text
+    # Only this file: no other settings file is written.
+    assert text.count('WriteAllBytes') == 2
 
 
 def test_the_session_records_the_mods():
@@ -383,7 +467,7 @@ def test_the_session_records_the_mods():
 
 def test_the_capture_sees_what_each_stage_claims():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
-    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_F.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_Esc.delivered -eq $true)",
+    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true", "Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true",
                    "Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0)", 'if ($log.before.status -ne 0) { throw', "if ($map -notmatch 'Sanctuary')",
                    '$null = switch ($Key)', "$after = Test-Key 'after' 'Esc'"):
         assert needle in text, needle
@@ -391,7 +475,7 @@ def test_the_capture_sees_what_each_stage_claims():
     stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
     assert 'Send-Key Esc' not in stages
     requested = text[text.index('$stagesRequested = @('):].split('\n')[0]
-    for stage in ('hooks', 'offer_keys', 'reward_keys', 'hook_errors'):
+    for stage in ('hooks', 'mod_off', 'offer_keys', 'offer_esc', 'reward_keys', 'hook_errors'):
         assert f"'{stage}'" in requested, stage
 
 
@@ -423,7 +507,11 @@ if __name__ == '__main__':
     test_a_hook_error_is_counted_and_a_key_must_really_arrive()
     test_the_capture_sees_what_each_stage_claims()
     test_a_key_that_changes_the_status_ends_the_key_tests()
-    test_no_key_the_mod_handles_goes_to_the_screen()
+    test_the_stock_read_presses_e_and_wasd()
+    test_the_mod_setting_changes_only_that_value()
+    test_the_mod_setting_comes_back_byte_identical()
+    test_the_finalizer_restores_the_setting_or_holds_for_recovery()
+    test_the_capture_refuses_and_proves_before_any_key()
     test_the_session_records_the_mods()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
