@@ -2775,7 +2775,13 @@ void AOpenWillowWalker::RunGunShots(float Now)
             {
                 FireWeapon();
                 ++GunShotBurstCount;
-                GunShotNextBurstAt = Now + (GunShotBurstCount == 3 ? 0.03f : 0.1f);
+                // At the gun's own pace, as the trigger path in Tick: a shot inside the last one's recoil starts its flash on a raised
+                // muzzle while the restarted clip drops the gun, which no player of a slow gun sees.
+                const FOpenWillowWeaponItem* Weapon = Inventory->ActiveWeapon();
+                const float Base = Weapon ? 1.f / FMath::Max(Weapon->FireRate, 0.01f) : 0.1f;
+                const float Interval = Weapon ? OpenWillowSkillEffects::Apply(this, OpenWillowSkillEffects::Attr::WeaponFireInterval,
+                    OpenWillowFiring::FireInterval(Weapon->Firing, Base, FiringStateFor(*Weapon))) : Base;
+                GunShotNextBurstAt = Now + (GunShotBurstCount == 3 ? 0.03f : Interval);
             }
             return;
         }
