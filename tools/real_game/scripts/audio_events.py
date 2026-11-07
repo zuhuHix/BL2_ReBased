@@ -40,12 +40,18 @@ AE_FUNCTIONS = (
     "WillowGame.LiftActionSkill:LockTarget",
     "WillowGame.WillowPlayerController:HandlePickup",
 )
-ae = globals().setdefault("ae", {"label": None, "rows": [], "dropped": 0, "errors": 0, "seen": {}, "tied": {}, "hooks": []})
+ae = globals().setdefault("ae", {"label": None, "rows": [], "dropped": 0, "errors": 0, "first_error": None, "seen": {}, "tied": {}, "hooks": []})
+
+
+def _ae_count_error(error):
+    ae["errors"] += 1
+    if ae["first_error"] is None:
+        ae["first_error"] = repr(error)
 
 
 def _ae_event(obj, args):
     """The sound event of a call: an argument of class AkEvent, else the behavior object's own Event; None when it has neither."""
-    for prop in args._type._properties():
+    for prop in (args._type._properties() if args is not None else ()):
         value = getattr(args, prop.Name, None)
         if getattr(getattr(value, "Class", None), "Name", None) == "AkEvent":
             return value._path_name()
@@ -54,16 +60,23 @@ def _ae_event(obj, args):
 
 
 def _ae_on_call(obj, args, _ret, func):
-    # A failed read must never reach the game's call.
+    # A failed read must never reach the game's call, so it is counted, and the first one's text kept: a window with errors fails its stage.
+    # The first run lost every call here (2026-11-07): a hook's `func` is a bound function, so the name is func.func.Name.
     if ae["label"] is None:
         return
     try:
         if len(ae["rows"]) >= AE_MAX_ROWS:
             ae["dropped"] += 1
             return
-        ae["rows"].append({"t": time.perf_counter(), "fn": func.Name, "by": obj.Class.Name, "event": _ae_event(obj, args)})
-    except Exception:
-        ae["errors"] += 1
+        row = {"t": time.perf_counter(), "fn": func.func.Name, "by": obj.Class.Name, "event": None}
+        ae["rows"].append(row)
+    except Exception as error:
+        _ae_count_error(error)
+        return
+    try:
+        row["event"] = _ae_event(obj, args)     # a bad read keeps the row: the call still says when the action happened
+    except Exception as error:
+        _ae_count_error(error)
 
 
 def ae_install():
@@ -88,7 +101,7 @@ def ae_remove():
 
 
 def ae_begin(label):
-    ae.update(label=label, rows=[], dropped=0, errors=0)
+    ae.update(label=label, rows=[], dropped=0, errors=0, first_error=None)
     return label
 
 
@@ -127,7 +140,7 @@ def ae_end(baselines=(), presses=(), marker=None, within=0.5, need=1):
         with open(Path(RG_OUT) / ("events_%s.jsonl" % label), "w", encoding="utf-8") as out:
             for row in rows:
                 out.write(json.dumps(row) + "\n")
-    return {"label": label, "rows": len(rows), "dropped": ae["dropped"], "errors": ae["errors"], "counts": counts, "calls": calls,
+    return {"label": label, "rows": len(rows), "dropped": ae["dropped"], "errors": ae["errors"], "first_error": ae["first_error"], "counts": counts, "calls": calls,
             "new": new, "tied": tied, "anchored_by": anchored_by, "anchors": len(anchors), "within": within, "need": need}
 
 
@@ -137,16 +150,18 @@ def ae_overlap():
             for label, tied in ae["tied"].items()}
 
 
-def ae_health(name):
-    """The target's health; 0 once it no longer exists, because killing it counts as a shot landing."""
+def ae_target(name):
+    """The target as it is now: {"gone": true} when it no longer exists, else its health. Zero and gone are different answers."""
     try:
         pawn = ai_pawn(name)
     except LookupError:
-        return 0.0
+        return {"gone": True, "health": None}
+    if getattr(pawn, "bDeleteMe", False):
+        return {"gone": True, "health": None}
     try:
-        return float(pawn.GetHealth())
+        return {"gone": False, "health": float(pawn.GetHealth())}
     except Exception:
-        return float(pawn.Health)
+        return {"gone": False, "health": float(pawn.Health)}
 
 
 def ae_weapon():
@@ -162,17 +177,26 @@ def ae_weapon():
         return {"error": str(error)}     # a label, not worth losing the session for
 
 
+def _ae_item_label(item):
+    return "%s:%s" % (item.Class.Name, item.GetShortHumanReadableName())
+
+
 def ae_throw():
-    """Drop one backpack item so there is something to pick up. The save it came from is restored after the run."""
+    """Drop one backpack item so there is something to pick up: a gun if there is one, since the slice's pickup is a gun; never a usable item.
+    The save it came from is restored after the run. The label stays as a string, so the capture can find that item's own pickup."""
+    ae["thrown"] = None
     try:
         manager = get_pc().GetPawnInventoryManager()
         items = list(manager.Backpack)
-        if not items:
-            return {"thrown": None}
-        item = items[0]
-        label = "%s:%s" % (item.Class.Name, item.GetShortHumanReadableName())
-        manager.ThrowBackpackInventory(item)
-        return {"thrown": label, "backpack_before": len(items)}
+        guns = [item for item in items if item.Class.Name == "WillowWeapon"]
+        others = [item for item in items if item.Class.Name != "WillowUsableItem"]
+        chosen = (guns or others or [None])[0]
+        if chosen is None:
+            return {"thrown": None, "backpack_before": len(items)}
+        label = _ae_item_label(chosen)
+        manager.ThrowBackpackInventory(chosen)
+        ae["thrown"] = label
+        return {"thrown": label, "backpack_before": len(items), "is_gun": bool(guns)}
     except Exception as error:
         return {"thrown": None, "error": str(error)}     # the pickup stage then ends incomplete; the others keep their results
 
@@ -184,17 +208,17 @@ def _ae_pickups():
         if "Default__" in pickup._path_name() or pickup.bDeleteMe or pickup.Inventory is None:
             continue
         where = pickup.Location
-        rows.append((math.dist((me.X, me.Y, me.Z), (where.X, where.Y, where.Z)), pickup.Name, pickup))
+        rows.append((math.dist((me.X, me.Y, me.Z), (where.X, where.Y, where.Z)), pickup.Name, pickup, _ae_item_label(pickup.Inventory)))
     return sorted(rows, key=lambda row: row[0])
 
 
 def ae_face_pickup():
-    """Stand 120 units from the nearest pickup, looking at it. None when there is none."""
+    """Stand 120 units from the pickup of the item ae_throw dropped, looking at it. None when there is none: another pickup would answer another question."""
     try:
-        rows = _ae_pickups()
+        rows = [row for row in _ae_pickups() if ae.get("thrown") and row[3] == ae["thrown"]]
         if not rows:
             return None
-        _dist, name, pickup = rows[0]
+        _dist, name, pickup, _label = rows[0]
         pc, where = get_pc(), pickup.Location
         pc.Pawn.Location = unrealsdk.make_struct("Vector", X=where.X - 120.0, Y=where.Y, Z=where.Z + 60.0)
         eye = pc.Pawn.Location.Z + pc.Pawn.BaseEyeHeight
