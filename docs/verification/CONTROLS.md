@@ -125,7 +125,8 @@ pickupable wins the key. The real-game read is a lead, not proof: standing 120 u
 with the thing still in reach and nothing else taking over. The other 3 stayed usable, and why was not checked (the ray may still have hit them).
 
 So in the host a vending machine, a lootable, a Quick Change station or a door is a target only while a ray from the camera along the view, 350 uu long, enters its box with nothing
-blocking on the way (`OpenWillowUseView`). What is the host's and not the game's:
+blocking on the way (`OpenWillowUseView`). `use_view_rule` tests the ray and box; `tools/test_interactives.ps1` tests a real station: with the view turned away the press has no target of any kind
+(`quick_change`), and from one spot a spawned sheet across the ray takes it off the target and removing the sheet puts it back (`use_view_blocker`). Machines, lootables and doors share the code but have no blocker row. What is the host's and not the game's:
 - The boxes stand in for the usable's collision: the machine's stand-in body, a lootable's whole bounds, a machine-sized box at a station (which has no mesh), and a door's box where
   it is now joined with where it closes, so an open door can be closed from where it was opened. A door and a strongbox were never read in the real game.
 - The existing reaches stay, measured from Maya (350 uu; 220 for a door), and the press still goes nearest first among what she looks at, where the game takes the first hit along the ray.

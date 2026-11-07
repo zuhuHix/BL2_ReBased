@@ -235,6 +235,7 @@ private:
     bool TickStationTest(AOpenWillowWalker& Walker);
     int32 TestStationStep = 0;
     int32 TestSavedMoney = 0;
+    TWeakObjectPtr<AActor> TestViewBlocker;
     FString TestStateBefore;
     bool SpawnOne(UWorld& World, const TSharedPtr<FJsonObject>& Json);
     // The Spawn functions return what they spawned, or null.
