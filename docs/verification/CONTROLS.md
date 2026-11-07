@@ -3,6 +3,21 @@
 AI-assisted (Claude). Host work so a person at the keyboard can do the slice's basic verbs. A passing
 `tools/test_controls.ps1` says the host did this; it does not say the host matches the game.
 
+## What was loaded during the real-game reads
+
+Both sessions ran with bl-sdk mods enabled, so no read here is from a game without mods: Better UI Controls, Dialog Skipper, Item Lights, Loot Collector, Apple's Borderlands
+Cheats, Be Gone Out Of Bounds Loot, Bossbar, BSABT, Commander, No Ads, Python Part Notifier, RTSE, Sanity Saver, Quick Startup, and Inventory Editor.
+
+Better UI Controls is the one that changes these menus. Read from its source: on the status menu it makes W, A, S and D act as arrows and the use key act as Enter, and on the
+Inventory adds R, Q, Home and End; it does not name M, L, Tab or Escape there. So E as Enter and those keys are the mod, not the game. A search of the other mods' source by name
+found none touching the status menu's keys, melee or the use prompt, and no saved key bind on V, M, L, E, Tab or Escape. That was a search, not a reading of every mod, so an
+indirect effect (a cheat's speed or damage) is not ruled out; the damage matching its formula and the swing matching its clip's length argue against one there.
+
+The page routes also have the stock script behind them (`StatusMenuExGFxMovie.HandleInputKey`, by `research/script_disasm.py`): on a key's release it compares the key with the
+player's bound logs, map, inventory, skills and challenges actions and switches to that screen, from whichever screen is up. A key for the screen already up stays there by
+inference: `TrySwitchToScreen` itself was not read. By the same logic I and K would not close their own pages in the game, while the host's do: the script's reading only, for the
+inventory lane. M and L doing nothing while down rests on the live reads and the data's list of actions allowed while down.
+
 ## Where the stock keys come from
 
 In the default keyboard layout, M and L map to the stock map and logs actions, and V and G to melee and grenade. That was read from
@@ -138,6 +153,7 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
   `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=29 failed=0`.
+  `route_refused_while_down` sends its key as a keydown event into the page: it tests the page's handler and the host's refusal, not real key delivery, which skips Slate.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop during a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.

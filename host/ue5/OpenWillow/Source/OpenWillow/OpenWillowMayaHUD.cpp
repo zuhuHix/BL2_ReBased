@@ -816,6 +816,12 @@ void AOpenWillowMayaHUD::PushSkillsState()
     SkillsBrowser->ExecuteJavascript(FString::Printf(TEXT("window.owSkills && window.owSkills(%s)"), *Skills->StateJson()));
 }
 
+bool AOpenWillowMayaHUD::AskMissionsReady()
+{
+    if (SkillsBrowser) SkillsBrowser->ExecuteJavascript(TEXT("window.owMissionsReport && window.owMissionsReport()"));
+    return LastMissionPageReport.Contains(TEXT("\"ready\":true"));
+}
+
 void AOpenWillowMayaHUD::SendPageKey(const FString& Key)
 {
     if (!SkillsBrowser || Key.Len() > 16) return;
