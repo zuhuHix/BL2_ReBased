@@ -53,9 +53,9 @@ One developer, a lot of AI, and a written record of every check.
     <td align="center" width="33%"><h3>14 / 14</h3>links of the spawn-to-respawn loop pass, in four runs on <code>main</code></td>
   </tr>
   <tr>
-    <td align="center"><h3>69 / 69</h3>weapon cards match golden values captured from the real game</td>
+    <td align="center"><h3>69 / 69</h3>weapon cards match the real game's four main stats, with live values (every printed stat on 68)</td>
     <td align="center"><h3>112</h3>dated verification records in <a href="docs/verification/">docs/verification</a></td>
-    <td align="center"><h3>743 commits</h3>in the 58 days since the first one (2026-09-10)</td>
+    <td align="center"><h3>750+ commits</h3>in the 58 days since the first one (2026-09-10)</td>
   </tr>
 </table>
 
@@ -69,11 +69,11 @@ Hey, I'm zuhu. Borderlands 2 is basically two separate things.
 
 **The machine:** `Borderlands2.exe`, the 2012 program that loads all of that and turns it into a game. It's old, 32-bit and locked, running on a modified Unreal Engine 3. Nobody outside Gearbox can touch it.
 
-Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawide, no level editor) lives in the machine, not the stuff. Mods can change the stuff. They can't touch the machine.
+Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawide, no level editor) lives in the machine, not the stuff. Mods can change the stuff, and SDK mods can even hook the running game, but nobody outside Gearbox can recompile the machine.
 
 **So this project builds a new machine.** I decode BL2's own files and bring them into Unreal Engine 5. I'm not modelling copies of anything and I'm not remaking assets from scratch: I'm reading the originals and rebuilding the engine underneath them. Imagine what that opens up: new NPCs, new maps, new characters, new UI, reworked anything. This game deserves a third life.
 
-Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those work. Nobody's done it for BL2 yet. That's the challenge.
+Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those work. As far as I know, nobody's done it for BL2 yet. That's the challenge.
 
 <p align="center">
   <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed Unreal Engine 5.">
@@ -85,7 +85,7 @@ Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openr
 <summary><b>Why can't mods just fix this?</b></summary>
 <br>
 
-Short version: mods can deliver about 80% of what players ask for (balance, QoL, new guns, sharper textures). The remaining 20% is exactly the stuff people want *most*, and it's physically inside `Borderlands2.exe`:
+Short version: my research estimates that mods could deliver about 80% of what players ask for (balance, QoL, new guns, sharper textures). That's an estimate, not a measurement. The rest is exactly the stuff people want *most*, and it's physically inside `Borderlands2.exe`:
 
 - **Co-op** runs through a backend mods can't replace
 - **64-bit** needs the engine recompiled, and only Gearbox can do that
@@ -102,7 +102,7 @@ The next big milestone is one complete loop on Sanctuary, as Maya:
 
 <p align="center"><b>spawn → fight → loot → equip → Phaselock → finish a mission → go down → respawn</b></p>
 
-There's a test that chains all of it in a single session, and on 2026-11-07 it ran four times on `main` (twice plain, once with a shield, once with a forced revive):
+There's a test that chains all of it in a single session, and on 2026-11-07 it ran four times on `main` (twice plain, once with a test-fixture shield, once with a forced revive):
 
 ```text
 slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14
@@ -179,7 +179,7 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 
 ### Guns
 
-**State:** Guns are assembled from the game's own parts and fire with their own firing modes, muzzle flash and impacts. They hold about right at the hip, but aiming down sights and paint are well short of the game.
+**State:** Guns are assembled from the game's own parts, and those parts set their firing modes. They hold about right at the hip, but aiming down sights and paint are well short of the game. The muzzle flash look is a host approximation, and per-surface impacts aren't done.
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/guns-lineup-host-2026-11-07.jpg" width="48%" alt="Four guns rendered in BL2_ReBased on a black backdrop">
@@ -246,7 +246,7 @@ An independent AI critic, one that didn't build the thing, gets our frames and m
 | Part | Score | What it covers |
 |:--|:-:|:--|
 | Gun at the hip | ![8.0 to 8.8](https://img.shields.io/badge/8.0%20to%208.8-brightgreen) | Idle pose and framing of three guns, not paint ([record](docs/verification/WEAPON_VISUALS.md)) |
-| Inventory and menus | ![7.79](https://img.shields.io/badge/7.79-yellowgreen) | Round 25. 8.21 if you ignore gun paint ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)) |
+| Inventory and menus | ![7.79](https://img.shields.io/badge/7.79-yellowgreen) | Round 25. 8.21 if you ignore gun paint and render colour ([record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)) |
 | Gun paint | ![6.5](https://img.shields.io/badge/6.5-yellow) | Side views against the real Inspect frame ([record](docs/verification/WEAPON_VISUALS.md)) |
 | Phaselock | ![5.1](https://img.shields.io/badge/5.1-orange) | Round 24 at the default facing ([record](docs/verification/PHASELOCK_STOCK_DATA.md)) |
 | Sanctuary | ![5.0](https://img.shields.io/badge/5.0-orange) | Eight matched cameras ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md)) |
@@ -254,7 +254,7 @@ An independent AI critic, one that didn't build the thing, gets our frames and m
 
 <sub>Green means the target is reached. Only the hip pose gets there, and only for pose and framing.</sub>
 
-**Measured in the real game itself.** I drive the installed game through the community mod SDK and record what it actually does, the same kind of live read my mod [BL2_RTSE](https://github.com/zuhuHix/Bl2_RTSE) uses. That's how these became fact instead of guesses: the level curve, maximum health, skill points, the Fire mission's XP, Phaselock's lift bob and cast rules, and 69 weapon cards with their exact parts ([record](docs/verification/REALGAME_GROUND_TRUTH.md)). Anything not confirmed like this stays labelled `UNVERIFIED` in the code and docs.
+**Measured in the real game itself.** I drive the installed game through the community mod SDK and record what it actually does, the same kind of live read my mod [BL2_RTSE](https://github.com/zuhuHix/Bl2_RTSE) uses. That's how these became fact instead of guesses: the level curve, maximum health, skill points, the Fire mission's XP, Phaselock's lift bob and some of its cast conditions, and 69 weapon cards with their exact parts ([record](docs/verification/REALGAME_GROUND_TRUTH.md)). Phaselock's target scoring, and casting while injured or down, are not confirmed. Anything not confirmed like this stays labelled `UNVERIFIED` in the code and docs.
 
 ## Where things stand
 
@@ -271,10 +271,10 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 - **Maya.** Movement numbers from the stock data (#77). Shield, health and Fight For Your Life in one host state (#72), a stand-in capacity for shields without a capacity stat (#124). Melee on V (#129). Stock frag grenades on G (#115, #123). A respawn charges the fee and shows a message (#151).
 - **Down and respawn.** The down, bleed-out, second-wind and respawn rules run on the VM (#59, [COMBAT_DOWN_RESPAWN.md](docs/verification/COMBAT_DOWN_RESPAWN.md)).
 - **HUD.** BL2's movie HUD by default (#54), the mission tracker and Fight For Your Life in the movie (#63), damage arrows and the level-up banner (#67), the shield bar (#80), BL2's minimap clip (#53), the Map screen (#97), use prompts (#131), M and L keys (#117), and Phaselock's cooldown on the movie (#47, #146).
-- **Guns.** Four slice guns with ADS, reload clips and muzzle flash (#48, #68). Guns built from the game's own parts (#57, #58, #86). Firing from the parts, including elemental explosions (#56, #70). Bullets carry momentum (#62). Generated guns get a view model, arms clips, the damage stack and the refire rule (#141, #144, #145, #137, #130). An iron-sight ADS height fit, marked as a fit (#150).
+- **Guns.** Four slice guns with ADS, reload clips and muzzle flash (#48, #68). Guns built from the game's own parts (#57, #58, #86). Firing from the parts, including elemental explosions (#56, #70). Bullets carry momentum (#62). Generated guns get a view model, arms clips, the damage stack, the refire rule, their firing block and their accuracy pool (#141, #144, #145, #137, #130, #136, #142). An iron-sight ADS height fit, marked as a fit (#150).
 - **Pickups and drops.** BL2's own card movie on world pickups (#95). E takes the aimed pickup, not the nearest (#101). Drops have a rarity beam and lie on the ground (#139).
 - **Gun range.** Moving enemies with AI, loot on death from the VM's death roll (#89), and five enemies including a Psycho, with corpses (#133).
-- **Skills.** Keyboard navigation (#35, #49). Skill modifiers on Maya's survival stats (#93). Quick Change respec at the placed machine (#106). Some numbers from live reads at level 8 only (#116).
+- **Skills.** Keyboard navigation (#35, #49). Skill modifiers on Maya's survival stats (#93). Quick Change respec at the placed machine (#106). Some numbers from live reads at level 8 only (#116), and Converge's damage from one live read (#135).
 - **Vendors and lootables.** Currency and stock persist (#87). The Ammo Dump and Dr. Zed sell, and ammo purchases fill the pools (#99). The shop keeps its selection rules and refusals on screen (#127). Lootable and pickup textures (#120). The shelves for shields and grenade mods sell stand-in gear with no stats.
 - **Phaselock.** Presentation and colour constants (#50, #94, #110), round 24 (#104), the target's six worn attachments (#113), and a held target's death ends the skill (#146). Lift bob and reload/weapon-swap rules are confirmed in the real game ([PHASELOCK_STOCK_DATA.md](docs/verification/PHASELOCK_STOCK_DATA.md)).
 - **Inventory and menus.** Tab switching (#91, #92). VALUE thumbnails and card fits (#69). An item set that would leave the backpack without room is refused (#71). The Missions log (#64, #100). Status pages hide the first-person gun (#118). A missing UI movie no longer covers the game (#122).
@@ -295,7 +295,7 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 
 ## What you'd get (eventually)
 
-**The first milestone:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in UE5. Everything below comes after that. It's not a remaster and it's not a remake; here's what a new machine actually buys you:
+**The first milestone is the goal:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in UE5. Today only parts of it do. Everything below comes after that. It's not a remaster and it's not a remake; here's what a new machine is meant to buy you. These are goals, and none of them exist yet:
 
 <table>
   <tr>
@@ -307,8 +307,8 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
     <td><img src=".github/assets/icons/map.svg" width="20" align="absmiddle" alt=""> <b>New maps.</b> BL2 never got a level editor. UE5 comes with one built in.</td>
   </tr>
   <tr>
-    <td><img src=".github/assets/icons/puzzle.svg" width="20" align="absmiddle" alt=""> <b>Your mods still work.</b> BLCMM text mods edit the same data we load, so they should just carry over.</td>
-    <td><img src=".github/assets/icons/save.svg" width="20" align="absmiddle" alt=""> <b>Your saves still work.</b> Real save files, same characters.</td>
+    <td><img src=".github/assets/icons/puzzle.svg" width="20" align="absmiddle" alt=""> <b>Your mods carry over.</b> BLCMM text mods edit the same data we load, so they should come along. Not tested yet.</td>
+    <td><img src=".github/assets/icons/save.svg" width="20" align="absmiddle" alt=""> <b>Your saves carry over.</b> Real save files, same characters.</td>
   </tr>
   <tr>
     <td><img src=".github/assets/icons/shield.svg" width="20" align="absmiddle" alt=""> <b>It can't be cancelled.</b> If the servers go, the game keeps working.</td>
@@ -372,7 +372,7 @@ I'm not sure anyone actually reads this far, but if you did, thank you for check
 
 ## Is this legal?
 
-Yes. I take it seriously. The rules are the same as [OpenMW](https://openmw.org/) (Morrowind) and [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2):
+I take this seriously. I'm not a lawyer, so this describes what the project does rather than giving a legal conclusion. I follow the same kind of rules as [OpenMW](https://openmw.org/) (Morrowind) and [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2):
 
 1. **I never share game files.** Not a texture, not a sound. Nothing extracted from the game *ever* enters this repository. Extracted assets live locally during import but stay git-ignored.
 2. **No leaked source, and no code copied from the game's binary.** I read file formats, watch what the real game does, and (since 2026-10-01) analyse the game executable on my own machine to understand how its native code behaves. Decompiler output and analysis databases are game-derived data and stay out of this repository; the code in it is written from understanding, not from listings. I'm not a lawyer and none of this is legal advice; the risks are spelled out in [docs/LEGAL.md](docs/LEGAL.md).
@@ -393,10 +393,10 @@ Not yet. There's no download. On my machines Maya can walk Sanctuary, shoot enem
 Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. This keeps the original stuff untouched and replaces only the *machine* that runs it. Remasters will follow later on when people enjoy their new modding capabilities.
 
 **Will my mods work?**
-That's the plan. Text mods edit the same game data this loads, so they should carry over once gameplay runs (Phase 4–5). SDK mods will need a compatibility layer later. It won't be hard and most mods will keep working.
+That's the plan, but it hasn't been tested. Text mods edit the same game data this loads, so they should carry over once gameplay runs (Phase 4–5). SDK mods will need a compatibility layer later. How many mods come along isn't known yet.
 
 **Will my saves work?**
-Yes. Reading real save files is a Phase 5 task. The save format is already documented by the community.
+That's the plan, but not yet. Reading and writing real save files is a Phase 5 task and hasn't been validated. The save format is already documented by the community.
 
 **Why Unreal Engine 5?**
 Borderlands 2 is Unreal Engine *3*. UE3's systems (materials, animation, particles, cutscenes, scripting) all have direct descendants in UE5, so we translate into them instead of inventing replacements. That's a much smaller problem.
@@ -424,7 +424,7 @@ Everything below is the technical layer. Click to expand.
 <summary><b>How it works: architecture</b></summary>
 <br>
 
-Measured directly from the installed game: 20,119 functions across the nine code packages. **12,978 (64.5%) are UnrealScript bytecode** and will run in our VM as-is. **7,141 (35.5%) were native C++** inside `Borderlands2.exe` and must be rebuilt. Of those, 286 are trivial builtins, 609 are online/save/DLC plumbing we replace rather than replicate, 512 bridge the Scaleform UI, 1,914 are stock UE3 natives whose contracts are public via UDK, and **3,803 are Gearbox's own, undocumented**. Full breakdown: [engine plan §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth-the-numbers-this-plan-rests-on).
+Measured directly from the installed game: 20,119 functions across the nine code packages. **12,978 (64.5%) are UnrealScript bytecode**, meant to run in our VM as-is (today the VM is partial, and it decodes all but 10 of them). **7,141 (35.5%) were native C++** inside `Borderlands2.exe` and must be rebuilt. Of those, 286 are trivial builtins, 609 are online/save/DLC plumbing we replace rather than replicate, 512 bridge the Scaleform UI, 1,914 are stock UE3 natives whose contracts are public via UDK, and **3,803 are Gearbox's own, undocumented**. Full breakdown: [engine plan §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth-the-numbers-this-plan-rests-on).
 
 Three layers. The script VM and the asset pipeline are engine-agnostic C++; the native layer is where the host engine shows up.
 
@@ -447,7 +447,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
    │  interpreter, states, latents,  │
    │  native dispatch table          │
    └─────────────────────────────────┘
-        runs the 12,978 inherited functions unchanged
+        goal: run the 12,978 inherited functions unchanged
 ```
 
 The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate; the plan rules out switching later. UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*, which is the whole reason it won out; all Phase 1 work targets UE 5.8. Full reasoning, and the alternative considered (Godot), is in [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision-decide-by-end-of-phase-0-never-after).
@@ -462,7 +462,7 @@ Analyse freely, publish only our own code. File formats, observed behaviour and 
 
 Every rebuilt native function needs a definition of "correct," and there are three we'll accept. **UDK**, a free running copy of UE3, covers the 1,914 stock natives. **The original game, instrumented** with [unrealsdk](https://github.com/bl-sdk) confirms the rest: hook a function, log what goes in and out during real play, then implement until our engine reproduces that log. **Community documentation** (the BLCM wiki, bl2.parts, Lootlemon) fills in stat math the other two don't reach. Reading the native function itself is now the fastest way to *find* the rule; it doesn't replace the check. A rule read from native code and not yet confirmed by one of the three stays labelled `UNVERIFIED` until it earns that label removed.
 
-That standard isn't just for natives. Every change in this repo ends in a check run against the real game, and the check gets written down: synthetic tests in CI, differential checks against a real install, visual checks by an actual person looking at the screen. [DECISIONS.md](DECISIONS.md) is the record of all of it: every architectural choice, what got verified, and what didn't.
+That standard isn't just for natives. Every change gets the checks that fit it, and they get written down: synthetic tests in CI, differential checks against a real install, host runs, and comparisons with the real game where they exist. Each record says which of these it has. [DECISIONS.md](DECISIONS.md) is the record of all of it: every architectural choice, what got verified, and what didn't.
 
 It's a one-person project, and I'm not quiet about the tooling. I own every architectural call, every verification and every license or provenance decision myself, but day to day, ChatGPT (Astra and Luna) handles format decoding and smaller one-off tasks, and Claude handles keeping the project organized plus last-resort coding once I've burned through a month's usage on my plan. Both operate under a written brief ([CLAUDE.md](CLAUDE.md)) and guard hooks in [`.claude/`](.claude/). Since 2026-09-30 an assistant may edit the package reader, container code and `CMakeLists.txt` and must then name the change and what is verified in its final message; the hooks still prompt me for license, dependency and provenance files and block game-file and decompiler-database writes.
 
