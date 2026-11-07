@@ -50,11 +50,11 @@ function Get-GameProcesses {
 }
 function Focus-Game { $true }
 function Assert-GameForeground { if ($scenario -eq 'focus_lost') { throw 'refusing to send input: Borderlands 2 is not the foreground window after 3 focus attempts (is someone using this PC?)' } }
-function Send-Key { $global:OwUseKeySent = $true }
+function Send-Key { $global:OwUseKeySent = $true; Add-Content -LiteralPath '__TMP__/keys.log' "$args" }
 function Send-KeyDown { }
 function Send-KeyUp { }
 function Save-Shot([string]$Name) { $f = Join-Path $script:RG $Name; New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null; Set-Content -LiteralPath $f 'frame'; $f }
-function Invoke-Burst { param($Folder, $Seconds, $IntervalMs, $Trigger, $Scale) if ($Trigger) { & $Trigger }; [pscustomobject]@{ frames = 3 } }
+function Invoke-Burst { param($Folder, $Seconds, $IntervalMs, $Trigger, $Scale) Add-Content -LiteralPath '__TMP__/bursts.log' "$Folder"; if ($Trigger) { & $Trigger }; [pscustomobject]@{ frames = 3 } }
 function Stop-OwnGame { if ($scenario -eq 'game_stuck') { 'refused: test' } else { $global:OwGameGone = $true; 'stopped' } }
 function Invoke-GamePyFile { param($Path, $OutFolder) 'loaded' }
 # What a session does to the player's files, whatever the run does about it.
@@ -85,13 +85,24 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         return (@{ Skel_DahlChest_Ammo = 1; Skel_Dumpster = 1; Skel_StorageLocker = 1; Skel_StrongBox = 1; Skel_CardboardBox = 1; Skel_LaundryMachine = $count } | ConvertTo-Json -Compress)
     }
     if ($Code -match 'lc_materials') { Set-Content -LiteralPath (Join-Path $script:RG 'loot_capture/materials.json') '{}'; if ($scenario -eq 'materials_unread') { return '{"slots": {}, "problems": ["Skel_X has no readable material slot"]}' }; return '{"slots": {}, "problems": []}' }
-    if ($Code -match 'lc_lower_ammo') { return '{"before": {"a": 10}, "after": {"a": 5}}' }
+    if ($Code -match 'lc_lower_ammo') {
+        if ($scenario -eq 'ammo_not_lowered') { return '{"before": {"a": 10}, "after": {"a": 10}, "fallen": []}' }
+        return '{"before": {"a": 10}, "after": {"a": 5}, "fallen": ["a"]}'
+    }
+    if ($Code -match 'lc_pickup_baseline') {
+        $global:OwBaselines = 1 + [int]$global:OwBaselines
+        $went = '{"present": false, "reason": "the chosen pickup went before this attempt"}'
+        if ($scenario -eq 'chosen_pickup_went') { return $went }
+        # Still there for the walk-over, gone by the use key.
+        if ($scenario -eq 'pickup_went_after_the_walk_over' -and ($global:OwBaselines % 2) -eq 0) { return $went }
+        return '{"present": true}'
+    }
     if ($Code -match 'lc_mods') { return '[{"name": "SomeMod", "enabled": true}]' }
     if ($Code -match 'lc_choose_pickup') { $global:OwFellOn = $false; $global:OwUseKeySent = $false }
     if ($Code -match 'lc_over_pickup') { $global:OwFellOn = $true }
     if ($Code -match 'lc_choose_pickup|lc_stand_pickup|lc_over_pickup|lc_aim_pickup') { return '{"pickup": "p"}' }
     if ($Code -match 'lc_pickup_state') {
-        if ($scenario -eq 'pickup_gone_only') { return '{"gone": true, "changed": false, "collected": false}' }
+        if ($scenario -in 'pickup_gone_only', 'pickup_went_after_the_walk_over') { return '{"gone": true, "changed": false, "collected": false}' }
         # Collected only once the thing that collects it was really sent.
         $sent = if ($scenario -eq 'collected_by_use_key') { $global:OwUseKeySent } else { $global:OwFellOn }
         if (-not $sent) { return '{"gone": false, "changed": false, "collected": false}' }
@@ -142,7 +153,11 @@ def run_script(script, scenario, earlier_session=None):
         kept = sorted(p.name for p in (tmp / 'realgame' / SCRIPTS[script]).glob('session.*.json'))
         contents = {path.name: path.read_text(encoding='utf-8-sig').strip() if path.exists() else None for path in files}
         backups = sorted(p.name for p in (tmp / 'realgame').glob('save-backup-*'))
+        def logged(name):
+            path = tmp / name
+            return path.read_text(encoding='utf-8').split() if path.exists() else []
         return {'code': done.returncode, 'out': done.stdout + done.stderr, 'session': session, 'files': contents, 'hub': hub.exists(),
+                'keys': logged('keys.log'), 'bursts': logged('bursts.log'),
                 'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups,
                 'kept': kept, 'kept_text': [(tmp / 'realgame' / SCRIPTS[script] / name).read_text(encoding='utf-8') for name in kept]}
 
@@ -284,7 +299,29 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertTrue(r['session']['status'].startswith('incomplete: Skel_'), r['out'])
         for row in r['session']['types'].values():   # a string: Capture-Type stopped at lc_stand, before any burst or key
             self.assertTrue(str(row).startswith('failed: game script failed'), r['out'])
+        self.assertEqual([b for b in r['bursts'] if 'Skel_' in b], [], r['out'])
+        self.assertNotIn('E', r['keys'], r['out'])
         self.assertEqual(r['files'], ORIGINAL)
+
+    def test_a_setter_that_lowered_nothing_is_incomplete(self):
+        r = self.run_it('ammo_not_lowered')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertTrue(any(p.startswith('ammo: no ammo pool fell') for p in r['session']['stage_problems']), r['out'])
+
+    def test_a_chosen_pickup_gone_before_the_attempt_gets_no_attempt(self):
+        r = self.run_it('chosen_pickup_went')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertTrue(r['session']['status'].startswith('incomplete: ammo_pickup, cash_pickup ('), r['out'])
+        self.assertEqual(r['session']['pickups']['ammo']['method'], 'none', r['out'])
+        self.assertEqual([b for b in r['bursts'] if 'ammo_' in b or 'cash_' in b], [], r['out'])
+
+    def test_a_pickup_gone_after_the_walk_over_gets_no_use_key(self):
+        r = self.run_it('pickup_went_after_the_walk_over')
+        self.assertEqual(r['code'], 1, r['out'])
+        row = r['session']['pickups']['ammo']
+        self.assertEqual(row['method'], 'none', r['out'])
+        self.assertTrue(row['result'].startswith('no use key'), r['out'])
+        self.assertEqual([b for b in r['bursts'] if b.endswith('_use')], [], r['out'])
 
     def test_a_pickup_that_went_without_the_value_rising_is_incomplete(self):
         r = self.run_it('pickup_gone_only')

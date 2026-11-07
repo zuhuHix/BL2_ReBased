@@ -49,8 +49,9 @@ class FakeWorld:
         with tempfile.TemporaryDirectory() as folder:
             self.lc = load(Path(folder))
         self.money = 100
-        self.pool = Thing('Pools.Ammo', Definition=Thing('D.Ammo_Pool'), AssociatedProvider=Thing('Map.PC.Manager'), CurrentValue=5.0)
-        self.pickups = [self.pickup('Map.Pick_1', 'GD.Ammo_Item'), self.pickup('Map.Pick_2', 'GD.Cash_Money')]
+        self.pool = self.ammo_pool('Pools.Shotgun', 'D.Ammo_Combat_Shotgun_Pool')
+        self.other_pool = self.ammo_pool('Pools.Sniper', 'D.Ammo_Sniper_Rifle_Pool')
+        self.pickups = [self.pickup('Map.Pick_1', 'GD.ammodrop_shotgun_shells'), self.pickup('Map.Pick_2', 'GD.Cash_Money')]
         self.objects = []
         state = types.SimpleNamespace(GetCurrencyOnHand=lambda _kind: self.money)
         self.aims = []
@@ -59,8 +60,14 @@ class FakeWorld:
         self.lc.get_pc = lambda: self.pc
         sdk = sys.modules['unrealsdk']
         sdk.make_struct = lambda _name, **fields: types.SimpleNamespace(**fields)
-        sdk.find_all = lambda name, _exact: {'WillowPickup': self.pickups, 'ResourcePool': [self.pool],
+        sdk.find_all = lambda name, _exact: {'WillowPickup': self.pickups, 'ResourcePool': [self.pool, self.other_pool],
                                              'WillowInteractiveObject': self.objects}.get(name, [])
+
+    @staticmethod
+    def ammo_pool(path, definition):
+        pool = Thing(path, Definition=Thing(definition), AssociatedProvider=Thing('Map.PC.Manager'), CurrentValue=5.0)
+        pool.SetCurrentValue = lambda value: setattr(pool, 'CurrentValue', value)
+        return pool
 
     def pickup(self, path, definition):
         item = types.SimpleNamespace(DefinitionData=types.SimpleNamespace(ItemDefinition=Thing(definition)))
@@ -71,6 +78,11 @@ class PickupStateTest(unittest.TestCase):
     def setUp(self):
         self.world = FakeWorld()
         self.lc = self.world.lc
+
+    def begin(self, kind):
+        """As the capture does: stand by the pickup, then take the attempt's baseline."""
+        self.lc.lc_stand_pickup(kind)
+        return self.lc.lc_pickup_baseline()
 
     def collect(self, chosen=0):
         """The pickup goes, and leaves a destroyed object behind for anything still holding it."""
@@ -86,6 +98,56 @@ class PickupStateTest(unittest.TestCase):
         chosen = self.lc.lc_choose_pickup('ammo')
         self.assertEqual((chosen['pickup'], chosen['in_the_open']), ('Map.Pick_3', True))
 
+    def test_another_pool_rising_with_the_chosen_pickup_gone_is_not_collected(self):
+        self.begin('ammo')
+        self.collect()
+        self.world.other_pool.CurrentValue = 9.0   # another pickup, touched on the way
+        state = self.lc.lc_pickup_state()
+        self.assertEqual((state['gone'], state['changed'], state['collected']), (True, False, False))
+        self.world.pool.CurrentValue = 9.0         # its own pool
+        self.assertEqual(self.lc.lc_pickup_state()['collected'], True)
+
+    def test_what_moved_before_the_attempt_is_not_credited_to_it(self):
+        self.lc.lc_stand_pickup('ammo')
+        self.world.pool.CurrentValue = 9.0         # on the way here, before the baseline
+        self.lc.lc_pickup_baseline()
+        self.collect()
+        self.assertEqual(self.lc.lc_pickup_state()['collected'], False)
+
+    def test_a_chosen_pickup_gone_before_the_attempt_is_not_present(self):
+        self.lc.lc_stand_pickup('ammo')
+        self.collect()
+        self.assertEqual(self.lc.lc_pickup_baseline()['present'], False)
+        self.world.pool.CurrentValue = 9.0
+        self.assertEqual(self.lc.lc_pickup_state()['collected'], False)
+
+    def test_no_baseline_for_the_attempt_is_not_collected(self):
+        self.begin('ammo')
+        self.lc.lc_stand_pickup('ammo')            # the second try's walk clears the first's baseline
+        self.collect()
+        self.world.pool.CurrentValue = 9.0
+        self.assertEqual(self.lc.lc_pickup_state()['collected'], False)
+
+    def test_no_baseline_for_a_cash_attempt_is_not_collected(self):
+        self.lc.lc_stand_pickup('cash')
+        self.collect(1)
+        self.world.money += 50
+        self.assertEqual(self.lc.lc_pickup_state()['collected'], False)
+
+    def test_an_ammo_type_with_no_known_pool_credits_nothing(self):
+        self.world.pickups[0] = self.world.pickup('Map.Pick_1', 'GD.ammodrop_unknown')
+        self.begin('ammo')
+        self.collect()
+        self.world.pool.CurrentValue = 9.0
+        self.assertEqual(self.lc.lc_pickup_state()['collected'], False)
+
+    def test_the_ammo_stage_lists_only_pools_that_fell(self):
+        self.world.other_pool.SetCurrentValue = lambda _value: (_ for _ in ()).throw(RuntimeError('no'))
+        result = self.lc.lc_lower_ammo()
+        self.assertEqual(result['fallen'], ['Ammo_Combat_Shotgun_Pool'])
+        self.world.pool.SetCurrentValue = self.world.other_pool.SetCurrentValue
+        self.assertEqual(self.lc.lc_lower_ammo()['fallen'], [])
+
     def test_the_walk_over_lands_on_the_pickup_and_the_chosen_one_is_judged(self):
         self.lc.lc_choose_pickup('ammo')
         self.world.pickups[0].Location = types.SimpleNamespace(X=7.0, Y=8.0, Z=9.0)
@@ -99,31 +161,31 @@ class PickupStateTest(unittest.TestCase):
         self.assertEqual(self.lc.lc_aim_pickup(), {'pickup': None})
 
     def test_nothing_kept_between_commands_is_a_game_object(self):
-        self.lc.lc_stand_pickup('ammo')
+        self.begin('ammo')
         self.assertEqual(self.lc.LC['pickup']['path'], 'Map.Pick_1')
         self.assertIsInstance(self.lc.LC['pickup']['path'], str)
 
     def test_a_collected_pickup_is_not_touched_again(self):
-        self.lc.lc_stand_pickup('ammo')
+        self.begin('ammo')
         self.lc.LC['pickup']['object'] = Dead()   # were anything to use a kept reference, this would raise
         self.collect()
         self.world.pool.CurrentValue = 9.0
         self.assertEqual(self.lc.lc_pickup_state()['collected'], True)
 
     def test_a_pickup_gone_without_the_value_rising_is_not_collected(self):
-        self.lc.lc_stand_pickup('ammo')
+        self.begin('ammo')
         self.collect()
         state = self.lc.lc_pickup_state()
         self.assertEqual((state['gone'], state['changed'], state['collected']), (True, False, False))
 
     def test_the_value_rising_with_the_pickup_still_there_is_not_collected(self):
-        self.lc.lc_stand_pickup('cash')
+        self.begin('cash')
         self.world.money = 500   # another pickup, say
         state = self.lc.lc_pickup_state()
         self.assertEqual((state['gone'], state['changed'], state['collected']), (False, True, False))
 
     def test_cash_counts_money_and_ammo_counts_pools(self):
-        self.lc.lc_stand_pickup('cash')
+        self.begin('cash')
         self.collect(1)
         self.world.pool.CurrentValue = 9.0
         self.assertEqual(self.lc.lc_pickup_state()['collected'], False)   # ammo rose, not money
@@ -134,14 +196,14 @@ class PickupStateTest(unittest.TestCase):
         # The old check read an error string as "gone".
         def unreadable(_kind):
             raise RuntimeError('read failed')
-        self.lc.lc_stand_pickup('cash')
+        self.begin('cash')
         self.collect(1)
         self.world.pc.PlayerReplicationInfo.GetCurrencyOnHand = unreadable
         state = self.lc.lc_pickup_state()
         self.assertEqual((state['gone'], state['collected']), (True, False))
 
     def test_a_pickup_whose_state_cannot_be_read_is_not_gone(self):
-        self.lc.lc_stand_pickup('ammo')
+        self.begin('ammo')
         self.world.pool.CurrentValue = 9.0
         chosen = self.world.pickups[0]
         delete_flag = property(lambda _self: (_ for _ in ()).throw(RuntimeError('read failed')))
