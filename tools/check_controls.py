@@ -3,8 +3,10 @@
 A summary of "failed=0" alone would pass a run that lost a row or renamed one. A pass says the host did this, not that it matches the
 real game (docs/verification/CONTROLS.md).
 
-Usage: python tools/check_controls.py <log>. Exit 0 pass, 1 fail.
+Usage: python tools/check_controls.py [--melee-clip] <log>. Exit 0 pass, 1 fail.
+--melee-clip also requires the imported first-person melee clip, for a run after the import (docs/verification/CONTROLS.md).
 """
+import math
 from pathlib import Path
 import re
 import sys
@@ -16,6 +18,37 @@ EXPECTED = ('start_closed', 'm_opens_map', 'map_closed', 'l_opens_missions', 'me
             'e_takes_the_named_pickup', 'down_cancels_swing', 'prompt_nothing_while_down', 'm_refused_while_down', 'l_refused_while_down', 'route_refused_while_down', 'closed_at_end')
 ROW = re.compile(r'OWCONTROLS (\S+) (PASS|FAIL)\b(.*)')
 SUMMARY = re.compile(r'OWCONTROLS SUMMARY passed=(\d+) failed=(\d+)[ \t\r]*$', re.M)
+# Every press line, whatever follows, so one that does not parse whole cannot be skipped. A refusal is its own line and names no clip.
+MELEE_PRESS_LINE = re.compile(r'OWMELEE press(?! refused:)([^\r\n]*)')
+MELEE_PRESS = re.compile(r' t=(\S+) duration=(\S+) clip=([01])[ \t]*')
+MELEE_CLIP_MISSING = re.compile(r'arms animation not found:[^\r\n]*Melee')
+MELEE_CLIP_SECONDS = 0.70   # the game holds the weapons this long, read live (OpenWillowMelee::NoClipDuration)
+
+
+def is_finite(number):
+    try:
+        return math.isfinite(float(number))
+    except ValueError:
+        return False
+
+
+def grade_melee_clip(text):
+    """Problems with the imported clip: not found, or a swing without it, or of another length. The stand-in duration is also 0.70, so clip=1 is what tells them apart."""
+    problems = []
+    if MELEE_CLIP_MISSING.search(text):
+        problems.append('the melee clip was not found')
+    lines = MELEE_PRESS_LINE.findall(text)
+    if not lines:
+        problems.append('no melee press logged')
+    for rest in lines:
+        press = MELEE_PRESS.fullmatch(rest)
+        if press is None or not all(is_finite(press.group(n)) for n in (1, 2)):
+            problems.append(f'a melee press line that does not parse:{rest}')
+        elif press.group(3) != '1':
+            problems.append(f'a swing ran without the clip: duration={press.group(2)} clip={press.group(3)}')
+        elif abs(float(press.group(2)) - MELEE_CLIP_SECONDS) > 0.02:
+            problems.append(f'the clip runs {press.group(2)} s, the game held the weapons {MELEE_CLIP_SECONDS:.2f} s')
+    return problems
 
 
 def grade(text):
@@ -41,9 +74,16 @@ def grade(text):
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    melee_clip = '--melee-clip' in args
+    if melee_clip:
+        args.remove('--melee-clip')
+    if len(args) != 1:
         sys.exit(__doc__)
-    rows, problems = grade(Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace'))
+    text = Path(args[0]).read_text(encoding='utf-8', errors='replace')
+    rows, problems = grade(text)
+    if melee_clip:
+        problems += grade_melee_clip(text)
     for name, result, detail in rows:
         print(f'{result:<5} {name:<24} {detail}')
     for problem in problems:

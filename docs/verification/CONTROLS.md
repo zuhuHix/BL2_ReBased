@@ -82,6 +82,10 @@ a wall ends the swing there.
 
 - The first-person clip is **not imported** yet: `tools/import_maya_combat_anims.ps1` now names it, and running that (an editor run) is the step left.
   Until then `MeleeAnim` logs the usual "arms animation not found" warning and the swing has no visible arm, for the 0.70 s the game holds the weapons.
+  The step, on a machine with the game and the UModel MD5 exports (ignored `local/`; not run yet), with the machine's own paths:
+  `tools/import_maya_combat_anims.ps1 -Engine <UE> -Game <BL2> -ArmsMesh <arms .md5mesh> -PistolAnimSet <folder of .md5anim> -SirenAnimSet <folder of .md5anim, the Siren first-person set>`, then `tools/test_controls.ps1` and
+  `python tools/check_controls.py --melee-clip <log>`. That asks for no "not found" warning on the clip, and every `OWMELEE press` with `clip=1` and a duration of 0.70 (within 0.02).
+  It says the clip loads and has the live length, not that the swing looks right: that takes a look at the arms next to the game's.
 - The swing's origin and direction use the camera, since the stock source is a native interface call.
 - The cone's use of the angle (not halved) is the low-confidence reading in `NATIVE_AI_MELEE.md`.
 - While down the host applies the trigger's weapon-ready rule. A stock swing does work down (twice, about 6 s after going down); how soon is unread.
