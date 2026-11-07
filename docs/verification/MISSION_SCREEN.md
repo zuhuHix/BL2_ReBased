@@ -13,8 +13,11 @@ The first scripted playtest showed one E accepting the mission with no text, no 
 | E at Marcus opens a screen; Enter on the offer accepts; Enter on the turn-in entry turns in; Enter again on a reward page takes the reward; the reward came 14.9 s after the turn-in, on that press | Live trace, [FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md) | Observed in game |
 | Accepting closes the screen by itself, because the entry list is then empty | Live trace plus the installed script | Observed in game |
 | After the reward the screen stayed open, listing the next mission | Live trace | Observed in game; the host closes instead, because the slice has one mission |
-| The offer takes Enter (confirm) and Escape (close), and the page-up and page-down keys scroll the description | Installed script (`QuestAcceptGFxMovie.HandleInputKey`), read with `research/script_disasm.py` | UNVERIFIED in game |
-| E does nothing on either page; Escape does nothing on the reward page, which takes Enter or the left mouse button | Installed script: no such key is bound there | UNVERIFIED in game |
+| Enter accepts, turns in and takes the reward, each on the key's release | Live capture, one run each | Observed in game, on the game's own handler. The mod below does not act on Enter here |
+| Escape closes an offer | Live capture, one press, on the next mission's offer | Observed in game |
+| Escape does nothing on the reward page: both handler calls return false and the page stays | Live capture, one press | Observed in game |
+| The page-up and page-down keys scroll the description | Installed script (`QuestAcceptGFxMovie.HandleInputKey`), read with `research/script_disasm.py` | UNVERIFIED in game |
+| E does nothing on the offer, the turn-in and the reward page; WASD does nothing on them | The script binds no such key. One live read at the offer: the game's handler returned false on E's press and release. See "SDK mods" | Offer: one read. The rest UNVERIFIED |
 | The prompts' text | The install's localization and `DefaultGame.ini`, through `tools/prepare_mission_screen.py` | The strings are the game's; where they appear is from the script |
 | Whether the world keeps running behind the screen, whether the player can move or look, what the reward page shows for a mission with no item | Not known | Open: `tools/real_game/mission_screen_capture.ps1` reads these |
 
@@ -59,11 +62,29 @@ It writes the two converted movies, the wrapper and `missionscreen.json` under i
 
 ## The reward page's gear row (2026-11-07)
 
-The H14c frames, as described by the runner, show the gear heading with nothing under it. On the evidence this is what the page does for this mission, but it is **UNVERIFIED until the capture's `reward_page` frame**:
+The H14c frames, as described by the runner, show the gear heading with nothing under it. The real game's `reward_page` frame shows the same for this mission: the heading with nothing under it (one capture, the frame viewed by the author). Why, on the evidence:
 - The Fire mission has no item reward: the live trace has `GetItemRewardsForPlayer` empty, and the lent pistol is taken back in the same step. So the pistol is not the row's content.
-- The installed `SetUpRewardsPage` writes the gear heading whatever the items, and hides the credit and XP fields by amount; only `SetNoReward`, another path, hides the heading. `SetNumItemChoices(0)` runs the movie's own code, which was not read and may hide it.
+- The installed `SetUpRewardsPage` writes the gear heading whatever the items, and hides the credit and XP fields by amount; only `SetNoReward`, another path, hides the heading. `SetNumItemChoices(0)` runs the movie's own code, which was not read; the frame shows it leaves the heading.
 
 Ruffle logs four parts of the reward clip as not registered when the page draws: `inventory - cell`, `eridium counter`, `item card` and `scanlines`, the library `SharedWillowMission`'s imports from SharedWillowInventory and SharedWillowComponents. Probably the same nested-import limit as above; not confirmed. The Fire mission has nothing to show in the first three, so they are not why the row is empty; `scanlines` is a small gap in the look. A mission with an item reward will need the cell and the card, and that is a later task.
+
+## What the real game does (2026-11-07)
+
+Three sessions with `tools/real_game/mission_screen_capture.ps1` on the zuhu PC, level 8, saves blocked and compared identical afterwards. The turn-in was reached by direct `UpdateObjective` calls, so the objective path is not what these record. A pass of the host's suite says what the host did; these say what the game did, with the mods below loaded.
+
+**SDK mods.** Every session had these loaded, and the session record lists them: Better UI Controls, Dialog Skipper (autoskip on), Apple's Borderlands Cheats, Commander, Loot Collector, RTSE, Sanity Saver and others. Better UI Controls changes this screen: it hooks `HandleInputKey` to send `Enter` on the use key's release and to turn the movement keys into arrows, and `HandleRewardInputKey` to take the reward on the use key's press. So in these sessions E accepted the offer, and that is the mod, not the game. The other mods were checked with a text search of their code only. Dialog Skipper blocks friendly NPCs' dialog events, so no timing around lines is read here.
+
+**Confirmed, on keys the mod does not touch (one run each):**
+- E from the world opens the screen and nothing is accepted. Enter's release accepts, and the screen closes inside that press.
+- Enter's release turns in: status and experience change in that press, before the reward is taken, and the reward page shows.
+- The page waits. The mouse and Escape do nothing there. Enter's release runs `AcceptReward` and `MissionRewardsReceived`.
+- With another mission available, the page then goes to that mission's offer rather than closing. The host closes, because the slice has one mission.
+- The world is not paused under the screen: game time runs and NPCs idle. `bPauseGameWhileActive` and `bCaptureInput` read false. The mouse moved nothing, though `IsLookInputIgnored` reads false; why is unread.
+- F on the offer reaches the handler, which returns false, and the screen stays.
+
+**Space, one press, cause UNVERIFIED.** Space accepted the offer. The handler returned false on its press and release, and `extChoiceConfirmed` ran 3 ms later, with no `HandleInputKey` around it and no `Enter`. Better UI Controls does not mention Space. The likely route is the movie's own focused button taking Space as a click, but that was not read, and the mouse's route may be the same. The host's page takes keys itself and does not do this.
+
+**The look, open and not done by the host:** the camera moves in close on the mission giver with the panel on one side, tilted; the HUD, minimap and tracker are hidden, as well as the gun; the panel has a level and difficulty row; the turn-in's body has a turn-in text and the objective lines; the prompt line sits under the panel; the reward page has an animated figure.
 
 ## The stall on the first E (2026-11-06)
 
