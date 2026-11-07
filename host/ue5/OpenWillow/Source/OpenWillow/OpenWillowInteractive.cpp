@@ -1156,10 +1156,12 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
     case 1:
         // In reach and looked at, with the sheet in the way: not the target. The next step is the same spot without it.
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST blocked selected=%d target=%s fixture=%d"), SelectedStation(Walker) ? 1 : 0, TargetNow(), TestViewBlocker.IsValid() ? 1 : 0);
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray blocked %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station));
         if (TestViewBlocker.IsValid()) TestViewBlocker->Destroy();
         break;
     case 2:
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST clear selected=%d target=%s"), SelectedStation(Walker) ? 1 : 0, TargetNow());
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray clear %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station));
         Walker.PressUseKey(); // through the use-key path: asks
         break;
     case 3:
