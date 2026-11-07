@@ -92,6 +92,13 @@ try {
     # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2); not installing it" }
     if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
+    # What was loaded: mods can change what a run sees (2026-11-07: Better UI Controls turned E into Enter on this screen). Reading only; a run without this record is not one to trust.
+    $modsRoot = Join-Path $env:OPENWILLOW_BL2 'sdk_mods'
+    $log.sdk_mods = @(Get-ChildItem -LiteralPath $modsRoot -Force | ForEach-Object { $_.Name } | Sort-Object)
+    $log.sdk_mods_settings = [ordered]@{}
+    foreach ($file in Get-ChildItem -LiteralPath (Join-Path $modsRoot 'settings') -Filter *.json) {
+        try { $log.sdk_mods_settings[$file.BaseName] = (Get-Content -Raw -LiteralPath $file.FullName | ConvertFrom-Json) } catch { $log.sdk_mods_settings[$file.BaseName] = "unreadable: $_" }
+    }
     $hubDeadline = (Get-Date).AddMinutes($HubWaitMinutes)
     while (!$hub) {
         try { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }

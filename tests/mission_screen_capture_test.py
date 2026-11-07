@@ -363,6 +363,13 @@ def test_e_comes_last_on_each_page():
     assert 'Send-Key Enter' not in stages[stages.index("$esc = Test-Key"):stages.index('# 4. The respawn')], 'every Enter goes through Test-Key, so it is marked and its delivery read'
 
 
+def test_the_session_records_the_mods():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    record, lock = text.index('$log.sdk_mods = @('), text.index('$hubDeadline = (Get-Date)')
+    assert record < lock < text.index('Install-Driver -BlockSavesAtStart -Exclusive'), 'recorded before the run changes anything'
+    assert '$log.sdk_mods_settings[$file.BaseName]' in text
+
+
 def test_the_capture_sees_what_each_stage_claims():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true)",
@@ -406,6 +413,7 @@ if __name__ == '__main__':
     test_the_capture_sees_what_each_stage_claims()
     test_a_key_that_changes_the_status_ends_the_key_tests()
     test_e_comes_last_on_each_page()
+    test_the_session_records_the_mods()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
     test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed()
