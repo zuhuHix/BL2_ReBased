@@ -11,7 +11,7 @@ $script:OwGunShotsSeconds = 3600
 # runs checks) and -owrangeshots (it only adds frames to a range run); none of those quits.
 $script:OwScriptedSwitches = @(
     'owinvshots', 'owcombatshots', 'owgunshots', 'owfiringshots', 'owphaselockshots', 'owpickupcardshots', 'owmapshots', 'owstatusshots', 'owminimapshots',
-    'owhudshots', 'owhuddownshots', 'owhudfxshots', 'owskillhudshots', 'owrangesurvey', 'owambientshots', 'owinvopenbench', 'owfiringtest', 'owreloadphaselocktest',
+    'owhudshots', 'owhuddownshots', 'owhudfxshots', 'owskillhudshots', 'owrangesurvey', 'owambientshots', 'owinvopenbench', 'owfiringtest', 'owreloadtest', 'owreloadphaselocktest',
     'owmissionlogtest', 'owambienttest', 'owinteractivetest', 'owmovertest', 'owquesttest', 'owrangetest', 'owvendortest', 'owinventoryactions', 'owslicegate')
 
 # The -Extra switches, one each. Launched with powershell -File, -Extra arrives as one comma-joined string.

@@ -888,3 +888,125 @@ void AOpenWillowWalker::RunFiringTest(float Now)
         break;
     }
 }
+
+void AOpenWillowWalker::RunReloadTest(float Now)
+{
+    // -owreloadtest: the first loaded gun that spends rounds and can equip. Its magazine is set low, the trigger goes down
+    // through the same FirePressed a key uses, and the empty magazine starts the reload by itself. An automatic gun stays held;
+    // a gun that fires per press gets repeated presses. The magazine is logged during the reload, then one result line compares
+    // the magazine and the reserve before and after with the rounds moved. Then the run quits. Test code only.
+    static int32 Phase = 0, Start = 0, Cost = 0, Size = 0, ReserveBefore = 0, ExpectedShots = 0, ShotsBefore = 0, ShotsFired = 0;
+    static int32 MagazineAtReload = 0, Presses = 0, RisesBeforeRefill = 0, LastMagazine = 0;
+    static float At = 0.f, ReloadStartedAt = 0.f, NextToggle = 0.f, NextSample = 0.f;
+    static bool bHolding = false;
+    static EOpenWillowAmmoType Type = EOpenWillowAmmoType::Grenade;
+    static FString Id;
+    const auto Finish = [this](const FString& Result)
+    {
+        Phase = 4;
+        FireReleased();
+        UE_LOG(LogTemp, Display, TEXT("OWRELOAD result=%s"), *Result);
+        if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+    };
+    if (Phase == 4) return;
+    const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+    if (Phase == 0)
+    {
+        if (Now < 5.f) return;
+        int32 Candidates = 0;
+        for (int32 I = 0; I < Inventory->Items().Num() && Id.IsEmpty(); ++I)
+        {
+            const FOpenWillowWeaponItem& Item = Inventory->Items()[I];
+            const FString ItemId = Item.Id;
+            if (UOpenWillowInventory::ShotCostRounds(Item) < 1 || UOpenWillowInventory::MagazineSize(Item) <= UOpenWillowInventory::ShotCostRounds(Item)
+                || !UOpenWillowInventory::ResolveAmmoType(Item, Type)) continue;
+            ++Candidates;
+            if (EquipItem(I, 0) && bWeaponOut && Inventory->ActiveWeapon() && Inventory->ActiveWeapon()->Id == ItemId) Id = ItemId;
+        }
+        if (Id.IsEmpty())
+        {
+            Finish(FString::Printf(TEXT("FAIL no gun that spends rounds equipped (%d items, %d candidates: check -owitems and -owlevel)"), Inventory->Items().Num(), Candidates));
+            return;
+        }
+        At = Now + 2.5f;   // the draw
+        Phase = 1;
+        return;
+    }
+    if (!Held || Held->Id != Id) { Finish(TEXT("FAIL the gun left the hand")); return; }
+    if (Phase == 1)
+    {
+        if (Now < At) return;
+        FOpenWillowWeaponItem* Item = Inventory->ActiveWeaponMutable();
+        Cost = UOpenWillowInventory::ShotCostRounds(*Item);
+        Size = UOpenWillowInventory::MagazineSize(*Item);
+        Item->MagazineLeft = FMath::Min(Cost * 2, Size - 1);
+        Start = UOpenWillowInventory::MagazineLeft(*Item);
+        ExpectedShots = Start / Cost;
+        ReserveBefore = Inventory->AmmoPool(Type).Current;
+        if (ReserveBefore <= 0) { Finish(TEXT("FAIL the reserve is empty before firing")); return; }
+        UE_LOG(LogTemp, Display, TEXT("OWRELOAD start id=%s name=%s cost=%d size=%d magazine=%d reserve=%d burst=%d expected_shots=%d"), *Id, *Item->Name, Cost, Size, Start,
+            ReserveBefore, Item->Firing.BurstCount, ExpectedShots);
+        ShotsBefore = OpenWillowFiring::Counts.Shots;
+        FirePressed();
+        bHolding = true;
+        Presses = 1;
+        NextToggle = Now + 0.15f;
+        At = Now + 30.f;
+        Phase = 2;
+        return;
+    }
+    const int32 Magazine = UOpenWillowInventory::MagazineLeft(*Held);
+    if (Phase == 2)
+    {
+        if (bReloading)
+        {
+            FireReleased();
+            bHolding = false;
+            ShotsFired = OpenWillowFiring::Counts.Shots - ShotsBefore;
+            MagazineAtReload = LastMagazine = Magazine;
+            ReloadStartedAt = NextSample = Now;
+            At = ReloadEndsAt + 5.f;
+            UE_LOG(LogTemp, Display, TEXT("OWRELOAD reload started after shots=%d presses=%d magazine=%d, refill due +%.2f, ends +%.2f"), ShotsFired, Presses, Magazine,
+                ReloadRefillAt - Now, ReloadEndsAt - Now);
+            Phase = 3;
+        }
+        else if (Now >= At)
+        {
+            Finish(FString::Printf(TEXT("FAIL no reload started in 30 s: shots=%d presses=%d magazine=%d"), OpenWillowFiring::Counts.Shots - ShotsBefore, Presses, Magazine));
+        }
+        else if (Held->Firing.BurstCount >= 1 && Now >= NextToggle)
+        {
+            // Fires per press: let go and press again, so the press after the last round finds the magazine empty.
+            if (bHolding) { FireReleased(); bHolding = false; }
+            else { FirePressed(); bHolding = true; ++Presses; }
+            NextToggle = Now + 0.15f;
+        }
+        return;
+    }
+    // Phase 3: during the reload. The real game's magazine count was reported rising here; this records what the host shows.
+    if (bReloading)
+    {
+        if (!bReloadRefilled && Magazine > LastMagazine) ++RisesBeforeRefill;
+        LastMagazine = Magazine;
+        if (Now >= NextSample)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRELOAD during t=%.2f magazine=%d refilled=%d"), Now - ReloadStartedAt, Magazine, bReloadRefilled ? 1 : 0);
+            NextSample = Now + 0.25f;
+        }
+        if (Now >= At) Finish(FString::Printf(TEXT("FAIL the reload did not end: magazine=%d"), Magazine));
+        return;
+    }
+    const int32 ReserveAfter = Inventory->AmmoPool(Type).Current;
+    const int32 Moved = ReloadAmmoMoved;
+    const int32 Expected = FMath::Min(Size, MagazineAtReload + ReserveBefore);
+    FString Failed;
+    if (ShotsFired != ExpectedShots) Failed += FString::Printf(TEXT(" shots %d, expected %d;"), ShotsFired, ExpectedShots);
+    if (MagazineAtReload != Start - ExpectedShots * Cost) Failed += FString::Printf(TEXT(" magazine at the reload %d, expected %d;"), MagazineAtReload, Start - ExpectedShots * Cost);
+    if (Moved <= 0) Failed += TEXT(" nothing moved;");
+    if (ReserveBefore - ReserveAfter != Moved) Failed += FString::Printf(TEXT(" the reserve fell by %d, moved %d;"), ReserveBefore - ReserveAfter, Moved);
+    if (Magazine != MagazineAtReload + Moved) Failed += FString::Printf(TEXT(" the magazine rose by %d, moved %d;"), Magazine - MagazineAtReload, Moved);
+    if (Magazine != Expected) Failed += FString::Printf(TEXT(" magazine %d, expected %d;"), Magazine, Expected);
+    Finish(FString::Printf(TEXT("%s id=%s cost=%d size=%d shots=%d magazine %d -> %d (fired down to %d) reserve %d -> %d moved=%d took=%.2f rises_before_refill=%d%s"),
+        Failed.IsEmpty() ? TEXT("PASS") : TEXT("FAIL"), *Id, Cost, Size, ShotsFired, Start, Magazine, MagazineAtReload, ReserveBefore, ReserveAfter, Moved, Now - ReloadStartedAt,
+        RisesBeforeRefill, *Failed));
+}

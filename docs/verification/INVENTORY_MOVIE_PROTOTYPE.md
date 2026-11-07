@@ -218,7 +218,7 @@ so the level-30 recipes and the level-36 gear manifest item equip; slots take
 one weapon per ammo type first; demo purse and reserves are set (made up); the
 run sends the page Down, E, F key events and writes `OWCombat_7b_InventoryCompare`
 and `OWCombat_7c_InventoryInspect`, then closes the page and holds the trigger on slot 2. With the default slots that gun is an Infinity, which spends no rounds and cannot reload: the 2026-11-06 run's
-62 shots prove firing works after the page closes, not the reload, and its `magazine 2 -> 1` is the magazine size clamping the set value, not a shot. This also changes the level in the Skills capture.
+62 shots prove firing works after the page closes, not the reload, and its `magazine 2 -> 1` is the magazine size clamping the set value, not a shot (the line now reads the set value back and names the gun and its shot cost). `-owreloadtest` covers the reload: NATIVE_WEAPON_TRIGGER_AMMO.md section 7. This also changes the level in the Skills capture.
 
 Automated (this pass): UE 5.8 build of `OpenWillowEditor` succeeded;
 `-owinventoryselftest` (synthetic add, duplicate ID, equip, locked-slot

@@ -30,7 +30,7 @@ class RunLimit(unittest.TestCase):
         return int(powershell(f'Get-OwRunLimitSeconds {arguments}')[0])
 
     def test_scripted_game_runs_get_the_default(self):
-        for switch in ('-owinvshots', '-owcombatshots', '-owstatusshots=map', '-owfiringtest', '-owinventoryactions', '-owinvopenbench=3', '-owslicegate'):
+        for switch in ('-owinvshots', '-owcombatshots', '-owstatusshots=map', '-owfiringtest', '-owreloadtest', '-owinventoryactions', '-owinvopenbench=3', '-owslicegate'):
             self.assertEqual(self.limit(f"-GameWindow -Extra '-owlevel=36','{switch}'"), 1200, switch)
 
     def test_a_gun_list_of_any_length_gets_longer(self):

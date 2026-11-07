@@ -355,6 +355,11 @@ ReloadCompletePercent` clamped to `[0, ReloadTime]` (a result of 0 or less is re
 i.e. the clip is refilled from the pool at that fraction of the reload, not at the end; the pool itself is not changed (it
 already holds the count, only the clip counter moves); the server recomputes `AmmoNotInClip`.
 **At `ReloadDone`:** the weapon returns to `Active` (replicated state 0).
+**Host check and an open gap (2026-11-07).** `-owreloadtest` (`AOpenWillowWalker::RunReloadTest`) fires a gun that spends rounds until the empty magazine starts a reload, and its `OWRELOAD result=` line
+compares the magazine and the reserve before and after with the rounds moved. A PASS means the host did this, not parity. Run it with
+`tools\run_ue_flash_hud.ps1 -GameWindow -Extra '-owreloadtest','-owlevel=36','-owitems=<recipes folder>'`, then read `OWRELOAD` and `OpenWillow reload finished: +N` in the log; the launcher's exit code does not carry the result.
+A live run reported to the inventory lane shows the magazine count rising in steps during a reload, while the host holds its count until the refill point (`rises_before_refill=0` in that line) and the script reading above sets the
+clip once. Not fixed, and the owner is undecided: which value the real count reads (clip, or a display value) was not read, so this stays `UNVERIFIED`.
 **`WeaponReloading.EndState`:** the bones are re-hidden, the pawn's `bReloading` cleared, and if the refill happened the
 "reload complete" skill event (21) is sent (plus event 35 for a manual reload); the animation references are cleared.
 Zoom pressed during a reload only sets a pending fire mark (`StartZoom` in the state).

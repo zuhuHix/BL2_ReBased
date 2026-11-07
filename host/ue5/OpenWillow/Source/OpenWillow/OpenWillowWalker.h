@@ -278,6 +278,8 @@ private:
     // -owfiringtest -owgunids=a,b,c (with -owcombattest): fires each named gun at the dummy, at a wall and (status guns)
     // at the dummy again, then logs one OWFIRING result line per gun (tools/test_weapon_firing.ps1).
     void RunFiringTest(float Now);
+    // -owreloadtest (with -owlevel and -owitems): a gun that spends rounds, fired until it reloads; one OWRELOAD result line.
+    void RunReloadTest(float Now);
     // -owfiringshots -owgunids=a,b,c: per gun, the real reference's pose (pitch 0, yaw 90, FOV 77.55), a flat wall 465.9 uu ahead,
     // one trigger pull and a frame every ~46 ms from two frames before the shot (tools/capture_firing_frames.ps1).
     void RunFiringShots(float Now);
@@ -385,6 +387,7 @@ private:
     float NextShotAt = 0;
     bool bReloading = false;
     int32 CombatShotsBeforeFiring = 0; // -owcombatshots: the shot count when its firing exercise starts
+    int32 CombatMagazineAtFiring = 0;  // -owcombatshots: the magazine read back after setting it, which clamps to the gun's size
     float ReloadEndsAt = 0;
     float ReloadRefillAt = 0;
     float ReloadCompletePercent = 1.f; // missing view-model field preserves the old full-duration refill
