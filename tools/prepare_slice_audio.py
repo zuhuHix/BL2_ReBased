@@ -21,7 +21,9 @@ import wave
 
 PLAY_SCHEMA = 'ow-audio-play-v1'
 # Role -> manifest key. Roles with no key are not resolved from evidence yet, so they stay silent rather than guess.
-ROLE_KEYS = {'fire': 'weapon:fire', 'hit': None, 'phaselock_cast': None, 'pickup': None}
+# hit and phaselock_cast come from one live session and are UNVERIFIED (SLICE_AUDIO_CHAIN.md section 5). hit's many files are one event's per-surface
+# sources, presumably, and the host picks at random, so a hit can sound like any surface until the switch value is known.
+ROLE_KEYS = {'fire': 'weapon:fire', 'hit': 'role:hit', 'phaselock_cast': 'role:phaselock_cast', 'pickup': None}
 DURATION_TOLERANCE_S = 0.05
 # The host's limits (OpenWillowAudio.h; a test compares them): a file past them would be mapped here and then refused there.
 MIN_SAMPLE_RATE = 8000

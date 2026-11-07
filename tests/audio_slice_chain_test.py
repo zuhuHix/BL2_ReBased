@@ -96,5 +96,30 @@ class DialogCoverageTest(unittest.TestCase):
         self.assertEqual({e['reached_in_scripted_run'] for e in manifest['entries']}, {False})
 
 
+class LiveRoleTest(unittest.TestCase):
+    def test_each_role_gets_an_entry_marked_unverified_with_the_check_not_claimed(self):
+        ak = {**chain.live_role_ak({'event': 'Pkg.Ak_Play_Thing'}), 'wwise': []}
+        manifest = chain.build_manifest({'dialog': [], 'marcus_group': [], 'door': [], 'weapon': [],
+                                         'live_roles': [{'key': 'role:hit', 'seen': 'once', 'ak_event': ak}]}, 'no-such-dir')
+        entry = manifest['entries'][0]
+        self.assertEqual((entry['key'], entry['kind'], entry['state']), ('role:hit', 'live_role', 'unresolved'))
+        self.assertIn('UNVERIFIED', entry['evidence'])
+        self.assertIsNone(entry['checks']['fnv1_matches_short_id'])     # not read from a package, so not checked and not claimed
+
+    def test_the_wwise_name_and_id_come_from_the_event_name(self):
+        ak = chain.live_role_ak({'event': 'Pkg.Group.Ak_Play_Thing'})
+        self.assertEqual(ak['wwise_name'], 'Play_Thing')
+        self.assertEqual(ak['short_id'], chain.ac.fnv1_32('Play_Thing'))
+
+    def test_a_name_that_breaks_the_rule_fails_loudly(self):
+        with self.assertRaises(ValueError):
+            chain.live_role_ak({'event': 'Pkg.Play_Thing'})
+
+    def test_every_role_is_listed_with_what_was_seen_and_no_pickup_guess(self):
+        keys = [row['key'] for row in chain.live_role_chain()]
+        self.assertEqual(keys, ['role:phaselock_cast', 'role:hit'])
+        self.assertTrue(all(row['seen'] for row in chain.live_role_chain()))
+
+
 if __name__ == '__main__':
     unittest.main()
