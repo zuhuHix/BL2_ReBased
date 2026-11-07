@@ -302,6 +302,7 @@ try {
     $log.completed_stages = @($stagesDone); $log.stage_problems = @($stageProblems)
     $log.run_error = $runError
     $log.status = Get-RunStatus $stagesRequested @($stagesDone) $runError $recovery
+    if ($stageProblems.Count -and $log.status -ne 'completed') { $log.status = "$($log.status) ($($stageProblems -join '; '))" }
     if ($evidenceError -and !$recovery) { $log.status = "failed: evidence not written ($evidenceError)" }
     $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
     try { $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json') }
