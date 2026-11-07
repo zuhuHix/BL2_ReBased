@@ -17,6 +17,8 @@ param(
     # Instead of the hit, miss and down casts, two separate reads: kill the lifted target (the skill, and the HUD emblem through
     # scripts/action_skill_hud.py), and the real shield's capacity against its level. A miss in one does not blank the other.
     [switch]$KillAndShield,
+    # Only the shield read of -KillAndShield: no target is needed, and none is picked.
+    [switch]$ShieldOnly,
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
     [int]$HubWaitMinutes = 120
@@ -88,7 +90,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($KillAndShield) { @('discover', 'kill', 'shield_levels') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
+$stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($ShieldOnly) { @('discover', 'shield_levels') } elseif ($KillAndShield) { @('discover', 'kill', 'shield_levels') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -151,7 +153,7 @@ try {
     foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py', 'action_skill_hud.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") phaselock_integrity | Out-Null }
 
     # The exact Adult or nothing: a variant has its own archetype, attachments and material, so its reads would answer another question.
-    for ($i = 0; $i -lt 24 -and !$target; $i++) {
+    for ($i = 0; $i -lt 24 -and !$target -and !$ShieldOnly; $i++) {
         $pick = Py @'
 import json
 rows = []
@@ -166,10 +168,12 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         $res = $pick | ConvertFrom-Json; $log.candidates = $res.rows; $target = $res.pick
         if (!$target) { Start-Sleep 5 }
     }
+    if (!$ShieldOnly) {
     if (!$target) { throw "no live CharClass_PrimalBeastAdult after 2 minutes of polling: $pick" }
     $liveClass = Py "print(ai_pawn('$target').AIClass._path_name().split('.')[-1])"
     if ($liveClass -ne 'CharClass_PrimalBeastAdult') { throw "target $target is $liveClass, not the Adult" }
     $log.target = $target; $log.target_class = $liveClass; "target $target ($liveClass)"
+    }
     $log.discover = Py 'import json; print(json.dumps(pi_discover(), default=str))' | ConvertFrom-Json
     # pi_flags() (CanPhaseLockTarget called from Python for every pawn) got no reply on 2026-11-02 and the session was lost; the
     # cast's own CanPhaseLockTarget result is marked by mark_lock() instead.
@@ -206,9 +210,10 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         $result
     }
 
-    if ($KillAndShield) {
+    if ($KillAndShield -or $ShieldOnly) {
         # KILL STAGE. Kill the lifted target 2.0 s after the cast, during the hold. The burst's frames and kill.jsonl show the skill, kill_hud.jsonl
         # the emblem. The stage's result is set only after the hooks are stopped and the emblem samples are checked.
+        if (!$ShieldOnly) {
         $killPassed = $false; $killWhy = 'did not finish'
         try {
             $killShots = @{ 'kill-2.10' = 2.1; 'kill-2.50' = 2.5; 'kill-3.50' = 3.5; 'kill-5.00' = 5.0; 'kill-6.00' = 6.0 }
@@ -234,6 +239,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         }
         Set-Stage 'kill' $killPassed $killWhy
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
+        }
         # END KILL STAGE
 
         # SHIELD STAGE. The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped. Every
@@ -243,6 +249,8 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         $shieldRows = @(); $shieldWhy = ''; $restored = $null
         try {
             $log.shields_start = Py 'import json; print(json.dumps(pi_shields(True), default=str))' | ConvertFrom-Json
+            # With no equipped shield found, nothing is spawned or changed, so there is nothing to restore either.
+            if (!$log.shields_start.equipped) { $shieldLevels = @(); $shieldWhy = 'no equipped shield found: nothing was changed' }
             foreach ($level in $shieldLevels) {
                 $row = [ordered]@{ level = $level }
                 $restoreOk = $false

@@ -448,7 +448,7 @@ Set-Content '__TMP__\live\keep.txt' 'changed by the run'
 STAGES = r"""
 $ErrorActionPreference = 'Stop'
 . '__REALGAME__'
-$Out = '__TMP__'; $target = 'T'; $log = [ordered]@{ kill_attempt = 'kill' }
+$Out = '__TMP__'; $target = 'T'; $log = [ordered]@{ kill_attempt = 'kill' }; $ShieldOnly = __SHIELD_ONLY__
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
 function Start-Sleep { }
@@ -459,7 +459,7 @@ function Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'ash_start') { return __ASH__ }
     if ($Code -match 'pi_stop') { __STOP__; return 'stopped' }
     if ($Code -match 'pi_hud_evidence') { return __HUD__ }
-    if ($Code -match 'pi_shields\(True\)') { return '{"equipped":{"name":"Own","level":8},"max_strength":181}' }
+    if ($Code -match 'pi_shields\(True\)') { return __START__ }
     if ($Code -match 'pi_shield_try\((\d+)\)') { $script:level = [int]$Matches[1]; return "{`"requested_level`":$script:level}" }
     if ($Code -match 'pi_shield_read') { return __READ__ }
     if ($Code -match 'pi_shield_restore|pi_shields_check') { $script:restoreCalls++; return __RESTORE__ }
@@ -470,7 +470,7 @@ function Invoke-LiftCast { $log.kill = [pscustomobject]@{ frames = 10; shots = @
 __STAGES__
 "RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; levels = @($log.shield_levels | ForEach-Object { $_.level }); tried = @($log.shield_levels | ForEach-Object { $_.tried.requested_level }) } | ConvertTo-Json -Compress)
 """
-GOOD = {'__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
+GOOD = {'__SHIELD_ONLY__': '$false', '__START__': """'{"equipped":{"name":"Own","level":8},"max_strength":181}'""", '__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
         '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__KILLED__': 'true'}
 
 
@@ -511,6 +511,12 @@ def test_the_two_stages_stand_alone_and_set_their_result_last():
     other = """$(if ($script:level -eq 15) { '{"counts":false}' } else { '{"counts":true}' })"""
     r = run_stages(__READ__=other)
     assert 'shield_levels' not in r['done'] and '4 of 5' in r['problems'][0]
+    # No equipped shield found: nothing is tried or restored, and the status says nothing changed.
+    r = run_stages(__START__="""'{"equipped":null,"max_strength":181}'""")
+    assert 'shield_levels' not in r['done'] and r['levels'] == [] and r['restores'] == 0 and 'nothing was changed' in r['problems'][0] and 'NOT RESTORED' not in r['problems'][0]
+    # Shield only: no kill stage runs, and the shield stage does.
+    r = run_stages(__SHIELD_ONLY__='$true', __ASH__="$(throw 'kill stage ran')")
+    assert r['done'] == ['shield_levels'] and r['problems'] == []
     # A restore that does not take stops the sweep and says so plainly.
     r = run_stages(__RESTORE__="""'{"ok":false}'""")
     assert 'shield_levels' not in r['done'] and r['levels'] == [1] and 'SHIELD NOT RESTORED' in r['problems'][0]

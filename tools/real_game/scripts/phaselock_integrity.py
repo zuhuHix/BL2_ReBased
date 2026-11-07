@@ -535,10 +535,13 @@ def _shield_row(item):
 def _shields():
     """(the equipped shield or None, the shields in the backpack.)"""
     im = get_pc().GetPawnInventoryManager()
-    chain, item = [], im.InventoryChain
-    while item:
-        chain.append(item)
-        item = item.Inventory
+    # 2026-11-07: the equipped shield was not in InventoryChain, which holds the weapons. ItemChain is the expected place (UNVERIFIED
+    # until a run reads it; pi_shields records the manager's chain-like fields for when it is not).
+    chain = []
+    for item in (im.InventoryChain, _null(lambda: im.ItemChain)):
+        while item:
+            chain.append(item)
+            item = item.Inventory
     equipped = [i for i in chain if i.Class.Name == "WillowShield"]
     return (equipped[0] if equipped else None), [i for i in im.Backpack if i.Class.Name == "WillowShield"]
 
@@ -562,6 +565,8 @@ def pi_shields(remember=False):
                              "backpack": sorted(i._path_name() for i in backpack)}
     return {"player_level": _null(lambda: int(get_pc().PlayerReplicationInfo.ExpLevel)), "max_strength": maximum,
             "strength": _null(lambda: float(get_pc().Pawn.GetShieldStrength())), "equipped": row,
+            "manager_fields": _null(lambda: [f.Name for f in get_pc().GetPawnInventoryManager().Class._fields()
+                                             if any(k in f.Name for k in ("Chain", "Item", "Equip", "Ready"))]),
             "backpack": [_shield_row(i) for i in backpack]}
 
 
