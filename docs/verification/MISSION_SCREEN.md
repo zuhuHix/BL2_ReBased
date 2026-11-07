@@ -29,6 +29,7 @@ The host's second-E close was a stand-in, and the script says it is not how the 
 - **Page:** `tools/hud_overlay/mission_screen.html`, BL2's own movie `UI_Mission.MissionInterface` under Ruffle, created hidden at the start of play (`FOpenWillowMissionPage`).
 - **Keys:** the host owns them. While the page is shown, every key press goes to `UOpenWillowQuest::OnScreenKey`, so the page needs no focus and a broken page cannot take input away from the keys that close it.
 - **Maya:** the page uses the status pages' transition, `SetInventoryPresentation`: arms and gun put away, aim let go, and every close restores it (`CloseScreenPage`). The trigger's release and the firing gates that make this hold come with PR #118, so the row `held_trigger_does_not_fire_under_the_page` fails until it is merged.
+- **The gameplay HUD:** not drawn while the page is on screen: neither the movie HUD nor the canvas fallback, and no HUD state is pushed. `DrawHUD` reads `IsScreenPageShown` each frame and stores nothing else, so every way the page closes brings the HUD back (Enter, Escape, Maya down, a lost page, end of play). The suite exercises Enter and Escape; the fall and the lost page are not exercised. Details in "What the real game does"; DECISIONS 2026-11-07.
 - **One page at a time:** with a status page or a shop open, `TryUse` refuses before Marcus's chain runs. No key takes that route, since those pages hold the input, but closing the mission page over them would hand the game the input.
 - **Flow:** E opens the offer or the turn-in, with nothing accepted yet. Enter on the offer accepts, and the VM's own close ends the page. Enter on the turn-in turns in and shows the reward page. Enter on the reward page takes the reward and closes. Escape closes the offer or the turn-in and is refused on the reward page. If Maya goes down, the page closes, and a reward still waiting is shown again at the next use.
 - **The page only draws:** it writes the fields and calls the movie functions listed under "The movie's interface", from the host's mission log snapshot.
@@ -59,7 +60,7 @@ It writes the two converted movies, the wrapper and `missionscreen.json` under i
 
 - `node tests/mission_screen_test.js` (the real page against a stub movie, DOM and guard), `python tests/prepare_mission_screen_test.py`, `python tests/check_mission_page_test.py`: synthetic.
 - Headless Edge with real Ruffle, on `?demo=offer`, `turnin` and `reward`: each page draws its text and prompt with the movie; with the movie folder absent, each shows the plain panel and no error panel. Sample data only.
-- `tools/test_mission_page.ps1` and `-NoMovie`: not run yet. E goes through the player's input binding, keys for the page through Slate, each no-op row checks the press arrived, and `tools/check_mission_page.py` requires the exact rows once each. With the movie and without, on main + #118 + #122 + fb613c5 (H14c, hummer, the page's rows then 20): both passed. The suite stops early if OWQUEST READY comes with no `page_ready` row in 120 s, which is what a stale DLL looked like.
+- `tools/test_mission_page.ps1` and `-NoMovie`: not run yet. E goes through the player's input binding, keys for the page through Slate, each no-op row checks the press arrived, and `tools/check_mission_page.py` requires the exact rows once each. With the movie and without, on main + #118 + #122 + fb613c5 (H14c, hummer, the page's rows then 20): both passed. The suite stops early if OWQUEST READY comes with no `page_ready` row in 120 s, which is what a stale DLL looked like. Since the HUD rows (2026-11-07) it has 27 rows: three that the HUD is hidden behind each page, and three that it is back after Escape, accepting and the reward. The suite passes `-owcanvashud` by default, so its rows then show only the canvas path; only a run with the movie HUD shows the movie hidden and back, and the row's `hud:` report says which it was. Not run yet in either mode.
 
 ## The reward page's gear row (2026-11-07)
 
@@ -85,7 +86,9 @@ Three sessions with `tools/real_game/mission_screen_capture.ps1` on the zuhu PC,
 
 **Space, one press, cause UNVERIFIED.** Space accepted the offer. The handler returned false on its press and release, and `extChoiceConfirmed` ran 3 ms later, with no `HandleInputKey` around it and no `Enter`. Better UI Controls does not mention Space. The likely route is the movie's own focused button taking Space as a click, but that was not read, and the mouse's route may be the same. The host's page takes keys itself and does not do this.
 
-**The look, open and not done by the host:** the camera moves in close on the mission giver with the panel on one side, tilted; the HUD, minimap and tracker are hidden, as well as the gun; the panel has a level and difficulty row; the turn-in's body has a turn-in text and the objective lines; the prompt line sits under the panel; the reward page has an animated figure.
+**The look, open and not done by the host:** the camera moves in close on the mission giver with the panel on one side, tilted; the panel has a level and difficulty row; the turn-in's body has a turn-in text and the objective lines; the prompt line sits under the panel; the reward page has an animated figure.
+
+**The HUD, done by the host since 2026-11-07:** the HUD, minimap and tracker are hidden, as well as the gun. The offer, turn-in and reward frames each show none of them. One capture of each, with the mods above loaded. When it hides and returns, and what hides it, were not read.
 
 ## The stall on the first E (2026-11-06)
 

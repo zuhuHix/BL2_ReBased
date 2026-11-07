@@ -44,6 +44,10 @@ public:
     // The Map page (tools/hud_overlay/map.html, OpenWillowMapScreen); false without a page URL.
     bool ToggleMap();
     bool IsMapOpen() const { return SkillsBrowser.IsValid() && bMapOpen; }
+    // For the mission page suite: the gameplay HUD as the last DrawHUD left it. Back means shown again (the movie, once it is ready, else the canvas).
+    bool IsGameplayHudHidden() const;
+    bool IsGameplayHudBack() const;
+    FString GameplayHudReport() const;
     void CloseSkills();
     void RequestSkillsCloseFromPage();
     bool IsSkillsOpen() const { return SkillsBrowser.IsValid(); }
@@ -110,6 +114,8 @@ private:
     FString LastPageReport;
     int32 PageReportCount = 0;
     void DrawDamagePopups(UFont* Font);
+    // Set by DrawHUD each frame: the mission page is up, so the gameplay HUD is not drawn.
+    bool bHiddenBehindMissionPage = false;
     // BL2's own HUD movie in Ruffle, in a transparent web page over the viewport (tools/hud_overlay). It is the
     // default gameplay HUD from http://127.0.0.1:8767/ (tools/run_ue_flash_hud.ps1); -owflashhud=<url> picks
     // another page and -owcanvashud forces the canvas HUD.

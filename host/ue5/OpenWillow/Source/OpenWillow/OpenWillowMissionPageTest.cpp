@@ -83,6 +83,12 @@ void UOpenWillowQuest::TickScreenPageTest()
     // A press the page must take: true when exactly one key reached OnScreenKey.
     const auto PageKey = [&](const FKey& Key) { const int32 Before = ScreenKeysSeen; PressKey(Key); return ScreenKeysSeen == Before + 1; };
     const bool bExpectMovie = !FParse::Param(FCommandLine::Get(), TEXT("owmissionpagenomovie"));
+    // The gameplay HUD behind the page and after each way out. Under -owcanvashud this shows only the canvas path; the report says which.
+    const auto HudRow = [&](const TCHAR* Name, bool bHidden)
+    {
+        const AOpenWillowMayaHUD* GameHud = Cast<AOpenWillowMayaHUD>(PC->GetHUD());
+        Row(Name, GameHud && (bHidden ? GameHud->IsGameplayHudHidden() : GameHud->IsGameplayHudBack()), GameHud ? GameHud->GameplayHudReport() : FString(TEXT("no HUD")));
+    };
     // The page on show, not any page: a late report from the last one must not pass.
     const auto Drawn = [&] { const FString& R = ScreenPage->LastReport();
         return !ScreenPageOn.IsEmpty() && R.Contains(FString::Printf(TEXT("\"page\":\"%s\""), *ScreenPageOn))
@@ -138,6 +144,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 4:
     {
+        HudRow(TEXT("hud_hidden_behind_the_offer"), true);
         PageShot(TEXT("1_Offer"));
         // The trigger held and a full magazine: the magazine has not moved, a direct shot is refused, and arms and gun are put away.
         const int32 Left = Magazine();
@@ -152,6 +159,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.5;
         break;
     case 6:
+        HudRow(TEXT("hud_back_after_escape"), false);
         PageShot(TEXT("2_AfterEscape"));
         StockMagazine();
         Row(TEXT("gun_fires_again_after_the_close"), Maya->AreArmsShown() && Maya->FireOnce(), State());
@@ -171,6 +179,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.5;
         break;
     case 10:
+        HudRow(TEXT("hud_back_after_accepting"), false);
         PageShot(TEXT("3_Accepted"));
         ScreenTestRetries = 0;
         break;
@@ -200,6 +209,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.;
         break;
     case 15:
+        HudRow(TEXT("hud_hidden_behind_the_turn_in"), true);
         PageShot(TEXT("4_TurnIn"));
         Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
         PageKey(EKeys::Enter);
@@ -211,6 +221,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.;
         break;
     case 17:
+        HudRow(TEXT("hud_hidden_behind_the_reward"), true);
         PageShot(TEXT("5_Reward"));
         Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
         break;
@@ -219,6 +230,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.5;
         break;
     case 19:
+        HudRow(TEXT("hud_back_after_the_reward"), false);
         PageShot(TEXT("6_Closed"));
         Row(TEXT("first_person_back_after_the_reward"), Maya->AreArmsShown(), State());
         UseE();
