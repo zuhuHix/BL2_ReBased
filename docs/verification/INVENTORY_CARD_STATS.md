@@ -107,7 +107,7 @@ prices as level 30, not as the level 42 real cards.
 
 The red line is the title part's `CustomPresentations`
 (`AttributePresentationDefinition`): `NoConstraintText` is the line and
-`TextColor` is (220, 70, 70), the `#dc4646` in the real cards' HTML. Among the
+`TextColor` is a red, the same one the real cards' HTML uses (`local/gunlook/measured_colours.md`, ignored). Among the
 74 legendary and unique weapon titles in `Startup.upk`, 73 have exactly one such
 presentation and one has none. All nine red lines seen on real cards exist
 verbatim in the cooked data (Conference Call "Let's just ping everyone all at
@@ -177,14 +177,14 @@ recipe's parts or a shotgun accessory term differ from the roll the game made, n
 lane. The page did not print some things the real cards have, and now does:
 
 - **Projectile count.** `card.projectiles` above 1 is forwarded as `projectiles`; the damage row prints "21" followed by a
-  smaller gold "x10" (size 10, `#e6d223`, both measured on a real capture and `UNVERIFIED` as exact values). The real
+  smaller gold "x10" (size and colour measured on a real capture, `UNVERIFIED` as exact values; `local/gunlook/measured_colours.md`, ignored). The real
   card's text carries a `[projectilecount]` tag; the page writes its own markup instead.
 - **Status rows.** `status_dps` and `status_chance` are forwarded as `statusDps`/`statusChance`; fire, shock and corrosive
   weapons get two rows after the five ("Burn Damage / sec." and "Ignite Chance", "Shock Damage / sec." and "Electrocute
   Chance", "Corrode Damage / sec." and "Corrode Chance"; icons `elementFire/Shock/Corrosive`), Float with one decimal, the
   chance with a percent sign. Labels are the ones the golden cards carry; slag has no card, so no rows. The card movie has
   rows for up to seven stats.
-- **Value colour.** Row values print in the label cyan (`#a4e8f3`), as the real card does; they were white.
+- **Value colour.** Row values print in the label cyan, as the real card does; they were white.
 - **Compare arrows.** Arrow only, no difference figure; damage compares as damage x projectiles.
 
 At the time of these captures the page did not receive the white flavour lines, zoom, sustained-fire note or orange

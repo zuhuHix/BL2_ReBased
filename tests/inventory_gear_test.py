@@ -14,7 +14,7 @@ def row(seq, obj, method, args):
 
 class GearObservationTest(unittest.TestCase):
     def test_observed_flavour_formatting_is_preserved(self):
-        markup = '• <font color="#ffffff">Bonus</font>\n• <font color="#dc4646">Flavour</font>'
+        markup = '• <font color="#ffffff">Bonus</font>\n• <font color="#abcdef">Flavour</font>'
         rows = [row(1, 'A', 'SetCardUIStats', {'TopStats':[]}),
                 row(2, 'A', 'SetTitle', {'Title':'Fixture','TypeIcon':'comm'}),
                 row(3, 'A', 'SetFunStats', {'FunStatsText':markup}),

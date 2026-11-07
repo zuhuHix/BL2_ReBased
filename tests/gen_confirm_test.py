@@ -20,7 +20,7 @@ def gun(**over):
         'prefix': {'part': 'GD_Test.Prefix.Quick', 'text': 'Quick'},
         'title': {'part': 'GD_Test.Title.Demo', 'text': 'Demo'},
         'card': {'level_requirement': 15, 'level_line': True, 'sale_value': 120, 'sale_value_known': True,
-                 'rarity_color': '#ffb400', 'projectiles': 1, 'element': 'Fire',
+                 'rarity_color': '#123abc', 'projectiles': 1, 'element': 'Fire',
                  'display': {'damage': 49.13, 'magazine': 6.9, 'fire_rate': 2.25, 'reload_time': 1.75,
                              'accuracy': 89.96, 'status_dps': 40.0, 'status_chance': 15.56}},
     }
@@ -40,7 +40,7 @@ def live_fill(**over):
                 {'label': 'Magazine Size', 'value': '7', 'icon': 'weaponClipSize'},
                 {'label': 'Fire Damage / sec.', 'value': '40.0', 'icon': 'x'},
                 {'label': 'Fire Chance', 'value': '15.6%', 'icon': 'x'}],
-            'title': {'Title': 'Quick Demo', 'Rarity': {'R': 255, 'G': 180, 'B': 0, 'A': 255}},
+            'title': {'Title': 'Quick Demo', 'Rarity': {'R': 18, 'G': 58, 'B': 188, 'A': 255}},
             'value': 120, 'level_line': 'LEVEL REQUIREMENT: 15'}
     fill.update(over)
     return fill
@@ -95,7 +95,7 @@ class Comparison(unittest.TestCase):
         self.assertEqual(exp['accuracy'], '90.0')
         self.assertEqual(exp['status_chance'], '15.6%')
         self.assertEqual(exp['level_line'], 'LEVEL REQUIREMENT: 15')
-        self.assertEqual(exp['rarity_colour'], '#FFB400')
+        self.assertEqual(exp['rarity_colour'], '#123ABC')
 
     def test_live_card_text_matches_expected(self):
         record = {'object': 'WillowWeapon_9', 'name': 'Quick Demo'}
