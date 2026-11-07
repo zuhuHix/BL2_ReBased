@@ -172,7 +172,7 @@ exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.p
   `test_ambient.ps1` and `seed_ambient_npc_assets.ps1` also wait while `Borderlands2` runs, so real-game probes and
   Unreal runs never overlap.
 - Nobody launches the game while a capture runs: a game started and closed between its checks goes unnoticed.
-- `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture` and `weapon_part_session` stop only their own game and send guarded input, but keep an older cleanup: they report save differences and do not restore them, and they release their locks before comparing. Check the saves by hand after one, or move it to the tail in `phaselock_integrity_capture.ps1` first.
+- **Not to be run:** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture` and `weapon_part_session`. They report save differences without restoring them, so they must not run against the maintainer's saves. Each moves to the shared tail in `phaselock_integrity_capture.ps1` when next needed, and the bar lifts for that one then. `projectiles_capture` and `weapon_parity2_capture` keep their own verified cleanup and stay runnable.
 - `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
   worktree and is rejected). The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.
 
