@@ -6,6 +6,7 @@
 #include "OpenWillowInteractive.h"
 #include "OpenWillowInventoryWidget.h"
 #include "OpenWillowUsePrompt.h"
+#include "OpenWillowUseView.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowNpc.h"
@@ -224,6 +225,19 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
             && FCString::Strcmp(Describe(EOpenWillowUseTarget::Vendor, true, false, None).Frame, TEXT("talk")) == 0
             && !Describe(EOpenWillowUseTarget::Vendor, true, true, None).Frame;
         Check(TEXT("use_prompt_rule"), bPrompts, TEXT("none, each target's frame, talking outranks a nearer target, and a reward page shows none"));
+        // A 100 uu box 90 uu ahead: straight on, and 15 degrees off, reach it; 30 degrees off passes beside it, close as it is; behind and beyond do not.
+        using OpenWillowUseView::RayEntersBox;
+        const FBox UseThing(FVector(90.f, -50.f, -50.f), FVector(190.f, 50.f, 50.f)), BeyondRay(FVector(400.f, -50.f, -50.f), FVector(500.f, 50.f, 50.f));
+        double RayDistance = 0, Ignored = 0;
+        const bool bStraight = RayEntersBox(FVector::ZeroVector, FVector::ForwardVector, UseThing, RayDistance);
+        const bool bInside = RayEntersBox(FVector(100.f, 0.f, 0.f), FVector::ForwardVector, UseThing, Ignored) && Ignored == 0.;
+        Check(TEXT("use_view_rule"), bStraight && FMath::IsNearlyEqual(RayDistance, 90., .01) && bInside
+            && RayEntersBox(FVector::ZeroVector, FRotator(0.f, 15.f, 0.f).Vector(), UseThing, Ignored)
+            && !RayEntersBox(FVector::ZeroVector, FRotator(0.f, 30.f, 0.f).Vector(), UseThing, Ignored)
+            && !RayEntersBox(FVector::ZeroVector, -FVector::ForwardVector, UseThing, Ignored)
+            && !RayEntersBox(FVector::ZeroVector, FVector::ForwardVector, BeyondRay, Ignored)
+            && !RayEntersBox(FVector::ZeroVector, FVector::ForwardVector, FBox(ForceInit), Ignored),
+            TEXT("straight at it, 15 off, not 30 off, not behind, not beyond the ray, not an empty box"));
         Check(TEXT("melee_damage_rule"), FMath::IsNearlyEqual(OpenWillowMelee::DamageAtLevel(0), 20.f) && FMath::IsNearlyEqual(OpenWillowMelee::DamageAtLevel(2), 25.538f, 0.01f),
             FString::Printf(TEXT("level0=%.3f level2=%.3f"), OpenWillowMelee::DamageAtLevel(0), OpenWillowMelee::DamageAtLevel(2)));
         using OpenWillowMelee::FCandidate;

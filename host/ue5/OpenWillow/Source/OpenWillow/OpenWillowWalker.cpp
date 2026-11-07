@@ -1471,12 +1471,12 @@ FOpenWillowUseDistances AOpenWillowWalker::UseDistances(AOpenWillowInventoryPick
         BestDistanceSquared = DistanceSquared;
         Nearest = *It;
     }
-    // One rule for the rest: every target in its own reach is measured, and the press goes nearest first.
+    // One rule for the rest: every target in its own reach (and, for all but pickups, in Maya's view: OpenWillowUseView.h) is measured, and the press goes nearest first.
     FOpenWillowUseDistances Targets;
     double Distance = 0;
     if (UOpenWillowVendorSubsystem::NearestInReach(*this, Distance)) Targets.Vendor = Distance;
     if (UOpenWillowInteractiveSubsystem::NearestInReach(*this, Distance)) Targets.Interactive = Distance;
-    if (Mover && Mover->InReach(GetActorLocation(), Distance)) Targets.Door = Distance;
+    if (Mover && Mover->InReach(*this, Distance)) Targets.Door = Distance;
     if (Nearest) Targets.Pickup = double(BestDistanceSquared);
     OutPickup = Nearest;
     return Targets;

@@ -7,6 +7,7 @@
 #include "GameFramework/Controller.h"
 #include "OpenWillowInteractivePickup.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowUseView.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowWeaponGen.h"
 #include "Animation/AnimSequence.h"
@@ -663,6 +664,9 @@ bool UOpenWillowInteractiveSubsystem::FindNearest(const AOpenWillowWalker& Walke
         if (!Lootable || Lootable->IsOpened()) continue;
         const double D2 = FVector::DistSquared(From, Lootable->GetActorLocation());
         if (D2 >= BestLootable) continue;
+        FVector Origin, Extent;
+        Lootable->GetActorBounds(false, Origin, Extent);
+        if (!OpenWillowUseView::LooksAt(Walker, FBox::BuildAABB(Origin, Extent), Lootable)) continue;
         BestLootable = D2;
         OutLootable = Lootable;
     }
@@ -726,8 +730,9 @@ bool FOpenWillowUseDistances::Offer(TFunctionRef<bool(EOpenWillowUseTarget)> Use
     return false;
 }
 
-AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::NearestStation(const FVector& From, double& OutDistanceSquared) const
+AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::NearestStation(const AOpenWillowWalker& Walker, double& OutDistanceSquared) const
 {
+    const FVector From = Walker.GetActorLocation();
     AOpenWillowQuickChangeStation* Nearest = nullptr;
     double Best = FMath::Square(LootableReach);
     for (const TWeakObjectPtr<AOpenWillowQuickChangeStation>& Candidate : Stations)
@@ -735,7 +740,7 @@ AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::NearestStation(c
         AOpenWillowQuickChangeStation* Station = Candidate.Get();
         if (!Station) continue;
         const double D2 = FVector::DistSquared(From, Station->GetActorLocation());
-        if (D2 >= Best) continue;
+        if (D2 >= Best || !OpenWillowUseView::LooksAt(Walker, Station->UseBox(), Station)) continue;
         Best = D2;
         Nearest = Station;
     }
@@ -776,7 +781,7 @@ bool UOpenWillowInteractiveSubsystem::NearestInReach(const AOpenWillowWalker& Wa
     const bool bLoot = FindNearest(Walker, Lootable, Pickup, OutDistanceSquared);
     UOpenWillowInteractiveSubsystem* Subsystem = SubsystemOf(Walker.GetWorld());
     double StationDistance = 0;
-    if (Subsystem && Subsystem->NearestStation(Walker.GetActorLocation(), StationDistance) && (!bLoot || StationDistance < OutDistanceSquared))
+    if (Subsystem && Subsystem->NearestStation(Walker, StationDistance) && (!bLoot || StationDistance < OutDistanceSquared))
     {
         OutDistanceSquared = StationDistance;
         return true;
@@ -793,7 +798,7 @@ bool UOpenWillowInteractiveSubsystem::TryUseNearest(AOpenWillowWalker& Walker)
     if (!Subsystem) return false;
     const bool bLoot = FindNearest(Walker, Lootable, Pickup, DistanceSquared);
     double StationDistance = 0;
-    AOpenWillowQuickChangeStation* Station = Subsystem->NearestStation(Walker.GetActorLocation(), StationDistance);
+    AOpenWillowQuickChangeStation* Station = Subsystem->NearestStation(Walker, StationDistance);
     if (Station && (!bLoot || StationDistance < DistanceSquared)) return Station->Use(Walker);
     if (!bLoot) return false;
     if (Lootable) return Subsystem->OpenLootable(Walker, *Lootable);
@@ -1070,7 +1075,7 @@ AOpenWillowQuickChangeStation* UOpenWillowInteractiveSubsystem::SelectedStation(
     AOpenWillowLootPickup* Pickup = nullptr;
     double LootDistance = 0, StationDistance = 0;
     const bool bLoot = FindNearest(Walker, Lootable, Pickup, LootDistance);
-    AOpenWillowQuickChangeStation* Station = NearestStation(Walker.GetActorLocation(), StationDistance);
+    AOpenWillowQuickChangeStation* Station = NearestStation(Walker, StationDistance);
     return Station && (!bLoot || StationDistance < LootDistance) ? Station : nullptr;
 }
 
@@ -1083,9 +1088,17 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
     if (!Skills || !Inventory) return false;
     const auto Beside = [&Station, &Walker]()
     {
-        const FVector At = Station.GetActorLocation() + Station.GetActorForwardVector() * 60.f + FVector(0.f, 0.f, 100.f);
+        // Far enough to stand outside the station's use box, where the view decides.
+        const FVector At = Station.GetActorLocation() + Station.GetActorForwardVector() * 120.f + FVector(0.f, 0.f, 100.f);
         Walker.SetActorLocation(At, false, nullptr, ETeleportType::TeleportPhysics);
     };
+    // Aims at the station, or Turn degrees to the side of it.
+    const auto Face = [&Station, &Walker](float Turn)
+    {
+        if (AController* Controller = Walker.GetController())
+            Controller->SetControlRotation((Station.UseBox().GetCenter() - OpenWillowUseView::EyeOf(Walker)).Rotation() + FRotator(0.f, Turn, 0.f));
+    };
+    Face(0.f);   // again at each step: Maya may still be landing
     int32 Money = 0;
     Inventory->GetMoney(Money);
     switch (TestStationStep++)
@@ -1097,6 +1110,12 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
         FString Reason;
         Skills->TrySpend(-1, -1, -1, Reason);
         Beside();
+        // In reach with the station behind her: not the target, and a press asks nothing.
+        Face(180.f);
+        const bool bSelectedAway = SelectedStation(Walker) != nullptr;
+        Walker.PressUseKey();
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST looked away selected=%d"), bSelectedAway ? 1 : 0);
+        Face(0.f);
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST ready money=%d"), Money);
         break;
     }
@@ -1109,6 +1128,7 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
     case 3:
         // Back inside the 5 s window: one press must ask again, not reset.
         Beside();
+        Face(0.f);
         Walker.PressUseKey();
         break;
     case 4:

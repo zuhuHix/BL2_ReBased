@@ -119,12 +119,20 @@ since the host only drives the clip.
 `PickupNearby`: Marcus, then an aimed pickup, then the nearest target. The exception: when the named target refuses a press (a full ammo
 pool, say) the press passes to the next target, which the prompt did not name.
 
-**Which target should win stays open.** `NATIVE_USE_INTERACTION.md` (read from native code) says the game casts one
+**The use target follows the view (maintainer's decision, 2026-11-07; UNVERIFIED as the game's rule).** `NATIVE_USE_INTERACTION.md` (read from native code) says the game casts one
 ray along the view and takes the first usable thing it hits, with no distance rule and no priority between kinds, and that a current
-pickupable wins the key. The host's nearest-target rule is a stand-in that also reaches things Maya is not looking at. This work does not
-change it. The real-game read supports the note: standing 120 uu from a usable thing and turning 15 to 30 degrees away, the usable went to none on 8 of 11 targets,
-with the thing still in reach and nothing else taking over. The other 3 stayed usable, and why was not checked (the ray may still have hit them). So the game appears to follow the view; the host's rule also reaches things Maya is not
-looking at. Aiming at a pickup with an interactive in reach was not read, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
+pickupable wins the key. The real-game read is a lead, not proof: standing 120 uu from a usable thing and turning 15 to 30 degrees away, the usable went to none on 8 of 11 targets,
+with the thing still in reach and nothing else taking over. The other 3 stayed usable, and why was not checked (the ray may still have hit them).
+
+So in the host a vending machine, a lootable, a Quick Change station or a door is a target only while a ray from the camera along the view, 350 uu long, enters its box with nothing
+blocking on the way (`OpenWillowUseView`). What is the host's and not the game's:
+- The boxes stand in for the usable's collision: the machine's stand-in body, a lootable's whole bounds, a machine-sized box at a station (which has no mesh), and a door's box where
+  it is now joined with where it closes, so an open door can be closed from where it was opened. A door and a strongbox were never read in the real game.
+- The existing reaches stay, measured from Maya (350 uu; 220 for a door), and the press still goes nearest first among what she looks at, where the game takes the first hit along the ray.
+- A station's open prompt now also ends on looking away (`not the selected target`), a consequence of the rule, not a read of the game.
+
+Pickups keep their rule (nearest in sight, an aimed one first) and Marcus keeps his own ray: the native note gives pickups their own path ("touched, else seen"), and they win the key.
+Aiming at a pickup with an interactive in reach was not read, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
 
 **The stock prompt, read live** (the clip, its frame and its text, with screenshots; one target per kind): `[E] SHOP` on a vending machine (frame `shop`), `[E] TALK` on a pawn
 (`talk`), `[E] USE` on the character customization machine and the bounty board (`use`), `[E] OPEN` on a golden chest (`open`), with its key cost after it in a red `(1)`. So the
@@ -153,12 +161,12 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   a mismatch silently), no key runs two actions, M and L are as above. Our own config and source only.
 - `tools/test_controls.ps1` (`-owcontrolstest`, in engine): presses through the player controller's input path, as the inventory
   suite does, with every page closed, because a simulated press reaches the bindings even where a real key could not. Rows:
-  `start_closed`, `m_opens_map`, `map_closed`, `l_opens_missions`, `melee_damage_rule`, `melee_cone_rule`, `melee_swing_rule`, `use_prompt_rule`,
+  `start_closed`, `m_opens_map`, `map_closed`, `l_opens_missions`, `melee_damage_rule`, `melee_cone_rule`, `melee_swing_rule`, `use_prompt_rule`, `use_view_rule`,
   `v_not_hit_before_the_delay` (the delay measured from the frames the swing started and the target lost health), `v_hits_target_ahead`
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
-  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `escape_closes_page_while_down`, `respawn_closes_page`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=33 failed=0`.
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `i_refused_while_down`, `k_refused_while_down`, `route_refused_while_down`, `escape_closes_page_while_down`, `respawn_closes_page`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=34 failed=0`.
   `route_refused_while_down` sends its key as a keydown event into the page: it tests the page's handler and the host's refusal, not real key delivery, which skips Slate.
   `escape_closes_page_while_down` sends Escape as a synthetic Slate event to the focused page, so it does cross Slate, but it is not an OS key press. `respawn_closes_page` reads the page and the player controller's input mode on both
   sides of the respawn, and the mode string is the engine's debug text for what was last set, so it does not prove a key then moves her.

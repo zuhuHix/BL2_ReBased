@@ -4201,3 +4201,13 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/WEAPON_VISUALS.md` sec
 
 - **Change:** `OpenWillowMovement::AimedFov` scales the zoom value in tangent by the live default over 70, then widens it by the aspect, for the world camera only. It replaces passing the zoom value as a horizontal angle. Hip FOV, foreground FOV, the gun's size and position are unchanged. Every aimed world frame moves, and so does the view kick while aiming.
 - **Confirmed:** on the real game, by a measured 4-degree view turn and by magnification from frames, on two guns at 1280x720 and FOV setting 90. UNVERIFIED on other zoom values, aspects and FOV settings. In the host (all-in-one build): compiled, firing suite 14 of 14 with no row moved, hip-to-ADS world scale on frames as the rule gives.
+
+## 2026-11-07: The use target follows the view on machines, lootables, stations and doors; UNVERIFIED as the game's rule (controls)
+
+AI-assisted (Claude Opus 5.5). Maintainer's decision, through the hub. Record: `docs/verification/CONTROLS.md`, "Use prompt".
+
+- **Change:** a vending machine, a lootable, a Quick Change station or a door is a use target only while a ray from the camera along the view, 350 uu long, enters its box with nothing blocking first (`OpenWillowUseView`). Being in reach behind Maya no longer offers or opens it. The prompt follows, since it asks the same code as the key.
+- **Evidence:** the native reading (`NATIVE_USE_INTERACTION.md`, itself unconfirmed), and a real-game lead: standing 120 uu from a usable thing and turning 15 to 30 degrees, the usable went to none on 8 of 11 targets; 3 stayed, and why was not checked. That is a lead, not proof, so the rule stays **UNVERIFIED** as the game's. A door and a strongbox were never read.
+- **The host's own, not the game's:** the boxes stand in for usable collision; the old reaches stay and the press still goes nearest first among what she looks at, where the game takes the first hit along the ray; a station's open prompt also ends on looking away.
+- **Left alone:** pickups (the native note gives them their own path, and they win the key) and Marcus (his own ray). A pickup against an interactive in reach was not read.
+- **Checked:** the graders' synthetic tests only. The host code was **not compiled or run** when this was written: both machines were held by a batch. The new rows (`use_view_rule`, `OWQCTEST looked away selected=0`) have never run.

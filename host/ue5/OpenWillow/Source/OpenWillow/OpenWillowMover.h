@@ -22,8 +22,8 @@ public:
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function) override;
     bool TryInteract();
-    // The use key's reach test of TryInteract on its own: true with the squared distance when From is in reach.
-    bool InReach(const FVector& From, double& OutDistanceSquared) const;
+    // The use key's reach test of TryInteract on its own: true with the squared distance when Walker looks at the door in reach.
+    bool InReach(const class AOpenWillowWalker& Walker, double& OutDistanceSquared) const;
     // Stock activation: a remote event through the installed Kismet sequence owning the door's Matinee action.
     // Returns whether any event node in the sequence matched. Unsupported ops fail the component explicitly.
     bool RemoteEvent(const FString& Name);

@@ -36,10 +36,12 @@ class OPENWILLOW_API AOpenWillowQuickChangeStation : public AActor
 public:
     AOpenWillowQuickChangeStation();
     void Configure(const FString& InId) { Id = InId; }
+    // What the use key's view ray tests. The station has no mesh in the host, only a label: a machine-sized box on the placed point, UNVERIFIED stand-in.
+    FBox UseBox() const { return FBox::BuildAABB(GetActorLocation() + FVector(0.f, 0.f, 105.f), FVector(60.f, 60.f, 105.f)); }
     // One use press from this walker. True: the press was used, whatever it did.
     bool Use(AOpenWillowWalker& Walker);
     // Called often while a prompt may be open, with or without a current walker: it ends when it expires, when that walker
-    // is gone or down, or when this station stops being its selected use target (bSelected false: walked out of reach, or
+    // is gone or down, or when this station stops being its selected use target (bSelected false: walked out of reach, looked away, or
     // something else is now nearer). The label clears too.
     void TickPrompt(double Now, const AOpenWillowWalker* Walker, bool bSelected);
     // Ends an open prompt now: the press went elsewhere (Marcus's talk takes the use key before the nearest-target rule).
