@@ -22,6 +22,9 @@ public:
     bool TryPickup(UOpenWillowInventory* Inventory);
     FString DisplayName() const;
     const FOpenWillowTakenInventoryItem& GetItem() const { return Item; }
+    // The lootable this drop lies inside, if any: the pickup sight check looks through it, and nothing else does.
+    void SetContainer(const AActor* InContainer) { Container = InContainer; }
+    const AActor* GetContainer() const { return Container.Get(); }
     // The colour of the drop's locator beam: the item card's "#RRGGBB" (read from the game's rarity table by the recipe tools,
     // under ignored local/), white when the item has none. Public for the automation test.
     static FLinearColor RarityBeamColor(const FString& HexColor);
@@ -31,6 +34,7 @@ public:
                                                      float Distance = 450.f, float LifeSeconds = 1.5f);
 
 private:
+    TWeakObjectPtr<const AActor> Container;
     UPROPERTY() TObjectPtr<USceneComponent> SceneRoot;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> WeaponVisual;
     UPROPERTY() TObjectPtr<UStaticMeshComponent> GearVisual;

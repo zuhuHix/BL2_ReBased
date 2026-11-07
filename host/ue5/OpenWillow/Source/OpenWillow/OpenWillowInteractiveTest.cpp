@@ -12,6 +12,12 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "OpenWillowInventoryPickup.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/World.h"
+#include "ReferenceSkeleton.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowInteractiveLootTest, "OpenWillow.Interactive.Loot",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -84,6 +90,60 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("its bone"), Socket && Socket->Bone == FName(TEXT("Base")));
         TestTrue(TEXT("its offset"), Socket && Socket->Offset.Equals(FVector(1.0, 2.0, 3.0)));
         TestFalse(TEXT("a socket with a broken location is left out"), Placed.Sockets.Contains(TEXT("Broken")));
+    }
+
+    // Where a drop really lies, through the real placement, on the engine's own small skeletal mesh. Place and offset invented.
+    {
+        UWorld* World = nullptr;
+        for (const FWorldContext& Context : GEngine->GetWorldContexts())
+            if (Context.WorldType == EWorldType::Game || Context.WorldType == EWorldType::PIE) World = Context.World();
+        UOpenWillowInteractiveSubsystem* Subsystem = World ? World->GetSubsystem<UOpenWillowInteractiveSubsystem>() : nullptr;
+        USkeletalMesh* Cube = LoadObject<USkeletalMesh>(nullptr, TEXT("/Engine/EngineMeshes/SkeletalCube.SkeletalCube"));
+        if (TestNotNull(TEXT("a game world"), World) && TestNotNull(TEXT("the subsystem"), Subsystem) && TestNotNull(TEXT("the engine's cube"), Cube))
+        {
+            FActorSpawnParameters Always;
+            Always.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+            AOpenWillowLootable* Box = World->SpawnActor<AOpenWillowLootable>(AOpenWillowLootable::StaticClass(),
+                FTransform(FRotator(0.f, 90.f, 0.f), FVector(1234.f, -567.f, 89.f)), Always);
+            if (TestNotNull(TEXT("the lootable"), Box))
+            {
+                const FName Bone = Cube->GetRefSkeleton().GetBoneName(0);
+                FOpenWillowLootSocket Inside;
+                Inside.Bone = Bone;
+                Inside.Offset = FVector(10.0, 20.0, 30.0);
+                TMap<FString, FOpenWillowLootSocket> BoxSockets;
+                BoxSockets.Add(TEXT("Inside"), Inside);
+                Box->ShowMeshForTest(Cube, BoxSockets);
+                // Worked out here from the mesh's reference pose and the component, not through the code under test.
+                const USkeletalMeshComponent* Mesh = Box->FindComponentByClass<USkeletalMeshComponent>();
+                const FVector Expected = (Cube->GetRefSkeleton().GetRefBonePose()[0] * Mesh->GetComponentTransform()).TransformPosition(Inside.Offset);
+
+                FOpenWillowLootItem Ammo;
+                Ammo.Balance = TEXT("Synthetic.Item.Ammo");
+                Ammo.Pickup.Kind = TEXT("ammo");
+                Ammo.Pickup.Amount = 1;
+                AActor* AtSocket = Subsystem->TestDrop(*Box, Ammo, TEXT("Inside"));
+                TestTrue(TEXT("a drop lies at its socket"), AtSocket && AtSocket->GetActorLocation().Equals(Expected, 0.01));
+                AActor* NoSocket = Subsystem->TestDrop(*Box, Ammo, TEXT("Nowhere"));
+                TestTrue(TEXT("a point with no socket still drops, elsewhere"), NoSocket && !NoSocket->GetActorLocation().Equals(Expected, 1.0));
+
+                FOpenWillowLootItem Shield;
+                Shield.Balance = TEXT("Synthetic.Item.Shield");
+                Shield.Kind = TEXT("shield");
+                Shield.bHasValue = true;
+                Shield.ValuePartTotal = 1.f;
+                Shield.ValueScaler = 1.f;
+                Shield.ValueBaseCost = 10.f;
+                const AOpenWillowInventoryPickup* Held = Cast<AOpenWillowInventoryPickup>(Subsystem->TestDrop(*Box, Shield, TEXT("Inside")));
+                TestTrue(TEXT("gear at a socket lies there and names its holder for the sight check"),
+                    Held && Held->GetActorLocation().Equals(Expected, 0.01) && Held->GetContainer() == Box);
+                const AOpenWillowInventoryPickup* Loose = Cast<AOpenWillowInventoryPickup>(Subsystem->TestDrop(*Box, Shield, TEXT("Nowhere")));
+                TestTrue(TEXT("gear outside has no holder to look through"), Loose && Loose->GetContainer() == nullptr);
+
+                for (AActor* Spawned : TArray<AActor*>{AtSocket, NoSocket, const_cast<AOpenWillowInventoryPickup*>(Held), const_cast<AOpenWillowInventoryPickup*>(Loose), Box})
+                    if (Spawned) Spawned->Destroy();
+            }
+        }
     }
 
     // Cash formula on invented constants: calc(L) = 10 x 2^L, amount = calc x (1 + 0.5 x grade). L = 3 gives 80; grade 4 gives 240.

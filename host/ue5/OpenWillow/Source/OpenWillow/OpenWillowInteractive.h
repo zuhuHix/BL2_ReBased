@@ -17,6 +17,7 @@ class AOpenWillowWalker;
 class AOpenWillowLootPickup;
 class FJsonObject;
 class USceneComponent;
+class USkeletalMesh;
 class USkeletalMeshComponent;
 class UStaticMeshComponent;
 class UAnimSequence;
@@ -157,6 +158,9 @@ public:
     bool IsOpened() const { return bOpened; }
     // True when the imported open clip loaded (the lid-opening capture of -owinteractivetest uses these).
     bool HasOpenClip() const { return OpenAnim != nullptr; }
+    bool ShowsImportedMesh() const { return bSkeletalShown; }
+    // For the automation test: this mesh and these sockets, without the imported assets.
+    void ShowMeshForTest(USkeletalMesh* Mesh, const TMap<FString, FOpenWillowLootSocket>& InSockets);
     // Where a drop from this attachment point lies: its socket on the imported mesh. False with no imported mesh or no such socket.
     bool SocketSlot(const FString& Point, FVector& OutSlot) const;
     // The path of the material the imported mesh renders in its first slot; empty without one.
@@ -206,6 +210,8 @@ public:
 
     // Opens a closed lootable (its drops are spawned around it). False when it is open already or nothing can be rolled.
     bool OpenLootable(AOpenWillowWalker& Walker, AOpenWillowLootable& Lootable);
+    // For the automation test: one drop of this item from this point, through the real placement. The spawned actor, or null.
+    AActor* TestDrop(AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item, const FString& Point);
     int32 LootableCount() const { return Lootables.Num(); }
     int32 NumStations() const { return Stations.Num(); }
     AOpenWillowLootable* LootableAt(int32 Index) const { return Lootables.IsValidIndex(Index) ? Lootables[Index].Get() : nullptr; }
@@ -231,13 +237,14 @@ private:
     int32 TestSavedMoney = 0;
     FString TestStateBefore;
     bool SpawnOne(UWorld& World, const TSharedPtr<FJsonObject>& Json);
-    void SpawnLeaf(AOpenWillowWalker& Walker, const AOpenWillowLootable& Lootable, const FOpenWillowLootLeaf& Leaf,
+    // The Spawn functions return what they spawned, or null.
+    AActor* SpawnLeaf(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootLeaf& Leaf,
         int32 Level, int32 Index, int32 Count, FRandomStream& Rng, int32& Spawned);
-    void SpawnWeapon(UWorld& World, const AOpenWillowLootable& Lootable, const FString& Balance, int32 Level, uint32 GunSeed,
+    AActor* SpawnWeapon(UWorld& World, const AOpenWillowLootable& Lootable, const FString& Balance, int32 Level, uint32 GunSeed,
         const FVector& Slot, int32& Spawned);
-    void SpawnGear(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item, int32 Level,
+    AActor* SpawnGear(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item, int32 Level,
         const FVector& Slot, int32& Spawned);
-    void SpawnPickup(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item, int32 Level,
+    AActor* SpawnPickup(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item, int32 Level,
         FRandomStream& Rng, const FVector& Slot, int32& Spawned);
     void AutoCollectTick();
     void TickInteractiveTest();

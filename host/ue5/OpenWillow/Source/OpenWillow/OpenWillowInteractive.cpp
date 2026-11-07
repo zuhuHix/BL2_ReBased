@@ -465,16 +465,19 @@ bool AOpenWillowLootable::Open()
     {
         // Plays the open sequence once (UNVERIFIED: the imported anim set is not checked in game).
         Skeletal->PlayAnimation(OpenAnim, false);
-        // Loot now lies inside, so the pickup sight test must see in. The hidden placeholder still blocks walking.
-        Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
-        Lid->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
-        Skeletal->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
     }
     else
     {
         LidPivot->SetRelativeRotation(FRotator(-100.f, 0.f, 0.f)); // placeholder lid, UNVERIFIED stand-in
     }
     return true;
+}
+
+void AOpenWillowLootable::ShowMeshForTest(USkeletalMesh* Mesh, const TMap<FString, FOpenWillowLootSocket>& InSockets)
+{
+    Skeletal->SetSkeletalMesh(Mesh);
+    Sockets = InSockets;
+    bSkeletalShown = true;
 }
 
 bool AOpenWillowLootable::SocketSlot(const FString& Point, FVector& OutSlot) const
@@ -812,7 +815,7 @@ bool UOpenWillowInteractiveSubsystem::OpenLootable(AOpenWillowWalker& Walker, AO
     UWorld* World = Walker.GetWorld();
     int32 Spawned = 0;
     for (int32 I = 0; World && I < Leaves.Num(); ++I)
-        SpawnLeaf(Walker, Lootable, Leaves[I], Level, I, Leaves.Num(), Rng, Spawned);
+        SpawnLeaf(*World, Lootable, Leaves[I], Level, I, Leaves.Num(), Rng, Spawned);
     UE_LOG(LogTemp, Display, TEXT("OWLOOT open id=%s config=%s drops=%d"), *Lootable.Id, *Config, Spawned);
     if (Spawned == 0)
     {
@@ -823,39 +826,64 @@ bool UOpenWillowInteractiveSubsystem::OpenLootable(AOpenWillowWalker& Walker, AO
     return true;
 }
 
-void UOpenWillowInteractiveSubsystem::SpawnLeaf(AOpenWillowWalker& Walker, const AOpenWillowLootable& Lootable,
+AActor* UOpenWillowInteractiveSubsystem::SpawnLeaf(UWorld& World, const AOpenWillowLootable& Lootable,
     const FOpenWillowLootLeaf& Leaf, int32 Level, int32 Index, int32 Count, FRandomStream& Rng, int32& Spawned)
 {
-    UWorld* World = Walker.GetWorld();
-    if (!World) return;
     FVector Slot;
-    if (Lootable.SocketSlot(Leaf.Point, Slot))
+    const bool bAtSocket = Lootable.SocketSlot(Leaf.Point, Slot);
+    if (!bAtSocket) Slot = DropSlot(Lootable, Index, Count);
+    AActor* Drop = nullptr;
+    if (Leaf.Class == TEXT("WeaponBalanceDefinition"))
     {
-        UE_LOG(LogTemp, Display, TEXT("OWLOOT slot id=%s point=%s at=socket"), *Lootable.Id, *Leaf.Point);
+        Drop = SpawnWeapon(World, Lootable, Leaf.Balance, Level, static_cast<uint32>(Rng.RandRange(1, MAX_int32)), Slot, Spawned);
+    }
+    else if (const FOpenWillowLootItem* Item = Items.Find(Leaf.Balance))
+    {
+        if (Item->IsPickup()) Drop = SpawnPickup(World, Lootable, *Item, Level, Rng, Slot, Spawned);
+        else if (Item->IsGear()) Drop = SpawnGear(World, Lootable, *Item, Level, Slot, Spawned);
+        else UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=no pickup or gear value"), *Lootable.Id, *Leaf.Balance);
     }
     else
     {
-        Slot = DropSlot(Lootable, Index, Count);
-        UE_LOG(LogTemp, Display, TEXT("OWLOOT slot id=%s point=%s at=front reason=%s"), *Lootable.Id, *Leaf.Point,
-            Lootable.HasOpenClip() ? TEXT("no socket") : TEXT("placeholder"));
-    }
-    if (Leaf.Class == TEXT("WeaponBalanceDefinition"))
-    {
-        SpawnWeapon(*World, Lootable, Leaf.Balance, Level, static_cast<uint32>(Rng.RandRange(1, MAX_int32)), Slot, Spawned);
-        return;
-    }
-    const FOpenWillowLootItem* Item = Items.Find(Leaf.Balance);
-    if (!Item)
-    {
         UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=not in the items block"), *Lootable.Id, *Leaf.Balance);
-        return;
     }
-    if (Item->IsPickup()) SpawnPickup(*World, Lootable, *Item, Level, Rng, Slot, Spawned);
-    else if (Item->IsGear()) SpawnGear(*World, Lootable, *Item, Level, Slot, Spawned);
-    else UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=no pickup or gear value"), *Lootable.Id, *Leaf.Balance);
+    if (!Drop) return nullptr;
+    if (bAtSocket)
+    {
+        if (AOpenWillowInventoryPickup* Held = Cast<AOpenWillowInventoryPickup>(Drop)) Held->SetContainer(&Lootable);
+    }
+    // After the spawn, from the actor: this says where a drop that exists really lies.
+    const FVector At = Drop->GetActorLocation();
+    const double FromContainer = FVector::Dist(At, Lootable.GetActorLocation());
+    if (bAtSocket)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT slot id=%s point=%s at=socket x=%.1f y=%.1f z=%.1f from_container=%.1f"), *Lootable.Id, *Leaf.Point,
+            At.X, At.Y, At.Z, FromContainer);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT slot id=%s point=%s at=front x=%.1f y=%.1f z=%.1f from_container=%.1f reason=%s"), *Lootable.Id,
+            *Leaf.Point, At.X, At.Y, At.Z, FromContainer, Lootable.ShowsImportedMesh() ? TEXT("no socket") : TEXT("placeholder"));
+    }
+    return Drop;
 }
 
-void UOpenWillowInteractiveSubsystem::SpawnWeapon(UWorld& World, const AOpenWillowLootable& Lootable, const FString& Balance,
+AActor* UOpenWillowInteractiveSubsystem::TestDrop(AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item, const FString& Point)
+{
+    UWorld* World = GetWorld();
+    if (!World) return nullptr;
+    Items.Add(Item.Balance, Item);
+    FOpenWillowLootLeaf Leaf;
+    Leaf.Balance = Item.Balance;
+    Leaf.Class = TEXT("InventoryBalanceDefinition");
+    Leaf.Weight = 1.f;
+    Leaf.Point = Point;
+    FRandomStream Rng(1);
+    int32 Spawned = 0;
+    return SpawnLeaf(*World, Lootable, Leaf, 5, 0, 1, Rng, Spawned);
+}
+
+AActor* UOpenWillowInteractiveSubsystem::SpawnWeapon(UWorld& World, const AOpenWillowLootable& Lootable, const FString& Balance,
     int32 Level, uint32 GunSeed, const FVector& Slot, int32& Spawned)
 {
     FOpenWillowWeaponItem Gun;
@@ -863,27 +891,28 @@ void UOpenWillowInteractiveSubsystem::SpawnWeapon(UWorld& World, const AOpenWill
     {
         UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=weapon generator unavailable or balance unknown"),
             *Lootable.Id, *Balance);
-        return;
+        return nullptr;
     }
     FOpenWillowTakenInventoryItem Taken;
     Taken.Weapon = Gun;
     AOpenWillowInventoryPickup* Pickup = World.SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(),
         FTransform(Slot), SpawnParams());
-    if (!Pickup) return;
+    if (!Pickup) return nullptr;
     Pickup->Initialize(Taken);
     ++Spawned;
     UE_LOG(LogTemp, Display, TEXT("OWLOOT drop id=%s kind=weapon balance=%s level=%d value=%d"), *Lootable.Id, *Balance, Level,
         Gun.bHasSaleValue ? Gun.SaleValue : 0);
+    return Pickup;
 }
 
-void UOpenWillowInteractiveSubsystem::SpawnGear(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item,
+AActor* UOpenWillowInteractiveSubsystem::SpawnGear(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item,
     int32 Level, const FVector& Slot, int32& Spawned)
 {
     const int32 Value = Item.GearValueAt(Level);
     if (Value < 0)
     {
         UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=gear value formula does not resolve"), *Lootable.Id, *Item.Balance);
-        return;
+        return nullptr;
     }
     // Stand-in gear: the name and value come from the manifest, the rarity is the lowest (UNVERIFIED host choice).
     FOpenWillowGearItem Gear;
@@ -899,13 +928,14 @@ void UOpenWillowInteractiveSubsystem::SpawnGear(UWorld& World, const AOpenWillow
     Taken.Gear = Gear;
     AOpenWillowInventoryPickup* Pickup = World.SpawnActor<AOpenWillowInventoryPickup>(AOpenWillowInventoryPickup::StaticClass(),
         FTransform(Slot), SpawnParams());
-    if (!Pickup) return;
+    if (!Pickup) return nullptr;
     Pickup->Initialize(Taken);
     ++Spawned;
     UE_LOG(LogTemp, Display, TEXT("OWLOOT drop id=%s kind=gear balance=%s level=%d value=%d"), *Lootable.Id, *Item.Balance, Level, Value);
+    return Pickup;
 }
 
-void UOpenWillowInteractiveSubsystem::SpawnPickup(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item,
+AActor* UOpenWillowInteractiveSubsystem::SpawnPickup(UWorld& World, const AOpenWillowLootable& Lootable, const FOpenWillowLootItem& Item,
     int32 Level, FRandomStream& Rng, const FVector& Slot, int32& Spawned)
 {
     const FOpenWillowPickupSpec& Spec = Item.Pickup;
@@ -914,15 +944,16 @@ void UOpenWillowInteractiveSubsystem::SpawnPickup(UWorld& World, const AOpenWill
     if (Spec.Kind == TEXT("cash") && Value <= 0)
     {
         UE_LOG(LogTemp, Display, TEXT("OWLOOT skip id=%s balance=%s reason=cash constants not set"), *Lootable.Id, *Item.Balance);
-        return;
+        return nullptr;
     }
     AOpenWillowLootPickup* Pickup = World.SpawnActor<AOpenWillowLootPickup>(AOpenWillowLootPickup::StaticClass(), FTransform(Slot),
         SpawnParams());
-    if (!Pickup) return;
+    if (!Pickup) return nullptr;
     Pickup->Configure(Spec, Value, Item.Balance);
     ++Spawned;
     UE_LOG(LogTemp, Display, TEXT("OWLOOT drop id=%s kind=%s balance=%s level=%d value=%d"), *Lootable.Id, *Spec.Kind, *Item.Balance,
         Level, Value);
+    return Pickup;
 }
 
 void UOpenWillowInteractiveSubsystem::AutoCollectTick()
