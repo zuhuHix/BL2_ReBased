@@ -9,7 +9,7 @@ every command, since a reference kept from an earlier command can crash the game
   ads_character()            the level, and whether Phaselock's skill is loaded (only Maya has it)
   ads_fov_arm() / ads_fov_read()  hook the HUD's PostRender once, project known view directions through its canvas, and fit the view's FOV
   ads_turn(degrees)          the view that many degrees from the one chosen by wp_face_wall, at level pitch, for the turn test (ClientSetRotation: _set_view's SetRotation moved nothing here)
-  ads_view() / ads_turned_by(from, degrees)  the rendered camera's yaw, and whether it now stands that many degrees from an earlier yaw
+  ads_view() / ads_turned_by(from, degrees)  the controller's yaw, and whether it now stands that many degrees from an earlier yaw (PlayerCamera is None in this game)
   ads_foreground()           the controller's foreground FOV getter, if script can call it (None otherwise; a getter never tried before)
 """
 import json
@@ -144,12 +144,12 @@ def ads_turn(degrees):
 
 
 def ads_view():
-    return {"camera_yaw_units": get_pc().PlayerCamera.CameraCache.POV.Rotation.Yaw}
+    return {"yaw_units": get_pc().Rotation.Yaw}
 
 
 def ads_turned_by(from_units, degrees):
-    """Has the rendered camera turned this many degrees from an earlier yaw, within half a degree? Yaw is in 65536ths of a turn, and may wrap."""
-    now = get_pc().PlayerCamera.CameraCache.POV.Rotation.Yaw
+    """Has the controller turned this many degrees from an earlier yaw, within half a degree? Yaw is in 65536ths of a turn, and may wrap."""
+    now = get_pc().Rotation.Yaw
     gap = ((now - int(from_units) + 32768) % 65536 - 32768) * 360.0 / 65536
     return {"from_units": int(from_units), "now_units": now, "degrees": gap, "moved": abs(abs(gap) - abs(float(degrees))) <= 0.5}
 

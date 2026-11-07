@@ -117,16 +117,17 @@ class ProbeTests(unittest.TestCase):
         ns['ads_fov_arm']()
         self.assertEqual(ns['ads_fov_read'](), {'fired': 0})
 
-    def test_the_turn_is_read_back_from_the_camera(self):
+    def test_the_turn_is_read_back_from_the_controller(self):
         ns = probe_namespace(self.repo)
-        pov = types.SimpleNamespace(Rotation=types.SimpleNamespace(Yaw=16384))
-        ns['pc'].PlayerCamera = types.SimpleNamespace(CameraCache=types.SimpleNamespace(POV=pov))
+        pov = ns['pc']
+        pov.Rotation = types.SimpleNamespace(Yaw=16384)
+        pov.PlayerCamera = None   # as in the game: the read must not go through it
         turns = []
         ns['pc'].ClientSetRotation = lambda rotator: turns.append(rotator)
         ns['wp_state']['view'] = {'yaw': 359.0}
         ns['ads_turn'](4)
         self.assertEqual(turns[-1], {'Pitch': 0, 'Yaw': int(363.0 * 65536 / 360) % 65536, 'Roll': 0}, 'wraps into 16 bits')
-        self.assertEqual(ns['ads_view'](), {'camera_yaw_units': 16384})
+        self.assertEqual(ns['ads_view'](), {'yaw_units': 16384})
         four = int(4 * 65536 / 360)
         self.assertFalse(ns['ads_turned_by'](16384, 4)['moved'], 'the camera did not move')
         pov.Rotation.Yaw = 16384 + four
@@ -221,6 +222,7 @@ class CaptureTests(unittest.TestCase):
     def test_the_fov_stage_is_asked_for_only_with_its_switch_and_cleans_up_after_itself(self):
         text = text_of(CAPTURE)
         self.assertIn('$(if ($MeasureFov) { @($guns.Keys | ForEach-Object { "${_}_fov" }) } else { @() })', text)
+        self.assertIn("if ($reply -match 'Traceback') { throw", text[text.index('function PyJson'):text.index('function Q(')])
         self.assertIn('$turned = ($g.fov_hip.turned.moved -eq $true) -and ($g.fov_zoom.measured.turned.moved -eq $true)', text)
         self.assertIn('Set-Stage "${id}_fov" ($states -and $turned)', text)
         measure = text[text.index('function Measure-ViewFov'):text.index('$Recipes') if text.index('$Recipes') > text.index('function Measure-ViewFov') else text.index('$extraRoots = ')]

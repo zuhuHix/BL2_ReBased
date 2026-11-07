@@ -42,8 +42,12 @@ if ($oldFrames.Count) { $keptFrames = New-Item -ItemType Directory (Join-Path $O
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
-# Py returns a traceback as text; here it cannot pass as an answer.
-function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json.dumps($Expr, default=str))" $Timeout | ConvertFrom-Json }
+# Py returns a traceback as text; here it cannot pass as an answer, and the error says what it was.
+function PyJson([string]$Expr, [int]$Timeout = 30) {
+    $reply = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
+    if ($reply -match 'Traceback') { throw "game command failed: $Expr`: $reply" }
+    $reply | ConvertFrom-Json
+}
 # A string as a JSON string literal, which Python reads as the same str: arguments never become source code.
 function Q([string]$Text) { ConvertTo-Json -InputObject $Text -Compress }
 
@@ -107,8 +111,8 @@ function Measure-ViewFov([string]$Name) {
     try {
         Start-Sleep -Milliseconds 400
         $result.frame_turned = Save-GunFrame "gun_ads/fov/${Name}_$TurnDegrees.png"
-        # What was rendered, read back: the frame counts only if the camera really stood the turn away from the first.
-        $result.turned = PyJson "ads_turned_by($($result.view_0.camera_yaw_units), $TurnDegrees)"
+        # Read back: the frame counts only if the controller really stood the turn away from the first. The pixels are the real check, offline.
+        $result.turned = PyJson "ads_turned_by($($result.view_0.yaw_units), $TurnDegrees)"
     } finally { PyJson 'ads_turn(0)' | Out-Null }
     Start-Sleep -Milliseconds 400
     [pscustomobject]$result
