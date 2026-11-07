@@ -52,14 +52,16 @@ function Invoke-Window([string]$Label, [string[]]$Baselines, [scriptblock]$Act, 
     $times = ($script:Presses | ForEach-Object { $_.ToString('R', [Globalization.CultureInfo]::InvariantCulture) }) -join ', '
     $result = Py "import json; print(json.dumps(ae_end([$names], [$times], '$Marker', $Within, $Need), default=str))" | ConvertFrom-Json
     $log["window_$Label"] = $result
-    "$Label`: rows $($result.rows), errors $($result.errors), new events: $($result.new -join ' '); tied to the action ($($result.anchored_by), $($result.anchors) moments): $($result.tied -join ' ')"
+    "$Label`: rows $($result.rows), errors $($result.errors), dropped $($result.dropped), new events: $($result.new -join ' '); tied to the action ($($result.anchored_by), $($result.anchors) moments): $($result.tied -join ' ')"
 }
 
-# Why a window cannot count: a hook that failed lost calls, so "no event" would mean nothing. Empty when none failed.
+# Why a window cannot count: a hook that failed, or rows past the cap, lost calls, so "no event" would mean nothing. Empty when none were lost.
 function Get-HookErrors($Window) {
     if (!$Window) { return 'no window; ' }
-    if ($Window.errors -gt 0) { return "hooks failed $($Window.errors) times, first: $($Window.first_error); " }
-    ''
+    $lost = ''
+    if ($Window.errors -gt 0) { $lost += "hooks failed $($Window.errors) times, first: $($Window.first_error); " }
+    if ($Window.dropped -gt 0) { $lost += "$($Window.dropped) calls dropped past the row limit; " }
+    $lost
 }
 
 function Send-Shots([int]$Count) {
