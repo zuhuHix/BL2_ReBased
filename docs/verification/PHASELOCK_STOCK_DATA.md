@@ -524,6 +524,11 @@ capture's 77.55 degrees (f 797) and far from the 93.9 degrees that the host's ma
 would give. The host's default capture FOV (BL2 setting 90, 106 degrees at 16:9) is much wider than the game's. That
 default belongs to the host camera, not this lane, and was not changed.
 
+**Correction (2026-11-07):** this estimate of about 82 degrees horizontal is contradicted, and so is the conclusion against reading 77.55 as a
+vertical angle. A 4 degree turn on the real camera reads the live hip FOV of 77.55 as a vertical angle, about 110 degrees horizontal at 16:9
+(gunlook's run at #148 cdebd03; correlation low, but the bands agree; `WEAPON_VISUALS.md`). So the "much wider" comparison above no longer holds
+either: the host's 106 is close to it. Round captures that used the 77.55-as-horizontal camera were matched under the old reading.
+
 **Stock data found this round:**
 - `Mat_SirenOrbBlackMOD` carries a scalar parameter `DepthBias` (default -20); `_NoBias` (the hand fizzle's) has none.
   `Mat_SirenGlowMOD` has `Bias` -15, and the smoke parent `Mat_Wispy_Smoke` has `DepthBias` -18.
