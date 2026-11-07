@@ -24,6 +24,7 @@ save or config; what it returns goes into the capture's JSON under the ignored l
   capture records which one killed).
 - sl_bullymongs(count): adult bullymongs to use; a pawn that cannot be read (a corpse) is left out, not an error.
 - sl_watch_result(name) / sl_stop_watches() / sl_shutdown(): read the rows and remove the hooks; shutdown also restores grades.
+- sl_stop_all(): sl_shutdown for the capture's cleanup; answers exactly "stopped" only when every grade reads as restored.
 
 A watch starts hooks and returns at once: a command runs inside a frame and must not sleep, so the capture waits between
 commands. Samples are taken in the game's tick hook; each watch stops collecting after its `seconds`.
@@ -566,3 +567,10 @@ def sl_shutdown():
             pass
         SL["tick"] = False
     return {"watches": watches, "grades": grades}
+
+
+def sl_stop_all():
+    """The capture's cleanup: "stopped" only when every grade reads as restored; anything else says what is left."""
+    out = sl_shutdown()
+    left = [row for row in out["grades"].get("rows", []) if row.get("status") != "restored"]
+    return f"grades not restored: {left}" if left else "stopped"
