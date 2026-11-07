@@ -51,6 +51,11 @@ bool FOpenWillowMayaMovementTest::RunTest(const FString&)
         / FMath::Tan(FMath::DegreesToRadians(43.0f / 2.f))));
     TestTrue(TEXT("sprint FOV from 90"), FMath::IsNearlyEqual(SprintFov(90.f), Expected, 0.2f));
     TestTrue(TEXT("sprint FOV at the 16:9 vertical default is x 1.35"), FMath::IsNearlyEqual(SprintFov(43.0f), 43.0f * 1.35f, 0.2f));
+    // Within a degree of the view turn measured on the real game's frames (about 79.5 and 98.5 horizontal at 16:9).
+    TestTrue(TEXT("aimed FOV at zoom 45"), FMath::IsNearlyEqual(AimedFov(45.f, 16.f / 9.f, 90.f), 79.5f, 1.f));
+    TestTrue(TEXT("aimed FOV at zoom 60"), FMath::IsNearlyEqual(AimedFov(60.f, 16.f / 9.f, 90.f), 98.5f, 1.f));
+    TestTrue(TEXT("a narrower window narrows the aimed FOV"), AimedFov(45.f, 4.f / 3.f, 90.f) < AimedFov(45.f, 16.f / 9.f, 90.f));
+    TestTrue(TEXT("a lower FOV setting narrows the aimed FOV"), AimedFov(45.f, 16.f / 9.f, 70.f) < AimedFov(45.f, 16.f / 9.f, 90.f));
     float Fov = 90.f;
     for (int32 I = 0; I < 60; ++I) Fov = EaseFov(Fov, 100.f, 1.f / 60.f);
     TestTrue(TEXT("FOV eases most of the way in a second"), Fov > 99.f && Fov <= 100.f);

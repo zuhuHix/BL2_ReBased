@@ -307,7 +307,7 @@ All angles are degrees. The game's "VFOV/HFOV" pair assumes a fixed 16:9 referen
   (converted with `CalculateFlexibleFOV` from ToVFOV of `ZoomedFOV`) replaces it; the result is scaled in tangent space by the view aspect scalar (1 in single player).
 - `IsZoomed`: the pawn has a weapon whose `ZoomState` is not 0 (any non-out zoom state).
 - **UE5 (ours):** use the horizontal FOV directly: default 70, sprint about 89.2 (at 16:9), zoom FOV per weapon type below.
-- **Open:** which axis the renderer treats these as (vertical-derived values at 16:9 assumed); verify against a real-game screenshot.
+- **Settled for the live value (2026-11-07):** a view turn measured on real frames shows the live FOV is a vertical angle at hip and at two zoom values (`WEAPON_VISUALS.md` section 24). The hip default above is not changed by that work.
 
 ## 19. FOV defaults, sprint FOV and smoothing (script)
 
