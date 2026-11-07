@@ -3,6 +3,10 @@ param(
     [string]$Out = 'local/phaselock/b2',
     [int]$TimeoutSeconds = 240,
     [int]$WaitForEditorSeconds = 900,
+    # -MovieHud (test-only): BL2's HUD movie instead of the canvas HUD: starts tools/hud_overlay/serve.py on -MovieHudPort and passes -owflashhud=<url>; the run fails
+    # if its log does not show the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
+    [switch]$MovieHud,
+    [int]$MovieHudPort = 8796,
     # Extra command-line switches (e.g. '-owfov=62.15' for 77.55 degrees at 16:9, '-owfpfov=45', '-owphaselockpitch=3.5').
     [string[]]$Extra = @()
 )
@@ -21,13 +25,18 @@ $gearLevel = if (Test-Path -LiteralPath $gear) { [int](Get-Content -LiteralPath 
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
+$movie = $null
+$movieOk = $true
 Enter-OwUeLock -Owner 'run_phaselock_shots' -TimeoutSeconds $WaitForEditorSeconds -AlsoWaitFor Borderlands2
 try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $outDir "run-$stamp.log"
     $started = Get-Date
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud', '-owcombattest', '-owphaselockshots',
+    $hudSwitch = '-owcanvashud'
+    if ($MovieHud) { $movie = Start-OwMovieHud -Port $MovieHudPort; $hudSwitch = "-owflashhud=$($movie.Url)" }
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', $hudSwitch, '-owcombattest', '-owphaselockshots',
         "-owitems=`"$itemDir`"", "-owlevel=$gearLevel") + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
@@ -45,6 +54,9 @@ try {
             Write-Host "Screenshot: $(Join-Path $outDir ($_.BaseName + '-' + $stamp + '.png'))"
         }
     }
+    if ($MovieHud) { $movieOk = Test-OwMovieHudLog -Log $log }
 } finally {
+    Stop-OwMovieHud $movie
     Exit-OwUeLock
 }
+if (!$movieOk) { exit 1 }

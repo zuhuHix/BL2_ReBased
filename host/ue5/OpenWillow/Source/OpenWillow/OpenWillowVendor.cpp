@@ -1477,7 +1477,7 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
     case 5: Report(); break;
     case 6: RestockOpen(); break;
     case 7: Report(); break;
-    case 8: FScreenshotRequest::RequestScreenshot(TEXT("OWVendor_open.png"), false, false); break;
+    case 8: FScreenshotRequest::RequestScreenshot(TEXT("OWVendor_open.png"), true, false); break; // UI on: the shop page is a Slate widget
     // Ammo: the first items machine, report, buy shelf row 0 (an ammo row), report.
     case 9: OpenFirstOfKind(TEXT("items")); break;
     case 10:

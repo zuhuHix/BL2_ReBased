@@ -45,6 +45,7 @@
 #include "GlobalRenderResources.h"
 
 void OpenWillowTickShieldCheck(AOpenWillowWalker& Maya, APlayerController& Player);   // OpenWillowShieldCheck.cpp, test-only
+bool OpenWillowEquipStandInShield(AOpenWillowWalker& Maya);   // OpenWillowShieldCheck.cpp, test-only
 void OpenWillowTickPhaselockKillCheck(AOpenWillowWalker& Maya, APlayerController& Player);   // OpenWillowPhaselockKillCheck.cpp, test-only
 
 // Host HUD laid out after BL2's (slanted shield/health bottom-left, XP bar
@@ -277,6 +278,43 @@ void AOpenWillowMayaHUD::BeginPlay()
     FlashHudRoot = SNew(SBox).Visibility(EVisibility::Hidden)[FlashHud.ToSharedRef()];
     GEngine->GameViewport->AddViewportWidgetContent(FlashHudRoot.ToSharedRef(), 5);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Flash HUD overlay: %s"), *Url);
+}
+
+bool AOpenWillowMayaHUD::CaptureAskedForMovie()
+{
+    FString Url;
+    return FParse::Value(FCommandLine::Get(), TEXT("owflashhud="), Url);
+}
+
+EOpenWillowCaptureHud AOpenWillowMayaHUD::CaptureHudGate(const UWorld* World, const TCHAR* Driver)
+{
+    if (!CaptureAskedForMovie()) return EOpenWillowCaptureHud::Go;
+    // Real seconds: the page runs in real time, and the Phaselock capture slows game time. Past logs: ready 12 to 37 s after the pawn.
+    static constexpr double TimeoutSeconds = 120.0, SettleSeconds = 2.0;
+    static double FirstAskedAt = -1.0, ReadyAt = -1.0;
+    static bool bFailedOnce = false;
+    if (bFailedOnce) return EOpenWillowCaptureHud::Failed;
+    const double Now = FPlatformTime::Seconds();
+    if (FirstAskedAt < 0.0) FirstAskedAt = Now;
+    const APlayerController* Player = World ? World->GetFirstPlayerController() : nullptr;
+    const AOpenWillowMayaHUD* Hud = Player ? Cast<AOpenWillowMayaHUD>(Player->GetHUD()) : nullptr;
+    const bool bReady = Hud && Hud->IsFlashHudReady();
+    const TCHAR* Why = nullptr;
+    if (Hud && Hud->bFlashHudFailed) Why = TEXT("the page failed, was lost or is another server's");
+    else if (!bReady && Now - FirstAskedAt > TimeoutSeconds) Why = TEXT("not ready in time");
+    if (Why)
+    {
+        bFailedOnce = true;
+        UE_LOG(LogTemp, Error, TEXT("OWCAPTUREHUD FAIL driver=%s after %.1f s: %s; quitting with no frames from here on"), Driver, Now - FirstAskedAt, Why);
+        return EOpenWillowCaptureHud::Failed;
+    }
+    if (!bReady) return EOpenWillowCaptureHud::Wait;
+    if (ReadyAt < 0.0)
+    {
+        ReadyAt = Now;
+        UE_LOG(LogTemp, Display, TEXT("OWCAPTUREHUD ready driver=%s after %.1f s"), Driver, Now - FirstAskedAt);
+    }
+    return Now - ReadyAt >= SettleSeconds ? EOpenWillowCaptureHud::Go : EOpenWillowCaptureHud::Wait;
 }
 
 void AOpenWillowMayaHUD::ToggleSkills()
@@ -1757,6 +1795,22 @@ void AOpenWillowMayaHUD::DrawHUD()
         PushFlashHudState(*Maya);
         if (bFlashHudReady)
         {
+            // -owstandinshield, test-only: a capture's shield, once. Its capacity is a stand-in (COMBAT_DOWN_RESPAWN.md).
+            static const bool bStandInShield = FParse::Param(FCommandLine::Get(), TEXT("owstandinshield"));
+            static bool bStandInShieldDone = false;
+            if (bStandInShield && !bStandInShieldDone)
+            {
+                bStandInShieldDone = true;
+                AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
+                if (Walker && OpenWillowEquipStandInShield(*Walker))
+                {
+                    UE_LOG(LogTemp, Display, TEXT("OWSTANDINSHIELD equipped a stat-less shield"));
+                }
+                else
+                {
+                    UE_LOG(LogTemp, Error, TEXT("OWSTANDINSHIELD FAIL the shield could not be added or equipped"));
+                }
+            }
             // The movie draws the crosshair, bars and weapon panel; damage numbers are not driven in it yet.
             if (FlashHudRoot && FlashHudRoot->GetVisibility() != EVisibility::HitTestInvisible)
                 FlashHudRoot->SetVisibility(EVisibility::HitTestInvisible);

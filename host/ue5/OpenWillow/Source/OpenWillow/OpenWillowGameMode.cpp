@@ -87,6 +87,18 @@ void AOpenWillowGameMode::RestartPlayer(AController* NewPlayer)
             Pawn->SetActorLocation(FVector(X, Y, Z), false, nullptr, ETeleportType::TeleportPhysics);
             if (auto* Maya = Cast<AOpenWillowWalker>(Pawn)) Maya->NotifyTeleported();
         }
+        // Test-only, for a capture from a set view: either one on its own keeps the other as the spawn left it.
+        float Yaw = 0, Pitch = 0;
+        const bool bYaw = FParse::Value(FCommandLine::Get(), TEXT("owspawnyaw="), Yaw) && FMath::IsFinite(Yaw);
+        const bool bPitch = FParse::Value(FCommandLine::Get(), TEXT("owspawnpitch="), Pitch) && FMath::IsFinite(Pitch);
+        if (bYaw || bPitch)
+        {
+            FRotator View = Player->GetControlRotation();
+            if (bYaw) View.Yaw = Yaw;
+            if (bPitch) View.Pitch = Pitch;
+            Player->SetControlRotation(View);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow spawn view set to %s"), *View.ToString());
+        }
         Player->SetViewTarget(Pawn);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow walking pawn activated at %s"), *Pawn->GetActorLocation().ToString());
         return;

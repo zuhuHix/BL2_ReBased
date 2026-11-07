@@ -7,6 +7,12 @@ param(
     [string]$Out = 'local/wpa/host_shots',
     # Quick: first-person idle and the side view only (-owgunquick); otherwise also ADS, burst and reload frames.
     [switch]$Quick,
+    # Maya's level (-owlevel).
+    [int]$Level = 40,
+    # -MovieHud (test-only): BL2's HUD movie from a server this run starts, not a stray one: starts tools/hud_overlay/serve.py on -MovieHudPort and passes -owflashhud=<url>; the run fails
+    # if its log does not show the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
+    [switch]$MovieHud,
+    [int]$MovieHudPort = 8796,
     [string[]]$Extra = @(),
     [int]$TimeoutSeconds = 3600,
     [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
@@ -30,8 +36,11 @@ $outDir = if ([IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $repo $Ou
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $shots = Join-Path $repo 'host/ue5/OpenWillow/Saved/Screenshots/WindowsEditor'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 $log = Join-Path $outDir 'run.log'
 $hub = $null
+$movie = $null
+$movieOk = $true
 try {
     if ($HubLock -and !(Test-Path -LiteralPath (Split-Path -Parent $HubLock))) { throw "hub lock folder missing: $HubLock" }
     while ($HubLock -and !$hub) {
@@ -48,12 +57,14 @@ try {
         if ($env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $env:OPENWILLOW_BL2).Path }
         $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
         $argsList = @("`"$repo\host\ue5\OpenWillow\OpenWillow.uproject`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
-            "-owitems=`"$Items`"", '-owlevel=40', '-owgunshots', ('-owgunids="' + ($Ids -join ',') + '"'),
+            "-owitems=`"$Items`"", "-owlevel=$Level", '-owgunshots', ('-owgunids="' + ($Ids -join ',') + '"'),
             '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-ddc=InstalledNoZenLocalFallback', '-d3d11', "`"-abslog=$log`"") + $Extra
         if ($Quick) { $argsList += '-owgunquick' }
+        if ($MovieHud) { $movie = Start-OwMovieHud -Port $MovieHudPort; $argsList += "-owflashhud=$($movie.Url)" }
         $p = Start-Process -PassThru -FilePath (Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe') -ArgumentList $argsList
         if (!$p.WaitForExit($TimeoutSeconds * 1000)) { Stop-Process -Id $p.Id -Force; "TIMEOUT: stopped our pid $($p.Id)" }
     } finally {
+        Stop-OwMovieHud $movie
         Exit-OwUeLock
     }
     Get-ChildItem $shots -Filter 'OWGun_*.png' -ErrorAction SilentlyContinue | Copy-Item -Destination $outDir -Force
@@ -61,7 +72,9 @@ try {
     "frames: $frames in $outDir"
     "assembly reports: $((Select-String -LiteralPath $log -Pattern 'OpenWillow weapon assembly ').Count)"
     Select-String -LiteralPath $log -Pattern 'gunshots skipped|Error:|Fatal' | Select-Object -First 20 | ForEach-Object { $_.Line.Substring(0, [Math]::Min(220, $_.Line.Length)) }
+    if ($MovieHud) { $movieOk = Test-OwMovieHudLog -Log $log }
 } finally {
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
 }
 if (-not $frames) { Write-Error 'no frames captured'; exit 1 }
+if (!$movieOk) { exit 1 }
