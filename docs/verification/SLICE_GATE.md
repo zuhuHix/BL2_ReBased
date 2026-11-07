@@ -358,6 +358,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-06 | Z10: #126 at 7f59924 + #133 at d02c70a, four enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | hold ended by a hit; passed by margin |
 | 2026-11-07 | Z13: #126 at 7f59924 + #133 at 716302b, five enemies, zuhu, all three variants | 13 / 1 / 0 of 14, each | link 4 FAIL: the burst killed the selected Psycho before the hold started; fixed in the driver by one shot at a time |
 | 2026-11-07 | Z16: #126 at 5a39f57 + #133 at 51deb95, five enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | one shot at a time and the hold both ran; Maya 28/213 after the fight without a shield; no enemy downed her |
+| 2026-11-07 | Z23: main 7eee9ee, five enemies, zuhu, no switch twice, `-Shield`, `-DownAfterFight` | 14 / 0 / 0 of 14, each | the first runs of the 14 links on `main` itself; no `fallback=shapes` line in the four logs; ctest 28/28, verify_packages exact; logs under ignored `local/` |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
