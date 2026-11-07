@@ -82,6 +82,8 @@ try {
     $summary = $null
     $readyAt = $null
     $staleBuild = $false
+    # With -MovieHud the suite's first row can wait for the movie (up to 120 s) before its own wait for the page.
+    $staleAfter = if ($MovieHud) { 240 } else { 120 }
     while (!$process.HasExited -and (Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
         if (Test-Path -LiteralPath $log) {
@@ -91,7 +93,7 @@ try {
             # The suite logs page_ready, pass or fail, within 60 s of its first tick (OWQUEST READY comes first). Without it the build has no page suite: a stale DLL (2026-11-07: 360 s of silence).
             if ("$text" -match 'OWQUEST READY' -and "$text" -notmatch 'OWMISSIONPAGETEST page_ready') {
                 if (!$readyAt) { $readyAt = Get-Date }
-                if (((Get-Date) - $readyAt).TotalSeconds -gt 120) { $staleBuild = $true; break }
+                if (((Get-Date) - $readyAt).TotalSeconds -gt $staleAfter) { $staleBuild = $true; break }
             }
         }
     }
@@ -109,9 +111,9 @@ try {
         & python (Join-Path $PSScriptRoot 'check_mission_page.py') $log
         $exitCode = if ($LASTEXITCODE -eq 0) { 0 } else { 1 }
     } else {
-        Write-Output "OWMISSIONPAGETEST SUMMARY result=FAIL reason=$(if ($staleBuild) { 'OWQUEST READY but no page_ready row in 120 s: is the UE module built from this branch?' } elseif ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
+        Write-Output "OWMISSIONPAGETEST SUMMARY result=FAIL reason=$(if ($staleBuild) { 'OWQUEST READY but no page_ready row in $staleAfter s: is the UE module built from this branch?' } elseif ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
     }
-    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log) -and $exitCode -eq 0) { $exitCode = 1 }
+    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log -Driver 'missionpage' -RequireShot) -and $exitCode -eq 0) { $exitCode = 1 }
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

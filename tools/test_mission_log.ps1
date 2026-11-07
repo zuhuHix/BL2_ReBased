@@ -95,7 +95,7 @@ try {
     } else {
         Write-Output "OWMISSIONTEST SUMMARY result=FAIL reason=$(if ($process.HasExited) { "editor exited ($($process.ExitCode))" } else { "no summary within $TimeoutSeconds s" })"
     }
-    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log) -and $exitCode -eq 0) { $exitCode = 1 }
+    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log -Driver 'missionlog' -RequireShot) -and $exitCode -eq 0) { $exitCode = 1 }
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

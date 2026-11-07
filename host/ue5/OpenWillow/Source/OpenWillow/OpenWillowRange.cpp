@@ -1,4 +1,5 @@
 #include "OpenWillowRange.h"
+#include "OpenWillowMayaHUD.h"
 #include "Engine/Engine.h"
 #include "Engine/Texture.h"
 #include "Materials/MaterialInstance.h"
@@ -522,10 +523,20 @@ void UOpenWillowRangeSubsystem::Tick(float DeltaTime)
 {
     const float Now = GetWorld()->GetTimeSeconds();
     if (bBuilt) UpdateThreatDen(Den, Now);   // PR2: the den's fall-back check (every second)
-    if (bTestMode && !bTestDone) TickTest(Now);
-    if (bSurveyMode && !bSurveyDone) TickSurvey(Now);
+    // A run that asked for the movie HUD holds the test, the survey and the kill row until it is ready. If it fails, quit with no more frames.
+    const bool bDriver = (bTestMode && !bTestDone) || (bSurveyMode && !bSurveyDone) || (bKillRow && !bKillRowDone);
+    const EOpenWillowCaptureHud MovieHud = bDriver ? AOpenWillowMayaHUD::CaptureHudGate(GetWorld(), TEXT("range")) : EOpenWillowCaptureHud::Go;
+    if (MovieHud == EOpenWillowCaptureHud::Failed)
+    {
+        bTestDone = bSurveyDone = bKillRowDone = true;
+        if (APlayerController* PC = GetWorld()->GetFirstPlayerController()) PC->ConsoleCommand(TEXT("quit"));
+        return;
+    }
+    const bool bGo = MovieHud == EOpenWillowCaptureHud::Go;
+    if (bGo && bTestMode && !bTestDone) TickTest(Now);
+    if (bGo && bSurveyMode && !bSurveyDone) TickSurvey(Now);
     if (bStartSwitch && !bStartSwitchDone) TickStartSwitch(Now);
-    if (bKillRow && !bKillRowDone && bStartSwitchDone) TickKillRow(Now);
+    if (bGo && bKillRow && !bKillRowDone && bStartSwitchDone) TickKillRow(Now);
 }
 
 void UOpenWillowRangeSubsystem::TickStartSwitch(float Now)
@@ -1010,7 +1021,7 @@ void RequestRangeShot(const FString& FileName)
 {
     const FString Dir = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/range/shots")));
     IFileManager::Get().MakeDirectory(*Dir, true);
-    FScreenshotRequest::RequestScreenshot(FPaths::Combine(Dir, FileName), true, false);
+    AOpenWillowMayaHUD::CaptureShot(TEXT("range"), FPaths::Combine(Dir, FileName));
 }
 }
 

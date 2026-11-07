@@ -2430,7 +2430,7 @@ void AOpenWillowWalker::RunPhaselockShots(float Now)
     auto Shot = [this, Now](const TCHAR* Kind, float At)
     {
         const FString Name = FString::Printf(TEXT("OWPhaselock_%s_%04d.png"), Kind, FMath::RoundToInt(At * 1000.f));
-        FScreenshotRequest::RequestScreenshot(Name, true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("phaselock"), Name);
         // Game time is clamped below and the movie page runs in real time, so a stall shows only in the real offset.
         UE_LOG(LogTemp, Display, TEXT("OpenWillow phaselock capture %s offset: requested +%.3f s, actual +%.3f s, real +%.3f s"),
             *Name, At, Now - PhaselockShotCastAt, FPlatformTime::Seconds() - CastRealAt);
@@ -2540,9 +2540,24 @@ void AOpenWillowWalker::RunCombatShots(float Now)
     // Give the imported inventory the same loading allowance as Skills.
     FString InventoryMovieUrl;
     if (CombatShotStep >= 16 && FParse::Value(FCommandLine::Get(), TEXT("owflashinventory="), InventoryMovieUrl)) Now -= 15.f;
+    // A run that asked for the movie HUD holds the script until it is ready, then runs it with the same spacing. If it fails, quit with no frames.
+    static float MovieHeldBy = 0.f;
+    if (CombatShotStep == 0)
+    {
+        const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(GetWorld(), TEXT("combat"));
+        if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+        if (MovieHud == EOpenWillowCaptureHud::Failed)
+        {
+            if (APlayerController* PC = Cast<APlayerController>(Controller)) PC->ConsoleCommand(TEXT("quit"));
+            CombatShotStep = 1000;
+            return;
+        }
+        if (AOpenWillowMayaHUD::CaptureAskedForMovie()) MovieHeldBy = FMath::Max(0.f, Now - 7.f);
+    }
+    Now -= MovieHeldBy;
     auto Shot = [](const TCHAR* Name)
     {
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("combat"), FString::Printf(TEXT("OWCombat_%s.png"), Name));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow combat capture %s"), Name);
     };
     auto Turn = [this](float Yaw, float Pitch)
@@ -2750,7 +2765,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
     }
     case 1:
         if (Now < GunShotPhaseAt + Settle) return;
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_idle.png"), *Id), true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("gunshots"), FString::Printf(TEXT("OWGun_%s_idle.png"), *Id));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s idle"), *Id);
         const FVector WeaponMountScale = Arms->GetSocketTransform(TEXT("R_Weapon_Bone"), RTS_World).GetScale3D();
         const FVector WeaponWorldScale = WeaponVisual->GetComponentTransform().GetScale3D();
@@ -2806,7 +2821,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
             UE_LOG(LogTemp, Display, TEXT("OpenWillow aim socket %s camera %s fitted offset %s alpha %.3f"),
                 *Model->ZoomSocket.Name, *SocketInCamera.ToString(), *Model->ZoomOffset.ToString(), AimAlpha);
         }
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_ads.png"), *Id), true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("gunshots"), FString::Printf(TEXT("OWGun_%s_ads.png"), *Id));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s ADS"), *Id);
         ++GunShotStep;
         break;
@@ -2841,7 +2856,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
         if (Now < GunShotNextBurstAt) return; // Capture within 50 ms while the fitted host flash is still bright.
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots hip-fire pose %s aim alpha %.3f arms %s"), *Id,
             AimAlpha, *Arms->GetRelativeLocation().ToString());
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_firing.png"), *Id), true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("gunshots"), FString::Printf(TEXT("OWGun_%s_firing.png"), *Id));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s hip-fire flash at %.3f s after last shot"), *Id,
             Now - (GunShotNextBurstAt - 0.03f));
         ++GunShotStep;
@@ -2879,7 +2894,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
             GunShotStep = (Gun + 1) * 8;
             return;
         }
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_reload.png"), *Id), true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("gunshots"), FString::Printf(TEXT("OWGun_%s_reload.png"), *Id));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots capture %s reload midpoint at %.3f normalized fraction"), *Id,
             Item && Item->ReloadTime > 0.f ? (Now - GunShotPhaseAt) / Item->ReloadTime : 0.f);
         ++GunShotStep;
@@ -2892,7 +2907,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
             // Stay on this gun for the later drop frame: counted in ticks, because a timer fires on the very next tick after the
             // side capture's hitch. Two ticks stay after the request, so the next gun is not equipped before the screenshot is taken.
             if (--GunShotDropTicks == 2)
-                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_droplate.png"), *Id), true, false);
+                AOpenWillowMayaHUD::CaptureShot(TEXT("gunshots"), FString::Printf(TEXT("OWGun_%s_droplate.png"), *Id));
             if (GunShotDropTicks == 0) ++GunShotStep;
             return;
         }
@@ -2930,7 +2945,7 @@ void AOpenWillowWalker::RunGunShots(float Now)
             // Optional world-drop frame (-owdropshots): the gun lying on the ground ahead, with its rarity beam.
             if (FParse::Param(FCommandLine::Get(), TEXT("owdropshots")) && AOpenWillowInventoryPickup::SpawnShowcase(this, *Item))
             {
-                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWGun_%s_drop.png"), *Id), true, false);
+                AOpenWillowMayaHUD::CaptureShot(TEXT("gunshots"), FString::Printf(TEXT("OWGun_%s_drop.png"), *Id));
                 // A later frame too: the spawn frame alone cannot tell a late beam from a missing one.
                 GunShotDropTicks = 14;
             }

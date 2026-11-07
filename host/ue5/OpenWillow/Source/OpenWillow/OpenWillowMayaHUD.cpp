@@ -309,12 +309,25 @@ EOpenWillowCaptureHud AOpenWillowMayaHUD::CaptureHudGate(const UWorld* World, co
         return EOpenWillowCaptureHud::Failed;
     }
     if (!bReady) return EOpenWillowCaptureHud::Wait;
-    if (ReadyAt < 0.0)
+    if (ReadyAt < 0.0) ReadyAt = Now;
+    if (Now - ReadyAt < SettleSeconds) return EOpenWillowCaptureHud::Wait;
+    static TSet<FString> DriversLogged;
+    bool bLogged = false;
+    DriversLogged.Add(Driver, &bLogged);
+    if (!bLogged)
     {
-        ReadyAt = Now;
         UE_LOG(LogTemp, Display, TEXT("OWCAPTUREHUD ready driver=%s after %.1f s"), Driver, Now - FirstAskedAt);
     }
-    return Now - ReadyAt >= SettleSeconds ? EOpenWillowCaptureHud::Go : EOpenWillowCaptureHud::Wait;
+    return EOpenWillowCaptureHud::Go;
+}
+
+void AOpenWillowMayaHUD::CaptureShot(const TCHAR* Driver, const FString& File)
+{
+    FScreenshotRequest::RequestScreenshot(File, true, false);
+    if (CaptureAskedForMovie())
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWCAPTUREHUD shot driver=%s file=%s"), Driver, *File);
+    }
 }
 
 void AOpenWillowMayaHUD::ToggleSkills()
@@ -410,6 +423,16 @@ void AOpenWillowMayaHUD::TickMissionLogTest()
     AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
     UOpenWillowQuest* Quest = Maya ? Maya->GetQuest() : nullptr;
     if (!Maya) return;
+    // A run that asked for the movie HUD holds the test until it is ready. If it fails, the suite fails with no frames.
+    const EOpenWillowCaptureHud MovieHud = CaptureHudGate(GetWorld(), TEXT("missionlog"));
+    if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+    if (MovieHud == EOpenWillowCaptureHud::Failed)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWMISSIONTEST SUMMARY passed=0 failed=1"));
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        bMissionLogTest = false;
+        return;
+    }
     const double Now = FPlatformTime::Seconds();
     if (MissionTestAt == 0) { MissionTestAt = Now + 3.; return; }
     if (Now < MissionTestAt) return;
@@ -429,7 +452,7 @@ void AOpenWillowMayaHUD::TickMissionLogTest()
         ++(bOk ? MissionTestPassed : MissionTestFailed);
         UE_LOG(LogTemp, Display, TEXT("OWMISSIONTEST %s %s %s"), Step, bOk ? TEXT("PASS") : TEXT("FAIL"), *Detail);
     };
-    auto Shot = [](const TCHAR* Name) { FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWMission_%s.png"), Name), true, false); };
+    auto Shot = [](const TCHAR* Name) { CaptureShot(TEXT("missionlog"), FString::Printf(TEXT("OWMission_%s.png"), Name)); };
     auto AskReport = [this]() { if (SkillsBrowser) SkillsBrowser->ExecuteJavascript(TEXT("window.owMissionsReport && window.owMissionsReport()")); };
     const FString MissionId = TEXT("GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire");
     double Wait = 2.;
@@ -485,6 +508,15 @@ void AOpenWillowMayaHUD::TickInvShots()
     if (!bInvShots || !PlayerOwner) return;
     AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn());
     if (!Maya) return;
+    // A run that asked for the movie HUD holds the timeline until it is ready. If it fails, quit with no frames.
+    const EOpenWillowCaptureHud MovieHud = CaptureHudGate(GetWorld(), TEXT("inv"));
+    if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+    if (MovieHud == EOpenWillowCaptureHud::Failed)
+    {
+        PlayerOwner->ConsoleCommand(TEXT("quit"));
+        bInvShots = false;
+        return;
+    }
     // Both pages load after the engine's first long frames, so the timeline starts only once the inventory page
     // has finished its movie and the skills page has populated its tree (a capture before that shows "Loading").
     if (!bInventoryPageReady || (!SkillsUrl.IsEmpty() && !bSkillsPagePopulated)) return;
@@ -504,7 +536,7 @@ void AOpenWillowMayaHUD::TickInvShots()
     if (Now < InvShotAt) return;
     auto Shot = [this](const TCHAR* Name)
     {
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWCombat_%s.png"), Name), true, false);
+        CaptureShot(TEXT("inv"), FString::Printf(TEXT("OWCombat_%s.png"), Name));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory capture %s"), Name);
     };
     double Wait = 1.5;

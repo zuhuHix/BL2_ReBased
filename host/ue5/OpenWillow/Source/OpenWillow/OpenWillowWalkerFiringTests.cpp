@@ -93,6 +93,10 @@ void AOpenWillowWalker::RunFiringShots(float Now)
         Ids = GunIdsFromCommandLine(List);
         UE_LOG(LogTemp, Display, TEXT("OpenWillow firing shots parsed %d recipe IDs: %s"), Ids.Num(), *List);
     }
+    // A run that asked for the movie HUD holds the first gun until it is ready. If it fails, on to the quit below, with no more frames.
+    const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(GetWorld(), TEXT("firing"));
+    if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+    if (MovieHud == EOpenWillowCaptureHud::Failed) Gun = Ids.Num();
     if (Ids[0] == TEXT("none") || Gun >= Ids.Num())
     {
         if (ShotWall.IsValid()) ShotWall->Destroy();
@@ -192,7 +196,7 @@ void AOpenWillowWalker::RunFiringShots(float Now)
             bPressed = true;
             FirePressed();
         }
-        FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWFiring_%s_%02d.png"), *Id, Frame), true, false);
+        AOpenWillowMayaHUD::CaptureShot(TEXT("firing"), FString::Printf(TEXT("OWFiring_%s_%02d.png"), *Id, Frame));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow firing shots capture %s frame %02d at %.4f s (shot %s)"), *Id, Frame, Now,
             Frame == ShotFrame ? TEXT("here") : TEXT("no"));
         ++Frame;

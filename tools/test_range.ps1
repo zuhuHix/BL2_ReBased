@@ -97,7 +97,7 @@ try {
         if ($RequirePsycho) { & python $checker $log --require-psycho } else { & python $checker $log }
         $code = $LASTEXITCODE
     }
-    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log)) { $code = 1 }
+    if ($MovieHud -and !(Test-OwMovieHudLog -Log $log -Driver 'range' -RequireShot:($Shots -or $Survey))) { $code = 1 }
     Write-Host "Log: $log"
 } finally {
     Stop-OwMovieHud $movie

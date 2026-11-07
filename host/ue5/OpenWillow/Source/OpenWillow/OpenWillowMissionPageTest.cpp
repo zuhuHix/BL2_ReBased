@@ -35,7 +35,7 @@ void BindingKey(APlayerController* PC, const FKey& Key, EInputEvent Event)
 // With the UI: the page is a Slate widget. Not called Shot: inside the member function that name finds UOpenWillowQuest::Shot, whose frames leave Slate out.
 void PageShot(const TCHAR* Name)
 {
-    FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWMissionPage_%s.png"), Name), true, false);
+    AOpenWillowMayaHUD::CaptureShot(TEXT("missionpage"), FString::Printf(TEXT("OWMissionPage_%s.png"), Name));
 }
 }
 
@@ -45,6 +45,19 @@ void UOpenWillowQuest::TickScreenPageTest()
     AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(GetOwner());
     APlayerController* PC = GetWorld()->GetFirstPlayerController();
     if (!Maya || !PC) return;
+    // A run that asked for the movie HUD holds the test until it is ready. If it fails, the suite fails with no frames.
+    if (ScreenTestStep == 0)
+    {
+        const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(GetWorld(), TEXT("missionpage"));
+        if (MovieHud == EOpenWillowCaptureHud::Wait) return;
+        if (MovieHud == EOpenWillowCaptureHud::Failed)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWMISSIONPAGETEST SUMMARY passed=0 failed=1"));
+            bScreenPageTest = false;
+            PC->ConsoleCommand(TEXT("quit"));
+            return;
+        }
+    }
     const double Now = FPlatformTime::Seconds();
     if (ScreenTestAt == 0.) ScreenTestAt = Now + 60.;   // the page's load limit
     const auto Row = [this](const TCHAR* Name, bool bOk, const FString& Detail)

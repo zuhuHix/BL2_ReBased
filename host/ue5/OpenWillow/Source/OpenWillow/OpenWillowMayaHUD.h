@@ -30,8 +30,12 @@ public:
     // True when this run named a movie page (-owflashhud=<url>), so its frames must show the movie.
     static bool CaptureAskedForMovie();
     // No movie asked for: Go at once, as before. Asked for: Wait until the page is ready and has settled, Failed (logged as
-    // an error, once) if the page failed, was lost, or is not ready in time. A driver stops taking frames on Failed.
+    // an error, once) if the page failed, was lost, or is not ready in time. A driver stops taking frames on Failed. The first Go
+    // for a driver logs "OWCAPTUREHUD ready driver=<Driver>".
     static EOpenWillowCaptureHud CaptureHudGate(const UWorld* World, const TCHAR* Driver);
+    // A frame with the UI on. A run that asked for the movie also logs "OWCAPTUREHUD shot driver=<Driver>", which
+    // tools/movie_hud.ps1 checks comes after that driver's ready line.
+    static void CaptureShot(const TCHAR* Driver, const FString& File);
     void ToggleSkills();
     bool ToggleInventory();
     // The Missions log page (tools/hud_overlay/missions.html); false without a page URL.

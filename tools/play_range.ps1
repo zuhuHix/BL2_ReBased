@@ -74,7 +74,7 @@ try {
         $built = Select-String -LiteralPath $log -Pattern 'OWRANGE start switch: built=1' -Quiet
         Write-Host $(if ($built) { 'Range check: the switch built the range.' } else { 'Range check: FAIL, no "built=1" line in the log.' })
         if (!$built) { $code = 1 }
-        if ($MovieHud -and !(Test-OwMovieHudLog -Log $log)) { $code = 1 }
+        if ($MovieHud -and !(Test-OwMovieHudLog -Log $log -Driver $(if ($KillRow) { 'range' } else { '' }) -RequireShot:$KillRow)) { $code = 1 }
     } else {
         $process.WaitForExit()
     }
