@@ -6,6 +6,7 @@ tools/real_game/skills_live_capture.ps1 and run with a stand-in for the game's r
 the game behaves as assumed. Run: python tests/skills_live_probe_test.py
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -322,7 +323,7 @@ $ErrorActionPreference = 'Stop'
 $errors = $null; $tokens = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('%CAPTURE%', [ref]$tokens, [ref]$errors)
 foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Copy-VerifiedRoot', 'Get-SavesVerdict', 'Get-SessionComplete', 'Get-MissingEvidence', 'Test-Number', 'Get-TargetHits', 'Test-KilledByMaya', 'Get-CastEvidence', 'Get-TimerEvidence', 'Get-CritEvidence', 'Get-DiscoverEvidence') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
+    if ($f.Name -in 'PyJson', 'PyCall', 'Invoke-Step', 'Get-StepsDone', 'Get-SessionComplete', 'Get-MissingEvidence', 'Test-Number', 'Get-TargetHits', 'Test-KilledByMaya', 'Get-CastEvidence', 'Get-TimerEvidence', 'Get-CritEvidence', 'Get-DiscoverEvidence') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
 }
 function global:Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'broken') { return "Traceback (most recent call last):`n  LookupError: WillowAIPawn_9" }
@@ -411,6 +412,11 @@ $noKills = @($summary.steps | Where-Object { $_.step -eq 'no_kills' })
 $gotIt = @($summary.steps | Where-Object { $_.step -eq 'got_it' })
 $noClaim = @($summary.steps | Where-Object { $_.step -eq 'no_claim' })
 $noError = [ordered]@{ started = 'x' }
+$done_rows = @([pscustomobject]@{ step = 'good'; ok = $true; possibly_contaminated = $false; missing = @() },
+               [pscustomobject]@{ step = 'failed'; ok = $false; possibly_contaminated = $false; missing = @() },
+               [pscustomobject]@{ step = 'mixed'; ok = $true; possibly_contaminated = $true; missing = @() },
+               [pscustomobject]@{ step = 'no_read'; ok = $true; possibly_contaminated = $false; missing = @('x') },
+               [pscustomobject]@{ step = 'no_field'; ok = $true; possibly_contaminated = $false })
 $completeWithEvidence = Get-SessionComplete $noError $gotIt @() $cleanOk $true $false $false
 $complete = [ordered]@{
     good = Get-SessionComplete $noError $passed @() $cleanOk $true $false $false
@@ -424,23 +430,11 @@ $complete = [ordered]@{
     driver_left = Get-SessionComplete $noError $passed @() @{ saves = 'identical to B'; driver = 'STILL PRESENT: D' } $true $false $false
     saves_differ = Get-SessionComplete $noError $passed @() @{ saves = 'NOT IDENTICAL to B'; driver = 'removed' } $true $false $false
     game_running = Get-SessionComplete $noError $passed @() $cleanOk $false $false $false
-    run_error = Get-SessionComplete ([ordered]@{ error = 'x' }) $passed @() $cleanOk $true $false $false
+    run_error = Get-SessionComplete ([ordered]@{ run_error = 'x' }) $passed @() $cleanOk $true $false $false
     grades_broken = Get-SessionComplete $noError $passed @() $cleanOk $true $true $false
     running_unknown = Get-SessionComplete $noError $passed @() $cleanOk $true $false $true
 }
-# The backup guard, on real folders with the real hash compare.
-$realgame = [System.Management.Automation.Language.Parser]::ParseFile('%REALGAME%', [ref]$tokens, [ref]$errors)
-foreach ($f in $realgame.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
-    if ($f.Name -eq 'Compare-TreeHashes') { . ([scriptblock]::Create($f.Extent.Text.Replace('function ', 'function global:'))) }
-}
-$src = Join-Path $Out 'src'; New-Item -ItemType Directory -Force (Join-Path $src 'a') | Out-Null; Set-Content (Join-Path $src 'a\f.txt') 'one'
-Copy-VerifiedRoot $src (Join-Path $Out 'good')
-$partial = Join-Path $Out 'partial'; New-Item -ItemType Directory -Force $partial | Out-Null
-$guard = 'no error'; try { Copy-VerifiedRoot $src $partial } catch { $guard = "$_" }
-$created = Get-SavesVerdict @([pscustomobject]@{ file = 'SanitySaver'; status = 'created during the run; left for the maintainer' }) 'BAK'
-$clean = Get-SavesVerdict @([pscustomobject]@{ file = 'x'; status = 'changed, restored' }) 'BAK'
-$failed = Get-SavesVerdict @([pscustomobject]@{ file = 'Config'; status = 'BACKUP FAILED; not restored, and nothing was started' }) 'BAK'
-[ordered]@{ ran = $script:ran; steps = $summary.steps; guard = $guard; created = $created; clean = $clean; failed = $failed; complete = $complete; complete_with_evidence = $completeWithEvidence; gates = $gates; unknown_after = $unknownAfter; no_kills = $noKills[0] } | ConvertTo-Json -Depth 5 -Compress
+[ordered]@{ ran = $script:ran; steps = $summary.steps; complete = $complete; steps_done = @(Get-StepsDone $done_rows); complete_with_evidence = $completeWithEvidence; gates = $gates; unknown_after = $unknownAfter; no_kills = $noKills[0] } | ConvertTo-Json -Depth 5 -Compress
 '''
 
 
@@ -478,10 +472,7 @@ def test_step_runner_keeps_the_traceback_and_stops():
     assert result['complete']['ran_but_no_kills'] is False, 'the fourth run: every step ran, no kill happened, and it said complete'
     assert result['no_kills']['ok'] is True and result['no_kills']['missing'] == ['both_kills_happened'], result['no_kills']
     assert not any(result['complete'].values()), result['complete']
-    assert 'differs from the original' in result['guard'], result['guard']
-    assert result['created'].startswith('NOT IDENTICAL') and 'SanitySaver' in result['created'], result['created']
-    assert result['failed'].startswith('NOT IDENTICAL') and 'Config' in result['failed'], result['failed']
-    assert result['clean'].startswith('identical'), result['clean']
+    assert result['steps_done'] == ['good'] or result['steps_done'] == 'good', result['steps_done']
     assert 'not_picked' not in {s['step'] for s in result['steps']}, '-Steps leaves the others out'
     by_step = {s['step']: s for s in result['steps']}
     assert record['ok'] is False and 'python: Traceback' in record['error'] and 'LookupError: WillowAIPawn_9' in record['error'], record
@@ -495,9 +486,227 @@ def test_step_runner_keeps_the_traceback_and_stops():
 
 def test_capture_tolerates_the_quit_reply():
     text = CAPTURE.read_text(encoding='utf-8')
-    assert 'if ($log.complete -eq $true) { exit 0 } else { exit 1 }' in text, 'exit 0 only when complete'
     assert """try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null }""" in text
     assert """    Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)'""" not in text, 'the bare call has no reply to trim'
+
+
+def test_stop_all_answers_stopped_only_with_the_grades_back():
+    helios = Definition('Pkg.Cataclysm.Helios')
+    tree = Tree({helios.path: 2})
+    pc = Controller(tree)
+    probe = load_probe(pc, {}, [helios])
+    probe['sl_set_grades']({'Helios': 5})
+    assert probe['sl_stop_all']() == 'stopped' and tree.grades[helios.path] == 2
+    assert probe['sl_stop_all']() == 'stopped', 'nothing left to restore'
+    probe['sl_set_grades']({'Helios': 5})
+    pc.apply_grades = False
+    answer = probe['sl_stop_all']()
+    assert answer.startswith('grades not restored') and 'not restored' in answer, answer
+
+
+# The capture's own tail, from its catch to its end, after a body that fails or finishes, with the real helpers from realgame.ps1.
+# Modelled on tests/realgame_snapshot_test.py, with this capture's steps and its evidence rule.
+TAIL = r"""
+$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+$errors = $null; $tokens = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile('__CAPTURE__', [ref]$tokens, [ref]$errors)
+foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($f.Name -in 'Get-StepsDone', 'Get-SessionComplete') { . ([scriptblock]::Create($f.Extent.Text)) }
+}
+function Restore-VerifiedRoots {
+    if (__CLEAN__) { [pscustomobject]@{ rows = @(); summary = 'identical to bak after 0 restores'; clean = $true } }
+    else { [pscustomobject]@{ rows = @([pscustomobject]@{ file = 'SaveData\x'; status = 'MISMATCH after restore' });
+                              summary = 'NOT IDENTICAL to bak (1 problems)'; clean = $false } }
+}
+$roots = [ordered]@{ SaveData = '__TMP__\live' }
+$Out = '__OUT__'; $bak = '__TMP__'; $HubLock = '__TMP__\hub.lock'; $Lane = 'test'
+Set-Content -LiteralPath $HubLock 'test now'
+$log = [ordered]@{}; $snapshots = @{ SaveData = @{} }; $extraRoots = [ordered]@{}; $stepsRequested = @('a'); $runError = ''
+$summary = [ordered]@{ steps = @() }; $script:GradesBroken = $false; $script:RunningUnknown = $false
+function Pass([string]$Name = 'a', $Missing = @(), $Mixed = $false) { $summary.steps += [pscustomobject]@{ step = $Name; ok = $true; possibly_contaminated = $Mixed; missing = @($Missing) } }
+__SETUP__
+$hub = 'held'; $proc = __PROC__; $procStart = $null; $runLock = $false; $driverOwned = __OWNED__; $driverAttempted = __ATTEMPTED__; $launchAttempted = __LAUNCHED__; $marker = 'm'
+function Get-GameProcesses { }
+__STUBS__
+try {
+    __BODY__
+__CAPTURE_TAIL__
+"""
+ALIVE = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
+EXITED = '([pscustomobject]@{ HasExited = $true; Id = 1 } | Add-Member -PassThru ScriptMethod Refresh { })'
+
+
+def run_tail(body, clean=True, proc='$null', setup='', after=None, owned='$true', attempted=None, launched='$true', stubs='function Remove-Driver { }', out='__TMP__'):
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    tail = text[text.index('\n} catch {\n    $runError') + 1:]
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'driver.ps1'
+        filled = (TAIL.replace('__OUT__', out).replace('__REALGAME__', str(REALGAME)).replace('__CAPTURE__', str(CAPTURE)).replace('__SETUP__', setup)
+                  .replace('__LAUNCHED__', launched).replace('__OWNED__', owned).replace('__ATTEMPTED__', attempted or owned).replace('__PROC__', proc)
+                  .replace('__STUBS__', stubs).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__CLEAN__', '$true' if clean else '$false')
+                  .replace('__TMP__', tmp))
+        script.write_text(filled, encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
+                              text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+        done.hub_lock_kept = (Path(tmp) / 'hub.lock').exists()
+        if after:
+            after(tmp, done)
+        return done
+
+
+def powershell_here():
+    if shutil.which('powershell'):
+        return True
+    print('(no Windows PowerShell: the capture tail checks were not run)')
+    return False
+
+
+def test_exit_0_only_for_a_completed_run_with_its_evidence_and_nothing_to_recover():
+    if not powershell_here():
+        return
+    # (body, restore clean, game process, expected exit, expected status)
+    for body, clean, proc, code, status in (('Pass', True, '$null', 0, 'completed'),
+                                            ('Pass', True, EXITED, 0, 'completed'),
+                                            ('Pass', False, '$null', 1, 'recovery needed: restore'),
+                                            ("'no step'", True, '$null', 1, 'incomplete: a'),
+                                            ("Pass 'other'", True, '$null', 1, 'incomplete: a'),
+                                            ("Pass 'a' @('timer_ran')", True, '$null', 1, 'incomplete: a'),   # the fourth run: it ran, and read nothing
+                                            ("Pass 'a' @() $true", True, '$null', 1, 'incomplete: a'),
+                                            ('Pass; $script:GradesBroken = $true', True, '$null', 1, 'incomplete: grades or cleanup'),
+                                            ('Pass; $script:RunningUnknown = $true', True, '$null', 1, 'incomplete: grades or cleanup'),
+                                            ("Pass; throw 'x'", True, '$null', 1, 'failed: x'),
+                                            ('Pass', True, ALIVE, 1, 'recovery needed: game exit')):
+        done = run_tail(body, clean, proc)
+        assert done.returncode == code and f'status: {status}' in done.stdout, (body, clean, proc, done.returncode, done.stdout, done.stderr)
+        assert done.hub_lock_kept is status.startswith('recovery'), (body, clean, proc, done.stdout)
+    # With no launch and no cleanup, all steps passing still says what is wrong rather than completed: the session rule needs a compared restore.
+    done = run_tail('Pass', launched='$false')
+    assert done.returncode == 1 and 'status: incomplete: grades or cleanup' in done.stdout, done.stdout
+
+
+def test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery():
+    if not powershell_here():
+        return
+    for body in ("throw 'cooldown did not end'", 'Pass'):
+        done = run_tail(body, clean=False)
+        assert done.returncode == 1 and done.hub_lock_kept is True, done.stdout + done.stderr
+        order = [done.stdout.find(text) for text in ('status: recovery needed: restore did not compare clean', 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-VerifiedBackup')]
+        assert -1 not in order and order == sorted(order), done.stdout
+
+
+def test_a_leftover_driver_holds_the_locks_and_says_what_to_do():
+    if not powershell_here():
+        return
+    make = "New-Item -ItemType Directory -Force (Join-Path $script:DriverDir 'x') | Out-Null"
+    done = run_tail('Pass', setup=make)
+    assert done.returncode == 1 and 'status: recovery needed: driver not removed' in done.stdout and done.hub_lock_kept is True, done.stdout
+    assert 'MANUAL RECOVERY' in done.stdout and 'Remove-Item -Recurse -Force' in done.stdout, done.stdout
+    done = run_tail('Pass', stubs="function Remove-Driver { throw 'in use' }")
+    assert done.returncode == 1 and 'driver not removed (error: in use)' in done.stdout and done.hub_lock_kept is True, done.stdout
+
+
+def test_a_game_this_run_did_not_start_stops_the_restore_and_holds_the_locks():
+    if not powershell_here():
+        return
+    no_restore = "function Remove-Driver { Write-Host 'driver removed' }\nfunction Restore-VerifiedRoots { throw 'must not run' }\n"
+    done = run_tail('Pass', stubs=no_restore + 'function Get-GameProcesses { [pscustomobject]@{ Id = 77 } }')
+    assert done.returncode == 1 and 'status: recovery needed: a game this run did not start is running (pid 77)' in done.stdout, done.stdout
+    assert done.hub_lock_kept is True and 'MANUAL RECOVERY' in done.stdout and 'NOT RESTORED' in done.stdout and 'driver removed' not in done.stdout, done.stdout
+    # One that starts during the cleanup, after the first look.
+    late = '$script:checks = 0\nfunction Get-GameProcesses { $script:checks++; if ($script:checks -gt 1) { [pscustomobject]@{ Id = 88 } } }'
+    done = run_tail('Pass', stubs=no_restore + late)
+    assert done.returncode == 1 and '(pid 88)' in done.stdout and done.hub_lock_kept is True and 'NOT RESTORED' in done.stdout, done.stdout
+
+
+def test_a_run_that_launched_nothing_restores_nothing():
+    if not powershell_here():
+        return
+    no_restore = "function Restore-VerifiedRoots { throw 'must not run' }"
+    # The backup failed partway, before the driver or the game: nothing to recover, the locks released, and still not completed.
+    done = run_tail("throw 'copy failed'", owned='$false', launched='$false', stubs=no_restore)
+    assert done.returncode == 1 and 'status: failed: copy failed' in done.stdout and 'cleanup saves: not touched' in done.stdout, done.stdout
+    assert done.hub_lock_kept is False and 'MANUAL RECOVERY' not in done.stdout, done.stdout
+    # A failed install that left the folder: reported, never removed, and the locks kept.
+    make = 'New-Item -ItemType Directory -Force $script:DriverDir | Out-Null'
+    done = run_tail("throw 'install failed'", setup=make, owned='$false', attempted='$true', launched='$false', stubs="function Remove-Driver { throw 'must not run' }\n" + no_restore)
+    assert done.returncode == 1 and 'status: recovery needed: driver not removed (STILL PRESENT after a failed install' in done.stdout and done.hub_lock_kept is True, done.stdout
+
+
+def test_a_failed_run_stops_the_hooks_while_the_game_is_alive():
+    if not powershell_here():
+        return
+    answer = "function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { Write-Host ('py: ' + $Code); __ANSWER__ }"
+    done = run_tail("throw 'boom'", proc=ALIVE, stubs=answer.replace('__ANSWER__', "'stopped'"))
+    assert 'py: print(sl_stop_all())' in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
+    done = run_tail("throw 'boom'", proc=ALIVE, stubs=answer.replace('__ANSWER__', "throw 'no reply'"))
+    assert 'cleanup hooks: not stopped' in done.stdout and 'cleanup game:' in done.stdout, done.stdout    # the rest of the cleanup still runs
+    done = run_tail("throw 'boom'", proc=ALIVE, stubs=answer.replace('__ANSWER__', "'Traceback: stopped'"))
+    assert 'cleanup hooks: not stopped: Traceback: stopped' in done.stdout, done.stdout
+    done = run_tail('Pass', proc=EXITED, stubs=answer.replace('__ANSWER__', "throw 'asked'"))
+    assert 'py:' not in done.stdout and 'cleanup hooks' not in done.stdout, done.stdout    # an exited game is not asked
+
+
+def test_the_summary_is_written_last_and_holds_the_final_status():
+    if not powershell_here():
+        return
+    seen = {}
+
+    def read(tmp, _done):
+        seen['run'] = json.loads((Path(tmp) / 'summary.json').read_text(encoding='utf-8-sig'))['run']
+    # save_compare.json cannot be written (a folder has its name): the summary, written after it, says so.
+    done = run_tail('Pass', setup="New-Item -ItemType Directory -Force '__TMP__\\save_compare.json' | Out-Null", after=read)
+    assert done.returncode == 1 and 'status: failed: evidence not written' in done.stdout, done.stdout
+    assert seen['run']['status'].startswith('failed: evidence not written') and seen['run']['complete'] is False, seen
+    # summary.json itself cannot be written: nothing says completed, and the exit is not 0.
+    done = run_tail('Pass', setup="New-Item -ItemType Directory -Force '__TMP__\\summary.json' | Out-Null")
+    assert done.returncode == 1 and 'status: failed: evidence not written' in done.stdout, done.stdout
+    # The ordinary end: its record agrees with its exit.
+    done = run_tail('Pass', after=read)
+    assert done.returncode == 0 and seen['run']['status'] == 'completed' and seen['run']['complete'] is True and seen['run']['completed_steps'] in ('a', ['a']), seen
+
+
+def test_earlier_evidence_is_gone_before_the_run():
+    if not powershell_here():
+        return
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    start = text.index('# Stale evidence:')
+    block = text[start:text.index('# End of stale evidence.')]
+    assert start < text.index('Enter-RunLock') and start < text.index('Backup-Saves')
+    names = ('summary', 'save_compare', 'discover', 'ruin')
+    with tempfile.TemporaryDirectory() as tmp:
+        for name in names:
+            (Path(tmp) / f'{name}.json').write_text('{"status": "completed"}', encoding='utf-8')
+        script = Path(tmp) / 'stale.ps1'
+        script.write_text(f"$ErrorActionPreference = 'Stop'\n$Out = '{tmp}'\n{block}", encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stdout + done.stderr
+        for name in names:
+            assert not (Path(tmp) / f'{name}.json').exists(), name
+            kept = list(Path(tmp).glob(f'{name}.*.json'))
+            assert len(kept) == 1 and 'completed' in kept[0].read_text(encoding='utf-8'), kept
+
+
+def test_the_capture_is_wired_to_the_safety_helpers():
+    text = CAPTURE.read_text(encoding='utf-8')
+    for call in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Restore-VerifiedRoots $bak $roots $snapshots', 'Save-VerifiedBackupRecord $bak $roots $snapshots',
+                 'Format-ManualRecovery $recovery $bak $HubLock $Lane', '$recovery = Get-RecoveryReason', '$holdLocks = [bool]$recovery',
+                 "Assert-SavesBlocked (Py 'print(block_saves())')", '$foreign = Get-ForeignGamesSeen $null',
+                 'if ($holdLocks) { $runLock = $false; $hub = $null }', 'Format-RestoreRows $rows', "if ($log.status -ne 'completed') { exit 1 }"):
+        assert call in text, call
+    assert 'Focus-Game' not in text, 'Assert-GameForeground checks what Focus-Game only reported'
+    order = [text.index(mark) for mark in ('Save-VerifiedBackupRecord $bak', '$driverAttempted = $true', '$driverOwned = $true', '$foreign = Get-ForeignGamesSeen', '$launchAttempted = $true', '$proc = Start-Game', 'Assert-SavesBlocked (Py', 'Send-Key Enter', "Invoke-Step 'discover'")]
+    assert order == sorted(order), 'backup, driver, foreign check, launch, saves blocked, then input'
+
+
+def test_every_step_the_capture_runs_is_a_step_it_names():
+    """The list decides what "completed" needs and which earlier files are moved: a step missing from it would not count."""
+    import re
+    text = CAPTURE.read_text(encoding='utf-8')
+    body = text[text.index('$launchAttempted = $true'):]
+    ran = re.findall(r"(?:Invoke-Step|Invoke-DamageCast) '(\w+)'", body)
+    named = re.search(r"\$allSteps = @\(([^)]*)\)", text).group(1)
+    assert ran == re.findall(r"'(\w+)'", named), (ran, named)
 
 
 def test_one_target_is_a_whole_name():

@@ -527,7 +527,7 @@ per skill. The session reported itself complete, which overstated it: two of its
 
 ### What a useful fifth run needs
 
-Not queued until this is reviewed. Only the two things the fourth run failed to read:
+Not queued until this is reviewed. The capture's locks, restore and exit status follow #138's finalizer (tested with stand-ins for the game, not yet run against it). Only the two things the fourth run failed to read:
 
 1. **Kill-skill timer: find out why the gun did nothing before relying on any kill.** A standing target that keeps its controller: `isolate` holds
    its ground speed at 0 and detaches every other pawn. Each trigger pull separate (repeated `StartFire` and `StopFire`), with a per-tick health

@@ -11,9 +11,11 @@
 #   helios                     Helios at grade 5; one cast, same recording as converge
 #   ruin                       Ruin at grade 1; one cast, same recording
 # Takes the keyboard only (no frame capture). Everything written is game data under ignored local/realgame/skills_live/:
-# one JSON per step, summary.json, and save_compare.json.
-# Locks, saves and cleanup follow phaselock_integrity_capture.ps1: the hub lock and the run lock; saves backed up; saving
-# blocked in game from the first frame; afterwards the save folder is compared with the backup (changed files restored).
+# one JSON per step, save_compare.json, and summary.json last, with the final status.
+# Locks, saves and cleanup follow phaselock_integrity_capture.ps1: the hub lock and the run lock; saves backed up and verified; saving
+# blocked in game from the first frame, or the run stops; input only while the game is the foreground window; afterwards every root is
+# restored and compared, unless a game may still be running. Anything left for a person keeps both locks and prints the recovery steps.
+# Exit 0 only for status 'completed': every requested step passed and got its evidence, and nothing is left to recover.
 param(
     # The machine-wide hub lock lives in the main checkout's local/ (shared by every worktree on this machine).
     [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
@@ -33,7 +35,15 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $Out = Join-Path $script:RG 'skills_live'
 New-Item -ItemType Directory -Force $Out | Out-Null
-$log = [ordered]@{ started = (Get-Date).ToString('o'); lane = $Lane; character = $Character }
+# Stale evidence: a final write that fails must not leave an earlier run's result behind. Kept under a new name, not deleted: after a run that
+# needs recovery, its record is what names the backup and says what went wrong, and a rejected retry must not lose that.
+$allSteps = @('discover', 'killskill_timer', 'converge', 'minds_eye_crit', 'subsequence_sweet_release', 'helios', 'ruin')
+$keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
+foreach ($stale in @('summary', 'save_compare') + $allSteps) { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
+# End of stale evidence.
+$stepsRequested = if ($Steps) { @($Steps) } else { $allSteps }
+$runError = ''
+$log = [ordered]@{ started = (Get-Date).ToString('o'); lane = $Lane; character = $Character; status = 'running'; requested_steps = $stepsRequested }
 $summary = [ordered]@{ steps = @() }
 
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
@@ -63,7 +73,7 @@ function Set-Up([string]$Target) {
     $s = PyCall "{'isolate': isolate('$Target'), 'place': place('$Target', 650.0)}"
     Start-Sleep 3
     $a = PyCall "{'isolate': isolate('$Target'), 'pitch': aim('$Target'), 'measure': measure('$Target'), 'camera': camera(), 'bounds': bounds('$Target')}"
-    Focus-Game | Out-Null; Start-Sleep -Milliseconds 500
+    Assert-GameForeground; Start-Sleep -Milliseconds 500
     @{ setup = $s; aim = $a }
 }
 
@@ -100,7 +110,7 @@ function Invoke-GunKill([string]$Target) {
 function Invoke-FreshKill([string]$Target, [double]$Seconds = 20) {
     $place = PyCall "place('$Target', 450.0)"
     Start-Sleep 1
-    Focus-Game | Out-Null
+    Assert-GameForeground
     $before = PyCall "{'health': ai_pawn('$Target').GetHealth(), 'controlled': ai_pawn('$Target').Controller is not None}"
     $start = Get-Date; $dead = $false
     PyCall "sl_damage_watch($($Seconds + 2), '$Target')" | Out-Null
@@ -265,25 +275,15 @@ function Invoke-DamageCast([string]$Name, [hashtable]$Grades) {
     }
 }
 
-# One root into the backup, verified by hash. Any failure stops the run before the game starts; a root that did not verify is never
-# restored from, because Restore-Tree deletes live files that a partial backup lacks.
-function Copy-VerifiedRoot([string]$Source, [string]$Backup) {
-    if (!(Test-Path -LiteralPath $Backup)) { Copy-Item -Recurse -LiteralPath $Source -Destination $Backup -ErrorAction Stop }
-    $different = @(Compare-TreeHashes $Source $Backup)
-    if ($different.Count) { throw "backup of $Source differs from the original in $($different.Count) files, first: $($different[0])" }
-}
-
-# The line for the summary. A root created during the run is left in place for the maintainer, and it does mean "not identical".
-function Get-SavesVerdict([object[]]$Rows, [string]$Backup) {
-    $bad = @($Rows | Where-Object { $_.status -like 'MISMATCH*' -or $_.status -like 'RESTORE FAILED*' -or $_.status -like 'BACKUP FAILED*' -or $_.status -like 'created during the run*' })
-    if ($bad.Count) { "NOT IDENTICAL to $Backup ($($bad.Count) problems: $(($bad | ForEach-Object { $_.file }) -join ', '))" }
-    else { "identical to $Backup after $(@($Rows).Count) restores" }
+# The steps that count as done for the run's status: passed, with their evidence, and no possible mix-up.
+function Get-StepsDone([object[]]$StepRows) {
+    @(@($StepRows | Where-Object { $_ }) | Where-Object { $_.ok -and !$_.possibly_contaminated -and $null -ne $_.missing -and !@($_.missing).Count } | ForEach-Object { $_.step })
 }
 
 # Complete means every requested step passed, got what it came for (its evidence) and had no possible mix-up from an earlier step, and
 # everything is back as it was. A step that ran without an error is not enough: that is how a run with no kills once reported complete.
 function Get-SessionComplete($Log, [object[]]$StepRows, [string[]]$Requested, $Cleanup, [bool]$GameGone, [bool]$GradesBroken, [bool]$RunningUnknown) {
-    if ($Log.Contains('error') -or !$GameGone -or $GradesBroken -or $RunningUnknown) { return $false }
+    if ($Log.run_error -or !$GameGone -or $GradesBroken -or $RunningUnknown) { return $false }
     if ("$($Cleanup.saves)" -notlike 'identical*') { return $false }
     if ($Cleanup.driver -notin 'removed', 'not installed by this run; untouched') { return $false }
     $rows = @($StepRows | Where-Object { $_ })
@@ -295,8 +295,10 @@ function Get-SessionComplete($Log, [object[]]$StepRows, [string[]]$Requested, $C
 }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
-$rootState = @{}   # backup state per root: verified, absent (no such folder at the backup) or failed
-$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false
+$snapshots = @{}
+$roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
+foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
+$hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $driverAttempted = $false; $launchAttempted = $false
 # A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the
 # image path and the start time before stopping a PID). Unknown switches are ignored by the game.
 $marker = "-owrun=$Lane-$PID"
@@ -317,27 +319,30 @@ try {
     Enter-RunLock 1800; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
     # The SDK's settings and Sanity Saver's private store are compared too (an earlier session saw Sanity Saver rewrite one).
-    # Verified before anything can change them; a failure ends the run here, before the driver and the game.
-    $backupRoots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
-    foreach ($d in $extraRoots.Keys) { $backupRoots[$d] = $extraRoots[$d] }
-    foreach ($d in $backupRoots.Keys) { $rootState[$d] = 'failed' }
-    foreach ($d in $backupRoots.Keys) {
-        if (!(Test-Path -LiteralPath $backupRoots[$d])) { $rootState[$d] = 'absent'; continue }
-        Copy-VerifiedRoot $backupRoots[$d] (Join-Path $bak $d)
-        $rootState[$d] = 'verified'
+    # A root is marked usable only after its copy compares identical; cleanup never restores from any other. A failure ends the run here,
+    # before the driver and the game.
+    foreach ($d in 'SaveData', 'Config') { $snapshots[$d] = Assert-SnapshotMatches (Join-Path $script:WillowDir $d) (Join-Path $bak $d) }
+    foreach ($d in $extraRoots.Keys) {
+        if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
-    # -Exclusive re-checks that the folder is absent and removes its own partial install on failure.
+    Save-VerifiedBackupRecord $bak $roots $snapshots
+    # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
+    # its own partial install on failure, so the folder is this run's only once the call has returned.
+    $driverAttempted = $true   # before the call: a failed install can leave the folder behind
     Install-Driver -BlockSavesAtStart -Exclusive
     $driverOwned = $true
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }
+    $foreign = Get-ForeignGamesSeen $null
+    if ($foreign) { throw "Borderlands2 (pid $foreign) started during the setup; not launching a second one" }
+    $launchAttempted = $true
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'skills_live/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
-    $log.block_saves = Py 'print(block_saves())'
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'skills_live/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
@@ -426,21 +431,24 @@ try {
     Invoke-DamageCast 'ruin' @{ Ruin = 1 }
     # Normal end: the game quits itself (the finally block still stops it if it has not).
     # The game may be gone before it answers: no reply, or an empty one, is the expected end here.
-    try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { 'quit sent (no reply)' }
+    try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } catch {
-    $log.error = "$_"
-    "error: $_"
+    $runError = "$_"
+    throw
 } finally {
-    # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: put back the grades and remove the
-    # hooks in game, stop our game, and only once it has exited remove our driver and restore and verify the saves and config;
-    # then write the logs and release the locks. If the game's exit is not confirmed, a live game could overwrite restored
-    # files: nothing is removed or restored, the backup is kept and manual-recovery steps are printed.
+    # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: stop the hooks and put back the grades in game,
+    # stop our game, and only once it has exited remove our driver and restore and verify the saves and config; then write the logs and
+    # release the locks. If a game may still be running, it could overwrite restored files: nothing is removed or restored, the backup is
+    # kept and manual-recovery steps are printed.
     $cleanup = [ordered]@{}
-    $gameGone = $true
-    if ($proc) {
-        try { if (Get-GameProcess) { $cleanup.shutdown = PyCall 'sl_shutdown()' 15 } } catch { $cleanup.shutdown = "error: $_" }
+    # A throw between a watch's start and its stop leaves hooks reading pawns into shutdown: stop them while the game can still answer.
+    if ($proc -and !$proc.HasExited) {
+        # Py returns a traceback as text, so only the exact answer counts.
+        try { $reply = Py 'print(sl_stop_all())' 15; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+        catch { $cleanup.hooks = "not stopped: $_" }
     }
+    $gameGone = $true
     if ($proc) {
         try {
             for ($i = 0; $i -lt 10 -and !$proc.HasExited; $i++) { Start-Sleep 1 }
@@ -449,56 +457,72 @@ try {
             $proc.Refresh(); $gameGone = $proc.HasExited
         } catch { $cleanup.game = "error: $_"; $gameGone = $false }
     }
-    if (!$gameGone) {
-        $cleanup.driver = "NOT REMOVED (game exit not confirmed): $script:DriverDir"
-        $cleanup.saves = "NOT RESTORED (game exit not confirmed); backup kept at $bak"
-        @"
-MANUAL RECOVERY: Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game)). Nothing was removed or restored.
-  1. Close Borderlands 2 yourself.
-  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'
-     Remove-Item -Recurse -Force '$script:DriverDir'
-     foreach (`$sub in 'SaveData', 'Config', 'sdk_settings', 'SanitySaver') { `$b = Join-Path '$bak' `$sub; if (Test-Path `$b) { Restore-Tree `$b `$(@{ SaveData = (Join-Path `$script:WillowDir 'SaveData'); Config = (Join-Path `$script:WillowDir 'Config'); sdk_settings = '$($extraRoots.sdk_settings)'; SanitySaver = '$($extraRoots.SanitySaver)' }[`$sub]) `$sub } }
-     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'; a 'MISMATCH after restore' row means it failed.
-  3. Then remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'.
-"@
-        $bak = $null; $driverOwned = $false; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
+    $restored = $null; $restoreError = ''
+    # Those flags are set before their calls, so a failure inside still counts. An install can only need its folder cleaned up; only a launched
+    # game can have changed the saves, so only that calls for a restore, which could otherwise erase another writer's changes.
+    $launched = $launchAttempted -or $proc
+    $touched = $driverAttempted -or $launched
+    # Reading only: a game this run did not start is never stopped, and nothing is removed or restored under or after it.
+    $untracked = if ($touched) { Get-ForeignGamesSeen $proc } else { '' }
+    $safe = $gameGone -and !$untracked
+    if (!$safe) {
+        $cleanup.driver = "NOT REMOVED (a game may still run): $script:DriverDir"
+        $cleanup.saves = "NOT RESTORED (a game may still run); backup kept at $bak"
     }
     try {
-        if ($driverOwned) {
+        if ($safe -and $driverOwned) {
             Remove-Driver
             $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT: $script:DriverDir" } else { 'removed' }
+        } elseif ($safe -and $driverAttempted) {
+            # The install failed. Its own rollback is best effort, and the folder may not be this run's, so it is reported, not removed.
+            $cleanup.driver = if (Test-Path -LiteralPath $script:DriverDir) { "STILL PRESENT after a failed install: $script:DriverDir" } else { 'install failed; nothing left' }
         } elseif (!$cleanup.Contains('driver')) { $cleanup.driver = 'not installed by this run; untouched' }
     } catch { $cleanup.driver = "error: $_" }
     $rows = @()
-    if ($bak) {
-        try {
-            $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
-            foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-            foreach ($sub in $roots.Keys) {
-                $b = Join-Path $bak $sub; $live = $roots[$sub]
-                try {
-                    if ($rootState[$sub] -eq 'verified') { $rows += @(Restore-Tree $b $live $sub) }
-                    elseif ($rootState[$sub] -eq 'absent') {
-                        # Absent at the backup and created during the run (an SDK mod's own store): reported, not deleted.
-                        if (Test-Path -LiteralPath $live) { $rows += [pscustomobject]@{ file = $sub; status = 'created during the run; left for the maintainer' } }
-                    }
-                    else { $rows += [pscustomobject]@{ file = $sub; status = 'BACKUP FAILED; not restored, and nothing was started' } }
-                } catch { $rows += [pscustomobject]@{ file = $sub; status = "RESTORE FAILED: $_" } }
-            }
-            $cleanup.saves = Get-SavesVerdict $rows $bak
-        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)" }
+    if ($bak -and $safe -and !$launched) { $cleanup.saves = 'not touched: this run launched no game' }
+    elseif ($bak -and $safe) {
+        # Once more, immediately before the restore: a game launched during the cleanup could overwrite it.
+        $untracked = Get-ForeignGamesSeen $proc
+        if ($untracked) { $safe = $false; $cleanup.saves = "NOT RESTORED (a game may still run); backup kept at $bak" }
     }
+    if ($bak -and $launched -and $safe) {
+        try {
+            $restored = Restore-VerifiedRoots $bak $roots $snapshots
+            $rows = @($restored.rows); $cleanup.saves = $restored.summary
+        } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
+    }
+    $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
+    $holdLocks = [bool]$recovery
+    # The evidence first and summary.json last, so the status it holds accounts for the rest. Missing evidence cannot read as completed; the
+    # restore has already run, and recovery keeps its status.
+    $evidenceError = ''
     try {
-        $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
-        $log.complete = Get-SessionComplete $log $summary.steps $Steps $cleanup $gameGone $script:GradesBroken $script:RunningUnknown
-        [ordered]@{ run = $log; steps = $summary.steps } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'summary.json')
-        if ($bak) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
-    } catch { "log write failed: $_" }
+        if ($restored) { @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json') }
+    } catch { $evidenceError = "$_" }
+    $log.completed_steps = @(Get-StepsDone $summary.steps)
+    $log.run_error = $runError
+    $log.status = Get-RunStatus $stepsRequested @($log.completed_steps) $runError $recovery
+    # Every step's evidence is in; the session's own rule also asks for its grades and its cleanup.
+    if ($log.status -eq 'completed' -and !(Get-SessionComplete $log $summary.steps $stepsRequested $cleanup $gameGone $script:GradesBroken $script:RunningUnknown)) {
+        $log.status = "incomplete: grades or cleanup not clean (grades_broken=$([bool]$script:GradesBroken), running_unknown=$([bool]$script:RunningUnknown), saves=$($cleanup.saves), driver=$($cleanup.driver))"
+    }
+    if ($evidenceError -and !$recovery) { $log.status = "failed: evidence not written ($evidenceError)" }
+    $log.complete = $log.status -eq 'completed'
+    $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup
+    try { [ordered]@{ run = $log; steps = $summary.steps } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'summary.json') }
+    catch {
+        "log write failed: $_"
+        if (!$recovery) { $log.status = "failed: evidence not written ($_)"; $log.complete = $false }
+    }
+    # Anything left for a person keeps both locks, so no other run starts on it.
+    if ($holdLocks) { $runLock = $false; $hub = $null }
     try { if ($runLock) { Exit-RunLock } } catch { "run lock release failed: $_" }
     try { if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force } } catch { "hub lock release failed: $_" }
+    "status: $($log.status)"
+    if ($runError) { "run error: $runError" }
     $cleanup.GetEnumerator() | ForEach-Object { "cleanup $($_.Key): $($_.Value)" }
-    "session complete: $($log.complete)"
-    $rows
+    Format-RestoreRows $rows
+    if ($holdLocks) { Format-ManualRecovery $recovery $bak $HubLock $Lane }
+    # Exit 0 only for a completed run with nothing left to recover. Here in the finally, so an error's rethrow passes through it too.
+    if ($log.status -ne 'completed') { exit 1 }
 }
-# The exit code says the same: a failed step or an unclean cleanup is not a success.
-if ($log.complete -eq $true) { exit 0 } else { exit 1 }
