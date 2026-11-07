@@ -20,11 +20,18 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
 namespace
 {
+// -owcorpsenolimits (test only, tools/play_range.ps1 -KillRow -NoCorpseLimits): the ragdoll without the depenetration limit and the speed caps, to see what they hide.
+bool CorpseLimitsOff()
+{
+    static const bool bOff = FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits"));
+    return bOff;
+}
 const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 // Host calibration (UNVERIFIED): factor between the data's light brightness and UE5's unitless intensity (see UpdatePresentation).
@@ -842,7 +849,13 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
     // Host stand-in (UNVERIFIED): the death clip plays; after RagdollDelay the mesh goes limp (physics only when the imported
     // mesh has a physics asset; the log says which); after RespawnDelay the mesh is put back on its pose and the target stands again.
     const float Since = Now - DiedAt;
-    if (bRagdollSimulating) TrackCorpse();
+    if (bRagdollSimulating)
+    {
+        TrackCorpse();
+        // At the times of the kill row's frames, and a moment before the respawn: at rest, if it rests.
+        const float Marks[] = {1.4f, 3.f, RespawnDelay - 0.25f};
+        if (CorpseGapReadings < UE_ARRAY_COUNT(Marks) && Since >= Marks[CorpseGapReadings]) ReadCorpseFloorGap(Since);
+    }
     if (!bRagdoll && Since >= RagdollDelay)
     {
         bRagdoll = true;
@@ -857,8 +870,14 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
             // Nothing throws a corpse on purpose: the death zeroed the knock, and no velocity is handed to the ragdoll. What can is the
             // moment physics takes over, with bodies overlapping each other or the floor (the suspect for the flung corpses of the first
             // playtest, UNVERIFIED): so that push is limited, and TrackCorpse caps what still gets through and logs it.
-            for (FBodyInstance* Body : StockMesh->Bodies)
-                if (Body) Body->SetMaxDepenetrationVelocity(RagdollDepenetrationSpeed);
+            if (!CorpseLimitsOff())
+                for (FBodyInstance* Body : StockMesh->Bodies)
+                    if (Body) Body->SetMaxDepenetrationVelocity(RagdollDepenetrationSpeed);
+            // What may be fighting itself: bodies that can collide with each other, and the joints holding them. Read only.
+            const UPhysicsAsset* Asset = StockMesh->GetPhysicsAsset();
+            const int32 BodyCount = Asset->SkeletalBodySetups.Num();
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s physics asset %s: %d bodies, %d constraints, %d of %d body pairs not colliding, limits %s"), *GetName(), *Asset->GetName(),
+                BodyCount, Asset->ConstraintSetup.Num(), Asset->CollisionDisableTable.Num(), BodyCount * (BodyCount - 1) / 2, CorpseLimitsOff() ? TEXT("OFF (test)") : TEXT("on"));
             StockMesh->SetSimulatePhysics(true);
             StockMesh->SetAllPhysicsLinearVelocity(FVector::ZeroVector);
             StockMesh->SetAllPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
@@ -867,6 +886,11 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
             CorpseFrom = StockMesh->Bounds.Origin;
             CorpseRise = CorpseDrift = CorpseSpeed = 0.f;
             CorpseCaps = 0;
+            CorpseGapReadings = 0;
+            CorpseGapLow = CorpseGapHigh = -1.f;
+            CorpseFastBone = NAME_None;
+            CorpseFastAt = 0.f;
+            CorpseStartAt = Now;
         }
         UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s ragdoll at %.2f s: physics asset %s"), *GetName(), Since,
             bPhysics ? TEXT("yes, simulating") : TEXT("none, not simulated"));
@@ -876,8 +900,8 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
     if (bRagdollSimulating)
     {
         bRagdollSimulating = false;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s corpse rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s, %d speed caps"), *GetName(),
-            CorpseRise, CorpseDrift, CorpseSpeed, CorpseCaps);
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s corpse rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s (%s, %.2f s into the ragdoll), %d speed caps"), *GetName(),
+            CorpseRise, CorpseDrift, CorpseSpeed, *CorpseFastBone.ToString(), CorpseFastAt, CorpseCaps);
     }
     // The mesh goes back under the pivot at its rest offset; the host never sets its rotation, so zero is its rest rotation.
     StockMesh->AttachToComponent(Pivot, FAttachmentTransformRules::KeepRelativeTransform);
@@ -915,7 +939,13 @@ void AOpenWillowCombatTarget::TrackCorpse()
         // Through the component: a kinematic body keeps its velocity, and FBodyInstance's own check needs the PhysicsCore module linked.
         if (!Body || !StockMesh->IsSimulatingPhysics(StockMesh->GetBoneName(Body->InstanceBoneIndex))) continue;
         FVector Velocity = Body->GetUnrealWorldVelocity();
-        CorpseSpeed = FMath::Max(CorpseSpeed, float(Velocity.Size()));
+        if (Velocity.Size() > CorpseSpeed)
+        {
+            CorpseSpeed = float(Velocity.Size());
+            CorpseFastBone = StockMesh->GetBoneName(Body->InstanceBoneIndex);
+            CorpseFastAt = GetWorld()->GetTimeSeconds() - CorpseStartAt;
+        }
+        if (CorpseLimitsOff()) continue;
         const FVector2D Flat(Velocity.X, Velocity.Y);
         const double FlatSpeed = Flat.Size();
         if (Velocity.Z <= RagdollMaxRiseSpeed && FlatSpeed <= RagdollMaxFlatSpeed) continue;
@@ -928,6 +958,34 @@ void AOpenWillowCombatTarget::TrackCorpse()
         Body->SetLinearVelocity(Velocity, false);
         ++CorpseCaps;
     }
+}
+
+void AOpenWillowCombatTarget::ReadCorpseFloorGap(float Since)
+{
+    ++CorpseGapReadings;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowCorpseGap), true, this);
+    float Lowest = -1.f, Highest = -1.f;
+    int32 Read = 0, NoFloor = 0;
+    for (FBodyInstance* Body : StockMesh->Bodies)
+    {
+        if (!Body || !StockMesh->IsSimulatingPhysics(StockMesh->GetBoneName(Body->InstanceBoneIndex))) continue;
+        const FVector At = Body->GetUnrealWorldTransform().GetLocation();
+        FHitResult Floor;
+        // From a little above: a body sunk into the floor still reads, as a small gap.
+        if (!GetWorld()->LineTraceSingleByChannel(Floor, At + FVector(0.f, 0.f, 50.f), At - FVector(0.f, 0.f, 5000.f), ECC_WorldStatic, Query))
+        {
+            ++NoFloor;
+            continue;
+        }
+        const float Gap = float(At.Z - Floor.ImpactPoint.Z);
+        Lowest = Read == 0 ? Gap : FMath::Min(Lowest, Gap);
+        Highest = Read == 0 ? Gap : FMath::Max(Highest, Gap);
+        ++Read;
+    }
+    CorpseGapLow = Lowest;
+    CorpseGapHigh = Highest;
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s corpse %.1f s after death: lowest body %.0f uu above the floor, highest %.0f uu, %d bodies read, %d with no floor below"), *GetName(), Since,
+        Lowest, Highest, Read, NoFloor);
 }
 
 bool AOpenWillowCombatTarget::KickCorpseForTest(float UpSpeed)

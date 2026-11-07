@@ -316,7 +316,7 @@ class PreflightTest(unittest.TestCase):
         self.assertIn('made', self.run_preflight({'spot_candidates': [{'x': 1}], 'spawns': [{'kind': 'made'}], 'kinds': {'made': {}}}, survey=True))
 
     def test_the_kill_row_needs_each_gun_to_have_fired(self):
-        good = lambda gun, shots=3, result='PASS': 'OWRANGEKILL gun=%d result=%s "Made" (pistol, level 1): %d shots, rose 1 uu, drifted 1 uu, fastest body 1 uu/s, 0 speed caps, measured 1' % (gun, result, shots)
+        good = lambda gun, shots=3, result='PASS': 'OWRANGEKILL gun=%d result=%s "Made" (pistol, level 1): %d shots, rose 1 uu, drifted 1 uu, fastest body 1 uu/s (Made_Bone, 0.10 s in), 0 speed caps, at rest 1 to 9 uu above the floor, measured 1' % (gun, result, shots)
         done = 'OWRANGEKILL done guns=2 fail=0'
         self.assertTrue(check_range.kills_ok(log(good(0), good(1), done))[0])
         self.assertFalse(check_range.kills_ok(log(good(0), good(1)))[0])                     # never finished

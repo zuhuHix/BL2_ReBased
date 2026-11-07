@@ -1131,20 +1131,21 @@ void UOpenWillowRangeSubsystem::TickKillRow(float Now)
     }
     case 2: // frames at the playtest's times after the death: 0.56 s and 2.17 s into the ragdoll
         if (Now - KillAt < 1.4f) return;
-        RequestRangeShot(FString::Printf(TEXT("kill_%d_a.png"), KillGun));
+        RequestRangeShot(FString::Printf(TEXT("kill%s_%d_a.png"), FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits")) ? TEXT("_nolimits") : TEXT(""), KillGun));
         KillStage = 3;
         return;
     case 3:
         if (Now - KillAt < 3.f) return;
-        RequestRangeShot(FString::Printf(TEXT("kill_%d_b.png"), KillGun));
+        RequestRangeShot(FString::Printf(TEXT("kill%s_%d_b.png"), FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits")) ? TEXT("_nolimits") : TEXT(""), KillGun));
         KillStage = 4;
         return;
     default: // after its respawn: what the corpse did
     {
         if (!Enemy) { FinishKill(false, TEXT("the enemy is gone")); return; }
         if (Enemy->IsDead()) return;
-        FinishKill(KillShots > 0 && Enemy->CorpseMeasured(), FString::Printf(TEXT("%s: %d shots, rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s, %d speed caps, measured %d"), *KillGunName, KillShots,
-            Enemy->CorpsePeakRise(), Enemy->CorpsePeakDrift(), Enemy->CorpsePeakSpeed(), Enemy->CorpseSpeedCaps(), Enemy->CorpseMeasured() ? 1 : 0));
+        FinishKill(KillShots > 0 && Enemy->CorpseMeasured(), FString::Printf(TEXT("%s: %d shots, rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s (%s, %.2f s in), %d speed caps, at rest %.0f to %.0f uu above the floor, measured %d"), *KillGunName, KillShots,
+            Enemy->CorpsePeakRise(), Enemy->CorpsePeakDrift(), Enemy->CorpsePeakSpeed(), *Enemy->CorpseFastestBone().ToString(), Enemy->CorpseFastestAt(), Enemy->CorpseSpeedCaps(),
+            Enemy->CorpseLowestGap(), Enemy->CorpseHighestGap(), Enemy->CorpseMeasured() ? 1 : 0));
         return;
     }
     }

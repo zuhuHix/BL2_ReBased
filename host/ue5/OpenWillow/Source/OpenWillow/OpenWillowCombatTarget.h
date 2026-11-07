@@ -116,6 +116,12 @@ public:
     float CorpsePeakDrift() const { return CorpseDrift; }
     float CorpsePeakSpeed() const { return CorpseSpeed; }
     int32 CorpseSpeedCaps() const { return CorpseCaps; }
+    // How far the lowest and the highest simulating body stood above the floor below it at the last reading (a second before the respawn: at rest, if it rests).
+    // -1 when no floor was found under any body.
+    float CorpseLowestGap() const { return CorpseGapLow; }
+    float CorpseHighestGap() const { return CorpseGapHigh; }
+    FName CorpseFastestBone() const { return CorpseFastBone; }
+    float CorpseFastestAt() const { return CorpseFastAt; }
     // Test only: throws one simulating body upward, to see the cap act on a known velocity. False without a simulating body.
     bool KickCorpseForTest(float UpSpeed);
     float CorpseKickedRiseSpeed() const;
@@ -252,6 +258,13 @@ protected:   // was private: the range enemy (OpenWillowEnemy.cpp) builds on the
     bool bRagdoll = false;              // the stock mesh is limp after its death (TickStockRespawn)
     bool bRagdollSimulating = false;    // ... and physics runs it (a physics asset was found)
     void TrackCorpse();                 // caps the bodies' speed and measures how far the body went
+    void ReadCorpseFloorGap(float Since);   // logs how far its bodies stand above the floor: what `rose` cannot say
+    int32 CorpseGapReadings = 0;
+    float CorpseGapLow = -1.f;
+    float CorpseGapHigh = -1.f;
+    FName CorpseFastBone;
+    float CorpseFastAt = 0.f;
+    float CorpseStartAt = 0.f;
     bool bCorpseMeasured = false;
     FVector CorpseFrom = FVector::ZeroVector;
     float CorpseRise = 0.f;

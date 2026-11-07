@@ -172,9 +172,27 @@ bodies are thrown with no shot behind them. The cause in the physics is UNVERIFI
 `tools/play_range.ps1 -KillRow` is the row for real kills: a rolled pistol and a rolled shotgun each kill a stock enemy from about 700 uu, with frames 1.4 s and 3 s after each death and
 the corpse's numbers in the log. It has not run yet.
 
+**Floor gap and the physics asset (follow-up, 2026-11).** `rose` cannot say whether a body is on the ground, so each simulated corpse now logs how far its lowest and highest bodies stand above the
+floor below them, 1.4 s and 3 s after death and just before the respawn, as well as which body was fastest and when. Each ragdoll logs its physics asset's bodies, constraints and the body pairs
+that do not collide. `tools/play_range.ps1 -KillRow -NoCorpseLimits` runs the kill row once without the depenetration limit and the speed caps, to see what they hide; it is a test switch, and how bodies
+are thrown in play does not change. None of this has run yet. The import's asset is auto-generated from the mesh, not the stock asset, so what these lines show is about the host's asset, and
+what they mean for the game's own is UNVERIFIED.
+
 **The den read.** `tools/real_game/cash_capture.ps1` has a `den_read` stage after the cash read, with its own result (`stage_results` in `session.json`): the player
 stands immune 1,600 uu from an enemy with no input, and `scripts/den_probe.py` records melee calls, blows and positions. It reads one map's dens at one level; its
-numbers don't speak for others. It has not run yet.
+numbers don't speak for others.
+
+First run (2026-11-07, one session, three trials, Three Horns Divide, Maya at level 8, immune: her health was unchanged after every trial, against 78 recorded blows). All of it UNVERIFIED beyond that:
+- **First blows did not land as one:** 8.6 s and 5.7 s between different attackers in two trials, and one attacker in the third. No two attackers landed on one tick. The den was a mix of kinds and distances, not four equal melee enemies on an arc, so this does not say what such a den would do.
+- **They can land close together:** two babies that had converged landed 14 pairs of blows within 0.05 s, on the same swing cycle.
+- **Their first blows were mostly not melee:** a slinger's rock from 800 uu and more, at about 3 s, and leaps. The range's enemies have neither.
+- **Swing start:** an adult's first swing came at 368 uu and a baby's first grab at 425, each inside its stock range, which supports the rule on those two samples. Regular bullymong and psycho: no read.
+- **Closing:** once there, the adult stood about 190 to 220 uu from Maya and the baby about 106. The host's adult stops at 334 and its regular at 260.
+- **Swing cycles:** adult 1.217 s, baby grab 1.133 s; the host uses 1.25 s for every kind.
+- **Speed:** moving medians of 500 for the slinger, 300 to 450 for the baby and 608 to 866 for adults, leaps included, with long pauses. The host's 400 is not too fast by this read; no number is taken from it.
+- **Notice:** members took a target 0.06 and 0.12 s apart in two trials: weak evidence, at 0.05 s sampling, that their updates are not in step.
+
+Options for the maintainer, none taken: swing cycles per kind; closer stopping distances; leaps and throws (the ranged lane). The money read in the same session gave no value: one collect took two pickups at once for +5, and the item's own value call returns 0, so the money stand-in stays.
 
 ## Range spot: candidates and the textured-floor rule (PR2 follow-up)
 

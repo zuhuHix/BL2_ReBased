@@ -13,6 +13,8 @@ param(
     # if its log does not show the movie accepted (tools/movie_hud.ps1). Without it nothing changes.
     [switch]$MovieHud,
     [int]$MovieHudPort = 8796,
+    # With -KillRow, once, to compare: the ragdoll without its depenetration limit and speed caps (-owcorpsenolimits). Frames: kill_nolimits_<gun>_<a|b>.png. A test only.
+    [switch]$NoCorpseLimits,
     [int]$WaitForEditorSeconds = 3600,
     [switch]$Build
 )
@@ -55,6 +57,8 @@ try {
         foreach ($key in $slice.Keys) { $arguments += "-$key=`"$(Join-Path $repo $slice[$key])`"" }
     }
     # Level 8, as the playtest that saw the flung corpses: the guns roll at that stage, and Maya can use them.
+    if ($NoCorpseLimits -and !$KillRow) { throw '-NoCorpseLimits is only for -KillRow' }
+    if ($NoCorpseLimits) { $arguments += '-owcorpsenolimits' }
     if ($KillRow) { $arguments += '-owrangekillrow', '-owlevel=8'; $Mode = 'passive'; $arguments = $arguments -replace '^-owrangemode=.*$', '-owrangemode=passive'; if ($CheckSeconds -le 0) { $CheckSeconds = if ($MovieHud) { 305 } else { 180 } } }
     if ($CheckSeconds -gt 0) { $arguments += '-unattended' }
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
