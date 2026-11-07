@@ -408,7 +408,7 @@ class CardTextTests(unittest.TestCase):
         objects['DamageType.Fire'] = {'WeaponCardPresentations': ['DamageType.Effectiveness']}
         objects['DamageType.Effectiveness'] = {
             'Description': 'Effective against a target type.', 'bDontDisplayNumber': True,
-            'TextColor': {'R': 255, 'G': 128, 'B': 0, 'A': 255},
+            'TextColor': {'R': 18, 'G': 52, 'B': 86, 'A': 255},
         }
         item = recipe()
         item.update({'title': {'part': 'Title'}})
@@ -418,9 +418,9 @@ class CardTextTests(unittest.TestCase):
             'Red, line', '2.0x Weapon Zoom', 'Consumes 2 ammo per shot.',
             'A weapon type note.', 'Effective against a target type.',
         ])
-        self.assertEqual(card['fun_stats_lines'][-1]['color'], '#FF8000')
+        self.assertEqual(card['fun_stats_lines'][-1]['color'], '#123456')
         self.assertIn('<font color="#DC4646">Red, line</font>', card['fun_stats_markup'])
-        self.assertIn('<font color="#FF8000">Effective against a target type.</font>', card['fun_stats_markup'])
+        self.assertIn('<font color="#123456">Effective against a target type.</font>', card['fun_stats_markup'])
 
     def test_null_presentation_entries_are_skipped(self):
         # Cooked data holds null references in these lists (in Startup.upk the Torgue pistol weapon type's and one
@@ -571,9 +571,9 @@ class NativeRuleTests(unittest.TestCase):
         self.assertEqual((card['rarity_level'], card['rarity_rating'], card['rarity']), (6, None, 5))  # no table
         objects[s.GLOBALS] = {'RarityLevelColors': [
             {'MinLevel': 1, 'MaxLevel': 5, 'Color': {'R': 1, 'G': 2, 'B': 3}, 'RarityRating': 'RARITY_Uncommon'},
-            {'MinLevel': 6, 'MaxLevel': 9, 'Color': {'R': 255, 'G': 0, 'B': 16}, 'RarityRating': 'RARITY_Legendary'}]}
+            {'MinLevel': 6, 'MaxLevel': 9, 'Color': {'R': 171, 'G': 205, 'B': 239}, 'RarityRating': 'RARITY_Legendary'}]}
         card = s.evaluate(FakePackage(objects), recipe(), level=1)['card']
-        self.assertEqual((card['rarity_level'], card['rarity'], card['rarity_color']), (6, 5, '#FF0010'))
+        self.assertEqual((card['rarity_level'], card['rarity'], card['rarity_color']), (6, 5, '#ABCDEF'))
 
     def test_plain_float_base_is_single_precision(self):
         # Invented: a 2.1 s reload under a -20 % scale. As a float 2.1 is 2.0999999, so the stack

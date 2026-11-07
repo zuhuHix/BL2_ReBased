@@ -167,9 +167,9 @@ on 2026-10-03 by reading the live objects through the SDK, game at the main menu
 Real inspect-view and first-person captures of the slice Maliwan fire pistol (exact parts) and the slice Jakobs
 pistol (exact parts) plus a save Jakobs revolver. An independent critic agent compared them with the host stills
 (an agent's judgement, not a measurement of parity): **Maliwan 4.5/10, Jakobs 3/10** (inspect vs host thumbnail),
-**4/10 and 4/10** first person; the earlier 6.5 and 5.0 were scored against wiki screenshots. Region medians (sRGB,
-real inspect vs host thumbnail): Maliwan white body (241,239,228) vs (141,136,116), Maliwan orange (236,128,0) hue 32
-vs (166,32,0) hue 11, Jakobs wood (142,130,108) vs (62,54,42), Jakobs frame (210,209,207) vs (72,76,88). Its main
+**4/10 and 4/10** first person; the earlier 6.5 and 5.0 were scored against wiki screenshots. Region medians
+(sRGB, real inspect vs host thumbnail; values in `local/gunlook/measured_colours.md`, ignored): the host read about a third to 60 percent of the real
+brightness on the Maliwan body, Jakobs wood and Jakobs frame, and the Maliwan orange's hue sat about 20 degrees toward red. Its main
 findings: the host is far too dark even in unlit albedo (a colour-space hypothesis), the Maliwan orange hue is wrong
 regardless of lighting, the Jakobs frame is near-white with sparse rust in the game, inserts are light grey mesh on the
 Maliwan, and the game shows element glow (red barrel slot and windows) the host lacks. The real first-person shots

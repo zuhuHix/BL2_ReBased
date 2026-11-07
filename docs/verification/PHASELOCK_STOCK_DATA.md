@@ -1056,7 +1056,7 @@ target query. The first attempt applied +3.5 degrees before the cast and missed 
 inside a 0.258 magnet radius. The host's +0.80 s wash boundary, measured as the strongest row-to-row luminance change over
 x=80..1199, moved from row 470 in the previous host frame to row 533; the real-game boundary spans rows 517-523 (peak at
 518). This is a 63 px correction from the old host frame and leaves the new boundary about 15 px below the reference.
-The host remains slightly brighter in the same broad strip (mean RGB at rows 500-509: 183,225,249; reference: 172,214,241),
+The host remains slightly brighter in the same broad strip (mean RGB at rows 500-509: 183,225,249, about 10 above the reference in each channel),
 but the scenes differ (Sanctuary versus Three Horns), so that is not an isolated material measurement. `InitialFlash`
 Overbright remains at its existing value 1; this pair does not justify changing it.
 

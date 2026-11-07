@@ -93,7 +93,7 @@ RECORDS = [
     ('F', 11, 'MonetaryValueMod', 3),
     ('F', 12, 'Name', 'Wrong', '5.0', '1.0', '100.0', 'maker:Other'),
     ('F', 13, 'Name', 'Late', '0.9', '5.0', '100.0', 'any'),       # only from level 5
-    ('F', 14, 'Line', 'Hot stuff', '#DC4646', '1', '• <font color="#DC4646">Hot stuff</font>'),
+    ('F', 14, 'Line', 'Hot stuff', '#ABCDEF', '1', '• <font color="#ABCDEF">Hot stuff</font>'),
     ('B', 0, 1, 'Test.Makers.Acme', '0'),
     ('S', 0, 'Body', 2, 'flat', -1, -1),
     ('S', 0, 'Body', 3, 4, -1, 3),
@@ -102,7 +102,7 @@ RECORDS = [
     ('S', 0, 'Barrel', 6, 'flat', -1, -1),
     ('S', 0, 'Barrel', 7, 9, -1, -1),
     ('G', 'rarity', '1.0', '1.0', 'RARITY_Common', '#FFFFFF'),
-    ('G', 'rarity', '2.0', '2.0', 'RARITY_Uncommon', '#3DD20B'),
+    ('G', 'rarity', '2.0', '2.0', 'RARITY_Uncommon', '#123456'),
     ('G', 'round', 'damage', 'ATTRROUNDING_IntCeil', '1.0'),
     ('G', 'round', 'magazine', 'ATTRROUNDING_IntFloor', '1.0'),
     ('G', 'round', 'fire_rate', 'ATTRROUNDING_Float', '1.0'),
@@ -240,13 +240,13 @@ class WeaponGenTests(unittest.TestCase):
     def test_rarity_price_level_and_text(self):
         card = self.gun(1, 1)['card']
         # Rarity: trunc(1.0) + trunc(1.9) = 2 -> the Uncommon row.
-        self.assertEqual((card['rarity_level'], card['rarity'], card['rarity_color']), (2, 2, '#3DD20B'))
+        self.assertEqual((card['rarity_level'], card['rarity'], card['rarity_color']), (2, 2, '#123456'))
         # Price: part total 2 (type) * 2 (Body.A) * 1.5 (prefix Sharp) = 6, * 50 = 300; not a checked
         # calculator.
         self.assertEqual((card['sale_value'], card['sale_value_known']), (300, False))
         self.assertEqual((card['level_requirement'], card['level_line']), (1, False))
         self.assertEqual(card['fun_stats'], 'Hot stuff')
-        self.assertEqual(card['fun_stats_markup'], '• <font color="#DC4646">Hot stuff</font>')
+        self.assertEqual(card['fun_stats_markup'], '• <font color="#ABCDEF">Hot stuff</font>')
         self.assertEqual((card['manufacturer'], card['projectiles'], card['shot_cost']), ('Acme', 1, 1.0))
         late = self.gun(8, 1)['card']
         # Stage 8: prefix Late has no modifier: 2 * 2 * 50 = 200.
