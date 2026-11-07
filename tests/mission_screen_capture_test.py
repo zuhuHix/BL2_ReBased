@@ -430,7 +430,7 @@ def test_the_finalizer_restores_the_setting_or_holds_for_recovery():
             script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
                               .replace('__OUT__', tmp).replace('__SETUP__', setup.replace('__TMP__', tmp) + extra).replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true')
                               .replace('__STUBS__', 'function Remove-Driver { }').replace('__BODY__', finish).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc).replace('__CLEAN__', '$true'), encoding='utf-8-sig')
-            done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+            done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp, LOCALAPPDATA=tmp), timeout=180)
             done.file_bytes = (Path(tmp) / 'mod.json').read_bytes()
             done.hub_lock_kept = (Path(tmp) / 'hub.lock').exists()
             return done
@@ -445,17 +445,119 @@ def test_the_finalizer_restores_the_setting_or_holds_for_recovery():
     assert done.returncode == 1 and 'cleanup mod_setting: NOT RESTORED' in done.stdout and done.file_bytes == bytes([9]) and done.hub_lock_kept is True, done.stdout + done.stderr
 
 
+def test_a_refusal_before_the_launch_does_not_restore_the_roots():
+    # The setting was changed, or its compare refused, and no game launched: the roots must not be restored over newer files, and the one file still comes back.
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    tail = text[text.index('\n} catch {\n    $runError') + 1:]
+    with tempfile.TemporaryDirectory() as tmp:
+        setup = mod_functions() + f"$modFile = '{tmp}\\mod.json'; $modWritten = $true; $modPrior = [byte[]](1, 2, 3)\n[IO.File]::WriteAllBytes($modFile, [byte[]](9))\n"
+        script = Path(tmp) / 'driver.ps1'
+        # base.TAIL's Restore-VerifiedRoots is replaced by one that leaves a mark, which must not appear.
+        stub = f"function Remove-Driver {{ }}\nfunction Restore-VerifiedRoots {{ Set-Content '{tmp}\\ROOTS_RESTORED' x; [pscustomobject]@{{ rows = @(); summary = 'x'; clean = $true }} }}"
+        script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp).replace('__OUT__', tmp).replace('__SETUP__', setup)
+                          .replace('__LAUNCHED__', '$false').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true').replace('__STUBS__', stub)
+                          .replace('__BODY__', "throw 'the mod setting differs from its verified backup; not changing it'").replace('__CAPTURE_TAIL__', tail).replace('__PROC__', '$null').replace('__CLEAN__', '$true'), encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp, LOCALAPPDATA=tmp), timeout=180)
+        assert done.returncode == 1 and 'not touched: this run launched no game' in done.stdout, done.stdout + done.stderr
+        assert not (Path(tmp) / 'ROOTS_RESTORED').exists(), done.stdout
+        assert (Path(tmp) / 'mod.json').read_bytes() == bytes([1, 2, 3]) and 'cleanup mod_setting: restored, identical' in done.stdout, done.stdout
+
+
+def test_a_killed_run_leaves_a_record_and_the_next_one_refuses_and_says_how():
+    done = run_ps(r"""
+$env:LOCALAPPDATA = $tmp
+Assert-NoModPending
+Write-Output 'no record, no refusal'
+$file = Join-Path $tmp 'mod.json'
+[IO.File]::WriteAllBytes($file, [byte[]](9))
+Save-ModPending $file ([byte[]](1, 2, 3)) 'C:\\some\\backup' 'test'
+try { Assert-NoModPending; Write-Output 'NOT REFUSED' } catch { Write-Output "refused: $_" }
+Write-Output ('file untouched: ' + (Test-SameBytes ([IO.File]::ReadAllBytes($file)) ([byte[]](9))))
+""")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert 'no record, no refusal' in done.stdout and 'NOT REFUSED' not in done.stdout, done.stdout
+    for needle in ('refused: A previous mission screen run', 'mod.json', 'AQID', 'some', 'WriteAllBytes', 'Then delete', 'file untouched: True'):
+        assert needle in done.stdout, (needle, done.stdout)
+
+
+def test_the_finalizer_removes_the_record_only_when_the_bytes_are_back():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    tail = text[text.index('\n} catch {\n    $runError') + 1:]
+    for extra, proc, kept in (('', '$null', False), ("function Restore-ModSetting { throw 'disk full' }\n", '$null', True), ('', '[pscustomobject]@{ HasExited = $false; Id = 1 }', True)):
+        with tempfile.TemporaryDirectory() as tmp:
+            setup = mod_functions() + f"$env:LOCALAPPDATA = '{tmp}'; $modFile = '{tmp}\\mod.json'; $modWritten = $true; $modPrior = [byte[]](1, 2, 3)\n[IO.File]::WriteAllBytes($modFile, [byte[]](9))\nSave-ModPending $modFile $modPrior 'bak' 'test'\n" + extra
+            script = Path(tmp) / 'driver.ps1'
+            script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp).replace('__OUT__', tmp).replace('__SETUP__', setup)
+                              .replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true').replace('__STUBS__', 'function Remove-Driver { }')
+                              .replace('__BODY__', "$stagesDone.Add('hit')").replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc).replace('__CLEAN__', '$true'), encoding='utf-8-sig')
+            subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
+            assert (Path(tmp) / 'OpenWillow/mission_screen_mod_pending.json').exists() is kept, (extra, proc)
+
+
+def test_the_mod_proof_runs_against_the_real_shape():
+    # As installed: the package's attribute named mod_list is its submodule, not a list, and get_ordered_mod_list() is the public way. A form that iterates mod_list would fail here.
+    probe = load_probe()
+    mod = lambda name, enabled, settings: types.SimpleNamespace(name=name, is_enabled=enabled, settings_file=None if settings is None else Path(settings))
+    fake = types.ModuleType('mods_base')
+    fake.mod_list = types.ModuleType('mods_base.mod_list')
+    fake.get_ordered_mod_list = lambda: [mod('Base', True, 'python-sdk.json'), mod('NoFile', True, None), mod('BUIC', state, 'x/BetterUIControls.json')]
+    sys.modules['mods_base'] = fake
+    for state, ok in ((False, True), (True, False)):
+        result = probe.ms_mod_state('BetterUIControls.json')
+        assert result['ok'] is ok and result['names'] == ['BUIC'], result
+    # Not there at all, or two with that file: not proof.
+    fake.get_ordered_mod_list = lambda: [mod('Base', True, 'python-sdk.json')]
+    assert probe.ms_mod_state('BetterUIControls.json')['ok'] is False
+    fake.get_ordered_mod_list = lambda: [mod('A', False, 'BetterUIControls.json'), mod('B', False, 'BetterUIControls.json')]
+    assert probe.ms_mod_state('BetterUIControls.json')['ok'] is False
+    text = CAPTURE.read_text(encoding='utf-8')
+    assert "ms_mod_state('BetterUIControls.json')" in text and '$log.mod_off.ok -ne $true' in text and ".mod_list" not in text
+
+
+def test_an_open_needs_a_closed_baseline_and_its_own_mark():
+    probe = load_probe()
+    fresh(probe)
+    hook(probe, 'Start', 'post', True)            # opened before the mark
+    probe.ms_mark('open_x_1')
+    assert probe.ms_opened('open_x_1')['opened'] is False
+    hook(probe, 'Start', 'post', False)           # refused after it
+    assert probe.ms_opened('open_x_1')['opened'] is False
+    hook(probe, 'Start', 'post', True)
+    assert probe.ms_opened('open_x_1')['opened'] is True
+    assert probe.ms_opened('no_such_mark')['opened'] is False
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    opening = text[text.index('function Open-Screen('):text.index('function Get-KeysNotDelivered')]
+    places = [opening.index(n) for n in ("ms_read('${Label}_baseline_$try')", 'if ($base.open -ne $false) { throw', "ms_mark('$mark')", 'Send-Key E', "ms_opened('$mark')", ".opened -eq $true) { return $row }")]
+    assert places == sorted(places), places
+
+
+def test_every_keyboard_key_needs_its_delivery():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    for needle in ("Get-KeysNotDelivered 'offer' @('W', 'A', 'S', 'D', 'F', 'E')", "Get-KeysNotDelivered 'turnin' @('W', 'S', 'E')", "Get-KeysNotDelivered 'reward' @('W', 'S', 'E', 'Esc')", "Set-Stage 'turnin_keys'", "Set-Stage 'reward_keys' ($missing.Count -eq 0)"):
+        assert needle in text, needle
+    start = text.index('function Get-KeysNotDelivered')
+    body = text[start:text.index('\n}\n', start) + 3]
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'keys.ps1'
+        script.write_text(body + """
+$log = @{ delivered_x_W = [pscustomobject]@{ delivered = $true }; delivered_x_S = [pscustomobject]@{ delivered = $false } }
+Write-Output ('missing=' + ((Get-KeysNotDelivered 'x' @('W', 'S', 'E')) -join ','))
+Write-Output ('count=' + @(Get-KeysNotDelivered 'x' @('W')).Count)
+""", encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=60)
+    assert 'missing=S,E' in done.stdout and 'count=0' in done.stdout, done.stdout + done.stderr
+
+
 def test_the_capture_refuses_and_proves_before_any_key():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     # Refused before any lock or backup; written after the launch flag, so the restore covers it, and last before the launch; proved in the game before any key.
-    order = ['$null = Get-ModOffBytes', '$hubDeadline = (Get-Date)', 'Backup-Saves', "$driverAttempted = $true", "$launchAttempted = $true", "sdk_settings\\BetterUIControls.json", '$log.mod_setting_prior_base64', '$modWritten = $true',
-             '[IO.File]::WriteAllBytes($modFile, $modOff)', '$proc = Start-Game $gameArgs', 'Assert-SavesBlocked (Py', '$log.mod_off = PyJson', 'Send-Key Enter; Start-Sleep 45']
+    order = ['Assert-NoModPending', '$null = Get-ModOffBytes', '$hubDeadline = (Get-Date)', 'Backup-Saves', "$driverAttempted = $true", "sdk_settings\\BetterUIControls.json", '$log.mod_setting_prior_base64', 'Save-ModPending $modFile', '$modWritten = $true',
+             '[IO.File]::WriteAllBytes($modFile, $modOff)', '$launchAttempted = $true', '$proc = Start-Game $gameArgs', 'Assert-SavesBlocked (Py', '$log.mod_off = PyJson', 'Send-Key Enter; Start-Sleep 45']
     body = text.index('try {\n    # Preflight')
     places = [text.index(needle, body) for needle in order]
     assert places == sorted(places), list(zip(order, places))
-    assert "m.settings_file.name == 'BetterUIControls.json'" in text and "@($log.mod_off.enabled)[0] -ne $false" in text
     # Only this file: no other settings file is written.
-    assert text.count('WriteAllBytes') == 2
+    assert text.count('[IO.File]::WriteAllBytes($') == 2   # the recovery message only names the call, for a person to run
 
 
 def test_the_session_records_the_mods():
@@ -467,7 +569,7 @@ def test_the_session_records_the_mods():
 
 def test_the_capture_sees_what_each_stage_claims():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
-    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true", "Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true",
+    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($missing.Count -eq 0", "Set-Stage 'turnin_keys' ($missing.Count -eq 0", "Set-Stage 'reward_keys' ($missing.Count -eq 0",
                    "Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0)", 'if ($log.before.status -ne 0) { throw', "if ($map -notmatch 'Sanctuary')",
                    '$null = switch ($Key)', "$after = Test-Key 'after' 'Esc'"):
         assert needle in text, needle
@@ -475,7 +577,7 @@ def test_the_capture_sees_what_each_stage_claims():
     stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
     assert 'Send-Key Esc' not in stages
     requested = text[text.index('$stagesRequested = @('):].split('\n')[0]
-    for stage in ('hooks', 'mod_off', 'offer_keys', 'offer_esc', 'reward_keys', 'hook_errors'):
+    for stage in ('hooks', 'mod_off', 'offer_keys', 'offer_esc', 'turnin_keys', 'reward_keys', 'hook_errors'):
         assert f"'{stage}'" in requested, stage
 
 
@@ -512,6 +614,12 @@ if __name__ == '__main__':
     test_the_mod_setting_comes_back_byte_identical()
     test_the_finalizer_restores_the_setting_or_holds_for_recovery()
     test_the_capture_refuses_and_proves_before_any_key()
+    test_a_refusal_before_the_launch_does_not_restore_the_roots()
+    test_a_killed_run_leaves_a_record_and_the_next_one_refuses_and_says_how()
+    test_the_finalizer_removes_the_record_only_when_the_bytes_are_back()
+    test_the_mod_proof_runs_against_the_real_shape()
+    test_an_open_needs_a_closed_baseline_and_its_own_mark()
+    test_every_keyboard_key_needs_its_delivery()
     test_the_session_records_the_mods()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()

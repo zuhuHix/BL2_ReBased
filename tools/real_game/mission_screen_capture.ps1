@@ -44,6 +44,23 @@ function Restore-ModSetting([string]$File, [byte[]]$Prior) {
     if (!(Test-SameBytes ([IO.File]::ReadAllBytes($File)) $Prior)) { throw "$File still differs after writing the prior bytes" }
     'restored, identical'
 }
+# A durable record, written before the setting is, so that a run killed before its finally leaves the way back. Outside the install and any worktree, next to the machine's run lock.
+function Get-ModPendingFile { Join-Path $env:LOCALAPPDATA 'OpenWillow\mission_screen_mod_pending.json' }
+function Save-ModPending([string]$File, [byte[]]$Prior, [string]$Backup, [string]$Lane) {
+    $pending = Get-ModPendingFile
+    New-Item -ItemType Directory -Force (Split-Path -Parent $pending) | Out-Null
+    [ordered]@{ file = $File; prior_base64 = [Convert]::ToBase64String($Prior); backup = $Backup; lane = $Lane; written = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding UTF8
+    if ((Get-Content -Raw -LiteralPath $pending | ConvertFrom-Json).prior_base64 -cne [Convert]::ToBase64String($Prior)) { throw "the pending record $pending did not read back" }
+}
+# Refuses while a record is there, and says exactly how to recover. It restores nothing itself: the setting may have been changed on purpose since.
+function Assert-NoModPending {
+    $pending = Get-ModPendingFile
+    if (!(Test-Path -LiteralPath $pending)) { return }
+    $record = Get-Content -Raw -LiteralPath $pending
+    $file = try { ($record | ConvertFrom-Json).file } catch { '(unreadable)' }
+    throw ("A previous mission screen run did not finish putting back $file, or was killed first. Nothing was changed by this run. The record is $pending :" + [Environment]::NewLine + $record + [Environment]::NewLine +
+        "Recovery, with Borderlands 2 closed: decide whether the setting should be put back, then in PowerShell: [IO.File]::WriteAllBytes('$file', [Convert]::FromBase64String('<prior_base64 from the record>')). The backup named in the record holds the same bytes. Then delete $pending and run again.")
+}
 # Mod setting end.
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
 function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json.dumps($Expr, default=str))" $Timeout | ConvertFrom-Json }
@@ -84,25 +101,38 @@ function Test-Keys([string]$Stage, [string[]]$Keys, [int]$Status) {
     $row
 }
 # Stand in front of Marcus and press E until his screen opens.
+# The screen must be closed first, and must open after this press: a screen already open would read as this E having opened it.
 function Open-Screen([string]$Label) {
     $row = $null
     for ($try = 1; $try -le 4; $try++) {
         $log["stand_$Label"] = PyJson 'fm_stand_in_front()'
+        $base = PyJson "ms_read('${Label}_baseline_$try')"
+        if ($base.open -ne $false) { throw "the screen is already open before the E for $Label (open $($base.open))" }
+        $mark = "open_${Label}_$try"
+        Py "print(ms_mark('$mark'))" | Out-Null
         Start-Sleep -Milliseconds 800; Assert-GameForeground; $null = Send-Key E
         $row = Read-After $Label 1.0
-        if ($row.open) { return $row }
+        $log["opened_${Label}_$try"] = PyJson "ms_opened('$mark')"
+        if ($row.open -and $log["opened_${Label}_$try"].opened -eq $true) { return $row }
         Start-Sleep 2
     }
+    $row | Add-Member -Force -NotePropertyName open -NotePropertyValue $false
     $row
+}
+# Which of these keys never reached the screen's handler. A key that was never pressed, because the page closed or a key changed the status first, counts as not reached.
+function Get-KeysNotDelivered([string]$Stage, [string[]]$Keys) {
+    @($Keys | Where-Object { $log["delivered_${Stage}_$_"].delivered -ne $true })
 }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @('hooks', 'mod_off', 'start', 'offer', 'offer_keys', 'offer_esc', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors')
+$stagesRequested = @('hooks', 'mod_off', 'start', 'offer', 'offer_keys', 'offer_esc', 'accept', 'ready', 'turnin', 'turnin_keys', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors')
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
+# Said per key, so that a key with no delivery read is not taken for one that had it.
+$log.keys_without_delivery_read = [ordered]@{ Mouse = 'movement is not a key, so the key handler has nothing to show; only the view and position reads say anything about it' }
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $modWritten = $false; $modPrior = $null; $driverAttempted = $false; $launchAttempted = $false
 # A token on the game's command line that identifies the process this run started (Stop-OwnGame checks it with the
@@ -120,6 +150,7 @@ try {
         try { $log.sdk_mods_settings[$file.BaseName] = (Get-Content -Raw -LiteralPath $file.FullName | ConvertFrom-Json) } catch { $log.sdk_mods_settings[$file.BaseName] = "unreadable: $_" }
     }
     # Refuse before any lock or backup if the setting cannot be changed: reading only.
+    Assert-NoModPending
     $modFile = Join-Path $modsRoot 'settings\BetterUIControls.json'
     if (!(Test-Path -LiteralPath $modFile)) { throw "no ${modFile}: not changing anything" }
     $null = Get-ModOffBytes ([IO.File]::ReadAllBytes($modFile))
@@ -152,28 +183,30 @@ try {
     if ($Character) { $gameArgs += "-Character=$Character" }
     $foreign = Get-ForeignGamesSeen $null
     if ($foreign) { throw "Borderlands2 (pid $foreign) started during the setup; not launching a second one" }
-    $launchAttempted = $true
-    # The last change before the launch, so that the finalizer's restore covers it. Its copy in the verified backup must be the same bytes, or the restore could not bring them back.
+    # The last change before the launch. Its copy in the verified backup must be the same bytes. The launch flag stays right at the launch: a refusal here launched nothing, so the
+    # finalizer must not restore the roots over newer files; its own block puts this one file back.
     $modPrior = [IO.File]::ReadAllBytes($modFile)
     if (!(Test-SameBytes ([IO.File]::ReadAllBytes((Join-Path $bak 'sdk_settings\BetterUIControls.json'))) $modPrior)) { throw 'the mod setting differs from its verified backup; not changing it' }
     $modOff = Get-ModOffBytes $modPrior
     $log.mod_setting_prior_base64 = [Convert]::ToBase64String($modPrior)
+    Save-ModPending $modFile $modPrior $bak $Lane
     $modWritten = $true   # before the write: a failure inside still restores
     [IO.File]::WriteAllBytes($modFile, $modOff)
     if (!(Test-SameBytes ([IO.File]::ReadAllBytes($modFile)) $modOff)) { throw 'the mod setting did not take the change' }
+    $launchAttempted = $true
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'mission_screen/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     # Proof from the running game, before any key: otherwise E would still be the mod's, and read as stock.
-    $log.mod_off = PyJson "{'enabled': [m.is_enabled for m in __import__('mods_base').mod_list if m.settings_file is not None and m.settings_file.name == 'BetterUIControls.json']}"
-    if (@($log.mod_off.enabled).Count -ne 1 -or @($log.mod_off.enabled)[0] -ne $false) { throw "Better UI Controls is not off in the running game: $($log.mod_off | ConvertTo-Json -Compress)" }
+    foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null }
+    $log.mod_off = PyJson "ms_mod_state('BetterUIControls.json')"
+    if ($log.mod_off.ok -ne $true) { throw "Better UI Controls is not off in the running game: $($log.mod_off | ConvertTo-Json -Compress)" }
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'mission_screen/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
-    foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null }
     $log.hooks = PyJson 'ms_start()'
     Set-Stage 'mod_off' ($true) ''   # the throw above is the check
     Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0) "functions not found, so their rows can never come: $(@($log.hooks.missing) -join '; ')"
@@ -190,7 +223,9 @@ try {
     # With the mod off, E and WASD are the game's own. Space is left out (an earlier run: one press accepted, through the movie). E comes last among the tests; a key that accepts is a finding, and
     # the run goes on from there. Mod still acting would show as an Enter after E's mark.
     $row = Test-Keys 'offer' @('Mouse', 'W', 'A', 'S', 'D', 'F', 'E') 0
-    Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true -and @($log.delivered_offer_E.seen) -notcontains 'Enter') "E did not reach the handler alone: $($log.delivered_offer_E | ConvertTo-Json -Compress)"
+    # The mouse has no delivery read (the handler gets no mouse movement): only the view and position say anything about it.
+    $missing = Get-KeysNotDelivered 'offer' @('W', 'A', 'S', 'D', 'F', 'E')
+    Set-Stage 'offer_keys' ($missing.Count -eq 0 -and @($log.delivered_offer_E.seen) -notcontains 'Enter') "not delivered: $($missing -join ', '); E's rows: $($log.delivered_offer_E | ConvertTo-Json -Compress)"
     $accept = $row
     if ($row.status -eq 0) {
         $esc = Test-Key 'offer' 'Esc'
@@ -223,6 +258,8 @@ try {
     # Enter, as at the offer: E here would be the mod's. The mark is before it.
     Py "print(ms_mark('turnin_enter'))" | Out-Null
     $row = Test-Keys 'turnin' @('Mouse', 'W', 'S', 'E') 3
+    $missing = Get-KeysNotDelivered 'turnin' @('W', 'S', 'E')
+    Set-Stage 'turnin_keys' ($missing.Count -eq 0 -and @($log.delivered_turnin_E.seen) -notcontains 'Enter') "not delivered: $($missing -join ', '); E's rows: $($log.delivered_turnin_E | ConvertTo-Json -Compress)"
     if ($row.status -eq 3) { $turned = Test-Key 'turnin' 'Enter' }
     foreach ($at in '0.5', '1.0', '1.5') { Read-After "reward_$at" 0.4 | Out-Null }
     Start-Sleep 2; $page = Read-After 'reward_page'
@@ -237,7 +274,8 @@ try {
         if ($last.open) { Py "print(ms_mark('reward_press_$key'))" | Out-Null; $last = Test-Key 'reward' $key }
     }
     $log.reward_closed_by_key_tests = !$last.open
-    Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true -and $log.delivered_reward_Esc.delivered -eq $true) "E or Esc never reached the reward page's handler: closed by a key test $($log.reward_closed_by_key_tests); $($log.delivered_reward_E | ConvertTo-Json -Compress) $($log.delivered_reward_Esc | ConvertTo-Json -Compress)"
+    $missing = Get-KeysNotDelivered 'reward' @('W', 'S', 'E', 'Esc')
+    Set-Stage 'reward_keys' ($missing.Count -eq 0) "not delivered: $($missing -join ', '); closed by a key test $($log.reward_closed_by_key_tests)"
     $after = $last
     $log.reward_after_keys = PyJson 'ms_reward_taken()'
     if ($after.open -and $log.reward_after_keys.count -eq 0) {
@@ -341,9 +379,13 @@ try {
     $modProblem = ''
     if ($modWritten) {
         if ($safe) {
-            try { $cleanup.mod_setting = Restore-ModSetting $modFile $modPrior }
-            catch { $modProblem = "$_"; $cleanup.mod_setting = "RESTORE FAILED: $_" }
-        } else { $cleanup.mod_setting = 'NOT RESTORED (a game may still run)' }
+            try {
+                $cleanup.mod_setting = Restore-ModSetting $modFile $modPrior
+                Remove-Item -LiteralPath (Get-ModPendingFile) -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath (Get-ModPendingFile)) { $cleanup.mod_setting += "; the pending record could not be removed: $(Get-ModPendingFile)" }
+            }
+            catch { $modProblem = "$_"; $cleanup.mod_setting = "RESTORE FAILED: $_ (the record stays: $(Get-ModPendingFile))" }
+        } else { $cleanup.mod_setting = "NOT RESTORED (a game may still run; the record stays: $(Get-ModPendingFile))" }
     }
     $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
     if ($modProblem) { $recovery = (@($recovery, "mod setting not restored ($modProblem)") | Where-Object { $_ }) -join '; ' }

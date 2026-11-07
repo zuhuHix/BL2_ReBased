@@ -107,6 +107,21 @@ def _ms_reads(rows):
     return [r["read"] for r in rows if "read" in r]
 
 
+def ms_mod_state(settings_name):
+    """The mod with this settings file, as the running game has it, through mods_base's public list. ok only if exactly one mod has that file and it is not enabled."""
+    import mods_base
+    found = [m for m in mods_base.get_ordered_mod_list() if m.settings_file is not None and m.settings_file.name == settings_name]
+    states = [bool(m.is_enabled) for m in found]
+    return {"names": [m.name for m in found], "enabled": states, "ok": states == [False]}
+
+
+def ms_opened(mark):
+    """Did the screen's Start succeed after this mark? A screen already open reads as open, and that is not this press having opened it."""
+    rows, marked = _ms_after(mark)
+    starts = [r for r in rows if r.get("tag") == "post" and r.get("func", "").endswith("QuestAcceptGFxMovie:Start")]
+    return {"marked": marked, "starts": len(starts), "opened": marked and any(_ms_truthy(r.get("ret")) for r in starts)}
+
+
 def ms_mark(name):
     MS["rows"].append({"t": _ms_now(), "tag": "mark", "func": name, "args": {}})
     return name
