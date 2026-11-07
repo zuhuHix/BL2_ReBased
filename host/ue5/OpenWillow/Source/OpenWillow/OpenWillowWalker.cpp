@@ -1775,6 +1775,15 @@ void AOpenWillowWalker::FireWeapon()
     }
     const FVector Start = Camera->GetComponentLocation();
     const FVector Muzzle = MuzzleLocation();
+    // Capture runs only: where each shot's flash starts, to set against the idle "gunprobe" muzzle and the frame.
+    static const bool bLogMuzzleAtSpawn = FParse::Param(FCommandLine::Get(), TEXT("owgunshots"));
+    if (bLogMuzzleAtSpawn)
+    {
+        const FVector FromEye = Muzzle - Start;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow gunshots muzzle at spawn %s t=%.3f: camera-space (%.2f, %.2f, %.2f), camera pitch %.2f"),
+            FiredItem ? *FiredItem->Id : TEXT("none"), GetWorld()->GetTimeSeconds(), FVector::DotProduct(FromEye, Camera->GetForwardVector()),
+            FVector::DotProduct(FromEye, Camera->GetRightVector()), FVector::DotProduct(FromEye, Camera->GetUpVector()), Camera->GetComponentRotation().Pitch);
+    }
     // Lane E's flame tint for plain and fire guns; elemental guns take their element's colour (the real Maliwan shock
     // pistol flashes blue; the per-element template pick is native, NATIVE_WEAPON_VISUALS 5).
     FLinearColor MuzzleTint(1.f, 0.22f, 0.025f, 1.f);
