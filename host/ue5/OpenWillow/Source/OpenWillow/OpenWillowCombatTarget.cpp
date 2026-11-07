@@ -430,6 +430,13 @@ void AOpenWillowCombatTarget::EndPhaselockNow(float Now)
 }
 float AOpenWillowCombatTarget::LiftedHeight() const { return Pivot->GetRelativeLocation().Z; }
 
+void AOpenWillowCombatTarget::ClearSwing()
+{
+    Wobble = FVector2D::ZeroVector;
+    WobbleVelocity = FVector2D::ZeroVector;
+    Pivot->SetRelativeRotation(FRotator(0.f, Pivot->GetRelativeRotation().Yaw, 0.f));
+}
+
 FVector AOpenWillowCombatTarget::AimPoint() const
 {
     if (HitVolume) return HitVolume->GetComponentLocation();
@@ -563,6 +570,7 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         KnockOrigin = HomeLocation;
         Pivot->SetRelativeScale3D(FVector(1.f));
         Pivot->SetRelativeLocation(FVector::ZeroVector);
+        ClearSwing();
         SetActorHiddenInGame(false);
         SetActorEnableCollision(true);
         OnRespawned();
@@ -815,6 +823,7 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
     StockMesh->SetRelativeRotation(FRotator::ZeroRotator);
     MeshExtraZ = 0.f;
     Pivot->SetRelativeLocation(FVector::ZeroVector);
+    ClearSwing();
     bRagdoll = false;
     bDead = false;
     Health = MaxHealth;
