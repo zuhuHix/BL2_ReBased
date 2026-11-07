@@ -148,10 +148,10 @@ duration oracle gives a ready success check (decoded length vs header duration).
 
 ## 4. Host plan
 
-Manifest `local/slice/audio.json` (schema `ow-audio-v1`, written by `tools/audio_slice_chain.py`, 18 entries now): per entry `key`, `kind`,
+Manifest `local/slice/audio.json` (schema `ow-audio-v1`, written by `tools/audio_slice_chain.py`; 49 entries on 2026-11-07): per entry `key`, `kind`,
 `trigger`, `ak_event {ue3_path, wwise_name, short_id}`, `banks`, `media[] {source, wem, bytes, codec, channels, sample_rate, duration_s, decoded}`,
-`duration_range_from_akevent`, `checks {fnv1_matches_short_id, wem_header_duration_within_akevent_range}`, `state`. States: `unresolved |
-extracted_undecoded | decoded_not_listened`; **all 18 are `extracted_undecoded`** and nothing is marked verified. Once a decoder is approved, drop
+`duration_range_from_akevent`, `checks {fnv1_matches_short_id, wem_header_duration_within_akevent_range}`, `state`. In `checks`, `null` means not compared and `false` means a comparison failed. States: `unresolved |
+extracted_undecoded | decoded_not_listened`; **all are `extracted_undecoded` that day** and nothing is marked verified. Once a decoder is approved, drop
 `<source>.wav` into `local/audio/decoded/` (or pass `--decoded-dir`) and re-run to fill `decoded`.
 
 Keys the host can use directly: `dialog:<event tag from --mission-run effect.a>`, `door:open` / `door:close`, `weapon:fire`, `weapon:equip`,
@@ -182,9 +182,9 @@ module or dependency). Without the option nothing changes.
 | `phaselock_cast` | the successful lift in the Walker's Phaselock cast | manifest `role:phaselock_cast`, `Ak_Play_FX_Player_Phaselock_Activate` | **UNVERIFIED**, one live session (below): posted in the same millisecond as the skill's `PhaseLockTarget`, one cast. Its name also matches PHASELOCK_STOCK_DATA.md |
 | `pickup` | `AOpenWillowInventoryPickup::TryPickup` when the item was added | none yet | candidates by name only, the `Ake_Obj_Pickup.Obj_Pickup` events; UNVERIFIED. Cash and ammo pickups take other paths and are not hooked |
 
-The two live roles were seen in one real-game session (2026-11-07, `feature/slice-audio-capture`, `docs/verification/SLICE_AUDIO_LIVE.md`, with the session's conditions and limits). That install is modded: other SDK mods were
+The two live roles were seen in one real-game session (2026-11-07): one map (Ice_P), one target, one Phaselock cast and the save's shotgun (`SG_Jakobs_2_Uncommon`), not the lent pistol, with logging-only hooks on the game's sound functions. A call made from native code to native code passes no hook, and these hooks saw no event for the shot itself, so an absence means "not seen there". That install is modded: other SDK mods were
 enabled, among them RTSE and Dialog Skipper with `Autoskip Dialog` on, which blocks dialog events from friendly NPCs, so heard lines and timing around lines from a live session are not stock. Neither role comes from a dialog event. They are not read
-from a package reference: the Wwise name is the object name without `Ak_` (holds for all 18 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`. Nothing here has been heard, and no game sound can play until a decoder is approved.
+from a package reference: the Wwise name is the object name without `Ak_` (holds for all 47 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`, and with no AkEvent range to compare with, so is the duration check. Nothing here has been heard, and no game sound can play until a decoder is approved.
 
 A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state, attenuation or ducking: every sound is 2D at full
 volume. Dialog is not hooked; the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.

@@ -171,12 +171,14 @@ class PrepareSliceAudioTest(unittest.TestCase):
 
     def test_the_live_roles_map_when_the_manifest_has_them(self):
         self.tone('1.wav')
+        self.tone('2.wav')
         data = {'schema': 'ow-audio-v1', 'entries': [{'key': 'role:hit', 'media': [{'source': 1, 'duration_s': 1.0}]},
-                                                     {'key': 'role:phaselock_cast', 'media': [{'source': 1, 'duration_s': 1.0}]}]}
+                                                     {'key': 'role:phaselock_cast', 'media': [{'source': 2, 'duration_s': 1.0}]}]}
         roles, unresolved = psa.build_play_map(data, self.dir)
-        self.assertEqual(len(roles['hit']), 1)
-        self.assertEqual(len(roles['phaselock_cast']), 1)
+        self.assertEqual(roles['hit'], [os.path.abspath(os.path.join(self.dir, '1.wav'))])
+        self.assertEqual(roles['phaselock_cast'], [os.path.abspath(os.path.join(self.dir, '2.wav'))])
         self.assertNotIn('hit', unresolved)
+        self.assertNotIn('phaselock_cast', unresolved)
 
     def test_tone_only_writes_the_map_without_a_manifest(self):
         out = os.path.join(self.dir, 'play.json')
