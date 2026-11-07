@@ -139,19 +139,19 @@ UModel/animation import already has to carry.
 Provenance and licences are in `THIRD_PARTY.md`. ww2ogg with revorb and an own converter were the other options; FFmpeg was ruled out above.
 
 Decode: `python tools/decode_slice_audio.py --vgmstream <path to vgmstream-cli.exe>` (or `OPENWILLOW_VGMSTREAM`), which runs `vgmstream-cli -i -o <source>.wav <source>.wem` per distinct source. `-i` ignores loop points: without it a
-looped file would come out longer than its header says. It keeps a file only when the decoder exited 0, the WAV passes the host's parser rules, and the length matches the `.wem` header. Output goes to ignored `local/audio/decoded/`, and the script refuses a folder elsewhere in the repository.
+looped file would come out longer than its header says. It keeps a file only when the decoder exited 0, the WAV passes the host's parser rules, its sample count, channels and rate equal the `.wem` header's exactly, and it is not all zeros. Output goes to ignored `local/audio/decoded/`, and the script refuses a folder elsewhere in the repository.
 
 **Benchmark (2026-11-07, zuhu PC, a few minutes of a 30-minute timebox):**
 
 | Set | Command | Elapsed | OK / failed | In | Out |
 |---|---|---|---|---|---|
-| Slice manifest, 153 distinct sources (in bank and streamed, sfx and English VO) | as above | 8.1 s | 153 / 0 | 4.1 MB | 26.8 MB |
+| Slice manifest, 153 distinct sources (in bank and streamed, sfx and English VO) | as above | 8.5 s | 153 / 0 | 4.1 MB | 26.8 MB |
 | 30 streamed sources beyond the slice, seeded sample, 15 from each base-game `Audio_Streaming.pck`; 424 s of audio; 24 to 48 kHz, mono and stereo | as above | 2.3 s | 30 / 0 | 7.0 MB | 67.0 MB |
 
 No unsupported types or duplicates in these sets (the tool decodes each source once); the whole install was not tried. On the 153:
 
-- every WAV's frame count equals the `.wem` header's sample count exactly, and channels and rate match. This is the first decode to confirm that header reading, previously only a duration oracle;
-- none is silent: lowest peak 12,533 of 32,767, median 32,632. This shows signal, not the right sound;
+- every WAV's frame count equals the `.wem` header's sample count exactly, and channels and rate match; the tool now requires this. This is the first decode to confirm that header reading, previously only a duration oracle;
+- none is silent, which the tool requires too, though only as "not all zeros". Observed by a one-off check, not by the tool: lowest peak 12,533 of 32,767, median 32,632. This shows signal, not the right sound;
 - each holds only `fmt ` and `data`, so the WAV rules on padded chunks do not come into play for this output;
 - a second decode of 10 was byte-identical;
 - the CLI exits `0xC0000135` (DLL not found) with only `libvorbis.dll` beside it, or with none: the bundled DLLs stay with it. The sound path itself uses Vorbis; which other DLLs it really calls was not measured.
