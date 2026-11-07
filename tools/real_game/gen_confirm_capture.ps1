@@ -69,7 +69,7 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'gen_confirm/boot.png' | Out-Null; throw 'driver did not answer' }
-    $log.block_saves = Py 'print(block_saves())'
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     # The title menu opens with Continue highlighted; a dialog may be up first (its OK takes the first Enter). Press
     # Enter and poll for a player pawn, up to three Enter presses.
     Start-Sleep 5; Focus-Game | Out-Null
