@@ -20,7 +20,7 @@ import time
 import unrealsdk
 from unrealsdk.hooks import Type, add_hook, remove_hook
 
-MS = globals().get("MS") or {"on": False, "rows": [], "hooks": [], "t0": None, "movie_path": None, "down": None, "missing": []}
+MS = globals().get("MS") or {"on": False, "rows": [], "hooks": [], "t0": None, "movie_path": None, "down": None, "missing": [], "hook_errors": 0, "hook_error_samples": []}
 MS_MISSION = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire"
 MS_TICK = "WillowGame.WillowGameViewportClient:Tick"
 MS_MAX_HITS = 8
@@ -40,8 +40,8 @@ MS_FUNCS = [("WillowGame.QuestAcceptGFxMovie", name, post) for name, post in (
     ("WillowGame.WillowPlayerController", "ClientSpawnMissionRewardUI", False), ("WillowGame.WillowPlayerController", "ClientShowNoRewardScreen", False),
     ("WillowGame.WillowPlayerController", "MissionRewardsReceived", False), ("WillowGame.WillowPlayerController", "AcceptOrSaveUnclaimedReward", False),
     ("WillowGame.WillowPlayerPawn", "ShowRespawnDialog", False), ("WillowGame.WillowPlayerPawn", "ClientShowRespawnDialog", False),
-    ("WillowGame.WillowPlayerPawn", "AwaitingRespawnDisplayRespawnCost", False), ("WillowGame.WillowPlayerPawn", "InjuredRespawn", False),
-    ("WillowGame.WillowPlayerPawn", "ResurrectAtLocation", False), ("WillowGame.WillowPlayerPawn", "GoFromInjuredToHealthy", False),
+    ("WillowGame.WillowPlayerPawn", "AwaitingRespawnDisplayRespawnCost", False), ("WillowGame.WillowPawn", "InjuredRespawn", False),
+    ("WillowGame.WillowPlayerPawn", "ResurrectAtLocation", False), ("WillowGame.WillowPawn", "GoFromInjuredToHealthy", False),
     ("WillowGame.WillowHUD", "ShowRespawnDialog", False)]
 # What the screen writes to its own movie (the host page has to write the same paths). Filtered to this movie: the HUD uses them too.
 MS_WRITES = ["SetVariableString", "SetVariableBool", "SetVariableNumber"]
@@ -179,7 +179,38 @@ def _ms_p(value):
     try:
         return value._path_name()
     except Exception:
-        return repr(value)[:160]
+        return str(value)[:160]   # an FName is not a str: its text is what the key rows compare
+
+
+def _ms_guard(hook):
+    """An exception in a hook is counted, never lost: a recording with errors fails its hook_errors stage."""
+
+    def guarded(obj, args, ret, func):
+        try:
+            hook(obj, args, ret, func)
+        except Exception as e:
+            MS["hook_errors"] += 1
+            if len(MS["hook_error_samples"]) < 5:
+                MS["hook_error_samples"].append(repr(e)[:200])
+
+    return guarded
+
+
+def ms_errors():
+    return {"hook_errors": MS["hook_errors"], "samples": MS["hook_error_samples"]}
+
+
+# What the game's own handler calls each key. The capture's names: Esc, Space.
+MS_KEY_NAMES = {"Esc": "Escape", "Space": "SpaceBar"}
+
+
+def ms_key_seen(mark):
+    """Did the screen's own key handler get this key after the mark key_<stage>_<key>? A key that never arrived would read as "this key does nothing"."""
+    rows, marked = _ms_after(mark)
+    key = mark.rsplit("_", 1)[-1]
+    wanted = MS_KEY_NAMES.get(key, key).lower()
+    seen = [str(r["args"].get("ukey")) for r in rows if r.get("tag") == "pre" and r.get("func", "").endswith(("HandleInputKey", "HandleRewardInputKey"))]
+    return {"marked": marked, "seen": seen[:8], "delivered": any(name.lower() == wanted for name in seen)}
 
 
 def _ms_args(args, func):
@@ -193,19 +224,15 @@ def _ms_args(args, func):
     return out
 
 
-def _ms_scalars(obj):
-    """The object's plain settings (flags, numbers, names), for the record of how the screen is set up."""
+def _ms_named(obj, names):
+    """The named plain settings; a name this class lacks reads as absent. Only these are touched: reading every property of a live movie is a risk this run does not need."""
     out = {}
-    try:
-        for q in obj.Class._properties():
-            try:
-                value = getattr(obj, q.Name)
-            except Exception:
-                continue
-            if isinstance(value, (bool, int, float, str)):
-                out[q.Name] = value
-    except Exception as e:
-        out["error"] = repr(e)[:100]
+    for name in names:
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        out[name] = value if isinstance(value, (bool, int, float, str)) else str(value)[:80]
     return out
 
 
@@ -273,21 +300,24 @@ def ms_stop():
 
 def ms_start():
     ms_stop()
-    MS.update(rows=[], t0=time.perf_counter(), on=True, movie_path=None, down=None, missing=[], cash_before=None)
+    MS.update(rows=[], t0=time.perf_counter(), on=True, movie_path=None, down=None, missing=[], cash_before=None, hook_errors=0, hook_error_samples=[])
     for cls, name, post in MS_FUNCS:
         path = f"{cls}:{name}"
+        # add_hook takes any string and such a hook never fires, so the name is looked up first.
+        try:
+            unrealsdk.find_object("Function", path)
+        except Exception as e:
+            MS["missing"].append(f"{path}: {e!r}"[:160])
+            continue
         for typ, tag in [(Type.PRE, "pre")] + ([(Type.POST, "post")] if post else []):
             ident = f"ow_ms_{tag}_{path}"
-            try:
-                add_hook(path, typ, ident, _ms_mk(path, tag))
-                MS["hooks"].append((path, typ, ident))
-            except Exception as e:
-                MS["missing"].append(f"{path}: {e!r}"[:160])
+            add_hook(path, typ, ident, _ms_guard(_ms_mk(path, tag)))
+            MS["hooks"].append((path, typ, ident))
     for name in MS_WRITES:
         path = f"GFxUI.GFxMoviePlayer:{name}"
-        add_hook(path, Type.PRE, f"ow_ms_write_{name}", _ms_write_hook(name))
+        add_hook(path, Type.PRE, f"ow_ms_write_{name}", _ms_guard(_ms_write_hook(name)))
         MS["hooks"].append((path, Type.PRE, f"ow_ms_write_{name}"))
-    add_hook(MS_TICK, Type.PRE, "ow_ms_tick", _ms_tick)
+    add_hook(MS_TICK, Type.PRE, "ow_ms_tick", _ms_guard(_ms_tick))
     MS["hooks"].append((MS_TICK, Type.PRE, "ow_ms_tick"))
     return {"hooks": len(MS["hooks"]), "missing": MS["missing"]}
 
@@ -296,15 +326,13 @@ def ms_read(label):
     pc = get_pc()
     world = pc.WorldInfo
     movie = _ms_movie()
-    row = {"label": label, "t": _ms_now(), "open": movie is not None, "game_time": world.TimeSeconds, "real_time": world.RealTimeSeconds,
-           "paused": _ms_p(world.Pauser), "view": [pc.Rotation.Pitch, pc.Rotation.Yaw]}
+    row = {"label": label, "t": _ms_now(), "open": movie is not None}
     pawn = pc.Pawn
-    if pawn is not None:
-        row["pos"] = [round(pawn.Location.X, 1), round(pawn.Location.Y, 1), round(pawn.Location.Z, 1)]
-        row["health"] = pawn.GetHealth()
-        row["state"] = str(pawn.GetStateName())
-        row["injured"] = bool(pawn.bIsInjured)
-    for key, fn in (("ignore_move", lambda: pc.IsMoveInputIgnored()), ("ignore_look", lambda: pc.IsLookInputIgnored()), ("exp", lambda: pc.GetExpPoints()),
+    # One field that this build answers differently must not cost the read: its error goes in the row.
+    for key, fn in (("game_time", lambda: world.TimeSeconds), ("real_time", lambda: world.RealTimeSeconds), ("paused", lambda: _ms_p(world.Pauser)),
+                    ("view", lambda: [pc.Rotation.Pitch, pc.Rotation.Yaw]), ("pos", lambda: [round(pawn.Location.X, 1), round(pawn.Location.Y, 1), round(pawn.Location.Z, 1)]),
+                    ("health", lambda: pawn.GetHealth()), ("state", lambda: str(pawn.GetStateName())), ("injured", lambda: bool(pawn.bIsInjured)),
+                    ("ignore_move", lambda: pc.IsMoveInputIgnored()), ("ignore_look", lambda: pc.IsLookInputIgnored()), ("exp", lambda: pc.GetExpPoints()),
                     ("cash", lambda: pc.PlayerReplicationInfo.GetCurrencyOnHand(0)), ("movie_playing", lambda: pc.IsMissionMoviePlaying()),
                     ("status", lambda: int(world.GRI.MissionTracker.GetMissionStatus(unrealsdk.find_object("MissionDefinition", MS_MISSION))))):
         try:
@@ -321,6 +349,11 @@ def ms_read(label):
             except Exception as e:
                 row[key + "_error"] = repr(e)[:100]
     MS["rows"].append({"read": row})
+    # Written at every read, so a stage that throws does not take the rows with it.
+    try:
+        ms_dump("screen")
+    except Exception as e:
+        row["dump_error"] = repr(e)[:100]
     return row
 
 
@@ -328,7 +361,8 @@ def ms_settings():
     movie = _ms_movie()
     if movie is None:
         return {"error": "the screen is not open"}
-    return {"movie": _ms_scalars(movie), "definition": _ms_scalars(movie.MissionUIDef) if movie.MissionUIDef else None}
+    return {"movie": _ms_named(movie, ("bPauseGameWhileActive", "bCaptureInput", "bIgnoreMouseInput", "bBlurLesserMovies", "bDisplayWithHudOff", "bCloseOnLevelChange", "TickRateSeconds")),
+            "definition": _ms_named(movie.MissionUIDef, ("bUsePPOverride",)) if movie.MissionUIDef else None}
 
 
 def _ms_objectives():
@@ -369,7 +403,7 @@ def ms_down():
 
 def ms_dump(name):
     with open(f"{RG_OUT}/{name}.json", "w", encoding="utf-8") as f:
-        json.dump({"rows": MS["rows"], "missing": MS["missing"]}, f, indent=1, default=str)
+        json.dump({"rows": MS["rows"], "missing": MS["missing"], "errors": ms_errors()}, f, indent=1, default=str)
     return len(MS["rows"])
 
 

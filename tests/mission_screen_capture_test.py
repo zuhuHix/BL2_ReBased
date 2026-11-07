@@ -273,6 +273,65 @@ def test_the_capture_stops_before_the_respawn_unless_the_screen_closed():
     assert not probe.ms_down()['refused'] and probe.MS['down'] and probe.MS['cash_before'] == 5
 
 
+def test_a_hook_error_is_counted_and_a_key_must_really_arrive():
+    probe = load_probe()
+    fresh(probe)
+    probe.MS.update(hook_errors=0, hook_error_samples=[])
+
+    def broken(obj, args, ret, func):
+        raise AttributeError('bound function has no Name')
+    probe._ms_guard(broken)(None, None, None, None)   # the bound-function mistake: counted, not lost
+    assert probe.ms_errors()['hook_errors'] == 1 and 'bound function' in probe.ms_errors()['samples'][0]
+
+    class FName:   # not a str, as the SDK's name values are not
+        def __init__(self, text):
+            self.text = text
+
+        def __str__(self):
+            return self.text
+    assert probe._ms_p(FName('E')) == 'E'
+    fresh(probe)
+    probe.ms_mark('key_offer_E')
+    assert probe.ms_key_seen('key_offer_E')['delivered'] is False      # pressed, never arrived
+    called(probe, 'HandleInputKey', 'QuestAcceptGFxMovie', ukey='W')
+    assert probe.ms_key_seen('key_offer_E')['delivered'] is False      # another key
+    called(probe, 'HandleInputKey', 'QuestAcceptGFxMovie', ukey='E')
+    assert probe.ms_key_seen('key_offer_E')['delivered'] is True
+    # Before the mark does not count, and the capture's key names map to the game's.
+    probe.ms_mark('key_reward_Esc')
+    assert probe.ms_key_seen('key_reward_Esc')['delivered'] is False
+    called(probe, 'HandleRewardInputKey', 'QuestAcceptGFxMovie', ukey='Escape')
+    assert probe.ms_key_seen('key_reward_Esc')['delivered'] is True
+    # A class that lacks a named setting costs nothing; every property is not walked.
+    assert probe._ms_named(types.SimpleNamespace(bCaptureInput=True), ('bCaptureInput', 'bAbsent')) == {'bCaptureInput': True}
+    # The respawn functions are hooked on the class that has them.
+    names = {(cls, name) for cls, name, _ in probe.MS_FUNCS}
+    assert ('WillowGame.WillowPawn', 'InjuredRespawn') in names and ('WillowGame.WillowPlayerPawn', 'InjuredRespawn') not in names
+    # add_hook takes any string: a name that does not resolve is reported, not hooked.
+
+    def nowhere(*a):
+        raise ValueError('no such function')
+    sys.modules['unrealsdk'].find_object = nowhere
+    probe.unrealsdk = sys.modules['unrealsdk']
+    started = probe.ms_start()
+    assert started['hooks'] == len(probe.MS_WRITES) + 1 and len(started['missing']) == len(probe.MS_FUNCS), started
+    probe.ms_stop()
+
+
+def test_the_capture_sees_what_each_stage_claims():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true)",
+                   "Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0)", 'if ($log.before.status -ne 0) { throw', "if ($map -notmatch 'Sanctuary')",
+                   '$null = switch ($Key)', '$esc = Test-Key'):
+        assert needle in text, needle
+    # Esc never goes out by itself in a stage: Test-Keys reopens a screen a key closed, and the reward's loop checks it is open.
+    stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
+    assert 'Send-Key Esc' not in stages
+    requested = text[text.index('$stagesRequested = @('):].split('\n')[0]
+    for stage in ('hooks', 'offer_keys', 'reward_keys', 'hook_errors'):
+        assert f"'{stage}'" in requested, stage
+
+
 def test_probe_helpers():
     probe = load_probe()
     first, second = probe.MS_TEXT[0], probe.MS_TEXT[1]
@@ -298,6 +357,8 @@ if __name__ == '__main__':
     test_the_reward_is_taken_once_by_a_marked_press_after_the_page()
     test_the_respawn_needs_the_order_and_the_money()
     test_the_capture_stops_before_the_respawn_unless_the_screen_closed()
+    test_a_hook_error_is_counted_and_a_key_must_really_arrive()
+    test_the_capture_sees_what_each_stage_claims()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
     test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed()

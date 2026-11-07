@@ -34,21 +34,37 @@ function Read-After([string]$Label, [double]$Wait = 0.6) {
     $row = PyJson "ms_read('$Label')"; Shot $Label; $log["read_$Label"] = $row; $row
 }
 # Press a key on an open screen (every send refuses without game focus); W is held for a second, Mouse moves the view. Esc goes only to a screen that is open: otherwise it opens the pause menu.
+# Returns the one read row, whatever the sends print. The mark proves the key reached the screen's own handler: a key that never arrived would read as "this key does nothing".
 function Test-Key([string]$Stage, [string]$Key) {
+    $mark = "key_${Stage}_$Key"
+    Py "print(ms_mark('$mark'))" | Out-Null
     Assert-GameForeground
-    switch ($Key) {
+    $null = switch ($Key) {
         'W' { Send-KeyDown W; Start-Sleep -Milliseconds 1000; Send-KeyUp W }
         'Mouse' { 1..10 | ForEach-Object { Send-Mouse 30 0; Start-Sleep -Milliseconds 30 } }
         default { Send-Key $Key }
     }
-    Read-After "${Stage}_after_$Key"
+    $row = Read-After "${Stage}_after_$Key"
+    if ($Key -ne 'Mouse') { $log["delivered_${Stage}_$Key"] = PyJson "ms_key_seen('$mark')" }
+    $row
+}
+# The key tests on a screen that must stay open for the next step. A key that closes it is a finding: logged, and the screen is opened again, so that nothing goes on to a closed screen.
+function Test-Keys([string]$Stage, [string[]]$Keys) {
+    foreach ($key in $Keys) {
+        $row = Test-Key $Stage $key
+        if (!$row.open) {
+            $log["${Stage}_closed_by_$key"] = $true
+            $row = Open-Screen "${Stage}_reopen_after_$key"
+            if (!$row.open) { throw "the screen did not open again after $key closed it ($Stage)" }
+        }
+    }
 }
 # Stand in front of Marcus and press E until his screen opens.
 function Open-Screen([string]$Label) {
     $row = $null
     for ($try = 1; $try -le 4; $try++) {
         $log["stand_$Label"] = PyJson 'fm_stand_in_front()'
-        Start-Sleep -Milliseconds 800; Assert-GameForeground; Send-Key E
+        Start-Sleep -Milliseconds 800; Assert-GameForeground; $null = Send-Key E
         $row = Read-After $Label 1.0
         if ($row.open) { return $row }
         Start-Sleep 2
@@ -60,7 +76,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @('start', 'offer', 'offer_esc', 'accept', 'ready', 'turnin', 'reward', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') })
+$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'offer_esc', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors')
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -113,17 +129,21 @@ try {
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
     foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null }
     $log.hooks = PyJson 'ms_start()'
+    Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0) "functions not found, so their rows can never come: $(@($log.hooks.missing) -join '; ')"
     $log.before = Read-After 'before'
+    if ($map -notmatch 'Sanctuary') { throw "not in Sanctuary, so Marcus is not here: $map" }
     Set-Stage 'start' ($log.before.status -eq 0) "the Fire mission is not at status 0 in this save (it is $($log.before.status))"
+    if ($log.before.status -ne 0) { throw "the Fire mission is at status $($log.before.status) in this save: there is no offer to read" }
 
     # 1. The offer: does E open a page first, and which keys does the page take? E again is the first test; Enter comes last, since it accepts.
     $row = Open-Screen 'offer'
     $log.settings = PyJson 'ms_settings()'
     Set-Stage 'offer' ($row.open -eq $true) 'E at Marcus did not open the screen'
     if (!$row.open) { throw 'the screen did not open at the offer' }
-    foreach ($key in 'E', 'W', 'Mouse', 'F', 'Space') { Test-Key 'offer' $key | Out-Null }
-    Assert-GameForeground; Send-Key Esc; $esc = Read-After 'offer_after_Esc'
-    Set-Stage 'offer_esc' ($esc.open -eq $false) 'Esc did not close the offer'
+    Test-Keys 'offer' @('E', 'W', 'Mouse', 'F', 'Space')
+    Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true) "E never reached the screen's handler, so nothing is known about what it does: $($log.delivered_offer_E | ConvertTo-Json -Compress)"
+    $esc = Test-Key 'offer' 'Esc'
+    Set-Stage 'offer_esc' ($esc.open -eq $false -and $esc.status -eq 0 -and $log.delivered_offer_Esc.delivered -eq $true) "Esc did not close the offer: open $($esc.open), status $($esc.status)"
     if ($esc.open) { throw 'the offer stayed open after Esc' }
     $row = Open-Screen 'offer_again'
     if (!$row.open) { throw 'the screen did not open again at the offer' }
@@ -142,9 +162,9 @@ try {
 
     # 3. The turn-in list, then the reward page, with the same key tests. Enter on the page is last: it takes the reward.
     $row = Open-Screen 'turnin'
-    Set-Stage 'turnin' ($row.open -eq $true) 'E at Marcus did not open the turn-in screen'
+    Set-Stage 'turnin' ($row.open -eq $true -and $row.status -eq 3) "E at Marcus did not open the turn-in screen: open $($row.open), status $($row.status)"
     if (!$row.open) { throw 'the screen did not open at the turn-in' }
-    foreach ($key in 'E', 'W', 'Mouse') { Test-Key 'turnin' $key | Out-Null }
+    Test-Keys 'turnin' @('E', 'W', 'Mouse')
     Py "print(ms_mark('turnin_enter'))" | Out-Null
     Assert-GameForeground; Send-Key Enter
     foreach ($at in '0.5', '1.0', '1.5') { Read-After "reward_$at" 0.4 | Out-Null }
@@ -159,6 +179,7 @@ try {
         if ($last.open) { Py "print(ms_mark('reward_press_$key'))" | Out-Null; $last = Test-Key 'reward' $key }
     }
     $log.reward_closed_by_key_tests = !$last.open
+    Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true) "E never reached the reward page's handler, so nothing is known about what it does: $($log.delivered_reward_E | ConvertTo-Json -Compress)"
     $after = $last
     if ($after.open) {
         Py "print(ms_mark('reward_press_Enter'))" | Out-Null
@@ -193,6 +214,8 @@ try {
         Py "print(ms_dump('screen'))" | Out-Null
         Set-Stage 'respawn' ($log.respawn.ok -eq $true) "no down, respawn, dialog and matching charge in order: $($log.respawn | ConvertTo-Json -Compress)"
     }
+    $log.hook_errors = PyJson 'ms_errors()'
+    Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0) "errors in the hooks, so rows may be missing: $($log.hook_errors | ConvertTo-Json -Compress)"
     Py 'print(ms_stop())' | Out-Null
     # The game may close before it answers this one.
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
