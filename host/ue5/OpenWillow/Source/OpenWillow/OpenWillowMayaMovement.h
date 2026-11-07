@@ -112,8 +112,9 @@ struct FEyeHeight
 float SprintFov(float BaseFovDegrees);
 // The horizontal camera angle at full zoom. The weapon's zoom value is scaled in tangent by the live default over the global default, which gives a
 // vertical angle, then widened by the aspect (confirmed at 1280x720, setting 90, zoom values 45 and 60: WEAPON_VISUALS.md section 24). Scaling with
-// another FOV setting is the host's assumption, UNVERIFIED, as are other zoom values.
-float AimedFov(float ZoomFovDegrees, float Aspect, float Bl2FovSetting);
+// another FOV setting is the host's assumption, UNVERIFIED, as are other zoom values. Fallback, the hip angle, when an input cannot give an angle: a zoom or
+// setting outside (1, 180) degrees or not finite, or an aspect not above 0.
+float AimedFov(float ZoomFovDegrees, float Aspect, float Bl2FovSetting, float FallbackDegrees);
 // Section 19: AdjustFOV's easing: lerp by dt x speed, snapping once it would overshoot.
 float EaseFov(float Current, float Target, float DeltaSeconds);
 

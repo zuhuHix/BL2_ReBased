@@ -2,6 +2,7 @@
 // walk bob, the eye height easing, the sprint FOV and falling damage. Inputs are invented; the expected values follow from
 // the rules' own constants (NATIVE_PLAYER_MOVEMENT.md), so this pins the host's arithmetic, not the game.
 // Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.MayaMovement; Quit"
+#include <limits>
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -52,10 +53,26 @@ bool FOpenWillowMayaMovementTest::RunTest(const FString&)
     TestTrue(TEXT("sprint FOV from 90"), FMath::IsNearlyEqual(SprintFov(90.f), Expected, 0.2f));
     TestTrue(TEXT("sprint FOV at the 16:9 vertical default is x 1.35"), FMath::IsNearlyEqual(SprintFov(43.0f), 43.0f * 1.35f, 0.2f));
     // Within a degree of the view turn measured on the real game's frames (about 79.5 and 98.5 horizontal at 16:9).
-    TestTrue(TEXT("aimed FOV at zoom 45"), FMath::IsNearlyEqual(AimedFov(45.f, 16.f / 9.f, 90.f), 79.5f, 1.f));
-    TestTrue(TEXT("aimed FOV at zoom 60"), FMath::IsNearlyEqual(AimedFov(60.f, 16.f / 9.f, 90.f), 98.5f, 1.f));
-    TestTrue(TEXT("a narrower window narrows the aimed FOV"), AimedFov(45.f, 4.f / 3.f, 90.f) < AimedFov(45.f, 16.f / 9.f, 90.f));
-    TestTrue(TEXT("a lower FOV setting narrows the aimed FOV"), AimedFov(45.f, 16.f / 9.f, 70.f) < AimedFov(45.f, 16.f / 9.f, 90.f));
+    const float Wide = 16.f / 9.f;
+    TestTrue(TEXT("aimed FOV at zoom 45"), FMath::IsNearlyEqual(AimedFov(45.f, Wide, 90.f, -1.f), 79.5f, 1.f));
+    TestTrue(TEXT("aimed FOV at zoom 60"), FMath::IsNearlyEqual(AimedFov(60.f, Wide, 90.f, -1.f), 98.5f, 1.f));
+    // The rule's own values, worked out by hand from its formula; no real frame checks these aspects or that setting.
+    TestTrue(TEXT("aimed FOV at 4:3"), FMath::IsNearlyEqual(AimedFov(45.f, 4.f / 3.f, 90.f, -1.f), 64.72f, 0.05f));
+    TestTrue(TEXT("aimed FOV at 21:9"), FMath::IsNearlyEqual(AimedFov(45.f, 21.f / 9.f, 90.f, -1.f), 95.91f, 0.05f));
+    TestTrue(TEXT("aimed FOV in a portrait window"), FMath::IsNearlyEqual(AimedFov(45.f, 9.f / 16.f, 90.f, -1.f), 29.93f, 0.05f));
+    TestTrue(TEXT("aimed FOV at setting 70"), FMath::IsNearlyEqual(AimedFov(45.f, Wide, 70.f, -1.f), 61.21f, 0.05f));
+    // Just inside the zoom's limits it still gives an angle; at them and beyond, the fallback.
+    TestTrue(TEXT("a zoom just above 1"), FMath::IsNearlyEqual(AimedFov(1.01f, Wide, 90.f, -1.f), 2.06f, 0.05f));
+    TestTrue(TEXT("a zoom just below 180"), FMath::IsNearlyEqual(AimedFov(179.f, Wide, 90.f, -1.f), 179.51f, 0.05f));
+    const float NotANumber = std::numeric_limits<float>::quiet_NaN();
+    const float Infinite = std::numeric_limits<float>::infinity();
+    for (const float Zoom : {0.f, 1.f, -45.f, 180.f, 181.f, 400.f, NotANumber, Infinite})
+    {
+        TestEqual(TEXT("a zoom that is no angle falls back"), AimedFov(Zoom, Wide, 90.f, 106.f), 106.f);
+    }
+    TestEqual(TEXT("a setting of 180 falls back"), AimedFov(45.f, Wide, 180.f, 106.f), 106.f);
+    TestEqual(TEXT("an aspect of 0 falls back"), AimedFov(45.f, 0.f, 90.f, 106.f), 106.f);
+    TestEqual(TEXT("an aspect that is no number falls back"), AimedFov(45.f, NotANumber, 90.f, 106.f), 106.f);
     float Fov = 90.f;
     for (int32 I = 0; I < 60; ++I) Fov = EaseFov(Fov, 100.f, 1.f / 60.f);
     TestTrue(TEXT("FOV eases most of the way in a second"), Fov > 99.f && Fov <= 100.f);
