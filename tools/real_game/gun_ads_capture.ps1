@@ -99,12 +99,17 @@ function Save-AimedFrame([string]$Gun) {
 # One state's FOV: the canvas projection, then two frames $TurnDegrees apart for the turn test, then the view back. The hook is off again whatever happens.
 $TurnDegrees = 4
 function Measure-ViewFov([string]$Name) {
-    $result = [ordered]@{ read = (PyJson 'ads_read()') }
+    $result = [ordered]@{ read = (PyJson 'ads_read()'); view_0 = (PyJson 'ads_view()') }
     $result.arm = PyJson 'ads_fov_arm()'
     try { Start-Sleep -Milliseconds 500 } finally { $result.canvas = PyJson 'ads_fov_read()' }
     $result.frame_0 = Save-GunFrame "gun_ads/fov/${Name}_0.png"
     PyJson "ads_turn($TurnDegrees)" | Out-Null
-    try { Start-Sleep -Milliseconds 400; $result.frame_turned = Save-GunFrame "gun_ads/fov/${Name}_$TurnDegrees.png" } finally { PyJson 'ads_turn(0)' | Out-Null }
+    try {
+        Start-Sleep -Milliseconds 400
+        $result.frame_turned = Save-GunFrame "gun_ads/fov/${Name}_$TurnDegrees.png"
+        # What was rendered, read back: the frame counts only if the camera really stood the turn away from the first.
+        $result.turned = PyJson "ads_turned_by($($result.view_0.camera_yaw_units), $TurnDegrees)"
+    } finally { PyJson 'ads_turn(0)' | Out-Null }
     Start-Sleep -Milliseconds 400
     [pscustomobject]$result
 }
@@ -205,7 +210,10 @@ try {
                         [pscustomobject]@{ before = $before; measured = $measured; foreground = $foreground; after = (PyJson 'ads_read()') }
                     }
                     $g.fov_released = Wait-Unzoomed
-                    Set-Stage "${id}_fov" (($g.fov_hip.read.zoom_state -ceq 'ZST_NotZoomed') -and $g.fov_zoom.before.zoomed -and $g.fov_zoom.after.zoomed -and ($g.fov_released.zoom_state -ceq 'ZST_NotZoomed')) 'a state was not the one measured'
+                    $states = ($g.fov_hip.read.zoom_state -ceq 'ZST_NotZoomed') -and $g.fov_zoom.before.zoomed -and $g.fov_zoom.after.zoomed -and ($g.fov_released.zoom_state -ceq 'ZST_NotZoomed')
+                    # A measure must answer: the turn at both states, since a canvas alone would leave the pixels unchecked. status: completed cannot mean nothing was measured.
+                    $turned = ($g.fov_hip.turned.moved -eq $true) -and ($g.fov_zoom.measured.turned.moved -eq $true)
+                    Set-Stage "${id}_fov" ($states -and $turned) "states as measured: $states; view turned at hip and zoom: $turned (canvas fired $($g.fov_hip.canvas.fired), $($g.fov_zoom.measured.canvas.fired) times)"
                 } catch { $g.fov_error = "$_"; Set-Stage "${id}_fov" $false "$_" }
             }
         } catch { $g.error = "$_"; Set-Stage $id $false "$_" }
