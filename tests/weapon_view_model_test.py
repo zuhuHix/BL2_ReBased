@@ -39,9 +39,14 @@ class ViewTableTests(unittest.TestCase):
             'sockets': {'Mesh': {'body_a_eye2': {'name': 'Body_A_Eye2', 'bone': 'R', 'location': [0.0, 9.0, 19.0]},
                                  'barrel_a_frontsight': {'name': 'Barrel_A_FrontSight', 'bone': 'R', 'location': [0.0, -9.0, 13.0]},
                                  'barrel_b_frontsight': {'name': 'Barrel_B_FrontSight', 'bone': 'Q', 'location': [0.0, -9.0, 13.0]},
+                                 'barrel_c_frontsight': {'name': 'Barrel_C_FrontSight', 'bone': 'R', 'location': [0.0, -9.0, 21.0]},
+                                 'body_c_eye1': {'name': 'Body_C_Eye1', 'bone': 'R', 'location': [0.0, 9.0, 19.0]},
+                                 'scope_b_eye2': {'name': 'Scope_B_Eye2', 'bone': 'R', 'location': [0.0, 9.0, 18.0]},
                                  'scope_a_eye1': {'name': 'Scope_A_Eye1', 'bone': 'R', 'location': [0.0, 9.0, 15.0]}}},
-            'parts': {'P.BarrelA': {'fragments': ['Barrel_A']}, 'P.BarrelB': {'fragments': ['Barrel_B']},
-                      'P.Body': {'fragments': ['Body_A']}, 'P.Sight': {'fragments': ['Scope_A']}},
+            'parts': {'P.BarrelA': {'fragments': ['Barrel_A']}, 'P.BarrelB': {'fragments': ['Barrel_B']}, 'P.BarrelC': {'fragments': ['Barrel_C']},
+                      'P.Body': {'fragments': ['Body_A']}, 'P.BodyC': {'fragments': ['Body_C']}, 'P.Sight': {'fragments': ['Scope_A']},
+                      'P.SightFallback': {'fragments': ['Scope_B']}, 'P.Overlay': {'fragments': ['Scope_C'], 'scope_overlay': True},
+                      'P.IronSight': {'fragments': ['Sight_None']}},
         }
 
         def fit(**slots):
@@ -51,6 +56,12 @@ class ViewTableTests(unittest.TestCase):
         self.assertEqual(plain['zoom_position_fit_cm'], [0.0, 1.0, 0.0], 'a class outside the fit stays on the eye socket')
         self.assertEqual(plain['zoom_socket_transform']['name'], 'Body_A_Eye2')
         self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='Sight'), [0.0, 1.0, 0.0], 'a sight part has its own eye socket')
+        self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='SightFallback'), [0.0, 1.0, 0.0], "a sight part's own fallback-named socket")
+        self.assertEqual(fit(Body='BodyC', Barrel='BarrelA'), [0.0, 1.0, 6.0], 'no sight part, the preferred name found on the body')
+        self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='Overlay'), [0.0, 1.0, 0.0], 'an overlay hides the gun')
+        self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='IronSight'), [0.0, 1.0, 6.0], 'a sight part with no socket of its own')
+        self.assertEqual(fit(Body='Body', Barrel='BarrelC'), [0.0, 1.0, -2.0], 'a front sight above the eye socket lowers the gun')
+        self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='Unknown'), [0.0, 1.0, 0.0], 'a sight outside the table may have its own socket')
         self.assertEqual(fit(Body='Body', Barrel='BarrelB'), [0.0, 1.0, 0.0], 'different bones are not compared')
         self.assertEqual(fit(Body='Body', Barrel='Unknown'), [0.0, 1.0, 0.0], 'a barrel outside the table has no front sight')
         self.assertEqual(tables['types']['WT.Gun']['zoom_position_fit_cm'], [0.0, 1.0, 0.0], 'the type table is not changed')

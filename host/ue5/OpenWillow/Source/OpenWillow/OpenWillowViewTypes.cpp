@@ -11,7 +11,7 @@ namespace OpenWillowViewTypes
 {
 namespace
 {
-constexpr int32 Schema = 1;  // tools/weapon_view_model.py VIEW_TYPES_SCHEMA
+constexpr int32 Schema = 2;  // tools/weapon_view_model.py VIEW_TYPES_SCHEMA
 
 struct FTable
 {
@@ -95,13 +95,14 @@ TSharedPtr<FJsonObject> FindSocket(const TSharedPtr<FJsonObject>& Sockets, const
     return bAllowPlain ? Copy(Generic, FString()) : nullptr;
 }
 
-// On iron sights a marked class rises by how far the eye socket sits above the barrel's front sight; the tool's add_sight_line_height.
-// A fit to real frames, not the game's rule: it is wrong on a shotgun (WEAPON_VISUALS.md section 23). UNVERIFIED on other guns.
-void AddSightLineHeight(FJsonObject& Entry, const TSharedPtr<FJsonObject>& Eye, const TSharedPtr<FJsonObject>& FrontSight)
+// On iron sights (no overlay, the eye socket not from a sight part) a marked class moves by the eye socket's height above the barrel's front sight;
+// the tool's add_sight_line_height. A fit to real frames, not the game's rule: it is wrong on a shotgun (WEAPON_VISUALS.md section 23). UNVERIFIED on other guns.
+void AddSightLineHeight(FJsonObject& Entry, const TSharedPtr<FJsonObject>& Eye, const TSharedPtr<FJsonObject>& FrontSight, const TArray<FString>& SightFragments, bool bOverlay)
 {
     bool bMarked = false;
-    if (!Entry.TryGetBoolField(TEXT("zoom_sight_line"), bMarked) || !bMarked || !Eye.IsValid() || !FrontSight.IsValid()) return;
-    FString EyeBone, SightBone;
+    if (!Entry.TryGetBoolField(TEXT("zoom_sight_line"), bMarked) || !bMarked || bOverlay || !Eye.IsValid() || !FrontSight.IsValid()) return;
+    FString EyeFragment, EyeBone, SightBone;
+    if (Eye->TryGetStringField(TEXT("fragment"), EyeFragment) && SightFragments.Contains(EyeFragment)) return;
     const TArray<TSharedPtr<FJsonValue>>* EyeAt = nullptr;
     const TArray<TSharedPtr<FJsonValue>>* SightAt = nullptr;
     if (!Eye->TryGetStringField(TEXT("bone"), EyeBone) || !FrontSight->TryGetStringField(TEXT("bone"), SightBone) || EyeBone != SightBone
@@ -161,11 +162,7 @@ TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOp
         bZoomKnown &= AddFragments(PartTable, Parts, Slot, ZoomFragments);
     TSharedPtr<FJsonObject> Zoom;
     if (Entry->TryGetStringField(TEXT("zoom_socket_preferred"), Name)) Zoom = FindSocket(Sockets, ZoomFragments, Name, bZoomKnown);
-    if (!Zoom.IsValid() && Entry->TryGetStringField(TEXT("zoom_socket_fallback"), Name))
-    {
-        Zoom = FindSocket(Sockets, ZoomFragments, Name, bZoomKnown);
-        AddSightLineHeight(*Entry, Zoom, FindSocket(Sockets, Barrel, TEXT("FrontSight"), bBarrelKnown));
-    }
+    if (!Zoom.IsValid() && Entry->TryGetStringField(TEXT("zoom_socket_fallback"), Name)) Zoom = FindSocket(Sockets, ZoomFragments, Name, bZoomKnown);
     Put(TEXT("zoom_socket_transform"), Zoom);
 
     bool bOverlay = false;
@@ -174,7 +171,25 @@ TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOp
             if (const TSharedPtr<FJsonObject>* Sight = Child(PartTable, Part.Part))
                 (*Sight)->TryGetBoolField(TEXT("scope_overlay"), bOverlay);
     Entry->SetBoolField(TEXT("scope_overlay"), bOverlay);
+    TArray<FString> Sight;
+    if (AddFragments(PartTable, Parts, TEXT("Sight"), Sight))  // a sight outside the table may have its own socket
+        AddSightLineHeight(*Entry, Zoom, FindSocket(Sockets, Barrel, TEXT("FrontSight"), bBarrelKnown), Sight, bOverlay);
     return Entry;
+}
+
+int32 DropStaleLines(const TSharedPtr<FJsonObject>& Root)
+{
+    if (!Root.IsValid()) return 0;
+    TArray<FString> Stale;
+    for (const auto& Pair : Root->Values)
+    {
+        const TSharedPtr<FJsonObject>* Line = nullptr;
+        double LineSchema = 0.0;
+        if (Pair.Value.IsValid() && Pair.Value->TryGetObject(Line) && Line && (!(*Line)->TryGetNumberField(TEXT("view_schema"), LineSchema) || int32(LineSchema) != Schema))
+            Stale.Add(FString(Pair.Key));  // the key type of FJsonObject::Values is not FString in 5.8
+    }
+    for (const FString& Key : Stale) Root->RemoveField(Key);
+    return Stale.Num();
 }
 
 FString WantedArmsSet(const FString& ViewSet, const FString& ItemType)

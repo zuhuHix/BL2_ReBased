@@ -959,6 +959,10 @@ void AOpenWillowWalker::LoadViewModels(const FString& ItemDir)
     if (!FFileHelper::LoadFileToString(Text, *FPaths::Combine(ItemDir, TEXT("weapon_view.json")))) return;
     TSharedPtr<FJsonObject> Root;
     if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid()) return;
+    if (const int32 Stale = OpenWillowViewTypes::DropStaleLines(Root))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow view models: refusing %d stale lines in %s; regenerate it with weapon_view_model.py --dir"), Stale, *ItemDir);
+    }
     AddViewModels(Root);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow view models: %d recipes from %s"), ViewModels.Num(), *ItemDir);
 }
