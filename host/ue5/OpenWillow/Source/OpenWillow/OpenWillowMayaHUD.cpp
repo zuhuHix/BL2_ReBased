@@ -1483,12 +1483,13 @@ void AOpenWillowMayaHUD::DrawDamagePopups(UFont* Font)
     }
 }
 
-void AOpenWillowMayaHUD::DrawRespawnMessage(const AOpenWillowWalker& Maya, UFont* Font)
+void AOpenWillowMayaHUD::DrawRespawnMessage(AOpenWillowWalker& Maya, UFont* Font)
 {
     // A plain panel on the left, standing in for the game's own (its look is open: docs/verification/COMBAT_DOWN_RESPAWN.md).
-    const FOpenWillowRespawnFee& Fee = Maya.GetRespawnFee();
+    FOpenWillowRespawnFee& Fee = Maya.GetRespawnFee();
+    Fee.BeginMessage(GetWorld()->GetTimeSeconds());   // this function is not reached under a status page, so the time starts here
     if (!Fee.IsMessageShown(GetWorld()->GetTimeSeconds())) return;
-    const TArray<FString> Lines = FOpenWillowRespawnFee::WrapLines(Fee.MessageBody(), 38);
+    const TArray<FString> Lines = FOpenWillowRespawnFee::WrapLines(Fee.MessageBody(), 38, 14);
     const float Scale = Canvas->ClipY / 720.f, LineHeight = 20.f * Scale, Pad = 10.f * Scale;
     const float X = Canvas->ClipX * 0.03f, Y = Canvas->ClipY * 0.38f, Width = 310.f * Scale, Height = Pad * 2.f + LineHeight * (Lines.Num() + 1);
     DrawRect(FLinearColor(0.03f, 0.08f, 0.16f, 0.85f), X, Y, Width, Height);
@@ -1730,7 +1731,7 @@ void AOpenWillowMayaHUD::DrawHUD()
     if (!Maya) return;
     UFont* Small = GEngine->GetSmallFont();
     UFont* Large = GEngine->GetLargeFont();
-    DrawRespawnMessage(*Maya, Small);
+    if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(PlayerOwner->GetPawn())) DrawRespawnMessage(*Walker, Small);
     if (FlashHud)
     {
         // The scripted cast first, so its state goes out in the same frame; the state is pushed as soon as the

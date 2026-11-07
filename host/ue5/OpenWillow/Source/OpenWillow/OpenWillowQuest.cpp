@@ -1800,7 +1800,7 @@ void UOpenWillowQuest::RunTest(float Delta)
     }
     case 21:
         // The step also waits for the fee: 11.8 s after the respawn.
-        if (Waiting(Walker->GetCharacterMovement()->IsMovingOnGround() && Walker->GetRespawnFee().LastFee() >= 0, 16.f)) return;
+        if (Waiting(Walker->GetCharacterMovement()->IsMovingOnGround() && Walker->GetRespawnFee().LastShownAt() >= 0.f, 16.f)) return;
         UE_LOG(LogTemp, Display, TEXT("OWQUEST after respawn: %s grounded=%d"), *Walker->GetActorLocation().ToString(),
             Walker->GetCharacterMovement()->IsMovingOnGround());
         Check(Walker->GetCharacterMovement()->IsMovingOnGround(), TEXT("respawn_point_is_standable"));
@@ -1812,7 +1812,12 @@ void UOpenWillowQuest::RunTest(float Delta)
             Check(Fee.LastFee() == 140 && MoneyNow == 1860, TEXT("respawn_charges_the_fee"));
             Check(FMath::IsNearlyEqual(Fee.LastChargedAt() - Walker->LastRespawnAt(), FOpenWillowRespawnFee::DelaySeconds, 0.5f), TEXT("respawn_fee_at_the_recorded_delay"));
             Check(Fee.IsMessageShown(GetWorld()->GetTimeSeconds()) && Fee.MessageBody().Contains(TEXT("140")) && !Fee.MessageTitle().IsEmpty(), TEXT("respawn_message_shows_the_fee"));
-            Check(!Fee.IsMessageShown(Fee.LastChargedAt() + FOpenWillowRespawnFee::MessageSeconds + 0.01f), TEXT("respawn_message_ends_by_itself"));
+            Check(!Fee.IsMessageShown(Fee.LastShownAt() + FOpenWillowRespawnFee::MessageSeconds + 0.01f), TEXT("respawn_message_ends_by_itself"));
+            // With the install here the game's own text must have loaded: the neutral stand-in would pass the check above, and hide a broken lookup.
+            const FString IniFile = FOpenWillowRespawnFee::LocalizationFile();
+            const bool bInstall = !IniFile.IsEmpty() && FPaths::FileExists(IniFile);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST respawn message text: %s (install file present: %d)"), Fee.MessageFromInstall() ? TEXT("the game's") : TEXT("the neutral stand-in"), bInstall);
+            Check(!bInstall || Fee.MessageFromInstall(), TEXT("respawn_message_uses_the_installed_text"));
             Shot(TEXT("5b_RespawnMessage"));
             Walker->GetInventory()->SetMoney(MoneyBeforeFee);
         }

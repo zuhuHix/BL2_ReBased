@@ -190,6 +190,7 @@ public:
     float LastRespawnAt() const { return MayaState.RespawnAt; }
     // The fee and message after a respawn (the HUD draws the message; the suite reads the fee).
     const FOpenWillowRespawnFee& GetRespawnFee() const { return RespawnFee; }
+    FOpenWillowRespawnFee& GetRespawnFee() { return RespawnFee; }
     // Hits that took health and came from a known place (the HUD's damage-direction arrows): how many so far, and the world
     // direction from Maya toward the last one's source (a point hit's shot direction reversed, else the causer's or the
     // instigator's position).
