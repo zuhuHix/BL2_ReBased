@@ -55,9 +55,11 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   hit from the selected enemy is a FAIL in range mode, and the checker overrules a NOT_AVAILABLE there. It is
   NOT_AVAILABLE only with the stand-in, which has no attack.
 - **Fire is held for the selected enemy's first hit (range mode).** Otherwise a quick kill could end the fight before that
-  enemy attacks. The driver shoots until the enemy has lost health, which alerts the den, then holds fire until the enemy
-  has hit Maya. A run where the enemy hits before it is wounded never holds. Not yet run in the host, so what this does to
-  her health is not known yet. The hold ends one of four ways, and links 3 and 4 name which as a fixture; link 3's detail
+  enemy attacks. The driver fires one shot every 0.5 s until the enemy has lost health (fixture `one shot at a time until
+  the selected enemy was wounded`), then holds fire until the enemy has hit Maya. One shot at a time is needed because
+  `FireOnce` has no fire-rate gate and a shot takes time to land: firing every tick put 6 or 7 shots in flight before the
+  first landed (see "With the hold on fire"). A run where the enemy hits before it is wounded never holds. The hold ends
+  one of four ways, and links 3 and 4 name which as a fixture; link 3's detail
   also gives the seconds held:
   - `fire held until the selected enemy hit Maya`: the enemy hit her. This wins if the hit and its death share a tick.
   - `fire held, ended by timeout`: 15 s passed. A real hit from the enemy after this is still a PASS, with this fixture.
@@ -109,6 +111,8 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   for level-30 guns, so a level-8 pistol needs about 470 shots.
 - **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6), because no enemy can attack Maya yet. It is named on
   `go_down`, and `bleed_out_respawn` names the down state it started from.
+- **`FireOnce` ignores the gun's fire rate.** It fires whenever the driver calls it, every tick outside the wait for the
+  wound, so link 3's shot counts and kill times are not what the gun would do in play. Link 3 does not grade time.
 - The lent mission pistol is readied with `EquipItem` + `DrawItemById`, as in `test_quest`.
 - **Enemies on fallback shapes are stated up front.** If the selected range enemy has no stock mesh (the range's
   `fallback=shapes`, for example a manifest with no mesh), `reach_fight_area` names the fixture `selected enemy on fallback
@@ -172,6 +176,20 @@ newer driver, but that has not been run.
 - **Nothing is checked against the real game.** The three runs also vary little: the same 11-shot kill in about 2.4 s.
 - **Link 4's margin was small in these runs.** The first hits landed about 0.6 to 0.7 s before the kill, with fire not
   held back. The driver now holds fire for that first hit (see the grading section), which these runs do not cover.
+
+### With the hold on fire, before one shot at a time (zuhu, integration batches, 2026-11-06 and 07)
+
+Both batches fired every tick until the enemy was wounded. Neither is the current driver, and neither is on main. This lane
+read their logs; the hub's runner ran them. All three variants in each.
+
+- **Z10, #126 at 7f59924 merged with #133 at d02c70a, four enemies: 14 / 0 / 0 each.** The hold ended by a hit each time,
+  after 3.3 s of hold. No shield: 53/213 after the fight. This passed by margin, not by design: the opening burst left the
+  selected bullymong with very little health before the hold started, and one or two more shots in flight would have killed
+  it.
+- **Z13, #126 at 7f59924 merged with #133 at 716302b, five enemies with a Psycho: 13 / 1 / 0 each.** Link 4 FAILed, correctly.
+  The Psycho was the nearest enemy, so it was selected. It died from the burst about 0.1 s into the fight, with the fixture
+  `fire held, ended by enemy died`, before any enemy reached Maya. She did not go down. The den had already noticed her by
+  sight 0.5 to 0.9 s before the fight, in both batches, so the first shot is not what alerts it.
 
 ### Before the Phaselock targeting fix (#111)
 
@@ -317,6 +335,8 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-06 | main cdf05d7 + c365984, no switch, yorad PC | 14 / 0 / 0 of 14 | link 4 PASS with per-causer counting; ended the fight at 60/213, healed by the fixture |
 | 2026-11-06 | main cdf05d7 + c365984, `-DownAfterFight`, yorad PC | 14 / 0 / 0 of 14 | revive fixture ran (forced) |
 | 2026-11-06 | combined build of this branch at 402d81e with #112 and #113, refreshed data, pc-hummer, all three variants | 14 / 0 / 0 of 14, each | reported by the hub; this lane did not read those logs. `-Shield` used the host stand-in, not a manifest shield |
+| 2026-11-06 | Z10: #126 at 7f59924 + #133 at d02c70a, four enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | hold ended by a hit; passed by margin |
+| 2026-11-07 | Z13: #126 at 7f59924 + #133 at 716302b, five enemies, zuhu, all three variants | 13 / 1 / 0 of 14, each | link 4 FAIL: the burst killed the selected Psycho before the hold started; fixed in the driver by one shot at a time, not yet run |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
