@@ -1,6 +1,6 @@
 # Marcus's mission screen in the host (2026-11-06)
 
-AI-assisted (Claude), mission UI lane. A pass here means the host did this, not that it matches the game. Nothing below has been compared with a frame of the real game.
+AI-assisted (Claude), mission UI lane. A pass of the host's suite means the host did this, not that it matches the game. "What the real game does" below reports the live captures; the host's own frames were seen by the runner only and have not been compared with the real ones side by side.
 
 ## What was wrong
 
@@ -17,9 +17,10 @@ The first scripted playtest showed one E accepting the mission with no text, no 
 | Escape closes an offer | Live capture, one press, on the next mission's offer | Observed in game |
 | Escape does nothing on the reward page: both handler calls return false and the page stays | Live capture, one press | Observed in game |
 | The page-up and page-down keys scroll the description | Installed script (`QuestAcceptGFxMovie.HandleInputKey`), read with `research/script_disasm.py` | UNVERIFIED in game |
-| E does nothing on the offer, the turn-in and the reward page; WASD does nothing on them | The script binds no such key. One live read at the offer: the game's handler returned false on E's press and release. See "SDK mods" | Offer: one read. The rest UNVERIFIED |
+| What E and WASD do on these pages | The script binds no such key. One read at the offer, with the mod below loaded: the game's handler returned false on E's press and release, and the mod's own hook then sent `Enter`, so the press as a whole accepted. WASD was not pressed | Without the mod: UNVERIFIED until a stock run. The host's rule that they do nothing comes from the script |
 | The prompts' text | The install's localization and `DefaultGame.ini`, through `tools/prepare_mission_screen.py` | The strings are the game's; where they appear is from the script |
-| Whether the world keeps running behind the screen, whether the player can move or look, what the reward page shows for a mission with no item | Not known | Open: `tools/real_game/mission_screen_capture.ps1` reads these |
+| The world keeps running behind the screen; the reward page shows the heading, the XP and an empty gear row for this mission | Live captures, see "What the real game does" | Observed in game, with the mods loaded |
+| Whether the player can move behind the screen | Not read: WASD were not pressed, and the mouse moved nothing though `IsLookInputIgnored` reads false | Open |
 
 The host's second-E close was a stand-in, and the script says it is not how the screen works. So E now does nothing on these pages. If the live read disagrees, the rule changes in one place, `UOpenWillowQuest::OnScreenKey`.
 
@@ -72,7 +73,7 @@ Ruffle logs four parts of the reward clip as not registered when the page draws:
 
 Three sessions with `tools/real_game/mission_screen_capture.ps1` on the zuhu PC, level 8, saves blocked and compared identical afterwards. The turn-in was reached by direct `UpdateObjective` calls, so the objective path is not what these record. A pass of the host's suite says what the host did; these say what the game did, with the mods below loaded.
 
-**SDK mods.** Every session had these loaded, and the session record lists them: Better UI Controls, Dialog Skipper (autoskip on), Apple's Borderlands Cheats, Commander, Loot Collector, RTSE, Sanity Saver and others. Better UI Controls changes this screen: it hooks `HandleInputKey` to send `Enter` on the use key's release and to turn the movement keys into arrows, and `HandleRewardInputKey` to take the reward on the use key's press. So in these sessions E accepted the offer, and that is the mod, not the game. The other mods were checked with a text search of their code only. Dialog Skipper blocks friendly NPCs' dialog events, so no timing around lines is read here.
+**SDK mods.** Every session had these loaded, and the session record lists them: Better UI Controls, Dialog Skipper (autoskip on), Apple's Borderlands Cheats, Commander, Loot Collector, RTSE, Sanity Saver and others. Better UI Controls changes this screen: it hooks `HandleInputKey` to send `Enter` on the use key's release and to turn the movement keys into arrows, and `HandleRewardInputKey` to take the reward on the use key's press. So in these sessions E accepted the offer: the game's handler returned false on it, and the accept came from the `Enter` the mod sent (read from the mod's source, and it fits the rows). What E does with no mod loaded stays UNVERIFIED until a stock run. The other mods were checked with a text search of their code only. Dialog Skipper blocks friendly NPCs' dialog events, so no timing around lines is read here.
 
 **Confirmed, on keys the mod does not touch (one run each):**
 - E from the world opens the screen and nothing is accepted. Enter's release accepts, and the screen closes inside that press.
@@ -92,7 +93,8 @@ H14 showed one frame of about 16 s on the first E, and none on the second; the p
 
 ## Open
 
-- The live read above; until then the key rules and the flat layout are the host's reading of the script.
+- A stock read of E and WASD, with Better UI Controls off (the maintainer's decision, for one run): until then the host's rule for those keys is its reading of the script. Enter and Escape are observed.
+- The flat layout against the real screen.
 - The mouse: the script takes the left button on the reward page and on a one-mission offer, and the movie has a close button. The host takes keys only, and the page shows no cursor.
-- The movie's 3D turn, the post-process override and the focus camera the real screen uses; the reward page's gear heading on a page with no gear; the difficulty bar and the player's XP and money (the movie's `SetLevelAndDifficulty`, `SetPlayerXP`, `SetPlayerTotalCredits` are not called yet); the screen's sounds, which wait for the audio lane.
+- The movie's 3D turn, the post-process override and the focus camera the real screen uses; the difficulty bar and the player's XP and money (the movie's `SetLevelAndDifficulty`, `SetPlayerXP`, `SetPlayerTotalCredits` are not called yet); the screen's sounds, which wait for the audio lane.
 - **Dialogue:** Marcus's lines and subtitles stay out of scope until audio has a decoder. What they need: decoded WEMs for the lines the slice names (`tools/audio_slice_chain.py` already resolves them, but the dismissal line is not in its manifest), the two-step dialog dispatch that is only reported today, and a subtitle source and a place to draw it.
