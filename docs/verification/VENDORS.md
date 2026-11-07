@@ -244,15 +244,44 @@ the script allows; whether the game's dialog stops that was not read. Reach is 3
 
 ## 9. Real-game lootable capture
 
-AI-assisted (Claude), 2026-11-07. `tools/real_game/loot_capture.ps1` drives the installed game, in Sanctuary with saves blocked, and restores and compares the player's files afterwards. Output stays under ignored `local/realgame/loot_capture/`.
+AI-assisted (Claude), 2026-11-07. `tools/real_game/loot_capture.ps1` drives the installed game, in Sanctuary with saves blocked, and restores and compares the player's files afterwards. Output stays under ignored `local/realgame/loot_capture/`. It ran twice. Both runs exited 1 as incomplete, and both left the saves identical after their restores, with no recovery needed. Everything below is read from live values and from frames by eye, and only for what those two runs did. The frames read were a sample of each burst, not all of them. This is not parity.
 
-**SDK mods stay on.** `Install-Driver -Exclusive` only refuses a driver folder that already exists. It does not disable other SDK mods, so a beam or icon on loot could be `ItemLights`' and not the game's. The capture records which mods are loaded and disables nothing.
+**Correction.** The first version of the capture counted a lootable as done when its frames existed. Three of six had not opened and still passed. A lootable stage now needs the object's own state to have changed.
 
-**What the first run showed, read by eye from frames and from live reads:**
+**SDK mods stay on.** `Install-Driver -Exclusive` only refuses a driver folder that already exists. It does not disable other SDK mods, and the capture disables nothing. The second run recorded these as enabled: Python SDK, Apple's Borderlands Cheats, Be Gone Out Of Bounds Loot, Better UI Controls, Bossbar, BSABT, Commander, Dialog Skipper, Item Lights, Loot Collector, No Ads, Python Part Notifier, RTSE, Sanity Saver, Quick Startup, and the run's own driver. Drop Chance Multiplier and OpenWillow UI Trace were listed but disabled.
 
-- **Material slots, read live:** the storage locker and the strong box both have `Prop_Lootables_02.PhAT.Mati_StorageLocker` in their first slot, which agrees with what PR #120 took from package data. The cardboard box, laundry machine, dumpster and DahlAmmo chest render their slot's material directly.
+Loot Collector, Better UI Controls, Dialog Skipper, Item Lights and Apple's Borderlands Cheats may affect what was read here, and whether any of them did has not been checked. So everything below about pickups and prompts is `UNVERIFIED` as stock behaviour, including the use prompt, the beams, the icons and the item card. That a press collected a pickup is what happened with these mods on.
+
+**What opening changes.** On each of the five types that opened, `SimpleAnimState` and `RepSimpleAnimState` went from 4 to 7 and `bCanBeUsed` went from true to false. On the seven tries that did not open, none of the three moved. This is what those types did in this one run, not a rule for every lootable.
+
+**A signal before the press.** `CachedUsableObject` on the player controller was that object on all five tries that opened, and empty on all seven that did not. It stays empty for a pickup even with the prompt showing, so it says nothing about pickups.
+
+**Lids, second run:**
+
+- **Opened:** the DahlAmmo chest, storage locker and cardboard box from the first side tried, the dumpster from the second and the laundry machine from the third.
+- **Against the host:** the laundry machine's round door swings out on its right, as the host's does. The dumpster's lid rises on a long edge; whether that is the rear is `UNVERIFIED`. The first run had the DahlAmmo chest, storage locker and cardboard box opening as the host's do.
+- **Strong box:** its hinge is still not observed. No side offered the prompt. Its bounds read as unusable, so the aim fell back to a guess above its origin. An orange panel under a shelf in one frame may be the box, `UNVERIFIED`.
+
+**Where loot lies.** In all five types that opened, the loot lies inside the container. Comparing this with the host's placement is a follow-up after PR #120.
+
+**Pickups:**
+
+- **Use key, ammo:** one grenade ammo pickup was collected by the use key. The prompt showed, and on the press the pickup flew at the camera and was gone within a few frames. The grenade count on the HUD and its pool each rose by one.
+- **Message:** none in the frames read of that one pickup. Other pickups were not read, so this is no rule.
+- **Walk-over:** not answered. The ammo pickup was not collected after the fall, but nothing shows the player touched it, and the position after the fall was not recorded. The other fall landed on top of a machine with the pickup inside it.
+- **Cash: not tested.** The capture mistook eridium for cash: its check puts an eridium stick in that group, and it chose one inside a laundry machine, from a side with no prompt. Eridium would not move money anyway. No money pickup was tried.
+- **In the open: not met.** Both chosen pickups lay within a lootable's bounds. Those bounds are large spheres and may overcount.
+
+**Materials, first run, read live:**
+
+- **Slots:** the storage locker and the strong box both have `Prop_Lootables_02.PhAT.Mati_StorageLocker` in their first slot, which agrees with what PR #120 took from package data. The cardboard box, laundry machine, dumpster and DahlAmmo chest render their slot's material directly.
 - **Per-object instances, `UNVERIFIED`:** placed lockers and strong boxes render a `MaterialInstanceConstant` of their own, not the slot's material. Their parents were not read, so whether `Mati_StorageLocker_GreenGlow` is involved is unknown, and the host's plain instance may differ from them.
-- **No labels:** no frame read shows floating text on loot, which agrees with PR #120 hiding the host's stand-in labels once the real mesh loads. The frames do show a use prompt and a beam, some with an icon. Those two are `UNVERIFIED` as stock, because of the mods above.
-- **Lids:** the DahlAmmo chest, storage locker and cardboard box opened, as the host's do. The strong box, dumpster and laundry machine did not open in that run. The likely cause is the capture's aim, which is not proven, so their lids stay unjudged.
-- **Where loot lies:** in those three that opened, the loot lies inside the container. Comparing this with the host's placement is a follow-up after PR #120.
-- **Collecting a pickup:** neither pickup was collected, and the use key was not tried. Whether touch collects one, and any message, stays `UNVERIFIED`.
+- **No labels:** no frame read shows floating text on loot, which agrees with PR #120 hiding the host's stand-in labels once the real mesh loads.
+
+**For a later run, not done.** A third run was judged not worth a launch before the pending merges.
+
+- Press only when `CachedUsableObject` is this object, and try other strong boxes until one offers the prompt.
+- Keep eridium apart from cash, and judge each by the value it moves.
+- Record the player's position after the fall, so a walk-over shows whether it touched.
+- Choose pickups by a tighter test than the sphere, and stand on the side with the prompt.
+- A pickup truly on open ground may not exist here, since all of them came from containers. A walk-over answer may need one dropped some other way.

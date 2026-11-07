@@ -31,7 +31,7 @@ LC_MESHES = ("Skel_DahlChest_Ammo", "Skel_Dumpster", "Skel_StorageLocker", "Skel
              "Skel_LaundryMachine")
 LC_MESH_PACKAGE = "Prop_Lootables_02.Meshes."   # most live here; the read reports a miss rather than guessing
 LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "pickup": None}
-# The fields on WillowInteractiveObject that describe its state (names from the package). Which of them opening changes has not been observed.
+# The fields on WillowInteractiveObject that describe its state. The second real run saw all three move on every opening and none on a failed try.
 OPEN_FIELDS = ("SimpleAnimState", "RepSimpleAnimState", "bCanBeUsed")
 SCALAR_KINDS = ("BoolProperty", "ByteProperty", "IntProperty", "FloatProperty", "NameProperty", "StrProperty")
 
@@ -206,7 +206,7 @@ def _open_state(actor):
 
 
 def _scalars(actor, limit=300):
-    """Every scalar property the object has, for the record: which of them opening changes has not been observed."""
+    """Every scalar property the object has, for the record of what moved."""
     out, cls = {}, _field(actor, "Class")
     while cls is not None and not isinstance(cls, str) and len(out) < limit:
         fields = _try(lambda c=cls: list(c._fields()))
@@ -249,8 +249,8 @@ def lc_side(leaf):
 
 def lc_opened(leaf, radius=600.0):
     """Whether this object changed since the first stand, in the fields that describe its state. Loot nearby is recorded, but is not
-    evidence: a neighbour opened by a stray press drops loot too. Every scalar that moved is recorded, because which field opening
-    moves has not been observed. No change, or an unreadable field, is not opened."""
+    evidence: a neighbour opened by a stray press drops loot too. Every scalar that moved is recorded as well. No change, or an
+    unreadable field, is not opened."""
     actor = _pick(leaf)
     before = LC["before"].get(leaf) or {"state": {}, "scalars": {}}
     state = _open_state(actor)
