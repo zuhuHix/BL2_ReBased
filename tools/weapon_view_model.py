@@ -79,6 +79,8 @@ ZOOM_POSITION_FITS_CM = {
     'GD_Weap_Pistol': (0.0, 1.1, 0.0),
 }
 FRONT_SIGHT_SOCKET = 'FrontSight'
+# The weapon classes add_sight_line_height applies to: a fit that real frames support there and refute on a shotgun (section 23).
+ZOOM_SIGHT_LINE_CLASSES = ('GD_Weap_Pistol', 'GD_Weap_AssaultRifle')
 
 
 def zoom_position_fit_cm(weapon_type):
@@ -88,12 +90,12 @@ def zoom_position_fit_cm(weapon_type):
 
 
 def add_sight_line_height(entry, eye, front_sight):
-    """On a gun aiming down iron sights (the fallback eye socket), raise it by how far that socket sits above the barrel's front sight.
+    """On a gun of a marked class aiming down iron sights (the fallback eye socket), raise it by how far that socket sits above the barrel's front sight.
 
-    The socket alone leaves the front sight low by that gap, and the gap changes with the body and barrel, so no one fit per
-    weapon type can hold (WEAPON_VISUALS.md section 23). Host rule, UNVERIFIED. Sockets on different bones are not compared.
+    A fit to real frames, not the game's rule, whose mechanism is unknown: it holds on two pistols and a rifle and is about 110 px wrong on a
+    shotgun (WEAPON_VISUALS.md section 23). UNVERIFIED on any other gun. Sockets on different bones are not compared.
     """
-    if not (eye and front_sight) or eye.get('bone') != front_sight.get('bone'):
+    if not entry.get('zoom_sight_line') or not (eye and front_sight) or eye.get('bone') != front_sight.get('bone'):
         return
     fit = list(entry.get('zoom_position_fit_cm') or (0.0, 0.0, 0.0))
     fit[2] += eye['location'][2] - front_sight['location'][2]
@@ -512,6 +514,7 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
             continue
         entry['weapon_type'] = weapon_type
         entry['zoom_position_fit_cm'], entry['zoom_position_fit_source'] = zoom_position_fit_cm(weapon_type)
+        entry['zoom_sight_line'] = str(weapon_type).split('.')[0] in ZOOM_SIGHT_LINE_CLASSES
         stats = recipe.get('stats') if isinstance(recipe.get('stats'), dict) else {}
         card = stats.get('card') if isinstance(stats.get('card'), dict) else {}
         try:

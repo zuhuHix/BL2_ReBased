@@ -95,10 +95,12 @@ TSharedPtr<FJsonObject> FindSocket(const TSharedPtr<FJsonObject>& Sockets, const
     return bAllowPlain ? Copy(Generic, FString()) : nullptr;
 }
 
-// On iron sights the gun rises by how far the eye socket sits above the barrel's front sight; the tool's add_sight_line_height. Host rule, UNVERIFIED.
+// On iron sights a marked class rises by how far the eye socket sits above the barrel's front sight; the tool's add_sight_line_height.
+// A fit to real frames, not the game's rule: it is wrong on a shotgun (WEAPON_VISUALS.md section 23). UNVERIFIED on other guns.
 void AddSightLineHeight(FJsonObject& Entry, const TSharedPtr<FJsonObject>& Eye, const TSharedPtr<FJsonObject>& FrontSight)
 {
-    if (!Eye.IsValid() || !FrontSight.IsValid()) return;
+    bool bMarked = false;
+    if (!Entry.TryGetBoolField(TEXT("zoom_sight_line"), bMarked) || !bMarked || !Eye.IsValid() || !FrontSight.IsValid()) return;
     FString EyeBone, SightBone;
     const TArray<TSharedPtr<FJsonValue>>* EyeAt = nullptr;
     const TArray<TSharedPtr<FJsonValue>>* SightAt = nullptr;

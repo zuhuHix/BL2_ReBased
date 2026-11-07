@@ -261,7 +261,8 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     {
         const FString Text = FString(TEXT(R"({"schema": @S, "library_md5": "@M",
           "types": {"WT.Gun": {"weapon_type": "WT.Gun", "first_person_fov": 40, "muzzle_socket": "Muzzle", "shell_casing_socket": "Port",
-                               "zoom_socket_preferred": "Eye1", "zoom_socket_fallback": "Eye2", "socket_table": "Mesh", "zoom_position_fit_cm": [0, 1, 0]}},
+                               "zoom_socket_preferred": "Eye1", "zoom_socket_fallback": "Eye2", "socket_table": "Mesh", "zoom_position_fit_cm": [0, 1, 0], "zoom_sight_line": true},
+                    "WT.Plain": {"weapon_type": "WT.Plain", "zoom_socket_preferred": "Eye1", "zoom_socket_fallback": "Eye2", "socket_table": "Mesh", "zoom_position_fit_cm": [0, 1, 0], "zoom_sight_line": false}},
           "sockets": {"Mesh": {"barrel_a_muzzle": {"name": "Barrel_A_Muzzle", "bone": "B", "fragment": ""},
                                "body_a_eye2": {"name": "Body_A_Eye2", "bone": "R", "fragment": "", "location": [0, 9, 19]},
                                "barrel_a_frontsight": {"name": "Barrel_A_FrontSight", "bone": "R", "fragment": "", "location": [0, -9, 13]},
@@ -328,6 +329,9 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     const TSharedPtr<FJsonObject> Iron = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel"))});
     if (TestTrue(TEXT("Iron sights compose"), Iron.IsValid()))
         TestEqual(TEXT("Iron sights raise the gun by the gap, on top of the type's fit"), FitOf(Iron), FVector(0, 1, 6));
+    const TSharedPtr<FJsonObject> Plain = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Plain"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel"))});
+    if (TestTrue(TEXT("A class outside the fit composes"), Plain.IsValid()))
+        TestEqual(TEXT("A class outside the fit stays on the eye socket"), FitOf(Plain), FVector(0, 1, 0));
     const TSharedPtr<FJsonObject> Scoped = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.ScopeB"))});
     if (TestTrue(TEXT("A sight part composes"), Scoped.IsValid()))
         TestEqual(TEXT("A sight part has its own eye socket: no gap"), FitOf(Scoped), FVector(0, 1, 0));

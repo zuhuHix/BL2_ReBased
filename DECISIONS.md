@@ -4091,10 +4091,11 @@ AI-assisted (Claude Opus 5.5; critic Luna). Record: `docs/verification/WEAPON_VI
 
 AI-assisted (Claude). Record: `docs/verification/COMBAT_DOWN_RESPAWN.md`, "The host's fee and message". 11.8 s after a respawn: 0.07 of the cash, rounded half up, and a 7 s panel with the game's own text read from the install at run time. No parsing change. The times and the amount come from one live capture that repeats earlier rows; the panel's look is a stand-in, and the death camera, tunnel and digistruct effect stay open.
 
-## 2026-11-07: ADS on iron sights rises by the eye socket's height above the front sight (gunlook)
+## 2026-11-07: ADS on iron sights: a height fit on pistols and rifles, refuted on a shotgun (gunlook)
 
 AI-assisted (Claude Opus 5.5). Record: `docs/verification/WEAPON_VISUALS.md` section 23.
 
-- **Change:** on a gun with no sight part, the ADS fit adds the height from its eye socket down to its barrel's front sight, in the tool and in `OpenWillowViewTypes::ComposeEntry`. It replaces the slice pistol's own fit, whose height was stale. Fits now go by weapon class: a side term for pistols only. On a machine that regenerates view data, ADS frames move.
+- **Change:** on a pistol or assault rifle with no sight part, the ADS fit adds the height from its eye socket down to its barrel's front sight, in the tool and in `OpenWillowViewTypes::ComposeEntry`. It replaces the slice pistol's own fit, whose height was stale. Fits now go by weapon class: a side term for pistols only. On a machine that regenerates view data, ADS frames move.
 - **Why not a fit per weapon type:** the gap changes with the body and barrel, even within one type.
-- **Checked:** the tool's composition against its generated lines, and synthetic tests. Not compiled, and no frame of the result yet. UNVERIFIED host rule, based on one real pistol frame and one real rifle frame.
+- **Why only those classes:** a real capture of the same parts shows it about 110 px wrong on the slice shotgun, where the eye socket alone was about 12 px off, and right on a second pistol. It is a fit to frames, not the game's rule; the mechanism is unknown. Shotguns and SMGs stay on the eye socket.
+- **Checked:** two real pistol frames, one real rifle frame, one real shotgun frame by eye. The class limit: tool against tool and synthetic tests; its frames are still to come. UNVERIFIED on any other gun.

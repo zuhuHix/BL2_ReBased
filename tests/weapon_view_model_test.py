@@ -33,7 +33,9 @@ class ViewTableTests(unittest.TestCase):
     def test_iron_sights_raise_the_gun_by_the_gap_to_the_front_sight(self):
         tables = {
             'types': {'WT.Gun': {'weapon_type': 'WT.Gun', 'zoom_socket_preferred': 'Eye1', 'zoom_socket_fallback': 'Eye2',
-                                 'zoom_position_fit_cm': [0.0, 1.0, 0.0], 'socket_table': 'Mesh'}},
+                                 'zoom_position_fit_cm': [0.0, 1.0, 0.0], 'socket_table': 'Mesh', 'zoom_sight_line': True},
+                      'WT.Plain': {'weapon_type': 'WT.Plain', 'zoom_socket_preferred': 'Eye1', 'zoom_socket_fallback': 'Eye2',
+                                   'zoom_position_fit_cm': [0.0, 1.0, 0.0], 'socket_table': 'Mesh', 'zoom_sight_line': False}},
             'sockets': {'Mesh': {'body_a_eye2': {'name': 'Body_A_Eye2', 'bone': 'R', 'location': [0.0, 9.0, 19.0]},
                                  'barrel_a_frontsight': {'name': 'Barrel_A_FrontSight', 'bone': 'R', 'location': [0.0, -9.0, 13.0]},
                                  'barrel_b_frontsight': {'name': 'Barrel_B_FrontSight', 'bone': 'Q', 'location': [0.0, -9.0, 13.0]},
@@ -45,6 +47,9 @@ class ViewTableTests(unittest.TestCase):
         def fit(**slots):
             return view.compose_entry(tables, 'WT.Gun', {k: f'P.{v}' for k, v in slots.items()})['zoom_position_fit_cm']
         self.assertEqual(fit(Body='Body', Barrel='BarrelA'), [0.0, 1.0, 6.0])
+        plain = view.compose_entry(tables, 'WT.Plain', {'Body': 'P.Body', 'Barrel': 'P.BarrelA'})
+        self.assertEqual(plain['zoom_position_fit_cm'], [0.0, 1.0, 0.0], 'a class outside the fit stays on the eye socket')
+        self.assertEqual(plain['zoom_socket_transform']['name'], 'Body_A_Eye2')
         self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='Sight'), [0.0, 1.0, 0.0], 'a sight part has its own eye socket')
         self.assertEqual(fit(Body='Body', Barrel='BarrelB'), [0.0, 1.0, 0.0], 'different bones are not compared')
         self.assertEqual(fit(Body='Body', Barrel='Unknown'), [0.0, 1.0, 0.0], 'a barrel outside the table has no front sight')
