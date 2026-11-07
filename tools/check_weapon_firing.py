@@ -61,6 +61,7 @@ PARSED = re.compile(r'firing test parsed \d+ recipe IDs: (\S+)')
 KV = re.compile(r'(\w+)=(\S+)')
 ROLLED_DAMAGE = re.compile(r'OWFIRING rolled_damage (.*)$')
 ROLLED = re.compile(r'OWFIRING rolled (.*)$')
+RESPAWN_REST = re.compile(r'OWFIRING respawn_rest (.*)$')
 MANIFEST_HINT = 'rerun python tools/weapon_gen_manifest.py --game <BL2 folder>'
 TEMPLATE_HINT = 'run python tools/weapon_gen_firing.py --game <BL2 folder>'
 
@@ -82,10 +83,14 @@ def read_log(text, extra=None):
     extra.setdefault('swap', {})
     extra.setdefault('rolled_damage', None)
     extra.setdefault('rolled', [])
+    extra.setdefault('respawn_rest', None)
     pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
         if match := ROLLED_DAMAGE.search(line):
             extra['rolled_damage'] = fields(match.group(1))
+            continue
+        if match := RESPAWN_REST.search(line):
+            extra['respawn_rest'] = fields(match.group(1))
             continue
         if match := ROLLED.search(line):
             extra['rolled'].append(fields(match.group(1)))
@@ -281,23 +286,25 @@ def pool_near(a, b):
 
 
 def rolled_damage_fails(name, line):
-    """The row's damage against what its shots should deal to the one dummy, when that can be said from the numbers. A dummy that died
-    must have been sent at least its health, and no more than expected; one that was sent its health must have died."""
-    damage, expected, maximum = finite(line, 'damage'), finite(line, 'expected_damage'), finite(line, 'dummy_max')
-    if damage is None or expected is None or maximum is None or line.get('dummy_died') not in ('0', '1'):
-        return [f"{name}: no damage numbers (damage={line.get('damage')}, expected_damage={line.get('expected_damage')}, dummy_max={line.get('dummy_max')}, dummy_died={line.get('dummy_died')})"]
-    if expected < 0:
-        return []    # damage over time or falloff: not said from these numbers
-    close = abs(damage - expected) <= 0.01 * max(expected, 1.0)
-    if line['dummy_died'] == '1':
-        if damage < maximum * 0.99:
-            return [f'{name}: the dummy died with only {damage} sent of its {maximum}: it did not start this row at full health']
-        if damage > expected * 1.01:
-            return [f'{name}: damage {damage} is more than its shots should deal ({expected})']
-        return []
-    if not close:
-        return [f'{name}: damage {damage}, its shots should deal {expected}: a shot missed the live dummy, or the dummy was down']
-    return []
+    """The row's damage against what its shots should deal to the one dummy. The test gives the dummy more health than any row deals, so
+    it must not die and nothing can hide a miss. Where the numbers can't say (expected_damage exactly -1: damage over time or falloff),
+    at least one damaging hit must have landed. What was launched must have landed before the row was read."""
+    damage, expected, flying = finite(line, 'damage'), finite(line, 'expected_damage'), finite(line, 'flying')
+    if damage is None or expected is None or flying is None or line.get('dummy_died') not in ('0', '1'):
+        return [f"{name}: no damage numbers (damage={line.get('damage')}, expected_damage={line.get('expected_damage')}, flying={line.get('flying')}, dummy_died={line.get('dummy_died')})"]
+    fails = []
+    if flying != 0:
+        fails.append(f'{name}: {line.get("flying")} projectiles were still flying when the wait ran out')
+    if line['dummy_died'] != '0':
+        fails.append(f'{name}: the dummy died, with more health than the row should deal (damage {damage})')
+    if expected == -1:
+        if damage <= 0:
+            fails.append(f'{name}: no damaging hit on the dummy (damage {damage})')
+    elif expected < 0:
+        fails.append(f'{name}: expected_damage {expected} is neither a number of damage nor -1')
+    elif abs(damage - expected) > 0.01 * max(expected, 1.0):
+        fails.append(f'{name}: damage {damage}, its shots should deal {expected}: a shot missed the dummy')
+    return fails
 
 
 def rolled_pool_fails(name, line, must_differ):
@@ -379,7 +386,8 @@ def check_rolled(lines):
         if 'damage' in line and line.get('id'):
             by_id.setdefault(line['id'], []).append(line)
     for gun, rows in by_id.items():
-        numbers = [finite(row, 'damage') for row in rows if row.get('dummy_died') == '0' and row.get('shots') == rows[0].get('shots')]
+        # Unknown-damage rows are left out: what they deal is not said to be the same.
+        numbers = [finite(row, 'damage') for row in rows if row.get('shots') == rows[0].get('shots') and (finite(row, 'expected_damage') or 0) >= 0]
         if len(numbers) > 1 and None not in numbers and max(numbers) - min(numbers) > 0.01 * max(max(numbers), 1.0):
             fails.append(f'rolled gun {gun}: the same gun and shots dealt {numbers} in different rows')
     return fails
@@ -468,6 +476,20 @@ def check_rolled_damage(line):
     if near(values['expected'], values['stand_in']):
         fails.append(f"the stack and the stand-in agree ({values['expected']}): this gun cannot tell them apart")
     return [f"rolled gun {line.get('id')}: {reason}" for reason in fails]
+
+
+def check_respawn_rest(line):
+    """A dummy killed by a hit must come back at rest, as its respawn says: no swing left from the lethal hit (OWFIRING respawn_rest)."""
+    if line is None:
+        return ['no OWFIRING respawn_rest line (the check did not run)']
+    if line.get('unavailable'):
+        return [f"not tested ({line['unavailable']})"]
+    wobble, speed = finite(line, 'wobble'), finite(line, 'wobble_speed')
+    if wobble is None or speed is None:
+        return [f"no numbers (wobble={line.get('wobble')}, wobble_speed={line.get('wobble_speed')})"]
+    if abs(wobble) > 0.01 or abs(speed) > 0.01:
+        return [f'the dummy respawned still swinging: wobble {wobble} deg, speed {speed} deg/s']
+    return []
 
 
 def check_hit_events(log, expected, throw=None, required=True, gun=None, swap=None):
@@ -736,6 +758,12 @@ def main(argv=None):
             print(f'rolled: FAIL {reason}')
         print('rolled: FAIL' if rolled else 'rolled: PASS')
         failed += bool(rolled)
+    if extra['respawn_rest'] is not None or not args.legacy:
+        rest = check_respawn_rest(extra['respawn_rest'])
+        for reason in rest:
+            print(f'respawn rest: FAIL {reason}')
+        print('respawn rest: FAIL' if rest else 'respawn rest: PASS')
+        failed += bool(rest)
     return 1 if failed or grenade_fails else 0
 
 

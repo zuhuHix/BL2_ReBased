@@ -327,6 +327,54 @@ void AOpenWillowWalker::RunFiringTest(float Now)
     static float RolledAt = 0.f, RolledHold = 0.f, RolledHeld = 0.f, RolledDamageBefore = 0.f;
     static int32 RolledStage = 1;     // what the gun was rolled at: the card is re-read from the same roll
     static bool bRolledDummyDied = false;
+    static float RolledWobbleAtPress = 0.f;
+    static float RolledPerShot = 0.f;      // what one trigger shot should deal, from the same value firing uses; -1 = can't be said
+    static float RolledSavedMaxHealth = -1.f;
+    // The rows are over: does a dummy killed by a hit come back at rest, as its respawn says? No row can show this, since none kills it.
+    // tools/check_weapon_firing.py check_respawn_rest.
+    static int32 RestStep = 0;
+    static float RestAt = 0.f;
+    if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun >= 4 && RestStep < 2 && CombatTarget.IsValid())
+    {
+        if (RestStep == 0)
+        {
+            if (CombatTarget->IsDead()) return;
+            CombatTarget->SetMaxHealth(1.f);
+            FOpenWillowHitEvent Lethal;
+            Lethal.Instigator = this;
+            Lethal.Target = CombatTarget.Get();
+            Lethal.Kind = EOpenWillowHitKind::Direct;
+            Lethal.Source = EOpenWillowHitSource::Bullet;
+            Lethal.Damage = 1000.f;
+            Lethal.Direction = (CombatTarget->AimPoint() - Camera->GetComponentLocation()).GetSafeNormal();
+            FHitResult LethalHit;
+            LethalHit.ImpactPoint = CombatTarget->AimPoint();
+            LethalHit.Location = LethalHit.ImpactPoint;
+            ApplyShotDamage(CombatTarget.Get(), Lethal, LethalHit);
+            RestAt = Now;
+            RestStep = 1;
+            if (!CombatTarget->IsDead())
+            {
+                UE_LOG(LogTemp, Error, TEXT("OWFIRING respawn_rest unavailable=not_killed"));
+                RestStep = 2;
+            }
+            return;
+        }
+        if (CombatTarget->IsDead() && Now < RestAt + 10.f) return;
+        // The first tick it is alive: a swing left from the lethal hit shows here.
+        if (CombatTarget->IsDead()) { UE_LOG(LogTemp, Error, TEXT("OWFIRING respawn_rest unavailable=no_respawn")); }
+        else
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING respawn_rest waited=%.2f wobble=%.3f wobble_speed=%.3f"), Now - RestAt, CombatTarget->WobbleSize(), CombatTarget->WobbleSpeed());
+        }
+        RestStep = 2;
+    }
+    // Then the dummy gets its own health back.
+    if (RolledGun >= 4 && RolledSavedMaxHealth > 0.f && CombatTarget.IsValid())
+    {
+        CombatTarget->SetMaxHealth(RolledSavedMaxHealth);
+        RolledSavedMaxHealth = -1.f;
+    }
     if (Ids[0] != TEXT("none") && Gun >= Ids.Num() && RolledGun < 4 && CombatTarget.IsValid())
     {
         const int32 Wanted = RolledGun == 0 ? 1 : RolledGun == 1 ? 0 : RolledGun == 2 ? FOpenWillowWeaponGen::BurstTestRocket : FOpenWillowWeaponGen::BurstTestPool;
@@ -370,7 +418,18 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             }
             UOpenWillowStatusEffects::ClearAll(CombatTarget.Get());
             CombatTarget->ResetForTest();
+            // More health than any row deals, so no row can kill it: a death can't hide a miss, and respawn stays out of the row.
+            if (RolledSavedMaxHealth < 0.f) RolledSavedMaxHealth = CombatTarget->GetMaxHealth();
+            CombatTarget->SetMaxHealth(1e8f);
             bRolledDummyDied = false;
+            RolledWobbleAtPress = CombatTarget->WobbleSize();
+            // As OpenWillowWalker.cpp FireWeapon computes it: each pellet's direct hit, or a rocket's explosion, plus a bullet's
+            // impact explosion, the splash following the shot's damage. Not said for damage over time, or falloff with distance.
+            const FOpenWillowFiringData& Fired = Held->Firing;
+            const float ShotAmount = ShotDamage(*Held, Now);
+            const float SplashAmount = Fired.Splash.bValid && Held->Damage > 0.f ? Fired.Splash.Damage * (ShotAmount / Held->Damage) : 0.f;
+            const bool bSaid = !(Fired.Status.bValid && Fired.Status.Dps > 0.f) && (!Fired.Splash.bValid || Fired.Splash.bFullDamage);
+            RolledPerShot = bSaid ? (Fired.Kind == EOpenWillowShotKind::Rocket ? 0.f : ShotAmount) + SplashAmount : -1.f;
             RolledHold = 3.f / Held->FireRate + 0.1f;
             RolledShotsBefore = OpenWillowFiring::Counts.Shots;
             RolledLaunchesBefore = OpenWillowFiring::Counts.Launches;
@@ -400,20 +459,17 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             // The pool on the held gun against the card read apart from it: the only line tying those numbers to the running host.
             float PoolCard[3], PoolBase[3];
             FOpenWillowWeaponGen::RolledPoolValues(Held->Balance, RolledStage, 1u, PoolCard, PoolBase);
-            // What one trigger shot should deal to one target: each pellet's direct hit, or a rocket's explosion, plus a bullet's impact
-            // explosion. -1 when it can't be said from these numbers (damage over time, or falloff with distance).
-            const FOpenWillowFiringData& Fired = Held->Firing;
-            const bool bRocketShot = Fired.Kind == EOpenWillowShotKind::Rocket;
-            const bool bSaid = !(Fired.Status.bValid && Fired.Status.Dps > 0.f) && (!Fired.Splash.bValid || Fired.Splash.bFullDamage);
-            const float PerShot = (bRocketShot ? 0.f : Held->Damage) + (Fired.Splash.bValid ? Fired.Splash.Damage : 0.f);
-            const float ExpectedDamage = bSaid ? (C.Shots - RolledShotsBefore) * FMath::Max(1, Fired.Pellets) * PerShot : -1.f;
-            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d impacts=%d damage=%.2f flying=%d expected_damage=%.2f dummy_died=%d dummy_max=%.2f pool_min=%.6f pool_max=%.6f pool_rate=%.6f card_min=%.6f card_max=%.6f card_rate=%.6f base_min=%.6f base_max=%.6f base_rate=%.6f"),
+            const float ExpectedDamage = RolledPerShot >= 0.f ? (C.Shots - RolledShotsBefore) * FMath::Max(1, Held->Firing.Pellets) * RolledPerShot : -1.f;
+            UE_LOG(LogTemp, Display, TEXT("OWFIRING rolled want=%d id=%s type=%s burst=%d from_manifest=%d firing_loaded=%d interval=%.3f hold=%.3f magazine=%.0f shots=%d launches=%d impacts=%d damage=%.2f flying=%d expected_damage=%.2f dummy_died=%d wobble_at_press=%.3f pool_min=%.6f pool_max=%.6f pool_rate=%.6f card_min=%.6f card_max=%.6f card_rate=%.6f base_min=%.6f base_max=%.6f base_rate=%.6f"),
                 Wanted, *Held->Id, *Held->Type.Replace(TEXT(" "), TEXT("_")), Held->Firing.BurstCount, Held->Firing.bBurstFromManifest ? 1 : 0,
                 Held->Firing.bLoaded ? 1 : 0, 1.f / Held->FireRate, RolledHeld, Held->Magazine, C.Shots - RolledShotsBefore,
                 C.Launches - RolledLaunchesBefore, C.ImpactsByWeapon.FindRef(Held->Id) - RolledImpactsBefore,
-                C.DamageByWeapon.FindRef(Held->Id) - RolledDamageBefore, Flying, ExpectedDamage, bRolledDummyDied ? 1 : 0, CombatTarget->GetMaxHealth(),
+                C.DamageByWeapon.FindRef(Held->Id) - RolledDamageBefore, Flying, ExpectedDamage, bRolledDummyDied ? 1 : 0, RolledWobbleAtPress,
                 float(Held->Firing.Pool.minValue), float(Held->Firing.Pool.maxValue), float(Held->Firing.Pool.idleRate),
                 PoolCard[0], PoolCard[1], PoolCard[2], PoolBase[0], PoolBase[1], PoolBase[2]);
+            // Past the wait: the row fails on flying above 0, and what is still in the air can't count towards a later row of this gun.
+            if (Flying > 0)
+                for (TActorIterator<AOpenWillowProjectile> It(GetWorld()); It; ++It) It->Destroy();
             ++RolledGun;
             RolledStep = 0;
         }
