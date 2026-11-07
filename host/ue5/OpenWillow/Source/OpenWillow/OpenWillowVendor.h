@@ -189,6 +189,8 @@ class OPENWILLOW_API AOpenWillowVendingMachine : public AActor
 public:
     AOpenWillowVendingMachine();
     void Configure(const FString& InId, const FString& InTitle, const FString& InKind);
+    // What the use key's view ray tests: the stand-in body, not its floating label.
+    FBox UseBox() const;
 
     FString Id;
     FString Title;
@@ -213,7 +215,7 @@ public:
     // Called from AOpenWillowWalker::PickupNearby. True when the press was used (a machine opened, or the shop is
     // already open); false lets the pickup go on.
     static bool TryUseNearest(AOpenWillowWalker& Walker);
-    // The reach test of TryUseNearest on its own: the squared distance to the nearest machine in reach (0 while the shop
+    // The reach test of TryUseNearest on its own: the squared distance to the nearest machine in reach that Maya looks at (0 while the shop
     // is shown, so a press closes it). The walker compares it with its other use targets.
     static bool NearestInReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared);
 

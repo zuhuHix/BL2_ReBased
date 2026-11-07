@@ -41,6 +41,7 @@ QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)
 QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
 QUICK_ANY = re.compile(r'OWQUICKCHANGE (.*)$', re.M)
 QUICK_AWAY = re.compile(r'OWQCTEST walked away')
+QUICK_LOOKED = re.compile(r'OWQCTEST looked away selected=(\d+)')
 QUICK_REFUSAL = re.compile(r'OWQCTEST refusal money=(\d+) grades_same=(\d)')
 QUICK_GRADES = re.compile(r'OWQCTEST reset grades_changed=(\d)')
 QUICK_RESET = re.compile(r'OWQUICKCHANGE reset id=(\S+) ok=(\d) cost=(\d+) before=(\d+) after=(\d+) reason=(.*)$', re.M)
@@ -261,7 +262,7 @@ def quick_events(log_text):
 
 
 def grade_quick_change(log_text, out):
-    """The -owinteractivetest sequence through the use key: ask, walk away (cancel), ask again, refused for lack of money,
+    """The -owinteractivetest sequence through the use key: look away (nothing), ask, walk away (cancel), ask again, refused for lack of money,
     ask, reset. Each reset must answer the prompt just before it: same station, same price."""
     unknown = [m.group(0).strip() for m in QUICK_ANY.finditer(log_text)
                if not any(rule.match(log_text, m.start()) for rule in (QUICK_PROMPT, QUICK_CANCEL, QUICK_RESET))]
@@ -272,6 +273,10 @@ def grade_quick_change(log_text, out):
     kinds = [kind for kind, _ in events]
     if kinds != ['prompt', 'cancel', 'prompt', 'reset', 'prompt', 'reset']:
         out.add('quick_change', 'FAIL', f'station events {kinds}, expected prompt, cancel, prompt, reset, prompt, reset')
+        return
+    looked = list(QUICK_LOOKED.finditer(log_text))
+    if len(looked) != 1 or looked[0].group(1) != '0' or looked[0].end() > events[0][1].start():
+        out.add('quick_change', 'FAIL', f'in reach and looking away must select nothing and ask nothing, before the first prompt: {[m.group(0) for m in looked]}')
         return
     away, refused, confirmed = events[1][1], events[3][1], events[5][1]
     if QUICK_AWAY.search(log_text, events[0][1].end(), away.start()) is None or away.group(2).strip() != 'not the selected target':

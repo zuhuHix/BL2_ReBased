@@ -2,6 +2,7 @@
 // ow.Vendor.* console commands.
 #include "OpenWillowVendor.h"
 #include "OpenWillowVendorPage.h"
+#include "OpenWillowUseView.h"
 #include "OpenWillowCurrency.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowMayaState.h"
@@ -321,7 +322,7 @@ TSharedRef<FJsonObject> GearBackpackJson(const FOpenWillowGearItem& Gear, bool b
 }
 
 // Reach of the use key (GlobalsDefinition.PlayerInteractionDistance, 350 uu, NATIVE_USE_INTERACTION.md). The native
-// use trace is not modelled: this is a distance check from the walker's origin, a labelled UNVERIFIED stand-in.
+// use trace is modelled on the machine's stand-in box (OpenWillowUseView.h); this reach from the walker's origin also stays, to order several: UNVERIFIED.
 constexpr float InteractionReach = 350.f;
 }
 
@@ -910,6 +911,11 @@ AOpenWillowVendingMachine::AOpenWillowVendingMachine()
     Label->SetWorldSize(40.f);
 }
 
+FBox AOpenWillowVendingMachine::UseBox() const
+{
+    return Body->Bounds.GetBox();
+}
+
 void AOpenWillowVendingMachine::Configure(const FString& InId, const FString& InTitle, const FString& InKind)
 {
     Id = InId;
@@ -1082,7 +1088,7 @@ bool UOpenWillowVendorSubsystem::NearestInReach(const AOpenWillowWalker& Walker,
         const AOpenWillowVendingMachine* Machine = Candidate.Get();
         if (!Machine) continue;
         const double DistanceSquared = FVector::DistSquared(Walker.GetActorLocation(), Machine->GetActorLocation());
-        if (DistanceSquared >= OutDistanceSquared) continue;
+        if (DistanceSquared >= OutDistanceSquared || !OpenWillowUseView::LooksAt(Walker, Machine->UseBox(), Machine)) continue;
         OutDistanceSquared = DistanceSquared;
         bFound = true;
     }
@@ -1101,7 +1107,7 @@ bool UOpenWillowVendorSubsystem::UseNearest(AOpenWillowWalker& Walker)
         AOpenWillowVendingMachine* Machine = Candidate.Get();
         if (!Machine) continue;
         const double DistanceSquared = FVector::DistSquared(WalkerLocation, Machine->GetActorLocation());
-        if (DistanceSquared >= BestDistanceSquared) continue;
+        if (DistanceSquared >= BestDistanceSquared || !OpenWillowUseView::LooksAt(Walker, Machine->UseBox(), Machine)) continue;
         BestDistanceSquared = DistanceSquared;
         Nearest = Machine;
     }

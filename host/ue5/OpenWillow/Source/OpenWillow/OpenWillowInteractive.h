@@ -226,8 +226,8 @@ private:
     void ReadBalances(const TSharedPtr<FJsonObject>& Root);
     void SpawnObjects(UWorld& World, const TSharedPtr<FJsonObject>& Root);
     void SpawnStations(UWorld& World, const TSharedPtr<FJsonObject>& Root);
-    // The nearest Quick Change station in reach, with its squared distance (reach as for lootables).
-    class AOpenWillowQuickChangeStation* NearestStation(const FVector& From, double& OutDistanceSquared) const;
+    // The nearest Quick Change station in reach that Maya looks at, with its squared distance (reach as for lootables).
+    class AOpenWillowQuickChangeStation* NearestStation(const AOpenWillowWalker& Walker, double& OutDistanceSquared) const;
     TArray<TWeakObjectPtr<class AOpenWillowQuickChangeStation>> Stations;
     // The station the press would go to now; null when another target would take it.
     class AOpenWillowQuickChangeStation* SelectedStation(const AOpenWillowWalker& Walker) const;

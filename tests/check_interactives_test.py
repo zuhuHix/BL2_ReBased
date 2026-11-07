@@ -57,6 +57,7 @@ def line(text):
     return f'LogTemp: Display: {text}\n'
 
 
+QUICK_LOOKED = 'OWQCTEST looked away selected=0'
 QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
              'OWQCTEST walked away',
              'OWQUICKCHANGE cancel id=S reason=not the selected target',
@@ -92,7 +93,7 @@ def good_log(spawned=3, unsupported=1):
     text += line(f'OWLOOTLID material balance=Balance.0 id=Map:Point_2 path={PLANNED_PATH}')
     for phase in ('closed', 'mid', 'opened'):
         text += line(f'OWLOOTLID shot balance=Balance.0 phase={phase}')
-    text += ''.join(line(row) for row in QUICK_RUN)
+    text += ''.join(line(row) for row in [QUICK_LOOKED, *QUICK_RUN])
     text += line('OWINTERACTIVETEST done spawned=3 opened=3')
     return text
 
@@ -354,8 +355,22 @@ class CommandLineTest(unittest.TestCase):
 class QuickChangeTest(unittest.TestCase):
     def grade(self, rows=None):
         out = ci.Results()
-        ci.grade_quick_change('\n'.join(QUICK_RUN if rows is None else rows) + '\n', out)
+        ci.grade_quick_change('\n'.join([QUICK_LOOKED, *(QUICK_RUN if rows is None else rows)]) + '\n', out)
         return out.rows[0]
+
+    def graded_as_is(self, rows):
+        out = ci.Results()
+        ci.grade_quick_change('\n'.join(rows) + '\n', out)
+        return out.rows[0]
+
+    def test_no_look_away_line_fails(self):
+        self.assertEqual(self.graded_as_is(QUICK_RUN)[1], 'FAIL')
+
+    def test_a_station_selected_while_looking_away_fails(self):
+        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=1', *QUICK_RUN])[1], 'FAIL')
+
+    def test_a_prompt_before_the_look_away_line_fails(self):
+        self.assertEqual(self.graded_as_is([QUICK_RUN[0], QUICK_LOOKED, *QUICK_RUN[1:]])[1], 'FAIL')
 
     def changed(self, index, old, new):
         rows = list(QUICK_RUN)

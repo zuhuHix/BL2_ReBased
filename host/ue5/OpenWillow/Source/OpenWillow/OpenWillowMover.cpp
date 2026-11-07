@@ -1,5 +1,6 @@
 #include "OpenWillowMover.h"
 #include "OpenWillowWalker.h"
+#include "OpenWillowUseView.h"
 #include "mover.hpp"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -216,14 +217,19 @@ void UOpenWillowMover::Fail(const FString& Error) {
         FPlatformMisc::RequestExit(false);
     }
 }
-bool UOpenWillowMover::InReach(const FVector& From, double& OutDistanceSquared) const {
+bool UOpenWillowMover::InReach(const AOpenWillowWalker& Walker, double& OutDistanceSquared) const {
     if (!Impl || Failed || !Mesh) return false;
-    OutDistanceSquared = FVector::DistSquared(From, Mesh->Bounds.Origin);
-    return OutDistanceSquared <= FMath::Square(220.);
+    OutDistanceSquared = FVector::DistSquared(Walker.GetActorLocation(), Mesh->Bounds.Origin);
+    if (OutDistanceSquared > FMath::Square(220.)) return false;
+    // Where the door is now, or where it closes: an open door can be closed from where it was opened. What the game's door offers is unread: UNVERIFIED.
+    FBox Box = Mesh->Bounds.GetBox();
+    if (Mesh->GetStaticMesh()) Box += Mesh->GetStaticMesh()->GetBoundingBox().TransformBy(Initial);
+    return OpenWillowUseView::LooksAt(Walker, Box, Mesh->GetOwner());
 }
 bool UOpenWillowMover::TryInteract() {
-    if (!Impl || Failed || !Mesh) return false;
-    if (FVector::DistSquared(GetOwner()->GetActorLocation(), Mesh->Bounds.Origin) > FMath::Square(220.)) return false;
+    const auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    double DistanceSquared = 0;
+    if (!Walker || !InReach(*Walker, DistanceSquared)) return false;
     if (Running) return true; // consume repeat key while moving
     StartMotion(Time >= Duration);
     return true;
