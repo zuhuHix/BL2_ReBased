@@ -28,7 +28,7 @@ functions) and Dialog Skipper, with `Autoskip Dialog` on (per the mission lane's
 `tools/real_game/audio_events_capture.ps1` logs the game's sound calls (`scripts/audio_events.py`) in labelled windows: `idle` (baseline), `phaselock`, `fire_away`
 (shots at the sky), `fire_hit` (shots at a target) and `pickup`. A window's `new` list holds events its baselines did not see; `tied` is the part of `new` that followed
 enough of the action's moments within a short span (the game's own call when it fires often enough, else the key press; both are logged). A stage passes only on `tied`,
-so an ambient sound that merely falls in the window does not count. The result feeds the role map of `tools/prepare_slice_audio.py` (feature/slice-audio).
+so an ambient sound that merely falls in the window does not count. The result feeds the role map of `tools/prepare_slice_audio.py`; see `docs/verification/SLICE_AUDIO_CHAIN.md` section 5.
 
 - **Logging only.** The hooks are pre-call and record; they do not block or change a call. Output is game data under ignored `local/realgame/audio_events/`.
 - **What it cannot see.** A function called from native code to native code passes no hook, so an absent event means "not seen here", not "not played". The run then ends `incomplete` for that stage.
