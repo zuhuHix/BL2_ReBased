@@ -44,6 +44,8 @@ QUICK_AWAY = re.compile(r'OWQCTEST walked away')
 QUICK_LOOKED = re.compile(r'OWQCTEST looked away selected=(\d+) target=(\S+)')
 VIEW_BLOCKED = re.compile(r'OWQCTEST blocked selected=(\d+) target=(\S+) fixture=(\d+)')
 VIEW_CLEAR = re.compile(r'OWQCTEST clear selected=(\d+) target=(\S+)')
+VIEW_RAY = re.compile(r'OWQCTEST ray (blocked|clear) .*?enters=(\d+) distance=\S+ blocked=(\d+) start_penetrating=(\d+) hit=(\S*?)/(\S*) hit_distance=')
+SHEET = 'ViewBlockerFixture'
 QUICK_REFUSAL = re.compile(r'OWQCTEST refusal money=(\d+) grades_same=(\d)')
 QUICK_GRADES = re.compile(r'OWQCTEST reset grades_changed=(\d)')
 QUICK_RESET = re.compile(r'OWQUICKCHANGE reset id=(\S+) ok=(\d) cost=(\d+) before=(\d+) after=(\d+) reason=(.*)$', re.M)
@@ -318,8 +320,16 @@ def grade_view_blocker(log_text, out):
         out.add('use_view_blocker', 'FAIL', f'{len(blocked)} blocked and {len(clear)} clear lines, expected one each')
         return
     first_prompt = QUICK_PROMPT.search(log_text)
+    rays = {m.group(1): m for m in VIEW_RAY.finditer(log_text)}
     if blocked[0].end() > clear[0].start() or first_prompt is None or clear[0].end() > first_prompt.start():
         out.add('use_view_blocker', 'FAIL', 'expected blocked, then clear, then the first station prompt')
+    elif set(rays) != {'blocked', 'clear'}:
+        out.add('use_view_blocker', 'FAIL', f'expected a ray line at each step, got {sorted(rays)}')
+    elif rays['blocked'].group(2, 3, 4, 6) != ('1', '1', '0', SHEET):
+        # Only the sheet counts: something else stopping the ray, or an eye already inside collision, would read as blocked without testing the blocker.
+        out.add('use_view_blocker', 'FAIL', f'the sheet was not what stopped the ray: {rays["blocked"].group(0)}')
+    elif rays['clear'].group(2, 3, 4) != ('1', '0', '0'):
+        out.add('use_view_blocker', 'FAIL', f'the ray is not clear with the sheet gone: {rays["clear"].group(0)}')
     elif blocked[0].group(3) != '1':
         out.add('use_view_blocker', 'FAIL', 'the blocking fixture did not spawn, so this shows nothing')
     elif blocked[0].group(1, 2) != ('0', 'none'):
