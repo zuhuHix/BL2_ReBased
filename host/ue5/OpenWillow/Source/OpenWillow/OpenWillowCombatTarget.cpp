@@ -772,6 +772,7 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
     // Host stand-in (UNVERIFIED): the death clip plays; after RagdollDelay the mesh goes limp (physics only when the imported
     // mesh has a physics asset; the log says which); after RespawnDelay the mesh is put back on its pose and the target stands again.
     const float Since = Now - DiedAt;
+    if (bRagdollSimulating) TrackCorpse();
     if (!bRagdoll && Since >= RagdollDelay)
     {
         bRagdoll = true;
@@ -781,12 +782,33 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
         if (HitVolume) HitVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
         StockMesh->SetCollisionProfileName(TEXT("Ragdoll"));
         const bool bPhysics = StockMesh->GetPhysicsAsset() != nullptr;
-        if (bPhysics) StockMesh->SetSimulatePhysics(true);
+        if (bPhysics)
+        {
+            // Nothing throws a corpse on purpose: the death zeroed the knock, and no velocity is handed to the ragdoll. What can is the
+            // moment physics takes over, with bodies overlapping each other or the floor (the suspect for the flung corpses of the first
+            // playtest, UNVERIFIED): so that push is limited, and TrackCorpse caps what still gets through and logs it.
+            for (FBodyInstance* Body : StockMesh->Bodies)
+                if (Body) Body->SetMaxDepenetrationVelocity(RagdollDepenetrationSpeed);
+            StockMesh->SetSimulatePhysics(true);
+            StockMesh->SetAllPhysicsLinearVelocity(FVector::ZeroVector);
+            StockMesh->SetAllPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+            bRagdollSimulating = true;
+            bCorpseMeasured = true;
+            CorpseFrom = StockMesh->Bounds.Origin;
+            CorpseRise = CorpseDrift = CorpseSpeed = 0.f;
+            CorpseCaps = 0;
+        }
         UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s ragdoll at %.2f s: physics asset %s"), *GetName(), Since,
             bPhysics ? TEXT("yes, simulating") : TEXT("none, not simulated"));
     }
     if (Since < RespawnDelay) return;
     if (bRagdoll) StockMesh->SetSimulatePhysics(false);
+    if (bRagdollSimulating)
+    {
+        bRagdollSimulating = false;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s corpse rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s, %d speed caps"), *GetName(),
+            CorpseRise, CorpseDrift, CorpseSpeed, CorpseCaps);
+    }
     // The mesh goes back under the pivot at its rest offset; the host never sets its rotation, so zero is its rest rotation.
     StockMesh->AttachToComponent(Pivot, FAttachmentTransformRules::KeepRelativeTransform);
     StockMesh->SetRelativeLocation(StockMeshBaseOffset);
@@ -810,6 +832,51 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
     PlayStock(StockIdle, true);
     UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s respawned after %.2f s at %s"), *GetName(), Since, *HomeLocation.ToString());
     OnRespawned();
+}
+
+void AOpenWillowCombatTarget::TrackCorpse()
+{
+    const FVector At = StockMesh->Bounds.Origin;
+    CorpseRise = FMath::Max(CorpseRise, float(At.Z - CorpseFrom.Z));
+    CorpseDrift = FMath::Max(CorpseDrift, float(FVector::Dist2D(At, CorpseFrom)));
+    for (FBodyInstance* Body : StockMesh->Bodies)
+    {
+        // Through the component: a kinematic body keeps its velocity, and FBodyInstance's own check needs the PhysicsCore module linked.
+        if (!Body || !StockMesh->IsSimulatingPhysics(StockMesh->GetBoneName(Body->InstanceBoneIndex))) continue;
+        FVector Velocity = Body->GetUnrealWorldVelocity();
+        CorpseSpeed = FMath::Max(CorpseSpeed, float(Velocity.Size()));
+        const FVector2D Flat(Velocity.X, Velocity.Y);
+        const double FlatSpeed = Flat.Size();
+        if (Velocity.Z <= RagdollMaxRiseSpeed && FlatSpeed <= RagdollMaxFlatSpeed) continue;
+        if (FlatSpeed > RagdollMaxFlatSpeed)
+        {
+            Velocity.X *= RagdollMaxFlatSpeed / FlatSpeed;
+            Velocity.Y *= RagdollMaxFlatSpeed / FlatSpeed;
+        }
+        Velocity.Z = FMath::Min(Velocity.Z, double(RagdollMaxRiseSpeed));
+        Body->SetLinearVelocity(Velocity, false);
+        ++CorpseCaps;
+    }
+}
+
+bool AOpenWillowCombatTarget::KickCorpseForTest(float UpSpeed)
+{
+    if (!bRagdollSimulating) return false;
+    for (FBodyInstance* Body : StockMesh->Bodies)
+    {
+        if (!Body) continue;
+        const FName Bone = StockMesh->GetBoneName(Body->InstanceBoneIndex);
+        if (!StockMesh->IsSimulatingPhysics(Bone)) continue;
+        Body->SetLinearVelocity(FVector(0.f, 0.f, UpSpeed), false);
+        CorpseKickBone = Bone;
+        return true;
+    }
+    return false;
+}
+
+float AOpenWillowCombatTarget::CorpseKickedRiseSpeed() const
+{
+    return CorpseKickBone.IsNone() || !bRagdollSimulating ? 0.f : float(StockMesh->GetPhysicsLinearVelocity(CorpseKickBone).Z);
 }
 
 FVector AOpenWillowCombatTarget::MomentumVelocity(const FVector& Momentum, float Mass)

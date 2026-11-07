@@ -1,4 +1,5 @@
 #include "OpenWillowRange.h"
+#include "Engine/Engine.h"
 #include "Engine/Texture.h"
 #include "Materials/MaterialInstance.h"
 #include "OpenWillowCombatTarget.h"
@@ -373,6 +374,7 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 if (!Obj.IsValid()) continue;
                 FOpenWillowRangeKind Kind;
                 Kind.Name = Pair.Key;
+                Kind.Json = Obj;
                 Obj->TryGetStringField(TEXT("label"), Kind.Label);
                 Obj->TryGetStringField(TEXT("mesh"), Kind.Mesh);
                 Obj->TryGetStringField(TEXT("idle"), Kind.Idle);
@@ -395,6 +397,7 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 Read(TEXT("walk_speed"), Kind.WalkSpeed);
                 Read(TEXT("patrol_radius"), Kind.PatrolRadius);
                 Read(TEXT("run_speed"), Kind.RunSpeed);
+                Read(TEXT("melee_start_range"), Kind.MeleeStartRange);
                 Read(TEXT("shield"), Kind.Shield);
                 Read(TEXT("shield_delay"), Kind.ShieldDelay);
                 Read(TEXT("shield_rate"), Kind.ShieldRate);
@@ -470,6 +473,20 @@ void UOpenWillowRangeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
     bTestMode = FParse::Param(FCommandLine::Get(), TEXT("owrangetest"));
     bSurveyMode = FParse::Param(FCommandLine::Get(), TEXT("owrangesurvey"));
+    bStartSwitch = FParse::Param(FCommandLine::Get(), TEXT("owrangestart"));
+    bKillRow = bStartSwitch && FParse::Param(FCommandLine::Get(), TEXT("owrangekillrow"));
+    FString ModeSwitch;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrangemode="), ModeSwitch))
+    {
+        // The toggles ow.RangeMode sets, from the start (read by the build).
+        bModeInvulnerable = ModeSwitch.Equals(TEXT("invulnerable"), ESearchCase::IgnoreCase) || ModeSwitch.Equals(TEXT("both"), ESearchCase::IgnoreCase);
+        bModePassive = ModeSwitch.Equals(TEXT("passive"), ESearchCase::IgnoreCase) || ModeSwitch.Equals(TEXT("both"), ESearchCase::IgnoreCase);
+    }
+    if (bStartSwitch && (bTestMode || bSurveyMode))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWRANGE -owrangestart is ignored with -owrangetest or -owrangesurvey: they build their own range"));
+        bStartSwitch = false;
+    }
     FString LootSwitch;
     if (FParse::Value(FCommandLine::Get(), TEXT("owrangeloot="), LootSwitch))
     {
@@ -507,6 +524,19 @@ void UOpenWillowRangeSubsystem::Tick(float DeltaTime)
     if (bBuilt) UpdateThreatDen(Den, Now);   // PR2: the den's fall-back check (every second)
     if (bTestMode && !bTestDone) TickTest(Now);
     if (bSurveyMode && !bSurveyDone) TickSurvey(Now);
+    if (bStartSwitch && !bStartSwitchDone) TickStartSwitch(Now);
+    if (bKillRow && !bKillRowDone && bStartSwitchDone) TickKillRow(Now);
+}
+
+void UOpenWillowRangeSubsystem::TickStartSwitch(float Now)
+{
+    // As the test driver: wait for Maya, then give the level's streaming the same few seconds before the floor traces of the spot.
+    if (!UGameplayStatics::GetPlayerPawn(this, 0)) return;
+    if (StartSwitchArmedAt < 0.f) { StartSwitchArmedAt = Now; return; }
+    if (Now - StartSwitchArmedAt < 4.f) return;
+    bStartSwitchDone = true;
+    const bool bBuilt_ = BuildAtResolvedSpot();
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE start switch: built=%d"), bBuilt_ ? 1 : 0);
 }
 
 bool UOpenWillowRangeSubsystem::LoadSliceData()
@@ -541,8 +571,39 @@ int32 UOpenWillowRangeSubsystem::EnemyLevel() const
     return 1;
 }
 
+void UOpenWillowRangeSubsystem::RefuseBuild(const FString& Why)
+{
+    BuildRefusal = Why;
+    UE_LOG(LogTemp, Warning, TEXT("OWRANGE build refused: %s"), *Why);
+    if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 30.f, FColor::Red, FString::Printf(TEXT("Range not built: %s"), *Why));
+}
+
+FString UOpenWillowRangeSubsystem::ManifestProblem() const
+{
+    if (!Manifest.bFromFile) return TEXT("no range manifest: run tools/prepare_range.py");
+    if (Manifest.Spawns.Num() == 0) return TEXT("the range manifest spawns nothing: re-run tools/prepare_range.py");
+    for (const FOpenWillowRangeSpawn& Spawn : Manifest.Spawns)
+    {
+        const FOpenWillowRangeKind* Kind = Manifest.Kinds.Find(Spawn.Kind);
+        if (!Kind) return FString::Printf(TEXT("the range manifest spawns %s, which it does not define: re-run tools/prepare_range.py"), *Spawn.Kind);
+        if (Kind->MeleeArrivalByLevel.Num() == 0 || Kind->MeleeRatioByLevel.Num() == 0 || Kind->MeleeStartRange <= 0.f)
+            return FString::Printf(TEXT("kind %s has no melee tables or swing range (an old or --no-vm manifest): its enemies could not fight as the range expects. Re-run tools/prepare_range.py"), *Spawn.Kind);
+    }
+    return FString();
+}
+
 bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
 {
+    // Whichever way it was started (ow.Range, -owrangestart, the test): nothing is built on a manifest that cannot fight, and the person who
+    // asked sees why, not only the log.
+    EnsureManifest();
+    BuildRefusal.Reset();
+    const FString Problem = ManifestProblem();
+    if (!Problem.IsEmpty())
+    {
+        RefuseBuild(Problem);
+        return false;
+    }
     UWorld* World = GetWorld();
     if (!World) return false;
     ClearRange();
@@ -552,7 +613,7 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
     FString Why;
     if (!FormationSlots(Spot, Yaw, DummySlots, EnemySlots, Why))
     {
-        UE_LOG(LogTemp, Warning, TEXT("OWRANGE build failed at %s yaw %.0f: %s"), *Spot.ToString(), Yaw, *Why);
+        RefuseBuild(FString::Printf(TEXT("the formation does not fit at %s yaw %.0f: %s"), *Spot.ToString(), Yaw, *Why));
         return false;
     }
     SpotNow = Spot;
@@ -578,7 +639,7 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             bStock ? TEXT("yes") : TEXT("no (engine shapes)"), Manifest.RespawnSeconds);
     }
 
-    // Moving enemies: the manifest's spawns on the arc slots, in manifest order, each facing the spot.
+    // Moving enemies: the manifest's spawns on the arc slots, in manifest order, each facing away from the spot.
     const int32 Level = EnemyLevel();
     int32 Index = 0;
     for (const FOpenWillowRangeSpawn& Spawn : Manifest.Spawns)
@@ -594,7 +655,9 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             const FVector& At = EnemySlots[Index];
             FActorSpawnParameters Params;
             Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-            AOpenWillowEnemy* Enemy = World->SpawnActor<AOpenWillowEnemy>(At, FRotator(0.f, (Spot - At).Rotation().Yaw, 0.f), Params);
+            // Host layout, not a game rule: the den stands facing away from the spot, so arriving does not trip the sight rule on the
+            // first update. Its patrol, or a shot, or coming close, starts the fight by the same rules as anywhere.
+            AOpenWillowEnemy* Enemy = World->SpawnActor<AOpenWillowEnemy>(At, FRotator(0.f, (At - Spot).Rotation().Yaw, 0.f), Params);
             if (!Enemy) continue;
             Enemy->SetupKind(*Kind, Level, Manifest.RespawnSeconds);
             Enemy->SetInvulnerable(bModeInvulnerable);
@@ -609,8 +672,8 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
     // Every slot must hold its actor; an incomplete range is a failed build (nothing is left standing).
     if (Dummies.Num() != DummySlots.Num() || Enemies.Num() != EnemySlots.Num())
     {
-        UE_LOG(LogTemp, Warning, TEXT("OWRANGE build failed: spawned %d of %d dummies and %d of %d enemies"), Dummies.Num(),
-            DummySlots.Num(), Enemies.Num(), EnemySlots.Num());
+        RefuseBuild(FString::Printf(TEXT("spawned %d of %d dummies and %d of %d enemies"), Dummies.Num(),
+            DummySlots.Num(), Enemies.Num(), EnemySlots.Num()));
         ClearRange();
         return false;
     }
@@ -678,6 +741,22 @@ void UOpenWillowRangeSubsystem::SetMode(bool bInvulnerableNow, bool bPassiveNow)
         }
     UE_LOG(LogTemp, Display, TEXT("OWRANGE mode invulnerable=%d passive=%d (%d dummies, %d enemies)"), bModeInvulnerable ? 1 : 0,
         bModePassive ? 1 : 0, Dummies.Num(), Enemies.Num());
+}
+
+bool UOpenWillowRangeSubsystem::BuildAtResolvedSpot()
+{
+    FVector Spot;
+    float Yaw = 0.f;
+    FString Source;
+    if (bTestNoSpot || !ResolveSpot(Spot, Yaw, Source))
+    {
+        RefuseBuild(TEXT("no spot for the range: no candidate or scouted place fits it (the log says why for each)"));
+        return false;
+    }
+    if (!BuildRange(Spot, Yaw)) return false;
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE spot source=%s at=%s yaw=%.0f"), *Source, *Spot.ToString(), Yaw);
+    TeleportMaya(GetWorld(), Spot, Yaw);
+    return true;
 }
 
 bool UOpenWillowRangeSubsystem::ResolveSpot(FVector& OutSpot, float& OutYaw, FString& OutSource)
@@ -941,6 +1020,125 @@ void UOpenWillowRangeSubsystem::TestShot(int32 Number)
     RequestRangeShot(FString::Printf(TEXT("range_%d.png"), Number));
 }
 
+void UOpenWillowRangeSubsystem::FinishKill(bool bOk, const FString& Why)
+{
+    if (!bOk) ++KillFailed;
+    UE_LOG(LogTemp, Display, TEXT("OWRANGEKILL gun=%d result=%s %s"), KillGun, bOk ? TEXT("PASS") : TEXT("FAIL"), *Why);
+    ++KillGun;
+    KillStage = 0;
+}
+
+static constexpr int32 KillGunStage = 8;
+
+// The kill row: what the first playtest saw flung, from the same kind of shots. Passive enemies, so nothing else moves them. Each gun kills one enemy from
+// about 700 uu; frames at the times the playtest's stills were taken; the corpse's own numbers after its respawn. Sanctuary only, host behaviour only.
+void UOpenWillowRangeSubsystem::TickKillRow(float Now)
+{
+    static const TCHAR* const Pools[] = {TEXT("GD_Itempools.WeaponPools.Pool_Weapons_Pistols"), TEXT("GD_Itempools.WeaponPools.Pool_Weapons_Shotguns")};
+    UWorld* World = GetWorld();
+    AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(World, 0));
+    APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
+    UOpenWillowInventory* Inventory = Walker ? Walker->GetInventory() : nullptr;
+    if (KillGun >= UE_ARRAY_COUNT(Pools) || !bBuilt || !PC || !Inventory)
+    {
+        if (KillGun < UE_ARRAY_COUNT(Pools)) ++KillFailed;
+        UE_LOG(LogTemp, Display, TEXT("OWRANGEKILL done guns=%d fail=%d"), KillGun, KillFailed);
+        bKillRowDone = true;
+        if (PC) PC->ConsoleCommand(TEXT("quit"));
+        return;
+    }
+    AOpenWillowEnemy* Enemy = KillTarget.Get();
+    switch (KillStage)
+    {
+    case 0: // the next enemy, Maya in front of it, the gun rolled, equipped and drawn
+    {
+        Enemy = Enemies.IsValidIndex(KillGun) ? Enemies[KillGun].Get() : nullptr;
+        if (!Enemy || !Enemy->IsStockPawn() || Enemy->IsDead()) { FinishKill(false, TEXT("no living stock enemy for this gun")); return; }
+        KillTarget = Enemy;
+        const FVector At = Enemy->GetActorLocation() + (SpotNow - Enemy->GetActorLocation()).GetSafeNormal2D() * 700.f;
+        FVector Floor;
+        if (!AOpenWillowEnemy::TraceFloor(World, FVector2D(At.X, At.Y), At.Z + 500.f, At.Z - 500.f, Walker, Floor)) { FinishKill(false, TEXT("no floor in front of the enemy")); return; }
+        TeleportMaya(World, Floor, (Enemy->GetActorLocation() - Floor).Rotation().Yaw);
+        // Test fixture: room for the gun and for what the equip swaps out. Maya's stand-in gear can fill the backpack (Z16), and nothing here is saved.
+        const FOpenWillowWeaponItem* Active = Inventory->ActiveWeapon();
+        const FString ActiveId = Active ? UOpenWillowInventory::StableId(*Active) : FString();
+        TArray<FString> Spare;
+        for (const FOpenWillowWeaponItem& Item : Inventory->Items())
+            if (UOpenWillowInventory::StableId(Item) != ActiveId) Spare.Add(UOpenWillowInventory::StableId(Item));
+        int32 Freed = 0;
+        for (int32 Index = Spare.Num() - 1; Index >= 0 && Freed < 2; --Index)
+        {
+            FOpenWillowTakenInventoryItem Taken;
+            if (Walker->TakeInventoryItemById(Spare[Index], Taken)) ++Freed;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OWRANGEKILL gun=%d fixture: %d item(s) taken from the backpack, %d left"), KillGun, Freed, Inventory->BackpackCount());
+        TSet<FString> Before;
+        for (const FOpenWillowWeaponItem& Item : Inventory->Items()) Before.Add(UOpenWillowInventory::StableId(Item));
+        // The playtest's stage: at stage 1 these pools give nothing, and the shotgun pool still nothing at 2 (the core generator agrees).
+        const int32 Stage = KillGunStage;
+        GEngine->Exec(World, *FString::Printf(TEXT("ow.RollGun %s %d %d"), Pools[KillGun], Stage, 101 + KillGun));
+        FString Id;
+        for (const FOpenWillowWeaponItem& Item : Inventory->Items())
+            if (!Before.Contains(UOpenWillowInventory::StableId(Item))) { Id = UOpenWillowInventory::StableId(Item); break; }
+        const int32 Index = Id.IsEmpty() ? INDEX_NONE : Inventory->FindItemIndexById(Id);
+        if (Index == INDEX_NONE) { FinishKill(false, FString::Printf(TEXT("%s: no new gun in the backpack (%d items): the ow.RollGun line above says why"), Pools[KillGun], Inventory->BackpackCount())); return; }
+        if (!Walker->EquipItem(Index, 0) || !Walker->DrawItemById(Id)) { FinishKill(false, FString::Printf(TEXT("could not equip and draw %s"), *Id)); return; }
+        const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+        KillGunName = Held ? FString::Printf(TEXT("\"%s\" (%s, level %d)"), *Held->Name, *Held->Type, Held->Level) : Id;
+        KillShots = 0;
+        KillAt = Now;
+        KillStage = 1;
+        return;
+    }
+    case 1: // real shots until it dies
+    {
+        if (!Enemy) { FinishKill(false, TEXT("the enemy is gone")); return; }
+        if (Now - KillAt < 1.f) return;   // the gun is drawn
+        if (Enemy->IsDead())
+        {
+            // Only this gun's shots count: a death with none fired is not its kill.
+            if (KillShots == 0) { FinishKill(false, FString::Printf(TEXT("%s: the enemy died with no shot fired"), *KillGunName)); return; }
+            UE_LOG(LogTemp, Display, TEXT("OWRANGEKILL gun=%d %s killed %s with %d shot(s), %.0f uu away"), KillGun, *KillGunName, *Enemy->GetName(), KillShots,
+                FVector::Dist(Walker->GetActorLocation(), Enemy->GetActorLocation()));
+            KillAt = Now;
+            KillStage = 2;
+            return;
+        }
+        if (Now - KillAt > 40.f) { FinishKill(false, FString::Printf(TEXT("%s: not dead after %d shots"), *KillGunName, KillShots)); return; }
+        const APlayerCameraManager* Camera = UGameplayStatics::GetPlayerCameraManager(World, 0);
+        const FVector Eye = Camera ? Camera->GetCameraLocation() : Walker->GetActorLocation();
+        PC->SetControlRotation((Enemy->AimPoint() - Eye).Rotation());
+        if (Walker->FireOnce()) { ++KillShots; return; }
+        FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable();
+        if (!Held || Walker->IsReloading() || UOpenWillowInventory::MagazineLeft(*Held) > 0) return;
+        EOpenWillowAmmoType Ammo;
+        if (!Inventory->CanReload(*Held) && UOpenWillowInventory::ResolveAmmoType(*Held, Ammo)) Inventory->SetAmmoCurrent(Ammo, Inventory->AmmoPool(Ammo).Max);
+#if WITH_EDITOR
+        Walker->TestReloadInput();
+#endif
+        return;
+    }
+    case 2: // frames at the playtest's times after the death: 0.56 s and 2.17 s into the ragdoll
+        if (Now - KillAt < 1.4f) return;
+        RequestRangeShot(FString::Printf(TEXT("kill_%d_a.png"), KillGun));
+        KillStage = 3;
+        return;
+    case 3:
+        if (Now - KillAt < 3.f) return;
+        RequestRangeShot(FString::Printf(TEXT("kill_%d_b.png"), KillGun));
+        KillStage = 4;
+        return;
+    default: // after its respawn: what the corpse did
+    {
+        if (!Enemy) { FinishKill(false, TEXT("the enemy is gone")); return; }
+        if (Enemy->IsDead()) return;
+        FinishKill(KillShots > 0 && Enemy->CorpseMeasured(), FString::Printf(TEXT("%s: %d shots, rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s, %d speed caps, measured %d"), *KillGunName, KillShots,
+            Enemy->CorpsePeakRise(), Enemy->CorpsePeakDrift(), Enemy->CorpsePeakSpeed(), Enemy->CorpseSpeedCaps(), Enemy->CorpseMeasured() ? 1 : 0));
+        return;
+    }
+    }
+}
+
 void UOpenWillowRangeSubsystem::TickTest(float Now)
 {
     // Steps: 0 wait for Maya, build and move her; 1 teleport; 2 placement; 3 body hit; 4 crit hit; 5 crit trace; 6 shield order;
@@ -953,7 +1151,7 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     AOpenWillowEnemy* Enemy1 = Enemies.Num() > 1 ? Enemies[1].Get() : nullptr;
     AOpenWillowCombatTarget* Dummy0 = Dummies.Num() > 0 ? Dummies[0].Get() : nullptr;
 
-    if (TestStep >= 16 && TestStep < 37)
+    if ((TestStep >= 16 && TestStep < 37) || (TestStep >= 90 && TestStep <= 93))
     {
         // The AI steps need the AI; the target steps before them ran with it off (an alerted range swarmed Maya and put her
         // down before the AI steps began, batch 2).
@@ -961,10 +1159,15 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
         TickAITest(Now);
         return;
     }
-    if (TestStep >= 37 && TestStep < 99)
+    if (TestStep >= 37 && TestStep < 90)
     {
         // The loot steps test the drops: the AI is off again so no blow lands on Maya while she walks onto a pickup.
-        if (bModeAI) SetAI(false);
+        // The AI steps also left every enemy but one passive.
+        if (bModeAI)
+        {
+            SetAI(false);
+            SetMode(false, false);
+        }
         TickLootTest(Now);
         return;
     }
@@ -1128,24 +1331,43 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
             TestStep = 6;
             return;
         }
-        // Aim the view at the critical region's centre and trace what the camera sees first.
-        const APlayerCameraManager* Camera = UGameplayStatics::GetPlayerCameraManager(World, 0);
-        const FVector Eye = Camera ? Camera->GetCameraLocation() : Pawn->GetActorLocation();
-        const FVector Aim = Crit->GetComponentLocation();
-        PC->SetControlRotation((Aim - Eye).Rotation());
+        // A shot from directly behind, as a player can fire it. The patrol may have walked the enemy behind a rock from Maya (Z16), and a low shot from her can
+        // meet the ground first (Z13), so: the enemy stands at home and is turned until both lines below reach it from 500 uu. No side clear is a failure.
+        // What makes a shot from behind critical: its line, followed on from the impact, must cross the head sphere itself. So the step also needs:
+        // - the head to stand past the capsule-width reach the check used to stop at, or this shot could not catch that reach coming back;
+        // - a shot at the small of the back, on the body and below the head, not to count.
+        const UPrimitiveComponent* Body = Enemy0->BodyComponent();
+        const UCapsuleComponent* Capsule = Cast<UCapsuleComponent>(Body);
         FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeCritTrace), true);
         Query.AddIgnoredActor(Pawn);
-        FHitResult Hit;
-        const bool bHit = World->LineTraceSingleByChannel(Hit, Eye, Eye + (Aim - Eye) * 1.2f, ECC_Visibility, Query);
-        FString First = TEXT("nothing hit");
-        if (bHit && Hit.GetActor())
-            First = FString::Printf(TEXT("first hit %s on %s"), *Hit.GetActor()->GetName(),
-                Hit.Component.IsValid() ? *Hit.Component->GetName() : TEXT("no component"));
-        // What counts is the enemy's own decision for that hit (the body capsule may be met first; IsCritRegion follows the
-        // shot line into the head sphere).
-        const bool bCrit = bHit && Hit.GetActor() == Enemy0
-            && Enemy0->IsCritRegion(Hit.Component.Get(), Hit.BoneName, Hit.ImpactPoint, (Aim - Eye).GetSafeNormal());
-        TestCheck(TEXT("crit_trace"), bCrit, First + FString::Printf(TEXT(", critical=%d"), bCrit ? 1 : 0));
+        FHitResult Hit, BackHit;
+        FVector Aim = FVector::ZeroVector, Back = FVector::ZeroVector, Forward = FVector::ForwardVector;
+        bool bHeadLine = false, bBackLine = false;
+        float TurnedTo = 0.f;
+        FString Blocked;
+        for (int32 Side = 0; Side < 8 && Body && !(bHeadLine && bBackLine); ++Side)
+        {
+            TurnedTo = (SpotNow - Enemy0->GetHome()).Rotation().Yaw + 180.f + 45.f * float(Side);
+            Enemy0->ResetForAITest(Now, TurnedTo, 3.f);
+            Forward = FRotator(0.f, TurnedTo, 0.f).Vector();
+            Aim = Crit->GetComponentLocation();
+            Back = Body->Bounds.Origin - FVector(0.f, 0.f, Body->Bounds.BoxExtent.Z * 0.5f);
+            const FVector HeadFrom = Aim - Forward * 500.f, BackFrom = Back - Forward * 500.f;
+            bHeadLine = World->LineTraceSingleByChannel(Hit, HeadFrom, Aim + Forward * 100.f, ECC_Visibility, Query) && Hit.GetActor() == Enemy0;
+            bBackLine = World->LineTraceSingleByChannel(BackHit, BackFrom, Back + Forward * 100.f, ECC_Visibility, Query) && BackHit.GetActor() == Enemy0;
+            if (!bHeadLine || !bBackLine)
+                Blocked += FString::Printf(TEXT(" yaw %.0f: %s/%s;"), TurnedTo, Hit.GetActor() ? *Hit.GetActor()->GetName() : TEXT("nothing"),
+                    BackHit.GetActor() ? *BackHit.GetActor()->GetName() : TEXT("nothing"));
+        }
+        const bool bClear = bHeadLine && bBackLine;
+        const bool bCrit = bClear && Enemy0->IsCritRegion(Hit.Component.Get(), Hit.BoneName, Hit.ImpactPoint, Forward);
+        const bool bBackCrit = bClear && Enemy0->IsCritRegion(BackHit.Component.Get(), BackHit.BoneName, BackHit.ImpactPoint, Forward);
+        const float OldReach = Capsule ? 2.f * FMath::Max(Capsule->GetScaledCapsuleRadius(), Capsule->GetScaledCapsuleHalfHeight()) : 0.f;
+        const float HeadPast = bClear ? float(FVector::Dist(Hit.ImpactPoint, Aim)) : 0.f;
+        TestCheck(TEXT("crit_trace"), bClear && bCrit && Capsule && HeadPast > OldReach && !bBackCrit,
+            FString::Printf(TEXT("clear side %d (yaw %.0f), first hit on %s, critical=%d, head %.0f uu past the impact (old reach %.0f), small of the back: first hit on %s, critical=%d; blocked:%s"),
+                bClear ? 1 : 0, TurnedTo, Hit.Component.IsValid() ? *Hit.Component->GetName() : TEXT("nothing"), bCrit ? 1 : 0, HeadPast, OldReach,
+                BackHit.Component.IsValid() ? *BackHit.Component->GetName() : TEXT("nothing"), bBackCrit ? 1 : 0, *Blocked));
         TestStep = 6;
         return;
     }
@@ -1261,14 +1483,62 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     {
         if (Now - DeathAt < 1.04f) return;   // the ragdoll delay (0.84 s) plus 0.2 s
         const USkeletalMeshComponent* Mesh = Enemy0 ? Enemy0->GetStockMesh() : nullptr;
-        if (!Mesh) TestSkip(TEXT("ragdoll"), TEXT("engine shapes, no stock mesh"));
-        else if (!Mesh->GetPhysicsAsset()) TestSkip(TEXT("ragdoll"), TEXT("no physics asset"));
+        // SKIP only when the manifest asks for no stock mesh. One it names that did not load, or came without a physics asset, is a failure.
+        const FOpenWillowRangeKind* Kind0 = Enemy0 ? Manifest.Kinds.Find(EnemyKinds.FindRef(Enemy0)) : nullptr;
+        const bool bWantsStock = Kind0 && !Kind0->Mesh.IsEmpty();
+        if (!Mesh && !bWantsStock) TestSkip(TEXT("ragdoll"), TEXT("the manifest names no stock mesh"));
+        else if (!Mesh) TestCheck(TEXT("ragdoll"), false, TEXT("the manifest names a stock mesh, and it did not load"));
+        else if (!Mesh->GetPhysicsAsset()) TestCheck(TEXT("ragdoll"), false, TEXT("the stock mesh has no physics asset"));
         else TestCheck(TEXT("ragdoll"), Mesh->IsSimulatingPhysics(), FString::Printf(TEXT("simulating=%d"), Mesh->IsSimulatingPhysics() ? 1 : 0));
         TestStep = 13;
         return;
     }
     case 13:
     {
+        // A second before the respawn: the body stayed down (the host's sanity bounds for a limp body, not game values). This kill has no shot
+        // behind it, so it may never reach a cap: corpse_cap then throws one body to see the cap act.
+        if (TestCorpseStage == 0)
+        {
+            if (Now - DeathAt < FMath::Max(Manifest.RespawnSeconds - 1.f, 1.2f)) return;
+            const FOpenWillowRangeKind* Kind0 = Enemy0 ? Manifest.Kinds.Find(EnemyKinds.FindRef(Enemy0)) : nullptr;
+            if (!Enemy0 || !Enemy0->CorpseMeasured())
+            {
+                if (Kind0 && !Kind0->Mesh.IsEmpty())
+                {
+                    TestCheck(TEXT("corpse_limp"), false, TEXT("the manifest names a stock mesh, and no ragdoll simulated"));
+                    TestCheck(TEXT("corpse_cap"), false, TEXT("the manifest names a stock mesh, and no ragdoll simulated"));
+                }
+                else
+                {
+                    TestSkip(TEXT("corpse_limp"), TEXT("the manifest names no stock mesh"));
+                    TestSkip(TEXT("corpse_cap"), TEXT("the manifest names no stock mesh"));
+                }
+                TestCorpseStage = 2;
+                return;
+            }
+            TestCheck(TEXT("corpse_limp"), Enemy0->CorpsePeakRise() <= 200.f && Enemy0->CorpsePeakDrift() <= 500.f,
+                FString::Printf(TEXT("rose %.0f uu, drifted %.0f uu, fastest body %.0f uu/s, %d speed caps"), Enemy0->CorpsePeakRise(), Enemy0->CorpsePeakDrift(),
+                    Enemy0->CorpsePeakSpeed(), Enemy0->CorpseSpeedCaps()));
+            TestCorpseCaps = Enemy0->CorpseSpeedCaps();
+            if (!Enemy0->KickCorpseForTest(3000.f))
+            {
+                TestCheck(TEXT("corpse_cap"), false, TEXT("no simulating body to throw"));
+                TestCorpseStage = 2;
+                return;
+            }
+            TestCorpseKickAt = Now;
+            TestCorpseStage = 1;
+            return;
+        }
+        if (TestCorpseStage == 1)
+        {
+            if (Now - TestCorpseKickAt < 0.1f) return;
+            const float Rise = Enemy0 ? Enemy0->CorpseKickedRiseSpeed() : 0.f;
+            const int32 Caps = Enemy0 ? Enemy0->CorpseSpeedCaps() - TestCorpseCaps : 0;
+            TestCheck(TEXT("corpse_cap"), Caps > 0 && Rise < 1000.f, FString::Printf(TEXT("thrown at 3000 uu/s: %d caps, rising at %.0f uu/s 0.1 s later"), Caps, Rise));
+            TestCorpseStage = 2;
+            return;
+        }
         if (Now - DeathAt < Manifest.RespawnSeconds + 0.5f) return;
         if (!Enemy0)
         {
@@ -1314,6 +1584,13 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     case 99:
     default:
     {
+        // A way in that fails for want of a spot must leave a reason, or the slice gate takes another target for the enemy (Luna r3). Last, so it can't disturb a step.
+        bTestNoSpot = true;
+        BuildRefusal.Reset();
+        const bool bBuiltNoSpot = BuildAtResolvedSpot();
+        bTestNoSpot = false;
+        TestCheck(TEXT("refusal_no_spot"), !bBuiltNoSpot && BuildRefusal.StartsWith(TEXT("no spot")), FString::Printf(TEXT("built=%d, refusal: %s"), bBuiltNoSpot ? 1 : 0, *BuildRefusal));
+        BuildRefusal.Reset();
         UE_LOG(LogTemp, Display, TEXT("OWRANGETEST SUMMARY result=%s pass=%d fail=%d skip=%d"), TestFail == 0 ? TEXT("PASS") : TEXT("FAIL"),
             TestPass, TestFail, TestSkipped);
         bTestDone = true;
@@ -1342,7 +1619,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     if (!E0)
     {
         const TCHAR* Names[] = {TEXT("notice_proximity"), TEXT("notice_sight"), TEXT("no_notice_far"), TEXT("provoked"),
-            TEXT("approach"), TEXT("melee_hit"), TEXT("melee_interval"), TEXT("melee_miss"), TEXT("forget"), TEXT("passive_no_melee")};
+            TEXT("approach"), TEXT("melee_hit"), TEXT("melee_interval"), TEXT("melee_miss"), TEXT("forget"), TEXT("passive_no_melee"),
+            TEXT("swing_range")};
         for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no enemy"));
         TestStep = 37;
         return;
@@ -1426,10 +1704,11 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         for (const auto& Weak : Enemies)
             if (AOpenWillowEnemy* Enemy = Weak.Get()) Enemy->SetPassive(Enemy != Keep);
     };
-    // Maya 400 uu ahead of an enemy, inside its melee volume (the origin is 100 uu behind it, 500 uu to Maya).
+    // Maya 250 uu ahead of an enemy, inside its melee volume (the origin is 100 uu behind it, 350 uu to Maya). A kind whose swing range
+    // is shorter closes the rest first; the steps allow for that.
     auto PlaceInVolume = [&](AOpenWillowEnemy* Enemy) -> bool
     {
-        const FVector At = Enemy->GetActorLocation() + Forward(Enemy) * 400.f;
+        const FVector At = Enemy->GetActorLocation() + Forward(Enemy) * 250.f;
         return PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, Enemy->GetActorLocation()));
     };
 
@@ -1776,6 +2055,107 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         TestCheck(TEXT("passive_no_melee"), bOk, FString::Printf(TEXT("swing starts %d, maya health %.1f -> %.1f, level %d"),
             Brain.SwingCount - TestSwingBase, TestHealthBefore, Pools(), Den.Level));
         SetMode(false, false);
+        TestStep = 92;
+        return;
+    }
+    case 92: // swing_range: Maya 480 uu ahead of E0: the blow would reach her there, but the swing must wait for its stock range.
+    {
+        Reset(TEXT("swing range"));
+        OnlyActive(E0);
+        const FVector At = E0->GetActorLocation() + Forward(E0) * 480.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, E0->GetActorLocation())))
+        {
+            TestSkip(TEXT("swing_range"), TEXT("no floor in front of the enemy"));
+            TestStep = 90;
+            return;
+        }
+        TestSwingBase = Brain.SwingCount;
+        StepStart = Now;
+        TestStep = 93;
+        return;
+    }
+    case 93:
+    {
+        if (Brain.SwingCount <= TestSwingBase)
+        {
+            if (Now - StepStart > 4.f)
+            {
+                TestCheck(TEXT("swing_range"), false, TEXT("no swing start in 4 s"));
+                TestStep = 90;
+            }
+            return;
+        }
+        // E0's kind only. A range of 480 or more would let an old-style swing at once pass, so the range itself is checked first.
+        const FOpenWillowRangeKind* Kind = Manifest.Kinds.Find(EnemyKinds.FindRef(E0));
+        const float Range = Kind ? Kind->MeleeStartRange : 0.f;
+        TestCheck(TEXT("swing_range"), Range > 0.f && Range < 480.f && Brain.LastSwingDistance > 0.f && Brain.LastSwingDistance <= Range,
+            FString::Printf(TEXT("kind %s: swing started %.0f uu from Maya, %.2f s after she stood 480 uu ahead, stock range %.0f"), *EnemyKinds.FindRef(E0),
+                Brain.LastSwingDistance, Now - StepStart, Range));
+        TestStep = 90;
+        return;
+    }
+    case 90: // psycho_melee: the range's psycho swings for its own kind's numbers (VM only, UNVERIFIED), not the bullymong's.
+    {
+        Reset(TEXT("psycho"));
+        TestPsycho = nullptr;
+        for (const auto& Pair : EnemyKinds)
+            if (Pair.Value == TEXT("psycho")) TestPsycho = const_cast<AOpenWillowEnemy*>(Pair.Key);
+        AOpenWillowEnemy* Psycho = TestPsycho.Get();
+        if (!Psycho)
+        {
+            TestSkip(TEXT("psycho_melee"), TEXT("no psycho on this range (its mesh is not imported)"));
+            TestStep = 37;
+            return;
+        }
+        Psycho->ResetForAITest(Now, (SpotNow - Psycho->GetHome()).Rotation().Yaw, 3.f);
+        OnlyActive(Psycho);
+        if (!PlaceInVolume(Psycho))
+        {
+            TestCheck(TEXT("psycho_melee"), false, TEXT("no floor in front of the psycho"));
+            TestStep = 37;
+            return;
+        }
+        TestResolvedBase = Psycho->GetBrain().MeleeResolved;
+        TestHealthBefore = Pools();
+        StepStart = Now;
+        TestStep = 91;
+        return;
+    }
+    case 91:
+    {
+        AOpenWillowEnemy* Psycho = TestPsycho.Get();
+        if (!Psycho)
+        {
+            TestCheck(TEXT("psycho_melee"), false, TEXT("the psycho is gone"));
+            TestStep = 37;
+            return;
+        }
+        const FOpenWillowEnemyBrain& PsychoBrain = Psycho->GetBrain();
+        if (PsychoBrain.MeleeResolved <= TestResolvedBase)
+        {
+            if (Now - StepStart > 3.f)
+            {
+                TestCheck(TEXT("psycho_melee"), false, TEXT("no swing resolved in 3 s"));
+                TestStep = 37;
+            }
+            return;
+        }
+        // What this measures: the manifest's own mesh is on the pawn, and Maya's pools lost what the psycho's tables say, worked out here and not
+        // taken from the brain. It says nothing of the psycho's stock AI tree (not run), or of whether those VM numbers match the game.
+        float Arrival = 0.f, Ratio = 0.f;
+        const FOpenWillowRangeKind* Kind = Manifest.Kinds.Find(TEXT("psycho"));
+        const bool bTable = Kind && OpenWillowValueAtLevel(Kind->MeleeArrivalByLevel, Psycho->GetLevel(), Arrival)
+            && OpenWillowValueAtLevel(Kind->MeleeRatioByLevel, Psycho->GetLevel(), Ratio);
+        const USkeletalMeshComponent* PsychoMesh = Psycho->GetStockMesh();
+        const USkeletalMesh* PsychoAsset = PsychoMesh ? PsychoMesh->GetSkeletalMeshAsset() : nullptr;
+        const FString AssetPath = PsychoAsset ? PsychoAsset->GetPathName() : FString();
+        const bool bOwnMesh = Kind && !Kind->Mesh.IsEmpty() && AssetPath == Kind->Mesh;
+        const int32 MayaLevel = Walker->GetSkills() ? Walker->GetSkills()->GetLevel() : Psycho->GetLevel();
+        const float Expected = FMath::Min(Arrival * Ratio * MeleeLevelScale(Psycho->GetLevel(), MayaLevel), TestHealthBefore);
+        const float Delta = TestHealthBefore - Pools();
+        const bool bOk = bTable && bOwnMesh && PsychoBrain.LastHit && Expected > 0.f && FMath::IsNearlyEqual(Delta, Expected, 0.01f);
+        TestCheck(TEXT("psycho_melee"), bOk, FString::Printf(TEXT("mesh %s (own %d), hit %d, arrival %.2f x ratio %.4f, pools %.1f -> %.1f, expected loss %.2f"),
+            *AssetPath, bOwnMesh ? 1 : 0, PsychoBrain.LastHit ? 1 : 0, Arrival, Ratio, TestHealthBefore, Pools(), Expected));
         TestStep = 37;
         return;
     }
@@ -2002,7 +2382,7 @@ void UOpenWillowRangeSubsystem::TickSurvey(float Now)
     {
         if (SurveyIndex >= Total)
         {
-            UE_LOG(LogTemp, Display, TEXT("OWRANGESURVEY done candidates=%d"), Total);
+            UE_LOG(LogTemp, Display, TEXT("OWRANGESURVEY done candidates=%d accepted=%d"), Total, SurveyAccepted);
             bSurveyDone = true;
             if (PC) PC->ConsoleCommand(TEXT("quit"));
             return;
@@ -2022,6 +2402,7 @@ void UOpenWillowRangeSubsystem::TickSurvey(float Now)
             if (BuildRange(Found, FoundYaw))
             {
                 bAccepted = true;
+                ++SurveyAccepted;
                 Spot = Found;
                 Yaw = FoundYaw;
                 Material = FoundMaterial;
@@ -2068,8 +2449,11 @@ void RangeCommand(const TArray<FString>& Args, UWorld* World)
         Yaw = Args.Num() >= 4 ? FCString::Atof(*Args[3]) : 0.f;
         Source = TEXT("args");
     }
-    else if (!Range->ResolveSpot(Spot, Yaw, Source))
+    else
+    {
+        Range->BuildAtResolvedSpot();
         return;
+    }
     if (!Range->BuildRange(Spot, Yaw)) return;
     UE_LOG(LogTemp, Display, TEXT("OWRANGE spot source=%s at=%s yaw=%.0f"), *Source, *Spot.ToString(), Yaw);
     TeleportMaya(World, Spot, Yaw);

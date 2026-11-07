@@ -2,7 +2,8 @@
 
 AI-assisted. Run through tools/import_phaselock_target.ps1 (which owns the editor lock), after the zone step. Reads the job file
 (OPENWILLOW_SLICE_JOB, written by tools/prepare_phaselock_target.py) and imports each attachment glTF into <dest>/Attachments, using
-the zone-colour instance of the same stock material on every slot. A missing instance, a slot that does not keep it or a failed save
+the zone-colour instance of the piece's stock material on every slot. A piece whose component names no material keeps what its import made
+(a plain stand-in for its own stock material, UNVERIFIED look). A missing instance, a slot that does not keep it or a failed save
 stops the step: the pieces would show the wrong colour or be lost with no sign of it. Only after every piece passed does it write
 <slice_dir>/editor_report_attach.json ({npc id: {mesh id: asset path}}), which the tool's attachments step reads. Only content under the
 job's dest folders is created or changed.
@@ -20,12 +21,14 @@ report = {}
 for npc in job['npcs']:
     entry = report.setdefault(npc['id'], {})
     for piece in npc['attachment_meshes']:
-        material_path = f'{npc["dest"]}/Materials/MI_{piece["material"]}_Zone'
-        if not eal.does_asset_exist(material_path):
-            raise RuntimeError(f'{piece["id"]}: {material_path} is missing (the zone step makes it; it stops and names its own prerequisite if it cannot)')
-        material = unreal.load_asset(material_path)
-        if material is None:
-            raise RuntimeError(f'{piece["id"]}: {material_path} exists but did not load')
+        material, material_path = None, 'its imported material'
+        if piece['material']:
+            material_path = f'{npc["dest"]}/Materials/MI_{piece["material"]}_Zone'
+            if not eal.does_asset_exist(material_path):
+                raise RuntimeError(f'{piece["id"]}: {material_path} is missing (the zone step makes it when the material has a diffuse and a mask; it stops and names its own prerequisite if it cannot)')
+            material = unreal.load_asset(material_path)
+            if material is None:
+                raise RuntimeError(f'{piece["id"]}: {material_path} exists but did not load')
         task = unreal.AssetImportTask()
         task.filename, task.destination_path = piece['gltf'], f'{npc["dest"]}/Attachments'
         task.automated, task.replace_existing, task.save = True, True, False
@@ -37,7 +40,7 @@ for npc in job['npcs']:
         slots = len(mesh.get_editor_property('static_materials'))
         if slots == 0:
             raise RuntimeError(f'{piece["id"]}: the imported mesh has no material slots')
-        for slot in range(slots):
+        for slot in range(slots if material else 0):
             mesh.set_material(slot, material)
             kept = mesh.get_material(slot)
             if kept is None or kept.get_path_name() != material.get_path_name():

@@ -11,13 +11,15 @@ param(
     [int]$TimeoutSeconds = 300,
     [int]$WaitForEditorSeconds = 3600,
     [switch]$Shots,
+    # The run fails when it exercised no psycho (for a batch that imported one).
+    [switch]$RequirePsycho,
     [switch]$SkipBuild
 )
 # AI-assisted (Claude). Unattended gun-range test in the host (Sanctuary_P, -owrangetest): the range is built outside the
 # town (scout or -At), Maya is teleported there, and the host's driver checks placement, body and critical hits, the shield
 # order, the invulnerable and passive toggles, patrol, death, ragdoll, respawn and the damage popups. It logs one
 # OWRANGETEST line per step; tools/check_range.py grades them (exit code). -Shots also saves frames to local/range/shots.
-# -Survey runs the spot-candidate survey instead (OWRANGESURVEY lines; exit 0 when it finished).
+# -Survey runs the spot-candidate survey instead (OWRANGESURVEY lines; exit 0 when it finished and built a range on at least one candidate).
 # Prepare the manifest first: python tools/prepare_range.py (stock health from the VM; enemy assets from
 # tools/import_phaselock_target.ps1 when imported). Builds the module first unless -SkipBuild. Owns one editor at a time and
 # the machine-wide UE run lock (tools/ue_lock.ps1); it never touches another process. Host behaviour only: UNVERIFIED in game.
@@ -79,12 +81,12 @@ try {
     if ($Survey) {
         Select-String -LiteralPath $log -Pattern 'OWRANGESURVEY' |
             ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
-        $code = 2
-        if (Select-String -LiteralPath $log -Pattern 'OWRANGESURVEY done' -Quiet) { $code = 0 }
+        & python $checker $log --survey-log
+        $code = $LASTEXITCODE
     } else {
         Select-String -LiteralPath $log -Pattern 'OWRANGE' |
             ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
-        & python $checker $log
+        if ($RequirePsycho) { & python $checker $log --require-psycho } else { & python $checker $log }
         $code = $LASTEXITCODE
     }
     Write-Host "Log: $log"

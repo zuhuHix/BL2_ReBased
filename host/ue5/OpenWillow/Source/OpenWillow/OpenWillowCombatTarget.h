@@ -110,6 +110,15 @@ public:
     void SetLevel(int32 NewLevel) { Level = FMath::Max(0, NewLevel); }
     const FVector& KnockVelocity() const { return Knock; }
     FVector LastHitMomentum() const { return LastMomentum; }
+    // The last simulated ragdoll (kept after the respawn, for the range test and the log).
+    bool CorpseMeasured() const { return bCorpseMeasured; }
+    float CorpsePeakRise() const { return CorpseRise; }
+    float CorpsePeakDrift() const { return CorpseDrift; }
+    float CorpsePeakSpeed() const { return CorpseSpeed; }
+    int32 CorpseSpeedCaps() const { return CorpseCaps; }
+    // Test only: throws one simulating body upward, to see the cap act on a known velocity. False without a simulating body.
+    bool KickCorpseForTest(float UpSpeed);
+    float CorpseKickedRiseSpeed() const;
     FVector LastHitVelocityChange() const { return LastVelocityChange; }
     FVector Displacement() const { return GetActorLocation() - KnockOrigin; }  // since the last ResetKnock
     void ResetKnock() { Knock = FVector::ZeroVector; KnockOrigin = GetActorLocation(); }
@@ -229,9 +238,23 @@ protected:   // was private: the range enemy (OpenWillowEnemy.cpp) builds on the
     bool bInvulnerable = false;         // SetInvulnerable
     bool bRespawnStock = false;         // SetRespawn: a stock pawn respawns (engine shapes always do)
     bool bRagdoll = false;              // the stock mesh is limp after its death (TickStockRespawn)
+    bool bRagdollSimulating = false;    // ... and physics runs it (a physics asset was found)
+    void TrackCorpse();                 // caps the bodies' speed and measures how far the body went
+    bool bCorpseMeasured = false;
+    FVector CorpseFrom = FVector::ZeroVector;
+    float CorpseRise = 0.f;
+    float CorpseDrift = 0.f;
+    float CorpseSpeed = 0.f;
+    int32 CorpseCaps = 0;
+    FName CorpseKickBone;
     float RespawnDelay = 3.f;           // death to respawn, seconds (3 s is the engine-shape value the Fire dummy keeps)
     // Death to ragdoll, seconds: the value src/combat_run.cpp uses for the player's ragdoll. For targets UNVERIFIED.
     static constexpr float RagdollDelay = 0.84f;
+    // Host stand-ins for a limp body (no game values): how fast bodies may push out of an overlap when physics takes over, and how fast
+    // any body may rise or travel sideways. A fall stays free.
+    static constexpr float RagdollDepenetrationSpeed = 100.f;
+    static constexpr float RagdollMaxRiseSpeed = 300.f;
+    static constexpr float RagdollMaxFlatSpeed = 600.f;
     void TickStockRespawn(float Now);
     // Hooks for subclasses. Defaults: the damage passes through, no critical hit, nothing on death or respawn.
     // AdjustIncomingDamage runs after the death and quest checks and before health is lowered; its result is the damage

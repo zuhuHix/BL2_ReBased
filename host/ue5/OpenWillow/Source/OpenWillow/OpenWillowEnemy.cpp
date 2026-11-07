@@ -91,6 +91,7 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
     if (bStock)
     {
         StockMesh->SetRelativeScale3D(FVector(Kind.MeshScale));
+        if (Kind.Json) AttachWornMeshes(*Kind.Json);   // what the stock pawn wears on its bones (a psycho's mask and axe)
         if (Kind.CollisionRadius > 0.f && Kind.CollisionHeight > 0.f)
         {
             // The pawn's cylinder as the hit capsule, as UseCommandLinePawn does (the centre sits its half height above the floor).
@@ -129,8 +130,9 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
     SetRespawn(true, RespawnSeconds);
     PauseUntil = Now + Rand.FRandRange(1.f, 3.f);
 
-    UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind=%s level=%d stock=%s walk_speed=%.0f patrol=%.0f shield=%.0f respawn=%.0f"),
-        *GetName(), *Kind.Name, InLevel, bStock ? TEXT("yes") : TEXT("no"), Kind.WalkSpeed, Kind.PatrolRadius, ShieldMax, RespawnSeconds);
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind=%s level=%d stock=%s walk_speed=%.0f run_speed=%.0f swing_start=%.0f patrol=%.0f shield=%.0f respawn=%.0f"),
+        *GetName(), *Kind.Name, InLevel, bStock ? TEXT("yes") : TEXT("no"), Kind.WalkSpeed, Kind.RunSpeed, Kind.MeleeStartRange, Kind.PatrolRadius,
+        ShieldMax, RespawnSeconds);
     return bStock;
 }
 
@@ -188,7 +190,9 @@ bool AOpenWillowEnemy::IsCritRegion(const UPrimitiveComponent* HitComponent, FNa
     if (Bone.ToString().Contains(TEXT("head"), ESearchCase::IgnoreCase)) return true;
     // A shot that met the body volume first: does its line, from the impact on through the body, cross the head sphere?
     if (!CritVolume || !HitComponent || HitComponent != BodyComponent() || ShotDirection.IsNearlyZero()) return false;
-    const float Through = 2.f * FMath::Max(HitVolume->GetScaledCapsuleRadius(), HitVolume->GetScaledCapsuleHalfHeight());
+    // Far enough to reach the head wherever the shot came from: from behind, the head stands well past the far side of the capsule.
+    const float Through = FMath::Max(2.f * FMath::Max(HitVolume->GetScaledCapsuleRadius(), HitVolume->GetScaledCapsuleHalfHeight()),
+        float(FVector::Dist(Impact, CritVolume->GetComponentLocation())) + CritVolume->GetScaledSphereRadius());
     return FMath::LineSphereIntersection(Impact, ShotDirection.GetSafeNormal(), double(Through), CritVolume->GetComponentLocation(),
         double(CritVolume->GetScaledSphereRadius()));
 }
@@ -375,10 +379,11 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     In.EnemyLevel = GetLevel();
     const AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(this, 0));
     In.bHasMaya = Walker && !Walker->IsDown();
+    // Read while she is down too: a swing that was pending when she went down still logs its scale (it misses: no Maya to hit).
+    In.MayaLevel = Walker && Walker->GetSkills() ? Walker->GetSkills()->GetLevel() : GetLevel();
     if (In.bHasMaya)
     {
         In.MayaLocation = Walker->GetActorLocation();
-        In.MayaLevel = Walker->GetSkills() ? Walker->GetSkills()->GetLevel() : GetLevel();
         // Exposure stand-in (UNVERIFIED): a Visibility line from the enemy's centre to Maya's centre, both ignored. Sampled only
         // on the brain's state updates (the only time it reads it); in between the last sample is passed on.
         // Not while passive, lifted or dead: the brain then skips its updates (NextUpdateAt does not advance), so "due" would
@@ -393,6 +398,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     float Arrival = 0.f, Ratio = 0.f;
     if (OpenWillowValueAtLevel(Kind.MeleeArrivalByLevel, GetLevel(), Arrival)) In.ArrivalDamage = Arrival;
     if (OpenWillowValueAtLevel(Kind.MeleeRatioByLevel, GetLevel(), Ratio)) In.Ratio = Ratio;
+    In.SwingStartRange = Kind.MeleeStartRange;
 
     const FOpenWillowBrainOrders Orders = Brain.Tick(Now, In, *Den, bDamagedByMaya);
     if (Orders.bSwingStarted) PlayMelee(Now);

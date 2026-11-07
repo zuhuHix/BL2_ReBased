@@ -78,7 +78,16 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     const bool bAware = bTargeting && In.bHasMaya && Den.Level >= SeenInThreatRadius
         && Now >= Den.AggroTime + MinAggroTimeToConsiderAwareOfTarget;
     const bool bInVolume = In.bHasMaya && WithinMeleeVolume(In.Location, In.YawDegrees, In.MayaLocation, 0.f);
-    const bool bInStop = In.bHasMaya && WithinMeleeVolume(In.Location, In.YawDegrees, In.MayaLocation, MeleeStopMargin);
+    // Starting a swing and landing it are separate questions. The volume above decides whether a swing lands (the forced swings of
+    // AI_MELEE_TARGETING_LIVE 5). A swing starts only inside the stock attack action's range (its AttackLocation range, read by
+    // tools/prepare_range.py; the live swings of section 4 had the player within about 300 uu). Measuring it horizontally from the
+    // enemy's location is UNVERIFIED. An old manifest has no range: then the reach decides, as before.
+    const float FlatDistance = In.bHasMaya ? float(FVector::Dist2D(In.Location, In.MayaLocation)) : 0.f;
+    const bool bHasStartRange = In.SwingStartRange > 0.f;
+    const bool bInStartRange = bInVolume && (!bHasStartRange || FlatDistance <= In.SwingStartRange);
+    const float StopAt = FMath::Max(In.SwingStartRange - MeleeStopMargin, FMath::Min(In.CollisionRadius, In.SwingStartRange));
+    const bool bInStop = bHasStartRange ? (bInVolume && FlatDistance <= StopAt)
+        : In.bHasMaya && WithinMeleeVolume(In.Location, In.YawDegrees, In.MayaLocation, MeleeStopMargin);
 
     // The damage moment of a swing: SwingDamageDelay after its start, Maya takes the hit if she is still in the volume.
     if (bSwingPending && Now >= SwingStartAt + SwingDamageDelay)
@@ -87,11 +96,12 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
         ResolveSwing(Now, In, bInVolume);
     }
 
-    // A swing cycle starts when Maya is inside the volume, one SwingInterval after the previous start. No melee without the
+    // A swing cycle starts when Maya is inside the start range, one SwingInterval after the previous start. No melee without the
     // manifest's melee numbers for this level.
     const bool bCanSwing = In.ArrivalDamage > 0.f && In.Ratio > 0.f;
-    if (bAware && bCanSwing && !bSwingPending && bInVolume && Now >= LastSwingStart + SwingInterval)
+    if (bAware && bCanSwing && !bSwingPending && bInStartRange && Now >= LastSwingStart + SwingInterval)
     {
+        LastSwingDistance = FlatDistance;
         StartSwing(Now, In);
         Orders.bSwingStarted = true;
     }
@@ -164,7 +174,8 @@ void FOpenWillowEnemyBrain::StartSwing(float Now, const FOpenWillowBrainInput& I
     PrevSwingStart = LastSwingStart;
     LastSwingStart = Now;
     ++SwingCount;
-    UE_LOG(LogTemp, Display, TEXT("OWRANGE swing enemy=%s t=%.2f"), *In.Self->GetName(), Now);
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE swing enemy=%s t=%.2f distance=%.0f start_range=%.0f"), *In.Self->GetName(), Now,
+        LastSwingDistance, In.SwingStartRange);
 }
 
 void FOpenWillowEnemyBrain::ResolveSwing(float Now, const FOpenWillowBrainInput& In, bool bHit)

@@ -1,0 +1,421 @@
+"""Synthetic tests of tools/real_game/cash_capture.ps1's data-safety path: the real script and the real realgame.ps1 helpers run against
+invented text files in a temporary folder, with only the game itself stubbed. No game, no game files, no real lock. Needs Windows PowerShell.
+
+Run: python tests/cash_capture_test.py
+"""
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+CAPTURE = ROOT / 'tools/real_game/cash_capture.ps1'
+
+# Dot-sourced by the capture in place of realgame.ps1: the real helpers, then the game's side replaced. $env:OW_SCENARIO picks a fault.
+STUB = r"""
+. '__REALGAME__'
+$work = '__WORK__'
+$scenario = $env:OW_SCENARIO
+$script:RG = Join-Path $work 'rg'
+$script:CmdDir = Join-Path $script:RG 'cmd'
+$script:WillowDir = Join-Path $work 'willow'
+$script:Game = $env:OPENWILLOW_BL2
+$script:DriverDir = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
+$script:Lock = Join-Path $work 'run.lock'
+New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
+function Start-Sleep { }
+function Get-GameProcess { $null }
+function Get-UntrackedGames($Own) { if ($scenario -eq 'foreign' -and $Own) { [pscustomobject]@{ Id = 777 } } }
+function Enter-RunLock { Set-Content -LiteralPath $script:Lock 'held' }
+function Exit-RunLock { Remove-Item -LiteralPath $script:Lock -Force }
+function Install-Driver { New-Item -ItemType Directory -Force $script:DriverDir | Out-Null }
+function Remove-Driver { if ($scenario -ne 'driver_stuck') { Remove-Item -Recurse -Force $script:DriverDir } }
+function Save-Shot { 'shot' }
+function Focus-Game { $true }
+$script:foreground = 0
+function Assert-GameForeground {
+    $script:foreground++
+    if ($scenario -eq 'no_focus') { throw 'refusing to send input: not the foreground window' }
+    if ($scenario -eq 'focus_lost_in_den' -and $script:foreground -ge 3) { throw 'refusing to send input: not the foreground window' }
+}
+function Send-Key { }
+function Send-Click { }
+function Invoke-GamePyFile([string]$Path) { if ($scenario -eq 'probe_traceback' -and $Path -like '*den_probe*') { "Traceback (most recent call last):`n  NameError" } else { 'ok' } }
+function Stop-OwnGame { if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
+$script:collects = 0; $script:singles = 0
+$script:Fake = [pscustomobject]@{ Id = 4242; StartTime = (Get-Date); HasExited = $false }
+$script:Fake | Add-Member ScriptMethod WaitForExit { param($ms) $this.HasExited } | Out-Null
+$script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
+function Start-Game { $script:Fake }
+function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
+    switch -Wildcard ($Code) {
+        '*block_saves*' {
+            if ($scenario -eq 'saves_open') { return 'False' }
+            if ($scenario -eq 'saves_traceback') { return 'Traceback: True, block_saves' }
+            return '5'
+        }
+        '*pc.Pawn.Class.Name*' { return 'Sanctuary_P WillowPlayerPawn' }
+        '*pc.Pawn is not None*' { return $(if ($scenario -eq 'no_travel') { 'Sanctuary_P True' } else { 'Ice_P True' }) }
+        '*cp_start*' {
+            # What a session does to the player's files, as seen on the real machine: a restore must undo all of this.
+            Set-Content -LiteralPath (Join-Path $script:WillowDir 'SaveData/save.sav') 'changed by the run'
+            Set-Content -LiteralPath (Join-Path $script:WillowDir 'SaveData/new.sav') 'added by the run'
+            Remove-Item -LiteralPath (Join-Path $script:WillowDir 'Config/game.ini')
+            Set-Content -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/python-sdk.json') 'changed by the run'
+            Set-Content -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver/store.txt') 'changed by the run'
+            if ($scenario -eq 'backup_changed') {
+                $saved = Get-ChildItem -LiteralPath $script:RG -Directory -Filter 'save-backup-*' | Select-Object -First 1
+                Set-Content -LiteralPath (Join-Path $saved.FullName 'SaveData/save.sav') 'backup damaged'
+            }
+            if ($scenario -eq 'run_error') { throw 'channel lost' }
+            if ($scenario -eq 'not_immune') { return '{"immune": false}' }
+            if ($scenario -eq 'traceback') { return "Traceback (most recent call last):`n  True block" }
+            return '{"immune": true}'
+        }
+        '*cp_level*' { return '8' }
+        '*cp_cash*' { return '100' }
+        '*cp_collect_start*' { return $(if ($scenario -eq 'no_money') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_collect_end*' {
+            $script:collects++
+            if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
+            $script:singles++
+            return '{"value_per_item": 3}'
+        }
+        '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
+        '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
+        '*cp_target*' { return 'None' }
+        '*cp_dump*' {
+            $real = @(for ($i = 0; $i -lt $script:collects; $i++) { @{ value_per_item = $(if ($i -lt $script:singles) { 3 } else { $null }) } })
+            $written = if ($scenario -eq 'dump_short') { @() } else { $real }
+            if ($scenario -ne 'dump_missing') {
+                [IO.File]::WriteAllText((Join-Path $script:RG 'cash/cash.json'), (ConvertTo-Json -Depth 4 @{ kills = 0; real = @($written) }))
+            }
+            return (ConvertTo-Json @{ kills = 0; collected = $script:collects; single_item_rows = $script:singles })
+        }
+        '*dp_start*' { if ($scenario -eq 'den_channel') { throw 'channel lost in the den read' }; return '[]' }
+        '*dp_begin*' { return $(if ($scenario -eq 'den_no_enemy') { 'None' } else { 'WillowAIPawn_1' }) }
+        '*dp_end*' { return '{"counts": true}' }
+        '*dp_dump*' {
+            $trials = if ($scenario -eq 'den_no_enemy') { 0 } else { 3 }
+            if ($scenario -ne 'den_dump_missing') {
+                [IO.File]::WriteAllText((Join-Path $script:RG 'cash/den.json'), (ConvertTo-Json @{ trials = @(1..3 | Select-Object -First $trials) }))
+            }
+            # As the real one: an object, not a list. A list would reach ConvertFrom-Json as one item in Windows PowerShell.
+            $missing = if ($scenario -eq 'den_unanswered') { '["first-blow spread: no counted trial had blows from two attackers"]' } else { '[]' }
+            return '{"summaries": [{"counts": true}], "missing": ' + $missing + '}'
+        }
+        '*quit*' { if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
+        default { return 'None' }
+    }
+}
+if ($scenario -eq 'bad_snapshot') {
+    function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) { if ($Snapshot -like '*Config') { throw 'snapshot differs' }; Get-TreeHashes $Snapshot }
+}
+if ($scenario -eq 'mismatch') { function Restore-Tree { [pscustomobject]@{ file = 'x'; status = 'MISMATCH after restore' } } }
+if ($scenario -eq 'restore_throws') { function Restore-Tree { throw 'disk full' } }
+"""
+
+
+class CashCaptureTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.work = Path(self.tmp.name)
+        self.game = self.work / 'game'
+        for name, text in (('sdk_mods/settings/python-sdk.json', 'original settings'), ('sdk_mods/SanitySaver/store.txt', 'original store')):
+            path = self.game / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding='utf-8')
+        for name, text in (('SaveData/save.sav', 'original save'), ('Config/game.ini', 'original config')):
+            path = self.work / 'willow' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding='utf-8')
+        self.hub = self.work / 'hub.lock'
+
+    def run_capture(self, scenario):
+        stub = self.work / 'stub.ps1'
+        stub.write_text(STUB.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__WORK__', str(self.work)),
+                        encoding='utf-8-sig')
+        env = dict(os.environ, OPENWILLOW_BL2=str(self.game), OW_SCENARIO=scenario)
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(CAPTURE),
+                               '-HubLock', str(self.hub), '-Helpers', str(stub)],
+                              capture_output=True, text=True, env=env, timeout=180)
+        session = json.loads((self.work / 'rg/cash/session.json').read_text(encoding='utf-8-sig'))
+        return done, session
+
+    def restore_by_hand(self):
+        """Runs the printed recovery command in a new PowerShell, with the real helpers, as the maintainer would."""
+        script = self.work / 'by_hand.ps1'
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\nRestore-VerifiedBackup '{self.backups()[0]}'\n", encoding='utf-8-sig')
+        env = dict(os.environ, OPENWILLOW_BL2=str(self.game))
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
+                              capture_output=True, text=True, env=env, timeout=120)
+
+    def saves(self):
+        return (self.work / 'willow/SaveData/save.sav').read_text(encoding='utf-8').strip()
+
+    def sdk_files(self):
+        return ((self.game / 'sdk_mods/settings/python-sdk.json').read_text(encoding='utf-8').strip(),
+                (self.game / 'sdk_mods/SanitySaver/store.txt').read_text(encoding='utf-8').strip())
+
+    def locks_held(self):
+        return self.hub.exists(), (self.work / 'run.lock').exists()
+
+    def backups(self):
+        return list((self.work / 'rg').glob('save-backup-*'))
+
+    def test_clean_run_restores_everything_and_releases(self):
+        done, session = self.run_capture('ok')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(session['status'], 'completed')
+        self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
+        self.assertEqual(self.saves(), 'original save')
+        self.assertFalse((self.work / 'willow/SaveData/new.sav').exists())
+        self.assertTrue((self.work / 'willow/Config/game.ini').exists())
+        self.assertEqual(self.sdk_files(), ('original settings', 'original store'))   # the SDK's files end as they began
+        self.assertFalse((self.game / 'sdk_mods/openwillow_realgame').exists())
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_a_clean_run_names_every_stage_it_ran(self):
+        _, session = self.run_capture('ok')
+        self.assertEqual(session['stage_results'], {'travel': 'passed', 'readings': 'passed', 'den_read': 'passed'})
+        self.assertEqual(session['completed_stages'], ['travel', 'readings', 'den_read'])
+
+    def test_a_failed_den_read_keeps_the_cash_result_and_is_not_completed(self):
+        for scenario, reason in (('den_channel', 'channel lost'), ('den_no_enemy', '0 of 0 trials')):
+            with self.subTest(scenario):
+                if self.backups():
+                    self.setUp()
+                done, session = self.run_capture(scenario)
+                self.assertEqual(session['status'], 'incomplete: den_read')
+                self.assertEqual(done.returncode, 1)
+                self.assertEqual(session['stage_results']['readings'], 'passed')
+                self.assertIn(reason, session['stage_results']['den_read'])
+                self.assertEqual(self.saves(), 'original save')
+                self.assertEqual(self.locks_held(), (False, False))
+
+    def test_without_the_immunity_hook_nothing_is_read(self):
+        for scenario in ('not_immune', 'traceback'):
+            with self.subTest(scenario):
+                if self.backups():
+                    self.setUp()
+                done, session = self.run_capture(scenario)
+                self.assertTrue(session['status'].startswith(('failed: the immunity hook is not installed', 'failed: game python error')), session['status'])
+                self.assertEqual(session['stage_results']['readings'], 'not run')
+                self.assertEqual(done.returncode, 1)
+                self.assertEqual(self.saves(), 'original save')
+
+    def test_immunity_lost_before_a_den_trial_fails_only_that_stage(self):
+        done, session = self.run_capture('immunity_lost')
+        self.assertEqual(session['status'], 'incomplete: den_read')
+        self.assertIn('immunity hook is gone', session['stage_results']['den_read'])
+        self.assertEqual(session['stage_results']['readings'], 'passed')
+
+    def test_a_dump_that_does_not_match_fails_the_stage(self):
+        for scenario, stage, words in (('dump_missing', 'readings', 'cash.json was not written'), ('dump_short', 'readings', 'cash.json holds 0'),
+                                       ('den_dump_missing', 'den_read', 'den.json was not written')):
+            with self.subTest(scenario):
+                if self.backups():
+                    self.setUp()
+                done, session = self.run_capture(scenario)
+                self.assertEqual(session['status'], 'incomplete: ' + stage)
+                self.assertIn(words, session['stage_results'][stage])
+                self.assertEqual(done.returncode, 1)
+
+    def test_zero_wanted_items_is_refused_before_anything_is_touched(self):
+        stub = self.work / 'stub.ps1'
+        stub.write_text(STUB.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__WORK__', str(self.work)), encoding='utf-8-sig')
+        env = dict(os.environ, OPENWILLOW_BL2=str(self.game), OW_SCENARIO='ok')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(CAPTURE), '-HubLock', str(self.hub),
+                               '-Helpers', str(stub), '-WantItems', '0'], capture_output=True, text=True, env=env, timeout=180)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertFalse((self.work / 'rg/cash/session.json').exists())
+        self.assertEqual(self.backups(), [])
+        self.assertFalse(self.hub.exists())
+
+    def test_too_few_readings_do_not_hide_a_good_den_read(self):
+        _, session = self.run_capture('never_single')
+        self.assertEqual(session['status'], 'incomplete: readings')
+        self.assertEqual(session['stage_results']['den_read'], 'passed')
+
+    def test_too_few_readings_is_incomplete_not_finished(self):
+        for scenario in ('no_money', 'never_single'):
+            with self.subTest(scenario):
+                if self.backups():
+                    self.setUp()
+                done, session = self.run_capture(scenario)
+                self.assertEqual(session['status'], 'incomplete: readings')
+                self.assertEqual(done.returncode, 1)
+                self.assertEqual(self.saves(), 'original save')
+                self.assertEqual(self.locks_held(), (False, False))
+
+    def test_a_pickup_that_cannot_be_collected_stops_the_loop(self):
+        done, session = self.run_capture('never_single')
+        self.assertIn('6 collects in a row', session['stopped'])
+        self.assertEqual(session['status'], 'incomplete: readings')
+
+    def test_a_failed_travel_is_not_completed(self):
+        done, session = self.run_capture('no_travel')
+        self.assertTrue(session['status'].startswith('failed'), session['status'])
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_trials_that_ran_are_not_enough_for_the_den_stage(self):
+        done, session = self.run_capture('den_unanswered')
+        self.assertEqual(session['status'], 'incomplete: den_read')
+        self.assertIn('first-blow spread', session['stage_results']['den_read'])
+        self.assertEqual(session['stage_results']['readings'], 'passed')
+        self.assertEqual(done.returncode, 1)
+
+    def test_a_probe_that_did_not_load_fails_its_stage(self):
+        done, session = self.run_capture('probe_traceback')
+        self.assertEqual(session['status'], 'incomplete: den_read')
+        self.assertIn('den_probe.py did not load', session['stage_results']['den_read'])
+        self.assertEqual(session['stage_results']['readings'], 'passed')
+
+    def test_readings_with_maya_down_are_not_readings(self):
+        done, session = self.run_capture('downed')
+        self.assertTrue(session['status'].startswith('incomplete: readings'), session['status'])
+        self.assertIn('Maya is down', session['stage_results']['readings'])
+
+    def test_a_game_this_run_did_not_start_touches_nothing(self):
+        done, session = self.run_capture('foreign')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertIn('did not start', session['status'])
+        self.assertIn('NOT RESTORED', session['cleanup']['saves'])
+        self.assertEqual(self.saves(), 'changed by the run')
+        self.assertTrue((self.game / 'sdk_mods/openwillow_realgame').exists())
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertEqual(done.returncode, 1)
+
+    def test_earlier_evidence_is_kept_under_a_new_name_and_never_read_as_this_run(self):
+        out = self.work / 'rg/cash'
+        out.mkdir(parents=True)
+        for name in ('session', 'save_compare', 'cash', 'den'):
+            (out / (name + '.json')).write_text('{"status": "completed", "kills": 0, "real": [], "trials": [1, 2, 3]}', encoding='utf-8')
+        done, session = self.run_capture('dump_missing')
+        self.assertEqual(session['status'], 'incomplete: readings')   # the earlier cash.json was not taken for this run's
+        self.assertIn('cash.json was not written', session['stage_results']['readings'])
+        for name in ('session', 'save_compare', 'cash', 'den'):
+            kept = list(out.glob(name + '.*.json'))
+            self.assertEqual(len(kept), 1, name)
+            self.assertIn('completed', kept[0].read_text(encoding='utf-8'))
+        self.assertEqual(done.returncode, 1)
+
+    def test_without_game_focus_the_run_stops_with_the_reason(self):
+        done, session = self.run_capture('no_focus')
+        self.assertIn('refusing to send input', session['status'])
+        self.assertEqual(session['stage_results']['travel'], 'not run')
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_focus_lost_in_the_den_read_fails_only_that_stage(self):
+        done, session = self.run_capture('focus_lost_in_den')
+        self.assertEqual(session['status'], 'incomplete: den_read')
+        self.assertIn('refusing to send input', session['stage_results']['den_read'])
+        self.assertEqual(session['stage_results']['readings'], 'passed')
+        self.assertEqual(done.returncode, 1)
+
+    def test_the_capture_never_ignores_a_focus_result(self):
+        text = CAPTURE.read_text(encoding='utf-8')
+        self.assertNotIn('Focus-Game', text)
+        self.assertEqual(text.count('Assert-GameForeground'), 4)
+
+    def test_a_traceback_is_not_saves_blocked(self):
+        done, session = self.run_capture('saves_traceback')
+        self.assertTrue(session['status'].startswith('failed: saves are not blocked'), session['status'])
+        self.assertEqual(session['stage_results']['travel'], 'not run')
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.saves(), 'original save')
+
+    def test_saves_not_blocked_stops_the_run(self):
+        done, session = self.run_capture('saves_open')
+        self.assertIn('saves are not blocked', session['status'])
+        self.assertEqual(done.returncode, 1)
+
+    def test_a_run_error_is_failed_and_still_restores(self):
+        done, session = self.run_capture('run_error')
+        self.assertEqual(session['status'], 'failed: channel lost')
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.sdk_files(), ('original settings', 'original store'))
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_an_unverified_snapshot_is_never_restored_from(self):
+        done, session = self.run_capture('bad_snapshot')
+        self.assertTrue(session['status'].startswith('failed'), session['status'])
+        self.assertEqual(session['cleanup']['saves'], 'not touched: this run launched no game')   # it failed before the driver and the game
+        self.assertEqual(self.locks_held(), (False, False))
+        self.assertTrue((self.work / 'willow/Config/game.ini').exists())
+
+    def test_a_restore_mismatch_keeps_locks_and_backup_and_prints_recovery(self):
+        done, session = self.run_capture('mismatch')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertEqual(session['run_status'], 'completed')
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertTrue(self.backups())
+        self.assertIn('MANUAL RECOVERY', done.stdout)
+        self.assertIn(f"Restore-VerifiedBackup '{self.backups()[0]}'", done.stdout)
+        self.assertNotIn('Restore-Tree', done.stdout)
+        self.assertIn('MISMATCH after restore', done.stdout)
+        self.assertEqual(self.saves(), 'changed by the run')
+        hand = self.restore_by_hand()
+        self.assertIn('identical', hand.stdout, hand.stdout + hand.stderr)
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.sdk_files(), ('original settings', 'original store'))
+
+    def test_a_restore_that_throws_keeps_locks_and_prints_recovery(self):
+        done, session = self.run_capture('restore_throws')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertTrue(self.backups())
+        self.assertIn('MANUAL RECOVERY', done.stdout)
+        self.assertEqual(done.returncode, 1)
+
+    def test_a_backup_that_changed_is_not_restored_from(self):
+        done, session = self.run_capture('backup_changed')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertEqual(self.saves(), 'changed by the run')
+        self.assertTrue((self.work / 'willow/Config/game.ini').exists())   # the other roots are still restored
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertIn('BACKUP CHANGED', done.stdout)
+        hand = self.restore_by_hand()   # the command itself refuses the changed root, by hand as well
+        self.assertIn('BACKUP CHANGED', hand.stdout, hand.stdout + hand.stderr)
+        self.assertEqual(self.saves(), 'changed by the run')
+        self.assertEqual(done.returncode, 1)
+
+    def test_a_driver_that_stays_is_reported_as_recovery(self):
+        done, session = self.run_capture('driver_stuck')
+        self.assertTrue(session['status'].startswith('recovery needed: driver not removed'), session['status'])
+        self.assertEqual(session['run_status'], 'completed')
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.saves(), 'original save')
+
+    def test_a_game_that_will_not_exit_touches_nothing(self):
+        done, session = self.run_capture('hung')
+        self.assertTrue(session['status'].startswith('recovery needed'), session['status'])
+        self.assertEqual(self.saves(), 'changed by the run')
+        self.assertEqual(self.sdk_files(), ('changed by the run', 'changed by the run'))
+        self.assertTrue((self.game / 'sdk_mods/openwillow_realgame').exists())
+        self.assertIn(f"Restore-VerifiedBackup '{self.backups()[0]}'", done.stdout)
+        self.assertTrue((self.backups()[0] / 'verified_hashes.json').exists())   # written before the game started
+        self.assertEqual(self.locks_held(), (True, True))
+        self.assertIn('MANUAL RECOVERY', done.stdout)
+        self.assertEqual(done.returncode, 1)
+
+    def test_a_held_hub_lock_stops_before_any_backup(self):
+        self.hub.write_text('someone 2026', encoding='utf-8')
+        done, session = self.run_capture('ok')
+        self.assertTrue(session['status'].startswith('failed'), session['status'])
+        self.assertIn('not waiting', session['status'])
+        self.assertEqual(self.backups(), [])
+        self.assertEqual(self.hub.read_text(encoding='utf-8'), 'someone 2026')
+        self.assertFalse((self.work / 'run.lock').exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

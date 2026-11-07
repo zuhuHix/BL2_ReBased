@@ -95,6 +95,30 @@ class PrepareRangeTest(unittest.TestCase):
                 prepare_range.main(['--no-vm', '--terrain', missing, '--views', missing, '--out', out])
             self.assertFalse(os.path.exists(out))
 
+    def test_main_writes_a_manifest(self):
+        import json
+        import os
+        import tempfile
+        views = {'views': [{'name': 'plaza_a', 'location': [10.0, 500.0, 1.0], 'rotation': [5.0, 90.0, 0.0]},
+                           {'name': 'plaza_b', 'location': [900.0, 20.0, 1.0], 'rotation': [5.0, 0.0, 0.0]}]}
+        with tempfile.TemporaryDirectory() as folder:
+            views_path = os.path.join(folder, 'views.json')
+            with open(views_path, 'w', encoding='utf-8') as f:
+                json.dump(views, f)
+            out = os.path.join(prepare_range.REPO, 'local', 'range', 'test_main_manifest.json')
+            self.addCleanup(lambda: os.path.exists(out) and os.remove(out))
+            none = os.path.join(folder, 'none.json')
+            prepare_range.main(['--no-vm', '--allow-missing-spot-data', '--views', views_path, '--terrain', none, '--target', none, '--out', out])
+            with open(out, encoding='utf-8') as f:
+                manifest = json.load(f)
+            self.assertTrue(manifest['assets'].startswith('missing'))
+            target = os.path.join(folder, 'target.json')
+            with open(target, 'w', encoding='utf-8') as f:
+                json.dump({'Bullymong': {'mesh': '/Game/M.M', 'idle': '', 'death': ''}}, f)
+            prepare_range.main(['--no-vm', '--allow-missing-spot-data', '--views', views_path, '--terrain', none, '--target', target, '--out', out])
+            with open(out, encoding='utf-8') as f:
+                self.assertEqual(json.load(f)['assets'], 'imported')
+
     def test_spot_data_message_names_the_plaza_views(self):
         import json
         import os
@@ -109,6 +133,80 @@ class PrepareRangeTest(unittest.TestCase):
             self.assertIn('plaza_*', str(stop.exception))
             self.assertIn('--views', str(stop.exception))
             self.assertFalse(os.path.exists(out))
+
+    def test_spawn_step_named_and_by_path(self):
+        self.assertEqual(prepare_range.spawn_step('regular', 4), 'spawn:regular:4')
+        path = 'Ice_Dynamic/GD_Psycho.Character.Pawn_Psycho'
+        self.assertEqual(prepare_range.spawn_step(path, 4), 'spawn:%s:4:4:%s' % (path, prepare_range.BALANCES[path]))
+
+    def test_every_kind_has_a_swing(self):
+        for vm_kind, _ in prepare_range.KINDS.values():
+            self.assertIn(vm_kind, prepare_range.SWINGS)
+
+    def test_melee_status_labels_vm_only_kinds(self):
+        self.assertIn('live rows', prepare_range.melee_status('bullymong'))
+        self.assertIn('UNVERIFIED', prepare_range.melee_status('psycho'))
+
+    def test_every_kind_names_its_asset_and_the_psycho_does_not_borrow(self):
+        self.assertEqual(set(prepare_range.KIND_ASSETS), set(prepare_range.KINDS))
+        self.assertEqual(prepare_range.KIND_ASSETS['psycho'], 'Psycho')
+
+    def test_psycho_spawns_only_with_its_own_mesh_and_last(self):
+        without = prepare_range.spawns_for({'psycho': {'mesh': ''}})
+        self.assertEqual(without, prepare_range.SPAWNS)
+        with_mesh = prepare_range.spawns_for({'psycho': {'mesh': '/Game/Made.Made'}})
+        self.assertEqual(with_mesh[:len(prepare_range.SPAWNS)], prepare_range.SPAWNS)
+        self.assertEqual(with_mesh[-1]['kind'], 'psycho')
+
+    def test_batches_fit_the_command_line_and_keep_every_kind(self):
+        levels = list(range(1, 51))
+        batches = prepare_range.step_batches(levels, 200)
+        self.assertEqual(sorted(k for b in batches for k in b), sorted(v for v, _ in prepare_range.KINDS.values()))
+        for batch in batches:
+            steps, first = [], 0
+            for kind in batch:
+                steps += prepare_range.kind_steps(kind, levels, first)
+                first = sum(1 for s in steps if s.startswith('spawn:'))
+            self.assertLess(len(' '.join(steps)) + 200, 32767)
+
+    def test_kind_steps_count_pawns_from_first(self):
+        steps = prepare_range.kind_steps('regular', [1, 2], 5)
+        self.assertIn('swing:5:melee', steps)
+        self.assertIn('swing:6:melee', steps)
+        self.assertEqual(steps.count('hit:7:999999:' + prepare_range.LETHAL), 1)
+
+    def test_merge_runs_moves_the_hit_indices(self):
+        one = {'rows': {'a': 1}, 'pawns': [{'level': 1}], 'steps': [{'step': 'hit:0:9:T:S', 'result': {}}]}
+        two = {'rows': {'b': 2}, 'pawns': [{'level': 2}], 'steps': [{'step': 'hit:0:9:T:S', 'result': {}}]}
+        merged = prepare_range.merge_runs([one, two])
+        self.assertEqual(merged['rows'], {'a': 1, 'b': 2})
+        self.assertEqual([s['step'] for s in merged['steps']], ['hit:0:9:T:S', 'hit:1:9:T:S'])
+        self.assertEqual(len(merged['pawns']), 2)
+
+    def test_swing_range_is_the_farthest_plain_melee(self):
+        actions = [('Made_Throw', 3000.0), ('Made_Melee', 320.0), ('MadeMeleeTwo', 394.0), ('Made_SlagMelee', 700.0), ('Made_Melee', 0.0)]
+        self.assertEqual(prepare_range.melee_start_range(actions), 394.0)
+        self.assertEqual(prepare_range.melee_start_range([('Made_Throw', 3000.0)]), 0.0)
+
+    def test_attack_actions_read_through_the_nodes(self):
+        objects = {'Def': {'nodelist': [{'Action': 'Def.Action_AnimAttack_1'}, {'Action': 'Def.Action_AnimAttack_1'}, {'Action': 'Def.Action_Patrol_1'},
+                                        {'Action': None}, {'Action': 'Def.Action_AnimAttack_2'}]},
+                   'Def.Action_AnimAttack_1': {'attackanim': 'Pkg.Anims.Made_Melee', 'limits': ['Def.A1.AttackLocation_Range_0', 'Def.A1.AttackLocation_Height_0']},
+                   'Def.A1.AttackLocation_Range_0': {'range': {'MinVal': 0, 'MaxVal': 111}},
+                   'Def.A1.AttackLocation_Height_0': {'height': 5},
+                   'Def.Action_AnimAttack_2': {'attackanim': 'Pkg.Anims.Made_Throw', 'limits': ['Def.A2.RangeLimit']},
+                   'Def.A2.RangeLimit': {'range': {'MinVal': 9, 'MaxVal': 222}}}
+        self.assertEqual(prepare_range.read_attack_actions('Def', objects.__getitem__), [('Made_Melee', 111.0), ('Made_Throw', 222.0)])
+
+    def test_every_kind_has_its_ai_definition(self):
+        self.assertEqual(set(prepare_range.AI_DEFINITIONS), set(prepare_range.KINDS))
+
+    def test_kind_carries_what_the_pawn_wears(self):
+        worn = [{'mesh': '/Game/Made.Made', 'bone': 'Made', 'location': [0, 0, 0], 'quat': [0, 0, 0, 1], 'scale': [1, 1, 1]}]
+        target = {'mesh': '/Game/M.M', 'idle': '/Game/I.I', 'death': '/Game/D.D', 'attachments': worn}
+        self.assertEqual(prepare_range.kind_entry('B', target, {}, 't', listing=[])['attachments'], worn)
+        del target['attachments']
+        self.assertNotIn('attachments', prepare_range.kind_entry('B', target, {}, 't', listing=[]))
 
     def test_clip_pick_by_role(self):
         names = ['Idle_Made', 'Walk_F_Made', 'Run_Made', 'Flinch_Front', 'Melee_Swipe', 'PhaseLock_Walk', 'Death_Made']
@@ -168,6 +266,69 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual(self.run_preflight({}, has_at=True), '')
         self.assertEqual(self.run_preflight({}, spot={'spot': {'x': 1, 'y': 2, 'z': 3}}), '')
 
+    def test_a_spawned_kind_must_be_able_to_swing(self):
+        whole = {'melee_arrival_by_level': {'1': 2.0}, 'melee_ratio_by_level': {'1': 0.5}, 'melee_start_range': 111.0}
+        check = lambda kind: self.run_preflight({'spawns': [{'kind': 'made'}], 'kinds': {'made': kind, 'unused': {}}}, has_at=True)
+        self.assertEqual(check(whole), '')
+        for missing in whole:
+            self.assertIn('made', check({k: v for k, v in whole.items() if k != missing}), missing)
+        self.assertIn('made', check(dict(whole, melee_start_range=0.0)))
+        self.assertIn('made', check(dict(whole, melee_start_range=-1.0)))
+        self.assertIn('made', check({}))   # a --no-vm manifest: its enemies would approach and never attack
+        self.assertIn('nokind', self.run_preflight({'spawns': [{'kind': 'nokind'}], 'kinds': {'made': whole}}, has_at=True))
+
+    def test_a_survey_needs_an_accepted_candidate(self):
+        self.assertTrue(check_range.survey_ok(log('OWRANGESURVEY done candidates=8 accepted=1')))
+        self.assertTrue(check_range.survey_ok(log('OWRANGESURVEY done candidates=8 accepted=12')))
+        self.assertFalse(check_range.survey_ok(log('OWRANGESURVEY done candidates=8 accepted=0')))
+        self.assertFalse(check_range.survey_ok(log('OWRANGESURVEY done candidates=8')))
+        self.assertFalse(check_range.survey_ok(log('OWRANGESURVEY index=0 accepted=1 at=1,2,3')))
+
+    def test_a_survey_keeps_the_manifest_rule(self):
+        self.assertIn('made', self.run_preflight({'spot_candidates': [{'x': 1}], 'spawns': [{'kind': 'made'}], 'kinds': {'made': {}}}, survey=True))
+
+    def test_the_kill_row_needs_each_gun_to_have_fired(self):
+        good = lambda gun, shots=3, result='PASS': 'OWRANGEKILL gun=%d result=%s "Made" (pistol, level 1): %d shots, rose 1 uu, drifted 1 uu, fastest body 1 uu/s, 0 speed caps, measured 1' % (gun, result, shots)
+        done = 'OWRANGEKILL done guns=2 fail=0'
+        self.assertTrue(check_range.kills_ok(log(good(0), good(1), done))[0])
+        self.assertFalse(check_range.kills_ok(log(good(0), good(1)))[0])                     # never finished
+        self.assertFalse(check_range.kills_ok(log(good(0), done))[0])                        # a total alone is not each gun
+        self.assertFalse(check_range.kills_ok(log(good(0), good(1, shots=0), done))[0])      # a gun that never fired
+        self.assertFalse(check_range.kills_ok(log(good(0), good(1, result='FAIL'), done))[0])
+        self.assertFalse(check_range.kills_ok(log(good(0), good(1), 'OWRANGEKILL done guns=2 fail=1'))[0])
+
+    def test_a_psycho_skip_needs_the_missing_mesh_reason_and_is_named(self):
+        import contextlib
+        import io
+        import os
+        import tempfile
+        passes = ['OWRANGETEST step=%s result=PASS' % s for s in check_range.EXPECTED if s != 'psycho_melee']
+        tail = ['OWRANGETEST SUMMARY result=PASS']
+
+        def run(reason, *flags):
+            text = log(*passes, 'OWRANGETEST step=psycho_melee result=SKIP reason=' + reason, *tail)
+            with tempfile.TemporaryDirectory() as folder:
+                path = os.path.join(folder, 'run.log')
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(text)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = check_range.main([path, *flags])
+            return code, out.getvalue()
+        code, out = run('no psycho on this range (its mesh is not imported)')
+        self.assertEqual(code, 0)
+        self.assertIn('no Psycho exercised', out)
+        self.assertEqual(run('no psycho on this range (its mesh is not imported)', '--require-psycho')[0], 1)
+        self.assertEqual(run('no enemy')[0], 1)
+
+    def test_ragdoll_steps_skip_only_when_no_stock_mesh_is_asked_for(self):
+        passes = ['OWRANGETEST step=%s result=PASS' % s for s in check_range.EXPECTED if s not in ('ragdoll', 'corpse_limp', 'corpse_cap')]
+        tail = ['OWRANGETEST SUMMARY result=PASS']
+        graded = lambda reason: check_range.grade(*check_range.parse(log(
+            *passes, *['OWRANGETEST step=%s result=SKIP reason=%s' % (s, reason) for s in ('ragdoll', 'corpse_limp', 'corpse_cap')], *tail)))[0]
+        self.assertTrue(graded('the manifest names no stock mesh'))
+        self.assertFalse(graded('engine shapes, no stock mesh'))
+
     def test_broken_spot_json_does_not_count(self):
         self.assertNotEqual(self.run_preflight({}, spot={'spot': {'x': 1}}), '')
         self.assertNotEqual(self.run_preflight({}, spot=[1, 2]), '')
@@ -203,7 +364,7 @@ class CheckRangeTest(unittest.TestCase):
         self.assertIn(('respawn', 'MISSING', ''), rows)
 
     def test_skip_only_where_allowed(self):
-        self.assertTrue(check_range.grade(*self.steps({'ragdoll': 'SKIP'}))[0])
+        self.assertTrue(check_range.grade(*self.steps({'loot_weapon_item': 'SKIP'}))[0])
         self.assertFalse(check_range.grade(*self.steps({'death': 'SKIP'}))[0])
 
     def test_step_status_needs_a_boundary(self):

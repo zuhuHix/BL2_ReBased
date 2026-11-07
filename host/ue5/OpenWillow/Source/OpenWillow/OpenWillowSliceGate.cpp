@@ -5,6 +5,7 @@
 #include "OpenWillowNpc.h"
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
+#include "OpenWillowRange.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowWeaponGen.h"
@@ -428,6 +429,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 return;
             }
             if (StepTime < 3.f) return;   // the range spawns its targets
+            // A refused range is a data problem, not a walking one: named here, and no other target in the world is taken for its enemy.
+            if (const UOpenWillowRangeSubsystem* Range = GetWorld()->GetSubsystem<UOpenWillowRangeSubsystem>(); Range && !Range->LastRefusal().IsEmpty())
+            {
+                FailLink(TEXT("reach_fight_area"), FString::Printf(TEXT("range refused: %s"), *Range->LastRefusal()));
+                Finish(TEXT("range refused"));
+                return;
+            }
             Enemy = NearestLiveTarget(true);
             if (!Enemy) { FailLink(TEXT("reach_fight_area"), TEXT("ow.Range ran but no live target is in the world")); Finish(TEXT("no enemy")); return; }
             // Stated up front: the fight and the Phaselock then run on the engine's shapes, not on the stock pawn.
