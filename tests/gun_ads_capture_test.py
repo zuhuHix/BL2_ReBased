@@ -5,6 +5,7 @@ Run: python tests/gun_ads_capture_test.py
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import types
@@ -61,6 +62,15 @@ class ProbeTests(unittest.TestCase):
             ns['ads_seed']('gun', 'gun.json')
         self.assertEqual(ns['made'], [])
 
+    def test_the_character_read_needs_the_skill_itself(self):
+        ns = probe_namespace(self.repo)
+        ns['pc'].Pawn = types.SimpleNamespace(GetExpLevel=lambda: 8)
+        skill = lambda path: types.SimpleNamespace(_path_name=lambda: path)
+        ns['unrealsdk'].find_all = lambda _name: [skill('Pkg.Default__LiftActionSkill')]
+        self.assertEqual(ns['ads_character'](), {'is_maya': False, 'level': 8})
+        ns['unrealsdk'].find_all = lambda _name: [skill('Pkg.Default__LiftActionSkill'), skill('Pkg.Lift')]
+        self.assertTrue(ns['ads_character']()['is_maya'])
+
     def test_held_says_how_the_gun_matches(self):
         ns = probe_namespace(self.repo)
         ns['wp_state']['recipes']['gun'] = {}
@@ -98,20 +108,43 @@ class CaptureTests(unittest.TestCase):
         self.assertNotIn('Focus-Game', text)
         self.assertEqual(len(re.findall(r'Send-MouseEvent 0x8\b', text)), 1)
         self.assertEqual(len(re.findall(r'Send-MouseEvent 0x10\b', text)), 1)
-        block = text[text.index('function Save-AimedFrame'):text.index('$Recipes = @($Recipes')]
+        block = text[text.index('function Save-AimedFrame'):text.index('$extraRoots = ')]
         self.assertLess(block.index('Assert-GameForeground'), block.index('Send-MouseEvent 0x8'))
         self.assertLess(block.index('Send-MouseEvent 0x8'), block.index('try {'))
         self.assertRegex(block, r'\} finally \{ Send-MouseEvent 0x10 \}')
 
-    def test_a_bad_recipe_stops_before_any_lock(self):
+    def test_a_bad_recipe_stops_before_any_lock_and_leaves_earlier_evidence(self):
+        # A copy of the scripts in a temporary repository: output goes by the script's own place, so a real gun_ads folder is out of reach.
         with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder) / 'repo'
+            (repo / 'tools/real_game').mkdir(parents=True)
+            for name in ('tools/ue_lock.ps1', 'tools/real_game/realgame.ps1', 'tools/real_game/gun_ads_capture.ps1'):
+                shutil.copy(ROOT / name, repo / name)
+            evidence = repo / 'local/realgame/gun_ads'
+            evidence.mkdir(parents=True)
+            for name in ('session.json', 'old_ads.png'):
+                (evidence / name).write_text('earlier', encoding='utf-8')
             lock = Path(folder) / 'hub.lock'
-            done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(CAPTURE), '-HubLock', str(lock),
-                                   '-Recipes', 'local/no/such_recipe.json'], capture_output=True, text=True, timeout=120,
+            done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(repo / 'tools/real_game/gun_ads_capture.ps1'),
+                                   '-HubLock', str(lock), '-Recipes', 'local/no/such_recipe.json'], capture_output=True, text=True, timeout=120,
                                   env=dict(os.environ, OPENWILLOW_BL2=folder))
             self.assertNotEqual(done.returncode, 0)
             self.assertIn('no recipe', done.stdout + done.stderr)
             self.assertFalse(lock.exists())
+            self.assertEqual(sorted(p.name for p in evidence.iterdir()), ['old_ads.png', 'session.json'])
+
+    def test_a_gun_frame_checks_the_foreground_and_a_failed_cleanup_fails_the_run(self):
+        text = text_of(CAPTURE)
+        self.assertEqual(len(re.findall(r'Save-Shot "gun_ads/\$', text)), 0, 'gun frames go through Save-GunFrame')
+        self.assertEqual(len(re.findall(r'= Save-GunFrame "gun_ads/', text)), 2)
+        frame = text[text.index('function Save-GunFrame'):text.index('function Wait-Unzoomed')]
+        self.assertLess(frame.index('Assert-GameForeground'), frame.index('Save-Shot'))
+        self.assertLess(frame.index('Save-Shot'), frame.index('Get-ForegroundWindowHandle'))
+        self.assertIn("+ 'gun_cleanup'", text)
+        self.assertIn("PyJson 'wp_cleanup()'", text)
+        self.assertIn("Set-Stage 'gun_cleanup' $false", text)
+        self.assertIn("$g.released = Wait-Unzoomed", text)
+        self.assertLess(text.index('ads_character()'), text.index('foreach ($id in $guns.Keys)'))
 
 
 if __name__ == '__main__':

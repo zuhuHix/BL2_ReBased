@@ -6,8 +6,14 @@ every command, since a reference kept from an earlier command can crash the game
   ads_seed(id, path, level)  make a recipe's exact parts at Maya's level, unless a match exists, as wp_seed does for the slice guns
   ads_held(id)               'exact', 'parts' (the game changed its stage or grade, as seen on some guns) or 'no'
   ads_read()                 the live zoom state, the field that told lane E's frames apart
+  ads_character()            the level, and whether Phaselock's skill is loaded (only Maya has it)
 """
 import json
+
+
+def ads_character():
+    skills = [s for s in unrealsdk.find_all("LiftActionSkill") if "Default__" not in s._path_name()]
+    return {"is_maya": bool(skills), "level": get_pc().Pawn.GetExpLevel()}
 
 
 def ads_recipe(recipe, level):
