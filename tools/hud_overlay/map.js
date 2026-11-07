@@ -111,7 +111,9 @@
   root.addEventListener('keydown', event => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const key = event.key.toLowerCase();
-    if (key === 'escape' || key === 'tab' || key === 'm') { event.preventDefault(); close(); return; }
+    // M does not close the stock map (read live, one press); its hint offers Escape.
+    if (key === 'escape' || key === 'tab') { event.preventDefault(); close(); return; }
+    if (key === 'm') { event.preventDefault(); return; }
     const route = tabRoute(event.key);
     if (route !== undefined) { event.preventDefault(); go(route); return; }
     if (key === 'i') { event.preventDefault(); go('/__ow_tab_inventory'); return; }

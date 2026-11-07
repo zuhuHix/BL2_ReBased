@@ -1,13 +1,9 @@
 #include "OpenWillowMelee.h"
 #include "OpenWillowHitEvent.h"
-#include "OpenWillowInventoryWidget.h"
-#include "OpenWillowMayaHUD.h"
-#include "OpenWillowVendor.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowArmsAnimInstance.h"
 #include "OpenWillowWalker.h"
 #include "Camera/CameraComponent.h"
-#include "GameFramework/PlayerController.h"
 #include "CollisionQueryParams.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -89,17 +85,14 @@ void AOpenWillowWalker::TickMelee()
 {
     if (!GetWorld() || !Camera || !MeleeBusy()) return;
     const float Now = GetWorld()->GetTimeSeconds();
-    // Going down, a status page or a shop ends the swing with its pending hit. A host rule, UNVERIFIED (CONTROLS.md).
-    const APlayerController* PC = Cast<APlayerController>(Controller);
-    const AOpenWillowMayaHUD* HUD = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
-    const UOpenWillowVendorSubsystem* Vendors = GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>();
-    const TCHAR* Cancel = IsDown() ? TEXT("Maya went down") : bInventoryPresentation || (HUD && HUD->IsSkillsOpen()) || IsInventoryWidgetOpen() ? TEXT("a status page opened")
-        : Vendors && Vendors->IsShopOpen() ? TEXT("a shop opened") : nullptr;
-    if (Cancel)
+    // Going down ends the swing with its pending hit (host rule, UNVERIFIED). A status page does not: in the game one opened inside the delay
+    // left the swing running and its hit still ran. The game then pauses under the menu and the host does not, so a hit due after the page
+    // opened lands under it here; what the game does with that one is UNVERIFIED. A shop is taken the same way, unread.
+    if (IsDown())
     {
         MeleeSwing.Reset();
         if (ArmsAnim && MeleeAnim && ArmsAnim->Action == MeleeAnim) ArmsAnim->PlayAction(nullptr);
-        UE_LOG(LogTemp, Display, TEXT("OWMELEE swing cancelled: %s t=%.2f"), Cancel, Now);
+        UE_LOG(LogTemp, Display, TEXT("OWMELEE swing cancelled: Maya went down t=%.2f"), Now);
         return;
     }
     if (!MeleeSwing.ConsumeHit(Now)) return;

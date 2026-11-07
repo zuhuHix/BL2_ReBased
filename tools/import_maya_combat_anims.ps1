@@ -28,7 +28,7 @@ $sirenJson = Join-Path $out 'siren_combat.json'
     --clips Draw ADD_Fire_Recoil --output $pistolJson
 if ($LASTEXITCODE -ne 0) { throw 'Pistol animation conversion failed' }
 & $Python $converter --mesh $meshPath --reference $reference --animset $sirenPath `
-    --clips Phase_Lock_Lift Phase_Lock_Fail --output $sirenJson
+    --clips Phase_Lock_Lift Phase_Lock_Fail Melee --output $sirenJson
 if ($LASTEXITCODE -ne 0) { throw 'Phaselock animation conversion failed' }
 
 $env:OPENWILLOW_BL2 = $gamePath

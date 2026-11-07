@@ -71,7 +71,7 @@ public:
     // For the suite: when the last swing started, whether a burst owes shots, and presses the swing rules refused.
     float MeleeStartedAt() const { return MeleeSwing.StartedAt(); }
     bool BurstActive() const { return Burst.active(); }
-    int32 MeleeRefusedByThrow = 0, GrenadesRefusedBySwing = 0, HolstersRefusedBySwing = 0;
+    int32 MeleeRefusedByThrow = 0, GrenadesRefusedBySwing = 0, HolstersRefusedBySwing = 0, PagesRefusedWhileDown = 0;
     // Mission weapon lend/return (UOpenWillowQuest): the grant adds the item to the backpack (observed in the real game: not equipped; the player
     // readies it with EquipItem); the return removes it wherever it is and draws another weapon only if it was the held one.
     bool LendWeapon(const FOpenWillowWeaponItem& Item);

@@ -553,8 +553,8 @@ void AOpenWillowWalker::BeginPlay()
     FirePistolAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("ADD_Fire_Recoil"));
     PhaselockAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Lift"));
     PhaselockFailAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Phase_Lock_Fail"));
-    // Not imported until the real-game read names its set; a swing then still lands, without the clip (OpenWillowMelee.cpp).
-    MeleeAnim = LoadArmsAnim(TEXT("PistolCombat"), TEXT("Melee"));
+    // In the Siren's first-person set (read live). tools/import_maya_combat_anims.ps1 imports it; until then a swing lands without the clip.
+    MeleeAnim = LoadArmsAnim(TEXT("SirenCombat"), TEXT("Melee"));
     // UE3 gestalt guns point along -Y; the hand's weapon bone expects X.
     // The yaw is an observed fit (see the barrel-axis log), not read data.
     float WeaponYaw = 90.f;
