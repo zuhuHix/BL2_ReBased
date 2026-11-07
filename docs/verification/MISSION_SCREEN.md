@@ -55,7 +55,15 @@ It writes the two converted movies, the wrapper and `missionscreen.json` under i
 
 - `node tests/mission_screen_test.js` (the real page against a stub movie, DOM and guard), `python tests/prepare_mission_screen_test.py`, `python tests/check_mission_page_test.py`: synthetic.
 - Headless Edge with real Ruffle, on `?demo=offer`, `turnin` and `reward`: each page draws its text and prompt with the movie; with the movie folder absent, each shows the plain panel and no error panel. Sample data only.
-- `tools/test_mission_page.ps1` and `-NoMovie`: not run yet. E goes through the player's input binding, keys for the page through Slate, each no-op row checks the press arrived, and `tools/check_mission_page.py` requires the exact rows once each.
+- `tools/test_mission_page.ps1` and `-NoMovie`: not run yet. E goes through the player's input binding, keys for the page through Slate, each no-op row checks the press arrived, and `tools/check_mission_page.py` requires the exact rows once each. With the movie and without, on main + #118 + #122 + fb613c5 (H14c, hummer, the page's rows then 20): both passed. The suite stops early if OWQUEST READY comes with no `page_ready` row in 120 s, which is what a stale DLL looked like.
+
+## The reward page's gear row (2026-11-07)
+
+The H14c frames, as described by the runner, show the gear heading with nothing under it. On the evidence this is what the page does for this mission, but it is **UNVERIFIED until the capture's `reward_page` frame**:
+- The Fire mission has no item reward: the live trace has `GetItemRewardsForPlayer` empty, and the lent pistol is taken back in the same step. So the pistol is not the row's content.
+- The installed `SetUpRewardsPage` writes the gear heading whatever the items, and hides the credit and XP fields by amount; only `SetNoReward`, another path, hides the heading. `SetNumItemChoices(0)` runs the movie's own code, which was not read and may hide it.
+
+Ruffle logs four parts of the reward clip as not registered when the page draws: `inventory - cell`, `eridium counter`, `item card` and `scanlines`, the library `SharedWillowMission`'s imports from SharedWillowInventory and SharedWillowComponents. Probably the same nested-import limit as above; not confirmed. The Fire mission has nothing to show in the first three, so they are not why the row is empty; `scanlines` is a small gap in the look. A mission with an item reward will need the cell and the card, and that is a later task.
 
 ## The stall on the first E (2026-11-06)
 

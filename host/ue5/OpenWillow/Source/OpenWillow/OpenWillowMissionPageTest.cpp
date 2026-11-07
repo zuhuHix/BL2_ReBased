@@ -70,8 +70,10 @@ void UOpenWillowQuest::TickScreenPageTest()
     // A press the page must take: true when exactly one key reached OnScreenKey.
     const auto PageKey = [&](const FKey& Key) { const int32 Before = ScreenKeysSeen; PressKey(Key); return ScreenKeysSeen == Before + 1; };
     const bool bExpectMovie = !FParse::Param(FCommandLine::Get(), TEXT("owmissionpagenomovie"));
+    // The page on show, not any page: a late report from the last one must not pass.
     const auto Drawn = [&] { const FString& R = ScreenPage->LastReport();
-        return R.Contains(TEXT("\"drawn\":true")) && R.Contains(bExpectMovie ? TEXT("\"movie\":true") : TEXT("\"movie\":false")); };
+        return !ScreenPageOn.IsEmpty() && R.Contains(FString::Printf(TEXT("\"page\":\"%s\""), *ScreenPageOn))
+            && R.Contains(TEXT("\"drawn\":true")) && R.Contains(bExpectMovie ? TEXT("\"movie\":true") : TEXT("\"movie\":false")); };
     // Steps run after a time and a few ticks, and rows that need a state wait for it (Await): one frame can stall for many seconds, and everything due by the clock would then
     // run in the frame after it, before the page has had a chance to answer.
     ++ScreenStepTicks;
@@ -148,6 +150,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 8:
         if (!Await(Drawn())) return;
+        Row(TEXT("offer_drawn_again"), Drawn(), State());
         Wait = 1.;
         break;
     case 9:
@@ -189,14 +192,11 @@ void UOpenWillowQuest::TickScreenPageTest()
         PageKey(EKeys::Enter);
         break;
     case 16:
-    {
-        const bool bRewardDrawn = ScreenPage->LastReport().Contains(TEXT("\"page\":\"reward\"")) && Drawn();
-        if (!Await(bRewardDrawn)) return;
+        if (!Await(ScreenPageOn == TEXT("reward") && Drawn())) return;
         Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
-            && RewardPages == 1 && RewardsReceived == 0 && bRewardDrawn, State());
+            && RewardPages == 1 && RewardsReceived == 0 && Drawn(), State());
         Wait = 1.;
         break;
-    }
     case 17:
         PageShot(TEXT("5_Reward"));
         Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
