@@ -3471,6 +3471,13 @@ AI-assisted (Claude). Real-game frames show loot inside five lootable types; the
 - **Verified:** every attachment point of the six supported types has a socket on its mesh, read from the packages. Offline, the offsets land where the meshes are on the bones that can tell. Synthetic tests of the reader, the roll and the checker.
 - **`UNVERIFIED`:** that the game places loot by these sockets, inferred from matching names and five types by eye. The host's result has not been seen in the engine at the time of writing. Socket rotation is not used. The strong box was never seen open.
 
+## 2026-11-07: loot at sockets, what the host run and the real distances add
+
+AI-assisted (Claude). Follows the previous entry. In one host run every drop was at its socket, and the suite and automation passed. Details are in `docs/verification/VENDORS.md` section 7; the numbers stay under ignored `local/`.
+
+- **Well supported, not proven:** that the game places loot by these sockets, which the previous entry called `UNVERIFIED`. 10 of 10 pickups read live lie at a socket's distance within rounding, on five types, by distance only, with other SDK mods on and one pickup each on four types.
+- **`UNVERIFIED`:** no mirroring on the dumpster is favoured, not proven; the chest cannot be told. The strong box's hinge and loot need a frame from the door side.
+
 ## 2026-11-03: elemental impact explosions from the firing mode, the cooked muzzle flash and casing (Weapons parity 2)
 
 AI-assisted (Claude). Records: `docs/verification/WEAPON_PROJECTILES.md` section 8, `WEAPON_VISUALS.md` section 18,
