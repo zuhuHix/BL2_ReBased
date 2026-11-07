@@ -135,6 +135,7 @@ public:
         LastMomentum = FVector::ZeroVector;
         LastVelocityChange = FVector::ZeroVector;
         KnockOrigin = HomeLocation;
+        ClearSwing();
     }
     // PR1 range additions (host stand-ins, UNVERIFIED in game). The defaults keep the Fire dummy, the firing tests and the
     // Phaselock tests as they were: a stock pawn does not respawn, nothing is invulnerable, no hit is critical.
@@ -191,6 +192,8 @@ protected:   // was private: the range enemy (OpenWillowEnemy.cpp) builds on the
     float BubbleDrawScale() const;
     void UpdatePresentation(float Now, float Held);
     void ClearPresentation();
+    // No swing left from hits: upright and still. The swing only ticks while alive, so a death would otherwise freeze it for the respawn.
+    void ClearSwing();
     FOpenWillowPhaselockFxData Fx;
     float LockLightData = 0;            // the light's brightness in the data's units (the UE5 intensity is this x a host gain)
     bool bFx = false;
