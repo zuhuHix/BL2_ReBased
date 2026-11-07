@@ -27,6 +27,15 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
 foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
 # End of stale evidence.
+# Stale event files: a window a later run does not reach (a retry it did not need) would otherwise keep an earlier run's file. They are that run's only
+# record of its calls, so they move aside rather than go.
+$staleEvents = @(Get-ChildItem -LiteralPath $Out -Filter 'events_*.jsonl' -File -ErrorAction SilentlyContinue)
+if ($staleEvents.Count) {
+    $earlier = Join-Path $Out "earlier-$keptAs"
+    New-Item -ItemType Directory -Force $earlier | Out-Null
+    $staleEvents | Move-Item -Destination $earlier
+}
+# End of stale event files.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
