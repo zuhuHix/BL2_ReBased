@@ -223,6 +223,17 @@ def media_entries(ak, decoded_dir):
     return out
 
 
+def duration_check(media, lo, hi):
+    """Header durations against the AkEvent's range: True all inside, False one outside, None when no full comparison ran (no media, no range, or a
+    duration missing with none outside). None means not checked, which is not a failure."""
+    if not media or lo is None or hi is None:
+        return None
+    durations = [m['duration_s'] for m in media]
+    if any(d is not None and not lo - 0.01 <= d <= hi + 0.01 for d in durations):
+        return False
+    return None if None in durations else True
+
+
 def build_manifest(chain, decoded_dir):
     """local/slice/audio.json: one entry per (stock trigger, AkEvent). `state` never claims more than was checked."""
     entries = []
@@ -230,7 +241,7 @@ def build_manifest(chain, decoded_dir):
     def add(key, kind, trigger, ak, **extra):
         media = media_entries(ak, decoded_dir)
         lo, hi = ak.get('min_duration'), ak.get('max_duration')
-        in_range = bool(media) and lo is not None and all(m['duration_s'] is not None and lo - 0.01 <= m['duration_s'] <= hi + 0.01 for m in media)
+        in_range = duration_check(media, lo, hi)
         decoded = bool(media) and all(m['decoded'] for m in media)
         state = 'unresolved' if not media else ('decoded_not_listened' if decoded else 'extracted_undecoded')
         entries.append({'key': key, 'kind': kind, 'trigger': trigger, 'ak_event': {k: ak[k] for k in ('ue3_path', 'wwise_name', 'short_id')},

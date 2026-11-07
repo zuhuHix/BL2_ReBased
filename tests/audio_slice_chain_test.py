@@ -96,6 +96,29 @@ class DialogCoverageTest(unittest.TestCase):
         self.assertEqual({e['reached_in_scripted_run'] for e in manifest['entries']}, {False})
 
 
+class DurationCheckTest(unittest.TestCase):
+    def test_true_only_when_every_duration_is_inside(self):
+        self.assertIs(chain.duration_check([{'duration_s': 1.0}, {'duration_s': 2.0}], 1.0, 2.0), True)
+
+    def test_false_only_when_a_comparison_failed(self):
+        self.assertIs(chain.duration_check([{'duration_s': 1.0}, {'duration_s': 9.0}], 1.0, 2.0), False)
+        self.assertIs(chain.duration_check([{'duration_s': None}, {'duration_s': 9.0}], 1.0, 2.0), False)
+
+    def test_none_when_no_full_comparison_ran(self):
+        self.assertIsNone(chain.duration_check([], 1.0, 2.0))
+        self.assertIsNone(chain.duration_check([{'duration_s': 1.0}], None, None))
+        self.assertIsNone(chain.duration_check([{'duration_s': None}, {'duration_s': 1.5}], 1.0, 2.0))
+
+    def test_a_live_role_writes_null_not_false(self):
+        sound = {'source': 1, 'wem': 'x', 'bytes': 1, 'codec': 'c', 'channels': 1, 'sample_rate': 48000, 'duration_s': 1.0}
+        ak = {**chain.live_role_ak({'event': 'Pkg.Ak_Play_Thing'}), 'wwise': [{'bank_names': ['B'], 'sounds': [sound]}]}
+        manifest = chain.build_manifest({'dialog': [], 'marcus_group': [], 'door': [], 'weapon': [],
+                                         'live_roles': [{'key': 'role:hit', 'seen': 'once', 'ak_event': ak}]}, 'no-such-dir')
+        entry = manifest['entries'][0]
+        self.assertEqual(entry['state'], 'extracted_undecoded')
+        self.assertIsNone(entry['checks']['wem_header_duration_within_akevent_range'])
+
+
 class LiveRoleTest(unittest.TestCase):
     def test_each_role_gets_an_entry_marked_unverified_with_the_check_not_claimed(self):
         ak = {**chain.live_role_ak({'event': 'Pkg.Ak_Play_Thing'}), 'wwise': []}
