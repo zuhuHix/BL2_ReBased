@@ -11,7 +11,10 @@ were not known when this was written, so each read is guarded and whole records 
   (usable object, icons) and what the HUD movie's two prompt clips show.
 - cp_prompt_read(): the same read at the current spot.
 - cp_melee_hooks() / cp_rows() / cp_unhook(): rows for the melee chain with the game clock.
-- cp_page(): whether the status menu is up and which screen it holds (with the screenshot, what a key on an open page did).
+- cp_page(): whether the status menu is up and which screen it holds (with the screenshot, what a key on an open page did). Status menu
+  movies stay behind when closed, so the open one is the one read; none open is reported as closed.
+- cp_dialog(): how many dialog boxes are up over the game.
+- cp_hits(path): the TakeDamage calls on that object so far, with the amounts.
 - cp_injure(): one huge hit on the player, for the end of a session only: she then bleeds out. Returns whether she is down.
 - cp_melee_facts(): what the pawn's definitions say for the melee: the special moves, the first-person animation and its
   length, the camera anim, the live value of the player melee damage definition.
@@ -44,6 +47,7 @@ CHAIN = [
     "Engine.Actor:TakeDamage",
     "WillowGame.WillowPawn:TakeDamage",
     "WillowGame.WillowAIPawn:TakeDamage",
+    "WillowGame.WillowInteractiveObject:TakeDamage",
 ]
 
 
@@ -111,6 +115,7 @@ def cp_prompt_read(label=""):
             row[prop] = _try(lambda: movie.GetVariableNumber(f"{clip}.{prop}"))
         for field in FIELDS:
             row[field] = _try(lambda: movie.GetVariableString(f"{clip}.{field}.text"))
+            row[field + "_var"] = _try(lambda: movie.GetVariableString(f"{clip}.{field}"))
             row[field + "_html"] = _try(lambda: movie.GetVariableString(f"{clip}.{field}.htmlText"))
         out[clip] = row
     return out
@@ -123,22 +128,38 @@ def cp_turn(degrees):
     return {"yaw": pc.Rotation.Yaw}
 
 
-def cp_prompt(path, distance=120.0, up=0.0):
-    """Stand `distance` uu from the object on the player's side of it, level with the view, and look at it."""
+def _centre(obj):
+    """The object's bounds centre when it has one, else its location: many are placed by their feet."""
+    origin = _try(lambda: obj.CollisionComponent.Bounds.Origin)
+    return obj.Location if isinstance(origin, str) or origin is None else origin
+
+
+def cp_prompt(path, distance=120.0):
+    """Stand `distance` uu from the object on the player's side of it, and look at its centre."""
     pc = _pc()
     pawn = pc.Pawn
     obj = unrealsdk.find_object("Object", path)
-    target = obj.Location
-    dx, dy = pawn.Location.X - target.X, pawn.Location.Y - target.Y
+    centre = _centre(obj)
+    dx, dy = pawn.Location.X - centre.X, pawn.Location.Y - centre.Y
     length = math.hypot(dx, dy) or 1.0
-    pawn.Location.X = target.X + dx / length * distance
-    pawn.Location.Y = target.Y + dy / length * distance
-    pawn.Location.Z = target.Z + up + 60.0
+    pawn.Location.X = centre.X + dx / length * distance
+    pawn.Location.Y = centre.Y + dy / length * distance
+    pawn.Location.Z = centre.Z + 20.0
     _try(lambda: pawn.ForceUpdateComponents(False, False))
+    return cp_aim(path)
+
+
+def cp_aim(path):
+    """Look at the object's centre from where the player stands now, in case she has settled since."""
+    pc = _pc()
+    pawn = pc.Pawn
+    centre = _centre(unrealsdk.find_object("Object", path))
+    eye = pawn.Location.Z + float(_try(lambda: pawn.BaseEyeHeight) or 64.0)
+    dx, dy, dz = centre.X - pawn.Location.X, centre.Y - pawn.Location.Y, centre.Z - eye
     to_units = 65536.0 / 360.0
-    pc.Rotation.Yaw = int(math.degrees(math.atan2(-dy, -dx)) * to_units)
-    pc.Rotation.Pitch = 0
-    return {"placed": True, "at": [pawn.Location.X, pawn.Location.Y, pawn.Location.Z]}
+    pc.Rotation.Yaw = int(math.degrees(math.atan2(dy, dx)) * to_units)
+    pc.Rotation.Pitch = int(math.degrees(math.atan2(dz, math.hypot(dx, dy))) * to_units)
+    return {"at": [pawn.Location.X, pawn.Location.Y, pawn.Location.Z], "centre": [centre.X, centre.Y, centre.Z]}
 
 
 def _row(path, tag):
@@ -188,13 +209,24 @@ def cp_unhook():
 def cp_page():
     pc = _pc()
     found = [m for m in unrealsdk.find_all("StatusMenuExGFxMovie", exact=False) if "Default__" not in m.Name]
-    movie = found[-1] if found else None
-    out = {"movie": _name(movie), "quick_screen": _try(lambda: int(pc.QuickAccessScreen))}
+    live = [m for m in found if _try(lambda: bool(m.bMovieIsOpen)) is True]
+    movie = live[-1] if live else None
+    out = {"movie": _name(movie), "open": movie is not None, "quick_screen": _try(lambda: int(pc.QuickAccessScreen)), "movies": len(found)}
     if movie is not None:
-        out["open"] = _try(lambda: bool(movie.bMovieIsOpen))
+        out["screen"] = _try(lambda: int(movie.CurrentScreen))
         out["props"] = _try(lambda: {p.Name: str(getattr(movie, p.Name))[:80] for p in movie.Class._properties()
                                      if any(word in p.Name.lower() for word in ("screen", "panel", "page", "current"))})
     return out
+
+
+def cp_dialog():
+    return sum(1 for m in unrealsdk.find_all("WillowGFxDialogBox", exact=False)
+               if "Default__" not in m.Name and _try(lambda: bool(m.bMovieIsOpen)) is True)
+
+
+def cp_hits(path):
+    rows = [row for row in CP["rows"] if row["tag"] == "pre" and row["fn"].endswith("TakeDamage") and path in str(row["self"])]
+    return {"count": len(rows), "amounts": [_try(lambda: row["args"].get("Damage", row["args"].get("DamageAmount"))) for row in rows]}
 
 
 def cp_injure():

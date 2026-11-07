@@ -47,7 +47,24 @@ function Remove-Driver { if ($scenario -ne 'driver_stuck') { Remove-Item -Recurs
 function Save-Shot { 'shot' }
 function Focus-Game { $true }
 function Assert-GameForeground { if ($scenario -eq 'no_focus') { throw 'refusing to send input: stub' } }
-function Send-Key { }
+# The menu as the first real run showed it: a key opens a page with no page up, Esc closes one, and Esc with none up opens the pause menu.
+$script:StubOpen = $false; $script:StubScreen = 0; $script:StubAsks = 0; $script:StubDialog = $false; $script:StubSwings = 0
+$script:StubScreens = @{ M = 2; L = 1; I = 3; K = 4; Tab = 2 }
+function Send-Key([string]$Key, [int]$HoldMs = 60) {
+    if ($Key -eq 'V') { $script:StubSwings++; return }
+    if ($Key -eq 'Enter') { $script:StubDialog = $false; return }
+    if ($Key -eq 'Esc') {
+        if ($script:StubOpen) { $script:StubOpen = $false } else { Set-Content -LiteralPath (Join-Path $work 'pause_opened.txt') $Key }
+        return
+    }
+    if (!$script:StubScreens.ContainsKey($Key)) { return }
+    if ($script:StubDialog) { return }   # a dialog takes the keys
+    if (!$script:StubOpen) {
+        if ($scenario -eq 'page_closed') { return }
+        $script:StubOpen = $true; $script:StubScreen = $script:StubScreens[$Key]
+        if ($scenario -eq 'dialog' -and $Key -eq 'I') { $script:StubDialog = $true }
+    } elseif ($scenario -ne 'keys_no_effect') { $script:StubScreen = $script:StubScreens[$Key] }
+}
 function Invoke-GamePyFile { 'ok' }
 function Stop-OwnGame { if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
 $script:Fake = [pscustomobject]@{ Id = 4242; StartTime = (Get-Date); HasExited = $false }
@@ -77,22 +94,18 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_melee_facts*' { return '{"definition": {}}' }
         '*cp_page*' {
-            # An old stage passed on the key "movie" alone, or on eight rows. The real read: open, and the screen the key left it on.
-            $script:StubPageAsks++
-            if ($scenario -eq 'page_closed') { return '{"movie": "m", "open": false, "quick_screen": 0}' }
-            if ($scenario -eq 'keys_no_effect') { return '{"movie": "m", "open": true, "quick_screen": 0}' }
-            return "{`"movie`": `"m`", `"open`": true, `"quick_screen`": $script:StubPageAsks}"
+            # The screen's clock moves by itself, so a whole-text comparison sees an effect in every read.
+            $script:StubAsks++
+            return "{`"movie`": `"m`", `"open`": $($script:StubOpen.ToString().ToLower()), `"screen`": $script:StubScreen, `"time`": $script:StubAsks}"
         }
-        '*cp_count*' {
-            # Each ask after a V sees one more call, unless the press never reached the game.
-            if ($scenario -eq 'no_melee' -or ($scenario -eq 'no_npc_melee' -and $script:StubMeleeCalls -ge 3)) { return "$script:StubMeleeCalls" }
-            $script:StubMeleeCalls++
-            return "$script:StubMeleeCalls"
-        }
+        '*cp_dialog*' { return $(if ($script:StubDialog) { '1' } else { '0' }) }
+        '*cp_count*' { return $(if ($scenario -eq 'no_melee') { '0' } else { "$script:StubSwings" }) }
+        '*cp_hits*' { return $(if ($scenario -eq 'no_target_hit') { '{"count": 0, "amounts": []}' } else { '{"count": 1, "amounts": [53.2]}' }) }
         '*cp_injure*' { return $(if ($scenario -eq 'not_down') { '{"injured": false}' } else { '{"injured": true}' }) }
         '*cp_melee_hooks*' { return '{}' }
-        '*cp_targets*' { return '[{"class": "WillowAIPawn", "path": "a.b"}]' }
-        '*cp_prompt_read*' { return '{}' }
+        '*cp_targets*' { return '[{"class": "WillowAIPawn", "path": "a.pawn", "definition": "x"}, {"class": "WillowInteractiveObject", "path": "a.box", "definition": "GD.CardboardBox"}, {"class": "WillowVendingMachine", "path": "a.shop", "definition": "y"}]' }
+        '*cp_prompt_read*' { return $(if ($scenario -eq 'no_usable') { '{"usable": null}' } else { '{"usable": "x", "p1.tools": {"_currentframe": 13}}' }) }
+        '*cp_prompt(*' { if ($Code -notmatch "cp_prompt\(r'a\.\w+'\)") { throw "a target's path ran together: $Code" }; return '{}' }
         '*quit*' { if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
         default { return 'None' }
     }
@@ -174,10 +187,22 @@ class ControlsCaptureTest(unittest.TestCase):
         done, session = self.run_capture('keys_no_effect')
         self.assertEqual(session['status'], 'incomplete: page_keys')
 
-    def test_a_press_that_never_reached_a_pawn_fails_melee_npc(self):
-        done, session = self.run_capture('no_npc_melee')
-        self.assertIn('melee_npc', session['status'])
-        self.assertTrue(any('melee_npc' in p and 'melee calls: 0' in p for p in session['stage_problems']), session['stage_problems'])
+    def test_a_swing_that_hit_nothing_fails_melee_target(self):
+        done, session = self.run_capture('no_target_hit')
+        self.assertEqual(session['status'], 'incomplete: melee_target')
+
+    def test_no_usable_target_fails_prompts(self):
+        done, session = self.run_capture('no_usable')
+        self.assertEqual(session['status'], 'incomplete: prompts')
+
+    def test_a_dialog_over_a_page_is_cleared(self):
+        done, session = self.run_capture('dialog')
+        self.assertEqual(session['status'], 'completed', session['stage_problems'])
+
+    def test_esc_never_goes_to_a_closed_page(self):
+        done, session = self.run_capture('ok')
+        self.assertEqual(session['status'], 'completed', session['stage_problems'])
+        self.assertFalse((self.work / 'pause_opened.txt').exists(), 'Esc with no page up opens the pause menu')
 
     def test_another_map_stops_the_run(self):
         done, session = self.run_capture('wrong_map')

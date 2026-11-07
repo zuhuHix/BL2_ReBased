@@ -19,7 +19,7 @@ param(
     [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'controls',
     [string]$Character = 'Save0008.sav',    # the level-8 Maya in Sanctuary
-    [int]$PromptTargets = 6,                # the nearest usable things read per class
+    [int]$PromptTargets = 8,                # the nearest usable things read per class
     # What to dot-source for the real-game functions. Only tests/controls_capture_test.py passes another file.
     [string]$Helpers = (Join-Path $PSScriptRoot 'realgame.ps1')
 )
@@ -36,14 +36,31 @@ foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.j
 $log = [ordered]@{ started = (Get-Date).ToString('o'); status = 'running' }
 function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
 # Evidence for the stages: a status menu that is really up, and the melee calls the game has made so far.
+function Get-Page { Py 'print(json.dumps(cp_page(), default=str))' 15 }
 function Test-PageOpen([string]$Json) { try { (ConvertFrom-Json $Json).open -eq $true } catch { $false } }
+# What a key can change on a page: whether it is open, and which screen. The rest of the read moves by itself (a screen's clock).
+function Get-PageState([string]$Json) { try { $page = ConvertFrom-Json $Json; "$($page.open)/$($page.screen)" } catch { "unread: $Json" } }
+# Esc on no page opens the pause menu, which then takes every key: only a page that is really open gets one.
+function Close-Page {
+    for ($i = 0; $i -lt 4; $i++) {
+        if (!(Test-PageOpen (Get-Page))) { return $true }
+        Send-Key Esc; Start-Sleep 2
+    }
+    !(Test-PageOpen (Get-Page))
+}
+# A dialog over a page takes its keys. Enter is its OK.
+function Clear-Dialogs {
+    for ($i = 0; $i -lt 5 -and [int](Py 'print(cp_dialog())' 15) -gt 0; $i++) { Send-Key Enter; Start-Sleep 1 }
+}
+# The first read that is a real use target with its clip showing, in the probe's JSON.
+function Test-PromptRead([string]$Json) { try { [bool](ConvertFrom-Json $Json).usable } catch { $false } }
 function Get-MeleeCount { [int](Py 'print(cp_count())') }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
 $snapshots = @{}
-$stagesRequested = @('bindings', 'melee_facts', 'melee_air', 'melee_interrupted', 'prompts', 'melee_npc', 'page_keys', 'page_down')
+$stagesRequested = @('melee_facts', 'melee_air', 'melee_interrupted', 'prompts', 'melee_target', 'page_keys', 'page_down')
 $log.requested_stages = $stagesRequested
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -94,8 +111,8 @@ try {
     Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/controls_probe.py') controls | Out-Null
 
     $bindings = Py 'print(json.dumps(cp_bindings()))' 60
-    $log.bindings = $bindings; "bindings: $bindings"
-    Set-Stage 'bindings' ($bindings -match '"key"') 'no binding read'
+    # Not a stage: the first run found none of these keys in this list, as the data says. The presses below are the evidence.
+    $log.bindings = $bindings
     $facts = Py 'print(json.dumps(cp_melee_facts(), default=str))' 60
     $log.facts = $facts; "facts: $facts"
     Set-Stage 'melee_facts' ($facts -match '"definition"') 'no definition read'
@@ -114,9 +131,9 @@ try {
     # the hit behaviour still ran and whether the menu opened; the shots show what happened to the arm.
     $beforeInterrupted = Get-MeleeCount
     Send-Key V; Start-Sleep -Milliseconds 100; Send-Key Tab; Start-Sleep 2
-    $menu = Py 'print(json.dumps(cp_page(), default=str))' 15
+    $menu = Get-Page
     Save-Shot 'controls/melee_then_menu.png' | Out-Null
-    Send-Key Esc; Start-Sleep 2
+    if (!(Close-Page)) { throw 'the status menu did not close after a swing' }
     Send-Key V; Start-Sleep -Milliseconds 100; Send-Key '2'; Start-Sleep 3
     Save-Shot 'controls/melee_then_weapon_key.png' | Out-Null
     Py "print(cp_rows('melee_interrupted'))" | Out-Null
@@ -124,15 +141,21 @@ try {
     $interruptedSwings = (Get-MeleeCount) - $beforeInterrupted
     Set-Stage 'melee_interrupted' ((Test-PageOpen $menu) -and $interruptedSwings -gt 0) "menu open: $(Test-PageOpen $menu), melee calls: $interruptedSwings"
 
-    # Each candidate: stand before it, read the prompt with a screenshot.
-    $targets = @(Py 'print(json.dumps(cp_targets()))' 60 | ConvertFrom-Json)
-    $picked = @($targets | Group-Object class | ForEach-Object { $_.Group | Select-Object -First $PromptTargets })
-    $n = 0; $reads = @()
+    # The list comes through ForEach-Object: in Windows PowerShell ConvertFrom-Json hands an array over as one item, and the first run's targets
+    # all ran together into one path, so Maya never moved.
+    $targets = @(Py 'print(json.dumps(cp_targets()))' 60 | ConvertFrom-Json | ForEach-Object { $_ })
+    # The nearest of each class, one per kind of object (pawns have no definition, so each counts): the first run's list was mostly cardboard boxes.
+    $picked = @($targets | Group-Object class | ForEach-Object { $_.Group | Group-Object { if ($_.class -eq 'WillowAIPawn') { $_.path } else { "$($_.definition)" } } | ForEach-Object { $_.Group[0] } | Select-Object -First $PromptTargets })
+    $n = 0; $reads = @(); $usableReads = 0
     foreach ($t in $picked) {
         $n++
         Py "print(cp_prompt(r'$($t.path)'))" | Out-Null
-        Start-Sleep 1
-        $reads += (Py "print(json.dumps(cp_prompt_read(r'$($t.path)'), default=str))")
+        Start-Sleep -Milliseconds 700
+        Py "print(cp_aim(r'$($t.path)'))" | Out-Null
+        Start-Sleep -Milliseconds 700
+        $read = Py "print(json.dumps(cp_prompt_read(r'$($t.path)'), default=str))"
+        $reads += $read
+        if (Test-PromptRead $read) { $usableReads++ }
         Save-Shot "controls/prompt_$n.png" | Out-Null
         # The same spot with the view turned away: does the target follow the view or the distance? It decides what the prompt names.
         foreach ($turn in 15, 30) {
@@ -142,36 +165,40 @@ try {
         }
     }
     $reads | Set-Content (Join-Path $Out 'prompts.jsonl')
-    "prompts: $($reads.Count)"; $log.prompts = $reads.Count
-    Set-Stage 'prompts' ($reads.Count -gt 0) 'no usable thing to read'
+    "prompts: $($reads.Count) reads, $usableReads of $($picked.Count) targets usable"; $log.prompts = $reads.Count; $log.usable_targets = $usableReads
+    Set-Stage 'prompts' ($usableReads -gt 0) "no target was usable, of $($picked.Count)"
 
-    # A melee press with the nearest pawn close ahead: whether a stock swing reaches something friendly.
-    $npc = @($targets | Where-Object { $_.class -eq 'WillowAIPawn' } | Select-Object -First 1)
-    $npcSwings = 0
-    if ($npc) {
-        $beforeNpc = Get-MeleeCount
-        Py "print(cp_prompt(r'$($npc[0].path)', 150.0))" | Out-Null
-        Start-Sleep 1; Assert-GameForeground; Send-Key V; Start-Sleep 3
-        Py "print(cp_rows('melee_npc'))" | Out-Null
-        $npcSwings = (Get-MeleeCount) - $beforeNpc
+    # A swing at something: the nearest pawn, then the nearest interactive object. What counts is a hit on the one she stands before.
+    $meleeTargets = @(@($targets | Where-Object { $_.class -eq 'WillowAIPawn' } | Select-Object -First 1) + @($targets | Where-Object { "$($_.definition)" -match 'CardboardBox' } | Select-Object -First 1))
+    $hitTargets = 0; $hitReads = @()
+    foreach ($t in $meleeTargets) {
+        Py "print(cp_prompt(r'$($t.path)'))" | Out-Null
+        Start-Sleep -Milliseconds 700
+        Py "print(cp_aim(r'$($t.path)'))" | Out-Null
+        Start-Sleep -Milliseconds 300; Assert-GameForeground; Send-Key V; Start-Sleep 2
+        $hits = Py "print(json.dumps(cp_hits(r'$($t.path)'), default=str))"
+        $hitReads += "{`"target`": `"$($t.class)`", `"hits`": $hits}"
+        if ((ConvertFrom-Json $hits).count -gt 0) { $hitTargets++ }
     }
-    Set-Stage 'melee_npc' ($npcSwings -gt 0) "pawns: $($npc.Count), melee calls: $npcSwings"
+    $hitReads | Set-Content (Join-Path $Out 'melee_target.jsonl')
+    Py "print(cp_rows('melee_target'))" | Out-Null
+    $log.melee_hits = $hitReads
+    Set-Stage 'melee_target' ($hitTargets -gt 0) "targets: $($meleeTargets.Count), hit: $hitTargets"
 
-    # M and L on each open page: open it with its stock key, press one, read and capture, close. Tab and Esc are the page's own business.
+    # M and L on each open page: open it with its stock key, clear any dialog, press one, read and capture, close by what is really open.
     $pageReads = @(); $pagesOpened = 0; $keysWithEffect = 0
     foreach ($page in 'M', 'L', 'I', 'K') {
         foreach ($key in 'M', 'L') {
             Assert-GameForeground
             Send-Key $page; Start-Sleep 2
-            $opened = Py 'print(json.dumps(cp_page(), default=str))' 15
+            Clear-Dialogs
+            $opened = Get-Page
             Send-Key $key; Start-Sleep 2
-            $after = Py 'print(json.dumps(cp_page(), default=str))' 15
-            if (Test-PageOpen $opened) { $pagesOpened++ }
-            if ($after -ne $opened) { $keysWithEffect++ }
+            $after = Get-Page
+            if (Test-PageOpen $opened) { $pagesOpened++; if ((Get-PageState $after) -ne (Get-PageState $opened)) { $keysWithEffect++ } }
             Save-Shot "controls/page_${page}_then_${key}.png" | Out-Null
             $pageReads += "{`"page`": `"$page`", `"key`": `"$key`", `"opened`": $opened, `"after`": $after}"
-            Send-Key Esc; Start-Sleep 2
-            Send-Key Esc; Start-Sleep 1   # if the key left a page open under the first close
+            if (!(Close-Page)) { throw "the page opened with $page did not close" }
             Save-Shot "controls/page_${page}_then_${key}_closed.png" | Out-Null
         }
     }
@@ -191,9 +218,9 @@ try {
         foreach ($key in 'M', 'L') {
             Assert-GameForeground
             Send-Key $key; Start-Sleep 1
-            $downReads += "{`"key`": `"$key`", `"after`": $(Py 'print(json.dumps(cp_page(), default=str))' 15)}"
+            $downReads += "{`"key`": `"$key`", `"after`": $(Get-Page)}"
             Save-Shot "controls/down_$key.png" | Out-Null
-            Send-Key Esc; Start-Sleep 1
+            if (!(Close-Page)) { throw "a page opened with $key while down did not close" }
         }
         Send-Key V; Start-Sleep 1
         Save-Shot 'controls/down_V.png' | Out-Null
