@@ -75,8 +75,17 @@ def test_each_script_parses():
     assert len(lines) == 7 and all(l.endswith(' 0') for l in lines), done.stdout + done.stderr
 
 
-def test_the_doc_no_longer_bars_them():
-    assert 'Not to be run until migrated' not in (ROOT / 'docs/TOOLING.md').read_text(encoding='utf-8')
+def test_the_doc_bars_exactly_the_five_without_a_restore():
+    doc = (ROOT / 'docs/TOOLING.md').read_text(encoding='utf-8')
+    line = next(l for l in doc.splitlines() if l.startswith('- **Not to be run:**'))
+    barred = line[:line.index('They report')]
+    for name in SEVEN[:5]:
+        assert f'`{name}`' in barred, name
+    for name in SEVEN[5:]:
+        assert name not in barred and f'`{name}`' in line, name
+    # Each of the five really has no restore, which is the reason given; when one gains it, its bar should lift.
+    for name in SEVEN[:5]:
+        assert 'Restore-' not in text(name), name
 
 
 if __name__ == '__main__':
