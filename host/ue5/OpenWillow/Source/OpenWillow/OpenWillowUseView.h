@@ -1,7 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
+#include "GameFramework/Actor.h"
 
-class AActor;
 class AOpenWillowWalker;
 class UWorld;
 
@@ -11,6 +11,17 @@ class UWorld;
 // reliable collision, so the ray tests a box that stands in for the usable's collision. Pickups and Marcus keep their own rules.
 namespace OpenWillowUseView
 {
+    // The imported level's own mesh for a placed usable, which in the host is other actors than the usable: each of its sections is one, and any may have collision.
+    struct FPlacedBody
+    {
+        TArray<TWeakObjectPtr<AActor>> Sections;
+        FBox Box = FBox(ForceInit);
+        bool Contains(const AActor* Actor) const
+        {
+            return Actor && Sections.ContainsByPredicate([Actor](const TWeakObjectPtr<AActor>& Section) { return Section.Get() == Actor; });
+        }
+    };
+
     constexpr double RayLength = 350.;   // GlobalsDefinition.PlayerInteractionDistance, as NATIVE_USE_INTERACTION.md reads it
 
     // The rule with no engine state: true when the ray enters Box within RayLength, with the distance to that point (0 from inside the box).
@@ -20,13 +31,14 @@ namespace OpenWillowUseView
     // Where the ray starts: the walker's camera.
     FVector EyeOf(const AOpenWillowWalker& Walker);
 
-    // The imported level's own mesh for a placed object, by the source path the importer tags it with, within 50 uu of Near. OutBox holds all its sections' bounds.
-    // Null when the map has none. A usable that is in the map this way is two actors in the host: its mesh must not count as something in front of it.
-    AActor* FindPlacedBody(UWorld& World, const FString& ObjectName, const FVector& Near, FBox& OutBox);
+    // Every section of the object at OwnerPath (the level's object path; the importer tags each section with OwnerPath.Component). False with OutProblem when there is none or it
+    // cannot be told for certain: one component at two places (the same name in two levels: the tag carries no level), or a component whose bounds do not reach Near.
+    bool FindPlacedBody(UWorld& World, const FString& OwnerPath, const FVector& Near, FPlacedBody& OutBody, FString& OutProblem);
 
-    // The ray from Walker's current view enters Box, and nothing but Walker, Target and Target's Body blocks it on the way.
-    bool LooksAt(const AOpenWillowWalker& Walker, const FBox& Box, const AActor* Target, const AActor* Body = nullptr);
+    // Without a Body: the ray from Walker's current view enters Box, and nothing but Walker and Target blocks it on the way.
+    // With a Body: the first thing the whole ray hits, Target aside, is a section of it, as the native note has the first usable hit be the object's own collision. Box is not used.
+    bool LooksAt(const AOpenWillowWalker& Walker, const FBox& Box, const AActor* Target, const FPlacedBody* Body = nullptr);
 
-    // For a test's log: the same ray and trace as LooksAt, spelled out: where it starts, where it points, the box, and what stopped it.
-    FString Describe(const AOpenWillowWalker& Walker, const FBox& Box, const AActor* Target, const AActor* Body = nullptr);
+    // For a test's log: the same ray and trace as LooksAt, spelled out: where it starts, where it points, the box, and what it hit.
+    FString Describe(const AOpenWillowWalker& Walker, const FBox& Box, const AActor* Target, const FPlacedBody* Body = nullptr);
 }

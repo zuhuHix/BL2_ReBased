@@ -41,9 +41,9 @@ QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)
 QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
 QUICK_ANY = re.compile(r'OWQUICKCHANGE (.*)$', re.M)
 QUICK_AWAY = re.compile(r'OWQCTEST walked away')
-QUICK_LOOKED = re.compile(r'OWQCTEST looked away selected=(\d+) target=(\S+)')
+QUICK_LOOKED = re.compile(r'OWQCTEST looked away selected=(\d+) target=(\S+) quest=(\d+)')
 VIEW_BLOCKED = re.compile(r'OWQCTEST blocked selected=(\d+) target=(\S+) fixture=(\d+)')
-VIEW_CLEAR = re.compile(r'OWQCTEST clear selected=(\d+) target=(\S+)')
+VIEW_CLEAR = re.compile(r'OWQCTEST clear selected=(\d+) target=(\S+) quest=(\d+)')
 VIEW_RAY = re.compile(r'OWQCTEST ray (blocked|clear) .*?enters=(\d+) distance=\S+ blocked=(\d+) start_penetrating=(\d+) hit=(\S*?)/(\S*) hit_distance=')
 SHEET = 'ViewBlockerFixture'
 QUICK_REFUSAL = re.compile(r'OWQCTEST refusal money=(\d+) grades_same=(\d)')
@@ -279,8 +279,8 @@ def grade_quick_change(log_text, out):
         out.add('quick_change', 'FAIL', f'station events {kinds}, expected prompt, cancel, prompt, reset, prompt, reset')
         return
     looked = list(QUICK_LOOKED.finditer(log_text))
-    if len(looked) != 1 or looked[0].groups() != ('0', 'none') or looked[0].end() > events[0][1].start():
-        out.add('quick_change', 'FAIL', f'in reach and looking away, the press must have no target at all, before the first prompt: {[m.group(0) for m in looked]}')
+    if len(looked) != 1 or looked[0].groups() != ('0', 'none', '0') or looked[0].end() > events[0][1].start():
+        out.add('quick_change', 'FAIL', f'in reach and looking away, the press must have no target at all and no quest to take it, before the first prompt: {[m.group(0) for m in looked]}')
         return
     away, refused, confirmed = events[1][1], events[3][1], events[5][1]
     if QUICK_AWAY.search(log_text, events[0][1].end(), away.start()) is None or away.group(2).strip() != 'not the selected target':
@@ -334,7 +334,7 @@ def grade_view_blocker(log_text, out):
         out.add('use_view_blocker', 'FAIL', 'the blocking fixture did not spawn, so this shows nothing')
     elif blocked[0].group(1, 2) != ('0', 'none'):
         out.add('use_view_blocker', 'FAIL', f'something solid on the ray, yet: {blocked[0].group(0)}')
-    elif clear[0].groups() != ('1', 'interactive'):
+    elif clear[0].groups() != ('1', 'interactive', '0'):
         out.add('use_view_blocker', 'FAIL', f'a clear ray, yet: {clear[0].group(0)}')
     else:
         out.add('use_view_blocker', 'PASS', 'not the target with something solid on the ray, the target with it gone')
