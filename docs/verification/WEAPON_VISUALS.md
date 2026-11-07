@@ -732,13 +732,23 @@ AI-assisted (Claude Opus 5.5). A playtest found rolled guns' sights sitting low 
 
 The slice pistol's height was set on 2026-10-22, before the 2026-11-03 ADS rules (section 15). The later "within 10 px" record for it was a side measurement. So its height was stale, and copying it to every pistol would have been wrong.
 
-**Rule (host rule, UNVERIFIED).** The two pistols share a body, so their frames give about 17 px per cm, and about 6.4 cm of height would put either at the real tip. The fallback eye socket on that body sits about 5.5 to 7 cm above the front sights of the barrels it can carry. On a gun with no sight part, the gun now rises by how far its eye socket sits above its barrel's front sight, on the same bone: `add_sight_line_height` in the tool, `AddSightLineHeight` in `OpenWillowViewTypes`, added on top of the type's fit.
+**Rule (host rule, UNVERIFIED).** The two pistols share a body, whose fallback eye socket sits several cm above the front sights of the barrels it can carry; each needed about that much height. On a gun with no sight part, the gun now rises by how far its eye socket sits above its barrel's front sight, on the same bone: `add_sight_line_height` in the tool, `AddSightLineHeight` in `OpenWillowViewTypes`, added on top of the type's fit.
 A sight part keeps its own eye socket. In the 118 sample guns, every sight part but three sniper ones also draws an overlay that hides the gun, so its height barely shows; those three stay as they were. That gap runs from about -2 to +7 cm across those guns. It differs within 6 of the 23 weapon types the sample shows on iron sights (types with one sample gun cannot show it), so no fit per type could hold.
 
 **Side term.** The pistol's hold is turned a little, so its tip sits left of centre: about 30 px on the slice pistol and 17 px on the rolled one. A side fit of 1.1 cm replaces the slice pistol's -0.6 cm, for every pistol type since they share the arms pose. It is fitted to those two frames and not derived.
 
-**Predicted, not seen (no capture yet):** pistol tip about 23 px below centre (real 8), assault rifle about 10 px below (real 15), rolled Jakobs pistol near the slice pistol's. The remaining pistol gap is close to the host's fixed drop below the reticle, left alone here.
+**Seen (run Z20 on the zuhu PC, frames under ignored `local/gunlook/ads1` and `ads2`; by eye on crops, about +-10 px), as the highest visible point of the gun below the screen centre:**
 
-**Checked.** Offline only. `--check` composes 118 of 118 guns the same as their generated lines (Python tool against tool, not the host or the game), and the only fields that differ from the old lines are the fit and its source. Synthetic tests cover the rule in Python and C++. The C++ is not compiled yet and no frame shows the result.
+| gun | fit height | host | real |
+|---|---|---|---|
+| slice pistol | 5.5 cm | 7 px below | 8 px below |
+| slice assault rifle | -1.25 cm | 20 px below | 15 px below |
+| rolled Jakobs pistol | 8 cm | 5 px below | no frame |
+| slice shotgun | 5.25 cm | 90 px above | no frame |
 
-**Not covered.** No real ADS frame exists for a shotgun, a Maliwan or Hyperion pistol, an SMG on iron sights, a sniper without an overlay or a launcher, so the rule is untested on those; on the slice shotgun it lifts the gun about 5 cm. Rotation is untouched: the host's gun stays turned where the real one points straight. The real and host SMG reticles also differ in the same frames (the lower triangle looks upside down, and the rings differ); not looked into.
+The slice pistol and rifle match their real frames better than predicted (23 and 10 px). The rolled pistol carries the same body and a barrel with a lower front sight, so its height differs, as the rule intends. Of eight more guns, the lowest and highest gap per class, six sit between 20 and 30 px below centre, and one SMG and one shotgun 10 to 15 px above. The side term leaves the slice pistol's tip about 10 px left of centre.
+**The slice shotgun looks wrong and may be.** It carries a low front sight on a body with a high eye socket, so the rule lifts it most. The front sight seems to reach the centre, but a tall part nearer the camera then stands well above it and the gun covers the reticle. Without the rule, that part's top sat about 5 px below centre. Only a real frame can say which is right.
+
+**Checked.** `--check` composes 39 of 39 guns the same as their generated lines on the zuhu PC, and 118 of 118 offline (Python tool against tool, not the host or the game); the only fields that differ from the old lines are the fit and its source. `OpenWillow.WeaponAssembly` passes, with the rule's synthetic cases. Reload rates and arms sets in those runs are as in Z19.
+
+**Not covered.** No real ADS frame exists for a shotgun, a Maliwan or Hyperion pistol, an SMG on iron sights, a sniper without an overlay or a launcher, so the rule is untested on those. The gun's size is untouched: the real rifle stands about 1.4 times wider (section 18). Rotation is untouched: the host's gun stays turned where the real one points straight. The real and host SMG reticles also differ in the same frames (the lower triangle looks upside down, and the rings differ); not looked into.
