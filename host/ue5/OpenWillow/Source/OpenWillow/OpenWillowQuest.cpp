@@ -1782,6 +1782,9 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (RespawnsBeforeDeath < 0)
         {
             RespawnsBeforeDeath = Respawns;
+            // A known purse for the fee's checks in the next step; put back there.
+            Walker->GetInventory()->GetMoney(MoneyBeforeFee);
+            Walker->GetInventory()->SetMoney(2000);
             FHitResult Hit;
             UGameplayStatics::ApplyPointDamage(Walker, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
             Check(Walker->IsDown() && Walker->GetHealth() == 0.f && Respawns == RespawnsBeforeDeath, TEXT("player_death_goes_down_first"));
@@ -1796,10 +1799,23 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     }
     case 21:
-        if (Waiting(Walker->GetCharacterMovement()->IsMovingOnGround(), 4.f)) return;
+        // The step also waits for the fee: 11.8 s after the respawn.
+        if (Waiting(Walker->GetCharacterMovement()->IsMovingOnGround() && Walker->GetRespawnFee().LastFee() >= 0, 16.f)) return;
         UE_LOG(LogTemp, Display, TEXT("OWQUEST after respawn: %s grounded=%d"), *Walker->GetActorLocation().ToString(),
             Walker->GetCharacterMovement()->IsMovingOnGround());
         Check(Walker->GetCharacterMovement()->IsMovingOnGround(), TEXT("respawn_point_is_standable"));
+        {
+            const FOpenWillowRespawnFee& Fee = Walker->GetRespawnFee();
+            int32 MoneyNow = 0;
+            Walker->GetInventory()->GetMoney(MoneyNow);
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST respawn fee %d, purse %d, %.2f s after the respawn, message %s"), Fee.LastFee(), MoneyNow, Fee.LastChargedAt() - Walker->LastRespawnAt(), *Fee.MessageBody());
+            Check(Fee.LastFee() == 140 && MoneyNow == 1860, TEXT("respawn_charges_the_fee"));
+            Check(FMath::IsNearlyEqual(Fee.LastChargedAt() - Walker->LastRespawnAt(), FOpenWillowRespawnFee::DelaySeconds, 0.5f), TEXT("respawn_fee_at_the_recorded_delay"));
+            Check(Fee.IsMessageShown(GetWorld()->GetTimeSeconds()) && Fee.MessageBody().Contains(TEXT("140")) && !Fee.MessageTitle().IsEmpty(), TEXT("respawn_message_shows_the_fee"));
+            Check(!Fee.IsMessageShown(Fee.LastChargedAt() + FOpenWillowRespawnFee::MessageSeconds + 0.01f), TEXT("respawn_message_ends_by_itself"));
+            Shot(TEXT("5b_RespawnMessage"));
+            Walker->GetInventory()->SetMoney(MoneyBeforeFee);
+        }
         break;
     case 22:
         if (!RunPhaselockTest()) return;

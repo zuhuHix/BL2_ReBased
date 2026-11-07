@@ -357,6 +357,7 @@ void AOpenWillowWalker::Respawn()
     // With -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host
     // stand-in: back to where this session started. Full health and shield either way; mission state is not touched.
     MayaState.Respawn(GetWorld()->GetTimeSeconds());
+    RespawnFee.Schedule(GetWorld()->GetTimeSeconds());
     bFireHeld = false;
     Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
@@ -756,6 +757,7 @@ void AOpenWillowWalker::BeginPlay()
 void AOpenWillowWalker::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    RespawnFee.Tick(GetWorld()->GetTimeSeconds(), Inventory);
     bAimModel = OpenWillowFiring::AimModelEnabled();   // off in scripted test and capture modes unless -owaimmodel
     if (GrenadeReleaseAt > 0.f && GetWorld()->GetTimeSeconds() >= GrenadeReleaseAt) ReleaseGrenade();
     TickMelee();
