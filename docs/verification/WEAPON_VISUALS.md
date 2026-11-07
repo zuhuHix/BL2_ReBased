@@ -718,7 +718,7 @@ Earlier rows (section 18: idle 7.0, reload 5.6) are from other critic runs and a
 real. The SMG's frame matches an early real pose, not the middle of the motion. That may be timing: the real run's halved reload time is under the fast-clip threshold, and the host plays the default clip at the card's base time (inferred, UNVERIFIED). The Torgue launcher
 leaves the frame at half its reload; no real frame compares that. A still does not show motion. Ammo counts during a reload differ too: the real magazine count rises through the reload, the host's stays 0 until the refill.
 
-## 23. ADS on iron sights: the height follows the parts, not the weapon type (gunlook lane, 2026-11-07)
+## 23. ADS on iron sights: a height fit on pistols and rifles, refuted on a shotgun (gunlook lane, 2026-11-07)
 
 AI-assisted (Claude Opus 5.5). A playtest found rolled guns' sights sitting low in ADS. The ask was a fit per weapon type. The frames and the cooked sockets say the height follows the parts instead.
 
@@ -732,7 +732,7 @@ AI-assisted (Claude Opus 5.5). A playtest found rolled guns' sights sitting low 
 
 The slice pistol's height was set on 2026-10-22, before the 2026-11-03 ADS rules (section 15). The later "within 10 px" record for it was a side measurement. So its height was stale, and copying it to every pistol would have been wrong.
 
-**Rule (host rule, UNVERIFIED).** The two pistols share a body, whose fallback eye socket sits several cm above the front sights of the barrels it can carry; each needed about that much height. On a gun with no sight part, the gun now rises by how far its eye socket sits above its barrel's front sight, on the same bone: `add_sight_line_height` in the tool, `AddSightLineHeight` in `OpenWillowViewTypes`, added on top of the type's fit.
+**Fit, not the game's rule; its mechanism is unknown, and it is UNVERIFIED beyond the guns below.** The two pistols share a body, whose fallback eye socket sits several cm above the front sights of the barrels it can carry; each needed about that much height. On a pistol or assault rifle with no sight part, the gun now rises by how far its eye socket sits above its barrel's front sight, on the same bone: `add_sight_line_height` in the tool, `AddSightLineHeight` in `OpenWillowViewTypes`, added on top of the type's fit.
 A sight part keeps its own eye socket. In the 118 sample guns, every sight part but three sniper ones also draws an overlay that hides the gun, so its height barely shows; those three stay as they were. That gap runs from about -2 to +7 cm across those guns. It differs within 6 of the 23 weapon types the sample shows on iron sights (types with one sample gun cannot show it), so no fit per type could hold.
 
 **Side term.** The pistol's hold is turned a little, so its tip sits left of centre: about 30 px on the slice pistol and 17 px on the rolled one. A side fit of 1.1 cm replaces the slice pistol's -0.6 cm, for every pistol type since they share the arms pose. It is fitted to those two frames and not derived.
@@ -747,8 +747,19 @@ A sight part keeps its own eye socket. In the 118 sample guns, every sight part 
 | slice shotgun | 5.25 cm | 90 px above | no frame |
 
 The slice pistol and rifle match their real frames better than predicted (23 and 10 px). The rolled pistol carries the same body and a barrel with a lower front sight, so its height differs, as the rule intends. Of eight more guns, the lowest and highest gap per class, six sit between 20 and 30 px below centre, and one SMG and one shotgun 10 to 15 px above. The side term leaves the slice pistol's tip about 10 px left of centre.
-**The slice shotgun looks wrong and may be.** It carries a low front sight on a body with a high eye socket, so the rule lifts it most. The front sight seems to reach the centre, but a tall part nearer the camera then stands well above it and the gun covers the reticle. Without the rule, that part's top sat about 5 px below centre. Only a real frame can say which is right.
+The numbers above are from the first version, which applied to every class.
 
-**Checked.** `--check` composes 39 of 39 guns the same as their generated lines on the zuhu PC, and 118 of 118 offline (Python tool against tool, not the host or the game); the only fields that differ from the old lines are the fit and its source. `OpenWillow.WeaponAssembly` passes, with the rule's synthetic cases. Reload rates and arms sets in those runs are as in Z19.
+**Real frames of the same parts (`tools/real_game/gun_ads_capture.ps1`, once, zuhu PC, frames under ignored `local/realgame/gun_ads/`; level 8 against the host's recipe stage, other light and place; by eye, about +-10 px):**
 
-**Not covered.** No real ADS frame exists for a shotgun, a Maliwan or Hyperion pistol, an SMG on iron sights, a sniper without an overlay or a launcher, so the rule is untested on those. The gun's size is untouched: the real rifle stands about 1.4 times wider (section 18). Rotation is untouched: the host's gun stays turned where the real one points straight. The real and host SMG reticles also differ in the same frames (the lower triangle looks upside down, and the rings differ); not looked into.
+| gun | real | host with the gap | host on the eye socket alone |
+|---|---|---|---|
+| slice shotgun | front sight tip 15 px below, barrel end's top 20 below | 90 px above | 8 px below |
+| Hyperion pistol | top 15 px below, centred | about 22 px below; tip about 15 right, body about 40 right | not captured |
+
+The gap is about 110 px wrong on the shotgun and the eye socket alone about 12 px, so **shotguns and SMGs stay on the eye socket**. On this barrel the front-sight socket seems to sit low in the barrel end while the visible tip is at its top (a guess, UNVERIFIED). The SMG has no real frame on iron sights, so it stays unchanged rather than fitted. The side term stays open: it is tuned on the other pistols, and the host's hold is turned where the real gun points straight.
+
+**Seen in those real frames, not acted on.** (a) Real guns stand wider in ADS: shotgun about 1.5 times, rifle about 1.4, Hyperion pistol about 1.1. A separate ADS foreground FOV is the likely cause (UNVERIFIED). (b) The camera's live FOV is wider than the gun's zoom value, by a constant ratio of about 1.15 in tangent at full zoom and unzoomed, on both guns and on lane E's. The host passes the zoom value straight to its camera (section 12 chose this over a 4:3 conversion). So the world's zoom likely differs, which may touch every ADS frame compared so far; to check first.
+
+**Checked.** The first version: `--check` composed 39 of 39 guns the same as their generated lines on the zuhu PC, `OpenWillow.WeaponAssembly` passed, and reload rates and arms sets were as in Z19. This version: `--check` offline (see the PR), synthetic tests of the class limit, and a new capture still to come.
+
+**Not covered.** No real ADS frame exists for a Maliwan pistol, other shotguns, an SMG on iron sights, a sniper without an overlay or a launcher. The gun's size is untouched: the real rifle stands about 1.4 times wider (section 18). Rotation is untouched: the host's gun stays turned where the real one points straight. The real and host SMG reticles also differ in the same frames (the lower triangle looks upside down, and the rings differ); not looked into.
