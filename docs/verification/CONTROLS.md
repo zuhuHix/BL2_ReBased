@@ -15,8 +15,8 @@ indirect effect (a cheat's speed or damage) is not ruled out; the damage matchin
 
 The page routes also have the stock script behind them (`StatusMenuExGFxMovie.HandleInputKey`, by `research/script_disasm.py`): on a key's release it compares the key with the
 player's bound logs, map, inventory, skills and challenges actions and switches to that screen, from whichever screen is up. A key for the screen already up stays there by
-inference: `TrySwitchToScreen` itself was not read. By the same logic I and K would not close their own pages in the game, while the host's do: the script's reading only, for the
-inventory lane. M and L doing nothing while down rests on the live reads and the data's list of actions allowed while down.
+inference: `TrySwitchToScreen` itself was not read. By the same logic I and K would not close their own pages in the game, and the host's now stay as well (`inventory.js`, `skills.js`): the script's reading only,
+**UNVERIFIED** live (see below). M and L doing nothing while down rests on the live reads and the data's list of actions allowed while down.
 
 ## Where the stock keys come from
 
