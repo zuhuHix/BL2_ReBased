@@ -261,13 +261,20 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     {
         const FString Text = FString(TEXT(R"({"schema": @S, "library_md5": "@M",
           "types": {"WT.Gun": {"weapon_type": "WT.Gun", "first_person_fov": 40, "muzzle_socket": "Muzzle", "shell_casing_socket": "Port",
-                               "zoom_socket_preferred": "Eye1", "zoom_socket_fallback": "Eye2", "socket_table": "Mesh"}},
+                               "zoom_socket_preferred": "Eye1", "zoom_socket_fallback": "Eye2", "socket_table": "Mesh", "zoom_position_fit_cm": [0, 1, 0]}},
           "sockets": {"Mesh": {"barrel_a_muzzle": {"name": "Barrel_A_Muzzle", "bone": "B", "fragment": ""},
+                               "body_a_eye2": {"name": "Body_A_Eye2", "bone": "R", "fragment": "", "location": [0, 9, 19]},
+                               "barrel_a_frontsight": {"name": "Barrel_A_FrontSight", "bone": "R", "fragment": "", "location": [0, -9, 13]},
+                               "barrel_b_frontsight": {"name": "Barrel_B_FrontSight", "bone": "Q", "fragment": "", "location": [0, -9, 13]},
+                               "scope_b_eye1": {"name": "Scope_B_Eye1", "bone": "R", "fragment": "", "location": [0, 9, 15]},
                                "muzzle": {"name": "Muzzle", "bone": "M", "fragment": ""},
                                "port": {"name": "Port", "bone": "R", "fragment": ""},
                                "eye2": {"name": "Eye2", "bone": "E", "fragment": ""},
                                "scope_a_eye2": {"name": "Scope_A_Eye2", "bone": "S", "fragment": ""}}},
           "parts": {"P.Barrel": {"fragments": ["Barrel_A"], "scope_overlay": false},
+                    "P.BarrelB": {"fragments": ["Barrel_B"], "scope_overlay": false},
+                    "P.Body": {"fragments": ["Body_A"], "scope_overlay": false},
+                    "P.ScopeB": {"fragments": ["Scope_B"], "scope_overlay": true},
                     "P.Sight": {"fragments": ["Scope_A"], "scope_overlay": true}}})"))
             .Replace(TEXT("@S"), *FString::FromInt(Schema)).Replace(TEXT("@M"), *Hash);
         FFileHelper::SaveStringToFile(Text, *File);
@@ -313,6 +320,23 @@ bool FOpenWillowViewTypesTest::RunTest(const FString&)
     const TSharedPtr<FJsonObject> UnknownSight = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Sight"), TEXT("P.Unknown"))});
     if (TestTrue(TEXT("An unknown sight still composes"), UnknownSight.IsValid()))
         TestFalse(TEXT("An unknown sight gets no plain zoom socket"), UnknownSight->HasField(TEXT("zoom_socket_transform")));
+    auto FitOf = [](const TSharedPtr<FJsonObject>& Composed)
+    {
+        const TArray<TSharedPtr<FJsonValue>>& Fit = Composed->GetArrayField(TEXT("zoom_position_fit_cm"));
+        return FVector(Fit[0]->AsNumber(), Fit[1]->AsNumber(), Fit[2]->AsNumber());
+    };
+    const TSharedPtr<FJsonObject> Iron = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel"))});
+    if (TestTrue(TEXT("Iron sights compose"), Iron.IsValid()))
+        TestEqual(TEXT("Iron sights raise the gun by the gap, on top of the type's fit"), FitOf(Iron), FVector(0, 1, 6));
+    const TSharedPtr<FJsonObject> Scoped = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Barrel")), Part(TEXT("Sight"), TEXT("P.ScopeB"))});
+    if (TestTrue(TEXT("A sight part composes"), Scoped.IsValid()))
+        TestEqual(TEXT("A sight part has its own eye socket: no gap"), FitOf(Scoped), FVector(0, 1, 0));
+    const TSharedPtr<FJsonObject> OtherBone = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.BarrelB"))});
+    if (TestTrue(TEXT("Another bone composes"), OtherBone.IsValid()))
+        TestEqual(TEXT("Sockets on different bones are not compared"), FitOf(OtherBone), FVector(0, 1, 0));
+    const TSharedPtr<FJsonObject> UnknownBarrel = OpenWillowViewTypes::ComposeEntry(TEXT("WT.Gun"), {Part(TEXT("Body"), TEXT("P.Body")), Part(TEXT("Barrel"), TEXT("P.Unknown"))});
+    if (TestTrue(TEXT("An unknown barrel composes"), UnknownBarrel.IsValid()))
+        TestEqual(TEXT("An unknown barrel has no front sight"), FitOf(UnknownBarrel), FVector(0, 1, 0));
     TestFalse(TEXT("An unknown type gives nothing"), OpenWillowViewTypes::ComposeEntry(TEXT("WT.Other"), {}).IsValid());
 
     // Through the Walker's parser; deferred and never finished, so its BeginPlay does not load the slice.

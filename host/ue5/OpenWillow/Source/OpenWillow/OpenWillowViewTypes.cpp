@@ -94,6 +94,30 @@ TSharedPtr<FJsonObject> FindSocket(const TSharedPtr<FJsonObject>& Sockets, const
         if (TSharedPtr<FJsonObject> Socket = Copy(Fragment + TEXT("_") + Generic, Fragment)) return Socket;
     return bAllowPlain ? Copy(Generic, FString()) : nullptr;
 }
+
+// On iron sights the gun rises by how far the eye socket sits above the barrel's front sight; the tool's add_sight_line_height. Host rule, UNVERIFIED.
+void AddSightLineHeight(FJsonObject& Entry, const TSharedPtr<FJsonObject>& Eye, const TSharedPtr<FJsonObject>& FrontSight)
+{
+    if (!Eye.IsValid() || !FrontSight.IsValid()) return;
+    FString EyeBone, SightBone;
+    const TArray<TSharedPtr<FJsonValue>>* EyeAt = nullptr;
+    const TArray<TSharedPtr<FJsonValue>>* SightAt = nullptr;
+    if (!Eye->TryGetStringField(TEXT("bone"), EyeBone) || !FrontSight->TryGetStringField(TEXT("bone"), SightBone) || EyeBone != SightBone
+        || !Eye->TryGetArrayField(TEXT("location"), EyeAt) || !FrontSight->TryGetArrayField(TEXT("location"), SightAt)
+        || EyeAt->Num() != 3 || SightAt->Num() != 3)
+    {
+        return;
+    }
+    const TArray<TSharedPtr<FJsonValue>>* Base = nullptr;
+    const bool bBase = Entry.TryGetArrayField(TEXT("zoom_position_fit_cm"), Base) && Base->Num() == 3;
+    TArray<TSharedPtr<FJsonValue>> Fit;
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        const double Gap = Axis == 2 ? (*EyeAt)[2]->AsNumber() - (*SightAt)[2]->AsNumber() : 0.0;
+        Fit.Add(MakeShared<FJsonValueNumber>((bBase ? (*Base)[Axis]->AsNumber() : 0.0) + Gap));
+    }
+    Entry.SetArrayField(TEXT("zoom_position_fit_cm"), Fit);
+}
 }
 
 TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOpenWillowWeaponPart>& Parts)
@@ -135,7 +159,11 @@ TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOp
         bZoomKnown &= AddFragments(PartTable, Parts, Slot, ZoomFragments);
     TSharedPtr<FJsonObject> Zoom;
     if (Entry->TryGetStringField(TEXT("zoom_socket_preferred"), Name)) Zoom = FindSocket(Sockets, ZoomFragments, Name, bZoomKnown);
-    if (!Zoom.IsValid() && Entry->TryGetStringField(TEXT("zoom_socket_fallback"), Name)) Zoom = FindSocket(Sockets, ZoomFragments, Name, bZoomKnown);
+    if (!Zoom.IsValid() && Entry->TryGetStringField(TEXT("zoom_socket_fallback"), Name))
+    {
+        Zoom = FindSocket(Sockets, ZoomFragments, Name, bZoomKnown);
+        AddSightLineHeight(*Entry, Zoom, FindSocket(Sockets, Barrel, TEXT("FrontSight"), bBarrelKnown));
+    }
     Put(TEXT("zoom_socket_transform"), Zoom);
 
     bool bOverlay = false;

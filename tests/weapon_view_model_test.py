@@ -30,6 +30,26 @@ class ViewTableTests(unittest.TestCase):
         self.assertEqual(entry['zoom_socket_transform']['name'], 'Scope_A_Eye2')
         self.assertTrue(entry['scope_overlay'])
 
+    def test_iron_sights_raise_the_gun_by_the_gap_to_the_front_sight(self):
+        tables = {
+            'types': {'WT.Gun': {'weapon_type': 'WT.Gun', 'zoom_socket_preferred': 'Eye1', 'zoom_socket_fallback': 'Eye2',
+                                 'zoom_position_fit_cm': [0.0, 1.0, 0.0], 'socket_table': 'Mesh'}},
+            'sockets': {'Mesh': {'body_a_eye2': {'name': 'Body_A_Eye2', 'bone': 'R', 'location': [0.0, 9.0, 19.0]},
+                                 'barrel_a_frontsight': {'name': 'Barrel_A_FrontSight', 'bone': 'R', 'location': [0.0, -9.0, 13.0]},
+                                 'barrel_b_frontsight': {'name': 'Barrel_B_FrontSight', 'bone': 'Q', 'location': [0.0, -9.0, 13.0]},
+                                 'scope_a_eye1': {'name': 'Scope_A_Eye1', 'bone': 'R', 'location': [0.0, 9.0, 15.0]}}},
+            'parts': {'P.BarrelA': {'fragments': ['Barrel_A']}, 'P.BarrelB': {'fragments': ['Barrel_B']},
+                      'P.Body': {'fragments': ['Body_A']}, 'P.Sight': {'fragments': ['Scope_A']}},
+        }
+
+        def fit(**slots):
+            return view.compose_entry(tables, 'WT.Gun', {k: f'P.{v}' for k, v in slots.items()})['zoom_position_fit_cm']
+        self.assertEqual(fit(Body='Body', Barrel='BarrelA'), [0.0, 1.0, 6.0])
+        self.assertEqual(fit(Body='Body', Barrel='BarrelA', Sight='Sight'), [0.0, 1.0, 0.0], 'a sight part has its own eye socket')
+        self.assertEqual(fit(Body='Body', Barrel='BarrelB'), [0.0, 1.0, 0.0], 'different bones are not compared')
+        self.assertEqual(fit(Body='Body', Barrel='Unknown'), [0.0, 1.0, 0.0], 'a barrel outside the table has no front sight')
+        self.assertEqual(tables['types']['WT.Gun']['zoom_position_fit_cm'], [0.0, 1.0, 0.0], 'the type table is not changed')
+
     def test_unresolved_socket_and_unknown_type(self):
         entry = view.compose_entry(self.TABLES, 'WT.Gun', {})
         self.assertIsNone(entry['muzzle_socket_transform'])
@@ -102,10 +122,10 @@ class WeaponViewModelTests(unittest.TestCase):
         self.assertNotIn('first_person_scale_fit', entry)
 
     def test_ads_frame_fit_is_separate_from_the_selected_cooked_socket(self):
-        self.assertEqual(view.zoom_position_fit_cm('slice_pistol'),
-                         ([0.0, -0.6, 11.0], 'UNVERIFIED fit to lane E ADS frame'))
-        self.assertEqual(view.zoom_position_fit_cm('slice_assault_rifle'),
-                         ([0.0, 0.0, 0.0], 'no recipe-specific fit'))
+        self.assertEqual(view.zoom_position_fit_cm('GD_Weap_Pistol.A_Weapons.WT'),
+                         ([0.0, 1.1, 0.0], 'UNVERIFIED fit to lane E ADS frames'))
+        self.assertEqual(view.zoom_position_fit_cm('GD_Weap_SMG.A_Weapons.WT'),
+                         ([0.0, 0.0, 0.0], 'no fit for this weapon class'))
 
     def test_reload_fallback_uses_last_unconditioned_type_animation(self):
         animations = view.reload_animation_names([
