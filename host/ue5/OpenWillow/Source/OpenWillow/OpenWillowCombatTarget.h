@@ -142,6 +142,9 @@ public:
     float GetHealth() const { return Health; }
     float GetMaxHealth() const { return MaxHealth; }
     bool IsDead() const { return bDead; }
+    // How far and how fast the dummy is swinging from hits (degrees, degrees per second).
+    float WobbleSize() const { return float(Wobble.Size()); }
+    float WobbleSpeed() const { return float(WobbleVelocity.Size()); }
     // Invulnerable: a hit is still recorded (popup, flash, wobble, log, quest hook, momentum) but does not lower health.
     void SetInvulnerable(bool bOn) { bInvulnerable = bOn; }
     bool IsInvulnerable() const { return bInvulnerable; }
