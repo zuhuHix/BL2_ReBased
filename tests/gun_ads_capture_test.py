@@ -4,9 +4,11 @@ Run: python tests/gun_ads_capture_test.py
 """
 import json
 import os
+import math
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -71,6 +73,46 @@ class ProbeTests(unittest.TestCase):
         ns['unrealsdk'].find_all = lambda _name: [skill('Pkg.Default__LiftActionSkill'), skill('Pkg.Lift')]
         self.assertTrue(ns['ads_character']()['is_maya'])
 
+    def test_the_fov_fit_reads_the_level_row_and_refuses_too_little(self):
+        ns = probe_namespace(self.repo)
+        for hfov in (77.55, 50.84, 110.0):
+            focal = 640.0 / math.tan(math.radians(hfov) / 2.0)
+            rows = [{'yaw': yaw, 'pitch': 0.0, 'x': 640.0 + focal * math.tan(math.radians(yaw)), 'y': 360.0} for yaw in (-20, -10, 0, 10, 20)]
+            rows += [{'yaw': 0.0, 'pitch': 15, 'x': 640.0, 'y': 100.0}, {'yaw': 0.0, 'pitch': -15, 'x': 640.0, 'y': 620.0}]
+            self.assertAlmostEqual(ns['ads_fit_fov'](rows, 1280.0), hfov, places=6)
+        self.assertIsNone(ns['ads_fit_fov']([], 1280.0))
+        self.assertIsNone(ns['ads_fit_fov']([{'yaw': 0.0, 'pitch': 0.0, 'error': 'x'}], 1280.0))
+        flipped = [{'yaw': yaw, 'pitch': 0.0, 'x': 640.0 - yaw} for yaw in (-20, 0, 20)]
+        self.assertIsNone(ns['ads_fit_fov'](flipped, 1280.0))
+
+    def test_the_fov_hook_measures_once_never_raises_and_goes_away(self):
+        ns = probe_namespace(self.repo)
+        added, removed = [], []
+        hooks = types.ModuleType('unrealsdk.hooks')
+        hooks.Type = types.SimpleNamespace(POST=1)
+        hooks.add_hook = lambda path, _type, _name, function: added.append((path, function))
+        hooks.remove_hook = lambda path, _type, _name: removed.append(path)
+        sys.modules['unrealsdk.hooks'] = hooks
+        self.addCleanup(sys.modules.pop, 'unrealsdk.hooks', None)
+        self.assertEqual(len(ns['ads_fov_arm']()['hooked']), 2)
+        callback = added[0][1]
+        callback(types.SimpleNamespace(Canvas=None), None, None, None)
+        self.assertIsNone(ns['ads_fov_state']['result'], 'no canvas: waits for a frame that has one')
+        callback(types.SimpleNamespace(Canvas=object()), None, None, None)   # the stub controller has no camera
+        self.assertIn('error', ns['ads_fov_state']['result'])
+        first = ns['ads_fov_state']['result']
+        callback(types.SimpleNamespace(Canvas=object()), None, None, None)
+        self.assertIs(ns['ads_fov_state']['result'], first, 'one frame only')
+        self.assertIs(ns['ads_fov_read'](), first)
+        self.assertEqual(len(removed), 2)
+        self.assertEqual(ns['ads_fov_state']['hooks'], [])
+
+    def test_a_getter_script_cannot_call_reads_as_none(self):
+        ns = probe_namespace(self.repo)
+        self.assertEqual(ns['ads_foreground'](), {'foreground_fov': None, 'callable': False})
+        ns['pc'].GetFOVAngleForeground = lambda: 45.0
+        self.assertEqual(ns['ads_foreground'](), {'foreground_fov': 45.0, 'callable': True})
+
     def test_held_says_how_the_gun_matches(self):
         ns = probe_namespace(self.repo)
         ns['wp_state']['recipes']['gun'] = {}
@@ -108,7 +150,7 @@ class CaptureTests(unittest.TestCase):
         self.assertNotIn('Focus-Game', text)
         self.assertEqual(len(re.findall(r'Send-MouseEvent 0x8\b', text)), 1)
         self.assertEqual(len(re.findall(r'Send-MouseEvent 0x10\b', text)), 1)
-        block = text[text.index('function Save-AimedFrame'):text.index('$extraRoots = ')]
+        block = text[text.index('function Invoke-WhileZoomed'):text.index('function Save-AimedFrame')]
         self.assertLess(block.index('Assert-GameForeground'), block.index('Send-MouseEvent 0x8'))
         self.assertLess(block.index('Send-MouseEvent 0x8'), block.index('try {'))
         self.assertRegex(block, r'\} finally \{ Send-MouseEvent 0x10 \}')
@@ -136,7 +178,8 @@ class CaptureTests(unittest.TestCase):
     def test_a_gun_frame_checks_the_foreground_and_a_failed_cleanup_fails_the_run(self):
         text = text_of(CAPTURE)
         self.assertEqual(len(re.findall(r'Save-Shot "gun_ads/\$', text)), 0, 'gun frames go through Save-GunFrame')
-        self.assertEqual(len(re.findall(r'= Save-GunFrame "gun_ads/', text)), 2)
+        self.assertEqual(len(re.findall(r'= Save-GunFrame "gun_ads/', text)), 4)
+        self.assertNotIn('Save-Shot "gun_ads/fov', text)
         frame = text[text.index('function Save-GunFrame'):text.index('function Wait-Unzoomed')]
         self.assertLess(frame.index('Assert-GameForeground'), frame.index('Save-Shot'))
         self.assertLess(frame.index('Save-Shot'), frame.index('Get-ForegroundWindowHandle'))
@@ -145,6 +188,13 @@ class CaptureTests(unittest.TestCase):
         self.assertIn("Set-Stage 'gun_cleanup' $false", text)
         self.assertIn("$g.released = Wait-Unzoomed", text)
         self.assertLess(text.index('ads_character()'), text.index('foreach ($id in $guns.Keys)'))
+
+    def test_the_fov_stage_is_asked_for_only_with_its_switch_and_cleans_up_after_itself(self):
+        text = text_of(CAPTURE)
+        self.assertIn('$(if ($MeasureFov) { @($guns.Keys | ForEach-Object { "${_}_fov" }) } else { @() })', text)
+        measure = text[text.index('function Measure-ViewFov'):text.index('$Recipes') if text.index('$Recipes') > text.index('function Measure-ViewFov') else text.index('$extraRoots = ')]
+        self.assertRegex(measure, r"try \{ Start-Sleep -Milliseconds 500 \} finally \{ \$result\.canvas = PyJson 'ads_fov_read\(\)' \}")
+        self.assertRegex(measure, r"finally \{ PyJson 'ads_turn\(0\)' \| Out-Null \}")
 
 
 if __name__ == '__main__':

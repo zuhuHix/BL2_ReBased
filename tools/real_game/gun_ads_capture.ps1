@@ -2,6 +2,7 @@
 # is held, each with a live read, for the host's ADS rule (docs/verification/WEAPON_VISUALS.md section 23). Takes the screen, keyboard and
 # mouse. Everything written is game data under ignored local/realgame/gun_ads/. Locks: the shared hub lock and the run lock; saves are
 # backed up, saving is blocked in game from the first frame, and afterwards the save folder is compared with the backup.
+# With -MeasureFov, also per gun, at hip and at full zoom: known view directions projected through the HUD canvas, and two frames a known turn apart.
 # "Steam must be running" at launch is a licence problem, not Steam: see the end of Steam's logs/console_log.txt for AppError_5.
 param(
     # The machine-wide hub lock lives in the main checkout's local/ (shared by every worktree on this machine).
@@ -10,6 +11,7 @@ param(
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya in Sanctuary
     # Recipes inside this checkout's local/. A file's name is the gun's id. A comma-separated string also works: -File passes a list as one.
     [string[]]$Recipes = @('local/items/slice/slice_shotgun.json', 'local/wpa/sample_matrix/m_weapontype_hyperion_pistol.json'),
+    [switch]$MeasureFov,
     [int]$Level = 8,                        # Every gun is made at Maya's level, which a recipe's own stage can be above: only the parts decide the look.
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
@@ -70,22 +72,40 @@ function PyOk([string]$Code, [int]$Timeout = 30) {
     $reply
 }
 
-# Lane E's zoom: the right button held, and read back live. The press is always released, and this returns only once it is.
-function Save-AimedFrame([string]$Gun) {
-    $result = [ordered]@{}
+# Lane E's zoom: the right button held, and read back live; $Body runs once it has settled, given that read. The press is always released, and this returns only once it is.
+function Invoke-WhileZoomed([scriptblock]$Body) {
     Assert-GameForeground
     Send-MouseEvent 0x8
     try {
         for ($i = 0; $i -lt 30; $i++) {
-            $result.before = PyJson 'ads_read()'
-            if ($result.before.zoomed -and $result.before.zoomed_rate -eq 0) { break }
+            $settled = PyJson 'ads_read()'
+            if ($settled.zoomed -and $settled.zoomed_rate -eq 0) { break }
             Start-Sleep -Milliseconds 100
         }
         Start-Sleep -Milliseconds 300
-        $result.sample = Py "print(wp_sample($(Q "${Gun}_ads")))"
-        $result.frame = Save-GunFrame "gun_ads/${Gun}_ads.png"
-        $result.after = PyJson 'ads_read()'
+        & $Body $settled
     } finally { Send-MouseEvent 0x10 }
+}
+
+function Save-AimedFrame([string]$Gun) {
+    Invoke-WhileZoomed {
+        param($before)
+        $sample = Py "print(wp_sample($(Q "${Gun}_ads")))"
+        $frame = Save-GunFrame "gun_ads/${Gun}_ads.png"
+        [pscustomobject]@{ before = $before; sample = $sample; frame = $frame; after = (PyJson 'ads_read()') }
+    }
+}
+
+# One state's FOV: the canvas projection, then two frames $TurnDegrees apart for the turn test, then the view back. The hook is off again whatever happens.
+$TurnDegrees = 4
+function Measure-ViewFov([string]$Name) {
+    $result = [ordered]@{ read = (PyJson 'ads_read()') }
+    $result.arm = PyJson 'ads_fov_arm()'
+    try { Start-Sleep -Milliseconds 500 } finally { $result.canvas = PyJson 'ads_fov_read()' }
+    $result.frame_0 = Save-GunFrame "gun_ads/fov/${Name}_0.png"
+    PyJson "ads_turn($TurnDegrees)" | Out-Null
+    try { Start-Sleep -Milliseconds 400; $result.frame_turned = Save-GunFrame "gun_ads/fov/${Name}_$TurnDegrees.png" } finally { PyJson 'ads_turn(0)' | Out-Null }
+    Start-Sleep -Milliseconds 400
     [pscustomobject]$result
 }
 
@@ -93,7 +113,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @($guns.Keys) + 'gun_cleanup'
+$stagesRequested = @($guns.Keys) + $(if ($MeasureFov) { @($guns.Keys | ForEach-Object { "${_}_fov" }) } else { @() }) + 'gun_cleanup'
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -174,6 +194,20 @@ try {
             $g.ads = Save-AimedFrame $id
             $g.released = Wait-Unzoomed
             Set-Stage $id (($g.idle.zoom_state -ceq 'ZST_NotZoomed') -and $g.ads.before.zoomed -and ($g.ads.before.zoomed_rate -eq 0) -and $g.ads.after.zoomed -and ($g.released.zoom_state -ceq 'ZST_NotZoomed')) 'the idle frame was zoomed, the ADS frame was not fully zoomed, or the zoom did not settle after release'
+            if ($MeasureFov) {
+                try {
+                    $g.fov_hip = Measure-ViewFov "${id}_hip"
+                    $g.fov_zoom = Invoke-WhileZoomed {
+                        param($before)
+                        $measured = Measure-ViewFov "${id}_zoom"
+                        # Last, while held: a native called from Python once lost a session (TOOLING.md); the frames are on disk by now.
+                        $foreground = PyJson 'ads_foreground()' 10
+                        [pscustomobject]@{ before = $before; measured = $measured; foreground = $foreground; after = (PyJson 'ads_read()') }
+                    }
+                    $g.fov_released = Wait-Unzoomed
+                    Set-Stage "${id}_fov" (($g.fov_hip.read.zoom_state -ceq 'ZST_NotZoomed') -and $g.fov_zoom.before.zoomed -and $g.fov_zoom.after.zoomed -and ($g.fov_released.zoom_state -ceq 'ZST_NotZoomed')) 'a state was not the one measured'
+                } catch { $g.fov_error = "$_"; Set-Stage "${id}_fov" $false "$_" }
+            }
         } catch { $g.error = "$_"; Set-Stage $id $false "$_" }
         "gun $id`: held $($g.held_as), idle $($g.idle.zoom_state), ADS $($g.ads.after.zoom_state) $($g.error)"
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
