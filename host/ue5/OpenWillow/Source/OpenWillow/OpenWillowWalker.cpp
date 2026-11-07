@@ -844,6 +844,8 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     if (bGunShots && bMayaActive && Controller) RunGunShots(Now);
     static const bool bFiringTest = FParse::Param(FCommandLine::Get(), TEXT("owfiringtest"));
     if (bFiringTest && bMayaActive && Controller) RunFiringTest(Now);
+    static const bool bReloadTest = FParse::Param(FCommandLine::Get(), TEXT("owreloadtest"));
+    if (bReloadTest && bMayaActive && Controller) RunReloadTest(Now);
     static const bool bFiringShots = FParse::Param(FCommandLine::Get(), TEXT("owfiringshots"));
     if (bFiringShots && bMayaActive && Controller) RunFiringShots(Now);
     static const bool bPhaselockShots = FParse::Param(FCommandLine::Get(), TEXT("owphaselockshots"));
@@ -2517,7 +2519,11 @@ void AOpenWillowWalker::RunCombatShots(float Now)
         const AOpenWillowMayaHUD* HUD = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
         if ((HUD && HUD->IsInventoryOpen()) || IsInventoryWidgetOpen()) ToggleInventory();
         SelectSlot(1);
-        if (FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable()) Held->MagazineLeft = 2;
+        if (FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable())
+        {
+            Held->MagazineLeft = 2;
+            CombatMagazineAtFiring = UOpenWillowInventory::MagazineLeft(*Held);
+        }
         CombatShotsBeforeFiring = OpenWillowFiring::Counts.Shots;
         FirePressed();
         break;
@@ -2529,8 +2535,10 @@ void AOpenWillowWalker::RunCombatShots(float Now)
         const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
         const int32 Magazine = Held ? UOpenWillowInventory::MagazineLeft(*Held) : -1;
         const int32 Fired = OpenWillowFiring::Counts.Shots - CombatShotsBeforeFiring;
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow combat firing exercise: shots=%d magazine 2 -> %d changed=%d reloading=%d%s"), Fired, Magazine,
-            Magazine != 2 ? 1 : 0, bReloading ? 1 : 0, Fired > 0 ? TEXT("") : TEXT(" FAILED: nothing fired"));
+        const int32 ShotCost = Held ? UOpenWillowInventory::ShotCostRounds(*Held) : -1;
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow combat firing exercise: gun=%s shot_cost=%d shots=%d magazine %d -> %d changed=%d reloading=%d%s%s"),
+            Held ? *Held->Id : TEXT("none"), ShotCost, Fired, CombatMagazineAtFiring, Magazine, Magazine != CombatMagazineAtFiring ? 1 : 0, bReloading ? 1 : 0,
+            ShotCost == 0 ? TEXT(" no reload possible: this gun spends no rounds") : TEXT(""), Fired > 0 ? TEXT("") : TEXT(" FAILED: nothing fired"));
         UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory snapshot after firing: %s"), *Inventory->StateJson(Skills->GetLevel()));
         break;
     }
