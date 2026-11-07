@@ -318,6 +318,51 @@ def test_a_hook_error_is_counted_and_a_key_must_really_arrive():
     probe.ms_stop()
 
 
+def stubbed_test_keys(rows):
+    """The capture's real Test-Keys against stubbed reads: one (open, status) per key; returns what it did."""
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    start = text.index('function Test-Keys(')
+    body = text[start:text.index('\n}\n', start) + 3]
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'keys.ps1'
+        fake = ', '.join(f"[pscustomobject]@{{ open = ${str(o).lower()}; status = {s} }}" for o, s in rows)
+        script.write_text('$log = [ordered]@{}\n$script:rows = @(' + fake + ')\n$script:i = 0\n$script:keys = @()\n'
+                          + 'function Test-Key($Stage, $Key) { $script:keys += $Key; $row = $script:rows[$script:i]; $script:i++; $row }\n'
+                          + 'function Open-Screen($Label) { $script:keys += "reopen"; [pscustomobject]@{ open = $true; status = 0 } }\n' + body
+                          + "\n$last = Test-Keys 'offer' @('W', 'Mouse', 'F') 0\n"
+                          + "Write-Output ('keys=' + ($script:keys -join ',')); Write-Output ('log=' + (($log.Keys | Sort-Object) -join ',')); Write-Output ('count=' + @($last).Count + ' status=' + $last.status)\n",
+                          encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout
+
+
+def test_a_key_that_changes_the_status_ends_the_key_tests():
+    # The first run: a key accepted, and reopening threw with nothing left to read.
+    out = stubbed_test_keys([(False, 1), (True, 1), (True, 1)])
+    assert 'keys=W\n' in out.replace('\r', '') and 'offer_status_changed_by_W' in out and 'reopen' not in out and 'count=1 status=1' in out, out
+    # A key that only closes the screen is logged, and it is opened again for the next key.
+    out = stubbed_test_keys([(True, 0), (False, 0), (True, 0)])
+    assert 'keys=W,Mouse,reopen,F' in out and 'offer_closed_by_Mouse' in out and 'count=1 status=0' in out, out
+    # All open: one row back, not a list.
+    out = stubbed_test_keys([(True, 0), (True, 0), (True, 0)])
+    assert 'keys=W,Mouse,F' in out and 'log=\n' in out.replace('\r', '') and 'count=1 status=0' in out, out
+
+
+def test_e_comes_last_on_each_page():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
+    order = ["Test-Keys 'offer' @('W', 'Mouse', 'F', 'Space') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'E'", "$accept = Test-Key 'offer' 'Enter'",
+             "Test-Keys 'turnin' @('W', 'Mouse') 3", "ms_mark('turnin_enter')", "$turned = Test-Key 'turnin' 'E'", "$turned = Test-Key 'turnin' 'Enter'",
+             "foreach ($key in 'W', 'Mouse', 'F', 'Esc', 'E')", "ms_mark('reward_press_Enter')"]
+    places = [stages.index(needle) for needle in order]
+    assert places == sorted(places), list(zip(order, places))
+    # Enter only when E did not do it; after the reward, Esc only: E could accept the next mission.
+    assert 'if ($accept.status -eq 0) {' in stages and 'if ($turned.status -eq 3) {' in stages and '$log.reward_after_keys.count -eq 0' in stages
+    assert "foreach ($key in 'E', 'Esc')" not in stages and "$after = Test-Key 'after' 'Esc'" in stages
+    assert 'Send-Key Enter' not in stages[stages.index("$esc = Test-Key"):stages.index('# 4. The respawn')], 'every Enter goes through Test-Key, so it is marked and its delivery read'
+
+
 def test_the_capture_sees_what_each_stage_claims():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true)",
@@ -359,6 +404,8 @@ if __name__ == '__main__':
     test_the_capture_stops_before_the_respawn_unless_the_screen_closed()
     test_a_hook_error_is_counted_and_a_key_must_really_arrive()
     test_the_capture_sees_what_each_stage_claims()
+    test_a_key_that_changes_the_status_ends_the_key_tests()
+    test_e_comes_last_on_each_page()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
     test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed()
