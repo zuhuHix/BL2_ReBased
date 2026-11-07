@@ -153,6 +153,38 @@ $good = '{"errors": 0, "first_error": null, "tied": []}' | ConvertFrom-Json
     assert text.count('(!$hitErrors -and') == 1 and text.count('(!$pickupErrors -and') == 1 and "Set-Stage 'baseline' (!$idleErrors)" in text
 
 
+def stage_with_window(window_json):
+    """The real fire_away stage lines and Set-Stage from the script, on a stub window. Returns PowerShell's output."""
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    function = text[text.index('function Get-HookErrors'):text.index('function Send-Shots')]
+    set_stage = next(line for line in text.splitlines() if line.startswith('function Set-Stage'))
+    stage = [line for line in text.splitlines() if '$awayErrors' in line]
+    assert len(stage) == 2
+    body = function + set_stage + "\n$stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]\n" + \
+        "$log = @{ window_fire_away = '" + window_json + "' | ConvertFrom-Json }\n" + '\n'.join(stage) + \
+        "\n'DONE=[' + ($stagesDone -join ',') + ']'\n'PROBLEMS=[' + ($stageProblems -join ',') + ']'\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'stage.ps1'
+        script.write_text(body, encoding='utf-8-sig')
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+
+
+def test_a_stage_refuses_a_window_that_dropped_rows_even_with_a_tied_event():
+    done = stage_with_window('{"errors": 0, "first_error": null, "dropped": 5, "tied": ["Pkg.Shot"]}')
+    assert 'DONE=[]' in done.stdout, done.stdout + done.stderr
+    assert 'fire_away: 5 calls dropped past the row limit' in done.stdout, done.stdout
+
+
+def test_a_stage_refuses_a_window_with_errors_even_with_a_tied_event():
+    done = stage_with_window('{"errors": 2, "first_error": "boom", "dropped": 0, "tied": ["Pkg.Shot"]}')
+    assert 'DONE=[]' in done.stdout and 'hooks failed 2 times, first: boom' in done.stdout, done.stdout + done.stderr
+
+
+def test_a_clean_window_with_a_tied_event_passes_its_stage():
+    done = stage_with_window('{"errors": 0, "first_error": null, "dropped": 0, "tied": ["Pkg.Shot"]}')
+    assert 'DONE=[fire_away]' in done.stdout and 'PROBLEMS=[]' in done.stdout, done.stdout + done.stderr
+
+
 def test_a_behavior_gives_its_own_event_and_a_marker_gives_none():
     with tempfile.TemporaryDirectory() as tmp:
         ns = load(tmp)
