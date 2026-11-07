@@ -356,18 +356,20 @@ def test_no_key_the_mod_handles_goes_to_the_screen():
     stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
     keys = re.findall(r"Test-Keys '\w+' @\(([^)]*)\)|Test-Key '\w+' '(\w+)'|foreach \(\$key in ('[^)]*)\) \{\n\s+if \(\$last\.open\)", stages)
     pressed = {name for group in keys for part in group for name in re.findall(r"'(\w+)'", part) + ([part] if part.isalpha() else [])}
-    assert pressed == {'Mouse', 'F', 'Space', 'Esc', 'Enter'}, pressed
+    assert pressed == {'Mouse', 'F', 'Esc', 'Enter'}, pressed
     for mod_key in ('E', 'W', 'A', 'S', 'D'):
         assert mod_key not in pressed
     # The only E is the one that opens the screen from the world, and an open that moved the status stops the run.
     assert stages.count('Send-Key E') == 0 and 'Send-Key E' in text[:text.index("$extraRoots = [ordered]@{")]
     assert "the opening E's release reached the mod" in stages and "Set-Stage 'offer' ($row.open -eq $true -and $row.status -eq 0)" in stages
     # F is left out of the reward page: the script inspects the selected item, and there is none.
-    assert "foreach ($key in 'Mouse', 'Space', 'Esc')" in stages
+    assert "foreach ($key in 'Mouse', 'Esc')" in stages
+    # A key that accepts or turns in does not end the run: it carries on from the new status.
+    assert 'a key test changed' not in stages and 'if ($row.status -eq 0) {' in stages and 'if ($row.status -eq 3) { $turned' in stages
     # Enter goes through Test-Key, so it is marked and its delivery read, and the respawn presses nothing.
     assert 'Send-Key Enter' not in stages
-    order = ["Test-Keys 'offer' @('Mouse', 'F', 'Space') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'Enter'", "Test-Keys 'turnin' @('Mouse', 'Space') 3",
-             "ms_mark('turnin_enter')", "$turned = Test-Key 'turnin' 'Enter'", "foreach ($key in 'Mouse', 'Space', 'Esc')", "ms_mark('reward_press_Enter')", "$after = Test-Key 'after' 'Esc'"]
+    order = ["Test-Keys 'offer' @('Mouse', 'F') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'Enter'", "ms_mark('turnin_enter')", "Test-Keys 'turnin' @('Mouse') 3",
+             "$turned = Test-Key 'turnin' 'Enter'", "foreach ($key in 'Mouse', 'Esc')", "ms_mark('reward_press_Enter')", "$after = Test-Key 'after' 'Esc'"]
     places = [stages.index(needle) for needle in order]
     assert places == sorted(places), list(zip(order, places))
 
