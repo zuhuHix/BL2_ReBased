@@ -7,7 +7,9 @@ param(
     [int]$TimeoutSeconds = 240,
     [int]$WaitForEditorSeconds = 1800,
     # -KillHeld: instead, kill the held dummy during the hold (-owphaselockkillcheck), checked by check_phaselock_kill.py.
-    [switch]$KillHeld
+    [switch]$KillHeld,
+    # -DestroyHeld: with -KillHeld, destroy the held actor instead of killing it.
+    [switch]$DestroyHeld
 )
 # Action-skill HUD indicator in the host: one -game run with BL2's HUD movie (-owflashhud), the combat dummy and
 # -owskillhudshots (OpenWillowMayaHUD casts Phaselock at the dummy, captures the HUD every 0.5 s through the cooldown
@@ -48,8 +50,9 @@ try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
     $started = Get-Date
+    $mode = @($(if ($KillHeld) { '-owphaselockkillcheck' } else { '-owskillhudshots' })) + @($(if ($DestroyHeld) { '-owphaselockkilldestroy' }))
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url",
-        "-owactionskill=`"$actionSkill`"", '-owcombattest', $(if ($KillHeld) { '-owphaselockkillcheck' } else { '-owskillhudshots' }),
+        "-owactionskill=`"$actionSkill`"", '-owcombattest') + $mode + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
@@ -61,7 +64,7 @@ try {
             ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $outDir -Force }
     }
     if ($finished) {
-        & python (Join-Path $PSScriptRoot $(if ($KillHeld) { 'check_phaselock_kill.py' } else { 'check_action_skill_hud.py' })) $log --shots $outDir
+        & python (Join-Path $PSScriptRoot $(if ($KillHeld) { 'check_phaselock_kill.py' } else { 'check_action_skill_hud.py' })) $log --shots $outDir $(if ($DestroyHeld) { '--destroyed' })
         $code = $LASTEXITCODE
     } else {
         # A hung or slow run fails even when the logged sequence looks complete; the checker is not run.

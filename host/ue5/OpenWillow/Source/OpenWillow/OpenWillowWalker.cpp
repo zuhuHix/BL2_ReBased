@@ -814,10 +814,11 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
             EndPhaselockEarly(TEXT("skill constraint ") + Failed);
         // The held target's death ends the skill at once, so the HUD emblem goes and the cooldown starts draining: the game's
         // InterruptPhaseLock and ReleaseTarget (live, one Adult killed by one large hit during the hold; a gun kill and a kill during the
-        // lift are UNVERIFIED). ACTION_SKILL_HUD.md.
-        if (IsPhaselockActive() && PhaselockTarget.IsValid() && PhaselockTarget->IsDead())
+        // lift are UNVERIFIED). A target that is gone altogether is a lost hold too (host choice): IsPhaselockActive needs bPhaselockHit,
+        // which only a hit sets, together with the target, so an invalid target here is never a miss. ACTION_SKILL_HUD.md.
+        if (IsPhaselockActive() && (!PhaselockTarget.IsValid() || PhaselockTarget->IsDead()))
         {
-            EndPhaselockEarly(TEXT("the held target died"));
+            EndPhaselockEarly(PhaselockTarget.IsValid() ? TEXT("the held target died") : TEXT("the held target is gone"));
         }
         UpdatePhaselockPresentation(Now);
     }

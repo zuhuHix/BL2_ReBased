@@ -137,7 +137,7 @@ Gunzerker dual wield or vehicles.
 
 AI-assisted (Claude). **Real game, confirmed live for one kill:** one Adult, killed about 2 s after the cast, during the hold, by one large `TakeDamage` with the player as instigator (`phaselock_integrity_capture.ps1 -KillAndShield`, bl-sdk hooks and HUD samples; values under ignored `local/`). The lift ends with `InterruptPhaseLock` and `ReleaseTarget` and no `StartOutro`. The emblem returns to its `none` frame almost at once rather than running to the skill's end, and the cooldown starts draining at the release. `EndSkill` follows about a second later. **UNVERIFIED:** a kill by a gun, a kill during the lift, and whether that later `EndSkill` matters to anything visible.
 
-**Host:** a held target's death ends the skill through `EndPhaselockEarly`, so the emblem goes and the cooldown drains. Before this, both ran to the timeline's end. A first playtest saw that.
+**Host:** a held target's death ends the skill through `EndPhaselockEarly`, so the emblem goes and the cooldown drains. Before this, both ran to the timeline's end. A first playtest saw that. A held actor that is gone altogether counts the same (a host choice; nothing live read it).
 
-**Check:** `powershell -File tools/test_action_skill_hud.ps1 -KillHeld` kills the held dummy (`-owphaselockkillcheck`, test-only), and `tools/check_phaselock_kill.py` grades the steps, the numbers and the HUD state lines. It shows the host did this on its dummy, not parity.
+**Check:** `powershell -File tools/test_action_skill_hud.ps1 -KillHeld` kills the held dummy (`-owphaselockkillcheck`, test-only), and `tools/check_phaselock_kill.py` grades the steps, the numbers, the drain against the base rate, the host's HUD state and the emblem frame the movie reads back. `-KillHeld -DestroyHeld` destroys the held actor instead. It shows the host did this on its dummy, not parity.
 
