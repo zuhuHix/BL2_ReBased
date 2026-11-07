@@ -57,12 +57,12 @@ def line(text):
     return f'LogTemp: Display: {text}\n'
 
 
-QUICK_LOOKED = 'OWQCTEST looked away selected=0 target=none'
+QUICK_LOOKED = 'OWQCTEST looked away selected=0 target=none quest=0'
 VIEW_BLOCKED = 'OWQCTEST blocked selected=0 target=none fixture=1'
-VIEW_CLEAR = 'OWQCTEST clear selected=1 target=interactive'
+VIEW_CLEAR = 'OWQCTEST clear selected=1 target=interactive quest=0'
 RAY_START = 'walker=(V(X=1, Y=2, Z=3)) eye=(V(X=1, Y=2, Z=4)) dir=(V(X=-1, Y=0, Z=0)) box=(IsValid=true, Min=(X=0 Y=0 Z=0), Max=(X=1 Y=1 Z=1))'
-RAY_BLOCKED = f'OWQCTEST ray blocked {RAY_START} enters=1 distance=50.0 blocked=1 start_penetrating=0 hit=Actor_1/ViewBlockerFixture hit_distance=25.0'
-RAY_CLEAR = f'OWQCTEST ray clear {RAY_START} enters=1 distance=50.0 blocked=0 start_penetrating=0 hit=none/none hit_distance=0.0'
+RAY_BLOCKED = f'OWQCTEST ray blocked {RAY_START} enters=1 distance=50.0 blocked=1 start_penetrating=0 hit=Actor_1/ViewBlockerFixture hit_distance=25.0 usable=0 body_sections=3'
+RAY_CLEAR = f'OWQCTEST ray clear {RAY_START} enters=1 distance=50.0 blocked=0 start_penetrating=0 hit=Machine_1/StaticMeshComponent0 hit_distance=60.0 usable=1 body_sections=3'
 QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
              'OWQCTEST walked away',
              'OWQUICKCHANGE cancel id=S reason=not the selected target',
@@ -378,7 +378,7 @@ class ViewBlockerTest(unittest.TestCase):
             self.assertEqual(self.grade(VIEW_BLOCKED, ray, VIEW_CLEAR, RAY_CLEAR), 'FAIL', other)
 
     def test_a_clear_line_with_a_blocked_ray_fails(self):
-        ray = RAY_CLEAR.replace('blocked=0 start_penetrating=0 hit=none/none', 'blocked=1 start_penetrating=0 hit=Actor/Component')
+        ray = RAY_CLEAR.replace('blocked=0 start_penetrating=0 hit=Machine_1/StaticMeshComponent0', 'blocked=1 start_penetrating=0 hit=Actor/Component')
         self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, VIEW_CLEAR, ray), 'FAIL')
 
     def test_the_target_kept_behind_the_blocker_fails(self):
@@ -391,10 +391,13 @@ class ViewBlockerTest(unittest.TestCase):
         self.assertEqual(self.grade('OWQCTEST blocked selected=0 target=none fixture=0', RAY_BLOCKED, VIEW_CLEAR, RAY_CLEAR), 'FAIL')
 
     def test_the_clear_ray_must_select_it(self):
-        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=0 target=none', RAY_CLEAR), 'FAIL')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=0 target=none quest=0', RAY_CLEAR), 'FAIL')
 
     def test_a_clear_ray_taken_by_another_target_fails(self):
-        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=0 target=vendor', RAY_CLEAR), 'FAIL')
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=0 target=vendor quest=0', RAY_CLEAR), 'FAIL')
+
+    def test_a_clear_ray_with_marcus_in_it_fails(self):
+        self.assertEqual(self.grade(VIEW_BLOCKED, RAY_BLOCKED, 'OWQCTEST clear selected=1 target=interactive quest=1', RAY_CLEAR), 'FAIL')
 
     def test_a_lost_line_fails(self):
         self.assertEqual(self.grade(VIEW_BLOCKED), 'FAIL')
@@ -419,11 +422,15 @@ class QuickChangeTest(unittest.TestCase):
         self.assertEqual(self.graded_as_is(QUICK_RUN)[1], 'FAIL')
 
     def test_a_station_selected_while_looking_away_fails(self):
-        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=1', *QUICK_RUN])[1], 'FAIL')
+        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=1 target=none quest=0', *QUICK_RUN])[1], 'FAIL')
 
     def test_another_target_while_looking_away_fails(self):
         # The station is not selected, but the press would still go to something.
-        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=0 target=vendor', *QUICK_RUN])[1], 'FAIL')
+        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=0 target=vendor quest=0', *QUICK_RUN])[1], 'FAIL')
+
+    def test_a_quest_that_would_take_the_press_fails(self):
+        # target=none does not rule out Marcus: the press tries him first.
+        self.assertEqual(self.graded_as_is(['OWQCTEST looked away selected=0 target=none quest=1', *QUICK_RUN])[1], 'FAIL')
 
     def test_a_prompt_before_the_look_away_line_fails(self):
         self.assertEqual(self.graded_as_is([QUICK_RUN[0], QUICK_LOOKED, *QUICK_RUN[1:]])[1], 'FAIL')

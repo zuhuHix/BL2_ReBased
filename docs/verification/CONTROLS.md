@@ -127,12 +127,13 @@ with the thing still in reach and nothing else taking over. The other 3 stayed u
 So in the host a vending machine, a lootable, a Quick Change station or a door is a target only while a ray from the camera along the view, 350 uu long, enters its box with nothing
 blocking on the way (`OpenWillowUseView`). `use_view_rule` tests the ray and box; `tools/test_interactives.ps1` tests a real station: with the view turned away the press has no target of any kind
 (`quick_change`), and from one spot a spawned sheet across the ray takes it off the target and removing the sheet puts it back (`use_view_blocker`). Machines, lootables and doors share the code but have no blocker row. What is the host's and not the game's:
-- The boxes stand in for the usable's collision: the machine's stand-in body, a lootable's whole bounds, the imported machine's bounds at a station (found by the tag the importer gives it, with a machine-sized box if the map has none), and a door's box where
+- The boxes stand in for the usable's collision: the machine's stand-in body, a lootable's whole bounds, a machine-sized box at a station only if the map has no imported machine for it, and a door's box where
   it is now joined with where it closes, so an open door can be closed from where it was opened. A door and a strongbox were never read in the real game.
 - The existing reaches stay, measured from Maya (350 uu; 220 for a door), and the press still goes nearest first among what she looks at, where the game takes the first hit along the ray.
-- A station is two actors in the host: the use target, and the imported machine in the level. The machine's collision does not count as blocking its own station. The first run showed why: without this,
-  the machine's collision stands in front of the old box from every spot a player can stand on that side, so the rule refused the station. The game's own usable hit is the object's collision itself
-  (the native note), which this models; **UNVERIFIED** beyond that note, though the real game did show `[E] USE` on this machine.
+- A station with an imported machine has no box: the whole 350 uu ray must hit one of the machine's sections first, as the native note has the first usable hit be the object's own collision. In the host it
+  is two kinds of actor, the use target and the machine's sections. The first run showed why this matters: a box behind the machine's collision was refused from every spot a player can stand on that side. Which
+  actors are the machine comes from the importer's tags, by the object's full path; the tags carry no level, so the same name placed twice, or a part that does not reach the placed point, is refused and logged,
+  and the station then uses the stand-in box. **UNVERIFIED** beyond the note, though the real game did show `[E] USE` on this machine.
 - A station's open prompt now also ends on looking away (`not the selected target`), a consequence of the rule, not a read of the game.
 
 Pickups keep their rule (nearest in sight, an aimed one first) and Marcus keeps his own ray: the native note gives pickups their own path ("touched, else seen"), and they win the key.

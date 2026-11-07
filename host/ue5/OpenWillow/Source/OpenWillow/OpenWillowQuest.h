@@ -43,6 +43,8 @@ public:
     bool OwnsItem(const FOpenWillowWeaponItem& Item) const { return bWeaponLent && !MissionWeapon.Id.IsEmpty() && Item.Id == MissionWeapon.Id; }
     // The use key near Marcus: accept when not started, turn in when ready; true when it was consumed.
     bool TryUse();
+    // For a test: TryUse now reaches a waiting reward or Marcus, and so may take the press from the world's targets.
+    bool MayTakeUse() const;
     bool CanTalkNow() const { return bTalkHintLogged; }   // the use key would talk to Marcus (UpdateHints, each tick)
     bool IsRewardPending() const;   // the reward page is up: TryUse takes the press, before Marcus's reach
     const class AOpenWillowNpc* GetMarcus() const { return Marcus; }

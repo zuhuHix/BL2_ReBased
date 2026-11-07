@@ -779,6 +779,11 @@ void UOpenWillowQuest::MissionScreen(bool& bRedeemable, bool& bEligible) const
 
 bool UOpenWillowQuest::IsRewardPending() const { return Impl && !bFailed && Impl->Slice->rewardPending(); }
 
+bool UOpenWillowQuest::MayTakeUse() const
+{
+    return Impl && !bFailed && (Impl->Slice->rewardPending() || InTalkReach());
+}
+
 bool UOpenWillowQuest::TryUse()
 {
     if (!Impl || bFailed) return false;

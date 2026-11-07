@@ -8,6 +8,7 @@
 #include "OpenWillowInteractivePickup.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowUseView.h"
+#include "OpenWillowQuest.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowWeaponGen.h"
 #include "Animation/AnimSequence.h"
@@ -770,12 +771,18 @@ void UOpenWillowInteractiveSubsystem::SpawnStations(UWorld& World, const TShared
         AOpenWillowQuickChangeStation* Station = World.SpawnActor<AOpenWillowQuickChangeStation>(AOpenWillowQuickChangeStation::StaticClass(), Pose, Params);
         if (!Station) continue;
         Station->Configure(Id);
-        FString ObjectName;
-        FBox BodyBox(ForceInit);
+        FString ObjectName, Problem;
         Id.Split(TEXT(":"), nullptr, &ObjectName);
-        AActor* Body = OpenWillowUseView::FindPlacedBody(World, ObjectName, Location, BodyBox);
-        Station->SetPlacedBody(Body, BodyBox);
-        UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: station %s use box from %s"), *Id, Body ? *Body->GetName() : TEXT("the stand-in, no imported machine found"));
+        OpenWillowUseView::FPlacedBody Body;
+        if (OpenWillowUseView::FindPlacedBody(World, TEXT("TheWorld.PersistentLevel.") + ObjectName, Location, Body, Problem))
+        {
+            Station->SetPlacedBody(Body);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: station %s is its imported machine, %d section(s)"), *Id, Body.Sections.Num());
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow interactives: station %s uses the stand-in box: %s"), *Id, *Problem);
+        }
         Stations.Add(Station);
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow interactives: %d Quick Change station(s) spawned"), Stations.Num());
@@ -1110,6 +1117,12 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
             Controller->SetControlRotation((Station.UseBox().GetCenter() - OpenWillowUseView::EyeOf(Walker)).Rotation() + FRotator(0.f, Turn, 0.f));
     };
     Face(0.f);   // again at each step: Maya may still be landing
+    // Marcus or a waiting reward takes the press before the targets (PickupNearby), so neither may be in play for a press here to say anything about the targets.
+    const auto QuestTakesPress = [&Walker]()
+    {
+        const UOpenWillowQuest* Quest = Walker.GetQuest();
+        return Quest && Quest->MayTakeUse();
+    };
     // What the press would go to now, whichever kind; the station not being selected does not say the press goes nowhere.
     const auto TargetNow = [&Walker]() -> const TCHAR*
     {
@@ -1138,8 +1151,9 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
         Face(180.f);
         const bool bSelectedAway = SelectedStation(Walker) != nullptr;
         const TCHAR* TargetAway = TargetNow();
+        const bool bQuestAway = QuestTakesPress();
         Walker.PressUseKey();
-        UE_LOG(LogTemp, Display, TEXT("OWQCTEST looked away selected=%d target=%s"), bSelectedAway ? 1 : 0, TargetAway);
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST looked away selected=%d target=%s quest=%d"), bSelectedAway ? 1 : 0, TargetAway, bQuestAway ? 1 : 0);
         Face(0.f);
         // Test fixture: a sheet across the ray, halfway to the station, for the next step. Only the visibility channel sees it, so it cannot move her.
         const FVector Eye = OpenWillowUseView::EyeOf(Walker);
@@ -1170,7 +1184,7 @@ bool UOpenWillowInteractiveSubsystem::TickStationTest(AOpenWillowWalker& Walker)
         if (TestViewBlocker.IsValid()) TestViewBlocker->Destroy();
         break;
     case 2:
-        UE_LOG(LogTemp, Display, TEXT("OWQCTEST clear selected=%d target=%s"), SelectedStation(Walker) ? 1 : 0, TargetNow());
+        UE_LOG(LogTemp, Display, TEXT("OWQCTEST clear selected=%d target=%s quest=%d"), SelectedStation(Walker) ? 1 : 0, TargetNow(), QuestTakesPress() ? 1 : 0);
         UE_LOG(LogTemp, Display, TEXT("OWQCTEST ray clear %s"), *OpenWillowUseView::Describe(Walker, Station.UseBox(), &Station, Station.GetPlacedBody()));
         Walker.PressUseKey(); // through the use-key path: asks
         break;

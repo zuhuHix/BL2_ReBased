@@ -6,6 +6,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "OpenWillowUseView.h"
 #include "OpenWillowQuickChange.generated.h"
 
 class AOpenWillowWalker;
@@ -36,13 +37,13 @@ class OPENWILLOW_API AOpenWillowQuickChangeStation : public AActor
 public:
     AOpenWillowQuickChangeStation();
     void Configure(const FString& InId) { Id = InId; }
-    // The imported machine in the level, which is another actor: what the view ray tests, and not something in front of the station. Null without one.
-    void SetPlacedBody(AActor* Body, const FBox& Box) { PlacedBody = Body; PlacedBox = Box; }
-    const AActor* GetPlacedBody() const { return PlacedBody.Get(); }
-    // What the use key's view ray tests: the imported machine's bounds, standing in for its collision. A map without that mesh gets a machine-sized box on the placed point.
+    // The imported machine in the level, other actors than this one: its own collision is what the use key's view ray must hit first. Null without one.
+    void SetPlacedBody(const OpenWillowUseView::FPlacedBody& Body) { PlacedBody = Body; }
+    const OpenWillowUseView::FPlacedBody* GetPlacedBody() const { return PlacedBody.Sections.Num() > 0 ? &PlacedBody : nullptr; }
+    // The machine's bounds, where to aim and stand clear of. A map without that mesh gets a machine-sized box on the placed point, which the view ray then tests: UNVERIFIED stand-in.
     FBox UseBox() const
     {
-        return PlacedBody.IsValid() ? PlacedBox : FBox::BuildAABB(GetActorLocation() + FVector(0.f, 0.f, 105.f), FVector(60.f, 60.f, 105.f));
+        return PlacedBody.Sections.Num() > 0 ? PlacedBody.Box : FBox::BuildAABB(GetActorLocation() + FVector(0.f, 0.f, 105.f), FVector(60.f, 60.f, 105.f));
     }
     // One use press from this walker. True: the press was used, whatever it did.
     bool Use(AOpenWillowWalker& Walker);
@@ -57,7 +58,6 @@ public:
 
 private:
     UPROPERTY() TObjectPtr<UTextRenderComponent> Label;
-    TWeakObjectPtr<AActor> PlacedBody;
-    FBox PlacedBox = FBox(ForceInit);
+    OpenWillowUseView::FPlacedBody PlacedBody;
     FOpenWillowQuickChangePress Press;
 };
