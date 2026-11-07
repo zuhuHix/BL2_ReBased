@@ -28,6 +28,7 @@ namespace
 constexpr float SpawnTimeout = 30.f;
 constexpr float KillTimeout = 240.f;      // the stand-in has 20,000 health (sized for level-30 guns)
 constexpr float AttackWait = 15.f;        // fire is held at most this long into the fight, for the selected enemy's first hit
+constexpr float WoundShotInterval = 0.5f; // until the wound lands: longer than a shot's flight here, so only one is in the air
 constexpr float LootWait = 4.f;           // a drop has this long after the kill to appear
 constexpr float LootRadius = 1500.f;      // ...within this distance of the corpse
 constexpr float PhaselockTargetWait = 12.f;
@@ -480,6 +481,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
 
     case EStep::Fight: {
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
+        if (bSlowFired) Fixture(TEXT("one shot at a time until the selected enemy was wounded"));
         // The first down of the fight: had the selected enemy hit her by then? A hit after she is Up again does not undo this.
         // DownAt also catches a down and a second wind between two of these ticks; a down from before the fight is older.
         const int32 SelectedHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;
@@ -507,7 +509,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         if (bEnemyAlive)
         {
-            if (StepTime < KillTimeout) { if (ShootAt(Enemy, 0.f)) ++KillShots; return; }
+            // Until the wound lands, one shot at a time: FireOnce has no fire-rate gate and a shot takes time to land, so
+            // firing every tick puts enough in flight to kill a weak enemy before the hold can start. Named as a fixture.
+            const bool bUnwounded = bRangeMode && HoldEnd.IsEmpty() && SelectedHits == 0 && !bDownSeenInFight && Enemy->HealthFraction() >= 1.f;
+            bSlowFired |= bUnwounded;
+            if (StepTime < KillTimeout) { if (ShootAt(Enemy, bUnwounded ? WoundShotInterval : 0.f)) ++KillShots; return; }
             if (HeldFireFor > 0.f) Fixture(HoldFixture());
             FailLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s still alive after %.0fs and %d shots (health %.0f%%)"),
                 *Enemy->GetName(), StepTime, KillShots, 100.f * Enemy->HealthFraction()));
@@ -524,6 +530,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,
         // and this link relied on the shield too.
         if (!ShieldFixture.IsEmpty()) Fixture(ShieldFixture);
+        if (bSlowFired) Fixture(TEXT("one shot at a time until the selected enemy was wounded"));
         if (HeldFireFor > 0.f) Fixture(HoldFixture());
         // The fight's hits by causer: the selected enemy, another actor, or none given.
         const int32 EnemyHits = Enemy ? W->GetHitCountFrom(Enemy.Get()) : 0;

@@ -77,6 +77,7 @@ private:
     class AOpenWillowInventoryPickup* DropRolledGun(uint32 Seed, const FVector& Near, FString& OutWhy);
     bool RunAimedPickup(class AOpenWillowInventoryPickup* Target);
     float HeldFireFor = 0.f;        // seconds of the fight spent holding fire for the selected enemy's first hit
+    bool bSlowFired = false;        // the fight fired one shot at a time until the selected enemy was wounded
     FString HoldEnd;                // what ended the hold: hit, timeout, Maya down or enemy died ("" while running, or if it never ran)
     float FightStartedAt = 0.f;     // world time; a DownAt from this on is a down during the fight
     FString HoldFixture() const;
