@@ -72,21 +72,32 @@ MUZZLE_FX_SOURCE = ('cooked EffectCollectionDefinition and particle systems; '
 SHELL_CASING_FX_SOURCE = ('cooked ShellCasingPSCTemplate particle system; '
                           'table layout fitted, host drawing UNVERIFIED')
 
-# Camera-local translation added after the selected cooked eye socket is
-# centered. The pistol's fallback body socket does not coincide with the
-# visible sight line, so this is a separate frame fit.
+# Camera-local translation added after the selected cooked eye socket is centered, by the first part of the weapon type's
+# path. The pistol's hold is turned a little, so its front sight sits left of the reticle; side term fitted to two frames, and
+# the same for every pistol because they share the arms pose (WEAPON_VISUALS.md section 23). UNVERIFIED.
 ZOOM_POSITION_FITS_CM = {
-    # Side term refit 2026-11-03 (weapons parity 2, critic round 2: sight 30-40 px left of the reticle at 960 px, about
-    # 2.6 cm at the gun's 87 cm depth under the 45-degree first-person FOV): -3.2 -> -0.6.
-    'slice_pistol': (0.0, -0.6, 11.0),
+    'GD_Weap_Pistol': (0.0, 1.1, 0.0),
 }
+FRONT_SIGHT_SOCKET = 'FrontSight'
 
 
-def zoom_position_fit_cm(recipe_id):
-    offset = ZOOM_POSITION_FITS_CM.get(recipe_id, (0.0, 0.0, 0.0))
-    source = ('UNVERIFIED fit to lane E ADS frame' if recipe_id in ZOOM_POSITION_FITS_CM
-              else 'no recipe-specific fit')
-    return [float(value) for value in offset], source
+def zoom_position_fit_cm(weapon_type):
+    fit = ZOOM_POSITION_FITS_CM.get(str(weapon_type).split('.')[0])
+    source = 'UNVERIFIED fit to lane E ADS frames' if fit else 'no fit for this weapon class'
+    return [float(value) for value in fit or (0.0, 0.0, 0.0)], source
+
+
+def add_sight_line_height(entry, eye, front_sight):
+    """On a gun aiming down iron sights (the fallback eye socket), raise it by how far that socket sits above the barrel's front sight.
+
+    The socket alone leaves the front sight low by that gap, and the gap changes with the body and barrel, so no one fit per
+    weapon type can hold (WEAPON_VISUALS.md section 23). Host rule, UNVERIFIED. Sockets on different bones are not compared.
+    """
+    if not (eye and front_sight) or eye.get('bone') != front_sight.get('bone'):
+        return
+    fit = list(entry.get('zoom_position_fit_cm') or (0.0, 0.0, 0.0))
+    fit[2] += eye['location'][2] - front_sight['location'][2]
+    entry['zoom_position_fit_cm'] = fit
 
 
 def merge_type_properties(class_defaults, type_properties):
@@ -388,7 +399,7 @@ def type_view_fields(recipe_id, class_defaults, type_properties):
         recoil_scale = float(recoil_scale)
     except (TypeError, ValueError):
         recoil_scale = 1.0
-    zoom_position_fit, zoom_position_fit_source = zoom_position_fit_cm(recipe_id)
+    zoom_position_fit, zoom_position_fit_source = zoom_position_fit_cm('')  # build_recipe_entries sets it, knowing the type
     entry = {
         'weapon_type': str(type_properties.get('weapon_type') or ''),
         'player_view_offset': offset,
@@ -500,6 +511,7 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
         if entry is None:
             continue
         entry['weapon_type'] = weapon_type
+        entry['zoom_position_fit_cm'], entry['zoom_position_fit_source'] = zoom_position_fit_cm(weapon_type)
         stats = recipe.get('stats') if isinstance(recipe.get('stats'), dict) else {}
         card = stats.get('card') if isinstance(stats.get('card'), dict) else {}
         try:
@@ -549,6 +561,7 @@ def build_recipe_entries(recipe_rows, package, class_defaults):
         zoom_socket = resolve_fragment_socket(sockets, zoom_fragments, entry['zoom_socket_preferred']) if entry['zoom_socket_preferred'] else None
         if zoom_socket is None and entry['zoom_socket_fallback']:
             zoom_socket = resolve_fragment_socket(sockets, zoom_fragments, entry['zoom_socket_fallback'])
+            add_sight_line_height(entry, zoom_socket, resolve_fragment_socket(sockets, selected_fragments.get('Barrel', []), FRONT_SIGHT_SOCKET))
         entry['muzzle_socket_transform'] = muzzle
         entry['muzzle_socket_transform_source'] = 'selected fragment SkeletalMeshSocket export' if muzzle else 'unresolved'
         entry['shell_casing_socket_transform'] = casing
@@ -664,6 +677,7 @@ def compose_entry(tables, weapon_type, slot_parts):
     zoom = table_socket(table, zoom_frags, entry['zoom_socket_preferred'], zoom_known) if entry.get('zoom_socket_preferred') else None
     if zoom is None and entry.get('zoom_socket_fallback'):
         zoom = table_socket(table, zoom_frags, entry['zoom_socket_fallback'], zoom_known)
+        add_sight_line_height(entry, zoom, table_socket(table, frags('Barrel'), FRONT_SIGHT_SOCKET, known('Barrel')))
     for name, socket in (('muzzle_socket_transform', muzzle), ('shell_casing_socket_transform', casing),
                          ('zoom_socket_transform', zoom)):
         entry[name] = socket

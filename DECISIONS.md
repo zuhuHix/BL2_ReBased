@@ -4090,3 +4090,11 @@ AI-assisted (Claude Opus 5.5; critic Luna). Record: `docs/verification/WEAPON_VI
 ## 2026-11-07: a respawn charges the fee and shows a timed message (mission UI lane)
 
 AI-assisted (Claude). Record: `docs/verification/COMBAT_DOWN_RESPAWN.md`, "The host's fee and message". 11.8 s after a respawn: 0.07 of the cash, rounded half up, and a 7 s panel with the game's own text read from the install at run time. No parsing change. The times and the amount come from one live capture that repeats earlier rows; the panel's look is a stand-in, and the death camera, tunnel and digistruct effect stay open.
+
+## 2026-11-07: ADS on iron sights rises by the eye socket's height above the front sight (gunlook)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/WEAPON_VISUALS.md` section 23.
+
+- **Change:** on a gun with no sight part, the ADS fit adds the height from its eye socket down to its barrel's front sight, in the tool and in `OpenWillowViewTypes::ComposeEntry`. It replaces the slice pistol's own fit, whose height was stale. Fits now go by weapon class: a side term for pistols only. On a machine that regenerates view data, ADS frames move.
+- **Why not a fit per weapon type:** the gap changes with the body and barrel, even within one type.
+- **Checked:** the tool's composition against its generated lines, and synthetic tests. Not compiled, and no frame of the result yet. UNVERIFIED host rule, based on one real pistol frame and one real rifle frame.

@@ -701,7 +701,7 @@ The timing rule stays UNVERIFIED. So do the fast rates this leaves in place, suc
 **Data steps a machine needs for the gun look, in order** (all output under ignored `local/` or `Content/`; the commands are in TOOLING.md "weapon part" or in each tool's help):
 1. Part library: `export_weapon_skins.py`, `weapon_library.py meshes`, `skins --game`, `index`, then `import_weapon_library.ps1`. Without it guns fall back to pre-built meshes and may paint wrong (section 21).
 2. `weapon_gen_manifest.py`: without it `ow.RollGun`, shops and drops roll nothing.
-3. `weapon_view_model.py --library local/weapon_library/library.json`: rolled guns' view models. Re-run when `library.json` changes; the host refuses a stale table.
+3. `weapon_view_model.py --library local/weapon_library/library.json`: rolled guns' view models. Re-run when `library.json` changes; the host refuses a stale table. Also `--dir local/items/slice`, the slice guns' own lines: the host does not notice those are old.
 4. Weapon reference poses, then `weapon_reload_library.py`, then the two imports it prints: reload clips and all arms sets. The poses come from `host/ue5/import_weapon_items.py` with `OPENWILLOW_WEAPON_REFERENCES` set and `OPENWILLOW_ITEMS` naming a folder of `weapon_recipe.py` recipes (`<id>.json`) that each have a `filter_gestalt_gltf.py --recipe` output (`<id>.gltf`), one recipe per library type; copy each pose to `<kind>.json`. The arms pose, `local/character/anim/ref_pose.json`, must already exist: importing Maya writes it (`OPENWILLOW_CHARACTER_REFERENCE`).
 5. `host/ue5/import_weapon_fx.py`: the soft muzzle flame; without it flashes have hard edges.
 
@@ -717,3 +717,28 @@ frames, and with its real reload sequences at the frame where the pose is neares
 Earlier rows (section 18: idle 7.0, reload 5.6) are from other critic runs and another machine, so they are not comparable. The target of 8 is reached on idle and on the pistol's reload only. The rifle's reload frame is larger and higher than
 real. The SMG's frame matches an early real pose, not the middle of the motion. That may be timing: the real run's halved reload time is under the fast-clip threshold, and the host plays the default clip at the card's base time (inferred, UNVERIFIED). The Torgue launcher
 leaves the frame at half its reload; no real frame compares that. A still does not show motion. Ammo counts during a reload differ too: the real magazine count rises through the reload, the host's stays 0 until the refill.
+
+## 23. ADS on iron sights: the height follows the parts, not the weapon type (gunlook lane, 2026-11-07)
+
+AI-assisted (Claude Opus 5.5). A playtest found rolled guns' sights sitting low in ADS. The ask was a fit per weapon type. The frames and the cooked sockets say the height follows the parts instead.
+
+**Measured** on existing 1280x720 frames (lane E's real ones, host run Z19; by eye on crops, so about +-10 px), as front-sight tip below the screen centre:
+
+| gun | fit height before | tip, host | tip, real |
+|---|---|---|---|
+| slice pistol | 11 cm | 72 px above | 8 px below |
+| rolled Jakobs pistol | none | 118 px below | no frame |
+| slice assault rifle | none | 5 px above | 15 px below |
+
+The slice pistol's height was set on 2026-10-22, before the 2026-11-03 ADS rules (section 15). The later "within 10 px" record for it was a side measurement. So its height was stale, and copying it to every pistol would have been wrong.
+
+**Rule (host rule, UNVERIFIED).** The two pistols share a body, so their frames give about 17 px per cm, and about 6.4 cm of height would put either at the real tip. The fallback eye socket on that body sits about 5.5 to 7 cm above the front sights of the barrels it can carry. On a gun with no sight part, the gun now rises by how far its eye socket sits above its barrel's front sight, on the same bone: `add_sight_line_height` in the tool, `AddSightLineHeight` in `OpenWillowViewTypes`, added on top of the type's fit.
+A sight part keeps its own eye socket. In the 118 sample guns, every sight part but three sniper ones also draws an overlay that hides the gun, so its height barely shows; those three stay as they were. That gap runs from about -2 to +7 cm across those guns. It differs within 6 of the 23 weapon types the sample shows on iron sights (types with one sample gun cannot show it), so no fit per type could hold.
+
+**Side term.** The pistol's hold is turned a little, so its tip sits left of centre: about 30 px on the slice pistol and 17 px on the rolled one. A side fit of 1.1 cm replaces the slice pistol's -0.6 cm, for every pistol type since they share the arms pose. It is fitted to those two frames and not derived.
+
+**Predicted, not seen (no capture yet):** pistol tip about 23 px below centre (real 8), assault rifle about 10 px below (real 15), rolled Jakobs pistol near the slice pistol's. The remaining pistol gap is close to the host's fixed drop below the reticle, left alone here.
+
+**Checked.** Offline only. `--check` composes 118 of 118 guns the same as their generated lines (Python tool against tool, not the host or the game), and the only fields that differ from the old lines are the fit and its source. Synthetic tests cover the rule in Python and C++. The C++ is not compiled yet and no frame shows the result.
+
+**Not covered.** No real ADS frame exists for a shotgun, a Maliwan or Hyperion pistol, an SMG on iron sights, a sniper without an overlay or a launcher, so the rule is untested on those; on the slice shotgun it lifts the gun about 5 cm. Rotation is untouched: the host's gun stays turned where the real one points straight. The real and host SMG reticles also differ in the same frames (the lower triangle looks upside down, and the rings differ); not looked into.
