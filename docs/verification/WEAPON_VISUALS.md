@@ -654,6 +654,7 @@ checker whites and the logo's sharpness. It warns that a blanket reduction of th
 whose bright receiver already matches; that light (section 19) was fitted on that pistol alone. So one gun fits and another clips: a
 soft shoulder in the paint material, not another light value, is the candidate. Not changed here. On the reverse side the logo reads
 backwards; no real frame shows that side, so that is unsettled.
+
 ## 22. Rolled guns get a view model from their weapon type and parts (gunlook lane, 2026-11-06)
 
 AI-assisted (Claude Opus 5.5). A playtest found rolled guns (shop, drops) with dead ADS, launchers filling the screen and muzzle fallbacks.
