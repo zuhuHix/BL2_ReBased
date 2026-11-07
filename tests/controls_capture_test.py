@@ -20,6 +20,8 @@ STUB = r"""
 $work = '__WORK__'
 $scenario = $env:OW_SCENARIO
 $script:StubPageAsks = 0
+$script:StubDown = $false
+$script:StubDownReads = 0
 $script:StubMeleeCalls = 0
 $script:RG = Join-Path $work 'rg'
 $script:CmdDir = Join-Path $script:RG 'cmd'
@@ -92,16 +94,32 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             if ($scenario -eq 'run_error' -or $scenario -eq 'hooks_traceback') { throw 'channel lost' }
             return '[{"key": "V"}]'
         }
-        '*cp_melee_facts*' { return '{"definition": {}}' }
+        '*cp_melee_facts*' {
+            $definition = '"definition": {"trace": 300.0, "cone": 40.0, "use_cone": true, "use_radius": false}'
+            $clips = '"arm_melee_clips": [{"set": "a", "clips": []}, {"set": "b", "clips": [["Melee", 0.7]]}]'
+            if ($scenario -eq 'facts_empty') { return '{"definition": {}}' }
+            if ($scenario -eq 'facts_clips_err') { return "{$definition, `"arm_melee_clips`": `"ERR AttributeError`"}" }
+            if ($scenario -eq 'facts_no_clip') { return "{$definition, `"arm_melee_clips`": [{`"set`": `"a`", `"clips`": []}]}" }
+            if ($scenario -eq 'facts_bad_clip') { return "{$definition, `"arm_melee_clips`": [{`"set`": `"a`", `"clips`": [[`"Melee`", `"ERR`"]]}]}" }
+            if ($scenario -eq 'facts_traceback') { return 'Traceback: "definition" not read' }
+            return "{$definition, $clips, `"first`": null, `"damage_value`": `"ERR AttributeError`"}"
+        }
         '*cp_page*' {
             # The screen's clock moves by itself, so a whole-text comparison sees an effect in every read.
             $script:StubAsks++
-            return "{`"movie`": `"m`", `"open`": $($script:StubOpen.ToString().ToLower()), `"screen`": $script:StubScreen, `"time`": $script:StubAsks}"
+            if ($script:StubDown -and ($scenario -eq 'down_tracebacks' -or ($scenario -eq 'down_one_traceback' -and $script:StubDownReads++ -gt 0))) { return 'Traceback: no pawn' }
+            $down = if ($script:StubDown -and $scenario -ne 'down_got_up') { 'true' } else { 'false' }
+            return "{`"movie`": `"m`", `"open`": $($script:StubOpen.ToString().ToLower()), `"screen`": $script:StubScreen, `"time`": $script:StubAsks, `"injured`": $down}"
         }
         '*cp_dialog*' { return $(if ($script:StubDialog) { '1' } else { '0' }) }
         '*cp_count*' { return $(if ($scenario -eq 'no_melee') { '0' } else { "$script:StubSwings" }) }
         '*cp_hits*' { return $(if ($scenario -eq 'no_target_hit') { '{"count": 0, "amounts": []}' } else { '{"count": 1, "amounts": [53.2]}' }) }
-        '*cp_injure*' { return $(if ($scenario -eq 'not_down') { '{"injured": false}' } else { '{"injured": true}' }) }
+        '*cp_injure*' {
+            if ($scenario -eq 'not_down') { return '{"injured": false}' }
+            if ($scenario -eq 'injure_traceback') { return 'Traceback: "injured": true was not set' }
+            $script:StubDown = $true
+            return '{"injured": true}'
+        }
         '*cp_melee_hooks*' { return '{}' }
         '*cp_targets*' { return '[{"class": "WillowAIPawn", "path": "a.pawn", "definition": "x"}, {"class": "WillowInteractiveObject", "path": "a.box", "definition": "GD.CardboardBox"}, {"class": "WillowVendingMachine", "path": "a.shop", "definition": "y"}]' }
         '*cp_prompt_read*' { return $(if ($scenario -eq 'no_usable') { '{"usable": null}' } else { '{"usable": "x", "p1.tools": {"_currentframe": 13}}' }) }
@@ -177,9 +195,22 @@ class ControlsCaptureTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertEqual(self.saves(), 'original save')
 
+    def test_melee_facts_need_the_fields_the_stage_exists_for(self):
+        for scenario in ('facts_empty', 'facts_clips_err', 'facts_no_clip', 'facts_bad_clip', 'facts_traceback'):
+            done, session = self.run_capture(scenario)
+            self.assertEqual(session['status'], 'incomplete: melee_facts', scenario)
+            self.setUp()
+
+    def test_page_down_needs_two_valid_reads_while_down(self):
+        for scenario in ('down_tracebacks', 'down_one_traceback', 'down_got_up', 'injure_traceback'):
+            done, session = self.run_capture(scenario)
+            self.assertEqual(session['status'], 'incomplete: page_down', scenario)
+            self.assertEqual(done.returncode, 1, scenario)
+            self.setUp()
+
     def test_a_page_that_never_opened_fails_its_stages(self):
         done, session = self.run_capture('page_closed')
-        for stage in ('melee_interrupted', 'page_keys'):
+        for stage in ('melee_interrupted', 'page_keys', 'page_down'):
             self.assertIn(stage, session['status'])
         self.assertEqual(done.returncode, 1)
 
