@@ -110,6 +110,19 @@ def sequence_names(chain, anim_set):
     return names
 
 
+def sockets(chain, mesh):
+    """The mesh's named sockets. A loot configuration's AttachmentPointName names one of them (name match only; UNVERIFIED as the rule)."""
+    rows = []
+    for path in children(chain, mesh, depth=1) if mesh else []:
+        if short(chain.classes[path]) != 'SkeletalMeshSocket':
+            continue
+        props = chain.props(path)
+        at = props.get('RelativeLocation') or {}
+        rows.append({'name': props.get('SocketName'), 'bone': props.get('BoneName'),
+                     'location': [at.get('X', 0.0), at.get('Y', 0.0), at.get('Z', 0.0)]})
+    return sorted(rows, key=lambda row: str(row['name']))
+
+
 def visual(chain, definition):
     """The definition's distinct mesh components, the anims its behaviours play and its particle templates."""
     components, seen = [], set()
@@ -127,6 +140,7 @@ def visual(chain, definition):
             continue  # two identical components (the strong box, the Dahl epic crate) are drawn as one here
         seen.add(key)
         entry['sequences'] = {s: sequence_names(chain, s) for s in entry['anim_sets']}
+        entry['sockets'] = sockets(chain, entry['skeletal_mesh'])
         entry['tree_anim_names'] = chain.props(entry['anim_tree']).get('SimpleAnimNames') if entry['anim_tree'] else None
         components.append(entry)
     played, particles = set(), set()

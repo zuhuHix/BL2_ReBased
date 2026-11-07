@@ -71,6 +71,8 @@ QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
 def good_log(spawned=3, unsupported=1):
     text = line(f'OpenWillow interactives: {spawned} lootable(s) spawned, {unsupported} unsupported not spawned')
     text += line('OWLOOT open id=Map:Point_0 config=Cash_Box drops=2')
+    text += line('OWLOOT slot id=Map:Point_0 point=Ammo1 at=socket')
+    text += line('OWLOOT slot id=Map:Point_0 point=Ammo2 at=front reason=placeholder')
     text += line('OWLOOT drop id=Map:Point_0 kind=cash balance=Item.Cash level=3 value=80')
     text += line('OWLOOT drop id=Map:Point_0 kind=ammo balance=Item.Ammo level=3 value=18')
     text += line('OWLOOT open id=Map:Point_1 config=Empty_Box drops=0')
@@ -115,9 +117,24 @@ class GoodRunTest(unittest.TestCase):
         self.assertEqual(status_of(results, 'opened_lootables'), 'PASS')
         self.assertEqual(status_of(results, 'open_drops'), 'PASS')
         self.assertEqual(status_of(results, 'cash_drops'), 'PASS')
+        self.assertEqual(status_of(results, 'drop_slots'), 'PASS')
         self.assertEqual(status_of(results, 'pickups'), 'PASS')
         self.assertEqual(status_of(results, 'test_sequence'), 'PASS')
         self.assertEqual(status_of(results, 'automation'), 'PASS')
+
+
+class DropSlotsTest(unittest.TestCase):
+    def test_a_drop_on_an_imported_mesh_with_no_socket_fails(self):
+        results = grade(good_log() + line('OWLOOT slot id=Map:Point_2 point=Gun9 at=front reason=no socket'))
+        self.assertEqual(status_of(results, 'drop_slots'), 'FAIL')
+
+    def test_drops_with_no_slot_line_are_missing(self):
+        text = ''.join(row for row in good_log().splitlines(True) if 'OWLOOT slot' not in row)
+        self.assertEqual(status_of(grade(text), 'drop_slots'), 'MISSING')
+
+    def test_an_unknown_reason_is_not_excused(self):
+        results = grade(good_log() + line('OWLOOT slot id=Map:Point_2 point=Gun9 at=front reason=later'))
+        self.assertEqual(status_of(results, 'drop_slots'), 'FAIL')
 
 
 class FullRunTest(unittest.TestCase):

@@ -28,6 +28,14 @@ struct FOpenWillowLootLeaf
     FString Balance;   // game object path (a weapon balance, or an item grade for pickups and gear)
     FString Class;     // WeaponBalanceDefinition, InventoryBalanceDefinition, ...
     float Weight = 0;  // only leaves with a weight above 0 are ever picked
+    FString Point;     // the attachment point that rolled it; set by Roll
+};
+
+// A named place on the imported mesh: an offset in one bone's space. From the package's SkeletalMeshSocket.
+struct FOpenWillowLootSocket
+{
+    FName Bone;
+    FVector Offset = FVector::ZeroVector;
 };
 
 // One attachment point: the point rolls its pool with Probability, then gives one leaf by weight.
@@ -55,6 +63,7 @@ struct FOpenWillowLootTable
     FString SkeletalMesh;
     FString AnimSet;          // tail name of the first anim set; the open anim is <AnimSet>_Open
     float VisualScale = 1.f;
+    TMap<FString, FOpenWillowLootSocket> Sockets;   // by name, which an attachment's Point matches
 
     // Reads one balance object. False with OutError when it has no usable configurations.
     bool Load(const TSharedPtr<FJsonObject>& Balance, FString& OutError);
@@ -148,6 +157,8 @@ public:
     bool IsOpened() const { return bOpened; }
     // True when the imported open clip loaded (the lid-opening capture of -owinteractivetest uses these).
     bool HasOpenClip() const { return OpenAnim != nullptr; }
+    // Where a drop from this attachment point lies: its socket on the imported mesh. False with no imported mesh or no such socket.
+    bool SocketSlot(const FString& Point, FVector& OutSlot) const;
     // The path of the material the imported mesh renders in its first slot; empty without one.
     FString RenderedMaterialPath() const;
 
@@ -166,6 +177,7 @@ private:
     UPROPERTY() TObjectPtr<UStaticMeshComponent> Lid;
     UPROPERTY() TObjectPtr<USkeletalMeshComponent> Skeletal;
     UPROPERTY() TObjectPtr<UAnimSequence> OpenAnim;
+    TMap<FString, FOpenWillowLootSocket> Sockets;
     bool bSkeletalShown = false;
     bool bOpened = false;
 };

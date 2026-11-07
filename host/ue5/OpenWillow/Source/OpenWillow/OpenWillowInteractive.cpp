@@ -162,6 +162,22 @@ void ReadVisual(const TSharedPtr<FJsonObject>& Balance, FOpenWillowLootTable& Ta
     if ((*First)->TryGetStringField(TEXT("skeletal_mesh"), Mesh)) Table.SkeletalMesh = TailName(Mesh);
     float Scale = 0;
     if (ReadFloat(*First, TEXT("scale"), Scale) && Scale > 0 && Scale <= 100.f) Table.VisualScale = Scale;
+    const TArray<TSharedPtr<FJsonValue>>* SocketRows = nullptr;
+    if ((*First)->TryGetArrayField(TEXT("sockets"), SocketRows))
+    {
+        ForEachObject(*SocketRows, [&Table](const TSharedPtr<FJsonObject>& Row)
+        {
+            FString Name, Bone;
+            const TArray<TSharedPtr<FJsonValue>>* At = nullptr;
+            if (!Row->TryGetStringField(TEXT("name"), Name) || !Row->TryGetStringField(TEXT("bone"), Bone)
+                || !Row->TryGetArrayField(TEXT("location"), At) || At->Num() != 3)
+                return;
+            FOpenWillowLootSocket Socket;
+            Socket.Bone = FName(*Bone);
+            Socket.Offset = FVector((*At)[0]->AsNumber(), (*At)[1]->AsNumber(), (*At)[2]->AsNumber());
+            Table.Sockets.Add(Name, Socket);
+        });
+    }
     const TArray<TSharedPtr<FJsonValue>>* AnimSets = nullptr;
     FString AnimSet;
     if ((*First)->TryGetArrayField(TEXT("anim_sets"), AnimSets) && !AnimSets->IsEmpty() && (*AnimSets)[0].IsValid()
@@ -252,6 +268,7 @@ bool FOpenWillowLootTable::Load(const TSharedPtr<FJsonObject>& Balance, FString&
     SkeletalMesh.Reset();
     AnimSet.Reset();
     VisualScale = 1.f;
+    Sockets.Reset();
     if (!Balance.IsValid())
     {
         OutError = TEXT("balance object missing");
@@ -310,7 +327,9 @@ void FOpenWillowLootTable::Roll(FRandomStream& Rng, TArray<FOpenWillowLootLeaf>&
         TArray<float> LeafWeights;
         for (const FOpenWillowLootLeaf& Leaf : Attachment.Leaves) LeafWeights.Add(Leaf.Weight);
         const int32 Pick = WeightedIndex(LeafWeights, Rng.FRand());
-        if (Pick != INDEX_NONE) OutLeaves.Add(Attachment.Leaves[Pick]);
+        if (Pick == INDEX_NONE) continue;
+        OutLeaves.Add(Attachment.Leaves[Pick]);
+        OutLeaves.Last().Point = Attachment.Point;
     }
 }
 
@@ -429,6 +448,7 @@ void AOpenWillowLootable::ApplyVisual(const FOpenWillowLootTable& Visual)
     // Both or neither: the placeholder's lid is the only visible opening when the clip is missing.
     if (!Mesh || !Clip) return;
     OpenAnim = Clip;
+    Sockets = Visual.Sockets;
     Skeletal->SetSkeletalMesh(Mesh);
     Skeletal->SetRelativeScale3D(FVector(Visual.VisualScale));
     Skeletal->SetVisibility(true);
@@ -445,11 +465,24 @@ bool AOpenWillowLootable::Open()
     {
         // Plays the open sequence once (UNVERIFIED: the imported anim set is not checked in game).
         Skeletal->PlayAnimation(OpenAnim, false);
+        // Loot now lies inside, so the pickup sight test must see in. The hidden placeholder still blocks walking.
+        Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+        Lid->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+        Skeletal->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
     }
     else
     {
         LidPivot->SetRelativeRotation(FRotator(-100.f, 0.f, 0.f)); // placeholder lid, UNVERIFIED stand-in
     }
+    return true;
+}
+
+bool AOpenWillowLootable::SocketSlot(const FString& Point, FVector& OutSlot) const
+{
+    const FOpenWillowLootSocket* Socket = bSkeletalShown ? Sockets.Find(Point) : nullptr;
+    if (!Socket || !Skeletal->DoesSocketExist(Socket->Bone)) return false;
+    // The imported bone takes the package's offset unchanged: checked offline, it lands inside each mesh (VENDORS.md section 7).
+    OutSlot = Skeletal->GetSocketTransform(Socket->Bone).TransformPosition(Socket->Offset);
     return true;
 }
 
@@ -795,7 +828,17 @@ void UOpenWillowInteractiveSubsystem::SpawnLeaf(AOpenWillowWalker& Walker, const
 {
     UWorld* World = Walker.GetWorld();
     if (!World) return;
-    const FVector Slot = DropSlot(Lootable, Index, Count);
+    FVector Slot;
+    if (Lootable.SocketSlot(Leaf.Point, Slot))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT slot id=%s point=%s at=socket"), *Lootable.Id, *Leaf.Point);
+    }
+    else
+    {
+        Slot = DropSlot(Lootable, Index, Count);
+        UE_LOG(LogTemp, Display, TEXT("OWLOOT slot id=%s point=%s at=front reason=%s"), *Lootable.Id, *Leaf.Point,
+            Lootable.HasOpenClip() ? TEXT("no socket") : TEXT("placeholder"));
+    }
     if (Leaf.Class == TEXT("WeaponBalanceDefinition"))
     {
         SpawnWeapon(*World, Lootable, Leaf.Balance, Level, static_cast<uint32>(Rng.RandRange(1, MAX_int32)), Slot, Spawned);

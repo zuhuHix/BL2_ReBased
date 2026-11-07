@@ -32,6 +32,7 @@ PICKUP = re.compile(r'OWPICKUP kind=(\S+) amount=(-?[\d.]+) before=(-?[\d.]+) af
                     r'ok=([01]) reason=(.*)$', re.M)
 LID_PHASES = ('closed', 'mid', 'opened')
 DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
+SLOT = re.compile(r'OWLOOT slot id=(\S+) point=(\S*) at=(\w+)(?: reason=([\w ]+))?')
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)')
 QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
@@ -180,6 +181,21 @@ def grade_drops(log_text, objects_by_id, constants, out):
         out.add('cash_drops', 'FAIL', f'{len(problems)} of {len(cash)} cash drop(s); first: {problems[0]}')
     else:
         out.add('cash_drops', 'PASS', f'{len(cash)} cash drop(s) inside the formula range at their level and stage')
+
+
+def grade_slots(log_text, out):
+    """Where each drop was put. A placeholder has no sockets, so its drops stay in front; an imported mesh has no such excuse."""
+    slots = SLOT.findall(log_text)
+    dropped = any(int(drops) > 0 for _, _, drops in OPEN.findall(log_text))
+    if not slots:
+        out.add('drop_slots', 'MISSING' if dropped else 'SKIPPED', 'no "OWLOOT slot" line' + ('' if dropped else ' and nothing dropped'))
+        return
+    missing = [f'{oid} point={point}' for oid, point, at, reason in slots if at != 'socket' and reason != 'placeholder']
+    if missing:
+        out.add('drop_slots', 'FAIL', f'{len(missing)} of {len(slots)} drop(s) on an imported mesh found no socket, first: {missing[0]}')
+        return
+    inside = sum(1 for _, _, at, _ in slots if at == 'socket')
+    out.add('drop_slots', 'PASS', f'{inside} of {len(slots)} drop(s) at their socket, the rest on placeholders')
 
 
 def check_pickup(kind, amount, before, after, cap, ok):
@@ -446,6 +462,7 @@ def grade(log_text, automation_text, doc, skip_automation=False, content_root=No
     grade_spawned(log_text, doc, out)
     grade_opens(log_text, objects_by_id, out)
     grade_drops(log_text, objects_by_id, cash_constants(doc), out)
+    grade_slots(log_text, out)
     grade_pickups(log_text, out)
     grade_quick_change(log_text, out)
     grade_lid_capture(log_text, out, expected_lid_types(doc, content_root), frames_dir, allow_no_lootables)

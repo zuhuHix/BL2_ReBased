@@ -9,6 +9,9 @@
 #include "OpenWillowQuickChange.h"
 #include "OpenWillowInventory.h"
 #include "Math/RandomStream.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowInteractiveLootTest, "OpenWillow.Interactive.Loot",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -56,6 +59,32 @@ bool FOpenWillowInteractiveLootTest::RunTest(const FString& Parameters)
     }
     TestFalse(TEXT("a probability-0 point never fires"), bDudFired);
     TestFalse(TEXT("a zero-weight configuration is never picked"), bSureNamed);
+
+    // A leaf remembers the point that rolled it, which is what places it. Names and numbers invented.
+    {
+        const TSharedPtr<FJsonObject> Balance = MakeShared<FJsonObject>();
+        const FString Json = TEXT("{\"configurations\":[{\"name\":\"c\",\"weight\":1,\"attachments\":[{\"point\":\"Gun7\",\"probability\":1,")
+            TEXT("\"items\":[{\"balance\":\"Synthetic.Item.Placed\",\"class\":\"InventoryBalanceDefinition\",\"weight\":1}]}]}],")
+            TEXT("\"visual\":{\"components\":[{\"skeletal_mesh\":\"P.Skel_Synthetic\",\"sockets\":[")
+            TEXT("{\"name\":\"Gun7\",\"bone\":\"Base\",\"location\":[1,2,3]},{\"name\":\"Broken\",\"bone\":\"Base\",\"location\":[1,2]}]}]}}");
+        TSharedPtr<FJsonObject> Parsed;
+        const TSharedRef<TJsonReader<>> JsonReader = TJsonReaderFactory<>::Create(Json);
+        TestTrue(TEXT("the synthetic balance parses"), FJsonSerializer::Deserialize(JsonReader, Parsed));
+        FOpenWillowLootTable Placed;
+        FString Error;
+        TestTrue(TEXT("the synthetic balance loads"), Placed.Load(Parsed, Error));
+        FRandomStream PlacedRng(7);
+        TArray<FOpenWillowLootLeaf> PlacedLeaves;
+        FString PlacedConfig;
+        Placed.Roll(PlacedRng, PlacedLeaves, PlacedConfig);
+        TestEqual(TEXT("one leaf rolled"), PlacedLeaves.Num(), 1);
+        TestTrue(TEXT("the leaf names its point"), PlacedLeaves.Num() == 1 && PlacedLeaves[0].Point == TEXT("Gun7"));
+        const FOpenWillowLootSocket* Socket = Placed.Sockets.Find(TEXT("Gun7"));
+        TestTrue(TEXT("the socket is read"), Socket != nullptr);
+        TestTrue(TEXT("its bone"), Socket && Socket->Bone == FName(TEXT("Base")));
+        TestTrue(TEXT("its offset"), Socket && Socket->Offset.Equals(FVector(1.0, 2.0, 3.0)));
+        TestFalse(TEXT("a socket with a broken location is left out"), Placed.Sockets.Contains(TEXT("Broken")));
+    }
 
     // Cash formula on invented constants: calc(L) = 10 x 2^L, amount = calc x (1 + 0.5 x grade). L = 3 gives 80; grade 4 gives 240.
     FOpenWillowPickupSpec Cash;
