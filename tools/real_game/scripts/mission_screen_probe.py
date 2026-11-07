@@ -42,7 +42,7 @@ MS_FUNCS = [("WillowGame.QuestAcceptGFxMovie", name, post) for name, post in (
     ("WillowGame.WillowPlayerPawn", "ShowRespawnDialog", False), ("WillowGame.WillowPlayerPawn", "ClientShowRespawnDialog", False),
     ("WillowGame.WillowPlayerPawn", "AwaitingRespawnDisplayRespawnCost", False), ("WillowGame.WillowPawn", "InjuredRespawn", False),
     ("WillowGame.WillowPlayerPawn", "ResurrectAtLocation", False), ("WillowGame.WillowPawn", "GoFromInjuredToHealthy", False),
-    ("WillowGame.WillowHUD", "ShowRespawnDialog", False)]
+    ("WillowGame.WillowHUD", "ShowRespawnDialog", False), ("WillowGame.WillowHUDGFxMovie", "AddTrainingText", False)]
 # What the screen writes to its own movie (the host page has to write the same paths). Filtered to this movie: the HUD uses them too.
 MS_WRITES = ["SetVariableString", "SetVariableBool", "SetVariableNumber"]
 # Text fields of the two pages, read back while the screen is open. A path the current frame does not have reads empty.

@@ -149,26 +149,22 @@ try {
     # 1. The offer: does E open a page first, and which keys does the page take? E again is the first test; Enter comes last, since it accepts.
     $row = Open-Screen 'offer'
     $log.settings = PyJson 'ms_settings()'
-    Set-Stage 'offer' ($row.open -eq $true) 'E at Marcus did not open the screen'
+    Set-Stage 'offer' ($row.open -eq $true -and $row.status -eq 0) "E at Marcus did not open the screen: open $($row.open), status $($row.status)"
     if (!$row.open) { throw 'the screen did not open at the offer' }
-    # E last: the first run showed it accepts. The other keys first, then Esc, which should leave the offer to reopen. Enter only if E did not accept.
-    $row = Test-Keys 'offer' @('W', 'Mouse', 'F', 'Space') 0
+    # Better UI Controls is on (2026-11-07), and this reads the game's own paths around it. On this screen it turns the use key's release into Enter and the movement keys into arrows,
+    # so neither E nor W, A, S, D is pressed here: those would be its behaviour. Enter, F, Space, Esc and the mouse are not in its rules for this screen. E only opens the screen, from the world.
+    $row = Test-Keys 'offer' @('Mouse', 'F', 'Space') 0
     if ($row.status -ne 0) { throw "a key test changed the mission's status to $($row.status) at the offer: see offer_status_changed_by_*" }
+    Set-Stage 'offer_keys' ($log.delivered_offer_F.delivered -eq $true) "F never reached the screen's handler, so nothing is known about what it does: $($log.delivered_offer_F | ConvertTo-Json -Compress)"
     $esc = Test-Key 'offer' 'Esc'
     Set-Stage 'offer_esc' ($esc.open -eq $false -and $esc.status -eq 0 -and $log.delivered_offer_Esc.delivered -eq $true) "Esc did not close the offer: open $($esc.open), status $($esc.status)"
     if ($esc.open) { throw 'the offer stayed open after Esc' }
     $row = Open-Screen 'offer_again'
     if (!$row.open) { throw 'the screen did not open again at the offer' }
-    $accept = Test-Key 'offer' 'E'
-    Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true) "E never reached the screen's handler, so nothing is known about what it does: $($log.delivered_offer_E | ConvertTo-Json -Compress)"
-    $log.accepted_by = 'E'
-    if ($accept.status -eq 0) {
-        $log.accepted_by = 'Enter'
-        if (!$accept.open) { $row = Open-Screen 'offer_for_enter'; if (!$row.open) { throw 'the screen did not open for Enter at the offer' } }
-        $accept = Test-Key 'offer' 'Enter'
-    }
+    if ($row.status -ne 0) { throw "opening the screen changed the status to $($row.status): the opening E's release reached the mod" }
+    $accept = Test-Key 'offer' 'Enter'
     Read-After 'accept_after' 1.0 | Out-Null
-    Set-Stage 'accept' ($accept.status -eq 1) "neither E nor Enter accepted: status $($accept.status)"
+    Set-Stage 'accept' ($accept.status -eq 1 -and $log.delivered_offer_Enter.delivered -eq $true) "Enter did not accept: status $($accept.status)"
     if ($accept.status -ne 1) { throw 'the offer was not accepted' }
 
     # 2. To the turn-in by the shortcut (ms_advance). Marcus walks to the range after the accept, so the wait lets him arrive.
@@ -184,17 +180,11 @@ try {
     $row = Open-Screen 'turnin'
     Set-Stage 'turnin' ($row.open -eq $true -and $row.status -eq 3) "E at Marcus did not open the turn-in screen: open $($row.open), status $($row.status)"
     if (!$row.open) { throw 'the screen did not open at the turn-in' }
-    $row = Test-Keys 'turnin' @('W', 'Mouse') 3
+    # Enter, as at the offer: E here would be the mod's. The mark is before it.
+    $row = Test-Keys 'turnin' @('Mouse', 'Space') 3
     if ($row.status -ne 3) { throw "a key test changed the mission's status to $($row.status) at the turn-in: see turnin_status_changed_by_*" }
-    # E last, as at the offer; Enter only if E did not turn it in. The mark is before both.
     Py "print(ms_mark('turnin_enter'))" | Out-Null
-    $turned = Test-Key 'turnin' 'E'
-    $log.turned_in_by = 'E'
-    if ($turned.status -eq 3) {
-        $log.turned_in_by = 'Enter'
-        if (!$turned.open) { $row = Open-Screen 'turnin_for_enter'; if (!$row.open) { throw 'the screen did not open for Enter at the turn-in' } }
-        $turned = Test-Key 'turnin' 'Enter'
-    }
+    $turned = Test-Key 'turnin' 'Enter'
     foreach ($at in '0.5', '1.0', '1.5') { Read-After "reward_$at" 0.4 | Out-Null }
     Start-Sleep 2; $page = Read-After 'reward_page'
     $log.reward_shown = PyJson 'ms_reward_shown()'
@@ -203,12 +193,12 @@ try {
     # Each press is marked, so the verdict can say which one took the reward, if a key test did.
     Py "print(ms_mark('reward_shown'))" | Out-Null
     $last = $page
-    # E last again; Enter only if the reward is still waiting after it.
-    foreach ($key in 'W', 'Mouse', 'F', 'Esc', 'E') {
+    # The mod takes the reward on the use key's press, so E is not pressed here. F is left out too: on this page the script makes it inspect the selected item, and there is none.
+    foreach ($key in 'Mouse', 'Space', 'Esc') {
         if ($last.open) { Py "print(ms_mark('reward_press_$key'))" | Out-Null; $last = Test-Key 'reward' $key }
     }
     $log.reward_closed_by_key_tests = !$last.open
-    Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true) "E never reached the reward page's handler, so nothing is known about what it does: closed by a key test $($log.reward_closed_by_key_tests); $($log.delivered_reward_E | ConvertTo-Json -Compress)"
+    Set-Stage 'reward_keys' ($log.delivered_reward_Esc.delivered -eq $true) "Esc never reached the reward page's handler, so nothing is known about what it does: closed by a key test $($log.reward_closed_by_key_tests); $($log.delivered_reward_Esc | ConvertTo-Json -Compress)"
     $after = $last
     $log.reward_after_keys = PyJson 'ms_reward_taken()'
     if ($after.open -and $log.reward_after_keys.count -eq 0) {
@@ -218,14 +208,15 @@ try {
     }
     $log.reward_taken = PyJson 'ms_reward_taken()'
     Set-Stage 'reward_taken' ($log.reward_taken.ok -eq $true) "the reward was not taken once by a marked press: $($log.reward_taken | ConvertTo-Json -Compress)"
-    # What is left: a list with the next mission, or nothing. Esc only, on a screen that is still open: E here could accept the next mission.
+    # What is left: a list with the next mission, or nothing. Esc only, on a screen that is still open.
     if ($after.open) { $after = Test-Key 'after' 'Esc' }
     Set-Stage 'closed' ($after.open -eq $false) 'the screen is still open after Esc'
     $closed = Read-After 'closed_world' 1.0
     Py "print(ms_dump('screen'))" | Out-Null
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
 
-    # 4. The respawn: down, bleed-out, the station, the dialog. A frame about each second; Enter once the dialog has stood for about three.
+    # 4. The respawn: down, bleed-out, the station, the message. A frame about each second. The script shows it with AddTrainingText for 7 s, not a dialog box, so no key is pressed:
+    # the frames say whether it goes by itself. Ten more frames after the call.
     if (!$SkipRespawn) {
         # Downing Maya with the screen open is the crash risk: stop here unless the screen is confirmed closed.
         if ($closed.open -ne $false -or $closed.movie_playing -eq $true -or 'closed' -notin $stagesDone) { throw "the screen is not confirmed closed (open $($closed.open), movie playing $($closed.movie_playing)); not going on to the respawn" }
@@ -236,8 +227,7 @@ try {
         while ((Get-Date) -lt $deadline) {
             $row = Read-After ('respawn_{0:D2}' -f $n) 0.8; $n++
             if (!$dialogAt -and (PyJson 'ms_respawn()').dialog) { $dialogAt = $n }
-            if ($dialogAt -and $n -eq $dialogAt + 4) { Assert-GameForeground; Send-Key Enter }
-            if ($dialogAt -and $n -gt $dialogAt + 8) { break }
+            if ($dialogAt -and $n -gt $dialogAt + 10) { break }
         }
         $log.respawn_frames = $n; $log.dialog_frame = $dialogAt; $log.cash_after = $row.cash
         $log.respawn = PyJson 'ms_respawn()'

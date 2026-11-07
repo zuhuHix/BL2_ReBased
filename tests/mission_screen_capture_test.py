@@ -5,6 +5,7 @@ Run: python tests/mission_screen_capture_test.py
 """
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -349,18 +350,26 @@ def test_a_key_that_changes_the_status_ends_the_key_tests():
     assert 'keys=W,Mouse,F' in out and 'log=\n' in out.replace('\r', '') and 'count=1 status=0' in out, out
 
 
-def test_e_comes_last_on_each_page():
+def test_no_key_the_mod_handles_goes_to_the_screen():
+    # Better UI Controls: on this screen the use key's release becomes Enter, the use key's press takes the reward, and the movement keys become arrows. Those would be its behaviour.
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
-    order = ["Test-Keys 'offer' @('W', 'Mouse', 'F', 'Space') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'E'", "$accept = Test-Key 'offer' 'Enter'",
-             "Test-Keys 'turnin' @('W', 'Mouse') 3", "ms_mark('turnin_enter')", "$turned = Test-Key 'turnin' 'E'", "$turned = Test-Key 'turnin' 'Enter'",
-             "foreach ($key in 'W', 'Mouse', 'F', 'Esc', 'E')", "ms_mark('reward_press_Enter')"]
+    keys = re.findall(r"Test-Keys '\w+' @\(([^)]*)\)|Test-Key '\w+' '(\w+)'|foreach \(\$key in ('[^)]*)\) \{\n\s+if \(\$last\.open\)", stages)
+    pressed = {name for group in keys for part in group for name in re.findall(r"'(\w+)'", part) + ([part] if part.isalpha() else [])}
+    assert pressed == {'Mouse', 'F', 'Space', 'Esc', 'Enter'}, pressed
+    for mod_key in ('E', 'W', 'A', 'S', 'D'):
+        assert mod_key not in pressed
+    # The only E is the one that opens the screen from the world, and an open that moved the status stops the run.
+    assert stages.count('Send-Key E') == 0 and 'Send-Key E' in text[:text.index("$extraRoots = [ordered]@{")]
+    assert "the opening E's release reached the mod" in stages and "Set-Stage 'offer' ($row.open -eq $true -and $row.status -eq 0)" in stages
+    # F is left out of the reward page: the script inspects the selected item, and there is none.
+    assert "foreach ($key in 'Mouse', 'Space', 'Esc')" in stages
+    # Enter goes through Test-Key, so it is marked and its delivery read, and the respawn presses nothing.
+    assert 'Send-Key Enter' not in stages
+    order = ["Test-Keys 'offer' @('Mouse', 'F', 'Space') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'Enter'", "Test-Keys 'turnin' @('Mouse', 'Space') 3",
+             "ms_mark('turnin_enter')", "$turned = Test-Key 'turnin' 'Enter'", "foreach ($key in 'Mouse', 'Space', 'Esc')", "ms_mark('reward_press_Enter')", "$after = Test-Key 'after' 'Esc'"]
     places = [stages.index(needle) for needle in order]
     assert places == sorted(places), list(zip(order, places))
-    # Enter only when E did not do it; after the reward, Esc only: E could accept the next mission.
-    assert 'if ($accept.status -eq 0) {' in stages and 'if ($turned.status -eq 3) {' in stages and '$log.reward_after_keys.count -eq 0' in stages
-    assert "foreach ($key in 'E', 'Esc')" not in stages and "$after = Test-Key 'after' 'Esc'" in stages
-    assert 'Send-Key Enter' not in stages[stages.index("$esc = Test-Key"):stages.index('# 4. The respawn')], 'every Enter goes through Test-Key, so it is marked and its delivery read'
 
 
 def test_the_session_records_the_mods():
@@ -372,7 +381,7 @@ def test_the_session_records_the_mods():
 
 def test_the_capture_sees_what_each_stage_claims():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
-    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_E.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_E.delivered -eq $true)",
+    for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_F.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_Esc.delivered -eq $true)",
                    "Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0)", 'if ($log.before.status -ne 0) { throw', "if ($map -notmatch 'Sanctuary')",
                    '$null = switch ($Key)', '$esc = Test-Key'):
         assert needle in text, needle
@@ -412,7 +421,7 @@ if __name__ == '__main__':
     test_a_hook_error_is_counted_and_a_key_must_really_arrive()
     test_the_capture_sees_what_each_stage_claims()
     test_a_key_that_changes_the_status_ends_the_key_tests()
-    test_e_comes_last_on_each_page()
+    test_no_key_the_mod_handles_goes_to_the_screen()
     test_the_session_records_the_mods()
     test_the_capture_parses_and_every_stage_is_marked()
     test_the_capture_is_wired_to_the_safety_helpers()
