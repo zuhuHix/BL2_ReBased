@@ -147,6 +147,24 @@ TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOp
     return Entry;
 }
 
+FString WantedArmsSet(const FString& ViewSet, const FString& ItemType)
+{
+    if (!ViewSet.IsEmpty()) return ViewSet;
+    if (ItemType == TEXT("Assault Rifle")) return TEXT("AssaultRifle");
+    if (ItemType == TEXT("Sub-Machine Gun") || ItemType == TEXT("SMG")) return TEXT("SMG");
+    if (ItemType == TEXT("Shotgun")) return TEXT("Shotgun");
+    return TEXT("Pistol");
+}
+
+FString ResolveArmsSet(const FString& Wanted, TFunctionRef<bool(const FString& Clip)> ClipExists, TArray<FString>& OutMissing)
+{
+    OutMissing.Reset();
+    if (Wanted.IsEmpty() || Wanted == TEXT("Pistol")) return TEXT("Pistol");
+    for (const TCHAR* Clip : {TEXT("Idle"), TEXT("Run_F"), TEXT("Sprint"), TEXT("Jump_Idle"), TEXT("Jump_End"), TEXT("Draw"), TEXT("ADD_Fire_Recoil")})
+        if (!ClipExists(Clip)) OutMissing.Add(Clip);
+    return OutMissing.IsEmpty() ? Wanted : FString(TEXT("Pistol"));
+}
+
 void ResetForTests(const FString& File)
 {
     FTable& T = Table();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/Function.h"
 
 class FJsonObject;
 struct FOpenWillowWeaponPart;
@@ -16,6 +17,11 @@ namespace OpenWillowViewTypes
 // Null when the table is missing or refused, or does not know the weapon type (a gun then has no view model, as before). A slot holding
 // a part the table does not know gets no plain-named socket either: that part's own socket cannot be ruled out. An empty slot can.
 TSharedPtr<FJsonObject> ComposeEntry(const FString& WeaponType, const TArray<FOpenWillowWeaponPart>& Parts);
+
+// Which arms clip set a gun plays. Wanted: the view data's set, else by item type, else Pistol. Resolved: Wanted only if ClipExists finds every
+// clip an equip needs, else Pistol, with the missing clips in OutMissing: a partly imported set must not leave some clips null. Pistol is always whole.
+FString WantedArmsSet(const FString& ViewSet, const FString& ItemType);
+FString ResolveArmsSet(const FString& Wanted, TFunctionRef<bool(const FString& Clip)> ClipExists, TArray<FString>& OutMissing);
 
 // For tests: drop the cached table (it is read once per process) and read it from File instead.
 void ResetForTests(const FString& File = FString());

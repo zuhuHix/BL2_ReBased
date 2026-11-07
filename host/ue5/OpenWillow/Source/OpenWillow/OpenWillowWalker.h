@@ -438,6 +438,7 @@ private:
         FString ArmsAnimSet;
     };
     mutable TMap<FString, FViewModel> ViewModels;
+    FString HeldArmsSet = TEXT("Pistol");  // the clip set chosen at equip; a reload plays from the same one
     bool bViewModelActive = false;      // foreground FOV on (the default; -owfpfov=0 turns it and the offsets off)
     bool bViewFovForced = false;        // -owfpfov=<n> given: that value for every weapon
     float ViewFovDefault = 45.f;        // horizontal degrees
