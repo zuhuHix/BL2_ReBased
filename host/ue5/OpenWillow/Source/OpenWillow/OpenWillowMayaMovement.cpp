@@ -53,8 +53,10 @@ float SprintFov(float BaseFovDegrees)
     return FMath::RadiansToDegrees(2.f * FMath::Atan(FMath::Tan(FMath::DegreesToRadians(BaseFovDegrees) * 0.5f) * Factor));
 }
 
-float AimedFov(float ZoomFovDegrees, float Aspect, float Bl2FovSetting)
+float AimedFov(float ZoomFovDegrees, float Aspect, float Bl2FovSetting, float FallbackDegrees)
 {
+    const auto IsAngle = [](float Degrees) { return FMath::IsFinite(Degrees) && Degrees > 1.f && Degrees < 180.f; };
+    if (!IsAngle(ZoomFovDegrees) || !IsAngle(Bl2FovSetting) || !FMath::IsFinite(Aspect) || Aspect <= 0.f) return FallbackDegrees;
     const auto TanHalf = [](float Degrees) { return FMath::Tan(FMath::DegreesToRadians(Degrees) * 0.5f); };
     const float Scale = TanHalf(LiveDefaultFov) / TanHalf(GlobalDefaultFov) * (TanHalf(Bl2FovSetting) / TanHalf(90.f));
     return FMath::RadiansToDegrees(2.f * FMath::Atan(TanHalf(ZoomFovDegrees) * Scale * Aspect));

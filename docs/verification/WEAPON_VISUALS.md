@@ -780,12 +780,16 @@ AI-assisted (Claude Opus 5.5). The host passed a weapon's zoom value straight to
 
 | Check | Rifle | Shotgun |
 |---|---|---|
-| Live camera value, against the rule's scale | fits to 4 places on all five guns read | same |
+| Live `CachedFOVAngle` against the rule's scale, a field read and not a rendered angle | fits to 4 places | same |
 | Hip-to-zoom magnification from one view's frames: measured, and from the live values | 1.71, 1.69 | 1.21, 1.21 |
 | World shift over a 4-degree turn at full zoom: measured, if vertical, if horizontal | 54, 53, 94 px | 38.5, 38, 68 px |
 | Horizontal angle from that shift, and from the rule | about 79.5, 80.4 | about 98.5, 99.3 |
 
-The tangent-scale form also matches the native note on `GetFOVAngle` (`NATIVE_PLAYER_MOVEMENT.md`). UNVERIFIED: other zoom values (sniper and SMG scopes are far from these two), other aspects, and scaling with another FOV setting, which is the host's assumption.
+That field read also fits the slice pistol, slice SMG and Hyperion pistol, five guns in all; only the rifle and shotgun were checked by rendered frames, so the scoped SMG's zoom is a field read only. The tangent-scale form also matches the native note on `GetFOVAngle` (`NATIVE_PLAYER_MOVEMENT.md`). UNVERIFIED: other zoom values (sniper and SMG scopes are far from these two), other aspects, and scaling with another FOV setting, which is the host's assumption.
+
+**Open, UNVERIFIED, not changed here.** `ScorePhaselockTarget` still scores from the FOV setting at a fixed 4:3 while the camera shows the aimed FOV; what the game does while aimed is unknown.
+
+The aspect is read from the viewport while aiming, so a resized window aims correctly. The hip FOV is still set once at start-up, as before. A zoom that cannot give an angle falls back to hip.
 
 **Effects to expect.** Every aimed world frame moves: the rifle's world about 80 degrees where it was 45, and an SMG scope about 49 where it was 25. Hand-drawn scope overlays do not change. The view kick scales with the camera's FOV (`OpenWillowWalker.cpp`, the `FovRatio` term), so it changes while aiming, on a rifle from about 0.31 of hip to about 0.63, against about 0.59 in the real game's values. The hip FOV stays about 4 degrees narrower than the real one; not part of this change.
 

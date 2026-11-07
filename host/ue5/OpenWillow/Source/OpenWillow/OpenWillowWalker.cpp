@@ -1233,7 +1233,14 @@ void AOpenWillowWalker::UpdateAim(float Now)
     AimAlpha = FMath::Lerp(AimTransitionStartAlpha, AimTransitionTargetAlpha, Progress);
     FViewModel* Model = FindViewModel(Item);
     // The world's FOV only; the arms and gun keep the foreground FOV. The rule and how it was confirmed: OpenWillowMovement::AimedFov.
-    const float ZoomFov = Model && Model->ZoomFov > 1.f ? OpenWillowMovement::AimedFov(Model->ZoomFov, CameraAspect, Bl2FovSetting) : WorldFovDefault;
+    float AimAspect = CameraAspect;  // the window as it is now: it can be resized after start-up
+    if (GEngine && GEngine->GameViewport)
+    {
+        FVector2D AimViewport = FVector2D::ZeroVector;
+        GEngine->GameViewport->GetViewportSize(AimViewport);
+        if (AimViewport.Y > 1.f) AimAspect = AimViewport.X / AimViewport.Y;
+    }
+    const float ZoomFov = Model ? OpenWillowMovement::AimedFov(Model->ZoomFov, AimAspect, Bl2FovSetting, WorldFovDefault) : WorldFovDefault;
     const float BaseFov = BaseFovNow > 1.f ? BaseFovNow : WorldFovDefault;   // the sprint FOV eases this (TickMovement)
     Camera->SetFieldOfView(FMath::Lerp(BaseFov, ZoomFov, AimAlpha));
     if (ScopeOverlayWidget)
