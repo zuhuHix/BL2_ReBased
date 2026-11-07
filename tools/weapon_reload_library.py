@@ -10,6 +10,7 @@ depend on a live threshold no table holds.
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -42,9 +43,19 @@ def reload_plan(types):
 
 
 def unusable_sets(plan):
-    """The sets the step cannot finish, each with its reason: a set with no reload clip would write an empty file and look done."""
-    return [f'{name}: no reload clip' if not row['clips'] else f'{name}: no mesh'
-            for name, row in plan.items() if not row['clips'] or not row['mesh']]
+    """The sets the step cannot finish, each with its reason: a set with no reload clip would write an empty file and look done.
+
+    Names from the table become file names, so each must be one plain path component, whoever wrote the table.
+    """
+    problems = []
+    for name, row in plan.items():
+        if not row['clips']:
+            problems.append(f'{name}: no reload clip')
+        if not row['mesh']:
+            problems.append(f'{name}: no mesh')
+        names = [name, row['kind']] + ([row['mesh']] if row['mesh'] else []) + list(row['clips'])
+        problems += [f'{name}: {value!r} is not a plain name' for value in names if not re.fullmatch(r'[A-Za-z0-9_]+', value)]
+    return problems
 
 
 def arms_clips(clip_set, reloads):
@@ -102,6 +113,13 @@ def main(argv=None, repo=ROOT):
     problems = unusable_sets(plan) if plan else ['the table has no clip set']
     problems += [f'no reference pose {path}' for path in
                  [args.references / f"{row['kind']}.json" for row in plan.values()] + [args.arms_reference] if not path.is_file()]
+    targets = {}
+    if not problems:
+        try:
+            for clip_set, row in plan.items():
+                targets[clip_set] = (local_output(weapons / f"{row['kind']}.json", repo=repo), local_output(arms / f'{clip_set}.json', repo=repo))
+        except ValueError as error:
+            problems.append(str(error))
     if problems:
         print('Nothing written: ' + '; '.join(problems), file=sys.stderr)
         return 1
@@ -126,7 +144,7 @@ def main(argv=None, repo=ROOT):
         if present:
             mesh = exports / 'Startup' / 'SkeletalMesh3' / f"{row['mesh']}.md5mesh"
             result = converter.convert(mesh, args.references / f'{kind}.json', present, anchor=None, allow_subset=True)
-            output = weapons / f'{kind}.json'
+            output = targets[clip_set][0]
             output.write_text(json.dumps(result), encoding='utf-8')
             weapon_pairs.append(f'{kind}={output}')
 
@@ -135,7 +153,7 @@ def main(argv=None, repo=ROOT):
         missing_any = missing_any or bool(missing)
         if present:
             result = converter.convert(arms_mesh, args.arms_reference, present, anchor='Camera')
-            output = arms / f'{clip_set}.json'
+            output = targets[clip_set][1]
             output.write_text(json.dumps(result), encoding='utf-8')
             arms_pairs.append(f'{clip_set}={output}')
 

@@ -98,6 +98,25 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 1, text)
             self.assertFalse(self.out.exists())
 
+    def test_a_path_in_the_table_writes_nothing_and_cleans_nothing(self):
+        sentinel = self.repo / 'docs/sentinel.txt'
+        sentinel.write_text('kept', encoding='utf-8')
+        old = self.out / 'weapons/Old.json'
+        old.parent.mkdir(parents=True)
+        old.write_text('kept', encoding='utf-8')
+        outside = str(self.repo / 'docs/evil')
+        good = self.TYPES['WT.A']
+        for types in ({'WT.A': dict(good, weapon_anim_set=outside)},
+                      {'WT.A': dict(good, weapon_anim_set='..\\..\\..\\docs\\evil')},
+                      {'WT.A': dict(good, socket_table='Pkg.' + outside.replace('.', '_'))},
+                      {'WT.A': dict(good, reload_animation='..\\evil')}):
+            code, text = self.run_main(types)
+            self.assertEqual(code, 1, text)
+            self.assertIn('not a plain name', text)
+            self.assertEqual(sorted(p.name for p in (self.repo / 'docs').iterdir()), ['sentinel.txt'])
+            self.assertEqual(sentinel.read_text(encoding='utf-8'), 'kept')
+            self.assertEqual(old.read_text(encoding='utf-8'), 'kept', 'refused before the cleanup')
+
     def test_a_missing_reference_fails_before_anything_is_written(self):
         (self.refs / 'Shotgun.json').unlink()
         code, text = self.run_main(self.TYPES)
