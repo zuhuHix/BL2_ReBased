@@ -109,6 +109,10 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestEqual(TEXT("another section is not read"), FOpenWillowRespawnFee::Message(None, 5), FString(TEXT("Fee: $5")));
         TestFalse(TEXT("the neutral text says so"), None.bLoaded);
         TestFalse(TEXT("two of three strings is not loaded"), FOpenWillowRespawnFee::ParseStrings(TEXT("[WillowHUD]\nRespawnDialogTitleString=T\nRespawnDialogString=B\n")).bLoaded);
+        TestFalse(TEXT("a repeated string does not stand in for a missing one"), FOpenWillowRespawnFee::ParseStrings(TEXT("[WillowHUD]\nRespawnDialogTitleString=T\nRespawnDialogString=B\nRespawnDialogString=C\n")).bLoaded);
+        const FOpenWillowRespawnFee::FStrings Empty = FOpenWillowRespawnFee::ParseStrings(TEXT("[WillowHUD]\nRespawnDialogTitleString=T\nRespawnDialogString=B\nRespawnDialogFeeWaivedString=\n"));
+        TestFalse(TEXT("an empty string is not found"), Empty.bLoaded);
+        TestEqual(TEXT("an empty string keeps the neutral text"), Empty.Waived, None.Waived);
         const FOpenWillowRespawnFee::FStrings Read = FOpenWillowRespawnFee::ParseStrings(TEXT("[WillowHUD]\r\nRespawnDialogTitleString=T\r\nRespawnDialogString=Paid %c\\n\\nDone\r\nRespawnDialogFeeWaivedString=Free\r\n"));
         TestEqual(TEXT("the title is read"), Read.Title, FString(TEXT("T")));
         TestTrue(TEXT("all three strings is loaded"), Read.bLoaded);
@@ -119,6 +123,7 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         const TArray<FString> Cut = FOpenWillowRespawnFee::WrapLines(TEXT("a bbbbbbb c"), 3, 10);
         TestTrue(TEXT("a word too long for a line is cut"), Cut == TArray<FString>({TEXT("a"), TEXT("bbb"), TEXT("bbb"), TEXT("b c")}));
         TestEqual(TEXT("the line count is limited"), FOpenWillowRespawnFee::WrapLines(TEXT("a\nb\nc\nd"), 3, 2).Num(), 2);
+        TestEqual(TEXT("a long word stops at the limit too"), FOpenWillowRespawnFee::WrapLines(TEXT("bbbbbbbbbbbbbbbbbbbb"), 3, 2).Num(), 2);
         FOpenWillowRespawnFee Fee;
         Fee.Schedule(10.f);
         Fee.Tick(21.f, nullptr);
