@@ -213,8 +213,17 @@ decision before implementation.
   `vgmstream-win64.zip`, 4,574,355 bytes, SHA-256 `692d45070852a35c1fa42726aa3c9de528e44eec925d37d99b1074256b99a229`, matching the digest GitHub publishes for
   that asset. `vgmstream-cli.exe` SHA-256 `10fb0691538d3133f0115a071f89775fc99f32210b7e5991cfc3c2869247e4b2` (not digitally signed; Smart App Control did not block it on the
   development machine). Unpacked outside the repository at `C:\Users\yorad\Tools\vgmstream\r2168\bin`.
-- **Licence:** ISC-style permission notice, per the bundled `COPYING`. The CLI needs the DLLs bundled with it (it does not start with only `libvorbis.dll`), and they keep their own
-  licences, per `ext_libs/licenses` at that tag: libvorbis and libogg (BSD-style), speex and celt (BSD-style), mpg123 (LGPL-2.1), and FFmpeg-derived libraries (LGPL files for FFmpeg 9.0.2).
+- **Licence:** vgmstream itself: ISC-style permission notice, with the portions named in the bundled `COPYING`. The CLI needs the DLLs bundled with it (it does not start with only `libvorbis.dll`), and they keep
+  their own licences. Compared on 2026-11-07: all nine files in `ext_libs/licenses` at that tag, the "External libraries" section of `doc/BUILD.md` at that tag, and the import tables and version strings of the nine bundled DLLs and of the CLI:
+  - `libvorbis.dll`: libvorbis 1.3.7 with libogg 1.3.5 inside it, BSD-style (`libvorbis-1.3.7.COPYING`, `libogg-1.3.5.COPYING`).
+  - `avcodec-`, `avformat-`, `avutil-` and `swresample-vgmstream-*.dll`: FFmpeg, LGPL (`ffmpeg-9.0.2.COPYING.LGPLv2.1`, `.LGPLv3`). The DLL's own licence string reads "LGPL version 2.1 or later"; `doc/BUILD.md` says "primarily" LGPL "with portions licensed under the GPL v2", and I found no GPL configure flag or licence string in the binary.
+    `doc/BUILD.md` also still names FFmpeg n5.1.2 while the licence files name 9.0.2: unresolved upstream, recorded as found.
+  - libopus 1.6.1 is statically inside `avcodec-vgmstream-63.dll` (its version string is there; `doc/BUILD.md`, "part of FFmpeg"), BSD-style (`opus-1.6.1-COPYING`). It has no DLL of its own.
+  - `libmpg123-0.dll`: mpg123 1.33.7, LGPL-2.1 (`mpg123-1.33.7-COPYING`).
+  - `libcelt-0061.dll` and `libcelt-0110.dll`: CELT 0.6.1 and 0.11.0. BSD-style per their licence files (`celt-0.6.1.COPYING`, `celt-0.11.0.COPYING`), though `doc/BUILD.md` says MIT; the files are taken as the record.
+  - `libspeex-1.dll`: Speex 1.2.1, BSD-style (`speex-1.2.1.COPYING`).
+
+  Every licence file is matched to a binary and every binary to a licence file. The zip itself ships only `COPYING`, not those files. None of these is redistributed by this project.
 - **Use:** external execution only. `tools/decode_slice_audio.py` runs it on the player's own game files, with an explicit path or `OPENWILLOW_VGMSTREAM`, to write PCM WAV under ignored
   `local/` for the UE5 host. Not a dependency of the build: nothing links it, no binary or code from it is in the repository, the script never downloads it, and no decoded output is tracked.
   Each player obtains it themselves. Benchmark: `docs/verification/SLICE_AUDIO_CHAIN.md` section 3.
