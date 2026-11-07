@@ -438,6 +438,12 @@ window.addEventListener('keydown', event => {
   } else if (event.key.toLowerCase() === 'i') {
     event.preventDefault();
     location.href = '/__ow_tab_inventory';
+  } else if (event.key.toLowerCase() === 'm') {   // M and L went to the stock Map and log from Skills (read live, one press each)
+    event.preventDefault();
+    location.href = '/__ow_tab_map';
+  } else if (event.key.toLowerCase() === 'l') {
+    event.preventDefault();
+    location.href = '/__ow_tab_missions';
   } else if (event.key === 'Enter') {
     event.preventDefault();
     if (!overview) spendSelected();

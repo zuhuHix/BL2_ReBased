@@ -204,8 +204,9 @@ function close() { location.href = '/__ow_close_missions'; }
 window.addEventListener('keydown', event => {
   if (event.altKey || event.ctrlKey || event.metaKey) return;
   const key = event.key.toLowerCase();
-  if (key === 'escape' || key === 'tab' || key === 'l') { event.preventDefault(); close(); return; }
-  // M on the stock log went to the Map (read live, one press).
+  if (key === 'escape' || key === 'tab') { event.preventDefault(); close(); return; }
+  if (key === 'l') { event.preventDefault(); return; }   // L stayed on the stock log (read live, one press); its hint offers Escape
+  // M on the stock log went to the Map (read live, twice).
   if (key === 'm') { event.preventDefault(); location.href = '/__ow_tab_map'; return; }
   if (!ready || !snapshot) return;
   if (key === 'arrowup') { event.preventDefault(); window.extLogUp(); }

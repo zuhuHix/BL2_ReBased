@@ -3899,3 +3899,9 @@ AI-assisted (Claude). Record: [docs/verification/CONTROLS.md](docs/verification/
 parsing change. A swing holds the weapons for 0.70 s and its clip is looked for in the Siren's set. A status page no longer cancels a swing, as the one read showed;
 a hit due after the page opened lands under it in the host, UNVERIFIED because the game pauses there. M and L refuse while Maya is down. M no longer closes the Map page and
 goes to the Map from the Missions page. A passing `tools/test_controls.ps1` means the host did this.
+
+## 2026-11-07: the second real-game read: the stock use prompt, and keys on open pages (controls lane)
+
+AI-assisted (Claude). Record: [docs/verification/CONTROLS.md](docs/verification/CONTROLS.md). Host change, no parsing change. L stays on the Missions page and M and L route from
+Skills, as read live; a page cannot route to the Map or Missions with Maya down. The prompt's frames and words for a shop, a pawn, a use machine and a chest held. The melee damage
+rule and knockback held on one hit on a box. The read supports the view-ray note against the host's nearest-target rule; that rule is unchanged here and stays open.

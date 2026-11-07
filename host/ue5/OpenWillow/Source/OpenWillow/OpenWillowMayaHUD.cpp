@@ -1566,7 +1566,14 @@ void AOpenWillowMayaHUD::DrawHUD()
         const EOpenWillowStatusPage Current = bInventoryOpen ? EOpenWillowStatusPage::Inventory
             : bMissionsOpen ? EOpenWillowStatusPage::Missions : bMapOpen ? EOpenWillowStatusPage::Map : EOpenWillowStatusPage::Skills;
         PendingTabSwitch = 0;
-        if (SkillsBrowser && To != Current && (To != EOpenWillowStatusPage::Missions || !MissionsUrl.IsEmpty())
+        // As the keys (ToggleMapOrMissionsPage): a page opened before Maya went down cannot route to these. The inventory and skills tabs are the inventory lane's.
+        const AOpenWillowWalker* DownMaya = PlayerOwner ? Cast<AOpenWillowWalker>(PlayerOwner->GetPawn()) : nullptr;
+        if (SkillsBrowser && To != Current && (To == EOpenWillowStatusPage::Map || To == EOpenWillowStatusPage::Missions) && DownMaya && DownMaya->IsDown())
+        {
+            ++TabRoutesRefusedWhileDown;
+            UE_LOG(LogTemp, Display, TEXT("OWCONTROLS page route refused: Maya is down"));
+        }
+        else if (SkillsBrowser && To != Current && (To != EOpenWillowStatusPage::Missions || !MissionsUrl.IsEmpty())
             && (To != EOpenWillowStatusPage::Map || !MapUrl.IsEmpty()))
         {
             CloseSkills();

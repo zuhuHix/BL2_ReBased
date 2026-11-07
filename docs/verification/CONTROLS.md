@@ -23,12 +23,12 @@ Host rules, **UNVERIFIED**:
 
 - With every page closed, the key opens its page. The script reaches the stock menu through `ShowStatusMenu` with a chosen first
   screen (`WillowPlayerController.ShowMap`), and it refuses through `CanShowModalMenu`, whose conditions were not read.
-- While Maya is down M and L refuse. In the real game neither opened anything (one press each), and the set of actions allowed while down
-  holds no menu. The host's inventory and skills keys still open while down; those belong to the inventory lane.
-- With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. In the real game M on the open Map left it open,
-  and M on the log went to the Map (one press each; the log itself was not seen, only the screen asked for). So `map.js` no longer closes on M and
-  `missions.js` goes to the Map on it. L on the Map and M or L on the Inventory and Skills were not read: the capture's later rows were spoiled by a
-  pause menu and a dialog, and those pages' keys are unchanged.
+- While Maya is down M and L refuse. In the real game neither opened anything (twice each), and the set of actions allowed while down holds no menu. A page
+  already open when she went down cannot route to the Map or Missions either, the same rule (a host choice: a stock page over going down was not read). The host's
+  inventory and skills keys still open while down; those belong to the inventory lane.
+- With a page holding the keyboard, a real key goes to the page's own script, not to these bindings. In the real game M stayed on the Map (twice) and went to the Map
+  from the log (twice) and from Skills (once); L went to the log from the Map, the Inventory and Skills (once each) and stayed on the log (once). So `map.js`, `missions.js`
+  and `skills.js` follow that. `inventory.js` has no L route yet, which belongs to the inventory lane; M on the Inventory was not read, as a dialog took the key.
 
 ## Melee
 
@@ -46,16 +46,17 @@ swing, so all of it is **UNVERIFIED** until the real-game read in `tools/real_ga
   best-lined candidate in range with a clear line. Its numbers are in `OpenWillowMelee.h`.
 - Damage is `Init_PlayerMeleeDamage`: 2.5 x (8 x 1.13^level) plus a melee buff attribute. Normal damage type, melee damage source.
 
-**What the real-game read says** (`tools/real_game/controls_capture.ps1`, one session, 2026-11-07, few samples; data under ignored `local/`):
+**What the real-game reads say** (`tools/real_game/controls_capture.ps1`, two sessions, 2026-11-07; data under ignored `local/`; counts are over both):
 
-- Confirmed by pressing: V reaches the melee behaviour, M and L the status menu on the Map and on the log. The hit ran about 0.29 s after the press
-  over 5 swings, through the Siren's definition. A press 0.37 s into a swing started nothing and was not queued, and one just after a swing ended
-  started another (one sample each). A swing ran while Maya was down (one sample).
-- A swing holds the weapons for 0.70 s, on every swing seen, which is the length of the `Melee` clip in the Siren's first-person anim set.
-- A status menu opened 0.18 s into a swing did not cancel it, and the hit behaviour still ran, 0.30 s after the press (one sample). The game clock then
-  nearly stopped under the menu, and the swing ended once it had closed.
-- Not read: damage, knockback, reach and cone against a target, and whether a weapon key is refused in a swing. The attempt to swing at a pawn did not
-  move Maya to it (a bug in the capture).
+- V reaches the melee behaviour (15 swings). The hit ran 0.29 to 0.30 s after the press, on all 15, through the Siren's definition. A press about 0.4 s into a
+  swing started nothing and was not queued (twice), and one just after a swing ended started another (twice). A swing ran about 6 s after Maya went down (twice).
+- A swing holds the weapons for 0.70 s, on all 15, which is the length of the `Melee` clip in the Siren's first-person anim set.
+- A status menu opened about 0.18 s into a swing did not cancel it, and the hit behaviour still ran at 0.30 s (twice). The game clock then nearly stopped under the
+  menu, and the swing ended once it had closed.
+- A swing at a cardboard box from 120 uu hit it once: 53.17 damage at level 8, which is the formula above with no buff; melee damage source, the definition as the
+  causer, and a horizontal momentum of 10,000 away from Maya, which is the knockback factor (one hit). A swing at a friendly pawn from the same distance made no
+  damage call on it (one swing). Reach, the cone and the trace's order against a target were not tested.
+- Not read: whether a weapon key is refused in a swing.
 
 **What the host does:** V starts a swing (`OpenWillowMelee.cpp`). It stops a reload, ends the aim and blocks the trigger, reload and
 Phaselock and a throw until the clip's length ends (they are refused, not queued), and ends a burst in progress. 0.30 s after the press the hit lands through `ApplyShotDamage`, so targets and listeners see
@@ -67,10 +68,8 @@ a wall ends the swing there.
 - The first-person clip is **not imported** yet: `tools/import_maya_combat_anims.ps1` now names it, and running that (an editor run) is the step left.
   Until then `MeleeAnim` logs the usual "arms animation not found" warning and the swing has no visible arm, for the 0.70 s the game holds the weapons.
 - The swing's origin and direction use the camera, since the stock source is a native interface call.
-- The cone's use of the angle (not halved) is the low-confidence reading in `NATIVE_AI_MELEE.md`, and the knockback factor is from
-  a bullymong's radius melee.
-- While down the input set still holds melee, and the host applies the trigger's weapon-ready rule. Whether a stock swing works
-  there is unread.
+- The cone's use of the angle (not halved) is the low-confidence reading in `NATIVE_AI_MELEE.md`.
+- While down the host applies the trigger's weapon-ready rule. A stock swing does work down (twice, about 6 s after going down); how soon is unread.
 - No critical hits, camera anim, hit sound, view shake, third-person move, melee weapon mesh, melee damage modifiers or skill
   overrides. Cloud Kill and Immolate act only on Bullet and Rocket sources, so a swing does not proc them. Other hit handling does see
   it: Life Tap applies to any hit that is neither a skill's nor a status effect's, and a melee kill reaches the generic kill
@@ -99,11 +98,17 @@ since the host only drives the clip.
 `PickupNearby`: Marcus, then an aimed pickup, then the nearest target. The exception: when the named target refuses a press (a full ammo
 pool, say) the press passes to the next target, which the prompt did not name.
 
-**Which target should win stays open.** `NATIVE_USE_INTERACTION.md` (read from native code, not confirmed in play) says the game casts one
+**Which target should win stays open.** `NATIVE_USE_INTERACTION.md` (read from native code) says the game casts one
 ray along the view and takes the first usable thing it hits, with no distance rule and no priority between kinds, and that a current
 pickupable wins the key. The host's nearest-target rule is a stand-in that also reaches things Maya is not looking at. This work does not
-change it; the capture reads the prompt with the view turned off a target. Aiming at a pickup with an interactive in reach is not in the
-capture, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
+change it. The real-game read supports the note: standing 120 uu from a usable thing and turning 15 to 30 degrees away, the usable went to none on 8 of 11 targets,
+with the thing still in reach and nothing else taking over. The other 3 stayed usable, and why was not checked (the ray may still have hit them). So the game appears to follow the view; the host's rule also reaches things Maya is not
+looking at. Aiming at a pickup with an interactive in reach was not read, since Sanctuary has no loose pickup to stand at: **UNVERIFIED**.
+
+**The stock prompt, read live** (the clip, its frame and its text, with screenshots; one target per kind): `[E] SHOP` on a vending machine (frame `shop`), `[E] TALK` on a pawn
+(`talk`), `[E] USE` on the character customization machine and the bounty board (`use`), `[E] OPEN` on a golden chest (`open`), with its key cost after it in a red `(1)`. So the
+host's frames and words hold for those. Others have their own: a radio's `[E] CHANGE STATION` with a second prompt `[Q] TURN OFF` on `toolsSecondary` below it, a mission object's
+own words on `objective`. Not read: a door, a strongbox (no usable from the spot tried), a loose pickup or gun. Costs, the secondary prompt and per-object words are not driven.
 
 **The reward page** takes the press before anything else (`UOpenWillowQuest::TryUse`), so no world prompt shows over it. It should carry its
 own wording, the stock reward screen's confirmation in the movie, not `p1.tools`: **UNVERIFIED**, and not built here. In the host the use key
@@ -132,7 +137,7 @@ writes the key (`[E]` is a host choice), whether a lootable says something other
   (one melee hit event, of the expected damage), `v_misses_target_behind` and `v_misses_target_out_of_reach` (the swing did start),
   `page_does_not_cancel_swing`, `v_refused_in_grenade_lockout`, `g_refused_during_swing`, `holster_refused_during_swing`, `v_stops_reload_before_refill`,
   `v_keeps_refill_after_it`, `burst_ends_on_swing`, `prompt_nothing_in_open_air`, `prompt_marcus_over_world_target`, `prompt_aimed_pickup`,
-  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=28 failed=0`.
+  `e_takes_the_named_pickup`, `down_cancels_swing`, `prompt_nothing_while_down`, `m_refused_while_down`, `l_refused_while_down`, `route_refused_while_down`, `closed_at_end`, then `OWCONTROLS SUMMARY passed=29 failed=0`.
   Refusal rows count the refusal itself, so a press that never arrived fails them; the reload rows require the reload to have started.
   A shop during a swing has no row.
   `tools/check_controls.py` grades the run's own log: the expected count, failed=0 and each expected row exactly once as PASS.

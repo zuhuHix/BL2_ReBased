@@ -50,7 +50,7 @@ captures under ignored `local/inv24/mapshots/`. Nothing below was observed in th
 - Pan is limited so the map point under the crosshairs stays inside the map movie's own rectangle (`getRect`) at the current
   zoom, re-applied after a zoom and when Maya moves (host rule; the game clamps natively, UNVERIFIED).
 - Tabs from the Map: 1 Missions, 3 Inventory, 4 Skills, 5 nothing (no Challenges page), Comma Missions, Period Inventory,
-  Escape / Tab close, and M does nothing (one press in the real game, CONTROLS.md); I, K, L as on the other pages. The Inventory's key 2, Comma and its Map tab now open this page.
+  Escape / Tab close, and M does nothing (twice in the real game, CONTROLS.md); I, K, L as on the other pages. The Inventory's key 2, Comma and its Map tab now open this page.
 
 ## Checks
 
