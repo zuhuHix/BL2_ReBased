@@ -475,6 +475,27 @@ def test_saves_are_proved_blocked_before_any_input_and_nothing_bypasses_the_focu
     assert block in body
 
 
+def test_stale_event_files_move_aside_before_the_run_and_keep_their_contents():
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    start = text.index('# Stale evidence:')
+    block = text[start:text.index('# End of stale event files.')]
+    assert start < text.index('Enter-RunLock')
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / 'events_phaselock_try2.jsonl').write_text('{"old": 1}', encoding='utf-8')
+        (Path(tmp) / 'other.txt').write_text('stays', encoding='utf-8')
+        script = Path(tmp) / 'stale.ps1'
+        script.write_text(f"$ErrorActionPreference = 'Stop'\n$Out = '{tmp}'\n{block}", encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert not list(Path(tmp).glob('events_*.jsonl')) and (Path(tmp) / 'other.txt').exists()
+        kept = list(Path(tmp).glob('earlier-*/events_phaselock_try2.jsonl'))
+        assert len(kept) == 1 and 'old' in kept[0].read_text(encoding='utf-8')
+        # A second pass with nothing stale makes no empty folder.
+        before = sorted(p.name for p in Path(tmp).iterdir())
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0 and sorted(p.name for p in Path(tmp).iterdir()) == before
+
+
 def test_all_four_roots_are_protected():
     text = CAPTURE.read_text(encoding='utf-8')
     for needed in ('$snapshots[$d] = Assert-SnapshotMatches', '$snapshots[$d] = New-VerifiedSnapshot', 'Save-VerifiedBackupRecord $bak $roots $snapshots',
