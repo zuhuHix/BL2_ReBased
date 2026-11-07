@@ -18,6 +18,16 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
+# Asked-for guns first: a run refused here touches no evidence.
+$Recipes = @($Recipes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$guns = [ordered]@{}
+foreach ($recipe in $Recipes) {
+    $id = [IO.Path]::GetFileNameWithoutExtension($recipe)
+    if ($id -notmatch '^[A-Za-z0-9_]+$') { throw "gun id '$id' is not of the form [A-Za-z0-9_]+" }
+    if (!(Test-Path -LiteralPath (Join-Path $script:Repo $recipe) -PathType Leaf)) { throw "no recipe $recipe in this checkout" }
+    $guns[$id] = $recipe -replace '\\', '/'
+}
+if (!$guns.Count) { throw 'no guns asked for' }
 $Out = Join-Path $script:RG 'gun_ads'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind, and an earlier run's frame must not pass for this one's.
@@ -35,6 +45,31 @@ function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json
 # A string as a JSON string literal, which Python reads as the same str: arguments never become source code.
 function Q([string]$Text) { ConvertTo-Json -InputObject $Text -Compress }
 
+# A gun's frame: the game in front before it, and still in front after it, without a second try: one that needed bringing back may show another window.
+function Save-GunFrame([string]$Name) {
+    Assert-GameForeground
+    $frame = Save-Shot $Name
+    if ((Get-ForegroundWindowHandle) -ne (Get-RunGameProcess).MainWindowHandle) { throw "the game lost the foreground during $Name" }
+    $frame
+}
+
+# After the zoom is let go: wait for the settled state, so the next gun starts from it. Returns the last read.
+function Wait-Unzoomed {
+    for ($i = 0; $i -lt 50; $i++) {
+        $read = PyJson 'ads_read()'
+        if ($read.zoom_state -ceq 'ZST_NotZoomed') { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $read
+}
+
+# Python errors come back as text; a line that must succeed cannot ignore them.
+function PyOk([string]$Code, [int]$Timeout = 30) {
+    $reply = Py $Code $Timeout
+    if ($reply -match 'Traceback') { throw "game command failed: $reply" }
+    $reply
+}
+
 # Lane E's zoom: the right button held, and read back live. The press is always released, and this returns only once it is.
 function Save-AimedFrame([string]$Gun) {
     $result = [ordered]@{}
@@ -48,27 +83,17 @@ function Save-AimedFrame([string]$Gun) {
         }
         Start-Sleep -Milliseconds 300
         $result.sample = Py "print(wp_sample($(Q "${Gun}_ads")))"
-        $result.frame = Save-Shot "gun_ads/${Gun}_ads.png"
+        $result.frame = Save-GunFrame "gun_ads/${Gun}_ads.png"
         $result.after = PyJson 'ads_read()'
     } finally { Send-MouseEvent 0x10 }
     [pscustomobject]$result
 }
 
-$Recipes = @($Recipes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-$guns = [ordered]@{}
-foreach ($recipe in $Recipes) {
-    $id = [IO.Path]::GetFileNameWithoutExtension($recipe)
-    if ($id -notmatch '^[A-Za-z0-9_]+$') { throw "gun id '$id' is not of the form [A-Za-z0-9_]+" }
-    if (!(Test-Path -LiteralPath (Join-Path $script:Repo $recipe) -PathType Leaf)) { throw "no recipe $recipe in this checkout" }
-    $guns[$id] = $recipe -replace '\\', '/'
-}
-if (!$guns.Count) { throw 'no guns asked for' }
-
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @($guns.Keys)
+$stagesRequested = @($guns.Keys) + 'gun_cleanup'
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -124,6 +149,9 @@ try {
     $seed = Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/weapon_parity_probe.py') gun_ads 60
     if ($seed -match 'Traceback') { throw "probe seed failed: $seed" }
     Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/gun_ads_probe.py') gun_ads | Out-Null
+    # The record says Maya at this level, so it must be so before any frame.
+    $log.character = PyJson 'ads_character()'
+    if (!$log.character.is_maya -or $log.character.level -ne $Level) { throw "not Maya at level $Level`: $($log.character | ConvertTo-Json -Compress)" }
     $log.wall = PyJson 'wp_face_wall()' 60
     Save-Shot 'gun_ads/wall.png' | Out-Null
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
@@ -142,25 +170,26 @@ try {
             Py 'print(wp_reface())' | Out-Null; Start-Sleep 2
             $g.idle = PyJson 'ads_read()'
             Py "print(wp_sample($(Q "${id}_idle")))" | Out-Null
-            $g.idle_frame = Save-Shot "gun_ads/${id}_idle.png"
+            $g.idle_frame = Save-GunFrame "gun_ads/${id}_idle.png"
             $g.ads = Save-AimedFrame $id
-            Start-Sleep 2
-            $g.released = PyJson 'ads_read()'
-            Set-Stage $id ((!$g.idle.zoomed) -and $g.ads.before.zoomed -and ($g.ads.before.zoomed_rate -eq 0) -and $g.ads.after.zoomed) 'the idle frame was zoomed, or the ADS frame was not fully zoomed'
+            $g.released = Wait-Unzoomed
+            Set-Stage $id (($g.idle.zoom_state -ceq 'ZST_NotZoomed') -and $g.ads.before.zoomed -and ($g.ads.before.zoomed_rate -eq 0) -and $g.ads.after.zoomed -and ($g.released.zoom_state -ceq 'ZST_NotZoomed')) 'the idle frame was zoomed, the ADS frame was not fully zoomed, or the zoom did not settle after release'
         } catch { $g.error = "$_"; Set-Stage $id $false "$_" }
         "gun $id`: held $($g.held_as), idle $($g.idle.zoom_state), ADS $($g.ads.after.zoom_state) $($g.error)"
         $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
     }
 
-    # Spawned guns go before the quit (TOOLING.md). A failure here costs no frame: saves are blocked and restored anyway.
+    # Spawned guns go before the quit (TOOLING.md). A gun left in the game is a failed run, though the frames stand and the saves are restored anyway.
     try {
         # As lane E: a slot the hand is not on first, then the hand moves there, then the rest. wp_cleanup refuses a probe gun still held.
         $heldSlot = Py 'w=get_pc().Pawn.Weapon; print(int(w.QuickSelectSlot) if w else -1)'
         $other = if ($heldSlot -ceq '1') { 2 } else { 1 }
-        Py "print(wp_restore_slot($other))" | Out-Null; Send-Key "$other"; Start-Sleep 3
-        foreach ($s in 1..4) { if ($s -ne $other) { try { Py "print(wp_restore_slot($s))" | Out-Null } catch { "restore slot $s`: $_" } } }
-        $log.gun_cleanup = Py 'print(wp_cleanup())' 30
-    } catch { $log.gun_cleanup = "not finished: $_" }
+        PyOk "print(wp_restore_slot($other))" | Out-Null; Send-Key "$other"; Start-Sleep 3
+        foreach ($s in 1..4) { if ($s -ne $other) { try { PyOk "print(wp_restore_slot($s))" | Out-Null } catch { "restore slot $s`: $_" } } }
+        $log.gun_cleanup = PyJson 'wp_cleanup()' 30
+        $left = @($log.gun_cleanup.remaining)
+        Set-Stage 'gun_cleanup' ($null -ne $log.gun_cleanup.remaining -and $left.Count -eq 0) "spawned guns left: $($left -join ', ')"
+    } catch { $log.gun_cleanup = "not finished: $_"; Set-Stage 'gun_cleanup' $false "$_" }
     # The game may close before it answers this one.
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
