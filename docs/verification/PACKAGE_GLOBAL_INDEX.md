@@ -18,7 +18,7 @@ Why no file that matches can be left out. `Package::findExport` compares folded 
 - an export's path equals the path, and then that export's outermost object starts with the same first segment. The segment is cut from the name itself, because a name can hold a dot;
 - the stem was stripped, so the file is also listed under its stem's first segment.
 
-A file whose outer chain cannot be walked is a candidate for every path (none in the installed game: `any_root=0`), and a file that does not load is a candidate for none, as in a scan. Listing a file too often only costs time.
+A file whose roots are not known is a candidate for every path: one that does not load during the pass (the old scan tried it again on each lookup, so a passing failure must not change the answer), one whose outer chain cannot be walked, and one with an empty outermost name, which `Package::path` drops so that the real path starts at a child. Listing a file too often only costs time. The index is published only when the pass is complete. (Luna's review found the empty name, the failed file and the partial index.)
 
 This corrected the first form of the idea, "a file with the path must have that root": the stem case does not need it.
 
@@ -30,9 +30,9 @@ The oracle: with `OPENWILLOW_RESOLVE_CHECK` set, each lookup also runs the old f
 |---|---|
 | Oracle on the Fire event-order step list (real packages, zuhu PC) | 5 lookups, 5 the same, 0 different |
 | `--slice-run` output with the same steps, before and after | identical JSON, for the setup alone, the first use and the full list |
-| `tests/global_resolve_test.py` (synthetic, oracle on) | copies of a path, folded case, a dotted name, broken outer chains, a file that does not load, a miss |
+| `tests/global_resolve_test.py` (synthetic, oracle on) | copies of a path, folded case, a dotted name, broken outer chains, a file that does not load, a file that fails once during the pass, an empty outermost name, a miss |
 
-What this does not show: the oracle covers the lookups these runs make, not every path a later map will ask for. The argument above is the reason to expect those to agree; the flag can check them when they come. The stem case is not reached by the synthetic test: the earlier direct lookup answers those paths first.
+What this does not show: the oracle covers the lookups these runs make, not every path a later map will ask for. The argument above is the reason to expect those to agree; the flag can check them when they come. The stem case is not reached by the synthetic test: the earlier direct lookup answers those paths first. The partial-index rule has no test: nothing in a test can fail the pass midway. The fail-once test uses a seam, `OPENWILLOW_RESOLVE_CHECK_FAIL_BUILD`, which works only with the check flag set.
 
 ## Timings and memory
 

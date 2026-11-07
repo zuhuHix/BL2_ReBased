@@ -111,7 +111,7 @@ private:
     // The global fallback's candidates (buildGlobalIndex). Positions in indexedPaths_, ascending: a lookup walks them in the order the full scan would.
     bool globalIndexBuilt_ = false;
     std::unordered_map<std::string, std::vector<uint32_t>> filesByRoot_;   // the first path segment, folded -> the files that could hold a path starting with it
-    std::vector<uint32_t> filesForAnyRoot_;                                // a broken outer chain: its roots are not known, so it stays a candidate for every path
+    std::vector<uint32_t> filesForAnyRoot_;                                // its roots are not known (buildGlobalIndex), so it stays a candidate for every path
 
     static std::string key(std::string_view value);
     std::filesystem::path choosePath(const std::string& packageName) const;

@@ -599,15 +599,24 @@ std::string firstSegment(std::string_view path) {
 // Which files could answer which paths, from one pass over the tree. A path is listed under its first segment; findExport(path) matches in a file only if
 // - an export's path equals it, and then that export's path has the same first segment (taken from its outermost object's name, which may itself hold a dot), or
 // - the file's stem prefixes it and is stripped first, so the file is listed under its stem's first segment too.
-// A file with an outer chain that cannot be walked is a candidate for everything, and a file that does not load is a candidate for nothing, as in a scan. Listing a file
-// too often costs time and cannot change an answer: only the same findExport, in the same order, decides.
+// A file whose roots are not known is a candidate for everything: one that does not load now (a scan tried it again on every lookup, so the failure may pass), one whose
+// outer chain cannot be walked, and one with an empty outermost name (Package::path drops it, so the real path starts at a child). Listing a file too often costs time and
+// cannot change an answer: only the same findExport, in the same order, decides. Published only when complete, so a failure here leaves no partial index behind.
 void PackageStore::buildGlobalIndex() {
-    globalIndexBuilt_ = true;
     constexpr int maxOuterChain = 256;
+    std::unordered_map<std::string, std::vector<uint32_t>> filesByRoot;
+    std::vector<uint32_t> filesForAnyRoot;
+    // The check flag's test seam: this file fails here, and only here, as a transient failure would.
+    const char* const failInBuild = std::getenv("OPENWILLOW_RESOLVE_CHECK") ? std::getenv("OPENWILLOW_RESOLVE_CHECK_FAIL_BUILD") : nullptr;
     for (uint32_t position = 0; position < indexedPaths_.size(); ++position) {
         std::shared_ptr<const Package> package;
-        try { package = Package::load(indexedPaths_[position]); }
-        catch (const std::exception&) { continue; }
+        try {
+            if (failInBuild && indexedPaths_[position].stem() == failInBuild) throw std::runtime_error("test: fails in the build");
+            package = Package::load(indexedPaths_[position]);
+        } catch (const std::exception&) {
+            filesForAnyRoot.push_back(position);
+            continue;
+        }
         std::unordered_set<std::string> roots{firstSegment(package->packageName)};
         bool walkable = true;
         for (int32_t index = 1; walkable && index <= int32_t(package->exports.size()); ++index) {
@@ -615,18 +624,22 @@ void PackageStore::buildGlobalIndex() {
                 int32_t cursor = index;
                 int steps = 0;
                 while (package->object(cursor).outer && ++steps < maxOuterChain) cursor = package->object(cursor).outer;
-                if (package->object(cursor).outer) walkable = false;
-                else roots.insert(firstSegment(package->object(cursor).name));
+                const auto& outermost = package->object(cursor);
+                if (outermost.outer || outermost.name.empty()) walkable = false;
+                else roots.insert(firstSegment(outermost.name));
             } catch (const std::exception&) { walkable = false; }
         }
-        if (!walkable) { filesForAnyRoot_.push_back(position); continue; }
-        for (const auto& root : roots) filesByRoot_[root].push_back(position);
+        if (!walkable) { filesForAnyRoot.push_back(position); continue; }
+        for (const auto& root : roots) filesByRoot[root].push_back(position);
     }
     if (std::getenv("OPENWILLOW_RESOLVE_CHECK")) {
         size_t entries = 0;
-        for (const auto& [root, files] : filesByRoot_) entries += files.size();
-        std::cerr << "OWRESOLVECHECK index files=" << indexedPaths_.size() << " roots=" << filesByRoot_.size() << " entries=" << entries << " any_root=" << filesForAnyRoot_.size() << std::endl;
+        for (const auto& [root, files] : filesByRoot) entries += files.size();
+        std::cerr << "OWRESOLVECHECK index files=" << indexedPaths_.size() << " roots=" << filesByRoot.size() << " entries=" << entries << " any_root=" << filesForAnyRoot.size() << std::endl;
     }
+    filesByRoot_ = std::move(filesByRoot);
+    filesForAnyRoot_ = std::move(filesForAnyRoot);
+    globalIndexBuilt_ = true;
 }
 
 // The first file in index order that has the path, among the files that can have it.
