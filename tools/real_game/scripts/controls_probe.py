@@ -211,7 +211,8 @@ def cp_page():
     found = [m for m in unrealsdk.find_all("StatusMenuExGFxMovie", exact=False) if "Default__" not in m.Name]
     live = [m for m in found if _try(lambda: bool(m.bMovieIsOpen)) is True]
     movie = live[-1] if live else None
-    out = {"movie": _name(movie), "open": movie is not None, "quick_screen": _try(lambda: int(pc.QuickAccessScreen)), "movies": len(found)}
+    out = {"movie": _name(movie), "open": movie is not None, "quick_screen": _try(lambda: int(pc.QuickAccessScreen)), "movies": len(found),
+           "injured": _try(lambda: bool(pc.Pawn.bIsInjured))}
     if movie is not None:
         out["screen"] = _try(lambda: int(movie.CurrentScreen))
         out["props"] = _try(lambda: {p.Name: str(getattr(movie, p.Name))[:80] for p in movie.Class._properties()

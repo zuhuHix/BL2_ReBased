@@ -55,6 +55,30 @@ function Clear-Dialogs {
 # The first read that is a real use target with its clip showing, in the probe's JSON.
 function Test-PromptRead([string]$Json) { try { [bool](ConvertFrom-Json $Json).usable } catch { $false } }
 function Get-MeleeCount { [int](Py 'print(cp_count())') }
+function Test-Number($Value) { $Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] }
+# Why the melee facts are not what the stage exists to capture, or nothing: the definition's numbers and switches, and the melee clip's set and length (what the import
+# needs). The first-person move and damage_value are logged but not required: the real run read none and an error for them, by a route the record does not rely on.
+function Get-MeleeFactsProblem([string]$Json) {
+    try { $facts = ConvertFrom-Json $Json } catch { return "not JSON: $Json" }
+    $definition = $facts.definition
+    if (!(Test-Number $definition.trace) -or $definition.trace -le 0) { return "no trace distance: $Json" }
+    if (!(Test-Number $definition.cone)) { return "no cone angle: $Json" }
+    if ($definition.use_cone -isnot [bool] -or $definition.use_radius -isnot [bool]) { return "no melee switches: $Json" }
+    $clips = 0
+    foreach ($set in @($facts.arm_melee_clips)) {
+        foreach ($clip in @($set.clips)) {
+            if ($null -eq $clip) { continue }
+            if (@($clip).Count -ne 2 -or "$($clip[0])" -notmatch 'melee' -or !(Test-Number $clip[1]) -or $clip[1] -le 0) { return "a bad clip read: $Json" }
+            $clips++
+        }
+    }
+    if ($clips -eq 0) { return "no melee clip read: $Json" }
+    ''
+}
+# A page read a key can be judged by. A traceback comes back as text, and is no read at all, so it must not pass for a key that did nothing.
+function Test-PageRead([string]$Json) { try { (ConvertFrom-Json $Json).open -is [bool] } catch { $false } }
+function Test-DownRead([string]$Json) { try { $page = ConvertFrom-Json $Json; $page.open -is [bool] -and $page.injured -eq $true } catch { $false } }
+function Test-Injured([string]$Json) { try { (ConvertFrom-Json $Json).injured -eq $true } catch { $false } }
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
@@ -115,7 +139,8 @@ try {
     $log.bindings = $bindings
     $facts = Py 'print(json.dumps(cp_melee_facts(), default=str))' 60
     $log.facts = $facts; "facts: $facts"
-    Set-Stage 'melee_facts' ($facts -match '"definition"') 'no definition read'
+    $factsProblem = Get-MeleeFactsProblem $facts
+    Set-Stage 'melee_facts' (!$factsProblem) $factsProblem
     $log.hooks = Py 'print(json.dumps(cp_melee_hooks()))' 60
 
     # The melee press: empty air first (the swing's own timing), then three presses 0.3 s apart (does a press in a swing count).
@@ -195,7 +220,7 @@ try {
             $opened = Get-Page
             Send-Key $key; Start-Sleep 2
             $after = Get-Page
-            if (Test-PageOpen $opened) { $pagesOpened++; if ((Get-PageState $after) -ne (Get-PageState $opened)) { $keysWithEffect++ } }
+            if (Test-PageOpen $opened) { $pagesOpened++; if ((Test-PageRead $after) -and (Get-PageState $after) -ne (Get-PageState $opened)) { $keysWithEffect++ } }
             Save-Shot "controls/page_${page}_then_${key}.png" | Out-Null
             $pageReads += "{`"page`": `"$page`", `"key`": `"$key`", `"opened`": $opened, `"after`": $after}"
             if (!(Close-Page)) { throw "the page opened with $page did not close" }
@@ -210,15 +235,17 @@ try {
     # Last: Maya then bleeds out. Whether the map, the missions and a swing work while she is down. The reads below take about 8 s against
     # about 20 s of bleed-out, so normally the game quits first. A slow session can see her die and respawn in memory: saves stay blocked
     # and everything is restored from the verified backup all the same, and only the last shots would show the respawn.
-    $injured = ''
-    for ($i = 0; $i -lt 8 -and $injured -notmatch '"injured": true'; $i++) { $injured = Py 'print(json.dumps(cp_injure(), default=str))' 15; Start-Sleep 1 }
+    $injured = ''; $downReadsValid = 0
+    for ($i = 0; $i -lt 8 -and !(Test-Injured $injured); $i++) { $injured = Py 'print(json.dumps(cp_injure(), default=str))' 15; Start-Sleep 1 }
     $log.injure = $injured; "injure: $injured"
-    if ($injured -match '"injured": true') {
+    if (Test-Injured $injured) {
         $downReads = @()
         foreach ($key in 'M', 'L') {
             Assert-GameForeground
             Send-Key $key; Start-Sleep 1
-            $downReads += "{`"key`": `"$key`", `"after`": $(Get-Page)}"
+            $after = Get-Page
+            if (Test-DownRead $after) { $downReadsValid++ }
+            $downReads += "{`"key`": `"$key`", `"after`": $after}"
             Save-Shot "controls/down_$key.png" | Out-Null
             if (!(Close-Page)) { throw "a page opened with $key while down did not close" }
         }
@@ -227,7 +254,10 @@ try {
         $downReads | Set-Content (Join-Path $Out 'page_down.jsonl')
         Py "print(cp_rows('page_down'))" | Out-Null
     }
-    Set-Stage 'page_down' ($injured -match '"injured": true') "she did not go down: $injured"
+    # A valid read says what the page was, with her still down. That the key arrived rests on focus, checked before each key, and on the same keys having opened pages
+    # earlier in this run: there is no read of the key itself, so a key lost in just this moment would still read as doing nothing.
+    $downWhy = if (!(Test-Injured $injured)) { "she did not go down: $injured" } else { "valid reads while down: $downReadsValid of 2, pages opened by key earlier: $pagesOpened of 8" }
+    Set-Stage 'page_down' ((Test-Injured $injured) -and $downReadsValid -eq 2 -and $pagesOpened -eq 8) $downWhy
     Py 'print(cp_unhook())' | Out-Null
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
