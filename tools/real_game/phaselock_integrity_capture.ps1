@@ -244,7 +244,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
 
         # SHIELD STAGE. The real shield's capacity at several levels: the equipped shield's balance, respawned at each level and equipped. Every
         # row stays in the log. The stage needs each level but her own shield's measured, and her own shield back; a clamped level is a finding,
-        # not a retry. Her own level's row can count but never fails the stage: an equal maximum there is inconclusive.
+        # not a retry. Her own level is refused: the key could not tell the two shields apart.
         $shieldLevels = 1, 5, 8, 15, 30, 50
         $shieldRows = @(); $shieldWhy = ''; $restored = $null
         try {
@@ -256,7 +256,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
                 $restoreOk = $false
                 try {
                     $row.tried = Py "import json; print(json.dumps(pi_shield_try($level), default=str))" | ConvertFrom-Json
-                    if (!$row.tried.skipped) {
+                    if ($row.tried -and !$row.tried.skipped) {
                         $until = (Get-Date).AddSeconds(5)
                         do {
                             $row.read = Py 'import json; print(json.dumps(pi_shield_read(), default=str))' | ConvertFrom-Json
@@ -271,7 +271,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
                         $until = (Get-Date).AddSeconds(5)
                         while ($restored.ok -ne $true -and (Get-Date) -lt $until) {
                             Start-Sleep -Milliseconds 250
-                            $restored = Py 'import json; print(json.dumps(pi_shields_check(), default=str))' | ConvertFrom-Json
+                            $restored = Py 'import json; print(json.dumps(pi_shield_restore(), default=str))' | ConvertFrom-Json
                         }
                         $row.restore = $restored; $restoreOk = $restored.ok -eq $true
                     } catch { $row.restore_error = "$_" }

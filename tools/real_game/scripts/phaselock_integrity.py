@@ -522,10 +522,17 @@ def pi_hud_evidence(at, since):
     return {"before": before, "running_before": running, "after": after, "usable": running > 0 and after > 0}
 
 
-# Shield reads keep names, never objects: a reference kept across commands or an inventory change can crash the game
-# (openwillow_realgame/__init__.py). Each command looks its shields up again by full path name.
+# Shield reads keep identifying values, never objects: a reference kept across commands or an inventory change can crash the game
+# (openwillow_realgame/__init__.py). Each command looks its shields up again. Equipping moves a shield to a new object (live, 2026-11-07), so
+# its path does not identify it: the key is its balance, level and name. Level and balance alone are not enough: the live save holds two
+# shields of one level and balance, told apart by name.
+def _shield_key(item):
+    return f"{item.DefinitionData.BalanceDefinition._path_name()}|{int(item.ExpLevel)}|{item.GetShortHumanReadableName()}"
+
+
 def _shield_row(item):
-    return {"key": _null(lambda: item._path_name()), "class": _null(lambda: item.Class.Name), "name": _null(lambda: item.GetShortHumanReadableName()),
+    return {"key": _null(lambda: _shield_key(item)), "path": _null(lambda: item._path_name()), "class": _null(lambda: item.Class.Name),
+            "name": _null(lambda: item.GetShortHumanReadableName()),
             "level": _null(lambda: int(item.ExpLevel)), "stage": _null(lambda: int(item.GameStage)),
             "grade": _null(lambda: int(item.GetManufacturerGradeIndex())), "rarity": _null(lambda: int(item.RarityLevel)),
             "value": _null(lambda: int(item.MonetaryValue)), "readied": _null(lambda: bool(item.bReadied)),
@@ -535,8 +542,7 @@ def _shield_row(item):
 def _shields():
     """(the equipped shield or None, the shields in the backpack.)"""
     im = get_pc().GetPawnInventoryManager()
-    # 2026-11-07: the equipped shield was not in InventoryChain, which holds the weapons. ItemChain is the expected place (UNVERIFIED
-    # until a run reads it; pi_shields records the manager's chain-like fields for when it is not).
+    # The worn shield is in ItemChain (live, 2026-11-07); InventoryChain holds the weapons.
     chain = []
     for item in (im.InventoryChain, _null(lambda: im.ItemChain)):
         while item:
@@ -544,11 +550,6 @@ def _shields():
             item = item.Inventory
     equipped = [i for i in chain if i.Class.Name == "WillowShield"]
     return (equipped[0] if equipped else None), [i for i in im.Backpack if i.Class.Name == "WillowShield"]
-
-
-def _find_shield(key):
-    equipped, backpack = _shields()
-    return next((i for i in ([equipped] if equipped is not None else []) + backpack if i._path_name() == key), None)
 
 
 def _max_strength():
@@ -562,7 +563,9 @@ def pi_shields(remember=False):
     maximum = _max_strength()
     if remember:
         pi["shield_base"] = {"key": row["key"] if row else None, "max": maximum, "level": row["level"] if row else None,
-                             "backpack": sorted(i._path_name() for i in backpack)}
+                             "balance": _null(lambda: equipped.DefinitionData.BalanceDefinition._path_name()),
+                             "backpack": sorted(_shield_key(i) for i in backpack), "backpack_paths": [i._path_name() for i in backpack]}
+        pi["shield_try"] = None
     return {"player_level": _null(lambda: int(get_pc().PlayerReplicationInfo.ExpLevel)), "max_strength": maximum,
             "strength": _null(lambda: float(get_pc().Pawn.GetShieldStrength())), "equipped": row,
             "manager_fields": _null(lambda: [f.Name for f in get_pc().GetPawnInventoryManager().Class._fields()
@@ -572,20 +575,24 @@ def pi_shields(remember=False):
 
 def pi_shield_try(level):
     """Spawn one shield of the equipped shield's balance at this level and equip it. Saving is blocked and the saves are restored by
-    the capture. UNVERIFIED: that ReadyBackpackInventory equips a shield; the read says whether it did."""
+    the capture. Refused at her own shield's level: the key could not tell the two apart."""
+    base = pi["shield_base"]
+    if level == base["level"]:
+        return {"skipped": "her own shield's level: the key cannot tell them apart", "level": level}
     im = get_pc().GetPawnInventoryManager()
-    own = _find_shield(pi["shield_base"]["key"])
-    if own is None:
-        raise RuntimeError("the character's own shield was not found")
+    equipped, _backpack = _shields()
+    if equipped is None or _shield_key(equipped) != base["key"]:
+        raise RuntimeError("the character's own shield is not equipped")
     pool = unrealsdk.find_class("ItemPool").ClassDefaultObject
-    result = pool.SpawnBalancedInventoryFromInventoryBalanceDefinition(own.DefinitionData.BalanceDefinition, 1, level, 0, get_pc().Pawn, [])
+    result = pool.SpawnBalancedInventoryFromInventoryBalanceDefinition(equipped.DefinitionData.BalanceDefinition, 1, level, 0, get_pc().Pawn, [])
     spawned = list(result[1]) if isinstance(result, tuple) else []
     if not spawned:
         return {"skipped": "nothing spawned", "level": level}
-    key = spawned[0]._path_name()
-    pi["shield_try"] = {"key": key, "level": level, "game_t": None}    # before the add, so a restore can undo an add that then throws
+    key, path = _shield_key(spawned[0]), spawned[0]._path_name()
+    pi["shield_try"] = {"key": key, "level": level, "game_t": None, "own_sent": False}    # before the add, so a restore can undo an add that then throws
     im.AddInventoryToBackpack(spawned[0])
-    item = _find_shield(key)
+    _equipped, backpack = _shields()
+    item = next((i for i in backpack if i._path_name() == path), None)
     if item is None:
         raise RuntimeError("the spawned shield did not reach the backpack")
     row = _shield_row(item)
@@ -595,57 +602,62 @@ def pi_shield_try(level):
 
 
 def pi_shield_read():
-    """The pool's maximum for this row's test shield. counts only when that shield is equipped, its level is the requested one, game
-    time has passed since the equip, and the maximum has left the character's own. At the own shield's level the same maximum may be
-    right or stale, so that row is inconclusive, not counted."""
+    """The pool's maximum for this row's test shield. counts only when a shield with its key is equipped, its level is the requested one
+    (a clamped level changes the key, and the row says which it got), game time has passed since the equip, and the maximum has left the
+    character's own."""
     equipped, _backpack = _shields()
     base, tried = pi["shield_base"], pi.get("shield_try")
     row = _shield_row(equipped) if equipped is not None else None
     maximum = _max_strength()
-    reason, inconclusive = None, False
+    reason = None
     if not tried:
         reason = "no test shield"
-    elif row is None or row["key"] != tried["key"]:
+    elif row is None or row["key"] == base["key"]:
         reason = "the test shield is not equipped"
     elif row["level"] != tried["level"]:
         reason = f"level {row['level']}, requested {tried['level']}"
+    elif row["balance"] != base["balance"]:
+        reason = f"balance {row['balance']}, not her shield's"
     elif not isinstance(maximum, float) or maximum <= 0.0:
         reason = "no capacity"
     elif tried["game_t"] is None or get_pc().WorldInfo.TimeSeconds <= tried["game_t"]:
         reason = "no game time since the equip"
     elif maximum == base["max"]:
-        inconclusive = tried["level"] == base["level"]
-        reason = "at her own shield's level the pool reads her own maximum: right or stale" if inconclusive else "the pool has not updated"
-    return {"max_strength": maximum, "equipped": row, "counts": reason is None, "inconclusive": inconclusive, "reason": reason}
+        reason = "the pool has not updated"
+    return {"max_strength": maximum, "equipped": row, "counts": reason is None, "reason": reason}
 
 
 def pi_shield_restore():
-    """Put the character's own shield back and remove the test shield. Errors reach the caller. The pool may take a moment:
-    pi_shields_check says when it has."""
+    """Put the character's own shield back, found by its key, and remove the test shield. Safe to call again while the move completes: her
+    shield is asked for once. Exactly one match or it stops and says so: it does not guess. Errors reach the caller."""
     im = get_pc().GetPawnInventoryManager()
     base, tried = pi["shield_base"], pi.get("shield_try")
-    equipped, _backpack = _shields()
-    if equipped is None or equipped._path_name() != base["key"]:
-        own = _find_shield(base["key"])
-        if own is None:
-            raise RuntimeError("the character's own shield was not found")
-        im.ReadyBackpackInventory(own)
+    equipped, backpack = _shields()
+    own_on = equipped is not None and _shield_key(equipped) == base["key"]
+    if not own_on and not (tried and tried.get("own_sent")):
+        matches = [i for i in backpack if _shield_key(i) == base["key"]]
+        if len(matches) != 1:
+            raise RuntimeError(f"her own shield cannot be identified: {len(matches)} shields match {base['key']}")
+        if tried:
+            tried["own_sent"] = True
+        im.ReadyBackpackInventory(matches[0])
+        equipped, backpack = _shields()
     if tried:
-        _equipped, backpack = _shields()
-        test = next((i for i in backpack if i._path_name() == tried["key"]), None)
+        # The test shield, now in the backpack as a new object: one with its key that was not there at the start.
+        test = next((i for i in backpack if _shield_key(i) == tried["key"] and i._path_name() not in base["backpack_paths"]), None)
         if test is not None:
             im.RemoveInventoryFromBackpack(test)    # no Destroy: the game quits within minutes and saves are blocked
-        if _equipped is None or _equipped._path_name() != tried["key"]:
-            pi["shield_try"] = None     # gone; while it is still equipped, a later restore can still remove it
+        elif equipped is not None and _shield_key(equipped) == base["key"]:
+            pi["shield_try"] = None     # gone
     return pi_shields_check()
 
 
 def pi_shields_check():
-    """Whether the equipped shield, the pool's maximum and the backpack's shields are the ones remembered at the start."""
+    """Whether the equipped shield, the pool's maximum and the backpack's shields are the ones remembered at the start, by key."""
     base = pi["shield_base"]
     equipped, backpack = _shields()
-    key, maximum = (equipped._path_name() if equipped is not None else None), _max_strength()
-    held = sorted(i._path_name() for i in backpack)
+    key, maximum = (_shield_key(equipped) if equipped is not None else None), _max_strength()
+    held = sorted(_shield_key(i) for i in backpack)
     return {"ok": key == base["key"] and maximum == base["max"] and held == base["backpack"], "key": key, "max_strength": maximum,
             "expected_key": base["key"], "expected_max": base["max"], "backpack": held, "expected_backpack": base["backpack"]}
 
