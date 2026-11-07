@@ -34,7 +34,7 @@ public:
     // for a driver logs "OWCAPTUREHUD ready driver=<Driver>".
     static EOpenWillowCaptureHud CaptureHudGate(const UWorld* World, const TCHAR* Driver);
     // A frame with the UI on. A run that asked for the movie also logs "OWCAPTUREHUD shot driver=<Driver>", which
-    // tools/movie_hud.ps1 checks comes after that driver's ready line.
+    // tools/movie_hud.ps1 checks comes after that driver's ready line. If the movie is no longer ready, it logs a failure, takes no frame and exits.
     static void CaptureShot(const TCHAR* Driver, const FString& File);
     void ToggleSkills();
     bool ToggleInventory();

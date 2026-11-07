@@ -323,11 +323,21 @@ EOpenWillowCaptureHud AOpenWillowMayaHUD::CaptureHudGate(const UWorld* World, co
 
 void AOpenWillowMayaHUD::CaptureShot(const TCHAR* Driver, const FString& File)
 {
-    FScreenshotRequest::RequestScreenshot(File, true, false);
     if (CaptureAskedForMovie())
     {
+        // Not all drivers ask the gate after their start, so a movie lost later is caught here: no frame, and the same exit the lid and vendor tests use.
+        const UWorld* World = GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetWorld() : nullptr;
+        const APlayerController* Player = World ? World->GetFirstPlayerController() : nullptr;
+        const AOpenWillowMayaHUD* Hud = Player ? Cast<AOpenWillowMayaHUD>(Player->GetHUD()) : nullptr;
+        if (!Hud || !Hud->IsFlashHudReady())
+        {
+            UE_LOG(LogTemp, Error, TEXT("OWCAPTUREHUD FAIL driver=%s movie lost: no frame %s; quitting"), Driver, *File);
+            FPlatformMisc::RequestExit(false);
+            return;
+        }
         UE_LOG(LogTemp, Display, TEXT("OWCAPTUREHUD shot driver=%s file=%s"), Driver, *File);
     }
+    FScreenshotRequest::RequestScreenshot(File, true, false);
 }
 
 void AOpenWillowMayaHUD::ToggleSkills()
