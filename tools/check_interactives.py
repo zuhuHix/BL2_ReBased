@@ -21,6 +21,7 @@ import argparse
 import json
 import math
 import re
+from collections import Counter
 import sys
 from pathlib import Path
 
@@ -32,7 +33,9 @@ PICKUP = re.compile(r'OWPICKUP kind=(\S+) amount=(-?[\d.]+) before=(-?[\d.]+) af
                     r'ok=([01]) reason=(.*)$', re.M)
 LID_PHASES = ('closed', 'mid', 'opened')
 DROP_KIND = re.compile(r'OWLOOT drop id=(\S+) kind=(\w+)')
-SLOT = re.compile(r'OWLOOT slot id=(\S+) point=(\S*) at=(\w+)(?: reason=([\w ]+))?')
+SLOT = re.compile(r'OWLOOT slot id=(\S+) point=(\S*) at=(\w+) x=-?[\d.]+ y=-?[\d.]+ z=-?[\d.]+ from_container=([\d.]+)(?: reason=([\w ]+))?')
+# A host check, wide enough for the biggest mesh: a socket's drop further than this from its lootable did not land in it.
+SOCKET_REACH = 300.0
 PICKUP_KINDS = ('cash', 'ammo', 'eridium', 'health')
 QUICK_PROMPT = re.compile(r'OWQUICKCHANGE prompt id=(\S+) cost=(\d+) money=(\d+)')
 QUICK_CANCEL = re.compile(r'OWQUICKCHANGE cancel id=(\S+) reason=(.*)$', re.M)
@@ -184,17 +187,29 @@ def grade_drops(log_text, objects_by_id, constants, out):
 
 
 def grade_slots(log_text, out):
-    """Where each drop was put. A placeholder has no sockets, so its drops stay in front; an imported mesh has no such excuse."""
+    """Where each drop that spawned lies. A placeholder has no sockets, so its drops stay in front; an imported mesh has no such
+    excuse. The line follows the spawn, so each open's drops must each have one."""
     slots = SLOT.findall(log_text)
     dropped = any(int(drops) > 0 for _, _, drops in OPEN.findall(log_text))
     if not slots:
         out.add('drop_slots', 'MISSING' if dropped else 'SKIPPED', 'no "OWLOOT slot" line' + ('' if dropped else ' and nothing dropped'))
         return
-    missing = [f'{oid} point={point}' for oid, point, at, reason in slots if at != 'socket' and reason != 'placeholder']
+    missing = [f'{oid} point={point}' for oid, point, at, _, reason in slots if at != 'socket' and reason != 'placeholder']
     if missing:
         out.add('drop_slots', 'FAIL', f'{len(missing)} of {len(slots)} drop(s) on an imported mesh found no socket, first: {missing[0]}')
         return
-    inside = sum(1 for _, _, at, _ in slots if at == 'socket')
+    far = [f'{oid} point={point} at {away}' for oid, point, at, away, _ in slots if at == 'socket' and float(away) > SOCKET_REACH]
+    if far:
+        out.add('drop_slots', 'FAIL', f'{len(far)} drop(s) further than {SOCKET_REACH} uu from their lootable, first: {far[0]}')
+        return
+    placed, counted = Counter(slot[0] for slot in slots), Counter()
+    for oid, _, drops in OPEN.findall(log_text):
+        counted[oid] += int(drops)
+    wrong = [f'{oid}: {counted[oid]} drop(s), {placed[oid]} placement line(s)' for oid in sorted(set(placed) | set(counted)) if placed[oid] != counted[oid]]
+    if wrong:
+        out.add('drop_slots', 'FAIL', f'{len(wrong)} lootable(s) whose drops and placement lines differ, first: {wrong[0]}')
+        return
+    inside = sum(1 for _, _, at, _, _ in slots if at == 'socket')
     out.add('drop_slots', 'PASS', f'{inside} of {len(slots)} drop(s) at their socket, the rest on placeholders')
 
 

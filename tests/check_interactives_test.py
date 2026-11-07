@@ -71,8 +71,8 @@ QUICK_RUN = ['OWQUICKCHANGE prompt id=S cost=200 money=5000',
 def good_log(spawned=3, unsupported=1):
     text = line(f'OpenWillow interactives: {spawned} lootable(s) spawned, {unsupported} unsupported not spawned')
     text += line('OWLOOT open id=Map:Point_0 config=Cash_Box drops=2')
-    text += line('OWLOOT slot id=Map:Point_0 point=Ammo1 at=socket')
-    text += line('OWLOOT slot id=Map:Point_0 point=Ammo2 at=front reason=placeholder')
+    text += line('OWLOOT slot id=Map:Point_0 point=Ammo1 at=socket x=1.0 y=-2.0 z=3.0 from_container=40.5')
+    text += line('OWLOOT slot id=Map:Point_0 point=Ammo2 at=front x=1.0 y=-2.0 z=3.0 from_container=110.0 reason=placeholder')
     text += line('OWLOOT drop id=Map:Point_0 kind=cash balance=Item.Cash level=3 value=80')
     text += line('OWLOOT drop id=Map:Point_0 kind=ammo balance=Item.Ammo level=3 value=18')
     text += line('OWLOOT open id=Map:Point_1 config=Empty_Box drops=0')
@@ -125,15 +125,32 @@ class GoodRunTest(unittest.TestCase):
 
 class DropSlotsTest(unittest.TestCase):
     def test_a_drop_on_an_imported_mesh_with_no_socket_fails(self):
-        results = grade(good_log() + line('OWLOOT slot id=Map:Point_2 point=Gun9 at=front reason=no socket'))
+        results = grade(good_log() + line('OWLOOT slot id=Map:Point_2 point=Gun9 at=front x=1.0 y=1.0 z=1.0 from_container=5.0 reason=no socket'))
         self.assertEqual(status_of(results, 'drop_slots'), 'FAIL')
+
+    def test_a_socket_drop_far_from_its_lootable_fails(self):
+        text = good_log().replace('from_container=40.5', 'from_container=9000.0')
+        self.assertEqual(status_of(grade(text), 'drop_slots'), 'FAIL')
+
+    def test_a_drop_with_no_placement_line_fails(self):
+        # A spawn that failed used to be counted: its line came first. Now an open's drops and lines must agree.
+        text = ''.join(row for row in good_log().splitlines(True) if 'point=Ammo2' not in row)
+        self.assertEqual(status_of(grade(text), 'drop_slots'), 'FAIL')
+
+    def test_a_placement_line_with_no_drop_fails(self):
+        text = good_log() + line('OWLOOT slot id=Map:Point_1 point=Gun at=socket x=1.0 y=1.0 z=1.0 from_container=5.0')
+        self.assertEqual(status_of(grade(text), 'drop_slots'), 'FAIL')
+
+    def test_a_placement_line_without_a_position_is_not_a_placement(self):
+        text = good_log().replace(' x=1.0 y=-2.0 z=3.0 from_container=40.5', '')
+        self.assertEqual(status_of(grade(text), 'drop_slots'), 'FAIL')
 
     def test_drops_with_no_slot_line_are_missing(self):
         text = ''.join(row for row in good_log().splitlines(True) if 'OWLOOT slot' not in row)
         self.assertEqual(status_of(grade(text), 'drop_slots'), 'MISSING')
 
     def test_an_unknown_reason_is_not_excused(self):
-        results = grade(good_log() + line('OWLOOT slot id=Map:Point_2 point=Gun9 at=front reason=later'))
+        results = grade(good_log() + line('OWLOOT slot id=Map:Point_2 point=Gun9 at=front x=1.0 y=1.0 z=1.0 from_container=5.0 reason=later'))
         self.assertEqual(status_of(results, 'drop_slots'), 'FAIL')
 
 

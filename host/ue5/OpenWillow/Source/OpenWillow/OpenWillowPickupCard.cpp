@@ -56,6 +56,7 @@ namespace
         Player.GetPlayerViewPoint(ViewLocation, ViewRotation);
         FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowPickupCardSight), false, &Maya);
         Query.AddIgnoredActor(&Pickup);
+        if (const AActor* Holder = Pickup.GetContainer()) Query.AddIgnoredActor(Holder);
         return World->LineTraceSingleByChannel(OutHit, ViewLocation, Pickup.GetActorLocation(), ECC_Visibility, Query);
     }
 
