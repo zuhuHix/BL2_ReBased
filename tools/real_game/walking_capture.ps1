@@ -30,7 +30,7 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GamePy 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { throw 'driver did not answer' }
-    Invoke-GamePy 'print(block_saves())' | Out-Null
+    Assert-SavesBlocked (Invoke-GamePy 'print(block_saves())') | Out-Null
     Focus-Game | Out-Null
     if ($Character) { Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45 }
     else { Send-Key C; Start-Sleep 2; Send-Key Enter; Start-Sleep 3; Send-Key Enter; Start-Sleep 40 }
