@@ -89,6 +89,12 @@ def map_packages():
                     'GradeModifiers': {'CustomLoot': [config('Early', const(9), [('Ammo1', 'Pools.Cash', 1.0)])]}},
                    {'GameStageRequirement': {'MinGameStage': 6, 'MaxGameStage': 100}, 'GradeModifiers': {}}]})
     m.update(definition('Defs.Box', 'Props.Skel_Box', OPEN_ANIMS, components=2))
+    m['Props.Skel_Box'] = ('Engine.SkeletalMesh', {})
+    m['Props.Skel_Box.SkeletalMeshSocket_1'] = ('Engine.SkeletalMeshSocket', {
+        'SocketName': 'Gun', 'BoneName': 'Lid', 'RelativeLocation': {'X': 1.5, 'Z': 3.0}})
+    m['Props.Skel_Box.SkeletalMeshSocket_0'] = ('Engine.SkeletalMeshSocket', {
+        'SocketName': 'Ammo1', 'BoneName': 'Base', 'RelativeLocation': {'X': 7.0, 'Y': -2.0, 'Z': 4.0}})
+    m['Props.Skel_Box.SomethingElse_0'] = ('Engine.Object', {'SocketName': 'NotASocket'})
     # Crate: no DefaultLoot; its loot comes from an InteractiveObjectLootListDefinition.
     m['Grades.Crate'] = ('WillowGame.InteractiveObjectBalanceDefinition', {
         'DefaultInteractiveObject': ref('Defs.Crate'), 'DefaultIncludedLootLists': [ref('Lists.Crate')]})
@@ -274,6 +280,15 @@ class PrepareInteractivesTest(unittest.TestCase):
         self.assertEqual((visual['open_animation'], visual['open_sequence']), ('Open', 'Open'))
         self.assertEqual(visual['particles'], ['FX.Dust'])
         self.assertEqual(self.doc['balances']['Grades.Box']['hud_icon'], 'Icons.Open')
+
+    def test_a_meshes_sockets_are_listed_by_name(self):
+        component = self.doc['balances']['Grades.Box']['visual']['components'][0]
+        self.assertEqual(component['sockets'], [
+            {'name': 'Ammo1', 'bone': 'Base', 'location': [7.0, -2.0, 4.0]},
+            {'name': 'Gun', 'bone': 'Lid', 'location': [1.5, 0.0, 3.0]}])    # a value left out reads as 0
+
+    def test_a_mesh_without_sockets_lists_none(self):
+        self.assertEqual(self.doc['balances']['Grades.Crate']['visual']['components'][0]['sockets'], [])
 
     def test_cash_pickup_rule(self):
         item = self.doc['items']['Grades.Cash']
