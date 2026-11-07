@@ -139,6 +139,26 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 
 ## Current link table
 
+Batch Z16: #126 at 5a39f57 merged with #133 at 51deb95, five enemies with a Psycho, zuhu, 2026-11-07, all three variants.
+This merge is not on main. **14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14 in all three**, stock enemies (`fallback=shapes` 0). The
+fixtures are those of the table below, plus these on links 3 and 4: `one shot at a time until the selected enemy was
+wounded` and `fire held until the selected enemy hit Maya`.
+
+- **Link 3:** the Psycho was selected in all three, and the hold started on the first wound and lasted 3.0 s. Three shots
+  killed it, one a critical hit, in 3.5 to 3.6 s.
+- **Link 4:** 1 hit by the selected enemy and 4 by others, in all three. All five enemies hit Maya in the same round.
+- **Maya after the fight:** 28/213 without a shield, then healed or revived by the fixture. One round of the pack took her
+  that low, so the kill came before a second round could down her. The margin is small: the second round was due about
+  0.7 s after the kill (arithmetic from the 1.25 s swing interval, not measured).
+- **No enemy downed her** and no second wind happened. The down at link 13, and the forced one under `-DownAfterFight`, came
+  from the test's lethal damage.
+- `-Shield` used a manifest shield under the level override, with the hits absorbed by it.
+
+Everything in "What this does not show" below still applies. Three runs with the same selection and the same three shots
+vary little.
+
+### Main cdf05d7 + c365984, before the hold on fire
+
 Main cdf05d7 plus this branch at c365984, yorad PC, 2026-11-06. Three runs, about 50 s of game time each. **14 PASS, 0
 FAIL, 0 NOT_AVAILABLE of 14 in all three**, graded by the current checker.
 
@@ -336,7 +356,8 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-06 | main cdf05d7 + c365984, `-DownAfterFight`, yorad PC | 14 / 0 / 0 of 14 | revive fixture ran (forced) |
 | 2026-11-06 | combined build of this branch at 402d81e with #112 and #113, refreshed data, pc-hummer, all three variants | 14 / 0 / 0 of 14, each | reported by the hub; this lane did not read those logs. `-Shield` used the host stand-in, not a manifest shield |
 | 2026-11-06 | Z10: #126 at 7f59924 + #133 at d02c70a, four enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | hold ended by a hit; passed by margin |
-| 2026-11-07 | Z13: #126 at 7f59924 + #133 at 716302b, five enemies, zuhu, all three variants | 13 / 1 / 0 of 14, each | link 4 FAIL: the burst killed the selected Psycho before the hold started; fixed in the driver by one shot at a time, not yet run |
+| 2026-11-07 | Z13: #126 at 7f59924 + #133 at 716302b, five enemies, zuhu, all three variants | 13 / 1 / 0 of 14, each | link 4 FAIL: the burst killed the selected Psycho before the hold started; fixed in the driver by one shot at a time |
+| 2026-11-07 | Z16: #126 at 5a39f57 + #133 at 51deb95, five enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | one shot at a time and the hold both ran; Maya 28/213 after the fight without a shield; no enemy downed her |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
