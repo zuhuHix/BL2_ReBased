@@ -170,7 +170,8 @@ First host read (one run, 2026-11-06, a test kill with no shot): the body rose 1
 bodies are thrown with no shot behind them. The cause in the physics is UNVERIFIED, and whether real kills now look right is still for the frames.
 
 `tools/play_range.ps1 -KillRow` is the row for real kills: a rolled pistol and a rolled shotgun each kill a stock enemy from about 700 uu, with frames 1.4 s and 3 s after each death and
-the corpse's numbers in the log. It has not run yet.
+the corpse's numbers in the log. First run (2026-11-07, one rolled pistol and one rolled shotgun): rose 4 and 1 uu, drifted 84 and 298 uu, fastest body 2,970 and 2,783 uu/s, 274 and 189 speed caps. No launch
+was seen, though the frames cannot show floor contact, and the cap is holding the throw down and hiding the cause, not curing it.
 
 **Floor gap and the physics asset (follow-up, 2026-11).** `rose` cannot say whether a body is on the ground, so each simulated corpse now logs how far its lowest and highest bodies stand above the
 floor below them, 1.4 s and 3 s after death and just before the respawn, as well as which body was fastest and when. Each ragdoll logs its physics asset's bodies, constraints and the body pairs
