@@ -1,6 +1,7 @@
 // AI-assisted (Claude). See OpenWillowInteractive.h. Strict manifest reading and loot rolls first, then the lootable actor,
 // the pickup rules, the subsystem (spawn, open, nearest use, auto pickup) and the in-engine test sequence.
 #include "OpenWillowInteractive.h"
+#include "OpenWillowMayaHUD.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "OpenWillowQuickChange.h"
 #include "OpenWillowSkills.h"
@@ -1165,6 +1166,15 @@ namespace
 bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
 {
     UWorld* World = GetWorld();
+    // A run that asked for the movie HUD holds the queue until it is ready. If it fails, the test's own exit, with no more frames.
+    const EOpenWillowCaptureHud MovieHud = AOpenWillowMayaHUD::CaptureHudGate(World, TEXT("lid capture"));
+    if (MovieHud == EOpenWillowCaptureHud::Wait) return true;
+    if (MovieHud == EOpenWillowCaptureHud::Failed)
+    {
+        World->GetTimerManager().ClearTimer(TestTimer);
+        FPlatformMisc::RequestExit(false);
+        return true;
+    }
     if (!bLidQueueBuilt)
     {
         bLidQueueBuilt = true;
@@ -1224,7 +1234,7 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
     auto Shot = [&FileKey, &FullBalance](const TCHAR* Phase)
     {
         const FString File = FString::Printf(TEXT("OWLootLid_%s_%s.png"), *FileKey, Phase);
-        FScreenshotRequest::RequestScreenshot(File, false, false);
+        FScreenshotRequest::RequestScreenshot(File, true, false);
         UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=%s"), *FullBalance, Phase);
     };
     switch (LidPhase++)
@@ -1248,7 +1258,7 @@ bool UOpenWillowInteractiveSubsystem::TickLidShots(AOpenWillowWalker& Walker)
         // A frame while the clip plays (the 2 s test step is longer than a lid's opening).
         World->GetTimerManager().SetTimer(LidMidTimer, FTimerDelegate::CreateLambda([FileKey, FullBalance]()
             {
-                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWLootLid_%s_mid.png"), *FileKey), false, false);
+                FScreenshotRequest::RequestScreenshot(FString::Printf(TEXT("OWLootLid_%s_mid.png"), *FileKey), true, false);
                 UE_LOG(LogTemp, Display, TEXT("OWLOOTLID shot balance=%s phase=mid"), *FullBalance);
             }), 0.4f, false);
         break;

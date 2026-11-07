@@ -240,6 +240,17 @@ Not done, because there is nothing real to drive them:
 * crosshair widening: the host has no bloom state;
 * the grenade icon type: the grenade mod item has no delivery type.
 
+## Captures with the movie (test-only, 2026-11-07)
+
+For a frame next to the real game, a capture has to show the movie instead of the canvas HUD. These switches do that. All are test-only, and normal play does not pass them. **Not run in the engine when written:** the switches are unproven until a recorded run says otherwise, and a pass means the host did this, not that a frame matches the game.
+
+* **`CaptureHudGate` (`AOpenWillowMayaHUD`).** Used by `-owphaselockshots`, `-owgunshots` and the lid capture of `-owinteractivetest`. A run without `-owflashhud=<url>` goes straight on, as before. With it, the driver holds until the page has reported ready plus 2 s, in real seconds. A page that fails or is lost, or is not ready within 120 s, logs `OWCAPTUREHUD FAIL driver=<name> ...` as an error, and the driver leaves through its usual exit with no further frames. A run that passes both `-owflashhud` and `-owcanvashud` fails this way too, by the timeout.
+* **UI on.** Phaselock, lid and vendor frames are now taken with the UI, because the movie and the shop page are Slate widgets, in every run of those drivers. So `test_vendors`' `OWVendor_open.png` now shows the shop page. The canvas HUD was already in UI-off frames, so the other tools' frames should look as before. UNVERIFIED: no frame has been compared.
+* **Phaselock timing.** The film's offsets from the key press are unchanged. Each frame logs `OpenWillow phaselock capture <file> offset: requested +x s, actual +y s, real +z s`. Game time is clamped, so a stall shows only in the real offset, and the page runs in real time. With a movie asked for, the cast is 1 s after the aim, not at a fixed game time; without one it stays at 8 s.
+* **`-owstandinshield`.** Once the movie is ready, equips the same stat-less shield as `-owshieldcheck` (`OpenWillowEquipStandInShield`, one function), with no hit. The log says `OWSTANDINSHIELD equipped` or `OWSTANDINSHIELD FAIL`. Its capacity is the stand-in rule's ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md)). It does nothing on the canvas path.
+* **`-owspawnyaw=` and `-owspawnpitch=`.** The view at spawn, next to `-owspawnx/y/z`. Either works alone. The spawn switches set the actor, and the eye sits above it.
+* **`-MovieHud` on the tools** (`run_phaselock_shots`, `test_range`, `play_range`, `test_mission_page`, `test_mission_log`, `run_weapon_assembly_shots`, with `tools/movie_hud.ps1`). Replaces `-owcanvashud` with a page server and `-owflashhud=<url>`. The run fails unless its log has `OpenWillow HUD path: movie`, no canvas line and no `OWCAPTUREHUD FAIL`. `play_range` checks this only when it runs unattended. This proves the movie was accepted, not that a frame shows it: someone still looks at the frames. Without the switch each tool passes what it passed before. `run_weapon_assembly_shots` also gains `-Level` (default 40). `python tests/movie_hud_test.py` runs the helper with no editor and reads the tools' text.
+
 ## Checks
 
 * `node tests/hud_warp_test.js`: the homography against the written-out formula (0.01 px, six turns, seven origins, a
