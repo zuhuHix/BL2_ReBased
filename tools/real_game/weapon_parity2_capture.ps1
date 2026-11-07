@@ -38,8 +38,9 @@ function PyJson([string]$Expr, [int]$Timeout = 30) {
 function Q([string]$Text) { ConvertTo-Json -InputObject $Text -Compress }
 # Gun ids name local recipe files and output folders: letters, digits and underscores only.
 foreach ($id in $Guns) { if ($id -notmatch '^[A-Za-z0-9_]+$') { throw "gun id '$id' is not of the form [A-Za-z0-9_]+" } }
-function Right-Hold([int]$Ms) { [OWRG.Native]::mouse_event(0x8, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $Ms }
-function Right-Release { [OWRG.Native]::mouse_event(0x10, 0, 0, 0, [UIntPtr]::Zero) }
+# Right button held across several steps: only with the game in front, and a caller releases it in a finally.
+function Right-Hold([int]$Ms) { Assert-GameForeground; Send-MouseEvent 0x8; Start-Sleep -Milliseconds $Ms }
+function Right-Release { Send-MouseEvent 0x10 }
 function Level-View { Py 'pc = get_pc(); r = pc.Rotation; pc.Rotation = unrealsdk.make_struct("Rotator", Pitch=0, Yaw=(r.Yaw + 16384) & 0xFFFF, Roll=0); print("ok")' | Out-Null }
 
 # Everything the game or the SDK could rewrite: the saves, the config and two SDK stores (an earlier session saw Sanity Saver
@@ -102,8 +103,8 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'wp2/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
-    $log.block_saves = Py 'print(block_saves())'
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'wp2/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
@@ -164,9 +165,10 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             $g.held = PyJson 'fp3_damage()'
             if (!$SkipVisuals -and $gun -like 'slice_*') {
                 Py 'fp3_unlock_aim(); print("ok")' | Out-Null
-                Level-View; Focus-Game | Out-Null; Start-Sleep 2
+                Level-View; Assert-GameForeground; Start-Sleep 2
                 Save-Shot "wp2/vis/$gun-hip.png" | Out-Null
-                Right-Hold 900; Save-Shot "wp2/vis/$gun-ads.png" | Out-Null; Right-Release; Start-Sleep 1
+                try { Right-Hold 900; Save-Shot "wp2/vis/$gun-ads.png" | Out-Null } finally { Right-Release }
+                Start-Sleep 1
                 $g.muzzle_burst = Invoke-Burst "wp2/vis/$gun-muzzle" 1.2 25 { Send-Click } 1.0
                 Start-Sleep 1
                 $g.reload_burst = Invoke-Burst "wp2/vis/$gun-reload" 4.0 60 { Send-Key R } 1.0

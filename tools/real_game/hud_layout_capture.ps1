@@ -27,6 +27,8 @@ $clips = @($names | ForEach-Object { "p1.$_" }) + @('p1.character.cooldown', 'p1
     'p1.shield.shield_disp', 'p1.levelClassMod.level', 'p1.bullets.bullet_c')
 $clipsPy = '[' + (($clips | ForEach-Object { "'$_'" }) -join ',') + ']'
 
+$marker = "-owrun=$Lane-$PID"   # with the image path and start time, what Stop-OwnGame checks before stopping a PID
+$procStart = $null
 $hub = $null; $bak = $null; $proc = $null; $runLock = $false
 try {
     while (!$hub) {
@@ -40,17 +42,17 @@ try {
     foreach ($res in $Resolutions) {
         $w, $h = $res -split 'x'; $run = [ordered]@{}; $log.runs[$res] = $run
         Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
-        $proc = Start-Game @('-windowed', "-ResX=$w", "-ResY=$h", '-nostartupmovies', "-Character=$Character")
+        $proc = Start-Game @('-windowed', "-ResX=$w", "-ResY=$h", '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
         $ok = $false
         for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
         if (-not $ok) { Save-Shot "hud_layout/boot_$res.png" | Out-Null; throw "driver did not answer at $res" }
-        $run.block_saves = Py 'print(block_saves())'
-        Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+        $run.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+        Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
         $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
         "map at ${res}: $map"; $run.map = $map
         if ($map -notmatch 'WillowPlayerPawn') { Save-Shot "hud_layout/load_failed_$res.png" | Out-Null; throw "no player pawn: $map" }
         Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 3
-        Focus-Game | Out-Null; Start-Sleep 2
+        Assert-GameForeground; Start-Sleep 2
         $rect = Get-GameRect; $run.client = @{ x = $rect.X; y = $rect.Y; width = $rect.Width; height = $rect.Height }
         Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/hud_layout.py') hud_layout | Out-Null
         $run.dump = Py "import json; print(json.dumps(hl_dump('layout_$res', $clipsPy), default=str))" 60
@@ -58,14 +60,15 @@ try {
         "dump ${res}: $($run.dump); client $($rect.Width)x$($rect.Height)"
         try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
         for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
-        $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
-        if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force; Start-Sleep 3 }
+        $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
+        if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }
+        if ($stopped -eq 'stopped') { Start-Sleep 3 }
         $proc = $null
     }
 } finally {
     $log.finished = (Get-Date).ToString('o')
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
-    if ($proc) { Start-Sleep 2; $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -eq 'Borderlands2') { Stop-Process -Id $proc.Id -Force } }
+    if ($proc) { Start-Sleep 2; "cleanup game: $(Stop-OwnGame $proc $procStart $marker)"; Start-Sleep 3 }
     try { Remove-Driver } catch { "Remove-Driver failed: $_" }
     if ($runLock) { Exit-RunLock }
     if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }

@@ -42,8 +42,9 @@ function PyJson([string]$Expr, [int]$Timeout = 30) {
 function Q([string]$Text) { ConvertTo-Json -InputObject $Text -Compress }
 # Gun ids name local recipe files and output folders: letters, digits and underscores only.
 foreach ($id in $Guns) { if ($id -notmatch '^[A-Za-z0-9_]+$') { throw "gun id '$id' is not of the form [A-Za-z0-9_]+" } }
-function Right-Hold([int]$Ms) { [OWRG.Native]::mouse_event(0x8, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds $Ms }
-function Right-Release { [OWRG.Native]::mouse_event(0x10, 0, 0, 0, [UIntPtr]::Zero) }
+# Right button held across several steps: only with the game in front, and a caller releases it in a finally.
+function Right-Hold([int]$Ms) { Assert-GameForeground; Send-MouseEvent 0x8; Start-Sleep -Milliseconds $Ms }
+function Right-Release { Send-MouseEvent 0x10 }
 function Level-View { Py 'pc = get_pc(); r = pc.Rotation; pc.Rotation = unrealsdk.make_struct("Rotator", Pitch=0, Yaw=(r.Yaw + 16384) & 0xFFFF, Roll=0); print("ok")' | Out-Null }
 
 # Everything the game or the SDK could rewrite: the saves, the config and two SDK stores (an earlier session saw Sanity Saver
@@ -106,8 +107,8 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'pj/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
-    $log.block_saves = Py 'print(block_saves())'
-    Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45
+    $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'pj/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
@@ -126,12 +127,12 @@ try {
         try {
             $g.spawn = PyJson "fp_spawn($(Q $gun))" 60
             $g.ready = PyJson "fp_ready($(Q $gun), 1)" 60
-            Focus-Game | Out-Null; Send-Key '1'; Start-Sleep 2   # draw quick slot 1 (fp_ready only fills it)
+            Assert-GameForeground; Send-Key '1'; Start-Sleep 2   # draw quick slot 1 (fp_ready only fills it)
             $g.held = Py 'w = get_pc().Pawn.Weapon; print(w.DefinitionData.WeaponTypeDefinition._path_name() if w else None)'
             $g.fields = PyJson 'pj_fields()' 60
             PyJson 'wp2_infinite_ammo(True)' | Out-Null
             $g.wall = PyJson 'fp_face_wall()' 60
-            Focus-Game | Out-Null; Start-Sleep 2
+            Assert-GameForeground; Start-Sleep 2
             # (a) single shots 1.5 s apart: the pool's floor, the per-shot impulse, hold and decay; kick and its return.
             PyJson "pj_start($(Q "${gun}_single"))" | Out-Null
             PyJson 'wp2_autofire(8, 0.06, 1.5)' | Out-Null; Wait-Auto 16; Start-Sleep 2
@@ -142,9 +143,11 @@ try {
             $g.hold = PyJson 'pj_stop()' 60
             # (c) the same, zoomed: the zoom effect on the cone and the kick.
             PyJson "pj_start($(Q "${gun}_zoom"))" | Out-Null
-            [OWRG.Native]::mouse_event(0x8, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 800
-            PyJson 'wp2_autofire(1, 2.0, 0.1)' | Out-Null; Wait-Auto 3
-            Right-Release; Start-Sleep 3
+            try {
+                Right-Hold 800
+                PyJson 'wp2_autofire(1, 2.0, 0.1)' | Out-Null; Wait-Auto 3
+            } finally { Right-Release }
+            Start-Sleep 3
             $g.zoom = PyJson 'pj_stop()' 60
             # (d) many separate presses for the AddSpread density (pellets x presses draws).
             $n = if ($gun -eq 'slice_shotgun') { 40 } else { 120 }
@@ -201,7 +204,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     try {
         $s.spawn = PyJson "fp_spawn($(Q $StatusGun))" 60
         $s.ready = PyJson "fp_ready($(Q $StatusGun), 1)" 60
-        Focus-Game | Out-Null; Send-Key '1'; Start-Sleep 2   # draw quick slot 1 (fp_ready only fills it)
+        Assert-GameForeground; Send-Key '1'; Start-Sleep 2   # draw quick slot 1 (fp_ready only fills it)
         $s.held = Py 'w = get_pc().Pawn.Weapon; print(w.DefinitionData.WeaponTypeDefinition._path_name() if w else None)'
         "status gun held: $($s.held)"
         if ($s.held -notmatch 'Maliwan') { throw "status gun not in hand: $($s.held)" }
@@ -226,7 +229,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             PyJson 'fp3_aim_target(0.0, True)' | Out-Null
             $gr.start = PyJson 'pj_grenade_start("grenades")'
             PyJson "fp3_run_begin($(Q 'grenades'), {'throws': $GrenadeThrows})" | Out-Null
-            for ($k = 0; $k -lt $GrenadeThrows; $k++) { Focus-Game | Out-Null; Send-Key G; Start-Sleep 5 }
+            for ($k = 0; $k -lt $GrenadeThrows; $k++) { Assert-GameForeground; Send-Key G; Start-Sleep 5 }
             Start-Sleep 3
             $gr.run_end = PyJson 'fp3_run_end()'
             $gr.stop = PyJson 'pj_grenade_stop()' 60
