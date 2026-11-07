@@ -16,7 +16,7 @@ FOpenWillowRespawnFee::FStrings FOpenWillowRespawnFee::ParseStrings(const FStrin
 {
     // Our own words, for a run without the install.
     FStrings Out{TEXT("Respawn"), TEXT("Fee: $%c"), TEXT("Fee: none"), false};
-    int32 Found = 0;
+    bool bTitle = false, bBody = false, bWaived = false;
     TArray<FString> Lines;
     IniText.ParseIntoArrayLines(Lines);
     bool bInSection = false;
@@ -31,11 +31,12 @@ FOpenWillowRespawnFee::FStrings FOpenWillowRespawnFee::ParseStrings(const FStrin
         FString Key, Value;
         if (!bInSection || !Trimmed.Split(TEXT("="), &Key, &Value)) continue;
         Value = Value.TrimQuotes().Replace(TEXT("\\n"), TEXT("\n"));
-        if (Key == TEXT("RespawnDialogTitleString")) { Out.Title = Value; ++Found; }
-        else if (Key == TEXT("RespawnDialogString")) { Out.Body = Value; ++Found; }
-        else if (Key == TEXT("RespawnDialogFeeWaivedString")) { Out.Waived = Value; ++Found; }
+        if (Value.IsEmpty()) continue;   // an empty string keeps the neutral one, and does not count as found
+        if (Key == TEXT("RespawnDialogTitleString")) { Out.Title = Value; bTitle = true; }
+        else if (Key == TEXT("RespawnDialogString")) { Out.Body = Value; bBody = true; }
+        else if (Key == TEXT("RespawnDialogFeeWaivedString")) { Out.Waived = Value; bWaived = true; }
     }
-    Out.bLoaded = Found == 3;
+    Out.bLoaded = bTitle && bBody && bWaived;
     return Out;
 }
 
@@ -50,12 +51,13 @@ TArray<FString> FOpenWillowRespawnFee::WrapLines(const FString& Text, int32 MaxC
     Text.ParseIntoArray(Paragraphs, TEXT("\n"), false);
     for (const FString& Paragraph : Paragraphs)
     {
+        if (Out.Num() >= MaxLines) break;
         TArray<FString> Words;
         Paragraph.ParseIntoArray(Words, TEXT(" "), true);
         FString Line;
         for (FString Word : Words)
         {
-            while (Word.Len() > MaxChars)   // too long for any line: cut it
+            while (Word.Len() > MaxChars && Out.Num() < MaxLines)   // too long for any line: cut it
             {
                 if (!Line.IsEmpty()) { Out.Add(Line); Line.Reset(); }
                 Out.Add(Word.Left(MaxChars));
