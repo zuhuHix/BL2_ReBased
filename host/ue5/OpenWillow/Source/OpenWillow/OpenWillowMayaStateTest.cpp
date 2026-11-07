@@ -100,6 +100,8 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestTrue(TEXT("the stand-in shield takes the hit"), Hit.ToShield == 100.f && Hit.ToHealth == 0.f && Maya.Health == HealthBefore);
         Run(Maya, 1.f, 1.f + FromRule.RechargeDelay + 2.f);
         TestTrue(TEXT("it recharges after the delay"), Maya.Shield > 125.f);
+    }
+    {
         // The fee's rule, with invented cash values and text.
         TestEqual(TEXT("fee rounds half up"), FOpenWillowRespawnFee::FeeFor(50), 4);
         TestEqual(TEXT("fee rounds down below a half"), FOpenWillowRespawnFee::FeeFor(1000), 70);
