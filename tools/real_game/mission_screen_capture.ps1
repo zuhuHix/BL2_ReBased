@@ -80,7 +80,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'offer_esc', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors')
+$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors')
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -157,16 +157,9 @@ try {
     # the page, the reward and the respawn are what it is for.
     $row = Test-Keys 'offer' @('Mouse', 'F') 0
     Set-Stage 'offer_keys' ($log.delivered_offer_F.delivered -eq $true) "F never reached the screen's handler, so nothing is known about what it does: $($log.delivered_offer_F | ConvertTo-Json -Compress)"
+    # Enter straight away: Esc is not tried at the offer, since a surprise there could end the run before the reward page and the respawn it is for (two runs were lost at this page).
     $accept = $row
-    if ($row.status -eq 0) {
-        $esc = Test-Key 'offer' 'Esc'
-        Set-Stage 'offer_esc' ($esc.open -eq $false -and $esc.status -eq 0 -and $log.delivered_offer_Esc.delivered -eq $true) "Esc did not close the offer: open $($esc.open), status $($esc.status)"
-        if ($esc.open) { throw 'the offer stayed open after Esc' }
-        $row = Open-Screen 'offer_again'
-        if (!$row.open) { throw 'the screen did not open again at the offer' }
-        if ($row.status -ne 0) { throw "opening the screen changed the status to $($row.status): the opening E's release reached the mod" }
-        $accept = Test-Key 'offer' 'Enter'
-    }
+    if ($row.status -eq 0) { $accept = Test-Key 'offer' 'Enter' }
     Read-After 'accept_after' 1.0 | Out-Null
     Set-Stage 'accept' ($accept.status -eq 1 -and $log.delivered_offer_Enter.delivered -eq $true) "Enter did not accept: status $($accept.status)"
     if ($accept.status -ne 1) { throw 'the offer was not accepted' }

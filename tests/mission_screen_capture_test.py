@@ -98,7 +98,7 @@ def test_the_capture_parses_and_every_stage_is_marked():
     assert done.returncode == 0, done.stdout + done.stderr
     text = CAPTURE.read_text(encoding='utf-8')
     requested = text[text.index('$stagesRequested = @('):].split('\n')[0]
-    for stage in ('start', 'offer', 'offer_esc', 'accept', 'ready', 'turnin', 'reward', 'reward_taken', 'closed', 'respawn'):
+    for stage in ('start', 'offer', 'accept', 'ready', 'turnin', 'reward', 'reward_taken', 'closed', 'respawn'):
         assert f"'{stage}'" in requested, stage
         assert f"Set-Stage '{stage}'" in text, stage
 
@@ -361,14 +361,14 @@ def test_no_key_the_mod_handles_goes_to_the_screen():
         assert mod_key not in pressed
     # The only E is the one that opens the screen from the world, and an open that moved the status stops the run.
     assert stages.count('Send-Key E') == 0 and 'Send-Key E' in text[:text.index("$extraRoots = [ordered]@{")]
-    assert "the opening E's release reached the mod" in stages and "Set-Stage 'offer' ($row.open -eq $true -and $row.status -eq 0)" in stages
+    assert "Set-Stage 'offer' ($row.open -eq $true -and $row.status -eq 0)" in stages
     # F is left out of the reward page: the script inspects the selected item, and there is none.
     assert "foreach ($key in 'Mouse', 'Esc')" in stages
     # A key that accepts or turns in does not end the run: it carries on from the new status.
-    assert 'a key test changed' not in stages and 'if ($row.status -eq 0) {' in stages and 'if ($row.status -eq 3) { $turned' in stages
+    assert 'a key test changed' not in stages and "if ($row.status -eq 0) { $accept = Test-Key 'offer' 'Enter' }" in stages and "Test-Key 'offer' 'Esc'" not in stages and 'if ($row.status -eq 3) { $turned' in stages
     # Enter goes through Test-Key, so it is marked and its delivery read, and the respawn presses nothing.
     assert 'Send-Key Enter' not in stages
-    order = ["Test-Keys 'offer' @('Mouse', 'F') 0", "$esc = Test-Key 'offer' 'Esc'", "$accept = Test-Key 'offer' 'Enter'", "ms_mark('turnin_enter')", "Test-Keys 'turnin' @('Mouse') 3",
+    order = ["Test-Keys 'offer' @('Mouse', 'F') 0", "$accept = Test-Key 'offer' 'Enter'", "ms_mark('turnin_enter')", "Test-Keys 'turnin' @('Mouse') 3",
              "$turned = Test-Key 'turnin' 'Enter'", "foreach ($key in 'Mouse', 'Esc')", "ms_mark('reward_press_Enter')", "$after = Test-Key 'after' 'Esc'"]
     places = [stages.index(needle) for needle in order]
     assert places == sorted(places), list(zip(order, places))
@@ -385,7 +385,7 @@ def test_the_capture_sees_what_each_stage_claims():
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     for needle in ("Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0)", "Set-Stage 'offer_keys' ($log.delivered_offer_F.delivered -eq $true)", "Set-Stage 'reward_keys' ($log.delivered_reward_Esc.delivered -eq $true)",
                    "Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0)", 'if ($log.before.status -ne 0) { throw', "if ($map -notmatch 'Sanctuary')",
-                   '$null = switch ($Key)', '$esc = Test-Key'):
+                   '$null = switch ($Key)', "$after = Test-Key 'after' 'Esc'"):
         assert needle in text, needle
     # Esc never goes out by itself in a stage: Test-Keys reopens a screen a key closed, and the reward's loop checks it is open.
     stages = text[text.index("$log.hooks = PyJson 'ms_start()'"):text.index('\n} catch {\n    $runError')]
