@@ -17,6 +17,30 @@ def log(rows=None, summary=None):
     return '\n'.join(lines)
 
 
+class MeleeClipTest(unittest.TestCase):
+    PRESS = 'LogTemp: Display: OWMELEE press t=12.50 duration={} clip={}\n'
+
+    def test_the_clip_at_its_length_passes(self):
+        self.assertEqual(cc.grade_melee_clip(self.PRESS.format('0.70', 1) * 2), [])
+
+    def test_the_stand_in_fails_though_its_duration_matches(self):
+        self.assertTrue(cc.grade_melee_clip(self.PRESS.format('0.70', 0)))
+
+    def test_a_clip_of_another_length_fails(self):
+        self.assertTrue(cc.grade_melee_clip(self.PRESS.format('1.20', 1)))
+
+    def test_no_press_fails(self):
+        self.assertTrue(cc.grade_melee_clip('LogTemp: Display: nothing\n'))
+
+    def test_the_missing_clip_warning_fails(self):
+        missing = 'LogTemp: Warning: OpenWillow arms animation not found: /Game/X/Anim_SirenCombat_Melee\n'
+        self.assertTrue(cc.grade_melee_clip(missing + self.PRESS.format('0.70', 1)))
+
+    def test_another_clip_missing_is_not_this_ones_problem(self):
+        other = 'LogTemp: Warning: OpenWillow arms animation not found: /Game/X/Anim_SirenCombat_Phase_Lock_Fail\n'
+        self.assertEqual(cc.grade_melee_clip(other + self.PRESS.format('0.70', 1)), [])
+
+
 class CheckControlsTest(unittest.TestCase):
     def test_a_full_run_passes(self):
         self.assertEqual(cc.grade(log())[1], [])
