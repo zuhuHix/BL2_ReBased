@@ -1,5 +1,6 @@
 #include "OpenWillowAudio.h"
 
+#include "AudioMixerBlueprintLibrary.h"
 #include "Components/AudioComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
@@ -16,6 +17,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "TimerManager.h"
+#include "UnrealClient.h"
 #include "UObject/UObjectGlobals.h"
 
 // RIFF reading is a few explicit bounds checks rather than the engine's FWaveModInfo, so the test below can state exactly
@@ -143,6 +145,15 @@ void LoadOnce()
     }
 }
 
+// -owrecordaudio: the WAV path, when the recording started (real time; -1 before), and when it was stopped (-1 while running).
+FString GRecordPath;
+double GRecordStarted = -1, GRecordStopped = -1, GLastFrame = -1;
+int32 GFrames = 0;
+// A recording longer than this is cut off by the mixer; the slice gate takes about two minutes with its pauses. Host choice.
+constexpr float RecordLimitSeconds = 900.f;
+constexpr double FrameInterval = 1.5;
+constexpr double WriteWaitLimit = 30.0;
+
 // The wave a test can look at after the play: bytes the mixer has not pulled yet.
 TWeakObjectPtr<USoundWaveProcedural> GLastWave;
 // Seconds of sound the mixer may still hold after it has pulled the whole queue.
@@ -198,7 +209,57 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
         }
     }), DrainPoll, true);
     UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num());
+    Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
     return true;
+}
+
+void OpenWillowAudio::Cue(const UObject* WorldContext, const FString& Label)
+{
+    using namespace OpenWillowAudioImpl;
+    if (GRecordStarted < 0 || GRecordStopped >= 0) return;
+    const double Now = FPlatformTime::Seconds();
+    FString Frame = TEXT("-");
+    // One request at a time: a second request in the same frame would replace the first.
+    if (GLastFrame < 0 || Now - GLastFrame >= FrameInterval)
+    {
+        GLastFrame = Now;
+        Frame = FString::Printf(TEXT("frame-%03d.png"), ++GFrames);
+        FScreenshotRequest::RequestScreenshot(FPaths::GetPath(GRecordPath) / TEXT("frames") / Frame, true, false);
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC cue t=%.3f label=%s frame=%s"), Now - GRecordStarted, *Label, *Frame);
+}
+
+void OpenWillowAudio::StopRecording(const UObject* WorldContext)
+{
+    using namespace OpenWillowAudioImpl;
+    if (GRecordStarted < 0 || GRecordStopped >= 0 || !WorldContext) return;
+    GRecordStopped = FPlatformTime::Seconds();
+    // The mixer writes the WAV on a worker thread; RecordingSettled says when it is there.
+    UAudioMixerBlueprintLibrary::StopRecordingOutput(WorldContext, EAudioRecordingExportType::WavFile, FPaths::GetBaseFilename(GRecordPath), FPaths::GetPath(GRecordPath));
+    UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC stop t=%.3f file=%s"), GRecordStopped - GRecordStarted, *GRecordPath);
+}
+
+bool OpenWillowAudio::RecordingSettled()
+{
+    using namespace OpenWillowAudioImpl;
+    if (GRecordStarted < 0) return true;
+    if (GRecordStopped < 0) return false;
+    // Done once the file exists with more than a header and its size has not changed for a second; the wait limit covers anything odd.
+    // tools/record_audio_listen.ps1 checks the written length against the stopped time.
+    static int64 LastSize = -1;
+    static double SameSince = -1;
+    const double Now = FPlatformTime::Seconds();
+    const int64 Size = IFileManager::Get().FileSize(*GRecordPath);
+    if (Size != LastSize) { LastSize = Size; SameSince = Now; }
+    const bool bDone = Size > 44 && Now - SameSince >= 1.0;
+    if (bDone || Now - GRecordStopped > WriteWaitLimit)
+    {
+        static bool bLogged = false;
+        if (!bLogged) UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC written=%d bytes=%lld after %.1f s"), bDone, Size, Now - GRecordStopped);
+        bLogged = true;
+        return true;
+    }
+    return false;
 }
 
 namespace OpenWillowAudioImpl
@@ -303,6 +364,17 @@ void OpenWillowAudio::Startup()
 {
     using namespace OpenWillowAudioImpl;
     FString File;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrecordaudio="), GRecordPath))
+    {
+        GRecordPath = FPaths::ConvertRelativePathToFull(GRecordPath);
+        FCoreUObjectDelegates::PostLoadMapWithWorld.AddLambda([](UWorld* World)
+        {
+            if (GRecordStarted >= 0 || !World || !World->IsGameWorld()) return;
+            UAudioMixerBlueprintLibrary::StartRecordingOutput(World, RecordLimitSeconds);
+            GRecordStarted = FPlatformTime::Seconds();
+            UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC start file=%s map=%s (test only; records what the host sent to the mixer)"), *GRecordPath, *World->GetMapName());
+        });
+    }
     GEnabled = FParse::Value(FCommandLine::Get(), TEXT("owaudioplay="), File);
     if (!GEnabled) return;
     OpenWillowHit::OnHit().AddStatic(&OnHit);

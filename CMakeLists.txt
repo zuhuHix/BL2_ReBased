@@ -57,6 +57,7 @@ add_test(NAME audio-slice-chain-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_
 add_test(NAME prepare-slice-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/prepare_slice_audio_test.py)
 add_test(NAME decode-slice-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/decode_slice_audio_test.py)
 add_test(NAME check-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_audio_test.py)
+add_test(NAME listen-report-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/listen_report_test.py)
 add_test(NAME ue-lock-machine-wide COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ue_lock_test.py)
 add_test(NAME movie-hud-switch COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/movie_hud_test.py)
 add_test(NAME audio-events-capture-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/audio_events_capture_test.py)

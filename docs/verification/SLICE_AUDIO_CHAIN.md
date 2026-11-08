@@ -216,6 +216,23 @@ and the mixer starts roughly 0.12 s after the play, so the earlier pass, sampled
 it now stops once the queue has drained plus a margin, on real time, with a limit of the sound's length plus 2 s, and the row polls under that limit and logs how long it took. Nobody has reported hearing the tone. `OWAUDIO play` means
 the host called play. Python: `tests/prepare_slice_audio_test.py`, `tests/check_audio_test.py` (synthetic).
 
+## 6. Listening session (2026-11-08, AI-assisted, Claude)
+
+**State: tooling for the maintainer to listen; the host's recording measured, nothing heard by the assistant.**
+
+`tools/record_audio_listen.ps1` runs the slice gate (the sequence `tools/test_slice_gate.ps1` grades) with the host's sounds on (`-owaudioplay`), a quiet pause
+before each step (`-owslicegatepause=<s>`, default 2 s in the driver, 0 = off in the host) and the host recording its own main output (`-owrecordaudio=<file.wav>`).
+The recording is UE's own submix recorder (`UAudioMixerBlueprintLibrary::StartRecordingOutput` / `StopRecordingOutput` in the engine's `AudioMixer` module, added to
+the module's private dependencies): no external recorder. Recording starts with the first game map and stops at the slice gate's summary; the gate waits for the
+mixer's background writer to finish the file before it exits. Every `Play` and every gate step logs `OWAUDIOREC cue t=<s from the recording start>` and saves a frame
+at most every 1.5 s. `tools/listen_report.py` then measures the WAV per cue (peak and RMS in the cue's window, how late the sound started after its cue, the quiet
+gap before the next step) and writes `LISTEN.md` and `ANSWERS.md` beside it, under ignored `local/audio_listen/<date>/<time>/`. Both are game-derived (event names
+come from the local manifest) and stay local.
+
+What it can show: what the host sent to the mixer and how loud the mix was. What it cannot: whether a sound is the right one, or sounds like the game. Only the
+roles in section 5 play; the guide lists everything else asked for (reload, equip, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
+level-up, mission and dialog, doors, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
+
 ## UNVERIFIED list
 
 Container fields beyond the oracles above (the externals table, `block_size` use, the 678 longer play actions, 10 unresolved play targets, 1 unresolved

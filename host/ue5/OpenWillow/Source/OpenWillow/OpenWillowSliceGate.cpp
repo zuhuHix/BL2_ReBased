@@ -1,4 +1,5 @@
 #include "OpenWillowSliceGate.h"
+#include "OpenWillowAudio.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryPickup.h"
@@ -58,6 +59,7 @@ void UOpenWillowSliceGate::Finish(const FString& Why)
 {
     if (!Why.IsEmpty()) UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note run ended early: %s"), *Why);
     UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE SUMMARY pass=%d fail=%d na=%d"), Pass, Failed, NotAvailable);
+    OpenWillowAudio::StopRecording(this);
     Next(EStep::Done);
 }
 
@@ -351,7 +353,6 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     AOpenWillowWalker* W = Walker();
     if (!W || !GetWorld()) return;
     RunTime += Delta;
-    StepTime += Delta;
     UseHeldFor += Delta;
     if (bUseHeld && UseHeldFor >= 0.1f)
     {
@@ -359,12 +360,22 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::E, IE_Released, 0.f));
         bUseHeld = false;
     }
+    if (HoldLeft > 0.f) { HoldLeft -= Delta; return; }
+    // Names in EStep's order, for a recording's cue log; Cue does nothing without -owrecordaudio.
+    static const TCHAR* const StepNames[] = {TEXT("Start"), TEXT("Spawn"), TEXT("Arena"), TEXT("Fight"), TEXT("Recover"), TEXT("Loot"), TEXT("Pickup"),
+        TEXT("PickupDecoy"), TEXT("Equip"), TEXT("Phaselock"), TEXT("Accept"), TEXT("WaitWalk"), TEXT("Trigger"), TEXT("ShootDummy"), TEXT("TurnIn"),
+        TEXT("Confirm"), TEXT("Down"), TEXT("Bleed"), TEXT("Done")};
+    static_assert(UE_ARRAY_COUNT(StepNames) == uint8(EStep::Done) + 1, "a name per step");
+    if (StepTime == 0.f) OpenWillowAudio::Cue(this, FString(TEXT("step ")) + StepNames[uint8(Step)]);
+    StepTime += Delta;
     UOpenWillowQuest* Quest = W->GetQuest();
     UOpenWillowInventory* Inventory = W->GetInventory();
     if (SkipWhileDown()) return;
     switch (Step)
     {
     case EStep::Start:
+        FParse::Value(FCommandLine::Get(), TEXT("owslicegatepause="), StepPause);
+        StepPause = FMath::Clamp(StepPause, 0.f, 10.f);
         UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE start map=%s quest=%d range_command=%d"), *GetWorld()->GetMapName(),
             Quest && Quest->Enabled(), IConsoleManager::Get().FindConsoleObject(TEXT("ow.Range")) != nullptr);
         Next(EStep::Spawn);
@@ -913,7 +924,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Done:
-        if (StepTime > 2.f && !FParse::Param(FCommandLine::Get(), TEXT("owslicegatestay"))) { FPlatformMisc::RequestExit(false); SetComponentTickEnabled(false); }
+        if (StepTime > 2.f && OpenWillowAudio::RecordingSettled() && !FParse::Param(FCommandLine::Get(), TEXT("owslicegatestay"))) { FPlatformMisc::RequestExit(false); SetComponentTickEnabled(false); }
         break;
     }
 }

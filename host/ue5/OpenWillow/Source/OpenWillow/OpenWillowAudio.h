@@ -45,4 +45,14 @@ OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& Out
 
 // True when the engine accepted the sound. WorldContext gives the world; a null context or missing role returns false.
 OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role);
+
+// Test only, for a listening session (tools/record_audio_listen.ps1): -owrecordaudio=<file.wav> records the engine's main output from the
+// first game map until StopRecording, through the audio mixer's own submix recorder (no new tool). Every Play and every Cue then logs
+//   OWAUDIOREC cue t=<seconds since the recording started> label=<role or step> frame=<png or ->
+// and saves a frame of the screen at most every 1.5 s. A recording proves what the host sent to the mixer, not what anyone heard.
+// Without the switch these do nothing.
+OPENWILLOW_API void Cue(const UObject* WorldContext, const FString& Label);
+OPENWILLOW_API void StopRecording(const UObject* WorldContext);
+// True when no recording is running or waiting to be written: the file is complete (or 30 s have passed since the stop).
+OPENWILLOW_API bool RecordingSettled();
 }

@@ -88,7 +88,10 @@ private:
     void PassLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("PASS"), Detail); }
     void FailLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("FAIL"), Detail); }
     void MissingLink(const TCHAR* Name, const FString& Detail) { Link(Name, TEXT("NOT_AVAILABLE"), Detail); }
-    void Next(EStep To) { Step = To; StepTime = 0.f; ShotClock = 0.f; }
+    void Next(EStep To) { Step = To; StepTime = 0.f; ShotClock = 0.f; HoldLeft = StepPause; }
+    // -owslicegatepause=<s> (tools/record_audio_listen.ps1): seconds the driver waits before each step, so a recording's steps stand apart.
+    // The world keeps running during the wait; StepTime does not count it. 0 (the default) leaves the run as it was.
+    float StepPause = 0.f, HoldLeft = 0.f;
     void Finish(const FString& Why);
     void PressUse();
     void Place(const FVector& Location, const FVector& Look);
