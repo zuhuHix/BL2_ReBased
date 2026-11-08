@@ -107,7 +107,7 @@ try {
     if (Get-GameProcess) { throw 'Borderlands2 is running although the hub lock was free; not touching it' }
     Enter-RunLock 600; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
-    Install-Driver
+    Install-Driver -Exclusive
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', $marker)
     if ($Character) { $gameArgs += "-Character=$Character" }   # the quick_startup mod puts this slot on the menu's Continue

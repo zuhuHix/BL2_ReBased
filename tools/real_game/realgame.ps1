@@ -60,33 +60,62 @@ function Backup-Saves {
     $dst
 }
 
-function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive) {
-    # Copy the command-channel mod into the game's sdk_mods (removed again by Remove-Driver).
-    # -BlockSavesAtStart: the driver blocks the save functions as soon as it loads (see the driver's autoblock.flag).
-    # -Exclusive: refuse when bl-sdk is absent or the mod folder already exists (then this run did not create it and must
-    # neither overwrite nor remove it); otherwise the old behaviour (create or overwrite).
+# Copy the command-channel mod into the game's sdk_mods (removed again by Remove-Driver). Always exclusive: refuse when bl-sdk is absent or the
+# folder already exists and is not this run's, so a folder this run did not install is never overwritten or removed. -Exclusive is still
+# accepted and changes nothing. -ClaimedBy <id>: the caller created the folder first, holding only a .owrun file with that id (the claim in
+# projectiles_capture and weapon_parity2_capture); that folder is this run's. -BlockSavesAtStart: the driver blocks the save functions as soon
+# as it loads (its autoblock.flag). The install is written into the pending record before the folder is touched.
+$script:DriverInstalled = $false   # true once this process installed (or claimed) the folder; Remove-Driver removes nothing otherwise
+function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive, [string]$ClaimedBy = '') {
     $target = $script:DriverDir
-    # The record first: the driver's save block and command channel stay in the game's folder if this run is killed.
-    Add-PendingChange "driver installed at $target (save block from the first frame: $([bool]$BlockSavesAtStart))"
-    if ($Exclusive) {
-        if (!(Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods'))) { throw "bl-sdk is not installed: $(Join-Path $script:Game 'sdk_mods') is missing" }
-        if (Test-Path -LiteralPath $target) { throw "$target already exists; not overwriting it (remove it by hand if it is a stale copy of this driver)" }
+    if (!(Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods'))) { throw "bl-sdk is not installed: $(Join-Path $script:Game 'sdk_mods') is missing" }
+    $claimed = $false
+    if (Test-Path -LiteralPath $target) {
+        $claimed = [bool]$ClaimedBy -and (Test-DriverClaim $target $ClaimedBy)
+        if (!$claimed) { throw "$target already exists and is not this run's; not overwriting it (remove it by hand if it is a stale copy of this driver)" }
     }
-    # A folder this call creates is removed again if the install fails part-way (a partial driver would make the next
-    # -Exclusive run refuse); a folder that already existed is left as it is.
-    $created = !(Test-Path -LiteralPath $target)
+    # The record first: the driver's save block and command channel stay in the game's folder if this run is killed.
+    Add-PendingChange "driver installed at $target (save block from the first frame: $([bool]$BlockSavesAtStart); $(if ($claimed) { "into the folder claimed by $ClaimedBy" } else { 'new folder' }))"
     try {
-        New-Item -ItemType Directory -Force $target | Out-Null
+        if (!$claimed) { New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null }   # no -Force: a folder that appeared since is refused
+        $script:DriverInstalled = $true
         Copy-Item (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py') $target -Force
         Set-Content -LiteralPath (Join-Path $target 'cmd_dir.txt') -Value $script:CmdDir -NoNewline
-        $flag = Join-Path $target 'autoblock.flag'
-        if ($BlockSavesAtStart) { Set-Content -LiteralPath $flag -Value '1' -NoNewline } else { Remove-Item $flag -ErrorAction SilentlyContinue }
+        if ($BlockSavesAtStart) { Set-Content -LiteralPath (Join-Path $target 'autoblock.flag') -Value '1' -NoNewline }
     } catch {
-        if ($created) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }
+        # Only this run's folder is removed again (a partial driver would make the next run refuse).
+        if ($script:DriverInstalled) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue; $script:DriverInstalled = $false }
         throw
     }
 }
-function Remove-Driver { Remove-Item -Recurse -Force (Join-Path $script:Game 'sdk_mods/openwillow_realgame') -ErrorAction SilentlyContinue }
+# A caller's claim: the folder holds only .owrun, and it reads exactly $Id.
+function Test-DriverClaim([string]$Dir, [string]$Id) {
+    $items = @(Get-ChildItem -LiteralPath $Dir -Force)
+    $owner = Join-Path $Dir '.owrun'
+    $items.Count -eq 1 -and $items[0].Name -ceq '.owrun' -and ([IO.File]::ReadAllText($owner) -ceq $Id)
+}
+# Remove the driver folder only when this process installed it and it still holds nothing but this driver's files. Anything else is left and
+# reported, and the pending record's check (driver folder still there) keeps the record and the locks.
+function Remove-Driver {
+    $target = $script:DriverDir
+    if (!(Test-Path -LiteralPath $target)) { $script:DriverInstalled = $false; return }
+    if (!$script:DriverInstalled) { Write-Warning "not removing ${target}: this run did not install it"; return }
+    $known = '__init__.py', 'cmd_dir.txt', 'autoblock.flag', '.owrun', '__pycache__'
+    $extra = @(Get-ChildItem -LiteralPath $target -Force | Where-Object { $_.Name -cnotin $known })
+    $init = Join-Path $target '__init__.py'
+    $changed = (Test-Path -LiteralPath $init) -and ((Get-FileSha256 $init) -cne (Get-FileSha256 (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py')))
+    if ($extra.Count -or $changed) { Write-Warning "not removing ${target}: it holds files this run did not install"; return }
+    Remove-Item -LiteralPath $target -Recurse -Force
+    $script:DriverInstalled = $false
+}
+
+# SHA-256 of a file as upper-case hex (what Get-FileHash printed, so older verified_hashes.json files still compare). .NET only, so the
+# harness does not depend on the Microsoft.PowerShell.Utility module loading in a child shell.
+function Get-FileSha256([string]$Path) {
+    $full = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $sha = [Security.Cryptography.SHA256]::Create(); $stream = [IO.File]::OpenRead($full)
+    try { -join ($sha.ComputeHash($stream) | ForEach-Object { $_.ToString('X2') }) } finally { $stream.Dispose(); $sha.Dispose() }
+}
 
 # Make the live tree $Live identical to the backup tree $Backup: files added during the run are removed, missing and changed
 # files are copied back, directories created during the run are removed when empty. Then every file is compared again by
@@ -96,15 +125,17 @@ function Restore-Tree([string]$Backup, [string]$Live, [string]$Label) {
     $rel = { param($Root, $Path) $Path.Substring($Root.Length + 1) }
     $row = { param($File, $Status) [pscustomobject]@{ file = "$Label\$File"; status = $Status } }
     if (!(Test-Path -LiteralPath $Live)) { New-Item -ItemType Directory -Force $Live | Out-Null }
+    # Paths compare case-sensitively: a file renamed only in case counts as added (removed) and missing (copied back under its old name).
+    $want = Get-TreeHashes $Backup
     foreach ($f in @(Get-ChildItem -LiteralPath $Live -Recurse -File -Force)) {
         $r = & $rel $Live $f.FullName
-        if (!(Test-Path -LiteralPath (Join-Path $Backup $r) -PathType Leaf)) { Remove-Item -LiteralPath $f.FullName -Force; & $row $r 'added, removed' }
+        if (!$want.ContainsKey($r)) { Remove-Item -LiteralPath $f.FullName -Force; & $row $r 'added, removed' }
     }
     foreach ($f in @(Get-ChildItem -LiteralPath $Backup -Recurse -File -Force)) {
         $r = & $rel $Backup $f.FullName; $dst = Join-Path $Live $r
         if (!(Test-Path -LiteralPath $dst -PathType Leaf)) {
             New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null; Copy-Item -LiteralPath $f.FullName $dst -Force; & $row $r 'missing, restored'
-        } elseif ((Get-FileHash -LiteralPath $f.FullName).Hash -ne (Get-FileHash -LiteralPath $dst).Hash) {
+        } elseif ($want[$r] -cne (Get-FileSha256 $dst)) {
             Copy-Item -LiteralPath $f.FullName $dst -Force; & $row $r 'changed, restored'
         }
     }
@@ -118,17 +149,24 @@ function Restore-Tree([string]$Backup, [string]$Live, [string]$Label) {
 function Compare-TreeHashes([string]$A, [string]$B) {
     Compare-Hashes (Get-TreeHashes $A) (Get-TreeHashes $B)
 }
-# Relative path to SHA-256 for every file under $Root; empty when the folder is gone.
+# Relative path to SHA-256 for every file under $Root; empty when the folder is gone. Keys are ordinal (case-sensitive): two paths that differ
+# only in case are two entries, and a rename that changes only case is a difference.
 function Get-TreeHashes([string]$Root) {
-    $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\'); $h = @{}
+    $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\'); $h = [hashtable]::new([StringComparer]::Ordinal)
     if (Test-Path -LiteralPath $Root) {
-        Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $h[$_.FullName.Substring($Root.Length + 1)] = (Get-FileHash -LiteralPath $_.FullName).Hash }
+        Get-ChildItem -LiteralPath $Root -Recurse -File -Force | ForEach-Object { $h[$_.FullName.Substring($Root.Length + 1)] = Get-FileSha256 $_.FullName }
     }
     $h
 }
+# Every path, compared ordinally, whose presence or hash differs between two path-to-hash tables.
 function Compare-Hashes([hashtable]$A, [hashtable]$B) {
-    @($A.Keys) + @($B.Keys) | Sort-Object -Unique | Where-Object { $A[$_] -ne $B[$_] }
+    $keys = [Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($k in $A.Keys) { [void]$keys.Add([string]$k) }
+    foreach ($k in $B.Keys) { [void]$keys.Add([string]$k) }
+    foreach ($k in $keys) { if (!(Test-HashKey $A $k) -or !(Test-HashKey $B $k) -or [string]$A[$k] -cne [string]$B[$k]) { $k } }
 }
+# Exact (ordinal) key presence, whatever comparer the table was made with.
+function Test-HashKey([hashtable]$Table, [string]$Key) { foreach ($k in $Table.Keys) { if ([string]$k -ceq $Key) { return $true } }; $false }
 
 # Copy $Live to the new folder $Snapshot and prove the copy matches, or throw. Returns the snapshot's hashes: store them for
 # Restore-VerifiedRoots, because only a root that passed may be restored from. Restore-Tree deletes live files absent from its backup,
@@ -203,7 +241,7 @@ function Restore-FromVerifiedRecord([string]$Backup) {
         $state = $root.Value.snapshot
         if ($state -is [string]) { $snapshots[$root.Name] = $state }
         elseif ($null -ne $state) {
-            $hashes = @{}
+            $hashes = [hashtable]::new([StringComparer]::Ordinal)
             foreach ($f in $state.PSObject.Properties) { $hashes[$f.Name] = $f.Value }
             $snapshots[$root.Name] = $hashes
         }

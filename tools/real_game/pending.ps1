@@ -8,12 +8,31 @@
 # the exact restore steps, before it takes a lock or touches a file. Contains no game data.
 
 $script:PendingDir = Join-Path $env:LOCALAPPDATA 'OpenWillow'
-# Tests only: OW_TEST_PENDING_DIR moves the folder, and only to somewhere under the system temp folder, so a test never reads or writes the
-# maintainer's records (tests/realgame_test_env.py sets a fresh one for every PowerShell run).
-if ($env:OW_TEST_PENDING_DIR) {
-    $testDir = [IO.Path]::GetFullPath($env:OW_TEST_PENDING_DIR); $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-    if (!$testDir.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "OW_TEST_PENDING_DIR must be under $tempRoot, not $testDir" }
+# Tests only. The folder moves only in an explicit synthetic test mode: OW_TEST_PENDING_DIR under the system temp folder AND
+# OW_TEST_MODE=synthetic-real-game (tests/realgame_test_env.py sets both for every PowerShell run). In that mode the save folders and the game
+# folder must be under the temp folder too (Assert-PendingTestRoots, checked at first use), so a run on the maintainer's saves can never keep its
+# records in Temp. Either variable without the other, or a test folder elsewhere, stops the harness from loading.
+$script:PendingTestMode = $false
+$script:PendingTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+if ($env:OW_TEST_PENDING_DIR -or $env:OW_TEST_MODE) {
+    if (!$env:OW_TEST_PENDING_DIR -or $env:OW_TEST_MODE -cne 'synthetic-real-game') {
+        throw "refusing to start: OW_TEST_PENDING_DIR='$env:OW_TEST_PENDING_DIR' and OW_TEST_MODE='$env:OW_TEST_MODE' are test settings and must come together (OW_TEST_MODE=synthetic-real-game). A real run must have neither: clear them, or real pending records would go to the wrong folder."
+    }
+    $testDir = [IO.Path]::GetFullPath($env:OW_TEST_PENDING_DIR)
+    if (!$testDir.StartsWith($script:PendingTempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "refusing to start: OW_TEST_PENDING_DIR must be under $($script:PendingTempRoot), not $testDir" }
     $script:PendingDir = $testDir
+    $script:PendingTestMode = $true
+}
+# In test mode every folder a record covers must be synthetic (under Temp): the saves, the game folder and the driver folder.
+function Assert-PendingTestRoots([string[]]$More = @()) {
+    if (!$script:PendingTestMode) { return }
+    foreach ($dir in @($script:WillowDir, $script:Game, $script:DriverDir) + $More) {
+        if (!$dir) { continue }
+        $full = [IO.Path]::GetFullPath($dir)
+        if (!$full.StartsWith($script:PendingTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "refusing: test mode (OW_TEST_MODE) is on, but $full is not under $($script:PendingTempRoot). Test mode only runs on synthetic folders; a real run must not set OW_TEST_PENDING_DIR or OW_TEST_MODE."
+        }
+    }
 }
 $script:PendingRecord = $null   # this run's record, once written
 $script:PendingKind = 'openwillow-realgame-pending'
@@ -47,6 +66,7 @@ function Write-PendingFile([string]$Path, $Record) {
 # Write (or rewrite, with more roots) this run's record. Called by Save-VerifiedBackupRecord, so every run that backs up has one before it
 # installs the driver or launches. $Roots maps a root name to its live folder.
 function Write-PendingRecord([string]$Backup, $Roots, [string[]]$Changes = @()) {
+    Assert-PendingTestRoots @($Roots.Values)
     $rootRows = [ordered]@{}   # not $roots: PowerShell names are case-insensitive, and that would hide the parameter
     foreach ($name in $Roots.Keys) { $rootRows[$name] = [ordered]@{ live = [string]$Roots[$name]; tree_sha256 = (Get-TreeDigest $Roots[$name]) } }
     $old = if ($script:PendingRecord -and (Test-Path -LiteralPath $script:PendingRecord)) { Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json } else { $null }
@@ -55,6 +75,7 @@ function Write-PendingRecord([string]$Backup, $Roots, [string[]]$Changes = @()) 
     $record = [ordered]@{
         kind = $script:PendingKind; version = 1; script = $script_; pid = $PID
         process_start = (Get-Process -Id $PID).StartTime.ToString('o')
+        process_start_utc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')   # with pid, the writer's identity (Get-WriterState)
         written = $(if ($old) { $old.written } else { (Get-Date).ToString('o') }); updated = (Get-Date).ToString('o')
         backup = $Backup; roots = $rootRows; driver_dir = $script:DriverDir; game = $env:OPENWILLOW_BL2
         hub_lock = [string](Get-Variable -Name HubLock -ValueOnly -ErrorAction SilentlyContinue)
@@ -96,7 +117,7 @@ function Get-PendingProblems($Record) {
                 continue
             }
             if ($null -eq $state) { $problems += "$($root.Name): no snapshot"; continue }
-            $hashes = @{}
+            $hashes = [hashtable]::new([StringComparer]::Ordinal)   # paths compare case-sensitively
             foreach ($f in $state.PSObject.Properties) { $hashes[$f.Name] = $f.Value }
             $inBackup = @(Compare-Hashes $hashes (Get-TreeHashes (Join-Path $backup $root.Name)))
             if ($inBackup.Count) { $problems += "$($root.Name): the backup changed after it was verified ($($inBackup.Count) files, first $($inBackup[0]))" }
@@ -120,12 +141,32 @@ function Test-IsOurDriverCopy([string]$Dir) {
     if (!(Test-Path -LiteralPath $Dir)) { return $false }
     $mine = Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py'
     $theirs = Join-Path $Dir '__init__.py'
-    if (!(Test-Path -LiteralPath $theirs) -or (Get-FileHash -LiteralPath $theirs).Hash -ne (Get-FileHash -LiteralPath $mine).Hash) { return $false }
+    if (!(Test-Path -LiteralPath $theirs) -or (Get-FileSha256 $theirs) -cne (Get-FileSha256 $mine)) { return $false }
     $known = '__init__.py', 'cmd_dir.txt', 'autoblock.flag', '.owrun', '__pycache__'
     !@(Get-ChildItem -LiteralPath $Dir -Force | Where-Object { $_.Name -notin $known }).Count
 }
 
-function Get-PendingFiles { if (Test-Path -LiteralPath $script:PendingDir) { @(Get-ChildItem -LiteralPath $script:PendingDir -Filter '*pending*.json' -File -Force) } else { @() } }
+# Is the run that wrote a record still running? Identity is the PID and the process start time in UTC, never the command line (a run from an
+# ISE or an interactive shell has no script name there). 'gone': no process has that PID, or the one that has it started at another time.
+# 'alive': same PID, same start time. 'unknown': it cannot be shown either way (no PID, no start time, an unreadable process); treated as alive.
+function Get-WriterState($Record) {
+    if (!$Record.pid) { return 'unknown' }
+    $id = 0
+    if (![int]::TryParse([string]$Record.pid, [ref]$id) -or $id -le 0) { return 'unknown' }
+    $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+    if (!$p) { return 'gone' }
+    $started = try { $p.StartTime.ToUniversalTime() } catch { $null }
+    if ($null -eq $started) { return 'unknown' }
+    $recorded = $null
+    if ($Record.process_start_utc) {
+        $parsed = [datetime]::MinValue
+        if ([datetime]::TryParse([string]$Record.process_start_utc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $recorded = $parsed.ToUniversalTime() }
+    }
+    if ($null -eq $recorded) { return 'unknown' }
+    if ([math]::Abs(($started - $recorded).TotalSeconds) -le 1) { 'alive' } else { 'gone' }
+}
+
+function Get-PendingFiles { Assert-PendingTestRoots; if (Test-Path -LiteralPath $script:PendingDir) { @(Get-ChildItem -LiteralPath $script:PendingDir -Filter '*pending*.json' -File -Force) } else { @() } }
 
 # The exact steps for a record this run cannot complete by itself.
 function Format-PendingRecovery([string]$File, $Record, [string[]]$Problems) {
@@ -135,8 +176,8 @@ function Format-PendingRecovery([string]$File, $Record, [string[]]$Problems) {
     foreach ($c in @($Record.changes)) { $lines += "  It changed: $c" }
     foreach ($p in $Problems) { $lines += "  Not yet back: $p" }
     $lines += @('  This run changed nothing and starts nothing until the record is gone. To recover:',
-        '  1. Make sure Borderlands 2 is closed. The restore puts the saves back as they were before that run: anything played since is lost, so copy',
-        "     '$([Environment]::GetFolderPath('MyDocuments'))\My Games\Borderlands 2\WillowGame\SaveData' aside first if you want to keep it.",
+        '  1. Make sure Borderlands 2 is closed. The restore puts the saves back as they were before that run. It first copies the current saves and',
+        '     settings to a pre-restore folder beside the backup and verifies that copy by tree hash, so anything played since is kept there, not lost.',
         "  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$(if ($Record.game) { $Record.game } else { $env:OPENWILLOW_BL2 })'; . '$PSScriptRoot\realgame.ps1'",
         "     Restore-PendingRecord '$File'",
         '     It restores every root from the verified backup (a backup that changed since is refused), removes the driver folder only if it is this',
@@ -159,12 +200,13 @@ function Assert-NoPendingRecords {
         if (!$record -or !$record.backup) {
             throw "PENDING RECORD: an earlier run left $($f.FullName) and it names no backup, so no restore can be printed or checked. Read it, recover what it names by hand (or with the script that wrote it), then move it out of $script:PendingDir. This run changed nothing. Its contents:$([Environment]::NewLine)$text"
         }
-        if ($record.pid -and [int]$record.pid -ne $PID) {
-            $alive = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$record.pid)" -ErrorAction SilentlyContinue
-            $by = if ($record.script) { [string]$record.script } else { ($f.BaseName -split '_')[0] }
-            if ($alive -and $alive.CommandLine -and $alive.CommandLine.Contains($by)) { throw "Pid $($record.pid) still looks like the run ($by) that wrote $($f.FullName). Wait for it to finish. This run changed nothing." }
-        }
+        # Nothing is completed while the writer may still run: alive, or not shown gone (no start time, unreadable). Fail closed.
+        $writer = Get-WriterState $record
+        if ($writer -eq 'alive') { throw "Pid $($record.pid) is still the run that wrote $($f.FullName) (same start time). Wait for it to finish. This run changed nothing." }
         if (@(Get-GameProcesses).Count) { throw "$($f.FullName) is there and Borderlands 2 is running: nothing can be verified under a live game. Close it first. This run changed nothing." }
+        if ($writer -ne 'gone') {
+            throw (Format-PendingRecovery $f.FullName $record @("the run that wrote it (pid $($record.pid)) cannot be shown to have ended: no recorded start time, or its process cannot be read. Nothing is completed automatically; when you are sure it has ended, use Restore-PendingRecord with -WriterGone"))
+        }
         $problems = @(Get-PendingProblems $record)
         $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
         $driverOnly = $problems.Count -and !@($problems | Where-Object { $_ -notlike 'the driver folder is still there*' }).Count
@@ -180,14 +222,18 @@ function Assert-NoPendingRecords {
 }
 
 # The manual way back for a record (Format-PendingRecovery prints the call): restore from the verified backup, verify, then remove the record.
-function Restore-PendingRecord([string]$File) {
+# Before anything is restored, the current state of every root is copied to a new pre-restore folder beside the backup and that copy is verified
+# by tree hash: progress made after the failed run is never lost, only set aside. -WriterGone: the person confirms the writer has ended when that
+# cannot be shown (Get-WriterState 'unknown'); a writer shown alive is always refused.
+function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
     if (!(Test-Path -LiteralPath $File)) { throw "no record at $File" }
     $record = Get-Content -Raw -LiteralPath $File | ConvertFrom-Json
     if (@(Get-GameProcesses).Count) { throw 'Borderlands 2 is running: close it first. Nothing was changed.' }
-    if ($record.pid -and [int]$record.pid -ne $PID) {
-        $alive = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$record.pid)" -ErrorAction SilentlyContinue
-        if ($alive -and $alive.CommandLine -and $record.script -and $alive.CommandLine.Contains([string]$record.script)) { throw "pid $($record.pid) still looks like the run that wrote $File; wait for it. Nothing was changed." }
-    }
+    $writer = Get-WriterState $record
+    if ($writer -eq 'alive') { throw "pid $($record.pid) is still the run that wrote $File (same start time); wait for it. Nothing was changed." }
+    if ($writer -ne 'gone' -and !$WriterGone) { throw "the run that wrote $File (pid $($record.pid)) cannot be shown to have ended. If you are sure it has, run Restore-PendingRecord '$File' -WriterGone. Nothing was changed." }
+    $aside = Save-PreRestoreSnapshot ([string]$record.backup)
+    "the current saves and settings were copied, verified by tree hash, to $aside (anything played since that run is there)"
     $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
     if (Test-Path -LiteralPath $driver) {
         if (Test-IsOurDriverCopy $driver) { Remove-Item -LiteralPath $driver -Recurse -Force; "removed the driver copy at $driver" }
@@ -198,6 +244,27 @@ function Restore-PendingRecord([string]$File) {
     if ($problems.Count) { throw "record kept at ${File}: $($problems -join '; ')" }
     Remove-Item -LiteralPath $File -Force
     "verified by tree hash; record $File removed"
+}
+
+# Copy every live root the backup's verified_hashes.json names to <backup's folder>\pre-restore-<time>\<root> and prove each copy by tree
+# hash, or throw before anything is restored. Returns the folder.
+function Save-PreRestoreSnapshot([string]$Backup) {
+    $file = Join-Path $Backup 'verified_hashes.json'
+    if (!(Test-Path -LiteralPath $file)) { throw "no verified_hashes.json in $Backup; not restoring from it. Nothing was changed." }
+    $aside = Join-Path (Split-Path -Parent $Backup) ('pre-restore-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$PID")
+    New-Item -ItemType Directory -Path $aside -ErrorAction Stop | Out-Null
+    $proof = [ordered]@{}
+    foreach ($root in (Get-Content -Raw -LiteralPath $file | ConvertFrom-Json).PSObject.Properties) {
+        $live = [string]$root.Value.live
+        if (!(Test-Path -LiteralPath $live)) { $proof[$root.Name] = 'absent'; continue }
+        $copy = Join-Path $aside $root.Name
+        Copy-Item -Recurse -Force -LiteralPath $live $copy
+        $want = Get-TreeDigest $live; $got = Get-TreeDigest $copy
+        if ($want -cne $got) { throw "the pre-restore copy of $live in $copy does not match it by tree hash; not restoring. Nothing was restored." }
+        $proof[$root.Name] = [ordered]@{ live = $live; tree_sha256 = $got }
+    }
+    $proof | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $aside 'pre_restore.json') -Encoding UTF8
+    $aside
 }
 
 # In a run's cleanup, after its restore: the record goes only when every check passes. Returns what happened, for the run's log; anything but

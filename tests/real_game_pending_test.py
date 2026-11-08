@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -226,7 +227,13 @@ $out.save = (Read-Text (Join-Path $tmp 'willow/SaveData/Save0001.sav')).Trim()
 $out.next = Fail-Text {{ Assert-NoPendingRecords }}
 """)
         self.assertIn('record', out['restore'][-1]); self.assertIn('removed', out['restore'][-1])
+        self.assertIn('verified by tree hash, to', out['restore'][0])
         self.assertEqual(out['save'], 'original save')
+        # What the killed run (or a person playing since) left is set aside first, not lost.
+        aside = sorted((self.tmp / 'realgame').glob('pre-restore-*'))
+        self.assertEqual(len(aside), 1)
+        self.assertEqual((aside[0] / 'SaveData/Save0001.sav').read_text(encoding='utf-8-sig').strip(), 'written by the killed run')
+        self.assertTrue((aside[0] / 'pre_restore.json').exists())
         self.assertEqual(out['next'], '')
         self.assertFalse(record.exists())
 
@@ -249,22 +256,49 @@ $out.next = Fail-Text {{ Assert-NoPendingRecords }}
         self.assertTrue(out['driver'])
         self.assertTrue(record.exists())
 
-    def test_a_game_running_or_a_live_writer_refuses_without_checking(self):
+    def test_a_game_running_refuses_without_checking(self):
         self.leave_record()
         (self.tmp / 'game_running').write_text('')
         out = self.run_ps(r"""$out.refusal = Fail-Text { Assert-NoPendingRecords }""")
         self.assertIn('Borderlands 2 is running', out['refusal'])
-        (self.tmp / 'game_running').unlink()
-        # A record naming this very PowerShell's parent-free pid as a live writer: its own pid is skipped, so use a live process whose
-        # command line carries the script name.
-        name = self.records()[0]
-        record = json.loads((self.pending / name).read_text(encoding='utf-8-sig'))
-        live = subprocess.Popen(['powershell', '-NoProfile', '-Command', 'Start-Sleep 30 # body'])
+
+    def test_the_writer_is_known_by_pid_and_start_time_not_by_its_command_line(self):
+        """A live process with no script name on its command line (an ISE, an interactive shell) still counts as the writer."""
+        record = self.leave_record()
+        live = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         try:
-            record['pid'] = live.pid
-            (self.pending / name).write_text(json.dumps(record), encoding='utf-8')
-            out = self.run_ps(r"""$out.refusal = Fail-Text { Assert-NoPendingRecords }""")
-            self.assertIn('still looks like the run (body)', out['refusal'])
+            def rewrite(start):
+                data = json.loads(record.read_text(encoding='utf-8-sig'))
+                data['pid'] = live.pid
+                if start is None:
+                    data.pop('process_start_utc', None)
+                else:
+                    data['process_start_utc'] = start
+                record.write_text(json.dumps(data), encoding='utf-8')
+            started = self.run_ps(rf"""$out.start = (Get-Process -Id {live.pid}).StartTime.ToUniversalTime().ToString('o')""")['start']
+            # Same PID, same start time: the writer is alive. Nothing is completed or removed.
+            rewrite(started)
+            out = self.run_ps(rf"""
+$out.refusal = Fail-Text {{ Assert-NoPendingRecords }}
+$out.restore = Fail-Text {{ Restore-PendingRecord '{record}' -WriterGone }}
+""")
+            self.assertIn('is still the run that wrote', out['refusal'])
+            self.assertIn('is still the run that wrote', out['restore'])
+            self.assertTrue(record.exists())
+            # Same PID, no recorded start time: cannot be shown gone, so nothing is completed (fail closed).
+            rewrite(None)
+            out = self.run_ps(rf"""
+$out.refusal = Fail-Text {{ Assert-NoPendingRecords }}
+$out.restore = Fail-Text {{ Restore-PendingRecord '{record}' }}
+""")
+            self.assertIn('cannot be shown to have ended', out['refusal'])
+            self.assertIn('-WriterGone', out['restore'])
+            self.assertTrue(record.exists())
+            # Same PID, another start time: Windows gave the PID to another process; the writer has gone.
+            rewrite('2001-01-01T00:00:00.0000000Z')
+            out = self.run_ps(r"""$out.lines = @(Assert-NoPendingRecords)""")
+            self.assertIn('Record removed', out['lines'][-1])
+            self.assertFalse(record.exists())
         finally:
             live.kill()   # the PID this test started
 
@@ -281,7 +315,9 @@ $out.next = Fail-Text {{ Assert-NoPendingRecords }}
         record = self.leave_record()
         ours = json.loads(record.read_text(encoding='utf-8-sig'))
         record.unlink()
-        (self.pending / 'showcase_run_pending.json').write_text(json.dumps({'backup': ours['backup'], 'pid': 1, 'script': 'showcase_real_capture'}), encoding='utf-8')
+        # Its pid names no live process, so its writer has gone. (A record with no pid at all cannot be shown gone and is never completed.)
+        gone = subprocess.Popen([sys.executable, '-c', 'pass']); gone.wait()
+        (self.pending / 'showcase_run_pending.json').write_text(json.dumps({'backup': ours['backup'], 'pid': gone.pid, 'script': 'showcase_real_capture'}), encoding='utf-8')
         (self.tmp / 'willow/Config/game.ini').write_text('changed', encoding='utf-8')
         out = self.run_ps(r"""$out.refusal = Fail-Text { Assert-NoPendingRecords }""")
         self.assertIn('Config: differs from the backup', out['refusal'])
@@ -289,6 +325,119 @@ $out.next = Fail-Text {{ Assert-NoPendingRecords }}
         out = self.run_ps(r"""$out.lines = @(Assert-NoPendingRecords)""")
         self.assertIn('Record removed', out['lines'][-1])
         self.assertEqual(self.records(), [])
+
+
+class TestModeTest(unittest.TestCase):
+    """OW_TEST_PENDING_DIR is honoured only in the explicit synthetic test mode, on synthetic folders; anything else refuses to start."""
+
+    def child(self, env, body=''):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / 'mode.ps1'
+            script.write_text(f". '{REALGAME}'\n{body}\n'loaded'\n", encoding='utf-8-sig')
+            base = {k: v for k, v in os.environ.items() if k not in ('OW_TEST_PENDING_DIR', 'OW_TEST_MODE')}
+            return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True,
+                                  timeout=120, env=dict(base, OPENWILLOW_BL2=tmp, **env))
+
+    def test_an_inherited_test_folder_without_the_mode_refuses_to_start(self):
+        with tempfile.TemporaryDirectory() as pending:
+            done = self.child({'OW_TEST_PENDING_DIR': pending, 'OW_TEST_MODE': ''})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn('refusing to start', done.stdout + done.stderr)
+            self.assertNotIn('loaded', done.stdout)
+
+    def test_the_mode_alone_or_a_folder_outside_temp_refuses(self):
+        done = self.child({'OW_TEST_MODE': 'synthetic-real-game', 'OW_TEST_PENDING_DIR': ''})
+        self.assertIn('refusing to start', done.stdout + done.stderr)
+        done = self.child({'OW_TEST_MODE': 'synthetic-real-game', 'OW_TEST_PENDING_DIR': str(ROOT / 'local' / 'pending-test')})
+        self.assertIn('must be under', done.stdout + done.stderr)
+        self.assertNotIn('loaded', done.stdout)
+
+    def test_test_mode_on_the_real_save_folders_refuses_at_first_use(self):
+        # The harness's own default WillowDir is the maintainer's Documents folder: test mode must refuse it before reading or writing records.
+        with tempfile.TemporaryDirectory() as pending:
+            done = self.child({'OW_TEST_PENDING_DIR': pending, 'OW_TEST_MODE': 'synthetic-real-game'},
+                              "try { Get-PendingFiles | Out-Null; 'used' } catch { \"refused: $_\" }")
+            self.assertIn('refused: refusing: test mode', done.stdout, done.stdout + done.stderr)
+            self.assertNotIn('used', done.stdout.replace('refused', ''))
+
+
+class DriverOwnershipTest(PendingBase):
+    """The driver folder is this run's only when this run created it (or claimed it); nothing else is overwritten or removed."""
+
+    def test_an_existing_folder_is_never_overwritten_or_removed(self):
+        out = self.run_ps(r"""
+New-Item -ItemType Directory -Force $script:DriverDir | Out-Null
+Set-Content (Join-Path $script:DriverDir '__init__.py') 'someone else'
+$bak = Backup-Saves
+$out.plain = Fail-Text { Install-Driver }
+$out.exclusive = Fail-Text { Install-Driver -BlockSavesAtStart -Exclusive }
+$out.claim = Fail-Text { Install-Driver -ClaimedBy 'run-1' }
+Remove-Driver 3>$null
+$out.kept = (Read-Text (Join-Path $script:DriverDir '__init__.py')).Trim()
+$out.changes = @((Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).changes).Count
+""")
+        for key in ('plain', 'exclusive', 'claim'):
+            self.assertIn('already exists and is not this run', out[key])
+        self.assertEqual(out['kept'], 'someone else')
+        self.assertEqual(out['changes'], 0)   # refused before anything was recorded or touched
+
+    def test_a_claimed_folder_is_filled_and_only_this_runs_files_are_removed(self):
+        out = self.run_ps(r"""
+New-Item -ItemType Directory -Force (Join-Path $script:Game 'sdk_mods') | Out-Null
+$bak = Backup-Saves
+New-Item -ItemType Directory -Path $script:DriverDir | Out-Null
+New-Item -ItemType File -Path (Join-Path $script:DriverDir '.owrun') -Value 'run-1' | Out-Null
+$out.wrong = Fail-Text { Install-Driver -ClaimedBy 'run-2' }
+Install-Driver -ClaimedBy 'run-1'
+$out.installed = Test-Path (Join-Path $script:DriverDir '__init__.py')
+Set-Content (Join-Path $script:DriverDir 'notes.txt') 'added by a person'
+Remove-Driver 3>$null
+$out.left_with_extra = Test-Path $script:DriverDir
+Remove-Item (Join-Path $script:DriverDir 'notes.txt')
+Remove-Driver
+$out.removed = !(Test-Path $script:DriverDir)
+""")
+        self.assertIn('already exists and is not this run', out['wrong'])
+        self.assertTrue(out['installed'])
+        self.assertTrue(out['left_with_extra'])
+        self.assertTrue(out['removed'])
+
+
+class CaseSensitiveHashTest(PendingBase):
+    def test_paths_differing_only_in_case_are_different_entries(self):
+        out = self.run_ps(r"""
+$a = [hashtable]::new([StringComparer]::Ordinal); $a['Save.sav'] = 'H1'
+$b = [hashtable]::new([StringComparer]::Ordinal); $b['save.sav'] = 'H1'
+$out.diff = @(Compare-Hashes $a $b)
+$both = [hashtable]::new([StringComparer]::Ordinal); $both['Save.sav'] = 'H1'; $both['save.sav'] = 'H2'
+$out.collision = @(Compare-Hashes $both $a)
+$out.same = @(Compare-Hashes $both $both).Count
+$out.hash_case = @(Compare-Hashes @{ 'x' = 'ABC' } @{ 'x' = 'abc' })
+$h = Get-TreeHashes (Join-Path $tmp 'willow/SaveData')
+$out.exact = $h.ContainsKey('Save0001.sav'); $out.other_case = $h.ContainsKey('SAVE0001.SAV')
+""")
+        self.assertEqual(out['diff'], ['Save.sav', 'save.sav'])
+        self.assertEqual(out['collision'], ['save.sav'])
+        self.assertEqual(out['same'], 0)
+        self.assertEqual(out['hash_case'], ['x'])
+        self.assertTrue(out['exact']); self.assertFalse(out['other_case'])
+
+    def test_a_rename_that_changes_only_case_is_seen_and_restored(self):
+        out = self.run_ps(r"""
+$bak = Backup-Saves
+$d = Join-Path $tmp 'willow/SaveData'
+$before = Get-TreeDigest $d
+Rename-Item (Join-Path $d 'Save0001.sav') 'tmp.sav'; Rename-Item (Join-Path $d 'tmp.sav') 'SAVE0001.sav'
+$out.digest_changed = ($before -ne (Get-TreeDigest $d))
+$out.kept = Complete-PendingRecord $true
+$out.restore = Restore-VerifiedBackup $bak
+$out.names = @(Get-ChildItem $d -File | ForEach-Object { $_.Name } | Sort-Object)
+$out.removed = Complete-PendingRecord $true
+""")
+        self.assertTrue(out['digest_changed'])
+        self.assertIn('SaveData: differs from the backup', out['kept'])
+        self.assertIn('Save0001.sav', out['names']); self.assertNotIn('SAVE0001.sav', out['names'])
+        self.assertTrue(out['removed'].startswith('removed'), out['removed'])
 
 
 class GuardedInputTest(unittest.TestCase):

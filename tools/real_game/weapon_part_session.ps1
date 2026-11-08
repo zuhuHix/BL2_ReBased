@@ -40,7 +40,7 @@ try {
     if (Get-GameProcess) { throw 'Borderlands2 still running after 90 min; not touching it' }
     Enter-RunLock 600; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
-    Install-Driver
+    Install-Driver -Exclusive
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false

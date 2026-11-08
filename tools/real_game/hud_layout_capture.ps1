@@ -39,7 +39,7 @@ try {
     if (Get-GameProcess) { throw 'Borderlands2 is running although the hub lock was free; not touching it' }
     Enter-RunLock 600; $runLock = $true
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
-    Install-Driver
+    Install-Driver -Exclusive
     foreach ($res in $Resolutions) {
         $w, $h = $res -split 'x'; $run = [ordered]@{}; $log.runs[$res] = $run
         Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item

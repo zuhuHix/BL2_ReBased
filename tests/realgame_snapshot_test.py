@@ -129,6 +129,7 @@ def test_helpers():
 TAIL = r"""
 $ErrorActionPreference = 'Stop'
 . '__REALGAME__'
+$script:WillowDir = '__TMP__\willow'   # synthetic: test mode refuses pending records over the real save folders
 function Restore-VerifiedRoots {
     if (__CLEAN__) { [pscustomobject]@{ rows = @(); summary = 'identical to bak after 0 restores'; clean = $true } }
     else { [pscustomobject]@{ rows = @([pscustomobject]@{ file = 'SaveData\x'; status = 'MISMATCH after restore' });

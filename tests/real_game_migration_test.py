@@ -81,9 +81,16 @@ def test_the_doc_bars_exactly_the_seven():
     line = next(l for l in doc.splitlines() if l.startswith('- **Not to be run:**'))
     barred = re.findall(r'`([^`]+)`', line.split('. ', 1)[0])
     assert len(barred) == 7 and set(barred) == set(SEVEN), barred
-    # The first five really have no restore, which is the reason given for them; when one gains it, its bar should lift.
+    # They are barred until a granted smoke run passes, not for a missing restore: each goes through the shared cleanup path.
+    assert 'until a hub-granted smoke run of it passes' in line, line
     for name in SEVEN[:5]:
-        assert not re.search('restore-', text(name), flags=re.I), name
+        s = text(name)
+        assert 'Complete-BackupRun $bak' in s, name
+        assert s.index('Complete-BackupRun $bak') < s.index('Exit-RunLock }', s.index('} finally {')), name   # restore before the locks go
+        assert 'added (left in place)' not in s, name   # the old compare-only block is gone
+    for name in SEVEN[5:]:
+        s = text(name)
+        assert '$cleanup.pending = Complete-PendingRecord' in s and 'Install-Driver -ClaimedBy $runId' in s, name
 
 
 def helper(name):
