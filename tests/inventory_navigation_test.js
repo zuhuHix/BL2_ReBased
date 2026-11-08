@@ -22,6 +22,7 @@ const context = vm.createContext({console:{log:value=>logs.push(value), error(){
   window:{addEventListener(){}, owMovieGuard:{FILES:{}, load:()=>new Promise(()=>{})}, RufflePlayer:{newest:()=>({createPlayer:()=>({
     ow(){}, ruffle:()=>({load:()=>new Promise(()=>{})})})})}}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/menu3d.js'),'utf8'),context);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/colours.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/item_card.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../tools/hud_overlay/inventory.js'),'utf8'),context);
 const run = code => vm.runInContext(code,context);

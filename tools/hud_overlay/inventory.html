@@ -30,7 +30,7 @@ body.compare-wide ruffle-player,body.inspect-wide ruffle-player{-webkit-mask-ima
 .cell.tab-current{cursor:default}.cell:disabled{cursor:not-allowed}
 /* A visible item card overlaps this cell: its thumbnail must not bleed over the card text. */
 .cell.covered{pointer-events:none;visibility:hidden}
-.cell.chevron{display:grid;place-items:center;padding:0;color:#a4e8f3;font:bold 26px/1 Arial;
+.cell.chevron{display:grid;place-items:center;padding:0;color:var(--ow-card-text,#d0d0d0);font:bold 26px/1 Arial;
  background:rgba(8,24,39,.55);border:1px solid #59dced;border-radius:3px}
 .cell.chevron:hover{background:rgba(25,186,211,.45);color:#fff}
 /* UNVERIFIED placeholder art for gear (see gearPlaceholder in inventory.js); --tint is the rarity colour. */
@@ -70,6 +70,8 @@ window.RufflePlayer={config:{autoplay:'on',unmuteOverlay:'hidden',splashScreen:f
 </head><body><div id="presentation"><div id="inspect-backdrop" hidden></div><div id="stage"><div id="controls" aria-label="Inventory controls"></div></div>
 <div id="inspect-preview" hidden aria-live="polite"></div></div><div id="live-status" role="status" aria-live="polite"></div>
 <div id="loading" role="status">Loading inventory…</div>
+<script src="game_colours.js"></script>
+<script src="colours.js"></script>
 <script src="movie_guard.js"></script>
 <script src="menu3d.js"></script>
 <script src="glass_sheet.js"></script>

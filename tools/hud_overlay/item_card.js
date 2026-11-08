@@ -3,8 +3,10 @@
 // round 24 (2026-11-04); the rules and their UNVERIFIED labels are as documented there and in INVENTORY_CARD_STATS.md.
 (function (root) {
   'use strict';
-  // Rarity colours (white, white, green, blue, purple, orange) for items without a host `rarityColor`.
-  const colors = [0xffffff, 0xffffff, 0x39ff14, 0x3c8dff, 0xb43cff, 0xffb400];
+  // Game colours come from the ignored local file through colours.js (DECISIONS.md 2026-11-08); without it, neutral greys.
+  const owColours = root.owColours;
+  // Rarity colours by host rarity (0 and 1 share the common tier) for items without a host `rarityColor`.
+  const colors = ['rarity_1', 'rarity_1', 'rarity_2', 'rarity_3', 'rarity_4', 'rarity_5'].map(owColours.tint);
   const gearItemTypes = new Set(['shield', 'grenade_mod', 'class_mod', 'relic']);
   const escapeHtml = text => String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     // `rounding` is the stat's presentation rounding (docs/verification/NATIVE_WEAPON_RULES.md section 2,
@@ -56,7 +58,7 @@
     const ARROW_VALUE_GAP = 2;
     // Real card text is about 17 px against 15 px here, values bolder (critic round 11, measured on the 2026-10-04 frames).
     const CARD_TEXT_SIZE = 16;
-    const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = '#e6d223';
+    const PROJECTILE_COUNT_SIZE = 10, PROJECTILE_COUNT_COLOUR = owColours.hex('card_projectile_count');
     function itemColor(item) {
       const raw = item?.rarityColor;
       if (typeof raw === 'string' && /^#[\da-f]{6}$/i.test(raw)) return Number.parseInt(raw.slice(1), 16);
@@ -186,13 +188,13 @@
         const arrow = compare?.arrow || 'blank';
         call(card, 'SetTopStat', index, stat.label, formatted, arrow, '', stat.icon || 'none');
         const row = `${card}.stat${index+1}`;
-        text(`${row}.labelField`, stat.label, CARD_TEXT_SIZE, 0xa4e8f3);
+        text(`${row}.labelField`, stat.label, CARD_TEXT_SIZE, owColours.tint('card_text'));
         // Values print in the label colour; a projectile count follows the damage in gold at a smaller size
         // (both measured on a real card, UNVERIFIED as exact game values).
         const mainHtml = stat.projectiles
           ? `${escapeHtml(formatted.slice(0, -`x${stat.projectiles}`.length))}<font size="${PROJECTILE_COUNT_SIZE}" color="${PROJECTILE_COUNT_COLOUR}">x${stat.projectiles}</font>`
           : escapeHtml(formatted);
-        richText(`${row}.mainField`, `<b>${mainHtml}</b>`, CARD_TEXT_SIZE, 0xa4e8f3);
+        richText(`${row}.mainField`, `<b>${mainHtml}</b>`, CARD_TEXT_SIZE, owColours.tint('card_text'));
         statVisibility.set(`${row}.mainField`, true);
         const arrowShown = compare?.arrow === 'up' || compare?.arrow === 'down';
         statVisibility.set(`${row}.auxField`, false);
@@ -210,7 +212,7 @@
       const funLines = typeof item.funStats === 'string' ? item.funStats.split(/;\s*/).filter(Boolean) : [];
       const redFirst = !gearItemTypes.has(item?.itemType);
       const funStats = funLines.map((line, index) =>
-        `• <font color="${redFirst && index === 0 ? '#dc4646' : '#ffffff'}">${escapeHtml(line)}</font>\n`).join('');
+        `• <font color="${redFirst && index === 0 ? owColours.hex('card_red_text') : '#ffffff'}">${escapeHtml(line)}</font>\n`).join('');
       // Preserve observed gear colours/emphasis in the movie's TextField. This payload
       // is passed only to Flash; it must never be inserted into browser HTML.
       call(card, 'SetFunStats', typeof item.funStatsMarkup === 'string' && item.funStatsMarkup ? item.funStatsMarkup : funStats);

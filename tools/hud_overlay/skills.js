@@ -56,7 +56,7 @@ timeLog('skills_page_start');
 function setGradeText(path, value, colour = null) {
   // Some movie text fields embed a digits-only WillowBody subset. Selecting
   // its full imported alias also renders the slash in ranks such as 0/5.
-  const color = colour || (Number(get(path, 'textColor')) || 0xb6cee2).toString(16).padStart(6, '0');
+  const color = colour || (Number(get(path, 'textColor')) || window.owColours.tint('skills_text')).toString(16).padStart(6, '0');
   set(path, 'html', true);
   set(path, 'htmlText', `<font face="$WillowBody" size="13" color="#${color}">${value}</font>`);
 }
@@ -179,7 +179,7 @@ function showTips() {
   const tips = [!overview && selected && canSpend(selected) ? data.strings.spendPoint : '', '[Q] Toggle Overview',
     data.strings.close].filter(Boolean);
   set(`${ROOT}.tooltips.tooltips`, 'htmlText',
-    `<font face="$WillowBody" size="15" color="#a4e8f3">${tips.join('   ')}</font>`);
+    `<font face="$WillowBody" size="15" color="${window.owColours.hex('card_text')}">${tips.join('   ')}</font>`);
 }
 
 function toggleOverview() {

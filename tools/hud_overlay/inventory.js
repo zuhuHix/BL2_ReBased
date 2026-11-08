@@ -27,6 +27,8 @@ const {colors, escapeHtml, weaponCardStats, cardRound, statusRows, statIcons, we
   CARD_TEXT_SIZE, PROJECTILE_COUNT_SIZE, PROJECTILE_COUNT_COLOUR, itemColor, movieTypeIcon, normalizeStatKey, cardStats, statNumber,
   statDecimals, statValueText, statComparison} = window.owItemCard;
 const cardWriter = window.owItemCard.createCardWriter({call, get, set});
+// Game colours from the ignored local file (colours.js, DECISIONS.md 2026-11-08); neutral greys without it.
+const {hex: gameHex, tint: gameTint} = window.owColours;
 const {statMainX, statVisibility, fitFunStats} = cardWriter;
 // Fully visible backpack rows. The real game shows about seven rows (the reference captures show seven
 // and the top of an eighth); the converted cell is drawn at ROW_SCALE so seven fit above the panel's
@@ -890,7 +892,7 @@ function drawCard() {
     hints.push(['[Page Up]/[Page Down] Sort', !transferSourceId]);
   hints.push([transferSourceId ? '[Escape] Cancel' : '[Escape] Close', true], ['[F] Inspect', !!item]);
   const markup = hints.map(([label, enabled]) =>
-    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join('   ');
+    `<font color="${gameHex(enabled ? 'card_text' : 'hint_disabled')}">${escapeHtml(label)}</font>`).join('   ');
   if (!inspectMode) set(ROOT + '.tooltips.tooltips', 'htmlText',
     `<p align="center"><font face="$WillowBody" size="15">${markup}</font></p>`);
   applyAmmoHighlight(item);
@@ -1088,7 +1090,7 @@ function updateInspect() {
   inspect.appendChild(picture);
   inspect.hidden = false;
   const markup = INSPECT_HINTS.map(([label, enabled]) =>
-    `<font color="${enabled ? '#a4e8f3' : '#666666'}">${escapeHtml(label)}</font>`).join(INSPECT_HINT_GAP);
+    `<font color="${gameHex(enabled ? 'card_text' : 'hint_disabled')}">${escapeHtml(label)}</font>`).join(INSPECT_HINT_GAP);
   set(ROOT + '.tooltips.tooltips', 'htmlText', `<p align="center"><font face="$WillowBody" size="${INSPECT_HINT_FONT_SIZE}">${markup}</font></p>`);
 }
 
@@ -1681,7 +1683,7 @@ const HEADER_NUDGE = 4; // 4 less than before: the real gap from sub-header to t
 // the movie's own highlight symbol stretched across the panel, behind the cells (depth 1500, cells start at 2000).
 // The symbol's art is narrower than its bounds and sits right of centre; factors measured on the round-11 frame (host choice).
 // The real band spans x 532-765 with the panel frame at 520-775: 12 px in on the left, 10 on the right.
-const BAND_INSET_LEFT = 12, BAND_INSET_RIGHT = 12, BAND_HEIGHT = 78, BAND_COLOUR = 0xb9ab46;
+const BAND_INSET_LEFT = 12, BAND_INSET_RIGHT = 12, BAND_HEIGHT = 78, BAND_COLOUR = gameTint('inventory_band');
 const BAND_FRAME_PAD = 22;                      // panel bkgd minus visible frame, per side (measured)
 let bandSerial = 0, bandNames = [], listOverhang = 0;
 const ROW_WIDTH_FOCUS = 173 / 158; // real rows are about 173 px wide in the focus view, the converted cell gives 158
@@ -1723,8 +1725,8 @@ function drawTileFrame(path) {
   call(frame, 'endFill');
 }
 // The real moved tile is a solid lime-yellow fill with a lime frame; the fill is kept translucent so the gun art stays readable (host choice).
-const TILE_FILL_LIME = 0xb4dc28, TILE_FILL_ALPHA = 62;
-const TILE_FRAME_GREEN = 0x4fd33f; // the compare card's green frame (host choice by eye)
+const TILE_FILL_LIME = gameTint('inventory_tile_fill'), TILE_FILL_ALPHA = 62;
+const TILE_FRAME_GREEN = gameTint('inventory_tile_frame'); // the compare card's green frame (host choice by eye)
 
 // Every render attaches headers under fresh names and depths: removing a clip and attaching another under the
 // same name in the same frame leaves the name on the doomed clip, which kept the movie's placeholder text.
@@ -1737,7 +1739,7 @@ function drawListHeader(rowGroup, label, y) {
   if (!bounds) { call(path, 'removeMovieClip'); return null; }
   set(path, '_xscale', ROW_SCALE * 100);
   set(path, '_yscale', ROW_SCALE * 100);
-  richText(`${path}.textField`, escapeHtml(label), LIST_HEADER_TEXT_SIZE, 0xe2edf1, 'center');
+  richText(`${path}.textField`, escapeHtml(label), LIST_HEADER_TEXT_SIZE, gameTint('list_header_text'), 'center');
   // The clip is taller than its text (the label sits at its top), so the row is centred on the text field, not
   // on the clip's bounds: with the bounds' centre every header drew about half a row too high, over the card above.
   const fieldY = Number(get(`${path}.textField`, '_y')), fieldHeight = Number(get(`${path}.textField`, '_height'));
@@ -1928,7 +1930,7 @@ function render() {
   // (the same fix the Skills badges use). Field name found by probing the movie (2026-10-04).
   const plate = `${INV}.storageCount.capacity`;
   set(plate, 'html', true);
-  set(plate, 'htmlText', `<font face="$WillowBody" size="${STORAGE_PLATE_SIZE}" color="#${(Number(get(plate, 'textColor')) || 0xe2edf1).toString(16).padStart(6, '0')}">${escapeHtml(capacity ? `${count}/${capacity}` : String(count))}</font>`);
+  set(plate, 'htmlText', `<font face="$WillowBody" size="${STORAGE_PLATE_SIZE}" color="#${(Number(get(plate, 'textColor')) || gameTint('list_header_text')).toString(16).padStart(6, '0')}">${escapeHtml(capacity ? `${count}/${capacity}` : String(count))}</font>`);
   refreshBackpackHeader();
   hit(ROOT+'.header.pcCloseButton', 'Close inventory', closeInventory, null, null, null, 'close');
   addHeaderTabs();
