@@ -136,13 +136,23 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 
 ## Progress in pictures
 
-*Where a real-game frame exists it sits next to ours, and captions say what still looks wrong. Full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/BL2_ReBased/releases/tag/progress-gallery) release, not in the repository: they show game content, and the rules for that are in [docs/LEGAL.md](docs/LEGAL.md).*
+*Where a real-game frame exists it sits next to ours, and each card says in its own text what still looks wrong. The newest cards (uploaded 2026-11-08) show our build 40ae631, captured 2026-11-07; their real-game frames come from my own sessions, and each card's footer says whether mods were on. Full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/BL2_ReBased/releases/tag/progress-gallery) release, not in the repository: they show game content, and the rules for that are in [docs/LEGAL.md](docs/LEGAL.md).*
 
 <!-- Gallery images are release assets on the progress-gallery prerelease (uploaded by the maintainer). Not in the git tree. -->
 
 ### Sanctuary
 
 **State:** Sanctuary is a walkable scene in UE5, and from a matched camera the geometry lines up with the real game. Lighting and materials are still approximations, and street life is missing.
+
+<p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/sanctuary-plaza-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the Sanctuary plaza in the real game, then ours from the same camera, then ours with Maya standing on that spot">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/sanctuary-moxxi-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the stairs up to Moxxi's bar in the real game and in ours, from the same spot">
+</p>
+<p align="center"><sub><b>Real game first, then ours, from the same spot</b> (ours captured 2026-11-07). The buildings, the bench, the posters and the stairs are in place. Light, glow and colour are the big gap, and the citizens are off by default.</sub></p>
+
+<details>
+<summary><b>Earlier Sanctuary frames (September to early November)</b></summary>
+<br>
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/sanctuary-pair-plaza-2026-10-22.jpg" width="100%" alt="Left: the Sanctuary plaza in BL2_ReBased. Right: the same camera in the real game.">
@@ -156,40 +166,53 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 </p>
 <p align="center"><sub><b>Left: the real game (2026-09-22). Right: BL2_ReBased (2026-11-07).</b> The same street from different spots, cameras not matched. Ours is colder and flatter, and the road surface differs.</sub></p>
 
+</details>
+
 ### Maya and Phaselock
 
 **State:** Phaselock casts, locks and lifts a target. Its lift bob and its reload and weapon-swap rules are confirmed in the real game. The look is still being tuned.
+
+<p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/phaselock-cast-pair-2026-11-08.jpg" width="49%" alt="Comparison card: Phaselock's cast frame by frame, the real game in the top row and ours below, timed from the key press">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/phaselock-hold-hud-pair-2026-11-08.jpg" width="49%" alt="Comparison card: a bullymong held in the Phaselock bubble with the HUD on, in the real game and in ours">
+</p>
+<p align="center"><sub><b>The cast and the hold, real game next to ours</b> (ours captured 2026-11-07). Same creature, different places. The real burst at the cast is much larger, and the real bubble is darker, with the target smaller inside it.</sub></p>
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/maya-phaselock-host-2026-09-28.jpg" width="32%" alt="September: an early Phaselock cast with nothing locked">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/maya-phaselock-host-2026-11-06-yaw180-1500ms.jpg" width="32%" alt="November: Phaselock holding a lifted bullymong">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/phaselock-burst-host-2026-11-07.jpg" width="32%" alt="November: the burst of light at Phaselock's release">
 </p>
-<p align="center"><sub><b>Left:</b> 2026-09-28, a purple bubble with nothing locked. <b>Middle:</b> 2026-11-06, a lifted bullymong; the target is too large and pale. <b>Right:</b> 2026-11-07, the cast's burst at 0.70 s, on a test target. No real-game frame of these exact views is published yet.</sub></p>
+<p align="center"><sub><b>How it got here.</b> <b>Left:</b> 2026-09-28, a purple bubble with nothing locked. <b>Middle:</b> 2026-11-06, a lifted bullymong; the target is too large and pale. <b>Right:</b> 2026-11-07, the cast's burst, on a test target.</sub></p>
 
 ### Missions
 
 **State:** Marcus's mission screen is BL2's own movie. E opens it, Enter accepts, turns in and takes the reward. The Fire mission's stock world data drives it, with labelled stand-ins elsewhere in the loop.
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/mission-offer-host-2026-11-07.jpg" width="48%" alt="Marcus offering Rock, Paper, Genocide: Fire Weapons! on BL2's mission screen">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/mission-complete-host-2026-11-07.jpg" width="48%" alt="BL2's Mission Complete screen in BL2_ReBased">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/mission-fire-weapons-pair-2026-11-08.jpg" width="80%" alt="Comparison card: Marcus's Fire weapons mission, from the offer to the turn-in to the reward, the real game in the top row and ours below">
 </p>
-<p align="center"><sub>Rock, Paper, Genocide: Fire Weapons!, offered by Marcus and turned in (2026-11-07). The plain bars at the bottom are the engine's test HUD. How the real screen behaves has its own record: <a href="docs/verification/MISSION_SCREEN.md">MISSION_SCREEN.md</a>.</sub></p>
+<p align="center"><sub><b>Rock, Paper, Genocide: Fire Weapons!, real game above, ours below</b> (ours captured 2026-11-07). The same pages and the same reward. Our camera misses Marcus, and the real pages have longer text. How the real screen behaves has its own record: <a href="docs/verification/MISSION_SCREEN.md">MISSION_SCREEN.md</a>.</sub></p>
 
 ### Guns
 
 **State:** Guns are assembled from the game's own parts, and those parts set their firing modes. They hold about right at the hip, but aiming down sights and paint are well short of the game. The muzzle flash look is a host approximation, and per-surface impacts aren't done.
 
 <p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/guns-hip-pair-2026-11-08.jpg" width="49%" alt="Comparison card: four test guns held at the hip on the street outside Scooter's, the real game in the top row and ours below">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/guns-firing-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the same four guns firing from the same pose, the real game in the top row and ours below">
+</p>
+<p align="center"><sub><b>The same four guns, built from the same parts, at the same pose on the same street</b> (ours captured 2026-11-07). Size and position at the hip are close. The street's colour and the guns' metal are well off, and the flash is drawn by the host, not with the game's own textures.</sub></p>
+
+<details>
+<summary><b>Older gun frames</b></summary>
+<br>
+
+<p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/guns-lineup-host-2026-11-07.jpg" width="48%" alt="Four guns rendered in BL2_ReBased on a black backdrop">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/rifle-firing-host-2026-11-07.jpg" width="48%" alt="An assault rifle firing with a muzzle flash and an ejected casing">
 </p>
 <p align="center"><sub>The four slice guns (left) and the assault rifle firing, casing in the air (right), both 2026-11-07. The metal is too pale, a known paint problem, and the weapon paint is <code>UNVERIFIED</code>.</sub></p>
-
-<details>
-<summary><b>An older game-versus-ours sheet for guns</b></summary>
-<br>
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/weapons-pairs-2026-10-04.jpg" width="80%" alt="Pair sheet from an older lane: game and host guns">
@@ -203,6 +226,11 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 **State:** A test range outside Sanctuary has five stock enemies that notice Maya, approach, hit her and drop loot on death. BL2 has no such range, so there's nothing in the game to compare it with, and the AI rules are host-side and partly `UNVERIFIED`.
 
 <p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/enemy-bullymong-pair-2026-11-08.jpg" width="80%" alt="Comparison card: a bullymong standing in the real game, next to the same creature in ours just after Phaselock let it go">
+</p>
+<p align="center"><sub><b>The same creature from the game's files, real game left, ours right</b> (ours captured 2026-11-07). Different places and moments: ours is still in the air after a Phaselock, and its fur reads brighter than the real one.</sub></p>
+
+<p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/range-pack-host-2026-11-07.jpg" width="48%" alt="A pack of five enemies coming over a snowy rise">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/range-leap-host-2026-11-07.jpg" width="48%" alt="A bullymong leaping at Maya, with another one coming in from the right">
 </p>
@@ -213,31 +241,54 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 **State:** The skills page is navigable, spends points and runs its rules, with Quick Change respec at the placed machine. Some skill numbers come from live reads at level 8 only; the rest are `UNVERIFIED`.
 
 <p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/skills-phaselock-card-pair-2026-11-08.jpg" width="80%" alt="Comparison card: Phaselock's skill card one second after the Skills tab opens, in the real game and in ours">
+</p>
+<p align="center"><sub><b>Real game left, ours right</b> (ours captured 2026-11-07). Same layout and same text, because it is the game's own menu movie reading the game's own strings. Maya is now drawn beside the page; the backdrop behind her still differs.</sub></p>
+
+<details>
+<summary><b>The same page a few days earlier</b></summary>
+<br>
+
+<p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/skills-game-2026-10-21.jpg" width="48%" alt="Game: Skills page one second after Tab">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/skills-host-2026-11-06.jpg" width="48%" alt="BL2_ReBased: Skills page on the same view">
 </p>
-<p align="center"><sub><b>Left: the real game (2026-10-21). Right: BL2_ReBased (2026-11-06).</b> Close in layout. The backdrop differs, and the character isn't drawn on this page yet.</sub></p>
+<p align="center"><sub><b>Left: the real game (2026-10-21). Right: BL2_ReBased (2026-11-06).</b> Close in layout, with no character drawn on the page yet.</sub></p>
+
+</details>
 
 ### Inventory
 
 **State:** Inventory and status pages run on BL2's own movies, with the game's own card rows and rendered guns. This is the best-scoring whole screen so far.
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-game-2026-10-21.jpg" width="32%" alt="Game: inventory page">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-11-06-r1.jpg" width="32%" alt="BL2_ReBased: inventory page, 2026-11-06">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-main-pair-2026-11-08.jpg" width="65%" alt="Comparison card: the inventory page with the same set of items, in the real game and in ours">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/inventory-host-2026-10-09.jpg" width="32%" alt="Before: BL2_ReBased inventory, 2026-10-09">
 </p>
-<p align="center"><sub><b>Left: the real game (2026-10-21). Middle: BL2_ReBased (2026-11-06). Right: BL2_ReBased a month earlier (2026-10-09)</b>, when guns were silhouettes and the money was test values. Some guns still render too pale, and the backdrop and a few values differ.</sub></p>
+<p align="center"><sub><b>Left: the real game next to ours</b> (ours captured 2026-11-07), with a different row selected and a different backdrop. <b>Right: ours a month earlier (2026-10-09)</b>, when guns were silhouettes and the money was test values.</sub></p>
+
+### HUD
+
+**State:** The HUD is BL2's own Flash movie, run by Ruffle over UE5 and fed from host state. Nothing on it is redrawn. Some of the numbers it shows are stand-ins, and the cards say which.
+
+<p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/hud-callouts-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the HUD part by part, the real game and ours from the same pose, with numbered notes">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/hud-ffyl-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the Fight For Your Life screen on the same street, in the real game and in ours">
+</p>
+<p align="center"><sub><b>The everyday HUD and Fight For Your Life, real game left, ours right</b> (ours captured 2026-11-07). The parts and their layout match. When Maya is down, the real screen loses its colour and hides the bars; ours doesn't yet.</sub></p>
 
 ### Vendors and lootables
 
 **State:** Gun machines, the currency, the Ammo Dump and Dr. Zed sell. Containers open, and their contents come out. The shop page is a stand-in rather than BL2's own, and drops don't sit in the right place yet (#163 is open).
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/lootable-ammo-host-2026-11-07.jpg" width="48%" alt="An opened Dahl ammo chest with a pickup on the ground in front of it">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/vendors-host-ammo-dump-2026-11-06.jpg" width="48%" alt="The Ammo Dump in BL2_ReBased">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-boxes-pair-2026-11-08.jpg" width="49%" alt="Comparison card: four kinds of lootable box opened, the real game in the top row and ours below">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-pickup-card-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the item card over a gun on the ground, in the real game and in ours">
 </p>
-<p align="center"><sub>An opened ammo chest (2026-11-07) and the Ammo Dump (2026-11-06). Prices and rules come from local data. There's no like-for-like real-game shop frame yet.</sub></p>
+<p align="center">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/vendor-shops-pair-2026-11-08.jpg" width="65%" alt="Comparison card: the real Ammo Dump and Dr. Zed shop pages, with our weapon machine page below and no frame of our Dr. Zed yet">
+</p>
+<p align="center"><sub><b>Boxes, a gun pickup and the shops</b> (ours captured 2026-11-07). The box models and the item card are the game's own. Each pair is from different places, and our opened boxes show less loot and no prompt. Our shop page is mostly our own lists, not the game's layout.</sub></p>
 
 ## How close is it?
 
