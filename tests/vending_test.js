@@ -372,6 +372,10 @@ check('Ammo and health state objects are checked when present, and a health floa
   assert.equal(model.validateState(state({ammo: 'many'})).ok, false);
   assert.equal(model.validateState(state({health: {current: -1, max: 400}})).ok, false);
   assert.equal(model.validateState(state({health: {current: 'high', max: 400}})).ok, false);
+  // The shield block (vendor movie C) is optional and checked like health.
+  assert.equal(model.validateState(state({shield: {current: 12.5, max: 181}})).ok, true);
+  assert.equal(model.validateState(state({shield: {current: 5}})).ok, false);
+  assert.equal(model.validateState(state({shield: 'full'})).ok, false);
 });
 
 check('The pool note shows the ammo pool for an ammo row and the health for a health row only', () => {

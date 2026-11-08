@@ -425,8 +425,20 @@ clip (`Feedback.Trigger(frame, label)`; its frames are `purchased`, `sold` and `
   serial and the money moved the right way.
 - The clip's sound is not played.
 
-How the real clip times and words its results is `UNVERIFIED`. There is no shield number from the host yet, so the shield
-bar is hidden (PR C).
+How the real clip times and words its results is `UNVERIFIED`.
+
+**Dr. Zed and the suite frames (PR C).**
+
+- **Shield bar.** The host's state carries a `shield` block, `{current, max}`, from the walker's shield and its capacity. The
+  page shows it in the movie's shield bar at the health machine, beside the health bar, as the shop's script does for that
+  shop type. With no shield (capacity 0) or no block, the bar is hidden.
+- **Dr. Zed's page.** His page is the same page with his stock. Section 10's background labels give it his grey panels and
+  face.
+- **Frames.** `-owvendortest` now also takes `OWVendor_ammo.png` after the Ammo Dump's ammo buy, and `OWVendor_zed.png` after
+  Dr. Zed's heal buy. Each is captured with that step's report, so it can be set beside the real `ammo_dump_open.png` and
+  `zed_open.png`. `tools/test_vendors.ps1` requires all three frames, with `OWVendor_open.png`, in each launch's screenshots, and fails
+  the run with a `FRAME MISSING` line when one is absent. Both are host frames: the test's state (a half pool, half health, a fresh buy) differs from the real
+  captures.
 
 **`UNVERIFIED`:** the whole layout against the game's frames, the tab mapping and titles, the section labels, the row pitch
 and how many rows show, and the level requirement colour (the host sends no player level, so every card shows the

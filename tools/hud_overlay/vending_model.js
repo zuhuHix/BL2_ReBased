@@ -80,6 +80,9 @@
     if (state.health !== undefined && (!isObject(state.health) || !isNumber(state.health.current) || !isNumber(state.health.max))) {
       return fail('health needs current and max');
     }
+    if (state.shield !== undefined && (!isObject(state.shield) || !isNumber(state.shield.current) || !isNumber(state.shield.max))) {
+      return fail('shield needs current and max');
+    }
     if (!Array.isArray(state.shop)) return fail('shop must be an array');
     if (!Array.isArray(state.backpack)) return fail('backpack must be an array');
     if (!Array.isArray(state.buyback)) return fail('buyback must be an array');

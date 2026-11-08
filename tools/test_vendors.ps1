@@ -23,8 +23,9 @@ param(
 # In-engine check of the vending machines (OpenWillowVendor.cpp, the vendors slice). One windowed host run in Sanctuary_P
 # with Maya, -owvendors=<vendors.json>, -owmoney=<Money> and -owvendortest: once the walker exists the host opens the
 # first weapons machine, reports, buys shelf item 0, reports, sells that gun back (ow.Vendor.SellLast), reports, restocks,
-# reports, takes OWVendor_open.png; then the first items (Ammo Dump) machine: reports, buys shelf row 0 (ammo), reports;
-# then the first health machine: reports, buys shelf row 0 (a heal), reports; and quits
+# reports, takes OWVendor_open.png; then the first items (Ammo Dump) machine: reports, buys shelf row 0 (ammo), reports,
+# takes OWVendor_ammo.png; then the first health machine: reports, buys shelf row 0 (a heal), reports, takes
+# OWVendor_zed.png; and quits
 # (UOpenWillowVendorSubsystem::TickVendorTest). That first launch saves its money and
 # shelf to local/vendors/currency.json (-owcurrencysave). A second launch (unless -SkipPersist) loads that file, with no
 # -owmoney, and runs the same sequence; tools/check_vendors.py compares its first report with the first launch's last one.
@@ -120,6 +121,10 @@ try {
     $firstLog = $log
     $persistLog = Join-Path $outDir "persist-$stamp.log"
     $passes = if ($SkipPersist) { @(1) } else { @(1, 2) }
+    # The frames each run must leave (UOpenWillowVendorSubsystem::TickVendorTest): the weapons shop, the Ammo Dump and Dr. Zed,
+    # for comparison with the real frames. A run without one of them fails, whatever the checker says.
+    $requiredFrames = @('OWVendor_open.png', 'OWVendor_ammo.png', 'OWVendor_zed.png')
+    $missingFrames = @()
     foreach ($pass in $passes) {
     $log = if ($pass -eq 1) { $firstLog } else { $persistLog }
     $shotsOut = if ($pass -eq 1) { Join-Path $outDir "shots-$stamp" } else { Join-Path $outDir "shots-$stamp-persist" }
@@ -162,6 +167,9 @@ try {
             Write-Output "Screenshots copied to $shotsOut"
         }
     }
+    foreach ($frame in $requiredFrames) {
+        if (!(Test-Path -LiteralPath (Join-Path $shotsOut $frame))) { $missingFrames += "run ${pass}: $frame" }
+    }
 
     }
 
@@ -190,6 +198,8 @@ try {
     if (!$SkipAutomation -and (Test-Path -LiteralPath $autoLog)) { $checkArgs += @('--automation-log', $autoLog) }
     & python @checkArgs
     $exitCode = $LASTEXITCODE
+    foreach ($missing in $missingFrames) { Write-Output "FRAME MISSING: $missing (not in this run's screenshots)" }
+    if ($missingFrames.Count -gt 0 -and $exitCode -eq 0) { $exitCode = 1 }
     Write-Output "Log: $firstLog"
     if ($passes.Count -gt 1) { Write-Output "Second launch log: $persistLog" }
 } finally {

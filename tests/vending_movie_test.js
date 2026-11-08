@@ -135,6 +135,33 @@ async function hangingLoad() {
   return {running, removed, cancels, lines};
 }
 
+// The browser half again, with a stub player that records what the page asks of the movie.
+async function drawnCalls(state) {
+  const calls = [];
+  const player = {remove() {}, ow: (target, op, member, value) => {
+    if (op === 'apply') { calls.push([target, member, ...(value || [])]); return member === 'getBounds' ? {xMin: 0, xMax: 100, yMin: 0, yMax: 50} : undefined; }
+    if (op === 'set') { calls.push([target, '=' + member, value]); return undefined; }
+    if (op === 'get') return member === '_name' ? 'x' : member === '_width' ? 200 : member === '_height' ? 400 : 0;
+    return undefined;
+  }};
+  const window = {RufflePlayer: {newest: () => ({createPlayer: () => player})},
+    owMovieGuard: {load: () => Promise.resolve(true), FILES: {vending: []}}, console: {log() {}}, setTimeout, clearTimeout,
+    OwVendingModel: require('../tools/hud_overlay/vending_model.js'), owItemCard: globalThis.owItemCard};
+  window.window = window;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/vending_movie.js'), 'utf8'), window);
+  assert.equal(await window.owVendingMovie.start({appendChild() {}}, null, null), true);
+  calls.length = 0;
+  const lists = window.OwVendingModel.buildLists(state);
+  window.owVendingMovie.render({state, lists, sel: {column: 'shop', index: 0}});
+  return calls;
+}
+
+function machineState(kind, extra = {}) {
+  return {serial: 1, open: true, opening: 1, machine: {id: 'm', kind, title: 'T'}, money: 100, eridium: 0, capacity: 12, used: 1,
+    resetSeconds: 60, message: '', shop: [], backpack: [], buyback: [], featured: null,
+    health: {current: 200.6, max: 400}, shield: {current: 90.4, max: 181}, ...extra};
+}
+
 // The guard wins the race: the page's timeout timer is cleared, not left pending.
 async function guardWins() {
   const timers = new Map();
@@ -209,6 +236,20 @@ async function setupThrows() {
   assert.equal(thrown.lines.filter(line => line.startsWith('OpenWillow movie setup failed')).length, 1);
   passed++;
   console.log('PASS A movie call that throws during setup gives the movie up (guard cancelled, player removed) and resolves false');
+
+  const shieldOf = calls => calls.filter(call => call[0].endsWith('.shieldBar'));
+  const zed = await drawnCalls(machineState('health'));
+  assert.deepEqual(shieldOf(zed).find(call => call[1] === 'SetShield'), ['_level1.vendingMachine.shieldBar', 'SetShield', 90, 181]);
+  assert.deepEqual(shieldOf(zed).find(call => call[1] === '=_visible'), ['_level1.vendingMachine.shieldBar', '=_visible', true]);
+  // Both panels get the frame label for the machine kind.
+  assert.ok(zed.some(call => call[0] === '_level1.owTPI.main.storagePanel' && call[1] === 'SetBackground' && call[2] === 'medicine'));
+  assert.ok(zed.some(call => call[0] === '_level1.vendingMachine.iotd' && call[1] === 'SetBackground' && call[2] === 'medicine'));
+  const noShield = await drawnCalls(machineState('health', {shield: {current: 0, max: 0}}));
+  assert.equal(shieldOf(noShield).some(call => call[1] === 'SetShield'), false);
+  const weapons = await drawnCalls(machineState('weapons'));
+  assert.deepEqual(shieldOf(weapons).find(call => call[1] === '=_visible'), ['_level1.vendingMachine.shieldBar', '=_visible', false]);
+  passed++;
+  console.log('PASS The shield bar shows the host shield at the health machine only, and both panels get the background for the kind');
 
   const late = await guardCancel('resolve');
   assert.equal(late.result, false);

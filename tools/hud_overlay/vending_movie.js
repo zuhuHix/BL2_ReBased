@@ -256,7 +256,7 @@
     call(VM + '.credits', 'SetValue', Math.min(state.money, MAX_DISPLAY_CREDITS));
     if (blackMarket) call(VM + '.eridium', 'SetValue', state.eridium);
     // The ammo panel shows at the ammo machine, the health bars at the health machine (the shop's script does the same per
-    // shop type). The shield bar waits for a host shield number: hidden until then.
+    // shop type).
     const ammo = state.machine.kind === 'items' && state.ammo;
     set(VM + '.ammo', '_visible', Boolean(ammo));
     for (const [key, clip] of Object.entries(AMMO_CLIPS)) {
@@ -269,7 +269,10 @@
     const health = state.machine.kind === 'health' && state.health;
     set(VM + '.healthBar', '_visible', Boolean(health));
     if (health) call(VM + '.healthBar', 'SetHealth', Math.floor(state.health.current), Math.floor(state.health.max));
-    set(VM + '.shieldBar', '_visible', false);
+    // The shield bar beside it, from the host's shield; hidden without a shield (no capacity) or without the field.
+    const shield = state.machine.kind === 'health' && state.shield && state.shield.max > 0 ? state.shield : null;
+    set(VM + '.shieldBar', '_visible', Boolean(shield));
+    if (shield) call(VM + '.shieldBar', 'SetShield', Math.floor(shield.current), Math.floor(shield.max));
     call(MAIN, 'SetStorageInfoCardTitle', 'BACKPACK');
     call(MAIN, 'SetStorageInfoCardData', `${state.used}/${state.capacity}`);
   }

@@ -1533,7 +1533,10 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
         Report();
         break;
     case 11: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST ammo buy refused: %s"), *Error); break;
-    case 12: Report(); break;
+    case 12:
+        Report();
+        AOpenWillowMayaHUD::CaptureShot(TEXT("vendor"), TEXT("OWVendor_ammo.png")); // the Ammo Dump's page, to set beside the real one
+        break;
     // Health: the first health machine, the same.
     case 13: OpenFirstOfKind(TEXT("health")); break;
     case 14:
@@ -1549,7 +1552,10 @@ void UOpenWillowVendorSubsystem::TickVendorTest()
         Report();
         break;
     case 15: if (!BuyByIndex(0, Error)) UE_LOG(LogTemp, Warning, TEXT("OWVENDTEST heal buy refused: %s"), *Error); break;
-    case 16: Report(); break;
+    case 16:
+        Report();
+        AOpenWillowMayaHUD::CaptureShot(TEXT("vendor"), TEXT("OWVendor_zed.png")); // Dr. Zed's page, to set beside the real one
+        break;
     case 17:
     {
         // A refused press, the same press again, then one with an old serial, through the page's own message path (no page keys).
@@ -1645,6 +1651,11 @@ FString UOpenWillowVendorSubsystem::StateJson() const
     HealthJson->SetNumberField(TEXT("current"), Walker ? Walker->GetHealth() : 0.f);
     HealthJson->SetNumberField(TEXT("max"), Walker ? Walker->GetMaxHealth() : 0.f);
     State->SetObjectField(TEXT("health"), HealthJson);
+    // The shield, for the shield bar the shop movie shows at the health machine (the shop's script does the same per shop type).
+    TSharedRef<FJsonObject> ShieldJson = MakeShared<FJsonObject>();
+    ShieldJson->SetNumberField(TEXT("current"), Walker ? Walker->GetShield() : 0.f);
+    ShieldJson->SetNumberField(TEXT("max"), Walker ? Walker->GetShieldCapacity() : 0.f);
+    State->SetObjectField(TEXT("shield"), ShieldJson);
 
     TArray<TSharedPtr<FJsonValue>> ShopJson;
     for (const FOpenWillowVendorItem& Item : Stock.Items)
