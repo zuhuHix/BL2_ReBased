@@ -175,5 +175,5 @@ powershell -File tools/private_sync.ps1 -Direction Push     # worktree -> store
 powershell -File tools/private_sync.ps1 -Direction Pull     # store -> worktree
 ```
 
-The default folders are `local/analysis` and `local/notes`. Pass `-Folders` for others. The script never deletes
+The default folders are `local/analysis`, `local/notes` and `local/ui/colours` (the game UI colours, `tools/game_colours.py`). Pass `-Folders` for others. The script never deletes
 anything, never overwrites a newer file with an older one, and refuses a store inside the repository.
