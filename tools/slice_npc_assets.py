@@ -73,6 +73,8 @@ NPC_START = {
         'package': 'Sanctuary_Dynamic',
         'pawn': 'GD_TargetDummy.Character.Pawn_TargetDummy',
         'dest': '/Game/OpenWillow/Characters/TargetDummy',
+        # The material's parent (Mati_ZedSurgeryPatient, read with our reader): picks the zone step's defaults (tools/creature_zone.py).
+        'master': 'Master_Creature',
         # Clip names come from GD_Z1_RockPaperGenocideData.Anims.SpecialMove_TargetDummyIdle and the three
         # GD_TargetDummy.Anims.Anim_TargetDummy_Death* definitions; checked in identity().
         'roles': [('idle', 'Anim_Sanctuary/Anim_Fink', 'Shield_Struggle_2'),
@@ -836,7 +838,7 @@ def editor_job_step(args):
                     textures[tex['parameter']] = str(file)
             slots.append({'slot': slot['name'], 'material': slot['material'], 'textures': textures, 'scalars': slot.get('scalars', {}),
                           'vectors': slot.get('vectors', {})})
-        job['npcs'].append({'id': name, 'dest': spec['dest'], 'mesh_name': mesh, 'gltf': str(gltf), 'slots': slots,
+        job['npcs'].append({'id': name, 'dest': spec['dest'], 'master': spec.get('master'), 'mesh_name': mesh, 'gltf': str(gltf), 'slots': slots,
                             'tracks': str(SLICE / f'anim_tracks_{name}.json'),
                             'roles': [r for r, _, _ in spec['roles']],
                             'reference_out': str(SLICE / f'ref_pose_{name}.json')})

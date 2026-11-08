@@ -50,6 +50,8 @@ TARGETS = {
         # (the host's icy white-lilac target) and the 100-unit cylinder and 0.7 scale that conflicted with the live reads.
         'pawn': 'GD_PrimalBeastAdult.Character.Pawn_PrimalBeastAdult',
         'dest': '/Game/OpenWillow/Characters/PhaselockTarget/Bullymong',
+        # The material's parent (Mati_BullymongAdult, read with our reader): picks the zone step's defaults (tools/creature_zone.py).
+        'master': 'Master_Creature',
         # What the archetype's body composition must wear, as (component, bone); read live on one Adult, 2026-11-06. Any other set
         # stops the tool (check_worn), so a filter or package change cannot quietly drop a piece.
         'attachments': [('StaticMeshComponent_3114', 'lElbow1'), ('StaticMeshComponent_3115', 'lElbow2'),
@@ -307,7 +309,7 @@ def editor_job_step(args):
                     textures[texture['parameter']] = str(file)
             slots.append({'slot': slot['name'], 'material': slot['material'], 'textures': textures,
                           'scalars': slot.get('scalars', {}), 'vectors': slot.get('vectors', {})})
-        job['npcs'].append({'id': name, 'dest': target['dest'], 'mesh_name': mesh,
+        job['npcs'].append({'id': name, 'dest': target['dest'], 'master': TARGETS[name].get('master'), 'mesh_name': mesh,
                             'gltf': str(npc.find_output(name, mesh, ['gltf'])), 'slots': slots,
                             'attachment_meshes': [{'id': m, 'gltf': str(npc.find_output(name, m, ['gltf'])), 'material': material}
                                                    for m, material in attachment_meshes(target['attachments']).items()],

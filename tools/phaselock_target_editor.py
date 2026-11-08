@@ -74,7 +74,7 @@ for npc in job['npcs']:
         # Master_Creature's colour model (tools/creature_zone.py): the vectors as stored and the two light/dark scales, from the
         # instance or the master's default. OPENWILLOW_ZONE_GAMMA=1 brings back round 23's x^2.2 fit for an A/B capture.
         gamma = os.environ.get('OPENWILLOW_ZONE_GAMMA', '0') == '1'
-        values = zone_parameters(slot, gamma=gamma)
+        values = zone_parameters(slot, master=npc.get('master'), gamma=gamma)
         for parameter, rgba in values['vectors'].items():
             mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))
         for parameter, value in values['scalars'].items():

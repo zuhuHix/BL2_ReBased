@@ -1507,7 +1507,9 @@ uniform-expression set names which parameter feeds which constant and sampler. L
 - `M_OW_NPC_Zone` (`tools/ambient_npc_attach_editor.py`) gains the two scalars, defaulting to 1.0, so the citizens' instances, which set
   neither, render as before. (The citizens' master was not read; whether they need the same scales is open.)
 - `tools/creature_zone.py` picks a creature instance's values: the zone vectors as stored, and the two scalars from the instance or the
-  master's 2.0. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars.
+  master's 2.0. Only a target whose tool entry names its master as `Master_Creature` gets the 2.0 (the bullymong and the dummy, both read with
+  our reader); any other keeps 1.0 unless its instance sets a value. The range's Psycho names none: several Psycho instances are
+  `Master_Creature` ones, but its two slot materials were not read. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars.
   `OPENWILLOW_ZONE_GAMMA=1` brings back round 23's fit for an A/B capture; the default is now the shader reading.
 - The range dummy gets the same zone material: `tools/seed_slice_npc_assets.ps1 -Steps zone` runs that editor step on the slice job.
   Before, the dummy kept the plain diffuse (`SLICE_NPC_ASSETS.md`: zones "not applied"), which is why it rendered near white.

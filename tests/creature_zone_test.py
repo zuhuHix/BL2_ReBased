@@ -14,7 +14,7 @@ SLOT = {'vectors': {'p_AColorMidtone': [0.5, 0.25, 1.0, 1.0], 'p_ColorD': [0.2, 
 
 
 def test_vectors_are_kept_as_stored():
-    out = z.zone_parameters(SLOT)
+    out = z.zone_parameters(SLOT, 'Master_Creature')
     assert out['vectors'] == {'p_AColorMidtone': [0.5, 0.25, 1.0, 1.0], 'p_ColorD': [0.2, 0.2, 0.2, 1.0]}
 
 
@@ -29,16 +29,23 @@ def test_gamma_option_raises_rgb_only():
 
 
 def test_master_defaults_when_not_overridden():
-    assert z.zone_parameters(SLOT)['scalars'] == {'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 2.0}
+    assert z.zone_parameters(SLOT, 'Master_Creature')['scalars'] == {'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 2.0}
+
+
+def test_other_or_unknown_master_keeps_the_earlier_scale():
+    for master in (None, 'Master_SomethingElse'):
+        assert z.zone_parameters(SLOT, master)['scalars'] == {'p_HighlightsIntensity': 1.0, 'p_ShadowsIntensity': 1.0}
+    slot = {'scalars': {'p_ShadowsIntensity': 3.0}}
+    assert z.zone_parameters(slot, None)['scalars'] == {'p_HighlightsIntensity': 1.0, 'p_ShadowsIntensity': 3.0}
 
 
 def test_instance_overrides_win():
     slot = {'vectors': {}, 'scalars': {'p_HighlightsIntensity': 3.0, 'p_PatternIntensity': 7.0}}
-    assert z.zone_parameters(slot)['scalars'] == {'p_HighlightsIntensity': 3.0, 'p_ShadowsIntensity': 2.0}
+    assert z.zone_parameters(slot, 'Master_Creature')['scalars'] == {'p_HighlightsIntensity': 3.0, 'p_ShadowsIntensity': 2.0}
 
 
 def test_missing_fields():
-    assert z.zone_parameters({}) == {'vectors': {}, 'scalars': dict(z.MASTER_CREATURE_SCALARS)}
+    assert z.zone_parameters({}, 'Master_Creature') == {'vectors': {}, 'scalars': dict(z.MASTER_CREATURE_SCALARS)}
 
 
 if __name__ == '__main__':

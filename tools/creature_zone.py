@@ -18,11 +18,13 @@ MASTER_CREATURE_SCALARS = {'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 2
 ZONE_VECTOR_ENDINGS = ('Hilight', 'Midtone', 'Shadow', 'ColorD')
 
 
-def zone_parameters(slot, gamma=False):
+def zone_parameters(slot, master=None, gamma=False):
     """{'vectors': {name: [r, g, b, a]}, 'scalars': {name: value}} for one material slot of an editor job.
 
-    slot: the job's slot dict, with the stock instance's own 'vectors' and 'scalars' (UModel props). gamma=True keeps
-    round 23's host fit (each colour channel raised to 2.2) for an A/B capture; the shader reading uses the values as stored.
+    slot: the job's slot dict, with the stock instance's own 'vectors' and 'scalars' (UModel props). master: the instance's parent
+    material as the job names it; only 'Master_Creature' has read defaults, any other master gets 1.0 (M_OW_NPC_Zone's default, the
+    earlier rule) unless the instance sets a value. gamma=True keeps round 23's host fit (each colour channel raised to 2.2) for an
+    A/B capture; the shader reading uses the values as stored.
     """
     vectors = {}
     for name, value in (slot.get('vectors') or {}).items():
@@ -32,7 +34,7 @@ def zone_parameters(slot, gamma=False):
         if gamma:
             rgba = [max(0.0, c) ** 2.2 for c in rgba[:3]] + rgba[3:]
         vectors[name] = rgba
-    scalars = dict(MASTER_CREATURE_SCALARS)
+    scalars = dict(MASTER_CREATURE_SCALARS) if master == 'Master_Creature' else {name: 1.0 for name in MASTER_CREATURE_SCALARS}
     for name in MASTER_CREATURE_SCALARS:
         value = (slot.get('scalars') or {}).get(name)
         if value is not None:
