@@ -1,21 +1,27 @@
-"""UE5 editor-Python step for the Phaselock target: zone-colour material on the imported stock enemy.
+"""UE5 editor-Python step: zone-colour material on an imported stock creature (the Phaselock bullymong, the range dummy).
 
-AI-assisted. Run through tools/import_phaselock_target.ps1 (which owns the editor lock), after
-tools/slice_npc_editor.py's ``npcs`` mode imported the mesh with the plain diffuse material. Reads the same job file
-(OPENWILLOW_SLICE_JOB, written by tools/prepare_phaselock_target.py).
+AI-assisted. Run through tools/import_phaselock_target.ps1 or tools/seed_slice_npc_assets.ps1 (each owns the editor lock),
+after tools/slice_npc_editor.py's ``npcs`` mode imported the mesh with the plain diffuse material. Reads that tool's job file
+(OPENWILLOW_SLICE_JOB, written by tools/prepare_phaselock_target.py or tools/slice_npc_assets.py). A slot without ``p_Masks``
+(Marcus) keeps its plain material.
 
-The bullymong's grey diffuse gets its colour from the material's zone vectors (p_?Color{Hilight,Midtone,Shadow},
-p_ColorD) through ``p_Masks``, whose layout is the citizens' one (left half light/dark map, right half zone mask, checked by
-eye on the exported texture). The citizens' ``M_OW_NPC_Zone`` (tools/ambient_npc_attach_editor.py) implements that mix;
-this step parents one instance to it. The mixing rule is applied by analogy (UNVERIFIED there, and so here); the vectors
-are the stock material instance's own (UModel props). ``M_OW_NPC_Zone`` comes from the citizens pipeline; without it this step
+Both creatures are instances of ``Master_Creature``. Their grey diffuse gets its colour from the zone vectors
+(p_?Color{Hilight,Midtone,Shadow}, p_ColorD) through ``p_Masks`` (left half light/dark map, right half zone mask). That layout,
+the mixing order and the two light/dark scales were read from Master_Creature's compiled shader (PHASELOCK_STOCK_DATA.md,
+"Master_Creature's colour model"); tools/creature_zone.py picks the values. The citizens' ``M_OW_NPC_Zone``
+(tools/ambient_npc_attach_editor.py) implements the mix, and this step parents one instance to it. The values are the stock
+material instance's own (UModel props). UNVERIFIED in the running game; the pattern layer (the dummy's) is not drawn. ``M_OW_NPC_Zone`` comes from the citizens pipeline; without it this step
 stops and names that prerequisite, because the attach step and the target's colours need the instance.
 Writes ``<slice_dir>/editor_report_zone.json``; only content under the job's ``dest`` folders is created or changed.
 """
 import json
 import os
 from pathlib import Path
+import sys
 import unreal
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from creature_zone import zone_parameters  # noqa: E402
 
 job = json.loads(Path(os.environ['OPENWILLOW_SLICE_JOB']).read_text(encoding='utf-8'))
 tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -65,26 +71,24 @@ for npc in job['npcs']:
             normal.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
             eal.save_loaded_asset(normal, only_if_is_dirty=False)
             mel.set_material_instance_texture_parameter_value(instance, 'Normal', normal)
-        applied = []
-        # Round 23 (UNVERIFIED): the stock colour vectors are read as gamma-space values and converted to linear (x^2.2 per
-        # RGB channel) before they reach UE5's linear shader. As linear values the light tan / brown zones rendered pale and
-        # olive in round 22 next to the game's saturated tan (a product of gamma values, converted, equals the product of the
-        # converted values, so the multiply by the sRGB diffuse is unchanged otherwise). OPENWILLOW_ZONE_GAMMA=0 turns it off.
-        gamma = os.environ.get('OPENWILLOW_ZONE_GAMMA', '1') != '0'
-        for parameter, value in slot.get('vectors', {}).items():
-            if parameter.startswith('p_') and parameter.endswith(('Hilight', 'Midtone', 'Shadow', 'ColorD')) and value:
-                rgba = [float(v) for v in value]
-                if gamma:
-                    rgba = [max(0.0, c) ** 2.2 for c in rgba[:3]] + rgba[3:]
-                mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))
-                applied.append(parameter)
+        # Master_Creature's colour model (tools/creature_zone.py): the vectors as stored and the two light/dark scales, from the
+        # instance or the master's default. OPENWILLOW_ZONE_GAMMA=1 brings back round 23's x^2.2 fit for an A/B capture.
+        gamma = os.environ.get('OPENWILLOW_ZONE_GAMMA', '0') == '1'
+        values = zone_parameters(slot, gamma=gamma)
+        for parameter, rgba in values['vectors'].items():
+            mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))
+        for parameter, value in values['scalars'].items():
+            if not mel.set_material_instance_scalar_parameter_value(instance, parameter, value):
+                raise RuntimeError(f'{ZONE} has no scalar {parameter}: it predates the light/dark scales. Rebuild it with '
+                                   'powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach, then run this step again.')
+        applied = sorted(values['vectors'])
         eal.save_loaded_asset(instance, only_if_is_dirty=False)
         for i in range(len(slots)):
             if str(slots[i].get_editor_property('material_slot_name')) == slot['slot']:
                 item = slots[i]
                 item.set_editor_property('material_interface', instance)
                 slots[i] = item
-        entry.update({'status': 'zone material', 'instance': path, 'vectors': sorted(applied), 'gamma_to_linear': gamma})
+        entry.update({'status': 'zone material', 'instance': path, 'vectors': applied, 'scalars': values['scalars'], 'gamma_to_linear': gamma})
         log(f'{npc["id"]}: {path} with {len(applied)} zone vectors')
     mesh.modify()
     mesh.set_editor_property('materials', slots)

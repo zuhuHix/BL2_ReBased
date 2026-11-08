@@ -5,8 +5,8 @@ param(
     # UModel build 1590 (external, never inside the repository).
     [string]$UModel = $env:OPENWILLOW_UMODEL,
     [string]$Python = 'python',
-    # Any of: extract, import, preview, capture, manifest. 'all' runs them in order.
-    [ValidateSet('all', 'extract', 'import', 'preview', 'capture', 'manifest')][string[]]$Steps = @('all'),
+    # Any of: extract, import, zone, preview, capture, manifest. 'all' runs them in order.
+    [ValidateSet('all', 'extract', 'import', 'zone', 'preview', 'capture', 'manifest')][string[]]$Steps = @('all'),
     [int]$CaptureWaitSeconds = 40,
     # Capture only these preview names (Marcus, Marcus-walk, TargetDummy, pistol); default all.
     [string[]]$Only = @()
@@ -17,6 +17,8 @@ param(
 #
 #   extract   tools/slice_npc_assets.py: identity (our reader), UModel exports, texture cross-check, pistol rolls
 #   import    editor: meshes/textures/materials + reference poses; convert MD5 clips; editor: anim sequences; pistol
+#   zone      editor: the dummy's Master_Creature colour zones (tools/phaselock_target_editor.py; needs M_OW_NPC_Zone from
+#             tools/seed_ambient_npc_assets.ps1 -Steps attach); Marcus's slots have no p_Masks and keep the plain material
 #   preview   editor (fresh session): reload every asset, record bounds/bone counts, build preview levels
 #   capture   -game launches of the preview levels, one screenshot each (window capture)
 #   manifest  merge everything into local/slice/npc_assets.json
@@ -55,7 +57,7 @@ function Use-EditorLock([scriptblock]$Body) {
     try { & $Body } finally { Exit-OwUeLock }
 }
 
-function Invoke-Editor([string]$Mode) {
+function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
     $env:OPENWILLOW_SLICE_JOB = Join-Path $slice 'editor_job.json'
     $env:OPENWILLOW_SLICE_MODE = $Mode
     $log = Join-Path $logs "editor-$Mode.log"
@@ -63,7 +65,7 @@ function Invoke-Editor([string]$Mode) {
     if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report -Force }
     Use-EditorLock {
         $process = Start-Process -FilePath $cmd -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logs "editor-$Mode.stdout.txt") -ArgumentList @(
-            "`"$project`"", '-run=pythonscript', "`"-script=$editorScript`"", '-unattended', '-nullrhi', '-nosplash',
+            "`"$project`"", '-run=pythonscript', "`"-script=$Script`"", '-unattended', '-nullrhi', '-nosplash',
             '-ddc=InstalledNoZenLocalFallback', "`"-abslog=$log`"")
         $null = $process.Handle   # without this, Start-Process -PassThru does not populate ExitCode
         try {
@@ -125,6 +127,7 @@ if (& $run 'import') {
     Invoke-Editor 'anims'
     Invoke-Editor 'pistol'
 }
+if (& $run 'zone') { Invoke-Editor 'zone' (Join-Path $PSScriptRoot 'phaselock_target_editor.py') }
 if (& $run 'preview') { Invoke-Editor 'preview' }
 if (& $run 'capture') {
     $shots = Join-Path $slice 'screenshots'

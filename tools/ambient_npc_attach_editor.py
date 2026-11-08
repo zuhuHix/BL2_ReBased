@@ -133,10 +133,15 @@ def outline_master():
     return material
 
 
+# InHI / InSI scale the light/dark map before the clamp. Master_Creature's compiled shader does this with its
+# p_HighlightsIntensity / p_ShadowsIntensity scalars (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Creature's colour
+# model"). The parameters default to 1 here, which is the earlier rule, so the citizens' instances (which set neither) are unchanged.
 ZONE_CODE = """
-float3 zoneA = lerp(lerp(InAM, InAH, saturate(InLight.r)), InAS, saturate(InLight.g));
-float3 zoneB = lerp(lerp(InBM, InBH, saturate(InLight.r)), InBS, saturate(InLight.g));
-float3 zoneC = lerp(lerp(InCM, InCH, saturate(InLight.r)), InCS, saturate(InLight.g));
+float hi = saturate(InLight.r * InHI);
+float sh = saturate(InLight.g * InSI);
+float3 zoneA = lerp(lerp(InAM, InAH, hi), InAS, sh);
+float3 zoneB = lerp(lerp(InBM, InBH, hi), InBS, sh);
+float3 zoneC = lerp(lerp(InCM, InCH, hi), InCS, sh);
 float3 mixed = InBase;
 mixed = lerp(mixed, zoneA, saturate(InZone.r));
 mixed = lerp(mixed, zoneB, saturate(InZone.g));
@@ -175,7 +180,7 @@ def zone_master():
                  sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
     mel.connect_material_expressions(uv(0.5, 0.0, 300), '', light, 'UVs')
     mel.connect_material_expressions(uv(0.5, 0.5, 600), '', zones, 'UVs')
-    names = ['InTex', 'InLight', 'InZone', 'InBase', 'InAH', 'InAM', 'InAS', 'InBH', 'InBM', 'InBS', 'InCH', 'InCM', 'InCS']
+    names = ['InTex', 'InLight', 'InZone', 'InBase', 'InAH', 'InAM', 'InAS', 'InBH', 'InBM', 'InBS', 'InCH', 'InCM', 'InCS', 'InHI', 'InSI']
     effect = node(material, unreal.MaterialExpressionCustom, -200, 0, code=ZONE_CODE, output_type=unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     entries = []
     for name in names:
@@ -192,6 +197,9 @@ def zone_master():
         vec = node(material, unreal.MaterialExpressionVectorParameter, -700, 900 + 120 * i, parameter_name=parameter,
                    default_value=unreal.LinearColor(1, 1, 1, 1))
         mel.connect_material_expressions(vec, 'RGB', effect, input_name)
+    for i, (input_name, parameter) in enumerate((('InHI', 'p_HighlightsIntensity'), ('InSI', 'p_ShadowsIntensity'))):
+        scale = node(material, unreal.MaterialExpressionScalarParameter, -700, 2100 + 100 * i, parameter_name=parameter, default_value=1.0)
+        mel.connect_material_expressions(scale, '', effect, input_name)
     mel.connect_material_property(effect, '', MP.MP_BASE_COLOR)
     normal = node(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, 2300, parameter_name='Normal',
                   sampler_type=unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL, texture=unreal.load_asset('/Engine/EngineMaterials/DefaultNormal'))
