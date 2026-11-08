@@ -28,7 +28,7 @@ PAGES = {'/': 'index.html', '/index.html': 'index.html', '/action_skill.js': 'ac
          '/item_card.js': 'item_card.js', '/pickup_card.js': 'pickup_card.js', '/pickup_card.html': 'pickup_card.html',
          '/map.html': 'map.html', '/map.js': 'map.js',
          '/mission_screen.html': 'mission_screen.html', '/mission_screen.js': 'mission_screen.js', '/mission_screen_model.js': 'mission_screen_model.js',
-         '/vending.html': 'vending.html', '/vending.js': 'vending.js', '/vending_model.js': 'vending_model.js', '/movie_guard.js': 'movie_guard.js',
+         '/vending.html': 'vending.html', '/vending.js': 'vending.js', '/vending_model.js': 'vending_model.js', '/vending_movie.js': 'vending_movie.js', '/movie_guard.js': 'movie_guard.js',
          '/colours.js': 'colours.js'}
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8'}
 PACKAGE_PREFIX = '/ package/'

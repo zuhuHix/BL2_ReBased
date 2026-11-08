@@ -19,6 +19,9 @@ function state(extra = {}) {
 
 let passed = 0;
 function check(name, test) { test(); passed++; console.log('PASS ' + name); }
+// Checks that wait for the page's movie start; they run after the others.
+const laterChecks = [];
+function checkLater(name, test) { laterChecks.push([name, test]); }
 
 check('Price text groups thousands and never goes below zero', () => {
   assert.equal(model.formatPrice(0), '$0');
@@ -120,11 +123,25 @@ check('An item the host marks unsellable (a lent mission weapon) is never sold',
   assert.deepEqual(model.actionFor({column: 'backpack', index: other}, lists, current), {ok: true, action: 'sell', id: 'b1'});
 });
 
-check('A missing or failed movie removes the Ruffle player instead of leaving its error panel', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'hud_overlay', 'vending.js'), 'utf8');
-  assert.ok(source.includes("method: 'HEAD'"));          // checks the movie exists before creating a player
-  assert.ok(source.includes("querySelector('#panic')"));  // and drops the player when Ruffle panics
-  assert.ok(source.includes('window.owPlayer.remove()'));
+checkLater('Without the shop movie the HTML page runs, and the page says once which one ran', async () => {
+  const page = loadPage({movie: false});
+  await page.started;
+  assert.deepEqual(page.lines().filter(line => line.startsWith('OWVENDPAGEMODE')), ['OWVENDPAGEMODE html']);
+  assert.equal(page.bodyMovie(), false);
+});
+
+checkLater('With the shop movie the page draws into it, Left goes to the backpack tab, and losing the movie falls back', async () => {
+  const page = loadPage({movie: true});
+  await page.started;
+  assert.deepEqual(page.lines().filter(line => line.startsWith('OWVENDPAGEMODE')), ['OWVENDPAGEMODE movie']);
+  assert.equal(page.bodyMovie(), true);
+  page.push(state({opening: 1}));
+  assert.ok(page.drawn() > 0);
+  page.key('ArrowLeft');                       // the movie's tabs: backpack, stock, buy-back
+  assert.deepEqual(page.selection(), {column: 'backpack', index: 0});
+  page.lose();
+  assert.equal(page.bodyMovie(), false);
+  assert.equal(page.lines().filter(line => line.startsWith('OWVENDPAGEMODE')).pop(), 'OWVENDPAGEMODE html');
 });
 
 check('The page tells the host when it can take input and keeps no local clock', () => {
@@ -210,17 +227,30 @@ check('Refusals show the stock labels; any other message is left alone', () => {
 });
 
 // The real vending.js, with stub DOM elements: what a key press and a host push actually do to the page.
-function loadPage() {
+function loadPage(options = {movie: false}) {
   const elements = {}, lines = [];
+  let bodyMovie = false, drawn = 0;
+  const body = {classList: {toggle: (_name, on) => { bodyMovie = on; }}};
   const element = () => ({textContent: '', hidden: false, children: [], classList: {add() {}}, setAttribute() {}, addEventListener() {},
     append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); }, replaceChildren(...c) { this.children = c; }});
   let onKey = null;
   const window = {OwVendingModel: model, RufflePlayer: {}};
+  let started = null, startMovie = null;
+  const movieView = require('../tools/hud_overlay/vending_movie.js');
+  // options.manual: the movie start settles only when the test calls page.startMovie(running).
+  window.owVendingMovie = {TAB_ORDER: movieView.TAB_ORDER, groupLists: movieView.groupLists, render: () => { drawn++; },
+    start: () => (started = options.manual ? new Promise(resolve => { startMovie = resolve; }) : Promise.resolve(options.movie))};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/vending.js'), 'utf8'), {
     window, setTimeout, console: {log: line => lines.push(line)}, fetch: () => Promise.resolve({ok: false}),
-    document: {getElementById: id => (elements[id] = elements[id] || element()), createElement: element,
+    document: {body, getElementById: id => (elements[id] = elements[id] || element()), createElement: element,
       addEventListener: (_name, handler) => { onKey = handler; }}});
   return {
+    started: started.then(() => new Promise(resolve => setTimeout(resolve, 0))),
+    startMovie: running => { startMovie(running); return started.then(() => new Promise(resolve => setTimeout(resolve, 0))); },
+    lines: () => lines,
+    bodyMovie: () => bodyMovie,
+    drawn: () => drawn,
+    lose: () => window.owVendingMovieLost(),
     push: raw => window.owVending(raw),
     key: key => onKey({key, preventDefault() {}}),
     message: () => elements.message.textContent,
@@ -352,4 +382,39 @@ check('Page script parses and stays small', () => {
   new vm.Script(source, {filename: 'vending.js'});
 });
 
-console.log(`${passed}/${passed} vending checks passed (synthetic items; movie layout and host numbers UNVERIFIED)`);
+// Host order smg a, shotgun b, smg c; the movie groups it a, c, b. The selected row must stay the same item.
+const mixed = () => state({opening: 1, shop: [item('a', {card: {type: 'smg'}}), item('b', {card: {type: 'shotgun'}}),
+  item('c', {card: {type: 'smg'}})]});
+
+checkLater('Page: when the movie starts after a push, the selection keeps its item (the movie groups the rows)', async () => {
+  const page = loadPage({manual: true});
+  page.push(mixed());
+  page.key('ArrowDown');                       // b, the shotgun, at index 1 on the HTML page
+  await page.startMovie(true);
+  assert.deepEqual(page.selection(), {column: 'shop', index: 2}); // b is third once grouped
+  page.key('Enter');
+  assert.deepEqual(page.requests().map(r => r.id), ['b']);
+});
+
+checkLater('Page: when the movie is lost, the HTML page keeps the selected item too', async () => {
+  const page = loadPage({manual: true});
+  await page.startMovie(true);
+  page.push(mixed());
+  page.key('ArrowDown');                       // c, second once grouped
+  page.lose();
+  assert.deepEqual(page.selection(), {column: 'shop', index: 2}); // c is third in the host order
+  page.key('Enter');
+  assert.deepEqual(page.requests().map(r => r.id), ['c']);
+});
+
+check('remapSelection keeps the row by id and clamps when it is gone', () => {
+  const before = {shop: [{id: 'a'}, {id: 'b'}, {id: 'c'}], backpack: [], buyback: []};
+  assert.deepEqual(model.remapSelection({column: 'shop', index: 1}, before, {shop: [{id: 'a'}, {id: 'c'}, {id: 'b'}]}), {column: 'shop', index: 2});
+  assert.deepEqual(model.remapSelection({column: 'shop', index: 2}, before, {shop: [{id: 'a'}]}), {column: 'shop', index: 0});
+  assert.deepEqual(model.remapSelection({column: 'backpack', index: 0}, before, {backpack: []}), {column: 'backpack', index: 0});
+});
+
+(async () => {
+  for (const [name, test] of laterChecks) { await test(); passed++; console.log('PASS ' + name); }
+  console.log(`${passed}/${passed} vending checks passed (synthetic items; movie layout and host numbers UNVERIFIED)`);
+})().catch(error => { console.error(error); process.exit(1); });

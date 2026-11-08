@@ -1,6 +1,7 @@
 <!doctype html>
-<!-- Vending machine page (PR 1). The stock movie is frame art when it loads; the lists, prices and hit targets are HTML.
-     Layout is UNVERIFIED against the game. Movie and Ruffle come from ignored local/ui/run (tools/prepare_vending_movie.py). -->
+<!-- Vending machine page. When the converted shop movies run, BL2's own movie draws the page (vending_movie.js) and the
+     HTML panel hides but for its message line; without them the HTML panel is the page. Layout is UNVERIFIED against the
+     game. Movies and Ruffle come from ignored local/ui/run (tools/prepare_vending_movie.py). -->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenWillow vending</title>
 <style>
@@ -31,6 +32,13 @@ h1{margin:0;font-size:22px;letter-spacing:.5px;flex:1 1 auto}
 #message{min-height:32px;margin:6px 0;color:#ffcf5c;font-weight:bold;font-size:24px;text-align:center}
 .hint{margin:8px 0 0;color:#7fa3b4;font-size:12px}
 [hidden]{display:none!important}
+#controls{position:fixed;inset:0;z-index:2;pointer-events:none}
+#controls .movie-cell{position:absolute;pointer-events:auto;background:transparent;border:0;padding:0;cursor:pointer}
+html:has(body.movie),body.movie{background:transparent}
+body.movie main{background:transparent;pointer-events:none}
+body.movie main>*:not(#message){visibility:hidden}
+body.movie #message{position:fixed;left:0;right:0;bottom:12%;text-shadow:0 0 6px #000}
+body:not(.movie) #controls{display:none}
 @media (max-width:760px){
  .columns{grid-template-columns:1fr}
  .list{min-height:0}
@@ -39,6 +47,7 @@ h1{margin:0;font-size:22px;letter-spacing:.5px;flex:1 1 auto}
 </style>
 </head><body>
 <div id="stage" aria-hidden="true"></div>
+<div id="controls"></div>
 <main id="panel" aria-label="Vending machine">
  <header>
   <h1 id="title">Vending machine</h1>
@@ -76,6 +85,9 @@ window.RufflePlayer = {config: {autoplay: 'on', unmuteOverlay: 'hidden', splashS
 <script src="ruffle/ruffle.js"></script>
 <script src="game_colours.js"></script>
 <script src="colours.js"></script>
+<script src="movie_guard.js"></script>
+<script src="item_card.js"></script>
 <script src="vending_model.js"></script>
+<script src="vending_movie.js"></script>
 <script src="vending.js"></script>
 </body></html>

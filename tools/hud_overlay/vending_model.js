@@ -149,9 +149,10 @@
   }
 
   // Moves {column, index}. Up/Down wrap inside the list; Tab cycles the columns; Left/Right step one column and stop
-  // at the ends. The index is clamped to the new list.
-  function moveSelection(sel, key, counts) {
-    const column = COLUMNS.indexOf(sel.column);
+  // at the ends. The index is clamped to the new list. `order` is the columns' order on screen (the movie's tabs put the
+  // backpack left of the stock).
+  function moveSelection(sel, key, counts, order = COLUMNS) {
+    const column = order.indexOf(sel.column);
     const length = counts[sel.column];
     if (key === 'up' || key === 'down') {
       if (length === 0) return {column: sel.column, index: 0};
@@ -159,12 +160,22 @@
       return {column: sel.column, index: (sel.index + step + length) % length};
     }
     let next = column;
-    if (key === 'tab') next = (column + 1) % COLUMNS.length;
+    if (key === 'tab') next = (column + 1) % order.length;
     else if (key === 'left') next = Math.max(0, column - 1);
-    else if (key === 'right') next = Math.min(COLUMNS.length - 1, column + 1);
+    else if (key === 'right') next = Math.min(order.length - 1, column + 1);
     else return sel;
-    const name = COLUMNS[next];
+    const name = order[next];
     return {column: name, index: clampIndex(sel.index, counts[name])};
+  }
+
+  // The selection after the same state's lists are rebuilt in another order (the shop movie groups rows by section; the HTML
+  // page does not): the selected row keeps its place by id, so Enter acts on the item the player chose. A row that is no
+  // longer listed leaves the index clamped.
+  function remapSelection(sel, before, after) {
+    const picked = (before[sel.column] || [])[sel.index];
+    const list = after[sel.column] || [];
+    const at = picked ? list.findIndex(row => row.id === picked.id) : -1;
+    return {column: sel.column, index: at >= 0 ? at : clampIndex(sel.index, list.length)};
   }
 
   function clampIndex(index, length) {
@@ -220,6 +231,6 @@
   }
 
   return {MACHINE_KINDS, ITEM_KINDS, ACTIONS, COLUMNS, BUYBACK_LIMIT, formatPrice, formatCountdown, validateState,
-    sortRows, buildLists, lengths, moveSelection, clampIndex, actionFor, buildRequest, keyCommand, poolNote, entersBackpack,
+    sortRows, buildLists, lengths, moveSelection, remapSelection, clampIndex, actionFor, buildRequest, keyCommand, poolNote, entersBackpack,
     selectionAfterState, isNewOpening, refusalLabel};
 });

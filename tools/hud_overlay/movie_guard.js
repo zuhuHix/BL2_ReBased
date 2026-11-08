@@ -13,7 +13,11 @@
     hud:['UI_HUD/HUD.swf', 'SharedComponents/ConsoleComponents.swf', 'SharedWillowComponents/SharedWillowComponents.swf', 'gfxfontlib.swf'],
     missionScreen:['UI_Mission/MissionInterface.swf', 'SharedWillowMission/SharedWillowMission.swf', 'SharedComponents/ConsoleComponents.swf',
       'SharedWillowComponents/SharedWillowComponents.swf', 'SharedWillowInventory/SharedWillowInventory.swf'],
-    pickupCard:['UI_Inworld/Weapon_Card.swf', 'SharedWillowComponents/SharedWillowComponents.swf']
+    pickupCard:['UI_Inworld/Weapon_Card.swf', 'SharedWillowComponents/SharedWillowComponents.swf'],
+    // The shop movie, the two-panel library the page loads beside it, and what both import.
+    vending:['UI_VendingMachine/VendingMachineInterface.swf', 'UI_VendingMachine/gfxfontlib.swf', 'gfxfontlib.swf',
+      'UI_TwoPanelInterface/TwoPanelInterface.swf', 'UI_TwoPanelInterface/gfxfontlib.swf', 'SharedComponents/ConsoleComponents.swf',
+      'SharedWillowComponents/SharedWillowComponents.swf', 'SharedWillowInventory/SharedWillowInventory.swf']
   };
 
   // Ruffle marks a failed movie by showing its #panic element.
@@ -38,29 +42,40 @@
   // Resolves true when the movie is loading, false when the page must do without it (the player has then been removed).
   // `requires`: other files the movie loads itself (a harness loads the real movie, which imports others).
   // onLost runs only if the panel appears after this has resolved true, however much later. The page gets one or the other.
+  // The promise has cancel(): a caller that gives up (its own timeout, a later setup step failing) calls it. A load that
+  // settles after that does nothing (no log, no second remove, no watch), and a watch already running is disconnected.
+  // Removing the player is then the caller's job.
   function load(player, options, label, requires = [], onLost = null) {
+    let cancelled = false, observer = null;
     const drop = reason => {
       console.log(`OpenWillow movie ${reason}: ${label} (${options.url}); tools/check_overlay_data.py says how to get it`);
       player.remove();
     };
     const urls = [options.url, ...requires];
-    return Promise.all(urls.map(url => fileState(url))).then(states => {
+    const loading = Promise.all(urls.map(url => fileState(url))).then(states => {
+      if (cancelled) return false;
       const named = state => urls.filter((_, i) => states[i] === state).join(', ');
       if (states.includes('missing')) { drop(`missing (${named('missing')})`); return false; }
       if (states.includes('unavailable')) { drop(`unavailable (${named('unavailable')})`); return false; }
       return player.ruffle().load(options).then(() => {
+        if (cancelled) return false;
         const lost = () => { drop('failed'); if (onLost) onLost(); };
         if (panicShown(player)) { drop('failed'); return false; } // the caller handles a false; onLost is for later
         // The panel is a class change or a new element in the player's shadow DOM, on any later movie or runtime error.
-        const observer = new root.MutationObserver(() => {
+        observer = new root.MutationObserver(() => {
           if (!panicShown(player)) return;
           observer.disconnect();
           lost();
         });
         observer.observe(player.shadowRoot, {subtree:true, childList:true, attributes:true, attributeFilter:['class']});
         return true;
-      }, error => { drop(`failed (${error})`); return false; });
+      }, error => { if (cancelled) return false; drop(`failed (${error})`); return false; });
     });
+    loading.cancel = () => {
+      cancelled = true;
+      if (observer) observer.disconnect();
+    };
+    return loading;
   }
 
   root.owMovieGuard = {load, panicShown, FILES};

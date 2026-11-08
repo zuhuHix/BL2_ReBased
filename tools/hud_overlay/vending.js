@@ -11,28 +11,29 @@ let state = null, lists = {shop: [], backpack: [], buyback: []};
 let sel = {column: 'shop', index: 0};
 let lastSerial = -1, localMessage = '', stateError = '', lastRequest = '', movieState = 'loading';
 
-// Stock movie as frame art. Any failure leaves the plain HTML panel, which works on its own, and removes the player:
-// Ruffle shows its own "Something went wrong" panel for a missing or broken movie, and its load() still resolves.
-const MOVIE_URL = 'UI_VendingMachine/VendingMachineInterface.swf';
-function dropMovie(reason) {
-  movieState = reason;
-  if (window.owPlayer) window.owPlayer.remove();
-  window.owPlayer = null;
+// BL2's own shop movie (vending_movie.js) draws the page when both converted movies run. Without them, or when Ruffle fails
+// later, the plain HTML panel below is the page (the missing-UI-movie rule; movie_guard.js removes a failed player). The
+// keys, rules and requests are the same either way. One line says which page ran.
+const movie = window.owVendingMovie;
+function usePage(mode) {
+  if (mode === movieState) return;
+  movieState = mode;
+  if (state) {
+    // The movie groups rows by section and the HTML page does not: keep the selected row (by id), not its index.
+    const next = mode === 'movie' ? movie.groupLists(model.buildLists(state)) : model.buildLists(state);
+    sel = model.remapSelection(sel, lists, next);
+    lists = next;
+  }
+  document.body.classList.toggle('movie', mode === 'movie');
+  console.log(`OWVENDPAGEMODE ${mode === 'movie' ? 'movie' : 'html'}`);
+  render();
 }
-// Ruffle marks a failed movie by showing its #panic element (seen in the browser with a missing file).
-function watchForPanic(player, checksLeft) {
-  const panic = player.shadowRoot && player.shadowRoot.querySelector('#panic');
-  if (panic && !panic.classList.contains('hidden')) { dropMovie('failed'); return; }
-  if (checksLeft > 0) setTimeout(() => watchForPanic(player, checksLeft - 1), 500);
-}
-fetch(MOVIE_URL, {method: 'HEAD'}).then(response => {
-  if (!response.ok) { movieState = 'missing'; return; } // no player at all: the HTML panel only
-  const player = window.RufflePlayer.newest().createPlayer();
-  $('stage').appendChild(player);
-  window.owPlayer = player;
-  player.ruffle().load({url: MOVIE_URL, base: 'UI_VendingMachine/'})
-    .then(() => { movieState = 'loaded'; watchForPanic(player, 20); }, () => dropMovie('failed'));
-}).catch(() => { movieState = 'missing'; });
+window.owVendingMovieLost = () => usePage('html');
+movie.start($('stage'), $('controls'), (picked, andAct) => {
+  sel = picked;
+  localMessage = '';
+  if (andAct) act(); else render();
+}).then(running => usePage(running ? 'movie' : 'html'), () => usePage('html'));
 
 function send(action, id) {
   const line = model.buildRequest(state ? state.serial : 0, action, id);
@@ -109,6 +110,7 @@ function render() {
     + (note ? `. ${note}` : '') : '';
   $('message').textContent = stateError || model.refusalLabel(localMessage || state.message);
   tickCountdown();
+  if (movieState === 'movie') movie.render({state, lists, sel});
 }
 
 // The seconds to restock come from the host's world time: the host pushes the state every second while the shop is
@@ -134,6 +136,7 @@ window.owVending = raw => {
   state = result.state;
   lastSerial = state.serial;
   lists = model.buildLists(state);
+  if (movieState === 'movie') lists = movie.groupLists(lists); // one header per section, in the order on screen
   render();
 };
 
@@ -149,7 +152,7 @@ document.addEventListener('keydown', event => {
   if (command === 'act') act();
   else if (command === 'close') close();
   else {
-    sel = model.moveSelection(sel, command, model.lengths(lists));
+    sel = model.moveSelection(sel, command, model.lengths(lists), movieState === 'movie' ? movie.TAB_ORDER : model.COLUMNS);
     localMessage = '';
     render();
   }

@@ -108,6 +108,7 @@ def good_log(spawned=3, sell=True, restock=True, first_ids=None, second_ids=None
         text += items_section(START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0])
         text += health_section(START_MONEY - SHOP_PRICES[0] + SHOP_VALUES[0] - AMMO_PRICE)
         text += stale_log()
+        text += line('OpenWillow vending console: OWVENDPAGEMODE movie (http://127.0.0.1:8767/vending.js:20)')
     return text
 
 
@@ -209,6 +210,21 @@ class StalePressTest(unittest.TestCase):
                            ('the openings were not counted', {'opening': 0})):
             with self.subTest(name):
                 self.assertEqual(self.grade(stale_log(**args))[1], 'FAIL')
+
+
+class PageModeTest(unittest.TestCase):
+    def grade(self, text):
+        out = cv.Results()
+        cv.grade_page_mode(text, out)
+        return out.rows[0][1]
+
+    def test_the_movie_passes_and_the_fallback_is_reported_not_failed(self):
+        self.assertEqual(self.grade('x OpenWillow vending console: OWVENDPAGEMODE movie (vending.js:20)'), 'PASS')
+        self.assertEqual(self.grade('OWVENDPAGEMODE html'), 'MISSING')
+        self.assertEqual(self.grade(''), 'MISSING')
+
+    def test_the_last_line_counts(self):
+        self.assertEqual(self.grade('OWVENDPAGEMODE movie\nOWVENDPAGEMODE html'), 'MISSING')
 
 
 class PriceFormulaTest(unittest.TestCase):
@@ -402,7 +418,7 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=17 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=18 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
 
     def test_a_required_automation_log_that_is_missing_exits_one(self):

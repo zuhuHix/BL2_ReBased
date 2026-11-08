@@ -14,20 +14,26 @@ STATUS_PAGES = 'Inventory, Skills, Missions, Map'
 PICKUP_STEPS = 'docs/verification/PICKUP_CARD.md "Local data"'
 MISSION_PAGE = 'mission screen (optional: the page has a plain panel without it)'
 MISSION_STEPS = 'python tools/prepare_mission_screen.py'
+VENDING_PAGE = 'vending shop movie (optional: the page has a plain panel without it)'
+VENDING_STEPS = 'python tools/prepare_vending_movie.py'
 REQUIRED = [
     ('ruffle/ruffle.js', 'every page', UI_STEPS),
     ('UI_HUD/harness.swf', 'HUD', UI_STEPS),
     ('UI_HUD/HUD.swf', 'HUD', UI_STEPS),
-    ('gfxfontlib.swf', 'HUD (imported by HUD.swf)', UI_STEPS),
+    ('gfxfontlib.swf', 'HUD (imported by HUD.swf), vending shop movie', UI_STEPS),
     ('UI_StatusMenu/harness.swf', STATUS_PAGES, UI_STEPS),
     ('UI_StatusMenu/StatusMenu.swf', STATUS_PAGES, UI_STEPS),
     # Imported by the movies above and below (their ImportAssets tags; tools/hud_overlay/movie_guard.js FILES lists the same).
-    ('SharedComponents/ConsoleComponents.swf', 'HUD, ' + STATUS_PAGES, UI_STEPS),
-    ('SharedWillowComponents/SharedWillowComponents.swf', 'HUD, world pickup card, ' + STATUS_PAGES, UI_STEPS),
-    ('SharedWillowInventory/SharedWillowInventory.swf', STATUS_PAGES, UI_STEPS),
+    ('SharedComponents/ConsoleComponents.swf', 'HUD, vending shop movie, ' + STATUS_PAGES, UI_STEPS),
+    ('SharedWillowComponents/SharedWillowComponents.swf', 'HUD, world pickup card, vending shop movie, ' + STATUS_PAGES, UI_STEPS),
+    ('SharedWillowInventory/SharedWillowInventory.swf', 'vending shop movie, ' + STATUS_PAGES, UI_STEPS),
     ('UI_Inworld/harness.swf', 'world pickup card', PICKUP_STEPS),
     ('UI_Inworld/Weapon_Card.swf', 'world pickup card', PICKUP_STEPS),
-    ('UI_VendingMachine/VendingMachineInterface.swf', 'vending frame art (optional: the page works without it)', UI_STEPS),
+    ('UI_VendingMachine/harness.swf', VENDING_PAGE, VENDING_STEPS),
+    ('UI_VendingMachine/VendingMachineInterface.swf', VENDING_PAGE, VENDING_STEPS),
+    ('UI_VendingMachine/gfxfontlib.swf', VENDING_PAGE, VENDING_STEPS),
+    ('UI_TwoPanelInterface/TwoPanelInterface.swf', VENDING_PAGE, VENDING_STEPS),
+    ('UI_TwoPanelInterface/gfxfontlib.swf', VENDING_PAGE, VENDING_STEPS),
     ('UI_Mission/harness.swf', MISSION_PAGE, MISSION_STEPS),
     ('UI_Mission/MissionInterface.swf', MISSION_PAGE, MISSION_STEPS),
     ('SharedWillowMission/SharedWillowMission.swf', MISSION_PAGE, MISSION_STEPS),

@@ -99,6 +99,8 @@ def supported_machines(vendors):
     return [m for m in vendors.get('machines', []) if m.get('supported', True)]
 
 
+# The page's one line saying which page ran: BL2's shop movie or the HTML fallback (tools/hud_overlay/vending.js).
+PAGE_MODE = re.compile(r'OWVENDPAGEMODE (movie|html)')
 STALE_PRESS = re.compile(r'OWVENDTEST stale_press start=(-?\d+) after_refusals=(-?\d+) after_stale=(-?\d+) refusal=\[([^\]]*)\] kept=\[([^\]]*)\] alone=\[([^\]]*)\] opening=(\d+)')
 
 
@@ -258,6 +260,7 @@ def grade(log_text, automation_text, vendors, open_index, open_kind='weapons', r
     out.rows.extend(grade_ammo_buy(log_text).rows)
     out.rows.extend(grade_heal_buy(log_text).rows)
     grade_stale_press(log_text, out)
+    grade_page_mode(log_text, out)
 
     if automation_text is None:
         out.add('automation', 'FAIL' if require_automation else 'MISSING', 'no automation log given')
@@ -346,6 +349,18 @@ def effect_line(pattern, log_text, opened, buy):
     OWVENDHEAL) inside the purchase, before the OWVENDOR buy line that reports the action."""
     found = list(pattern.finditer(log_text, opened.end(), buy.start()))
     return found[-1] if found else None
+
+
+def grade_page_mode(log_text, out):
+    """page_mode: which page drew the shop. The HTML page is the designed fallback when the converted movies are missing, so it
+    is reported, not failed; the last line counts (a movie lost mid-run falls back)."""
+    modes = PAGE_MODE.findall(log_text)
+    if not modes:
+        out.add('page_mode', 'MISSING', 'no "OWVENDPAGEMODE" line from the page')
+    elif modes[-1] == 'movie':
+        out.add('page_mode', 'PASS', 'the shop movie drew the page')
+    else:
+        out.add('page_mode', 'MISSING', 'the HTML fallback drew the page (shop movie absent or lost; python tools/prepare_vending_movie.py)')
 
 
 def grade_stale_press(log_text, out):

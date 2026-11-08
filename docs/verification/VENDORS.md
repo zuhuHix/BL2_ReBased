@@ -67,9 +67,9 @@ live sale is observed. Buy-back is also `UNVERIFIED`.
   given. The use key opens the nearest machine within 350 uu that Maya looks at, a stand-in for the native use trace
   (NATIVE_USE_INTERACTION.md; CONTROLS.md, "The use target follows the view").
 - The page starts its selection over on each opening. A refusal shows in the stock shop's labels (`INSUFFICIENT FUNDS`, `FULL`), read from script; which reasons the game sends to `FULL` is native and `UNVERIFIED`. The stock feedback clip and its sound are not driven. The state's serial moves only on a success, a restock or an opening. A refusal keeps it, so a repeat press gets the refusal again; a stale press changes nothing, keeps a refusal already showing, and otherwise says "Try again".
-- The page `tools/hud_overlay/vending.html` runs the stock `UI_VendingMachine.VendingMachineInterface` movie in Ruffle
-  as frame art (converted by `tools/prepare_vending_movie.py`) with HTML lists over it. The host pushes state with
-  `window.owVending(state)`, and the page answers with `OWVEND {serial, action, id}` console lines.
+- The page `tools/hud_overlay/vending.html` draws the shop in BL2's own movies when they are converted (section 10), and
+  otherwise as an HTML page of lists. The host pushes state with `window.owVending(state)`, and the page answers with
+  `OWVEND {serial, action, id}` console lines either way.
 - The machine visual is a placeholder box and the page layout is not fitted to the game: both `UNVERIFIED`.
 - Host rules, all host choices and `UNVERIFIED` against the game:
   - A restock that has fallen due is applied before the next action, never after it. A buy aimed at the shelf from
@@ -327,3 +327,86 @@ Loot Collector, Better UI Controls, Dialog Skipper, Item Lights and Apple's Bord
 - Record the player's position after the fall, so a walk-over shows whether it touched.
 - Choose pickups by a tighter test than the sphere, and stand on the side with the prompt.
 - A pickup truly on open ground may not exist here, since all of them came from containers. A walk-over answer may need one dropped some other way.
+
+## 10. The shop movie (vendor movie PR A, 2026-11-08)
+
+AI-assisted (Claude). The vending page now runs the game's own shop movie in Ruffle, driven by the page's state, as the
+inventory page does with the StatusMenu (`tools/hud_overlay/inventory.js`).
+
+**What the game uses, read from the converted movies and the shop's script (`research/script_disasm.py` on
+`VendingMachineExGFxMovie`; the listings stay under ignored `local/`):**
+
+- `UI_VendingMachine.VendingMachineInterface` holds the item of the day panel, the credits and eridium counters, the ammo
+  panel, the health and shield bars, the feedback clip and the backdrop.
+- The header, the list panel and the item card are not in it. It imports them as one symbol from
+  `UI_TwoPanelInterface.TwoPanelInterface`, a library the bank and other shops share. Both movies are in `Sanctuary_P`.
+- The shop's script shows the ammo panel at the ammo machine and the health and shield bars at the health machine. It
+  picks the header frame and the panel backgrounds per shop type. The list panels are filled natively, so the page fills
+  them itself (below).
+
+**How the page runs them.** `tools/prepare_vending_movie.py` now converts both movies, writes the harness wrapper and copies
+the converted font library next to each. `tools/hud_overlay/vending_movie.js` loads the shop movie, then loads the
+two-panel library into a clip of its own at the stage origin, and hides the copy the shop movie placed. Ruffle does not
+resolve the imports of a library that is itself imported, so the placed copy had no panels or cards. Loaded as a movie of
+its own, the library resolves them (seen in a headless browser). This is a Ruffle workaround, not how Scaleform composes
+the shop.
+
+The page then draws, on every state push and key press:
+
+- The header frame and the list background by machine kind. The page's three lists are the header's three tabs: backpack
+  (sell) on the left, the stock in the middle, buy-back on the right. Left and Right step through the tabs in that order;
+  the HTML page keeps its own column order. The tab order and titles are host choices.
+- The list rows as the library's own `inventory - cell` clips in rarity colour, with section headers. Headers are in our
+  own wording: guns by card type, other rows by kind. The rows of one section are drawn together, so each section has one
+  header as in the real list. The sections keep the order they first appear in the host's list, and the rows keep the host's
+  order inside one. Up and Down follow this order on screen.
+- The item card for the selected row, through `tools/hud_overlay/item_card.js`, with the row's price as the card's value.
+  The card is moved 100 px left of the movie's own place, so it sits beside the list as in the real Dr. Zed frame rather
+  than over it (the game's 3D tilt is not reproduced). A host fit by eye.
+- The item of the day in its own panel, with the restock countdown. It is left out of the stock list and selected as the
+  stock's first row.
+- The credits, or eridium at the Black Market, the ammo pools at the ammo machine, and health at the health machine.
+- `BACKPACK used/capacity` on the storage card, and a key line.
+- An empty tab: the list panel's own SOLD OUT widget for the stock (the shop's script turns it on for that panel), one
+  `(EMPTY)` cell for the backpack or buy-back. Which one the game shows for an empty buy-back is `UNVERIFIED`.
+
+The movie's 3D tilt, the panel tweens, sorting and the compare card are not driven.
+
+**Cell pictures: type icons, not thumbnails.** In the real shop frames the cells carry only the item's 3D thumbnail. There is no
+name or price text in them; the card shows those. The game renders those thumbnails at run time, so this host has none,
+and none are invented. Each cell shows instead the item card's own type icon from `SharedWillowComponents`, the
+`item card - weapon type` symbol, tinted with the rarity colour. Guns show their type, ammo its gun type (the real Ammo
+Dump card shows the rifle for rifle ammo), and shields, grenade mods and health their own icon. Class mods have no frame
+and stay empty. The icons are drawn from the library loaded into a clip of its own above the panels, because the list
+panel's library does not hold the symbol. Gun previews from the inventory page are not wired in.
+
+**Panel colour and the item of the day's face.** The shop's script passes each panel a number per shop type, and the
+panel's script wrapper (`InventoryListPanelGFxObject` and `ItemOfTheDayPanelGFxObject`, `SetBackground`) turns it into a frame
+label before calling the movie. Weapons get `weapons`, items `ammo`, health `medicine` and the Black Market `eridium`. The page
+passes that label to both panels. In the bench the item of the day's frames then show Marcus on red, Marcus on green, Dr. Zed
+on grey and Earl on purple, which agrees with the real Ammo Dump frame (green) and Dr. Zed frame (grey, his face). All three
+Sanctuary machines play the same GFx definition, `UI_VendingMachine.VendingMachineDef`. Read from the package, it sets no
+custom tint or item-of-the-day movie.
+
+**Fallback.** Without the converted files (`tools/hud_overlay/movie_guard.js` FILES.vending, `tools/check_overlay_data.py`),
+or when Ruffle fails later, the HTML page runs as before (the missing-UI-movie rule from #122). A movie load that has not
+settled after 8 s also counts as failed: the player is removed, one line says so, and the HTML page runs.
+The page then cancels the guard's load (`tools/hud_overlay/movie_guard.js` gives its promise a `cancel()`), and it does the
+same when a later setup step fails, including a movie call that throws during setup (logged once, then the HTML page). A load that settles after that logs nothing and removes nothing, and starts no panic
+watch; a watch already running is disconnected. When the movie wins the race, the timeout timer is cleared. When the page
+changes between the movie and HTML, it keeps the selected row by its id, since the movie groups rows by section and the
+HTML page does not. So Enter still acts on the item the player chose. The page logs
+`OWVENDPAGEMODE movie` or `OWVENDPAGEMODE html` once, and again if the movie is lost. `tools/check_vendors.py` reports the
+last one as `page_mode`: PASS for the movie, MISSING (not failed) for the fallback.
+
+**Not yet in the movie.** Refusals still show as the page's text over the movie, not in the feedback clip (PR B). There is no
+shield number from the host yet, so the shield bar is hidden (PR C).
+
+**`UNVERIFIED`:** the whole layout against the game's frames, the tab mapping and titles, the section labels, the row pitch
+and how many rows show, and the level requirement colour (the host sends no player level, so every card shows the
+requirement as met).
+
+**Checked:** `node tests/vending_movie_test.js` (7) and `node tests/vending_test.js` (37), both synthetic. The page ran in
+headless Edge against the converted movies with an invented state: weapons stock, the sell tab at the ammo machine, a
+scroll. Those frames are host frames, not a comparison with the game. `tools/test_vendors.ps1` has not run this page yet.
+
