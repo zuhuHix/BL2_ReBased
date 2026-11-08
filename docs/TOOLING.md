@@ -187,28 +187,35 @@ checks the owner and staleness rules against temporary lock files.
 
 ```
 git worktree add --detach ../BL2_ReBased-landing origin/main      # once; the script works only in this worktree
-DRY=1 tools/land_batch.sh -w ../BL2_ReBased-landing -t <tested-commit> "176:5329004 177:b3b6db8"   # checks only
-tools/land_batch.sh -w ../BL2_ReBased-landing -t <tested-commit> "176:5329004 177:b3b6db8"
+DRY=1 bash tools/land_batch.sh -w ../BL2_ReBased-landing -t <tested-commit> "<pr>:<head> <pr>:<head>"   # checks only
+bash tools/land_batch.sh -w ../BL2_ReBased-landing -t <tested-commit> "<pr>:<head> <pr>:<head>"
+bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdown-only PRs, no tested tree
 ```
 
-It rebases the listed PRs, in that order, into one chain on top of `origin/main`, then moves each PR branch to its
-commit in the chain and fast-forwards `main` once. GitHub finds each PR's head inside `main` and marks the PR Merged,
-and CI runs once for the batch instead of once per PR. Before it pushes anything, it checks:
+`<head>` is the full 40-character commit that was reviewed and tested; `<tested-commit>` is the integration commit
+(current `main` plus exactly these PRs, in this order) that the in-engine suites passed on. The script rebases the
+listed PRs into one chain on top of `origin/main`, then one atomic push moves each PR branch to its commit in the
+chain and fast-forwards `main`: either every ref moves or none does. GitHub finds each PR's head inside `main` and
+marks the PR Merged; the script waits for that, then deletes the landed remote branches (GitHub retargets any open PR
+that was based on one). Before it pushes anything, it checks:
 
-- each PR's head is still the reviewed commit (the `sha7` in the list), and the PR is open;
-- each rebased PR changes exactly the lines it changed when reviewed (a patch-id comparison, `DECISIONS.md` excluded,
-  since that file merges as a union of entries through `tools/merge-union.attributes`);
-- with `-t`, the chain's final tree is identical to the tree of the integration commit the in-engine suites ran on.
+- each PR is open, targets `main` (stacked PRs: land the parent first), and its head is still the reviewed commit;
+- each rebased PR changes exactly the lines it changed when reviewed (every changed byte, wherever the hunk moved);
+  for `DECISIONS.md`, which merges as a union of entries through `tools/merge-union.attributes`, the same added lines;
+- with `-t`, the chain's final tree is byte-identical to the tested commit's tree; with `-D`, every changed file is
+  Markdown.
 
 `git rerere` is switched on for the repository, so a conflict resolved once, for example while building the integration
-branch, is resolved the same way when the batch lands. A conflict rerere has not seen leaves the rebase open in the
-landing worktree with instructions. The script deletes only the remote branch of a landed PR, never a local worktree.
-Read the CI run on the new `main` before landing the next batch. The log is `local/hub/land_batch.log`.
+branch, is resolved the same way when the batch lands; the tree check catches a recorded fix that differs from the
+tested one. A conflict rerere has not seen leaves the rebase open in the landing worktree with instructions. The script
+refuses to start while a rebase is in progress there. CI runs on the new `main`; PR workflows may also run once per
+moved PR branch. Read the run on `main` before landing the next batch. The log is `local/hub/land_batch.log`.
 
 **Standing approval (maintainer, 2026-11-08).** The coordinating assistant may land a PR without asking first when
-its independent review is clean and its in-engine suites passed on its final head, and reports what landed afterwards.
-These still wait for the maintainer's explicit OK: changes to `THIRD_PARTY.md` or `LICENSE`, a new dependency or tool,
-`ROADMAP.md`, history rewrites, releases, and anything public outside the repository.
+its independent review is clean and its in-engine suites passed on the tested commit given to `-t` (or, for a
+Markdown-only PR, its review is clean), and reports what landed afterwards. These still wait for the maintainer's
+explicit OK: changes to `THIRD_PARTY.md` or `LICENSE`, a new dependency or tool, `ROADMAP.md`, history rewrites,
+releases, and anything public outside the repository.
 
 ## `ow-package`: the package reader
 
