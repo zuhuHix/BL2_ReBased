@@ -765,15 +765,26 @@ void AOpenWillowWalker::BeginPlay()
     // Slice choice by the maintainer (2026-11-08): Maya starts in the stand-in shield, so her shield bar is full at the start. Its
     // capacity is local data (ReadStandInShieldRule); without that file she starts with no shield and the log says why. A shield
     // the test fixtures already wear (-owcombatshots) is kept. -ownostartshield leaves her unshielded, for the tests that need that.
-    if (!FParse::Param(FCommandLine::Get(), TEXT("ownostartshield")) && !Inventory->GearSlotItem(TEXT("shield")))
+    // -owshieldcheck and -owstandinshield add their own stand-in, so the start shield would be a second one (review r1, P2): they skip it.
+    if (!FParse::Param(FCommandLine::Get(), TEXT("ownostartshield")))
     {
-        FString RuleError;
-        if (!ReadStandInShieldRule(RuleError))
+        const bool bOwnShieldSwitch = FParse::Param(FCommandLine::Get(), TEXT("owshieldcheck")) || FParse::Param(FCommandLine::Get(), TEXT("owstandinshield"));
+        if (bOwnShieldSwitch)
         {
-            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya starts with no shield: %s"), *RuleError);
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya starts with no start shield: -owshieldcheck or -owstandinshield owns the shield"));
         }
-        else if (!OpenWillowEquipStandInShield(*this))
-            UE_LOG(LogTemp, Error, TEXT("OpenWillow Maya starts with no shield: the stand-in could not be added or equipped"));
+        else if (!Inventory->GearSlotItem(TEXT("shield")))
+        {
+            FString RuleError;
+            if (!ReadStandInShieldRule(RuleError))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya starts with no shield: %s"), *RuleError);
+            }
+            else if (!OpenWillowEquipStandInShield(*this))
+            {
+                UE_LOG(LogTemp, Error, TEXT("OpenWillow Maya starts with no shield: the stand-in could not be added or equipped"));
+            }
+        }
     }
     RefreshHealthForLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d, health %.1f"),
