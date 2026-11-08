@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,18 @@ class FakePackage:
     def props(self, path):
         assert path == GLOBALS
         return {'RarityLevelColors': self.rows}
+
+
+def make_outside_junction(case, target):
+    """A junction inside this checkout's local/ pointing at `target` (outside it), removed after the test; None off Windows."""
+    try:
+        import _winapi
+    except ImportError:
+        return None
+    link = ROOT / 'local' / f'ow_test_junction_{os.getpid()}'
+    _winapi.CreateJunction(str(target), str(link))
+    case.addCleanup(os.rmdir, link)  # removes the junction only, never the target's contents
+    return link
 
 
 def row(rating, r, g, b):
@@ -74,6 +87,31 @@ class GameColoursTests(unittest.TestCase):
             game_colours.colour('skill_tag')
         self.assertEqual(err.getvalue().count('neutral greys'), 1)
 
+    def test_a_json_file_of_the_wrong_shape_is_unreadable_and_warns_once(self):
+        for index, body in enumerate(([], {'colours': ['#010101']}, {'not_colours': {}}, {'colours': 'x'})):
+            file = self.dir / f'shape{index}.json'
+            file.write_text(json.dumps(body), encoding='utf-8')
+            self.assertIsNone(game_colours.read_file(file), body)
+            os.environ['OPENWILLOW_GAME_COLOURS'] = str(file)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(game_colours.colour('card_text'), game_colours.NEUTRAL['card_text'])
+                game_colours.colour('skill_tag')
+            self.assertEqual(err.getvalue().count('missing or unreadable'), 1, body)
+
+    def test_rarity_fallbacks_are_one_grey_not_white(self):
+        tiers = {game_colours.NEUTRAL[f'rarity_{n}'] for n in range(1, 6)}
+        self.assertEqual(len(tiers), 1)
+        self.assertNotIn('#FFFFFF', tiers)
+
+    def test_under_local_follows_links(self):
+        self.assertTrue(game_colours.under_local(ROOT / 'local' / 'ui' / 'colours' / 'x.json'))
+        self.assertFalse(game_colours.under_local(self.dir / 'x.json'))
+        self.assertFalse(game_colours.under_local(ROOT / 'local' / '..' / 'x.json'))
+        link = make_outside_junction(self, self.dir)
+        if link:
+            self.assertFalse(game_colours.under_local(link / 'x.json'))
+
     def test_load_reads_the_file_over_neutral(self):
         file = self.dir / 'present.json'
         file.write_text(json.dumps({'colours': {'card_red_text': '#0F1E2D'}}), encoding='utf-8')
@@ -97,6 +135,22 @@ class GameColoursTests(unittest.TestCase):
         file = self.dir / 'c.json'
         file.write_text(json.dumps({'colours': {'card_text': '#010101', 'bad': '</script>'}}), encoding='utf-8')
         self.assertEqual(serve.colours_script(file), b'window.OW_GAME_COLOURS = {"card_text": "#010101"};\n')
+
+    def test_prepare_skill_tree_output_must_stay_under_local(self):
+        script = [sys.executable, str(ROOT / 'tools' / 'prepare_skill_tree.py'), '--reader', 'none.exe', '--game', str(self.dir / 'no_game')]
+        outside = subprocess.run(script + ['--output', str(self.dir / 'run')], capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(outside.returncode, 2)
+        self.assertIn("outside this checkout's ignored local/", outside.stderr)
+        self.assertFalse((self.dir / 'run').exists())
+        link = make_outside_junction(self, self.dir)
+        if link:
+            through = subprocess.run(script + ['--output', str(link / 'run')], capture_output=True, text=True, cwd=ROOT)
+            self.assertEqual(through.returncode, 2)
+            self.assertIn("outside this checkout's ignored local/", through.stderr)
+        scratch = Path(tempfile.mkdtemp(prefix='ow_test_', dir=ROOT / 'local'))  # the tool writes a schema next to --output
+        self.addCleanup(shutil.rmtree, scratch, True)
+        inside = subprocess.run(script + ['--output', str(scratch / 'run')], capture_output=True, text=True, cwd=ROOT)
+        self.assertNotIn("outside this checkout's ignored local/", inside.stderr)  # past the guard; fails later on the fake game
 
     def test_output_must_stay_under_local(self):
         result = subprocess.run([sys.executable, str(ROOT / 'tools' / 'game_colours.py'), '--output', str(self.dir / 'x.json')],

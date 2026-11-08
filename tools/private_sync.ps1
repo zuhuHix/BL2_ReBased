@@ -14,8 +14,34 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (!$Store) { throw 'Pass -Store <folder> or set OPENWILLOW_PRIVATE (a folder outside this repository)' }
 $store = [IO.Path]::GetFullPath($Store)
-if ($store.TrimEnd('\') -ieq $repo.TrimEnd('\') -or $store.StartsWith($repo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
-    throw "The store $store is inside the repository $repo; game-derived files must stay out of it"
+# The real folder behind a path: every existing part that is a junction or symbolic link is replaced by its final
+# target, so a store reached through a link into the repository is caught. Parts that do not exist yet stay as written.
+function Resolve-RealPath([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $root = [IO.Path]::GetPathRoot($full)
+    $real = $root
+    foreach ($part in $full.Substring($root.Length).Split('\', [StringSplitOptions]::RemoveEmptyEntries)) {
+        $next = Join-Path $real $part
+        $item = Get-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue
+        if ($item -and $item.LinkType) {
+            if ($item.PSObject.Methods['ResolveLinkTarget']) {  # PowerShell 7 (.NET 6+): follows a chain of links
+                $target = $item.ResolveLinkTarget($true)
+                if ($target) { $next = $target.FullName }
+            } elseif (@($item.Target)[0]) {  # Windows PowerShell 5.1: one link level; a relative target is next to the link
+                $target = @($item.Target)[0] -replace '^\\\\\?\\', ''
+                $next = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($target)) { $target } else { Join-Path $real $target }))
+            }
+        }
+        $real = $next
+    }
+    return $real.TrimEnd('\')
+}
+$realStore = Resolve-RealPath $store
+$realRepo = Resolve-RealPath $repo
+foreach ($pair in @(@($store.TrimEnd('\'), $repo.TrimEnd('\')), @($realStore, $realRepo))) {
+    if ($pair[0] -ieq $pair[1] -or $pair[0].StartsWith($pair[1] + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "The store $store (really $realStore) is inside the repository $repo; game-derived files must stay out of it"
+    }
 }
 New-Item -ItemType Directory -Force -Path $store | Out-Null
 $failed = $false

@@ -4287,3 +4287,9 @@ listed in the PR. Not verified here: the in-engine inventory and skills suites w
 (handed to the batch runner); UNVERIFIED that the pages look unchanged with the file present.
 
 `README.md.bak`, a stray tracked backup, is deleted (maintainer said yes); it held GitHub diagram styling only.
+
+Review r1 (Luna, 2026-11-08): the five rarity fallbacks are now one mid grey (white was the stock Common);
+a colours file that is valid JSON but not `{"colours": {...}}` counts as unreadable and warns;
+`prepare_skill_tree.py --output` and `game_colours.py --output` must resolve (links followed) inside this
+checkout's `local/`. A junctioned subfolder of `local/` that points elsewhere is therefore refused too.
+`private_sync.ps1` resolves junctions and symbolic links on the store path before refusing a store inside the repository.

@@ -26,10 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = ROOT / 'local' / 'ui' / 'colours' / 'game_colours.json'
 HEX = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
-# Every key the code reads, with its neutral stand-in (greys and white, chosen to look
-# obviously unstyled, not taken from the game). Keep in step with tools/hud_overlay/colours.js.
+# Every key the code reads, with its neutral stand-in (greys, chosen to look obviously unstyled, not taken
+# from the game). All five rarity tiers share one mid grey, so no tier can match a stock rarity colour (the
+# stock Common is white). Keep in step with tools/hud_overlay/colours.js.
 NEUTRAL = {
-    'rarity_1': '#FFFFFF', 'rarity_2': '#E0E0E0', 'rarity_3': '#C0C0C0', 'rarity_4': '#A0A0A0', 'rarity_5': '#808080',
+    'rarity_1': '#8C8C8C', 'rarity_2': '#8C8C8C', 'rarity_3': '#8C8C8C', 'rarity_4': '#8C8C8C', 'rarity_5': '#8C8C8C',
     'card_text': '#D0D0D0',             # item card labels and values, menu hint text
     'card_projectile_count': '#B0B0B0', # the "xN" after a shotgun's damage
     'card_red_text': '#909090',         # a title part's flavour line; also how weapon_stats.py recognises it
@@ -68,11 +69,20 @@ def valid(colours):
 
 
 def read_file(file):
+    """The file's valid colours, or None when it is missing, not JSON, or not {"colours": {...}} (unreadable)."""
     try:
         data = json.loads(Path(file).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
-    return valid(data.get('colours') if isinstance(data, dict) else None)
+    if not isinstance(data, dict) or not isinstance(data.get('colours'), dict):
+        return None
+    return valid(data['colours'])
+
+
+def under_local(target):
+    """True when `target`, with every junction and symbolic link followed, is inside this checkout's local/."""
+    real = Path(os.path.realpath(target))
+    return real.is_relative_to(Path(os.path.realpath(ROOT / 'local')))
 
 
 def load():
@@ -139,7 +149,7 @@ def main():
     parser.add_argument('--seed', type=Path, help='private {"colours": {key: "#RRGGBB"}} notes for the measured keys')
     parser.add_argument('--output', type=Path, default=DEFAULT_PATH)
     args = parser.parse_args()
-    if not args.output.resolve().is_relative_to((ROOT / 'local').resolve()):
+    if not under_local(args.output):
         parser.error("output must stay under this checkout's ignored local/")
     if bool(args.reader) != bool(args.package):
         parser.error('--reader and --package go together')
