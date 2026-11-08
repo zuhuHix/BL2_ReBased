@@ -205,6 +205,11 @@ def main():
     parser.add_argument('--name', default='siren')
     parser.add_argument('--output', default='local/ui/run')
     args = parser.parse_args()
+    # The tree JSON carries the game's skill-tag colour (game-derived), so it may only go under this checkout's
+    # ignored local/, with links followed (DECISIONS.md 2026-11-08).
+    if not game_colours.under_local(args.output):
+        parser.error(f"--output {args.output} resolves outside this checkout's ignored local/ "
+                     f"({game_colours.ROOT / 'local'}); generated skill data must stay there")
 
     game = Path(args.game)
     cooked = game / 'WillowGame' / 'CookedPCConsole'

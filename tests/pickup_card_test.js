@@ -20,6 +20,16 @@ function check(name, test) { test(); passed++; console.log('PASS ' + name); }
 const hud = load('/');
 const {placement, plan} = hud.owPickupCard;
 
+check('Without the local colours file every rarity uses the one neutral grey of colours.js, not a stock colour', () => {
+  const grey = hud.owColours.tint('rarity_1');
+  assert.notStrictEqual(grey, 0xffffff);
+  assert.deepStrictEqual(Array.from(hud.owItemCard.colors), Array(6).fill(grey));
+});
+check('With a (made-up) colours file the rarity table follows it', () => {
+  const made = load('/', {OW_GAME_COLOURS: {rarity_1: '#010101', rarity_2: '#020202', rarity_3: '#030303', rarity_4: '#040404', rarity_5: '#050505'}});
+  assert.deepStrictEqual(Array.from(made.owItemCard.colors), [0x010101, 0x010101, 0x020202, 0x030303, 0x040404, 0x050505]);
+});
+
 check('Placement centres the card over the item, its bottom a gap above it', () => {
   const box = placement(0.5, 0.8, 1280, 720, 328 / 259);
   assert.ok(Math.abs(box.left + box.width / 2 - 640) < 1e-9);
