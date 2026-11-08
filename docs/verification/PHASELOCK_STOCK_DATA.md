@@ -677,7 +677,7 @@ alpha/colour; `fade(D)` as above.
 | `Mati_Wispy_Smoke_Cloud_SubUV` (translucent, sub-image) | Colour `a x col`, alpha `saturate(a x alpha) x fade(19)`, `a` the sub-image alpha (two frames blended by the particle's frame fraction). |
 | `Mat_SirenGlowMOD` (modulate) | Scene multiplied by `1 + min(3, fade(16) x alpha x mask(2uv) x col)`: an overbright modulate. |
 | `Mat_PhaseLockScreenEffect` (translucent, full-view) | Replaces the view by `saturate(scene^2 x col x mask)` blended by the particle alpha; the mask is `PhaseLockScreenMask02_Dif_Tex` (the second referenced texture; rounds 2-5 used the first, a UV mask). |
-| `Mat_SirenSuction` | A refraction: the scene colour read at the screen UV offset by a distortion map, alpha `sat(15 x mask x alpha) x sat((depth - 20) / 512) x fade(26) x square mask`. Not drawn by the host. |
+| `Mat_SirenSuction` | A refraction: the scene colour read at the screen UV offset by a distortion map, alpha `sat(15 x mask x alpha) x sat((depth - 20) / 512) x fade(26) x square mask`. Drawn since 2026-11-08 ("The suction refraction" below). |
 
 Textures (sampler state from the `Texture2D` exports): wrap addressing and sRGB unless listed. Clamp: `PhaseLockBubble_Dif_Tex`,
 `EnergyRibbon_Dif_Tex`, `EnergySwirl_Dif_Tex`, `Square_Mask_Dif`, `Tex_Lens_Flare_Wide_Prime`. Mirror: `EnergyOrbCenter_Dif_Mirror`,
@@ -1450,3 +1450,23 @@ AI-assisted (Claude). `tools/real_game/phaselock_integrity_capture.ps1 -KillAndS
 - Shields of levels 15, 30 and 50 spawned but did not equip, most likely because they are above the player's level (reason not read: UNVERIFIED). The stage now asks only for levels at or below the player's. That change has not been run.
 - Restoring worked on every row read: her shield and backpack ended as they started.
 
+
+### The suction refraction (2026-11-08, showcase follow-up; read from the shader cache, no game run)
+
+AI-assisted (Claude). The 2026-11-08 showcase card at +0.80 s shows the game's burst filling most of the view, with the rocks behind it
+broken into refracted facets, where ours is a ring around the target over a readable street. Rounds 19 to 22 named the one layer the host
+never drew, the hand template's `Suction` emitter (`Mat_SirenSuction`, a screen distortion), as the next step. Its compiled pixel shader
+(particle dynamic-parameter vertex factory, read from `RefShaderCache-PC-D3D-SM3.upk` as in round 6; listing under ignored `local/`), in our words:
+
+- **Colour:** the scene colour, read at the undistorted screen UV plus `2 x distortion.rg - 1` (the distortion map read at the sprite UV,
+  so the shift is in screen-UV units), clamped to 0..1. The particle colour is not used. The texture list of the material export names the three
+  textures: `EnergyOrbScreenUVDistortion_Nrm_Tex` (the shift), `EnergyOrbSoftMod_Dif_Mirror` (the mask, read at twice the UV) and
+  `Square_Mask_Dif` (read at the undistorted screen UV, its green fades the effect toward the screen's edges).
+- **Opacity:** `saturate((view depth - FadeStart) / FadeDistance)` (scalar parameters, 20 and 512 by default) x `saturate(15 x mask.r x particle alpha)`
+  x the soft depth fade over 26 units x the square mask's green. This matches the earlier one-line reading in the table above.
+- **Host (UNVERIFIED until a capture):** `host/ue5/import_phaselock_fx.py` builds it as an exact material whose code returns the shift and the
+  opacity; UE5's `SceneColor` expression reads the scene at that shift. `Mat_SirenSuction` leaves the importer's allowed skips. No C++ change: the
+  host draws every emitter whose material imports. Open: UE5's `SceneColor` in a translucent material sees the opaque scene only, and the hand
+  effect is drawn in the first-person foreground; whether the game's copy included earlier translucent layers was not read.
+- **Needs (heavy tier):** `tools/import_phaselock_fx.ps1`, then `tools/run_phaselock_shots.ps1` with the round-20 switches and `-owcombatpawn=Bullymong`,
+  compared at +0.50, +0.80 and +1.50 s with the real frames.
