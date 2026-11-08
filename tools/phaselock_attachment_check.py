@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Compare where the live game puts the Phaselock target's worn pieces with where the host puts them.
+"""Compare where the live game puts the Phaselock target's worn pieces with where the host puts them: each piece's pivot position on its bone.
 
-AI-assisted (Claude), 2026-11-08. Inputs are ignored local files: the probe's rows
-(tools/real_game/phaselock_integrity_capture.ps1 -> local/realgame/phaselock_integrity/hit.jsonl, whose 'assets' rows list each attached
-piece with its bone's world matrix and, since 2026-11-08, its world bounds) and the host's placement
-(local/phaselock/target/host_target.json, written by tools/prepare_phaselock_target.py attachments).
+AI-assisted (Claude), 2026-11-08. Inputs are ignored local files: the probe's session folder
+(tools/real_game/phaselock_integrity_capture.ps1 -> local/realgame/phaselock_integrity/: session.json names the hit attempt it kept, hit or
+hit_try<N>, and <attempt>.jsonl holds that attempt's rows) and the host's placement (local/phaselock/target/host_target.json, written by
+tools/prepare_phaselock_target.py attachments).
 
-Why the bounds: LocalToWorld read null through the SDK. A piece mesh's pivot is its bounds' centre (checked on the exported glTF of
-all four meshes), so the world bounds' origin is the piece's world position, and taking it into the bone's frame gives the offset the
-host should use. UE3 matrices are row-vector: rows X, Y, Z are the axes (scaled), row W the origin. Prints one row per piece: the live
-offset in the bone's frame, the host's, and the distance between them. The verdict needs a real-game run; this tool only does the arithmetic.
+Only the kept attempt counts, and only if session.json says it lifted the target; its pieces are read from a row in which the target is the
+lifted (held) pawn. A failed first cast is never compared (PR #182 review r1).
 
-Usage: python tools/phaselock_attachment_check.py --rows <hit.jsonl> --host <host_target.json> [--pawn Bullymong]
+Why the bounds: LocalToWorld read null through the SDK. A piece mesh's pivot is its bounds' centre (checked on the exported glTF of all
+four meshes), so the world bounds' origin is the piece's world position, and taking it into the bone's frame gives the offset the host
+should use. UE3 matrices are row-vector: rows X, Y, Z are the axes (scaled), row W the origin.
+
+What it checks: the pivot position at one held frame, against PASS_TOLERANCE. Not the pieces' orientation or scale (the extents are not
+compared), and not other poses. Exit 0 when every piece is within the tolerance, 1 otherwise, 2 when the session cannot be used.
+
+Usage: python tools/phaselock_attachment_check.py --session local/realgame/phaselock_integrity --host local/phaselock/target/host_target.json
 """
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 
@@ -36,8 +42,41 @@ def to_bone_frame(bone_matrix, point):
     return [replaced(i) / det for i in range(3)]
 
 
+# Host choice (UNVERIFIED): how far, in units, a live pivot may sit from the host's and still pass. The bounds and the bone matrix are read on
+# the same frame, but a component's bounds may trail its bone by a frame of the hold's loop motion; 8 units leaves room for that and is
+# small against the pieces (about 25 to 115 units long).
+PASS_TOLERANCE = 8.0
+
+
+class SessionError(Exception):
+    pass
+
+
+def held_rows(folder, stage='hit'):
+    """(rows of the kept attempt in which the target is lifted, the target's name). Raises SessionError when the session cannot be used."""
+    folder = Path(folder)
+    try:
+        session = json.loads((folder / 'session.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise SessionError(f'session.json unreadable in {folder}: {error}')
+    attempt = session.get(f'{stage}_attempt')
+    if not attempt:
+        raise SessionError(f'session.json names no {stage}_attempt')
+    result = session.get(f'{attempt}_result') or {}
+    if result.get('target_lifted') is not True or not result.get('target'):
+        raise SessionError(f'the kept attempt {attempt} did not lift the target ({result.get("lifted")})')
+    path = folder / f'{attempt}.jsonl'
+    if not path.is_file():
+        raise SessionError(f'{path} is missing')
+    rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    held = [row for row in rows if row.get('lifted') == result['target']]
+    if not held:
+        raise SessionError(f'{attempt}: no row shows {result["target"]} lifted')
+    return held, result['target']
+
+
 def live_pieces(rows):
-    """{bone: [offset in bone frame]} from the newest probe row that has an attachment with both a bone matrix and bounds."""
+    """{bone: [offset in bone frame]} from the newest of the given rows that has an attachment with both a bone matrix and bounds."""
     found = {}
     for row in rows:
         for piece in ((row.get('assets') or {}).get('attachments') or []):
@@ -55,7 +94,8 @@ def compare(live, host_rows):
         mine = piece['location']
         theirs = live.get(piece['bone'])
         gap = math.dist(mine, theirs) if theirs else None
-        out.append({'bone': piece['bone'], 'host': mine, 'live': theirs, 'gap': gap})
+        out.append({'bone': piece['bone'], 'host': mine, 'live': theirs, 'gap': gap,
+                    'pass': gap is not None and gap <= PASS_TOLERANCE})
     return out
 
 
@@ -65,16 +105,23 @@ def vector(v):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--rows', required=True, type=Path)
+    parser.add_argument('--session', required=True, type=Path, help='the capture folder holding session.json and <attempt>.jsonl')
     parser.add_argument('--host', required=True, type=Path)
     parser.add_argument('--pawn', default='Bullymong')
     args = parser.parse_args()
-    rows = [json.loads(line) for line in args.rows.read_text(encoding='utf-8').splitlines() if line.strip()]
+    try:
+        rows, target = held_rows(args.session)
+    except SessionError as error:
+        print(f'cannot compare: {error}')
+        return 2
     host = json.loads(args.host.read_text(encoding='utf-8'))[args.pawn].get('attachments', [])
-    for r in compare(live_pieces(rows), host):
+    results = compare(live_pieces(rows), host)
+    print(f'held target {target}; pivot position on the bone at one held frame; tolerance {PASS_TOLERANCE} units')
+    for r in results:
         gap = '-' if r['gap'] is None else '%.1f' % r['gap']
-        print(f"{r['bone']:<8} host {vector(r['host'])}  live {vector(r['live'])}  gap {gap}")
+        print(f"{r['bone']:<8} host {vector(r['host'])}  live {vector(r['live'])}  gap {gap}  {'pass' if r['pass'] else 'FAIL'}")
+    return 0 if results and all(r['pass'] for r in results) else 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

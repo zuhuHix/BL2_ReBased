@@ -1540,7 +1540,10 @@ AI-assisted (Claude). The 2026-11-08 showcase reads the bullymong's claws and sp
 - **What is not known:** the placement itself. `LocalToWorld` read null, so the probe never saw a piece's world transform.
 - **Change:** the probe (`tools/real_game/scripts/phaselock_integrity.py`) also reads each attached piece's world `Bounds` (origin, extent, radius).
   With the pivot at the bounds' centre, the origin taken into the bone's frame is the piece's offset on its bone. `tools/phaselock_attachment_check.py`
-  does that arithmetic against `host_target.json` and prints the gap per piece (synthetic tests only).
+  does that arithmetic against `host_target.json` (synthetic tests only). It reads only the hit attempt `session.json` kept, refuses it unless
+  that attempt lifted the target, and takes the pieces from a row in which the target is the held pawn, so a failed first cast is never compared.
+  It passes a piece within 8 units (a host choice, UNVERIFIED: the bounds may trail the bone by a frame of the loop's motion).
 - **Needs (real game, zuhu):** one `tools/real_game/phaselock_integrity_capture.ps1` hit run on an Adult, then
-  `python tools/phaselock_attachment_check.py --rows local/realgame/phaselock_integrity/hit.jsonl --host local/phaselock/target/host_target.json`.
-  A gap of a few units confirms the placement rule; a large or mirrored gap says which piece and bone to fix. UNVERIFIED until then.
+  `python tools/phaselock_attachment_check.py --session local/realgame/phaselock_integrity --host local/phaselock/target/host_target.json`.
+  What a pass shows: each piece's pivot position on its bone at one held frame. It does not check the pieces' orientation or scale, or other
+  poses. A large or mirrored gap says which piece and bone to fix. UNVERIFIED until then.

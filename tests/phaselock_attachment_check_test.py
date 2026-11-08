@@ -2,8 +2,10 @@
 
 Run: python tests/phaselock_attachment_check_test.py
 """
+import json
 import math
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
@@ -38,8 +40,53 @@ def test_compare_uses_the_newest_row_and_reports_missing():
                                       {'bone': 'Spine2', 'bone_matrix': bone, 'bounds': None}]}}
     rows = c.compare(c.live_pieces([old, {'other': 1}, new]),
                      [{'bone': 'Head', 'location': [0, 0, 0]}, {'bone': 'Spine2', 'location': [1, 1, 1]}])
-    assert abs(rows[0]['gap'] - 5.0) < 1e-9
-    assert rows[1]['live'] is None and rows[1]['gap'] is None
+    assert abs(rows[0]['gap'] - 5.0) < 1e-9 and rows[0]['pass'] is (5.0 <= c.PASS_TOLERANCE)
+    assert rows[1]['live'] is None and rows[1]['gap'] is None and rows[1]['pass'] is False
+
+
+def piece_row(lifted, offset, bone_name='Head'):
+    bone = rotated_bone(0.3, 1.0, (50.0, 0.0, 100.0))
+    return {'lifted': lifted, 'assets': {'attachments': [{'bone': bone_name, 'bone_matrix': bone, 'bounds': {'origin': world_of(bone, offset)}}]}}
+
+
+def session_folder(tmp, session, files):
+    folder = Path(tmp)
+    (folder / 'session.json').write_text(json.dumps(session), encoding='utf-8')
+    for name, rows in files.items():
+        (folder / name).write_text(chr(10).join(json.dumps(r) for r in rows), encoding='utf-8')
+    return folder
+
+
+def test_only_the_kept_attempt_with_the_target_held_counts():
+    with tempfile.TemporaryDirectory() as tmp:
+        # A failed first cast (hit) has a wrong placement; the kept retry (hit_try2) holds the target with the right one.
+        folder = session_folder(tmp, {'hit_attempt': 'hit_try2', 'hit_result': {'target': 'Pawn_A', 'target_lifted': False},
+                                      'hit_try2_result': {'target': 'Pawn_A', 'target_lifted': True}},
+                                {'hit.jsonl': [piece_row(None, [90.0, 0.0, 0.0])],
+                                 'hit_try2.jsonl': [piece_row(None, [70.0, 0.0, 0.0]), piece_row('Pawn_A', [1.0, 2.0, 2.0])]})
+        rows, target = c.held_rows(folder)
+        assert target == 'Pawn_A' and all(r['lifted'] == 'Pawn_A' for r in rows)
+        result = c.compare(c.live_pieces(rows), [{'bone': 'Head', 'location': [0.0, 0.0, 0.0]}])[0]
+        assert abs(result['gap'] - 3.0) < 1e-9 and result['pass']
+
+
+def test_unusable_sessions_are_refused():
+    cases = [({}, {}),
+             ({'hit_attempt': 'hit', 'hit_result': {'target': 'Pawn_A', 'target_lifted': False}}, {'hit.jsonl': [piece_row('Pawn_A', [0, 0, 0])]}),
+             ({'hit_attempt': 'hit', 'hit_result': {'target': 'Pawn_A', 'target_lifted': True}}, {}),
+             ({'hit_attempt': 'hit', 'hit_result': {'target': 'Pawn_A', 'target_lifted': True}}, {'hit.jsonl': [piece_row('Pawn_B', [0, 0, 0])]})]
+    for session, files in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                c.held_rows(session_folder(tmp, session, files))
+            except c.SessionError:
+                continue
+            raise AssertionError(f'accepted {session}')
+
+
+def test_a_gap_beyond_the_tolerance_fails():
+    rows = [piece_row('Pawn_A', [c.PASS_TOLERANCE + 1.0, 0.0, 0.0])]
+    assert c.compare(c.live_pieces(rows), [{'bone': 'Head', 'location': [0.0, 0.0, 0.0]}])[0]['pass'] is False
 
 
 if __name__ == '__main__':
