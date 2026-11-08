@@ -85,8 +85,9 @@ try {
 
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
+    # -ownostartshield: the checks start with no shield worn (the empty shield slot and the shield's own equip steps); Maya's start shield is off.
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya',
-        "-owflashhud=$url", "-owflashskills=${url}skills.html",
+        '-ownostartshield', "-owflashhud=$url", "-owflashskills=${url}skills.html",
         "-owslots=$Slots", '-game', '-windowed', '-ResX=1280', '-ResY=720',
         '-nosplash', '-unattended', "-abslog=`"$log`"")
     if (!$NoInventoryMovie) { $arguments += "-owflashinventory=${url}inventory.html" }

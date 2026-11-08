@@ -312,6 +312,9 @@ private:
     void TickShield(float Now);
     FOpenWillowStandInShieldRule StandInShieldRule;
     bool bStandInShieldRuleRead = false;
+    FString StandInShieldRuleError;     // why the rule did not load (empty when it did)
+    // Reads the stand-in rule file once (local/slice). True when the rule is set; OutError says why not. Logs only the success.
+    bool ReadStandInShieldRule(FString& OutError);
 public:
     // What a shield item gives: its card's stats, the stand-in rule's capacity when the card has none, the stats' defaults otherwise.
     struct FShieldStats { float Capacity = 0.f; float RechargeDelay = 0.f; float RechargeRate = 0.f; bool bStandIn = false; };

@@ -73,7 +73,8 @@ try {
     $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
     $env:OPENWILLOW_SCENE = Join-Path $repo 'local/sanctuary'
     $started = Get-Date
-    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', "-owflashhud=$url",
+    # -ownostartshield: the captures keep the no-start-shield baseline (the shield frames come from -owhudshield, -owshieldcheck and -owhuddownshots).
+    $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-ownostartshield', "-owflashhud=$url",
         "-owitems=`"$(Split-Path -Parent $gear)`"", "-owlevel=$level") + $mode + $Extra + @(
         '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")

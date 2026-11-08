@@ -322,6 +322,20 @@ AOpenWillowWalker::FShieldStats AOpenWillowWalker::ReadShieldStats(const FOpenWi
     return Out;
 }
 
+bool AOpenWillowWalker::ReadStandInShieldRule(FString& OutError)
+{
+    if (!bStandInShieldRuleRead)
+    {
+        bStandInShieldRuleRead = true;
+        const FString File = FPaths::ConvertRelativePathToFull(
+            FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/slice/stand_in_shield.json")));
+        if (StandInShieldRule.LoadFile(File, StandInShieldRuleError))
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya shield: stand-in rule read from %s"), *File);
+    }
+    OutError = StandInShieldRuleError;
+    return StandInShieldRule.IsSet();
+}
+
 void AOpenWillowWalker::TickShield(float Now)
 {
     // A new shield is applied once, when the equipped id changes.
@@ -331,18 +345,8 @@ void AOpenWillowWalker::TickShield(float Now)
     EquippedShieldId = Id;
     if (Item && !bStandInShieldRuleRead)
     {
-        bStandInShieldRuleRead = true;
-        const FString File = FPaths::ConvertRelativePathToFull(
-            FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../local/slice/stand_in_shield.json")));
         FString Error;
-        if (StandInShieldRule.LoadFile(File, Error))
-        {
-            UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya shield: stand-in rule read from %s"), *File);
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: %s"), *Error);
-        }
+        if (!ReadStandInShieldRule(Error)) UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya shield: %s"), *Error);
     }
     const FShieldStats Stats = ReadShieldStats(Item, StandInShieldRule);
     MayaState.EquipShield(Stats.Capacity, Stats.RechargeDelay, Stats.RechargeRate, !bShieldEverEquipped, Now);
@@ -455,6 +459,8 @@ float AOpenWillowWalker::ShotDamage(const FOpenWillowWeaponItem& Weapon, float N
     if (!Skill.IsEmpty()) return Skill.Apply(Weapon.Damage * (1.f + Scale));   // no stack: skill modifiers over the card value (UNVERIFIED)
     return Weapon.Damage * (1.f + Scale);      // fallback without the stack: S taken as 1 (UNVERIFIED, see the header)
 }
+
+bool OpenWillowEquipStandInShield(AOpenWillowWalker& Maya);   // OpenWillowShieldCheck.cpp: a stat-less shield, equipped as the inventory does
 
 void AOpenWillowWalker::BeginPlay()
 {
@@ -755,6 +761,19 @@ void AOpenWillowWalker::BeginPlay()
         const TArray<FOpenWillowGearItem> Gear = Inventory->GearItemList();
         for (const FOpenWillowGearItem& Item : Gear)
             if (!Inventory->GearSlotItem(Item.ItemType)) Inventory->EquipGearById(Item.Id, Item.ItemType, Skills->GetLevel());
+    }
+    // Slice choice by the maintainer (2026-11-08): Maya starts in the stand-in shield, so her shield bar is full at the start. Its
+    // capacity is local data (ReadStandInShieldRule); without that file she starts with no shield and the log says why. A shield
+    // the test fixtures already wear (-owcombatshots) is kept. -ownostartshield leaves her unshielded, for the tests that need that.
+    if (!FParse::Param(FCommandLine::Get(), TEXT("ownostartshield")) && !Inventory->GearSlotItem(TEXT("shield")))
+    {
+        FString RuleError;
+        if (!ReadStandInShieldRule(RuleError))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow Maya starts with no shield: %s"), *RuleError);
+        }
+        else if (!OpenWillowEquipStandInShield(*this))
+            UE_LOG(LogTemp, Error, TEXT("OpenWillow Maya starts with no shield: the stand-in could not be added or equipped"));
     }
     RefreshHealthForLevel();
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level %d, %d skill points, action grade %d, health %.1f"),

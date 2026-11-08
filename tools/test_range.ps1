@@ -61,8 +61,9 @@ try {
     $mode = if ($Survey) { '-owrangesurvey' } else { '-owrangetest' }
     $hudSwitch = '-owcanvashud'
     if ($MovieHud) { $movie = Start-OwMovieHud -Port $MovieHudPort; $hudSwitch = "-owflashhud=$($movie.Url)" }
+    # -ownostartshield: the range's steps restore Maya's health only and its survey counts her downs, both with no shield worn.
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', $hudSwitch, $mode,
-        "-owrange=`"$Manifest`"", '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
+        '-ownostartshield', "-owrange=`"$Manifest`"", '-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     # The Fire mission's stock dummy (local/slice manifests, as tools/test_quest.ps1 uses them); without them the host
     # stands engine-shape dummies and says so.
