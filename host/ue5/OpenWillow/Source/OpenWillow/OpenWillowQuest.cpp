@@ -1133,7 +1133,7 @@ void UOpenWillowQuest::UpdateHints()
     const APawn* Pawn = Cast<APawn>(GetOwner());
     const APlayerController* Player = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
     if (const AOpenWillowMayaHUD* Hud = Player ? Cast<AOpenWillowMayaHUD>(Player->GetHUD()) : nullptr)
-        if (Hud->IsSkillsOpen() || Hud->IsMovieHudReady()) return;
+        if (Hud->IsSkillsOpen() || Hud->IsFlashHudReady()) return;
     if (const UOpenWillowVendorSubsystem* Vendors = GetWorld() ? GetWorld()->GetSubsystem<UOpenWillowVendorSubsystem>() : nullptr)
         if (Vendors->IsShopOpen()) return;
     FString Line = TEXT("Rock, Paper, Genocide: Fire Weapons! - ");
