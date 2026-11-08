@@ -1465,7 +1465,10 @@ never drew, the hand template's `Suction` emitter (`Mat_SirenSuction`, a screen 
 - **Opacity:** `saturate((view depth - FadeStart) / FadeDistance)` (scalar parameters, 20 and 512 by default) x `saturate(15 x mask.r x particle alpha)`
   x the soft depth fade over 26 units x the square mask's green. This matches the earlier one-line reading in the table above.
 - **Host (UNVERIFIED until a capture):** `host/ue5/import_phaselock_fx.py` builds it as an exact material whose code returns the shift and the
-  opacity; UE5's `SceneColor` expression reads the scene at that shift. `Mat_SirenSuction` leaves the importer's allowed skips. No C++ change: the
+  opacity; UE5's `SceneColor` expression, set to its OffsetFraction input mode, reads the scene at that shift. (Review r1: in its default
+  Coordinates mode that pin does not exist, and the unchecked connection left the shift out silently. Every connection in the importer now
+  stops the run when the editor refuses it, the SceneColor input is read back after linking, and the report records the wiring;
+  `tests/import_phaselock_fx_source_test.py` pins this in the source.) `Mat_SirenSuction` leaves the importer's allowed skips. No C++ change: the
   host draws every emitter whose material imports. Open: UE5's `SceneColor` in a translucent material sees the opaque scene only, and the hand
   effect is drawn in the first-person foreground; whether the game's copy included earlier translucent layers was not read.
 - **Needs (heavy tier):** `tools/import_phaselock_fx.ps1`, then `tools/run_phaselock_shots.ps1` with the round-20 switches and `-owcombatpawn=Bullymong`,

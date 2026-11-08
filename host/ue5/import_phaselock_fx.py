@@ -44,6 +44,19 @@ tools = unreal.AssetToolsHelpers.get_asset_tools()
 mel = unreal.MaterialEditingLibrary
 eal = unreal.EditorAssetLibrary
 report = {'materials': {}, 'textures': {}, 'meshes': {}, 'skipped': {}}
+
+
+def connect(a, a_pin, b, b_pin):
+    """mel.connect_material_expressions, but a connection the editor refuses (a wrong pin name, say) stops the import instead of
+    leaving a material that compiles without it (PR #181 review: the refraction's offset pin was silently unconnected)."""
+    if not mel.connect_material_expressions(a, a_pin, b, b_pin):
+        raise RuntimeError(f'OW_PLFX could not connect {a.get_name()}.{a_pin or "<first output>"} -> {b.get_name()}.{b_pin or "<first input>"}')
+
+
+def connect_property(a, a_pin, prop):
+    """mel.connect_material_property, checked the same way."""
+    if not mel.connect_material_property(a, a_pin, prop):
+        raise RuntimeError(f'OW_PLFX could not connect {a.get_name()}.{a_pin or "<first output>"} -> material {prop}')
 # Stock colour constants of the effect shaders (game-derived, so not in this tracked file): an ignored local input next to the
 # emitters, local/phaselock/fx_constants.json, e.g. {"Mat_SirenHandInnerOrb": {"blue": [r, g, b]}}. The values were read from
 # the shaders (round 6, the shader-cache reading). A missing or malformed value stops the import here, before anything changes.
@@ -200,14 +213,14 @@ def build(name, blend, domain_fn=None):
 
     def op(cls, a, a_pin, b, b_pin, x, y):
         expression = node(cls, x, y)
-        mel.connect_material_expressions(a, a_pin, expression, 'A')
-        mel.connect_material_expressions(b, b_pin, expression, 'B')
+        connect(a, a_pin, expression, 'A')
+        connect(b, b_pin, expression, 'B')
         return expression
 
     def mask(source, pin, channels, x, y):
         expression = node(unreal.MaterialExpressionComponentMask, x, y, r='R' in channels, g='G' in channels,
                           b='B' in channels, a='A' in channels)
-        mel.connect_material_expressions(source, pin, expression, '')
+        connect(source, pin, expression, '')
         return expression
 
     def scalar(param, default, x, y):
@@ -232,20 +245,20 @@ def build(name, blend, domain_fn=None):
     doubled = op(M, uv, uv_pin, const(2.0, -2200, 150), '', -2000, 100)
     centred = op(S, doubled, '', const(1.0, -2000, 250), '', -1850, 100)
     absolute = node(unreal.MaterialExpressionAbs, -1700, 100)
-    mel.connect_material_expressions(centred, '', absolute, '')
+    connect(centred, '', absolute, '')
     mirrored = node(unreal.MaterialExpressionOneMinus, -1550, 100)
-    mel.connect_material_expressions(absolute, '', mirrored, '')
+    connect(absolute, '', mirrored, '')
     uv1 = node(unreal.MaterialExpressionLinearInterpolate, -1400, 0)
-    mel.connect_material_expressions(uv, uv_pin, uv1, 'A')
-    mel.connect_material_expressions(mirrored, '', uv1, 'B')
-    mel.connect_material_expressions(scalar('Mirror', 0.0, -1550, 250), '', uv1, 'Alpha')
+    connect(uv, uv_pin, uv1, 'A')
+    connect(mirrored, '', uv1, 'B')
+    connect(scalar('Mirror', 0.0, -1550, 250), '', uv1, 'Alpha')
     # Sub-image: (uv + (column, row)) / (columns, rows) with frame index SubUV.B.
     sub = node(unreal.MaterialExpressionVectorParameter, -1550, 400, parameter_name='SubUV',
                default_value=unreal.LinearColor(1, 1, 0, 0))
     column = op(unreal.MaterialExpressionFmod, sub, 'B', sub, 'R', -1250, 450)
     row_f = op(D, sub, 'B', sub, 'R', -1250, 550)
     row = node(unreal.MaterialExpressionFloor, -1100, 550)
-    mel.connect_material_expressions(row_f, '', row, '')
+    connect(row_f, '', row, '')
     offset = op(unreal.MaterialExpressionAppendVector, column, '', row, '', -950, 450)
     size = op(unreal.MaterialExpressionAppendVector, sub, 'R', sub, 'G', -950, 550)
     shifted = op(A, uv1, '', offset, '', -800, 100)
@@ -256,34 +269,34 @@ def build(name, blend, domain_fn=None):
     uv3 = op(A, uv2, '', pan2, '', -500, 100)
     tex = node(unreal.MaterialExpressionTextureSampleParameter2D, -350, 100, parameter_name='Tex',
                texture=unreal.load_asset('/Engine/EngineResources/WhiteSquareTexture'))
-    mel.connect_material_expressions(uv3, '', tex, 'UVs')
+    connect(uv3, '', tex, 'UVs')
     # Radial falloff for textureless modulate materials.
     distance = op(unreal.MaterialExpressionDistance, uv, uv_pin,
                   node(unreal.MaterialExpressionConstant2Vector, -1400, 900, r=0.5, g=0.5), '', -1250, 900)
     radius = op(M, distance, '', const(2.0, -1250, 1000), '', -1100, 900)
     radial = node(unreal.MaterialExpressionOneMinus, -950, 900)
-    mel.connect_material_expressions(radius, '', radial, '')
+    connect(radius, '', radial, '')
     # x RadialSharpness (default 1: a linear falloff; > 1: a disc that stays full out to 1 - 1/sharpness of the radius).
     radial_s = op(M, radial, '', scalar('RadialSharpness', 1.0, -950, 1000), '', -900, 950)
     radial_c = node(unreal.MaterialExpressionSaturate, -800, 900)
-    mel.connect_material_expressions(radial_s, '', radial_c, '')
+    connect(radial_s, '', radial_c, '')
     use_radial = scalar('Radial', 0.0, -350, 400)
     rgb = node(unreal.MaterialExpressionLinearInterpolate, -150, 100)
-    mel.connect_material_expressions(tex, 'RGB', rgb, 'A')
-    mel.connect_material_expressions(radial_c, '', rgb, 'B')
-    mel.connect_material_expressions(use_radial, '', rgb, 'Alpha')
+    connect(tex, 'RGB', rgb, 'A')
+    connect(radial_c, '', rgb, 'B')
+    connect(use_radial, '', rgb, 'Alpha')
     alpha = node(unreal.MaterialExpressionLinearInterpolate, -150, 250)
-    mel.connect_material_expressions(tex, 'A', alpha, 'A')
-    mel.connect_material_expressions(radial_c, '', alpha, 'B')
-    mel.connect_material_expressions(use_radial, '', alpha, 'Alpha')
+    connect(tex, 'A', alpha, 'A')
+    connect(radial_c, '', alpha, 'B')
+    connect(use_radial, '', alpha, 'Alpha')
     # Optional soft mask: a second, mirrored texture the material lists (host reading of the .mat slot list).
     mask_tex = node(unreal.MaterialExpressionTextureSampleParameter2D, -350, 1100, parameter_name='Mask',
                     texture=unreal.load_asset('/Engine/EngineResources/WhiteSquareTexture'))
-    mel.connect_material_expressions(mirrored, '', mask_tex, 'UVs')
+    connect(mirrored, '', mask_tex, 'UVs')
     mask_weight = node(unreal.MaterialExpressionLinearInterpolate, -150, 1100)
-    mel.connect_material_expressions(const(1.0, -350, 1250), '', mask_weight, 'A')
-    mel.connect_material_expressions(mask_tex, 'R', mask_weight, 'B')
-    mel.connect_material_expressions(scalar('UseMask', 0.0, -350, 1350), '', mask_weight, 'Alpha')
+    connect(const(1.0, -350, 1250), '', mask_weight, 'A')
+    connect(mask_tex, 'R', mask_weight, 'B')
+    connect(scalar('UseMask', 0.0, -350, 1350), '', mask_weight, 'Alpha')
     rgb = op(M, rgb, '', mask_weight, '', 0, 100)
     alpha = op(M, alpha, '', mask_weight, '', 0, 250)
     brightest = op(unreal.MaterialExpressionMax, op(unreal.MaterialExpressionMax, mask(rgb, '', 'R', 0, 300), '',
@@ -304,18 +317,18 @@ def build(name, blend, domain_fn=None):
         # scene-colour expression remains UNVERIFIED in this surface-domain stand-in because UE5 did not provide a usable
         # scene sample in either tested post-process location.
         luminance = node(unreal.MaterialExpressionDotProduct, 400, 1800)
-        mel.connect_material_expressions(color_rgb, '', luminance, 'A')
-        mel.connect_material_expressions(node(unreal.MaterialExpressionConstant3Vector, 250, 1900,
+        connect(color_rgb, '', luminance, 'A')
+        connect(node(unreal.MaterialExpressionConstant3Vector, 250, 1900,
                                               constant=unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0)), '', luminance, 'B')
         hue = op(D, color_rgb, '', op(unreal.MaterialExpressionMax, luminance, '', const(0.001, 400, 1950), '', 550, 1800), '', 700, 1700)
         hue_clip = node(unreal.MaterialExpressionSaturate, 850, 1750)
-        mel.connect_material_expressions(hue, '', hue_clip, '')
+        connect(hue, '', hue_clip, '')
         weight = node(unreal.MaterialExpressionSaturate, 700, 1500)
-        mel.connect_material_expressions(op(M, brightest, '', color_a, 'A', 550, 1500), '', weight, '')
+        connect(op(M, brightest, '', color_a, 'A', 550, 1500), '', weight, '')
         emissive = node(unreal.MaterialExpressionLinearInterpolate, 850, 1500)
-        mel.connect_material_expressions(const(1.0, 700, 1400), '', emissive, 'A')
-        mel.connect_material_expressions(hue_clip, '', emissive, 'B')
-        mel.connect_material_expressions(weight, '', emissive, 'Alpha')
+        connect(const(1.0, 700, 1400), '', emissive, 'A')
+        connect(hue_clip, '', emissive, 'B')
+        connect(weight, '', emissive, 'Alpha')
     elif blend == unreal.BlendMode.BLEND_MODULATE or domain_fn == 'darken':
         # lerp(1, target, weight): weight = mask, x the particle alpha (1 - alpha with AlphaInvert) when UseAlpha, x the
         # colour's largest channel when ColourGain; target black instead of the colour when Darken. Which materials use
@@ -324,23 +337,23 @@ def build(name, blend, domain_fn=None):
         # equals the modulate for a black target and, unlike UE5's modulate (applied apart from the additive layer even
         # before DOF), darkens what earlier emitters drew.
         inverted = node(unreal.MaterialExpressionOneMinus, -500, 1450)
-        mel.connect_material_expressions(color, 'A', inverted, '')
+        connect(color, 'A', inverted, '')
         particle_alpha = node(unreal.MaterialExpressionLinearInterpolate, -350, 1420)
-        mel.connect_material_expressions(color, 'A', particle_alpha, 'A')
-        mel.connect_material_expressions(inverted, '', particle_alpha, 'B')
-        mel.connect_material_expressions(scalar('AlphaInvert', 0.0, -500, 1380), '', particle_alpha, 'Alpha')
+        connect(color, 'A', particle_alpha, 'A')
+        connect(inverted, '', particle_alpha, 'B')
+        connect(scalar('AlphaInvert', 0.0, -500, 1380), '', particle_alpha, 'Alpha')
         alpha_term = node(unreal.MaterialExpressionLinearInterpolate, -150, 1500)
-        mel.connect_material_expressions(const(1.0, -350, 1500), '', alpha_term, 'A')
-        mel.connect_material_expressions(particle_alpha, '', alpha_term, 'B')
-        mel.connect_material_expressions(scalar('UseAlpha', 0.0, -350, 1580), '', alpha_term, 'Alpha')
+        connect(const(1.0, -350, 1500), '', alpha_term, 'A')
+        connect(particle_alpha, '', alpha_term, 'B')
+        connect(scalar('UseAlpha', 0.0, -350, 1580), '', alpha_term, 'Alpha')
         darken = scalar('Darken', 0.0, -350, 1700)
         largest = op(unreal.MaterialExpressionMax, op(unreal.MaterialExpressionMax, mask(color, '', 'R', -500, 1800), '',
                                                       mask(color, '', 'G', -500, 1880), '', -350, 1800), '',
                      mask(color, '', 'B', -500, 1960), '', -200, 1800)
         gain = node(unreal.MaterialExpressionLinearInterpolate, -50, 1800)
-        mel.connect_material_expressions(const(1.0, -200, 1950), '', gain, 'A')
-        mel.connect_material_expressions(largest, '', gain, 'B')
-        mel.connect_material_expressions(scalar('ColourGain', 0.0, -200, 2030), '', gain, 'Alpha')
+        connect(const(1.0, -200, 1950), '', gain, 'A')
+        connect(largest, '', gain, 'B')
+        connect(scalar('ColourGain', 0.0, -200, 2030), '', gain, 'Alpha')
         # MaxWeight caps the darkening where opaque geometry lies just behind the quad (within 40 uu, fading out by 80 uu:
         # the lifted target under the depth-biased black orb), MaxWeightFar where the scene is further behind (the bubble
         # interior over the background). Both 1 unless set per instance below. Reason: UE3 blended into an 8-bit target
@@ -349,61 +362,61 @@ def build(name, blend, domain_fn=None):
         depth_gap = op(S, node(unreal.MaterialExpressionSceneDepth, -350, 2200), '', node(unreal.MaterialExpressionPixelDepth, -350, 2300), '',
                        -200, 2250)
         far = node(unreal.MaterialExpressionSaturate, 100, 2250)
-        mel.connect_material_expressions(op(D, op(S, depth_gap, '', const(40.0, -200, 2350), '', -50, 2250), '', const(40.0, -50, 2350), '',
+        connect(op(D, op(S, depth_gap, '', const(40.0, -200, 2350), '', -50, 2250), '', const(40.0, -50, 2350), '',
                                             0, 2250), '', far, '')
         cap = node(unreal.MaterialExpressionLinearInterpolate, 150, 2150)
-        mel.connect_material_expressions(scalar('MaxWeight', 1.0, 0, 2100), '', cap, 'A')
-        mel.connect_material_expressions(scalar('MaxWeightFar', 1.0, 0, 2180), '', cap, 'B')
-        mel.connect_material_expressions(far, '', cap, 'Alpha')
+        connect(scalar('MaxWeight', 1.0, 0, 2100), '', cap, 'A')
+        connect(scalar('MaxWeightFar', 1.0, 0, 2180), '', cap, 'B')
+        connect(far, '', cap, 'Alpha')
         weight = op(unreal.MaterialExpressionMin, op(M, op(M, brightest, '', alpha_term, '', 50, 1550), '', gain, '', 150, 1600), '',
                     cap, '', 250, 1600)
         weight_s = node(unreal.MaterialExpressionSaturate, 350, 1600)
-        mel.connect_material_expressions(weight, '', weight_s, '')
+        connect(weight, '', weight_s, '')
         weight = weight_s
         # HueOnly: the colour divided by its luminance (Rec. 709), a brightness-keeping tint instead of a plain multiply.
         colour_luminance = node(unreal.MaterialExpressionDotProduct, -50, -350)
-        mel.connect_material_expressions(color_rgb, '', colour_luminance, 'A')
-        mel.connect_material_expressions(node(unreal.MaterialExpressionConstant3Vector, -200, -300,
+        connect(color_rgb, '', colour_luminance, 'A')
+        connect(node(unreal.MaterialExpressionConstant3Vector, -200, -300,
                                               constant=unreal.LinearColor(0.2126, 0.7152, 0.0722, 1.0)), '', colour_luminance, 'B')
         colour_hue = op(D, color_rgb, '', op(unreal.MaterialExpressionMax, colour_luminance, '', const(0.001, -50, -250), '', 100, -350),
                         '', 250, -400)
         tint = node(unreal.MaterialExpressionLinearInterpolate, 400, -350)
-        mel.connect_material_expressions(color_rgb, '', tint, 'A')
-        mel.connect_material_expressions(colour_hue, '', tint, 'B')
-        mel.connect_material_expressions(scalar('HueOnly', 0.0, 250, -300), '', tint, 'Alpha')
+        connect(color_rgb, '', tint, 'A')
+        connect(colour_hue, '', tint, 'B')
+        connect(scalar('HueOnly', 0.0, 250, -300), '', tint, 'Alpha')
         target = node(unreal.MaterialExpressionLinearInterpolate, 250, -200)
-        mel.connect_material_expressions(tint, '', target, 'A')
-        mel.connect_material_expressions(const(0.0, 100, -250), '', target, 'B')
-        mel.connect_material_expressions(darken, '', target, 'Alpha')
+        connect(tint, '', target, 'A')
+        connect(const(0.0, 100, -250), '', target, 'B')
+        connect(darken, '', target, 'Alpha')
         if domain_fn == 'darken':
             target_largest = op(unreal.MaterialExpressionMax, op(unreal.MaterialExpressionMax, mask(target, '', 'R', 250, 2000), '',
                                                                  mask(target, '', 'G', 250, 2080), '', 400, 2000), '',
                                 mask(target, '', 'B', 250, 2160), '', 550, 2000)
             remaining = node(unreal.MaterialExpressionOneMinus, 700, 2000)
-            mel.connect_material_expressions(target_largest, '', remaining, '')
+            connect(target_largest, '', remaining, '')
             opacity = node(unreal.MaterialExpressionSaturate, 850, 1800)
-            mel.connect_material_expressions(op(M, weight, '', remaining, '', 700, 1800), '', opacity, '')
-            mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
+            connect(op(M, weight, '', remaining, '', 700, 1800), '', opacity, '')
+            connect_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
             # DarkColor: the colour the darkening blends toward (black unless set per emitter by the host).
             emissive = mask(node(unreal.MaterialExpressionVectorParameter, 700, 0, parameter_name='DarkColor',
                                  default_value=unreal.LinearColor(0.0, 0.0, 0.0, 1.0)), '', 'RGB', 850, 0)
         else:
             emissive = node(unreal.MaterialExpressionLinearInterpolate, 400, 0)
-            mel.connect_material_expressions(const(1.0, 100, -100), '', emissive, 'A')
-            mel.connect_material_expressions(target, '', emissive, 'B')
-            mel.connect_material_expressions(weight, '', emissive, 'Alpha')
+            connect(const(1.0, 100, -100), '', emissive, 'A')
+            connect(target, '', emissive, 'B')
+            connect(weight, '', emissive, 'Alpha')
     else:
         coverage = node(unreal.MaterialExpressionLinearInterpolate, 400, 300)
-        mel.connect_material_expressions(alpha, '', coverage, 'A')
-        mel.connect_material_expressions(brightest, '', coverage, 'B')
-        mel.connect_material_expressions(scalar('LumAlpha', 0.0, 250, 400), '', coverage, 'Alpha')
+        connect(alpha, '', coverage, 'A')
+        connect(brightest, '', coverage, 'B')
+        connect(scalar('LumAlpha', 0.0, 250, 400), '', coverage, 'Alpha')
         opacity = node(unreal.MaterialExpressionSaturate, 700, 300)
-        mel.connect_material_expressions(op(M, coverage, '', color_a, 'A', 550, 300), '', opacity, '')
-        mel.connect_material_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
+        connect(op(M, coverage, '', color_a, 'A', 550, 300), '', opacity, '')
+        connect_property(opacity, '', unreal.MaterialProperty.MP_OPACITY)
         ceiling = op(D, const(1.0, 700, 450), '', op(unreal.MaterialExpressionMax, opacity, '', const(0.05, 700, 550), '', 850, 450),
                      '', 1000, 400)
         emissive = op(unreal.MaterialExpressionMin, op(M, rgb, '', color_rgb, '', 250, 0), '', ceiling, '', 1100, 0)
-    mel.connect_material_property(emissive, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    connect_property(emissive, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     return material
@@ -455,11 +468,11 @@ return Enable * GlowColor * (1.0 - f * f) * mask * base;
         entries.append(entry)
     custom.set_editor_property('inputs', entries)
     colour_rgb = node(unreal.MaterialExpressionComponentMask, -700, 200, r=True, g=True, b=True, a=False)
-    mel.connect_material_expressions(colour, '', colour_rgb, '')
+    connect(colour, '', colour_rgb, '')
     for name, source in (('UV', uv), ('GT', time), ('GlowColor', colour_rgb), ('Enable', enable), ('Masks', masks),
                          ('Diffuse', diffuse), ('Fire', fire_object)):
-        mel.connect_material_expressions(source, '', custom, name)
-    mel.connect_material_property(custom, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        connect(source, '', custom, name)
+    connect_property(custom, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     return material
@@ -763,7 +776,7 @@ def exact_material(name):
         return expression
 
     def link(a, a_pin, b, b_pin):
-        mel.connect_material_expressions(a, a_pin, b, b_pin)
+        connect(a, a_pin, b, b_pin)
 
     color = node(unreal.MaterialExpressionVectorParameter, -900, -300, parameter_name='Color',
                  default_value=unreal.LinearColor(1, 1, 1, 1))
@@ -837,18 +850,27 @@ def exact_material(name):
         link(source, '', custom, input_name)
     rgb = node(unreal.MaterialExpressionComponentMask, 650, 0, r=True, g=True, b=True, a=False)
     link(custom, '', rgb, '')
+    scene_wiring = {}
     if spec['scene']:
         # The refraction: the custom code's .xy is the screen-UV shift; the colour is the scene colour there, clamped to 0..1
         # as the stock shader does.
         shift = node(unreal.MaterialExpressionComponentMask, 500, -150, r=True, g=True, b=False, a=False)
         link(custom, '', shift, '')
-        scene = node(unreal.MaterialExpressionSceneColor, 650, -150)
+        # The node's input is a UV in its default mode (Coordinates); the shift needs OffsetFraction mode, whose pin has that name.
+        scene = node(unreal.MaterialExpressionSceneColor, 650, -150,
+                     input_mode=unreal.MaterialSceneAttributeInputMode.OFFSET_FRACTION)
         link(shift, '', scene, 'OffsetFraction')
+        # Read back what the editor holds as the node's input: the shift node, or the import stops.
+        fed = [e for e in mel.get_inputs_for_material_expression(material, scene) if e]
+        if not any(e.get_name() == shift.get_name() for e in fed):
+            raise RuntimeError(f'OW_PLFX {name}: the scene colour node is not fed by the shift ({[e.get_name() for e in fed]})')
+        scene_wiring = {'scene_color_input_mode': str(scene.get_editor_property('input_mode')), 'scene_offset_pin': 'OffsetFraction',
+                        'scene_offset_from': shift.get_name()}
         rgb = node(unreal.MaterialExpressionSaturate, 800, -150)
         link(scene, '', rgb, '')
     if blend == unreal.BlendMode.BLEND_MODULATE:
         # The overbright modulate (scene x (1 + c)) is drawn as UE5's modulate with the factor unclamped.
-        mel.connect_material_property(rgb, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+        connect_property(rgb, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     else:
         # The shaders write colours up to 4 (min(c, 4)). Host reading (UNVERIFIED): a layer's colour is brought into range
         # by dividing by its largest channel when that exceeds 1, which keeps the hue. A per-channel clip turned the spikes'
@@ -867,16 +889,16 @@ def exact_material(name):
             scaled = node(unreal.MaterialExpressionMultiply, 950, 0)
             link(clamped, '', scaled, 'A')
             link(gain, '', scaled, 'B')
-            mel.connect_material_property(scaled, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+            connect_property(scaled, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
         else:
-            mel.connect_material_property(clamped, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+            connect_property(clamped, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     if blend == unreal.BlendMode.BLEND_TRANSLUCENT:
         alpha = node(unreal.MaterialExpressionComponentMask, 650, 150, r=False, g=False, b=False, a=True)
         link(custom, '', alpha, '')
         scaled_alpha = node(unreal.MaterialExpressionMultiply, 800, 150)
         link(alpha, '', scaled_alpha, 'A')
         link(gain, '', scaled_alpha, 'B')
-        mel.connect_material_property(scaled_alpha, '', unreal.MaterialProperty.MP_OPACITY)
+        connect_property(scaled_alpha, '', unreal.MaterialProperty.MP_OPACITY)
     mel.recompile_material(material)
     eal.save_loaded_asset(material, only_if_is_dirty=False)
     instance = tools.create_asset(f'MI_{name}', f'{destination}/Materials', unreal.MaterialInstanceConstant,
@@ -884,7 +906,7 @@ def exact_material(name):
     mel.set_material_instance_parent(instance, material)
     eal.save_loaded_asset(instance, only_if_is_dirty=False)
     report['materials'][name] = {'instance': instance.get_path_name(), 'parent': material.get_name(), 'exact': True,
-                                 'textures': spec['textures'], 'blend': spec['blend']}
+                                 'textures': spec['textures'], 'blend': spec['blend'], **scene_wiring}
     log(f'{name}: exact {spec["blend"]} textures {spec["textures"]}')
 
 
@@ -987,6 +1009,9 @@ for name in sorted(meshes):
 
 for name, entry in report['skipped'].items():
     log(f'skipped {name}: {entry["reason"]}')
+for name, spec in EXACT.items():
+    if spec['scene'] and 'scene_offset_from' not in report['materials'].get(name, {}):
+        raise RuntimeError(f'OW_PLFX {name}: no record of the refraction offset being wired')
 unexpected = sorted(set(report['skipped']) - set(NOT_DRAWN) - set(OPTIONAL_MATERIALS))
 if unexpected:
     raise RuntimeError(f'OW_PLFX unexpected skips after the input check: {unexpected}')
