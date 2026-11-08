@@ -4,7 +4,7 @@ param(
     # A folder outside this repository (a private repository clone, a synced folder, an external drive).
     [string]$Store = $env:OPENWILLOW_PRIVATE,
     # Repository-relative folders to mirror.
-    [string[]]$Folders = @('local/analysis', 'local/notes'),
+    [string[]]$Folders = @('local/analysis', 'local/notes', 'local/ui/colours'),
     [switch]$WhatIf
 )
 # Copies game-derived working files (analysis databases, hand patches, notes) between this worktree and a private

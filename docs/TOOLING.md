@@ -934,9 +934,15 @@ into `local/ui/run` with the same converter and a StatusMenu harness, then
 prepare Maya's tree and icon movies from the installed packages:
 
 ```powershell
+python tools/game_colours.py --reader build/Release/ow-package.exe --package "$game\WillowGame\CookedPCConsole\Startup.upk" --seed <private notes>
 python tools/prepare_skill_tree.py --reader build/Release/ow-package.exe --game $game --output local/ui/run
 python tools/hud_overlay/serve.py --movies local/ui/run
 ```
+
+The game's UI colours are not in the repository (DECISIONS.md 2026-11-08): `tools/game_colours.py` writes the
+ignored `local/ui/colours/game_colours.json` (rarity tiers from the install, the measured keys from a private
+seed, or receive the file with `tools/private_sync.ps1 -Direction Pull`). Without it the pages and tools use
+neutral greys and say so once. Run it before `prepare_skill_tree.py`, which bakes the skill-tag colour in.
 
 Open `http://127.0.0.1:8767/skills.html?points=41&action=1` for a standalone visual
 check. In the UE game window, press **K** to open Maya's Skills tab, hover a
