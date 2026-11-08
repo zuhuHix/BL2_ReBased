@@ -4330,3 +4330,11 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/VENDORS.md` section 10
 - **UNVERIFIED:** how the real bar rounds and shows a stand-in shield; the frames are host frames of a test state.
 - **Checked:** synthetic tests, including the movie's draw path with a recording stub player, and the UE module build. The in-engine suite has not run it.
 
+## 2026-11-08: The mission page turns the view onto Marcus, a stand-in fitted to the real frames; UNVERIFIED (mission camera lane)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/MISSION_SCREEN.md`, "The camera on the giver".
+
+- **Change:** while the mission page is shown, the camera stays at Maya's eye, zooms by a fixed factor and turns, with no roll, so that Marcus's head bone lands on a fixed screen point; the control rotation is left alone and every close gives the view back. New `OpenWillowFocusCam`, called from `UOpenWillowQuest::TickFocusCamera`. The numbers are measured from real frames and stay in ignored `local/slice/mission_focus_camera.json`; without it the view is unchanged.
+- **Evidence:** the real offer, turn-in and reward frames against the closed frames from the same stand, and the installed script's `BeginFocus`/`EndFocus` around the screen. The native focus camera was not read, so whether the real one zooms or moves in, and its aim point, are open. The probe now records the camera, Marcus's head and focus settings, and a per-tick trace across each open and close, for the real-game run that settles it.
+- **Suite:** the mission page suite stands 110 uu from Marcus, as the real capture did (was 150), and has five new camera rows (`tools/check_mission_page.py` expects 32).
+- **Checked:** synthetic tests only when written (`OpenWillow.FocusCam`, the probe's geometry, the checker). No parsing behaviour changed.

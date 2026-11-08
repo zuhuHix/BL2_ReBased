@@ -7,8 +7,13 @@
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowMissionPage.h"
 #include "OpenWillowNpc.h"
+#include "OpenWillowFocusCam.h"
 #include "OpenWillowWalker.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "InputKeyEventArgs.h"
 #include "Misc/CommandLine.h"
@@ -73,7 +78,8 @@ void UOpenWillowQuest::TickScreenPageTest()
         bScreenPageTest = false;
         PC->ConsoleCommand(TEXT("quit"));
     };
-    const auto Stand = [this] { PlacePlayer(Marcus->GetActorLocation() + Marcus->GetActorForwardVector() * 150.f + FVector(0, 0, 20), Marcus->GetActorLocation() + FVector(0, 0, 20)); };
+    // 110 uu in front of him, looking at his chest: the stand of the real capture (fire_mission_probe.py, fm_stand_in_front), so the frames compare.
+    const auto Stand = [this] { PlacePlayer(Marcus->GetActorLocation() + Marcus->GetActorForwardVector() * 110.f + FVector(0, 0, 20), Marcus->GetActorLocation() + FVector(0, 0, 20)); };
     // The gun with a full magazine, so the page is the only thing that changes between the shots.
     const auto StockMagazine = [Maya] { if (FOpenWillowWeaponItem* Held = Maya->GetInventory()->ActiveWeaponMutable()) Held->MagazineLeft = -1; };
     const auto Magazine = [Maya] { const FOpenWillowWeaponItem* Held = Maya->GetInventory()->ActiveWeapon(); return Held ? Held->MagazineLeft : -2; };
@@ -88,6 +94,36 @@ void UOpenWillowQuest::TickScreenPageTest()
     {
         const AOpenWillowMayaHUD* GameHud = Cast<AOpenWillowMayaHUD>(PC->GetHUD());
         Row(Name, GameHud && (bHidden ? GameHud->IsGameplayHudHidden() : GameHud->IsGameplayHudBack()), GameHud ? GameHud->GameplayHudReport() : FString(TEXT("no HUD")));
+    };
+    // The page's view on Marcus (OpenWillowFocusCam): with the page up, his bone lands on the local data's screen point in the view the player sees (the camera
+    // manager's, one frame old); with it closed, the view is the control rotation again. Without the local data the "on" rows fail and say so.
+    const auto FocusRow = [&](const TCHAR* Name, bool bOn)
+    {
+        const UCameraComponent* Camera = Maya->FindComponentByClass<UCameraComponent>();
+        const APlayerCameraManager* View = PC->PlayerCameraManager;
+        if (!Camera || !View || !Marcus) { Row(Name, false, TEXT("no camera or no Marcus")); return; }
+        double Aspect = 16. / 9.;
+        if (GEngine && GEngine->GameViewport)
+        {
+            FVector2D Size = FVector2D::ZeroVector;
+            GEngine->GameViewport->GetViewportSize(Size);
+            if (Size.X > 1. && Size.Y > 1.) Aspect = Size.X / Size.Y;
+        }
+        const FString Seen = FString::Printf(TEXT("view=%s control=%s fov=%.1f pawn_rotation=%d"), *View->GetCameraRotation().ToString(), *PC->GetControlRotation().ToString(),
+            View->GetFOVAngle(), Camera->bUsePawnControlRotation ? 1 : 0);
+        if (!bOn)
+        {
+            const bool bBack = Camera->bUsePawnControlRotation && View->GetCameraRotation().Equals(PC->GetControlRotation(), 0.5f);
+            Row(Name, bBack, Seen);
+            return;
+        }
+        if (!FocusParams) { Row(Name, false, FString::Printf(TEXT("no focus camera data (%s) %s"), *OpenWillowFocusCam::DefaultPath(), *Seen)); return; }
+        FVector Point;
+        const bool bBone = OpenWillowFocusCam::FocusPoint(*Marcus, FocusParams->Bone, Point);
+        FVector2D Landed;
+        const bool bFront = OpenWillowFocusCam::Project(View->GetCameraLocation(), View->GetCameraRotation(), View->GetFOVAngle(), Aspect, Point, Landed);
+        const bool bOk = bBone && bFront && !Camera->bUsePawnControlRotation && FVector2D::Distance(Landed, FocusParams->Screen) < 0.06;
+        Row(Name, bOk, FString::Printf(TEXT("bone=%d landed=(%.3f, %.3f) wanted=(%.3f, %.3f) %s"), bBone ? 1 : 0, Landed.X, Landed.Y, FocusParams->Screen.X, FocusParams->Screen.Y, *Seen));
     };
     // The page on show, not any page: a late report from the last one must not pass.
     const auto Drawn = [&] { const FString& R = ScreenPage->LastReport();
@@ -145,6 +181,7 @@ void UOpenWillowQuest::TickScreenPageTest()
     case 4:
     {
         HudRow(TEXT("hud_hidden_behind_the_offer"), true);
+        FocusRow(TEXT("camera_on_marcus_offer"), true);
         PageShot(TEXT("1_Offer"));
         // The trigger held and a full magazine: the magazine has not moved, a direct shot is refused, and arms and gun are put away.
         const int32 Left = Magazine();
@@ -160,6 +197,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 6:
         HudRow(TEXT("hud_back_after_escape"), false);
+        FocusRow(TEXT("camera_back_after_escape"), false);
         PageShot(TEXT("2_AfterEscape"));
         StockMagazine();
         Row(TEXT("gun_fires_again_after_the_close"), Maya->AreArmsShown() && Maya->FireOnce(), State());
@@ -210,6 +248,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 15:
         HudRow(TEXT("hud_hidden_behind_the_turn_in"), true);
+        FocusRow(TEXT("camera_on_marcus_turn_in"), true);
         PageShot(TEXT("4_TurnIn"));
         Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
         PageKey(EKeys::Enter);
@@ -222,6 +261,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 17:
         HudRow(TEXT("hud_hidden_behind_the_reward"), true);
+        FocusRow(TEXT("camera_on_marcus_reward"), true);
         PageShot(TEXT("5_Reward"));
         Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
         break;
@@ -231,6 +271,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 19:
         HudRow(TEXT("hud_back_after_the_reward"), false);
+        FocusRow(TEXT("camera_back_after_the_reward"), false);
         PageShot(TEXT("6_Closed"));
         Row(TEXT("first_person_back_after_the_reward"), Maya->AreArmsShown(), State());
         UseE();

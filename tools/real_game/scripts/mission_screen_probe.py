@@ -15,6 +15,7 @@ the world keeps running behind it, what the reward page shows, and what the resp
 - ms_down(): a large hit on the player, repeated on the tick until she is down. Refused while the screen is open.
 """
 import json
+import math
 import time
 
 import unrealsdk
@@ -69,6 +70,107 @@ def ms_pick_text(read_text):
 def ms_turnin_ready(status):
     """The tracker's status for ready to turn in, as read in the golden trace (3)."""
     return status == 3
+
+
+MS_CAM_MAX = 600
+
+
+def _ms_angle(units):
+    """A 16-bit rotator value in radians (65536 is a full turn). An unsigned value above half a turn reads as the negative one it is."""
+    v = int(units) % 65536
+    if v >= 32768:
+        v -= 65536
+    return v * math.pi / 32768.0
+
+
+def ms_view_geometry(cam, rot, fov_deg, point, aspect=16 / 9):
+    """Where a point is in a camera's view: its distance, its depth, and its normalised device coordinates (x right, y up, 1 at the frame's edge).
+
+    cam and point are [x, y, z] in UE3 world units (X forward, Y right, Z up); rot is the rotator [pitch, yaw, roll]; fov_deg is the horizontal FOV.
+    The camera axes are built the way Unreal's FRotationMatrix builds them. ndc is None when the point is not in front of the camera. Math only."""
+    p, y, r = _ms_angle(rot[0]), _ms_angle(rot[1]), _ms_angle(rot[2])
+    sp, cp, sy, cy, sr, cr = math.sin(p), math.cos(p), math.sin(y), math.cos(y), math.sin(r), math.cos(r)
+    axis_x = (cp * cy, cp * sy, sp)
+    axis_y = (sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, -sr * cp)
+    axis_z = (-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp)
+    d = [point[i] - cam[i] for i in range(3)]
+    dist = math.sqrt(sum(c * c for c in d))
+    fwd = sum(d[i] * axis_x[i] for i in range(3))
+    right = sum(d[i] * axis_y[i] for i in range(3))
+    up = sum(d[i] * axis_z[i] for i in range(3))
+    if fwd <= 0:
+        return {"distance": round(dist, 4), "forward": round(fwd, 4), "ndc": None}
+    half = math.tan(math.radians(fov_deg) / 2.0)
+    ndc = [right / fwd / half, up / fwd / (half / aspect)]
+    return {"distance": round(dist, 4), "forward": round(fwd, 4), "ndc": [round(ndc[0], 4), round(ndc[1], 4)]}
+
+
+def _ms_try(target, key, fn):
+    """One field of a read: its value under key, or its error under key_error. A field this build lacks never costs the rest of the read."""
+    try:
+        target[key] = fn()
+    except Exception as e:
+        target[key + "_error"] = repr(e)[:100]
+
+
+def _ms_vec(v, digits=1):
+    return [round(v.X, digits), round(v.Y, digits), round(v.Z, digits)]
+
+
+def _ms_rot(r):
+    return [r.Pitch, r.Yaw, r.Roll]
+
+
+def _ms_vec_any(v):
+    """An offset as its fields: X, Y and Z when the struct has them, else X and Y, else its text."""
+    for names in (("X", "Y", "Z"), ("X", "Y")):
+        if all(hasattr(v, n) for n in names):
+            return [round(getattr(v, n), 2) for n in names]
+    return _ms_p(v)
+
+
+def _ms_pov(pc):
+    pov = pc.PlayerCamera.CameraCache.POV
+    return {"location": _ms_vec(pov.Location, 1), "rotation": _ms_rot(pov.Rotation), "fov": pov.FOV}
+
+
+def _ms_viewport(pc):
+    """The viewport's size in pixels, from the viewport's own size fields, else from GetViewportSize; whichever this build has."""
+    client = pc.Player.ViewportClient
+    try:
+        return [int(client.Viewport.SizeX), int(client.Viewport.SizeY)]
+    except Exception as first:
+        try:
+            size = client.GetViewportSize()
+            return [int(size.X), int(size.Y)]
+        except Exception as second:
+            raise RuntimeError(f"no viewport size: {first!r:.60} / {second!r:.60}")
+
+
+def _ms_marcus(path):
+    """Marcus's pawn: where he is, his eyes and head, and the focus settings of his class. Each field has its own try."""
+    pawn = unrealsdk.find_object("WillowAIPawn", path)
+    if pawn is None:
+        raise ValueError("no pawn at MARCUS_PATH")
+    out = {}
+    _ms_try(out, "location", lambda: _ms_vec(pawn.Location))
+    _ms_try(out, "rotation", lambda: _ms_rot(pawn.Rotation))
+    _ms_try(out, "EyeHeight", lambda: pawn.EyeHeight)
+    _ms_try(out, "BaseEyeHeight", lambda: pawn.BaseEyeHeight)
+    _ms_try(out, "head_bone", lambda: _ms_vec(pawn.Mesh.GetBoneLocation("Head", 0)))
+    _ms_try(out, "FocusRadius", lambda: pawn.AIClass.FocusRadius)
+    _ms_try(out, "FocusOffset", lambda: _ms_vec_any(pawn.AIClass.FocusOffset))
+    return out
+
+
+def _ms_focus(row):
+    """Where Marcus's head and his eyes are in the camera's view, at the viewport's aspect (16:9 when the size is not known)."""
+    cam, marcus = row["camera"], row["marcus"]
+    vp = row.get("viewport")
+    aspect = vp[0] / vp[1] if vp and vp[1] else 16 / 9
+    eye = [marcus["location"][0], marcus["location"][1], marcus["location"][2] + marcus["BaseEyeHeight"]]
+    args = (cam["location"], cam["rotation"], cam["fov"])
+    return {"head": ms_view_geometry(*args, marcus["head_bone"], aspect), "eye": ms_view_geometry(*args, eye, aspect), "aspect": round(aspect, 4)}
 
 
 def _ms_truthy(ret):
@@ -262,7 +364,29 @@ def _ms_write_hook(name):
     return hook
 
 
+def _ms_cam_tick():
+    """One row of the camera's point of view for this tick, while a trace is armed and its time is not up."""
+    cam = MS.get("cam")
+    if not MS["on"] or not cam or cam["n"] >= MS_CAM_MAX or _ms_now() > cam["until"]:
+        return
+    cam["n"] += 1
+    row = {"t": _ms_now(), "tag": "cam"}
+    try:
+        pov = get_pc().PlayerCamera.CameraCache.POV
+        row["cam"] = [_ms_vec(pov.Location, 1), _ms_rot(pov.Rotation), pov.FOV]
+    except Exception as e:
+        row["error"] = repr(e)[:100]
+    MS["rows"].append(row)
+
+
+def ms_cam_trace(seconds):
+    """Samples the camera on every tick for this many seconds from now (at most MS_CAM_MAX rows). Returns the armed duration."""
+    MS["cam"] = {"until": _ms_now() + float(seconds), "n": 0}
+    return float(seconds)
+
+
 def _ms_tick(obj, args, ret, func):
+    _ms_cam_tick()
     job = MS["down"]
     if not job or job["done"]:
         return
@@ -339,6 +463,18 @@ def ms_read(label):
             row[key] = fn()
         except Exception as e:
             row[key + "_error"] = repr(e)[:100]
+    # The camera, the viewport and Marcus, each field on its own, so the focus geometry can be checked against the head and the eyes.
+    _ms_try(row, "camera", lambda: _ms_pov(pc))
+    _ms_try(row, "camera_fov_default", lambda: pc.PlayerCamera.DefaultFOV)
+    _ms_try(row, "focus_object", lambda: _ms_p(pc.FocusObject))
+    _ms_try(row, "viewport", lambda: _ms_viewport(pc))
+    marcus_path = globals().get("MARCUS_PATH")
+    if marcus_path:
+        _ms_try(row, "marcus", lambda: _ms_marcus(marcus_path))
+    else:
+        row["marcus_error"] = "MARCUS_PATH is not set"
+    if isinstance(row.get("camera"), dict) and isinstance(row.get("marcus"), dict):
+        _ms_try(row, "focus", lambda: _ms_focus(row))
     if movie is not None:
         row["text"] = ms_pick_text(movie.GetVariableString)
         for key, fn in (("entries", lambda: len(movie.MissionList)), ("single", lambda: movie.bSingleMissionDisplay), ("redeemable", lambda: movie.RedeemableCount),
