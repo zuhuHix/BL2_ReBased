@@ -68,7 +68,10 @@ function Open-Screen([string]$Label) {
     $row = $null
     for ($try = 1; $try -le 4; $try++) {
         $log["stand_$Label"] = PyJson 'fm_stand_in_front()'
-        Start-Sleep -Milliseconds 800; Assert-GameForeground; $null = Send-Key E
+        Start-Sleep -Milliseconds 800; Assert-GameForeground
+        # The camera's trace across the open (offer and turn-in only): sampled every tick for 2 s from here.
+        if ($Label -in 'offer', 'turnin') { Py 'print(ms_cam_trace(2.0))' | Out-Null }
+        $null = Send-Key E
         $row = Read-After $Label 1.0
         if ($row.open) { return $row }
         Start-Sleep 2
@@ -159,6 +162,8 @@ try {
     Set-Stage 'offer_keys' ($log.delivered_offer_F.delivered -eq $true) "F never reached the screen's handler, so nothing is known about what it does: $($log.delivered_offer_F | ConvertTo-Json -Compress)"
     # Enter straight away: Esc is not tried at the offer, since a surprise there could end the run before the reward page and the respawn it is for (two runs were lost at this page).
     $accept = $row
+    # The camera's trace across the close that the accept makes, sampled every tick for 2 s.
+    if ($row.status -eq 0) { Py 'print(ms_cam_trace(2.0))' | Out-Null }
     if ($row.status -eq 0) { $accept = Test-Key 'offer' 'Enter' }
     Read-After 'accept_after' 1.0 | Out-Null
     Set-Stage 'accept' ($accept.status -eq 1 -and $log.delivered_offer_Enter.delivered -eq $true) "Enter did not accept: status $($accept.status)"
@@ -199,6 +204,7 @@ try {
     $log.reward_after_keys = PyJson 'ms_reward_taken()'
     if ($after.open -and $log.reward_after_keys.count -eq 0) {
         Py "print(ms_mark('reward_press_Enter'))" | Out-Null
+        Py 'print(ms_cam_trace(2.0))' | Out-Null   # the camera across the close
         $after = Test-Key 'reward' 'Enter'
         foreach ($at in '0.5', '1.0') { $after = Read-After "reward_taken_$at" 0.4 }
     }

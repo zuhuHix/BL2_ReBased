@@ -13,9 +13,10 @@ def log(names=EXPECTED, result='PASS', summary=None):
 
 
 assert grade(log())[1] == [], grade(log())[1]
-assert len(EXPECTED) == 27, len(EXPECTED)
+assert len(EXPECTED) == 32, len(EXPECTED)
 # The HUD behind the page and after each way out are required rows.
-for name in ('hud_hidden_behind_the_offer', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_back_after_the_reward'):
+for name in ('hud_hidden_behind_the_offer', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_back_after_the_reward',
+             'camera_on_marcus_offer', 'camera_back_after_escape', 'camera_on_marcus_turn_in', 'camera_on_marcus_reward', 'camera_back_after_the_reward'):
     assert any(f'{name} appears 0 times' in p for p in grade(log(tuple(n for n in EXPECTED if n != name)))[1]), name
 # failed=0 with a lost row: the old exit rule passed this.
 lost = grade(log(EXPECTED[1:]))[1]

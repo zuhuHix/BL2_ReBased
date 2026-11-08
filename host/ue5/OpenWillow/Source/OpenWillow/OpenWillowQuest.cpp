@@ -6,6 +6,7 @@
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowMover.h"
 #include "OpenWillowNpc.h"
+#include "OpenWillowFocusCam.h"
 #include "OpenWillowProjectile.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowSliceData.h"
@@ -16,6 +17,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -82,6 +84,8 @@ UOpenWillowQuest::UOpenWillowQuest()
 void UOpenWillowQuest::BeginPlay()
 {
     Super::BeginPlay();
+    // After the walker's tick, which sets the camera's FOV each frame: the page's view (TickFocusCamera) goes on top of it.
+    if (AActor* Owner = GetOwner()) AddTickPrerequisiteActor(Owner);
     bEnabled = FParse::Param(FCommandLine::Get(), TEXT("owquest"));
     bTesting = FParse::Param(FCommandLine::Get(), TEXT("owquesttest"));
     bResume = FParse::Param(FCommandLine::Get(), TEXT("owquestresume"));
@@ -868,6 +872,61 @@ void UOpenWillowQuest::CloseScreenPage(const TCHAR* Why)
     UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page closed: %s (status %d)"), Why, Status());
 }
 
+void UOpenWillowQuest::TickFocusCamera()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    UCameraComponent* Camera = Walker ? Walker->FindComponentByClass<UCameraComponent>() : nullptr;
+    if (!Camera) return;
+    if (!IsScreenPageShown() || !Marcus)
+    {
+        if (bFocusOn)
+        {
+            OpenWillowFocusCam::Release(*Camera, FocusBaseFov);
+            bFocusOn = false;
+            UE_LOG(LogTemp, Display, TEXT("OWFOCUSCAM off: the view follows the control rotation again, FOV %.1f"), FocusBaseFov);
+        }
+        return;
+    }
+    if (!bFocusTried)
+    {
+        bFocusTried = true;
+        const FString Path = OpenWillowFocusCam::DefaultPath();
+        OpenWillowFocusCam::FParams Params;
+        FString Error;
+        if (OpenWillowFocusCam::Load(Path, Params, Error))
+        {
+            FocusParams = Params;
+            UE_LOG(LogTemp, Display, TEXT("OWFOCUSCAM read %s: bone %s, screen (%.3f, %.3f), zoom %.3f (%s; UNVERIFIED stand-in)"), *Path, *Params.Bone.ToString(),
+                Params.Screen.X, Params.Screen.Y, Params.Zoom, Params.Source.IsEmpty() ? TEXT("no source given") : *Params.Source);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OWFOCUSCAM %s: %s; the mission page leaves the view as it is"), *Path, *Error);
+        }
+    }
+    if (!FocusParams) return;
+    // The player's FOV: the walker sets it on each of its ticks. Still the value set here last frame means it has not ticked since, and the kept one stands.
+    if (!bFocusOn || !FMath::IsNearlyEqual(static_cast<double>(Camera->FieldOfView), FocusSetFov, 0.01)) FocusBaseFov = Camera->FieldOfView;
+    double Aspect = 16. / 9.;
+    if (GEngine && GEngine->GameViewport)
+    {
+        FVector2D Size = FVector2D::ZeroVector;
+        GEngine->GameViewport->GetViewportSize(Size);
+        if (Size.X > 1. && Size.Y > 1.) Aspect = Size.X / Size.Y;
+    }
+    FVector Point;
+    const bool bBone = OpenWillowFocusCam::FocusPoint(*Marcus, FocusParams->Bone, Point);
+    const bool bSolved = OpenWillowFocusCam::Apply(*Camera, Point, *FocusParams, Aspect, FocusBaseFov);
+    FocusSetFov = Camera->FieldOfView;
+    if (!bFocusOn)
+    {
+        bFocusOn = true;
+        UE_LOG(LogTemp, Display, TEXT("OWFOCUSCAM on: page %s, point %s (%s), %.0f uu from the eye, FOV %.1f -> %.1f, view %s%s"), *ScreenPageOn, *Point.ToString(),
+            bBone ? *FocusParams->Bone.ToString() : TEXT("no such bone: actor location"), FVector::Dist(Point, Camera->GetComponentLocation()), FocusBaseFov, FocusSetFov,
+            *Camera->GetComponentRotation().ToString(), bSolved ? TEXT("") : TEXT(" (no solution: plain look-at)"));
+    }
+}
+
 void UOpenWillowQuest::OnScreenKey(const FKey& Key)
 {
     if (!Impl || bFailed || !ScreenPage || !ScreenPage->IsShown()) return;
@@ -1152,6 +1211,7 @@ void UOpenWillowQuest::UpdateHints()
 void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function)
 {
     Super::TickComponent(Delta, Type, Function);
+    TickFocusCamera();   // first, so a failed quest still gives the view back
     if (!Impl || bFailed) return;
     if (bReleaseUse) {
         if (auto* Pawn = Cast<APawn>(GetOwner())) if (auto* PC = Cast<APlayerController>(Pawn->GetController()))

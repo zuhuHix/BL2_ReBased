@@ -2,6 +2,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "OpenWillowInventory.h"
+#include "OpenWillowFocusCam.h"
 #include "OpenWillowQuest.generated.h"
 
 class FJsonObject;
@@ -107,6 +108,12 @@ private:
     void ShowScreenPage(const TCHAR* Page);
     void CloseScreenPage(const TCHAR* Why);
     void TickScreenPage();
+    // The view on Marcus while the page is up (OpenWillowFocusCam, UNVERIFIED stand-in). The numbers come from local data, read at the first page;
+    // without them the view is left alone. The player's FOV is kept under the zoom, since the walker sets it only on its own ticks.
+    void TickFocusCamera();
+    TOptional<OpenWillowFocusCam::FParams> FocusParams;
+    bool bFocusTried = false, bFocusOn = false;
+    double FocusBaseFov = 0., FocusSetFov = 0.;
     // -owmissionpagetest (OpenWillowMissionPageTest.cpp).
     void TickScreenPageTest();
     bool ScreenOpenInVm() const;
