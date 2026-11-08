@@ -96,7 +96,9 @@ void UOpenWillowQuest::TickScreenPageTest()
         Row(Name, GameHud && (bHidden ? GameHud->IsGameplayHudHidden() : GameHud->IsGameplayHudBack()), GameHud ? GameHud->GameplayHudReport() : FString(TEXT("no HUD")));
     };
     // The page's view on Marcus (OpenWillowFocusCam): with the page up, his bone lands on the local data's screen point in the view the player sees (the camera
-    // manager's, one frame old); with it closed, the view is the control rotation again. Without the local data the "on" rows fail and say so.
+    // manager's, one frame old); with it closed, the view is the control rotation again, and the control rotation and FOV are those from just before the
+    // page opened (ViewBefore). Without the local data the "on" rows fail and say so.
+    const auto ViewBefore = [&] { ScreenTestControl = PC->GetControlRotation(); ScreenTestFov = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetFOVAngle() : 0.f; };
     const auto FocusRow = [&](const TCHAR* Name, bool bOn)
     {
         const UCameraComponent* Camera = Maya->FindComponentByClass<UCameraComponent>();
@@ -109,11 +111,12 @@ void UOpenWillowQuest::TickScreenPageTest()
             GEngine->GameViewport->GetViewportSize(Size);
             if (Size.X > 1. && Size.Y > 1.) Aspect = Size.X / Size.Y;
         }
-        const FString Seen = FString::Printf(TEXT("view=%s control=%s fov=%.1f pawn_rotation=%d"), *View->GetCameraRotation().ToString(), *PC->GetControlRotation().ToString(),
-            View->GetFOVAngle(), Camera->bUsePawnControlRotation ? 1 : 0);
+        const FString Seen = FString::Printf(TEXT("view=%s control=%s fov=%.1f pawn_rotation=%d before: control=%s fov=%.1f"), *View->GetCameraRotation().ToString(),
+            *PC->GetControlRotation().ToString(), View->GetFOVAngle(), Camera->bUsePawnControlRotation ? 1 : 0, *ScreenTestControl.ToString(), ScreenTestFov);
         if (!bOn)
         {
-            const bool bBack = Camera->bUsePawnControlRotation && View->GetCameraRotation().Equals(PC->GetControlRotation(), 0.5f);
+            const bool bBack = Camera->bUsePawnControlRotation && View->GetCameraRotation().Equals(PC->GetControlRotation(), 0.5f)
+                && PC->GetControlRotation().Equals(ScreenTestControl, 0.5f) && FMath::Abs(View->GetFOVAngle() - ScreenTestFov) < 0.5f;
             Row(Name, bBack, Seen);
             return;
         }
@@ -166,6 +169,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         StockMagazine();
         Row(TEXT("control_gun_fires_before_the_page"), Maya->FireOnce() && Maya->AreArmsShown(), State());
         BindingKey(PC, EKeys::LeftMouseButton, IE_Pressed);   // held through the page's open, released under it
+        ViewBefore();
         UseE();
         break;
     case 2:
@@ -235,6 +239,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.;
         break;
     case 12:
+        ViewBefore();
         UseE();
         break;
     case 13:
@@ -280,8 +285,22 @@ void UOpenWillowQuest::TickScreenPageTest()
         // Nothing here changes when the press lands, so the row waits for the press itself.
         if (!Await(UseArrived())) return;
         Row(TEXT("e_afterwards_opens_nothing"), UseArrived() && !ScreenPage->IsShown(), State());
+        // Last, since a failed quest stops everything: the page put up directly, so the view is on Marcus, then a failure must close it and give the view back.
+        ViewBefore();
+        ShowScreenPage(TEXT("offer"));
+        Wait = 1.;
+        break;
+    case 21:
+    {
+        const UCameraComponent* Camera = Maya->FindComponentByClass<UCameraComponent>();
+        const bool bWasOn = bFocusOn && Camera && !Camera->bUsePawnControlRotation;
+        Fail(TEXT("mission page suite: a failure forced with the page open"));
+        const bool bBack = Camera && Camera->bUsePawnControlRotation && FMath::Abs(Camera->FieldOfView - ScreenTestFov) < 0.5f && PC->GetControlRotation().Equals(ScreenTestControl, 0.5f);
+        Row(TEXT("failure_closes_the_page_and_gives_the_view_back"), bWasOn && !ScreenPage->IsShown() && !bFocusOn && bBack,
+            FString::Printf(TEXT("was_on=%d fov=%.1f before=%.1f %s"), bWasOn ? 1 : 0, Camera ? Camera->FieldOfView : 0.f, ScreenTestFov, *State()));
         Finish();
         return;
+    }
     default: return;
     }
     ++ScreenTestStep;

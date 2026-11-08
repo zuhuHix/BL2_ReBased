@@ -111,6 +111,7 @@ private:
     // The view on Marcus while the page is up (OpenWillowFocusCam, UNVERIFIED stand-in). The numbers come from local data, read at the first page;
     // without them the view is left alone. The player's FOV is kept under the zoom, since the walker sets it only on its own ticks.
     void TickFocusCamera();
+    void ReleaseFocusCamera();   // gives the view back; called by every close of the page
     TOptional<OpenWillowFocusCam::FParams> FocusParams;
     bool bFocusTried = false, bFocusOn = false;
     double FocusBaseFov = 0., FocusSetFov = 0.;
@@ -124,6 +125,9 @@ private:
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
     // Presses that reached OnScreenKey and TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
     int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0, ScreenTestUses = 0;
+    // The view just before the page opened (control rotation, FOV), for the rows that check it comes back after the close.
+    FRotator ScreenTestControl = FRotator::ZeroRotator;
+    float ScreenTestFov = 0.f;
     int32 ScreenStepTicks = 0;   // the suite's ticks in the current step: a stalled frame must not count as time passing
     double ScreenStepAt = 0.;
     struct FImpl;

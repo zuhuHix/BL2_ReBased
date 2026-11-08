@@ -59,10 +59,12 @@ bool FOpenWillowFocusCamTest::RunTest(const FString&)
 
     // The local file: a good one reads, each bad field is refused, a missing file is reported.
     const FString Dir = FPaths::Combine(FPaths::AutomationTransientDir(), FString::Printf(TEXT("focuscam_%s"), *FGuid::NewGuid().ToString()));
-    const auto Write = [&Dir](const TCHAR* Name, const TCHAR* Json)
+    TestTrue(TEXT("temp folder made"), IFileManager::Get().MakeDirectory(*Dir, true));
+    // Each file must really be written, or a refused Load below would pass for the wrong reason.
+    const auto Write = [this, &Dir](const TCHAR* Name, const TCHAR* Json)
     {
         const FString Path = FPaths::Combine(Dir, Name);
-        FFileHelper::SaveStringToFile(Json, *Path);
+        TestTrue(FString::Printf(TEXT("wrote %s"), Name), FFileHelper::SaveStringToFile(Json, *Path));
         return Path;
     };
     FParams Params;

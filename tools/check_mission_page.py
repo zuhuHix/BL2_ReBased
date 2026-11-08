@@ -14,7 +14,8 @@ EXPECTED = ('page_ready', 'e_refused_under_a_status_page', 'control_gun_fires_be
             'mission_ready_to_turn_in', 'e_opens_the_turn_in', 'turn_in_drawn', 'turn_in_e_does_nothing', 'enter_shows_the_reward_page', 'reward_waits_for_enter',
             'enter_takes_the_reward_and_closes', 'first_person_back_after_the_reward', 'e_afterwards_opens_nothing',
             'hud_hidden_behind_the_offer', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_the_reward',
-            'camera_on_marcus_offer', 'camera_back_after_escape', 'camera_on_marcus_turn_in', 'camera_on_marcus_reward', 'camera_back_after_the_reward')
+            'camera_on_marcus_offer', 'camera_back_after_escape', 'camera_on_marcus_turn_in', 'camera_on_marcus_reward', 'camera_back_after_the_reward',
+            'failure_closes_the_page_and_gives_the_view_back')
 ROW = re.compile(r'OWMISSIONPAGETEST (\S+) (PASS|FAIL)\b(.*)')
 SUMMARY = re.compile(r'OWMISSIONPAGETEST SUMMARY passed=(\d+) failed=(\d+)[ \t\r]*$', re.M)
 

@@ -295,6 +295,8 @@ void UOpenWillowQuest::Fail(const FString& Error)
 {
     bFailed = true;
     UE_LOG(LogTemp, Error, TEXT("OWQUEST ERROR %s"), *Error);
+    // A failed quest stops ticking the page and its keys, so a page left open would stay for good, over a zoomed view: close it now.
+    CloseScreenPage(TEXT("the quest failed"));
     if (bTesting) {
         UE_LOG(LogTemp, Display, TEXT("OWQUESTTEST SUMMARY result=FAIL checks=%d errors=%d reason=%s"), Checks, ++Errors, *Error);
         FPlatformMisc::RequestExit(false);
@@ -869,7 +871,19 @@ void UOpenWillowQuest::CloseScreenPage(const TCHAR* Why)
     ScreenPage->Hide(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr);
     ScreenPageOn.Reset();
     if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->SetInventoryPresentation(false);
+    ReleaseFocusCamera();   // every close, end of play and a failure included, not only the next tick
     UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page closed: %s (status %d)"), Why, Status());
+}
+
+void UOpenWillowQuest::ReleaseFocusCamera()
+{
+    if (!bFocusOn) return;
+    bFocusOn = false;
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    UCameraComponent* Camera = Walker ? Walker->FindComponentByClass<UCameraComponent>() : nullptr;
+    if (!Camera) return;
+    OpenWillowFocusCam::Release(*Camera, FocusBaseFov);
+    UE_LOG(LogTemp, Display, TEXT("OWFOCUSCAM off: the view follows the control rotation again, FOV %.1f"), FocusBaseFov);
 }
 
 void UOpenWillowQuest::TickFocusCamera()
@@ -877,14 +891,9 @@ void UOpenWillowQuest::TickFocusCamera()
     auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
     UCameraComponent* Camera = Walker ? Walker->FindComponentByClass<UCameraComponent>() : nullptr;
     if (!Camera) return;
-    if (!IsScreenPageShown() || !Marcus)
+    if (!IsScreenPageShown() || !Marcus || bFailed)
     {
-        if (bFocusOn)
-        {
-            OpenWillowFocusCam::Release(*Camera, FocusBaseFov);
-            bFocusOn = false;
-            UE_LOG(LogTemp, Display, TEXT("OWFOCUSCAM off: the view follows the control rotation again, FOV %.1f"), FocusBaseFov);
-        }
+        ReleaseFocusCamera();
         return;
     }
     if (!bFocusTried)
@@ -1211,7 +1220,7 @@ void UOpenWillowQuest::UpdateHints()
 void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function)
 {
     Super::TickComponent(Delta, Type, Function);
-    TickFocusCamera();   // first, so a failed quest still gives the view back
+    TickFocusCamera();   // before the failure return; a failure itself closes the page and gives the view back (Fail)
     if (!Impl || bFailed) return;
     if (bReleaseUse) {
         if (auto* Pawn = Cast<APawn>(GetOwner())) if (auto* PC = Cast<APlayerController>(Pawn->GetController()))
