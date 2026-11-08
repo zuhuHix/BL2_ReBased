@@ -5,9 +5,11 @@
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformTime.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -370,6 +372,15 @@ void OpenWillowAudio::Startup()
         FCoreUObjectDelegates::PostLoadMapWithWorld.AddLambda([](UWorld* World)
         {
             if (GRecordStarted >= 0 || !World || !World->IsGameWorld()) return;
+            // A submix switches itself off while nothing plays, and records nothing then: the first run wrote no file at all, and the quiet
+            // gaps would be dropped, which would shift every later cue. This engine switch keeps submixes rendering silence instead.
+            if (IConsoleVariable* NeverDisable = IConsoleManager::Get().FindConsoleVariable(TEXT("au.NeverDisableSubmixes")))
+                NeverDisable->Set(1, ECVF_SetByCode);
+            else UE_LOG(LogTemp, Warning, TEXT("OWAUDIOREC au.NeverDisableSubmixes not found: quiet stretches may be missing from the recording"));
+            // An unattended window usually has no focus, and an unfocused window's volume (0 by default) zeroes the mix before the recorder sees
+            // it: the second run wrote 71 s of zeros. Full volume with or without focus while recording.
+            FApp::SetUnfocusedVolumeMultiplier(1.f);
+            FApp::SetVolumeMultiplier(1.f);
             UAudioMixerBlueprintLibrary::StartRecordingOutput(World, RecordLimitSeconds);
             GRecordStarted = FPlatformTime::Seconds();
             UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC start file=%s map=%s (test only; records what the host sent to the mixer)"), *GRecordPath, *World->GetMapName());

@@ -224,7 +224,10 @@ the host called play. Python: `tests/prepare_slice_audio_test.py`, `tests/check_
 before each step (`-owslicegatepause=<s>`, default 2 s in the driver, 0 = off in the host) and the host recording its own main output (`-owrecordaudio=<file.wav>`).
 The recording is UE's own submix recorder (`UAudioMixerBlueprintLibrary::StartRecordingOutput` / `StopRecordingOutput` in the engine's `AudioMixer` module, added to
 the module's private dependencies): no external recorder. Recording starts with the first game map and stops at the slice gate's summary; the gate waits for the
-mixer's background writer to finish the file before it exits. Every `Play` and every gate step logs `OWAUDIOREC cue t=<s from the recording start>` and saves a frame
+mixer's background writer to finish the file before it exits. Two engine behaviours had to be switched off while recording, each found by a failed run on 2026-11-08: a submix
+switches itself off while nothing plays and then records nothing (first run: no file; the fix sets the engine's `au.NeverDisableSubmixes`, which also keeps the quiet
+gaps in the file so cue times stay true), and an unfocused window's volume multiplier (0 by default) zeroes the mix before the recorder sees it (second run: a WAV
+of the right length, every sample zero; the fix sets the focused and unfocused multipliers to 1). Every `Play` and every gate step logs `OWAUDIOREC cue t=<s from the recording start>` and saves a frame
 at most every 1.5 s. `tools/listen_report.py` then measures the WAV per cue (peak and RMS in the cue's window, how late the sound started after its cue, the quiet
 gap before the next step) and writes `LISTEN.md` and `ANSWERS.md` beside it, under ignored `local/audio_listen/<date>/<time>/`. Both are game-derived (event names
 come from the local manifest) and stay local.
@@ -232,6 +235,12 @@ come from the local manifest) and stay local.
 What it can show: what the host sent to the mixer and how loud the mix was. What it cannot: whether a sound is the right one, or sounds like the game. Only the
 roles in section 5 play; the guide lists everything else asked for (reload, equip, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
 level-up, mission and dialog, doors, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
+
+Runs (zuhu PC, 2026-11-08, decoded sounds from vgmstream, 2 s pause): the first two failed as above (and lacked the slice data in that worktree: a missing range
+manifest and Marcus's assets). The third: slice gate 14 of 14 PASS, editor exit 0, a 122.7 s 48 kHz stereo WAV (file size matches the stopped length), overall peak
+-0.2 dBFS, no clipped cue. Nine plays: in the fight 3 shots and 3 impacts (peaks -2.7 to -0.2 dBFS for shot and impact together, since they start within a few ms),
+one Phaselock cast (peak -4.5 dBFS, RMS -22.9 dBFS over its 4.1 s), at the dummy 1 shot and 1 impact (peak -1.6 dBFS); every pause before a step measured silent.
+Sounds that started in silence began 0.134 to 0.145 s after their cue. Nobody has listened to it yet; the guide went to the maintainer.
 
 ## UNVERIFIED list
 

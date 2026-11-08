@@ -101,6 +101,18 @@ class ListenReportTest(unittest.TestCase):
         _, _, steps, _ = self.run_build(amplitude=1.0)
         self.assertTrue(steps[1]['sounds'][0]['level']['clipped'])
 
+    def test_repeated_step_cue_is_one_step(self):
+        text = log().replace('label=step Down frame=frame-004.png', 'label=step Fight frame=frame-004.png')
+        _, _, steps, _ = self.run_build(text=text)
+        self.assertEqual([s['name'] for s in steps], ['Start', 'Fight'])
+
+    def test_onset_not_measured_over_another_sound(self):
+        # The hit cue at 2.52 s starts inside the fire tone: no onset for it, while the fire cue (in silence) has one.
+        _, _, steps, _ = self.run_build()
+        fire, hit = steps[1]['sounds']
+        self.assertIsNotNone(fire['level']['onset_s'])
+        self.assertIsNone(hit['level']['onset_s'])
+
     def test_labels_parse(self):
         run = lr.parse_log(log())
         fire = [c for c in run['cues'] if c['name'] == 'fire'][0]

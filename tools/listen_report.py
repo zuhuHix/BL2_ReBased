@@ -30,6 +30,7 @@ LINK = re.compile(r'OWSLICEGATE link=(\S+) result=(\S+) fixtures=\[(.*?)\] detai
 SUMMARY = re.compile(r'OWSLICEGATE SUMMARY pass=(\d+) fail=(\d+) na=(\d+)')
 SILENT_DBFS = -60.0     # a window quieter than this counts as silence (host choice)
 STEP_WINDOW = 1.0       # seconds measured after a step cue that is not itself a sound
+TAIL = 0.4              # the mixer starts a sound up to ~0.15 s after its cue and stops it 0.25 s after it drains: skipped before a gap is measured
 
 # What the driver does on screen at each slice gate step, in our words. Steps with no sound of their own are still listed so a gap is visible.
 STEPS = {
@@ -130,9 +131,12 @@ def measure(mono, rate, start, length):
         return None
     peak = max(window)
     rms = math.sqrt(sum(v * v for v in window) / len(window))
-    # First frame louder than the silence floor, as a delay from the cue: how late the mixer started the sound.
+    # First frame louder than the silence floor, as a delay from the cue: how late the mixer started the sound. Only when the cue starts in
+    # silence (the 0.2 s before it are quiet); over another sound it would measure that sound.
     floor = 10 ** (SILENT_DBFS / 20)
-    onset = next((i for i, v in enumerate(window) if v > floor), None)
+    before = mono[max(0, a - int(0.2 * rate)):a]
+    quiet_before = not before or max(before) <= floor
+    onset = next((i for i, v in enumerate(window) if v > floor), None) if quiet_before else None
     return {'peak_dbfs': round(dbfs(peak), 1), 'rms_dbfs': round(dbfs(rms), 1), 'onset_s': None if onset is None else round(onset / rate, 3),
             'clipped': peak >= 0.999}
 
@@ -186,6 +190,9 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     # Steps: from one step cue to the next. Each holds the sound cues that fall inside it.
     steps = []
     for cue in run['cues']:
+        # A step that restarts its own clock logs its name again (the gate's Accept does): one step for the listener.
+        if cue['kind'] == 'step' and steps and steps[-1]['name'] == cue['name']:
+            continue
         if cue['kind'] == 'step':
             steps.append({'name': cue['name'], 't': cue['t'], 'frame': cue['frame'], 'sounds': []})
         elif steps:
@@ -194,7 +201,7 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
         step['end'] = steps[i + 1]['t'] if i + 1 < len(steps) else (run['stop_t'] or length)
         # The pause before the next step should be quiet: measured over its last 1.5 s, which the driver's pause leaves empty.
         last_sound_end = max([s['t'] + (s['seconds'] or 0) for s in step['sounds']], default=step['t'])
-        quiet_from = max(last_sound_end, step['end'] - 1.5)
+        quiet_from = max(last_sound_end + TAIL if step['sounds'] else last_sound_end, step['end'] - 1.5)
         step['gap'] = measure(mono, rate, quiet_from, step['end'] - quiet_from) if mono and step['end'] - quiet_from > 0.2 else None
 
     names = load_names(manifest)
@@ -214,7 +221,9 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
              'Game-derived: keep under ignored `local/`.', '',
              f'- Recording: `{wav.name}` ({length:.1f} s, {rate} Hz, {channels} channel(s), overall peak {fmt_db(dbfs(overall_peak)) if mono else "-"} dBFS)',
              f'- Slice gate: {"pass %s, fail %s, n/a %s" % run["summary"] if run["summary"] else "no summary in the log"}',
-             f'- Times are seconds from the recording start. The mixer started sounds a median {median_onset if median_onset is not None else "?"} s after their cue.',
+             f'- Times are minutes:seconds from the recording start (the first {steps[0]["t"]:.0f} s are the map loading, silent). Sounds that start in silence began a median '
+             f'{median_onset if median_onset is not None else "?"} s after their cue ({len(onsets)} measured).' if steps else '- No step cues in the log.',
+             '- A shot and its bullet impact start within a few milliseconds of each other, so their levels below are of the two together, not each alone.',
              '- Frames (`frames/`) are saved at most every 1.5 s, at the first cue that allows one, so a step shows its first moment.',
              '- Nothing here was listened to. The levels are measurements of the mix, not a judgement that a sound is right.', '']
     if problems:
