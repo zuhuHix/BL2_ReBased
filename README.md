@@ -321,20 +321,20 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 
 - **Maya.** Movement numbers from the stock data (#77). Shield, health and Fight For Your Life in one host state (#72), a stand-in capacity for shields without a capacity stat (#124). Melee on V (#129). Stock frag grenades on G (#115, #123). A respawn charges the fee and shows a message (#151).
 - **Down and respawn.** The down, bleed-out, second-wind and respawn rules run on the VM (#59, [COMBAT_DOWN_RESPAWN.md](docs/verification/COMBAT_DOWN_RESPAWN.md)).
-- **HUD.** BL2's movie HUD by default (#54), the mission tracker and Fight For Your Life in the movie (#63), damage arrows and the level-up banner (#67), the shield bar (#80), BL2's minimap clip (#53), the Map screen (#97), use prompts (#131), M and L keys (#117), and Phaselock's cooldown on the movie (#47, #146).
+- **HUD.** BL2's movie HUD by default (#54), the mission tracker and Fight For Your Life in the movie (#63), damage arrows and the level-up banner (#67), the shield bar (#80), BL2's minimap clip (#53), the Map screen (#97), use prompts (#131), a use target that follows the view on machines, lootables, stations and doors (#159), M and L keys (#117), and Phaselock's cooldown on the movie (#47, #146).
 - **Guns.** Four slice guns with ADS, reload clips and muzzle flash (#48, #68). Guns built from the game's own parts (#57, #58, #86). Firing from the parts, including elemental explosions (#56, #70). Bullets carry momentum (#62). Generated guns get a view model, arms clips, the damage stack, the refire rule, their firing block and their accuracy pool (#141, #144, #145, #137, #130, #136, #142). An iron-sight ADS height fit, marked as a fit (#150).
 - **Pickups and drops.** BL2's own card movie on world pickups (#95). E takes the aimed pickup, not the nearest (#101). Drops have a rarity beam and lie on the ground (#139).
 - **Gun range.** Moving enemies with AI, loot on death from the VM's death roll (#89), and five enemies including a Psycho, with corpses (#133).
 - **Skills.** Keyboard navigation (#35, #49). Skill modifiers on Maya's survival stats (#93). Quick Change respec at the placed machine (#106). Some numbers from live reads at level 8 only (#116), and Converge's damage from one live read (#135).
-- **Vendors and lootables.** Currency and stock persist (#87). The Ammo Dump and Dr. Zed sell, and ammo purchases fill the pools (#99). The shop keeps its selection rules and refusals on screen (#127). Lootable and pickup textures (#120). The shelves for shields and grenade mods sell stand-in gear with no stats.
+- **Vendors and lootables.** Currency and stock persist (#87). The Ammo Dump and Dr. Zed sell, and ammo purchases fill the pools (#99). The shop keeps its selection rules and refusals on screen (#127). Lootable and pickup textures (#120). Drops lie inside the container they came from (#163); how closely that matches the game is not checked. The shelves for shields and grenade mods sell stand-in gear with no stats.
 - **Phaselock.** Presentation and colour constants (#50, #94, #110), round 24 (#104), the target's six worn attachments (#113), and a held target's death ends the skill (#146). Lift bob and reload/weapon-swap rules are confirmed in the real game ([PHASELOCK_STOCK_DATA.md](docs/verification/PHASELOCK_STOCK_DATA.md)).
-- **Inventory and menus.** Tab switching (#91, #92). VALUE thumbnails and card fits (#69). An item set that would leave the backpack without room is refused (#71). The Missions log (#64, #100). Status pages hide the first-person gun (#118). A missing UI movie no longer covers the game (#122).
+- **Inventory and menus.** Tab switching (#91, #92). VALUE thumbnails and card fits (#69). An item set that would leave the backpack without room is refused (#71). The Missions log (#64, #100). Status pages hide the first-person gun (#118). A missing UI movie no longer covers the game (#122). Status menu keys keep each page on its own key and route between pages from the Inventory (#158).
 - **The Fire mission.** Accept, objective and turn-in run on stock world data with labelled stand-ins ([SANCTUARY_RPG_MISSION.md](docs/verification/SANCTUARY_RPG_MISSION.md)), through Marcus's mission screen on BL2's own movie (#134).
-- **Audio.** The host plays WAV sounds by role, but no game sound yet (#119). Which roles exist comes from one live session, `UNVERIFIED` (#149).
+- **Audio.** The host plays sounds by role (#119), and the game's own sounds now play, decoded on your machine by an external tool (#166). Nobody has listened to them side by side with the game yet. Which roles exist comes from one live session, `UNVERIFIED` (#149).
 
 </details>
 
-**In progress (open PRs, not on `main`):** the game's own sounds through an external decoder (#166), lootable drops at the right spot (#163), a use target that follows your view (#159), and status menu keys (#158). [See all open PRs](https://github.com/zuhuHix/BL2_ReBased/pulls).
+**In progress:** work not yet on `main` is in the [open PRs](https://github.com/zuhuHix/BL2_ReBased/pulls).
 
 **Not yet:**
 
@@ -342,7 +342,7 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 - **An enemy that actually downs Maya in the gate run.** Enemies hit her on the range, but the gate's down still comes from the test.
 - **The rest of the game.** The other ~79 maps, the other Vault Hunters, the full campaign, co-op, your saves.
 
-**Next up:** the open PRs above, a proper side-by-side of the whole loop with the original game, and closing the gaps on the scoreboard. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
+**Next up:** whatever is in the open PRs, a proper side-by-side of the whole loop with the original game, and closing the gaps on the scoreboard. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
 
 ## What you'd get (eventually)
 
