@@ -54,7 +54,8 @@ compare with the baseline there. Report automated checks separately from in-game
 - Look up natives with `python tools/native_index_find.py <name>`; do not open `docs/verification/NATIVE_INDEX.md` whole.
 
 ## How to finish a lane
-Unless your brief says otherwise, do not commit, push or edit `DECISIONS.md`, `README.md`, `ROADMAP.md`, `AGENTS.md` or
+Right before you report a branch ready, rebase it on the latest `origin/main` and rerun your light checks, so it lands
+without conflicts (`docs/TOOLING.md`, "Landing PRs in a batch"). Unless your brief says otherwise, do not commit, push or edit `DECISIONS.md`, `README.md`, `ROADMAP.md`, `AGENTS.md` or
 `docs/TOOLING.md`. Write `local/p2/<lane>/handoff.md` with:
 - the changed tracked paths, and the gate output with numbers;
 - what is verified and how, and what is `UNVERIFIED`;

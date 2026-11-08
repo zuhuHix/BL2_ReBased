@@ -181,6 +181,35 @@ side by side; a branch older than that still uses the per-checkout file, so reba
 worktrees. CTest `ue-lock-machine-wide` fails when a script that names `UnrealEditor*.exe` does not use the helper, and
 checks the owner and staleness rules against temporary lock files.
 
+### Landing PRs in a batch
+
+`tools/land_batch.sh` lands several reviewed PRs with one push to `main` (Git Bash, with `gh` logged in):
+
+```
+git worktree add --detach ../BL2_ReBased-landing origin/main      # once; the script works only in this worktree
+DRY=1 tools/land_batch.sh -w ../BL2_ReBased-landing -t <tested-commit> "176:5329004 177:b3b6db8"   # checks only
+tools/land_batch.sh -w ../BL2_ReBased-landing -t <tested-commit> "176:5329004 177:b3b6db8"
+```
+
+It rebases the listed PRs, in that order, into one chain on top of `origin/main`, then moves each PR branch to its
+commit in the chain and fast-forwards `main` once. GitHub finds each PR's head inside `main` and marks the PR Merged,
+and CI runs once for the batch instead of once per PR. Before it pushes anything, it checks:
+
+- each PR's head is still the reviewed commit (the `sha7` in the list), and the PR is open;
+- each rebased PR changes exactly the lines it changed when reviewed (a patch-id comparison, `DECISIONS.md` excluded,
+  since that file merges as a union of entries through `tools/merge-union.attributes`);
+- with `-t`, the chain's final tree is identical to the tree of the integration commit the in-engine suites ran on.
+
+`git rerere` is switched on for the repository, so a conflict resolved once, for example while building the integration
+branch, is resolved the same way when the batch lands. A conflict rerere has not seen leaves the rebase open in the
+landing worktree with instructions. The script deletes only the remote branch of a landed PR, never a local worktree.
+Read the CI run on the new `main` before landing the next batch. The log is `local/hub/land_batch.log`.
+
+**Standing approval (maintainer, 2026-11-08).** The coordinating assistant may land a PR without asking first when
+its independent review is clean and its in-engine suites passed on its final head, and reports what landed afterwards.
+These still wait for the maintainer's explicit OK: changes to `THIRD_PARTY.md` or `LICENSE`, a new dependency or tool,
+`ROADMAP.md`, history rewrites, releases, and anything public outside the repository.
+
 ## `ow-package`: the package reader
 
 A standalone x64 C++20 tool that reads version 832/46 packages:
