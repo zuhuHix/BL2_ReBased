@@ -9,7 +9,7 @@
   const NEUTRAL = {
     // One mid grey for every rarity tier, so none matches a stock rarity colour (stock Common is white).
     rarity_1: '#8C8C8C', rarity_2: '#8C8C8C', rarity_3: '#8C8C8C', rarity_4: '#8C8C8C', rarity_5: '#8C8C8C',
-    card_text: '#D0D0D0', card_projectile_count: '#B0B0B0', card_red_text: '#909090', hint_disabled: '#707070',
+    card_text: '#D0D0D0', card_plain_text: '#E6E6E6', card_projectile_count: '#B0B0B0', card_red_text: '#909090', hint_disabled: '#707070',
     list_header_text: '#F0F0F0', inventory_band: '#909090', inventory_tile_fill: '#A0A0A0', inventory_tile_frame: '#B0B0B0',
     skills_text: '#C8C8C8', skill_current: '#B0B0B0', skill_maxed: '#E0E0E0', skill_locked: '#808080',
     skill_class_mod: '#F0F0F0', skill_tag: '#D8D8D8'

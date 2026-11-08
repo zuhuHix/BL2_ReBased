@@ -32,6 +32,7 @@ HEX = re.compile(r'^#[0-9A-Fa-f]{6}$')
 NEUTRAL = {
     'rarity_1': '#8C8C8C', 'rarity_2': '#8C8C8C', 'rarity_3': '#8C8C8C', 'rarity_4': '#8C8C8C', 'rarity_5': '#8C8C8C',
     'card_text': '#D0D0D0',             # item card labels and values, menu hint text
+    'card_plain_text': '#E6E6E6',       # item card text without its own colour (flavour lines other than the red one)
     'card_projectile_count': '#B0B0B0', # the "xN" after a shotgun's damage
     'card_red_text': '#909090',         # a title part's flavour line; also how weapon_stats.py recognises it
     'hint_disabled': '#707070',         # a menu hint that does nothing right now

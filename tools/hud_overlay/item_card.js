@@ -148,10 +148,10 @@
     const {call, get, set} = api;
     const statMainX = new Map();
     const statVisibility = new Map();
-    function text(path, value, size = 15, tint = 0xffffff, align = '') {
+    function text(path, value, size = 15, tint = owColours.tint('card_plain_text'), align = '') {
       richText(path, escapeHtml(value), size, tint, align);
     }
-    function richText(path, html, size = 15, tint = 0xffffff, align = '') {
+    function richText(path, html, size = 15, tint = owColours.tint('card_plain_text'), align = '') {
       const body = `<font face="$WillowBody" size="${size}" color="#${tint.toString(16).padStart(6,'0')}">${html}</font>`;
       set(path, 'htmlText', align ? `<p align="${align}">${body}</p>` : body);
     }
@@ -212,7 +212,7 @@
       const funLines = typeof item.funStats === 'string' ? item.funStats.split(/;\s*/).filter(Boolean) : [];
       const redFirst = !gearItemTypes.has(item?.itemType);
       const funStats = funLines.map((line, index) =>
-        `• <font color="${redFirst && index === 0 ? owColours.hex('card_red_text') : '#ffffff'}">${escapeHtml(line)}</font>\n`).join('');
+        `• <font color="${redFirst && index === 0 ? owColours.hex('card_red_text') : owColours.hex('card_plain_text')}">${escapeHtml(line)}</font>\n`).join('');
       // Preserve observed gear colours/emphasis in the movie's TextField. This payload
       // is passed only to Flash; it must never be inserted into browser HTML.
       call(card, 'SetFunStats', typeof item.funStatsMarkup === 'string' && item.funStatsMarkup ? item.funStatsMarkup : funStats);
