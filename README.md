@@ -145,7 +145,7 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 **State:** Sanctuary is a walkable scene in UE5, and from a matched camera the geometry lines up with the real game. Lighting and materials are still approximations, and street life is missing.
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/sanctuary-plaza-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the Sanctuary plaza in the real game, then ours from the same camera, then ours with Maya standing on that spot">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/sanctuary-plaza-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the Sanctuary plaza in the real game, then ours from the same camera, then ours in first person from that spot with BL2's HUD">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/sanctuary-moxxi-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the stairs up to Moxxi's bar in the real game and in ours, from the same spot">
 </p>
 <p align="center"><sub><b>Real game first, then ours, from the same spot</b> (ours captured 2026-11-07). The buildings, the bench, the posters and the stairs are in place. Light, glow and colour are the big gap, and the citizens are off by default.</sub></p>
@@ -275,20 +275,20 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/hud-callouts-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the HUD part by part, the real game and ours from the same pose, with numbered notes">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/hud-ffyl-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the Fight For Your Life screen on the same street, in the real game and in ours">
 </p>
-<p align="center"><sub><b>The everyday HUD and Fight For Your Life, real game left, ours right</b> (ours captured 2026-11-07). The parts and their layout match. When Maya is down, the real screen loses its colour and hides the bars; ours doesn't yet.</sub></p>
+<p align="center"><sub><b>The everyday HUD and Fight For Your Life, real game left, ours right</b> (ours captured 2026-11-07). The HUD parts sit in the same places. Ours shows fewer minimap icons, has no mission running in the tracker, and its crosshair does not widen while firing. When Maya is down, the real screen loses its colour and hides the bars; ours doesn't yet.</sub></p>
 
 ### Vendors and lootables
 
-**State:** Gun machines, the currency, the Ammo Dump and Dr. Zed sell. Containers open, and their contents come out. The shop page is a stand-in rather than BL2's own, and drops don't sit in the right place yet (#163 is open).
+**State:** Gun machines, the currency, the Ammo Dump and Dr. Zed sell. Containers open, and their contents come out. The shop page is a stand-in rather than BL2's own, and drops now lie inside the container they came from (#163); how closely that matches the game is not checked yet.
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-boxes-pair-2026-11-08.jpg" width="49%" alt="Comparison card: four kinds of lootable box opened, the real game in the top row and ours below">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-boxes-pair-2026-11-08.jpg" width="49%" alt="Comparison card: four kinds of lootable container opened, the real game in the top row and ours below">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-pickup-card-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the item card over a gun on the ground, in the real game and in ours">
 </p>
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/vendors-host-ammo-dump-2026-11-06.jpg" width="48%" alt="The Ammo Dump in BL2_ReBased">
 </p>
-<p align="center"><sub><b>Boxes and a gun pickup, real game next to ours</b> (ours captured 2026-11-07), and our Ammo Dump (2026-11-06). The box models and the item card are the game's own. Each pair is from different places, and our opened boxes show less loot and no prompt. Our shop page is a stand-in with our own lists, and there is no like-for-like real-game shop frame published yet.</sub></p>
+<p align="center"><sub><b>Lootable containers and a gun pickup, real game next to ours</b> (ours captured 2026-11-07), and our Ammo Dump (2026-11-06). The container models and the item card are the game's own. Each pair is from different places, and our opened containers show less loot and no prompt. Our shop page is a stand-in with our own lists, and there is no like-for-like real-game shop frame published yet.</sub></p>
 
 ## How close is it?
 
