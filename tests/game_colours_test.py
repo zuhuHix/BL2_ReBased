@@ -29,13 +29,22 @@ class FakePackage:
         return {'RarityLevelColors': self.rows}
 
 
+def ensure_local(case):
+    """This checkout's local/; a clean checkout has none yet, so make it and remove it after the test if it is empty."""
+    local = ROOT / 'local'
+    if not local.is_dir():
+        local.mkdir()
+        case.addCleanup(lambda: local.rmdir() if not any(local.iterdir()) else None)
+    return local
+
+
 def make_outside_junction(case, target):
     """A junction inside this checkout's local/ pointing at `target` (outside it), removed after the test; None off Windows."""
     try:
         import _winapi
     except ImportError:
         return None
-    link = ROOT / 'local' / f'ow_test_junction_{os.getpid()}'
+    link = ensure_local(case) / f'ow_test_junction_{os.getpid()}'
     _winapi.CreateJunction(str(target), str(link))
     case.addCleanup(os.rmdir, link)  # removes the junction only, never the target's contents
     return link
@@ -99,10 +108,11 @@ class GameColoursTests(unittest.TestCase):
                 game_colours.colour('skill_tag')
             self.assertEqual(err.getvalue().count('missing or unreadable'), 1, body)
 
-    def test_rarity_fallbacks_are_one_grey_not_white(self):
+    def test_rarity_fallbacks_are_one_grey_unlike_a_made_up_file(self):
         tiers = {game_colours.NEUTRAL[f'rarity_{n}'] for n in range(1, 6)}
         self.assertEqual(len(tiers), 1)
-        self.assertNotIn('#FFFFFF', tiers)
+        made_up = {f'rarity_{n}': '#0%d0%d0%d' % (n, n, n) for n in range(1, 6)}
+        self.assertTrue(tiers.isdisjoint(made_up.values()))
 
     def test_under_local_follows_links(self):
         self.assertTrue(game_colours.under_local(ROOT / 'local' / 'ui' / 'colours' / 'x.json'))
@@ -147,7 +157,7 @@ class GameColoursTests(unittest.TestCase):
             through = subprocess.run(script + ['--output', str(link / 'run')], capture_output=True, text=True, cwd=ROOT)
             self.assertEqual(through.returncode, 2)
             self.assertIn("outside this checkout's ignored local/", through.stderr)
-        scratch = Path(tempfile.mkdtemp(prefix='ow_test_', dir=ROOT / 'local'))  # the tool writes a schema next to --output
+        scratch = Path(tempfile.mkdtemp(prefix='ow_test_', dir=ensure_local(self)))  # the tool writes a schema next to --output
         self.addCleanup(shutil.rmtree, scratch, True)
         inside = subprocess.run(script + ['--output', str(scratch / 'run')], capture_output=True, text=True, cwd=ROOT)
         self.assertNotIn("outside this checkout's ignored local/", inside.stderr)  # past the guard; fails later on the fake game

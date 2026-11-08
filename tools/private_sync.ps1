@@ -14,34 +14,25 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (!$Store) { throw 'Pass -Store <folder> or set OPENWILLOW_PRIVATE (a folder outside this repository)' }
 $store = [IO.Path]::GetFullPath($Store)
-# The real folder behind a path: every existing part that is a junction or symbolic link is replaced by its final
-# target, so a store reached through a link into the repository is caught. Parts that do not exist yet stay as written.
-function Resolve-RealPath([string]$Path) {
-    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
-    $root = [IO.Path]::GetPathRoot($full)
-    $real = $root
-    foreach ($part in $full.Substring($root.Length).Split('\', [StringSplitOptions]::RemoveEmptyEntries)) {
-        $next = Join-Path $real $part
-        $item = Get-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue
-        if ($item -and $item.LinkType) {
-            if ($item.PSObject.Methods['ResolveLinkTarget']) {  # PowerShell 7 (.NET 6+): follows a chain of links
-                $target = $item.ResolveLinkTarget($true)
-                if ($target) { $next = $target.FullName }
-            } elseif (@($item.Target)[0]) {  # Windows PowerShell 5.1: one link level; a relative target is next to the link
-                $target = @($item.Target)[0] -replace '^\\\\\?\\', ''
-                $next = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($target)) { $target } else { Join-Path $real $target }))
-            }
+# Identity check, not a path-string one: a uniquely named marker file is put in the repository root, and the store
+# and every one of its ancestors is asked whether it holds that marker. Any spelling that reaches the repository
+# (a junction or symbolic link chain, a UNC share of the checkout, a different case) sees the marker and is refused.
+# The marker is always removed; if it cannot be written the script stops (fail closed).
+$marker = ".ow_private_sync_marker_$([guid]::NewGuid().ToString('N'))"
+$markerPath = Join-Path $repo $marker
+try {
+    New-Item -ItemType File -Path $markerPath -ErrorAction Stop | Out-Null
+    $probe = $store  # full path; GetDirectoryName walks up to the drive or share root, then gives null
+    while ($probe) {
+        if (Test-Path -LiteralPath (Join-Path $probe $marker)) {
+            throw "The store $store is inside the repository $repo (its folder $probe is the repository root); game-derived files must stay out of it"
         }
-        $real = $next
+        $parent = [IO.Path]::GetDirectoryName($probe)
+        if (!$parent -or $parent -eq $probe) { break }
+        $probe = $parent
     }
-    return $real.TrimEnd('\')
-}
-$realStore = Resolve-RealPath $store
-$realRepo = Resolve-RealPath $repo
-foreach ($pair in @(@($store.TrimEnd('\'), $repo.TrimEnd('\')), @($realStore, $realRepo))) {
-    if ($pair[0] -ieq $pair[1] -or $pair[0].StartsWith($pair[1] + '\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "The store $store (really $realStore) is inside the repository $repo; game-derived files must stay out of it"
-    }
+} finally {
+    Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Force -Path $store | Out-Null
 $failed = $false

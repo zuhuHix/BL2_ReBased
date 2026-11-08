@@ -4281,7 +4281,7 @@ Without the file every key falls back to a neutral grey (or white) that is plain
 page logs `OpenWillow game colours missing` once (Python: one stderr line). `weapon_stats.py` then recognises
 no flavour line as red, so regenerated cards lose their red line until the file is there. Tests use made-up
 colours only. Old commits still hold the earlier values; the history is not rewritten (maintainer's call).
-Plain white `#FFFFFF` (default text), page chrome of the host-made stand-in pages (loading screens, vending
+Plain-white defaults outside the item card (the inventory page's own text helpers, weapon_stats' white lines), page chrome of the host-made stand-in pages (loading screens, vending
 page, glass sheet) and host choices recorded as such stay in the code. Verified: the JS and Python tests
 listed in the PR. Not verified here: the in-engine inventory and skills suites with and without the file
 (handed to the batch runner); UNVERIFIED that the pages look unchanged with the file present.
@@ -4293,3 +4293,9 @@ a colours file that is valid JSON but not `{"colours": {...}}` counts as unreada
 `prepare_skill_tree.py --output` and `game_colours.py --output` must resolve (links followed) inside this
 checkout's `local/`. A junctioned subfolder of `local/` that points elsewhere is therefore refused too.
 `private_sync.ps1` resolves junctions and symbolic links on the store path before refusing a store inside the repository.
+
+Review r2 (Luna, 2026-11-08): `private_sync.ps1` no longer compares path strings. It writes a uniquely named marker
+file in the repository root, refuses a store when the store or any existing ancestor holds that marker (so link
+chains of any length, UNC shares of the checkout and other spellings are caught), and always deletes the marker.
+The item card's plain text (flavour lines other than the red one, and its text helpers' default) reads the new
+`card_plain_text` key; without the file it is a light grey.

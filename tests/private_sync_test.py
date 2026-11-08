@@ -37,9 +37,15 @@ class PrivateSyncStoreTests(unittest.TestCase):
     def test_each_shell(self):
         name = f'ow_sync_test_store_{os.getpid()}'
         into_repo = self.link('into_repo', ROOT)
+        two_hops = self.link('two_hops', into_repo)  # a junction to a junction to the repository
+        drive, rest = os.path.splitdrive(str(ROOT))
+        unc = Path('\\\\localhost\\' + drive[0] + '$' + rest) if drive.endswith(':') else None
+        if unc is not None and not (unc / 'tools' / 'private_sync.ps1').is_file():
+            unc = None  # the administrative share is not reachable here
         outside = self.tmp / 'real'
         outside.mkdir()
         elsewhere = self.link('elsewhere', outside)
+        print('UNC alias case:', 'run' if unc else 'skipped (no administrative share)', file=sys.stderr)
         for shell in SHELLS:
             with self.subTest(shell=Path(shell).name):
                 plain = self.run_sync(shell, ROOT / name)
@@ -48,7 +54,15 @@ class PrivateSyncStoreTests(unittest.TestCase):
                 through = self.run_sync(shell, into_repo / name)
                 self.assertNotEqual(through.returncode, 0, through.stdout)
                 self.assertIn('inside the repository', through.stdout + through.stderr)
+                hops = self.run_sync(shell, two_hops / name)
+                self.assertNotEqual(hops.returncode, 0, hops.stdout)
+                self.assertIn('inside the repository', hops.stdout + hops.stderr)
+                if unc is not None:
+                    share = self.run_sync(shell, unc / name)
+                    self.assertNotEqual(share.returncode, 0, share.stdout)
+                    self.assertIn('inside the repository', share.stdout + share.stderr)
                 self.assertFalse((ROOT / name).exists(), 'a refused store must not be created')
+                self.assertEqual(list(ROOT.glob('.ow_private_sync_marker_*')), [], 'the marker must be removed')
                 fine = self.run_sync(shell, elsewhere / 'store')
                 self.assertEqual(fine.returncode, 0, fine.stdout + fine.stderr)
                 self.assertIn('skip (missing)', fine.stdout)

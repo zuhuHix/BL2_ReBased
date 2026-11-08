@@ -20,13 +20,15 @@ function check(name, test) { test(); passed++; console.log('PASS ' + name); }
 const hud = load('/');
 const {placement, plan} = hud.owPickupCard;
 
-check('Without the local colours file every rarity uses the one neutral grey of colours.js, not a stock colour', () => {
-  const grey = hud.owColours.tint('rarity_1');
-  assert.notStrictEqual(grey, 0xffffff);
+const MADE_UP_RARITY = {rarity_1: '#010101', rarity_2: '#020202', rarity_3: '#030303', rarity_4: '#040404', rarity_5: '#050505'};
+check('Without the local colours file every rarity uses the one neutral fallback of colours.js', () => {
+  const grey = Number.parseInt(hud.owColours.neutral('rarity_1').slice(1), 16);
+  for (const key of Object.keys(MADE_UP_RARITY)) assert.strictEqual(hud.owColours.neutral(key), hud.owColours.neutral('rarity_1'));
   assert.deepStrictEqual(Array.from(hud.owItemCard.colors), Array(6).fill(grey));
+  for (const value of Object.values(MADE_UP_RARITY)) assert.notStrictEqual(grey, Number.parseInt(value.slice(1), 16));
 });
 check('With a (made-up) colours file the rarity table follows it', () => {
-  const made = load('/', {OW_GAME_COLOURS: {rarity_1: '#010101', rarity_2: '#020202', rarity_3: '#030303', rarity_4: '#040404', rarity_5: '#050505'}});
+  const made = load('/', {OW_GAME_COLOURS: MADE_UP_RARITY});
   assert.deepStrictEqual(Array.from(made.owItemCard.colors), [0x010101, 0x010101, 0x020202, 0x030303, 0x040404, 0x050505]);
 });
 
