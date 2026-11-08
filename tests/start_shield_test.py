@@ -33,6 +33,20 @@ class StartShieldWalkerTest(unittest.TestCase):
         # no stand-in capacity is invented: the start equip only runs once the rule has loaded
         self.assertNotRegex(self.walker, r'EquipShield\(\s*\d')
 
+    def test_shield_check_and_stand_in_switches_skip_the_start_shield(self):
+        # review r1 (P2): these switches add their own stand-in, so the start shield would be a second one
+        block = self.walker[self.walker.index('ownostartshield'):self.walker.index('RefreshHealthForLevel();\n    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level')]
+        self.assertIn('FParse::Param(FCommandLine::Get(), TEXT("owshieldcheck"))', block)
+        self.assertIn('FParse::Param(FCommandLine::Get(), TEXT("owstandinshield"))', block)
+        self.assertIn('-owshieldcheck or -owstandinshield owns the shield', block)
+        # the skip is decided before the rule is read or the start stand-in is equipped
+        self.assertLess(block.index('owshieldcheck'), block.index('ReadStandInShieldRule(RuleError)'))
+
+    def test_no_brace_less_UE_LOG_before_else(self):
+        # C2181: an if with a UE_LOG and no braces, followed by else (project memory: UE_LOG before else)
+        block = self.walker[self.walker.index('ownostartshield'):self.walker.index('RefreshHealthForLevel();\n    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya level')]
+        self.assertNotRegex(block, r'UE_LOG\([^;]*\);\s*\n\s*else')
+
     def test_rule_is_read_once_and_logs_only_success(self):
         body = self.walker[self.walker.index('bool AOpenWillowWalker::ReadStandInShieldRule'):]
         body = body[:body.index('void AOpenWillowWalker::TickShield')]
