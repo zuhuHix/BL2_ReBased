@@ -17,7 +17,7 @@ param(
 #
 #   extract   tools/slice_npc_assets.py: identity (our reader), UModel exports, texture cross-check, pistol rolls
 #   import    editor: meshes/textures/materials + reference poses; convert MD5 clips; editor: anim sequences; pistol
-#   zone      editor: the dummy's Master_Creature colour zones (tools/phaselock_target_editor.py; needs M_OW_NPC_Zone from
+#   zone      editor: the dummy's zone colours, our host model, UNVERIFIED (tools/phaselock_target_editor.py; needs M_OW_NPC_Zone from
 #             tools/seed_ambient_npc_assets.ps1 -Steps attach); Marcus's slots have no p_Masks and keep the plain material
 #   preview   editor (fresh session): reload every asset, record bounds/bone counts, build preview levels
 #   capture   -game launches of the preview levels, one screenshot each (window capture)

@@ -1,17 +1,20 @@
-"""UE5 editor-Python step: zone-colour material on an imported stock creature (the Phaselock bullymong, the range dummy).
+"""UE5 editor-Python step: zone-colour material on imported stock targets (the Phaselock bullymong and psycho, the slice's target dummy).
 
 AI-assisted. Run through tools/import_phaselock_target.ps1 or tools/seed_slice_npc_assets.ps1 (each owns the editor lock),
 after tools/slice_npc_editor.py's ``npcs`` mode imported the mesh with the plain diffuse material. Reads that tool's job file
 (OPENWILLOW_SLICE_JOB, written by tools/prepare_phaselock_target.py or tools/slice_npc_assets.py). A slot without ``p_Masks``
 (Marcus) keeps its plain material.
 
-Both creatures are instances of ``Master_Creature``. Their grey diffuse gets its colour from the zone vectors
-(p_?Color{Hilight,Midtone,Shadow}, p_ColorD) through ``p_Masks`` (left half light/dark map, right half zone mask). That layout,
-the mixing order and the two light/dark scales were read from Master_Creature's compiled shader (PHASELOCK_STOCK_DATA.md,
-"Master_Creature's colour model"); tools/creature_zone.py picks the values. The citizens' ``M_OW_NPC_Zone``
-(tools/ambient_npc_attach_editor.py) implements the mix, and this step parents one instance to it. The values are the stock
-material instance's own (UModel props). UNVERIFIED in the running game; the pattern layer (the dummy's) is not drawn. ``M_OW_NPC_Zone`` comes from the citizens pipeline; without it this step
-stops and names that prerequisite, because the attach step and the target's colours need the instance.
+Parents: the Bullymong's and the TargetDummy's materials have a known ``Master_Creature`` parent (read with our reader; their job entries
+name it). The Psycho's slots' parent is unknown: they stay at a light/dark scale of 1.0 and the step logs a scale note for each.
+From Master_Creature's compiled shader (read locally; PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model") come only the two
+light/dark scales, ``p_HighlightsIntensity`` / ``p_ShadowsIntensity`` with their master default, and the use of the zone vectors as stored
+(no gamma step); tools/creature_zone.py picks those values. The rest is our host model, UNVERIFIED: the grey diffuse is coloured by the
+zone vectors (p_?Color{Hilight,Midtone,Shadow}, p_ColorD) through ``p_Masks`` (left half light/dark map, right half zone mask), mixed as
+the citizens' ``M_OW_NPC_Zone`` (tools/ambient_npc_attach_editor.py) does; this step parents one instance to it. The values are the stock
+material instance's own (UModel props). Nothing here is checked in the running game; the dummy's pattern layer is not drawn.
+``M_OW_NPC_Zone`` comes from the citizens pipeline; without it this step stops and names that prerequisite, because the attach step
+and the target's colours need the instance.
 Writes ``<slice_dir>/editor_report_zone.json``; only content under the job's ``dest`` folders is created or changed.
 """
 import json

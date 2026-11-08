@@ -1489,7 +1489,8 @@ uses, in our words (UNVERIFIED against the running game):
   **The host had no scale (1.0)**, so every zone stayed nearer its midtone.
 - **Colour space:** the zone vectors are used as stored, with no gamma step. Round 23's x^2.2 on the vectors is a host fit that this reading
   does not support.
-- The mask layout and the zone mixing are what the host already did. The master's other terms are not drawn by the host.
+- The mask layout and the zone mixing are the host's own model (`M_OW_NPC_Zone`), unchanged here and UNVERIFIED. The master's other terms
+  are not drawn by the host.
 
 **Changes (UNVERIFIED until a capture):**
 

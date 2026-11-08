@@ -1,8 +1,9 @@
-"""Which parameter values a Master_Creature instance hands to the host's zone material (M_OW_NPC_Zone).
+"""Which parameter values a target's material instance hands to the host's zone material (M_OW_NPC_Zone).
 
 AI-assisted (Claude), 2026-11-08. Plain Python (no ``unreal``), so tests/creature_zone_test.py runs it without the editor.
-tools/phaselock_target_editor.py calls it for the bullymong and the range dummy, both instances of
-``Common_Materials.Creature.Master_Creature``.
+tools/phaselock_target_editor.py calls it for every zone slot. Only targets whose job entry names ``Master_Creature`` as the parent (the
+Bullymong and the TargetDummy, read with our reader) get that master's defaults; any other (the Psycho, whose slots' parent is unknown)
+keeps a scale of 1.0 and gets a scale note. The zone mix itself is our host model (M_OW_NPC_Zone), UNVERIFIED.
 
 Where the rule comes from (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model", our own words): our
 local reading of Master_Creature's compiled shader is that it multiplies the light/dark map's red and green by the scalars

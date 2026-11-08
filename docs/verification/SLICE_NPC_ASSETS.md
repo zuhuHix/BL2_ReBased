@@ -203,7 +203,8 @@ instance per slot. Marcus's MICs use only `p_Diffuse`/`p_Normal`. The dummy's MI
 `p_CustomPattern` and 13 colour/3 scalar parameters (`p_A/B/C Color*`, `p_*Intensity`): the mask, pattern and colour zones are **not applied**
 (master graph stripped; Maya's zone-tint approximation was not copied). Their values are kept in `local/slice/npc_identity.json` (`mesh_material_slots[].scalars/vectors`).
 **Update 2026-11-08:** the dummy's material is a `Master_Creature` instance; `tools/seed_slice_npc_assets.ps1 -Steps zone` now gives it the
-zone colours and light/dark scales from that master's compiled shader (PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model";
+host's zone colours (our model, UNVERIFIED) with the light/dark scales and as-stored vectors read from that master's compiled shader
+(PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model";
 UNVERIFIED in game). Its pattern texture is still not drawn.
 
 Fresh-session check (`preview` mode, a new editor process that only loads from disk): all meshes, skeletons and 9 AnimSequences
