@@ -14,6 +14,8 @@ UI trace for the class portrait); such requests are answered with
 """
 import argparse
 import functools
+import json
+import re
 import http.server
 import urllib.parse
 from pathlib import Path
@@ -26,19 +28,42 @@ PAGES = {'/': 'index.html', '/index.html': 'index.html', '/action_skill.js': 'ac
          '/item_card.js': 'item_card.js', '/pickup_card.js': 'pickup_card.js', '/pickup_card.html': 'pickup_card.html',
          '/map.html': 'map.html', '/map.js': 'map.js',
          '/mission_screen.html': 'mission_screen.html', '/mission_screen.js': 'mission_screen.js', '/mission_screen_model.js': 'mission_screen_model.js',
-         '/vending.html': 'vending.html', '/vending.js': 'vending.js', '/vending_model.js': 'vending_model.js', '/movie_guard.js': 'movie_guard.js'}
+         '/vending.html': 'vending.html', '/vending.js': 'vending.js', '/vending_model.js': 'vending_model.js', '/movie_guard.js': 'movie_guard.js',
+         '/colours.js': 'colours.js'}
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8'}
 PACKAGE_PREFIX = '/ package/'
+# The game's UI colours stay in an ignored local file (tools/game_colours.py, DECISIONS.md 2026-11-08); the pages read
+# them as a script so they are there before the page's own scripts run. A missing file answers null (neutral greys).
+COLOURS_PATH = '/game_colours.js'
+HEX_COLOUR = re.compile(r'^#[0-9A-Fa-f]{6}$')
+
+
+def colours_script(colours_file):
+    """`window.OW_GAME_COLOURS = {key: '#RRGGBB'}` from the file, or null. Values that are not #RRGGBB are dropped
+    (colours.js then uses its neutral grey for them); serve.py runs alone in tests, so it does not import tools/."""
+    try:
+        data = json.loads(Path(colours_file).read_text(encoding='utf-8'))
+        found = {k: v for k, v in data['colours'].items() if isinstance(v, str) and HEX_COLOUR.match(v)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        found = None
+    return ('window.OW_GAME_COLOURS = ' + (json.dumps(found, sort_keys=True) if found else 'null') + ';\n').encode('utf-8')
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, colours=None, **kwargs):
+        self.colours = colours
+        super().__init__(*args, **kwargs)
+
     def do_GET(self):
         path = urllib.parse.unquote(self.path.split('?')[0])
-        if path in PAGES:
-            page = HERE / PAGES[path]
-            body = page.read_bytes()
+        if path in PAGES or path == COLOURS_PATH:
+            if path == COLOURS_PATH:
+                body, kind = colours_script(self.colours), TYPES['.js']
+            else:
+                page = HERE / PAGES[path]
+                body, kind = page.read_bytes(), TYPES[page.suffix]
             self.send_response(200)
-            self.send_header('Content-Type', TYPES[page.suffix])
+            self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -69,12 +94,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--movies', default=str(Path(__file__).parents[2] / 'local' / 'ui' / 'run'))
     parser.add_argument('--port', type=int, default=8767)
+    parser.add_argument('--colours', default=str(Path(__file__).parents[2] / 'local' / 'ui' / 'colours' / 'game_colours.json'),
+                        help='the ignored game colours file (tools/game_colours.py); missing means neutral greys')
     args = parser.parse_args()
     movies = Path(args.movies).resolve()
     for need in ('ruffle/ruffle.js', 'UI_HUD/harness.swf', 'UI_HUD/HUD.swf'):
         if not (movies / need).is_file():
             raise SystemExit(f'missing {movies / need}; see DECISIONS.md 2026-09-26 for the conversion steps')
-    handler = functools.partial(Handler, directory=str(movies))
+    handler = functools.partial(Handler, directory=str(movies), colours=args.colours)
+    if not Path(args.colours).is_file():
+        print(f'game colours: {args.colours} missing; the pages use neutral greys')
     print(f'UI overlay on http://127.0.0.1:{args.port}/ serving {movies}')
     http.server.ThreadingHTTPServer(('127.0.0.1', args.port), handler).serve_forever()
 
