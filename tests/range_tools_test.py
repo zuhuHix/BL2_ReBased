@@ -52,6 +52,34 @@ class PrepareRangeTest(unittest.TestCase):
                             os.path.join(repo, 'local', '..', 'm.json'), os.path.join(repo, 'localx', 'm.json')):
                 with self.assertRaises(SystemExit):
                     prepare_range.local_output(outside, repo)
+    def test_relative_paths_resolve_from_the_repository_not_the_folder(self):
+        import os
+        import tempfile
+        from unittest import mock
+        seen = {}
+
+        def fake_vm(reader, levels):
+            seen['reader'] = reader
+            return {}
+
+        out = os.path.join(prepare_range.REPO, 'local', 'range', 'test_relative_manifest.json')
+        self.addCleanup(lambda: os.path.exists(out) and os.remove(out))
+        here = os.getcwd()
+        with tempfile.TemporaryDirectory() as folder:
+            os.chdir(folder)
+            try:
+                with mock.patch.object(prepare_range, 'run_vm', fake_vm), mock.patch.object(prepare_range, 'start_ranges', lambda reader: {}):
+                    prepare_range.main(['--levels', '1', '--reader', os.path.join('build', 'Release', 'ow-package.exe'),
+                                        '--allow-missing-spot-data', '--views', os.path.join('local', 'none.json'),
+                                        '--terrain', os.path.join('local', 'none.json'), '--target', os.path.join('local', 'none.json'),
+                                        '--out', os.path.join('local', 'range', 'test_relative_manifest.json')])
+            finally:
+                os.chdir(here)
+        self.assertEqual(seen['reader'], os.path.join(prepare_range.REPO, 'build', 'Release', 'ow-package.exe'))
+        self.assertTrue(os.path.isfile(out))
+        absolute = os.path.abspath(os.path.join(here, 'elsewhere', 'ow-package.exe'))
+        self.assertEqual(prepare_range.from_repo(absolute), absolute)   # an absolute path is kept as given
+
     def test_loot_tables_from_kill_steps(self):
         run = {'pawns': [{'archetype': 'Pkg/Made.Character.Pawn_Beast', 'level': 4}],
                'steps': [{'step': 'spawn:x:4', 'result': {}},

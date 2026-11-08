@@ -27,6 +27,7 @@
 #    pass it with --views.
 #
 # Usage: python tools/prepare_range.py [--reader build/Release/ow-package.exe] [--levels 1-50] [--no-vm]
+# A relative path given to --reader, --target, --out, --terrain or --views is taken from the repository root, not the current folder.
 import argparse
 import json
 import os
@@ -149,6 +150,12 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
         if entry["idle"]:
             entry.update(find_clips(entry["idle"], listing))
     return entry
+
+
+def from_repo(path):
+    """A command-line path as given when absolute; a relative one from the repository root, so the tool works from any folder
+    (the usage line's build/Release/ow-package.exe is not a path from the folder the tool was run in)."""
+    return path if os.path.isabs(path) else os.path.join(REPO, path)
 
 
 def local_output(path, repo=REPO):
@@ -426,6 +433,8 @@ def main(argv=None):
                         help="write the manifest without candidates or a scout centre (the range then needs -owrangeat or range.json)")
     parser.add_argument("--no-vm", action="store_true", help="skip the VM run (empty health tables: the host uses its stand-in)")
     args = parser.parse_args(argv)
+    for name in ("reader", "target", "out", "terrain", "views"):
+        setattr(args, name, from_repo(getattr(args, name)))
     args.out = local_output(args.out)
     run = {} if args.no_vm else run_vm(args.reader, parse_levels(args.levels))
     targets = {}
