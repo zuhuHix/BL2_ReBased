@@ -234,11 +234,23 @@ def _matrix_row(matrix):
     return _null(planes)
 
 
+def _bounds_row(comp):
+    """The piece's world-space bounds (origin, box extent, sphere radius), or null. LocalToWorld read null through the SDK on
+    2026-11-06; the bounds are updated with the component's transform, and the piece meshes' pivots sit at their bounds' centres,
+    so the origin taken into the bone's frame gives the piece's placement on the bone."""
+    def read():
+        b = comp.Bounds
+        return {"origin": [_r(b.Origin.X), _r(b.Origin.Y), _r(b.Origin.Z)],
+                "extent": [_r(b.BoxExtent.X), _r(b.BoxExtent.Y), _r(b.BoxExtent.Z)], "radius": _r(float(b.SphereRadius))}
+    return _null(read)
+
+
 def _placement_row(mesh, comp, bone):
-    """What settles where an attached piece sits: its world matrix and its bone's, read on the same frame."""
+    """What settles where an attached piece sits: its world matrix (or its world bounds) and its bone's matrix, read on the same frame."""
     index = _null(lambda: mesh.MatchRefBone(bone))
     bone_matrix = _null(lambda: mesh.GetBoneMatrix(index)) if isinstance(index, int) else None
     return {"local_to_world": _matrix_row(_null(lambda: comp.LocalToWorld)),
+            "bounds": _bounds_row(comp),
             "bone_matrix": _matrix_row(bone_matrix),
             "translation": _null(lambda: plain(comp.Translation)), "rotation": _null(lambda: plain(comp.Rotation)),
             "scale": _null(lambda: comp.Scale), "scale3d": _null(lambda: plain(comp.Scale3D))}

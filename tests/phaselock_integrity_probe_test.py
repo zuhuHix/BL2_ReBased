@@ -482,13 +482,15 @@ def test_placement_reads_both_matrices_and_nulls_what_fails():
         return Obj(X=x, Y=0.0, Z=0.0)
     matrix = Obj(XPlane=plane(1.0), YPlane=plane(2.0), ZPlane=plane(3.0), WPlane=plane(4.0))
     mesh = Obj(MatchRefBone=lambda name: 7, GetBoneMatrix=lambda index: matrix)
-    comp = Obj(LocalToWorld=matrix, Translation=(1, 2, 3), Rotation=(0, 0, 0), Scale=1.5, Scale3D=(1, -1, 1))
+    bounds = Obj(Origin=Obj(X=10.0, Y=20.0, Z=30.0), BoxExtent=Obj(X=1.0, Y=2.0, Z=3.0), SphereRadius=4.0)
+    comp = Obj(LocalToWorld=matrix, Bounds=bounds, Translation=(1, 2, 3), Rotation=(0, 0, 0), Scale=1.5, Scale3D=(1, -1, 1))
     row = ns['_placement_row'](mesh, comp, 'Head')
     assert row['local_to_world'][3] == [4.0, 0.0, 0.0] and row['bone_matrix'][0] == [1.0, 0.0, 0.0]
+    assert row['bounds'] == {'origin': [10.0, 20.0, 30.0], 'extent': [1.0, 2.0, 3.0], 'radius': 4.0}
     assert row['scale'] == 1.5 and row['scale3d'] == (1, -1, 1)
     # A field the SDK does not expose gives JSON null, and a bad matrix does not stop the row.
     bare = ns['_placement_row'](Obj(MatchRefBone=lambda name: 7, GetBoneMatrix=lambda index: Obj()), Obj(), 'Head')
-    assert bare['local_to_world'] is None and bare['bone_matrix'] is None and bare['scale'] is None
+    assert bare['local_to_world'] is None and bare['bone_matrix'] is None and bare['scale'] is None and bare['bounds'] is None
 
 
 if __name__ == '__main__':

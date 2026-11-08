@@ -1527,3 +1527,20 @@ editor job whose every glTF was the string "None" and whose texture lists were e
   the zone step keeps plain on purpose (Marcus, no `p_Masks`) is accepted; a slot whose `p_Masks` or `p_Diffuse` the job expected but the
   export lacked is reported. `tests/editor_inputs_test.py` runs the three steps against a stub `unreal` and checks that a bad job makes no
   import, delete, create or save call (review r1 of PR #195). Not run in the editor.
+### The worn pieces' placement: a world-space check (2026-11-08, showcase follow-up; not run yet)
+
+AI-assisted (Claude). The 2026-11-08 showcase reads the bullymong's claws and spikes as separated from the body. What is known:
+
+- **In the showcase build** (integration checkout at `40ae631`, the six pieces imported) the pieces wear the body's zone instance and sit on their
+  bones with the stock component transforms, as recorded above. The pivot of each exported piece mesh is its bounds' centre (all four glTF exports).
+- **What the frames show:** at +0.50 and +0.80 s the cast flash washes the torso (zone A) toward white while the brown limbs (zones B and C, part of
+  the skinned body) and the pieces stay brown, so the limbs read as separate shapes. At +6.2 s, with no flash, the elbow spikes sit on the forearms
+  but are smooth flat tan where the game's are streaked dark brown. Both point at the colour model first ("Master_Creature's colour model" above,
+  another branch), not at the placement.
+- **What is not known:** the placement itself. `LocalToWorld` read null, so the probe never saw a piece's world transform.
+- **Change:** the probe (`tools/real_game/scripts/phaselock_integrity.py`) also reads each attached piece's world `Bounds` (origin, extent, radius).
+  With the pivot at the bounds' centre, the origin taken into the bone's frame is the piece's offset on its bone. `tools/phaselock_attachment_check.py`
+  does that arithmetic against `host_target.json` and prints the gap per piece (synthetic tests only).
+- **Needs (real game, zuhu):** one `tools/real_game/phaselock_integrity_capture.ps1` hit run on an Adult, then
+  `python tools/phaselock_attachment_check.py --rows local/realgame/phaselock_integrity/hit.jsonl --host local/phaselock/target/host_target.json`.
+  A gap of a few units confirms the placement rule; a large or mirrored gap says which piece and bone to fix. UNVERIFIED until then.
