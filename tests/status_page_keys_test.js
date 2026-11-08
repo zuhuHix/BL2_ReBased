@@ -43,7 +43,7 @@ assert.strictEqual(missions.press('Escape'), '/__ow_close_missions');
 assert.strictEqual(missions.press('Tab'), '/__ow_close_missions');
 console.log('PASS Missions: M goes to the Map, L stays, Escape and Tab close');
 
-const skills = page(['skill_nav.js', 'skills.js']);
+const skills = page(['colours.js', 'skill_nav.js', 'skills.js']);
 assert.strictEqual(skills.press('m'), '/__ow_tab_map', 'M on Skills goes to the Map');
 assert.strictEqual(skills.press('l'), '/__ow_tab_missions', 'L on Skills goes to the log');
 assert.strictEqual(skills.press('i'), '/__ow_tab_inventory', 'I on Skills goes to the Inventory');

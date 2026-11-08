@@ -9,16 +9,18 @@
 // strings: { nextLevel, classModBonus, classModUntrained, pointSingular,
 // pointPlural } from the install's WillowGame.int.
 (function (root) {
-  const CURRENT = "#cc6600";   // number colour below max grade
-  const MAXED = "#00cc00";     // number colour at max grade
-  const LOCKED = "#a3a3b0";    // whole text while the skill's tier is locked
-  const CLASS_MOD = "#33FFFF"; // class-mod bonus note
+  // Game colours from the ignored local file through colours.js (DECISIONS.md 2026-11-08), read on each call;
+  // without it, neutral greys. skill_current: number below max grade; skill_maxed: at max grade; skill_locked:
+  // the whole text while the skill's tier is locked; skill_class_mod: the class-mod bonus note.
+  const colours = typeof module !== "undefined" && module.exports ? require("./colours.js") : root.owColours;
 
   function lines(stats, grade) {
     return stats[Math.min(grade, stats.length - 1)] || [];
   }
 
   function skillInfoHtml(skill, state, strings) {
+    const CURRENT = colours.hex("skill_current"), MAXED = colours.hex("skill_maxed");
+    const LOCKED = colours.hex("skill_locked"), CLASS_MOD = colours.hex("skill_class_mod");
     const grade = Math.max(0, Math.floor(state.grade || 0));
     const bonus = Math.max(0, Math.floor(state.bonus || 0));
     const stats = skill.stats || [];

@@ -9,7 +9,7 @@ function load(locationPath, extra = {}) {
   const context = vm.createContext({console:{log(){}}, setTimeout, Math, JSON, Number, String, Map, Set, Array, Object,
     location:{pathname:locationPath}, ...extra});
   context.window = context;
-  for (const file of ['item_card.js', 'pickup_card.js'])
+  for (const file of ['colours.js', 'item_card.js', 'pickup_card.js'])
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay', file), 'utf8'), context);
   return context;
 }
