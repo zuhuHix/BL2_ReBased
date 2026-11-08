@@ -484,8 +484,8 @@ SPIN = "#define OWSPIN(q, a) float2(cos(a) * (q).x - sin(a) * (q).y, sin(a) * (q
 EXACT = {}
 
 
-def exact(name, blend, textures, code, subuv=False, dyn=False, params=()):
-    EXACT[name] = {'blend': blend, 'textures': textures, 'code': SPIN + code, 'subuv': subuv, 'dyn': dyn, 'params': params}
+def exact(name, blend, textures, code, subuv=False, dyn=False, params=(), scene=False):
+    EXACT[name] = {'blend': blend, 'textures': textures, 'code': SPIN + code, 'subuv': subuv, 'dyn': dyn, 'params': params, 'scene': scene}
 
 
 # Mat_SirenEnemyOrb (additive): the bubble's rim sphere. The bubble texture (a thin glowing ring on a dark disc) is read at a
@@ -730,6 +730,21 @@ float3 boost = min(3.0, saturate((SD - PD) / 16.0) * Col.a * g * Col.rgb);
 return float4(1.0 + Overbright * boost, 1.0);
 """, params=(('Overbright', 0.4),))
 
+# Mat_SirenSuction (translucent, a refraction; read from its compiled shader 2026-11-08, PHASELOCK_STOCK_DATA.md "The suction
+# refraction"): the scene behind is drawn again, read at the screen UV shifted by the distortion map (2 x its red/green - 1, in
+# screen-UV units). Opacity = a fade with distance from the camera (zero at FadeStart 20, full 512 units further) x saturate(15 x the
+# mirrored soft mask at twice the UV x particle alpha) x a soft depth fade over 26 units x the green of a square mask read at the
+# undistorted screen UV (it fades the effect toward the screen's edges). The particle colour is unused. scene=True: the code returns
+# the UV shift in .xy and the opacity in .w; exact_material reads the scene colour with UE5's SceneColor at that shift.
+exact('Mat_SirenSuction', 'trans', ['EnergyOrbScreenUVDistortion_Nrm_Tex', 'EnergyOrbSoftMod_Dif_Mirror', 'Square_Mask_Dif'], r"""
+float2 shift = Texture2DSample(T0, T0Sampler, UV).rg * 2.0 - 1.0;
+float mask = Texture2DSample(T1, T1Sampler, 2.0 * UV).r;
+float edge = Texture2DSample(T2, T2Sampler, SP).g;
+float away = saturate((PD - 20.0) / 512.0);
+float alpha = away * saturate(15.0 * mask * Col.a) * saturate((SD - PD) / 26.0) * edge;
+return float4(shift, 0.0, alpha);
+""", scene=True)
+
 
 def exact_material(name):
     spec = EXACT[name]
@@ -793,6 +808,8 @@ def exact_material(name):
     scene_depth = node(unreal.MaterialExpressionSceneDepth, -900, 550)
     pixel_depth = node(unreal.MaterialExpressionPixelDepth, -900, 650)
     inputs = [('Col', color4), ('UV', uv_out), ('GT', time), ('SD', scene_depth), ('PD', pixel_depth)]
+    if spec['scene']:
+        inputs.append(('SP', node(unreal.MaterialExpressionScreenPosition, -900, 1300)))
     for param_name, default in spec['params']:
         inputs.append((param_name, node(unreal.MaterialExpressionScalarParameter, -900, 1200, parameter_name=param_name,
                                         default_value=default)))
@@ -820,6 +837,15 @@ def exact_material(name):
         link(source, '', custom, input_name)
     rgb = node(unreal.MaterialExpressionComponentMask, 650, 0, r=True, g=True, b=True, a=False)
     link(custom, '', rgb, '')
+    if spec['scene']:
+        # The refraction: the custom code's .xy is the screen-UV shift; the colour is the scene colour there, clamped to 0..1
+        # as the stock shader does.
+        shift = node(unreal.MaterialExpressionComponentMask, 500, -150, r=True, g=True, b=False, a=False)
+        link(custom, '', shift, '')
+        scene = node(unreal.MaterialExpressionSceneColor, 650, -150)
+        link(shift, '', scene, 'OffsetFraction')
+        rgb = node(unreal.MaterialExpressionSaturate, 800, -150)
+        link(scene, '', rgb, '')
     if blend == unreal.BlendMode.BLEND_MODULATE:
         # The overbright modulate (scene x (1 + c)) is drawn as UE5's modulate with the factor unclamped.
         mel.connect_material_property(rgb, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)

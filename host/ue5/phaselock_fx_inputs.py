@@ -18,7 +18,6 @@ REQUIRED_CONSTANTS = (('Mat_SirenHandInnerOrb', 'blue'), ('Mat_PowerUpTwirls', '
 # The only materials the import may skip; a skip of anything else stops the run. Each is a skip the importer makes today.
 OPTIONAL_MATERIALS = {
     'Mat_PhaseLockImpactMiss_HalfMoonGlow': 'no texture parameters, so UModel lists no texture for it',
-    'Mat_SirenSuction': 'screen-distortion material (a normal map in the Diffuse slot): not drawn',
 }
 
 # The slot guess of UModel's .mat names the wrong mask for the screen effect: the shader reads the second referenced
