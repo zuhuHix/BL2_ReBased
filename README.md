@@ -286,9 +286,9 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-pickup-card-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the item card over a gun on the ground, in the real game and in ours">
 </p>
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/vendor-shops-pair-2026-11-08.jpg" width="65%" alt="Comparison card: the real Ammo Dump and Dr. Zed shop pages, with our weapon machine page below and no frame of our Dr. Zed yet">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/vendors-host-ammo-dump-2026-11-06.jpg" width="48%" alt="The Ammo Dump in BL2_ReBased">
 </p>
-<p align="center"><sub><b>Boxes, a gun pickup and the shops</b> (ours captured 2026-11-07). The box models and the item card are the game's own. Each pair is from different places, and our opened boxes show less loot and no prompt. Our shop page is mostly our own lists, not the game's layout.</sub></p>
+<p align="center"><sub><b>Boxes and a gun pickup, real game next to ours</b> (ours captured 2026-11-07), and our Ammo Dump (2026-11-06). The box models and the item card are the game's own. Each pair is from different places, and our opened boxes show less loot and no prompt. Our shop page is a stand-in with our own lists, and there is no like-for-like real-game shop frame published yet.</sub></p>
 
 ## How close is it?
 
