@@ -1,0 +1,3 @@
+# Shell scripts and git attribute files must keep LF endings, or Git Bash fails on the carriage returns.
+*.sh text eol=lf
+*.attributes text eol=lf
