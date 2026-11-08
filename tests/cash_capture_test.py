@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run)
 import tempfile
 import unittest
 
@@ -347,7 +348,10 @@ class CashCaptureTest(unittest.TestCase):
     def test_an_unverified_snapshot_is_never_restored_from(self):
         done, session = self.run_capture('bad_snapshot')
         self.assertTrue(session['status'].startswith('failed'), session['status'])
-        self.assertEqual(session['cleanup']['saves'], 'not touched: this run launched no game')   # it failed before the driver and the game
+        # Backup-Saves proves each copy itself now, so the run stops inside it: no backup, no pending record, nothing touched.
+        self.assertIn('snapshot differs', session['status'])
+        self.assertNotIn('saves', session['cleanup'])
+        self.assertEqual(session['cleanup']['pending'], 'none written')
         self.assertEqual(self.locks_held(), (False, False))
         self.assertTrue((self.work / 'willow/Config/game.ini').exists())
 

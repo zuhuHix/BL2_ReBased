@@ -16,6 +16,7 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 $probeList = Get-Content $Probes -Raw | ConvertFrom-Json
 $hub = $null; $bak = $null; $game = $null; $gameStart = $null
+Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
 if (-not $CallerHoldsHubLock) { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
 try {
     Enter-RunLock 600
@@ -73,6 +74,7 @@ try {
     Invoke-GamePy 'walk_stop(); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null
     for ($i = 0; $i -lt 20 -and -not $game.HasExited; $i++) { Start-Sleep 2 }
 } finally {
+    "cleanup inputs: $(Release-HeldInputs)"   # every key and button this run still holds is let go before anything else
     Start-Sleep 3
     if ($game -and -not $game.HasExited) {
         # Stop only our own game: same process id, same executable, same start time, our command line.
@@ -85,15 +87,12 @@ try {
         else { "game pid $($game.Id) no longer matches the process this run started; left running" }
     }
     Remove-Driver
-    if ($bak) {
-        $src = Join-Path $script:WillowDir 'SaveData'
-        $b = $bak + '\SaveData'
-        Get-ChildItem $b -Recurse -File | ForEach-Object {
-            $o = Join-Path $src $_.FullName.Substring($b.Length)
-            if ((Get-FileHash $o).Hash -ne (Get-FileHash $_.FullName).Hash) { "restoring $o"; Copy-Item $_.FullName $o -Force }
-        }
-        'save compare done'
+    # Restore and verify while both locks are held (Complete-BackupRun): this run's pending record goes only when every root compares clean,
+    # and anything left for a person keeps both locks.
+    $keepLocks = $false
+    if ($bak) { $done = Complete-BackupRun $bak (Join-Path $script:RG 'walking/save_compare.json'); $done.lines; $keepLocks = !$done.clean }
+    if (!$keepLocks) {
+        Exit-RunLock
+        if ($hub) { Remove-Item $HubLock -Force -ErrorAction SilentlyContinue }
     }
-    Exit-RunLock
-    if ($hub) { Remove-Item $HubLock -Force -ErrorAction SilentlyContinue }
 }

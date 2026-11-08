@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run)
 import sys
 import tempfile
 import types
