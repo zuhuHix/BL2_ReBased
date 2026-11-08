@@ -194,9 +194,11 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 
 `<head>` is the full 40-character commit that was reviewed and tested; `<tested-commit>` is the integration commit
 (current `main` plus exactly these PRs, in this order) that the in-engine suites passed on. The script rebases the
-listed PRs into one chain on top of `origin/main`, then one atomic push moves each PR branch to its commit in the
-chain and fast-forwards `main`: either every ref moves or none does. GitHub finds each PR's head inside `main` and
-marks the PR Merged; the script waits for that, then deletes each landed remote branch unless it moved after the push (GitHub
+listed PRs into one chain on top of `origin/main`. One atomic push moves the PR branches to their commits in the chain
+(all or none); once GitHub shows the new heads, `main` fast-forwards in a second push, leased on the `main` the chain
+was built on. (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
+second push is refused, the PRs stay open on their rebased heads and the run can be repeated with those.) GitHub finds
+each PR's head inside `main` and marks the PR Merged; the script waits for that, then deletes each landed remote branch unless it moved after the push (GitHub
 retargets any open PR that was based on one). Before it pushes anything, it checks:
 
 - each PR is open, targets `main` (stacked PRs: land the parent first), comes from a branch of this repository (not a
@@ -205,8 +207,8 @@ retargets any open PR that was based on one). Before it pushes anything, it chec
   where the hunks now sit (an earlier PR in the batch that edits lines next to a later one's makes this stop; land them
   separately); `DECISIONS.md`, which merges as a union of entries through `tools/merge-union.attributes`, may only gain
   lines, the same ones;
-- with `-t`, the chain's final tree is byte-identical to the tested commit's tree; with `-D`, every changed file is
-  Markdown.
+- with `-t`, the chain's final tree is byte-identical to the tested commit's tree; with `-D`, every changed path is a
+  regular, non-executable Markdown text file.
 
 `git rerere` is switched on for the repository, so a conflict resolved once, for example while building the integration
 branch, is resolved the same way when the batch lands; the tree check catches a recorded fix that differs from the

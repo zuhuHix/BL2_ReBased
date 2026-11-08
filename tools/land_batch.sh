@@ -11,10 +11,11 @@
 #    example while building the integration branch, and DECISIONS.md merges as a union (it is an append-only log).
 # 2. Checks that each rebased PR changes exactly the lines it changed when reviewed (DECISIONS.md: the same added
 #    lines), and that the chain's final tree is identical to the tested commit's tree (-t). With -D instead, every
-#    changed file must be Markdown.
-# 3. One atomic push moves each PR branch to its commit in the chain and fast-forwards main, leased on the main the
-#    chain was built on: either every ref moves or none does. GitHub finds each PR's head inside main and marks the
-#    PR Merged; the script waits for that, then deletes the landed remote branches.
+#    changed file must be a regular, non-executable Markdown text file.
+# 3. One atomic push moves the PR branches to their commits in the chain (all or none, leased on the reviewed heads);
+#    once GitHub shows the new heads, main fast-forwards, leased on the main the chain was built on. GitHub finds each
+#    PR's head inside main and marks the PR Merged; the script waits for that, then deletes the landed remote branches.
+#    (In one combined push GitHub closes the PRs instead of merging them.)
 # It stops at the first thing it cannot prove, and nothing is pushed before every check has passed.
 set -u
 wt=; tested=; docsonly=
@@ -45,9 +46,19 @@ git config rerere.enabled true
 # The PR's diff with its context lines and full binary content, minus what a rebase legitimately moves (blob ids and
 # hunk line numbers): every changed byte and its surroundings must match, wherever the hunk now sits.
 changes() { git diff --no-color --no-ext-diff --binary -U3 "$1" "$2" -- . ':!DECISIONS.md' | grep -v -E '^index ' | sed -E 's/^@@ -[0-9,]+ \+[0-9,]+ @@/@@/'; }
-# DECISIONS.md is append-only: a PR may only add lines there, and must add the same ones after the rebase.
-decisions_added() { git diff --no-color -U0 "$1" "$2" -- DECISIONS.md | grep -E '^\+' | grep -v -E '^\+\+\+ (b/|/dev/null)' | sort; }
-decisions_removed() { git diff --no-color -U0 "$1" "$2" -- DECISIONS.md | grep -E '^-' | grep -v -E '^--- (a/|/dev/null)'; }
+# DECISIONS.md is append-only: a PR may only add lines there, and must add the same ones after the rebase. The file
+# headers come before the first hunk, so only lines after it count (a content line may itself start with ++ or --).
+decisions_lines() { git diff --no-color --no-renames -U0 "$1" "$2" -- DECISIONS.md | awk -v s="$3" '/^@@/ { h = 1; next } h && substr($0, 1, 1) == s'; }
+decisions_added() { decisions_lines "$1" "$2" + | sort; }
+decisions_removed() { decisions_lines "$1" "$2" -; }
+# -D: every path on both sides is a regular, non-executable Markdown text file.
+docs_only_problem() {
+  local raw numstat
+  raw=$(git diff --no-renames --raw "$1" "$2") || { echo "diff failed"; return; }
+  echo "$raw" | awk '{ split($0, t, "\t"); m = substr($2, 1, 6); if (t[2] !~ /\.md$/) print "not Markdown: " t[2]; else if (m != "100644" && m != "000000") print "mode " m ": " t[2] }'
+  numstat=$(git diff --no-renames --numstat "$1" "$2")
+  echo "$numstat" | awk -F'\t' '$1 == "-" { print "binary: " $3 }'
+}
 # Open, still at the reviewed head, targeting main, and from a branch of this repository (not a fork).
 pr_ok() {
   local n=$1 want=$2 info state head branch base_ref head_repo
@@ -75,8 +86,8 @@ for item in $list; do
   base=$(git merge-base "$old" "$main")
   [ -n "$(git diff --name-only "$base" "$old")" ] || stop "#$n changes nothing" 5
   if [ -n "$docsonly" ]; then
-    other=$(git diff --name-only "$base" "$old" | grep -v -E '\.md$')
-    [ -z "$other" ] || stop "#$n changes non-Markdown files ($other); land it with -t <tested-commit>" 5
+    other=$(docs_only_problem "$base" "$old")
+    [ -z "$other" ] || stop "#$n is not Markdown-only ($other); land it with -t <tested-commit>" 5
   fi
   git checkout -q --detach "$old"
   started=1
@@ -105,16 +116,29 @@ if [ -n "$tested" ]; then
 fi
 if [ -n "${DRY:-}" ]; then echo "DRY: every check passed, nothing pushed; chain tip ${chain:0:9}" | tee -a "$log"; exit 0; fi
 
-refs=(); leases=(--force-with-lease="main:$main")
+refs=(); leases=()
 for p in "${plan[@]}"; do
   IFS=: read -r n old new branch <<<"$p"
   # Checked again right before the push: a PR closed, retargeted or moved during the rebase must not land.
   again=$(pr_ok "$n" "$old") || stop "$again (changed while the batch was built; nothing pushed)" 3
   [ "$again" = "$branch" ] || stop "#$n branch changed to $again; nothing pushed" 3
-  refs+=("$new:refs/heads/$branch"); leases+=(--force-with-lease="$branch:$old")
+  [ "$new" = "$old" ] || { refs+=("$new:refs/heads/$branch"); leases+=(--force-with-lease="$branch:$old"); }
 done
-refs+=("$chain:refs/heads/main")
-git push -q --atomic "${leases[@]}" origin "${refs[@]}" || stop "atomic push refused (main or a branch moved); nothing changed" 8
+# Two steps, because GitHub closes (rather than merges) a PR whose branch moves in the same push as the base: first
+# the PR branches move to their rebased commits (all or none) and GitHub updates each PR; then main fast-forwards.
+if [ ${#refs[@]} -gt 0 ]; then
+  git push -q --atomic "${leases[@]}" origin "${refs[@]}" || stop "branch push refused (a branch moved); nothing changed" 8
+  for p in "${plan[@]}"; do
+    IFS=: read -r n old new branch <<<"$p"
+    seen=
+    for _ in $(seq 1 24); do
+      seen=$(gh api "$R/pulls/$n" --jq .head.sha 2>/dev/null) && [ "$seen" = "$new" ] && break
+      sleep 5
+    done
+    [ "$seen" = "$new" ] || stop "#$n: GitHub still shows head $seen after the branch push; main NOT pushed. The PR branches now hold the rebased commits; rerun with the new heads after checking them." 12
+  done
+fi
+git push -q --force-with-lease="main:$main" origin "$chain:refs/heads/main" || stop "main push refused (main moved); main unchanged. The PR branches hold the rebased commits; rerun with the new heads." 8
 echo "  pushed: main ${main:0:7} -> ${chain:0:7}" | tee -a "$log"
 fail=
 for p in "${plan[@]}"; do
