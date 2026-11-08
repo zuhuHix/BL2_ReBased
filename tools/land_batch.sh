@@ -42,9 +42,23 @@ export GIT_EDITOR=true
 # Kept on for the whole repository so resolutions made while building integration branches are recorded too.
 git config rerere.enabled true
 
-# A diff reduced to its changed lines, so moving a hunk does not count as a change but every changed byte does.
-changes() { git diff --no-color --no-ext-diff -U0 "$1" "$2" -- . ':!DECISIONS.md' | grep -v -E '^(index |@@ )'; }
-decisions_added() { git diff --no-color -U0 "$1" "$2" -- DECISIONS.md | grep -E '^\+[^+]' | sort; }
+# The PR's diff with its context lines and full binary content, minus what a rebase legitimately moves (blob ids and
+# hunk line numbers): every changed byte and its surroundings must match, wherever the hunk now sits.
+changes() { git diff --no-color --no-ext-diff --binary -U3 "$1" "$2" -- . ':!DECISIONS.md' | grep -v -E '^index ' | sed -E 's/^@@ -[0-9,]+ \+[0-9,]+ @@/@@/'; }
+# DECISIONS.md is append-only: a PR may only add lines there, and must add the same ones after the rebase.
+decisions_added() { git diff --no-color -U0 "$1" "$2" -- DECISIONS.md | grep -E '^\+' | grep -v -E '^\+\+\+ (b/|/dev/null)' | sort; }
+decisions_removed() { git diff --no-color -U0 "$1" "$2" -- DECISIONS.md | grep -E '^-' | grep -v -E '^--- (a/|/dev/null)'; }
+# Open, still at the reviewed head, targeting main, and from a branch of this repository (not a fork).
+pr_ok() {
+  local n=$1 want=$2 info state head branch base_ref head_repo
+  info=$(gh api "$R/pulls/$n" --jq '[.state,.head.sha,.head.ref,.base.ref,(.head.repo.full_name // "")]|@tsv') || { echo "#$n api"; return 1; }
+  IFS=$'\t' read -r state head branch base_ref head_repo <<<"$info"
+  [ "$state" = open ] || { echo "#$n state=$state"; return 1; }
+  [ "$head" = "$want" ] || { echo "#$n head $head is not the reviewed $want"; return 1; }
+  [ "$base_ref" = main ] || { echo "#$n targets $base_ref, not main; land its parent first and retarget it"; return 1; }
+  [ "$head_repo" = "$repo" ] || { echo "#$n comes from ${head_repo:-a deleted fork}, not $repo; land fork PRs by hand"; return 1; }
+  echo "$branch"
+}
 
 git fetch -q origin main || stop "fetch main"
 main=$(git rev-parse origin/main)
@@ -54,11 +68,8 @@ echo "$(date -u +%FT%TZ) land $list on ${main:0:7}" >> "$log"
 for item in $list; do
   IFS=: read -r n want <<<"$item"
   [[ "$want" =~ ^[0-9a-f]{40}$ ]] || stop "#$n: give the full 40-character reviewed head, not '$want'" 3
-  info=$(gh api "$R/pulls/$n" --jq '[.state,.head.sha,.head.ref,.base.ref]|@tsv') || stop "#$n api"
-  IFS=$'\t' read -r state old branch base_ref <<<"$info"
-  [ "$state" = open ] || stop "#$n state=$state" 2
-  [ "$old" = "$want" ] || stop "#$n head $old is not the reviewed $want" 3
-  [ "$base_ref" = main ] || stop "#$n targets $base_ref, not main; land its parent first and retarget it" 3
+  branch=$(pr_ok "$n" "$want") || stop "$branch" 3
+  old=$want
   git fetch -q origin "$branch" || stop "#$n fetch $branch"
   [ "$(git rev-parse "origin/$branch")" = "$old" ] || stop "#$n branch moved while landing" 3
   base=$(git merge-base "$old" "$main")
@@ -81,6 +92,8 @@ for item in $list; do
   started=
   new=$(git rev-parse HEAD)
   [ "$(changes "$base" "$old")" = "$(changes "$chain" "$new")" ] || stop "#$n: the rebased change differs from the reviewed one; check it by hand" 5
+  [ -z "$(decisions_removed "$base" "$old")" ] || stop "#$n removes or edits DECISIONS.md lines; that log is append-only, land it by hand" 5
+  [ -z "$(decisions_removed "$chain" "$new")" ] || stop "#$n: the rebase removed DECISIONS.md lines" 5
   [ "$(decisions_added "$base" "$old")" = "$(decisions_added "$chain" "$new")" ] || stop "#$n: its DECISIONS.md entries changed in the rebase" 5
   echo "  #$n ${old:0:7} -> ${new:0:7} on ${chain:0:7}" | tee -a "$log"
   plan+=("$n:$old:$new:$branch")
@@ -95,6 +108,9 @@ if [ -n "${DRY:-}" ]; then echo "DRY: every check passed, nothing pushed; chain 
 refs=(); leases=(--force-with-lease="main:$main")
 for p in "${plan[@]}"; do
   IFS=: read -r n old new branch <<<"$p"
+  # Checked again right before the push: a PR closed, retargeted or moved during the rebase must not land.
+  again=$(pr_ok "$n" "$old") || stop "$again (changed while the batch was built; nothing pushed)" 3
+  [ "$again" = "$branch" ] || stop "#$n branch changed to $again; nothing pushed" 3
   refs+=("$new:refs/heads/$branch"); leases+=(--force-with-lease="$branch:$old")
 done
 refs+=("$chain:refs/heads/main")
@@ -114,7 +130,8 @@ for p in "${plan[@]}"; do
   fi
   # GitHub retargets open PRs based on this branch when it is deleted. Only the remote branch goes; a local
   # worktree on it keeps its files.
-  if git push -q origin --delete "$branch" >/dev/null 2>&1; then d=deleted; else d="NOT deleted"; fi
+  # Leased on the landed commit: a branch someone moved after the push is kept.
+  if git push -q --force-with-lease="$branch:$new" origin --delete "$branch" >/dev/null 2>&1; then d=deleted; else d="NOT deleted (moved since?)"; fi
   echo "OK #$n landed ${new:0:7}, remote branch $d" | tee -a "$log"
 done
 echo "main is now ${chain:0:7}; read its CI run before landing the next batch" | tee -a "$log"

@@ -196,12 +196,15 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 (current `main` plus exactly these PRs, in this order) that the in-engine suites passed on. The script rebases the
 listed PRs into one chain on top of `origin/main`, then one atomic push moves each PR branch to its commit in the
 chain and fast-forwards `main`: either every ref moves or none does. GitHub finds each PR's head inside `main` and
-marks the PR Merged; the script waits for that, then deletes the landed remote branches (GitHub retargets any open PR
-that was based on one). Before it pushes anything, it checks:
+marks the PR Merged; the script waits for that, then deletes each landed remote branch unless it moved after the push (GitHub
+retargets any open PR that was based on one). Before it pushes anything, it checks:
 
-- each PR is open, targets `main` (stacked PRs: land the parent first), and its head is still the reviewed commit;
-- each rebased PR changes exactly the lines it changed when reviewed (every changed byte, wherever the hunk moved);
-  for `DECISIONS.md`, which merges as a union of entries through `tools/merge-union.attributes`, the same added lines;
+- each PR is open, targets `main` (stacked PRs: land the parent first), comes from a branch of this repository (not a
+  fork), and its head is still the reviewed commit; this is checked again right before the push;
+- each rebased PR shows the same diff as when reviewed, context lines and binary content included, ignoring only
+  where the hunks now sit (an earlier PR in the batch that edits lines next to a later one's makes this stop; land them
+  separately); `DECISIONS.md`, which merges as a union of entries through `tools/merge-union.attributes`, may only gain
+  lines, the same ones;
 - with `-t`, the chain's final tree is byte-identical to the tested commit's tree; with `-D`, every changed file is
   Markdown.
 
