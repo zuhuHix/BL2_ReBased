@@ -61,7 +61,7 @@ try {
 
     # 2. Back up saves, install the command channel, start the game with the save.
     $bak = Backup-Saves; $log.backup = $bak; "backup $bak"
-    Install-Driver; $installed = $true
+    Install-Driver -Exclusive; $installed = $true
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies')
     if ($Character) { $gameArgs += "-Character=$Character" }

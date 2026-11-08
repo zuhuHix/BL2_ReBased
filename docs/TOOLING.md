@@ -172,7 +172,7 @@ exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.p
   `test_ambient.ps1` and `seed_ambient_npc_assets.ps1` also wait while `Borderlands2` runs, so real-game probes and
   Unreal runs never overlap.
 - Nobody launches the game while a capture runs: a game started and closed between its checks goes unnoticed.
-- **Not to be run:** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture`, `weapon_part_session`, `projectiles_capture` and `weapon_parity2_capture`. The first five report save differences without restoring them. The last two record a failed restore or a mismatch and still release both locks, so a later capture can start on changed saves. None of them may run against the maintainer's saves. Each moves to the shared tail in `phaselock_integrity_capture.ps1` when next needed, and the bar lifts for that one then.
+- **Not to be run:** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture`, `weapon_part_session`, `projectiles_capture` and `weapon_parity2_capture`. Since 2026-11-08 their cleanup is the shared one: the first five restore every root from the verified backup through `Complete-BackupRun`, the last two keep both locks and the pending record when their restore does not compare clean (`Complete-PendingRecord`). That is checked only by synthetic tests (`tests/real_game_pending_test.py`, `tests/real_game_migration_test.py`): none of them has run against the real game since. Each stays barred until a hub-granted smoke run of it passes (for the first five, one granted `hud_layout_capture` smoke run exercises the shared `Complete-BackupRun` path); the bar lifts for that script then, and this line says so.
 - `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
   worktree and is rejected). The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.
 
@@ -1091,32 +1091,6 @@ again in every command (a stale weapon reference crashed the game), keep spawned
 before any travel or quit, and compare the save folder with the backup afterwards. `scripts/phaselock.py` samples the
 lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-down calls. Results:
 `docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
-
-### Pending records and guarded input (every real-game script)
-
-Before a run changes anything the maintainer owns, it writes a **pending record** under `%LOCALAPPDATA%\OpenWillow\`
-(`tools/real_game/pending.ps1`, `realgame_run_pending-<script>-<pid>.json`): the script, its PID and start time, the backup
-folder, each root's live folder and tree hash (one SHA-256 over every file's path and SHA-256), and one line per change,
-each written before that change: the driver's save block, the launch, SDK mods off (`Set-SdkModsOff`). `Backup-Saves` and
-`Save-VerifiedBackupRecord` write it; `Install-Driver`, `Start-Game` and `Set-SdkModsOff` refuse without it. The record goes
-only when every root is the backup again by tree hash, the backup itself is unchanged, no game runs and the driver folder is
-gone (`Complete-PendingRecord`, or `Complete-BackupRun` in the shorter captures). Otherwise it stays, with both locks.
-
-Every capture starts with `Assert-NoPendingRecords`, before any lock: any `*pending*.json` there (ours, the showcase
-capture's `showcase_*pending*.json`, the mission screen branch's `mission_screen_mod_pending.json`) stops it and prints the
-exact steps. It completes a record by itself only when the roots already match the backup, or when this driver's untouched
-copy is the only leftover. It never rolls the saves back by itself: someone may have played since. The way back by hand:
-
-```powershell
-$env:OPENWILLOW_BL2 = '<game folder>'; . tools/real_game/realgame.ps1
-Restore-PendingRecord '<record>'   # restore from the verified backup, verify by tree hash, then remove the record
-```
-
-Input is guarded: every key and button press is remembered until its release, and each capture's `finally` starts with
-`Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. Presses held across steps sit in their own
-`try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
-them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import `tests/realgame_test_env.py`,
-which gives every PowerShell run its own pending folder under the temp folder (`OW_TEST_PENDING_DIR`, accepted only there).
 `scripts/ambient_npcs.py` (`Invoke-GamePyFile ... ambient_npcs.py ambient`) lists live pawns and dens (`amb_pawns`,
 `amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
 Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials and attached meshes (hair, hats, gear);
@@ -1124,6 +1098,46 @@ Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials 
 `scripts/scene_owners.py` (`Invoke-GamePyFile ... scene_owners.py lanea`, then `so_dump('owners', [materials])`) lists the
 live components of interactive objects, mission spawners and wiring actors with their hidden flags and poses; `so_view` and
 `so_camera` place the player and read the exact view (`GetPlayerViewPoint`, FOV) for a matched host inspection viewpoint.
+
+### Pending records and guarded input (every real-game script)
+
+Before a run changes anything the maintainer owns, it writes a **pending record** under `%LOCALAPPDATA%\OpenWillow\`
+(`tools/real_game/pending.ps1`, `realgame_run_pending-<script>-<pid>.json`): the script, its PID and process start time
+(local and UTC), the backup folder, each root's live folder and tree hash (one SHA-256 over every file's path and SHA-256,
+paths compared case-sensitively), and one line per change, each written before that change: the driver's install and save
+block, the launch, SDK mods off (`Set-SdkModsOff`). `Backup-Saves` and `Save-VerifiedBackupRecord` write it;
+`Install-Driver`, `Start-Game` and `Set-SdkModsOff` refuse without it. The record goes only when every root is the backup
+again by tree hash, the backup itself is unchanged, no game runs and the driver folder is gone (`Complete-PendingRecord`, or
+`Complete-BackupRun` in the shorter captures). Otherwise it stays, with both locks.
+
+The driver folder is always exclusive: `Install-Driver` refuses a folder that exists unless the caller claimed it for this
+run (`-ClaimedBy <id>`, an `.owrun` file and nothing else), and `Remove-Driver` removes only a folder this process installed
+that still holds only the driver's files.
+
+Every capture starts with `Assert-NoPendingRecords`, before any lock: any `*pending*.json` there (ours, the showcase
+capture's `showcase_*pending*.json`, the mission screen branch's `mission_screen_mod_pending.json`) stops it and prints the
+exact steps. The writer is identified by PID and process start time, never by its command line: while that process lives, or
+when it cannot be shown gone (no start time recorded, an unreadable process), nothing is completed. A record is completed
+automatically only when its writer is shown gone and the roots already match the backup, or this driver's untouched copy is
+the only leftover. The saves are never rolled back automatically. The way back by hand:
+
+```powershell
+$env:OPENWILLOW_BL2 = '<game folder>'; . tools/real_game/realgame.ps1
+Restore-PendingRecord '<record>'   # add -WriterGone only when you know the writing run has ended and it cannot be shown
+```
+
+`Restore-PendingRecord` first copies every current root to `local/realgame/pre-restore-<time>-<pid>/` and verifies that
+copy by tree hash (so anything played since the failed run is set aside, not lost), then restores from the verified backup,
+verifies by tree hash and only then removes the record.
+
+Input is guarded: every key and button press is remembered until its release, and each capture's `finally` starts with
+`Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. Presses held across steps sit in their own
+`try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
+them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import
+`tests/realgame_test_env.py`, which gives every PowerShell run its own pending folder under the temp folder. The harness
+honours that folder only in the explicit test mode (`OW_TEST_PENDING_DIR` under Temp together with
+`OW_TEST_MODE=synthetic-real-game`), and in that mode only on save, game and driver folders under Temp. Either variable
+alone, or test mode pointed at real folders, refuses to start: a real run must set neither.
 
 ## Sanctuary ambient NPCs (host, behind a flag)
 

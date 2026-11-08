@@ -99,10 +99,10 @@ try {
     Save-VerifiedBackupRecord $bak $roots $snapshots
     "backup $bak ($(@($rootState.Keys | Where-Object { $rootState[$_].verified }).Count) roots verified)"
     # Claim the driver folder: it must not exist (New-Item without -Force fails then), nor may its owner file (same rule, as
-    # for the hub lock). Install-Driver then fills the folder this run owns (not -Exclusive: the folder exists by now).
+    # for the hub lock). Install-Driver -ClaimedBy then fills the folder this run owns, and refuses any other.
     New-Item -ItemType Directory -Path $script:DriverDir -ErrorAction Stop | Out-Null
     New-Item -ItemType File -Path $ownerFile -Value $runId -ErrorAction Stop | Out-Null
-    Install-Driver
+    Install-Driver -ClaimedBy $runId   # the folder this run claimed above (.owrun), and no other
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false

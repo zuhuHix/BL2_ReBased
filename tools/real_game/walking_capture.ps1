@@ -21,7 +21,7 @@ if (-not $CallerHoldsHubLock) { $hub = New-Item -ItemType File -Path $HubLock -V
 try {
     Enter-RunLock 600
     $bak = Backup-Saves; "backup $bak"
-    Install-Driver
+    Install-Driver -Exclusive
     Get-ChildItem (Join-Path $script:RG 'cmd') -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $gameArgs = @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies')
     if ($Character) { $gameArgs += "-Character=$Character" }  # the quick_startup mod puts this slot on the menu's Continue
