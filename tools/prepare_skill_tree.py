@@ -18,8 +18,9 @@ observations, not read from Gearbox's scripts:
   two traces; the layout's own bCellIsOccupied (a bool array) is not decoded yet.
 - Branch order is the root branch's Children order (Motion, Harmony, Cataclysm
   for Maya), which matched the traced branch numbers.
-- `[skill]X[-skill]` becomes `<font color="#FFDEAD"><i>X</i></font>`, as in the
-  traced SetInfo text. The per-grade "Next Level" block is not produced: it
+- `[skill]X[-skill]` becomes `<font color="C"><i>X</i></font>`, as in the
+  traced SetInfo text; C is the `skill_tag` colour from the ignored local file
+  (tools/game_colours.py; a neutral grey without it). The per-grade "Next Level" block is not produced: it
   needs the skills' attribute math, which is not evaluated yet.
 """
 import argparse
@@ -32,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from extract_swfmovie import extract  # noqa: E402
 import skill_stats  # noqa: E402
+import game_colours  # noqa: E402
 
 SCHEMA_LINES = [
     'Children=ObjectProperty',
@@ -105,7 +107,8 @@ def unquote(text):
 
 def description_html(text, aliases):
     text = ALIAS.sub(lambda m: aliases.get(m.group(1), m.group(0)), text or '')
-    return SKILL_TAG.sub(r'<font color="#FFDEAD"><i>\1</i></font>', text)
+    colour = game_colours.colour('skill_tag')
+    return SKILL_TAG.sub(lambda m: f'<font color="{colour}"><i>{m.group(1)}</i></font>', text)
 
 
 def key_aliases(game, localization):
