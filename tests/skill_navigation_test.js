@@ -44,7 +44,9 @@ check('the overlay server routes every script the Skills page loads', () => {
   const served = fs.readFileSync('tools/hud_overlay/serve.py', 'utf8');
   const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map(m => m[1]).filter(src => !src.includes('/'));
   assert.ok(scripts.includes('skill_nav.js'));
-  for (const src of scripts) assert.ok(served.includes(`'/${src}': '${src}'`), `serve.py does not route ${src}`);
+  // game_colours.js is made by serve.py from the ignored local colours file, not a file in the folder.
+  for (const src of scripts) assert.ok(served.includes(`'/${src}': '${src}'`)
+    || (src === 'game_colours.js' && served.includes("COLOURS_PATH = '/game_colours.js'")), `serve.py does not route ${src}`);
 });
 
 check('an action-skill tie picks the lower-numbered first-tier cell (UNVERIFIED)', () => {
