@@ -25,7 +25,8 @@ public:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void DrawHUD() override;
-    // Test-only, for the capture drivers (docs/verification/HUD_PARITY.md, "Captures with the movie").
+    // The movie HUD is ready and in use: the capture drivers wait for it (docs/verification/HUD_PARITY.md, "Captures with the movie"),
+    // and the quest's on-screen debug text stays off while it is in use.
     bool IsFlashHudReady() const { return bFlashHudReady; }
     // True when this run named a movie page (-owflashhud=<url>), so its frames must show the movie.
     static bool CaptureAskedForMovie();
@@ -46,8 +47,6 @@ public:
     bool IsMapOpen() const { return SkillsBrowser.IsValid() && bMapOpen; }
     // For the mission page suite: the gameplay HUD as the last DrawHUD left it. Back means shown again (the movie, once it is ready, else the canvas).
     bool IsGameplayHudHidden() const;
-    // The movie HUD is in use, so the quest's on-screen debug text stays off.
-    bool IsMovieHudReady() const { return bFlashHudReady; }
     bool IsGameplayHudBack() const;
     FString GameplayHudReport() const;
     void CloseSkills();
