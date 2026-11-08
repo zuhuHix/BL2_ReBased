@@ -58,6 +58,7 @@ $marker = "-owrun=$runId"
 $ownerFile = Join-Path $script:DriverDir '.owrun'
 function Test-DriverOwned { try { (Test-Path -LiteralPath $ownerFile) -and ([IO.File]::ReadAllText($ownerFile) -eq $runId) } catch { $false } }
 try {
+    Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
     # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2)" }
     if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
@@ -92,6 +93,10 @@ try {
         $st.verified = $true; $st.files = @(Get-ChildItem -LiteralPath (Join-Path $bak $sub) -Recurse -File -Force).Count
     }
     $rootState | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $bak 'backup_complete.json')
+    # verified_hashes.json and this run's pending record (pending.ps1), before the driver: a kill from here on leaves a record the next run refuses on.
+    $snapshots = @{}
+    foreach ($sub in $rootState.Keys) { $snapshots[$sub] = if (!$rootState[$sub].present) { 'absent' } elseif ($rootState[$sub].verified) { Get-TreeHashes (Join-Path $bak $sub) } else { 'unverified' } }
+    Save-VerifiedBackupRecord $bak $roots $snapshots
     "backup $bak ($(@($rootState.Keys | Where-Object { $rootState[$_].verified }).Count) roots verified)"
     # Claim the driver folder: it must not exist (New-Item without -Force fails then), nor may its owner file (same rule, as
     # for the hub lock). Install-Driver then fills the folder this run owns (not -Exclusive: the folder exists by now).
@@ -210,6 +215,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     # while both locks are still held; then write the logs; release the locks last, each in its own step. If the game's
     # exit is not confirmed nothing is removed or restored and the locks stay held (manual recovery printed).
     $cleanup = [ordered]@{}
+    $cleanup.inputs = Release-HeldInputs   # every key and button this run still holds is let go before anything else
     $gameGone = $true
     if ($proc) {
         try {
@@ -260,6 +266,13 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         $problem = 'MISMATCH*', 'RESTORE FAILED*', 'NO VERIFIED BACKUP*', 'CREATED DURING THE RUN, STILL PRESENT'
         $bad = @($rows | Where-Object { $status = $_.status; @($problem | Where-Object { $status -clike $_ }).Count })
         $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
+    }
+    # This run's pending record goes only once every root is the backup again by tree hash, with no game and no driver left; otherwise it and both
+    # locks stay, and the steps are printed.
+    $cleanup.pending = Complete-PendingRecord ([bool]$bak)
+    if ($cleanup.pending -notlike 'removed*' -and $cleanup.pending -ne 'none written') {
+        $runLock = $false; $hub = $null
+        if ($script:PendingRecord) { Format-PendingRecovery $script:PendingRecord (Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json) @() }
     }
     try {
         $log.finished = (Get-Date).ToString('o'); $log.cleanup = $cleanup

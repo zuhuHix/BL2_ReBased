@@ -92,6 +92,7 @@ function Enter-IceMap {
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $driverAttempted = $false; $launchAttempted = $false; $denLoaded = $false
 $marker = "-owrun=$Lane-$PID"   # an argument the game ignores; Stop-OwnGame looks for it on the command line
 try {
+    Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
     # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2); not installing it" }
     if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
@@ -231,6 +232,7 @@ try {
     # Each step is isolated so a failure in one (a log write) cannot skip the restore. Order: stop our game, and only once it has
     # exited remove our driver and restore and verify the roots; then write the logs and release the locks.
     $cleanup = [ordered]@{}
+    $cleanup.inputs = Release-HeldInputs   # every key and button this run still holds is let go before anything else
     # A throw in the den read leaves its per-frame hook reading pawns into shutdown: stop it while the game can still answer.
     if ($denLoaded -and $proc -and !$proc.HasExited) {
         # Py returns a traceback as text, so only the exact answer counts.
@@ -281,6 +283,9 @@ try {
         } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
     }
     $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
+    # This run's pending record (pending.ps1) goes only once every root is the backup again by tree hash, with no game and no driver left.
+    $cleanup.pending = Complete-PendingRecord $safe
+    if ($cleanup.pending -notlike 'removed*' -and $cleanup.pending -ne 'none written' -and !$recovery) { $recovery = "pending record $($cleanup.pending)" }
     $holdLocks = [bool]$recovery
     # The evidence first and session.json last, so the status it holds accounts for the rest. Missing evidence cannot read as completed; the
     # restore has already run, and recovery keeps its status.

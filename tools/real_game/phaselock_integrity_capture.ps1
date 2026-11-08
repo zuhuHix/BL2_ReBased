@@ -49,7 +49,7 @@ function Invoke-CastCapture([string]$Name, [double]$Before, [double]$After, [has
     $t0 = Get-QpcSeconds; $press = $null; $acted = $null
     while ($true) {
         $ts = Get-QpcSeconds
-        if ($null -eq $press -and $ts - $t0 -ge $Before) { Send-KeyDown F; $press = Get-QpcSeconds; Start-Sleep -Milliseconds 60; Send-KeyUp F; continue }
+        if ($null -eq $press -and $ts - $t0 -ge $Before) { Send-KeyDown F; try { $press = Get-QpcSeconds; Start-Sleep -Milliseconds 60 } finally { Send-KeyUp F }; continue }
         if ($press -and $ts - $press -gt $After) { break }
         if ($press -and $Action -and $null -eq $acted -and $ts - $press -ge $ActionAt) { $acted = & $Action; continue }
         $bmp = [Drawing.Bitmap]::new($rect.Width, $rect.Height)
@@ -100,6 +100,7 @@ $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; 
 $marker = "-owrun=$Lane-$PID"
 $hostShots = @{ 'hit-0.25' = 0.25; 'hit-0.50' = 0.5; 'hit-0.80' = 0.8; 'hit-1.50' = 1.5; 'hit-3.00' = 3.0; 'hit-4.50' = 4.5; 'hit-5.30' = 5.3; 'hit-6.20' = 6.2 }
 try {
+    Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
     # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2); not installing it" }
     if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
@@ -342,6 +343,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     # If the game's exit is not confirmed, a live game could overwrite restored files: nothing is removed or restored, the
     # backup is kept and manual-recovery steps are printed.
     $cleanup = [ordered]@{}
+    $cleanup.inputs = Release-HeldInputs   # every key and button this run still holds is let go before anything else
     # A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.
     if ($proc -and !$proc.HasExited) {
         # Py returns a traceback as text, so only the exact answer counts.
@@ -392,6 +394,9 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
     }
     $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
+    # This run's pending record (pending.ps1) goes only once every root is the backup again by tree hash, with no game and no driver left.
+    $cleanup.pending = Complete-PendingRecord $safe
+    if ($cleanup.pending -notlike 'removed*' -and $cleanup.pending -ne 'none written' -and !$recovery) { $recovery = "pending record $($cleanup.pending)" }
     $holdLocks = [bool]$recovery
     # The evidence first and session.json last, so the status it holds accounts for the rest. Missing evidence cannot read as completed; the
     # restore has already run, and recovery keeps its status.

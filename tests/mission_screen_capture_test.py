@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run)
 import sys
 import tempfile
 import types
@@ -64,7 +65,8 @@ def test_the_capture_is_wired_to_the_safety_helpers():
     start = text.index('$proc = Start-Game $gameArgs')
     assert install < start < text.index("$log.block_saves = Assert-SavesBlocked")
     assert text.index('$log.block_saves = Assert-SavesBlocked') < text.index('Send-Key Enter')
-    body = text.index('try {\n    # Preflight')
+    body = text.index('try {\n    Assert-NoPendingRecords')
+    assert body < text.index('    # Preflight')
     for change in ('Send-Key', 'ms_advance', 'ms_force_ready', 'ms_down', 'ms_start'):
         assert text.index(change, body) > start, change
     # The sends check focus themselves. Focus-Game's Alt tap would itself be a key press at an open screen, so the stages only assert.

@@ -42,7 +42,7 @@ function Invoke-CastCapture([string]$Name, [double]$Before, [double]$After, [has
     $t0 = Get-QpcSeconds; $press = $null
     while ($true) {
         $ts = Get-QpcSeconds
-        if ($null -eq $press -and $ts - $t0 -ge $Before) { Send-KeyDown F; $press = Get-QpcSeconds; Start-Sleep -Milliseconds 60; Send-KeyUp F; continue }
+        if ($null -eq $press -and $ts - $t0 -ge $Before) { Send-KeyDown F; try { $press = Get-QpcSeconds; Start-Sleep -Milliseconds 60 } finally { Send-KeyUp F }; continue }
         if ($press -and $ts - $press -gt $After) { break }
         $bmp = [Drawing.Bitmap]::new($rect.Width, $rect.Height)
         $g = [Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($rect.Location, [Drawing.Point]::Empty, $rect.Size); $g.Dispose()
@@ -99,6 +99,7 @@ $marker = "-owrun=$Lane-$PID"   # with the image path and start time, what Stop-
 $procStart = $null
 $hub = $null; $bak = $null; $proc = $null; $target = $null; $runLock = $false   # not $game: that is realgame.ps1's $script:Game
 try {
+    Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
     while (!$hub) {
         try { $hub = New-Item -ItemType File -Path $HubLock -Value "$Lane $((Get-Date).ToString('o'))" -ErrorAction Stop }
         catch { "hub lock held by '$(Get-Content $HubLock -Raw -ErrorAction SilentlyContinue)'; retry in 60 s"; Start-Sleep 60 }
@@ -182,28 +183,15 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } finally {
+    "cleanup inputs: $(Release-HeldInputs)"   # every key and button this run still holds is let go before anything else
     $log.finished = (Get-Date).ToString('o')
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
     if ($proc) { Start-Sleep 2; "cleanup game: $(Stop-OwnGame $proc $procStart $marker)"; Start-Sleep 3 }
     try { Remove-Driver } catch { "Remove-Driver failed: $_" }
-    if ($runLock) { Exit-RunLock }
-    if ($hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
-    if ($bak) {
-        # Compare with the backup; put changed files back and list everything (character selection writes a .bak).
-        $src = $script:WillowDir
-        $rows = foreach ($sub in 'SaveData', 'Config') {
-            $b = Join-Path $bak $sub; $s = Join-Path $src $sub
-            Get-ChildItem $s -Recurse -File | ForEach-Object {
-                $rel = $_.FullName.Substring($s.Length + 1); $old = Join-Path $b $rel
-                if (!(Test-Path $old)) { [pscustomobject]@{ file = "$sub\$rel"; status = 'added (left in place)' } }
-                elseif ((Get-FileHash $old).Hash -ne (Get-FileHash $_.FullName).Hash) {
-                    Copy-Item $old $_.FullName -Force; [pscustomobject]@{ file = "$sub\$rel"; status = 'changed, restored' }
-                }
-            }
-            Get-ChildItem $b -Recurse -File | Where-Object { !(Test-Path (Join-Path $s $_.FullName.Substring($b.Length + 1))) } |
-                ForEach-Object { [pscustomobject]@{ file = "$sub\$($_.FullName.Substring($b.Length + 1))"; status = 'missing' } }
-        }
-        @{ backup = $bak; compared = (Get-Date).ToString('o'); changes = @($rows) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $Out 'save_compare.json')
-        "save compare: $(@($rows).Count) differences"; $rows
-    }
+    # Restore and verify while both locks are held (Complete-BackupRun): this run's pending record goes only when every root compares clean,
+    # and anything left for a person keeps both locks.
+    $keepLocks = $false
+    if ($bak) { $done = Complete-BackupRun $bak (Join-Path $Out 'save_compare.json'); $done.lines; $keepLocks = !$done.clean }
+    if ($runLock -and !$keepLocks) { Exit-RunLock }
+    if (!$keepLocks -and $hub -and (Test-Path $HubLock) -and ((Get-Content $HubLock -Raw) -like "$Lane *")) { Remove-Item $HubLock -Force }
 }

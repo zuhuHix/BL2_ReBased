@@ -1091,6 +1091,32 @@ again in every command (a stale weapon reference crashed the game), keep spawned
 before any travel or quit, and compare the save folder with the backup afterwards. `scripts/phaselock.py` samples the
 lift skill every frame and marks `StartActionSkill` and the weapon's reload/put-down calls. Results:
 `docs/verification/REALGAME_GROUND_TRUTH.md`, DECISIONS 2026-10-02.
+
+### Pending records and guarded input (every real-game script)
+
+Before a run changes anything the maintainer owns, it writes a **pending record** under `%LOCALAPPDATA%\OpenWillow\`
+(`tools/real_game/pending.ps1`, `realgame_run_pending-<script>-<pid>.json`): the script, its PID and start time, the backup
+folder, each root's live folder and tree hash (one SHA-256 over every file's path and SHA-256), and one line per change,
+each written before that change: the driver's save block, the launch, SDK mods off (`Set-SdkModsOff`). `Backup-Saves` and
+`Save-VerifiedBackupRecord` write it; `Install-Driver`, `Start-Game` and `Set-SdkModsOff` refuse without it. The record goes
+only when every root is the backup again by tree hash, the backup itself is unchanged, no game runs and the driver folder is
+gone (`Complete-PendingRecord`, or `Complete-BackupRun` in the shorter captures). Otherwise it stays, with both locks.
+
+Every capture starts with `Assert-NoPendingRecords`, before any lock: any `*pending*.json` there (ours, the showcase
+capture's `showcase_*pending*.json`, the mission screen branch's `mission_screen_mod_pending.json`) stops it and prints the
+exact steps. It completes a record by itself only when the roots already match the backup, or when this driver's untouched
+copy is the only leftover. It never rolls the saves back by itself: someone may have played since. The way back by hand:
+
+```powershell
+$env:OPENWILLOW_BL2 = '<game folder>'; . tools/real_game/realgame.ps1
+Restore-PendingRecord '<record>'   # restore from the verified backup, verify by tree hash, then remove the record
+```
+
+Input is guarded: every key and button press is remembered until its release, and each capture's `finally` starts with
+`Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. Presses held across steps sit in their own
+`try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
+them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import `tests/realgame_test_env.py`,
+which gives every PowerShell run its own pending folder under the temp folder (`OW_TEST_PENDING_DIR`, accepted only there).
 `scripts/ambient_npcs.py` (`Invoke-GamePyFile ... ambient_npcs.py ambient`) lists live pawns and dens (`amb_pawns`,
 `amb_dens`, `amb_live`), samples positions over time (`amb_sample`) and places the player (`amb_goto`) for the
 Sanctuary ambient NPC record. `amb_compose` reads each live citizen's materials and attached meshes (hair, hats, gear);

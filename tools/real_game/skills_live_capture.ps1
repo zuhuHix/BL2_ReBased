@@ -303,6 +303,7 @@ $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false
 # image path and the start time before stopping a PID). Unknown switches are ignored by the game.
 $marker = "-owrun=$Lane-$PID"
 try {
+    Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
     # Preflight before any lock or backup: bl-sdk present, our driver folder not already there.
     if (!(Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods'))) { throw "bl-sdk is not installed (no sdk_mods in $env:OPENWILLOW_BL2); not installing it" }
     if (Test-Path -LiteralPath $script:DriverDir) { throw "$script:DriverDir already exists; this run did not create it and leaves it alone" }
@@ -442,6 +443,7 @@ try {
     # release the locks. If a game may still be running, it could overwrite restored files: nothing is removed or restored, the backup is
     # kept and manual-recovery steps are printed.
     $cleanup = [ordered]@{}
+    $cleanup.inputs = Release-HeldInputs   # every key and button this run still holds is let go before anything else
     # A throw between a watch's start and its stop leaves hooks reading pawns into shutdown: stop them while the game can still answer.
     if ($proc -and !$proc.HasExited) {
         # Py returns a traceback as text, so only the exact answer counts.
@@ -492,6 +494,9 @@ try {
         } catch { $cleanup.saves = "RESTORE FAILED: $_ (backup kept at $bak)"; $restoreError = "$_" }
     }
     $recovery = Get-RecoveryReason $gameGone $cleanup.game $restored $restoreError $cleanup.driver $untracked
+    # This run's pending record (pending.ps1) goes only once every root is the backup again by tree hash, with no game and no driver left.
+    $cleanup.pending = Complete-PendingRecord $safe
+    if ($cleanup.pending -notlike 'removed*' -and $cleanup.pending -ne 'none written' -and !$recovery) { $recovery = "pending record $($cleanup.pending)" }
     $holdLocks = [bool]$recovery
     # The evidence first and summary.json last, so the status it holds accounts for the rest. Missing evidence cannot read as completed; the
     # restore has already run, and recovery keeps its status.

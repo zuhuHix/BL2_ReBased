@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import re
 import subprocess
+import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run)
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]

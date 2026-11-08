@@ -43,6 +43,7 @@ $log.frequency_subjects = @($freqSubjects | ForEach-Object { [pscustomobject]@{ 
 
 $hub = $null; $bak = $null; $proc = $null; $runLock = $false; $installed = $false
 try {
+    Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
     # 1. Wait for the game to be free (never touch one that is running) and for the hub lock.
     $deadline = (Get-Date).AddMinutes($WaitMinutes)
     while (($null -ne (Get-GameProcess)) -or (Test-Path $HubLock) -or (Get-Process -Name 'UnrealEditor*' -ErrorAction SilentlyContinue)) {
@@ -144,6 +145,7 @@ catch {
     "ERROR: $($_.Exception.Message)"
 }
 finally {
+    "cleanup inputs: $(Release-HeldInputs)"   # every key and button this run still holds is let go before anything else
     # Only what this run started: the quit command, the driver and the game are touched only when we started them
     # (another lane's game and its installed driver are never reached from here).
     if ($proc) {
@@ -154,15 +156,11 @@ finally {
         if (-not $proc.HasExited -and $cmd -match 'Borderlands2\.exe' -and $cmd -match '-windowed') { Stop-Process -Id $proc.Id -Force; "stopped our game pid $($proc.Id)" }
     }
     if ($installed) { Remove-Driver }
-    if ($runLock) { Exit-RunLock }
-    if ($hub) { Remove-Item $HubLock -Force -ErrorAction SilentlyContinue }
-    if ($bak) {
-        # Compare the save folder with the backup by relative path and hash; differences are listed, not restored.
-        $live = Join-Path $script:WillowDir 'SaveData'
-        $hashes = { param($root) Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ rel = $_.FullName.Substring($root.Length); hash = (Get-FileHash $_.FullName).Hash } } }
-        $diff = Compare-Object (& $hashes (Join-Path $bak 'SaveData')) (& $hashes $live) -Property rel, hash
-        $log.save_compare = @($diff | ForEach-Object { "$($_.SideIndicator) $($_.rel)" })
-        "save folder vs backup: $(if ($diff) { "$(@($diff).Count) differences (listed in session.json)" } else { 'identical' })"
-    }
+    # Restore and verify while both locks are held (Complete-BackupRun): this run's pending record goes only when every root compares clean,
+    # and anything left for a person keeps both locks.
+    $keepLocks = $false
+    if ($bak) { $done = Complete-BackupRun $bak (Join-Path $Out 'save_compare.json'); $done.lines; $log.save_compare = @($done.lines); $keepLocks = !$done.clean }
+    if ($runLock -and !$keepLocks) { Exit-RunLock }
+    if ($hub -and !$keepLocks) { Remove-Item $HubLock -Force -ErrorAction SilentlyContinue }
     $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
 }

@@ -8,6 +8,7 @@ import math
 import re
 import shutil
 import subprocess
+import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run)
 import sys
 import tempfile
 import types
@@ -190,7 +191,7 @@ class CaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             repo = Path(folder) / 'repo'
             (repo / 'tools/real_game').mkdir(parents=True)
-            for name in ('tools/ue_lock.ps1', 'tools/real_game/realgame.ps1', 'tools/real_game/gun_ads_capture.ps1'):
+            for name in ('tools/ue_lock.ps1', 'tools/real_game/realgame.ps1', 'tools/real_game/pending.ps1', 'tools/real_game/gun_ads_capture.ps1'):
                 shutil.copy(ROOT / name, repo / name)
             evidence = repo / 'local/realgame/gun_ads'
             evidence.mkdir(parents=True)

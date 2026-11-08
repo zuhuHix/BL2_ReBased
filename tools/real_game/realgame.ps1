@@ -12,6 +12,8 @@ $script:Game = $env:OPENWILLOW_BL2
 # The game's WillowGame folder under the shell's Documents folder (which may be redirected away from %USERPROFILE%).
 $script:WillowDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'My Games/Borderlands 2/WillowGame'
 $script:DriverDir = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
+# Pending records: what a run changed, written before it changes it (pending.ps1).
+. (Join-Path $PSScriptRoot 'pending.ps1')
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 
 Add-Type -AssemblyName System.Drawing
@@ -41,12 +43,20 @@ function Enter-RunLock([int]$WaitSeconds = 600) {
 }
 function Exit-RunLock { Exit-OwUeLock }   # removes the lock only when this process owns it
 
+# Copy SaveData and Config to a new backup folder, prove each copy by hash, and write the backup's verified_hashes.json and this run's pending
+# record (Save-VerifiedBackupRecord). Refuses first while an earlier run's record is left (Assert-NoPendingRecords). Returns the folder.
 function Backup-Saves {
+    Assert-NoPendingRecords | ForEach-Object { Write-Host $_ }
     $src = $script:WillowDir
     $dst = Join-Path $script:RG ('save-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Force $dst | Out-Null
-    Copy-Item -Recurse (Join-Path $src 'SaveData') $dst
-    Copy-Item -Recurse (Join-Path $src 'Config') $dst
+    $roots = [ordered]@{ SaveData = (Join-Path $src 'SaveData'); Config = (Join-Path $src 'Config') }
+    $snapshots = @{}
+    foreach ($name in $roots.Keys) {
+        Copy-Item -Recurse -LiteralPath $roots[$name] $dst
+        $snapshots[$name] = Assert-SnapshotMatches $roots[$name] (Join-Path $dst $name)
+    }
+    Save-VerifiedBackupRecord $dst $roots $snapshots
     $dst
 }
 
@@ -56,6 +66,8 @@ function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive) {
     # -Exclusive: refuse when bl-sdk is absent or the mod folder already exists (then this run did not create it and must
     # neither overwrite nor remove it); otherwise the old behaviour (create or overwrite).
     $target = $script:DriverDir
+    # The record first: the driver's save block and command channel stay in the game's folder if this run is killed.
+    Add-PendingChange "driver installed at $target (save block from the first frame: $([bool]$BlockSavesAtStart))"
     if ($Exclusive) {
         if (!(Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods'))) { throw "bl-sdk is not installed: $(Join-Path $script:Game 'sdk_mods') is missing" }
         if (Test-Path -LiteralPath $target) { throw "$target already exists; not overwriting it (remove it by hand if it is a stale copy of this driver)" }
@@ -167,14 +179,22 @@ function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
     [pscustomobject]@{ rows = $rows; summary = $summary; changed = $changed; clean = ($bad.Count -eq 0 -and $notes.Count -eq 0) }
 }
 
-# The record that outlives this process: each root's live folder and its snapshot state, in the backup folder.
+# The record that outlives this process: each root's live folder and its snapshot state, in the backup folder. Then this run's pending record
+# under %LOCALAPPDATA%\OpenWillow (pending.ps1), with every root's tree hash: from here on a kill leaves something the next run refuses on.
 function Save-VerifiedBackupRecord([string]$Backup, $Roots, $Snapshots) {
     $record = [ordered]@{}
     foreach ($name in $Roots.Keys) { $record[$name] = [ordered]@{ live = $Roots[$name]; snapshot = $Snapshots[$name] } }
     $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Backup 'verified_hashes.json') -Encoding UTF8
+    Write-PendingRecord $Backup $Roots | Out-Null
 }
 # The one way to restore by hand: from that record, through Restore-VerifiedRoots, so a backup that changed since is refused.
 function Restore-VerifiedBackup([string]$Backup) {
+    $restored = Restore-FromVerifiedRecord $Backup
+    Format-RestoreRows $restored.rows
+    $restored.summary
+}
+# Restore-VerifiedRoots over the roots and snapshot states the backup's verified_hashes.json names. Returns its result object.
+function Restore-FromVerifiedRecord([string]$Backup) {
     $file = Join-Path $Backup 'verified_hashes.json'
     if (!(Test-Path -LiteralPath $file)) { throw "no verified_hashes.json in $Backup; not restoring from it" }
     $roots = [ordered]@{}; $snapshots = @{}
@@ -188,9 +208,37 @@ function Restore-VerifiedBackup([string]$Backup) {
             $snapshots[$root.Name] = $hashes
         }
     }
-    $restored = Restore-VerifiedRoots $Backup $roots $snapshots
-    Format-RestoreRows $restored.rows
-    $restored.summary
+    Restore-VerifiedRoots $Backup $roots $snapshots
+}
+
+# The cleanup of the shorter captures (Backup-Saves, one game at a time): call it after the game is stopped and the driver removed, before the
+# locks are released. With no game running, every root goes back to the verified backup and is compared again; the comparison goes to
+# $CompareFile; this run's pending record goes only when that is clean. Returns clean (false: keep both locks) and the lines to print, which
+# hold the exact recovery steps when it is not clean.
+function Complete-BackupRun([string]$Backup, [string]$CompareFile) {
+    $lines = @(); $clean = $false; $safe = $true
+    try {
+        $games = @(Get-GameProcesses)
+        if ($games.Count) { $safe = $false; $lines += "saves: NOT RESTORED: Borderlands 2 is running (pid $(@($games | ForEach-Object { $_.Id }) -join ', ')) and could overwrite them; backup kept at $Backup" }
+        else {
+            $restored = Restore-FromVerifiedRecord $Backup
+            if ($CompareFile) { @{ backup = $Backup; compared = (Get-Date).ToString('o'); changes = @($restored.rows) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $CompareFile }
+            $lines += Format-RestoreRows $restored.rows
+            $lines += "saves: $($restored.summary)"
+            $clean = $restored.clean
+        }
+    } catch { $lines += "saves: RESTORE FAILED: $_ (backup kept at $Backup)" }
+    $pendingFile = $script:PendingRecord
+    $pending = Complete-PendingRecord $safe
+    $lines += "pending record: $pending"
+    if ($pending -notlike 'removed*' -and $pending -ne 'none written') { $clean = $false }
+    if (!$clean) {
+        $record = if ($pendingFile -and (Test-Path -LiteralPath $pendingFile)) { Get-Content -Raw -LiteralPath $pendingFile | ConvertFrom-Json } else { $null }
+        if ($record) { $lines += Format-PendingRecovery $pendingFile $record @(Get-PendingProblems $record) }
+        else { $lines += "MANUAL RECOVERY: close Borderlands 2, then: . '$PSScriptRoot\realgame.ps1'; Restore-VerifiedBackup '$Backup'" }
+        $lines += 'Both locks are kept until that is done.'
+    }
+    [pscustomobject]@{ clean = $clean; lines = $lines }
 }
 
 # The restore rows as text. Plain objects go through a deferred formatter: when a script ends on a rethrown error, they and every
@@ -218,6 +266,9 @@ function Format-ManualRecovery([string]$Reason, [string]$Backup, [string]$HubLoc
     if ($Backup) {
         $lines += "     Restore-VerifiedBackup '$Backup'"
         $lines += "     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand. A root reported as created or not backed up is yours to judge."
+    }
+    if ($script:PendingRecord -and (Test-Path -LiteralPath $script:PendingRecord)) {
+        $lines += "     Then Restore-PendingRecord '$script:PendingRecord'   # verifies every root by tree hash and only then removes this run's pending record"
     }
     $lines += "  3. Only when nothing above reports a problem, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'."
     $lines -join [Environment]::NewLine
@@ -259,6 +310,7 @@ function Stop-OwnGame([Diagnostics.Process]$Started, [datetime]$StartTime, [stri
 
 function Start-Game([string[]]$Arguments = @()) {
     $exe = Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'
+    Add-PendingChange "game launched: $exe $($Arguments -join ' ')"   # a game can write the saves and profile; recorded before it starts
     $script:OwnGame = Start-Process -FilePath $exe -ArgumentList $Arguments -WorkingDirectory (Split-Path $exe) -PassThru
     $script:OwnGame
 }
@@ -294,7 +346,7 @@ function Focus-Game {
     $p = Get-RunGameProcess; if (!$p) { throw 'game not running' }
     $h = $p.MainWindowHandle
     # A harmless Alt tap lets SetForegroundWindow succeed from a background process.
-    [OWRG.Native]::keybd_event(0x12, 0x38, 0, [UIntPtr]::Zero); [OWRG.Native]::keybd_event(0x12, 0x38, 2, [UIntPtr]::Zero)
+    try { Invoke-NativeKey 0x12 0x38 0 } finally { Invoke-NativeKey 0x12 0x38 2 }
     [OWRG.Native]::ShowWindow($h, 9) | Out-Null
     [OWRG.Native]::SetForegroundWindow($h) | Out-Null
     Start-Sleep -Milliseconds 200
@@ -336,24 +388,52 @@ $script:Scan = @{ Esc=0x01; '1'=0x02; '2'=0x03; '3'=0x04; '4'=0x05; Tab=0x0F; Q=
 function Assert-Key([string]$Key) { if (-not ($script:Scan.ContainsKey($Key) -or $script:ScanExt.ContainsKey($Key))) { throw "no scan code for key '$Key'" } }
 # Arrow keys are extended scan codes (KEYEVENTF_EXTENDEDKEY).
 $script:ScanExt = @{ Up=0x48; Down=0x50; Left=0x4B; Right=0x4D }
+# Guarded input. Every press is remembered until its release, and Release-HeldInputs lets go of whatever is still held: every capture calls it
+# first in its finally, so an error, a timeout or Ctrl+C (PowerShell runs finally blocks on a stop) leaves no key or button down. The native calls
+# go through Invoke-NativeKey and Invoke-NativeMouse only, so a test can replace them.
+$script:HeldInputs = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { [OWRG.Native]::keybd_event($Vk, $Scan, $Flags, [UIntPtr]::Zero) }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { [OWRG.Native]::mouse_event($Flags, $Dx, $Dy, $Data, [UIntPtr]::Zero) }
+# Each mouse button's down flag, up flag and the name it is held under.
+$script:MouseButtons = @(@(0x2, 0x4, 'left'), @(0x8, 0x10, 'right'), @(0x20, 0x40, 'middle'))
 function Send-KeyDown([string]$Key) {
     Assert-Key $Key
     Assert-GameForeground
-    if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0x9, [UIntPtr]::Zero) }
-    else { [OWRG.Native]::keybd_event(0, [byte]$script:Scan[$Key], 0x8, [UIntPtr]::Zero) }
+    if (!$script:HeldInputs.Contains("key $Key")) { $script:HeldInputs.Add("key $Key") }   # before the send: releasing a key never pressed is harmless
+    if ($script:ScanExt.ContainsKey($Key)) { Invoke-NativeKey 0 ([byte]$script:ScanExt[$Key]) 0x9 }
+    else { Invoke-NativeKey 0 ([byte]$script:Scan[$Key]) 0x8 }
 }
 # A release is never refused: it lets go of what a press took. It goes to whatever has focus then, which is not guaranteed harmless but is
 # better than a key left held.
 function Send-KeyUp([string]$Key) {
     Assert-Key $Key
-    if ($script:ScanExt.ContainsKey($Key)) { [OWRG.Native]::keybd_event(0, [byte]$script:ScanExt[$Key], 0xB, [UIntPtr]::Zero) }
-    else { [OWRG.Native]::keybd_event(0, [byte]$script:Scan[$Key], 0xA, [UIntPtr]::Zero) }
+    if ($script:ScanExt.ContainsKey($Key)) { Invoke-NativeKey 0 ([byte]$script:ScanExt[$Key]) 0xB }
+    else { Invoke-NativeKey 0 ([byte]$script:Scan[$Key]) 0xA }
+    [void]$script:HeldInputs.Remove("key $Key")
 }
 function Send-Key([string]$Key, [int]$HoldMs = 60) {
     Send-KeyDown $Key
     try { Start-Sleep -Milliseconds $HoldMs } finally { Send-KeyUp $Key }   # a press is always released
 }
-function Send-MouseEvent([int]$Flags, [int]$Dx = 0, [int]$Dy = 0) { [OWRG.Native]::mouse_event($Flags, $Dx, $Dy, 0, [UIntPtr]::Zero) }
+function Send-MouseEvent([int]$Flags, [int]$Dx = 0, [int]$Dy = 0) {
+    foreach ($b in $script:MouseButtons) { if (($Flags -band $b[0]) -and !$script:HeldInputs.Contains("button $($b[2])")) { $script:HeldInputs.Add("button $($b[2])") } }
+    Invoke-NativeMouse $Flags $Dx $Dy
+    foreach ($b in $script:MouseButtons) { if ($Flags -band $b[1]) { [void]$script:HeldInputs.Remove("button $($b[2])") } }
+}
+# Let go of every key and button this run still holds. Never throws: each release is tried. Returns what it did, for the run's log.
+function Release-HeldInputs {
+    $held = @($script:HeldInputs)
+    if (!$held.Count) { return 'none held' }
+    $failed = @()
+    foreach ($item in $held) {
+        try {
+            $kind, $name = $item -split ' ', 2
+            if ($kind -eq 'key') { Send-KeyUp $name }
+            else { Send-MouseEvent (@($script:MouseButtons | Where-Object { $_[2] -eq $name })[0][1]) }
+        } catch { $failed += "$item ($_)" }
+    }
+    if ($failed.Count) { "released $($held -join ', '); FAILED: $($failed -join ', ')" } else { "released $($held -join ', ')" }
+}
 # Move the cursor to a point given in game client pixels and left-click (menus).
 function Send-ClickAt([int]$X, [int]$Y) {
     Assert-GameForeground
@@ -362,7 +442,7 @@ function Send-ClickAt([int]$X, [int]$Y) {
 function Send-Wheel([int]$Notches) {
     Assert-GameForeground
     $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32](120 * $Notches)), 0)  # negative = toward the user
-    [OWRG.Native]::mouse_event(0x800, 0, 0, $data, [UIntPtr]::Zero)
+    Invoke-NativeMouse 0x800 0 0 $data
 }
 # Hold the left button and move in steps (inspect-view rotation).
 function Send-Drag([int]$Dx, [int]$Dy, [int]$Steps = 20) {
@@ -373,7 +453,7 @@ function Send-Drag([int]$Dx, [int]$Dy, [int]$Steps = 20) {
         for ($i = 0; $i -lt $Steps; $i++) { Assert-GameForeground; Send-MouseEvent 0x1 ([int]($Dx / $Steps)) ([int]($Dy / $Steps)); Start-Sleep -Milliseconds 15 }
     } finally { Send-MouseEvent 0x4 }   # the button is always let go
 }
-function Send-Mouse([int]$Dx, [int]$Dy) { Assert-GameForeground; [OWRG.Native]::mouse_event(0x1, $Dx, $Dy, 0, [UIntPtr]::Zero) }
+function Send-Mouse([int]$Dx, [int]$Dy) { Assert-GameForeground; Invoke-NativeMouse 0x1 $Dx $Dy }
 function Send-Click([switch]$Right) {
     Assert-GameForeground
     $down, $up = if ($Right) { 0x8, 0x10 } else { 0x2, 0x4 }
