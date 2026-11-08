@@ -21,7 +21,7 @@ import sys
 import unreal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from creature_zone import zone_parameters  # noqa: E402
+from creature_zone import scale_note, zone_parameters  # noqa: E402
 
 job = json.loads(Path(os.environ['OPENWILLOW_SLICE_JOB']).read_text(encoding='utf-8'))
 tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -82,6 +82,10 @@ for npc in job['npcs']:
                 raise RuntimeError(f'{ZONE} has no scalar {parameter}: it predates the light/dark scales. Rebuild it with '
                                    'powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach, then run this step again.')
         applied = sorted(values['vectors'])
+        note = scale_note(slot, npc.get('master'))
+        if note:
+            log(f'{npc["id"]}: {note}')
+            entry.setdefault('scale_notes', []).append(note)
         eal.save_loaded_asset(instance, only_if_is_dirty=False)
         for i in range(len(slots)):
             if str(slots[i].get_editor_property('material_slot_name')) == slot['slot']:

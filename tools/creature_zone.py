@@ -4,11 +4,10 @@ AI-assisted (Claude), 2026-11-08. Plain Python (no ``unreal``), so tests/creatur
 tools/phaselock_target_editor.py calls it for the bullymong and the range dummy, both instances of
 ``Common_Materials.Creature.Master_Creature``.
 
-Where the rule comes from (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model", our own words): the
-compiled base-pass pixel shader of Master_Creature in the install's shader cache multiplies the light/dark map's red and green
-by the scalars ``p_HighlightsIntensity`` and ``p_ShadowsIntensity`` before clamping them, and uses the colour vectors as they
-are stored, with no gamma step. The scalars' defaults in the shader's uniform expressions are 2.0; an instance that does not
-override them gets 2.0. The host's earlier zone material had no such scale (1.0) and raised the vectors to the power 2.2
+Where the rule comes from (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model", our own words): our
+local reading of Master_Creature's compiled shader is that it multiplies the light/dark map's red and green by the scalars
+``p_HighlightsIntensity`` and ``p_ShadowsIntensity`` before clamping them, and uses the colour vectors as they are stored, with no
+gamma step. Both scalars default to 2.0 in the master; an instance that does not override them gets 2.0. The host's earlier zone material had no such scale (1.0) and raised the vectors to the power 2.2
 (round 23), both host fits. UNVERIFIED against the running game: this is a reading of compiled data, and UE5's lighting
 and tone curve are not BL2's.
 """
@@ -40,3 +39,18 @@ def zone_parameters(slot, master=None, gamma=False):
         if value is not None:
             scalars[name] = float(value)
     return {'vectors': vectors, 'scalars': scalars}
+
+
+def scale_note(slot, master=None):
+    """The zone step's log line for a slot whose scales were not chosen from a known master, else None.
+
+    A target that names no master (the range's Psycho: its slot materials' parent was not read) keeps 1.0, today's look; this says so
+    per slot instead of leaving it implicit. Reading the per-slot parents is a later item.
+    """
+    if master == 'Master_Creature':
+        return None
+    own = [name for name in MASTER_CREATURE_SCALARS if (slot.get('scalars') or {}).get(name) is not None]
+    left = [name for name in MASTER_CREATURE_SCALARS if name not in own]
+    if not left:
+        return None
+    return f'{slot.get("material", "?")}: parent unknown, scale left at 1.0 ({", ".join(left)})'

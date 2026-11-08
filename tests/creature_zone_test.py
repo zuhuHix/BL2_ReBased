@@ -48,6 +48,24 @@ def test_missing_fields():
     assert z.zone_parameters({}, 'Master_Creature') == {'vectors': {}, 'scalars': dict(z.MASTER_CREATURE_SCALARS)}
 
 
+def test_scale_note_only_for_unknown_parents():
+    assert z.scale_note(SLOT, 'Master_Creature') is None
+    assert z.scale_note({'material': 'Mati_X', 'scalars': {'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 2.0}}, None) is None
+    note = z.scale_note({'material': 'Mati_X', 'scalars': {'p_ShadowsIntensity': 3.0}}, None)
+    assert note == 'Mati_X: parent unknown, scale left at 1.0 (p_HighlightsIntensity)'
+
+
+def test_psycho_slots_stay_at_one():
+    # The Psycho's tool entry names no master, so its slots keep 1.0 and each gets the note (slot names and values invented).
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+    import prepare_phaselock_target as target
+    master = target.TARGETS['Psycho'].get('master')
+    assert master is None and target.TARGETS['Bullymong'].get('master') == 'Master_Creature'
+    for slot in ({'material': 'Mati_Body', 'scalars': {}}, {'material': 'Mati_Head', 'scalars': {'p_PatternIntensity': 1.0}}):
+        assert z.zone_parameters(slot, master)['scalars'] == {'p_HighlightsIntensity': 1.0, 'p_ShadowsIntensity': 1.0}
+        assert 'parent unknown, scale left at 1.0' in z.scale_note(slot, master)
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:

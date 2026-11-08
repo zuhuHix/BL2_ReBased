@@ -1476,31 +1476,20 @@ never drew, the hand template's `Suction` emitter (`Mat_SirenSuction`, a screen 
 
 ### Master_Creature's colour model (2026-11-08, showcase follow-up; read from the shader cache, no game run)
 
+### Master_Creature's colour model (2026-11-08, showcase follow-up; read locally from the compiled shader, no game run)
+
 AI-assisted (Claude). The 2026-11-08 showcase showed our bullymong pale and yellow where the game's is darker and browner, and
 the range's dummies near white. Both pawns' materials are instances of `Common_Materials.Creature.Master_Creature` (the Adult's
-`Mati_BullymongAdult`, and the dummy's `Mati_ZedSurgeryPatient`, read with `ow-package --object-dump`). Its graph is stripped, but
-its compiled permutations are in `RefShaderCache-PC-D3D-SM3.upk`, found the way round 6 describes (the instance's
-static-permutation id is followed in the cache by the base material's name; the shader map before it lists the shaders by type).
-The skinned-mesh base-pass pixel shader of each instance's permutation was read with `research/d3d9_bytecode.py`, and its
-uniform-expression set names which parameter feeds which constant and sampler. Listings and scripts stay under ignored
-`local/shader_creature/`; below is our own description.
+`Mati_BullymongAdult`, and the dummy's `Mati_ZedSurgeryPatient`, read with `ow-package --object-dump`). Its graph is stripped; its
+compiled shader in the install's shader cache was read locally, as in round 6. Working notes stay under ignored `local/`. What this fix
+uses, in our words (UNVERIFIED against the running game):
 
-- **Mask layout:** `p_Masks` is two maps side by side: the left half (u x 0.5, v) is the light/dark map, the right half (u x 0.5 + 0.5, v)
-  the zone mask. This is what the host's zone material already did (checked by eye before; now read).
-- **Light/dark scales:** the left half's red is multiplied by `p_HighlightsIntensity` and its green by `p_ShadowsIntensity`, then each is
-  clamped to 0..1. Both scalars default to 2.0 in the master. The bullymong's instance does not set them (2.0); the dummy's sets both.
-  **The host had no scale (1.0)**, so every zone stayed nearer its midtone: less of the dark shadow colour and less highlight.
-- **Zones:** each zone's colour goes from Midtone toward Hilight by the highlight amount, then toward Shadow by the shadow amount.
-  Starting from `p_ColorD`, zones A, B and C are blended in by the zone mask's red, green and blue. The result multiplies the `p_Diffuse`
-  texture (all three channels). Same as the host.
-- **Colour space:** the vectors are used as stored, with no gamma step, as in the Master_Gun reading. Round 23's x^2.2 on the vectors is a host fit
-  that this reading does not support.
-- **Pattern** (the dummy's permutation only): `p_CustomPattern`, read at UV0 or UV1 (`p_UVChannelSelect`) scaled and shifted by
-  `p_PatternScalePosition`, optionally inverted (`p_PatternInvert`), times `p_PatternIntensity` and clamped, blends the zone colour toward
-  `p_PatternColor`. **Not drawn by the host.**
-- **Other terms:** an emissive of diffuse x the left half's blue x `p_EmissiveScale`; a dissolve (`p_fade`, `p_DissolveColor`) and an elemental
-  death blend (`P_DeathsValue`, `p_ElementalDeathColor`) that are off at their defaults. Lighting: no diffuse scale (Master_Gun has 0.4) and
-  no material specular. The host draws none of these.
+- **Light/dark scales:** the light/dark map's red and green are multiplied by `p_HighlightsIntensity` and `p_ShadowsIntensity` before they are
+  clamped. Both default to 2.0 in the master; an instance may override them (the bullymong's does not, the dummy's does).
+  **The host had no scale (1.0)**, so every zone stayed nearer its midtone.
+- **Colour space:** the zone vectors are used as stored, with no gamma step. Round 23's x^2.2 on the vectors is a host fit that this reading
+  does not support.
+- The mask layout and the zone mixing are what the host already did. The master's other terms are not drawn by the host.
 
 **Changes (UNVERIFIED until a capture):**
 
@@ -1509,7 +1498,8 @@ uniform-expression set names which parameter feeds which constant and sampler. L
 - `tools/creature_zone.py` picks a creature instance's values: the zone vectors as stored, and the two scalars from the instance or the
   master's 2.0. Only a target whose tool entry names its master as `Master_Creature` gets the 2.0 (the bullymong and the dummy, both read with
   our reader); any other keeps 1.0 unless its instance sets a value. The range's Psycho names none: several Psycho instances are
-  `Master_Creature` ones, but its two slot materials were not read. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars.
+  `Master_Creature` ones, but its two slot materials' parent was not read, so their scale stays 1.0 (today's look; the zone step logs
+  "parent unknown, scale left at 1.0" per slot). Reading the per-slot parents is a later item. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars.
   `OPENWILLOW_ZONE_GAMMA=1` brings back round 23's fit for an A/B capture; the default is now the shader reading.
 - The range dummy gets the same zone material: `tools/seed_slice_npc_assets.ps1 -Steps zone` runs that editor step on the slice job.
   Before, the dummy kept the plain diffuse (`SLICE_NPC_ASSETS.md`: zones "not applied"), which is why it rendered near white.

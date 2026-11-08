@@ -4369,4 +4369,4 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.m
   used no scale and, since round 23, raised the vectors to the power 2.2; the dummy had no zone colours at all.
 - **Change:** `M_OW_NPC_Zone` gains the two scalars (default 1.0, so the citizens are unchanged); `tools/creature_zone.py` sets them and the stored
   vectors on creature instances; the gamma fit is now opt-in (`OPENWILLOW_ZONE_GAMMA=1`); `seed_slice_npc_assets.ps1 -Steps zone` gives the dummy the zone material.
-- **Not verified:** nothing has run in the editor or the game yet. The pattern, emissive and lighting terms of the master are not drawn. No parsing behaviour changed.
+- **Not verified:** nothing has run in the editor or the game yet. The master's other terms are not drawn. No parsing behaviour changed.

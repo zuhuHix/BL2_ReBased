@@ -133,9 +133,10 @@ def outline_master():
     return material
 
 
-# InHI / InSI scale the light/dark map before the clamp. Master_Creature's compiled shader does this with its
-# p_HighlightsIntensity / p_ShadowsIntensity scalars (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Creature's colour
-# model"). The parameters default to 1 here, which is the earlier rule, so the citizens' instances (which set neither) are unchanged.
+# InHI / InSI scale the light/dark map before the clamp. Our reading of Master_Creature's compiled shader is that it does this with its
+# p_HighlightsIntensity / p_ShadowsIntensity scalars (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model");
+# UNVERIFIED against the running game. The parameters default to 1 here, which is the earlier rule, so the citizens' instances (which
+# set neither) are unchanged.
 ZONE_CODE = """
 float hi = saturate(InLight.r * InHI);
 float sh = saturate(InLight.g * InSI);
