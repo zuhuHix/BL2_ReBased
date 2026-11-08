@@ -95,6 +95,18 @@ check('Cell icons: the card type icon frame by gun type, ammo by its gun type, g
   assert.equal(movie.cardItem({id: 'a', name: 'AR Ammo', kind: 'ammo', ammoType: 'ar', rarity: 1, price: 9, priceValid: true}).type, 'assault rifle');
 });
 
+check('Feedback: a new message is a refusal; a buy or sale counts once the money moved its way in the same opening', () => {
+  const at = (serial, money, extra = {}) => ({serial, money, opening: 1, machine: {id: 'm'}, ...extra});
+  assert.deepEqual(movie.feedbackFor(null, null, null, 'Full', ''), {frame: 'bad', label: 'FULL'});
+  assert.equal(movie.feedbackFor(null, null, null, 'FULL', 'FULL'), null);
+  assert.deepEqual(movie.feedbackFor({action: 'buy', serial: 3}, at(3, 500), at(4, 400), '', ''), {frame: 'purchased', label: 'PURCHASED'});
+  assert.deepEqual(movie.feedbackFor({action: 'buyback', serial: 3}, at(3, 500), at(4, 400), '', ''), {frame: 'purchased', label: 'PURCHASED'});
+  assert.deepEqual(movie.feedbackFor({action: 'sell', serial: 3}, at(3, 500), at(4, 600), '', ''), {frame: 'sold', label: 'SOLD'});
+  assert.equal(movie.feedbackFor({action: 'buy', serial: 3}, at(3, 500), at(4, 500), '', ''), null);       // a restock
+  assert.equal(movie.feedbackFor({action: 'buy', serial: 3}, at(3, 500), at(3, 400), '', ''), null);       // not answered yet
+  assert.equal(movie.feedbackFor({action: 'buy', serial: 3}, at(3, 500), at(4, 400, {opening: 2}), '', ''), null);
+});
+
 check('An empty tab: SOLD OUT for the stock, one (EMPTY) cell for the backpack and buy-back, nothing when rows exist', () => {
   assert.equal(movie.emptyView('shop', []), 'soldout');
   assert.equal(movie.emptyView('backpack', []), 'cell');

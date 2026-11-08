@@ -66,6 +66,8 @@
     }
     if (state.used > state.capacity) return fail('used is larger than capacity');
     if (typeof state.message !== 'string') return fail('message must be a string');
+    if (state.refusal !== undefined && typeof state.refusal !== 'string') return fail('refusal must be a string when present');
+    if (state.handled !== undefined && !isInt(state.handled)) return fail('handled must be a non-negative integer when present');
     if (state.opening !== undefined && !isInt(state.opening)) return fail('opening must be a non-negative integer');
     // The ammo pools and the health (host numbers; health is a float on the host, so it is only checked as a number).
     if (state.ammo !== undefined) {
@@ -215,10 +217,13 @@
   }
 
   // The line the page logs for the host: 'OWVEND {"serial":n,"action":"buy","id":"..."}'. Close has id null.
-  function buildRequest(serial, action, id) {
+  // `request` (optional) is the page's number for this request; the host names the last one it answered as `handled`.
+  function buildRequest(serial, action, id, request) {
     if (!ACTIONS.includes(action)) throw new RangeError(`unknown action ${action}`);
     if (action !== 'close' && !isText(id)) throw new RangeError(`${action} needs an item id`);
-    return 'OWVEND ' + JSON.stringify({serial, action, id: action === 'close' ? null : id});
+    const body = {serial, action, id: action === 'close' ? null : id};
+    if (request !== undefined) body.request = request;
+    return 'OWVEND ' + JSON.stringify(body);
   }
 
   // Keyboard names to commands; anything else is ignored by the page.

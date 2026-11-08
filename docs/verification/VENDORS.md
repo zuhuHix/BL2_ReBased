@@ -399,8 +399,34 @@ HTML page does not. So Enter still acts on the item the player chose. The page l
 `OWVENDPAGEMODE movie` or `OWVENDPAGEMODE html` once, and again if the movie is lost. `tools/check_vendors.py` reports the
 last one as `page_mode`: PASS for the movie, MISSING (not failed) for the fallback.
 
-**Not yet in the movie.** Refusals still show as the page's text over the movie, not in the feedback clip (PR B). There is no
-shield number from the host yet, so the shield bar is hidden (PR C).
+**Feedback clip (PR B).** In movie mode the page's message line is hidden, and results play in the shop movie's own feedback
+clip (`Feedback.Trigger(frame, label)`; its frames are `purchased`, `sold` and `bad`, seen in the bench):
+
+- Each request carries a number, `request`, and the host's state names the last one it answered, `handled`. That covers a
+  request done, refused, or ignored as stale. A result counts only for the request it answers.
+  - The page starts its numbers at a random base on each load, so a reloaded page never reuses a number the host may still
+    echo.
+  - The host sets `handled` back to 0 on each new opening.
+  - The host takes `request` only as a JSON number that is a whole number from 0 to 2^53; anything else is ignored and
+    leaves `handled` as it was. The UE automation test `OpenWillow.Vendor.RequestNumber` covers this, and the vendor checker
+    requires it.
+- The host state also has a `refusal` field: the last action's refusal alone. `message` carries the stock notice (an empty
+  shelf), which is never played. A host state without `handled` and `refusal` plays no host results, with one
+  `OWVENDNOANSWER` line.
+- In movie mode one request waits for its answer at a time. A press made while one waits is ignored, with one `OWVENDBUSY`
+  line. A request with no answer is let go after 3 s (host choice), with one `OWVENDPENDING` line. Its answer, if it comes
+  later, is ignored with one `OWVENDLATE` line, so it cannot be taken for the next request's. The HTML page does not hold
+  presses back.
+- A refusal the page makes itself (cannot afford, backpack full) plays `bad` at once, on every press.
+- A host refusal plays `bad` when the state answering the request carries one. The stock labels are `INSUFFICIENT FUNDS` and
+  `FULL`; any other refusal plays in capitals.
+- A buy or buy-back plays `purchased` with the label `PURCHASED`, and a sale plays `sold` with `SOLD`. These words are ours:
+  the frames print whatever label they get, and nothing for an empty one. They play when the answering state has a newer
+  serial and the money moved the right way.
+- The clip's sound is not played.
+
+How the real clip times and words its results is `UNVERIFIED`. There is no shield number from the host yet, so the shield
+bar is hidden (PR C).
 
 **`UNVERIFIED`:** the whole layout against the game's frames, the tab mapping and titles, the section labels, the row pitch
 and how many rows show, and the level requirement colour (the host sends no player level, so every card shows the

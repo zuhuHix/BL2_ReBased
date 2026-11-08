@@ -120,8 +120,22 @@
     return `[Enter] ${word}    [Left]/[Right] Tabs    [Escape] Cancel`;
   }
 
+  // What the shop's feedback clip shows after a state push, or null. The clip has a frame for a purchase, a sale and a
+  // refusal (its frame labels); each prints the label it is given. `pending` is the page's last
+  // request {action, serial}; it counts as done when the money moved its way within the same opening (a restock alone moves
+  // the serial, not the money). A message shows as a refusal whenever it is new.
+  function feedbackFor(pending, previous, next, message, shownMessage) {
+    if (message && message !== shownMessage) return {frame:'bad', label:message.toUpperCase()};
+    if (!pending || !previous || !next || previous.opening !== next.opening || previous.machine.id !== next.machine.id) return null;
+    if (next.serial <= pending.serial) return null;
+    // The two result frames print the label they are given (an empty one shows nothing, seen in the bench); the words are ours.
+    if ((pending.action === 'buy' || pending.action === 'buyback') && next.money < previous.money) return {frame:'purchased', label:'PURCHASED'};
+    if (pending.action === 'sell' && next.money > previous.money) return {frame:'sold', label:'SOLD'};
+    return null;
+  }
+
   const api = {HEADER_FRAME, PANEL_BACKGROUND, TAB_SIDE, TAB_ORDER, TAB_TITLE, AMMO_CLIPS, sectionLabel, listEntries, scrollTop, cardItem,
-    tooltip, cellIcon, groupLists, emptyView, LOAD_TIMEOUT_MS};
+    tooltip, cellIcon, groupLists, emptyView, LOAD_TIMEOUT_MS, feedbackFor};
   if (typeof module === 'object' && module.exports) { module.exports = api; return; }
 
   // ---- The movie ------------------------------------------------------------------------------------------------------
@@ -408,11 +422,16 @@
     call(MAIN, 'SetTooltipText', tooltip(sel.column, Boolean(featured)));
   }
 
+  // Plays the feedback clip (Feedback.Trigger(frame, label) in the shop movie).
+  function feedback(shown) {
+    if (ready && shown) call(VM + '.feedback', 'Trigger', shown.frame, shown.label);
+  }
+
   function render(next) {
     if (next.state && view && next.state.opening !== view.state.opening) top = 0;
     view = next;
     draw();
   }
 
-  root.owVendingMovie = {...api, start, render, isReady:() => ready};
+  root.owVendingMovie = {...api, start, render, feedback, isReady:() => ready};
 })(typeof window !== 'undefined' ? window : globalThis);

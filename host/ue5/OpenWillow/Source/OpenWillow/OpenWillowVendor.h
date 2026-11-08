@@ -221,6 +221,9 @@ public:
 
     // Page bridge: one console line "OWVEND {json}" from the page.
     void HandlePageMessage(const FString& Line);
+    // The page's number for a request ("request"), when the message has one that is a JSON number and a whole number from
+    // 0 to 2^53. False for a missing, string, fractional, negative or too large value.
+    static bool ParseRequestNumber(const FJsonObject& Message, int64& OutRequest);
 
     // Console commands (ow.Vendor.*).
     bool OpenByIndex(int32 Index, FString& OutError);
@@ -278,4 +281,5 @@ private:
     int64 Serial = 0;                 // counts the states pushed to the page
     int64 Opening = 0;                // counts the shop's openings; the page starts its selection over on a new one
     FString LastMessage;             // the last action's refusal text, empty when it went through
+    int64 LastHandledRequest = 0;    // the page's id of the last request answered (sent back as `handled`)
 };

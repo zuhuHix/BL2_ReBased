@@ -234,14 +234,19 @@ function loadPage(options = {movie: false}) {
   const element = () => ({textContent: '', hidden: false, children: [], classList: {add() {}}, setAttribute() {}, addEventListener() {},
     append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); }, replaceChildren(...c) { this.children = c; }});
   let onKey = null;
-  const window = {OwVendingModel: model, RufflePlayer: {}};
+  // A short answer timeout, so a test's leftover wait does not hold the run open (the page's own is 3 s).
+  // Request numbers start at 0 here (options.requestBase) so the tests can name them; the page's own base is random.
+  const window = {OwVendingModel: model, RufflePlayer: {}, owVendingPendingTimeoutMs: options.pendingMs || 200,
+    owVendingRequestBase: options.requestBase === undefined ? 0 : options.requestBase};
   let started = null, startMovie = null;
+  const played = [];
   const movieView = require('../tools/hud_overlay/vending_movie.js');
   // options.manual: the movie start settles only when the test calls page.startMovie(running).
-  window.owVendingMovie = {TAB_ORDER: movieView.TAB_ORDER, groupLists: movieView.groupLists, render: () => { drawn++; },
+  window.owVendingMovie = {TAB_ORDER: movieView.TAB_ORDER, feedbackFor: movieView.feedbackFor, groupLists: movieView.groupLists,
+    render: () => { drawn++; }, feedback: shown => { if (shown) played.push(shown); },
     start: () => (started = options.manual ? new Promise(resolve => { startMovie = resolve; }) : Promise.resolve(options.movie))};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/vending.js'), 'utf8'), {
-    window, setTimeout, console: {log: line => lines.push(line)}, fetch: () => Promise.resolve({ok: false}),
+    window, setTimeout, clearTimeout, console: {log: line => lines.push(line)}, fetch: () => Promise.resolve({ok: false}),
     document: {body, getElementById: id => (elements[id] = elements[id] || element()), createElement: element,
       addEventListener: (_name, handler) => { onKey = handler; }}});
   return {
@@ -250,6 +255,7 @@ function loadPage(options = {movie: false}) {
     lines: () => lines,
     bodyMovie: () => bodyMovie,
     drawn: () => drawn,
+    played: () => played.map(shown => shown.frame + (shown.label ? ' ' + shown.label : '')),
     lose: () => window.owVendingMovieLost(),
     push: raw => window.owVending(raw),
     key: key => onKey({key, preventDefault() {}}),
@@ -328,6 +334,7 @@ check('Request line has the serial, action and id', () => {
   assert.equal(line.slice(0, 7), 'OWVEND ');
   assert.deepEqual(JSON.parse(line.slice(7)), {serial: 4, action: 'buy', id: 'stock_3'});
   assert.equal(model.buildRequest(9, 'close', undefined), 'OWVEND {"serial":9,"action":"close","id":null}');
+  assert.equal(model.buildRequest(4, 'buy', 'stock_3', 12), 'OWVEND {"serial":4,"action":"buy","id":"stock_3","request":12}');
   assert.throws(() => model.buildRequest(1, 'steal', 'x'), RangeError);
   assert.throws(() => model.buildRequest(1, 'sell', ''), RangeError);
 });
@@ -407,11 +414,140 @@ checkLater('Page: when the movie is lost, the HTML page keeps the selected item 
   assert.deepEqual(page.requests().map(r => r.id), ['c']);
 });
 
+check('The refusal field is optional and must be text', () => {
+  assert.equal(model.validateState(state({refusal: ''})).ok, true);
+  assert.equal(model.validateState(state({refusal: 'Insufficient funds'})).ok, true);
+  assert.equal(model.validateState(state({refusal: 3})).ok, false);
+  assert.equal(model.validateState(state({handled: 7})).ok, true);
+  assert.equal(model.validateState(state({handled: -1})).ok, false);
+});
+
 check('remapSelection keeps the row by id and clamps when it is gone', () => {
   const before = {shop: [{id: 'a'}, {id: 'b'}, {id: 'c'}], backpack: [], buyback: []};
   assert.deepEqual(model.remapSelection({column: 'shop', index: 1}, before, {shop: [{id: 'a'}, {id: 'c'}, {id: 'b'}]}), {column: 'shop', index: 2});
   assert.deepEqual(model.remapSelection({column: 'shop', index: 2}, before, {shop: [{id: 'a'}]}), {column: 'shop', index: 0});
   assert.deepEqual(model.remapSelection({column: 'backpack', index: 0}, before, {backpack: []}), {column: 'backpack', index: 0});
+});
+
+// The host's answer to request n: the state names it as `handled` and carries the action's `refusal` (empty when it went through).
+const answer = (n, extra = {}) => state({opening: 1, refusal: '', handled: n, ...extra});
+const lastRequest = page => page.requests()[page.requests().length - 1].request;
+
+checkLater('Movie: a refused press plays at once, each time; a push does not replay it; a buy answered plays purchased', async () => {
+  const page = loadPage({movie: true});
+  await page.started;
+  page.push(answer(0));
+  page.key('ArrowDown');                       // s2, which cannot be afforded: the page refuses it itself
+  page.key('Enter');
+  page.push(answer(0, {serial: 5}));           // the host's one-second push
+  page.key('Enter');
+  assert.deepEqual(page.played(), ['bad INSUFFICIENT FUNDS', 'bad INSUFFICIENT FUNDS']);
+  page.key('ArrowUp');                         // s1, affordable
+  page.key('Enter');
+  assert.deepEqual(page.requests().map(r => r.action), ['buy']);
+  assert.equal(lastRequest(page), 1);          // requests are numbered
+  page.push(answer(1, {serial: 6, money: 900}));
+  assert.equal(page.played().pop(), 'purchased PURCHASED');
+  page.push(answer(1, {serial: 7, money: 900}));  // a later push plays nothing
+  assert.equal(page.played().length, 3);
+});
+
+checkLater('Movie: a sale plays sold; a host refusal plays its label; a restock alone plays nothing', async () => {
+  const page = loadPage({movie: true});
+  await page.started;
+  page.push(answer(0));
+  page.key('ArrowLeft');                       // backpack tab
+  page.key('Enter');                           // sell b1 (sorted first), not worn
+  page.push(answer(1, {serial: 5, money: 1040}));
+  assert.deepEqual(page.played(), ['sold SOLD']);
+  page.key('Enter');                           // request 2
+  page.push(answer(2, {serial: 5, money: 1040, refusal: 'Backpack full', message: 'Backpack full'}));
+  assert.equal(page.played().pop(), 'bad FULL');
+  page.key('Enter');                           // request 3; a restock moves the serial, but this state answers request 2
+  page.push(answer(2, {serial: 6, money: 1040}));
+  assert.equal(page.played().length, 2);
+});
+
+checkLater('Movie: a sell pressed before the buy is answered is ignored, so the buy gets its own result', async () => {
+  const page = loadPage({movie: true});
+  await page.started;
+  page.push(answer(0));
+  page.key('Enter');                           // buy s1
+  page.key('ArrowLeft');                       // backpack tab
+  page.key('Enter');                           // sell b1 before the buy's answer: ignored
+  page.key('Enter');
+  assert.deepEqual(page.requests().map(r => r.action), ['buy']);
+  assert.equal(page.lines().filter(line => line.startsWith('OWVENDBUSY')).length, 1);
+  page.push(answer(1, {serial: 5, money: 900}));
+  assert.deepEqual(page.played(), ['purchased PURCHASED']);
+  page.key('Enter');                           // now the sale goes
+  assert.deepEqual(page.requests().map(r => r.action), ['buy', 'sell']);
+});
+
+checkLater('Movie: a late answer to a timed-out buy is not taken for the second buy (Luna r2 repro)', async () => {
+  const page = loadPage({movie: true, pendingMs: 30});
+  await page.started;
+  page.push(answer(0));
+  page.key('Enter');                           // buy, request 1
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(page.lines().filter(line => line.startsWith('OWVENDPENDING')).length, 1);
+  page.key('Enter');                           // buy again with the same serial, request 2
+  assert.deepEqual(page.requests().map(r => [r.action, r.serial, r.request]), [['buy', 4, 1], ['buy', 4, 2]]);
+  page.push(answer(1, {serial: 5, money: 900})); // the first buy's late success: not request 2's
+  assert.deepEqual(page.played(), []);
+  assert.equal(page.lines().filter(line => line.startsWith('OWVENDLATE')).length, 1);
+  page.push(answer(2, {serial: 5, money: 900, refusal: 'Try again', message: 'Try again'})); // the host refuses the stale second
+  assert.deepEqual(page.played(), ['bad TRY AGAIN']);
+});
+
+checkLater('Movie: after a reload, the host still echoing the old page number does not answer the new request', async () => {
+  const first = loadPage({movie: true});
+  await first.started;
+  first.push(answer(0));
+  first.key('Enter');                          // request 1 from the first page load
+  const reloaded = loadPage({movie: true, requestBase: 5000});
+  await reloaded.started;
+  reloaded.push(answer(1));                    // the host still names request 1 (no new opening yet)
+  reloaded.key('Enter');                       // the reloaded page's request 5001
+  assert.equal(lastRequest(reloaded), 5001);
+  reloaded.push(answer(1, {serial: 5, money: 900}));  // a state that names the old number: not this request's answer
+  assert.deepEqual(reloaded.played(), []);
+  reloaded.key('ArrowLeft');
+  reloaded.key('Enter');                       // still waiting, so this press is ignored
+  assert.deepEqual(reloaded.requests().map(r => r.request), [5001]);
+  reloaded.push(answer(5001, {serial: 6, money: 800}));
+  assert.deepEqual(reloaded.played(), ['purchased PURCHASED']);
+});
+
+check('The page source starts its request numbers at a random base, not at a fixed number or a clock', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'tools', 'hud_overlay', 'vending.js'), 'utf8');
+  assert.ok(/Math\.random\(\)/.test(source));
+  assert.ok(!source.includes('requestCount = 0'));
+});
+
+checkLater('Movie: a stock notice is never played as a refusal, and a host without the answer fields plays no host results', async () => {
+  const page = loadPage({movie: true});
+  await page.started;
+  page.push(answer(0, {message: 'No weapons listed'}));
+  page.key('Enter');
+  page.push(answer(1, {serial: 5, money: 900, message: 'No weapons listed'}));
+  assert.deepEqual(page.played(), ['purchased PURCHASED']);
+  const old = loadPage({movie: true});
+  await old.started;
+  old.push(state({opening: 1, message: 'No weapons listed'})); // no refusal or handled field
+  old.key('Enter');
+  old.push(state({opening: 1, serial: 5, money: 900, message: 'Insufficient funds'}));
+  assert.deepEqual(old.played(), []);
+  assert.equal(old.lines().filter(line => line.startsWith('OWVENDNOANSWER')).length, 1);
+});
+
+checkLater('HTML page: presses are not held back (only the movie waits for answers)', async () => {
+  const page = loadPage({movie: false});
+  await page.started;
+  page.push(state({opening: 1}));
+  page.key('Enter');
+  page.key('Enter');
+  assert.deepEqual(page.requests().map(r => r.action), ['buy', 'buy']);
 });
 
 (async () => {

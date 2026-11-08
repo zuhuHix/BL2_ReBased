@@ -1136,6 +1136,7 @@ bool UOpenWillowVendorSubsystem::OpenAt(AOpenWillowWalker& Walker, AOpenWillowVe
     if (bRestocked) SaveCurrency();
     Page->Show(PC);
     ++Opening;
+    LastHandledRequest = 0; // a new opening answers no request yet: an old number is never echoed into it
     PushState();
     // While open, push the state every second: the page's countdown is the host's world time, and a restock that falls
     // due while the shop is open shows at once.
@@ -1171,6 +1172,18 @@ void UOpenWillowVendorSubsystem::HandlePageMessage(const FString& Line)
     Json->TryGetNumberField(TEXT("serial"), ReceivedSerial);
     Json->TryGetStringField(TEXT("action"), Action);
     Json->TryGetStringField(TEXT("id"), Id);
+    // The page numbers its requests; the state names the last one answered (stale, refused or done), so the page can tell
+    // which of its requests a result belongs to.
+    // A request number that is not a whole number from 0 to 2^53 is ignored and leaves `handled` as it was.
+    int64 Request = 0;
+    if (ParseRequestNumber(*Json, Request))
+    {
+        LastHandledRequest = Request;
+    }
+    else if (Json->HasField(TEXT("request")))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OWVENDOR ignored a request number that is not a whole number from 0 to 2^53"));
+    }
     // The serial first, for close too: a close left over from an earlier opening must not close the shop just reopened.
     if (int64(ReceivedSerial) != Serial)
     {
@@ -1191,6 +1204,16 @@ void UOpenWillowVendorSubsystem::HandlePageMessage(const FString& Line)
     }
     FString Error;
     Command(Action, Id, Error);
+}
+
+bool UOpenWillowVendorSubsystem::ParseRequestNumber(const FJsonObject& Message, int64& OutRequest)
+{
+    const TSharedPtr<FJsonValue> Field = Message.TryGetField(TEXT("request"));
+    if (!Field.IsValid() || Field->Type != EJson::Number) return false;
+    const double Value = Field->AsNumber();
+    if (!(Value >= 0.0 && Value <= 9007199254740992.0) || Value != FMath::FloorToDouble(Value)) return false;
+    OutRequest = int64(Value);
+    return true;
 }
 
 bool UOpenWillowVendorSubsystem::Command(const FString& Action, FString Id, FString& OutError)
@@ -1663,6 +1686,9 @@ FString UOpenWillowVendorSubsystem::StateJson() const
     State->SetNumberField(TEXT("resetSeconds"), FMath::FloorToInt(Stock.SecondsToReset(Now)));
     State->SetNumberField(TEXT("opening"), double(Opening));
     State->SetStringField(TEXT("message"), LastMessage.IsEmpty() ? Stock.Notice : LastMessage);
+    // The last action's refusal alone, without the stock notice: the shop movie plays its refusal clip only for this.
+    State->SetStringField(TEXT("refusal"), LastMessage);
+    State->SetNumberField(TEXT("handled"), double(LastHandledRequest));
     return Compact(State);
 }
 

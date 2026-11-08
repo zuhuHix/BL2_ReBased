@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- Vending machine page. When the converted shop movies run, BL2's own movie draws the page (vending_movie.js) and the
-     HTML panel hides but for its message line; without them the HTML panel is the page. Layout is UNVERIFIED against the
+     HTML panel hides (refusals play in the movie's feedback clip); without them the HTML panel is the page. Layout is UNVERIFIED against the
      game. Movies and Ruffle come from ignored local/ui/run (tools/prepare_vending_movie.py). -->
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenWillow vending</title>
@@ -36,8 +36,7 @@ h1{margin:0;font-size:22px;letter-spacing:.5px;flex:1 1 auto}
 #controls .movie-cell{position:absolute;pointer-events:auto;background:transparent;border:0;padding:0;cursor:pointer}
 html:has(body.movie),body.movie{background:transparent}
 body.movie main{background:transparent;pointer-events:none}
-body.movie main>*:not(#message){visibility:hidden}
-body.movie #message{position:fixed;left:0;right:0;bottom:12%;text-shadow:0 0 6px #000}
+body.movie main>*{visibility:hidden}
 body:not(.movie) #controls{display:none}
 @media (max-width:760px){
  .columns{grid-template-columns:1fr}

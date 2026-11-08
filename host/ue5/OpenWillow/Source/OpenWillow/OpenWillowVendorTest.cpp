@@ -13,6 +13,9 @@
 #include "Misc/Paths.h"
 #include "OpenWillowCurrency.h"
 #include "OpenWillowMayaState.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -428,6 +431,34 @@ bool FOpenWillowVendorPersistTest::RunTest(const FString& Parameters)
     IFileManager::Get().Delete(*Resolved, false, true, true);
     IFileManager::Get().Delete(*(Resolved + TEXT(".bak")), false, true, true);
 
+    return true;
+}
+
+// The page's request numbers (vendor movie B): only a JSON number that is a whole number from 0 to 2^53 is taken.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowVendorRequestNumberTest, "OpenWillow.Vendor.RequestNumber",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FOpenWillowVendorRequestNumberTest::RunTest(const FString& Parameters)
+{
+    const auto Parse = [](const TCHAR* Text, int64& Out)
+    {
+        TSharedPtr<FJsonObject> Json;
+        if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Json) || !Json.IsValid()) return false;
+        return UOpenWillowVendorSubsystem::ParseRequestNumber(*Json, Out);
+    };
+    int64 Out = -7;
+    TestTrue(TEXT("a whole number is taken"), Parse(TEXT("{\"request\":42}"), Out));
+    TestEqual(TEXT("its value"), Out, int64(42));
+    TestTrue(TEXT("zero is taken"), Parse(TEXT("{\"request\":0}"), Out));
+    TestTrue(TEXT("a large page base is taken"), Parse(TEXT("{\"request\":1125899906842624}"), Out));
+    TestEqual(TEXT("exactly"), Out, int64(1125899906842624));
+    Out = -7;
+    TestFalse(TEXT("a negative is ignored"), Parse(TEXT("{\"request\":-1}"), Out));
+    TestFalse(TEXT("a fraction is ignored"), Parse(TEXT("{\"request\":1.5}"), Out));
+    TestFalse(TEXT("a string is ignored"), Parse(TEXT("{\"request\":\"5\"}"), Out));
+    TestFalse(TEXT("above 2^53 is ignored"), Parse(TEXT("{\"request\":1e300}"), Out));
+    TestFalse(TEXT("a missing field is ignored"), Parse(TEXT("{\"serial\":3}"), Out));
+    TestEqual(TEXT("an ignored value leaves the output alone"), Out, int64(-7));
     return true;
 }
 #endif

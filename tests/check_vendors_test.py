@@ -145,7 +145,9 @@ GOOD_AUTOMATION = ('LogAutomationController: Display: Test Completed. Result={Pa
                    'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.Items}'
                    '\tPath={OpenWillow.Vendor.Items}\n'
                    'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.RolledGunFiringTemplate}'
-                   '\tPath={OpenWillow.Vendor.RolledGunFiringTemplate}\n')
+                   '\tPath={OpenWillow.Vendor.RolledGunFiringTemplate}\n'
+                   'LogAutomationController: Display: Test Completed. Result={Passed}\tName={OpenWillow.Vendor.RequestNumber}'
+                   '\tPath={OpenWillow.Vendor.RequestNumber}\n')
 
 
 def run(log, automation=GOOD_AUTOMATION, doc=None, open_index=0):
@@ -418,7 +420,7 @@ class MainTest(unittest.TestCase):
                 code = cv.main(['--log', str(log), '--automation-log', str(auto), '--vendors', str(vendors),
                                 '--open-index', '0'])
             self.assertEqual(code, 0)
-            self.assertIn('SUMMARY passed=18 failed=0 missing=0', buffer.getvalue())
+            self.assertIn('SUMMARY passed=19 failed=0 missing=0', buffer.getvalue())
             self.assertIn('CHECK prices PASS', buffer.getvalue())
 
     def test_a_required_automation_log_that_is_missing_exits_one(self):

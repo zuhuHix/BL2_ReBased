@@ -45,7 +45,7 @@ REFUSED = re.compile(r'ow\.Vendor\.(\w+) refused: (.*)$', re.M)
 STATE = re.compile(r'OWVENDSTATE (\{.*)$', re.M)   # the whole rest of the line: a broken JSON is reported, not skipped
 PAGE_ERROR = re.compile(r'OWVENDERR (.*)$', re.M)   # the page refused a host state
 AUTOMATION_TESTS = ('OpenWillow.Vendor.Stock', 'OpenWillow.Vendor.Persist', 'OpenWillow.Vendor.Items',
-                    'OpenWillow.Vendor.RolledGunFiringTemplate')
+                    'OpenWillow.Vendor.RolledGunFiringTemplate', 'OpenWillow.Vendor.RequestNumber')
 AMMO_LINE = re.compile(r'OWVENDAMMO type=(\w+) before=(-?\d+) after=(-?\d+) max=(-?\d+)')
 HEAL_LINE = re.compile(r'OWVENDHEAL before=(-?[\d.]+) after=(-?[\d.]+) max=(-?[\d.]+)')
 CURRENCY_REFUSED = re.compile(r'OWCURRENCY load refused: (.*)$', re.M)
