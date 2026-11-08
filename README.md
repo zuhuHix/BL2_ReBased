@@ -279,10 +279,10 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 
 ### Vendors and lootables
 
-**State:** Gun machines, the currency, the Ammo Dump and Dr. Zed sell. Containers open, and their contents come out. The shop page is a stand-in rather than BL2's own, and drops now lie inside the container they came from (#163); how closely that matches the game is not checked yet.
+**State:** Gun machines, the currency, the Ammo Dump and Dr. Zed sell. Containers open, and their contents come out. The shop page is a stand-in rather than BL2's own, and drops now lie inside the container they came from (#163), compared only in a few frames; the placement rule is unproven.
 
 <p align="center">
-  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-boxes-pair-2026-11-08.jpg" width="49%" alt="Comparison card: four kinds of lootable container opened, the real game in the top row and ours below">
+  <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-boxes-pair-2026-11-08b.jpg" width="49%" alt="Comparison card: four kinds of lootable container opened, the real game in the top row and ours below">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/loot-pickup-card-pair-2026-11-08.jpg" width="49%" alt="Comparison card: the item card over a gun on the ground, in the real game and in ours">
 </p>
 <p align="center">
@@ -326,11 +326,11 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 - **Pickups and drops.** BL2's own card movie on world pickups (#95). E takes the aimed pickup, not the nearest (#101). Drops have a rarity beam and lie on the ground (#139).
 - **Gun range.** Moving enemies with AI, loot on death from the VM's death roll (#89), and five enemies including a Psycho, with corpses (#133).
 - **Skills.** Keyboard navigation (#35, #49). Skill modifiers on Maya's survival stats (#93). Quick Change respec at the placed machine (#106). Some numbers from live reads at level 8 only (#116), and Converge's damage from one live read (#135).
-- **Vendors and lootables.** Currency and stock persist (#87). The Ammo Dump and Dr. Zed sell, and ammo purchases fill the pools (#99). The shop keeps its selection rules and refusals on screen (#127). Lootable and pickup textures (#120). Drops lie inside the container they came from (#163); how closely that matches the game is not checked. The shelves for shields and grenade mods sell stand-in gear with no stats.
+- **Vendors and lootables.** Currency and stock persist (#87). The Ammo Dump and Dr. Zed sell, and ammo purchases fill the pools (#99). The shop keeps its selection rules and refusals on screen (#127). Lootable and pickup textures (#120). Drops lie inside the container they came from (#163), compared only in a few frames; the placement rule is unproven. The shelves for shields and grenade mods sell stand-in gear with no stats.
 - **Phaselock.** Presentation and colour constants (#50, #94, #110), round 24 (#104), the target's six worn attachments (#113), and a held target's death ends the skill (#146). Lift bob and reload/weapon-swap rules are confirmed in the real game ([PHASELOCK_STOCK_DATA.md](docs/verification/PHASELOCK_STOCK_DATA.md)).
 - **Inventory and menus.** Tab switching (#91, #92). VALUE thumbnails and card fits (#69). An item set that would leave the backpack without room is refused (#71). The Missions log (#64, #100). Status pages hide the first-person gun (#118). A missing UI movie no longer covers the game (#122). Status menu keys keep each page on its own key and route between pages from the Inventory (#158).
 - **The Fire mission.** Accept, objective and turn-in run on stock world data with labelled stand-ins ([SANCTUARY_RPG_MISSION.md](docs/verification/SANCTUARY_RPG_MISSION.md)), through Marcus's mission screen on BL2's own movie (#134).
-- **Audio.** The host plays sounds by role (#119), and the game's own sounds now play, decoded on your machine by an external tool (#166). Nobody has listened to them side by side with the game yet. Which roles exist comes from one live session, `UNVERIFIED` (#149).
+- **Audio.** The host plays sounds by role (#119), and the game's own sounds can be decoded on your machine by an external tool, with the host wired to play them (#166). Playback in a run has not been checked yet, and nobody has listened to them against the game. Which roles exist comes from one live session, `UNVERIFIED` (#149).
 
 </details>
 
@@ -565,7 +565,7 @@ A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/i
 
 The Sanctuary slice lives in `host/`: Maya's movement, state, HUD, guns, grenades, melee, pickups, Phaselock, the gun range, the Fire mission, the skills page, vending and lootables, with labelled stand-ins and unverified rules where the records say so. The slice gate (`tools/test_slice_gate.ps1`) runs its 14 checks in sequence and reports any link whose piece the host lacks as NOT_AVAILABLE.
 
-Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, saves, and playing the game's own sounds. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for the slice's characters.)
+Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, saves, and checked playback of the game's own sounds. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for the slice's characters.)
 
 Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 
