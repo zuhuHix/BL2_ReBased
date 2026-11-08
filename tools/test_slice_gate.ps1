@@ -70,6 +70,8 @@ try {
     if ($Gun) { $arguments += "-owslicegategun=$Gun" }
     if ($Shield) { $arguments += '-owslicegateshield' }
     if ($DownAfterFight) { $arguments += '-owslicegatedownafterfight' }
+    # The two variants keep the no-start-shield baseline their fixtures were written against (SLICE_GATE.md). The plain run starts as normal play does.
+    if ($Shield -or $DownAfterFight) { $arguments += '-ownostartshield' }
     if ($AudioPlay) { $arguments += "-owaudioplay=`"$AudioPlay`"" }
     $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")

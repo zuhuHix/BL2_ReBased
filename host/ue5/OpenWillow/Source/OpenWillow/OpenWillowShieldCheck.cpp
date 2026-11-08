@@ -11,7 +11,8 @@
 #include "OpenWillowWalker.h"
 #include "UnrealClient.h"
 
-// A shield with no stats, added and equipped as the inventory screen does. Also used by -owstandinshield (OpenWillowMayaHUD.cpp).
+// A shield with no stats, added and equipped as the inventory screen does. Used by Maya's start shield in normal play (OpenWillowWalker.cpp
+// BeginPlay; -ownostartshield leaves it out) and by the test-only -owstandinshield (OpenWillowMayaHUD.cpp).
 bool OpenWillowEquipStandInShield(AOpenWillowWalker& Maya)
 {
     UOpenWillowInventory* Inventory = Maya.GetInventory();

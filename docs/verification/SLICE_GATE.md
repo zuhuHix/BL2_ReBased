@@ -303,6 +303,8 @@ This is not a merged state: the merge was local and was deleted after the run. *
 
 ### Shield variant (`-owslicegateshield`, `tools/test_slice_gate.ps1 -Shield`)
 
+Since 2026-11-08 the plain run starts with the stand-in shield, as normal play does; the `-Shield` and `-DownAfterFight` runs pass `-ownostartshield` and keep the no-start-shield baseline below (see [COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"). The older text below that says Maya has no shield at spawn describes those runs and the earlier plain runs.
+
 Maya fights with a shield, so the fight path can run without the restore fixture: only a downed Maya is restored, and
 her health after the fight is kept. She gets a shield from the gear manifest when it has one. Otherwise she gets a host
 stand-in with her maximum health as its capacity and the default recharge, which is **not stock data**. Both are named
