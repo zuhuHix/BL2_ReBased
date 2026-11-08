@@ -63,6 +63,7 @@ import math
 from pathlib import Path
 import re
 
+import game_colours
 import skill_stats
 import weapon_recipe
 from weapon_recipe import f32
@@ -172,8 +173,9 @@ SCHEMA_LINES = weapon_recipe.SCHEMA_LINES + [
     # Struct elements are tagged, so the struct name is only a label.
     'MappingData=StructProperty:WeaponStatusEffectPresentationMapping',
 ]
-# Title parts' CustomPresentations carry the red flavour line, TextColor (220, 70, 70).
-RED_TEXT_COLOR = {'R': 220, 'G': 70, 'B': 70}
+# Title parts' CustomPresentations carry the red flavour line. Its exact TextColor is the `card_red_text` key of
+# the ignored local colours file (tools/game_colours.py, DECISIONS.md 2026-11-08); without that file no line is
+# recognised as red (the neutral grey is not a TextColor the cards use) and game_colours warns once.
 WHITE_TEXT_COLOR = {'R': 255, 'G': 255, 'B': 255}
 CARD_ZOOM_REFERENCE_FOV = 80.0
 GAME_TEXT_TAG = re.compile(r'\[([A-Za-z][A-Za-z0-9_]*)\](.*?)\[-\1\]', re.S)
@@ -364,7 +366,7 @@ def red_text(package, recipe, localize=None):
 
 
 def _is_red(color):
-    return all(color.get(k) == v for k, v in RED_TEXT_COLOR.items())
+    return all(color.get(k) == v for k, v in game_colours.rgb('card_red_text').items())
 
 
 def _hex_color(color):

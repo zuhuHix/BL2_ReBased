@@ -2,10 +2,17 @@
 from pathlib import Path
 import json
 import math
+import os
 import sys
+import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import weapon_stats as s
+
+# A made-up red flavour colour stands in for the ignored local colours file (the game's is never in the repository).
+COLOURS = tempfile.TemporaryDirectory()
+os.environ['OPENWILLOW_GAME_COLOURS'] = str(Path(COLOURS.name) / 'game_colours.json')
+Path(os.environ['OPENWILLOW_GAME_COLOURS']).write_text(json.dumps({'colours': {'card_red_text': '#C91121'}}), encoding='utf-8')
 
 A = 'D_Attributes.Weapon.'
 
@@ -253,7 +260,7 @@ def card_world():
             'bEnabled': True, 'Multiplier': const(0, init='Init.Universal'),
             'Level': const(0, 'Att.Base'), 'Power': const(1)}},
         'Title': {'CustomPresentations': ['Title.Red', 'Title.White']},
-        'Title.Red': {'NoConstraintText': 'Red; line', 'TextColor': {'R': 220, 'G': 70, 'B': 70, 'A': 255}},
+        'Title.Red': {'NoConstraintText': 'Red; line', 'TextColor': {'R': 201, 'G': 17, 'B': 33, 'A': 255}},
         'Title.White': {'NoConstraintText': 'Not red', 'TextColor': {'R': 255, 'G': 255, 'B': 255, 'A': 255}},
     })
     objects['Type']['MonetaryValue'] = {'BaseValueAttribute': 'Att.Maker', 'InitializationDefinition': CALC}
@@ -419,7 +426,7 @@ class CardTextTests(unittest.TestCase):
             'A weapon type note.', 'Effective against a target type.',
         ])
         self.assertEqual(card['fun_stats_lines'][-1]['color'], '#123456')
-        self.assertIn('<font color="#DC4646">Red, line</font>', card['fun_stats_markup'])
+        self.assertIn('<font color="#C91121">Red, line</font>', card['fun_stats_markup'])
         self.assertIn('<font color="#123456">Effective against a target type.</font>', card['fun_stats_markup'])
 
     def test_null_presentation_entries_are_skipped(self):
@@ -481,12 +488,24 @@ class CardTextTests(unittest.TestCase):
         objects['Balance'] = {'CustomPresentations': ['Balance.Red']}
         objects['Balance.Red'] = {
             'NoConstraintText': 'A   compact     flavour line.',
-            'TextColor': {'R': 220, 'G': 70, 'B': 70, 'A': 255},
+            'TextColor': {'R': 201, 'G': 17, 'B': 33, 'A': 255},
         }
         item = dict(recipe(), balance='Balance')
         card = s.evaluate(FakePackage(objects), item, level=1)['card']
         self.assertEqual(card['fun_stats'], 'A compact flavour line.')
-        self.assertEqual(card['fun_stats_lines'][0]['color'], '#DC4646')
+        self.assertEqual(card['fun_stats_lines'][0]['color'], '#C91121')
+
+    def test_without_the_colours_file_no_line_is_red(self):
+        objects = card_world()
+        item = recipe()
+        item.update({'title': {'part': 'Title'}})
+        saved = os.environ['OPENWILLOW_GAME_COLOURS']
+        os.environ['OPENWILLOW_GAME_COLOURS'] = str(Path(COLOURS.name) / 'missing.json')
+        try:
+            self.assertIsNone(s.red_text(FakePackage(objects), item))
+        finally:
+            os.environ['OPENWILLOW_GAME_COLOURS'] = saved
+        self.assertEqual(s.red_text(FakePackage(objects), item), 'Red, line')
 
 
 class NativeRuleTests(unittest.TestCase):
