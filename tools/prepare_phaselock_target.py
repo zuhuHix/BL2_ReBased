@@ -33,7 +33,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slice_npc_assets as npc
-from editor_inputs import file_problem  # noqa: E402
+from editor_inputs import ZONE_TEXTURES, file_problem  # noqa: E402
 
 OUT = ROOT / 'local/phaselock/target'
 UMODEL_OUT = ROOT / 'local/external/umodel/phaselock-target'
@@ -309,11 +309,14 @@ def job_problems(job):
         for piece in npc_entry.get('attachment_meshes', []):
             if bad(piece.get('gltf')):
                 problems.append(f'{name}: attachment {piece["id"]} glTF {piece.get("gltf")!r}')
+        # Only the textures the mesh and zone steps import count (diffuse, masks, normal); a missing export of any other parameter
+        # (a pattern texture, say) is not used by them and does not block the job.
         for slot in npc_entry.get('slots', []):
             for parameter in slot.get('missing_textures', []):
-                problems.append(f'{name}: slot {slot["slot"]} texture {parameter} not in the UModel output')
+                if parameter in ZONE_TEXTURES:
+                    problems.append(f'{name}: slot {slot["slot"]} texture {parameter} not in the UModel output')
             for parameter, path in slot.get('textures', {}).items():
-                if bad(path):
+                if parameter in ZONE_TEXTURES and bad(path):
                     problems.append(f'{name}: slot {slot["slot"]} texture {parameter} {path!r}')
     return problems
 

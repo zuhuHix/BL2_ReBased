@@ -69,8 +69,10 @@ def test_npcs_and_attach():
 
 # --- the editor scripts against a stub unreal ------------------------------------------------------------------------------------
 
+# Any of these in a call path is a change to content: imports, deletes, creates, saves, and every material-instance mutation the zone step
+# makes (clear_all_material_instance_parameters, set_material_instance_parent and the *_parameter_value setters all contain "material").
 FORBIDDEN = ('import_asset_tasks', 'delete_directory', 'delete_asset', 'create_asset', 'save_loaded_asset', 'save_directory',
-             'set_editor_property', 'set_material')
+             'set_editor_property', 'set_material', 'clear_all_material_instance_parameters')
 
 
 class Recorder:
@@ -89,10 +91,26 @@ class Recorder:
         return iter(())
 
 
+class StubClassMeta(type):
+    """An unreal class (capitalised name): a real type, so isinstance() works; its attributes are recorders, so calls are logged."""
+    def __getattr__(cls, name):
+        return Recorder(cls._log, f'unreal.{cls.__name__}.{name}')
+
+
+def stub_attribute(log, name):
+    if name[:1].isupper():
+        cls = StubClassMeta(name, (Recorder,), {'_log': log})
+        original = cls.__init__
+        cls.__init__ = lambda self, *args, **kwargs: (log.append(f'unreal.{name}()'), original(self, log, f'unreal.{name}()'))[1]
+        return cls
+    return Recorder(log, f'unreal.{name}')
+
+
 def run_with_stub(script, job, mode=None):
     log = []
     stub = types.ModuleType('unreal')
-    stub.__getattr__ = lambda name: Recorder(log, f'unreal.{name}')
+    classes = {}
+    stub.__getattr__ = lambda name: classes.setdefault(name, stub_attribute(log, name))
     with tempfile.TemporaryDirectory() as tmp:
         job_file = Path(tmp) / 'job.json'
         job.setdefault('slice_dir', tmp)
@@ -105,8 +123,8 @@ def run_with_stub(script, job, mode=None):
         try:
             runpy.run_path(str(ROOT / 'tools' / script), run_name='__main__')
             error = None
-        except RuntimeError as raised:
-            error = str(raised)
+        except Exception as raised:   # a stopped step raises RuntimeError; anything else is reported the same way, with what was touched
+            error = f'{type(raised).__name__}: {raised}'
         finally:
             sys.modules.pop('unreal', None)
             os.environ.clear()
@@ -119,10 +137,17 @@ def touched(log):
 
 
 def test_zone_step_stops_before_any_change():
-    job = {'tool': 'tools/prepare_phaselock_target.py', 'npcs': [{'id': 'B', 'dest': '/Game/X', 'mesh_name': 'M', 'master': 'Master_Creature',
-           'slots': [{'slot': 'S', 'material': 'Mati_X', 'textures': {}, 'missing_textures': ['p_Masks', 'p_Diffuse']}]}]}
-    error, log = run_with_stub('phaselock_target_editor.py', job)
-    assert error and 'zone: inputs missing' in error and not touched(log), (error, touched(log))
+    # A valid zoned slot comes first, so a check placed after (or inside) the loop would already have changed that slot's instance.
+    with tempfile.TemporaryDirectory() as tmp:
+        good, empty, absent = files(tmp)
+        valid = {'slot': 'Good', 'material': 'Mati_Good', 'textures': {'p_Diffuse': good, 'p_Masks': good, 'p_Normal': good}, 'vectors': {},
+                 'scalars': {}}
+        broken = {'slot': 'Bad', 'material': 'Mati_Bad', 'textures': {'p_Diffuse': good, 'p_Masks': empty}, 'vectors': {}, 'scalars': {}}
+        job = {'tool': 'tools/prepare_phaselock_target.py', 'npcs': [
+            {'id': 'A', 'dest': '/Game/A', 'mesh_name': 'M', 'master': 'Master_Creature', 'slots': [valid]},
+            {'id': 'B', 'dest': '/Game/B', 'mesh_name': 'M', 'master': 'Master_Creature', 'slots': [broken]}]}
+        error, log = run_with_stub('phaselock_target_editor.py', job)
+    assert error and 'zone: inputs missing' in error and 'B/Bad p_Masks' in error and not touched(log), (error, touched(log))
 
 
 def test_attach_step_stops_before_any_import():

@@ -1519,7 +1519,7 @@ editor job whose every glTF was the string "None" and whose texture lists were e
 `AssetTools.ImportAssetTasks`, and Unreal stopped on an assertion (editor exit 3). The zone step had already "succeeded" with
 `kept plain material` for every slot, so it could not test a material change.
 
-- `tools/prepare_phaselock_target.py editor-job` writes no job when a mesh or attachment glTF or a listed texture is missing or empty
+- `tools/prepare_phaselock_target.py editor-job` writes no job when a mesh or attachment glTF, or a texture the mesh or zone step imports (diffuse, masks, normal), is missing or empty; other texture parameters do not block it
   (`job_problems`, synthetic test), and names each missing input and the `-Steps prepare` extract that produces them.
 - The zone, attach and mesh (slice `npcs`) editor steps check, before anything changes (for `npcs`: before `clean()` deletes a destination),
   every file they will import, through `tools/editor_inputs.py`: no path in the job (None, "None", empty), a missing file or an empty file
