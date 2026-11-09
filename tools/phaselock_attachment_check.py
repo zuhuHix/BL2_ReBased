@@ -99,8 +99,11 @@ def host_rows(path, pawn):
         rows = json.loads(Path(path).read_text(encoding='utf-8'))[pawn].get('attachments', [])
         bones = [row['bone'] for row in rows]
         for row in rows:
-            if len(row['location']) != 3:
-                raise ValueError(f"{row['bone']}: location is not three numbers")
+            location = row['location']
+            numbers = isinstance(location, list) and len(location) == 3 and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in location)
+            if not isinstance(row['bone'], str) or not numbers:
+                raise ValueError(f"{row['bone']!r}: needs a bone name and a location of three finite numbers")
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         raise SessionError(f'host report {path} unusable for {pawn}: {error!r}')
     if len(set(bones)) != len(bones):

@@ -97,7 +97,12 @@ def test_a_piece_missing_from_the_host_report_fails():
 
 def test_unusable_host_reports_are_refused():
     cases = ['{', json.dumps({'Other': {}}), json.dumps({'Bullymong': {'attachments': [{'bone': 'Head'}]}}),
-             json.dumps({'Bullymong': {'attachments': [{'bone': 'Head', 'location': [0, 0, 0]}, {'bone': 'Head', 'location': [1, 1, 1]}]}})]
+             json.dumps({'Bullymong': {'attachments': [{'bone': 'Head', 'location': [0, 0, 0]}, {'bone': 'Head', 'location': [1, 1, 1]}]}}),
+             json.dumps({'Bullymong': {'attachments': [{'bone': 'Head', 'location': ['a', 'b', 'c']}]}}),
+             json.dumps({'Bullymong': {'attachments': [{'bone': 'Head', 'location': [0, True, 0]}]}}),
+             json.dumps({'Bullymong': {'attachments': [{'bone': ['Head'], 'location': [0, 0, 0]}]}}),
+             json.dumps({'Bullymong': {'attachments': [{'bone': 'Head', 'location': 'xyz'}]}}),
+             json.dumps({'Bullymong': [1, 2]})]
     for text in cases:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'host.json'
