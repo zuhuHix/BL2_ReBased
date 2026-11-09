@@ -86,6 +86,26 @@ def test_roles_keep_the_host_naming():
         assert 'idle' not in spec['dest'].lower()   # a replace of "Idle" must only touch the clip name
 
 
+def test_job_problems_names_every_missing_input():
+    with tempfile.TemporaryDirectory() as tmp:
+        good = Path(tmp) / 'Mesh_A.gltf'
+        good.write_text('{}', encoding='utf-8')
+        empty = Path(tmp) / 'Empty.png'
+        empty.write_bytes(b'')
+        tex = Path(tmp) / 'Tex_A.png'
+        tex.write_bytes(b'x')
+        complete = {'npcs': [{'id': 'Fake', 'gltf': str(good), 'attachment_meshes': [{'id': 'Piece', 'gltf': str(good)}],
+                              'slots': [{'slot': 'S', 'textures': {'p_Diffuse': str(tex)}, 'missing_textures': []}]}]}
+        assert t.job_problems(complete) == []
+        # The 2026-11-09 failure: no exports, so every glTF was the string "None" and the textures were dropped.
+        broken = {'npcs': [{'id': 'Fake', 'gltf': 'None', 'attachment_meshes': [{'id': 'Piece', 'gltf': ''}],
+                            'slots': [{'slot': 'S', 'textures': {'p_Normal': str(empty)}, 'missing_textures': ['p_Masks']}]}]}
+        problems = t.job_problems(broken)
+        assert len(problems) == 4
+        assert any('mesh glTF' in p for p in problems) and any('attachment Piece' in p for p in problems)
+        assert any('p_Masks not in the UModel output' in p for p in problems) and any('p_Normal' in p for p in problems)
+
+
 if __name__ == '__main__':
     for name, fn in list(globals().items()):
         if name.startswith('test_'):

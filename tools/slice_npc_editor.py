@@ -40,6 +40,9 @@ def log(message):
 
 
 def import_one(path, folder, expected):
+    # Unreal's importer asserts (editor exit 3) on a missing source instead of failing cleanly; stop with the file named instead.
+    if not path or str(path) == 'None' or not Path(path).is_file() or Path(path).stat().st_size == 0:
+        raise RuntimeError(f'import source missing or empty: {path!r} (the UModel exports were not there when the job was written)')
     task = unreal.AssetImportTask()
     task.filename = str(path)
     task.destination_path = folder
