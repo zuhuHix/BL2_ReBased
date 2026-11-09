@@ -4379,3 +4379,11 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.m
   uses them as stored. The x2 light/dark scales from the shader reading stay.
 - **Why:** an A/B in identical light (runner-z36) scored by a Luna critic, colour only: 6.4/10 with the fit, 5.8 without.
 - **Not verified:** a host fit on top of a shader reading, judged by eye in UE5's light; the game's own rendering of the colours was not matched.
+
+## 2026-11-09: Missing UModel exports stop the Phaselock target import with a message, not an Unreal assertion
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.md`, "Missing exports stop the target import instead of crashing Unreal".
+
+- **Cause:** a worktree without the UModel exports wrote "None" for every glTF; the attach step's import asserted (exit 3), and the zone step kept plain materials silently.
+- **Change:** the job writer refuses an incomplete job; the zone, attach and mesh editor steps check their sources first. No parsing or host change.
+- **Checked:** synthetic test of the job check; the editor checks run in plain Python against the failing and a complete job. Not run in the editor.

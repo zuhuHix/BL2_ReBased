@@ -294,6 +294,29 @@ def host_target(name, target):
                        'cylinder': observed['source']}}
 
 
+def job_problems(job):
+    """Every input the editor steps would import that is not a non-empty file, as readable lines; [] when the job is complete.
+    The editor's importer asserts on a missing source instead of failing cleanly (2026-11-09: a worktree without the UModel exports wrote
+    "None" for every glTF and Unreal stopped with exit 3), and the zone step would quietly keep the plain material."""
+    def bad(path):
+        return not path or path == 'None' or not Path(path).is_file() or Path(path).stat().st_size == 0
+    problems = []
+    for npc_entry in job['npcs']:
+        name = npc_entry['id']
+        if bad(npc_entry.get('gltf')):
+            problems.append(f'{name}: mesh glTF {npc_entry.get("gltf")!r}')
+        for piece in npc_entry.get('attachment_meshes', []):
+            if bad(piece.get('gltf')):
+                problems.append(f'{name}: attachment {piece["id"]} glTF {piece.get("gltf")!r}')
+        for slot in npc_entry.get('slots', []):
+            for parameter in slot.get('missing_textures', []):
+                problems.append(f'{name}: slot {slot["slot"]} texture {parameter} not in the UModel output')
+            for parameter, path in slot.get('textures', {}).items():
+                if bad(path):
+                    problems.append(f'{name}: slot {slot["slot"]} texture {parameter} {path!r}')
+    return problems
+
+
 def editor_job_step(args):
     identity = npc.read_json(OUT / 'identity.json')
     job = {'tool': TOOL, 'generated': npc.now(), 'npcs': [], 'slice_dir': str(OUT)}
@@ -302,20 +325,27 @@ def editor_job_step(args):
         mesh = npc.leaf(target['skeletal_mesh']['path'])
         slots = []
         for slot in target.get('mesh_material_slots', []):
-            textures = {}
+            textures, missing = {}, []
             for texture in slot['textures']:
                 file = npc.find_output(name, npc.leaf(texture['object']), ['png', 'tga'])
                 if file:
                     textures[texture['parameter']] = str(file)
-            slots.append({'slot': slot['name'], 'material': slot['material'], 'textures': textures,
+                else:
+                    missing.append(texture['parameter'])
+            slots.append({'slot': slot['name'], 'material': slot['material'], 'textures': textures, 'missing_textures': missing,
                           'scalars': slot.get('scalars', {}), 'vectors': slot.get('vectors', {})})
         job['npcs'].append({'id': name, 'dest': target['dest'], 'master': TARGETS[name].get('master'), 'mesh_name': mesh,
-                            'gltf': str(npc.find_output(name, mesh, ['gltf'])), 'slots': slots,
-                            'attachment_meshes': [{'id': m, 'gltf': str(npc.find_output(name, m, ['gltf'])), 'material': material}
+                            'gltf': str(npc.find_output(name, mesh, ['gltf']) or ''), 'slots': slots,
+                            'attachment_meshes': [{'id': m, 'gltf': str(npc.find_output(name, m, ['gltf']) or ''), 'material': material}
                                                    for m, material in attachment_meshes(target['attachments']).items()],
                             'tracks': str(OUT / f'anim_tracks_{name}.json'), 'roles': [r for r, _ in TARGETS[name]['roles']],
                             'reference_out': str(OUT / f'ref_pose_{name}.json')})
         hosts[name] = host_target(name, target)
+    problems = job_problems(job)
+    if problems:
+        lines = '\n  '.join(problems)
+        sys.exit('editor-job: the UModel exports are incomplete, so no job was written (the editor would assert or keep plain '
+                 f'materials):\n  {lines}\nRun powershell -File tools/import_phaselock_target.ps1 -Steps prepare (UModel extract) first.')
     npc.write_json(OUT / 'editor_job.json', job)
     npc.write_json(OUT / 'host_target.json', hosts)
     print(f'editor-job: wrote {OUT / "editor_job.json"} and host_target.json')

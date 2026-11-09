@@ -1511,3 +1511,16 @@ uses, in our words (UNVERIFIED against the running game):
 - **Needs (heavy tier):** `seed_ambient_npc_assets.ps1 -Steps attach` (rebuilds `M_OW_NPC_Zone`), `import_phaselock_target.ps1 -Steps zone,attach`,
   `seed_slice_npc_assets.ps1 -Steps zone`, then the Phaselock and range captures.
 - **Not explained by this:** how much of the remaining gap is UE5's lighting and tone curve against BL2's.
+
+### Missing exports stop the target import instead of crashing Unreal (2026-11-09)
+
+AI-assisted (Claude). A fresh runner worktree without `local/external/umodel/phaselock-target` (the UModel exports are not seeded) wrote an
+editor job whose every glTF was the string "None" and whose texture lists were empty. The attach step then handed "None" to
+`AssetTools.ImportAssetTasks`, and Unreal stopped on an assertion (editor exit 3). The zone step had already "succeeded" with
+`kept plain material` for every slot, so it could not test a material change.
+
+- `tools/prepare_phaselock_target.py editor-job` writes no job when a mesh or attachment glTF or a listed texture is missing or empty
+  (`job_problems`, synthetic test), and names each missing input and the `-Steps prepare` extract that produces them.
+- The zone, attach and mesh editor steps check their source files before they touch anything (the zone step also refuses a slot with no
+  texture files) and stop with the file named. Checked by running the same checks in plain Python on that runner's job (they stop) and on a
+  complete job (they pass); no editor run.

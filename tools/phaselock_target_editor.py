@@ -49,6 +49,16 @@ def texture(path, folder, srgb):
     return asset
 
 
+# A slot whose textures the job could not find would silently keep the plain material (2026-11-09, a worktree without the UModel
+# exports): stop before changing anything instead.
+missing = [f'{npc["id"]}/{slot["slot"]}: {problem}' for npc in job['npcs'] for slot in npc['slots']
+           for problem in ([f'texture {p} not in the UModel output' for p in slot.get('missing_textures', [])]
+                           + [f'{p} file {f} missing' for p, f in slot['textures'].items() if not Path(f).is_file()]
+                           + (['no texture files at all'] if not slot['textures'] else []))]
+if missing:
+    raise RuntimeError('zone: inputs missing, nothing changed: ' + '; '.join(missing)
+                       + ' (rerun the job writer after the UModel extract: tools/import_phaselock_target.ps1 -Steps prepare)')
+
 for npc in job['npcs']:
     entry = report.setdefault(npc['id'], {'status': 'kept plain material'})
     if not eal.does_asset_exist(ZONE):

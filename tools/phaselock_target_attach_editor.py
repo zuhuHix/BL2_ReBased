@@ -18,6 +18,23 @@ tools = unreal.AssetToolsHelpers.get_asset_tools()
 eal = unreal.EditorAssetLibrary
 report = {}
 
+
+def source_problem(path):
+    """Why a glTF cannot be imported, or None. Unreal's importer asserts (editor exit 3) on a missing source instead of failing cleanly."""
+    if not path or path == 'None':
+        return 'no glTF in the job (the UModel exports were missing when the job was written)'
+    if not Path(path).is_file() or Path(path).stat().st_size == 0:
+        return f'{path} is missing or empty'
+    return None
+
+
+# Every source is checked before anything is imported, so a half-imported set is never left behind.
+missing = [f'{npc["id"]}/{piece["id"]}: {source_problem(piece["gltf"])}' for npc in job['npcs'] for piece in npc['attachment_meshes']
+           if source_problem(piece['gltf'])]
+if missing:
+    raise RuntimeError('attach: inputs missing, nothing imported: ' + '; '.join(missing)
+                       + ' (run tools/import_phaselock_target.ps1 -Steps prepare, which writes the job after the UModel extract)')
+
 for npc in job['npcs']:
     entry = report.setdefault(npc['id'], {})
     for piece in npc['attachment_meshes']:
