@@ -13,6 +13,9 @@ param(
     [string[]]$ExtraSeedFolders = @(),
     # Per-run output: never copied from the seed or from -SourceWorktree, at any depth, and a pair whose own name is here is skipped.
     [string[]]$ExcludeFolderNames = @('shots', 'screenshots', 'logs', 'captures', 'realgame', 'h4x', 'z3x', 'runs'),
+    # Generated files that are per-run or regenerable and that no suite or host code reads: never copied. observed_gear.json is
+    # written by tools/prepare_inventory_gear.py from traces; the host reads only gear_manifest.json.
+    [string[]]$ExcludeFileNames = @('observed_gear.json'),
     # The seed folder (default: local\worktree-seed of the shared repository). The tests point it at a synthetic folder.
     [string]$SeedDirectory
 )
@@ -79,6 +82,7 @@ function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnch
         # Per-run output folders are skipped at any depth (the directory parts of the path, not the file name).
         $Folders = @([IO.Path]::GetDirectoryName($RelativePath) -split '[\\/]')
         if (@($Folders | Where-Object { $ExcludeFolderNames -contains $_ }).Count -gt 0) { continue }
+        if ($ExcludeFileNames -contains $File.Name) { continue }
 
         $SourceDirectory = $File.DirectoryName
         if (!$CheckedSource.ContainsKey($SourceDirectory)) {

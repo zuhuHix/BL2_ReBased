@@ -97,17 +97,21 @@ class ProvisionTest(unittest.TestCase):
         self.assertTrue(self.local('ui', 'run', 'previews', 'p.png').is_file())                      # per-folder subpaths kept
         self.assertTrue((self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').is_file())
 
-    def test_default_list_names_every_folder_the_gates_suites_read(self):
+    def test_default_allowlist_keeps_the_gates_folders(self):
+        """A fixed list, not a scan: it pins the folders the GATES.md suites read (test_inventory_actions, test_quest,
+        test_mover, test_slice_gate, test_weapon_firing) as they were on 2026-11-09. A suite that gains a folder needs this
+        set and tools/worktree_seed_folders.txt updated by hand, and sanctuary stays an explicit opt-in."""
         listed = {line.split('#')[0].strip() for line in (TOOLS / 'worktree_seed_folders.txt').read_text(encoding='utf-8').splitlines()}
-        # The folders test_inventory_actions, test_quest, test_mover, test_slice_gate and test_weapon_firing read (docs/verification/GATES.md).
         needed = {'items', 'character', 'ui', 'slice', 'doors', 'range', 'quest', 'firing', 'inventory', 'inventory-actions'}
         self.assertEqual(sorted(needed - listed), [])
         self.assertNotIn('sanctuary', listed)     # 1.7 GB here: opt-in with -ExtraSeedFolders, see docs/TOOLING.md
 
     def test_inventory_gear_manifest_is_copied_by_default(self):
         write(self.seed / 'inventory' / 'gear_manifest.json', 'gear')
+        write(self.seed / 'inventory' / 'observed_gear.json', 'observed')   # generated from traces; never copied
         self.run_script()
         self.assertEqual(self.local('inventory', 'gear_manifest.json').read_text(encoding='utf-8'), 'gear')
+        self.assertFalse(self.local('inventory', 'observed_gear.json').exists())
 
     def test_output_folders_are_never_copied(self):
         self.run_script()

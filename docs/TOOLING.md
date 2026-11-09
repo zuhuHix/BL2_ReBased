@@ -666,7 +666,8 @@ It copies `host/ue5/OpenWillow/Content/` and these `local/` folders, each from `
 - `weapon_library` and `gestalt`: read by import and prepare tools only, by no suite script.
 
 **Never copied, at any depth:** folders named `shots`, `screenshots`, `logs`, `captures`, `realgame`, `h4x`, `z3x` and `runs`
-(per-run output). `-ExcludeFolderNames` changes that list.
+(per-run output). `-ExcludeFolderNames` changes that list. The file `observed_gear.json` (written by `prepare_inventory_gear.py`, read by
+nothing else) is never copied either: `-ExcludeFileNames` changes that.
 
 The default list is `tools/worktree_seed_folders.txt`, one name per line. The installer and the provisioner both read it, so
 there is one list. Parameters: `-SeedFolders` replaces the default list; `-ExtraSeedFolders` adds to it; `-SeedDirectory` names another
