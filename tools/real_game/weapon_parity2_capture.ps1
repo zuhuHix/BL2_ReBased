@@ -48,6 +48,7 @@ function Level-View { Py 'pc = get_pc(); r = pc.Rotation; pc.Rotation = unrealsd
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config')
     sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
 $rootState = [ordered]@{}
+$backupHashes = @{}   # per root: the backup's file hashes as it verified; the finalizer re-checks the backup against them before any restore
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $target = $null; $runLock = $false
 # One id per run: the game's command-line marker (Stop-OwnGame checks it with the image path and the start time before
 # stopping a PID; unknown switches are ignored by the game), the driver folder's owner file and the backup folder name.
@@ -90,12 +91,13 @@ try {
             Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
             throw
         }
-        $st.verified = $true; $st.files = @(Get-ChildItem -LiteralPath (Join-Path $bak $sub) -Recurse -File -Force).Count
+        $st.verified = $true; $backupHashes[$sub] = Get-TreeHashes (Join-Path $bak $sub)
+        $st.files = @(Get-ChildItem -LiteralPath (Join-Path $bak $sub) -Recurse -File -Force).Count
     }
     $rootState | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $bak 'backup_complete.json')
     # verified_hashes.json and this run's pending record (pending.ps1), before the driver: a kill from here on leaves a record the next run refuses on.
     $snapshots = @{}
-    foreach ($sub in $rootState.Keys) { $snapshots[$sub] = if (!$rootState[$sub].present) { 'absent' } elseif ($rootState[$sub].verified) { Get-TreeHashes (Join-Path $bak $sub) } else { 'unverified' } }
+    foreach ($sub in $rootState.Keys) { $snapshots[$sub] = if (!$rootState[$sub].present) { 'absent' } elseif ($rootState[$sub].verified) { $backupHashes[$sub] } else { 'unverified' } }
     Save-VerifiedBackupRecord $bak $roots $snapshots
     "backup $bak ($(@($rootState.Keys | Where-Object { $rootState[$_].verified }).Count) roots verified)"
     # Claim the driver folder: it must not exist (New-Item without -Force fails then), nor may its owner file (same rule, as
@@ -233,7 +235,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         $why = if (!$gameGone) { "Borderlands 2 (pid $($proc.Id)) did not confirm its exit ($($cleanup.game))" } else { "ANOTHER GAME RUNNING (pid $($otherGame.Id))" }
         $cleanup.saves = "$why`: manual recovery needed, backup at $bak"
         "MANUAL RECOVERY: $why. Nothing was removed or restored;"
-        "  close it, remove '$script:DriverDir' if its .owrun file reads '$runId', run Restore-Tree from each verified folder of '$bak' (realgame.ps1), then remove '$HubLock' and '$script:Lock'."
+        "  close it, remove '$script:DriverDir' if its .owrun file reads '$runId', run Restore-PendingRecord '$script:PendingRecord' (realgame.ps1; it re-checks each backup before restoring), then remove '$HubLock' and '$script:Lock'."
         $bak = $null; $ownerFile = $null; $runLock = $false; $hub = $null   # skip the steps below; locks stay held on purpose
     }
     try {
@@ -254,8 +256,10 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
                         $rows += [pscustomobject]@{ file = $sub; status = $(if (Test-Path -LiteralPath $live) { 'CREATED DURING THE RUN, STILL PRESENT' } else { 'created during the run, removed' }) }
                     }
                 } elseif ($st.verified) {
-                    # Restore-Tree removes added files, restores missing and changed ones, then compares every hash again.
-                    $rows += @(Restore-Tree $b $live $sub)
+                    # The backup is re-checked against the hashes it was verified with before anything is restored (Restore-VerifiedRoots): a backup
+                    # changed since is not restored, and the record and both locks stay. Otherwise: Restore-Tree removes added files, restores missing
+                    # and changed ones, then compares every hash again.
+                    $rows += @((Restore-VerifiedRoots $bak @{ $sub = $live } @{ $sub = $backupHashes[$sub] }).rows)
                 } else {
                     $rows += [pscustomobject]@{ file = $sub; status = 'NO VERIFIED BACKUP: not restored' }
                 }
@@ -263,7 +267,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         }
         # A root the backup never reached (the run stopped before it) has no state: report it, never call it identical.
         foreach ($sub in $roots.Keys) { if (!$rootState.Contains($sub)) { $rows += [pscustomobject]@{ file = $sub; status = 'NO VERIFIED BACKUP: backup did not reach it' } } }
-        $problem = 'MISMATCH*', 'RESTORE FAILED*', 'NO VERIFIED BACKUP*', 'CREATED DURING THE RUN, STILL PRESENT'
+        $problem = 'MISMATCH*', 'RESTORE FAILED*', 'NO VERIFIED BACKUP*', 'BACKUP CHANGED*', 'CREATED DURING THE RUN, STILL PRESENT'
         $bad = @($rows | Where-Object { $status = $_.status; @($problem | Where-Object { $status -clike $_ }).Count })
         $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
     }

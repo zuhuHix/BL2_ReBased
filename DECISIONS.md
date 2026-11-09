@@ -4447,3 +4447,21 @@ AI-assisted (Claude Haiku 5.5). The Z42 run showed the magazine fixture stalls t
 - **Verified (automated):** the listen-report suite (20 tests), the prepare suite (34), ctest (34), and the UE module build through the slot.
 - **Not verified:** in engine. The post-link reload, its start and finish lines, and the gate verdict are unseen.
 - **Open (not in this PR):** `ShootAt` stalls when the magazine is above zero but below one shot's cost: it neither fires nor reloads. The no-switch gate never hit it on the runs so far. Needs its own review.
+
+## 2026-11-09: The capture finalizers re-check each backup before they restore (projectiles, weapon parity)
+
+AI-assisted (Claude Haiku 5.5). Review found that `projectiles_capture.ps1` and `weapon_parity2_capture.ps1` restored each verified root with
+`Restore-Tree` straight from the backup folder, without first checking that the folder still matched what the run verified. A backup changed
+during the run would have been copied over the live saves, and the pending record was only checked afterwards.
+
+- **Change:** each script keeps the file hashes it took as each root verified (`$backupHashes`), and writes the same table to
+  `verified_hashes.json`. Its finalizer restores through `Restore-VerifiedRoots`, the shared path the other captures already use, which compares the
+  backup with those hashes first. A changed backup is not restored (row `BACKUP CHANGED after verification`), the saves line reads NOT IDENTICAL,
+  and the pending record and both locks stay. The manual recovery for an unconfirmed game exit now names `Restore-PendingRecord`, not a bare
+  `Restore-Tree`.
+- **Why:** fail closed. A backup that changed since it was verified proves nothing, and the saves are the maintainer's.
+- **Not changed:** the restore of an unchanged backup, the driver and game checks, and the parsing code. No game run.
+- **Verified (synthetic, no game):** `tests/real_game_finalizer_recheck_test.py` runs each script's own backup section and finally block with the
+  game stubbed. A changed backup keeps the live saves, the record and the locks, and the intact roots are still restored; an unchanged backup is
+  restored and its record removed. Against the previous scripts the changed-backup case fails (the live save is overwritten).
+- **Not verified:** a real-game run of either capture after this change.

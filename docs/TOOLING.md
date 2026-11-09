@@ -1123,6 +1123,11 @@ appears during the run keeps the record). `Backup-Saves` and `Save-VerifiedBacku
 again by tree hash, the backup itself is unchanged, no game runs and the driver folder is gone (`Complete-PendingRecord`, or
 `Complete-BackupRun` in the shorter captures). Otherwise it stays, with both locks.
 
+The two capture finalizers (`projectiles_capture`, `weapon_parity2_capture`) restore through `Restore-VerifiedRoots` too: before each root is
+restored, its backup is compared with the file hashes the run took when that root verified. A backup changed since is not restored (row
+`BACKUP CHANGED after verification`), the saves line reads NOT IDENTICAL, and the record and both locks stay. The manual recovery printed for
+an unconfirmed game exit names `Restore-PendingRecord`, which makes the same check. Synthetic test: `tests/real_game_finalizer_recheck_test.py`.
+
 The driver folder is always exclusive: `Install-Driver` refuses a folder that exists unless the caller claimed it for this
 run (`-ClaimedBy <id>`, an `.owrun` file and nothing else), and writes an owner id into the folder's `.owrun` and the record.
 `Remove-Driver`, and any recovery, removes only a folder whose `.owrun` matches that id exactly and that still holds only the
