@@ -338,7 +338,7 @@ AI-assisted (Claude). One real-game session (`tools/real_game/projectiles_captur
 Save0008 Maya, Sanctuary_P then Ice_P; saving blocked, saves and config restored and hash-compared afterwards). The probe
 sampled every frame the controller's `AccuracyPool` value, its four kick fields and its rotation, and logged every
 `AddWeaponKick`, `AddSpread` and `FireAmmunition` call with the game clock. Numbers only; the dumps stay under ignored
-`local/realgame/pj/`; `tools/analyze_projectiles_live.py` prints the fits. To repeat the status part, run `projectiles_capture.ps1 -StatusOnly` (its bar was lifted 2026-11-09, see "Bar lifted" in `docs/TOOLING.md`; not yet run for this capture). It needs `local/items/slice/status_maliwan_fire.json`: a copy of `slice_mission_pistol_fire.json` with `balance` set to `GD_Weap_Pistol.A_Weapons_Elemental.Pistol_Maliwan_2_Fire`, made by hand.
+`local/realgame/pj/`; `tools/analyze_projectiles_live.py` prints the fits. To repeat the status part, run `projectiles_capture.ps1 -StatusOnly` (still barred, see "Not to be run" in `docs/TOOLING.md`). It needs `local/items/slice/status_maliwan_fire.json`: a copy of `slice_mission_pistol_fire.json` with `balance` set to `GD_Weap_Pistol.A_Weapons_Elemental.Pistol_Maliwan_2_Fire`, made by hand.
 
 **Limits of this session.** The probe's equip step left the save's own Jakobs shotgun (`WT_Jakobs_Shotgun`) in hand for every
 run, so all the numbers below come from that one gun. Maya's skills were active: a skill modifier on the weapon's

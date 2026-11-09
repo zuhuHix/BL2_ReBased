@@ -76,12 +76,15 @@ def test_each_script_parses():
     assert done.returncode == 0 and len(lines) == 7 and all(l.endswith(' 0') for l in lines), done.stdout + done.stderr
 
 
-def test_the_doc_lifts_the_bar_on_exactly_the_seven():
+def test_the_doc_lifts_five_and_keeps_two_barred():
     doc = (ROOT / 'docs/TOOLING.md').read_text(encoding='utf-8')
     line = next(l for l in doc.splitlines() if l.startswith('- **Bar lifted (2026-11-09):**'))
-    barred = re.findall(r'`([^`]+)`', line.split('. ', 1)[0])
-    assert len(barred) == 7 and set(barred) == set(SEVEN), barred
-    # The lift rests on run Z41 (hud_layout_capture, shared cleanup); each script still goes through the shared cleanup path below.
+    kept = next(l for l in doc.splitlines() if l.startswith('- **Not to be run:**'))
+    lifted = re.findall(r'`([^`]+)`', line.split(' are no longer barred', 1)[0])
+    barred = re.findall(r'`([^`]+)`', kept.split('. ', 1)[0])
+    assert len(lifted) == 5 and set(lifted) == set(SEVEN[:5]), lifted
+    assert set(barred) == set(SEVEN[5:]) and len(barred) == 2, barred
+    # The lift rests on run Z41 (hud_layout_capture, shared cleanup), which the five use.
     assert 'UNVERIFIED for its own capture' in line and 'commit 6da8d34' in line, line
     for name in SEVEN[:5]:
         s = text(name)
