@@ -149,7 +149,7 @@ class CashCaptureTest(unittest.TestCase):
     def restore_by_hand(self):
         """Runs the printed recovery command in a new PowerShell, with the real helpers, as the maintainer would."""
         script = self.work / 'by_hand.ps1'
-        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\nRestore-VerifiedBackup '{self.backups()[0]}'\n", encoding='utf-8-sig')
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\n$script:WillowDir = [IO.Path]::GetTempPath()   # test mode: by-hand restores run only over synthetic folders\nRestore-VerifiedBackup '{self.backups()[0]}'\n", encoding='utf-8-sig')
         env = dict(os.environ, OPENWILLOW_BL2=str(self.game))
         return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
                               capture_output=True, text=True, env=env, timeout=120)
@@ -363,7 +363,7 @@ class CashCaptureTest(unittest.TestCase):
         self.assertEqual(self.locks_held(), (True, True))
         self.assertTrue(self.backups())
         self.assertIn('MANUAL RECOVERY', done.stdout)
-        self.assertIn(f"Restore-VerifiedBackup '{self.backups()[0]}'", done.stdout)
+        self.assertIn("Restore-PendingRecord '", done.stdout); self.assertNotIn('Restore-VerifiedBackup', done.stdout)   # with a record, its one way back
         self.assertNotIn('Restore-Tree', done.stdout)
         self.assertIn('MISMATCH after restore', done.stdout)
         self.assertEqual(self.saves(), 'changed by the run')
@@ -405,7 +405,7 @@ class CashCaptureTest(unittest.TestCase):
         self.assertEqual(self.saves(), 'changed by the run')
         self.assertEqual(self.sdk_files(), ('changed by the run', 'changed by the run'))
         self.assertTrue((self.game / 'sdk_mods/openwillow_realgame').exists())
-        self.assertIn(f"Restore-VerifiedBackup '{self.backups()[0]}'", done.stdout)
+        self.assertIn("Restore-PendingRecord '", done.stdout); self.assertNotIn('Restore-VerifiedBackup', done.stdout)   # with a record, its one way back
         self.assertTrue((self.backups()[0] / 'verified_hashes.json').exists())   # written before the game started
         self.assertEqual(self.locks_held(), (True, True))
         self.assertIn('MANUAL RECOVERY', done.stdout)

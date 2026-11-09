@@ -22,11 +22,14 @@ if ($env:OW_TEST_PENDING_DIR -or $env:OW_TEST_MODE) {
     if (!$testDir.StartsWith($script:PendingTempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "refusing to start: OW_TEST_PENDING_DIR must be under $($script:PendingTempRoot), not $testDir" }
     $script:PendingDir = $testDir
     $script:PendingTestMode = $true
+    # The run lock must be synthetic too (OPENWILLOW_UE_LOCK under Temp, checked by Assert-PendingTestRoots). With a synthetic lock file the
+    # wait for real editors and games on this PC means nothing, and would only stall a test while the hub runs a suite: test mode skips it.
+    function Get-OwUeBusyProcess([string[]]$AlsoWaitFor = @()) { @() }
 }
 # In test mode every folder a record covers must be synthetic (under Temp): the saves, the game folder and the driver folder.
 function Assert-PendingTestRoots([string[]]$More = @()) {
     if (!$script:PendingTestMode) { return }
-    foreach ($dir in @($script:WillowDir, $script:Game, $script:DriverDir) + $More) {
+    foreach ($dir in @($script:WillowDir, $script:Game, $script:DriverDir, (Get-OwUeLockPath)) + $More) {
         if (!$dir) { continue }
         $full = [IO.Path]::GetFullPath($dir)
         if (!$full.StartsWith($script:PendingTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -81,6 +84,8 @@ function Write-PendingRecord([string]$Backup, $Roots, [string[]]$Changes = @()) 
         hub_lock = [string](Get-Variable -Name HubLock -ValueOnly -ErrorAction SilentlyContinue)
         lane = [string](Get-Variable -Name Lane -ValueOnly -ErrorAction SilentlyContinue)
         changes = @(@(if ($old) { @($old.changes) }) + @($Changes) | Where-Object { $_ })
+        driver_owner = $(if ($old -and $old.driver_owner) { [string]$old.driver_owner } else { '' })   # Install-Driver sets it
+        held_inputs = @(if ($old) { @($old.held_inputs) | Where-Object { $_ } })                       # Save-HeldInputs keeps it current
     }
     Write-PendingFile $path $record
     $script:PendingRecord = $path
@@ -92,6 +97,14 @@ function Add-PendingChange([string]$What) {
     Assert-PendingRecorded $What
     $record = Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json
     $record.changes = @(@($record.changes) + "$((Get-Date).ToString('o')) $What")
+    $record.updated = (Get-Date).ToString('o')
+    Write-PendingFile $script:PendingRecord $record
+}
+# Set one field of this run's record (driver_owner, held_inputs), written and read back like every other change.
+function Set-PendingField([string]$Name, $Value) {
+    Assert-PendingRecorded "recording $Name"
+    $record = Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json
+    $record | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
     $record.updated = (Get-Date).ToString('o')
     Write-PendingFile $script:PendingRecord $record
 }
@@ -136,14 +149,50 @@ function Get-PendingProblems($Record) {
     @($problems | Select-Object -Unique)
 }
 
-# True only for a folder that holds this checkout's driver and nothing a person added: the one thing safe to remove without asking.
-function Test-IsOurDriverCopy([string]$Dir) {
-    if (!(Test-Path -LiteralPath $Dir)) { return $false }
+# True only for a folder whose .owrun holds exactly $Owner (the id the record stored) and that holds this checkout's driver and nothing a person
+# added: the one thing safe to remove without asking. -AllowPartial: an install that stopped before __init__.py was copied also counts.
+function Test-IsOurDriverCopy([string]$Dir, [string]$Owner, [switch]$AllowPartial) {
+    if (!$Owner -or !(Test-Path -LiteralPath $Dir)) { return $false }
+    $ownerFile = Join-Path $Dir '.owrun'
+    if (!(Test-Path -LiteralPath $ownerFile) -or [IO.File]::ReadAllText($ownerFile) -cne $Owner) { return $false }
     $mine = Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py'
     $theirs = Join-Path $Dir '__init__.py'
-    if (!(Test-Path -LiteralPath $theirs) -or (Get-FileSha256 $theirs) -cne (Get-FileSha256 $mine)) { return $false }
+    if (Test-Path -LiteralPath $theirs) { if ((Get-FileSha256 $theirs) -cne (Get-FileSha256 $mine)) { return $false } }
+    elseif (!$AllowPartial) { return $false }
     $known = '__init__.py', 'cmd_dir.txt', 'autoblock.flag', '.owrun', '__pycache__'
-    !@(Get-ChildItem -LiteralPath $Dir -Force | Where-Object { $_.Name -notin $known }).Count
+    !@(Get-ChildItem -LiteralPath $Dir -Force | Where-Object { $_.Name -cnotin $known }).Count
+}
+
+# Recovery holds the shared run lock (the one every capture and editor run takes) for its whole length, and checks for a running game at each
+# step: a game started in between could rewrite what is being restored.
+function Invoke-RecoveryLocked([scriptblock]$Body) {
+    Enter-OwUeLock -Owner 'realgame-recovery' -TimeoutSeconds 120 -AlsoWaitFor Borderlands2
+    try { & $Body } finally { Exit-OwUeLock }
+}
+function Assert-NoGameForRecovery([string]$When) {
+    $games = @(Get-GameProcesses)
+    if ($games.Count) { throw "Borderlands 2 is running (pid $(@($games | ForEach-Object { $_.Id }) -join ', ')) $When; stopped here, the record is kept. Close it and run this again." }
+}
+
+# Keys and buttons a killed run recorded as held. Released only when its writer is shown gone and a game window exists (a key can only stay
+# held inside a running game); then the record's list is cleared. Returns what it did.
+function Release-RecordedInputs([string]$File, $Record) {
+    $held = @($Record.held_inputs | Where-Object { $_ })
+    if (!$held.Count) { return }
+    if (!@(Get-GameProcesses | Where-Object { $_.MainWindowHandle -and $_.MainWindowHandle -ne [IntPtr]::Zero }).Count) {
+        # No game window: the keys were held only inside the game session, which has ended, so there is nothing to release.
+        $Record | Add-Member -NotePropertyName held_inputs -NotePropertyValue @() -Force
+        Write-PendingFile $File $Record
+        return "recorded as held, but no game window is open, so nothing is held: $($held -join ', ')"
+    }
+    foreach ($item in $held) {
+        $kind, $name = $item -split ' ', 2
+        if ($kind -ceq 'key') { Send-KeyUp $name }
+        else { $b = @($script:MouseButtons | Where-Object { $_[2] -ceq $name }); if ($b.Count) { Send-MouseEvent $b[0][1] } }
+    }
+    $Record | Add-Member -NotePropertyName held_inputs -NotePropertyValue @() -Force
+    Write-PendingFile $File $Record
+    "released what the run that wrote $File left held: $($held -join ', ')"
 }
 
 # Is the run that wrote a record still running? Identity is the PID and the process start time in UTC, never the command line (a run from an
@@ -179,7 +228,7 @@ function Format-PendingRecovery([string]$File, $Record, [string[]]$Problems) {
         '  1. Make sure Borderlands 2 is closed. The restore puts the saves back as they were before that run. It first copies the current saves and',
         '     settings to a pre-restore folder beside the backup and verifies that copy by tree hash, so anything played since is kept there, not lost.',
         "  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$(if ($Record.game) { $Record.game } else { $env:OPENWILLOW_BL2 })'; . '$PSScriptRoot\realgame.ps1'",
-        "     Restore-PendingRecord '$File'",
+        "     Restore-PendingRecord '$File'   # holds the run lock throughout and stops if a game starts",
         '     It restores every root from the verified backup (a backup that changed since is refused), removes the driver folder only if it is this',
         '     driver''s untouched copy, compares every root by tree hash and removes the record only when all match. Anything else it prints stays yours to judge.')
     $locks = @()
@@ -203,6 +252,7 @@ function Assert-NoPendingRecords {
         # Nothing is completed while the writer may still run: alive, or not shown gone (no start time, unreadable). Fail closed.
         $writer = Get-WriterState $record
         if ($writer -eq 'alive') { throw "Pid $($record.pid) is still the run that wrote $($f.FullName) (same start time). Wait for it to finish. This run changed nothing." }
+        if ($writer -eq 'gone') { Release-RecordedInputs $f.FullName $record }
         if (@(Get-GameProcesses).Count) { throw "$($f.FullName) is there and Borderlands 2 is running: nothing can be verified under a live game. Close it first. This run changed nothing." }
         if ($writer -ne 'gone') {
             throw (Format-PendingRecovery $f.FullName $record @("the run that wrote it (pid $($record.pid)) cannot be shown to have ended: no recorded start time, or its process cannot be read. Nothing is completed automatically; when you are sure it has ended, use Restore-PendingRecord with -WriterGone"))
@@ -210,7 +260,7 @@ function Assert-NoPendingRecords {
         $problems = @(Get-PendingProblems $record)
         $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
         $driverOnly = $problems.Count -and !@($problems | Where-Object { $_ -notlike 'the driver folder is still there*' }).Count
-        if ($driverOnly -and (Test-IsOurDriverCopy $driver)) {
+        if ($driverOnly -and (Test-IsOurDriverCopy $driver ([string]$record.driver_owner) -AllowPartial)) {
             Remove-Item -LiteralPath $driver -Recurse -Force
             "Earlier run's record $($f.FullName): its roots match the backup; removed the driver copy it left at $driver."
             $problems = @(Get-PendingProblems $record)
@@ -228,22 +278,31 @@ function Assert-NoPendingRecords {
 function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
     if (!(Test-Path -LiteralPath $File)) { throw "no record at $File" }
     $record = Get-Content -Raw -LiteralPath $File | ConvertFrom-Json
-    if (@(Get-GameProcesses).Count) { throw 'Borderlands 2 is running: close it first. Nothing was changed.' }
+    $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
+    Assert-PendingTestRoots (@([string]$record.backup, $driver) + @(if ($record.roots) { $record.roots.PSObject.Properties | ForEach-Object { [string]$_.Value.live } }))
     $writer = Get-WriterState $record
     if ($writer -eq 'alive') { throw "pid $($record.pid) is still the run that wrote $File (same start time); wait for it. Nothing was changed." }
     if ($writer -ne 'gone' -and !$WriterGone) { throw "the run that wrote $File (pid $($record.pid)) cannot be shown to have ended. If you are sure it has, run Restore-PendingRecord '$File' -WriterGone. Nothing was changed." }
-    $aside = Save-PreRestoreSnapshot ([string]$record.backup)
-    "the current saves and settings were copied, verified by tree hash, to $aside (anything played since that run is there)"
-    $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
-    if (Test-Path -LiteralPath $driver) {
-        if (Test-IsOurDriverCopy $driver) { Remove-Item -LiteralPath $driver -Recurse -Force; "removed the driver copy at $driver" }
-        else { "the driver folder $driver is not this driver's untouched copy: left for you" }
+    Release-RecordedInputs $File $record
+    Invoke-RecoveryLocked {
+        Assert-NoGameForRecovery 'before anything is copied'
+        $aside = Save-PreRestoreSnapshot ([string]$record.backup)
+        "the current saves and settings were copied, verified by tree hash, to $aside (anything played since that run is there)"
+        Assert-NoGameForRecovery 'after the copy'
+        if (Test-Path -LiteralPath $driver) {
+            if (Test-IsOurDriverCopy $driver ([string]$record.driver_owner) -AllowPartial) { Remove-Item -LiteralPath $driver -Recurse -Force; "removed the driver copy at $driver (owner $($record.driver_owner))" }
+            else { "the driver folder $driver is not that run's (its .owrun does not match the record): left for you" }
+        }
+        Assert-NoGameForRecovery 'before restoring'
+        $restored = Restore-FromVerifiedRecord ([string]$record.backup)
+        Format-RestoreRows $restored.rows
+        $restored.summary
+        $problems = @(Get-PendingProblems $record)
+        if ($problems.Count) { throw "record kept at ${File}: $($problems -join '; ')" }
+        Assert-NoGameForRecovery 'before the record is removed'
+        Remove-Item -LiteralPath $File -Force
+        "verified by tree hash; record $File removed"
     }
-    Restore-VerifiedBackup ([string]$record.backup)
-    $problems = @(Get-PendingProblems $record)
-    if ($problems.Count) { throw "record kept at ${File}: $($problems -join '; ')" }
-    Remove-Item -LiteralPath $File -Force
-    "verified by tree hash; record $File removed"
 }
 
 # Copy every live root the backup's verified_hashes.json names to <backup's folder>\pre-restore-<time>\<root> and prove each copy by tree
@@ -251,6 +310,7 @@ function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
 function Save-PreRestoreSnapshot([string]$Backup) {
     $file = Join-Path $Backup 'verified_hashes.json'
     if (!(Test-Path -LiteralPath $file)) { throw "no verified_hashes.json in $Backup; not restoring from it. Nothing was changed." }
+    Assert-PendingTestRoots (@($Backup) + @((Get-Content -Raw -LiteralPath $file | ConvertFrom-Json).PSObject.Properties | ForEach-Object { [string]$_.Value.live }))
     $aside = Join-Path (Split-Path -Parent $Backup) ('pre-restore-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$PID")
     New-Item -ItemType Directory -Path $aside -ErrorAction Stop | Out-Null
     $proof = [ordered]@{}

@@ -1104,15 +1104,18 @@ live components of interactive objects, mission spawners and wiring actors with 
 Before a run changes anything the maintainer owns, it writes a **pending record** under `%LOCALAPPDATA%\OpenWillow\`
 (`tools/real_game/pending.ps1`, `realgame_run_pending-<script>-<pid>.json`): the script, its PID and process start time
 (local and UTC), the backup folder, each root's live folder and tree hash (one SHA-256 over every file's path and SHA-256,
-paths compared case-sensitively), and one line per change, each written before that change: the driver's install and save
-block, the launch, SDK mods off (`Set-SdkModsOff`). `Backup-Saves` and `Save-VerifiedBackupRecord` write it;
+paths compared case-sensitively), the driver folder's owner id, the keys and buttons held right now, and one line per change, each written before that change: the driver's install and save
+block, the launch, SDK mods off (`Set-SdkModsOff`). The roots are every folder a launch can rewrite: `SaveData`, `Config`,
+the SDK's `sdk_mods/settings` and Sanity Saver's `sdk_mods/SanitySaver` (absent ones are recorded as absent, and one that
+appears during the run keeps the record). `Backup-Saves` and `Save-VerifiedBackupRecord` write it;
 `Install-Driver`, `Start-Game` and `Set-SdkModsOff` refuse without it. The record goes only when every root is the backup
 again by tree hash, the backup itself is unchanged, no game runs and the driver folder is gone (`Complete-PendingRecord`, or
 `Complete-BackupRun` in the shorter captures). Otherwise it stays, with both locks.
 
 The driver folder is always exclusive: `Install-Driver` refuses a folder that exists unless the caller claimed it for this
-run (`-ClaimedBy <id>`, an `.owrun` file and nothing else), and `Remove-Driver` removes only a folder this process installed
-that still holds only the driver's files.
+run (`-ClaimedBy <id>`, an `.owrun` file and nothing else), and writes an owner id into the folder's `.owrun` and the record.
+`Remove-Driver`, and any recovery, removes only a folder whose `.owrun` matches that id exactly and that still holds only the
+driver's files.
 
 Every capture starts with `Assert-NoPendingRecords`, before any lock: any `*pending*.json` there (ours, the showcase
 capture's `showcase_*pending*.json`, the mission screen branch's `mission_screen_mod_pending.json`) stops it and prints the
@@ -1126,12 +1129,20 @@ $env:OPENWILLOW_BL2 = '<game folder>'; . tools/real_game/realgame.ps1
 Restore-PendingRecord '<record>'   # add -WriterGone only when you know the writing run has ended and it cannot be shown
 ```
 
-`Restore-PendingRecord` first copies every current root to `local/realgame/pre-restore-<time>-<pid>/` and verifies that
-copy by tree hash (so anything played since the failed run is set aside, not lost), then restores from the verified backup,
-verifies by tree hash and only then removes the record.
+While a record exists, that is the only way back: `Restore-VerifiedBackup` refuses then, and the printed recovery names only
+`Restore-PendingRecord`. It holds the shared run lock throughout and checks that no Borderlands 2 runs before the copy, after
+it, before restoring and before removing the record (a game seen at any of them stops it, record kept). It first copies every
+current root to `local/realgame/pre-restore-<time>-<pid>/` and verifies that copy by tree hash (so anything played since the
+failed run is set aside, not lost), removes the driver folder only on an exact owner match, restores from the verified backup,
+verifies by tree hash and only then removes the record. `Restore-VerifiedBackup`, for a backup no record names, does the same
+lock, game checks and pre-restore copy.
 
 Input is guarded: every key and button press is remembered until its release, and each capture's `finally` starts with
-`Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. Presses held across steps sit in their own
+`Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. The held set is also written into the pending record
+before each press (no record, no press). A run killed outright (Task Manager, a power cut) skips its `finally`: if the game
+window is still open, a key it held can stay held in the game until the next run's start check or `Restore-PendingRecord`
+sends the recorded releases (only when the writer is shown gone). With no game window there is nothing to release, and the
+list is cleared. Presses held across steps sit in their own
 `try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
 them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import
 `tests/realgame_test_env.py`, which gives every PowerShell run its own pending folder under the temp folder. The harness
