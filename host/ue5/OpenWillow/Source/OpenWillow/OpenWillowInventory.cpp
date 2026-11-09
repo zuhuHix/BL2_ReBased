@@ -884,7 +884,8 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
     return Json;
 }
 
-// Switches of the drivers that quit the game themselves: tools/run_limit.ps1's list without -owinventoryselftest (keep the two in step). The self-test
+// Switches of the test drivers whose run a self-test quit would cut short: tools/run_limit.ps1's list of drivers that quit the game themselves,
+// without -owinventoryselftest, plus owcombattest and owrangeshots, which never quit (tests/run_limit_test.py checks the two lists). The self-test
 // quits after its own log only when none of these is on the command line, so a combined run such as -owinventoryactions
 // -owinventoryselftest still reaches its own quit.
 static bool AnotherDriverRequested()
