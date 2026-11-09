@@ -76,16 +76,14 @@ def test_each_script_parses():
     assert done.returncode == 0 and len(lines) == 7 and all(l.endswith(' 0') for l in lines), done.stdout + done.stderr
 
 
-def test_the_doc_lifts_five_and_keeps_two_barred():
+def test_the_doc_lifts_all_seven_and_bars_none():
     doc = (ROOT / 'docs/TOOLING.md').read_text(encoding='utf-8')
     line = next(l for l in doc.splitlines() if l.startswith('- **Bar lifted (2026-11-09):**'))
-    kept = next(l for l in doc.splitlines() if l.startswith('- **Not to be run:**'))
+    assert not any(l.startswith('- **Not to be run:**') for l in doc.splitlines())
     lifted = re.findall(r'`([^`]+)`', line.split(' are no longer barred', 1)[0])
-    barred = re.findall(r'`([^`]+)`', kept.split('. ', 1)[0])
-    assert len(lifted) == 5 and set(lifted) == set(SEVEN[:5]), lifted
-    assert set(barred) == set(SEVEN[5:]) and len(barred) == 2, barred
-    # The lift rests on run Z41 (hud_layout_capture, shared cleanup), which the five use.
-    assert 'UNVERIFIED for its own capture' in line and 'commit 6da8d34' in line, line
+    assert len(lifted) == 7 and set(lifted) == set(SEVEN), lifted
+    # The lift of the first five rests on run Z41 (hud_layout_capture, shared cleanup); the two finalizers on PR #200 and run Z44.
+    assert 'UNVERIFIED for its own capture' in line and 'commit 6da8d34' in line and 'PR #200' in line and 'Z44' in line, line
     for name in SEVEN[:5]:
         s = text(name)
         assert 'Complete-BackupRun $bak' in s, name
@@ -94,6 +92,7 @@ def test_the_doc_lifts_five_and_keeps_two_barred():
     for name in SEVEN[5:]:
         s = text(name)
         assert '$cleanup.pending = Complete-PendingRecord' in s and 'Install-Driver -ClaimedBy $runId' in s, name
+        assert 'Restore-VerifiedRoots $bak' in s, name   # the re-checking restore (PR #200), not a bare Restore-Tree
 
 
 def helper(name):
