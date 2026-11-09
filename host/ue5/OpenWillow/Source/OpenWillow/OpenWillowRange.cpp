@@ -1121,7 +1121,7 @@ void UOpenWillowRangeSubsystem::TickKillRow(float Now)
         PC->SetControlRotation((Enemy->AimPoint() - Eye).Rotation());
         if (Walker->FireOnce()) { ++KillShots; return; }
         FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable();
-        if (!Held || Walker->IsReloading() || UOpenWillowInventory::MagazineLeft(*Held) > 0) return;
+        if (!Held || Walker->IsReloading() || !UOpenWillowInventory::MagazineBelowShot(*Held)) return;   // below one shot's cost counts as empty (PR #201)
         EOpenWillowAmmoType Ammo;
         if (!Inventory->CanReload(*Held) && UOpenWillowInventory::ResolveAmmoType(*Held, Ammo)) Inventory->SetAmmoCurrent(Ammo, Inventory->AmmoPool(Ammo).Max);
 #if WITH_EDITOR
