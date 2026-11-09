@@ -102,9 +102,9 @@ void UOpenWillowSliceGate::Place(const FVector& Location, const FVector& Look)
 
 // -owslicegatemag=<n> (test only): sets the held gun's magazine to n rounds, once, before the first shot at the dummy, so a listening run
 // hears a reload. The reserve is left alone, so the reload draws from it. The magazine is never set below one shot's cost: a gun whose
-// shot costs 2 rounds (the lent pistol) cannot fire with 1 round, and ShootAt reloads only from an empty magazine, so 1 round would stall
-// the step with no shot and no reload (found in the run of 2026-11-09, 19:30). With the magazine at one shot's cost, the first shot
-// empties it and ShootAt presses reload (WITH_EDITOR builds only: UnrealEditor.exe -game runs the editor target, which has it).
+// shot costs 2 rounds (the lent pistol) cannot fire with 1 round. ShootAt now reloads from any magazine below one shot's cost, so 1 round
+// no longer stalls the step (the stall was found in the run of 2026-11-09, 19:30, when ShootAt reloaded only from an empty magazine); the
+// clamp keeps the first shot emptying the magazine (WITH_EDITOR builds only: UnrealEditor.exe -game runs the editor target, which has it).
 void UOpenWillowSliceGate::ApplyMagazineFixture(AOpenWillowWalker* W)
 {
     if (MagazineFixture <= 0 || !W) return;
@@ -136,8 +136,8 @@ bool UOpenWillowSliceGate::HoldForFixtureReload(AOpenWillowWalker* W, float Delt
     FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
     if (FixtureReload == 0)
     {
-        // Nothing to do unless the shot left the magazine empty and no reload is running.
-        if (!Held || W->IsReloading() || UOpenWillowInventory::MagazineLeft(*Held) > 0 || UOpenWillowInventory::ShotCostRounds(*Held) == 0)
+        // Nothing to do unless the shot left the magazine below one shot's cost and no reload is running.
+        if (!Held || W->IsReloading() || !UOpenWillowInventory::MagazineBelowShot(*Held))
         {
             FixtureReload = 2;
             return false;
@@ -194,8 +194,9 @@ bool UOpenWillowSliceGate::HoldForFixtureReload(AOpenWillowWalker* W, float Delt
     return false;
 }
 
-// One FireOnce at the target every Interval seconds (0: every tick). Reloads an empty magazine through the reload key;
-// when the reserve is empty too, refills it (test fixture, logged once per refill). False when the shot did not go out.
+// One FireOnce at the target every Interval seconds (0: every tick). Reloads a magazine below one shot's cost through the reload key
+// (the same rule the player's trigger uses, UOpenWillowInventory::MagazineBelowShot); when the reserve is empty too, refills it (test
+// fixture, logged once per refill). False when the shot did not go out.
 bool UOpenWillowSliceGate::ShootAt(AOpenWillowCombatTarget* Target, float Interval)
 {
     AOpenWillowWalker* W = Walker();
@@ -207,7 +208,7 @@ bool UOpenWillowSliceGate::ShootAt(AOpenWillowCombatTarget* Target, float Interv
     if (W->FireOnce()) return true;
     UOpenWillowInventory* Inventory = W->GetInventory();
     FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
-    if (!Held || W->IsReloading() || UOpenWillowInventory::MagazineLeft(*Held) > 0) return false;
+    if (!Held || W->IsReloading() || !UOpenWillowInventory::MagazineBelowShot(*Held)) return false;
     EOpenWillowAmmoType Ammo;
     if (!Inventory->CanReload(*Held) && UOpenWillowInventory::ResolveAmmoType(*Held, Ammo))
     {

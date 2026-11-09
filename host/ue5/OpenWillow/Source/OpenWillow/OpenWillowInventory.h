@@ -253,6 +253,9 @@ public:
     static int32 ShotCostRounds(const FOpenWillowWeaponItem& Item);
     static int32 MagazineSize(const FOpenWillowWeaponItem& Item);
     static int32 MagazineLeft(const FOpenWillowWeaponItem& Item);
+    // True when the magazine holds fewer rounds than one shot costs, 0 included: the trigger then reloads, as from an empty
+    // magazine (the player's fire path and the test driver both use it). Never true for a gun that costs no ammo.
+    static bool MagazineBelowShot(const FOpenWillowWeaponItem& Item);
     // Takes one shot from the magazine; false when the magazine is short.
     bool ConsumeShot(FOpenWillowWeaponItem& Item) const;
     // True when the magazine is not full and its pool holds ammo.

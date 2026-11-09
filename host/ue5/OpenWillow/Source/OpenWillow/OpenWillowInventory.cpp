@@ -712,6 +712,12 @@ int32 UOpenWillowInventory::MagazineLeft(const FOpenWillowWeaponItem& Item)
     return Item.MagazineLeft < 0 ? MagazineSize(Item) : FMath::Min(Item.MagazineLeft, MagazineSize(Item));
 }
 
+bool UOpenWillowInventory::MagazineBelowShot(const FOpenWillowWeaponItem& Item)
+{
+    const int32 Cost = ShotCostRounds(Item);
+    return Cost > 0 && MagazineLeft(Item) < Cost;
+}
+
 bool UOpenWillowInventory::ConsumeShot(FOpenWillowWeaponItem& Item) const
 {
     const int32 Cost = ShotCostRounds(Item);
@@ -939,6 +945,19 @@ bool UOpenWillowInventory::RunSelfTest()
     Check(MagazineSize(Fractional) == 10 && ShotCostRounds(Fractional) == 1, TEXT("magazine and shot cost truncate"));
     Fractional.ShotCost = 0.5f;
     Check(ShotCostRounds(Fractional) == 0, TEXT("a shot cost below one truncates to no cost"));
+    // A magazine below one shot's cost (0 included) is a reload, not a stall: the trigger reloads, and the gun cannot fire.
+    FOpenWillowWeaponItem Costly = Make(TEXT("c"), TEXT("Pistol"));
+    Costly.Magazine = 3.f;
+    Costly.ShotCost = 2.f;
+    Costly.MagazineLeft = 1;
+    Check(MagazineBelowShot(Costly) && !Inv->ConsumeShot(Costly), TEXT("one round is below a two-round shot: reload, no shot"));
+    Costly.MagazineLeft = 0;
+    Check(MagazineBelowShot(Costly), TEXT("an empty magazine is below a two-round shot"));
+    Costly.MagazineLeft = 2;
+    Check(!MagazineBelowShot(Costly) && Inv->ConsumeShot(Costly), TEXT("a full shot's worth of rounds fires"));
+    Costly.ShotCost = 0.f;
+    Costly.MagazineLeft = 0;
+    Check(!MagazineBelowShot(Costly), TEXT("a gun that costs no ammo never reloads from the magazine rule"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory self-test: %s"), Failures ? TEXT("FAILED") : TEXT("passed"));
     return Failures == 0;
 }
