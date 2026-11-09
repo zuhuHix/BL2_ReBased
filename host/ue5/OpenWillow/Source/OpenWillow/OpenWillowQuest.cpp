@@ -133,14 +133,12 @@ void UOpenWillowQuest::BeginPlay()
         }
         if (OpenWillowAudio::Enabled()) {
             // With sound on, the host is the stock dialog's audio device (SLICE_AUDIO_CHAIN.md section 5c). The VM has already chosen the line (event,
-            // talk act, talker, priority); the host plays the play map's "line:<event tag>" and reports the line's end when its file's length has
-            // passed in game time, so the next behavior waits for it as live (FIRE_MISSION_GOLDEN_TRACE.md, lane L4). A line with no file in the map is not
-            // played and ends on the next update, as before. Without -owaudioplay no player is set and nothing here changes.
-            Impl->Slice->mission().dialog().setLinePlayer([this](const vm::DialogSystem::Line& Line) {
+            // talk act, talker, priority); the host plays the play map's "line:<event tag>" and gives back its file's length, and the dialog's own clock
+            // ends the line at that length (plus the act's OutputDelay), so the next behavior waits for it as live (FIRE_MISSION_GOLDEN_TRACE.md, lane L4).
+            // A line with no file in the map is not played (-1) and ends on the next update. Without -owaudioplay no player is set and nothing here changes.
+            Impl->Slice->mission().dialog().setTimedLinePlayer([this](const vm::DialogSystem::Line& Line) {
                 float Seconds = 0.f;
-                if (!OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds)) return false;
-                PlayingLines.Add(TPair<int32, float>(Line.id, Seconds));
-                return true;
+                return OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds) ? double(Seconds) : -1.0;
             });
             UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog line player set: lines play from the audio play map and last as long as their files"));
         }
@@ -546,11 +544,14 @@ void UOpenWillowQuest::Pump()
             for (const auto& Media : (*Entry)->GetArrayField(TEXT("media")))
                 Sources.Add(FString::Printf(TEXT("%.0f"), Media->AsObject()->GetNumberField(TEXT("source"))));
             const FString State = (*Entry)->GetStringField(TEXT("state"));
-            // "started": the host's line player played it (section 5c); "not playing": sound is on but the play map has no file for it; "no audio device": sound is off.
+            // Sound off: the same text as before the line player existed, whatever the outcome. Sound on: "started" means the host's line player
+            // played it (section 5c); "not playing" means the play map has no file for it.
             if (Outcome == TEXT("started")) ++DialogPlayed;
             UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog line %s ak=%s talker=%hs (%s) outcome=%s -> source %s state=%s (%s)"),
                 *A, *Ak, Event.c.c_str(), *Field("talker"), *Outcome, *FString::Join(Sources, TEXT(",")), *State,
-                Outcome == TEXT("started") ? TEXT("played by the host") : TEXT("not played"));
+                !OpenWillowAudio::Enabled() ? TEXT("not played: no audio device")
+                    : Outcome == TEXT("started") ? TEXT("played by the host")
+                    : Outcome == TEXT("not playing") ? TEXT("not played: no file in the audio play map") : TEXT("not played"));
             break;
         }
         case K::StatusEffect: UE_LOG(LogTemp, Display, TEXT("OWQUEST status effect %s on dummy (not applied: no effect system)"), *A); break;
@@ -1262,9 +1263,6 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
     // Any other level change (the test fixtures' SetLevel) is picked up here, once a frame.
     if (auto* Walker = Cast<AOpenWillowWalker>(GetOwner())) Walker->RefreshHealthForLevel();
     bHealthAdoptedThisTick = false;
-    // A playing line whose file has run out: the dialog's line end (its OutputDelay and the behavior's poll follow in the VM).
-    for (int32 i = PlayingLines.Num() - 1; i >= 0; --i)
-        if ((PlayingLines[i].Value -= Delta) <= 0.f) { Impl->Slice->mission().dialog().lineEnded(PlayingLines[i].Key); PlayingLines.RemoveAt(i); }
     Impl->Slice->tick(Delta);
     Pump();
     TickScreenPage();

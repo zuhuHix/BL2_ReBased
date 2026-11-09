@@ -628,7 +628,7 @@ int main(int argc, char** argv) {
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
             // turnin | tick:<seconds> | script:accept | script:turnin | script:screen | script:use | stage:<n> | player:<level>:<experience> | pool |
-            // lines:<seconds> (a test line player: every dialog line lasts that long) | talker:<name tag path> (a pawn that can talk) |
+            // lines:<seconds> (a test line player: every dialog line lasts that long) | timedlines:<seconds> (a timed line player, the UE host's kind) | talker:<name tag path> (a pawn that can talk) |
             // kismet:<variable>|<name tag path> (a new talker pawn bound to the mission's named Kismet variable; no tag clears the variable)
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
@@ -678,6 +678,10 @@ int main(int argc, char** argv) {
                 }
                 else if (step == "pool" && script) script->updateExperiencePool();
                 else if (step.rfind("lines:", 0) == 0) mission.dialog().setTestLineLength(std::stod(step.substr(6)));   // every dialog line lasts <s>
+                else if (step.rfind("timedlines:", 0) == 0) {     // a timed line player (the UE host's kind): every line's audio lasts <s>
+                    const double length = std::stod(step.substr(11));
+                    mission.dialog().setTimedLinePlayer([length](const vm::DialogSystem::Line&) { return length; });
+                }
                 else if (step.rfind("talker:", 0) == 0) mission.dialog().registerTalker(step.substr(7));              // a pawn with this name tag
                 else if (step.rfind("kismet:", 0) == 0) {         // kismet:<variable>|<name tag>: a new pawn with that name tag (a talker) bound to the mission's named Kismet variable; no tag clears it
                     const std::string rest = step.substr(7);
@@ -822,6 +826,10 @@ int main(int argc, char** argv) {
                 else if (step == "close") ok = slice.closeScreen();               // Escape: the player leaves Marcus's mission screen
                 else if (step == "cheatlevel") slice.cheatLevelUp();       // one ExpLevelUp(true): the not-natural level-up
                 else if (step.rfind("lines:", 0) == 0) slice.mission().dialog().setTestLineLength(std::stod(step.substr(6)));
+                else if (step.rfind("timedlines:", 0) == 0) {
+                    const double length = std::stod(step.substr(11));
+                    slice.mission().dialog().setTimedLinePlayer([length](const vm::DialogSystem::Line&) { return length; });
+                }
                 else if (step.rfind("talker:", 0) == 0) slice.mission().dialog().registerTalker(step.substr(7));
                 else if (step.rfind("stage:", 0) == 0) slice.setRegionGameStage(std::stoi(step.substr(6)));
                 else if (step.rfind("player:", 0) == 0) {     // player:<level>:<experience>

@@ -1369,7 +1369,7 @@ def build_dynamic():
     return p
 
 
-def build_dialog_mission():
+def build_dialog_mission(kickoff_output_delay=None):
     """DialogMission: ToyMission's shape (SetA {RockPaper_GoToRange}) plus a behavior provider and a dialog group. Default id 12 (the
     kickoff) -> K1 (tag A); custom events Chatter, Template and Immediate -> K2 (tag B), K3 (tag C), K4 (tag D, bForcePlayImmediate).
     Every K has Out (id 0) -> <name>Out and Finished (id 1) -> <name>Done remote events."""
@@ -1411,9 +1411,10 @@ def build_dialog_mission():
     def talk_data(ak_name):
         return t.array('TalkData', 1, t.obj('NameTag', marcus) + t.obj('TalkAkEvent', ak[ak_name]) + none)
 
-    def act(name, node_id, ak_name):
-        return p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), name, w32(0) + t.int('NodeID', node_id) + talk_data(ak_name) + none, outer=group)
-    acts = {'A': act('ActA', 41, 'A'), 'B1': act('ActB1', 42, 'A'), 'B2': act('ActB2', 43, 'B'), 'B3': act('ActB3', 44, 'A'), 'D': act('ActD', 45, 'D')}
+    def act(name, node_id, ak_name, output_delay=None):
+        delay = t.float('OutputDelay', output_delay) if output_delay is not None else b''
+        return p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), name, w32(0) + t.int('NodeID', node_id) + talk_data(ak_name) + delay + none, outer=group)
+    acts = {'A': act('ActA', 41, 'A', kickoff_output_delay), 'B1': act('ActB1', 42, 'A'), 'B2': act('ActB2', 43, 'B'), 'B3': act('ActB3', 44, 'A'), 'D': act('ActD', 45, 'D')}
     # Swap I8: ActX names the instigator as its talker; its only TalkData entry is the Dummy name tag (the shape of the Fire line 03a)
     acts['X'] = p.add_export(chain('WillowGame', 'WillowDialogAct_Talk'), 'ActX', w32(0) + t.int('NodeID', 46)
                              + t.array('TalkData', 1, t.obj('NameTag', dummy_tag) + t.obj('TalkAkEvent', ak['A']) + none) + t.bool('bInstigatorTalker', True) + none, outer=group)
@@ -1908,6 +1909,25 @@ with tempfile.TemporaryDirectory() as folder:
     # after the end is 0.6167 s, reached by the sixth 0.1 s tick (t = 0.64 s), and not by the fifth (t = 0.54 s), whose last poll (0.5167 s)
     # still sees the line live
     check('E2 Finished at the first poll after the line ended', done_at == [5], done_at)
+
+    # E2b: a timed line player (the UE host's kind) keeps the act's whole OutputDelay across one long update. ActA has OutputDelay 0.3 here; its
+    # 0.55 s audio starts at about 0.0167 s and ends at 0.5667 s, so the act finishes at 0.8667 s. The poll at 0.8167 s, inside the one 0.83 s tick,
+    # must still see it live (a finish taken from the end of a frame minus that frame would have selected Finished at the 0.6167 s poll); the poll at
+    # 0.9167 s sees it ended.
+    (root / 'DialogMissionDelay.upk').write_bytes(build_dialog_mission(kickoff_output_delay=0.3).build())
+    proc = subprocess.run([reader, str(root / 'DialogMissionDelay.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), 'timedlines:0.55',
+                           'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02', 'tick:0.83', 'tick:0.1'], capture_output=True, text=True, encoding='utf-8')
+    assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
+    got = json.loads(proc.stdout)
+    steps = got['steps'][2:]
+    check('E2b exit and errors', proc.returncode == 0 and got['errors'] == [], (proc.returncode, got['errors']))
+    check('E2b the timed player starts the line', [l['outcome'] for l in lines(steps[2])] == ['started'], lines(steps[2]))
+    check('E2b a long update keeps the whole OutputDelay', 'KickDone' not in seen(steps[3]) and 'KickDone' in seen(steps[4]),
+          [seen(step) for step in steps])
+    proc = subprocess.run([reader, str(root / 'DialogMissionDelay.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), 'timedlines:-1',
+                           'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02'], capture_output=True, text=True, encoding='utf-8')
+    got = json.loads(proc.stdout)
+    check('E2b a line the timed player does not play is "not playing"', [l['outcome'] for l in lines(got['steps'][4])] == ['not playing'], got['steps'][4])
 
     # E3: after the line ended, the same chatter event plays; a template event (no inline act) resolves through the link table;
     # a forced-immediate trigger selects Finished and Out in its first run

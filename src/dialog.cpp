@@ -84,7 +84,7 @@ std::string DialogSystem::rootGroupOf(const Value& group) {
     return pathOf(&current);
 }
 
-void DialogSystem::setTestLineLength(double seconds) { testLength_ = seconds; player_ = nullptr; }
+void DialogSystem::setTestLineLength(double seconds) { testLength_ = seconds; player_ = nullptr; timedPlayer_ = nullptr; }
 
 void DialogSystem::registerTalker(const std::string& nameTagPath, ObjectPtr actor) {
     for (auto& talker : talkers_) {
@@ -211,6 +211,10 @@ void DialogSystem::tick(double seconds) {
     for (size_t i = 0; i < data_.size(); ++i) {
         EventData& data = data_[i];
         if (data.live && data.playing && data.testEnd >= 0 && now_ >= data.testEnd) lineEnded(data.lineId);
+        if (data.live && data.playing && data.audioEnd >= 0 && now_ >= data.audioEnd) {    // the timed player's line: finish from the real end
+            data.playing = false;
+            data.finishTime = data.audioEnd + data.outputDelay;
+        }
         if (data.live && !data.playing && now_ >= data.finishTime) stopTalking(int(i));
     }
 }
@@ -414,7 +418,7 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
     line.talker = chosen.nameTag;
     if (talker < 0) { report("no talker"); return; }
     line.echo = talkers_[size_t(talker)].echo;
-    if (!player_ && testLength_ < 0) { report("no audio device"); return; }      // Talk does nothing without an audio device
+    if (!player_ && !timedPlayer_ && testLength_ < 0) { report("no audio device"); return; }      // Talk does nothing without an audio device
     // Priority arbitration: a lower index is more important; the tracked mission's group is floored.
     int index = tag.priority;
     if (!trackedGroup_.empty() && groupPath == trackedGroup_ && index > startIndex_) index = std::min(index, trackedPlot_ ? plotFloor_ : sideFloor_);
@@ -440,7 +444,14 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
     speaker.liveData = handle.index;
     speaker.liveIndex = index;
     if (chosen.akEvent.empty()) { report("no audio event"); return; }          // live until the next update ends it
-    data.playing = player_ ? player_(line) : true;
+    data.audioEnd = -1;
+    if (timedPlayer_) {
+        const double length = timedPlayer_(line);
+        data.playing = length >= 0;
+        if (data.playing) data.audioEnd = now_ + length;
+    } else {
+        data.playing = player_ ? player_(line) : true;
+    }
     if (testLength_ >= 0) data.testEnd = now_ + testLength_;
     if (tag.oncePerSession) played_.insert(tag.path);
     lineStarted_ = true;

@@ -43,7 +43,11 @@ public:
 
     DialogSystem(Runtime& runtime, std::shared_ptr<const Package> package) : runtime_(runtime), package_(std::move(package)) {}
 
-    void setLinePlayer(std::function<bool(const Line&)> start) { player_ = std::move(start); testLength_ = -1; }
+    void setLinePlayer(std::function<bool(const Line&)> start) { player_ = std::move(start); timedPlayer_ = nullptr; testLength_ = -1; }
+    // A player that knows each line's length: it returns the length in seconds (negative: the line is not played). The dialog's own clock then
+    // ends the audio at its exact time, so the finish time is that end plus the act's OutputDelay however long the update that reaches it is.
+    // For a host that plays a file of known length (the UE host's slice audio, SLICE_AUDIO_CHAIN.md section 5c).
+    void setTimedLinePlayer(std::function<double(const Line&)> start) { timedPlayer_ = std::move(start); player_ = nullptr; testLength_ = -1; }
     void setTestLineLength(double seconds);
     void lineEnded(int lineId);
     // A pawn that can talk (its name tag, e.g. "GD_Dialog_NPC.Names.DialogName_Marcus"); without one the talker is an echo caller. With `actor` the talker
@@ -82,6 +86,7 @@ private:
         bool live = false, playing = false;
         int lineId = 0;
         double finishTime = 0, outputDelay = 0, testEnd = -1;
+        double audioEnd = -1;                            // the timed player's audio end on the dialog clock (-1: none)
         std::string rootGroup;
         int talker = -1;
     };
@@ -97,6 +102,7 @@ private:
     Runtime& runtime_;
     std::shared_ptr<const Package> package_;
     std::function<bool(const Line&)> player_;
+    std::function<double(const Line&)> timedPlayer_;
     double testLength_ = -1;
     double now_ = 0;
     int nextLine_ = 1;
