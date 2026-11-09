@@ -188,6 +188,7 @@ int DialogSystem::resolveTalker(const std::string& nameTag, bool echo) {
 
 void DialogSystem::stopTalking(int index) {
     EventData& data = data_[size_t(index)];
+    if (data.live && data.playing && onLineStopped) onLineStopped(data.lineId);
     if (data.talker >= 0 && talkers_[size_t(data.talker)].liveData == index) talkers_[size_t(data.talker)].liveData = -1;
     groupIndex_.erase(data.rootGroup);
     data.live = false;

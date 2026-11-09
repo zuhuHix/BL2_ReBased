@@ -681,6 +681,7 @@ int main(int argc, char** argv) {
                 else if (step.rfind("timedlines:", 0) == 0) {     // a timed line player (the UE host's kind): every line's audio lasts <s>
                     const double length = std::stod(step.substr(11));
                     mission.dialog().setTimedLinePlayer([length](const vm::DialogSystem::Line&) { return length; });
+                    mission.dialog().onLineStopped = [](int lineId) { std::cerr << "dialog line stopped while playing: " << lineId << '\n'; };
                 }
                 else if (step.rfind("talker:", 0) == 0) mission.dialog().registerTalker(step.substr(7));              // a pawn with this name tag
                 else if (step.rfind("kismet:", 0) == 0) {         // kismet:<variable>|<name tag>: a new pawn with that name tag (a talker) bound to the mission's named Kismet variable; no tag clears it
@@ -829,6 +830,7 @@ int main(int argc, char** argv) {
                 else if (step.rfind("timedlines:", 0) == 0) {
                     const double length = std::stod(step.substr(11));
                     slice.mission().dialog().setTimedLinePlayer([length](const vm::DialogSystem::Line&) { return length; });
+                    slice.mission().dialog().onLineStopped = [](int lineId) { std::cerr << "dialog line stopped while playing: " << lineId << '\n'; };
                 }
                 else if (step.rfind("talker:", 0) == 0) slice.mission().dialog().registerTalker(step.substr(7));
                 else if (step.rfind("stage:", 0) == 0) slice.setRegionGameStage(std::stoi(step.substr(6)));

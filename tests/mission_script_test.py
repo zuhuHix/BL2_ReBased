@@ -81,6 +81,7 @@ Act_ObjectParameterSwitch (tag V: no entry matches, the unlinked last output end
 """
 
 import json
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -1928,6 +1929,19 @@ with tempfile.TemporaryDirectory() as folder:
                            'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02'], capture_output=True, text=True, encoding='utf-8')
     got = json.loads(proc.stdout)
     check('E2b a line the timed player does not play is "not playing"', [l['outcome'] for l in lines(got['steps'][4])] == ['not playing'], got['steps'][4])
+
+    # E2c: a line that interrupts a playing one. Tag D (echo, the same priority as A, so it may override it) is triggered while A's audio plays: the
+    # dialog stops A (group silence, the talker's own StopTalking) and reports it through onLineStopped, which a host uses to stop A's sound. A line
+    # whose audio has already ended is not reported.
+    proc = subprocess.run([reader, str(root / 'DialogMission.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), 'timedlines:0.55',
+                           'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02', 'custom:Immediate', 'tick:0.02', 'tick:1', 'custom:Immediate', 'tick:0.02',
+                           'tick:1'], capture_output=True, text=True, encoding='utf-8')
+    got = json.loads(proc.stdout)
+    started = [l['line'] for step in got['steps'] for l in lines(step) if l['outcome'] == 'started']
+    stopped = [int(x) for x in re.findall(r'dialog line stopped while playing: (\d+)', proc.stderr)]
+    check('E2c exit and errors', proc.returncode == 0 and got['errors'] == [], (proc.returncode, got['errors'], proc.stderr))
+    check('E2c the interrupting line starts and the interrupted one is reported once, while it played', len(started) == 3 and stopped == [int(started[0])],
+          (started, stopped, [(s['step'], lines(s)) for s in got['steps']]))
 
     # E3: after the line ended, the same chatter event plays; a template event (no inline act) resolves through the link table;
     # a forced-immediate trigger selects Finished and Out in its first run

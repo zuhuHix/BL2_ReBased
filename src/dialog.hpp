@@ -40,6 +40,10 @@ public:
     // Called for every line chosen (a talk act with an audio event and a talker), with what became of it: "started",
     // "no audio device", "blocked by priority" or "no audio event".
     std::function<void(const Line&, const std::string& outcome)> onLine;
+    // Called with a line's id when the dialog stops it while its audio still plays (StopTalking: the talker's next line, a group silence). The
+    // stock component's StopTalking stops the line's audio too, so a host that plays lines stops that sound here. Not called for a line whose
+    // audio had already ended.
+    std::function<void(int lineId)> onLineStopped;
 
     DialogSystem(Runtime& runtime, std::shared_ptr<const Package> package) : runtime_(runtime), package_(std::move(package)) {}
 

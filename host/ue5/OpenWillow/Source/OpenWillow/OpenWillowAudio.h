@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+class UAudioComponent;
+
 // Plays slice sounds from plain PCM WAV files on the player's machine (SLICE_AUDIO_CHAIN.md section 5).
 //
 // -owaudioplay=<audio_play.json> (written by tools/prepare_slice_audio.py) maps a role ("fire", "hit", "phaselock_cast",
@@ -44,8 +46,9 @@ OPENWILLOW_API bool WithinLimits(int64 FileBytes, int64 UsedBytes, FString& OutE
 OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& OutError);
 
 // True when the engine accepted the sound. WorldContext gives the world; a null context or missing role returns false.
-// OutSeconds, when given, receives the chosen file's length (left alone when nothing plays).
-OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds = nullptr);
+// OutSeconds, when given, receives the chosen file's length; OutComponent the playing sound, so a caller can stop it early (both left alone
+// when nothing plays). A sound stopped early ends there; its drain timer then stops checking it.
+OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds = nullptr, TWeakObjectPtr<UAudioComponent>* OutComponent = nullptr);
 
 // Whether -owaudioplay turned the sound on (the play map may still lack a role). Callers that change behaviour with sound, such as the
 // dialog line player (UOpenWillowQuest), ask this first so that a run without the switch is unchanged.

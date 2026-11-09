@@ -229,7 +229,7 @@ constexpr float DrainPoll = 0.05f;
 
 bool OpenWillowAudio::Enabled() { return OpenWillowAudioImpl::GEnabled; }
 
-bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds)
+bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds, TWeakObjectPtr<UAudioComponent>* OutComponent)
 {
     using namespace OpenWillowAudioImpl;
     if (!GEnabled) return false;
@@ -262,6 +262,7 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
     World->GetTimerManager().SetTimer(Stop, FTimerDelegate::CreateWeakLambda(Component, [Component, Seconds, Started, DrainedAt = -1.0, bStopped = false]() mutable
     {
         if (bStopped) return;
+        if (!Component->IsPlaying()) { bStopped = true; return; }   // stopped early by its caller (an interrupted dialog line)
         const double Now = FPlatformTime::Seconds();
         USoundWaveProcedural* Sound = Cast<USoundWaveProcedural>(Component->Sound);
         const int32 Left = Sound ? Sound->GetAvailableAudioByteCount() : 0;
@@ -277,6 +278,7 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
     UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num());
     Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
     if (OutSeconds) *OutSeconds = Seconds;
+    if (OutComponent) *OutComponent = Component;
     return true;
 }
 

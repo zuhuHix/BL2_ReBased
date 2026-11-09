@@ -1,6 +1,7 @@
 #include "OpenWillowQuest.h"
 #include "OpenWillowMayaHUD.h"
 #include "OpenWillowAudio.h"
+#include "Components/AudioComponent.h"
 #include "OpenWillowVendor.h"
 #include "Misc/PackageName.h"
 #include "OpenWillowCombatTarget.h"
@@ -138,8 +139,20 @@ void UOpenWillowQuest::BeginPlay()
             // A line with no file in the map is not played (-1) and ends on the next update. Without -owaudioplay no player is set and nothing here changes.
             Impl->Slice->mission().dialog().setTimedLinePlayer([this](const vm::DialogSystem::Line& Line) {
                 float Seconds = 0.f;
-                return OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds) ? double(Seconds) : -1.0;
+                TWeakObjectPtr<UAudioComponent> Sound;
+                if (!OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds, &Sound)) return -1.0;
+                LineSounds.Add(Line.id, Sound);
+                return double(Seconds);
             });
+            // A line the dialog stops while it plays (the talker's next line, a group silence: StopTalking) loses its sound too, as the stock
+            // component's StopTalking stops its audio (NATIVE_DIALOG.md "Talk" step 5). Without this an interrupted line kept sounding to its end.
+            Impl->Slice->mission().dialog().onLineStopped = [this](int LineId) {
+                TWeakObjectPtr<UAudioComponent> Sound;
+                if (LineSounds.RemoveAndCopyValue(LineId, Sound) && Sound.IsValid()) {
+                    Sound->Stop();
+                    UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog line %d stopped by the dialog while it played; its sound is stopped"), LineId);
+                }
+            };
             UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog line player set: lines play from the audio play map and last as long as their files"));
         }
         // Slice gear (tools/weapon_slice_gear.py): the recipe of the mission's own MissionWeapon and the level the

@@ -3,6 +3,8 @@
 #include "Components/ActorComponent.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowFocusCam.h"
+class UAudioComponent;
+
 #include "OpenWillowQuest.generated.h"
 
 class FJsonObject;
@@ -264,6 +266,9 @@ private:
     int32 MissionEventsMatched = 0;
     bool bAcceptChecked = false;        // test: the use_key_accepts_mission check ran (step 4 may wait for the walk)
     int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0, DialogAkMismatches = 0;
+    // The sound of each dialog line the host started (-owaudioplay only), by the VM's line id, so a line the dialog interrupts can be stopped
+    // (SLICE_AUDIO_CHAIN.md section 5c). Entries of lines that ended normally stay until the run ends: a few dozen weak pointers at most.
+    TMap<int32, TWeakObjectPtr<UAudioComponent>> LineSounds;
     TArray<int32> ArrivalMotions;       // door motion requested by each entered ArrivedAtMoveNode event
     FVector DummySpawnedAt = FVector::ZeroVector;
     FVector DummyAttachedAt = FVector::ZeroVector;   // dummy location right after the attach op ran
