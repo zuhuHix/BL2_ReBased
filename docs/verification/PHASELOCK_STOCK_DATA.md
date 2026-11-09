@@ -1474,8 +1474,6 @@ never drew, the hand template's `Suction` emitter (`Mat_SirenSuction`, a screen 
 - **Needs (heavy tier):** `tools/import_phaselock_fx.ps1`, then `tools/run_phaselock_shots.ps1` with the round-20 switches and `-owcombatpawn=Bullymong`,
   compared at +0.50, +0.80 and +1.50 s with the real frames.
 
-### Master_Creature's colour model (2026-11-08, showcase follow-up; read from the shader cache, no game run)
-
 ### Master_Creature's colour model (2026-11-08, showcase follow-up; read locally from the compiled shader, no game run)
 
 AI-assisted (Claude). The 2026-11-08 showcase showed our bullymong pale and yellow where the game's is darker and browner, and
@@ -1500,7 +1498,9 @@ uses, in our words (UNVERIFIED against the running game):
   master's 2.0. Only a target whose tool entry names its master as `Master_Creature` gets the 2.0 (the bullymong and the dummy, both read with
   our reader); any other keeps 1.0 unless its instance sets a value. The range's Psycho names none: several Psycho instances are
   `Master_Creature` ones, but its two slot materials' parent was not read, so their scale stays 1.0 (today's look; the zone step logs
-  "parent unknown, scale left at 1.0" per slot). Reading the per-slot parents is a later item. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars.
+  "parent unknown, scale left at 1.0" per slot). Reading the per-slot parents is a later item. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars (it reads the
+  parent's scalar names and reads every value back: UE 5.8's scalar setter always returns False). An existing zone instance is updated in place,
+  so the worn pieces that reference it keep it.
   `OPENWILLOW_ZONE_GAMMA=1` brings back round 23's fit for an A/B capture; the default is now the shader reading.
 - The range dummy gets the same zone material: `tools/seed_slice_npc_assets.ps1 -Steps zone` runs that editor step on the slice job.
   Before, the dummy kept the plain diffuse (`SLICE_NPC_ASSETS.md`: zones "not applied"), which is why it rendered near white.

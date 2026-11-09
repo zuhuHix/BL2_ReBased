@@ -62,10 +62,14 @@ for npc in job['npcs']:
             continue
         name = f'MI_{slot["material"]}_Zone'
         path = f'{dest}/Materials/{name}'
-        if eal.does_asset_exist(path):
-            eal.delete_asset(path)
-        instance = tools.create_asset(name, f'{dest}/Materials', unreal.MaterialInstanceConstant,
-                                      unreal.MaterialInstanceConstantFactoryNew())
+        # An existing instance is updated in place: the attach step's piece meshes reference it, and deleting it would leave them
+        # without a material until the attach step ran again. Every parameter below is set (or read back) on each run.
+        instance = unreal.load_asset(path) if eal.does_asset_exist(path) else None
+        if not isinstance(instance, unreal.MaterialInstanceConstant):
+            if instance is not None:
+                eal.delete_asset(path)
+            instance = tools.create_asset(name, f'{dest}/Materials', unreal.MaterialInstanceConstant,
+                                          unreal.MaterialInstanceConstantFactoryNew())
         mel.set_material_instance_parent(instance, unreal.load_asset(ZONE))
         mel.set_material_instance_texture_parameter_value(instance, 'Diffuse', texture(files['p_Diffuse'], f'{dest}/Textures', True))
         mel.set_material_instance_texture_parameter_value(instance, 'Masks', texture(files['p_Masks'], f'{dest}/Textures', False))
@@ -80,10 +84,17 @@ for npc in job['npcs']:
         values = zone_parameters(slot, master=npc.get('master'), gamma=gamma)
         for parameter, rgba in values['vectors'].items():
             mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))
+        # UE 5.8's set_material_instance_scalar_parameter_value always returns False (the engine never sets its result), so the
+        # parent's parameter list is checked first and every value is read back after it is set.
+        known = {str(name) for name in mel.get_scalar_parameter_names(unreal.load_asset(ZONE))}
         for parameter, value in values['scalars'].items():
-            if not mel.set_material_instance_scalar_parameter_value(instance, parameter, value):
+            if parameter not in known:
                 raise RuntimeError(f'{ZONE} has no scalar {parameter}: it predates the light/dark scales. Rebuild it with '
                                    'powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach, then run this step again.')
+            mel.set_material_instance_scalar_parameter_value(instance, parameter, value)
+            held = mel.get_material_instance_scalar_parameter_value(instance, parameter)
+            if abs(held - value) > 1e-6:
+                raise RuntimeError(f'{path}: {parameter} reads {held} after being set to {value}')
         applied = sorted(values['vectors'])
         note = scale_note(slot, npc.get('master'))
         if note:
