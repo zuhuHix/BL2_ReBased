@@ -67,8 +67,9 @@ try {
             # A graceful close first: the host stops the recording on its world's teardown and waits for the WAV to be written.
             $asked = $process.CloseMainWindow()
             Write-Host "Timed out after $TimeoutSeconds s; asked pid $($process.Id) (this run's editor) to close (window message sent: $asked)."
-            if (!$process.WaitForExit($CloseWaitSeconds * 1000)) {
-                Stop-Process -Id $process.Id -Force
+            # Through the retained handle, not by id: after the wait the id could belong to another process.
+            if (!$process.WaitForExit($CloseWaitSeconds * 1000) -and !$process.HasExited) {
+                $process.Kill()
                 Write-Host "Still running $CloseWaitSeconds s later; stopped pid $($process.Id). The recording is lost (a forced stop writes no WAV)."
             }
         }

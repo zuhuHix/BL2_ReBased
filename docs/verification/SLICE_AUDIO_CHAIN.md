@@ -227,7 +227,7 @@ the module's private dependencies): no external recorder. Recording starts with 
 teardown, or failing that the engine's pre-exit, stops it, and a 900 s timer caps it (the mixer's expected duration, 180 s, only reserves memory).
 Each end waits for the mixer's background writer until the file holds everything its RIFF header declares (at most 30 s). On a timeout the driver
 asks the editor's window to close and waits up to 60 s before a forced stop. A crash, or that forced stop, loses the recording: crash survival is
-out of scope. When the recording stops, the host puts back the engine setting and the two volume multipliers it changed. The paths other than the
+out of scope. When the recording stops, the host puts back the engine setting and the two volume multipliers it changed, each only if it still holds the recorder's value. The paths other than the
 gate's summary have not been exercised in the engine (UNVERIFIED). Two engine behaviours had to be switched off while recording, each found by a failed run on 2026-11-08: a submix
 switches itself off while nothing plays and then records nothing (first run: no file; the fix sets the engine's `au.NeverDisableSubmixes`, which also keeps the quiet
 gaps in the file so cue times stay true), and an unfocused window's volume multiplier (0 by default) zeroes the mix before the recorder sees it (second run: a WAV

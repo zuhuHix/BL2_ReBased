@@ -181,16 +181,18 @@ bool FileComplete(int64& OutSize)
     return RiffSize + 8 == OutSize;
 }
 
+// Each setting goes back only while it still holds the recorder's override (1): if something else changed it during the recording, that
+// change is kept. The focus handler sets the volume to 1 or to the unfocused value, which is also 1 while recording.
 void RestoreSettings()
 {
     if (GChangedNeverDisable)
     {
-        if (IConsoleVariable* NeverDisable = IConsoleManager::Get().FindConsoleVariable(TEXT("au.NeverDisableSubmixes")))
-            NeverDisable->Set(GPriorNeverDisable, ECVF_SetByCode);
+        IConsoleVariable* NeverDisable = IConsoleManager::Get().FindConsoleVariable(TEXT("au.NeverDisableSubmixes"));
+        if (NeverDisable && NeverDisable->GetInt() == 1) NeverDisable->Set(GPriorNeverDisable, ECVF_SetByCode);
     }
     GChangedNeverDisable = false;
-    FApp::SetUnfocusedVolumeMultiplier(GPriorUnfocusedVolume);
-    FApp::SetVolumeMultiplier(GPriorVolume);
+    if (FApp::GetUnfocusedVolumeMultiplier() == 1.f) FApp::SetUnfocusedVolumeMultiplier(GPriorUnfocusedVolume);
+    if (FApp::GetVolumeMultiplier() == 1.f) FApp::SetVolumeMultiplier(GPriorVolume);
 }
 
 // The wave a test can look at after the play: bytes the mixer has not pulled yet.
