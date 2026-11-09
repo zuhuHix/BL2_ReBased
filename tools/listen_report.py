@@ -131,7 +131,8 @@ def measure(mono, rate, start, length):
         return None
     peak = max(window)
     rms = math.sqrt(sum(v * v for v in window) / len(window))
-    # First frame louder than the silence floor, as a delay from the cue: how late the mixer started the sound. Only when the cue starts in
+    # First frame louder than the silence floor, as a delay from the cue. The cue's clock (the host's real time from its start call) and the
+    # file's (the mixer's first recorded buffer) are not calibrated against each other, so this mixes render delay with that offset. Only when the cue starts in
     # silence (the 0.2 s before it are quiet); over another sound it would measure that sound.
     floor = 10 ** (SILENT_DBFS / 20)
     before = mono[max(0, a - int(0.2 * rate)):a]
@@ -162,7 +163,20 @@ def load_names(manifest: Path | None):
     return names
 
 
-def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, play_map: Path | None = None):
+LOCAL = Path(__file__).resolve().parent.parent / 'local'
+
+
+def checked_out(out: Path, local_root: Path = LOCAL) -> Path:
+    """The output folder, resolved through links, if it lies inside local_root (resolved the same way); ValueError otherwise.
+    The report carries event names from the local manifest, so it may only be written under the checkout's ignored local/."""
+    root = local_root.resolve()
+    target = out.resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f'refusing to write the report outside {root}: {out} resolves to {target}')
+    return target
+
+
+def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, play_map: Path | None = None, local_root: Path = LOCAL):
     run = parse_log(log_text)
     problems = []
     if not run['started']:
@@ -211,6 +225,7 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     onsets = sorted(c['level']['onset_s'] for c in run['cues'] if c['kind'] == 'sound' and c['level'] and c['level']['onset_s'] is not None)
     median_onset = onsets[len(onsets) // 2] if onsets else None
 
+    out = checked_out(out, local_root)
     out.mkdir(parents=True, exist_ok=True)
     (out / 'cues.json').write_text(json.dumps({'wav': str(wav), 'rate': rate, 'channels': channels, 'length_s': round(length, 3),
                                                'peak_dbfs': round(dbfs(overall_peak), 1) if mono else None, 'median_onset_s': median_onset,
@@ -221,8 +236,8 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
              'Game-derived: keep under ignored `local/`.', '',
              f'- Recording: `{wav.name}` ({length:.1f} s, {rate} Hz, {channels} channel(s), overall peak {fmt_db(dbfs(overall_peak)) if mono else "-"} dBFS)',
              f'- Slice gate: {"pass %s, fail %s, n/a %s" % run["summary"] if run["summary"] else "no summary in the log"}',
-             f'- Times are minutes:seconds from the recording start (the first {steps[0]["t"]:.0f} s are the map loading, silent). Sounds that start in silence began a median '
-             f'{median_onset if median_onset is not None else "?"} s after their cue ({len(onsets)} measured).' if steps else '- No step cues in the log.',
+             f'- Times are minutes:seconds from the recording start (the first {steps[0]["t"]:.0f} s are the map loading, silent). Sounds that start in silence: onset relative to the cue, median '
+             f'{median_onset if median_onset is not None else "?"} s ({len(onsets)} measured; clocks not calibrated, so this is not a latency).' if steps else '- No step cues in the log.',
              '- A shot and its bullet impact start within a few milliseconds of each other, so their levels below are of the two together, not each alone.',
              '- Frames (`frames/`) are saved at most every 1.5 s, at the first cue that allows one, so a step shows its first moment.',
              '- Nothing here was listened to. The levels are measurements of the mix, not a judgement that a sound is right.', '']
@@ -291,6 +306,11 @@ def main(argv=None):
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--play-map', type=Path)
     args = parser.parse_args(argv)
+    try:
+        checked_out(args.out)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
     problems, steps, run = build(args.log.read_text(encoding='utf-8', errors='replace'), args.wav, args.out, args.manifest, args.play_map)
     for step in steps:
         roles = {}

@@ -48,7 +48,7 @@ class ListenReportTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         wav = tmp / 'listen.wav'
         write_wav(wav, seconds, tones, amplitude=amplitude)
-        problems, steps, run = lr.build(text or log(), wav, tmp / 'out')
+        problems, steps, run = lr.build(text or log(), wav, tmp / 'out', local_root=tmp)
         return tmp / 'out', problems, steps, run
 
     def test_steps_sounds_and_levels(self):
@@ -92,7 +92,7 @@ class ListenReportTest(unittest.TestCase):
 
     def test_missing_wav_and_no_start(self):
         tmp = Path(tempfile.mkdtemp())
-        problems, _, _ = lr.build('nothing here', tmp / 'none.wav', tmp / 'out')
+        problems, _, _ = lr.build('nothing here', tmp / 'none.wav', tmp / 'out', local_root=tmp)
         self.assertTrue(any('no WAV' in p for p in problems), problems)
         self.assertTrue(any('never started recording' in p for p in problems), problems)
         self.assertTrue((tmp / 'out' / 'LISTEN.md').exists())
@@ -112,6 +112,40 @@ class ListenReportTest(unittest.TestCase):
         fire, hit = steps[1]['sounds']
         self.assertIsNotNone(fire['level']['onset_s'])
         self.assertIsNone(hit['level']['onset_s'])
+
+    def test_out_outside_local_refused(self):
+        root = Path(tempfile.mkdtemp())
+        local = root / 'local'
+        local.mkdir()
+        self.assertEqual(lr.checked_out(local / 'a' / 'b', local), (local / 'a' / 'b').resolve())
+        for outside in (root / 'elsewhere', local / '..' / 'escape', root):
+            with self.assertRaises(ValueError):
+                lr.checked_out(outside, local)
+        with self.assertRaises(ValueError):
+            lr.build('nothing here', root / 'none.wav', root / 'out', local_root=local)
+        self.assertFalse((root / 'out').exists())
+
+    def test_link_inside_local_pointing_outside_refused(self):
+        root = Path(tempfile.mkdtemp())
+        local, target = root / 'local', root / 'target'
+        local.mkdir()
+        target.mkdir()
+        link = local / 'link'
+        try:
+            if sys.platform == 'win32':
+                import _winapi
+                _winapi.CreateJunction(str(target), str(link))
+            else:
+                link.symlink_to(target, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f'cannot make a link here: {error}')
+        with self.assertRaises(ValueError):
+            lr.checked_out(link / 'run', local)
+
+    def test_main_refuses_outside_out(self):
+        root = Path(tempfile.mkdtemp())
+        self.assertEqual(lr.main([str(root / 'x.log'), str(root / 'x.wav'), str(root / 'out')]), 2)
+        self.assertFalse((root / 'out').exists())
 
     def test_labels_parse(self):
         run = lr.parse_log(log())

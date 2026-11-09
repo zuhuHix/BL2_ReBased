@@ -223,13 +223,19 @@ the host called play. Python: `tests/prepare_slice_audio_test.py`, `tests/check_
 `tools/record_audio_listen.ps1` runs the slice gate (the sequence `tools/test_slice_gate.ps1` grades) with the host's sounds on (`-owaudioplay`), a quiet pause
 before each step (`-owslicegatepause=<s>`, default 2 s in the driver, 0 = off in the host) and the host recording its own main output (`-owrecordaudio=<file.wav>`).
 The recording is UE's own submix recorder (`UAudioMixerBlueprintLibrary::StartRecordingOutput` / `StopRecordingOutput` in the engine's `AudioMixer` module, added to
-the module's private dependencies): no external recorder. Recording starts with the first game map and stops at the slice gate's summary; the gate waits for the
-mixer's background writer to finish the file before it exits. Two engine behaviours had to be switched off while recording, each found by a failed run on 2026-11-08: a submix
+the module's private dependencies): no external recorder. Recording starts with the first game map and stops at the slice gate's summary, or on any other graceful end: the recorded world's
+teardown, or failing that the engine's pre-exit, stops it, and a 900 s timer caps it (the mixer's expected duration, 180 s, only reserves memory).
+Each end waits for the mixer's background writer until the file holds everything its RIFF header declares (at most 30 s). On a timeout the driver
+asks the editor's window to close and waits up to 60 s before a forced stop. A crash, or that forced stop, loses the recording: crash survival is
+out of scope. When the recording stops, the host puts back the engine setting and the two volume multipliers it changed. The paths other than the
+gate's summary have not been exercised in the engine (UNVERIFIED). Two engine behaviours had to be switched off while recording, each found by a failed run on 2026-11-08: a submix
 switches itself off while nothing plays and then records nothing (first run: no file; the fix sets the engine's `au.NeverDisableSubmixes`, which also keeps the quiet
 gaps in the file so cue times stay true), and an unfocused window's volume multiplier (0 by default) zeroes the mix before the recorder sees it (second run: a WAV
-of the right length, every sample zero; the fix sets the focused and unfocused multipliers to 1). Every `Play` and every gate step logs `OWAUDIOREC cue t=<s from the recording start>` and saves a frame
+of the right length, every sample zero; the fix sets the focused and unfocused multipliers to 1 while recording). Every `Play` and every gate step logs `OWAUDIOREC cue t=<s from the recording start>` and saves a frame
 at most every 1.5 s. `tools/listen_report.py` then measures the WAV per cue (peak and RMS in the cue's window, how late the sound started after its cue, the quiet
-gap before the next step) and writes `LISTEN.md` and `ANSWERS.md` beside it, under ignored `local/audio_listen/<date>/<time>/`. Both are game-derived (event names
+gap before the next step) and writes `LISTEN.md` and `ANSWERS.md` beside it, under ignored `local/audio_listen/<date>/<time>/`; it refuses an output
+folder that resolves (through links) outside the checkout's `local/`. The start delay is an onset relative to the cue: the cue's clock and the
+recording's are not calibrated against each other, so it is not a latency measurement. Both are game-derived (event names
 come from the local manifest) and stay local.
 
 What it can show: what the host sent to the mixer and how loud the mix was. What it cannot: whether a sound is the right one, or sounds like the game. Only the
@@ -240,7 +246,7 @@ Runs (zuhu PC, 2026-11-08, decoded sounds from vgmstream, 2 s pause): the first 
 manifest and Marcus's assets). The third: slice gate 14 of 14 PASS, editor exit 0, a 122.7 s 48 kHz stereo WAV (file size matches the stopped length), overall peak
 -0.2 dBFS, no clipped cue. Nine plays: in the fight 3 shots and 3 impacts (peaks -2.7 to -0.2 dBFS for shot and impact together, since they start within a few ms),
 one Phaselock cast (peak -4.5 dBFS, RMS -22.9 dBFS over its 4.1 s), at the dummy 1 shot and 1 impact (peak -1.6 dBFS); every pause before a step measured silent.
-Sounds that started in silence began 0.134 to 0.145 s after their cue. Nobody has listened to it yet; the guide went to the maintainer.
+For sounds that started in silence, the onset relative to the cue was 0.134 to 0.145 s (clocks not calibrated; not a latency). Nobody has listened to it yet; the guide went to the maintainer.
 
 ## UNVERIFIED list
 

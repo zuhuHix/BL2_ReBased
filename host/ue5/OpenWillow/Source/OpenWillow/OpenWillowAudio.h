@@ -47,7 +47,8 @@ OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& Out
 OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role);
 
 // Test only, for a listening session (tools/record_audio_listen.ps1): -owrecordaudio=<file.wav> records the engine's main output from the
-// first game map until StopRecording, through the audio mixer's own submix recorder (no new tool). Every Play and every Cue then logs
+// first game map until StopRecording or any graceful end (world teardown, engine exit, a 900 s cap; a crash loses it), through the
+// audio mixer's own submix recorder (no new tool). Every Play and every Cue then logs
 //   OWAUDIOREC cue t=<seconds since the recording started> label=<role or step> frame=<png or ->
 // and saves a frame of the screen at most every 1.5 s. A recording proves what the host sent to the mixer, not what anyone heard.
 // Without the switch these do nothing.

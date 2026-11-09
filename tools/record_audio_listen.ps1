@@ -9,6 +9,7 @@ param(
     [switch]$NoShield,                 # leave out -owslicegateshield
     [switch]$NoDownAfterFight,         # leave out -owslicegatedownafterfight (the revive stand-in)
     [int]$TimeoutSeconds = 900,
+    [int]$CloseWaitSeconds = 60,       # after a timeout: how long a graceful close may take (the host writes the WAV) before a forced stop
     [int]$WaitForEditorSeconds = 3600
 )
 # A listening session for the maintainer: one slice gate run (OpenWillowSliceGate.cpp, the same sequence tools/test_slice_gate.ps1 grades) with
@@ -63,8 +64,13 @@ try {
     if (!$process.WaitForExit($TimeoutSeconds * 1000)) {
         $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId=$($process.Id)" -ErrorAction SilentlyContinue).CommandLine
         if ($commandLine -and $commandLine.Contains($log)) {
-            Stop-Process -Id $process.Id -Force
-            Write-Host "Timed out after $TimeoutSeconds s; stopped pid $($process.Id) (this run's editor)."
+            # A graceful close first: the host stops the recording on its world's teardown and waits for the WAV to be written.
+            $asked = $process.CloseMainWindow()
+            Write-Host "Timed out after $TimeoutSeconds s; asked pid $($process.Id) (this run's editor) to close (window message sent: $asked)."
+            if (!$process.WaitForExit($CloseWaitSeconds * 1000)) {
+                Stop-Process -Id $process.Id -Force
+                Write-Host "Still running $CloseWaitSeconds s later; stopped pid $($process.Id). The recording is lost (a forced stop writes no WAV)."
+            }
         }
     }
     else { Write-Host "Editor exited with $($process.ExitCode)" }

@@ -7,9 +7,11 @@
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
@@ -151,10 +153,45 @@ void LoadOnce()
 FString GRecordPath;
 double GRecordStarted = -1, GRecordStopped = -1, GLastFrame = -1;
 int32 GFrames = 0;
-// A recording longer than this is cut off by the mixer; the slice gate takes about two minutes with its pauses. Host choice.
-constexpr float RecordLimitSeconds = 900.f;
+// The game world the recording belongs to; a stop needs it to reach the audio device.
+TWeakObjectPtr<UWorld> GRecordWorld;
+// What the recording changed, put back when it stops (the process may keep running, e.g. with -owslicegatestay).
+int32 GPriorNeverDisable = 0;
+float GPriorUnfocusedVolume = 0.f, GPriorVolume = 1.f;
+bool GChangedNeverDisable = false;
+// The mixer only reserves memory for the expected duration (the slice gate takes about two minutes with its pauses); it does not stop there.
+// The cap is a separate timer that stops the recording. Host choices.
+constexpr float RecordExpectedSeconds = 180.f;
+constexpr float RecordCapSeconds = 900.f;
 constexpr double FrameInterval = 1.5;
 constexpr double WriteWaitLimit = 30.0;
+
+// The mixer's writer puts the WAV header (with its RIFF size) down first and the data after it in chunks on a background task, so the file is
+// complete exactly when its size is the RIFF size plus the 8 bytes before it. OutSize is the size seen, -1 for no file.
+bool FileComplete(int64& OutSize)
+{
+    OutSize = IFileManager::Get().FileSize(*GRecordPath);
+    if (OutSize <= 44) return false;
+    TUniquePtr<FArchive> Reader(IFileManager::Get().CreateFileReader(*GRecordPath, FILEREAD_AllowWrite | FILEREAD_Silent));
+    if (!Reader) return false;
+    uint8 Head[8] = {};
+    Reader->Serialize(Head, 8);
+    if (Reader->IsError() || FMemory::Memcmp(Head, "RIFF", 4) != 0) return false;
+    const int64 RiffSize = int64(uint32(Head[4]) | uint32(Head[5]) << 8 | uint32(Head[6]) << 16 | uint32(Head[7]) << 24);
+    return RiffSize + 8 == OutSize;
+}
+
+void RestoreSettings()
+{
+    if (GChangedNeverDisable)
+    {
+        if (IConsoleVariable* NeverDisable = IConsoleManager::Get().FindConsoleVariable(TEXT("au.NeverDisableSubmixes")))
+            NeverDisable->Set(GPriorNeverDisable, ECVF_SetByCode);
+    }
+    GChangedNeverDisable = false;
+    FApp::SetUnfocusedVolumeMultiplier(GPriorUnfocusedVolume);
+    FApp::SetVolumeMultiplier(GPriorVolume);
+}
 
 // The wave a test can look at after the play: bytes the mixer has not pulled yet.
 TWeakObjectPtr<USoundWaveProcedural> GLastWave;
@@ -238,6 +275,7 @@ void OpenWillowAudio::StopRecording(const UObject* WorldContext)
     GRecordStopped = FPlatformTime::Seconds();
     // The mixer writes the WAV on a worker thread; RecordingSettled says when it is there.
     UAudioMixerBlueprintLibrary::StopRecordingOutput(WorldContext, EAudioRecordingExportType::WavFile, FPaths::GetBaseFilename(GRecordPath), FPaths::GetPath(GRecordPath));
+    RestoreSettings();
     UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC stop t=%.3f file=%s"), GRecordStopped - GRecordStarted, *GRecordPath);
 }
 
@@ -246,14 +284,11 @@ bool OpenWillowAudio::RecordingSettled()
     using namespace OpenWillowAudioImpl;
     if (GRecordStarted < 0) return true;
     if (GRecordStopped < 0) return false;
-    // Done once the file exists with more than a header and its size has not changed for a second; the wait limit covers anything odd.
-    // tools/record_audio_listen.ps1 checks the written length against the stopped time.
-    static int64 LastSize = -1;
-    static double SameSince = -1;
+    // Done once the file holds everything its header declares; the wait limit covers a writer that never finishes.
+    // tools/listen_report.py checks the written length against the stopped time.
     const double Now = FPlatformTime::Seconds();
-    const int64 Size = IFileManager::Get().FileSize(*GRecordPath);
-    if (Size != LastSize) { LastSize = Size; SameSince = Now; }
-    const bool bDone = Size > 44 && Now - SameSince >= 1.0;
+    int64 Size = -1;
+    const bool bDone = FileComplete(Size);
     if (bDone || Now - GRecordStopped > WriteWaitLimit)
     {
         static bool bLogged = false;
@@ -362,6 +397,23 @@ void RunTest(UWorld* World)
 
 }
 
+namespace OpenWillowAudioImpl
+{
+// Stops (if still recording) and blocks the calling thread until the file is complete or the wait limit passes. Only for shutdown paths: the
+// writer runs on a background task, so waiting here does not stall it.
+void StopAndWait(UWorld* World, const TCHAR* Why)
+{
+    if (GRecordStarted < 0) return;
+    if (GRecordStopped < 0)
+    {
+        if (!World) return;
+        UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC stopping on %s"), Why);
+        OpenWillowAudio::StopRecording(World);
+    }
+    while (!OpenWillowAudio::RecordingSettled()) FPlatformProcess::Sleep(0.05f);
+}
+}
+
 void OpenWillowAudio::Startup()
 {
     using namespace OpenWillowAudioImpl;
@@ -372,18 +424,48 @@ void OpenWillowAudio::Startup()
         FCoreUObjectDelegates::PostLoadMapWithWorld.AddLambda([](UWorld* World)
         {
             if (GRecordStarted >= 0 || !World || !World->IsGameWorld()) return;
+            GPriorUnfocusedVolume = FApp::GetUnfocusedVolumeMultiplier();
+            GPriorVolume = FApp::GetVolumeMultiplier();
             // A submix switches itself off while nothing plays, and records nothing then: the first run wrote no file at all, and the quiet
             // gaps would be dropped, which would shift every later cue. This engine switch keeps submixes rendering silence instead.
             if (IConsoleVariable* NeverDisable = IConsoleManager::Get().FindConsoleVariable(TEXT("au.NeverDisableSubmixes")))
+            {
+                GPriorNeverDisable = NeverDisable->GetInt();
+                GChangedNeverDisable = true;
                 NeverDisable->Set(1, ECVF_SetByCode);
+            }
             else UE_LOG(LogTemp, Warning, TEXT("OWAUDIOREC au.NeverDisableSubmixes not found: quiet stretches may be missing from the recording"));
             // An unattended window usually has no focus, and an unfocused window's volume (0 by default) zeroes the mix before the recorder sees
             // it: the second run wrote 71 s of zeros. Full volume with or without focus while recording.
             FApp::SetUnfocusedVolumeMultiplier(1.f);
             FApp::SetVolumeMultiplier(1.f);
-            UAudioMixerBlueprintLibrary::StartRecordingOutput(World, RecordLimitSeconds);
+            UAudioMixerBlueprintLibrary::StartRecordingOutput(World, RecordExpectedSeconds);
             GRecordStarted = FPlatformTime::Seconds();
+            GRecordWorld = World;
             UE_LOG(LogTemp, Display, TEXT("OWAUDIOREC start file=%s map=%s (test only; records what the host sent to the mixer)"), *GRecordPath, *World->GetMapName());
+            FTimerHandle Cap;
+            World->GetTimerManager().SetTimer(Cap, FTimerDelegate::CreateWeakLambda(World, [World]
+            {
+                if (GRecordStopped >= 0) return;
+                UE_LOG(LogTemp, Warning, TEXT("OWAUDIOREC cap of %.0f s reached: recording stopped"), RecordCapSeconds);
+                OpenWillowAudio::StopRecording(World);
+            }), RecordCapSeconds, false);
+        });
+        // Any graceful end (the slice gate's summary, a closed window, a quit request) gets a finished file: the world's teardown, or failing that
+        // the engine's pre-exit, stops the recording and blocks until the writer is done. A crash loses the recording; that is out of scope.
+        FWorldDelegates::OnWorldBeginTearDown.AddLambda([](UWorld* World)
+        {
+            if (World && World == GRecordWorld.Get()) StopAndWait(World, TEXT("world teardown"));
+        });
+        FCoreDelegates::OnEnginePreExit.AddLambda([]
+        {
+            if (GRecordStarted >= 0 && GRecordStopped < 0 && !GRecordWorld.IsValid())
+            {
+                UE_LOG(LogTemp, Warning, TEXT("OWAUDIOREC engine exit with the recording's world already gone: no file"));
+                RestoreSettings();
+                return;
+            }
+            StopAndWait(GRecordWorld.Get(), TEXT("engine pre-exit"));
         });
     }
     GEnabled = FParse::Value(FCommandLine::Get(), TEXT("owaudioplay="), File);
