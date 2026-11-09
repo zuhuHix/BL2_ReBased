@@ -9,7 +9,8 @@ Parents: the Bullymong's and the TargetDummy's materials have a known ``Master_C
 name it). The Psycho's slots' parent is unknown: they stay at a light/dark scale of 1.0 and the step logs a scale note for each.
 From Master_Creature's compiled shader (read locally; PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model") come only the two
 light/dark scales, ``p_HighlightsIntensity`` / ``p_ShadowsIntensity`` with their master default, and the use of the zone vectors as stored
-(no gamma step); tools/creature_zone.py picks those values. The rest is our host model, UNVERIFIED: the grey diffuse is coloured by the
+(no gamma step); tools/creature_zone.py picks those values, and by default applies round 23's x^2.2 to the vectors as a host fit
+(UNVERIFIED; OPENWILLOW_ZONE_GAMMA=0 turns it off). The rest is our host model, UNVERIFIED: the grey diffuse is coloured by the
 zone vectors (p_?Color{Hilight,Midtone,Shadow}, p_ColorD) through ``p_Masks`` (left half light/dark map, right half zone mask), mixed as
 the citizens' ``M_OW_NPC_Zone`` (tools/ambient_npc_attach_editor.py) does; this step parents one instance to it. The values are the stock
 material instance's own (UModel props). Nothing here is checked in the running game; the dummy's pattern layer is not drawn.
@@ -24,7 +25,7 @@ import sys
 import unreal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from creature_zone import scale_note, zone_parameters  # noqa: E402
+from creature_zone import gamma_from_env, scale_note, zone_parameters  # noqa: E402
 
 job = json.loads(Path(os.environ['OPENWILLOW_SLICE_JOB']).read_text(encoding='utf-8'))
 tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -82,8 +83,9 @@ for npc in job['npcs']:
             eal.save_loaded_asset(normal, only_if_is_dirty=False)
             mel.set_material_instance_texture_parameter_value(instance, 'Normal', normal)
         # Master_Creature's colour model (tools/creature_zone.py): the vectors as stored and the two light/dark scales, from the
-        # instance or the master's default. OPENWILLOW_ZONE_GAMMA=1 brings back round 23's x^2.2 fit for an A/B capture.
-        gamma = os.environ.get('OPENWILLOW_ZONE_GAMMA', '0') == '1'
+        # instance or the master's default. The vectors get the x^2.2 host fit by default (creature_zone.GAMMA_FIT_DEFAULT, UNVERIFIED);
+        # OPENWILLOW_ZONE_GAMMA=0 uses them as stored, as the shader does.
+        gamma = gamma_from_env(os.environ.get('OPENWILLOW_ZONE_GAMMA'))
         values = zone_parameters(slot, master=npc.get('master'), gamma=gamma)
         for parameter, rgba in values['vectors'].items():
             mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))

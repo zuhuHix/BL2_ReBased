@@ -13,8 +13,8 @@ SLOT = {'vectors': {'p_AColorMidtone': [0.5, 0.25, 1.0, 1.0], 'p_ColorD': [0.2, 
         'scalars': {}}
 
 
-def test_vectors_are_kept_as_stored():
-    out = z.zone_parameters(SLOT, 'Master_Creature')
+def test_vectors_are_kept_as_stored_without_the_fit():
+    out = z.zone_parameters(SLOT, 'Master_Creature', gamma=False)
     assert out['vectors'] == {'p_AColorMidtone': [0.5, 0.25, 1.0, 1.0], 'p_ColorD': [0.2, 0.2, 0.2, 1.0]}
 
 
@@ -23,9 +23,16 @@ def test_only_zone_vectors_pass():
     assert 'p_PatternColor' not in names and 'p_EmissiveScale' not in names and 'p_BColorShadow' not in names
 
 
-def test_gamma_option_raises_rgb_only():
-    out = z.zone_parameters(SLOT, gamma=True)['vectors']['p_AColorMidtone']
+def test_gamma_fit_is_the_default_and_raises_rgb_only():
+    assert z.zone_parameters(SLOT) == z.zone_parameters(SLOT, gamma=True)
+    out = z.zone_parameters(SLOT)['vectors']['p_AColorMidtone']
     assert abs(out[0] - 0.5 ** 2.2) < 1e-9 and abs(out[1] - 0.25 ** 2.2) < 1e-9 and out[2] == 1.0 and out[3] == 1.0
+
+
+def test_gamma_from_env():
+    assert z.gamma_from_env(None) is True and z.gamma_from_env('') is True
+    assert z.gamma_from_env('0') is False and z.gamma_from_env(' 0 ') is False
+    assert z.gamma_from_env('1') is True
 
 
 def test_master_defaults_when_not_overridden():

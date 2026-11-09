@@ -9,22 +9,36 @@ Where the rule comes from (docs/verification/PHASELOCK_STOCK_DATA.md, "Master_Cr
 local reading of Master_Creature's compiled shader is that it multiplies the light/dark map's red and green by the scalars
 ``p_HighlightsIntensity`` and ``p_ShadowsIntensity`` before clamping them, and uses the colour vectors as they are stored, with no
 gamma step. Both scalars default to 2.0 in the master; an instance that does not override them gets 2.0. The host's earlier zone material had no such scale (1.0) and raised the vectors to the power 2.2
-(round 23), both host fits. UNVERIFIED against the running game: this is a reading of compiled data, and UE5's lighting
+(round 23). The scales now follow the shader; the x^2.2 stays on by default as a host fit (GAMMA_FIT_DEFAULT, below), because it looked
+closer to the game in UE5 than the vectors as stored. UNVERIFIED against the running game: this is a reading of compiled data, and UE5's lighting
 and tone curve are not BL2's.
 """
+
+# Host fit (UNVERIFIED), on top of the shader reading: the zone vectors are raised to the power 2.2 by default. The shader uses them as
+# stored, but in UE5's lighting and tone curve that looked olive and grey; an A/B in identical light (2026-11-09, runner-z36 claude-z36d
+# off / claude-z36e on, a Luna critic, colour only) scored the fit 6.4/10 against 5.8. OPENWILLOW_ZONE_GAMMA=0 gives the shader-faithful look.
+GAMMA_FIT_DEFAULT = True
+
+
+def gamma_from_env(value):
+    """OPENWILLOW_ZONE_GAMMA's value -> whether to apply the fit: unset uses GAMMA_FIT_DEFAULT, '0' turns it off, anything else on."""
+    if value is None or str(value).strip() == '':
+        return GAMMA_FIT_DEFAULT
+    return str(value).strip() != '0'
+
 
 # Master_Creature's defaults for the two scalars, from its compiled uniform expressions (an instance may override them).
 MASTER_CREATURE_SCALARS = {'p_HighlightsIntensity': 2.0, 'p_ShadowsIntensity': 2.0}
 ZONE_VECTOR_ENDINGS = ('Hilight', 'Midtone', 'Shadow', 'ColorD')
 
 
-def zone_parameters(slot, master=None, gamma=False):
+def zone_parameters(slot, master=None, gamma=GAMMA_FIT_DEFAULT):
     """{'vectors': {name: [r, g, b, a]}, 'scalars': {name: value}} for one material slot of an editor job.
 
     slot: the job's slot dict, with the stock instance's own 'vectors' and 'scalars' (UModel props). master: the instance's parent
     material as the job names it; only 'Master_Creature' has read defaults, any other master gets 1.0 (M_OW_NPC_Zone's default, the
-    earlier rule) unless the instance sets a value. gamma=True keeps round 23's host fit (each colour channel raised to 2.2) for an
-    A/B capture; the shader reading uses the values as stored.
+    earlier rule) unless the instance sets a value. gamma (default GAMMA_FIT_DEFAULT, True) applies round 23's host fit, each colour
+    channel raised to 2.2; gamma=False uses the values as stored, as the shader does.
     """
     vectors = {}
     for name, value in (slot.get('vectors') or {}).items():
