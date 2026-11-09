@@ -69,8 +69,15 @@ try {
             Write-Host "Timed out after $TimeoutSeconds s; asked pid $($process.Id) (this run's editor) to close (window message sent: $asked)."
             # Through the retained handle, not by id: after the wait the id could belong to another process.
             if (!$process.WaitForExit($CloseWaitSeconds * 1000) -and !$process.HasExited) {
-                $process.Kill()
-                Write-Host "Still running $CloseWaitSeconds s later; stopped pid $($process.Id). The recording is lost (a forced stop writes no WAV)."
+                # It can exit between the check and the kill; then Kill() throws. That is the outcome wanted, so report and carry on.
+                try {
+                    $process.Kill()
+                    Write-Host "Still running $CloseWaitSeconds s later; stopped pid $($process.Id). The recording is lost (a forced stop writes no WAV)."
+                } catch {
+                    $process.Refresh()
+                    if ($process.HasExited) { Write-Host "The editor exited on its own just before the forced stop." }
+                    else { Write-Host "Forced stop failed and the editor is still running: $_" }
+                }
             }
         }
     }
