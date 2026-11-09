@@ -23,7 +23,11 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import unreal
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from editor_inputs import file_problem, npcs_problem  # noqa: E402
 
 job = json.loads(Path(os.environ['OPENWILLOW_SLICE_JOB']).read_text(encoding='utf-8'))
 mode = os.environ['OPENWILLOW_SLICE_MODE']
@@ -40,9 +44,9 @@ def log(message):
 
 
 def import_one(path, folder, expected):
-    # Unreal's importer asserts (editor exit 3) on a missing source instead of failing cleanly; stop with the file named instead.
-    if not path or str(path) == 'None' or not Path(path).is_file() or Path(path).stat().st_size == 0:
-        raise RuntimeError(f'import source missing or empty: {path!r} (the UModel exports were not there when the job was written)')
+    # Backstop for the modes without a preflight: Unreal's importer asserts (editor exit 3) on a missing source instead of failing cleanly.
+    if file_problem(path):
+        raise RuntimeError(f'import source {path!r}: {file_problem(path)}')
     task = unreal.AssetImportTask()
     task.filename = str(path)
     task.destination_path = folder
@@ -166,6 +170,10 @@ def clean(folder):
 
 
 def mode_npcs():
+    # Every source this mode imports is checked before clean() deletes a destination or anything is imported (tools/editor_inputs.py).
+    problem = npcs_problem(job)
+    if problem:
+        raise RuntimeError(problem)
     parent = master_material('M_OW_NPC', True)
     for npc in job['npcs']:
         dest = npc['dest']

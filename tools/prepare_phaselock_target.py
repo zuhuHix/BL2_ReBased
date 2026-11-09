@@ -32,7 +32,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-import slice_npc_assets as npc  # noqa: E402
+import slice_npc_assets as npc
+from editor_inputs import file_problem  # noqa: E402
 
 OUT = ROOT / 'local/phaselock/target'
 UMODEL_OUT = ROOT / 'local/external/umodel/phaselock-target'
@@ -299,7 +300,7 @@ def job_problems(job):
     The editor's importer asserts on a missing source instead of failing cleanly (2026-11-09: a worktree without the UModel exports wrote
     "None" for every glTF and Unreal stopped with exit 3), and the zone step would quietly keep the plain material."""
     def bad(path):
-        return not path or path == 'None' or not Path(path).is_file() or Path(path).stat().st_size == 0
+        return file_problem(path) is not None
     problems = []
     for npc_entry in job['npcs']:
         name = npc_entry['id']
