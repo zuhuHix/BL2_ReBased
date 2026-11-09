@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param()
 
+# Installs or upgrades the worktree seed: refreshes the cached provisioner and folder list in the seed, fills the seed from
+# this checkout (the provisioner's own fill mode: the same folders, exclusions and checks), and installs the post-checkout hook.
+# Rerun it after pulling a change to tools/provision_worktree_assets.ps1 or tools/worktree_seed_folders.txt.
 $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $CommonDir = (& git -C $RepositoryRoot rev-parse --path-format=absolute --git-common-dir).Trim()
@@ -21,38 +24,19 @@ if (!(Test-Path -LiteralPath $GitBashPath -PathType Leaf)) {
     throw 'Git for Windows Bash was not found. The Windows bash.exe alias is not Git Bash.'
 }
 
-function Copy-MissingTree([string]$Source, [string]$Destination) {
-    if (!(Test-Path -LiteralPath $Source -PathType Container)) {
-        throw "Required local asset directory is missing: $Source"
-    }
+[IO.Directory]::CreateDirectory($SeedRoot) | Out-Null
 
-    $SourceRoot = [IO.Path]::GetFullPath($Source).TrimEnd([char[]]@('\', '/'))
-    $DestinationRoot = [IO.Path]::GetFullPath($Destination)
-    [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-    foreach ($File in Get-ChildItem -LiteralPath $SourceRoot -Recurse -File -Force) {
-        $RelativePath = $File.FullName.Substring($SourceRoot.Length).TrimStart([char[]]@('\', '/'))
-        $Target = Join-Path $DestinationRoot $RelativePath
-        if ([IO.File]::Exists($Target)) { continue }
-        [IO.Directory]::CreateDirectory((Split-Path -Parent $Target)) | Out-Null
-        [IO.File]::Copy($File.FullName, $Target, $false)
-        [IO.File]::SetLastWriteTimeUtc($Target, $File.LastWriteTimeUtc)
-    }
-}
-
-$AssetPairs = @(
-    @{ Name = 'Content'; Source = (Join-Path $RepositoryRoot 'host\ue5\OpenWillow\Content'); Seed = (Join-Path $SeedRoot 'Content') },
-    @{ Name = 'items'; Source = (Join-Path $RepositoryRoot 'local\items'); Seed = (Join-Path $SeedRoot 'items') },
-    @{ Name = 'character'; Source = (Join-Path $RepositoryRoot 'local\character'); Seed = (Join-Path $SeedRoot 'character') },
-    @{ Name = 'ui'; Source = (Join-Path $RepositoryRoot 'local\ui'); Seed = (Join-Path $SeedRoot 'ui') }
-)
-
-foreach ($Pair in $AssetPairs) {
-    Copy-MissingTree $Pair.Source $Pair.Seed
-}
-
+# 1. The cached copies first, so the seed fill and every later hook run use this version of the provisioner and list.
 $Provisioner = Join-Path $PSScriptRoot 'provision_worktree_assets.ps1'
-Copy-Item -LiteralPath $Provisioner -Destination (Join-Path $SeedRoot 'provision_worktree_assets.ps1') -Force
+$SeedProvisioner = Join-Path $SeedRoot 'provision_worktree_assets.ps1'
+Copy-Item -LiteralPath $Provisioner -Destination $SeedProvisioner -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'worktree_seed_folders.txt') -Destination (Join-Path $SeedRoot 'worktree_seed_folders.txt') -Force
 
+# 2. Fill the seed from this checkout, through the cached provisioner's fill mode (missing files only, never overwritten).
+& $SeedProvisioner -FillSeedFrom $RepositoryRoot -SeedDirectory $SeedRoot
+if ($LASTEXITCODE -ne 0) { throw 'Filling the worktree seed failed (see the messages above).' }
+
+# 3. The post-checkout hook.
 $HookSource = Join-Path $RepositoryRoot '.githooks\post-checkout'
 $HooksDirectory = (& git -C $RepositoryRoot rev-parse --git-path hooks).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the Git hooks directory.' }
@@ -82,18 +66,21 @@ if ($LASTEXITCODE -ne 0) { throw "Could not make the hook executable: $HookDesti
 Remove-Item Env:\OPENWILLOW_HOOK_PATH
 Remove-Item Env:\OPENWILLOW_HOOK_UNIX_PATH
 
-$SeedContentFiles = (Get-ChildItem -LiteralPath (Join-Path $SeedRoot 'Content') -Recurse -File -Force).Count
+# 4. A manifest of what the seed holds (informational; nothing reads it).
+$Folders = [ordered]@{}
+foreach ($Name in @('Content') + @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'worktree_seed_folders.txt') -Encoding UTF8 |
+        ForEach-Object { ($_ -replace '#.*$', '').Trim() } | Where-Object { $_ })) {
+    $Dir = Join-Path $SeedRoot $Name
+    $Folders[$Name] = if (Test-Path -LiteralPath $Dir -PathType Container) { (Get-ChildItem -LiteralPath $Dir -Recurse -File -Force).Count } else { 0 }
+}
 $Manifest = [ordered]@{
-    format = 1
+    format = 2
     created_utc = [DateTimeOffset]::UtcNow.ToString('o')
     source_worktree = $RepositoryRoot
     source_commit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
-    content_files = $SeedContentFiles
-    item_files = (Get-ChildItem -LiteralPath (Join-Path $SeedRoot 'items') -Recurse -File -Force).Count
-    character_files = (Get-ChildItem -LiteralPath (Join-Path $SeedRoot 'character') -Recurse -File -Force).Count
-    ui_files = (Get-ChildItem -LiteralPath (Join-Path $SeedRoot 'ui') -Recurse -File -Force).Count
+    files = $Folders
 }
 $Manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SeedRoot 'manifest.json') -Encoding utf8
 
 Write-Output "Installed shared post-checkout asset seeding at $HookDestination"
-Write-Output "Seed cache: $SeedRoot ($SeedContentFiles Content files)"
+Write-Output "Seed cache: $SeedRoot (Content: $($Folders['Content']) files)"

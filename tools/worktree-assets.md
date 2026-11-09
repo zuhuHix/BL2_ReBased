@@ -4,7 +4,8 @@ UE imports and runtime recipes are generated locally and ignored by Git. A new
 worktree therefore needs a local seed before its level, Maya assets, inventory
 recipes, and skill UI can load.
 
-Run `tools/install_worktree_assets_hook.ps1` once from a populated worktree.
+Run `tools/install_worktree_assets_hook.ps1` once from a populated worktree, and again after a change to the provisioner or its folder
+list (it refreshes the seed's copies and refills the seed; see [docs/TOOLING.md](../docs/TOOLING.md) "What a new worktree gets").
 It keeps a seed under the main checkout's ignored `local/worktree-seed/` and
 installs a shared Git `post-checkout` hook. The hook provisions these folders
 into new worktrees before `git worktree add` returns: `host/ue5/OpenWillow/Content/` and the `local/` folders the suites read
@@ -14,7 +15,8 @@ The UI seed must hold every converted movie the overlay loads, including `local/
 card); `python tools/check_overlay_data.py` lists what a worktree lacks. Links: `serve.py` resolves both its movies folder and
 each file, and answers 404 for a file that resolves outside the folder. So a junction at `local/`, `local/ui` or `local/ui/run` is fine
 (the folder resolves too and everything stays inside it), and a junction inside `local/ui/run`, such as `UI_Inworld` pointing elsewhere, is
-a 404 like a missing file. The check follows the same rule. Use real copies inside the folder.
+a 404 like a missing file. The check follows the same rule. Use real copies inside the folder. The provisioner itself refuses a junction or symlink on its destination or source path, so
+a junction at `local/` or `local/ui` is filled by hand, not by the provisioner.
 
 The UI seed includes the generated static weapon previews at
 `local/ui/run/previews/`. Rebuild them from the provisioned UModel glTF files

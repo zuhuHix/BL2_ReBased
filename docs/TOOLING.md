@@ -667,7 +667,30 @@ It copies `host/ue5/OpenWillow/Content/` and these `local/` folders, each from `
 **Never copied, at any depth:** folders named `shots`, `screenshots`, `logs`, `captures`, `realgame`, `h4x`, `z3x` and `runs`
 (per-run output). `-ExcludeFolderNames` changes that list.
 
-Parameters: `-SeedFolders` replaces the default list; `-ExtraSeedFolders` adds to it; `-SeedDirectory` names another seed (the tests use it).
+The default list is `tools/worktree_seed_folders.txt`, one name per line. The installer and the provisioner both read it, so
+there is one list. Parameters: `-SeedFolders` replaces the default list; `-ExtraSeedFolders` adds to it; `-SeedDirectory` names another
+seed (the tests use it).
+
+**Refused, not copied.** Provisioning stops with an error when a junction or symlink sits on a destination path (`local\`, a
+`local\<folder>\`, `host\ue5\OpenWillow\Content\`) or on a seed or source path, and it checks that every write lands under the
+folder it was meant for. Fill such a folder by hand, or remove the junction first. A pair whose own folder name is excluded
+(for example a top-level `local\logs` under `-SourceWorktree`) is skipped and reported as `skipped (excluded name)`.
+
+**Upgrading an existing install.** A seed keeps the copy of the provisioner that the installer wrote, so a change to
+`tools/provision_worktree_assets.ps1` or `tools/worktree_seed_folders.txt` reaches new worktrees only after the installer runs again.
+From the main checkout (or any populated worktree):
+
+```powershell
+powershell -File tools/install_worktree_assets_hook.ps1
+```
+
+It refreshes the seed's copy of the provisioner and list, fills the seed folders (missing files only), and reinstalls the hook.
+A seed without the list, from before this change, makes the hook fail with a message that names this step.
+
+**A failing hook still leaves the checkout.** `git worktree add` (and `git checkout`) runs the `post-checkout` hook after the
+checkout has already happened. When provisioning fails, the new worktree exists, but Git returns a nonzero exit code, so a script
+that checks it sees a failure. Look at the hook's messages, fix the seed, then run the provisioner by hand:
+`powershell -File tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree>`.
 A folder missing from the seed is reported as `(not in the seed)`. `-SourceWorktree` keeps its old behaviour (every `local/` folder of
 a populated worktree) but skips the excluded names too.
 

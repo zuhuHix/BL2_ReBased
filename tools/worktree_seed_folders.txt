@@ -1,0 +1,22 @@
+# Local folders the worktree seed copies (one plain name per line; '#' starts a comment).
+# Read by tools/provision_worktree_assets.ps1 and tools/install_worktree_assets_hook.ps1: one list, not two.
+# Per-run output folders are never copied, whatever is listed here (the provisioner's -ExcludeFolderNames).
+items
+character
+ui
+slice
+doors
+range
+quest
+menus
+lootables
+phaselock
+weapons
+vendors
+interactives
+minimap
+ambient
+skillhud
+audio
+firing
+inventory-actions
