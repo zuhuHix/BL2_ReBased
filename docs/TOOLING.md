@@ -676,6 +676,15 @@ seed (the tests use it).
 folder it was meant for. Fill such a folder by hand, or remove the junction first. A pair whose own folder name is excluded
 (for example a top-level `local\logs` under `-SourceWorktree`) is skipped and reported as `skipped (excluded name)`.
 
+**Every pair is checked before the first copy,** so a refusal leaves all destinations untouched. A worktree whose `local\` is itself
+a junction (a shared data root, as on the pc-hummer runners) is the one intended exception: its local pairs are skipped with one
+line, `local\ is a junction (shared data root); not provisioning local`, Content is still provisioned, and the exit code is 0. Any
+other junction stays a refusal. The installer validates the seed path (`local\` and `local\worktree-seed`) before it writes anything,
+and refuses a junction there.
+
+Scope: paths are checked lexically from the repository root down. Ancestors above it, 8.3 aliases, and a junction created during the
+copy are out of scope; provisioning is a local setup step, not a security boundary.
+
 **Upgrading an existing install.** A seed keeps the copy of the provisioner that the installer wrote, so a change to
 `tools/provision_worktree_assets.ps1` or `tools/worktree_seed_folders.txt` reaches new worktrees only after the installer runs again.
 From the main checkout (or any populated worktree):

@@ -12,6 +12,18 @@ $CommonDir = [IO.Path]::GetFullPath($CommonDir)
 $SharedRepositoryRoot = Split-Path -Parent $CommonDir
 $SeedRoot = Join-Path $SharedRepositoryRoot 'local\worktree-seed'
 
+function Test-Reparse([string]$Path) {
+    $Item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    return ($null -ne $Item -and (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0))
+}
+
+# Validate the whole seed path before anything is created or written: the cached copies, the fill and the manifest all come after this.
+foreach ($Part in @((Join-Path $SharedRepositoryRoot 'local'), $SeedRoot)) {
+    if (Test-Reparse $Part) {
+        throw "Refusing to seed through a junction or symlink: $Part. The seed must be a real folder (nothing was written)."
+    }
+}
+
 $GitBashPath = Join-Path ${env:ProgramFiles} 'Git\bin\bash.exe'
 if (!(Test-Path -LiteralPath $GitBashPath -PathType Leaf)) {
     $GitBashCommand = Get-Command git.exe -ErrorAction SilentlyContinue

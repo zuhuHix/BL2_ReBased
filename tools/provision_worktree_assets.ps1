@@ -49,8 +49,8 @@ function Assert-Under([string]$Path, [string]$Root) {
 }
 
 function Assert-NoReparse([string]$Anchor, [string]$Path) {
-    # Every component from the anchor down to the path (both included) must be a real folder or file: a junction or
-    # symlink there would send the copy somewhere else, e.g. out of local\.
+    # Every component from the anchor down to the path (both included) must be a real folder or file. Paths are checked
+    # lexically from the anchor; this is a local setup step, not a security boundary.
     $Root = [IO.Path]::GetFullPath($Anchor).TrimEnd('\')
     $Full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     if (!$Full.Equals($Root, [StringComparison]::OrdinalIgnoreCase)) { Assert-Under $Full $Root }
@@ -64,17 +64,15 @@ function Assert-NoReparse([string]$Anchor, [string]$Path) {
     }
 }
 
-function Copy-MissingTree([string]$Source, [string]$Destination, [string]$SourceAnchor, [string]$DestinationAnchor) {
-    if (!(Test-Path -LiteralPath $Source -PathType Container)) { return 0 }
-
+function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnchor, [string]$DestinationAnchor) {
+    # Checks only, no writes: every file that would be copied, with its target. Refusals are thrown here, in the preflight.
     $SourceRoot = [IO.Path]::GetFullPath($Source).TrimEnd('\')
     $DestinationRoot = [IO.Path]::GetFullPath($Destination).TrimEnd('\')
     Assert-NoReparse $SourceAnchor $SourceRoot
     Assert-NoReparse $DestinationAnchor $DestinationRoot
-    [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
-    $Copied = 0
     $CheckedSource = @{}
     $CheckedTarget = @{}
+    $Plan = New-Object System.Collections.ArrayList
 
     foreach ($File in Get-ChildItem -LiteralPath $SourceRoot -Recurse -File -Force) {
         $RelativePath = $File.FullName.Substring($SourceRoot.Length).TrimStart([char[]]@('\', '/'))
@@ -96,20 +94,55 @@ function Copy-MissingTree([string]$Source, [string]$Destination, [string]$Source
             Assert-NoReparse $DestinationAnchor $TargetDirectory
             $CheckedTarget[$TargetDirectory] = $true
         }
-        if ([IO.File]::Exists($Target)) { continue }
+        if ([IO.File]::Exists($Target)) { continue }   # missing files only
 
-        [IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
+        [void]$Plan.Add(@{ Source = $File.FullName; Target = $Target; TargetDirectory = $TargetDirectory; Stamp = $File.LastWriteTimeUtc })
+    }
+    return ,$Plan.ToArray()
+}
+
+function Copy-Plan([string]$DestinationRoot, $Plan) {
+    [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
+    $Copied = 0
+    foreach ($Item in $Plan) {
+        if ([IO.File]::Exists($Item.Target)) { continue }
+        [IO.Directory]::CreateDirectory($Item.TargetDirectory) | Out-Null
         try {
-            [IO.File]::Copy($File.FullName, $Target, $false)
-            [IO.File]::SetLastWriteTimeUtc($Target, $File.LastWriteTimeUtc)
+            [IO.File]::Copy($Item.Source, $Item.Target, $false)
+            [IO.File]::SetLastWriteTimeUtc($Item.Target, $Item.Stamp)
             $Copied++
         } catch [IO.IOException] {
             # Another provisioning process may have created the same file.
-            if (![IO.File]::Exists($Target)) { throw }
+            if (![IO.File]::Exists($Item.Target)) { throw }
         }
     }
-
     return $Copied
+}
+
+function Invoke-Pairs($Pairs, [bool]$SkipLocal, [string]$MissingNote) {
+    # Preflight first: every pair is checked before the first write, so a refusal leaves every destination untouched.
+    $Plans = New-Object System.Collections.ArrayList
+    $Lines = New-Object System.Collections.ArrayList
+    foreach ($Pair in $Pairs) {
+        if ($Pair.Folder -and ($ExcludeFolderNames -contains $Pair.Folder)) {
+            [void]$Lines.Add(('{0}: skipped (excluded name)' -f $Pair.Name)); continue
+        }
+        if ($SkipLocal -and $Pair.Name.StartsWith('local/')) { continue }
+        if (!(Test-Path -LiteralPath $Pair.Source -PathType Container)) {
+            [void]$Plans.Add(@{ Pair = $Pair; Plan = @(); Missing = $true }); continue
+        }
+        $Plan = Get-CopyPlan $Pair.Source $Pair.Destination $Pair.SourceAnchor $Pair.DestinationAnchor
+        [void]$Plans.Add(@{ Pair = $Pair; Plan = $Plan; Missing = $false })
+    }
+    # Every pair passed the preflight; only now does anything get written.
+    foreach ($Entry in $Plans) {
+        if ($Entry.Missing) {
+            [void]$Lines.Add(('{0}: 0 missing files added{1}' -f $Entry.Pair.Name, $MissingNote)); continue
+        }
+        $Count = Copy-Plan $Entry.Pair.Destination $Entry.Plan
+        [void]$Lines.Add(('{0}: {1} missing files added' -f $Entry.Pair.Name, $Count))
+    }
+    return ,$Lines.ToArray()
 }
 
 if ($FillSeedFrom) {
@@ -126,14 +159,8 @@ if ($FillSeedFrom) {
         $Pairs += @{ Name = "seed/$Name"; Folder = $Name; Source = (Join-Path $SourceRoot "local\$Name"); SourceAnchor = $SourceRoot;
                      Destination = (Join-Path $SeedRoot $Name); DestinationAnchor = $SeedRoot }
     }
-    $Summary = foreach ($Pair in $Pairs) {
-        if ($Pair.Folder -and ($ExcludeFolderNames -contains $Pair.Folder)) { '{0}: skipped (excluded name)' -f $Pair.Name; continue }
-        $Count = Copy-MissingTree $Pair.Source $Pair.Destination $Pair.SourceAnchor $Pair.DestinationAnchor
-        $Note = ''
-        if (!(Test-Path -LiteralPath $Pair.Source -PathType Container)) { $Note = ' (not in this checkout)' }
-        '{0}: {1} missing files added{2}' -f $Pair.Name, $Count, $Note
-    }
-    Write-Output ("OpenWillow worktree seed filled at {0} from {1}`n{2}" -f $SeedRoot, $SourceRoot, ($Summary -join "`n"))
+    $Lines = Invoke-Pairs $Pairs $false ' (not in this checkout)'
+    Write-Output ("OpenWillow worktree seed filled at {0} from {1}`n{2}" -f $SeedRoot, $SourceRoot, ($Lines -join "`n"))
     return
 }
 
@@ -166,6 +193,7 @@ foreach ($Name in $AllFolders) {
     $Pairs += @{ Name = "local/$Name"; Folder = $Name; Source = (Join-Path $SeedRoot $Name); SourceAnchor = $SeedRoot;
                  Destination = (Join-Path $WorktreeRoot "local\$Name"); DestinationAnchor = $WorktreeRoot }
 }
+$MissingNote = ' (not in the seed)'
 
 if ($SourceWorktree) {
     $SourceWorktree = [IO.Path]::GetFullPath($SourceWorktree).TrimEnd('\')
@@ -181,15 +209,15 @@ if ($SourceWorktree) {
                          Destination = (Join-Path $WorktreeRoot "local\$($Dir.Name)"); DestinationAnchor = $WorktreeRoot }
         }
     }
+    $MissingNote = ''
 } elseif (!(Test-Path -LiteralPath (Join-Path $SeedRoot 'Content') -PathType Container)) {
     throw "OpenWillow asset seed is missing at $SeedRoot; run tools/install_worktree_assets_hook.ps1 from a populated worktree."
 }
 
-$Summary = foreach ($Pair in $Pairs) {
-    if ($Pair.Folder -and ($ExcludeFolderNames -contains $Pair.Folder)) { '{0}: skipped (excluded name)' -f $Pair.Name; continue }
-    $Count = Copy-MissingTree $Pair.Source $Pair.Destination $Pair.SourceAnchor $Pair.DestinationAnchor
-    $Note = ''
-    if (!$SourceWorktree -and !(Test-Path -LiteralPath $Pair.Source -PathType Container)) { $Note = ' (not in the seed)' }
-    '{0}: {1} missing files added{2}' -f $Pair.Name, $Count, $Note
-}
-Write-Output ("OpenWillow worktree assets provisioned for {0}`n{1}" -f $WorktreeRoot, ($Summary -join "`n"))
+# A worktree whose local\ is itself a junction (a shared data root, e.g. on a runner) keeps that data: its local pairs are
+# skipped with one line, Content is still provisioned. Any other junction is refused by the preflight.
+$LocalIsJunction = Test-Reparse (Join-Path $WorktreeRoot 'local')
+$Lines = Invoke-Pairs $Pairs $LocalIsJunction $MissingNote
+$Header = "OpenWillow worktree assets provisioned for $WorktreeRoot"
+if ($LocalIsJunction) { $Lines = @('local\ is a junction (shared data root); not provisioning local') + $Lines }
+Write-Output ($Header + "`n" + ($Lines -join "`n"))

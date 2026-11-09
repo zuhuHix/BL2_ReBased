@@ -1,8 +1,10 @@
 """Synthetic tests for tools/provision_worktree_assets.ps1 and tools/install_worktree_assets_hook.ps1: throwaway git
 repositories and fake seeds, no game data.
 
-Run: python tests/provision_worktree_test.py   (Windows only; it runs Windows PowerShell, as the post-checkout hook does)
+Run: python tests/provision_worktree_test.py   (Windows only; it runs Windows PowerShell, as the post-checkout hook does,
+and the installer tests also need Git for Windows' bash.exe)
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -16,6 +18,20 @@ SCRIPT = TOOLS / 'provision_worktree_assets.ps1'
 INSTALLER = TOOLS / 'install_worktree_assets_hook.ps1'
 POWERSHELL = shutil.which('powershell') or shutil.which('pwsh')
 GIT_IDENTITY = ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid']
+HUMMER_MESSAGE = 'local\\ is a junction (shared data root); not provisioning local'
+
+
+def git_bash_path():
+    """The bash.exe the installer looks for: Program Files first, then the Git install that git.exe comes from."""
+    candidate = Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'Git' / 'bin' / 'bash.exe'
+    if candidate.is_file():
+        return candidate
+    git = shutil.which('git')
+    if git:
+        candidate = Path(git).parent.parent / 'bin' / 'bash.exe'
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def write(path, text='x'):
@@ -26,7 +42,8 @@ def write(path, text='x'):
 def make_junction(link, target):
     target.mkdir(parents=True, exist_ok=True)
     link.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], check=True, capture_output=True)
+    # shell=True so the quotes reach cmd.exe as written; list arguments would escape them and mklink would fail.
+    subprocess.run(f'mklink /J "{link}" "{target}"', shell=True, check=True, capture_output=True)
 
 
 def powershell_file(script, *args, cwd=None):
@@ -129,15 +146,38 @@ class ProvisionTest(unittest.TestCase):
         self.assertFalse(self.local('range', 'shots').exists())
         self.assertEqual(self.local('slice', 'x.json').read_text(encoding='utf-8'), 'kept')
 
-    def test_junction_on_the_destination_is_refused(self):
-        other = self.make_worktree(self.base / 'junctioned')
+    def test_junction_on_a_folder_destination_is_refused(self):
         elsewhere = self.base / 'elsewhere'
         elsewhere.mkdir()
-        make_junction(other / 'local', elsewhere)
-        result = self.run_script(worktree=other)
+        make_junction(self.local('doors'), elsewhere)
+        result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('junction or symlink', result.stdout + result.stderr)
         self.assertEqual(list(elsewhere.iterdir()), [])     # nothing was written through the junction
+
+    def test_refusal_leaves_earlier_destinations_untouched(self):
+        # The list order is Content, items, character, ui, slice, doors: slice and Content are planned and checked before doors refuses.
+        write(self.seed / 'slice' / 'extra.json', 'extra')
+        elsewhere = self.base / 'elsewhere'
+        elsewhere.mkdir()
+        make_junction(self.local('doors'), elsewhere)
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.local('slice', 'extra.json').exists())
+        self.assertFalse((self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').exists())
+
+    def test_junctioned_local_is_skipped_with_one_line(self):
+        hummer = self.make_worktree(self.base / 'hummer')
+        shared = self.base / 'shared-data'
+        write(shared / 'slice' / 'shared.json', 'shared')
+        make_junction(hummer / 'local', shared)
+        result = self.run_script(worktree=hummer)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count(HUMMER_MESSAGE), 1)
+        self.assertNotIn('local/slice', result.stdout)                 # the local pairs are not planned at all
+        self.assertTrue((hummer / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').is_file())
+        self.assertFalse((shared / 'doors').exists())                  # nothing written into the shared root
+        self.assertEqual(sorted(p.name for p in shared.iterdir()), ['slice'])
 
     def test_junction_in_the_seed_is_refused(self):
         seed = self.base / 'seed-junction'
@@ -152,7 +192,8 @@ class ProvisionTest(unittest.TestCase):
         self.assertFalse(self.local('doors').exists())
 
 
-@unittest.skipUnless(sys.platform == 'win32' and POWERSHELL, 'needs Windows PowerShell and Git Bash')
+@unittest.skipUnless(sys.platform == 'win32' and POWERSHELL and git_bash_path(),
+                     'needs Windows PowerShell and Git for Windows bash.exe (the installer runs the hook with it)')
 class InstallerTest(unittest.TestCase):
     """installer -> seed -> post-checkout hook -> a new worktree, in a synthetic repository."""
 
@@ -219,6 +260,15 @@ class InstallerTest(unittest.TestCase):
         cached.write_text('# an old copy\n', encoding='utf-8')
         self.assertEqual(self.install().returncode, 0)
         self.assertEqual(cached.read_text(encoding='utf-8'), (self.repo / 'tools' / 'provision_worktree_assets.ps1').read_text(encoding='utf-8'))
+
+    def test_junctioned_seed_is_refused_before_anything_is_written(self):
+        elsewhere = self.base / 'elsewhere-seed'
+        elsewhere.mkdir()
+        make_junction(self.repo / 'local' / 'worktree-seed', elsewhere)
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('junction or symlink', result.stdout + result.stderr)
+        self.assertEqual(list(elsewhere.iterdir()), [])             # no cached copy, no fill, no manifest
 
 
 if __name__ == '__main__':
