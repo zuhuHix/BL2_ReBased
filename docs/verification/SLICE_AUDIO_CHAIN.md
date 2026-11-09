@@ -232,6 +232,29 @@ Not used: `OpenWillowClip::GameSeconds`, which adds one frame interval to a clip
 
 Test: `tests/prepare_slice_audio_test.py` (invented names and times, synthetic WAVs) and `tests/listen_report_test.py` (the cues as steps; the names from a synthetic manifest). The listening guide now lists `equip`, `reload_out` and `reload_in` as played and no longer as "not hooked". The gate's Equip step draws the gun, so an equip cue is expected there. **Getting a reload into the run (2026-11-09):** the gate reloads only when a shot finds the magazine empty, and only in editor builds (`ShootAt` calls the reload key under `WITH_EDITOR`). `UnrealEditor.exe -game` runs the editor target (`OpenWillowEditor.Target.cs`, `TargetType.Editor`), so the listening run does take that path. A test-only switch sets the magazine: `-owslicegatemag=<n>` (absent = the gate as before; 0 is the same as absent) sets the held gun's magazine to n rounds once, at the first ShootDummy tick, leaving the reserve alone; it logs `OWSLICEGATE note test fixture: magazine of <gun> set to <n> rounds`. The magazine is never set below one shot's cost (the lent pistol's shot costs 2 rounds: with 1 round nothing fires, and `ShootAt` reloads only from an empty magazine). The first dummy shot usually completes the objective, so no further press would come: once the dummy link has passed, the fixture asks for one reload through the same key `ShootAt` uses, holds the ShootDummy step while it runs, and gives up after 10 s (a fixture note, not a link failure). It logs `OWSLICEGATE note test fixture: reload started after the magazine fixture` when the reload starts and `magazine fixture reload finished` when it ends. `tools/record_audio_listen.ps1` passes it by default (`-Mag 1`; `-Mag 0` leaves it off). `tools/listen_report.py` states the fixture in LISTEN.md and flags a fixture run with no logged `reload_out` or `reload_in` cue. Test: the synthetic listen-report rows. The switch itself is UNVERIFIED in the engine until a run confirms the log line and the reload cues. Nothing here has been heard.
 
+### 5b. Doors (2026-11-09, AI-assisted, Claude)
+
+**State: the host plays the two door roles when a mover door starts to move. Nothing has been heard, and no run has shown a door sound.**
+
+Two more roles, both from the door's keys in section 2 (`door:open`, `door:close`). `tools/prepare_slice_audio.py` maps them from those keys, like `equip`; a key whose decoded file is missing stays unresolved with its reason, and nothing is picked by guessing.
+
+| Role | Hook | Sound | Evidence |
+|---|---|---|---|
+| `door_open` | `UOpenWillowMover::StartMotion` when the motion starts toward open | manifest `door:open` | **UNVERIFIED** that this key is the opening sound. Its name and its track's time at the start of the door's sequence point that way; section 2 says the key-to-direction mapping is not established |
+| `door_close` | the same, when the motion starts toward closed | manifest `door:close` | the same; its track's own time in the game data is not used by the host (UNVERIFIED that the game waits for it) |
+
+- **Where it plays.** `StartMotion` is the one place a motion starts, whichever route asked for it (the use key, the quest's remote events, the mission's events). It runs after the script accepts the start, so a refused start plays nothing. A turn-around (a play or reverse while the door moves the other way) plays nothing: the host's choice, and the turn-around itself is already UNVERIFIED (`OpenWillowMover.cpp`).
+- **Position.** 2D at full volume, like every slice sound (section 5). `OpenWillowAudio::Play` takes no location, so the door sound has no distance and no direction. A positioned sound would need a new call that spawns the sound at the door: not done here.
+- **Per door.** The manifest holds one pair of door keys, for one door's sequence. The host maps one role per direction and plays it for every mover door in the level. If the slice has more than one mover door, they all sound alike (UNVERIFIED that the slice has only one).
+
+**Does the slice gate hear a door?** Not by any step of its own. Maya never walks through a door: she talks to Marcus with the use key (the accept step), and the gate only watches Marcus walk to the range, where the stock sequence closes a door behind him (the gate's `WaitWalk` comment; the placement of that door reverse is in [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md)). If that walk runs through the mover, a `door_close` cue appears in the recording during the wait, and `run.log` shows `OWMOVER start reverse=1`. **UNVERIFIED**: no run has checked it. No door cue in a run means the door did not move through the mover; it is not a fault in the sound.
+
+**How to hear a door on purpose.** No new switch was added. The existing mover suite (`tools/test_mover.ps1`, `-owmovertest`, 16 checks) opens and closes the mover door through the stock events, so each motion start plays its role when the editor gets `-owaudioplay=<audio_play.json>`. That script passes no audio switch, so the listener adds it by hand, and it records nothing: `tools/record_audio_listen.ps1` is the gate only. A door sound heard through the suite is therefore not in a `LISTEN.md`. Adding a recording to the mover suite would be a separate, larger change.
+
+`tools/listen_report.py` lists both roles as played (cues `door_open` and `door_close`, named from the manifest) and drops "Door open / close" from the not-played list; "other doors" is listed there instead. `Play` already logs its own `OWAUDIOREC cue` line, so no extra cue is needed.
+
+Test: `tests/prepare_slice_audio_test.py` (the two roles map from their keys; a missing decoded file stays unresolved; a missing key says so; invented names and synthetic WAVs) and `tests/listen_report_test.py` (door cues become step sounds; names come from a synthetic manifest). The real prepare run on the local manifest resolves both roles from the decoded files (length check only).
+
 ## 6. Listening session (2026-11-08, AI-assisted, Claude)
 
 **State: tooling for the maintainer to listen; the host's recording measured, nothing heard by the assistant.**
@@ -255,8 +278,8 @@ recording's are not calibrated against each other, so it is not a latency measur
 come from the local manifest) and stay local.
 
 What it can show: what the host sent to the mixer and how loud the mix was. What it cannot: whether a sound is the right one, or sounds like the game. Only the
-roles in sections 5 and 5a play; the guide lists everything else asked for (reloads of other guns, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
-level-up, mission and dialog, doors, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
+roles in sections 5, 5a and 5b play; the guide lists everything else asked for (reloads of other guns, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
+level-up, mission and dialog, doors other than the mover's, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
 
 Runs (zuhu PC, 2026-11-08, decoded sounds from vgmstream, 2 s pause): the first two failed as above (and lacked the slice data in that worktree: a missing range
 manifest and Marcus's assets). The third: slice gate 14 of 14 PASS, editor exit 0, a 122.7 s 48 kHz stereo WAV (file size matches the stopped length), overall peak
@@ -269,4 +292,4 @@ For sounds that started in silence, the onset relative to the cue was 0.134 to 0
 Container fields beyond the oracles above (the externals table, `block_size` use, the 678 longer play actions, 10 unresolved play targets, 1 unresolved
 prefetch source); plugin `0x650002` meaning; container child extraction (longest run of in-bank ids, used for the pistol switch container and Marcus's random
 containers); which child a switch/random container selects; Vorbis sample-count offset (only duration-oracle checked); event-with-null-`OutputAction` pairing
-rule; why two actions share a source; door key semantics; the HypEngineer name-tag mismatch; the reload notify times against the imported clip and the game's reload, and which of the lent pistol's two reload sequences the game plays (section 5a); whether a plain draw plays the pickup-and-equip sound (section 5a); nothing here was decoded, auditioned or compared to the original game.
+rule; why two actions share a source; door key semantics, including which key is the opening sound and whether the game waits for the close key's own time (section 5b); whether the gate's Marcus walk closes the door through the mover; the HypEngineer name-tag mismatch; the reload notify times against the imported clip and the game's reload, and which of the lent pistol's two reload sequences the game plays (section 5a); whether a plain draw plays the pickup-and-equip sound (section 5a); nothing here was decoded, auditioned or compared to the original game.

@@ -26,7 +26,9 @@ PLAY_SCHEMA = 'ow-audio-play-v1'
 # hit and phaselock_cast come from one live session and are UNVERIFIED (SLICE_AUDIO_CHAIN.md section 5). hit's many files are one event's per-surface
 # sources, presumably, and the host picks at random, so a hit can sound like any surface until the switch value is known.
 # equip is the lent pistol's PickupAndEquipSounds event; the host plays it when a gun is drawn (UNVERIFIED that the game does the same).
-ROLE_KEYS = {'fire': 'weapon:fire', 'hit': 'role:hit', 'phaselock_cast': 'role:phaselock_cast', 'pickup': None, 'equip': 'weapon:equip'}
+# door_open / door_close are the slice mover door's two keys (SLICE_AUDIO_CHAIN.md section 5b): which one is the opening sound is UNVERIFIED.
+ROLE_KEYS = {'fire': 'weapon:fire', 'hit': 'role:hit', 'phaselock_cast': 'role:phaselock_cast', 'pickup': None, 'equip': 'weapon:equip',
+             'door_open': 'door:open', 'door_close': 'door:close'}
 # The lent pistol's reload sounds are not one key each: the manifest has one reload-anim key per (arms clip, notify time). The trigger's
 # text gives the clip and the notify time; the AkEvent's name gives clip out or clip in. Both come from the manifest, nothing is typed in here.
 RELOAD_NOTIFY = re.compile(r'^reload anim (\S+) @([0-9.]+)s$')

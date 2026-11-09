@@ -185,12 +185,36 @@ class ListenReportTest(unittest.TestCase):
             {'key': 'weapon:fire', 'ak_event': {'wwise_name': 'Play_Synth_Shot'}},
             {'key': 'weapon:equip', 'ak_event': {'wwise_name': 'Play_Synth_Equip'}},
             {'key': 'weapon:reload_anim_Synth_at_0.5s', 'ak_event': {'wwise_name': 'Play_Synth_Clip_Out'}},
-            {'key': 'weapon:reload_anim_Synth_at_1.5s', 'ak_event': {'wwise_name': 'Play_Synth_Clip_In'}}]}
+            {'key': 'weapon:reload_anim_Synth_at_1.5s', 'ak_event': {'wwise_name': 'Play_Synth_Clip_In'}},
+            {'key': 'door:open', 'ak_event': {'wwise_name': 'Play_Synth_Door_Open'}},
+            {'key': 'door:close', 'ak_event': {'wwise_name': 'Play_Synth_Door_Close'}}]}
         path = tmp / 'audio.json'
         path.write_text(json.dumps(manifest), encoding='utf-8')
         self.assertEqual(lr.load_names(path), {'fire': 'Play_Synth_Shot', 'equip': 'Play_Synth_Equip',
-                                               'reload_out': 'Play_Synth_Clip_Out', 'reload_in': 'Play_Synth_Clip_In'})
-        self.assertTrue({'equip', 'reload_out', 'reload_in'} <= set(lr.ROLES))
+                                               'reload_out': 'Play_Synth_Clip_Out', 'reload_in': 'Play_Synth_Clip_In',
+                                               'door_open': 'Play_Synth_Door_Open', 'door_close': 'Play_Synth_Door_Close'})
+        self.assertTrue({'equip', 'reload_out', 'reload_in', 'door_open', 'door_close'} <= set(lr.ROLES))
+        self.assertNotIn('Door open / close', [what for what, _ in lr.NOT_PLAYED])
+
+    def test_door_cues_are_steps_sounds(self):
+        rows = [
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWAUDIOREC cue t=0.100 label=step Fight frame=frame-001.png',
+            'OWAUDIOREC cue t=0.500 label=door_open seconds=1.000 frame=-',
+            'OWAUDIOREC cue t=2.000 label=step Recover frame=frame-002.png',
+            'OWAUDIOREC cue t=2.300 label=door_close seconds=1.400 frame=-',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ]
+        text = '\n'.join('[2026.11.09-12.00.00:000][  1]LogTemp: Display: ' + r for r in rows)
+        out, problems, steps, _ = self.run_build(text=text, tones=((0.5, 1.0), (2.3, 1.4)))
+        self.assertEqual(problems, [])
+        self.assertEqual([s['name'] for s in steps[0]['sounds']], ['door_open'])
+        self.assertEqual([s['name'] for s in steps[1]['sounds']], ['door_close'])
+        listen = (out / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('**door_open** x1', listen)
+        self.assertIn('**door_close** x1', listen)
+        self.assertNotIn('Door open / close', listen)
 
 
     def display_text(self, rows):

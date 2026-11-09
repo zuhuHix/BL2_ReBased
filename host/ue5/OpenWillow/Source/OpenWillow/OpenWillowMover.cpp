@@ -1,6 +1,7 @@
 #include "OpenWillowMover.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowUseView.h"
+#include "OpenWillowAudio.h"
 #include "mover.hpp"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -242,6 +243,8 @@ void UOpenWillowMover::StartMotion(bool NextReverse) {
     Reverse = NextReverse; Running = true; bDoorEndPending = false;
     ++(Reverse ? DoorCloseStarts : DoorOpenStarts);
     UE_LOG(LogTemp, Display, TEXT("OWMOVER start reverse=%d steps=%llu checkpoint=%d"), Reverse, uint64(Result.steps), Result.checkpoint);
+    // The door's own sound for this motion start (SLICE_AUDIO_CHAIN.md section 5b): 2D, the same as every other slice sound.
+    OpenWillowAudio::Play(this, Reverse ? TEXT("door_close") : TEXT("door_open"));
 }
 bool UOpenWillowMover::RemoteEvent(const FString& Name) {
     LastEventMatched = 0; LastEventBoundary = 0;

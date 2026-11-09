@@ -207,6 +207,34 @@ class PrepareSliceAudioTest(unittest.TestCase):
         self.assertEqual(roles['equip'], [os.path.abspath(os.path.join(self.dir, '1.wav'))])
         self.assertNotIn('equip', unresolved)
 
+    def test_door_roles_map_from_their_keys(self):
+        self.tone('4.wav')
+        self.tone('5.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [
+            {'key': 'door:open', 'media': [{'source': 4, 'duration_s': 1.0}]},
+            {'key': 'door:close', 'media': [{'source': 5, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertEqual(roles['door_open'], [os.path.abspath(os.path.join(self.dir, '4.wav'))])
+        self.assertEqual(roles['door_close'], [os.path.abspath(os.path.join(self.dir, '5.wav'))])
+        self.assertNotIn('door_open', unresolved)
+        self.assertNotIn('door_close', unresolved)
+
+    def test_a_door_without_a_decoded_file_stays_unresolved_and_is_not_guessed(self):
+        self.tone('4.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [
+            {'key': 'door:open', 'media': [{'source': 4, 'duration_s': 1.0}]},
+            {'key': 'door:close', 'media': [{'source': 9, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertIn('door_open', roles)
+        self.assertNotIn('door_close', roles)
+        self.assertIn('9', unresolved['door_close'])
+        self.assertNotIn('door_open', unresolved)
+
+    def test_missing_door_keys_are_unresolved_with_reasons(self):
+        _, unresolved = psa.build_play_map(manifest([]), self.dir)
+        self.assertEqual(unresolved['door_open'], 'manifest has no door:open')
+        self.assertEqual(unresolved['door_close'], 'manifest has no door:close')
+
     def test_reload_roles_come_from_the_clip_out_and_clip_in_notifies(self):
         for name in ('1.wav', '2.wav', '3.wav'):
             self.tone(name)

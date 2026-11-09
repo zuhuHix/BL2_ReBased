@@ -5,7 +5,7 @@
 // Plays slice sounds from plain PCM WAV files on the player's machine (SLICE_AUDIO_CHAIN.md section 5).
 //
 // -owaudioplay=<audio_play.json> (written by tools/prepare_slice_audio.py) maps a role ("fire", "hit", "phaselock_cast",
-// "pickup", "equip", "reload_out", "reload_in") to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
+// "pickup", "equip", "reload_out", "reload_in", "door_open", "door_close") to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
 // No Wwise logic: no bus, RTPC, state, attenuation or ducking; every sound plays 2D at full volume. A role with several
 // files picks one at random, because the real container's choice is UNVERIFIED.
 //

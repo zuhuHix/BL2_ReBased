@@ -72,6 +72,10 @@ ROLES = {
                    'the magazine coming out. When it plays within the reload is UNVERIFIED against the game: the host\'s timing is the notify offset, scaled to the reload'),
     'reload_in': ('the reload\'s clip-in notify, on the lent pistol only', 'manifest reload notify, clip in (the play map\'s timing)',
                   'the new magazine going in, later in the same reload. Its timing is UNVERIFIED against the game, as for clip out'),
+    'door_open': ('the slice mover door starts to open', 'manifest door:open (one of the door\'s two sound keys)',
+                  'a wooden door opening, 2D, from wherever the listener stands. Only the one mover door has a sound; which of the two keys is the opening sound is UNVERIFIED'),
+    'door_close': ('the slice mover door starts to close', 'manifest door:close (the door\'s other sound key)',
+                   'a wooden door closing, 2D. The host starts it when the door starts to close, not at the key\'s own time in the game data (UNVERIFIED that the game does the same)'),
 }
 
 # The same step when the magazine fixture (-owslicegatemag) was applied: the first shot empties the magazine, the objective completes, and the
@@ -88,7 +92,7 @@ NOT_PLAYED = [
     ('Fight For Your Life, revive, respawn', 'no sound mapped'),
     ('Level-up', 'no sound mapped'),
     ('Mission accept / complete, Marcus\'s lines', 'mission dialog and Marcus\'s barks are decoded, not hooked (dialog is not played by the host)'),
-    ('Door open / close', 'decoded, not hooked'),
+    ('Other doors, and the door\'s opening or closing in the middle of a move', 'no sound: the mover door\'s sound plays only when a motion starts (section 5b)'),
     ('Vendor and menu sounds', 'no sound mapped (the menus are the Flash overlay, which plays no sound)'),
     ('Footsteps, jump, land', 'no sound mapped'),
     ('Ambient sound, music', 'none'),
@@ -172,6 +176,8 @@ def load_names(manifest: Path | None):
             key, name = entry.get('key', ''), (entry.get('ak_event') or {}).get('wwise_name')
             if key in ('weapon:fire', 'weapon:equip'):
                 names[key[7:]] = name
+            elif key in ('door:open', 'door:close'):
+                names['door_' + key[5:]] = name
             elif key.startswith('role:'):
                 names[key[5:]] = name
             elif key.startswith('weapon:reload_anim_') and name:
