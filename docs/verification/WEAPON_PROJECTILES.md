@@ -340,6 +340,14 @@ sampled every frame the controller's `AccuracyPool` value, its four kick fields 
 `AddWeaponKick`, `AddSpread` and `FireAmmunition` call with the game clock. Numbers only; the dumps stay under ignored
 `local/realgame/pj/`; `tools/analyze_projectiles_live.py` prints the fits. To repeat the status part, run `projectiles_capture.ps1 -StatusOnly` (barred until 2026-11-09; the bar is lifted, see "Bar lifted" in `docs/TOOLING.md`; the script has not run since its finalizer was fixed in PR #200, so it stays `UNVERIFIED` for its own capture). It needs `local/items/slice/status_maliwan_fire.json`: a copy of `slice_mission_pistol_fire.json` with `balance` set to `GD_Weap_Pistol.A_Weapons_Elemental.Pistol_Maliwan_2_Fire`, made by hand.
 
+**Run Z47 (2026-11-09, main 913f9b7, zuhu): the status part did not run.** The recipe file above was missing on zuhu, so
+`fp_spawn` and `fp_ready` raised in the game. `PyJson` kept the traceback as text and the script went on; key `1` drew the
+save's own slot-1 gun (a Torgue pistol), and the `Maliwan` check refused it. The check was right; the missing file was the
+cause. Since this note the script refuses a missing status recipe before it takes a lock or makes a backup, and stops the
+status step on a `fp_spawn` / `fp_ready` traceback with the error's last line. The log line now also names the held and the
+readied weapon object. Saves were identical after that run and the pending record was removed. No status numbers exist from
+the run.
+
 **Limits of this session.** The probe's equip step left the save's own Jakobs shotgun (`WT_Jakobs_Shotgun`) in hand for every
 run, so all the numbers below come from that one gun. Maya's skills were active: a skill modifier on the weapon's
 `PerShotAccuracyImpulse` turned the type's 11 into 5.4524. The rules below are ratios and orders of events, which these

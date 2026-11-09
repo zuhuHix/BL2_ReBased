@@ -29,7 +29,12 @@ $Out = Join-Path $script:RG 'wp2'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+# An empty reply file reads as $null: say so instead of failing on .Trim() (run Z47: the parity2 quit wrote one as the game exited).
+function Py([string]$Code, [int]$Timeout = 30) {
+    $r = Invoke-GamePy $Code $Timeout
+    if ($null -eq $r) { throw "empty reply from the game (it may have exited) to: $($Code.Substring(0, [Math]::Min(80, $Code.Length)))" }
+    $r.Trim()
+}
 function PyJson([string]$Expr, [int]$Timeout = 30) {
     $r = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
     try { $r | ConvertFrom-Json } catch { $r }
@@ -211,8 +216,9 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         "gun $gun done: $($g.run_end | ConvertTo-Json -Compress)"
         $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
     }
-    $log.cleanup = PyJson 'fp_cleanup()' 60
-    Py 'wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' | Out-Null
+    $log.fp_cleanup = PyJson 'fp_cleanup()' 60   # not 'cleanup': the finalizer writes its own record under that key
+    # The quit ends the game before it can reply: an empty or missing reply is the expected result here, not an error (as in projectiles_capture.ps1).
+    try { Invoke-GamePy 'wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 30 | Out-Null } catch { "quit sent; no reply: $_" }
     for ($i = 0; $i -lt 20 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
 } finally {
     # Order: stop our game; only once it has exited, remove our driver and restore and verify the saves, config and SDK stores

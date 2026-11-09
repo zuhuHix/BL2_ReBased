@@ -33,7 +33,12 @@ $Out = Join-Path $script:RG 'pj'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+# An empty reply file reads as $null: say so instead of failing on .Trim() (run Z47: the parity2 quit wrote one as the game exited).
+function Py([string]$Code, [int]$Timeout = 30) {
+    $r = Invoke-GamePy $Code $Timeout
+    if ($null -eq $r) { throw "empty reply from the game (it may have exited) to: $($Code.Substring(0, [Math]::Min(80, $Code.Length)))" }
+    $r.Trim()
+}
 function PyJson([string]$Expr, [int]$Timeout = 30) {
     $r = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
     try { $r | ConvertFrom-Json } catch { $r }
@@ -42,6 +47,19 @@ function PyJson([string]$Expr, [int]$Timeout = 30) {
 function Q([string]$Text) { ConvertTo-Json -InputObject $Text -Compress }
 # Gun ids name local recipe files and output folders: letters, digits and underscores only.
 foreach ($id in $Guns) { if ($id -notmatch '^[A-Za-z0-9_]+$') { throw "gun id '$id' is not of the form [A-Za-z0-9_]+" } }
+# The status gun's recipe is a hand-made local file (WEAPON_PROJECTILES.md section 10): without it fp_spawn fails in the game and slot 1 keeps the
+# save's own gun (run Z47). Checked here, before any lock or backup, in the folders the probe's _recipe_file reads.
+function Find-LocalRecipe([string]$Id) {
+    $items = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'local\items'
+    @((Join-Path $items "slice\$Id.json"), (Join-Path $items "$Id.json"), (Join-Path $items "firing\coverage\$Id.json")) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+if ($StatusGun -notmatch '^[A-Za-z0-9_]+$') { throw "status gun id '$StatusGun' is not of the form [A-Za-z0-9_]+" }
+if (!(Find-LocalRecipe $StatusGun)) { throw "no local recipe for the status gun '$StatusGun' (local/items/slice/$StatusGun.json; see WEAPON_PROJECTILES.md section 10)" }
+# A probe call that raised returns its traceback as text (PyJson keeps unparsed replies): stop the step with the error's last line.
+function Assert-PyResult($Value, [string]$What) {
+    if ($Value -is [string] -and $Value -match 'Traceback') { throw "$What failed: $(@($Value.Trim() -split "`r?`n")[-1])" }
+    $Value
+}
 # Right button held across several steps: only with the game in front, and a caller releases it in a finally.
 function Right-Hold([int]$Ms) { Assert-GameForeground; Send-MouseEvent 0x8; Start-Sleep -Milliseconds $Ms }
 function Right-Release { Send-MouseEvent 0x10 }
@@ -211,11 +229,12 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     "target $target maya $mayaLevel level set $($log.level_set | ConvertTo-Json -Compress)"
     $s = [ordered]@{}; $log.status = $s
     try {
-        $s.spawn = PyJson "fp_spawn($(Q $StatusGun))" 60
-        $s.ready = PyJson "fp_ready($(Q $StatusGun), 1)" 60
+        $s.spawn = Assert-PyResult (PyJson "fp_spawn($(Q $StatusGun))" 60) 'fp_spawn'
+        $s.ready = Assert-PyResult (PyJson "fp_ready($(Q $StatusGun), 1)" 60) 'fp_ready'
         Assert-GameForeground; Send-Key '1'; Start-Sleep 2   # draw quick slot 1 (fp_ready only fills it)
         $s.held = Py 'w = get_pc().Pawn.Weapon; print(w.DefinitionData.WeaponTypeDefinition._path_name() if w else None)'
-        "status gun held: $($s.held)"
+        $s.held_weapon = Py 'w = get_pc().Pawn.Weapon; print(w._path_name() if w else None)'
+        "status gun held: $($s.held) ($($s.held_weapon); readied $($s.ready.weapon))"
         if ($s.held -notmatch 'Maliwan') { throw "status gun not in hand: $($s.held)" }
         PyJson 'wp2_infinite_ammo(True)' | Out-Null
         $s.run = PyJson "fp3_run_begin($(Q "status_$StatusGun"), {'presses': $StatusPresses})"
@@ -246,7 +265,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         } catch { $gr.error = "$_"; "grenade run failed: $_"; try { Py 'pj_grenade_stop(); fp3_run_end(); print("ok")' | Out-Null } catch {} }
         $log | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $Out 'session.json')
     }
-    $log.cleanup = PyJson 'fp_cleanup()' 60
+    $log.fp_cleanup = PyJson 'fp_cleanup()' 60   # not 'cleanup': the finalizer writes its own record under that key
     # The quit ends the game before it can reply: no reply is the expected result here, not an error (Py would .Trim() it).
     try { Invoke-GamePy 'pj_stop(write=False); wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 30 | Out-Null } catch { "quit sent; no reply: $_" }
     for ($i = 0; $i -lt 20 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }

@@ -149,6 +149,68 @@ $old = Join-Path $script:CmdDir 'cT-00000000000000000000000000000001.out'
     assert '(New-Guid)' in helper('Invoke-GamePy')
 
 
+
+def script_fn(script, name):
+    """One function's text from a capture script (a multi-line function ending in a closing brace on its own line)."""
+    body = text(script)
+    start = body.index(f'function {name}(')
+    return body[start:body.index('\n}\n', start) + 3]
+
+
+def test_an_empty_reply_fails_with_a_clear_message_in_both_finalizers():
+    # Run Z47: the parity2 quit's reply file was empty as the game exited, Get-Content -Raw gave $null, and .Trim() threw a null-method error.
+    for name in ('projectiles_capture', 'weapon_parity2_capture'):
+        out = run_stubbed("""$ErrorActionPreference = 'Stop'
+function Invoke-GamePy($Code, $Timeout) {{ if ($Code -eq 'empty') {{ $null }} else {{ "  answer`n" }} }}
+{}
+"ok: [$(Py 'full')]"
+try {{ Py 'empty' | Out-Null; 'no throw' }} catch {{ "threw: $_" }}
+""".format(script_fn(name, 'Py')))
+        assert 'ok: [answer]' in out and 'threw: empty reply from the game (it may have exited) to: empty' in out, name + out
+
+
+def test_the_parity2_quit_expects_no_reply_and_fp_cleanup_is_not_overwritten():
+    for name in ('projectiles_capture', 'weapon_parity2_capture'):
+        s = text(name)
+        quit_line = next(l for l in s.splitlines() if 'ConsoleCommand("quit"' in l)
+        assert quit_line.lstrip().startswith('try { Invoke-GamePy ') and 'catch { "quit sent; no reply: $_" }' in quit_line, name
+        # The finalizer writes $log.cleanup; the probe's own cleanup result goes under another key so it survives.
+        assert "$log.fp_cleanup = PyJson 'fp_cleanup()' 60" in s and "$log.cleanup = PyJson" not in s, name
+
+
+def test_projectiles_refuses_a_missing_status_recipe_before_any_lock():
+    s = text('projectiles_capture')
+    check = s.index('if (!(Find-LocalRecipe $StatusGun))')
+    assert check < s.index('Assert-NoPendingRecords') < s.index('New-Item -ItemType File -Path $HubLock')
+    # $PSScriptRoot is the real script's folder; the stub points the same function at a temp tree laid out like the repository.
+    fn = script_fn('projectiles_capture', 'Find-LocalRecipe').replace('$PSScriptRoot', '$script:Root')
+    out = run_stubbed("""$ErrorActionPreference = 'Stop'
+$script:Root = '@TMP@/tools/real_game'
+New-Item -ItemType Directory -Force '@TMP@/local/items/slice', '@TMP@/local/items/firing/coverage' | Out-Null
+Set-Content '@TMP@/local/items/slice/a_gun.json' '{{}}'
+Set-Content '@TMP@/local/items/firing/coverage/b_gun.json' '{{}}'
+{}
+"a: $([bool](Find-LocalRecipe 'a_gun')) b: $([bool](Find-LocalRecipe 'b_gun')) c: $([bool](Find-LocalRecipe 'c_gun'))"
+""".format(fn))
+    assert 'a: True b: True c: False' in out, out
+
+
+def test_projectiles_stops_the_status_step_on_a_probe_traceback():
+    # Run Z47: fp_spawn and fp_ready raised (no recipe), PyJson kept the traceback text, and slot 1 drew the save's own gun.
+    s = text('projectiles_capture')
+    assert "Assert-PyResult (PyJson \"fp_spawn($(Q $StatusGun))\" 60) 'fp_spawn'" in s
+    assert "Assert-PyResult (PyJson \"fp_ready($(Q $StatusGun), 1)\" 60) 'fp_ready'" in s
+    assert s.index("'fp_ready'") < s.rindex('draw quick slot 1 (fp_ready only fills it)')  # the status step's draw (the last one)
+    out = run_stubbed("""$ErrorActionPreference = 'Stop'
+{}
+$tb = "Traceback (most recent call last):`r`n  File x, line 1`r`nFileNotFoundError: no local recipe for g"
+try {{ Assert-PyResult $tb 'fp_spawn' | Out-Null; 'no throw' }} catch {{ "threw: $_" }}
+$obj = [pscustomobject]@{{ weapon = 'W' }}
+"kept: $((Assert-PyResult $obj 'fp_ready').weapon)"
+""".format(script_fn('projectiles_capture', 'Assert-PyResult')))
+    assert 'threw: fp_spawn failed: FileNotFoundError: no local recipe for g' in out and 'kept: W' in out, out
+
+
 if __name__ == '__main__':
     for name, test in list(globals().items()):
         if name.startswith('test_'):

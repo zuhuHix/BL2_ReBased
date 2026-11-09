@@ -279,7 +279,9 @@ def _wp2_cb(kind):
     def callback(obj, args, ret, func):
         if fp_state.get("run") is None:
             return
-        row = {"kind": kind, "func": func.func.Name, "obj": _path(obj), "args": _args(args)}
+        # The hook group goes under "hook": _log's own first argument is the row kind ("wp2"), so a "kind" key here made every
+        # call a TypeError, which _safe logged as hook_error (run Z47, 2026-11-09: no wp2 row reached any run file).
+        row = {"hook": kind, "func": func.func.Name, "obj": _path(obj), "args": _args(args)}
         if kind == "weapon":
             pawn = get_pc().Pawn
             if pawn is None or pawn.Weapon is None or _path(obj) != _path(pawn.Weapon):
