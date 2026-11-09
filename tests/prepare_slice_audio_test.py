@@ -235,6 +235,39 @@ class PrepareSliceAudioTest(unittest.TestCase):
         self.assertEqual(unresolved['door_open'], 'manifest has no door:open')
         self.assertEqual(unresolved['door_close'], 'manifest has no door:close')
 
+    def test_each_dialog_line_gets_its_own_role_from_its_key(self):
+        self.tone('6.wav')
+        self.tone('7.wav')
+        self.tone('8.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [
+            {'key': 'dialog:Pkg.Events.Invented_Line_A', 'media': [{'source': 6, 'duration_s': 1.0}]},
+            {'key': 'marcus_group:Pkg.Events.Invented_Bark', 'media': [{'source': 7, 'duration_s': 1.0}, {'source': 8, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertEqual(roles['line:Pkg.Events.Invented_Line_A'], [os.path.abspath(os.path.join(self.dir, '6.wav'))])
+        self.assertEqual(len(roles['line:Pkg.Events.Invented_Bark']), 2)   # a random container: every source, the host picks
+        self.assertFalse([r for r in unresolved if r.startswith('line:')])
+
+    def test_a_dialog_line_without_a_decoded_file_stays_silent(self):
+        data = {'schema': 'ow-audio-v1', 'entries': [{'key': 'dialog:Pkg.Events.Invented_Line_B', 'media': [{'source': 9, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertNotIn('line:Pkg.Events.Invented_Line_B', roles)
+        self.assertIn('9', unresolved['line:Pkg.Events.Invented_Line_B'])
+
+    def test_a_tag_under_both_prefixes_takes_the_dialog_entry(self):
+        self.tone('6.wav')
+        self.tone('7.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [
+            {'key': 'marcus_group:Pkg.Events.Invented_Both', 'media': [{'source': 7, 'duration_s': 1.0}]},
+            {'key': 'dialog:Pkg.Events.Invented_Both', 'media': [{'source': 6, 'duration_s': 1.0}]}]}
+        roles, _ = psa.build_play_map(data, self.dir)
+        self.assertEqual(roles['line:Pkg.Events.Invented_Both'], [os.path.abspath(os.path.join(self.dir, '6.wav'))])
+
+    def test_other_keys_make_no_line_role(self):
+        self.tone('6.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [{'key': 'door:open', 'media': [{'source': 6, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertFalse([r for r in list(roles) + list(unresolved) if r.startswith('line:')])
+
     def test_reload_roles_come_from_the_clip_out_and_clip_in_notifies(self):
         for name in ('1.wav', '2.wav', '3.wav'):
             self.tone(name)

@@ -216,6 +216,27 @@ class ListenReportTest(unittest.TestCase):
         self.assertIn('**door_close** x1', listen)
         self.assertNotIn('Door open / close', listen)
 
+    def test_dialog_line_cues_are_steps_sounds_with_one_description(self):
+        rows = [
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWAUDIOREC cue t=0.100 label=step Accept frame=frame-001.png',
+            'OWAUDIOREC cue t=0.500 label=line:Pkg.Events.Invented_Line_A seconds=1.000 frame=-',
+            'OWAUDIOREC cue t=2.000 label=step WaitWalk frame=frame-002.png',
+            'OWAUDIOREC cue t=2.300 label=line:Pkg.Events.Invented_Line_B seconds=1.400 frame=-',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ]
+        text = '\n'.join('[2026.11.09-12.00.00:000][  1]LogTemp: Display: ' + r for r in rows)
+        out, problems, steps, _ = self.run_build(text=text, tones=((0.5, 1.0), (2.3, 1.4)))
+        self.assertEqual(problems, [])
+        self.assertEqual([s['name'] for s in steps[0]['sounds']], ['line:Pkg.Events.Invented_Line_A'])
+        self.assertEqual([s['name'] for s in steps[1]['sounds']], ['line:Pkg.Events.Invented_Line_B'])
+        listen = (out / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('**line:Pkg.Events.Invented_Line_A** x1', listen)
+        self.assertNotIn('a sound the guide does not describe', listen)
+        self.assertEqual(lr.describe('line:Anything'), lr.ROLES[lr.LINE_ROLE][2])
+        self.assertNotIn('dialog is not played by the host', listen)
+
 
     def display_text(self, rows):
         return '\n'.join('[2026.11.09-12.00.00:000][  1]LogTemp: Display: ' + r for r in rows)

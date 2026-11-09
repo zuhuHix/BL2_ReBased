@@ -76,7 +76,19 @@ ROLES = {
                   'a wooden door opening, 2D, from wherever the listener stands. Only the one mover door has a sound; which of the two keys is the opening sound is UNVERIFIED'),
     'door_close': ('the slice mover door starts to close', 'manifest door:close (the door\'s other sound key)',
                    'a wooden door closing, 2D. The host starts it when the door starts to close, not at the key\'s own time in the game data (UNVERIFIED that the game does the same)'),
+    'line:<event tag>': ('a mission line or a Marcus bark, when the stock dialog (run in the VM) starts it; the next line waits for its end',
+                         'manifest dialog: or marcus_group: entry of that event tag',
+                         'a voice line (the cue names its event tag). Which line plays and when is the stock dialog\'s choice in the VM; a bark with several takes is picked '
+                         'at random (the container\'s rule is UNVERIFIED). 2D, no radio (echo) filter, no ducking of the other sounds'),
 }
+LINE_ROLE = 'line:<event tag>'
+
+
+def describe(role):
+    """What a listener should hear for a cue's role; every line:<tag> cue shares one description."""
+    if role.startswith('line:'):
+        return ROLES[LINE_ROLE][2]
+    return ROLES.get(role, ('', '', 'a sound the guide does not describe'))[2]
 
 # The same step when the magazine fixture (-owslicegatemag) was applied: the first shot empties the magazine, the objective completes, and the
 # fixture then asks for one reload before the turn-in step.
@@ -91,7 +103,9 @@ NOT_PLAYED = [
     ('Maya taking damage, pain', 'no sound mapped'),
     ('Fight For Your Life, revive, respawn', 'no sound mapped'),
     ('Level-up', 'no sound mapped'),
-    ('Mission accept / complete, Marcus\'s lines', 'mission dialog and Marcus\'s barks are decoded, not hooked (dialog is not played by the host)'),
+    ('Marcus\'s turn-in and dismissal lines, his lingering-in-menu bark', 'not played: the stock data gives the turn-in tag no line, the dismissal line is not in the manifest, and the lingering timer is not modelled (section 5c)'),
+    ('A mission line whose talker the VM does not resolve', 'silent: the run log reports it as "no talker"; no speaker is guessed'),
+    ('Mission accept and complete sounds other than voice lines', 'no sound identified'),
     ('Other doors, and the door\'s opening or closing in the middle of a move', 'no sound: the mover door\'s sound plays only when a motion starts (section 5b)'),
     ('Vendor and menu sounds', 'no sound mapped (the menus are the Flash overlay, which plays no sound)'),
     ('Footsteps, jump, land', 'no sound mapped'),
@@ -307,7 +321,7 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
                 rmss = [c['level']['rms_dbfs'] for c in cues if c['level']]
                 level = f'peak {fmt_db(min(peaks))} to {fmt_db(max(peaks))} dBFS, RMS {fmt_db(min(rmss))} to {fmt_db(max(rmss))} dBFS' if peaks else 'not measured'
                 clipped = sum(1 for c in cues if c['level'] and c['level']['clipped'])
-                hear = ROLES.get(role, ('', '', 'a sound the guide does not describe'))[2]
+                hear = describe(role)
                 lines.append(f'- **{role}** x{len(cues)}, first at {mmss(cues[0]["t"])}' + (f', last at {mmss(cues[-1]["t"])}' if len(cues) > 1 else '')
                              + f' ({level}' + (f', {clipped} clipped' if clipped else '') + f'). You should hear {hear}.')
                 frames = [c['frame'] for c in cues if c['frame']]

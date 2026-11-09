@@ -227,7 +227,9 @@ constexpr float DrainLimit = 2.f;
 constexpr float DrainPoll = 0.05f;
 }
 
-bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
+bool OpenWillowAudio::Enabled() { return OpenWillowAudioImpl::GEnabled; }
+
+bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds)
 {
     using namespace OpenWillowAudioImpl;
     if (!GEnabled) return false;
@@ -274,6 +276,7 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
     }), DrainPoll, true);
     UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num());
     Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
+    if (OutSeconds) *OutSeconds = Seconds;
     return true;
 }
 

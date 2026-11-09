@@ -4,7 +4,8 @@
 Reads the ow-audio-v1 manifest (tools/audio_slice_chain.py) and PCM WAV files already decoded into an ignored directory,
 and writes local/slice/audio_play.json for the host's -owaudioplay=. This tool decodes nothing and calls no decoder: a
 role without a checked WAV stays out of the map and is listed under "unresolved". The "timing" block holds the reload notify
-offsets (clip out, clip in) per arms clip, from the same manifest, for the host to time the reload's sounds (section 5).
+offsets (clip out, clip in) per arms clip, from the same manifest, for the host to time the reload's sounds (section 5). Dialog lines
+get one role each, "line:<event tag>" (section 5c).
 
   python tools/prepare_slice_audio.py [--manifest local/slice/audio.json] [--decoded-dir local/audio/decoded]
   python tools/prepare_slice_audio.py --tone-only     # a synthetic test tone only, no game data
@@ -34,6 +35,10 @@ ROLE_KEYS = {'fire': 'weapon:fire', 'hit': 'role:hit', 'phaselock_cast': 'role:p
 RELOAD_NOTIFY = re.compile(r'^reload anim (\S+) @([0-9.]+)s$')
 RELOAD_ROLES = {'reload_out': 'Clip_Out', 'reload_in': 'Clip_In'}
 RELOAD_TIMING_KEY = {'reload_out': 'clip_out_s', 'reload_in': 'clip_in_s'}
+# Dialog lines (SLICE_AUDIO_CHAIN.md section 5c): one role per manifest dialog entry, "line:<event tag>", from the mission's dialog group
+# (dialog:) and Marcus's own group (marcus_group:). The host does not choose a line: the stock dialog in the VM does, and the host plays the
+# role of the event tag it chose. A tag with no decoded file stays unresolved, and that line stays silent.
+LINE_PREFIXES = ('dialog:', 'marcus_group:')
 DURATION_TOLERANCE_S = 0.05
 # The host's limits (OpenWillowAudio.h; a test compares them): a file past them would be mapped here and then refused there.
 MIN_SAMPLE_RATE = 8000
@@ -187,6 +192,17 @@ def build_play_map(manifest, decoded_dir):
             unresolved[role] = 'manifest has no reload notify for %s' % RELOAD_ROLES[role]
             continue
         files, reasons, used = entry_files(media, decoded_dir, used)
+        if files:
+            roles[role] = files
+        else:
+            unresolved[role] = '; '.join(reasons) or 'entry has no media'
+    # dialog: before marcus_group:, the order of the host's own manifest lookup, so a tag under both prefixes takes the dialog: entry.
+    line_entries = [(prefix, entry) for prefix in LINE_PREFIXES for entry in manifest['entries'] if entry['key'].startswith(prefix)]
+    for prefix, entry in line_entries:
+        role = 'line:' + entry['key'][len(prefix):]
+        if role in roles or role in unresolved:
+            continue
+        files, reasons, used = entry_files(entry['media'], decoded_dir, used)
         if files:
             roles[role] = files
         else:

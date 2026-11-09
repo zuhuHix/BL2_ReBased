@@ -5,7 +5,7 @@
 // Plays slice sounds from plain PCM WAV files on the player's machine (SLICE_AUDIO_CHAIN.md section 5).
 //
 // -owaudioplay=<audio_play.json> (written by tools/prepare_slice_audio.py) maps a role ("fire", "hit", "phaselock_cast",
-// "pickup", "equip", "reload_out", "reload_in", "door_open", "door_close") to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
+// "pickup", "equip", "reload_out", "reload_in", "door_open", "door_close", and one "line:<dialog event tag>" per mission or Marcus line) to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
 // No Wwise logic: no bus, RTPC, state, attenuation or ducking; every sound plays 2D at full volume. A role with several
 // files picks one at random, because the real container's choice is UNVERIFIED.
 //
@@ -44,7 +44,12 @@ OPENWILLOW_API bool WithinLimits(int64 FileBytes, int64 UsedBytes, FString& OutE
 OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& OutError);
 
 // True when the engine accepted the sound. WorldContext gives the world; a null context or missing role returns false.
-OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role);
+// OutSeconds, when given, receives the chosen file's length (left alone when nothing plays).
+OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds = nullptr);
+
+// Whether -owaudioplay turned the sound on (the play map may still lack a role). Callers that change behaviour with sound, such as the
+// dialog line player (UOpenWillowQuest), ask this first so that a run without the switch is unchanged.
+OPENWILLOW_API bool Enabled();
 
 // The reload's clip-out and clip-in sounds sit at these offsets, in seconds from the start of the arms clip ClipName (its sequence name in
 // the game's data). From the play map's "timing" block. False when the map has no timing for that clip, or the sound is off: then nothing

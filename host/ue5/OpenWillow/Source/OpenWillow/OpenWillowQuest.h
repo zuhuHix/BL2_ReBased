@@ -264,6 +264,9 @@ private:
     int32 MissionEventsMatched = 0;
     bool bAcceptChecked = false;        // test: the use_key_accepts_mission check ran (step 4 may wait for the walk)
     int32 DialogLookups = 0, DialogMisses = 0, DialogPlayed = 0, DialogAkMismatches = 0;
+    // Dialog lines the host is playing (-owaudioplay only): the VM's line id and the game seconds left until the host reports its end
+    // (SLICE_AUDIO_CHAIN.md section 5c). Empty without sound, where the VM has no line player and no line takes time.
+    TArray<TPair<int32, float>> PlayingLines;
     TArray<int32> ArrivalMotions;       // door motion requested by each entered ArrivedAtMoveNode event
     FVector DummySpawnedAt = FVector::ZeroVector;
     FVector DummyAttachedAt = FVector::ZeroVector;   // dummy location right after the attach op ran

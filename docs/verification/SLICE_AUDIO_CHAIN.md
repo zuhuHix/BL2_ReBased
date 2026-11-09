@@ -198,7 +198,7 @@ enabled, among them RTSE and Dialog Skipper with `Autoskip Dialog` on, which blo
 from a package reference: the Wwise name is the object name without `Ak_` (holds for all 47 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`, and with no AkEvent range to compare with, so is the duration check. Nothing here has been heard.
 
 A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state, attenuation or ducking: every sound is 2D at full
-volume. Dialog is not hooked; the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.
+volume. Dialog lines are hooked only with `-owaudioplay` (section 5c); without it the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.
 
 Refused by both the host and the prepare tool, with the same rules, after walking the whole declared RIFF: a RIFF size past the file, a chunk or its pad past the RIFF size (also after
 `data`), a partial chunk at its end, more than one `fmt` or `data`, partial sample frames, anything but 16-bit
@@ -255,6 +255,24 @@ Two more roles, both from the door's keys in section 2 (`door:open`, `door:close
 
 Test: `tests/prepare_slice_audio_test.py` (the two roles map from their keys; a missing decoded file stays unresolved; a missing key says so; invented names and synthetic WAVs) and `tests/listen_report_test.py` (door cues become step sounds; names come from a synthetic manifest). The real prepare run on the local manifest resolves both roles from the decoded files (length check only).
 
+### 5c. Mission dialog and Marcus's barks (2026-11-09, AI-assisted, Claude)
+
+**State: with `-owaudioplay` the host plays every line the stock dialog starts, and the next line waits for it to end. Nothing has been heard, and no run has shown a line cue yet.**
+
+The host chooses no line. The VM already runs the stock dialog (NATIVE_DIALOG.md, UNVERIFIED rules): the mission's `Behavior_TriggerDialogEvent`s and Marcus's on-use event pick the event, the talk act, the talker and the priority, and report each chosen line to the host (`OWQUEST dialog line`). What was missing was an audio device. The VM has a line player interface for one (`DialogSystem::setLinePlayer` / `lineEnded`), used so far only by the core's `lines:<s>` test length.
+
+| Role | Hook | Sound | Evidence |
+|---|---|---|---|
+| `line:<event tag>` | the VM's line player, set by `UOpenWillowQuest` when sound is on: called when a talk act starts its line | the manifest's `dialog:<tag>` entry, else `marcus_group:<tag>` (the order of the host's own lookup) | the event tag is the stock dialog's choice in the VM; the tag-to-AkEvent-to-source chain is section 2, and the host already checks the VM's AkEvent against the manifest's (`DialogAkMismatches`). The lines and their order were observed live without the dialog skipper (FIRE_MISSION_GOLDEN_TRACE.md, lane L4). Nothing here has been heard |
+
+- **Prepare.** `tools/prepare_slice_audio.py` maps one role per manifest dialog entry, from its key only. A tag whose decoded file is missing stays under `unresolved` with its reason; nothing is picked by guessing. A bark entry with several sources (a random container) keeps them all and the host picks one at random (the container's rule is UNVERIFIED, as for every slice sound). On the local manifest (2026-11-09) all 39 line roles resolve: the 35 entries of the mission's dialog group and Marcus's 4 barks (length check only).
+- **Line end.** The player plays the file and returns true; the host then counts the file's length down in game time (the frame delta, before the VM's tick) and calls `lineEnded` at zero. The VM adds the act's OutputDelay, and the dialog behavior's 0.1 s poll selects Finished, so the next behavior waits for the line, as live (L4: a line's Finished 0.010 to 0.073 s after its audio). Game time and the mixer's real time are assumed equal (no slow motion in the slice); the mixer's start delay (about 0.13 s, section 6) is not added. A line with no file in the map returns false ("not playing") and ends on the next update, about as before.
+- **What changes with sound on.** The mission's timing becomes the stock one. Live the kickoff line (about 18 s) held the first objective set and Marcus's walk; the core's `lines:2` run (`tools/verify_fire_event_order.py`, 32 of 32 rules) shows the same ordering in the VM. So in a listening run Marcus starts walking after line 01, about 18 s after the accept (the gate's `WaitWalk` limit is 45 s; the walk is about 1,240 uu at 294 uu/s, SLICE_WORLD_PLACEMENT.md), and 03b, 03a and 04 run one after another. **UNVERIFIED** in the engine until a run shows it. Without `-owaudioplay` no player is set and nothing changes: the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still expects 0 played.
+- **Barks.** Marcus's on-use bark plays when the use key reaches him with the mission available (live: it started at the use and ran 3.10 s while the page opened, L4). The lingering-in-menu bark needs the pawn's lingering timer, which the host does not model: silent.
+- **Not played.** The turn-in tag (the stock data gives it no line) and the dismissal line (not in the manifest, see MISSION_SCREEN.md "Open"). A line whose talker the VM does not resolve is reported as "no talker" and stays silent. An interrupted line (the VM's `stopTalking`, a higher-priority line on the same talker or group) keeps sounding in the host until its file ends, because `Play` returns no handle to stop: a known gap. The slice gate meets it at once: it accepts within about 2 s of the use, while the on-use bark (about 3 s) is still sounding, so the bark's tail overlaps the start of the kickoff line (live, the player read the page for a while and the two did not overlap). Lines are 2D at full volume, like every slice sound: no echo (radio) filter, no `bVoice` ducking, no lip sync, no subtitles.
+
+`Play` logs its own `OWAUDIOREC cue` with the role, so a line shows in a recording as `line:<event tag>`; `tools/listen_report.py` describes every such cue with one shared text and no longer lists "Marcus's lines" as not played. Test: `tests/prepare_slice_audio_test.py` (a role per dialog key, a missing file stays unresolved, the `dialog:` entry wins over `marcus_group:`, other keys make no line role; invented tags and synthetic WAVs) and `tests/listen_report_test.py` (line cues as step sounds with the shared description).
+
 ## 6. Listening session (2026-11-08, AI-assisted, Claude)
 
 **State: tooling for the maintainer to listen; the host's recording measured, nothing heard by the assistant.**
@@ -278,8 +296,8 @@ recording's are not calibrated against each other, so it is not a latency measur
 come from the local manifest) and stay local.
 
 What it can show: what the host sent to the mixer and how loud the mix was. What it cannot: whether a sound is the right one, or sounds like the game. Only the
-roles in sections 5, 5a and 5b play; the guide lists everything else asked for (reloads of other guns, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
-level-up, mission and dialog, doors other than the mover's, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
+roles in sections 5, 5a, 5b and 5c play; the guide lists everything else asked for (reloads of other guns, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
+level-up, Marcus's turn-in, dismissal and lingering lines, doors other than the mover's, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
 
 Runs (zuhu PC, 2026-11-08, decoded sounds from vgmstream, 2 s pause): the first two failed as above (and lacked the slice data in that worktree: a missing range
 manifest and Marcus's assets). The third: slice gate 14 of 14 PASS, editor exit 0, a 122.7 s 48 kHz stereo WAV (file size matches the stopped length), overall peak
