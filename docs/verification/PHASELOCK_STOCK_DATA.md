@@ -1521,6 +1521,9 @@ editor job whose every glTF was the string "None" and whose texture lists were e
 
 - `tools/prepare_phaselock_target.py editor-job` writes no job when a mesh or attachment glTF or a listed texture is missing or empty
   (`job_problems`, synthetic test), and names each missing input and the `-Steps prepare` extract that produces them.
-- The zone, attach and mesh editor steps check their source files before they touch anything (the zone step also refuses a slot with no
-  texture files) and stop with the file named. Checked by running the same checks in plain Python on that runner's job (they stop) and on a
-  complete job (they pass); no editor run.
+- The zone, attach and mesh (slice `npcs`) editor steps check, before anything changes (for `npcs`: before `clean()` deletes a destination),
+  every file they will import, through `tools/editor_inputs.py`: no path in the job (None, "None", empty), a missing file or an empty file
+  stops the step with the file named and the command that writes that job (the phaselock or the slice tool). Only imported files count: a slot
+  the zone step keeps plain on purpose (Marcus, no `p_Masks`) is accepted; a slot whose `p_Masks` or `p_Diffuse` the job expected but the
+  export lacked is reported. `tests/editor_inputs_test.py` runs the three steps against a stub `unreal` and checks that a bad job makes no
+  import, delete, create or save call (review r1 of PR #195). Not run in the editor.

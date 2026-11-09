@@ -26,6 +26,7 @@ import unreal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from creature_zone import gamma_from_env, scale_note, zone_parameters  # noqa: E402
+from editor_inputs import zone_problem  # noqa: E402
 
 job = json.loads(Path(os.environ['OPENWILLOW_SLICE_JOB']).read_text(encoding='utf-8'))
 tools = unreal.AssetToolsHelpers.get_asset_tools()
@@ -49,15 +50,11 @@ def texture(path, folder, srgb):
     return asset
 
 
-# A slot whose textures the job could not find would silently keep the plain material (2026-11-09, a worktree without the UModel
-# exports): stop before changing anything instead.
-missing = [f'{npc["id"]}/{slot["slot"]}: {problem}' for npc in job['npcs'] for slot in npc['slots']
-           for problem in ([f'texture {p} not in the UModel output' for p in slot.get('missing_textures', [])]
-                           + [f'{p} file {f} missing' for p, f in slot['textures'].items() if not Path(f).is_file()]
-                           + (['no texture files at all'] if not slot['textures'] else []))]
-if missing:
-    raise RuntimeError('zone: inputs missing, nothing changed: ' + '; '.join(missing)
-                       + ' (rerun the job writer after the UModel extract: tools/import_phaselock_target.ps1 -Steps prepare)')
+# Every file the zone step will import is checked before anything changes (tools/editor_inputs.py): a missing export would otherwise
+# keep the plain material silently or stop Unreal on an assertion.
+problem = zone_problem(job)
+if problem:
+    raise RuntimeError(problem)
 
 for npc in job['npcs']:
     entry = report.setdefault(npc['id'], {'status': 'kept plain material'})
