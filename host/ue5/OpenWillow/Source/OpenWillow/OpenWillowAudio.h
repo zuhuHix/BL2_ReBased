@@ -5,7 +5,7 @@
 // Plays slice sounds from plain PCM WAV files on the player's machine (SLICE_AUDIO_CHAIN.md section 5).
 //
 // -owaudioplay=<audio_play.json> (written by tools/prepare_slice_audio.py) maps a role ("fire", "hit", "phaselock_cast",
-// "pickup") to WAV files under ignored local/. Without the option, or for a role the map does not have, Play does nothing.
+// "pickup", "equip", "reload_out", "reload_in") to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
 // No Wwise logic: no bus, RTPC, state, attenuation or ducking; every sound plays 2D at full volume. A role with several
 // files picks one at random, because the real container's choice is UNVERIFIED.
 //
@@ -45,6 +45,11 @@ OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& Out
 
 // True when the engine accepted the sound. WorldContext gives the world; a null context or missing role returns false.
 OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role);
+
+// The reload's clip-out and clip-in sounds sit at these offsets, in seconds from the start of the arms clip ClipName (its sequence name in
+// the game's data). From the play map's "timing" block. False when the map has no timing for that clip, or the sound is off: then nothing
+// should be scheduled. The offsets are the game's notify times; that they line up with the imported clip is UNVERIFIED.
+OPENWILLOW_API bool ReloadNotifyTimes(const FString& ClipName, float& OutClipOut, float& OutClipIn);
 
 // Test only, for a listening session (tools/record_audio_listen.ps1): -owrecordaudio=<file.wav> records the engine's main output from the
 // first game map until StopRecording or any graceful end (world teardown, engine exit, a 900 s cap; a crash loses it), through the

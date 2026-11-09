@@ -894,6 +894,18 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
     static const bool bReloadPhaselockTest = FParse::Param(FCommandLine::Get(), TEXT("owreloadphaselocktest"));
     RefillIfDue(Now);
+    // The reload's clip-out and clip-in sounds, at the notify times StartReload scheduled (SLICE_AUDIO_CHAIN.md section 5). Both
+    // stop with the reload: a notify after its end is not played, as the arms clip stops there too.
+    if (bReloading && ReloadClipOutAt >= 0.f && Now >= ReloadClipOutAt)
+    {
+        ReloadClipOutAt = -1.f;
+        OpenWillowAudio::Play(this, TEXT("reload_out"));
+    }
+    if (bReloading && ReloadClipInAt >= 0.f && Now >= ReloadClipInAt)
+    {
+        ReloadClipInAt = -1.f;
+        OpenWillowAudio::Play(this, TEXT("reload_in"));
+    }
     if (bReloading && Now >= ReloadEndsAt)
     {
         RefillIfDue(ReloadEndsAt); // the refill point is never after the end (fraction <= 1)
@@ -1392,6 +1404,8 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     ArmsAnim->SetClips(IdleAnim, RunAnim, SprintAnim, JumpAnim, LandAnim);
     UpdateArmsVisibility();
     if (DrawPistolAnim) ArmsAnim->PlayAction(DrawPistolAnim);
+    // The gun is drawn: its equip sound (the lent pistol's PickupAndEquipSounds event, played for every gun; SLICE_AUDIO_CHAIN.md section 5).
+    OpenWillowAudio::Play(this, TEXT("equip"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
         Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);
 }
@@ -1726,6 +1740,7 @@ bool AOpenWillowWalker::StartReload(float Now)
     ReloadItemId = Weapon->Id;
     WeaponReloadAnim = nullptr;
     ArmsReloadAnim = nullptr;
+    ReloadClipOutAt = ReloadClipInAt = -1.f;
     if (Model && !Model->ReloadAsset.IsEmpty())
     {
         // An assembled gun uses its library gestalt's skeleton (OpenWillowWeaponAssembly): the same clip imported there
@@ -1761,6 +1776,14 @@ bool AOpenWillowWalker::StartReload(float Now)
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow arms reload animation missing: %s/%s"),
                 *HeldArmsSet, *Model->ReloadAnimation);
+        }
+        // The lent pistol's reload sounds. The manifest's notify offsets are in the arms clip's own time, and that clip plays at Rate, so the
+        // real delay is offset / Rate. Scheduled only while the arms clip plays. UNVERIFIED that the imported clip's offsets match the game's.
+        float ClipOut = 0.f, ClipIn = 0.f;
+        if (ArmsReloadAnim && ArmsAnim && Rate > 0.f && OpenWillowAudio::ReloadNotifyTimes(Model->ReloadAnimation, ClipOut, ClipIn))
+        {
+            ReloadClipOutAt = Now + ClipOut / Rate;
+            ReloadClipInAt = Now + ClipIn / Rate;
         }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload started: %s, %.1f s"), *Weapon->Name, Weapon->ReloadTime);
@@ -1798,6 +1821,7 @@ void AOpenWillowWalker::CancelReload()
     WeaponReloadAnim = nullptr;
     if (ArmsAnim && ArmsReloadAnim && ArmsAnim->Action == ArmsReloadAnim) ArmsAnim->PlayAction(nullptr);
     ArmsReloadAnim = nullptr;
+    ReloadClipOutAt = ReloadClipInAt = -1.f;
 }
 void AOpenWillowWalker::FireWeapon()
 {

@@ -399,6 +399,9 @@ private:
     int32 ReloadAmmoMoved = 0;
     bool bReloadRefilled = false;
     FString ReloadItemId; // weapon the running reload belongs to
+    // Game-clock times of the reload's clip-out and clip-in sounds (-1: none scheduled); set by StartReload, played from Tick, cleared by CancelReload.
+    float ReloadClipOutAt = -1.f;
+    float ReloadClipInAt = -1.f;
     UPROPERTY() TObjectPtr<class UAnimSequence> WeaponReloadAnim;
     UPROPERTY() TObjectPtr<class UAnimSequence> ArmsReloadAnim;
     bool bOutOfAmmoLogged = false;

@@ -64,12 +64,17 @@ ROLES = {
     'phaselock_cast': ('the moment Phaselock lifts its target', 'manifest role:phaselock_cast',
                        'the Phaselock activation. Only the cast has a sound: the hold, the release and the bubble are silent on our build'),
     'pickup': ('an item added by the pickup key', 'no sound identified (play map: unresolved)', 'nothing: the host has no pickup sound yet'),
+    'equip': ('a gun drawn: from the slot keys, the inventory, or the first gun at the start of a run', 'manifest weapon:equip (the lent pistol\'s pickup-and-equip sound)',
+              'a short pickup-and-equip sound for the gun in hand. The host plays it for every gun, so another gun sounding like the lent pistol\'s is the known gap; whether the game plays this sound on a plain draw is UNVERIFIED'),
+    'reload_out': ('the reload\'s clip-out notify, on the lent pistol only', 'manifest reload notify, clip out (the play map\'s timing)',
+                   'the magazine coming out. When it plays within the reload is UNVERIFIED against the game: the host\'s timing is the notify offset, scaled to the reload'),
+    'reload_in': ('the reload\'s clip-in notify, on the lent pistol only', 'manifest reload notify, clip in (the play map\'s timing)',
+                  'the new magazine going in, later in the same reload. Its timing is UNVERIFIED against the game, as for clip out'),
 }
 
 # Asked for, but not played by our build: what exists for each so a listener knows a silence there is expected.
 NOT_PLAYED = [
-    ('Reload (clip out / clip in)', 'decoded for the lent pistol, not hooked: the host has no reload notify yet'),
-    ('Equip / draw a gun', 'decoded for the lent pistol, not hooked'),
+    ('Reload of guns other than the lent pistol', 'no reload sound mapped for them: the lent pistol\'s reload clip is the only one with notify times in the manifest'),
     ('Phaselock hold, release and bubble', 'no sound mapped'),
     ('Pickups: cash, ammo, items', 'no sound identified; cash and ammo take other paths and are not hooked'),
     ('Shield hit, break, recharge', 'no sound mapped'),
@@ -156,10 +161,15 @@ def load_names(manifest: Path | None):
     if manifest and manifest.exists():
         for entry in json.loads(manifest.read_text(encoding='utf-8')).get('entries', []):
             key, name = entry.get('key', ''), (entry.get('ak_event') or {}).get('wwise_name')
-            if key == 'weapon:fire':
-                names['fire'] = name
+            if key in ('weapon:fire', 'weapon:equip'):
+                names[key[7:]] = name
             elif key.startswith('role:'):
                 names[key[5:]] = name
+            elif key.startswith('weapon:reload_anim_') and name:
+                # Same rule as tools/prepare_slice_audio.py: the AkEvent's name says clip out or clip in.
+                for role, suffix in (('reload_out', 'Clip_Out'), ('reload_in', 'Clip_In')):
+                    if name.endswith(suffix):
+                        names.setdefault(role, name)
     return names
 
 

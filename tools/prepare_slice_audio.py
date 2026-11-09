@@ -3,7 +3,8 @@
 
 Reads the ow-audio-v1 manifest (tools/audio_slice_chain.py) and PCM WAV files already decoded into an ignored directory,
 and writes local/slice/audio_play.json for the host's -owaudioplay=. This tool decodes nothing and calls no decoder: a
-role without a checked WAV stays out of the map and is listed under "unresolved".
+role without a checked WAV stays out of the map and is listed under "unresolved". The "timing" block holds the reload notify
+offsets (clip out, clip in) per arms clip, from the same manifest, for the host to time the reload's sounds (section 5).
 
   python tools/prepare_slice_audio.py [--manifest local/slice/audio.json] [--decoded-dir local/audio/decoded]
   python tools/prepare_slice_audio.py --tone-only     # a synthetic test tone only, no game data
@@ -15,6 +16,7 @@ import argparse
 import json
 import math
 import os
+import re
 import struct
 import sys
 import wave
@@ -23,7 +25,13 @@ PLAY_SCHEMA = 'ow-audio-play-v1'
 # Role -> manifest key. Roles with no key are not resolved from evidence yet, so they stay silent rather than guess.
 # hit and phaselock_cast come from one live session and are UNVERIFIED (SLICE_AUDIO_CHAIN.md section 5). hit's many files are one event's per-surface
 # sources, presumably, and the host picks at random, so a hit can sound like any surface until the switch value is known.
-ROLE_KEYS = {'fire': 'weapon:fire', 'hit': 'role:hit', 'phaselock_cast': 'role:phaselock_cast', 'pickup': None}
+# equip is the lent pistol's PickupAndEquipSounds event; the host plays it when a gun is drawn (UNVERIFIED that the game does the same).
+ROLE_KEYS = {'fire': 'weapon:fire', 'hit': 'role:hit', 'phaselock_cast': 'role:phaselock_cast', 'pickup': None, 'equip': 'weapon:equip'}
+# The lent pistol's reload sounds are not one key each: the manifest has one reload-anim key per (arms clip, notify time). The trigger's
+# text gives the clip and the notify time; the AkEvent's name gives clip out or clip in. Both come from the manifest, nothing is typed in here.
+RELOAD_NOTIFY = re.compile(r'^reload anim (\S+) @([0-9.]+)s$')
+RELOAD_ROLES = {'reload_out': 'Clip_Out', 'reload_in': 'Clip_In'}
+RELOAD_TIMING_KEY = {'reload_out': 'clip_out_s', 'reload_in': 'clip_in_s'}
 DURATION_TOLERANCE_S = 0.05
 # The host's limits (OpenWillowAudio.h; a test compares them): a file past them would be mapped here and then refused there.
 MIN_SAMPLE_RATE = 8000
@@ -105,6 +113,48 @@ def check_wav(path, expected_duration):
     return None
 
 
+def entry_files(media_list, decoded_dir, used):
+    """The usable WAVs among media_list (paths), the reasons the others were refused, and the bytes held with them added to `used`."""
+    files, reasons = [], []
+    for media in media_list:
+        path = os.path.abspath(os.path.join(decoded_dir, '%s.wav' % media['source']))
+        reason = check_wav(path, media.get('duration_s'))
+        if not reason and used + os.path.getsize(path) > MAX_TOTAL_BYTES:
+            reason = 'the map would hold more than %d bytes' % MAX_TOTAL_BYTES
+        if reason:
+            reasons.append('%s: %s' % (media['source'], reason))
+        else:
+            used += os.path.getsize(path)
+            files.append(path)
+    return files, reasons, used
+
+
+def reload_notifies(manifest):
+    """(role, arms clip name, notify time in seconds) for each reload notify the manifest records, with its manifest entry."""
+    found = []
+    for entry in manifest['entries']:
+        match = RELOAD_NOTIFY.match((entry.get('trigger') or {}).get('role', ''))
+        if not match:
+            continue
+        name = (entry.get('ak_event') or {}).get('wwise_name', '')
+        for role, suffix in RELOAD_ROLES.items():
+            if name.endswith(suffix):
+                found.append((role, match.group(1), float(match.group(2)), entry))
+    return found
+
+
+def reload_timing(manifest):
+    """{clip name: {clip_out_s, clip_in_s}} for each arms clip that has both notifies, in seconds from the clip's start. A clip with two
+    notifies of one kind, or only one of the two, is left out (the host then schedules nothing for it)."""
+    times, clashes = {}, set()
+    for role, clip, seconds, _ in reload_notifies(manifest):
+        slot = times.setdefault(clip, {})
+        if RELOAD_TIMING_KEY[role] in slot:
+            clashes.add(clip)
+        slot[RELOAD_TIMING_KEY[role]] = seconds
+    return {clip: slot for clip, slot in times.items() if clip not in clashes and len(slot) == 2}
+
+
 def build_play_map(manifest, decoded_dir):
     entries = {entry['key']: entry for entry in manifest['entries']}
     roles, unresolved, used = {}, {}, 0
@@ -116,17 +166,25 @@ def build_play_map(manifest, decoded_dir):
         if entry is None:
             unresolved[role] = 'manifest has no %s' % key
             continue
-        files, reasons = [], []
-        for media in entry['media']:
-            path = os.path.abspath(os.path.join(decoded_dir, '%s.wav' % media['source']))
-            reason = check_wav(path, media.get('duration_s'))
-            if not reason and used + os.path.getsize(path) > MAX_TOTAL_BYTES:
-                reason = 'the map would hold more than %d bytes' % MAX_TOTAL_BYTES
-            if reason:
-                reasons.append('%s: %s' % (media['source'], reason))
-            else:
-                used += os.path.getsize(path)
-                files.append(path)
+        files, reasons, used = entry_files(entry['media'], decoded_dir, used)
+        if files:
+            roles[role] = files
+        else:
+            unresolved[role] = '; '.join(reasons) or 'entry has no media'
+    notifies = reload_notifies(manifest)
+    for role in RELOAD_ROLES:
+        media, seen = [], set()
+        for found_role, _, _, entry in notifies:
+            if found_role != role:
+                continue
+            for item in entry['media']:
+                if item['source'] not in seen:   # the same sound can sit under both clips (the same source, once)
+                    seen.add(item['source'])
+                    media.append(item)
+        if not media:
+            unresolved[role] = 'manifest has no reload notify for %s' % RELOAD_ROLES[role]
+            continue
+        files, reasons, used = entry_files(media, decoded_dir, used)
         if files:
             roles[role] = files
         else:
@@ -142,7 +200,7 @@ def main(argv=None):
     ap.add_argument('--tone', default='local/audio/test_tone.wav', help='synthetic tone, always written, role test_tone')
     ap.add_argument('--tone-only', action='store_true', help='map only the synthetic tone; reads no game data')
     args = ap.parse_args(argv)
-    roles, unresolved = {}, {}
+    roles, unresolved, timing = {}, {}, {}
     if not args.tone_only:
         if not os.path.isfile(args.manifest):
             sys.exit('no manifest at %s: run tools/audio_slice_chain.py first, or pass --tone-only' % args.manifest)
@@ -151,15 +209,18 @@ def main(argv=None):
         if manifest.get('schema') != 'ow-audio-v1':
             sys.exit('%s is not an ow-audio-v1 manifest' % args.manifest)
         roles, unresolved = build_play_map(manifest, args.decoded_dir)
+        timing = {'reload': reload_timing(manifest)}
     write_tone(args.tone)
     roles['test_tone'] = [os.path.abspath(args.tone)]
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, 'w', encoding='utf-8') as fh:
-        json.dump({'schema': PLAY_SCHEMA, 'roles': roles, 'unresolved': unresolved}, fh, indent=1)
+        json.dump({'schema': PLAY_SCHEMA, 'roles': roles, 'unresolved': unresolved, 'timing': timing}, fh, indent=1)
     for role, files in sorted(roles.items()):
         print('role %s: %d file(s)' % (role, len(files)))
     for role, reason in sorted(unresolved.items()):
         print('role %s: UNRESOLVED (%s)' % (role, reason))
+    for clip, slot in sorted(timing.get('reload', {}).items()):
+        print('reload timing %s: clip out %.3f s, clip in %.3f s (notify offsets in the arms clip)' % (clip, slot['clip_out_s'], slot['clip_in_s']))
     print('wrote %s (length checked only; nothing has been listened to)' % args.out)
     return 0
 

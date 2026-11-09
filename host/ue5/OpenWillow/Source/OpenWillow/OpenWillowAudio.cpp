@@ -93,6 +93,13 @@ TMap<FString, TArray<OpenWillowAudio::FWav>>& Roles()
     return Map;
 }
 
+// Reload clip name -> (clip-out offset, clip-in offset) in seconds, from the play map's "timing" block.
+TMap<FString, TPair<float, float>>& ReloadTimes()
+{
+    static TMap<FString, TPair<float, float>> Map;
+    return Map;
+}
+
 // Set once by Startup; the only thing an event pays while sound is off.
 bool GEnabled = false;
 
@@ -115,6 +122,22 @@ void LoadOnce()
     {
         UE_LOG(LogTemp, Warning, TEXT("OWAUDIO play map unreadable or wrong schema: %s"), *File);
         return;
+    }
+    // The reload's notify offsets (tools/prepare_slice_audio.py). A clip with a missing, negative or non-finite offset is left out.
+    const TSharedPtr<FJsonObject>* TimingObject = nullptr;
+    const TSharedPtr<FJsonObject>* ReloadObject = nullptr;
+    if (Root->TryGetObjectField(TEXT("timing"), TimingObject) && (*TimingObject)->TryGetObjectField(TEXT("reload"), ReloadObject))
+    {
+        for (const auto& Pair : (*ReloadObject)->Values)
+        {
+            const TSharedPtr<FJsonObject> Clip = Pair.Value->AsObject();
+            double ClipOut = -1., ClipIn = -1.;
+            if (Clip.IsValid() && Clip->TryGetNumberField(TEXT("clip_out_s"), ClipOut) && Clip->TryGetNumberField(TEXT("clip_in_s"), ClipIn)
+                && FMath::IsFinite(ClipOut) && FMath::IsFinite(ClipIn) && ClipOut >= 0. && ClipIn >= 0.)
+            {
+                ReloadTimes().Add(FString(Pair.Key), TPair<float, float>(float(ClipOut), float(ClipIn)));
+            }
+        }
     }
     const TSharedPtr<FJsonObject>* RoleObject = nullptr;
     if (!Root->TryGetObjectField(TEXT("roles"), RoleObject)) return;
@@ -251,6 +274,18 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role)
     }), DrainPoll, true);
     UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num());
     Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
+    return true;
+}
+
+bool OpenWillowAudio::ReloadNotifyTimes(const FString& ClipName, float& OutClipOut, float& OutClipIn)
+{
+    using namespace OpenWillowAudioImpl;
+    if (!GEnabled) return false;
+    LoadOnce();
+    const TPair<float, float>* Times = ReloadTimes().Find(ClipName);
+    if (!Times) return false;
+    OutClipOut = Times->Key;
+    OutClipIn = Times->Value;
     return true;
 }
 

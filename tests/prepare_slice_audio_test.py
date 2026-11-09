@@ -195,6 +195,73 @@ class PrepareSliceAudioTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             psa.main(['--manifest', bad, '--out', os.path.join(self.dir, 'p.json'), '--tone', os.path.join(self.dir, 'tone.wav')])
 
+    # Invented names and times throughout: the real manifest's values stay out of tracked files.
+    def reload_entry(self, clip, seconds, suffix, source):
+        return {'key': 'weapon:reload_anim_%s_at_%ss' % (clip, seconds), 'trigger': {'role': 'reload anim %s @%ss' % (clip, seconds)},
+                'ak_event': {'wwise_name': 'Play_Synth_%s' % suffix}, 'media': [{'source': source, 'duration_s': 1.0}]}
+
+    def test_equip_maps_from_its_key(self):
+        self.tone('1.wav')
+        data = {'schema': 'ow-audio-v1', 'entries': [{'key': 'weapon:equip', 'media': [{'source': 1, 'duration_s': 1.0}]}]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertEqual(roles['equip'], [os.path.abspath(os.path.join(self.dir, '1.wav'))])
+        self.assertNotIn('equip', unresolved)
+
+    def test_reload_roles_come_from_the_clip_out_and_clip_in_notifies(self):
+        for name in ('1.wav', '2.wav', '3.wav'):
+            self.tone(name)
+        data = {'schema': 'ow-audio-v1', 'entries': [
+            self.reload_entry('Synth_Reload', 0.25, 'Clip_Out', 2), self.reload_entry('Synth_Reload', 0.75, 'Clip_In', 3),
+            # A second clip under the same two sounds: the shared source is mapped once, not twice.
+            self.reload_entry('Synth_Fast', 0.1, 'Clip_Out', 2), self.reload_entry('Synth_Fast', 0.4, 'Clip_In', 3)]}
+        roles, unresolved = psa.build_play_map(data, self.dir)
+        self.assertEqual(roles['reload_out'], [os.path.abspath(os.path.join(self.dir, '2.wav'))])
+        self.assertEqual(roles['reload_in'], [os.path.abspath(os.path.join(self.dir, '3.wav'))])
+        self.assertNotIn('reload_out', unresolved)
+        self.assertNotIn('reload_in', unresolved)
+
+    def test_missing_equip_and_reload_notifies_are_unresolved_with_reasons(self):
+        _, unresolved = psa.build_play_map(manifest([]), self.dir)
+        self.assertEqual(unresolved['equip'], 'manifest has no weapon:equip')
+        self.assertEqual(unresolved['reload_out'], 'manifest has no reload notify for Clip_Out')
+        self.assertEqual(unresolved['reload_in'], 'manifest has no reload notify for Clip_In')
+
+    def test_timing_pairs_each_clip_with_both_notifies(self):
+        data = {'schema': 'ow-audio-v1', 'entries': [self.reload_entry('Synth_Reload', 0.25, 'Clip_Out', 2),
+                                                     self.reload_entry('Synth_Reload', 0.75, 'Clip_In', 3),
+                                                     self.reload_entry('Synth_Half', 0.5, 'Clip_Out', 2)]}
+        self.assertEqual(psa.reload_timing(data), {'Synth_Reload': {'clip_out_s': 0.25, 'clip_in_s': 0.75}})
+
+    def test_a_clip_with_two_notifies_of_one_kind_is_left_out_of_timing(self):
+        data = {'schema': 'ow-audio-v1', 'entries': [self.reload_entry('Synth_Reload', 0.25, 'Clip_Out', 2),
+                                                     self.reload_entry('Synth_Reload', 0.5, 'Clip_Out', 2),
+                                                     self.reload_entry('Synth_Reload', 0.75, 'Clip_In', 3)]}
+        self.assertEqual(psa.reload_timing(data), {})
+
+    def test_main_writes_roles_and_timing(self):
+        for name in ('1.wav', '2.wav', '3.wav'):
+            self.tone(name)
+        data = {'schema': 'ow-audio-v1', 'entries': [
+            self.reload_entry('Synth_Reload', 0.25, 'Clip_Out', 2), self.reload_entry('Synth_Reload', 0.75, 'Clip_In', 3)]}
+        manifest_path = os.path.join(self.dir, 'audio.json')
+        with open(manifest_path, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh)
+        out = os.path.join(self.dir, 'play.json')
+        tone = os.path.join(self.dir, 'tone.wav')
+        self.assertEqual(psa.main(['--manifest', manifest_path, '--decoded-dir', self.dir, '--out', out, '--tone', tone]), 0)
+        with open(out, encoding='utf-8') as fh:
+            played = json.load(fh)
+        self.assertEqual(played['timing'], {'reload': {'Synth_Reload': {'clip_out_s': 0.25, 'clip_in_s': 0.75}}})
+        self.assertIn('reload_out', played['roles'])
+        self.assertIn('reload_in', played['roles'])
+        self.assertIn('test_tone', played['roles'])
+
+    def test_tone_only_writes_an_empty_timing_block(self):
+        out = os.path.join(self.dir, 'play.json')
+        psa.main(['--tone-only', '--out', out, '--tone', os.path.join(self.dir, 'tone.wav')])
+        with open(out, encoding='utf-8') as fh:
+            self.assertEqual(json.load(fh)['timing'], {})
+
 
 if __name__ == '__main__':
     unittest.main()

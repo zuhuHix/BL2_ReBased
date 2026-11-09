@@ -216,6 +216,22 @@ and the mixer starts roughly 0.12 s after the play, so the earlier pass, sampled
 it now stops once the queue has drained plus a margin, on real time, with a limit of the sound's length plus 2 s, and the row polls under that limit and logs how long it took. Nobody has reported hearing the tone. `OWAUDIO play` means
 the host called play. Python: `tests/prepare_slice_audio_test.py`, `tests/check_audio_test.py` (synthetic).
 
+### 5a. Equip and reload (2026-11-09, AI-assisted, Claude)
+
+Two more roles, both for the lent pistol's events. The manifest already records them (`weapon:equip` and six `weapon:reload_anim_*` keys, section 2); nothing in the chain changed. `tools/prepare_slice_audio.py` maps them: `equip` from its key; `reload_out` and `reload_in` from the reload notifies, picked by the AkEvent name (clip out or clip in) and deduplicated by source.
+
+| Role | Hook | Sound | Evidence |
+|---|---|---|---|
+| `equip` | `AOpenWillowWalker::SelectSlot`, after the draw animation starts (a gun drawn: slot key, inventory equip, the slice gate's equip step) | manifest `weapon:equip` (`PickupAndEquipSounds`) | **UNVERIFIED** that the game plays this sound on a plain draw: the event is named for pickup and equip. The host plays it for every gun, as it does the shot |
+| `reload_out` | `AOpenWillowWalker::StartReload` schedules it; `Tick` plays it | manifest reload notify, clip out | **UNVERIFIED**, not a listen. Only the held arms clip of the lent pistol (the view model's `Reload_Maliwan`) has notify times; other guns get no reload sound |
+| `reload_in` | the same | manifest reload notify, clip in | the same |
+
+**Timing.** The notify times are offsets, in seconds, from the start of the arms clip. The host plays the arms clip at `Rate` (clip length / the reload time, as before), so a notify plays `offset / Rate` after the reload starts. The offsets come from the manifest through the play map's `timing` block (`ow-audio-play-v1`, written by `prepare_slice_audio.py`; the host reads it with the map, and nothing is typed into the host). Cancelling the reload (a weapon put away, a down state) cancels both; a notify due after the reload's end is not played, since the arms clip stops there too.
+
+Not used: `OpenWillowClip::GameSeconds`, which adds one frame interval to a clip's length. A notify offset measures from the clip's start, so that frame does not move it, and the reload rate is unchanged. Whether the imported clip's notify times line up with the game's is **UNVERIFIED**, and so is which of the lent pistol's two sequences (the `_Fast` one has its own times) the game plays for it; the host plays the view model's name, which is not the `_Fast` one.
+
+Test: `tests/prepare_slice_audio_test.py` (invented names and times, synthetic WAVs) and `tests/listen_report_test.py` (the cues as steps; the names from a synthetic manifest). The listening guide now lists `equip`, `reload_out` and `reload_in` as played and no longer as "not hooked". The gate's Equip step draws the gun, so an equip cue is expected there; the slice gate fires a reload only when a magazine runs empty, so a listening run needs a reload to hear one. Nothing here has been heard.
+
 ## 6. Listening session (2026-11-08, AI-assisted, Claude)
 
 **State: tooling for the maintainer to listen; the host's recording measured, nothing heard by the assistant.**
@@ -239,7 +255,7 @@ recording's are not calibrated against each other, so it is not a latency measur
 come from the local manifest) and stay local.
 
 What it can show: what the host sent to the mixer and how loud the mix was. What it cannot: whether a sound is the right one, or sounds like the game. Only the
-roles in section 5 play; the guide lists everything else asked for (reload, equip, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
+roles in sections 5 and 5a play; the guide lists everything else asked for (reloads of other guns, Phaselock hold and release, pickups, shield, damage, Fight For Your Life,
 level-up, mission and dialog, doors, menus, footsteps) as not played. Test: `tests/listen_report_test.py` (synthetic tones and log).
 
 Runs (zuhu PC, 2026-11-08, decoded sounds from vgmstream, 2 s pause): the first two failed as above (and lacked the slice data in that worktree: a missing range
@@ -253,4 +269,4 @@ For sounds that started in silence, the onset relative to the cue was 0.134 to 0
 Container fields beyond the oracles above (the externals table, `block_size` use, the 678 longer play actions, 10 unresolved play targets, 1 unresolved
 prefetch source); plugin `0x650002` meaning; container child extraction (longest run of in-bank ids, used for the pistol switch container and Marcus's random
 containers); which child a switch/random container selects; Vorbis sample-count offset (only duration-oracle checked); event-with-null-`OutputAction` pairing
-rule; why two actions share a source; door key semantics; the HypEngineer name-tag mismatch; nothing here was decoded, auditioned or compared to the original game.
+rule; why two actions share a source; door key semantics; the HypEngineer name-tag mismatch; the reload notify times against the imported clip and the game's reload, and which of the lent pistol's two reload sequences the game plays (section 5a); whether a plain draw plays the pickup-and-equip sound (section 5a); nothing here was decoded, auditioned or compared to the original game.

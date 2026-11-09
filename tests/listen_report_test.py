@@ -1,6 +1,7 @@
 """tools/listen_report.py on an invented log and a synthetic WAV (tones and silence written here). No game data."""
 from pathlib import Path
 import array
+import json
 import math
 import sys
 import tempfile
@@ -153,6 +154,43 @@ class ListenReportTest(unittest.TestCase):
         self.assertEqual((fire['kind'], fire['seconds'], fire['frame']), ('sound', 0.5, None))
         self.assertEqual(run['summary'], ('1', '0', '0'))
         self.assertEqual(run['written'], (True, 1000))
+
+    def test_equip_and_reload_cues_are_steps_sounds(self):
+        rows = [
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWAUDIOREC cue t=0.100 label=step Equip frame=frame-001.png',
+            'OWAUDIOREC cue t=0.200 label=equip seconds=0.400 frame=-',
+            'OWAUDIOREC cue t=2.000 label=step Fight frame=frame-002.png',
+            'OWAUDIOREC cue t=2.500 label=reload_out seconds=0.200 frame=-',
+            'OWAUDIOREC cue t=3.200 label=reload_in seconds=0.500 frame=-',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ]
+        text = '\n'.join('[2026.11.08-12.00.00:000][  1]LogTemp: Display: ' + r for r in rows)
+        out, problems, steps, _ = self.run_build(text=text, tones=((0.2, 0.4), (2.5, 0.2), (3.2, 0.5)))
+        self.assertEqual(problems, [])
+        self.assertEqual([s['name'] for s in steps], ['Equip', 'Fight'])
+        self.assertEqual([s['name'] for s in steps[0]['sounds']], ['equip'])
+        self.assertEqual([s['name'] for s in steps[1]['sounds']], ['reload_out', 'reload_in'])
+        listen = (out / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('**equip** x1', listen)
+        self.assertIn('**reload_out** x1', listen)
+        self.assertIn('**reload_in** x1', listen)
+        self.assertNotIn('Equip / draw a gun', listen)
+        self.assertNotIn('Reload (clip out / clip in)', listen)
+
+    def test_equip_and_reload_names_come_from_the_manifest(self):
+        tmp = Path(tempfile.mkdtemp())
+        manifest = {'schema': 'ow-audio-v1', 'entries': [
+            {'key': 'weapon:fire', 'ak_event': {'wwise_name': 'Play_Synth_Shot'}},
+            {'key': 'weapon:equip', 'ak_event': {'wwise_name': 'Play_Synth_Equip'}},
+            {'key': 'weapon:reload_anim_Synth_at_0.5s', 'ak_event': {'wwise_name': 'Play_Synth_Clip_Out'}},
+            {'key': 'weapon:reload_anim_Synth_at_1.5s', 'ak_event': {'wwise_name': 'Play_Synth_Clip_In'}}]}
+        path = tmp / 'audio.json'
+        path.write_text(json.dumps(manifest), encoding='utf-8')
+        self.assertEqual(lr.load_names(path), {'fire': 'Play_Synth_Shot', 'equip': 'Play_Synth_Equip',
+                                               'reload_out': 'Play_Synth_Clip_Out', 'reload_in': 'Play_Synth_Clip_In'})
+        self.assertTrue({'equip', 'reload_out', 'reload_in'} <= set(lr.ROLES))
 
 
 if __name__ == '__main__':
