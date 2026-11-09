@@ -244,7 +244,7 @@ class ListenReportTest(unittest.TestCase):
         self.assertFalse(any('reload sound' in p for p in problems), problems)
         listen = (out / 'LISTEN.md').read_text(encoding='utf-8')
         self.assertIn('On screen: Maya shoots the dummy with the lent pistol.', listen)
-        self.assertNotIn('she reloads before the next', listen)
+        self.assertNotIn('she reloads before turning in', listen)
 
     def test_shootdummy_text_says_reload_only_when_the_fixture_applied(self):
         applied = self.display_text([
@@ -257,7 +257,7 @@ class ListenReportTest(unittest.TestCase):
             'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
         ])
         out, _, _, _ = self.run_build(text=applied, tones=((2.0, 0.2), (3.0, 0.5)))
-        self.assertIn('she reloads before the next', (out / 'LISTEN.md').read_text(encoding='utf-8'))
+        self.assertIn('she reloads before turning in', (out / 'LISTEN.md').read_text(encoding='utf-8'))
 
 if __name__ == '__main__':
     unittest.main()

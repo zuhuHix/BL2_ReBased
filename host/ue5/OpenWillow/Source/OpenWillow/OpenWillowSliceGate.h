@@ -54,6 +54,9 @@ private:
     int32 MagazineFixture = 0;
     bool bMagazineFixtureSet = false;
     bool bMagazineReloadLogged = false;   // the fixture's reload is logged once, when it starts
+    bool bDummyLinkPassed = false;        // the mission_objective link is passed once, even while the fixture holds the step
+    uint8 FixtureReload = 0;              // the fixture's own reload after the dummy link: 0 not begun, 1 waiting, 2 done
+    float FixtureReloadWait = 0.f;
     float RespawnAtBefore = 0.f;
     FVector DeathLocation = FVector::ZeroVector;
     int64 ExperienceBeforeTurnIn = 0;
@@ -102,6 +105,7 @@ private:
     void AimAt(const FVector& Point);
     bool ShootAt(class AOpenWillowCombatTarget* Target, float Interval);
     void ApplyMagazineFixture(class AOpenWillowWalker* W);
+    bool HoldForFixtureReload(class AOpenWillowWalker* W, float Delta);
     class AOpenWillowCombatTarget* NearestLiveTarget(bool bPreferEnemyClass) const;
     class AOpenWillowNpc* FindMarcus() const;
     bool QuestMarker(const TCHAR* Kind, FVector& Out) const;

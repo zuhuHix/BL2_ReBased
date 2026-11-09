@@ -124,6 +124,76 @@ void UOpenWillowSliceGate::ApplyMagazineFixture(AOpenWillowWalker* W)
         *Held->Id, Set, MagazineFixture, Cost, Size);
 }
 
+// After the dummy link has passed, the magazine fixture's own reload (SLICE_AUDIO_CHAIN.md section 5a). The first shot at the dummy usually
+// completes the objective, so the step moves on at once and no later trigger press would reload the magazine that shot emptied. This asks
+// for one reload through the same call ShootAt uses, waits for it to finish, and gives up after a timeout (a fixture note, not a link
+// failure). Returns true while it waits. Off (and false at once) without -owslicegatemag, or once done, so the switch-absent gate is unchanged.
+bool UOpenWillowSliceGate::HoldForFixtureReload(AOpenWillowWalker* W, float Delta)
+{
+    constexpr float FixtureReloadTimeout = 10.f;   // host choice: the lent pistol's reload is about 2.2 s; a longer wait means the reload is stuck
+    if (MagazineFixture <= 0 || FixtureReload == 2 || !W) return false;
+    UOpenWillowInventory* Inventory = W->GetInventory();
+    FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
+    if (FixtureReload == 0)
+    {
+        // Nothing to do unless the shot left the magazine empty and no reload is running.
+        if (!Held || W->IsReloading() || UOpenWillowInventory::MagazineLeft(*Held) > 0 || UOpenWillowInventory::ShotCostRounds(*Held) == 0)
+        {
+            FixtureReload = 2;
+            return false;
+        }
+        EOpenWillowAmmoType Ammo;
+        if (!Inventory->CanReload(*Held) && UOpenWillowInventory::ResolveAmmoType(*Held, Ammo))
+        {
+            Inventory->SetAmmoCurrent(Ammo, Inventory->AmmoPool(Ammo).Max);
+            Fixture(TEXT("ammo reserve refilled"));
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: %s reserve refilled to %d"),
+                UOpenWillowInventory::AmmoTypeKey(Ammo), Inventory->AmmoPool(Ammo).Max);
+        }
+#if WITH_EDITOR
+        W->TestReloadInput();
+        if (!W->IsReloading())
+        {
+            FixtureReload = 2;
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine fixture reload did not start (not ready, or no ammo to draw)"));
+            return false;
+        }
+        FixtureReload = 1;
+        FixtureReloadWait = 0.f;
+        if (!bMagazineReloadLogged)
+        {
+            bMagazineReloadLogged = true;
+            Fixture(TEXT("reload started after the magazine fixture"));
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: reload started after the magazine fixture (-owslicegatemag=%d)"), MagazineFixture);
+        }
+        return true;
+#else
+        FixtureReload = 2;
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine fixture reload not requested: this build has no reload key (not WITH_EDITOR)"));
+        return false;
+#endif
+    }
+    // FixtureReload == 1: the reload was requested; wait while it runs.
+    FixtureReloadWait += Delta;
+    if (W->IsReloading())
+    {
+        if (FixtureReloadWait < FixtureReloadTimeout) return true;
+        FixtureReload = 2;
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine fixture reload did not finish within %.0f s; the step moves on"), FixtureReloadTimeout);
+        return false;
+    }
+    FixtureReload = 2;
+    if (Held && UOpenWillowInventory::MagazineLeft(*Held) > 0)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine fixture reload finished, magazine %d after %.1f s"), UOpenWillowInventory::MagazineLeft(*Held), FixtureReloadWait);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine fixture reload ended with no magazine (cancelled)"));
+    }
+    return false;
+}
+
 // One FireOnce at the target every Interval seconds (0: every tick). Reloads an empty magazine through the reload key;
 // when the reserve is empty too, refills it (test fixture, logged once per refill). False when the shot did not go out.
 bool UOpenWillowSliceGate::ShootAt(AOpenWillowCombatTarget* Target, float Interval)
@@ -877,7 +947,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (StepTime < 1.5f) { if (MissionDummy) AimAt(MissionDummy->AimPoint()); return; }   // the target Matinee carries it out
         if (!bMagazineFixtureSet) { bMagazineFixtureSet = true; ApplyMagazineFixture(W); }
         if (Quest->Status() == 1 && MissionDummy && StepTime < DummyTimeout) { if (ShootAt(MissionDummy, 0.6f)) ++DummyShots; return; }
-        if (Quest->Status() == 2) PassLink(TEXT("mission_objective"), FString::Printf(TEXT("trigger touched, dummy registered, %d shot(s) with the lent weapon completed the objectives"), DummyShots));
+        if (Quest->Status() == 2)
+        {
+            if (!bDummyLinkPassed) { bDummyLinkPassed = true; PassLink(TEXT("mission_objective"), FString::Printf(TEXT("trigger touched, dummy registered, %d shot(s) with the lent weapon completed the objectives"), DummyShots)); }
+            if (HoldForFixtureReload(W, Delta)) return;   // the magazine fixture's reload, after the link; false at once when the switch is absent
+        }
         else { FailLink(TEXT("mission_objective"), FString::Printf(TEXT("status %d after %d shot(s) at the dummy"), Quest->Status(), DummyShots)); Next(EStep::Down); return; }
         Next(EStep::TurnIn);
         break;

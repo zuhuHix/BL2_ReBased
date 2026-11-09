@@ -74,8 +74,9 @@ ROLES = {
                   'the new magazine going in, later in the same reload. Its timing is UNVERIFIED against the game, as for clip out'),
 }
 
-# The same step when the magazine fixture (-owslicegatemag) was applied: the first shot empties the magazine and she reloads before the next.
-STEPS_WITH_FIXTURE = {'ShootDummy': 'Maya shoots the dummy with the lent pistol; the magazine fixture empties it on the first shot, so she reloads before the next'}
+# The same step when the magazine fixture (-owslicegatemag) was applied: the first shot empties the magazine, the objective completes, and the
+# fixture then asks for one reload before the turn-in step.
+STEPS_WITH_FIXTURE = {'ShootDummy': 'Maya shoots the dummy with the lent pistol; the magazine fixture empties it on the first shot, and after the objective she reloads before turning in'}
 
 # Asked for, but not played by our build: what exists for each so a listener knows a silence there is expected.
 NOT_PLAYED = [
