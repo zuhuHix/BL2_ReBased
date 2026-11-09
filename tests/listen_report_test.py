@@ -228,5 +228,36 @@ class ListenReportTest(unittest.TestCase):
         self.assertIsNone(run['magazine_fixture'])
         self.assertIn('No magazine fixture in this run', (out / 'LISTEN.md').read_text(encoding='utf-8'))
 
+    def test_refused_magazine_fixture_is_a_problem(self):
+        text = self.display_text([
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWSLICEGATE note test fixture: -owslicegatemag=1 not applied, no magazine-fed gun in hand',
+            'OWAUDIOREC cue t=0.100 label=step ShootDummy frame=frame-001.png',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ])
+        out, problems, steps, run = self.run_build(text=text, tones=((2.0, 0.5),))
+        self.assertEqual(run['magazine_refused'], (1, 'no magazine-fed gun in hand'))
+        self.assertIsNone(run['magazine_fixture'])
+        self.assertTrue(any('not applied' in p and 'no magazine-fed gun in hand' in p for p in problems), problems)
+        # Not applied: no reload problem on top of it, and the step keeps its plain text.
+        self.assertFalse(any('reload sound' in p for p in problems), problems)
+        listen = (out / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('On screen: Maya shoots the dummy with the lent pistol.', listen)
+        self.assertNotIn('she reloads before the next', listen)
+
+    def test_shootdummy_text_says_reload_only_when_the_fixture_applied(self):
+        applied = self.display_text([
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWSLICEGATE note test fixture: magazine of Synth_Gun set to 1 rounds (-owslicegatemag=1, size 12)',
+            'OWAUDIOREC cue t=0.100 label=step ShootDummy frame=frame-001.png',
+            'OWAUDIOREC cue t=2.000 label=reload_out seconds=0.200 frame=-',
+            'OWAUDIOREC cue t=3.000 label=reload_in seconds=0.500 frame=-',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ])
+        out, _, _, _ = self.run_build(text=applied, tones=((2.0, 0.2), (3.0, 0.5)))
+        self.assertIn('she reloads before the next', (out / 'LISTEN.md').read_text(encoding='utf-8'))
+
 if __name__ == '__main__':
     unittest.main()

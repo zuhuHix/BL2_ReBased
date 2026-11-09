@@ -29,6 +29,7 @@ WRITTEN = re.compile(r'OWAUDIOREC written=(\d) bytes=(-?\d+)')
 LINK = re.compile(r'OWSLICEGATE link=(\S+) result=(\S+) fixtures=\[(.*?)\] detail=(.*) \(t=')
 SUMMARY = re.compile(r'OWSLICEGATE SUMMARY pass=(\d+) fail=(\d+) na=(\d+)')
 FIXTURE_MAG = re.compile(r'OWSLICEGATE note test fixture: magazine of (\S+) set to (\d+) rounds')
+FIXTURE_REFUSED = re.compile(r'OWSLICEGATE note test fixture: -owslicegatemag=(\d+) not applied, (.*)')
 SILENT_DBFS = -60.0     # a window quieter than this counts as silence (host choice)
 STEP_WINDOW = 1.0       # seconds measured after a step cue that is not itself a sound
 TAIL = 0.4              # the mixer starts a sound up to ~0.15 s after its cue and stops it 0.25 s after it drains: skipped before a gap is measured
@@ -48,7 +49,7 @@ STEPS = {
     'Accept': 'Maya is moved to Marcus and presses use: the Fire mission is accepted',
     'WaitWalk': 'Marcus walks to his spot; the objective marker appears',
     'Trigger': 'Maya touches the mission trigger; the target dummy appears',
-    'ShootDummy': 'Maya shoots the dummy with the lent pistol (with the magazine fixture, the first shot empties it and she reloads before the next)',
+    'ShootDummy': 'Maya shoots the dummy with the lent pistol',
     'TurnIn': 'Maya turns the mission in at Marcus',
     'Confirm': 'the driver checks the reward and that the lent pistol was returned',
     'Down': 'the test applies lethal damage: Maya enters Fight For Your Life',
@@ -72,6 +73,9 @@ ROLES = {
     'reload_in': ('the reload\'s clip-in notify, on the lent pistol only', 'manifest reload notify, clip in (the play map\'s timing)',
                   'the new magazine going in, later in the same reload. Its timing is UNVERIFIED against the game, as for clip out'),
 }
+
+# The same step when the magazine fixture (-owslicegatemag) was applied: the first shot empties the magazine and she reloads before the next.
+STEPS_WITH_FIXTURE = {'ShootDummy': 'Maya shoots the dummy with the lent pistol; the magazine fixture empties it on the first shot, so she reloads before the next'}
 
 # Asked for, but not played by our build: what exists for each so a listener knows a silence there is expected.
 NOT_PLAYED = [
@@ -106,7 +110,9 @@ def parse_log(text: str):
     written = WRITTEN.search(text)
     summary = SUMMARY.search(text)
     fixture = FIXTURE_MAG.search(text)
-    return {'magazine_fixture': (fixture.group(1), int(fixture.group(2))) if fixture else None, 'cues': cues, 'links': links, 'started': bool(START.search(text)), 'stop_t': float(stop.group(1)) if stop else None,
+    refused = FIXTURE_REFUSED.search(text)
+    return {'magazine_fixture': (fixture.group(1), int(fixture.group(2))) if fixture else None,
+            'magazine_refused': (int(refused.group(1)), refused.group(2).strip()) if refused else None, 'cues': cues, 'links': links, 'started': bool(START.search(text)), 'stop_t': float(stop.group(1)) if stop else None,
             'written': (written.group(1) == '1', int(written.group(2))) if written else None,
             'summary': summary.groups() if summary else None}
 
@@ -206,7 +212,11 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     if mono and run['stop_t'] and length < run['stop_t'] - 1.0:
         problems.append(f'WAV is {length:.1f} s but the recording ran {run["stop_t"]:.1f} s: the file looks cut short')
     overall_peak = max(mono) if mono else 0.0
-    if run['magazine_fixture']:
+    if run['magazine_refused']:
+        # The gate asked for a magazine it could not set (no magazine-fed gun in hand): the fixture did nothing, and the report says so.
+        requested, why = run['magazine_refused']
+        problems.append(f'the magazine fixture (-owslicegatemag={requested}) was not applied: {why}. No fixture reload is expected from this run.')
+    elif run['magazine_fixture']:
         # The run set the lent gun's magazine (-owslicegatemag): a reload is expected after its first shot at the dummy.
         missing = [r for r in ('reload_out', 'reload_in') if not any(c['kind'] == 'sound' and c['name'] == r for c in run['cues'])]
         if missing:
@@ -276,7 +286,8 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     for n, step in enumerate(steps, 1):
         lines.append(f'### {n}. {mmss(step["t"])} to {mmss(step["end"])}: {step["name"]}')
         lines.append('')
-        lines.append(f'On screen: {STEPS.get(step["name"], "(no description)")}.' + (f' Frame: `frames/{step["frame"]}`.' if step['frame'] else ''))
+        shown = STEPS_WITH_FIXTURE.get(step['name']) if run['magazine_fixture'] else None
+        lines.append(f'On screen: {shown or STEPS.get(step["name"], "(no description)")}.' + (f' Frame: `frames/{step["frame"]}`.' if step['frame'] else ''))
         lines.append('')
         if not step['sounds']:
             lines.append('Our build plays nothing here. **You should hear silence.**')

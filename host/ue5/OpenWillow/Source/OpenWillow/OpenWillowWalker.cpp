@@ -894,14 +894,15 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     if (bPhaselockShots && bMayaActive && Controller) RunPhaselockShots(Now);
     static const bool bReloadPhaselockTest = FParse::Param(FCommandLine::Get(), TEXT("owreloadphaselocktest"));
     RefillIfDue(Now);
-    // The reload's clip-out and clip-in sounds, at the notify times StartReload scheduled (SLICE_AUDIO_CHAIN.md section 5). Both
-    // stop with the reload: a notify after its end is not played, as the arms clip stops there too.
-    if (bReloading && ReloadClipOutAt >= 0.f && Now >= ReloadClipOutAt)
+    // The reload's clip-out and clip-in sounds, at the notify times StartReload scheduled (SLICE_AUDIO_CHAIN.md section 5). A cue plays only
+    // when its own scheduled time is before the reload's end, so a notify at or after the end never plays, as the arms clip stops there too.
+    // A cue due before the end but reached in the same tick as the end still plays once: the test is the scheduled time, not Now.
+    if (bReloading && ReloadClipOutAt >= 0.f && Now >= ReloadClipOutAt && ReloadClipOutAt < ReloadEndsAt)
     {
         ReloadClipOutAt = -1.f;
         OpenWillowAudio::Play(this, TEXT("reload_out"));
     }
-    if (bReloading && ReloadClipInAt >= 0.f && Now >= ReloadClipInAt)
+    if (bReloading && ReloadClipInAt >= 0.f && Now >= ReloadClipInAt && ReloadClipInAt < ReloadEndsAt)
     {
         ReloadClipInAt = -1.f;
         OpenWillowAudio::Play(this, TEXT("reload_in"));
@@ -911,6 +912,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
         RefillIfDue(ReloadEndsAt); // the refill point is never after the end (fraction <= 1)
         const FOpenWillowWeaponItem* Reloaded = ReloadingWeapon();
         bReloading = false;
+        ReloadClipOutAt = ReloadClipInAt = -1.f;   // any cue not yet due dies with the reload
         UE_LOG(LogTemp, Display, TEXT("OpenWillow reload finished: +%d, magazine %d"), ReloadAmmoMoved,
             Reloaded ? UOpenWillowInventory::MagazineLeft(*Reloaded) : 0);
         if (WeaponVisual && WeaponReloadAnim)
@@ -1782,8 +1784,10 @@ bool AOpenWillowWalker::StartReload(float Now)
         float ClipOut = 0.f, ClipIn = 0.f;
         if (ArmsReloadAnim && ArmsAnim && Rate > 0.f && OpenWillowAudio::ReloadNotifyTimes(Model->ReloadAnimation, ClipOut, ClipIn))
         {
-            ReloadClipOutAt = Now + ClipOut / Rate;
-            ReloadClipInAt = Now + ClipIn / Rate;
+            // Scheduled only where it falls before the reload's end (ReloadEndsAt is set above): a later notify is not played.
+            const float OutAt = Now + ClipOut / Rate, InAt = Now + ClipIn / Rate;
+            ReloadClipOutAt = OutAt < ReloadEndsAt ? OutAt : -1.f;
+            ReloadClipInAt = InAt < ReloadEndsAt ? InAt : -1.f;
         }
     }
     UE_LOG(LogTemp, Display, TEXT("OpenWillow reload started: %s, %.1f s"), *Weapon->Name, Weapon->ReloadTime);
