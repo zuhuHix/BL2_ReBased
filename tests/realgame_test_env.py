@@ -17,6 +17,8 @@ def _run_with_pending_dir(args, *rest, **kwargs):
         if 'OW_TEST_PENDING_DIR' not in env:
             env['OW_TEST_PENDING_DIR'] = folder = tempfile.mkdtemp(prefix='ow-pending-')
             atexit.register(shutil.rmtree, folder, True)
+        if 'OPENWILLOW_UE_LOCK' not in env and env.get('OW_TEST_PENDING_DIR'):
+            env['OPENWILLOW_UE_LOCK'] = os.path.join(env['OW_TEST_PENDING_DIR'], 'ue_run.lock')   # test mode needs a synthetic run lock
         if 'OW_TEST_PENDING_DIR' in env and 'OW_TEST_MODE' not in env:
             env['OW_TEST_MODE'] = 'synthetic-real-game'   # pending.ps1 honours the folder only in this mode, on folders under Temp
         kwargs['env'] = env

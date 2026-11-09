@@ -29,7 +29,7 @@ $script:RG = Join-Path $tmp 'realgame'
 $script:WillowDir = Join-Path $tmp 'willow'
 $script:Game = Join-Path $tmp 'game'
 $script:DriverDir = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
-function Get-GameProcesses { if (Test-Path -LiteralPath (Join-Path $tmp 'game_running')) { @([pscustomobject]@{ Id = 4242; Path = 'x'; StartTime = Get-Date }) } else { @() } }
+function Get-GameProcesses { if (Test-Path -LiteralPath (Join-Path $tmp 'game_running')) { @([pscustomobject]@{ Id = 4242; Path = 'x'; StartTime = Get-Date; MainWindowHandle = [IntPtr]1 }) } else { @() } }
 $out = [ordered]@{}
 function Read-Text([string]$Path) { [IO.File]::ReadAllText($Path) }
 function Fail-Text([scriptblock]$Block) { try { & $Block | Out-Null; '' } catch { "$_" } }
@@ -107,7 +107,7 @@ $out.unsafe = Complete-PendingRecord $false
 New-Item -ItemType File (Join-Path $tmp 'game_running') | Out-Null
 $out.game_running = Complete-PendingRecord $true
 Remove-Item (Join-Path $tmp 'game_running')
-$out.restore = Restore-VerifiedBackup $bak
+$out.restore = (Restore-FromVerifiedRecord $bak).summary
 $out.removed = Complete-PendingRecord $true
 $out.after = @(Get-PendingFiles).Count
 $out.save = Read-Text (Join-Path $tmp 'willow/SaveData/Save0001.sav')
@@ -117,7 +117,7 @@ $out.bak_file_gone = !(Test-Path (Join-Path $tmp 'willow/SaveData/Save0001.sav.b
         self.assertRegex(out['records'][0], r'^realgame_run_pending-body-\d+\.json$')
         self.assertEqual(out['kind'], 'openwillow-realgame-pending')
         self.assertTrue(out['pid_ok'] and out['backup_ok'] and out['digest_ok'] and out['has_start'])
-        self.assertEqual(out['roots'], ['SaveData', 'Config'])
+        self.assertEqual(out['roots'], ['SaveData', 'Config', 'sdk_settings', 'SanitySaver'])
         self.assertEqual(out['changes'], ['test change'])
         self.assertIn('KEPT', out['kept']); self.assertIn('SaveData: differs from the backup', out['kept'])
         self.assertIn('SaveData: tree hash', out['kept'])
@@ -168,7 +168,7 @@ $out.removed = Complete-PendingRecord $true
         out = self.run_ps(r"""
 $settings = Join-Path $tmp 'game/sdk_mods/settings'
 $bak = Backup-Saves
-$out.not_a_root = Fail-Text { Set-SdkModsOff $settings }
+$out.not_a_root = Fail-Text { Set-SdkModsOff (Join-Path $tmp 'elsewhere') }
 $roots = [ordered]@{ SaveData = (Join-Path $tmp 'willow/SaveData'); Config = (Join-Path $tmp 'willow/Config'); sdk_settings = $settings }
 $snapshots = @{ SaveData = (Get-TreeHashes (Join-Path $bak 'SaveData')); Config = (Get-TreeHashes (Join-Path $bak 'Config')) }
 $snapshots.sdk_settings = New-VerifiedSnapshot $settings (Join-Path $bak 'sdk_settings')
@@ -177,7 +177,7 @@ $out.off = @(Set-SdkModsOff $settings)
 $out.text = Read-Text (Join-Path $settings 'SomeMod.json')
 $out.changes = @((Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).changes | ForEach-Object { $_ -replace '^\S+ ', '' })
 $out.kept = Complete-PendingRecord $true
-Restore-VerifiedBackup $bak | Out-Null
+Restore-FromVerifiedRecord $bak | Out-Null
 $out.back = Read-Text (Join-Path $settings 'SomeMod.json')
 $out.removed = Complete-PendingRecord $true
 """)
@@ -430,7 +430,7 @@ $before = Get-TreeDigest $d
 Rename-Item (Join-Path $d 'Save0001.sav') 'tmp.sav'; Rename-Item (Join-Path $d 'tmp.sav') 'SAVE0001.sav'
 $out.digest_changed = ($before -ne (Get-TreeDigest $d))
 $out.kept = Complete-PendingRecord $true
-$out.restore = Restore-VerifiedBackup $bak
+$out.restore = (Restore-FromVerifiedRecord $bak).summary
 $out.names = @(Get-ChildItem $d -File | ForEach-Object { $_.Name } | Sort-Object)
 $out.removed = Complete-PendingRecord $true
 """)
@@ -438,6 +438,140 @@ $out.removed = Complete-PendingRecord $true
         self.assertIn('SaveData: differs from the backup', out['kept'])
         self.assertIn('Save0001.sav', out['names']); self.assertNotIn('SAVE0001.sav', out['names'])
         self.assertTrue(out['removed'].startswith('removed'), out['removed'])
+
+
+class RecoveryTest(PendingBase):
+    """Review r2: one way back while a record exists, every launch-written root covered, the lock and the game checks around a recovery,
+    the driver owner, and keys a killed run left held."""
+
+    def leave(self, body=''):
+        self.run_ps("New-Item -ItemType Directory -Force (Join-Path $script:Game 'sdk_mods') | Out-Null\n$bak = Backup-Saves\n" + body)
+        return self.pending / self.records()[0]
+
+    def test_the_recovery_text_names_only_restore_pending_record(self):
+        out = self.run_ps(r"""
+$bak = Backup-Saves
+$out.text = Format-ManualRecovery 'test' $bak (Join-Path $tmp 'hub.lock') 'lane'
+$out.refused = Fail-Text { Restore-VerifiedBackup $bak }
+""")
+        self.assertIn('Restore-PendingRecord', out['text'])
+        self.assertNotIn('Restore-VerifiedBackup', out['text'])
+        self.assertIn('use Restore-PendingRecord', out['refused'])
+
+    def test_restore_verified_backup_without_a_record_sets_the_state_aside_first(self):
+        record = self.leave("Set-Content (Join-Path $tmp 'willow/SaveData/Save0001.sav') 'played since'")
+        backup = json.loads(record.read_text(encoding='utf-8-sig'))['backup']
+        record.unlink()   # as if no record named this backup
+        out = self.run_ps(rf"""$out.lines = @(Restore-VerifiedBackup '{backup}'); $out.save = (Read-Text (Join-Path $tmp 'willow/SaveData/Save0001.sav')).Trim()""")
+        self.assertIn('verified by tree hash, to', out['lines'][0])
+        self.assertEqual(out['save'], 'original save')
+        aside = sorted((self.tmp / 'realgame').glob('pre-restore-*'))
+        self.assertEqual((aside[0] / 'SaveData/Save0001.sav').read_text(encoding='utf-8-sig').strip(), 'played since')
+
+    def test_the_sdk_settings_and_sanity_saver_store_are_backed_up_and_restored(self):
+        (self.tmp / 'game/sdk_mods/SanitySaver').mkdir(parents=True)
+        (self.tmp / 'game/sdk_mods/SanitySaver/store.sav').write_text('original store', encoding='utf-8')
+        record = self.leave("""Set-Content (Join-Path $tmp 'game/sdk_mods/settings/SomeMod.json') 'rewritten by the game'
+Set-Content (Join-Path $tmp 'game/sdk_mods/SanitySaver/store.sav') 'rewritten by the game'""")
+        data = json.loads(record.read_text(encoding='utf-8-sig'))
+        self.assertEqual(sorted(data['roots']), sorted(['SaveData', 'Config', 'sdk_settings', 'SanitySaver']))
+        out = self.run_ps(rf"""$out.refusal = Fail-Text {{ Assert-NoPendingRecords }}; $out.lines = @(Restore-PendingRecord '{record}')""")
+        self.assertIn('sdk_settings: differs from the backup', out['refusal'])
+        self.assertIn('SanitySaver: differs from the backup', out['refusal'])
+        self.assertEqual((self.tmp / 'game/sdk_mods/settings/SomeMod.json').read_text(encoding='utf-8-sig'), '{"enabled": true, "keys": {}}')
+        self.assertEqual((self.tmp / 'game/sdk_mods/SanitySaver/store.sav').read_text(encoding='utf-8-sig'), 'original store')
+        self.assertFalse(record.exists())
+
+    def test_a_root_absent_at_the_backup_and_created_by_the_game_keeps_the_record(self):
+        record = self.leave("New-Item -ItemType Directory -Force (Join-Path $tmp 'game/sdk_mods/SanitySaver') | Out-Null; Set-Content (Join-Path $tmp 'game/sdk_mods/SanitySaver/new.sav') 'x'")
+        out = self.run_ps(r"""$out.refusal = Fail-Text { Assert-NoPendingRecords }""")
+        self.assertIn('SanitySaver: absent at the backup, present now', out['refusal'])
+        self.assertTrue(record.exists())
+
+    def test_recovery_holds_the_lock_and_stops_when_a_game_appears(self):
+        record = self.leave("Set-Content (Join-Path $tmp 'willow/SaveData/Save0001.sav') 'written by the killed run'")
+        out = self.run_ps(rf"""
+$global:calls = 0
+function Get-GameProcesses {{ $global:calls++; if ($global:calls -ge 2) {{ @([pscustomobject]@{{ Id = 77; MainWindowHandle = [IntPtr]::Zero }}) }} else {{ @() }} }}
+function Save-PreRestoreSnapshot([string]$Backup) {{ $global:lockDuring = Test-Path -LiteralPath (Get-OwUeLockPath); 'aside' }}
+$out.error = Fail-Text {{ Restore-PendingRecord '{record}' }}
+$out.lock_during = $global:lockDuring
+$out.lock_after = Test-Path -LiteralPath (Get-OwUeLockPath)
+$out.save = (Read-Text (Join-Path $tmp 'willow/SaveData/Save0001.sav')).Trim()
+""")
+        self.assertIn('Borderlands 2 is running (pid 77) after the copy', out['error'])
+        self.assertTrue(out['lock_during'])
+        self.assertFalse(out['lock_after'])
+        self.assertEqual(out['save'], 'written by the killed run')   # nothing restored
+        self.assertTrue(record.exists())
+
+    def test_restore_entry_points_refuse_real_folders_in_test_mode(self):
+        record = self.leave()
+        data = json.loads(record.read_text(encoding='utf-8-sig'))
+        data['backup'] = str(ROOT / 'local' / 'realgame' / 'save-backup-not-temp')
+        record.write_text(json.dumps(data), encoding='utf-8')
+        out = self.run_ps(rf"""
+$out.pending = Fail-Text {{ Restore-PendingRecord '{record}' }}
+$out.verified = Fail-Text {{ Restore-VerifiedBackup '{data['backup']}' }}
+$out.roots = Fail-Text {{ Restore-VerifiedRoots (Join-Path $tmp 'bak') ([ordered]@{{ SaveData = '{ROOT / 'local' / 'x'}' }}) @{{}} }}
+""")
+        for key in ('pending', 'verified', 'roots'):
+            self.assertIn('test mode', out[key], key)
+
+    def test_a_driver_folder_with_another_owner_is_never_removed(self):
+        record = self.leave("Install-Driver -BlockSavesAtStart -Exclusive")
+        data = json.loads(record.read_text(encoding='utf-8-sig'))
+        self.assertTrue(data['driver_owner'])
+        owner = self.tmp / 'game/sdk_mods/openwillow_realgame/.owrun'
+        self.assertEqual(owner.read_text(encoding='utf-8'), data['driver_owner'])
+        owner.write_text('someone-else', encoding='utf-8')
+        out = self.run_ps(rf"""$out.refusal = Fail-Text {{ Assert-NoPendingRecords }}; $out.lines = @(Fail-Text {{ Restore-PendingRecord '{record}' }}); $out.driver = Test-Path $script:DriverDir""")
+        self.assertIn('the driver folder is still there', out['refusal'])
+        self.assertIn('the driver folder is still there', out['lines'][0])
+        self.assertTrue(out['driver'])
+        self.assertTrue(record.exists())
+
+    def test_keys_a_killed_run_held_are_recorded_and_released_by_the_next_run(self):
+        mock = r"""
+$global:native = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:native.Add("key $Scan $Flags") }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
+function Assert-GameForeground { }
+"""
+        # The run presses W and the right button, then dies without its finally.
+        record = self.leave(mock + "Send-KeyDown W; Send-MouseEvent 0x8")
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key W', 'button right'])
+        # The game is still open: the next run sends the releases first, then refuses because a game runs.
+        (self.tmp / 'game_running').write_text('')
+        out = self.run_ps(mock + r"""$out.refusal = Fail-Text { Assert-NoPendingRecords }; $out.native = @($global:native)""")
+        self.assertEqual(out['native'], ['key 17 10', 'mouse 16'])
+        self.assertIn('Borderlands 2 is running', out['refusal'])
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], [])
+        # A killed run whose game has closed too: nothing is held, nothing is sent, and the record completes as usual.
+        (self.tmp / 'game_running').unlink()
+        record.unlink()
+        record = self.leave(mock + "Send-KeyDown W")
+        out = self.run_ps(mock + r"""$out.lines = @(Assert-NoPendingRecords); $out.native = @($global:native)""")
+        self.assertEqual(out['native'], [])
+        self.assertIn('no game window is open, so nothing is held: key W', out['lines'][0])
+        self.assertFalse(record.exists())
+
+    def test_a_press_without_a_record_is_refused_and_a_release_clears_the_list(self):
+        out = self.run_ps(r"""
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { }
+function Assert-GameForeground { }
+$out.refused = Fail-Text { Send-KeyDown W }
+$out.held = @($script:HeldInputs).Count
+$bak = Backup-Saves
+Send-KeyDown W
+$out.during = @((Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).held_inputs)
+Send-KeyUp W
+$out.after = @((Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).held_inputs).Count
+""")
+        self.assertIn('refusing to press W', out['refused'])
+        self.assertEqual(out['held'], 0)
+        self.assertEqual(out['during'], ['key W'])
+        self.assertEqual(out['after'], 0)
 
 
 class GuardedInputTest(unittest.TestCase):
@@ -451,6 +585,8 @@ function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:nati
 function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
 $global:front = $true
 function Assert-GameForeground { if (!$global:front) { throw 'refusing to send input: not in front' } }
+New-Item -ItemType Directory -Force (Join-Path $tmp 'bak') | Out-Null
+if (!$global:NoRecord) { Write-PendingRecord (Join-Path $tmp 'bak') ([ordered]@{}) | Out-Null }
 """ + body + "\n$out.native = @($global:native); $out.held = @($script:HeldInputs)", tmp, pending)
 
     def test_a_key_held_across_an_error_is_released_by_the_finally(self):

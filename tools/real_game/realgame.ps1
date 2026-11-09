@@ -43,18 +43,24 @@ function Enter-RunLock([int]$WaitSeconds = 600) {
 }
 function Exit-RunLock { Exit-OwUeLock }   # removes the lock only when this process owns it
 
-# Copy SaveData and Config to a new backup folder, prove each copy by hash, and write the backup's verified_hashes.json and this run's pending
-# record (Save-VerifiedBackupRecord). Refuses first while an earlier run's record is left (Assert-NoPendingRecords). Returns the folder.
+# Every folder a game launch can rewrite: the saves, the config, the SDK's mod settings and Sanity Saver's store (an earlier session saw it
+# rewrite one). The names match the captures' own $roots, so their later Save-VerifiedBackupRecord covers the same folders.
+function Get-RunRoots {
+    [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config')
+        sdk_settings = (Join-Path $script:Game 'sdk_mods/settings'); SanitySaver = (Join-Path $script:Game 'sdk_mods/SanitySaver') }
+}
+# Copy every run root to a new backup folder, prove each copy by hash (a root that does not exist is recorded as absent), and write the backup's
+# verified_hashes.json and this run's pending record (Save-VerifiedBackupRecord). Refuses first while an earlier run's record is left
+# (Assert-NoPendingRecords). Returns the folder.
 function Backup-Saves {
     Assert-NoPendingRecords | ForEach-Object { Write-Host $_ }
-    $src = $script:WillowDir
     $dst = Join-Path $script:RG ('save-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Force $dst | Out-Null
-    $roots = [ordered]@{ SaveData = (Join-Path $src 'SaveData'); Config = (Join-Path $src 'Config') }
+    $roots = Get-RunRoots
     $snapshots = @{}
     foreach ($name in $roots.Keys) {
-        Copy-Item -Recurse -LiteralPath $roots[$name] $dst
-        $snapshots[$name] = Assert-SnapshotMatches $roots[$name] (Join-Path $dst $name)
+        if (!(Test-Path -LiteralPath $roots[$name])) { $snapshots[$name] = 'absent'; continue }
+        $snapshots[$name] = New-VerifiedSnapshot $roots[$name] (Join-Path $dst $name)
     }
     Save-VerifiedBackupRecord $dst $roots $snapshots
     $dst
@@ -66,6 +72,7 @@ function Backup-Saves {
 # projectiles_capture and weapon_parity2_capture); that folder is this run's. -BlockSavesAtStart: the driver blocks the save functions as soon
 # as it loads (its autoblock.flag). The install is written into the pending record before the folder is touched.
 $script:DriverInstalled = $false   # true once this process installed (or claimed) the folder; Remove-Driver removes nothing otherwise
+$script:DriverOwner = ''           # the owner id in its .owrun and in the pending record
 function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive, [string]$ClaimedBy = '') {
     $target = $script:DriverDir
     if (!(Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods'))) { throw "bl-sdk is not installed: $(Join-Path $script:Game 'sdk_mods') is missing" }
@@ -74,11 +81,17 @@ function Install-Driver([switch]$BlockSavesAtStart, [switch]$Exclusive, [string]
         $claimed = [bool]$ClaimedBy -and (Test-DriverClaim $target $ClaimedBy)
         if (!$claimed) { throw "$target already exists and is not this run's; not overwriting it (remove it by hand if it is a stale copy of this driver)" }
     }
-    # The record first: the driver's save block and command channel stay in the game's folder if this run is killed.
-    Add-PendingChange "driver installed at $target (save block from the first frame: $([bool]$BlockSavesAtStart); $(if ($claimed) { "into the folder claimed by $ClaimedBy" } else { 'new folder' }))"
+    # The record first: the driver's save block and command channel stay in the game's folder if this run is killed. Its owner id goes into the
+    # record and the folder's .owrun: only a folder whose .owrun matches the record is ever removed without asking.
+    $owner = if ($claimed) { $ClaimedBy } else { "$(Get-RunScriptName)-$PID-$([guid]::NewGuid().ToString('N'))" }
+    Set-PendingField 'driver_owner' $owner
+    Add-PendingChange "driver installed at $target (save block from the first frame: $([bool]$BlockSavesAtStart); owner $owner)"
     try {
-        if (!$claimed) { New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null }   # no -Force: a folder that appeared since is refused
-        $script:DriverInstalled = $true
+        if (!$claimed) {
+            New-Item -ItemType Directory -Path $target -ErrorAction Stop | Out-Null   # no -Force: a folder that appeared since is refused
+            [IO.File]::WriteAllText((Join-Path $target '.owrun'), $owner)
+        }
+        $script:DriverInstalled = $true; $script:DriverOwner = $owner
         Copy-Item (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py') $target -Force
         Set-Content -LiteralPath (Join-Path $target 'cmd_dir.txt') -Value $script:CmdDir -NoNewline
         if ($BlockSavesAtStart) { Set-Content -LiteralPath (Join-Path $target 'autoblock.flag') -Value '1' -NoNewline }
@@ -100,11 +113,7 @@ function Remove-Driver {
     $target = $script:DriverDir
     if (!(Test-Path -LiteralPath $target)) { $script:DriverInstalled = $false; return }
     if (!$script:DriverInstalled) { Write-Warning "not removing ${target}: this run did not install it"; return }
-    $known = '__init__.py', 'cmd_dir.txt', 'autoblock.flag', '.owrun', '__pycache__'
-    $extra = @(Get-ChildItem -LiteralPath $target -Force | Where-Object { $_.Name -cnotin $known })
-    $init = Join-Path $target '__init__.py'
-    $changed = (Test-Path -LiteralPath $init) -and ((Get-FileSha256 $init) -cne (Get-FileSha256 (Join-Path $PSScriptRoot 'openwillow_realgame/__init__.py')))
-    if ($extra.Count -or $changed) { Write-Warning "not removing ${target}: it holds files this run did not install"; return }
+    if (!(Test-IsOurDriverCopy $target $script:DriverOwner -AllowPartial)) { Write-Warning "not removing ${target}: its owner file or contents are not this run's"; return }
     Remove-Item -LiteralPath $target -Recurse -Force
     $script:DriverInstalled = $false
 }
@@ -171,8 +180,9 @@ function Test-HashKey([hashtable]$Table, [string]$Key) { foreach ($k in $Table.K
 # Copy $Live to the new folder $Snapshot and prove the copy matches, or throw. Returns the snapshot's hashes: store them for
 # Restore-VerifiedRoots, because only a root that passed may be restored from. Restore-Tree deletes live files absent from its backup,
 # so a partial snapshot, or one that changed later, would lose them.
+# A snapshot folder that already exists (Backup-Saves made it) is not copied into again: it is only proved against the live folder.
 function New-VerifiedSnapshot([string]$Live, [string]$Snapshot) {
-    Copy-Item -Recurse -Force -LiteralPath $Live $Snapshot
+    if (!(Test-Path -LiteralPath $Snapshot)) { Copy-Item -Recurse -Force -LiteralPath $Live $Snapshot }
     Assert-SnapshotMatches $Live $Snapshot
 }
 function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) {
@@ -188,6 +198,7 @@ function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) {
 # not deleted. Returns rows, a summary, changed (the roots whose backup changed) and clean: true only when every root is identical to its
 # backup or stayed absent. A root reported and left alone, or one with no usable snapshot, is not clean.
 function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
+    Assert-PendingTestRoots (@($Backup) + @($Roots.Values))   # in test mode, every folder it may write must be synthetic
     $rows = @(); $notes = @(); $changed = @()
     foreach ($name in $Roots.Keys) {
         $live = $Roots[$name]
@@ -225,11 +236,21 @@ function Save-VerifiedBackupRecord([string]$Backup, $Roots, $Snapshots) {
     $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Backup 'verified_hashes.json') -Encoding UTF8
     Write-PendingRecord $Backup $Roots | Out-Null
 }
-# The one way to restore by hand: from that record, through Restore-VerifiedRoots, so a backup that changed since is refused.
+# Restore by hand from a backup no pending record names. While any pending record exists it refuses: Restore-PendingRecord is the way then.
+# Like it, it holds the run lock, copies the current roots aside (verified by tree hash) first, and checks for a running game before and after.
 function Restore-VerifiedBackup([string]$Backup) {
-    $restored = Restore-FromVerifiedRecord $Backup
-    Format-RestoreRows $restored.rows
-    $restored.summary
+    Assert-PendingTestRoots @($Backup)
+    $records = @(Get-PendingFiles)
+    if ($records.Count) { throw "a pending record exists ($($records[0].FullName)): use Restore-PendingRecord '$($records[0].FullName)' instead. Nothing was changed." }
+    Invoke-RecoveryLocked {
+        Assert-NoGameForRecovery 'before anything is copied'
+        $aside = Save-PreRestoreSnapshot $Backup
+        "the current roots were copied, verified by tree hash, to $aside"
+        Assert-NoGameForRecovery 'before restoring'
+        $restored = Restore-FromVerifiedRecord $Backup
+        Format-RestoreRows $restored.rows
+        $restored.summary
+    }
 }
 # Restore-VerifiedRoots over the roots and snapshot states the backup's verified_hashes.json names. Returns its result object.
 function Restore-FromVerifiedRecord([string]$Backup) {
@@ -300,13 +321,14 @@ function Format-ManualRecovery([string]$Reason, [string]$Backup, [string]$HubLoc
     $lines = @("MANUAL RECOVERY: $Reason. Both locks are held and the backup is kept at $Backup.",
         '  1. Make sure Borderlands 2 is closed.',
         "  2. In a new PowerShell window: `$env:OPENWILLOW_BL2 = '$env:OPENWILLOW_BL2'; . '$PSScriptRoot\realgame.ps1'")
-    if (Test-Path -LiteralPath $script:DriverDir) { $lines += "     Remove-Item -Recurse -Force '$script:DriverDir'   # first check it is this driver's copy, not someone's" }
-    if ($Backup) {
-        $lines += "     Restore-VerifiedBackup '$Backup'"
-        $lines += "     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand. A root reported as created or not backed up is yours to judge."
-    }
     if ($script:PendingRecord -and (Test-Path -LiteralPath $script:PendingRecord)) {
-        $lines += "     Then Restore-PendingRecord '$script:PendingRecord'   # verifies every root by tree hash and only then removes this run's pending record"
+        # The only step while a record exists: it sets the current state aside first, removes only this run's driver copy, restores and verifies.
+        $lines += "     Restore-PendingRecord '$script:PendingRecord'"
+        $lines += "     It copies the current saves and settings aside (verified by tree hash), removes the driver folder only if its owner file is this run's, restores every root from the verified backup and removes the record only when all compare clean. Anything it reports instead is yours to judge."
+    } elseif ($Backup) {
+        if (Test-Path -LiteralPath $script:DriverDir) { $lines += "     Remove-Item -Recurse -Force '$script:DriverDir'   # first check it is this driver's copy, not someone's" }
+        $lines += "     Restore-VerifiedBackup '$Backup'   # copies the current state aside first"
+        $lines += "     Every row must read 'added, removed', 'missing, restored' or 'changed, restored'. A 'MISMATCH after restore', 'RESTORE FAILED' or 'BACKUP CHANGED' row means that root is not recovered; a changed backup is refused, so compare it with the live files by hand. A root reported as created or not backed up is yours to judge."
     }
     $lines += "  3. Only when nothing above reports a problem, remove the locks this run left: '$HubLock' (if it names '$Lane') and '$script:Lock'."
     $lines -join [Environment]::NewLine
@@ -434,10 +456,17 @@ function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { [OWRG.Native
 function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { [OWRG.Native]::mouse_event($Flags, $Dx, $Dy, $Data, [UIntPtr]::Zero) }
 # Each mouse button's down flag, up flag and the name it is held under.
 $script:MouseButtons = @(@(0x2, 0x4, 'left'), @(0x8, 0x10, 'right'), @(0x20, 0x40, 'middle'))
+# The held set is also written into this run's pending record before each press (Save-HeldInputs), so a run killed with a key down leaves the
+# key named: the next run or the recovery sends its release while the game window is there. No record, no press.
+function Save-HeldInputs([switch]$Release) {
+    if ($Release) { try { if ($script:PendingRecord -and (Test-Path -LiteralPath $script:PendingRecord)) { Set-PendingField 'held_inputs' @($script:HeldInputs) } } catch { Write-Warning "held inputs not recorded: $_" }; return }
+    Set-PendingField 'held_inputs' @($script:HeldInputs)
+}
 function Send-KeyDown([string]$Key) {
     Assert-Key $Key
     Assert-GameForeground
     if (!$script:HeldInputs.Contains("key $Key")) { $script:HeldInputs.Add("key $Key") }   # before the send: releasing a key never pressed is harmless
+    try { Save-HeldInputs } catch { [void]$script:HeldInputs.Remove("key $Key"); throw "refusing to press ${Key}: $_" }
     if ($script:ScanExt.ContainsKey($Key)) { Invoke-NativeKey 0 ([byte]$script:ScanExt[$Key]) 0x9 }
     else { Invoke-NativeKey 0 ([byte]$script:Scan[$Key]) 0x8 }
 }
@@ -447,16 +476,20 @@ function Send-KeyUp([string]$Key) {
     Assert-Key $Key
     if ($script:ScanExt.ContainsKey($Key)) { Invoke-NativeKey 0 ([byte]$script:ScanExt[$Key]) 0xB }
     else { Invoke-NativeKey 0 ([byte]$script:Scan[$Key]) 0xA }
-    [void]$script:HeldInputs.Remove("key $Key")
+    if ($script:HeldInputs.Remove("key $Key")) { Save-HeldInputs -Release }
 }
 function Send-Key([string]$Key, [int]$HoldMs = 60) {
     Send-KeyDown $Key
     try { Start-Sleep -Milliseconds $HoldMs } finally { Send-KeyUp $Key }   # a press is always released
 }
 function Send-MouseEvent([int]$Flags, [int]$Dx = 0, [int]$Dy = 0) {
-    foreach ($b in $script:MouseButtons) { if (($Flags -band $b[0]) -and !$script:HeldInputs.Contains("button $($b[2])")) { $script:HeldInputs.Add("button $($b[2])") } }
+    $added = @()
+    foreach ($b in $script:MouseButtons) { if (($Flags -band $b[0]) -and !$script:HeldInputs.Contains("button $($b[2])")) { $script:HeldInputs.Add("button $($b[2])"); $added += "button $($b[2])" } }
+    if ($added.Count) { try { Save-HeldInputs } catch { foreach ($a in $added) { [void]$script:HeldInputs.Remove($a) }; throw "refusing to press a mouse button: $_" } }
     Invoke-NativeMouse $Flags $Dx $Dy
-    foreach ($b in $script:MouseButtons) { if ($Flags -band $b[1]) { [void]$script:HeldInputs.Remove("button $($b[2])") } }
+    $released = $false
+    foreach ($b in $script:MouseButtons) { if ($Flags -band $b[1]) { if ($script:HeldInputs.Remove("button $($b[2])")) { $released = $true } } }
+    if ($released) { Save-HeldInputs -Release }
 }
 # Let go of every key and button this run still holds. Never throws: each release is tried. Returns what it did, for the run's log.
 function Release-HeldInputs {

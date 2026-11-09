@@ -264,7 +264,7 @@ class CaptureSafetyBase:
         self.assertEqual(r['files'], CHANGED, r['out'])
         self.assertEqual((r['hub'], r['run_lock'], r['driver']), (True, True, True), r['out'])
         self.assertEqual(len(r['backups']), 1)
-        self.assertIn('Restore-VerifiedBackup', r['out'])
+        self.assertIn('Restore-PendingRecord', r['out']); self.assertNotIn('Restore-VerifiedBackup', r['out'])
 
     def test_a_restore_that_does_not_compare_clean_keeps_the_locks_and_the_backup(self):
         r = self.run_it('backup_changes')
@@ -274,7 +274,7 @@ class CaptureSafetyBase:
         self.assertEqual((r['hub'], r['run_lock']), (True, True), r['out'])
         self.assertEqual(len(r['backups']), 1)
         self.assertIn('BACKUP CHANGED', r['out'])
-        self.assertIn('Restore-VerifiedBackup', r['out'])
+        self.assertIn('Restore-PendingRecord', r['out']); self.assertNotIn('Restore-VerifiedBackup', r['out'])
 
     def test_a_run_that_fails_restores_and_exits_1_without_finishing_as_completed(self):
         r = self.run_it('no_answer')

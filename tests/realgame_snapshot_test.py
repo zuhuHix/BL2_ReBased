@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 . '__REALGAME__'
 $out = [ordered]@{}
 $tmp = '__TMP__'
+$script:WillowDir = Join-Path $tmp 'willow'   # synthetic: test mode refuses the real save folders
 function Tree($Name, $Files) {
     $d = Join-Path $tmp $Name; New-Item -ItemType Directory -Force $d | Out-Null
     foreach ($f in $Files) { Set-Content -LiteralPath (Join-Path $d $f) "text of $f" }
@@ -172,7 +173,7 @@ def test_a_failed_run_with_a_bad_restore_still_prints_the_rows_and_the_recovery(
         done = run_tail(body)
         assert done.returncode == 1, done.stdout + done.stderr
         assert done.hub_lock_kept is True       # the lock stays while the restore needs recovery
-        order = [done.stdout.find(text) for text in (status, 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-VerifiedBackup')]
+        order = [done.stdout.find(text) for text in (status, 'MISMATCH after restore', 'MANUAL RECOVERY', 'Restore-VerifiedBackup')]   # no pending record in this tail: the backup's own restore
         assert -1 not in order and order == sorted(order), done.stdout
 
 
@@ -413,9 +414,9 @@ Remove-Item '__TMP__\SaveData\keep.txt'
 """
 
     def run_printed(tmp, done):
-        line = next(l.strip() for l in done.stdout.splitlines() if l.strip().startswith('Restore-VerifiedBackup'))
+        line = next(l.strip() for l in done.stdout.splitlines() if l.strip().startswith('Restore-PendingRecord'))
         script = Path(tmp) / 'by_hand.ps1'
-        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\n{line}\n", encoding='utf-8-sig')
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\n$script:WillowDir = [IO.Path]::GetTempPath()   # test mode: by-hand restores run only over synthetic folders\n{line}\n", encoding='utf-8-sig')
         hand = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
         assert 'BACKUP CHANGED' in hand.stdout and 'NOT IDENTICAL' in hand.stdout, hand.stdout + hand.stderr
@@ -437,7 +438,7 @@ Set-Content '__TMP__\live\keep.txt' 'changed by the run'
 
     def run_printed(tmp, done):
         script = Path(tmp) / 'by_hand.ps1'
-        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\nRestore-VerifiedBackup '{tmp}'\n", encoding='utf-8-sig')
+        script.write_text(f". '{ROOT / 'tools/real_game/realgame.ps1'}'\n$script:WillowDir = [IO.Path]::GetTempPath()   # test mode: by-hand restores run only over synthetic folders\nRestore-VerifiedBackup '{tmp}'\n", encoding='utf-8-sig')
         hand = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
         assert 'changed, restored' in hand.stdout and 'identical to' in hand.stdout, hand.stdout + hand.stderr
