@@ -1135,14 +1135,18 @@ it, before restoring and before removing the record (a game seen at any of them 
 current root to `local/realgame/pre-restore-<time>-<pid>/` and verifies that copy by tree hash (so anything played since the
 failed run is set aside, not lost), removes the driver folder only on an exact owner match, restores from the verified backup,
 verifies by tree hash and only then removes the record. `Restore-VerifiedBackup`, for a backup no record names, does the same
-lock, game checks and pre-restore copy.
+lock, game checks and pre-restore copy. Nothing locks the game itself out: **don't start Borderlands 2 while a recovery runs.**
+A game seen after the restore is reported loudly (record kept, pre-restore copy named), but what it wrote meanwhile may
+already be overwritten. A record whose backup manifest lacks one of `SaveData`, `Config`, `sdk_settings`, `SanitySaver` (an
+older format) is never completed automatically: `Restore-PendingRecord` restores what it covers, says which roots it cannot
+vouch for and leaves `recovery_note.txt` in the backup folder.
 
 Input is guarded: every key and button press is remembered until its release, and each capture's `finally` starts with
 `Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. The held set is also written into the pending record
 before each press (no record, no press). A run killed outright (Task Manager, a power cut) skips its `finally`: if the game
 window is still open, a key it held can stay held in the game until the next run's start check or `Restore-PendingRecord`
-sends the recorded releases (only when the writer is shown gone). With no game window there is nothing to release, and the
-list is cleared. Presses held across steps sit in their own
+sends the recorded releases (only when the writer is shown gone). The list is cleared only when no Borderlands 2 process runs at
+all; a game process without a window keeps it, and the run refuses. Presses held across steps sit in their own
 `try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
 them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import
 `tests/realgame_test_env.py`, which gives every PowerShell run its own pending folder under the temp folder. The harness

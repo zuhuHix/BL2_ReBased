@@ -116,8 +116,19 @@ function Assert-PendingRecorded([string]$Doing) {
 
 # Why the live state is not yet what the record's run started from. Empty: restored and verified. The backup's own verified_hashes.json is the
 # per-file truth (a backup that changed since proves nothing); this module's records also hold each root's tree hash, checked as well.
+# Every root a launch can rewrite, by the names Backup-Saves and the captures use. A manifest without one of them (an older format) cannot
+# vouch for it: such a record is never completed automatically; only Restore-PendingRecord handles it.
+$script:RequiredRoots = 'SaveData', 'Config', 'sdk_settings', 'SanitySaver'
+function Get-UncoveredRoots([string]$Backup) {
+    $file = Join-Path $Backup 'verified_hashes.json'
+    if (!$Backup -or !(Test-Path -LiteralPath $file)) { return @($script:RequiredRoots) }
+    $names = @((Get-Content -Raw -LiteralPath $file | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name })
+    @($script:RequiredRoots | Where-Object { $_ -cnotin $names })
+}
 function Get-PendingProblems($Record) {
     $problems = @()
+    $uncovered = @(Get-UncoveredRoots ([string]$Record.backup))
+    if ($uncovered.Count) { $problems += "the backup manifest does not cover $($uncovered -join ', '): nothing can vouch for them (an older record; only Restore-PendingRecord handles it)" }
     $backup = [string]$Record.backup
     $file = if ($backup) { Join-Path $backup 'verified_hashes.json' } else { '' }
     if (!$backup -or !(Test-Path -LiteralPath $file)) { $problems += "no verified_hashes.json in '$backup'" }
@@ -169,6 +180,12 @@ function Invoke-RecoveryLocked([scriptblock]$Body) {
     Enter-OwUeLock -Owner 'realgame-recovery' -TimeoutSeconds 120 -AlsoWaitFor Borderlands2
     try { & $Body } finally { Exit-OwUeLock }
 }
+# After a restore: a game started meanwhile may have written progress the restore then overwrote. Not prevented (nothing locks the game
+# out), only reported, with the record kept and the pre-restore copy named. Don't start the game while a recovery runs.
+function Assert-NoGameAfterRestore([string]$Aside) {
+    $games = @(Get-GameProcesses)
+    if ($games.Count) { throw "A GAME STARTED DURING RECOVERY (Borderlands 2 pid $(@($games | ForEach-Object { $_.Id }) -join ', ')): anything it wrote may have been overwritten by the restore. The record is kept. The state before the restore is in $Aside. Close the game, compare by hand, then run this again." }
+}
 function Assert-NoGameForRecovery([string]$When) {
     $games = @(Get-GameProcesses)
     if ($games.Count) { throw "Borderlands 2 is running (pid $(@($games | ForEach-Object { $_.Id }) -join ', ')) $When; stopped here, the record is kept. Close it and run this again." }
@@ -179,11 +196,16 @@ function Assert-NoGameForRecovery([string]$When) {
 function Release-RecordedInputs([string]$File, $Record) {
     $held = @($Record.held_inputs | Where-Object { $_ })
     if (!$held.Count) { return }
-    if (!@(Get-GameProcesses | Where-Object { $_.MainWindowHandle -and $_.MainWindowHandle -ne [IntPtr]::Zero }).Count) {
-        # No game window: the keys were held only inside the game session, which has ended, so there is nothing to release.
+    $games = @(Get-GameProcesses)
+    if ($games.Count -and !@($games | Where-Object { $_.MainWindowHandle -and $_.MainWindowHandle -ne [IntPtr]::Zero }).Count) {
+        # A game process without a window (starting or closing): nothing to send the releases to yet, and the session may still hold them.
+        return "recorded as held and a game runs without a window: kept ($($held -join ', '))"
+    }
+    if (!$games.Count) {
+        # No game process: the keys were held only inside the game session, which has ended, so there is nothing to release.
         $Record | Add-Member -NotePropertyName held_inputs -NotePropertyValue @() -Force
         Write-PendingFile $File $Record
-        return "recorded as held, but no game window is open, so nothing is held: $($held -join ', ')"
+        return "recorded as held, but no game runs, so nothing is held: $($held -join ', ')"
     }
     foreach ($item in $held) {
         $kind, $name = $item -split ' ', 2
@@ -297,9 +319,16 @@ function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
         $restored = Restore-FromVerifiedRecord ([string]$record.backup)
         Format-RestoreRows $restored.rows
         $restored.summary
-        $problems = @(Get-PendingProblems $record)
+        Assert-NoGameAfterRestore $aside
+        $uncovered = @(Get-UncoveredRoots ([string]$record.backup))
+        $problems = @(Get-PendingProblems $record | Where-Object { $_ -notlike 'the backup manifest does not cover*' })
         if ($problems.Count) { throw "record kept at ${File}: $($problems -join '; ')" }
-        Assert-NoGameForRecovery 'before the record is removed'
+        if ($uncovered.Count) {
+            # An older record: what it covers is restored and verified; the rest it cannot vouch for. A note stays beside the backup.
+            $note = Join-Path ([string]$record.backup) 'recovery_note.txt'
+            "$((Get-Date).ToString('o')) Restore-PendingRecord '$File': restored and verified $(@($restored.rows).Count) rows; NOT VOUCHED FOR (not in this backup): $($uncovered -join ', '). The state before the restore is in $aside." | Set-Content -LiteralPath $note -Encoding UTF8
+            "NOT VOUCHED FOR: $($uncovered -join ', ') were not in this backup and were not restored or checked. Compare them by hand (the state before the restore is in $aside). Note: $note"
+        }
         Remove-Item -LiteralPath $File -Force
         "verified by tree hash; record $File removed"
     }
