@@ -654,6 +654,7 @@ It copies `host/ue5/OpenWillow/Content/` and these `local/` folders, each from `
 | `lootables`, `interactives` | `test_interactives.ps1`, `lootables_editor_test.py` |
 | `phaselock` | `run_phaselock_shots.ps1` |
 | `weapons`, `vendors`, `inventory-actions` | `test_vendors.ps1` (`inventory-actions` also the `-Items` path of GATES.md) |
+| `inventory` | `test_inventory_actions.ps1` (GATES.md): the host reads `local/inventory/gear_manifest.json` (`OpenWillowWalker.cpp`); `prepare_inventory_gear.py` writes `observed_gear.json` there |
 | `minimap`, `skillhud`, `ambient`, `audio`, `firing` | `test_hud_minimap.ps1`, `test_action_skill_hud.ps1`, `test_ambient.ps1`, `test_audio.ps1`, `test_weapon_firing.ps1` |
 
 **Left out by default:**
