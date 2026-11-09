@@ -102,6 +102,10 @@ def test_job_problems_names_every_missing_input():
                             'slots': [{'slot': 'S', 'textures': {'p_Normal': str(empty)}, 'missing_textures': ['p_Masks']}]}]}
         problems = t.job_problems(broken)
         assert len(problems) == 4
+        # A texture neither the mesh nor the zone step imports does not block the job, missing or empty (review r2).
+        unused = {'npcs': [dict(complete['npcs'][0], slots=[{'slot': 'S', 'textures': {'p_Diffuse': str(tex), 'p_CustomPattern': str(empty)},
+                                                              'missing_textures': ['p_PatternMask']}])]}
+        assert t.job_problems(unused) == []
         assert any('mesh glTF' in p for p in problems) and any('attachment Piece' in p for p in problems)
         assert any('p_Masks not in the UModel output' in p for p in problems) and any('p_Normal' in p for p in problems)
 
