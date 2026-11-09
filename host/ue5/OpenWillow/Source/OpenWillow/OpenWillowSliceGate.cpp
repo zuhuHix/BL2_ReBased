@@ -100,6 +100,27 @@ void UOpenWillowSliceGate::Place(const FVector& Location, const FVector& Look)
     AimAt(Look);
 }
 
+// -owslicegatemag=<n> (test only): sets the held gun's magazine to n rounds, once, before the first shot at the dummy, so a listening run
+// hears a reload. The reserve is left alone, so the reload draws from it. With n = 1 the first shot empties the magazine and ShootAt presses
+// reload (WITH_EDITOR builds only: the editor target, which UnrealEditor.exe -game runs, has it). Clamped to the gun's magazine size.
+void UOpenWillowSliceGate::ApplyMagazineFixture(AOpenWillowWalker* W)
+{
+    if (MagazineFixture <= 0 || !W) return;
+    UOpenWillowInventory* Inventory = W->GetInventory();
+    FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeaponMutable() : nullptr;
+    if (!Held || UOpenWillowInventory::ShotCostRounds(*Held) == 0)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: -owslicegatemag=%d not applied, no magazine-fed gun in hand"), MagazineFixture);
+        return;
+    }
+    const int32 Size = UOpenWillowInventory::MagazineSize(*Held);
+    const int32 Set = FMath::Clamp(MagazineFixture, 1, Size);
+    Held->MagazineLeft = Set;
+    Fixture(FString::Printf(TEXT("magazine of %s set to %d rounds"), *Held->Id, Set));
+    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine of %s set to %d rounds (-owslicegatemag=%d, size %d)"),
+        *Held->Id, Set, MagazineFixture, Size);
+}
+
 // One FireOnce at the target every Interval seconds (0: every tick). Reloads an empty magazine through the reload key;
 // when the reserve is empty too, refills it (test fixture, logged once per refill). False when the shot did not go out.
 bool UOpenWillowSliceGate::ShootAt(AOpenWillowCombatTarget* Target, float Interval)
@@ -376,6 +397,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Start:
         FParse::Value(FCommandLine::Get(), TEXT("owslicegatepause="), StepPause);
         StepPause = FMath::Clamp(StepPause, 0.f, 10.f);
+        // -owslicegatemag=<n> (test only, off by default): see ApplyMagazineFixture.
+        FParse::Value(FCommandLine::Get(), TEXT("owslicegatemag="), MagazineFixture);
         UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE start map=%s quest=%d range_command=%d"), *GetWorld()->GetMapName(),
             Quest && Quest->Enabled(), IConsoleManager::Get().FindConsoleObject(TEXT("ow.Range")) != nullptr);
         Next(EStep::Spawn);
@@ -843,6 +866,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
 
     case EStep::ShootDummy:
         if (StepTime < 1.5f) { if (MissionDummy) AimAt(MissionDummy->AimPoint()); return; }   // the target Matinee carries it out
+        if (!bMagazineFixtureSet) { bMagazineFixtureSet = true; ApplyMagazineFixture(W); }
         if (Quest->Status() == 1 && MissionDummy && StepTime < DummyTimeout) { if (ShootAt(MissionDummy, 0.6f)) ++DummyShots; return; }
         if (Quest->Status() == 2) PassLink(TEXT("mission_objective"), FString::Printf(TEXT("trigger touched, dummy registered, %d shot(s) with the lent weapon completed the objectives"), DummyShots));
         else { FailLink(TEXT("mission_objective"), FString::Printf(TEXT("status %d after %d shot(s) at the dummy"), Quest->Status(), DummyShots)); Next(EStep::Down); return; }

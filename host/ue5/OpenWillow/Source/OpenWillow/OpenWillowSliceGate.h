@@ -50,6 +50,9 @@ private:
     FString GunId;                  // the looted or rolled gun the equip link draws
     FString LentId;                 // the Fire mission's lent pistol
     int32 DummyShots = 0;
+    // -owslicegatemag=<n> (test only, 0 = off): the held gun's magazine is set to n rounds once, before the first shot at the dummy.
+    int32 MagazineFixture = 0;
+    bool bMagazineFixtureSet = false;
     float RespawnAtBefore = 0.f;
     FVector DeathLocation = FVector::ZeroVector;
     int64 ExperienceBeforeTurnIn = 0;
@@ -97,6 +100,7 @@ private:
     void Place(const FVector& Location, const FVector& Look);
     void AimAt(const FVector& Point);
     bool ShootAt(class AOpenWillowCombatTarget* Target, float Interval);
+    void ApplyMagazineFixture(class AOpenWillowWalker* W);
     class AOpenWillowCombatTarget* NearestLiveTarget(bool bPreferEnemyClass) const;
     class AOpenWillowNpc* FindMarcus() const;
     bool QuestMarker(const TCHAR* Kind, FVector& Out) const;

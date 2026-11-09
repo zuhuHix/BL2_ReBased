@@ -28,6 +28,7 @@ STOP = re.compile(r'OWAUDIOREC stop t=([\d.]+)')
 WRITTEN = re.compile(r'OWAUDIOREC written=(\d) bytes=(-?\d+)')
 LINK = re.compile(r'OWSLICEGATE link=(\S+) result=(\S+) fixtures=\[(.*?)\] detail=(.*) \(t=')
 SUMMARY = re.compile(r'OWSLICEGATE SUMMARY pass=(\d+) fail=(\d+) na=(\d+)')
+FIXTURE_MAG = re.compile(r'OWSLICEGATE note test fixture: magazine of (\S+) set to (\d+) rounds')
 SILENT_DBFS = -60.0     # a window quieter than this counts as silence (host choice)
 STEP_WINDOW = 1.0       # seconds measured after a step cue that is not itself a sound
 TAIL = 0.4              # the mixer starts a sound up to ~0.15 s after its cue and stops it 0.25 s after it drains: skipped before a gap is measured
@@ -47,7 +48,7 @@ STEPS = {
     'Accept': 'Maya is moved to Marcus and presses use: the Fire mission is accepted',
     'WaitWalk': 'Marcus walks to his spot; the objective marker appears',
     'Trigger': 'Maya touches the mission trigger; the target dummy appears',
-    'ShootDummy': 'Maya shoots the dummy with the lent pistol',
+    'ShootDummy': 'Maya shoots the dummy with the lent pistol (with the magazine fixture, the first shot empties it and she reloads before the next)',
     'TurnIn': 'Maya turns the mission in at Marcus',
     'Confirm': 'the driver checks the reward and that the lent pistol was returned',
     'Down': 'the test applies lethal damage: Maya enters Fight For Your Life',
@@ -104,7 +105,8 @@ def parse_log(text: str):
     stop = STOP.search(text)
     written = WRITTEN.search(text)
     summary = SUMMARY.search(text)
-    return {'cues': cues, 'links': links, 'started': bool(START.search(text)), 'stop_t': float(stop.group(1)) if stop else None,
+    fixture = FIXTURE_MAG.search(text)
+    return {'magazine_fixture': (fixture.group(1), int(fixture.group(2))) if fixture else None, 'cues': cues, 'links': links, 'started': bool(START.search(text)), 'stop_t': float(stop.group(1)) if stop else None,
             'written': (written.group(1) == '1', int(written.group(2))) if written else None,
             'summary': summary.groups() if summary else None}
 
@@ -204,6 +206,11 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     if mono and run['stop_t'] and length < run['stop_t'] - 1.0:
         problems.append(f'WAV is {length:.1f} s but the recording ran {run["stop_t"]:.1f} s: the file looks cut short')
     overall_peak = max(mono) if mono else 0.0
+    if run['magazine_fixture']:
+        # The run set the lent gun's magazine (-owslicegatemag): a reload is expected after its first shot at the dummy.
+        missing = [r for r in ('reload_out', 'reload_in') if not any(c['kind'] == 'sound' and c['name'] == r for c in run['cues'])]
+        if missing:
+            problems.append('the magazine fixture was set but no ' + ' or '.join(missing) + ' sound was logged: look for "OpenWillow reload started" in the run log')
     if mono and dbfs(overall_peak) < SILENT_DBFS:
         problems.append(f'WAV is silent (peak {fmt_db(dbfs(overall_peak))} dBFS)')
 
@@ -251,6 +258,13 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
              '- A shot and its bullet impact start within a few milliseconds of each other, so their levels below are of the two together, not each alone.',
              '- Frames (`frames/`) are saved at most every 1.5 s, at the first cue that allows one, so a step shows its first moment.',
              '- Nothing here was listened to. The levels are measurements of the mix, not a judgement that a sound is right.', '']
+    if run['magazine_fixture']:
+        item, rounds = run['magazine_fixture']
+        lines.append(f'- Test fixture: the held gun ({item}) had its magazine set to {rounds} round(s) before the dummy shots (`-owslicegatemag`), so it reloads '
+                     'after its first shot there. The reload itself is the game code; the magazine size and the first shot belong to the fixture.')
+    else:
+        lines.append('- No magazine fixture in this run: a reload sound appears only if the gun ran dry on its own.')
+    lines.append('')
     if problems:
         lines += ['**Problems with this recording:**', ''] + [f'- {p}' for p in problems] + ['']
     lines += ['## What our host plays', '', '| Role | When | Mapped to | What you should hear |', '|---|---|---|---|']

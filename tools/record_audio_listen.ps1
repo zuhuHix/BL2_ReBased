@@ -8,6 +8,7 @@ param(
     [double]$Pause = 2.0,              # -owslicegatepause: seconds of quiet before each slice gate step
     [switch]$NoShield,                 # leave out -owslicegateshield
     [switch]$NoDownAfterFight,         # leave out -owslicegatedownafterfight (the revive stand-in)
+    [int]$Mag = 1,                     # -owslicegatemag: the lent gun's magazine rounds before the dummy shots, so a reload is heard (0 = leave it alone)
     [int]$TimeoutSeconds = 900,
     [int]$CloseWaitSeconds = 60,       # after a timeout: how long a graceful close may take (the host writes the WAV) before a forced stop
     [int]$WaitForEditorSeconds = 3600
@@ -56,6 +57,7 @@ try {
         "-owslicegatepause=$Pause", "-owaudioplay=`"$AudioPlay`"", "-owrecordaudio=`"$wav`"")
     if (!$NoShield) { $arguments += '-owslicegateshield' }
     if (!$NoDownAfterFight) { $arguments += '-owslicegatedownafterfight' }
+    if ($Mag -gt 0) { $arguments += "-owslicegatemag=$Mag" }
     $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru

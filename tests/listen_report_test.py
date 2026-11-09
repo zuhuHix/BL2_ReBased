@@ -193,5 +193,40 @@ class ListenReportTest(unittest.TestCase):
         self.assertTrue({'equip', 'reload_out', 'reload_in'} <= set(lr.ROLES))
 
 
+    def display_text(self, rows):
+        return '\n'.join('[2026.11.09-12.00.00:000][  1]LogTemp: Display: ' + r for r in rows)
+
+    def test_magazine_fixture_is_stated_and_its_reload_is_expected(self):
+        text = self.display_text([
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWSLICEGATE note test fixture: magazine of Synth_Gun set to 1 rounds (-owslicegatemag=1, size 12)',
+            'OWAUDIOREC cue t=0.100 label=step ShootDummy frame=frame-001.png',
+            'OWAUDIOREC cue t=2.000 label=reload_out seconds=0.200 frame=-',
+            'OWAUDIOREC cue t=3.000 label=reload_in seconds=0.500 frame=-',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ])
+        out, problems, steps, run = self.run_build(text=text, tones=((2.0, 0.2), (3.0, 0.5)))
+        self.assertEqual(problems, [])
+        self.assertEqual(run['magazine_fixture'], ('Synth_Gun', 1))
+        listen = (out / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('Test fixture: the held gun (Synth_Gun) had its magazine set to 1 round(s)', listen)
+
+    def test_magazine_fixture_without_a_logged_reload_is_a_problem(self):
+        text = self.display_text([
+            'OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only; records what the host sent to the mixer)',
+            'OWSLICEGATE note test fixture: magazine of Synth_Gun set to 1 rounds (-owslicegatemag=1, size 12)',
+            'OWAUDIOREC cue t=0.100 label=step ShootDummy frame=frame-001.png',
+            'OWAUDIOREC stop t=6.000 file=C:/x/listen.wav',
+            'OWAUDIOREC written=1 bytes=1000 after 1.0 s',
+        ])
+        _, problems, _, _ = self.run_build(text=text, tones=((2.0, 0.5),))
+        self.assertTrue(any('reload' in p and 'reload started' in p for p in problems), problems)
+
+    def test_no_fixture_says_so(self):
+        out, _, _, run = self.run_build()
+        self.assertIsNone(run['magazine_fixture'])
+        self.assertIn('No magazine fixture in this run', (out / 'LISTEN.md').read_text(encoding='utf-8'))
+
 if __name__ == '__main__':
     unittest.main()
