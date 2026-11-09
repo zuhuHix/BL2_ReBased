@@ -1,6 +1,7 @@
 #include "dialog.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <climits>
 #include <set>
 
@@ -448,7 +449,8 @@ void DialogSystem::talk(Handle handle, const Act& act, const Tag& tag, const std
     data.audioEnd = -1;
     if (timedPlayer_) {
         const double length = timedPlayer_(line);
-        data.playing = length >= 0;
+        // A negative, NaN or infinite length (or one whose end overflows the clock) is not played: an infinite end would never finish the act.
+        data.playing = std::isfinite(length) && length >= 0 && std::isfinite(now_ + length);
         if (data.playing) data.audioEnd = now_ + length;
     } else {
         data.playing = player_ ? player_(line) : true;

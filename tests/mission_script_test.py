@@ -1929,6 +1929,12 @@ with tempfile.TemporaryDirectory() as folder:
                            'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02'], capture_output=True, text=True, encoding='utf-8')
     got = json.loads(proc.stdout)
     check('E2b a line the timed player does not play is "not playing"', [l['outcome'] for l in lines(got['steps'][4])] == ['not playing'], got['steps'][4])
+    # An infinite length is refused like a negative one: the line is "not playing" and the act still finishes (an infinite audio end never would).
+    proc = subprocess.run([reader, str(root / 'DialogMissionDelay.upk'), '--mission-run', 'DialogMission', '--cooked', str(root), 'timedlines:inf',
+                           'talker:DialogName_Marcus', 'accept', 'tick:0', 'tick:0.02', 'tick:0.5', 'tick:0.5'], capture_output=True, text=True, encoding='utf-8')
+    got = json.loads(proc.stdout)
+    check('E2b an infinite length is "not playing" and the act finishes', proc.returncode == 0 and [l['outcome'] for l in lines(got['steps'][4])] == ['not playing']
+          and any('KickDone' in seen(step) for step in got['steps'][4:]), (proc.returncode, proc.stderr, [(s['step'], lines(s), seen(s)) for s in got['steps']]))
 
     # E2c: a line that interrupts a playing one. Tag D (echo, the same priority as A, so it may override it) is triggered while A's audio plays: the
     # dialog stops A (group silence, the talker's own StopTalking) and reports it through onLineStopped, which a host uses to stop A's sound. A line
