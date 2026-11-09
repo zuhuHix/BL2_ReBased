@@ -896,7 +896,9 @@ static bool AnotherDriverRequested()
         TEXT("owinvopenbench"), TEXT("owfiringtest"), TEXT("owreloadtest"), TEXT("owreloadphaselocktest"), TEXT("owmissionlogtest"),
         TEXT("owambienttest"), TEXT("owinteractivetest"), TEXT("owmovertest"), TEXT("owquesttest"), TEXT("owrangetest"),
         TEXT("owvendortest"), TEXT("owinventoryactions"), TEXT("owslicegate"), TEXT("owaudiotest"), TEXT("owcontrolstest"),
-        TEXT("owmissionpagetest"), TEXT("owshieldcheck"), TEXT("owphaselockkillcheck") };
+        TEXT("owmissionpagetest"), TEXT("owshieldcheck"), TEXT("owphaselockkillcheck"),
+        // Not quitters, so not in the launcher list: a self-test quit would still cut their runs short.
+        TEXT("owcombattest"), TEXT("owrangeshots") };
     for (const TCHAR* Driver : Drivers)
     {
         if (FParse::Param(FCommandLine::Get(), Driver)) return true;

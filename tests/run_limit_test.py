@@ -110,7 +110,10 @@ INVENTORY_CPP = REPO / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow' /
 
 class QuitListsInSync(unittest.TestCase):
     """The C++ guard (AnotherDriverRequested in OpenWillowInventory.cpp) and the launcher's scripted list must name the same drivers.
-    The only allowed difference is -owinventoryselftest itself, which is in the launcher's list and not in the guard."""
+    Allowed differences, and only these: -owinventoryselftest is in the launcher's list and not in the guard; -owcombattest and
+    -owrangeshots are in the guard and not in the launcher's list, because they do not quit and so are not scripted runs."""
+    ALLOWED_SCRIPT_ONLY = {'owinventoryselftest'}
+    ALLOWED_CPP_ONLY = {'owcombattest', 'owrangeshots'}
 
     def cpp_drivers(self):
         source = INVENTORY_CPP.read_text(encoding='utf-8')
@@ -124,9 +127,11 @@ class QuitListsInSync(unittest.TestCase):
 
     def test_the_guard_and_the_launcher_list_name_the_same_drivers(self):
         cpp = self.cpp_drivers()
-        script = self.script_drivers() - {'owinventoryselftest'}
-        self.assertEqual(sorted(script - cpp), [], 'in the launcher list but not the C++ guard')
-        self.assertEqual(sorted(cpp - script), [], 'in the C++ guard but not the launcher list')
+        script = self.script_drivers()
+        self.assertEqual(sorted(script - cpp - self.ALLOWED_SCRIPT_ONLY), [], 'in the launcher list but not the C++ guard')
+        self.assertEqual(sorted(cpp - script - self.ALLOWED_CPP_ONLY), [], 'in the C++ guard but not the launcher list')
+        self.assertEqual(sorted(script - cpp), sorted(self.ALLOWED_SCRIPT_ONLY), 'the launcher-only allowance changed')
+        self.assertEqual(sorted(cpp - script), sorted(self.ALLOWED_CPP_ONLY), 'the guard-only allowance changed')
 
     def test_the_lists_are_read(self):
         self.assertGreaterEqual(len(self.cpp_drivers()), 30)
