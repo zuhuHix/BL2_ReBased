@@ -63,9 +63,12 @@ for npc in job['npcs']:
         name = f'MI_{slot["material"]}_Zone'
         path = f'{dest}/Materials/{name}'
         # An existing instance is updated in place: the attach step's piece meshes reference it, and deleting it would leave them
-        # without a material until the attach step ran again. Every parameter below is set (or read back) on each run.
+        # without a material until the attach step ran again. Its overrides are cleared first, so nothing from an older run (a Normal
+        # or a vector this job no longer has) survives; then the parent and every value are set again and read back.
         instance = unreal.load_asset(path) if eal.does_asset_exist(path) else None
-        if not isinstance(instance, unreal.MaterialInstanceConstant):
+        if isinstance(instance, unreal.MaterialInstanceConstant):
+            mel.clear_all_material_instance_parameters(instance)
+        else:
             if instance is not None:
                 eal.delete_asset(path)
             instance = tools.create_asset(name, f'{dest}/Materials', unreal.MaterialInstanceConstant,

@@ -1499,8 +1499,8 @@ uses, in our words (UNVERIFIED against the running game):
   our reader); any other keeps 1.0 unless its instance sets a value. The range's Psycho names none: several Psycho instances are
   `Master_Creature` ones, but its two slot materials' parent was not read, so their scale stays 1.0 (today's look; the zone step logs
   "parent unknown, scale left at 1.0" per slot). Reading the per-slot parents is a later item. `tools/phaselock_target_editor.py` uses it and stops, naming the rebuild step, if `M_OW_NPC_Zone` predates the scalars (it reads the
-  parent's scalar names and reads every value back: UE 5.8's scalar setter always returns False). An existing zone instance is updated in place,
-  so the worn pieces that reference it keep it.
+  parent's scalar names and reads every value back: UE 5.8's scalar setter always returns False). An existing zone instance is updated in place
+  (its overrides cleared first, then every value set again), so the worn pieces that reference it keep it and no older value survives.
   `OPENWILLOW_ZONE_GAMMA=1` brings back round 23's fit for an A/B capture; the default is now the shader reading.
 - The range dummy gets the same zone material: `tools/seed_slice_npc_assets.ps1 -Steps zone` runs that editor step on the slice job.
   Before, the dummy kept the plain diffuse (`SLICE_NPC_ASSETS.md`: zones "not applied"), which is why it rendered near white.
