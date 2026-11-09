@@ -292,12 +292,24 @@ void UOpenWillowQuest::TickScreenPageTest()
         break;
     case 21:
     {
+        // The failure itself. The quest stops ticking the page from here; only the next step runs (UOpenWillowQuest::TickComponent), after the camera
+        // manager has updated the view a few times (the step waits a second and five ticks, as every step does).
         const UCameraComponent* Camera = Maya->FindComponentByClass<UCameraComponent>();
-        const bool bWasOn = bFocusOn && Camera && !Camera->bUsePawnControlRotation;
+        ScreenTestFailedWithFocus = bFocusOn && Camera && !Camera->bUsePawnControlRotation;
         Fail(TEXT("mission page suite: a failure forced with the page open"));
-        const bool bBack = Camera && Camera->bUsePawnControlRotation && FMath::Abs(Camera->FieldOfView - ScreenTestFov) < 0.5f && PC->GetControlRotation().Equals(ScreenTestControl, 0.5f);
-        Row(TEXT("failure_closes_the_page_and_gives_the_view_back"), bWasOn && !ScreenPage->IsShown() && !bFocusOn && bBack,
-            FString::Printf(TEXT("was_on=%d fov=%.1f before=%.1f %s"), bWasOn ? 1 : 0, Camera ? Camera->FieldOfView : 0.f, ScreenTestFov, *State()));
+        Wait = 1.;
+        break;
+    }
+    case 22:
+    {
+        // The view the player sees: the camera manager's rotation and FOV against those from just before the page opened, and the control rotation unchanged.
+        const APlayerCameraManager* View = PC->PlayerCameraManager;
+        const bool bBack = View && View->GetCameraRotation().Equals(ScreenTestControl, 0.5f) && FMath::Abs(View->GetFOVAngle() - ScreenTestFov) < 0.5f
+            && PC->GetControlRotation().Equals(ScreenTestControl, 0.5f);
+        Row(TEXT("failure_closes_the_page_and_gives_the_view_back"), ScreenTestFailedWithFocus && !ScreenPage->IsShown() && !bFocusOn && bBack,
+            FString::Printf(TEXT("was_on=%d view=%s fov=%.1f control=%s before: control=%s fov=%.1f %s"), ScreenTestFailedWithFocus ? 1 : 0,
+                View ? *View->GetCameraRotation().ToString() : TEXT("none"), View ? View->GetFOVAngle() : 0.f, *PC->GetControlRotation().ToString(),
+                *ScreenTestControl.ToString(), ScreenTestFov, *State()));
         Finish();
         return;
     }

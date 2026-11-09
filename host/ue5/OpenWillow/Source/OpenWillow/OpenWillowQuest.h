@@ -128,6 +128,7 @@ private:
     // The view just before the page opened (control rotation, FOV), for the rows that check it comes back after the close.
     FRotator ScreenTestControl = FRotator::ZeroRotator;
     float ScreenTestFov = 0.f;
+    bool ScreenTestFailedWithFocus = false;   // the forced failure came while the view was on Marcus
     int32 ScreenStepTicks = 0;   // the suite's ticks in the current step: a stalled frame must not count as time passing
     double ScreenStepAt = 0.;
     struct FImpl;
