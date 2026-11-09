@@ -47,12 +47,17 @@ bool FOpenWillowFocusCamTest::RunTest(const FString&)
         TestTrue(FString::Printf(TEXT("case %d in front"), I), bFront);
         TestTrue(FString::Printf(TEXT("case %d lands (%.4f, %.4f) on (%.2f, %.2f)"), I, Landed.X, Landed.Y, C.Screen.X, C.Screen.Y), Landed.Equals(C.Screen, 1e-4));
         TestTrue(FString::Printf(TEXT("case %d has no roll"), I), FMath::IsNearlyZero(View.Roll));
+        // Passing checks print nothing, so each case reports what it measured.
+        AddInfo(FString::Printf(TEXT("FocusCam case %d: solved=%d view=%s landed=(%.4f, %.4f) asked=(%.2f, %.2f)"), I, bSolved ? 1 : 0, *View.ToString(),
+            Landed.X, Landed.Y, C.Screen.X, C.Screen.Y));
     }
     // Straight above the eye cannot be put low on the screen with no roll: no solution, and the look-at is given.
     {
         FRotator View;
-        TestFalse(TEXT("no solution straight above for a low point"), Aim(FVector::ZeroVector, FVector(0, 0, 100), FVector2D(0., -0.9), 90., 1., View));
+        const bool bUpsideDown = Aim(FVector::ZeroVector, FVector(0, 0, 100), FVector2D(0., -0.9), 90., 1., View);
+        TestFalse(TEXT("no solution straight above for a low point"), bUpsideDown);
         TestTrue(TEXT("its fallback is the look-at"), View.Equals(FVector(0, 0, 1).Rotation(), 1e-3));
+        AddInfo(FString::Printf(TEXT("FocusCam straight above, low point: solved=%d view=%s (refused: the camera would pass straight up)"), bUpsideDown ? 1 : 0, *View.ToString()));
         FVector2D Landed;
         TestFalse(TEXT("a point behind does not project"), Project(FVector::ZeroVector, FRotator::ZeroRotator, 90., 1., FVector(-10, 0, 0), Landed));
     }
@@ -82,6 +87,7 @@ bool FOpenWillowFocusCamTest::RunTest(const FString&)
     TestFalse(TEXT("screen off the view"), Load(Write(TEXT("off.json"), TEXT("{\"bone\":\"B\",\"screen\":[1.2,0],\"zoom\":1.5}")), Params, Error));
     TestFalse(TEXT("zoom that widens"), Load(Write(TEXT("wide.json"), TEXT("{\"bone\":\"B\",\"screen\":[0,0],\"zoom\":0.8}")), Params, Error));
     TestFalse(TEXT("no zoom"), Load(Write(TEXT("nozoom.json"), TEXT("{\"bone\":\"B\",\"screen\":[0,0]}")), Params, Error));
+    AddInfo(FString::Printf(TEXT("FocusCam file checks done in %s; last error \"%s\"; zoomed FOV 90 by 2 = %.3f"), *Dir, *Error, ZoomedFov(90., 2.)));
     IFileManager::Get().DeleteDirectory(*Dir, false, true);
     return true;
 }
