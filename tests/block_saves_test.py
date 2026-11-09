@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'tools' / 'real_game' / 'openwillow_realgame' / '__init__.py'
 # Written out here, not read from the driver, so a wrong name there that happens to exist in the game still fails.
 EXPECTED = {'WillowGame.WillowSaveGameManager:' + name for name in ('SaveGame', 'Save', 'SaveRawData', 'SaveGraveyard')}
-# Still ignoring the reply on this branch. The seven scripts barred from running get it from #157 and vendors from #160; an entry can go once that has
+# Still ignoring the reply on this branch. The seven scripts whose bar was lifted on 2026-11-09 (docs/TOOLING.md) get it from #157 and vendors from #160; an entry can go once that has
 # landed, and the test stays green either way.
 PENDING = {'action_skill_hud_capture', 'hud_integrity_capture', 'hud_layout_capture', 'hud_parity_capture', 'weapon_part_session',
            'projectiles_capture', 'weapon_parity2_capture', 'vendors_capture'}

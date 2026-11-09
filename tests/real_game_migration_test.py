@@ -76,13 +76,13 @@ def test_each_script_parses():
     assert done.returncode == 0 and len(lines) == 7 and all(l.endswith(' 0') for l in lines), done.stdout + done.stderr
 
 
-def test_the_doc_bars_exactly_the_seven():
+def test_the_doc_lifts_the_bar_on_exactly_the_seven():
     doc = (ROOT / 'docs/TOOLING.md').read_text(encoding='utf-8')
-    line = next(l for l in doc.splitlines() if l.startswith('- **Not to be run:**'))
+    line = next(l for l in doc.splitlines() if l.startswith('- **Bar lifted (2026-11-09):**'))
     barred = re.findall(r'`([^`]+)`', line.split('. ', 1)[0])
     assert len(barred) == 7 and set(barred) == set(SEVEN), barred
-    # They are barred until a granted smoke run passes, not for a missing restore: each goes through the shared cleanup path.
-    assert 'until a hub-granted smoke run of it passes' in line, line
+    # The lift rests on run Z41 (hud_layout_capture, shared cleanup); each script still goes through the shared cleanup path below.
+    assert 'UNVERIFIED for its own capture' in line and 'commit 6da8d34' in line, line
     for name in SEVEN[:5]:
         s = text(name)
         assert 'Complete-BackupRun $bak' in s, name
