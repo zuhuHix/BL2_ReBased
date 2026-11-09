@@ -169,9 +169,9 @@ $out.removed = Complete-PendingRecord $true
 $settings = Join-Path $tmp 'game/sdk_mods/settings'
 $bak = Backup-Saves
 $out.not_a_root = Fail-Text { Set-SdkModsOff (Join-Path $tmp 'elsewhere') }
-$roots = [ordered]@{ SaveData = (Join-Path $tmp 'willow/SaveData'); Config = (Join-Path $tmp 'willow/Config'); sdk_settings = $settings }
+$roots = [ordered]@{ SaveData = (Join-Path $tmp 'willow/SaveData'); Config = (Join-Path $tmp 'willow/Config'); sdk_settings = $settings; SanitySaver = (Join-Path $tmp 'game/sdk_mods/SanitySaver') }
 $snapshots = @{ SaveData = (Get-TreeHashes (Join-Path $bak 'SaveData')); Config = (Get-TreeHashes (Join-Path $bak 'Config')) }
-$snapshots.sdk_settings = New-VerifiedSnapshot $settings (Join-Path $bak 'sdk_settings')
+$snapshots.sdk_settings = New-VerifiedSnapshot $settings (Join-Path $bak 'sdk_settings'); $snapshots.SanitySaver = 'absent'
 Save-VerifiedBackupRecord $bak $roots $snapshots
 $out.off = @(Set-SdkModsOff $settings)
 $out.text = Read-Text (Join-Path $settings 'SomeMod.json')
@@ -553,8 +553,56 @@ function Assert-GameForeground { }
         record = self.leave(mock + "Send-KeyDown W")
         out = self.run_ps(mock + r"""$out.lines = @(Assert-NoPendingRecords); $out.native = @($global:native)""")
         self.assertEqual(out['native'], [])
-        self.assertIn('no game window is open, so nothing is held: key W', out['lines'][0])
+        self.assertIn('no game runs, so nothing is held: key W', out['lines'][0])
         self.assertFalse(record.exists())
+
+    def test_a_game_running_without_a_window_keeps_the_held_list(self):
+        mock = r"""
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:sent = $true }
+function Assert-GameForeground { }
+"""
+        record = self.leave(mock + "Send-KeyDown W")
+        out = self.run_ps(mock + r"""
+function Get-GameProcesses { @([pscustomobject]@{ Id = 55; MainWindowHandle = [IntPtr]::Zero }) }
+$out.refusal = Fail-Text { Assert-NoPendingRecords }
+$out.restore = Fail-Text { Restore-PendingRecord '__RECORD__' }
+$out.sent = [bool]$global:sent
+""".replace('__RECORD__', str(record)))
+        self.assertIn('Borderlands 2 is running', out['refusal'])
+        self.assertIn('Borderlands 2 is running', out['restore'])
+        self.assertFalse(out['sent'])
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key W'])
+
+    def test_an_older_record_without_every_root_is_never_completed_automatically(self):
+        record = self.leave()
+        data = json.loads(record.read_text(encoding='utf-8-sig'))
+        manifest = Path(data['backup']) / 'verified_hashes.json'
+        roots = json.loads(manifest.read_text(encoding='utf-8-sig'))
+        manifest.write_text(json.dumps({k: roots[k] for k in ('SaveData', 'Config')}), encoding='utf-8')   # the older two-root format
+        data['roots'] = {k: data['roots'][k] for k in ('SaveData', 'Config')}
+        record.write_text(json.dumps(data), encoding='utf-8')
+        (self.tmp / 'game/sdk_mods/settings/SomeMod.json').write_text('rewritten by the game', encoding='utf-8')
+        # SaveData and Config match, but the record cannot vouch for the SDK roots: refused, never auto-completed.
+        out = self.run_ps(r"""$out.refusal = Fail-Text { Assert-NoPendingRecords }""")
+        self.assertIn('does not cover sdk_settings, SanitySaver', out['refusal'])
+        self.assertTrue(record.exists())
+        # Restore-PendingRecord restores what it covers, says what it cannot vouch for, keeps a note, and removes the record.
+        out = self.run_ps(rf"""$out.lines = @(Restore-PendingRecord '{record}')""")
+        text = '\n'.join(out['lines'])
+        self.assertIn('NOT VOUCHED FOR: sdk_settings, SanitySaver', text)
+        self.assertTrue((Path(data['backup']) / 'recovery_note.txt').exists())
+        self.assertFalse(record.exists())
+        self.assertEqual((self.tmp / 'game/sdk_mods/settings/SomeMod.json').read_text(encoding='utf-8-sig'), 'rewritten by the game')   # not touched
+
+    def test_a_game_that_starts_during_the_restore_keeps_the_record_and_says_so(self):
+        record = self.leave("Set-Content (Join-Path $tmp 'willow/SaveData/Save0001.sav') 'written by the killed run'")
+        out = self.run_ps(rf"""
+function Restore-FromVerifiedRecord([string]$Backup) {{ New-Item -ItemType File (Join-Path $tmp 'game_running') | Out-Null; [pscustomobject]@{{ rows = @(); summary = 'restored' }} }}
+$out.error = Fail-Text {{ Restore-PendingRecord '{record}' }}
+""")
+        self.assertIn('A GAME STARTED DURING RECOVERY', out['error'])
+        self.assertIn('pre-restore-', out['error'])
+        self.assertTrue(record.exists())
 
     def test_a_press_without_a_record_is_refused_and_a_release_clears_the_list(self):
         out = self.run_ps(r"""

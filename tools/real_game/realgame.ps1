@@ -250,6 +250,7 @@ function Restore-VerifiedBackup([string]$Backup) {
         $restored = Restore-FromVerifiedRecord $Backup
         Format-RestoreRows $restored.rows
         $restored.summary
+        Assert-NoGameAfterRestore $aside
     }
 }
 # Restore-VerifiedRoots over the roots and snapshot states the backup's verified_hashes.json names. Returns its result object.
@@ -285,6 +286,9 @@ function Complete-BackupRun([string]$Backup, [string]$CompareFile) {
             $lines += Format-RestoreRows $restored.rows
             $lines += "saves: $($restored.summary)"
             $clean = $restored.clean
+            # A game started during the restore could have written what the restore then overwrote: kept for a person, not completed.
+            $after = @(Get-GameProcesses)
+            if ($after.Count) { $safe = $false; $clean = $false; $lines += "saves: A GAME STARTED DURING THE RESTORE (pid $(@($after | ForEach-Object { $_.Id }) -join ', ')); the record is kept" }
         }
     } catch { $lines += "saves: RESTORE FAILED: $_ (backup kept at $Backup)" }
     $pendingFile = $script:PendingRecord
