@@ -637,6 +637,44 @@ name must be unique. Ambiguous cache names fail explicitly. The manifest records
 `package_scope`, which material refresh reuses. Base-only preparation retains
 the existing base-game search root. DLC discovery alone is not DLC compatibility.
 
+## What a new worktree gets
+
+`tools/provision_worktree_assets.ps1` (run by the shared `post-checkout` hook; setup in [tools/worktree-assets.md](../tools/worktree-assets.md))
+copies **missing files only** from the seed, under the main checkout's `local/worktree-seed/`, and never overwrites a file a worktree already has.
+It copies `host/ue5/OpenWillow/Content/` and these `local/` folders, each from `seed\<name>\` into `local\<name>\`:
+
+| Folder | Read by (examples, from the suites and check or run scripts) |
+|---|---|
+| `items`, `character`, `ui` | the weapon, character and HUD suites (`test_controls.ps1`, `run_quest.ps1`, `test_hud_minimap.ps1`, `test_mission_log.ps1`, `run_ue_flash_hud.ps1`) |
+| `slice` | the largest group (21 scripts): `check_vendors.py`, `check_shield_check.py`, `play_range.ps1`, `run_quest.ps1` and the `prepare_*_test.py` tests |
+| `doors` | `test_mover.ps1`, `test_quest.ps1`, `test_slice_gate.ps1`, `test_mission_page.ps1` |
+| `range` | `test_range.ps1`, `play_range.ps1`, `check_range.py`, `test_slice_gate.ps1` |
+| `quest` | `run_quest.ps1`, `test_quest.ps1` |
+| `menus` | `test_controls.ps1`, `test_mission_log.ps1`, `test_mission_page.ps1` |
+| `lootables`, `interactives` | `test_interactives.ps1`, `lootables_editor_test.py` |
+| `phaselock` | `run_phaselock_shots.ps1` |
+| `weapons`, `vendors`, `inventory-actions` | `test_vendors.ps1` (`inventory-actions` also the `-Items` path of GATES.md) |
+| `minimap`, `skillhud`, `ambient`, `audio`, `firing` | `test_hud_minimap.ps1`, `test_action_skill_hud.ps1`, `test_ambient.ps1`, `test_audio.ps1`, `test_weapon_firing.ps1` |
+
+**Left out by default:**
+
+- `sanctuary` is read by several suites (`test_controls.ps1`, `test_interactives.ps1`, `test_inventory_actions.ps1`, `run_hud_shots.ps1`, …)
+  but is about 1.7 GB in the main checkout, most of it intermediate (`ue-obj`, `center-pillar-umodel`). Add it for one run with
+  `-ExtraSeedFolders sanctuary`.
+- `external/` (UModel exports; the full export is over 10 GB). Copy only the subfolder a task needs, by hand.
+- `weapon_library` and `gestalt`: read by import and prepare tools only, by no suite script.
+
+**Never copied, at any depth:** folders named `shots`, `screenshots`, `logs`, `captures`, `realgame`, `h4x`, `z3x` and `runs`
+(per-run output). `-ExcludeFolderNames` changes that list.
+
+Parameters: `-SeedFolders` replaces the default list; `-ExtraSeedFolders` adds to it; `-SeedDirectory` names another seed (the tests use it).
+A folder missing from the seed is reported as `(not in the seed)`. `-SourceWorktree` keeps its old behaviour (every `local/` folder of
+a populated worktree) but skips the excluded names too.
+
+Sizes: this list is what the suites read; in the main checkout today only `sanctuary` (1.7 GB), `character` (2.2 MB), `external` (4 MB here)
+and `slice` (one 0.5 MB file) are present, so the other folders could not be measured here. The seed's own folders are not measured here either;
+measure them after the hub fills it (`du` per folder, the same list as the table).
+
 ## Regenerating local data on a fresh machine
 
 Everything under `local/` and `host/ue5/OpenWillow/Content/` is generated from the installed game and is not in Git. A

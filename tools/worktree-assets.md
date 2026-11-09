@@ -7,12 +7,8 @@ recipes, and skill UI can load.
 Run `tools/install_worktree_assets_hook.ps1` once from a populated worktree.
 It keeps a seed under the main checkout's ignored `local/worktree-seed/` and
 installs a shared Git `post-checkout` hook. The hook provisions these folders
-into new worktrees before `git worktree add` returns:
-
-- `host/ue5/OpenWillow/Content/`
-- `local/items/`
-- `local/character/`
-- `local/ui/`
+into new worktrees before `git worktree add` returns: `host/ue5/OpenWillow/Content/` and the `local/` folders the suites read
+(the default list, with what reads each, is in [docs/TOOLING.md](../docs/TOOLING.md) "What a new worktree gets").
 
 The UI seed must hold every converted movie the overlay loads, including `local/ui/run/UI_Inworld/` (the world pickup
 card); `python tools/check_overlay_data.py` lists what a worktree lacks. Links: `serve.py` resolves both its movies folder and
@@ -32,8 +28,7 @@ Provisioning copies missing files only, so it preserves worktree-specific
 generated assets. To repair a worktree manually, run
 `tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree-path>`.
 
-The shared seed only holds Content, `local/items`, `local/character` and `local/ui`, and it is only as fresh
-as the last time it was refreshed. For a worktree that continues earlier work, copy everything from the most
+The shared seed is only as fresh as the last time it was refreshed. For a worktree that continues earlier work, copy everything from the most
 recent populated worktree instead (Content plus every `local/` folder: slice data, weapon tables, real-game
 captures, Phaselock data, analysis notes). Existing files are kept:
 
@@ -41,10 +36,9 @@ captures, Phaselock data, analysis notes). Existing files are kept:
 tools/provision_worktree_assets.ps1 -SourceWorktree <previous-worktree-path>
 ```
 
-What the seed leaves out, and a new worktree therefore lacks until it is copied or regenerated: `local/slice/`
-(world, audio, NPC and minimap manifests), `local/doors/`, `local/sanctuary/`, `local/gestalt/`, `local/weapon_library/`,
-`local/audio/`, the Phaselock data, and `local/external/` (the UModel exports; the full export is over 10 GB, so copy only
-the subfolders a task needs). The suites name the manifest they miss. To fill a worktree from the main checkout without
+What the default seed leaves out is listed in [docs/TOOLING.md](../docs/TOOLING.md) "What a new worktree gets": `sanctuary`
+(add it with `-ExtraSeedFolders sanctuary`), `local/external/` (the UModel exports; the full export is over 10 GB, so copy only
+the subfolders a task needs), and the per-run output folders. The suites name the manifest they miss. To fill a worktree from the main checkout without
 overwriting anything, either use `-SourceWorktree <main checkout>` above or copy single folders with
 `robocopy <main>\local\slice <worktree>\local\slice /E /XO`; otherwise regenerate them in the order given in
 [docs/TOOLING.md](../docs/TOOLING.md) "Regenerating local data on a fresh machine".
