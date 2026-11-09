@@ -30,7 +30,7 @@ class RunLimit(unittest.TestCase):
         return int(powershell(f'Get-OwRunLimitSeconds {arguments}')[0])
 
     def test_scripted_game_runs_get_the_default(self):
-        for switch in ('-owinvshots', '-owcombatshots', '-owstatusshots=map', '-owfiringtest', '-owreloadtest', '-owinventoryactions', '-owinvopenbench=3', '-owslicegate'):
+        for switch in ('-owinvshots', '-owcombatshots', '-owstatusshots=map', '-owfiringtest', '-owreloadtest', '-owinventoryactions', '-owinvopenbench=3', '-owslicegate', '-owinventoryselftest'):
             self.assertEqual(self.limit(f"-GameWindow -Extra '-owlevel=36','{switch}'"), 1200, switch)
 
     def test_a_gun_list_of_any_length_gets_longer(self):
@@ -43,7 +43,6 @@ class RunLimit(unittest.TestCase):
         self.assertEqual(self.limit('-GameWindow'), 0)                         # playing
         self.assertEqual(self.limit("-GameWindow -Extra '-owlevel=36'"), 0)    # playing with a setup switch
         self.assertEqual(self.limit("-GameWindow -Extra '-owcombattest'"), 0)  # spawns a target for play, and does not quit
-        self.assertEqual(self.limit("-GameWindow -Extra '-owinventoryselftest'"), 0)  # only runs checks, and does not quit
 
     def test_an_explicit_limit_wins(self):
         self.assertEqual(self.limit('-TimeoutSeconds 60 -GameWindow'), 60)
@@ -56,7 +55,7 @@ class RunLimit(unittest.TestCase):
     def test_which_switches_count_as_a_scripted_run(self):
         for extra in ("'-owpickupcardshots'", "'-owinvshots'", "'-owcombatshots'", "'-owlevel=36','-owinvshots'", "'-owlevel=36,-owinvshots'", "'-owrangesurvey'", "'-owslicegate'"):
             self.assertTrue(self.scripted(extra), extra)
-        for extra in ("'-owlevel=36'", "'-owitems=x','-owslots=2'", "'-owquest'", "''", "'-owcombattest'", "'-owinventoryselftest'", "'-owrangeshots'",
+        for extra in ("'-owlevel=36'", "'-owitems=x','-owslots=2'", "'-owquest'", "''", "'-owcombattest'", "'-owrangeshots'",
                       "'-owslicegate','-owslicegatestay'"):  # the gate does not quit with -stay; a person is watching it
             self.assertFalse(self.scripted(extra), extra)
 

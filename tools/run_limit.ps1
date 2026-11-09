@@ -7,12 +7,13 @@ $script:OwScriptedRunSeconds = 1200
 $script:OwGunShotsSeconds = 3600
 
 # The switches that run by themselves and quit, one for each driver that reaches a quit in the host (search for "quit" and RequestExit). This is a list
-# on purpose: a new driver has to be added here. A pattern on the name caught -owcombattest (it only spawns a target for play), -owinventoryselftest (it only
-# runs checks) and -owrangeshots (it only adds frames to a range run); none of those quits.
+# on purpose: a new driver has to be added here. A pattern on the name caught -owcombattest (it only spawns a target for play) and -owrangeshots (it only adds
+# frames to a range run); neither quits. -owinventoryselftest quits after it logs its PASS/FAILED lines, unless another driver is on the command line (the
+# same list is AnotherDriverRequested in OpenWillowInventory.cpp).
 $script:OwScriptedSwitches = @(
     'owinvshots', 'owcombatshots', 'owgunshots', 'owfiringshots', 'owphaselockshots', 'owpickupcardshots', 'owmapshots', 'owstatusshots', 'owminimapshots',
     'owhudshots', 'owhuddownshots', 'owhudfxshots', 'owskillhudshots', 'owrangesurvey', 'owambientshots', 'owinvopenbench', 'owfiringtest', 'owreloadtest', 'owreloadphaselocktest',
-    'owmissionlogtest', 'owambienttest', 'owinteractivetest', 'owmovertest', 'owquesttest', 'owrangetest', 'owvendortest', 'owinventoryactions', 'owslicegate')
+    'owmissionlogtest', 'owambienttest', 'owinteractivetest', 'owmovertest', 'owquesttest', 'owrangetest', 'owvendortest', 'owinventoryactions', 'owinventoryselftest', 'owslicegate')
 
 # The -Extra switches, one each. Launched with powershell -File, -Extra arrives as one comma-joined string.
 function Get-OwSwitchNames {

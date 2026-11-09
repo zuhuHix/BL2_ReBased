@@ -1048,7 +1048,7 @@ For a repeatable UE capture, launch the same script with
 `-GameWindow -Extra @('-owcombattest','-owcombatshots','-owskillshots')`. It writes the `OWCombat_*` PNGs (including
 `OWCombat_8_Skills.png` and `OWCombat_9_AfterSkills.png`) under UE `Saved/Screenshots` before quitting. `-owcombatshots`
 is test-only: it raises Maya's level, fills the weapon slots and sets demo currency and ammo (made-up numbers). Other
-switches: `-owslots=<2..4>`, `-owmoney=<n>`, `-owerid=<n>`, `-owinventoryselftest`; **R** reloads in play.
+switches: `-owslots=<2..4>`, `-owmoney=<n>`, `-owerid=<n>`, `-owinventoryselftest` (one PASS or FAILED line per check, then the `passed`/`FAILED` summary and a quit, unless another driver such as `-owinventoryactions` is on the command line); **R** reloads in play.
 `-owinvshots` is a separate capture that drives the inventory page with the stock keys and writes `OWCombat_D*.png`. What
 each switch sets up, the page's `OWINVTIME` lines and the steps of `tools/test_inventory_actions.ps1` are described in
 [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md) (2026-09-29 and 2026-10-04 sections).

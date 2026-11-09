@@ -2,8 +2,11 @@
 #include "Dom/JsonObject.h"
 #include "Engine/SkeletalMesh.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
+#include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
+#include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -879,13 +882,41 @@ FString UOpenWillowInventory::StateJson(int32 Level) const
     return Json;
 }
 
+// Switches of the drivers that quit the game themselves: tools/run_limit.ps1's list without -owinventoryselftest (keep the two in step). The self-test
+// quits after its own log only when none of these is on the command line, so a combined run such as -owinventoryactions
+// -owinventoryselftest still reaches its own quit.
+static bool AnotherDriverRequested()
+{
+    static const TCHAR* const Drivers[] = {
+        TEXT("owinvshots"), TEXT("owcombatshots"), TEXT("owgunshots"), TEXT("owfiringshots"), TEXT("owphaselockshots"),
+        TEXT("owpickupcardshots"), TEXT("owmapshots"), TEXT("owstatusshots"), TEXT("owminimapshots"), TEXT("owhudshots"),
+        TEXT("owhuddownshots"), TEXT("owhudfxshots"), TEXT("owskillhudshots"), TEXT("owrangesurvey"), TEXT("owambientshots"),
+        TEXT("owinvopenbench"), TEXT("owfiringtest"), TEXT("owreloadtest"), TEXT("owreloadphaselocktest"), TEXT("owmissionlogtest"),
+        TEXT("owambienttest"), TEXT("owinteractivetest"), TEXT("owmovertest"), TEXT("owquesttest"), TEXT("owrangetest"),
+        TEXT("owvendortest"), TEXT("owinventoryactions"), TEXT("owslicegate") };
+    for (const TCHAR* Driver : Drivers)
+    {
+        if (FParse::Param(FCommandLine::Get(), Driver)) return true;
+    }
+    return false;
+}
+
 bool UOpenWillowInventory::RunSelfTest()
 {
     UOpenWillowInventory* Inv = NewObject<UOpenWillowInventory>(GetTransientPackage());
     int32 Failures = 0;
+    // One line per check: PASS, or FAILED (the error line).
     auto Check = [&Failures](bool bOk, const TCHAR* What)
     {
-        if (!bOk) { ++Failures; UE_LOG(LogTemp, Error, TEXT("OpenWillow inventory self-test FAILED: %s"), What); }
+        if (bOk)
+        {
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory self-test PASS: %s"), What);
+        }
+        else
+        {
+            ++Failures;
+            UE_LOG(LogTemp, Error, TEXT("OpenWillow inventory self-test FAILED: %s"), What);
+        }
     };
     auto Make = [](const TCHAR* Id, const TCHAR* Type)
     {
@@ -959,5 +990,7 @@ bool UOpenWillowInventory::RunSelfTest()
     Costly.MagazineLeft = 0;
     Check(!MagazineBelowShot(Costly), TEXT("a gun that costs no ammo never reloads from the magazine rule"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory self-test: %s"), Failures ? TEXT("FAILED") : TEXT("passed"));
+    // Quit after the result, pass or fail, as the other self-tests do (graceful exit).
+    if (!AnotherDriverRequested()) FPlatformMisc::RequestExit(false);
     return Failures == 0;
 }
