@@ -101,8 +101,10 @@ void UOpenWillowSliceGate::Place(const FVector& Location, const FVector& Look)
 }
 
 // -owslicegatemag=<n> (test only): sets the held gun's magazine to n rounds, once, before the first shot at the dummy, so a listening run
-// hears a reload. The reserve is left alone, so the reload draws from it. With n = 1 the first shot empties the magazine and ShootAt presses
-// reload (WITH_EDITOR builds only: the editor target, which UnrealEditor.exe -game runs, has it). Clamped to the gun's magazine size.
+// hears a reload. The reserve is left alone, so the reload draws from it. The magazine is never set below one shot's cost: a gun whose
+// shot costs 2 rounds (the lent pistol) cannot fire with 1 round, and ShootAt reloads only from an empty magazine, so 1 round would stall
+// the step with no shot and no reload (found in the run of 2026-11-09, 19:30). With the magazine at one shot's cost, the first shot
+// empties it and ShootAt presses reload (WITH_EDITOR builds only: UnrealEditor.exe -game runs the editor target, which has it).
 void UOpenWillowSliceGate::ApplyMagazineFixture(AOpenWillowWalker* W)
 {
     if (MagazineFixture <= 0 || !W) return;
@@ -114,11 +116,12 @@ void UOpenWillowSliceGate::ApplyMagazineFixture(AOpenWillowWalker* W)
         return;
     }
     const int32 Size = UOpenWillowInventory::MagazineSize(*Held);
-    const int32 Set = FMath::Clamp(MagazineFixture, 1, Size);
+    const int32 Cost = UOpenWillowInventory::ShotCostRounds(*Held);
+    const int32 Set = FMath::Clamp(FMath::Max(MagazineFixture, Cost), 1, Size);
     Held->MagazineLeft = Set;
     Fixture(FString::Printf(TEXT("magazine of %s set to %d rounds"), *Held->Id, Set));
-    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine of %s set to %d rounds (-owslicegatemag=%d, size %d)"),
-        *Held->Id, Set, MagazineFixture, Size);
+    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: magazine of %s set to %d rounds (-owslicegatemag=%d, shot cost %d, size %d)"),
+        *Held->Id, Set, MagazineFixture, Cost, Size);
 }
 
 // One FireOnce at the target every Interval seconds (0: every tick). Reloads an empty magazine through the reload key;
@@ -145,6 +148,12 @@ bool UOpenWillowSliceGate::ShootAt(AOpenWillowCombatTarget* Target, float Interv
     }
 #if WITH_EDITOR
     W->TestReloadInput();
+    if (MagazineFixture > 0 && !bMagazineReloadLogged && W->IsReloading())
+    {
+        bMagazineReloadLogged = true;
+        Fixture(TEXT("reload started after the magazine fixture"));
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: reload started after the magazine fixture (-owslicegatemag=%d)"), MagazineFixture);
+    }
 #endif
     return false;
 }

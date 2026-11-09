@@ -53,6 +53,7 @@ private:
     // -owslicegatemag=<n> (test only, 0 = off): the held gun's magazine is set to n rounds once, before the first shot at the dummy.
     int32 MagazineFixture = 0;
     bool bMagazineFixtureSet = false;
+    bool bMagazineReloadLogged = false;   // the fixture's reload is logged once, when it starts
     float RespawnAtBefore = 0.f;
     FVector DeathLocation = FVector::ZeroVector;
     int64 ExperienceBeforeTurnIn = 0;
