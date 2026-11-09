@@ -237,6 +237,66 @@ $out.next = Fail-Text {{ Assert-NoPendingRecords }}
         self.assertEqual(out['next'], '')
         self.assertFalse(record.exists())
 
+    def test_a_backup_and_manifest_changed_to_agree_are_refused_against_the_record(self):
+        """Restore-PendingRecord does not trust verified_hashes.json alone: a backup file and its manifest hash both rewritten (so they agree)
+        no longer give the record's tree hash for that root, and the root is refused. Review F2 on PR #200."""
+        import hashlib
+        record = self.leave_record("Set-Content (Join-Path $tmp 'willow/SaveData/Save0001.sav') 'written by the killed run'")
+        backup = Path(json.loads(record.read_text(encoding='utf-8-sig'))['backup'])
+        (backup / 'SaveData/Save0001.sav').write_bytes(b'tampered')
+        manifest = backup / 'verified_hashes.json'
+        data = json.loads(manifest.read_text(encoding='utf-8-sig'))
+        data['SaveData']['snapshot']['Save0001.sav'] = hashlib.sha256(b'tampered').hexdigest().upper()
+        manifest.write_text(json.dumps(data), encoding='utf-8')
+        out = self.run_ps(rf"""$out.lines = @(Fail-Text {{ Restore-PendingRecord '{record}' -WriterGone }})""")
+        text = '\n'.join(out['lines'])
+        self.assertIn('record kept at', text)
+        self.assertIn('SaveData', text)
+        self.assertEqual((self.tmp / 'willow/SaveData/Save0001.sav').read_text(encoding='utf-8-sig').strip(), 'written by the killed run')
+        self.assertTrue(record.exists())
+
+    def test_a_manifest_naming_another_live_folder_is_refused_against_the_record(self):
+        record = self.leave_record()
+        backup = Path(json.loads(record.read_text(encoding='utf-8-sig'))['backup'])
+        decoy = self.tmp / 'decoy'
+        decoy.mkdir()
+        (decoy / 'mine.txt').write_text('not a save', encoding='utf-8')
+        manifest = backup / 'verified_hashes.json'
+        data = json.loads(manifest.read_text(encoding='utf-8-sig'))
+        data['Config']['live'] = str(decoy)
+        manifest.write_text(json.dumps(data), encoding='utf-8')
+        out = self.run_ps(rf"""$out.lines = @(Fail-Text {{ Restore-PendingRecord '{record}' -WriterGone }})""")
+        self.assertIn('record kept at', out['lines'][0])
+        self.assertIn('Config', out['lines'][0])
+        self.assertEqual((decoy / 'mine.txt').read_text(encoding='utf-8'), 'not a save')   # the manifest's destination was not written
+        self.assertTrue(record.exists())
+        # The restore rows say why (Restore-FromVerifiedRecord with the record).
+        out = self.run_ps(rf"""
+$r = Restore-FromVerifiedRecord '{backup}' (Get-Content -Raw -LiteralPath '{record}' | ConvertFrom-Json)
+$out.rows = @($r.rows | ForEach-Object {{ "$($_.file): $($_.status)" }}); $out.clean = $r.clean; $out.summary = $r.summary
+""")
+        self.assertTrue(any(row.startswith("Config: REFUSED: the manifest's live folder") for row in out['rows']), out)
+        self.assertFalse(out['clean'])
+        self.assertIn('roots refused', out['summary'])
+
+    def test_a_missing_backup_root_counts_as_changed_not_empty(self):
+        """A root verified empty has an empty snapshot; its backup folder gone must still keep the record (review F3 on PR #200)."""
+        out = self.run_ps(r"""
+New-Item -ItemType Directory -Force (Join-Path $script:Game 'sdk_mods/SanitySaver') | Out-Null   # an empty root
+$bak = Backup-Saves
+Remove-Item -LiteralPath (Join-Path $bak 'SanitySaver') -Recurse -Force
+$out.pending = Complete-PendingRecord $true
+$r = Restore-FromVerifiedRecord $bak
+$out.rows = @($r.rows | ForEach-Object { "$($_.file): $($_.status)" }); $out.clean = $r.clean
+$out.live = Test-Path -LiteralPath (Join-Path $script:Game 'sdk_mods/SanitySaver')
+""")
+        self.assertIn('KEPT', out['pending'])
+        self.assertIn('SanitySaver: the backup changed after it was verified (its folder', out['pending'])
+        self.assertTrue(any(row.startswith('SanitySaver: BACKUP CHANGED / MISSING') for row in out['rows']), out)
+        self.assertFalse(out['clean'])
+        self.assertTrue(out['live'])
+        self.assertEqual(len(self.records()), 1)
+
     def test_a_record_whose_roots_already_match_is_completed_and_removed(self):
         record = self.leave_record()
         out = self.run_ps(r"""$out.lines = @(Assert-NoPendingRecords)""")

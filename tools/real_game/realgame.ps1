@@ -129,8 +129,10 @@ function Get-FileSha256([string]$Path) {
 # Make the live tree $Live identical to the backup tree $Backup: files added during the run are removed, missing and changed
 # files are copied back, directories created during the run are removed when empty. Then every file is compared again by
 # SHA-256. Returns one row per difference found; a row with status 'MISMATCH after restore' means the restore failed.
+# A missing backup folder is refused before $Live is touched: Get-TreeHashes reads it as empty, which would delete every live file.
 function Restore-Tree([string]$Backup, [string]$Live, [string]$Label) {
     $Backup = [IO.Path]::GetFullPath($Backup).TrimEnd('\'); $Live = [IO.Path]::GetFullPath($Live).TrimEnd('\')
+    if (!(Test-Path -LiteralPath $Backup -PathType Container)) { throw "backup folder $Backup is missing; $Live was not touched" }
     $rel = { param($Root, $Path) $Path.Substring($Root.Length + 1) }
     $row = { param($File, $Status) [pscustomobject]@{ file = "$Label\$File"; status = $Status } }
     if (!(Test-Path -LiteralPath $Live)) { New-Item -ItemType Directory -Force $Live | Out-Null }
@@ -206,7 +208,11 @@ function Restore-VerifiedRoots([string]$Backup, $Roots, $Snapshots) {
             if ($Snapshots[$name] -is [hashtable]) {
                 $b = Join-Path $Backup $name
                 $diff = @(Compare-Hashes $Snapshots[$name] (Get-TreeHashes $b))
-                if ($diff.Count) {
+                if (!(Test-Path -LiteralPath $b -PathType Container)) {
+                    # Get-TreeHashes reads a missing folder as empty: a verified empty root would otherwise pass and reach Restore-Tree.
+                    $rows += [pscustomobject]@{ file = $name; status = "BACKUP CHANGED / MISSING after verification ($b is gone); not restored" }
+                    $changed += $name
+                } elseif ($diff.Count) {
                     $rows += [pscustomobject]@{ file = $name; status = "BACKUP CHANGED after verification ($($diff.Count) files, first $($diff[0])); not restored" }
                     $changed += $name
                 } else { $rows += @(Restore-Tree $b $live $name) }
@@ -254,7 +260,10 @@ function Restore-VerifiedBackup([string]$Backup) {
     }
 }
 # Restore-VerifiedRoots over the roots and snapshot states the backup's verified_hashes.json names. Returns its result object.
-function Restore-FromVerifiedRecord([string]$Backup) {
+# -Record (Restore-PendingRecord passes the pending record): the manifest is not trusted alone. A root is refused (row 'REFUSED', not restored,
+# result not clean) unless the record names it with the same live folder and its manifest snapshot gives the record's tree hash for that root
+# (Get-HashesDigest, the scheme of Get-TreeDigest). A root the record names and the manifest does not is refused the same way.
+function Restore-FromVerifiedRecord([string]$Backup, $Record = $null) {
     $file = Join-Path $Backup 'verified_hashes.json'
     if (!(Test-Path -LiteralPath $file)) { throw "no verified_hashes.json in $Backup; not restoring from it" }
     $roots = [ordered]@{}; $snapshots = @{}
@@ -268,7 +277,33 @@ function Restore-FromVerifiedRecord([string]$Backup) {
             $snapshots[$root.Name] = $hashes
         }
     }
-    Restore-VerifiedRoots $Backup $roots $snapshots
+    if ($null -eq $Record) { return (Restore-VerifiedRoots $Backup $roots $snapshots) }
+    $refused = @(); $recorded = @{}
+    if ($Record.roots) { foreach ($r in $Record.roots.PSObject.Properties) { $recorded[$r.Name] = $r.Value } }
+    $full = { param($Path) if ($Path) { [IO.Path]::GetFullPath([string]$Path).TrimEnd('\') } else { '' } }
+    foreach ($name in @($roots.Keys)) {
+        $mine = $recorded[$name]; $state = $snapshots[$name]; $why = $null
+        if ($null -eq $mine -or !@($recorded.Keys | Where-Object { $_ -ceq $name }).Count) { $why = 'the pending record does not name this root' }
+        elseif ((& $full $roots[$name]) -cne (& $full $mine.live)) { $why = "the manifest's live folder '$($roots[$name])' is not the record's '$($mine.live)'" }
+        else {
+            $got = if ($state -is [hashtable]) { Get-HashesDigest $state } elseif ($state -ceq 'absent') { 'absent' } else { $null }   # else: never restored
+            if ($null -ne $got -and $got -cne [string]$mine.tree_sha256) { $why = "the manifest snapshot's tree hash $got is not the record's $($mine.tree_sha256)" }
+        }
+        if ($why) { $refused += [pscustomobject]@{ file = $name; status = "REFUSED: $why; not restored" }; $roots.Remove($name) }
+    }
+    foreach ($name in $recorded.Keys) {
+        if (!@($roots.Keys | Where-Object { $_ -ceq $name }).Count -and !@($refused | Where-Object { $_.file -ceq $name }).Count) {
+            $refused += [pscustomobject]@{ file = $name; status = 'REFUSED: the pending record names this root and the manifest does not; not restored' }
+        }
+    }
+    $result = Restore-VerifiedRoots $Backup $roots $snapshots
+    if ($refused.Count) {
+        $result.rows = @($refused) + @($result.rows)
+        $result.summary = "NOT IDENTICAL to $Backup ($($refused.Count) roots refused: the manifest does not match the pending record)"
+        $result.clean = $false
+    }
+    $result | Add-Member -NotePropertyName refused -NotePropertyValue @($refused) -Force
+    $result
 }
 
 # The cleanup of the shorter captures (Backup-Saves, one game at a time): call it after the game is stopped and the driver removed, before the

@@ -1128,6 +1128,14 @@ restored, its backup is compared with the file hashes the run took when that roo
 `BACKUP CHANGED after verification`), the saves line reads NOT IDENTICAL, and the record and both locks stay. The manual recovery printed for
 an unconfirmed game exit names `Restore-PendingRecord`, which makes the same check. Synthetic test: `tests/real_game_finalizer_recheck_test.py`.
 
+A verified root whose backup folder is missing counts as changed, never as empty (`Get-TreeHashes` reads a missing folder as an empty one):
+`Restore-Tree` refuses a missing backup before it touches the live folder, `Restore-VerifiedRoots` reports `BACKUP CHANGED / MISSING` and
+restores nothing for that root, and the pending-record check keeps the record. The two finalizers hash each staged backup once and use that one
+table both for the comparison with the live tree and as the trusted baseline. `Restore-PendingRecord` does not trust `verified_hashes.json` alone:
+a root is refused (row `REFUSED`, record kept) unless the pending record names it with the same live folder and the manifest's snapshot gives
+the record's tree hash for it. Accepted risk: between the re-check of a backup and the copy from it there is still a short window in which a
+change would be restored; it needs another process writing our ignored backup folder during a run, and no staged copy guards against it.
+
 The driver folder is always exclusive: `Install-Driver` refuses a folder that exists unless the caller claimed it for this
 run (`-ClaimedBy <id>`, an `.owrun` file and nothing else), and writes an owner id into the folder's `.owrun` and the record.
 `Remove-Driver`, and any recovery, removes only a folder whose `.owrun` matches that id exactly and that still holds only the

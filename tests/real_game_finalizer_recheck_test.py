@@ -39,7 +39,10 @@ $Out = Join-Path $tmp 'out'; New-Item -ItemType Directory -Force $Out | Out-Null
 $HubLock = Join-Path $tmp 'hub.lock'; Set-Content -LiteralPath $HubLock 'test run'
 $Lane = 'test'; $log = [ordered]@{}
 __ROOTS__
-$rootState = [ordered]@{}; $backupHashes = @{}; $proc = $null; $ownerFile = $null; $runLock = $false; $hub = 'held'
+# The run lock is held, as after Enter-RunLock; its release is stubbed and counted, so the test sees whether the finalizer releases it.
+$global:runLockReleases = 0
+function Exit-RunLock { $global:runLockReleases++ }
+$rootState = [ordered]@{}; $backupHashes = @{}; $proc = $null; $ownerFile = $null; $runLock = $true; $hub = 'held'
 # The script's own backup section: every root copied, verified, and the backup's record written.
 __BACKUP__
 # The game played on after the backup: its progress is in the live saves now, and the backup is not that.
@@ -53,9 +56,21 @@ $result['rows'] = @($rows | ForEach-Object { "$($_.file): $($_.status)" })
 $result['save'] = [IO.File]::ReadAllText((Join-Path $script:WillowDir 'SaveData/Save0001.sav'))
 $result['config'] = [IO.File]::ReadAllText((Join-Path $script:WillowDir 'Config/game.ini'))
 $result['hub_lock_kept'] = Test-Path -LiteralPath $HubLock
+$result['run_lock_releases'] = $global:runLockReleases
+$result['sdk_setting_exists'] = Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/SomeMod.json')
 $result['records'] = @(Get-ChildItem -LiteralPath $env:OW_TEST_PENDING_DIR -Filter '*pending*.json' -File).Count
 $result | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $tmp 'out.json') -Encoding UTF8
 """
+
+# The backup folder of a verified root is gone after verification. sdk_settings is used because the missing folder is the worst case for any
+# root: Get-TreeHashes reads it as empty, and the restore would then delete every live file of it. Its live file is changed too, so a restore
+# (or a delete) would show.
+MISSING = ("Set-Content -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/SomeMod.json') 'played since' -NoNewline; "
+           "Remove-Item -LiteralPath (Join-Path $bak 'sdk_settings') -Recurse -Force   # the backup root is gone")
+# A verified root that was empty: its snapshot is an empty table, so only the missing-folder check can tell gone from empty.
+EMPTY_THEN_MISSING = ("Get-ChildItem -LiteralPath (Join-Path $bak 'sdk_settings') -File | Remove-Item -Force; "
+                      "$backupHashes['sdk_settings'] = @{}; "
+                      "Remove-Item -LiteralPath (Join-Path $bak 'sdk_settings') -Recurse -Force")
 
 TAMPER = "Set-Content -LiteralPath (Join-Path $bak 'SaveData/Save0001.sav') 'tampered' -NoNewline   # the backup changed after it was verified"
 
@@ -107,7 +122,23 @@ class FinalizerRecheckTest(unittest.TestCase):
                 self.assertIn('SaveData: the backup changed after it was verified', out['pending'], out)
                 self.assertEqual(out['records'], 1)                          # the record is kept
                 self.assertTrue(out['hub_lock_kept'])                        # and the lock with it
+                self.assertEqual(out['run_lock_releases'], 0, out)           # and the run lock: its release is skipped
                 self.assertEqual(out['config'], 'original config')           # a root whose backup is intact is still restored
+
+    def test_a_missing_backup_root_leaves_the_live_root_untouched_and_keeps_the_record(self):
+        for script in SCRIPTS:
+            for name, tamper in (('missing', MISSING), ('empty-then-missing', EMPTY_THEN_MISSING)):
+                with self.subTest(script=script, case=name):
+                    out = run_cleanup(script, tamper)
+                    self.assertTrue(out['sdk_setting_exists'], out)               # nothing in the live root was deleted
+                    self.assertTrue(any(row.startswith('sdk_settings: BACKUP CHANGED / MISSING') for row in out['rows']), out)
+                    self.assertTrue(out['saves'].startswith('NOT IDENTICAL'), out)
+                    self.assertTrue(out['pending'].startswith('KEPT'), out)
+                    self.assertIn('sdk_settings: the backup changed after it was verified', out['pending'], out)
+                    self.assertEqual(out['records'], 1)
+                    self.assertTrue(out['hub_lock_kept'])
+                    self.assertEqual(out['run_lock_releases'], 0, out)
+                    self.assertEqual(out['save'], 'original save', out)        # the intact roots are still restored
 
     def test_an_unchanged_backup_is_restored_and_the_record_is_removed(self):
         for script in SCRIPTS:
@@ -119,12 +150,35 @@ class FinalizerRecheckTest(unittest.TestCase):
                 self.assertTrue(out['pending'].startswith('removed'), out)
                 self.assertEqual(out['records'], 0)
                 self.assertFalse(out['hub_lock_kept'])
+                self.assertEqual(out['run_lock_releases'], 1, out)           # a clean restore releases the run lock
 
     def test_neither_finalizer_restores_with_restore_tree_directly(self):
         for script in SCRIPTS:
             text = (R / f'{script}.ps1').read_text(encoding='utf-8')
             self.assertNotIn('Restore-Tree $b $live $sub', text, script)
             self.assertIn('Restore-VerifiedRoots $bak @{ $sub = $live } @{ $sub = $backupHashes[$sub] }', text, script)
+            # The backup is hashed once, and that one table is both the comparison with the live tree and the baseline (review F1).
+            self.assertIn('$diff = @(Compare-Hashes (Get-TreeHashes $live) $staged)', text, script)
+            self.assertIn('$backupHashes[$sub] = $staged', text, script)
+            self.assertNotIn('$backupHashes[$sub] = Get-TreeHashes', text, script)
+
+
+class RestoreTreeTest(unittest.TestCase):
+    def test_restore_tree_refuses_a_missing_backup_before_touching_the_live_folder(self):
+        with tempfile.TemporaryDirectory(prefix='ow-recheck-') as tmp, tempfile.TemporaryDirectory(prefix='ow-recheck-pending-') as pending:
+            live = Path(tmp) / 'live'
+            live.mkdir()
+            (live / 'keep.sav').write_text('mine', encoding='utf-8')
+            body = Path(tmp) / 'body.ps1'
+            body.write_text(f"""$ErrorActionPreference = 'Stop'
+. '{REALGAME}'
+try {{ Restore-Tree '{Path(tmp) / 'gone'}' '{live}' 'x' | Out-Null; 'NO THROW' }} catch {{ "threw: $_" }}
+""", encoding='utf-8-sig')
+            env = dict(os.environ, OW_TEST_PENDING_DIR=pending, OW_TEST_MODE='synthetic-real-game', OPENWILLOW_BL2=str(Path(tmp) / 'game'))
+            done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(body)], capture_output=True, text=True,
+                                  timeout=120, env=env)
+            self.assertIn('threw: backup folder', done.stdout, done.stdout + done.stderr)
+            self.assertEqual((live / 'keep.sav').read_text(encoding='utf-8'), 'mine')
 
 
 if __name__ == '__main__':

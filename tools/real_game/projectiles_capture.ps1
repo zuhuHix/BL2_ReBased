@@ -87,7 +87,10 @@ try {
         $staging = Join-Path $bak "$sub.staging"
         try {
             Copy-Item -Recurse -LiteralPath $live $staging
-            $diff = @(Compare-TreeHashes $live $staging)
+            # The copy is hashed once: the same table is compared with the live tree and kept as the baseline, so nothing that changes between
+            # the two steps can become the baseline. (The rename keeps every relative path.)
+            $staged = Get-TreeHashes $staging
+            $diff = @(Compare-Hashes (Get-TreeHashes $live) $staged)
             if ($diff.Count) { throw "backup of $sub differs from the live tree in $($diff.Count) files ($($diff[0]), ...); not starting" }
             Rename-Item -LiteralPath $staging $sub
         } catch {
@@ -95,8 +98,7 @@ try {
             Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
             throw
         }
-        $st.verified = $true; $backupHashes[$sub] = Get-TreeHashes (Join-Path $bak $sub)
-        $st.files = @(Get-ChildItem -LiteralPath (Join-Path $bak $sub) -Recurse -File -Force).Count
+        $st.verified = $true; $backupHashes[$sub] = $staged; $st.files = $staged.Count
     }
     $rootState | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $bak 'backup_complete.json')
     # verified_hashes.json and this run's pending record (pending.ps1), before the driver: a kill from here on leaves a record the next run refuses on.

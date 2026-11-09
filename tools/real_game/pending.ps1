@@ -43,7 +43,11 @@ $script:PendingKind = 'openwillow-realgame-pending'
 # One SHA-256 over every file's relative path and SHA-256, in ordinal path order: the tree hash. 'absent' when the folder is gone.
 function Get-TreeDigest([string]$Root) {
     if (!(Test-Path -LiteralPath $Root)) { return 'absent' }
-    $hashes = Get-TreeHashes $Root
+    Get-HashesDigest (Get-TreeHashes $Root)
+}
+# The same tree hash from a path-to-SHA-256 table (a manifest snapshot), so a snapshot can be checked against a record's tree_sha256.
+function Get-HashesDigest([hashtable]$Hashes) {
+    $hashes = $Hashes
     [string[]]$names = @($hashes.Keys)
     [Array]::Sort($names, [StringComparer]::Ordinal)
     $text = ($names | ForEach-Object { "$_`t$($hashes[$_])" }) -join "`n"
@@ -143,8 +147,11 @@ function Get-PendingProblems($Record) {
             if ($null -eq $state) { $problems += "$($root.Name): no snapshot"; continue }
             $hashes = [hashtable]::new([StringComparer]::Ordinal)   # paths compare case-sensitively
             foreach ($f in $state.PSObject.Properties) { $hashes[$f.Name] = $f.Value }
-            $inBackup = @(Compare-Hashes $hashes (Get-TreeHashes (Join-Path $backup $root.Name)))
-            if ($inBackup.Count) { $problems += "$($root.Name): the backup changed after it was verified ($($inBackup.Count) files, first $($inBackup[0]))" }
+            $backupRoot = Join-Path $backup $root.Name
+            $inBackup = @(Compare-Hashes $hashes (Get-TreeHashes $backupRoot))
+            # A missing backup folder reads as empty: for a root verified empty it would pass. Missing is changed, never empty.
+            if (!(Test-Path -LiteralPath $backupRoot -PathType Container)) { $problems += "$($root.Name): the backup changed after it was verified (its folder $backupRoot is missing)" }
+            elseif ($inBackup.Count) { $problems += "$($root.Name): the backup changed after it was verified ($($inBackup.Count) files, first $($inBackup[0]))" }
             $inLive = @(Compare-Hashes $hashes (Get-TreeHashes $live))
             if ($inLive.Count) { $problems += "$($root.Name): differs from the backup ($($inLive.Count) files, first $($inLive[0]))" }
         }
@@ -316,10 +323,12 @@ function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
             else { "the driver folder $driver is not that run's (its .owrun does not match the record): left for you" }
         }
         Assert-NoGameForRecovery 'before restoring'
-        $restored = Restore-FromVerifiedRecord ([string]$record.backup)
+        # The manifest names the paths and hashes; the record checks it (root names, live folders, tree hash per root) before anything is restored.
+        $restored = Restore-FromVerifiedRecord ([string]$record.backup) $record
         Format-RestoreRows $restored.rows
         $restored.summary
         Assert-NoGameAfterRestore $aside
+        if (@($restored.refused).Count) { throw "record kept at ${File}: the backup manifest does not match it for $(@($restored.refused | ForEach-Object { $_.file }) -join ', ') (see the REFUSED rows above); those roots were not restored" }
         $uncovered = @(Get-UncoveredRoots ([string]$record.backup))
         $problems = @(Get-PendingProblems $record | Where-Object { $_ -notlike 'the backup manifest does not cover*' })
         if ($problems.Count) { throw "record kept at ${File}: $($problems -join '; ')" }
