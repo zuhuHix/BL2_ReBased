@@ -671,6 +671,11 @@ The default list is `tools/worktree_seed_folders.txt`, one name per line. The in
 there is one list. Parameters: `-SeedFolders` replaces the default list; `-ExtraSeedFolders` adds to it; `-SeedDirectory` names another
 seed (the tests use it).
 
+**When the hook runs.** The `post-checkout` hook provisions only a new worktree (git passes an all-zero previous HEAD for
+`git worktree add`). Branch switches and rebases in an existing worktree skip it, and so do file checkouts (`git checkout -- <path>`),
+because the provisioner scans the whole seed and each run took minutes. `OPENWILLOW_PROVISION=1` forces a run. To top up an existing
+worktree, run it by hand: `powershell -File tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree>` (still missing files only).
+
 **Refused, not copied.** Provisioning stops with an error when a junction or symlink sits on a destination path (`local\`, a
 `local\<folder>\`, `host\ue5\OpenWillow\Content\`) or on a seed or source path, and it checks that every write lands under the
 folder it was meant for. Fill such a folder by hand, or remove the junction first. A pair whose own folder name is excluded

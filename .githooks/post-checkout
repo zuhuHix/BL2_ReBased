@@ -3,6 +3,20 @@
 
 set -u
 
+# Git runs this hook as: post-checkout <previous HEAD> <new HEAD> <1 for a branch checkout, 0 for a file checkout>.
+# Provision only when a worktree is new (previous HEAD all zeros, as git passes it for `git worktree add`) and this is not a
+# file checkout. Branch switches and rebases in an existing worktree skip it: the provisioner scans the whole seed, which is slow.
+# OPENWILLOW_PROVISION=1 forces a run; to top up an existing worktree, run tools/provision_worktree_assets.ps1 by hand.
+if [ "${OPENWILLOW_PROVISION:-}" != "1" ]; then
+    PREVIOUS_HEAD="${1:-}"
+    CHECKOUT_FLAG="${3:-}"
+    if [ "$CHECKOUT_FLAG" = "0" ]; then exit 0; fi
+    # Any character other than 0 (or an empty value) means the worktree already had a HEAD.
+    case "$PREVIOUS_HEAD" in
+        ''|*[!0]*) exit 0 ;;
+    esac
+fi
+
 WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
 SEED_ROOT="$(dirname "$COMMON_DIR")/local/worktree-seed"

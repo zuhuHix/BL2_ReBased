@@ -261,6 +261,48 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(self.install().returncode, 0)
         self.assertEqual(cached.read_text(encoding='utf-8'), (self.repo / 'tools' / 'provision_worktree_assets.ps1').read_text(encoding='utf-8'))
 
+    def git_in(self, worktree, *args, env=None):
+        return subprocess.run(['git', *GIT_IDENTITY, '-C', str(worktree), *args], capture_output=True, text=True,
+                              encoding='utf-8', errors='replace', env=env)
+
+    def test_hook_provisions_a_new_worktree_but_not_a_later_branch_switch(self):
+        self.assertEqual(self.install().returncode, 0)
+        self.git_in(self.repo, 'branch', 'other')
+        added = self.add_worktree('w3')
+        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+        new = self.base / 'w3'
+        slice_file = new / 'local' / 'slice' / 'x.json'
+        self.assertTrue(slice_file.is_file())                     # the new worktree was provisioned
+        slice_file.unlink()
+        switched = self.git_in(new, 'checkout', '-q', 'other')    # an existing worktree: the hook must skip
+        self.assertEqual(switched.returncode, 0, switched.stdout + switched.stderr)
+        self.assertFalse(slice_file.exists())
+
+    def test_hook_skips_a_file_checkout(self):
+        self.assertEqual(self.install().returncode, 0)
+        added = self.add_worktree('w4')
+        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+        new = self.base / 'w4'
+        slice_file = new / 'local' / 'slice' / 'x.json'
+        slice_file.unlink()
+        restored = self.git_in(new, 'checkout', '--', 'host/ue5/OpenWillow/OpenWillow.uproject')
+        self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
+        self.assertFalse(slice_file.exists())
+
+    def test_env_var_forces_a_provision_on_a_branch_switch(self):
+        self.assertEqual(self.install().returncode, 0)
+        self.git_in(self.repo, 'branch', 'forced')
+        added = self.add_worktree('w5')
+        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+        new = self.base / 'w5'
+        slice_file = new / 'local' / 'slice' / 'x.json'
+        slice_file.unlink()
+        env = dict(os.environ, OPENWILLOW_PROVISION='1')
+        switched = self.git_in(new, 'checkout', '-q', 'forced', env=env)
+        self.assertEqual(switched.returncode, 0, switched.stdout + switched.stderr)
+        self.assertTrue(slice_file.is_file())                     # forced: the missing file came back
+        self.assertEqual(slice_file.read_text(encoding='utf-8'), 'slice')
+
     def test_junctioned_seed_is_refused_before_anything_is_written(self):
         elsewhere = self.base / 'elsewhere-seed'
         elsewhere.mkdir()
