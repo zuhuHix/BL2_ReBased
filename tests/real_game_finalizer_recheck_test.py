@@ -58,6 +58,7 @@ $result['config'] = [IO.File]::ReadAllText((Join-Path $script:WillowDir 'Config/
 $result['hub_lock_kept'] = Test-Path -LiteralPath $HubLock
 $result['run_lock_releases'] = $global:runLockReleases
 $result['sdk_setting_exists'] = Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/SomeMod.json')
+$result['other_writer_file'] = if (Test-Path -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/Other.json')) { [IO.File]::ReadAllText((Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/Other.json')) } else { 'MISSING' }
 $result['records'] = @(Get-ChildItem -LiteralPath $env:OW_TEST_PENDING_DIR -Filter '*pending*.json' -File).Count
 $result | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $tmp 'out.json') -Encoding UTF8
 """
@@ -71,6 +72,11 @@ MISSING = ("Set-Content -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/se
 EMPTY_THEN_MISSING = ("Get-ChildItem -LiteralPath (Join-Path $bak 'sdk_settings') -File | Remove-Item -Force; "
                       "$backupHashes['sdk_settings'] = @{}; "
                       "Remove-Item -LiteralPath (Join-Path $bak 'sdk_settings') -Recurse -Force")
+
+# The sdk_settings root did not exist at the backup (no file of it in FILES), and another writer creates it after the backup, before the cleanup.
+ABSENT_THEN_CREATED = ("New-Item -ItemType Directory -Force (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings') | Out-Null; "
+                       "Set-Content -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings/Other.json') 'another writer' -NoNewline")
+FILES_WITHOUT_SDK_SETTINGS = {k: v for k, v in FILES.items() if not k.startswith('game/sdk_mods/settings/')}
 
 TAMPER = "Set-Content -LiteralPath (Join-Path $bak 'SaveData/Save0001.sav') 'tampered' -NoNewline   # the backup changed after it was verified"
 
@@ -89,11 +95,11 @@ def lifted(script):
     return roots, backup, final[:-1]
 
 
-def run_cleanup(script, tamper):
+def run_cleanup(script, tamper, files=FILES):
     roots, backup, final = lifted(script)
     with tempfile.TemporaryDirectory(prefix='ow-recheck-') as tmp, tempfile.TemporaryDirectory(prefix='ow-recheck-pending-') as pending:
         tmp_path = Path(tmp)
-        for rel, text in FILES.items():
+        for rel, text in files.items():
             path = tmp_path / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding='utf-8')
@@ -139,6 +145,21 @@ class FinalizerRecheckTest(unittest.TestCase):
                     self.assertTrue(out['hub_lock_kept'])
                     self.assertEqual(out['run_lock_releases'], 0, out)
                     self.assertEqual(out['save'], 'original save', out)        # the intact roots are still restored
+
+    def test_an_absent_root_created_during_the_run_is_left_in_place_and_reported_like_the_shared_path(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                out = run_cleanup(script, ABSENT_THEN_CREATED, files=FILES_WITHOUT_SDK_SETTINGS)
+                self.assertEqual(out['other_writer_file'], 'another writer', out)   # never removed: another writer's file stays
+                self.assertIn('sdk_settings: created during the run; left for the maintainer', out['rows'], out)   # the shared helper's row
+                self.assertNotIn('created during the run, removed', ' '.join(out['rows']), out)
+                self.assertTrue(out['saves'].startswith('NOT IDENTICAL'), out)     # as Restore-VerifiedRoots' summary reads
+                self.assertTrue(out['pending'].startswith('KEPT'), out)            # the record stays, as on the shared path
+                self.assertEqual(out['records'], 1)
+                self.assertTrue(out['hub_lock_kept'])
+                self.assertEqual(out['run_lock_releases'], 0, out)
+                self.assertEqual(out['save'], 'original save', out)                # the intact roots are still restored, as on the shared path
+                self.assertEqual(out['config'], 'original config', out)
 
     def test_an_unchanged_backup_is_restored_and_the_record_is_removed(self):
         for script in SCRIPTS:

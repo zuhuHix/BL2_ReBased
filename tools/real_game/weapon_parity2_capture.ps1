@@ -252,11 +252,9 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
             $st = $rootState[$sub]; $b = Join-Path $bak $sub; $live = $roots[$sub]
             try {
                 if (!$st.present) {
-                    # Absent at the start (an SDK store this run's game created): removed again; still there is a problem.
-                    if (Test-Path -LiteralPath $live) {
-                        Remove-Item -LiteralPath $live -Recurse -Force -ErrorAction SilentlyContinue
-                        $rows += [pscustomobject]@{ file = $sub; status = $(if (Test-Path -LiteralPath $live) { 'CREATED DURING THE RUN, STILL PRESENT' } else { 'created during the run, removed' }) }
-                    }
+                    # Absent at the start: a root that exists now was created during the run, perhaps by another writer. It is left in place and
+                    # reported by the shared helper (snapshot 'absent'), never removed here; the outcome is the shared path's.
+                    $rows += @((Restore-VerifiedRoots $bak @{ $sub = $live } @{ $sub = 'absent' }).rows)
                 } elseif ($st.verified) {
                     # The backup is re-checked against the hashes it was verified with before anything is restored (Restore-VerifiedRoots): a backup
                     # changed since is not restored, and the record and both locks stay. Otherwise: Restore-Tree removes added files, restores missing
@@ -269,7 +267,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
         }
         # A root the backup never reached (the run stopped before it) has no state: report it, never call it identical.
         foreach ($sub in $roots.Keys) { if (!$rootState.Contains($sub)) { $rows += [pscustomobject]@{ file = $sub; status = 'NO VERIFIED BACKUP: backup did not reach it' } } }
-        $problem = 'MISMATCH*', 'RESTORE FAILED*', 'NO VERIFIED BACKUP*', 'BACKUP CHANGED*', 'CREATED DURING THE RUN, STILL PRESENT'
+        $problem = 'MISMATCH*', 'RESTORE FAILED*', 'NO VERIFIED BACKUP*', 'BACKUP CHANGED*', 'CREATED DURING THE RUN, STILL PRESENT', 'created during the run; left*'
         $bad = @($rows | Where-Object { $status = $_.status; @($problem | Where-Object { $status -clike $_ }).Count })
         $cleanup.saves = if ($bad.Count) { "NOT IDENTICAL to $bak ($($bad.Count) problems)" } else { "identical to $bak after $($rows.Count) restores" }
     }
