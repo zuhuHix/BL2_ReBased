@@ -89,6 +89,37 @@ def test_a_gap_beyond_the_tolerance_fails():
     assert c.compare(c.live_pieces(rows), [{'bone': 'Head', 'location': [0.0, 0.0, 0.0]}])[0]['pass'] is False
 
 
+def test_a_piece_missing_from_the_host_report_fails():
+    rows = [piece_row('Pawn_A', [0.0, 0.0, 0.0], 'Head'), piece_row('Pawn_A', [0.0, 0.0, 0.0], 'Spine2')]
+    result = c.compare(c.live_pieces(rows), [{'bone': 'Head', 'location': [0.0, 0.0, 0.0]}])
+    assert [r['bone'] for r in result] == ['Head', 'Spine2'] and result[0]['pass'] and result[1]['pass'] is False
+
+
+def test_unusable_host_reports_are_refused():
+    cases = ['{', json.dumps({'Other': {}}), json.dumps({'Bullymong': {'attachments': [{'bone': 'Head'}]}}),
+             json.dumps({'Bullymong': {'attachments': [{'bone': 'Head', 'location': [0, 0, 0]}, {'bone': 'Head', 'location': [1, 1, 1]}]}})]
+    for text in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'host.json'
+            path.write_text(text, encoding='utf-8')
+            try:
+                c.host_rows(path, 'Bullymong')
+            except c.SessionError:
+                continue
+            raise AssertionError(f'accepted {text}')
+
+
+def test_a_truncated_session_row_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = session_folder(tmp, {'hit_attempt': 'hit', 'hit_result': {'target': 'Pawn_A', 'target_lifted': True}}, {})
+        (folder / 'hit.jsonl').write_text(json.dumps(piece_row('Pawn_A', [0, 0, 0])) + chr(10) + '{"lifted": "Pa', encoding='utf-8')
+        try:
+            c.held_rows(folder)
+        except c.SessionError:
+            return
+        raise AssertionError('accepted a truncated row')
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:

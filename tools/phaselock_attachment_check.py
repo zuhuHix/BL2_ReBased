@@ -68,7 +68,12 @@ def held_rows(folder, stage='hit'):
     path = folder / f'{attempt}.jsonl'
     if not path.is_file():
         raise SessionError(f'{path} is missing')
-    rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    except (OSError, ValueError) as error:
+        raise SessionError(f'{path} unreadable: {error}')
+    if not all(isinstance(row, dict) for row in rows):
+        raise SessionError(f'{path} has a row that is not an object')
     held = [row for row in rows if row.get('lifted') == result['target']]
     if not held:
         raise SessionError(f'{attempt}: no row shows {result["target"]} lifted')
@@ -88,7 +93,23 @@ def live_pieces(rows):
     return found
 
 
+def host_rows(path, pawn):
+    """The host report's attachments for pawn. Raises SessionError when the report cannot be used, or names a bone twice."""
+    try:
+        rows = json.loads(Path(path).read_text(encoding='utf-8'))[pawn].get('attachments', [])
+        bones = [row['bone'] for row in rows]
+        for row in rows:
+            if len(row['location']) != 3:
+                raise ValueError(f"{row['bone']}: location is not three numbers")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise SessionError(f'host report {path} unusable for {pawn}: {error!r}')
+    if len(set(bones)) != len(bones):
+        raise SessionError(f'host report {path} names a bone twice: {bones}')
+    return rows
+
+
 def compare(live, host_rows):
+    """One row per piece on either side. A piece only the game shows, or only the host shows, fails: a partial report must not pass."""
     out = []
     for piece in host_rows:
         mine = piece['location']
@@ -96,6 +117,9 @@ def compare(live, host_rows):
         gap = math.dist(mine, theirs) if theirs else None
         out.append({'bone': piece['bone'], 'host': mine, 'live': theirs, 'gap': gap,
                     'pass': gap is not None and gap <= PASS_TOLERANCE})
+    named = {piece['bone'] for piece in host_rows}
+    for bone in sorted(set(live) - named):
+        out.append({'bone': bone, 'host': None, 'live': live[bone], 'gap': None, 'pass': False})
     return out
 
 
@@ -111,16 +135,18 @@ def main():
     args = parser.parse_args()
     try:
         rows, target = held_rows(args.session)
+        host = host_rows(args.host, args.pawn)
     except SessionError as error:
         print(f'cannot compare: {error}')
         return 2
-    host = json.loads(args.host.read_text(encoding='utf-8'))[args.pawn].get('attachments', [])
     results = compare(live_pieces(rows), host)
     print(f'held target {target}; pivot position on the bone at one held frame; tolerance {PASS_TOLERANCE} units')
     for r in results:
-        gap = '-' if r['gap'] is None else '%.1f' % r['gap']
+        gap = '-' if r['gap'] is None else '%.2f' % r['gap']
         print(f"{r['bone']:<8} host {vector(r['host'])}  live {vector(r['live'])}  gap {gap}  {'pass' if r['pass'] else 'FAIL'}")
-    return 0 if results and all(r['pass'] for r in results) else 1
+    passed = bool(results) and all(r['pass'] for r in results)
+    print(f"verdict: {'PASS' if passed else 'FAIL'} ({sum(r['pass'] for r in results)} of {len(results)} pieces)")
+    return 0 if passed else 1
 
 
 if __name__ == '__main__':
