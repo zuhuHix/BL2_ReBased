@@ -13,7 +13,8 @@ $script:OwGunShotsSeconds = 3600
 $script:OwScriptedSwitches = @(
     'owinvshots', 'owcombatshots', 'owgunshots', 'owfiringshots', 'owphaselockshots', 'owpickupcardshots', 'owmapshots', 'owstatusshots', 'owminimapshots',
     'owhudshots', 'owhuddownshots', 'owhudfxshots', 'owskillhudshots', 'owrangesurvey', 'owambientshots', 'owinvopenbench', 'owfiringtest', 'owreloadtest', 'owreloadphaselocktest',
-    'owmissionlogtest', 'owambienttest', 'owinteractivetest', 'owmovertest', 'owquesttest', 'owrangetest', 'owvendortest', 'owinventoryactions', 'owinventoryselftest', 'owslicegate')
+    'owmissionlogtest', 'owambienttest', 'owinteractivetest', 'owmovertest', 'owquesttest', 'owrangetest', 'owvendortest', 'owinventoryactions', 'owinventoryselftest', 'owslicegate',
+    'owaudiotest', 'owcontrolstest', 'owmissionpagetest', 'owshieldcheck', 'owphaselockkillcheck')
 
 # The -Extra switches, one each. Launched with powershell -File, -Extra arrives as one comma-joined string.
 function Get-OwSwitchNames {

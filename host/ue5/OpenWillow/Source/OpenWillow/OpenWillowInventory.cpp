@@ -3,8 +3,10 @@
 #include "Engine/SkeletalMesh.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
+#include "CoreGlobals.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
+#include "Misc/OutputDeviceRedirector.h"
 #include "Misc/PackageName.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
@@ -893,7 +895,8 @@ static bool AnotherDriverRequested()
         TEXT("owhuddownshots"), TEXT("owhudfxshots"), TEXT("owskillhudshots"), TEXT("owrangesurvey"), TEXT("owambientshots"),
         TEXT("owinvopenbench"), TEXT("owfiringtest"), TEXT("owreloadtest"), TEXT("owreloadphaselocktest"), TEXT("owmissionlogtest"),
         TEXT("owambienttest"), TEXT("owinteractivetest"), TEXT("owmovertest"), TEXT("owquesttest"), TEXT("owrangetest"),
-        TEXT("owvendortest"), TEXT("owinventoryactions"), TEXT("owslicegate") };
+        TEXT("owvendortest"), TEXT("owinventoryactions"), TEXT("owslicegate"), TEXT("owaudiotest"), TEXT("owcontrolstest"),
+        TEXT("owmissionpagetest"), TEXT("owshieldcheck"), TEXT("owphaselockkillcheck") };
     for (const TCHAR* Driver : Drivers)
     {
         if (FParse::Param(FCommandLine::Get(), Driver)) return true;
@@ -990,7 +993,11 @@ bool UOpenWillowInventory::RunSelfTest()
     Costly.MagazineLeft = 0;
     Check(!MagazineBelowShot(Costly), TEXT("a gun that costs no ammo never reloads from the magazine rule"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow inventory self-test: %s"), Failures ? TEXT("FAILED") : TEXT("passed"));
-    // Quit after the result, pass or fail, as the other self-tests do (graceful exit).
-    if (!AnotherDriverRequested()) FPlatformMisc::RequestExit(false);
+    // Quit after the result, pass or fail, as the other self-tests do (graceful exit). Flush first so the summary line is in the log file.
+    if (!AnotherDriverRequested())
+    {
+        if (GLog) GLog->Flush();
+        FPlatformMisc::RequestExit(false);
+    }
     return Failures == 0;
 }

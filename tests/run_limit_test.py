@@ -1,6 +1,7 @@
 """Synthetic test of tools/run_limit.ps1: the rule for which runs get a limit, and stopping a stalled process that the run started.
 A sleeping Python stands in for the editor, so nothing heavy starts. Windows only (the launchers are)."""
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -102,6 +103,35 @@ class RunLimit(unittest.TestCase):
         for piece in ('run_limit.ps1', 'Wait-OwStartedProcess', 'Stop-OwStartedProcess', '[int]$TimeoutSeconds = -1', '$process.ExitCode -eq 0'):
             self.assertIn(piece, source)
         self.assertNotRegex(source, r'Stop-Process\s+-Name|taskkill|\bpkill\b|\bkillall\b')
+
+
+INVENTORY_CPP = REPO / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow' / 'OpenWillowInventory.cpp'
+
+
+class QuitListsInSync(unittest.TestCase):
+    """The C++ guard (AnotherDriverRequested in OpenWillowInventory.cpp) and the launcher's scripted list must name the same drivers.
+    The only allowed difference is -owinventoryselftest itself, which is in the launcher's list and not in the guard."""
+
+    def cpp_drivers(self):
+        source = INVENTORY_CPP.read_text(encoding='utf-8')
+        block = source.split('static const TCHAR* const Drivers[] = {', 1)[1].split('};', 1)[0]
+        return set(re.findall(r'TEXT\("(ow[a-z0-9_]+)"\)', block))
+
+    def script_drivers(self):
+        source = HELPER.read_text(encoding='utf-8')
+        block = source.split('$script:OwScriptedSwitches = @(', 1)[1].split(')', 1)[0]
+        return set(re.findall(r"'(ow[a-z0-9_]+)'", block))
+
+    def test_the_guard_and_the_launcher_list_name_the_same_drivers(self):
+        cpp = self.cpp_drivers()
+        script = self.script_drivers() - {'owinventoryselftest'}
+        self.assertEqual(sorted(script - cpp), [], 'in the launcher list but not the C++ guard')
+        self.assertEqual(sorted(cpp - script), [], 'in the C++ guard but not the launcher list')
+
+    def test_the_lists_are_read(self):
+        self.assertGreaterEqual(len(self.cpp_drivers()), 30)
+        self.assertIn('owshieldcheck', self.cpp_drivers())
+        self.assertIn('owinventoryselftest', self.script_drivers())
 
 
 if __name__ == '__main__':
