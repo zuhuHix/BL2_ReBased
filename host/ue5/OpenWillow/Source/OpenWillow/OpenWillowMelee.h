@@ -17,10 +17,9 @@ namespace OpenWillowMelee
     // The first-person move's blends (GD_PlayerShared.Anims1st.WeaponAnim_Melee).
     constexpr float BlendIn = 0.1f;
     constexpr float BlendOut = 0.15f;
-    // The game holds the weapons for the first-person clip's length: 0.70 s, read live. Used only until that clip is imported.
+    // The game holds the weapons for the first-person clip's length: 0.70 s, read live. Used only until that clip is imported; then the
+    // clip's game length (OpenWillowClip::GameSeconds, OpenWillowClipTime.h).
     constexpr float NoClipDuration = .7f;
-    // How long the game holds the weapons for an imported clip. The package gives a clip keys / 30 s; UE gives it the same keys one interval less, as it counts the gaps between them.
-    inline float HeldSeconds(float PlayLength, double FrameInterval) { return PlayLength + float(FrameInterval); }
 
     // Init_PlayerMeleeDamage: 2.5 x (8 x 1.13^level). The buff the definition adds (InstigatedMeleeDamageAddedBuff) is not modelled.
     float DamageAtLevel(int32 Level);

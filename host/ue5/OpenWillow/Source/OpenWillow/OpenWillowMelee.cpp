@@ -1,4 +1,5 @@
 #include "OpenWillowMelee.h"
+#include "OpenWillowClipTime.h"
 #include "OpenWillowHitEvent.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowArmsAnimInstance.h"
@@ -63,7 +64,7 @@ void AOpenWillowWalker::MeleePressed()
         return;
     }
     // At least as long as the hit's delay, so the weapons stay busy until the hit has landed.
-    const float Duration = FMath::Max(MeleeAnim ? OpenWillowMelee::HeldSeconds(MeleeAnim->GetPlayLength(), MeleeAnim->GetSamplingFrameRate().AsInterval()) : OpenWillowMelee::NoClipDuration, OpenWillowMelee::HitDelay);
+    const float Duration = FMath::Max(MeleeAnim ? OpenWillowClip::GameSeconds(*MeleeAnim) : OpenWillowMelee::NoClipDuration, OpenWillowMelee::HitDelay);
     if (!MeleeSwing.Press(Now, Duration))
     {
         UE_LOG(LogTemp, Display, TEXT("OWMELEE press refused: swing in progress t=%.2f"), Now);

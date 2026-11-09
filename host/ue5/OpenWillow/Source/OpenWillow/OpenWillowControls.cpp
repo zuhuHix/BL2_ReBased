@@ -1,5 +1,6 @@
 #include "OpenWillowControls.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowClipTime.h"
 #include "OpenWillowHitEvent.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowSkills.h"
@@ -246,8 +247,8 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         Check(TEXT("melee_cone_rule"), Pick == 1 && OpenWillowMelee::ChooseVictim(FVector::ZeroVector, FVector::ForwardVector, {Blocked, Far, Side}) == INDEX_NONE, FString::Printf(TEXT("pick=%d"), Pick));
         OpenWillowMelee::FSwing Swing;
         const bool bFirst = Swing.Press(0.f, 1.f), bSecond = Swing.Press(.5f, 1.f), bEarly = Swing.ConsumeHit(.2f), bDue = Swing.ConsumeHit(.3f), bOnce = Swing.ConsumeHit(.4f), bAgain = Swing.Press(1.f, 1.f);
-        const bool bHeld = FMath::IsNearlyEqual(OpenWillowMelee::HeldSeconds(20.f / 30.f, 1. / 30.), 21.f / 30.f, 1e-5f);
-        Check(TEXT("melee_swing_rule"), bFirst && !bSecond && !bEarly && bDue && !bOnce && bAgain && bHeld, TEXT("press, refused, not early, due, once, press again; 21 keys hold 0.70 s"));
+        const bool bHeld = FMath::IsNearlyEqual(OpenWillowClip::GameSeconds(20.f / 30.f, 1. / 30.), 21.f / 30.f, 1e-5f);
+        Check(TEXT("melee_swing_rule"), bFirst && !bSecond && !bEarly && bDue && !bOnce && bAgain && bHeld, TEXT("press, refused, not early, due, once, press again; game length: 21 keys at 30 fps are 0.70 s"));
         // Well inside the reach and dead ahead, from Maya's own key.
         PlaceDummy(Maya, Player, 150.f, 0.f);
         PressV(Player, Now, true);
