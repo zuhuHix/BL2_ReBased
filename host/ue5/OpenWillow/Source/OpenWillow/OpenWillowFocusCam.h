@@ -31,7 +31,7 @@ namespace OpenWillowFocusCam
     // The horizontal FOV, in degrees, of the page's view.
     double ZoomedFov(double HorizontalFovDegrees, double Zoom);
     // The view rotation (roll 0) that puts Point at Screen for a camera at Eye with this horizontal FOV and aspect (width over height).
-    // False when no such rotation exists (the point is at the eye, or too far above or below for that screen point); Out is then the plain look-at.
+    // False when no such rotation exists (the point is at the eye, or too far above or below for that screen point without turning the camera upside down); Out is then the plain look-at.
     bool Aim(const FVector& Eye, const FVector& Point, const FVector2D& Screen, double HorizontalFovDegrees, double Aspect, FRotator& Out);
     // Where Point lands on the screen of that view (x right, y up, -1..1); false when it is behind the camera. The inverse of Aim, for checks.
     bool Project(const FVector& Eye, const FRotator& View, double HorizontalFovDegrees, double Aspect, const FVector& Point, FVector2D& Out);

@@ -60,6 +60,8 @@ bool Aim(const FVector& Eye, const FVector& Point, const FVector2D& Screen, doub
     if (FMath::Abs(Target.Z) > A) return false;
     const double Phi = FMath::Atan2(Local.Z, Local.X);
     const double Pitch = FMath::Asin(Target.Z / A) - Phi;
+    // Past straight up or down the camera would be upside down: that is no framing, so the plain look-at stands.
+    if (FMath::Abs(Pitch) > UE_HALF_PI) return false;
     // Then yaw: after the pitch the direction points (H, Local.Y) on the ground plane, turned by the yaw; the yaw is what makes it the target's heading.
     const double H = Local.X * FMath::Cos(Pitch) - Local.Z * FMath::Sin(Pitch);
     const double Yaw = FMath::Atan2(Target.Y, Target.X) - FMath::Atan2(Local.Y, H);
