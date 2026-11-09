@@ -220,4 +220,10 @@ $LocalIsJunction = Test-Reparse (Join-Path $WorktreeRoot 'local')
 $Lines = Invoke-Pairs $Pairs $LocalIsJunction $MissingNote
 $Header = "OpenWillow worktree assets provisioned for $WorktreeRoot"
 if ($LocalIsJunction) { $Lines = @('local\ is a junction (shared data root); not provisioning local') + $Lines }
+# The marker the post-checkout hook reads: in this worktree's own git directory (per worktree, never tracked, and not under local\,
+# which may be a shared junctioned root). It is written only after every copy above succeeded.
+$GitDir = (& git -C $WorktreeRoot rev-parse --path-format=absolute --git-dir).Trim()
+if ($LASTEXITCODE -eq 0 -and $GitDir) {
+    Set-Content -LiteralPath (Join-Path $GitDir 'openwillow-provisioned') -Value ([DateTimeOffset]::UtcNow.ToString('o')) -Encoding ascii
+}
 Write-Output ($Header + "`n" + ($Lines -join "`n"))

@@ -4,17 +4,22 @@
 set -u
 
 # Git runs this hook as: post-checkout <previous HEAD> <new HEAD> <1 for a branch checkout, 0 for a file checkout>.
-# Provision only when a worktree is new (previous HEAD all zeros, as git passes it for `git worktree add`) and this is not a
-# file checkout. Branch switches and rebases in an existing worktree skip it: the provisioner scans the whole seed, which is slow.
-# OPENWILLOW_PROVISION=1 forces a run; to top up an existing worktree, run tools/provision_worktree_assets.ps1 by hand.
+# A worktree is provisioned once: the provisioner writes a marker in the worktree's own git directory after a successful run.
+# Provision when the marker is missing (a new worktree, or a `git worktree add --no-checkout` worktree at its first real
+# checkout, whose previous HEAD is not zeros) or when the previous HEAD is all zeros. Skip branch switches and rebases in a
+# provisioned worktree, and skip file checkouts. The provisioner scans the whole seed, which is slow.
+# OPENWILLOW_PROVISION=1 forces a run. To top up an existing worktree, run tools/provision_worktree_assets.ps1 by hand.
 if [ "${OPENWILLOW_PROVISION:-}" != "1" ]; then
     PREVIOUS_HEAD="${1:-}"
     CHECKOUT_FLAG="${3:-}"
     if [ "$CHECKOUT_FLAG" = "0" ]; then exit 0; fi
-    # Any character other than 0 (or an empty value) means the worktree already had a HEAD.
-    case "$PREVIOUS_HEAD" in
-        ''|*[!0]*) exit 0 ;;
-    esac
+    GIT_DIR_HERE=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
+    if [ -f "$GIT_DIR_HERE/openwillow-provisioned" ]; then
+        # Provisioned before: only a zero previous HEAD (which a marked worktree never has) would run again.
+        case "$PREVIOUS_HEAD" in
+            ''|*[!0]*) exit 0 ;;
+        esac
+    fi
 fi
 
 WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0

@@ -303,6 +303,26 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(slice_file.is_file())                     # forced: the missing file came back
         self.assertEqual(slice_file.read_text(encoding='utf-8'), 'slice')
 
+    def test_no_checkout_worktree_provisions_on_its_first_real_checkout(self):
+        self.assertEqual(self.install().returncode, 0)
+        self.git_in(self.repo, 'branch', 'nc-a')
+        self.git_in(self.repo, 'branch', 'nc-b')
+        added = subprocess.run(['git', *GIT_IDENTITY, '-C', str(self.repo), 'worktree', 'add', '-q', '--no-checkout',
+                                '--detach', str(self.base / 'nc'), 'nc-a'], capture_output=True, text=True, encoding='utf-8', errors='replace')
+        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+        new = self.base / 'nc'
+        slice_file = new / 'local' / 'slice' / 'x.json'
+        self.assertFalse(slice_file.exists())                   # --no-checkout: the add did not provision
+        first = self.git_in(new, 'checkout', '-q', 'nc-a')      # a real previous HEAD, not zeros
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertTrue(slice_file.is_file())                   # no marker yet, so the first real checkout provisioned
+        git_dir = self.git_in(new, 'rev-parse', '--path-format=absolute', '--git-dir').stdout.strip()
+        self.assertTrue((Path(git_dir) / 'openwillow-provisioned').is_file())
+        slice_file.unlink()
+        switched = self.git_in(new, 'checkout', '-q', 'nc-b')   # marked now: a branch switch is skipped
+        self.assertEqual(switched.returncode, 0, switched.stdout + switched.stderr)
+        self.assertFalse(slice_file.exists())
+
     def test_junctioned_seed_is_refused_before_anything_is_written(self):
         elsewhere = self.base / 'elsewhere-seed'
         elsewhere.mkdir()
