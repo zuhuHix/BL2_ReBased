@@ -118,14 +118,15 @@ bool FOpenWillowCombatTargetSwingTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("a 10 s knock stall equals a 2 s stall"),
         LongOffset.Equals(CutOffset, 1e-2) && FMath::IsNearlyEqual(LongFactor, CutFactor, 1e-6f));
 
-    // Released fall under -500 cm/s^2 from 300 uu: 0.6 s as a stall equals 18 frames of 1/30 s, and lands near 120 uu.
+    // Released fall under -500 cm/s^2 from 300 uu: 0.6 s as a stall equals 18 frames of 1/30 s. The analytic drop is 0.5 * 500 * 0.6^2 = 90 uu
+    // (210 uu left); the semi-implicit steps drop 500 * (1/30)^2 * (1 + ... + 18) = 95 uu, leaving 205 uu.
     float StallHeight = 300.f, StallFall = 0.f;
     AOpenWillowCombatTarget::StepFall(StallHeight, StallFall, 0.6f);
     float FrameHeight = 300.f, FrameFall = 0.f;
     for (int32 Frame = 0; Frame < 18; ++Frame) AOpenWillowCombatTarget::StepFall(FrameHeight, FrameFall, Full);
     TestTrue(TEXT("0.6 s fall equals 18 frames of 1/30 s"),
         FMath::IsNearlyEqual(StallHeight, FrameHeight, 1e-2f) && FMath::IsNearlyEqual(StallFall, FrameFall, 1e-2f));
-    TestTrue(TEXT("0.6 s fall lands near the analytic 120 uu"), StallHeight > 100.f && StallHeight < 140.f);
+    TestTrue(TEXT("0.6 s fall lands near 205 uu (semi-implicit; analytic 210)"), StallHeight > 200.f && StallHeight < 212.f);
 
     // Fall from 50 uu over 0.6 s lands on the floor in both ways, with no speed left.
     float LowStall = 50.f, LowStallFall = 0.f;
