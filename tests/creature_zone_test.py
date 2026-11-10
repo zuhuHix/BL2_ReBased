@@ -23,16 +23,26 @@ def test_only_zone_vectors_pass():
     assert 'p_PatternColor' not in names and 'p_EmissiveScale' not in names and 'p_BColorShadow' not in names
 
 
-def test_gamma_fit_is_the_default_and_raises_rgb_only():
-    assert z.zone_parameters(SLOT) == z.zone_parameters(SLOT, gamma=True)
-    out = z.zone_parameters(SLOT)['vectors']['p_AColorMidtone']
+def test_vectors_as_stored_are_the_default():
+    assert z.GAMMA_FIT_DEFAULT is False
+    assert z.zone_parameters(SLOT) == z.zone_parameters(SLOT, gamma=False)
+
+
+def test_gamma_fit_raises_rgb_only():
+    out = z.zone_parameters(SLOT, gamma=True)['vectors']['p_AColorMidtone']
     assert abs(out[0] - 0.5 ** 2.2) < 1e-9 and abs(out[1] - 0.25 ** 2.2) < 1e-9 and out[2] == 1.0 and out[3] == 1.0
 
 
 def test_gamma_from_env():
-    assert z.gamma_from_env(None) is True and z.gamma_from_env('') is True
+    assert z.gamma_from_env(None) is False and z.gamma_from_env('') is False
     assert z.gamma_from_env('0') is False and z.gamma_from_env(' 0 ') is False
     assert z.gamma_from_env('1') is True
+
+
+def test_masks_srgb_only_for_master_creature():
+    assert z.masks_srgb('Master_Creature') is True
+    for master in (None, '', 'Master_SomethingElse'):
+        assert z.masks_srgb(master) is False
 
 
 def test_master_defaults_when_not_overridden():
