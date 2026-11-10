@@ -4571,18 +4571,20 @@ AI-assisted (Claude Fable 5), at the maintainer's request. Documentation only; n
 - **One reading rule narrowed.** The old text said to read `docs/LEGAL.md` and the README's "Is this legal?" section first, always. The brief now carries the short form and says to read the full text before work on native analysis, licences, provenance, reuse of third-party code, releases or anything published, money, or anything that moves game-derived data. `docs/LEGAL.md` still wins where it says more.
 - **Checked.** The Claude CLI loads `AGENTS.md` through the import (a session quoted rule 10 without reading the file). Every path the two files name exists, and `python tools/decisions_index.py --check` passes. An independent review (Luna) compared the old and new texts rule by rule and against `docs/LEGAL.md`; its ten findings were applied. The status log's claims were found in `DECISIONS.md`, `ROADMAP.md` or the verification records before it was removed.
 - **Not checked.** `ctest` and `tools/verify_packages.py` were not run: the change is Markdown only and no test reads these files. `tools/mission_closure.py` still cites `CLAUDE.md` in one message string for the UModel material note, which now lives in `AGENTS.md`.
-## 2026-11-10: Creature zones: masks sampled as sRGB, the x^2.2 fit off again (creature colour lane 2)
+
+## 2026-11-10: Creature zones: masks sampled as sRGB; the x^2.2 fit stays a host fit (creature colour lane 2)
 
 AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.md`, "Why the skin reads yellow and the spikes golden".
 
-- **Found:** the host's zone and channel mapping matches the master's compiled shader (checked against the cache's uniform-expression list); not
-  the cause. The worn spikes use the body's instance and sit in zone A with the torso, so "yellow skin" and "golden spikes" are one fault. Two causes,
-  both from data: the x^2.2 fit (the shader uses the vectors as stored; the fit roughly doubles zone A's saturation toward orange), and the masks'
-  colour space (both creature mask textures have `SRGB` set in the package, so the game decodes them before the x2 light/dark scales; the host read
-  them raw, about 1.7 times the highlight amount, toward zone A's pale yellow highlight).
-- **Change:** `tools/creature_zone.py`: the fit is chosen by the resolved parent, `gamma_default()`: off for `Master_Creature` targets, still on
-  for an unresolved or other parent (the range's Psycho), which the shader evidence does not cover (review r1). `OPENWILLOW_ZONE_GAMMA` overrides
-  both for an A/B. `masks_srgb()` (True for `Master_Creature` targets); `tools/phaselock_target_editor.py` imports those masks as sRGB. Other
-  masters and the citizens are otherwise unchanged.
+- **Found:** the host's zone and channel mapping matches Master_Creature's compiled shader (checked against the cache's uniform-expression
+  list); not the cause. The worn spikes use the body's instance and sit in zone A with the torso, so "yellow skin" and "golden spikes" are one
+  fault. The shader uses the zone vectors as stored. Both creature mask textures have `SRGB` set in the package (the normal maps do not), so
+  the game decodes them before the x2 light/dark scales; the host read them raw (about 1.7 times the highlight amount).
+- **Change:** `masks_srgb()` in `tools/creature_zone.py` (True for `Master_Creature` targets); `tools/phaselock_target_editor.py` imports
+  those masks as sRGB. Other masters and the citizens are unchanged.
+- **Critic (run Z55d, Luna, colour only, against the matched real frames):** sRGB masks with the vectors as stored 6.1/10 (too pale, cool);
+  sRGB masks with the x^2.2 fit 6.6; the earlier raw masks with the fit 5.5 (yellow, golden spikes). Hub chose the second: the x^2.2 fit
+  stays on for every target (`OPENWILLOW_ZONE_GAMMA=0` for an A/B), an UNVERIFIED host fit; the remaining paleness is most likely UE5's
+  tone curve and the host's 0.15 specular (the shader has none), not checked yet.
 - **Checked:** `tests/creature_zone_test.py` (synthetic), `tests/editor_inputs_test.py`. No parsing change.
-- **Not verified:** no editor import or capture yet; whether the result matches the game's frames is for the next Phaselock capture and a critic.
+- **Not verified:** the look against the running game beyond this critic score.

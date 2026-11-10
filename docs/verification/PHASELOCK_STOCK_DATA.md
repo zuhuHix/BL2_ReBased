@@ -1505,8 +1505,7 @@ uses, in our words (UNVERIFIED against the running game):
   In identical light (runner-z36, ignored `local/phaselock/claude-z36d` without it, `claude-z36e` with it) a Luna critic, colour only, scored
   the fit 6.4/10 against 5.8 for the vectors as stored: warmer, dirtier tan on the shoulders, forearms and legs, spikes more ochre. Both are
   still too yellow in the lit skin and too golden in the spike highlights, and the claw tips lean red. The fit most likely makes up for
-  something in UE5's lighting or tone curve rather than in the material; not checked. (Superseded on 2026-11-10: the fit is off by default
-  again and the masks are sampled as sRGB; see "Why the skin reads yellow and the spikes golden" below.)
+  something in UE5's lighting or tone curve rather than in the material; not checked. (Rechecked on 2026-11-10 with sRGB masks: the fit stays on; see "Why the skin reads yellow and the spikes golden" below.)
 - The range dummy gets the same zone material: `tools/seed_slice_npc_assets.ps1 -Steps zone` runs that editor step on the slice job.
   Before, the dummy kept the plain diffuse (`SLICE_NPC_ASSETS.md`: zones "not applied"), which is why it rendered near white.
 - **Needs (heavy tier):** `seed_ambient_npc_assets.ps1 -Steps attach` (rebuilds `M_OW_NPC_Zone`), `import_phaselock_target.ps1 -Steps zone,attach`,
@@ -1529,7 +1528,8 @@ are not. What was checked, in our words (local numbers and sheets under ignored 
 - **Cause 1, the gamma fit (evidence: the shader reading plus arithmetic on the package values).** The shader uses the vectors as stored. Zone A's
   stored colours are warm tans; raising each channel to 2.2 darkens the weaker green and blue channels far more than red, so the per-mesh mean albedo
   (vectors x diffuse, through our mix) roughly doubles in saturation and turns toward orange on every piece. That is the yellow and gold the critic saw.
-  The fit was chosen by eye (6.4 vs 5.8) while cause 2 was still in place.
+  The fit was chosen by eye (6.4 vs 5.8) while cause 2 was still in place. In UE5, though, the vectors as stored render too pale (critic
+  below), so the fit stays as a host fit.
 - **Cause 2, the mask's colour space (evidence: package data).** Both creature mask textures the host draws (the Adult's and the range
   dummy's) have the Texture2D `SRGB` flag set; their normal maps do not, so the flag is really read. UE3 samples such a texture decoded to
   linear, so the shader's x2 light/dark scales act on decoded values. The host imported the masks as linear data, so it used the raw values:
@@ -1538,16 +1538,19 @@ are not. What was checked, in our words (local numbers and sheets under ignored 
   hardly changes which zone a texel takes.
 - **Ruled out for this pawn:** the emissive term (diffuse x the light/dark map's blue x `p_EmissiveScale`): that channel is close to black
   over the whole map.
-- **Change (UNVERIFIED until a capture):** `tools/creature_zone.py` turns the x^2.2 fit off by default for `Master_Creature` targets
-  (`gamma_default()`). A target with an unresolved or other parent, today the range's Psycho, keeps the fit: the shader reading covers only
-  `Master_Creature` (review r1). `OPENWILLOW_ZONE_GAMMA` (`0` off, anything else on) overrides both for an A/B. `masks_srgb()` says a `Master_Creature` target's `p_Masks` is imported as sRGB; `tools/phaselock_target_editor.py`
-  uses it and reports `masks_srgb` per target. Other masters keep the earlier raw import (their masks' flag was not read). The citizens'
-  `M_OW_NPC_Zone` graph is unchanged: the sampler type was already Color; only the texture's flag changes.
-- **Needs (heavy tier):** `import_phaselock_target.ps1 -Steps zone` (and `seed_slice_npc_assets.ps1 -Steps zone` for the dummy), then the
-  Phaselock capture with the round-18 switches and `-owcombatpawn=Bullymong`, compared with the matched real frames
-  (`local/realgame/phaselock/matched_650/run2/frames_at/`) and with `claude-z36d` / `claude-z36e`.
-- **Still open:** UE5's lighting and tone curve against BL2's (the shader has no material specular; the host keeps 0.15 at roughness 0.85),
-  the dummy's pattern layer, whether the citizens' masks are sRGB too, and the Psycho's slot parents (which would settle its fit and mask choice).
+- **Change:** `masks_srgb()` in `tools/creature_zone.py` says a `Master_Creature` target's `p_Masks` is imported as sRGB;
+  `tools/phaselock_target_editor.py` uses it and reports `masks_srgb` per target. Other masters keep the earlier raw import (their masks'
+  flag was not read). The citizens' `M_OW_NPC_Zone` graph is unchanged: the sampler type was already Color; only the texture's flag changes.
+- **Critic, run Z55d (on b18b8c0; a Luna critic, colour only, against `matched_650/run2` at +0.50, +0.80 and +1.50 s; the +0.50 s frame
+  carried most of it):** A, sRGB masks with the vectors as stored, 6.1/10 (too pale, cool and desaturated, chalky, slightly lavender; spikes
+  mostly no longer golden). B, sRGB masks with the x^2.2 fit, 6.6 (warmer and closer, still a bit pale; a few tan-gold tips; slight
+  yellow-green mottling in highlights). C, the earlier look (raw masks, fit on), 5.5 (too yellow, clearly golden spikes, muddy shadows).
+- **Decision (hub): B.** The sRGB masks stay (A and B both beat C). The x^2.2 fit stays on for every target, as before (`GAMMA_FIT_DEFAULT`;
+  `OPENWILLOW_ZONE_GAMMA=0` turns it off for an A/B). It remains an UNVERIFIED host fit: the shader reading says the vectors are used as
+  stored, so the remaining paleness most likely comes from what the host does not model, UE5's lighting and tone curve and the host's
+  0.15 specular (the shader has none). Not checked yet.
+- **Still open:** UE5's tone curve and the host's specular against BL2's, the dummy's pattern layer, whether the citizens' masks are sRGB
+  too, and the Psycho's slot parents (its mask choice).
 
 ### Missing exports stop the target import instead of crashing Unreal (2026-11-09)
 
