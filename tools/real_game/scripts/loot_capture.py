@@ -42,10 +42,6 @@ LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "door": {},
 # landed, aim lower again. Host choices; the strong box is small and sits under a shelf.
 NUDGES = ("low", "step", "center", "low")
 VIEW_DISTANCE = 150.0   # the door-side frame's fixed distance from the mesh's centre, in uu (host choice)
-# A blind press (storage locker only) needs the player this close to the mesh's centre and looking at it this closely. Run Z53b: the locker
-# was the usable object from its first stand, 280 uu across the floor from that centre (radius + 120); the limits sit just above that.
-BLIND_MAX_DISTANCE = 300.0
-BLIND_MAX_ANGLE = 10.0
 # The fields on WillowInteractiveObject that describe its state. The second real run saw all three move on every opening and none on a failed try.
 OPEN_FIELDS = ("SimpleAnimState", "RepSimpleAnimState", "bCanBeUsed")
 # Which ammo pool a pickup fills, matched on the names of its definition and of the pool (read live; only the grenade pair has been seen to move).
@@ -307,7 +303,7 @@ def _door(before, after, origin, facing):
     turn the object's origin about that bone by the same turn, and take the floor direction it moved in. A point behind a door that swings
     out moves outwards, whatever the angle. That direction is snapped to the nearest quarter turn of the object's facing, since the
     sides of a box are. None, so the view falls back to the facing, if no bone turned, none could be read, two bones turned the most
-    alike (within 1 degree: no single door), or the origin moved 1 uu or less across the floor (no direction to read)."""
+    alike (1 degree apart or less: no single door), or the origin moved 1 uu or less across the floor (no direction to read)."""
     turns = []
     for name, now in after.items():
         then = before.get(name) if isinstance(before, dict) else None
@@ -319,7 +315,7 @@ def _door(before, after, origin, facing):
         turn = _quat_mul(q1, [-q0[0], -q0[1], -q0[2], q0[3]])
         turns.append((math.degrees(2.0 * math.acos(min(1.0, abs(turn[3])))), name, turn, then["pos"]))
     turns.sort(key=lambda t: t[0], reverse=True)
-    if not turns or turns[0][0] <= 10.0 or (len(turns) > 1 and turns[0][0] - turns[1][0] < 1.0):
+    if not turns or turns[0][0] <= 10.0 or (len(turns) > 1 and round(turns[0][0] - turns[1][0], 3) <= 1.0):
         return None
     angle, name, turn, hinge = turns[0]
     arm = [origin[i] - hinge[i] for i in range(3)]
@@ -351,10 +347,9 @@ def lc_aim(leaf):
     return {"object": actor._path_name(), "radius": radius, "use_target": _use_target()}
 
 
-def lc_ready(leaf, attempt=0, nudge=True):
+def lc_ready(leaf, attempt=0):
     """Whether the player's CachedUsableObject is this object. Two real runs: it was the object on all five tries that opened and empty on all
-    seven that did not, so the capture presses only when it is. If not, and nudge is true, one nudge (NUDGES, in turn) for the next read.
-    The capture passes nudge=False on a side's last read, so a blind press is made from the settled stand that read saw."""
+    seven that did not, so the capture presses only when it is. If not, one nudge (NUDGES, in turn) for the next read."""
     actor = _pick(leaf)
     target = _use_target()
     row = {"object": actor._path_name(), "attempt": attempt, "use_target": target, "usable": target == actor._path_name()}
@@ -364,11 +359,9 @@ def lc_ready(leaf, attempt=0, nudge=True):
         me = get_pc().Pawn.Location  # noqa: F821
         row["state"] = _open_state(actor)
         row["distance"] = round(math.dist((me.X, me.Y, me.Z), _center(actor)[0]))
-    if not row["usable"] and nudge:
         nudge = NUDGES[attempt % len(NUDGES)]
         center, radius = _center(actor)
         goal = (center[0], center[1], center[2] - 0.5 * radius) if nudge == "low" else center
-        me = get_pc().Pawn.Location  # noqa: F821
         if nudge == "step":
             yaw = math.degrees(math.atan2(me.Y - center[1], me.X - center[0]))
             spot, _ = _stand_at(actor, 0, yaw=yaw, distance=max(90.0, radius + 40.0))
@@ -376,39 +369,6 @@ def lc_ready(leaf, attempt=0, nudge=True):
         else:
             _aim(goal, me.X, me.Y, me.Z)
         row["next"] = nudge
-    return row
-
-
-def lc_blind_check(leaf):
-    """Right before a blind press: CachedUsableObject must still be empty (another object would take the press), the player within
-    BLIND_MAX_DISTANCE of the mesh's centre and looking at it within BLIND_MAX_ANGLE. Anything unreadable fails the check."""
-    actor = _pick(leaf)
-    pc = get_pc()  # noqa: F821
-    me = pc.Pawn.Location
-    center = _center(actor)[0]
-    eye = _field(pc.Pawn, "BaseEyeHeight")
-    eye_z = me.Z + (eye if _is_number(eye) else 64.0)
-    row = {"object": actor._path_name(), "use_target": _use_target(), "distance": round(math.dist((me.X, me.Y, me.Z), center))}
-    rot = _field(pc, "Rotation")
-    yaw, pitch = _field(rot, "Yaw"), _field(rot, "Pitch")
-    if _is_number(yaw) and _is_number(pitch):
-        pitch = pitch % 65536
-        pitch = (pitch - 65536 if pitch > 65536 // 2 else pitch) * 2.0 * math.pi / 65536.0   # past half a turn is below level
-        yaw = yaw * 2.0 * math.pi / 65536.0
-        view = (math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), math.sin(pitch))
-        to = (center[0] - me.X, center[1] - me.Y, center[2] - eye_z)
-        length = math.sqrt(sum(c * c for c in to)) or 1.0
-        row["angle"] = round(math.degrees(math.acos(max(-1.0, min(1.0, sum(v * t for v, t in zip(view, to)) / length)))), 1)
-    else:
-        row["angle"] = None
-    problems = []
-    if row["use_target"] is not None:
-        problems.append(f"usable object is {row['use_target']}")
-    if row["distance"] > BLIND_MAX_DISTANCE:
-        problems.append(f"{row['distance']} uu away, over {BLIND_MAX_DISTANCE:.0f}")
-    if row["angle"] is None or row["angle"] > BLIND_MAX_ANGLE:
-        problems.append(f"aim {row['angle']} degrees off, over {BLIND_MAX_ANGLE:.0f}")
-    row["ok"], row["problems"] = not problems, problems
     return row
 
 
@@ -489,6 +449,8 @@ def _kind(pickup):
     text = (_path(definition) or "").lower()
     if "ammo" in text or "ammodump" in text:
         return "ammo", text
+    if "eridium" in text:   # its definition sits under gd_currency too, but it moves no money (Z53c chose one as cash)
+        return "eridium", text
     if "money" in text or "cash" in text or "currency" in text:
         return "cash", text
     return "other", text

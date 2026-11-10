@@ -54,7 +54,7 @@ function Assert-GameForeground { if ($scenario -eq 'focus_lost') { throw 'refusi
 function Send-Key { $global:OwUseKeySent = $true; Add-Content -LiteralPath '__TMP__/keys.log' "$args" }
 function Send-KeyDown { }
 function Send-KeyUp { }
-function Save-Shot([string]$Name) { $f = Join-Path $script:RG $Name; New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null; Set-Content -LiteralPath $f 'frame'; $f }
+function Save-Shot([string]$Name) { if ($scenario -eq 'press_step_fails' -and $Name -like '*Skel_CardboardBox_*_closed.png') { $null.Trim() };  $f = Join-Path $script:RG $Name; New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null; Set-Content -LiteralPath $f 'frame'; $f }
 function Invoke-Burst { param($Folder, $Seconds, $IntervalMs, $Trigger, $Scale) Add-Content -LiteralPath '__TMP__/bursts.log' "$Folder"; if ($Trigger) { & $Trigger }; [pscustomobject]@{ frames = 3 } }
 function Stop-OwnGame { if ($scenario -eq 'game_stuck') { 'refused: test' } else { $global:OwGameGone = $true; 'stopped' } }
 function Invoke-GamePyFile { param($Path, $OutFolder) 'loaded' }
@@ -111,27 +111,27 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     }
     if ($Code -match 'lc_opened') {
         $global:OwOpenReads = 1 + [int]$global:OwOpenReads
+        # An empty reply file, which Get-Content -Raw reads as null: the dumpster's first press only.
+        if ($scenario -eq 'empty_reply' -and $Code -match 'Skel_Dumpster' -and !$global:OwEmptySent) { $global:OwEmptySent = $true; return $null }
         if ($scenario -eq 'never_opens') { return '{"opened": false, "changed": {}}' }
         if ($scenario -eq 'opens_on_third_side' -and $global:OwOpenReads -lt 3) { return '{"opened": false, "changed": {}}' }
         return '{"opened": true, "changed": {"bCanBeUsed": [true, false]}}'
     }
     if ($Code -match 'lc_ready') {
         $global:OwReadyReads = 1 + [int]$global:OwReadyReads
-        if ($scenario -eq 'never_usable') { return '{"usable": false, "use_target": "Map.Other", "next": "low"}' }
-        if ($scenario -in 'usable_field_empty', 'blind_target_appears', 'blind_too_far') {
-            Add-Content -LiteralPath '__TMP__/ready.log' $Code
-            return '{"usable": false, "use_target": null, "next": "low"}'
+        if ($scenario -eq 'dumpster_late' -and $Code -match 'Skel_Dumpster') {
+            # As in run Z53c: side 0 empty on all five reads, side 4 usable on its first.
+            $global:OwDumpsterReads = 1 + [int]$global:OwDumpsterReads
+            if ($global:OwDumpsterReads -le 5) { return '{"usable": false, "use_target": null, "next": "low", "state": {"SimpleAnimState": 4}, "distance": 336}' }
+            return '{"object": "x", "attempt": 0, "use_target": "x", "usable": true}'
         }
+        if ($scenario -eq 'never_usable') { return '{"usable": false, "use_target": "Map.Other", "next": "low"}' }
+        if ($scenario -eq 'usable_field_empty') { return '{"usable": false, "use_target": null, "next": "low"}' }
         # The strong box offers the prompt only on its second object's third read.
         if ($scenario -eq 'strongbox_usable_late' -and $Code -match 'Skel_StrongBox' -and !($global:OwNextObject -and ($global:OwReadyReads % 5) -eq 3)) { return '{"usable": false, "use_target": null, "next": "step"}' }
         return '{"usable": true}'
     }
     if ($Code -match 'lc_next_object') { $global:OwNextObject = $true; $global:OwReadyReads = 0; return '{"object": "Map.Next", "count": 3}' }
-    if ($Code -match 'lc_blind_check') {
-        if ($scenario -eq 'blind_target_appears') { return '{"ok": false, "use_target": "Map.Other", "problems": ["usable object is Map.Other"]}' }
-        if ($scenario -eq 'blind_too_far') { return '{"ok": false, "use_target": null, "distance": 420, "problems": ["420 uu away, over 300"]}' }
-        return '{"ok": true, "use_target": null, "distance": 280, "angle": 2.0, "problems": []}'
-    }
     if ($Code -match 'lc_where') { return '{"distance": 280}' }
     if ($Code -match 'lc_view') { Add-Content -LiteralPath '__TMP__/views.log' $Code; return '{"view": "v", "from": "lid bone"}' }
     if ($Code -match 'lc_aim') { return '{}' }
@@ -178,7 +178,6 @@ def run_script(script, scenario, earlier_session=None):
             return path.read_text(encoding='utf-8').split() if path.exists() else []
         return {'code': done.returncode, 'out': done.stdout + done.stderr, 'session': session, 'files': contents, 'hub': hub.exists(),
                 'keys': logged('keys.log'), 'bursts': logged('bursts.log'), 'views': logged('views.log'),
-                'ready': (tmp / 'ready.log').read_text(encoding='utf-8').splitlines() if (tmp / 'ready.log').exists() else [],
                 'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups,
                 'kept': kept, 'kept_text': [(tmp / 'realgame' / SCRIPTS[script] / name).read_text(encoding='utf-8') for name in kept]}
 
@@ -367,31 +366,40 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertEqual((len(box['tries']), len(box['tries'][0]['ready'])), (12, 5), r['out'])   # bounded: 5 reads, 4 sides, 3 boxes
         self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object: 12 side(s), 5 reads each; nothing pressed') for p in r['session']['stage_problems']), r['out'])
 
-    def test_an_empty_usable_field_presses_blind_for_the_storage_locker_only(self):
+    def test_an_empty_usable_field_is_never_pressed_for_any_type(self):
+        # The blind fallback for the storage locker was removed: no type is pressed unless it is the usable object.
         r = self.run_it('usable_field_empty')
         self.assertEqual(r['code'], 1, r['out'])
+        self.assertNotIn('E', r['keys'], r['out'])
         locker = r['session']['types']['Skel_StorageLocker']
-        self.assertEqual((locker['opened'], locker['opened_blind'], len(locker['tries']), locker['tries'][0]['blind']), (True, True, 1, True), r['out'])
-        self.assertIn('Skel_StorageLocker: opened by a BLIND press', r['out'])
-        self.assertEqual([b.rsplit('/', 1)[-1] for b in r['bursts'] if 'Skel_' in b], ['Skel_StorageLocker_0_0_open'], r['out'])   # no other type pressed
-        self.assertIn('Skel_StorageLocker', r['session']['completed_stages'], r['out'])
-        self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object') for p in r['session']['stage_problems']), r['out'])
-        self.assertIn('"ok": true', locker['tries'][0]['blind_check'], r['out'])
-        # No nudge after a side's last read, so the press is made from the stand that read saw.
-        ready = [line for line in r['ready'] if 'Skel_StorageLocker' in line]
-        self.assertEqual([line.endswith(', False)))') for line in ready], [False, False, False, False, True], r['out'])
+        self.assertEqual((locker['opened'], len(locker['tries'])), (False, 4), r['out'])
+        self.assertNotIn('BLIND', r['out'])
 
-    def test_a_blind_press_is_refused_when_the_final_check_fails(self):
-        for scenario, why in (('blind_target_appears', 'usable object is Map.Other'), ('blind_too_far', '420 uu away')):
-            with self.subTest(scenario):
-                r = self.run_it(scenario)
-                self.assertEqual(r['code'], 1, r['out'])
-                self.assertNotIn('E', r['keys'], r['out'])
-                self.assertEqual([b for b in r['bursts'] if 'Skel_' in b], [], r['out'])
-                locker = r['session']['types']['Skel_StorageLocker']
-                self.assertEqual((locker['opened'], len(locker['tries'])), (False, 4), r['out'])
-                self.assertNotIn('blind', locker['tries'][0], r['out'])
-                self.assertIn(f'blind press refused ({why}', r['out'])
+    def test_z53c_read_sequence_alone_opens_the_dumpster_on_side_4(self):
+        # Side 0 empty on five reads, side 4 usable on its first: the path the dumpster took in Z53c, without the failure.
+        r = self.run_it('dumpster_late')
+        self.assertEqual(r['session']['status'], 'completed', r['out'])
+        self.assertEqual([t['side'] for t in r['session']['types']['Skel_Dumpster']['tries']], [0, 4], r['out'])
+
+    def test_an_empty_reply_fails_that_side_and_the_capture_moves_on(self):
+        r = self.run_it('empty_reply')
+        dumpster = r['session']['types']['Skel_Dumpster']
+        self.assertIsInstance(dumpster, dict, r['out'])   # not "failed: You cannot call a method on a null-valued expression."
+        self.assertEqual([t['side'] for t in dumpster['tries']], [0, 4], r['out'])
+        self.assertIn('empty reply from the game to: print(json.dumps(lc_opened', dumpster['tries'][0]['error'], r['out'])
+        self.assertTrue(dumpster['opened'], r['out'])   # the next side was pressed and opened
+        self.assertEqual(r['session']['status'], 'completed', r['out'])
+        self.assertNotIn('null-valued', r['out'])
+
+    def test_a_failed_press_step_names_its_line_and_a_type_failing_every_side_says_why(self):
+        r = self.run_it('press_step_fails')
+        self.assertEqual(r['code'], 1, r['out'])
+        box = r['session']['types']['Skel_CardboardBox']
+        self.assertEqual(len(box['tries']), 4, r['out'])
+        self.assertRegex(box['tries'][0]['error'], r'null-valued expression\. \(line \d+: ', r['out'])
+        self.assertTrue(any(p.startswith('Skel_CardboardBox: did not open from 4 pressed of 4 side(s); no state field changed; side 0 failed:')
+                            for p in r['session']['stage_problems']), r['out'])
+        self.assertIn('Skel_DahlChest_Ammo', r['session']['completed_stages'], r['out'])   # other types still ran
 
     def test_the_strong_box_moves_on_to_another_box_and_frames_its_door_side(self):
         r = self.run_it('strongbox_usable_late')

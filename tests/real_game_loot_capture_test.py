@@ -359,6 +359,25 @@ class OpenedTest(unittest.TestCase):
         self.assertIsNone(self.open_with(door_turn_degrees=90.0, base_turn_degrees=89.5))   # within 1 degree: no single door
         self.assertEqual(self.lc.lc_view('Skel_Box', 'door')['from'], 'object facing')
 
+    def test_bones_exactly_one_degree_apart_mark_no_door(self):
+        # On _door directly, with exact quaternions: the record rounds them to 4 places, about 0.01 degree.
+        def bone(degrees, spot):
+            half = math.radians(degrees) / 2.0
+            return {'pos': list(spot), 'quat': [0.0, 0.0, math.sin(half), math.cos(half)]}
+        before = {'Base': bone(0.0, (0, 0, 0)), 'Door': bone(0.0, (-20, 25, 6))}
+
+        def door(base_degrees):
+            return self.lc._door(before, {'Base': bone(base_degrees, (0, 0, 0)), 'Door': bone(90.0, (-20, 25, 6))}, (0.0, 0.0, 0.0), 0.0)
+        self.assertIsNone(door(89.0))                    # the boundary counts as a tie
+        self.assertEqual(door(88.9)['bone'], 'Door')     # just past it does not
+
+    def test_eridium_is_not_cash(self):
+        # Z53c chose an eridium stick as cash: its definition sits under gd_currency, but it moves no money.
+        self.world.pickups = [self.world.pickup('Map.Pick_E', 'gd_currency.a_item.eridiumstick'), self.world.pickup('Map.Pick_C', 'gd_currency.a_item.currency')]
+        self.assertEqual(self.lc._kind(self.world.pickups[0])[0], 'eridium')
+        self.assertEqual(self.lc.lc_choose_pickup('cash')['pickup'], 'Map.Pick_C')
+        self.assertEqual(self.lc.lc_view('Skel_Box', 'door')['from'], 'object facing')
+
     def test_a_clear_strongest_bone_still_marks_the_door(self):
         self.assertEqual(self.open_with(door_turn_degrees=90.0, base_turn_degrees=40.0)['bone'], 'Door')
 
@@ -366,25 +385,6 @@ class OpenedTest(unittest.TestCase):
         # A hinge 0.4 uu from the origin: a quarter turn moves the origin well under 1 uu across the floor.
         self.assertIsNone(self.open_with(door_turn_degrees=90.0, hinge=(-0.4, 0.0, 6.0)))
         self.assertEqual(self.lc.lc_view('Skel_Box', 'door')['from'], 'object facing')
-
-    def blind(self, me, yaw_degrees, pitch_degrees=0.0, target=None):
-        self.world.pc.Pawn.Location = types.SimpleNamespace(**dict(zip('XYZ', me)))
-        self.world.pc.Pawn.BaseEyeHeight = 0.0
-        self.world.pc.Rotation = types.SimpleNamespace(Yaw=int(yaw_degrees * 65536 / 360) % 65536, Pitch=int(pitch_degrees * 65536 / 360) % 65536)
-        self.world.pc.CachedUsableObject = target
-        return self.lc.lc_blind_check('Skel_Box')
-
-    def test_a_blind_press_needs_an_empty_field_a_close_stand_and_a_true_aim(self):
-        ok = self.blind((10.0, -250.0, 30.0), 90.0)   # 270 uu south of the centre, looking north at it
-        self.assertEqual((ok['ok'], ok['distance'], ok['angle'], ok['problems']), (True, 270, 0.0, []))
-        self.assertFalse(self.blind((10.0, -250.0, 30.0), 90.0, target=Thing('Map.Other'))['ok'])   # another object would take the press
-        far = self.blind((10.0, -320.0, 30.0), 90.0)
-        self.assertEqual((far['ok'], far['problems']), (False, ['340 uu away, over 300']))
-        off = self.blind((10.0, -250.0, 30.0), 105.0)
-        self.assertEqual((off['ok'], off['angle']), (False, 15.0))
-        self.assertTrue(self.blind((10.0, -250.0, 30.0), 90.0, pitch_degrees=-5.0)['ok'])   # a little below: pitch past 32768 reads as negative
-        del self.world.pc.Rotation
-        self.assertEqual(self.lc.lc_blind_check('Skel_Box')['ok'], False)   # an unreadable aim fails
 
     def test_where_reports_the_press_stand_distance(self):
         self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-180.0, Z=30.0)
