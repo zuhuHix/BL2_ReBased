@@ -60,6 +60,8 @@ FLOOR_UP = 12.0
 REACH_BELOW = 130.0
 REACH_ABOVE = 10.0
 SEARCH_RADIUS = 2000.0   # uu from the player; the nearest reachable pickup inside it is chosen
+# A container's frame counts as level when its pitch and roll are each within this many rotator units (65536 is a full turn: 182 is about 1 degree).
+TILT_UNITS = 182
 
 
 def lc_root():
@@ -205,6 +207,12 @@ def lc_goto(x, y, z):
     return True
 
 
+def _is_lootable(actor):
+    """One of the lootable types this capture knows (LC_MESHES), by its skeletal mesh. Any other interactive object is not a container here."""
+    mesh = _row(actor)["mesh"] or ""
+    return any(mesh.endswith("." + leaf) for leaf in LC_MESHES)
+
+
 def _center(actor):
     """Where the object really is, and how big: its mesh's bounds. A small box on a shelf is not at its actor's origin plus a guess."""
     component = _component(actor)
@@ -264,6 +272,20 @@ def _xyz(v, digits=1):
 def _transform(actor):
     rot = actor.Rotation
     return {"pos": _xyz(actor.Location), "rot": _try(lambda: [rot.Pitch, rot.Yaw, rot.Roll]), "facing": round(_facing(actor), 1)}
+
+
+def _drop_frame(actor):
+    """None when the object's frame is level enough to judge its drops: pitch and roll each within TILT_UNITS (65536 units is a full turn, so
+    about 1 degree). Otherwise the reason. Fails closed: an unreadable rotation is not level. _local turns by yaw only."""
+    rot = actor.Rotation
+    pitch, roll = _try(lambda: rot.Pitch), _try(lambda: rot.Roll)
+    if not (_is_number(pitch) and _is_number(roll)):
+        return "rotation unreadable: drops not judged as floor drops"
+    turn = 65536
+    pitch, roll = (pitch + turn // 2) % turn - turn // 2, (roll + turn // 2) % turn - turn // 2   # to a signed angle
+    if abs(pitch) > TILT_UNITS or abs(roll) > TILT_UNITS:
+        return f"tilted: pitch {pitch}, roll {roll} units: drops not judged as floor drops"
+    return None
 
 
 def _local(actor, pos):
@@ -365,6 +387,9 @@ def lc_ready(leaf, attempt=0):
     actor = _pick(leaf)
     target = _use_target()
     row = {"object": actor._path_name(), "attempt": attempt, "use_target": target, "usable": target == actor._path_name()}
+    if row["usable"]:
+        # The pickups lying here just before the press. A drop is one that appears after the press: lc_opened tags only those.
+        LC.setdefault("pre_press", {})[leaf] = sorted(p._path_name() for p in _live("WillowPickup"))
     if not row["usable"]:
         # Run Z53: the storage locker's field stayed empty on all 20 reads, where run 2 read the locker itself from the same spot. Its own
         # state and the player's distance go in the record, so the next empty read can be told apart from an already opened object.
@@ -441,14 +466,24 @@ def lc_opened(leaf, radius=600.0):
     door = _door(before.get("bones"), bones, (loc.X, loc.Y, loc.Z), _facing(actor)) if changed else None
     if door:
         LC["door"][leaf] = door
+    # The pickups before the press (lc_ready's snapshot, taken once per try); none means no drop is tagged.
+    pre = LC.get("pre_press", {}).pop(leaf, None)
     pickups = _near((loc.X, loc.Y, loc.Z), radius, actor)
-    if changed:   # only loot from an object that opened counts as dropped from it: its frame is what says where on it the loot lies
+    drop_frame = _drop_frame(actor)
+    drops = LC.setdefault("drops", {})
+    tagged = []
+    # Only loot that appeared after this object's press, and that no earlier container already owns, is its drop. Its frame says where on it the
+    # loot lies, so a tilted frame (drop_frame) tags nothing: _local turns by yaw only.
+    if changed and pre is not None and drop_frame is None:
         for row in pickups:
-            if isinstance(row.get("local"), list):
-                LC.setdefault("drops", {})[row["path"]] = {"container": actor._path_name(), "local": row["local"]}
+            path = row["path"]
+            if path in pre or path in drops or not isinstance(row.get("local"), list):
+                continue
+            drops[path] = {"container": actor._path_name(), "local": row["local"], "floor_z": round(loc.Z, 1)}
+            tagged.append(path)
     return {"object": actor._path_name(), "opened": bool(changed), "changed": changed, "state": state, "scalars_moved": moved,
             "transform": _transform(actor), "bones_closed": before.get("bones"), "bones": bones, "door": door,
-            "pickups": pickups, "use_target": _use_target()}
+            "pickups": pickups, "drops_tagged": tagged, "drop_frame": drop_frame, "use_target": _use_target()}
 
 
 def lc_mods():
@@ -554,7 +589,8 @@ def lc_choose_pickup(kind):
     me = get_pc().Pawn.Location  # noqa: F821
     here = (me.X, me.Y, me.Z)
     rows = [p for p in _live("WillowPickup") if _kind(p)[0] == kind]
-    lootables = [_center(actor) for actor in _live("WillowInteractiveObject")]
+    # The sphere is a conservative approximation of a container's bounds: it may hold a loose pickup near a container out, which fails closed.
+    lootables = [_center(actor) for actor in _live("WillowInteractiveObject") if _is_lootable(actor)]
     skipped = {"inside_container": 0, "above_reach": 0, "too_far": 0}
     reachable = []
     for p in rows:
@@ -580,14 +616,15 @@ def lc_choose_pickup(kind):
                 skipped["too_far"] += 1
                 continue
             reach, container, local = "loose in the open", None, None
-        reachable.append((0 if drop is not None else 1, distance, p, reach, container, local))
+        reachable.append((distance, p, reach, container, local))
     if not reachable:
         LC["pickup"] = None
         return {"kind": kind, "pickup": None, "reason": f"no reachable {kind} pickup", "seen": len(rows), "skipped": skipped}
-    _, _, pickup, reach, container, local = min(reachable, key=lambda row: row[:2])
+    # The nearest eligible pickup, a drop or not: a far drop must not outrank a nearer loose one.
+    _, pickup, reach, container, local = min(reachable, key=lambda row: row[0])
     definition = _kind(pickup)[1]
     pool = _ammo_pool_of(definition) if kind == "ammo" else None
-    LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pool": pool, "baseline": None}
+    LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pool": pool, "baseline": None, "walk_over": None}
     return {"kind": kind, "pickup": pickup._path_name(), "definition": definition, "pool": pool, "reach": reach,
             "pos": [round(v, 1) for v in (pickup.Location.X, pickup.Location.Y, pickup.Location.Z)], "container": container,
             "container_local": local, "pawn_z": round(me.Z, 1), "seen": len(rows), "skipped": skipped}
@@ -608,13 +645,28 @@ def lc_stand_pickup(kind, distance=150.0):
 
 def lc_over_pickup():
     """The walk-over: straight above the chosen pickup, falling onto it, so nothing around it can block the way. Whether touching
-    collects it is the question."""
+    collects it is the question. Only onto a floor that was read and lies within the pickup's reach: a drop's container origin
+    (floor_z, lc_opened). Anything else, a loose pickup included, skips the fall and says why; the use key still runs."""
     pickup = _chosen_pickup()
     if pickup is None:
         return {"pickup": None}
     loc = pickup.Location
+    drop = LC.get("drops", {}).get(pickup._path_name())
+    floor = drop.get("floor_z") if drop is not None else None
+    if drop is None:
+        reason = "no floor under the target was read (not a container's drop)"
+    elif not _is_number(floor):
+        reason = "the container's floor was not read"
+    elif not (loc.Z - REACH_BELOW <= floor <= loc.Z + REACH_ABOVE):
+        reason = "the floor under the target is outside the pickup's reach"
+    else:
+        reason = None
+    if reason is not None:
+        LC["pickup"]["walk_over"] = f"skipped: {reason}"
+        return {"pickup": pickup._path_name(), "walk_over": LC["pickup"]["walk_over"]}
+    LC["pickup"]["walk_over"] = "fall"
     _place(loc.X, loc.Y, loc.Z + 120.0, (loc.X + 100.0, loc.Y, loc.Z))
-    return {"pickup": pickup._path_name()}
+    return {"pickup": pickup._path_name(), "walk_over": "fall"}
 
 
 def lc_aim_pickup():
@@ -650,4 +702,5 @@ def lc_pickup_state():
     gone = not any(p._path_name() == chosen["path"] for p in _live("WillowPickup"))
     after = {"pools": _try(_pool_values), "money": _money()}
     changed = _value_rose(chosen, chosen["baseline"], after)
-    return {"gone": gone, "changed": changed, "collected": gone and changed, "pools": after["pools"], "money": after["money"]}
+    return {"gone": gone, "changed": changed, "collected": gone and changed, "pools": after["pools"], "money": after["money"],
+            "walk_over": chosen.get("walk_over")}

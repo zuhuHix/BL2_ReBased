@@ -36,7 +36,7 @@ class Thing:
         self.path = path
         self.__dict__.update(fields)
         self.Location = types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0)
-        self.Rotation = types.SimpleNamespace(Yaw=0)
+        self.Rotation = types.SimpleNamespace(Yaw=0, Pitch=0, Roll=0)
         self.Class = types.SimpleNamespace(Name='Thing', _fields=lambda: [], SuperField=None)
 
     def _path_name(self):
@@ -91,7 +91,7 @@ class PickupStateTest(unittest.TestCase):
 
     def test_a_pickup_inside_a_lootable_is_skipped_and_one_in_the_open_is_chosen(self):
         bounds = types.SimpleNamespace(Origin=types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0), SphereRadius=50.0)
-        self.world.objects.append(Thing('Map.Box', Mesh=Thing('c', SkeletalMesh=Thing('Pkg.Skel_Box'), Bounds=bounds), bDeleteMe=False))
+        self.world.objects.append(Thing('Map.Box', Mesh=Thing('c', SkeletalMesh=Thing('Pkg.Skel_CardboardBox'), Bounds=bounds), bDeleteMe=False))
         # The only ammo (Pick_1) lies inside the lootable: it is skipped, and the record says why, not "not collected" later.
         chosen = self.lc.lc_choose_pickup('ammo')
         self.assertEqual((chosen['pickup'], chosen['reason'], chosen['skipped']['inside_container']), (None, 'no reachable ammo pickup', 1))
@@ -101,6 +101,17 @@ class PickupStateTest(unittest.TestCase):
         self.world.pickups.append(far)
         chosen = self.lc.lc_choose_pickup('ammo')
         self.assertEqual((chosen['pickup'], chosen['reach'], chosen['container'], chosen['pos']), ('Map.Pick_3', 'loose in the open', None, [500.0, 0.0, 0.0]))
+
+    def test_a_thing_that_is_not_a_known_lootable_does_not_hold_a_pickup_out_of_the_open(self):
+        bounds = types.SimpleNamespace(Origin=types.SimpleNamespace(X=500.0, Y=0.0, Z=0.0), SphereRadius=50.0)
+        vending = Thing('Map.Vending', Mesh=Thing('c', SkeletalMesh=Thing('Pkg.Vending.Skel_Vending'), Bounds=bounds), bDeleteMe=False)
+        self.world.objects.append(vending)
+        far = self.world.pickup('Map.Pick_3', 'GD.Ammo_Item')
+        far.Location = types.SimpleNamespace(X=500.0, Y=0.0, Z=0.0)
+        self.world.pickups = [far]
+        self.assertEqual(self.lc.lc_choose_pickup('ammo')['reach'], 'loose in the open')   # a vending machine is not a container here
+        vending.Mesh.SkeletalMesh = Thing('Pkg.Meshes.Skel_LaundryMachine')                 # the same sphere, of a lootable type, holds it
+        self.assertEqual((self.lc.lc_choose_pickup('ammo')['pickup'], self.lc.lc_choose_pickup('ammo')['skipped']['inside_container']), (None, 1))
 
     def test_a_pickup_above_the_standing_reach_or_too_far_is_skipped(self):
         self.world.pickups[0].Location = types.SimpleNamespace(X=300.0, Y=0.0, Z=500.0)   # above a standing player's floor
@@ -160,11 +171,16 @@ class PickupStateTest(unittest.TestCase):
         self.world.pool.SetCurrentValue = self.world.other_pool.SetCurrentValue
         self.assertEqual(self.lc.lc_lower_ammo()['fallen'], [])
 
-    def test_the_walk_over_lands_on_the_pickup_and_the_chosen_one_is_judged(self):
+    def test_a_walk_over_onto_a_loose_pickup_is_skipped_and_the_record_says_so(self):
+        # No floor under a loose pickup was read, so Maya is not dropped onto it; the use key still runs.
         self.lc.lc_choose_pickup('ammo')
         self.world.pickups[0].Location = types.SimpleNamespace(X=7.0, Y=8.0, Z=9.0)
-        self.assertEqual(self.lc.lc_over_pickup()['pickup'], 'Map.Pick_1')
-        self.assertEqual((self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y), (7.0, 8.0))
+        result = self.lc.lc_over_pickup()
+        self.assertEqual(result['pickup'], 'Map.Pick_1')
+        self.assertTrue(result['walk_over'].startswith('skipped: no floor under the target was read'), result)
+        self.assertEqual((self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y), (0.0, 0.0))
+        self.lc.lc_pickup_baseline()   # the state is judged against a baseline, as in an attempt
+        self.assertTrue(self.lc.lc_pickup_state()['walk_over'].startswith('skipped'))
 
     def test_a_chosen_pickup_that_went_has_nothing_to_stand_by(self):
         self.lc.lc_choose_pickup('ammo')
@@ -313,8 +329,22 @@ class OpenedTest(unittest.TestCase):
         self.assertEqual(rows['Map.Pick_1']['local'], [5.0, 10.0, 2.0])
         self.assertEqual(rows['Map.Pick_2']['local'], [5.0, -10.0, 2.0])
 
+    def ready_before(self, leaf='Skel_Box', box=None):
+        """The usable read just before the press, as the capture does it: the pickups lying there now are not this container's drop."""
+        self.world.pc.CachedUsableObject = box or self.box
+        self.lc.lc_ready(leaf, 0)
+
+    def make_container(self, path, mesh, x):
+        bounds = types.SimpleNamespace(Origin=types.SimpleNamespace(X=x, Y=0.0, Z=0.0), SphereRadius=25.0)
+        box = Thing(path, Mesh=Thing('c', SkeletalMesh=Thing('Pkg.Meshes.' + mesh), Bounds=bounds), bDeleteMe=False,
+                    SimpleAnimState=0, RepSimpleAnimState=0, bCanBeUsed=True)
+        box.Location = types.SimpleNamespace(X=x, Y=0.0, Z=0.0)
+        self.world.objects.append(box)
+        return box
+
     def test_a_drop_on_the_floor_of_an_opened_box_is_chosen_and_one_inside_it_is_skipped(self):
         self.lc.lc_stand('Skel_Box')
+        self.ready_before()
         floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
         floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)       # 2 uu above the box's origin, as the Z53 clip lay
         inside = self.world.pickup('Map.Inside', 'GD.ammodrop_sniper_rifle_cartridges')
@@ -333,6 +363,7 @@ class OpenedTest(unittest.TestCase):
         # Run Z54: the cardboard box's clip, 2.4 uu above its box, was refused while the player stood on another level. Stands teleport the
         # player beside the pickup, so only a loose pickup is measured from her.
         self.lc.lc_stand('Skel_Box')
+        self.ready_before()
         floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
         floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
         self.world.pickups = [floor]
@@ -354,6 +385,7 @@ class OpenedTest(unittest.TestCase):
 
     def test_a_drop_with_nothing_else_reachable_reports_no_reachable_pickup(self):
         self.lc.lc_stand('Skel_Box')
+        self.ready_before()
         inside = self.world.pickup('Map.Inside', 'GD.ammodrop_sniper_rifle_cartridges')
         inside.Location = types.SimpleNamespace(X=0.0, Y=0.0, Z=87.0)     # the Z53 laundry machine's ammo: 87 uu up
         self.world.pickups = [inside]
@@ -363,6 +395,84 @@ class OpenedTest(unittest.TestCase):
         chosen = self.lc.lc_choose_pickup('ammo')
         self.assertEqual((chosen['pickup'], chosen['reason'], chosen['skipped']['inside_container']), (None, 'no reachable ammo pickup', 1))
         self.assertIsNone(self.lc.LC['pickup'])
+
+    def test_each_drop_is_tagged_once_by_the_container_that_dropped_it(self):
+        # B's usable read comes first, so B's pre-press list does not hold the drop A makes; B's open then sees it nearby and must not take it.
+        a = self.make_container('Map.BoxA', 'Skel_CardboardBox', 0.0)
+        b = self.make_container('Map.BoxB', 'Skel_Dumpster', 100.0)
+        old = self.world.pickup('Map.Old', 'GD.ammodrop_patrol_smg_clip')
+        old.Location = types.SimpleNamespace(X=50.0, Y=0.0, Z=2.0)
+        self.world.pickups = [old]
+        self.lc.lc_stand('Skel_Dumpster')
+        self.ready_before('Skel_Dumpster', box=b)
+        self.lc.lc_stand('Skel_CardboardBox')
+        self.ready_before('Skel_CardboardBox', box=a)
+        a.bCanBeUsed = False
+        drop_a = self.world.pickup('Map.DropA', 'GD.ammodrop_patrol_smg_clip')
+        drop_a.Location = types.SimpleNamespace(X=5.0, Y=0.0, Z=2.0)
+        self.world.pickups.append(drop_a)
+        self.assertEqual(self.lc.lc_opened('Skel_CardboardBox')['drops_tagged'], ['Map.DropA'])
+        b.bCanBeUsed = False
+        drop_b = self.world.pickup('Map.DropB', 'GD.ammodrop_patrol_smg_clip')
+        drop_b.Location = types.SimpleNamespace(X=95.0, Y=0.0, Z=2.0)
+        self.world.pickups.append(drop_b)
+        self.assertEqual(self.lc.lc_opened('Skel_Dumpster')['drops_tagged'], ['Map.DropB'])
+        self.assertEqual({path: d['container'] for path, d in self.lc.LC['drops'].items()}, {'Map.DropA': 'Map.BoxA', 'Map.DropB': 'Map.BoxB'})
+
+    def test_a_drop_from_a_tilted_container_is_not_judged_a_floor_drop(self):
+        self.box.Rotation = types.SimpleNamespace(Yaw=0, Pitch=0, Roll=-4544)   # about 25 degrees, as the Z53d cardboard box read
+        self.lc.lc_stand('Skel_Box')
+        self.ready_before()
+        floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
+        floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
+        self.world.pickups = [floor]
+        self.box.bCanBeUsed = False
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertTrue(result['drop_frame'].startswith('tilted'), result)
+        self.assertEqual((result['drops_tagged'], self.lc.LC['drops']), ([], {}))
+
+    def test_an_unreadable_rotation_is_not_level_either(self):
+        self.box.Rotation = types.SimpleNamespace(Yaw=0)   # no pitch or roll to read
+        self.lc.lc_stand('Skel_Box')
+        self.ready_before()
+        self.world.pickups = [self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')]
+        self.box.bCanBeUsed = False
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertTrue(result['drop_frame'].startswith('rotation unreadable'), result)
+        self.assertEqual(self.lc.LC['drops'], {})
+
+    def test_the_nearest_eligible_pickup_wins_whether_it_is_a_drop_or_not(self):
+        self.lc.lc_stand('Skel_Box')
+        self.ready_before()
+        drop = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
+        drop.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
+        self.world.pickups = [drop]
+        self.box.bCanBeUsed = False
+        self.lc.lc_opened('Skel_Box')
+        loose = self.world.pickup('Map.Loose', 'GD.ammodrop_patrol_smg_clip')
+        loose.Location = types.SimpleNamespace(X=10.0, Y=-380.0, Z=2.0)
+        self.world.pickups.append(loose)   # after the open: not the box's drop
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-200.0, Z=70.0)   # the drop is about 216 uu away, the loose one 192
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['reach']), ('Map.Loose', 'loose in the open'))
+
+    def test_a_walk_over_falls_only_onto_a_drops_floor_when_it_is_within_reach(self):
+        self.lc.lc_stand('Skel_Box')
+        self.ready_before()
+        floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
+        floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
+        self.world.pickups = [floor]
+        self.box.bCanBeUsed = False
+        self.lc.lc_opened('Skel_Box')
+        self.lc.lc_choose_pickup('ammo')
+        self.assertEqual(self.lc.lc_over_pickup()['walk_over'], 'fall')   # the box's origin, 0 uu, is within the pickup's reach
+        self.assertEqual((self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y), (5.0, 5.0))
+        self.lc.LC['drops']['Map.Floor']['floor_z'] = 50.0   # a floor 48 uu above the pickup: outside its reach
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=-300.0, Y=-300.0, Z=70.0)
+        self.lc.lc_choose_pickup('ammo')
+        result = self.lc.lc_over_pickup()
+        self.assertTrue(result['walk_over'].startswith('skipped: the floor under the target is outside'), result)
+        self.assertEqual((self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y), (-300.0, -300.0))
 
     def bones(self, door_turn_degrees, base_turn_degrees=0.0, hinge=(-20.0, 25.0, 6.0)):
         """A root bone and a door bone on the hinge at (-20, 25): only the door bone's rotation changes, about the vertical, as in run Z53."""
