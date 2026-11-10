@@ -1407,6 +1407,7 @@ void AOpenWillowWalker::SelectSlot(int32 Slot)
     UpdateArmsVisibility();
     if (DrawPistolAnim) ArmsAnim->PlayAction(DrawPistolAnim);
     // The gun is drawn: its equip sound (the lent pistol's PickupAndEquipSounds event, played for every gun; SLICE_AUDIO_CHAIN.md section 5).
+    ++DrawCount;
     OpenWillowAudio::Play(this, TEXT("equip"));
     UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya equipped slot %d: %s (rarity %d, %.0f dmg, %.1f/s)"),
         Slot + 1, *Item->Name, Item->Rarity, Item->Damage, Item->FireRate);

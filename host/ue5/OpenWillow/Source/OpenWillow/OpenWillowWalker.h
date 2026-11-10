@@ -40,6 +40,8 @@ public:
     virtual void Tick(float DeltaSeconds) override;
     virtual void SetupPlayerInputComponent(UInputComponent* Input) override;
     bool HasWeaponOut() const { return bWeaponOut; }
+    // How many times a weapon was drawn (SelectSlot reached its draw clip and equip sound): a test counts one per draw.
+    int32 GetDrawCount() const { return DrawCount; }
     bool IsMayaActive() const { return bMayaActive; }
     // Pickup presses that found a dropped item in reach (test hook).
     int32 PickupAttemptCount() const { return PickupAttempts; }
@@ -366,6 +368,7 @@ private:
     bool bSpawnProbeLogged = false;
     bool bMayaActive = false;
     bool bWeaponOut = false;
+    int32 DrawCount = 0;
     bool bInventoryPresentation = false;
     int32 PickupAttempts = 0;
     bool bLastPickupAccepted = false;

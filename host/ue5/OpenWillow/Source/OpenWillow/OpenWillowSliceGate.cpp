@@ -292,12 +292,23 @@ bool UOpenWillowSliceGate::EquipAndDraw(const FString& Id, FString& OutWhy)
         if (!Inventory->SlotItem(Candidate)) { Slot = Candidate; break; }
     const int32 Index = Inventory->FindItemIndexById(Id);
     if (Index == INDEX_NONE) { OutWhy = FString::Printf(TEXT("%s is not in the backpack"), *Id); return false; }
+    const int32 DrawsBefore = W->GetDrawCount();
     if (!W->EquipItem(Index, Slot)) { OutWhy = FString::Printf(TEXT("EquipItem(%d, slot %d) refused %s"), Index, Slot, *Id); return false; }
-    if (!W->DrawItemById(Id)) { OutWhy = FString::Printf(TEXT("DrawItemById refused %s after equipping it in slot %d"), *Id, Slot); return false; }
+    // EquipItem already draws when the destination is the held slot (or nothing was out): drawing again would play the draw and its
+    // equip sound a second time in the same frame (listening run of 2026-11-10, SLICE_AUDIO_CHAIN.md section 5d). Draw only when not held.
+    const FOpenWillowWeaponItem* Drawn = Inventory->ActiveWeapon();
+    const bool bAlreadyHeld = W->HasWeaponOut() && Drawn && UOpenWillowInventory::StableId(*Drawn) == Id;
+    if (!bAlreadyHeld && !W->DrawItemById(Id)) { OutWhy = FString::Printf(TEXT("DrawItemById refused %s after equipping it in slot %d"), *Id, Slot); return false; }
     const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
     if (!Held || UOpenWillowInventory::StableId(*Held) != Id || !W->HasWeaponOut())
     {
         OutWhy = FString::Printf(TEXT("held weapon is %s, not %s"), Held ? *UOpenWillowInventory::StableId(*Held) : TEXT("none"), *Id);
+        return false;
+    }
+    // One draw per equip-and-draw: two would be two draw clips and two equip sounds in one frame.
+    if (const int32 Draws = W->GetDrawCount() - DrawsBefore; Draws != 1)
+    {
+        OutWhy = FString::Printf(TEXT("%s was drawn %d times for one equip (expected 1)"), *Id, Draws);
         return false;
     }
     OutWhy = FString::Printf(TEXT("%s \"%s\" (%s, level %d) equipped in slot %d and drawn"), *Id, *Held->Name, *Held->Type, Held->Level, Slot + 1);
