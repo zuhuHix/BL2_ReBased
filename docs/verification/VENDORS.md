@@ -354,6 +354,13 @@ Loot Collector, Better UI Controls, Dialog Skipper, Item Lights and Apple's Bord
 - Choose pickups by a tighter test than the sphere, and stand on the side with the prompt.
 - A pickup truly on open ground may not exist here, since all of them came from containers. A walk-over answer may need one dropped some other way.
 
+**Ammo pickup choice (changed 2026-11-10, after runs Z53, Z53b, Z53c and Z53d).** AI-assisted (Claude). Every run's ammo pickup was not collected, because the choice was a pickup inside a container: in Z53d a sniper cartridge 87 uu up inside a laundry machine (its offset in the machine's frame), where neither the fall nor the use key reached it. The choice now skips it and says so.
+
+- **Reachable means** one of two things. A drop from an opened container that lies at most 12 uu above that container's origin in its own frame (`FLOOR_UP`): Z53d's cardboard box dropped an SMG clip 2.4 uu up, the case it was built for. Or a loose pickup outside every lootable's bounds. Either must lie 130 uu under to 10 uu over the player's centre (`REACH_BELOW`, `REACH_ABOVE`) and within 2000 uu of her (`SEARCH_RADIUS`). All of these numbers are host choices. The player's capsule height is not read, so the band is generous and `UNVERIFIED`. So is any container origin lying on its floor, apart from the cardboard box's clip in Z53d.
+- **Drops are recorded only from an opened object**, through its own frame in `lc_opened`. A pickup by a box that did not open is judged as loose.
+- **No reachable pickup is named as such**: the stage reads `no reachable ammo pickup (seen N: inside a container A, out of reach B, too far C)`, not "not collected". The use-key and walk-over tries are unchanged. The record's `choose` now holds `reach`, `pos`, `container`, `container_local` (the pickup in its container's frame) and the skip counts.
+- **Not run in the game.** Synthetic tests only (`tests/real_game_loot_capture_test.py`). Whether a floor drop is collected by the use key or a walk-over is still open.
+
 ## 10. The shop movie (vendor movie PR A, 2026-11-08)
 
 AI-assisted (Claude). The vending page now runs the game's own shop movie in Ruffle, driven by the page's state, as the

@@ -19,7 +19,9 @@ pickup can be collected.
   lc_where(mesh): the player's distance from it, for the frame taken from the press stand.
 - lc_mods(): the SDK mods loaded, for the record. Reads only; nothing is disabled.
 - lc_lower_ammo(): halve the ammo pools, recording them.
-- lc_choose_pickup(kind): the nearest pickup of that kind ('ammo' or 'cash'). lc_over_pickup(): fall onto it. lc_stand_pickup(kind) and
+- lc_choose_pickup(kind): the nearest reachable pickup of that kind ('ammo' or 'cash'): one dropped onto the floor from an opened container,
+  or one loose in the open. One inside a container, or out of reach, is skipped; none left reports "no reachable <kind> pickup".
+  lc_over_pickup(): fall onto it. lc_stand_pickup(kind) and
   lc_aim_pickup(): stand beside it and look at it, for the use key. lc_pickup_baseline(): right before an attempt, that it is still there and
   what the attempt starts from.
 - lc_pickup_state(): whether that pickup is gone and the ammo or money rose. Collected only when both.
@@ -37,7 +39,7 @@ import unrealsdk
 LC_MESHES = ("Skel_DahlChest_Ammo", "Skel_Dumpster", "Skel_StorageLocker", "Skel_StrongBox", "Skel_CardboardBox",
              "Skel_LaundryMachine")
 LC_MESH_PACKAGE = "Prop_Lootables_02.Meshes."   # most live here; the read reports a miss rather than guessing
-LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "door": {}, "pickup": None}
+LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "door": {}, "pickup": None, "drops": {}}
 # Applied in turn after each read of the usable object that is not this one: aim at its lower half, step closer, aim again from where the player
 # landed, aim lower again. Host choices; the strong box is small and sits under a shelf.
 NUDGES = ("low", "step", "center", "low")
@@ -48,6 +50,15 @@ OPEN_FIELDS = ("SimpleAnimState", "RepSimpleAnimState", "bCanBeUsed")
 AMMO_POOLS = (("grenade", "Grenade"), ("assault_rifle", "Combat_Rifle"), ("shotgun", "Combat_Shotgun"), ("repeater_pistol", "Repeater_Pistol"),
               ("smg", "Patrol_SMG"), ("sniper", "Sniper"), ("rocket", "Rocket"))
 SCALAR_KINDS = ("BoolProperty", "ByteProperty", "IntProperty", "FloatProperty", "NameProperty", "StrProperty")
+# Which pickups a player can reach (host choices, not read from the game). A drop from an opened container counts as on the floor when it
+# lies at most this far above the container's origin in the container's own frame: the Z53 cardboard box's clip lay 2.4 uu up, the
+# laundry machine's ammo 87 uu up inside it. Whether each type's origin is its floor is UNVERIFIED.
+FLOOR_UP = 12.0
+# Where a standing player's floor is, read from her centre (the pawn's location): a pickup must lie from REACH_BELOW under it to REACH_ABOVE
+# above it. The capsule height is not read, so these bounds are generous and UNVERIFIED.
+REACH_BELOW = 130.0
+REACH_ABOVE = 10.0
+SEARCH_RADIUS = 2000.0   # uu from the player; the nearest reachable pickup inside it is chosen
 
 
 def lc_root():
@@ -429,9 +440,14 @@ def lc_opened(leaf, radius=600.0):
     door = _door(before.get("bones"), bones, (loc.X, loc.Y, loc.Z), _facing(actor)) if changed else None
     if door:
         LC["door"][leaf] = door
+    pickups = _near((loc.X, loc.Y, loc.Z), radius, actor)
+    if changed:   # only loot from an object that opened counts as dropped from it: its frame is what says where on it the loot lies
+        for row in pickups:
+            if isinstance(row.get("local"), list):
+                LC.setdefault("drops", {})[row["path"]] = {"container": actor._path_name(), "local": row["local"]}
     return {"object": actor._path_name(), "opened": bool(changed), "changed": changed, "state": state, "scalars_moved": moved,
             "transform": _transform(actor), "bones_closed": before.get("bones"), "bones": bones, "door": door,
-            "pickups": _near((loc.X, loc.Y, loc.Z), radius, actor), "use_target": _use_target()}
+            "pickups": pickups, "use_target": _use_target()}
 
 
 def lc_mods():
@@ -528,28 +544,49 @@ def _chosen_pickup():
 
 
 def lc_choose_pickup(kind):
-    """The nearest pickup of this kind that is in the open: loot lies inside some containers, where neither a fall nor a clear look reaches it.
-    Inside means within the bounds of a lootable, since a line-of-sight trace never answered in this game. The record says which it got.
-    Its path and the ammo pool it fills are kept, so that one pickup is judged through both tries."""
+    """The nearest pickup of this kind that the player can reach. Two kinds count: one dropped from an opened container that lies on the floor
+    in the container's frame (FLOOR_UP), and one loose in the open, outside every lootable's bounds. Loot still inside a container is skipped:
+    the Z53 ammo lay 87 uu up inside a laundry machine, where neither a fall nor the use key reached it. Each candidate must also lie in the
+    band a standing player reaches (REACH_BELOW, REACH_ABOVE) and within SEARCH_RADIUS. Inside means within the bounds of a lootable, since a
+    line-of-sight trace never answered in this game. Its path and the ammo pool it fills are kept, so that one pickup is judged through both
+    tries."""
     me = get_pc().Pawn.Location  # noqa: F821
+    here = (me.X, me.Y, me.Z)
     rows = [p for p in _live("WillowPickup") if _kind(p)[0] == kind]
-    if not rows:
-        LC["pickup"] = None
-        return {"kind": kind, "pickup": None}
     lootables = [_center(actor) for actor in _live("WillowInteractiveObject")]
-
-    def inside(p):
+    skipped = {"inside_container": 0, "above_reach": 0, "too_far": 0}
+    reachable = []
+    for p in rows:
         spot = (p.Location.X, p.Location.Y, p.Location.Z)
-        return any(math.dist(center, spot) < radius for center, radius in lootables)
-
-    def rank(p):
-        return inside(p), math.dist((p.Location.X, p.Location.Y, p.Location.Z), (me.X, me.Y, me.Z))
-
-    pickup = min(rows, key=rank)
+        drop = LC.get("drops", {}).get(p._path_name())
+        if drop is not None:
+            if drop["local"][2] > FLOOR_UP:
+                skipped["inside_container"] += 1
+                continue
+            reach, container, local = "dropped on the floor", drop["container"], drop["local"]
+        elif any(math.dist(center, spot) < radius for center, radius in lootables):
+            skipped["inside_container"] += 1
+            continue
+        else:
+            reach, container, local = "loose in the open", None, None
+        if not (-REACH_BELOW <= spot[2] - here[2] <= REACH_ABOVE):
+            skipped["above_reach"] += 1
+            continue
+        distance = math.dist(spot, here)
+        if distance > SEARCH_RADIUS:
+            skipped["too_far"] += 1
+            continue
+        reachable.append((0 if drop is not None else 1, distance, p, reach, container, local))
+    if not reachable:
+        LC["pickup"] = None
+        return {"kind": kind, "pickup": None, "reason": f"no reachable {kind} pickup", "seen": len(rows), "skipped": skipped}
+    _, _, pickup, reach, container, local = min(reachable, key=lambda row: row[:2])
     definition = _kind(pickup)[1]
     pool = _ammo_pool_of(definition) if kind == "ammo" else None
     LC["pickup"] = {"path": pickup._path_name(), "kind": kind, "pool": pool, "baseline": None}
-    return {"kind": kind, "pickup": pickup._path_name(), "definition": definition, "pool": pool, "in_the_open": not inside(pickup)}
+    return {"kind": kind, "pickup": pickup._path_name(), "definition": definition, "pool": pool, "reach": reach,
+            "pos": [round(v, 1) for v in (pickup.Location.X, pickup.Location.Y, pickup.Location.Z)], "container": container,
+            "container_local": local, "pawn_z": round(me.Z, 1), "seen": len(rows), "skipped": skipped}
 
 
 def lc_stand_pickup(kind, distance=150.0):

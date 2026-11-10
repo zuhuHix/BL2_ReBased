@@ -119,7 +119,11 @@ function Capture-Type([string]$Mesh, [int]$Objects = 1) {
 function Capture-Pickup([string]$Kind) {
     $row = [ordered]@{ collected = $false; method = 'none' }
     $row.choose = Py "print(json.dumps(lc_choose_pickup('$Kind')))" 60
-    if ($row.choose -match '"pickup": null') { $row.result = 'none on the ground'; return $row }
+    if ($row.choose -match '"pickup": null') {
+        # Named as such, not as a failed pickup: nothing reachable was ever tried. The record keeps how many were seen and skipped, and why.
+        $why = try { $c = $row.choose | ConvertFrom-Json; "$($c.reason) (seen $($c.seen): inside a container $($c.skipped.inside_container), out of reach $($c.skipped.above_reach), too far $($c.skipped.too_far))" } catch { 'no reachable pickup' }
+        $row.result = $why; return $row
+    }
     $row.stand = Py "print(json.dumps(lc_stand_pickup('$Kind')))"
     Start-Sleep 2
     $row.aim = Py 'print(json.dumps(lc_aim_pickup()))'

@@ -89,15 +89,26 @@ class PickupStateTest(unittest.TestCase):
         """The pickup goes, and leaves a destroyed object behind for anything still holding it."""
         self.world.pickups = [p for i, p in enumerate(self.world.pickups) if i != chosen]
 
-    def test_a_pickup_in_the_open_is_chosen_over_a_nearer_one_inside_a_lootable(self):
+    def test_a_pickup_inside_a_lootable_is_skipped_and_one_in_the_open_is_chosen(self):
         bounds = types.SimpleNamespace(Origin=types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0), SphereRadius=50.0)
         self.world.objects.append(Thing('Map.Box', Mesh=Thing('c', SkeletalMesh=Thing('Pkg.Skel_Box'), Bounds=bounds), bDeleteMe=False))
-        self.assertEqual(self.lc.lc_choose_pickup('ammo')['in_the_open'], False)   # the only one: taken, and the record says so
+        # The only ammo (Pick_1) lies inside the lootable: it is skipped, and the record says why, not "not collected" later.
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['reason'], chosen['skipped']['inside_container']), (None, 'no reachable ammo pickup', 1))
+        self.assertEqual(self.lc.lc_stand_pickup('ammo'), {'kind': 'ammo', 'pickup': None})
         far = self.world.pickup('Map.Pick_3', 'GD.Ammo_Item')
         far.Location = types.SimpleNamespace(X=500.0, Y=0.0, Z=0.0)
         self.world.pickups.append(far)
         chosen = self.lc.lc_choose_pickup('ammo')
-        self.assertEqual((chosen['pickup'], chosen['in_the_open']), ('Map.Pick_3', True))
+        self.assertEqual((chosen['pickup'], chosen['reach'], chosen['container'], chosen['pos']), ('Map.Pick_3', 'loose in the open', None, [500.0, 0.0, 0.0]))
+
+    def test_a_pickup_above_the_standing_reach_or_too_far_is_skipped(self):
+        self.world.pickups[0].Location = types.SimpleNamespace(X=300.0, Y=0.0, Z=500.0)   # above a standing player's floor
+        skipped = self.lc.lc_choose_pickup('ammo')['skipped']
+        self.assertEqual(skipped['above_reach'], 1)
+        self.world.pickups[0].Location = types.SimpleNamespace(X=3000.0, Y=0.0, Z=0.0)     # beyond the search radius
+        self.assertEqual(self.lc.lc_choose_pickup('ammo')['skipped']['too_far'], 1)
+        self.assertIsNone(self.lc.lc_choose_pickup('ammo')['pickup'])
 
     def test_another_pool_rising_with_the_chosen_pickup_gone_is_not_collected(self):
         self.begin('ammo')
@@ -302,6 +313,44 @@ class OpenedTest(unittest.TestCase):
         self.assertEqual(rows['Map.Pick_1']['local'], [5.0, 10.0, 2.0])
         self.assertEqual(rows['Map.Pick_2']['local'], [5.0, -10.0, 2.0])
 
+    def test_a_drop_on_the_floor_of_an_opened_box_is_chosen_and_one_inside_it_is_skipped(self):
+        self.lc.lc_stand('Skel_Box')
+        floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
+        floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)       # 2 uu above the box's origin, as the Z53 clip lay
+        inside = self.world.pickup('Map.Inside', 'GD.ammodrop_sniper_rifle_cartridges')
+        inside.Location = types.SimpleNamespace(X=0.0, Y=0.0, Z=44.0)     # 44 uu up in the box's frame, inside it, and nearer the player
+        self.world.pickups = [floor, inside]
+        self.box.bCanBeUsed = False
+        self.lc.lc_opened('Skel_Box')
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-200.0, Z=70.0)
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['reach'], chosen['container']), ('Map.Floor', 'dropped on the floor', 'Map.Box'))
+        self.assertEqual((chosen['container_local'], chosen['pos'], chosen['skipped']['inside_container']), ([5.0, 5.0, 2.0], [5.0, 5.0, 2.0], 1))
+        self.assertEqual(chosen['pool'], 'Patrol_SMG')
+        self.assertEqual(self.lc.LC['pickup']['path'], 'Map.Floor')
+
+    def test_a_pickup_by_a_box_that_did_not_open_is_not_a_drop(self):
+        self.lc.lc_stand('Skel_Box')
+        floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
+        floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
+        self.world.pickups = [floor]
+        self.assertFalse(self.lc.lc_opened('Skel_Box')['opened'])
+        self.assertNotIn('Map.Floor', self.lc.LC['drops'])
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-200.0, Z=70.0)
+        self.assertEqual(self.lc.lc_choose_pickup('ammo')['reach'], 'loose in the open')   # outside the box's bounds, so loose
+
+    def test_a_drop_with_nothing_else_reachable_reports_no_reachable_pickup(self):
+        self.lc.lc_stand('Skel_Box')
+        inside = self.world.pickup('Map.Inside', 'GD.ammodrop_sniper_rifle_cartridges')
+        inside.Location = types.SimpleNamespace(X=0.0, Y=0.0, Z=87.0)     # the Z53 laundry machine's ammo: 87 uu up
+        self.world.pickups = [inside]
+        self.box.bCanBeUsed = False
+        self.lc.lc_opened('Skel_Box')
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-200.0, Z=70.0)
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['reason'], chosen['skipped']['inside_container']), (None, 'no reachable ammo pickup', 1))
+        self.assertIsNone(self.lc.LC['pickup'])
+
     def bones(self, door_turn_degrees, base_turn_degrees=0.0, hinge=(-20.0, 25.0, 6.0)):
         """A root bone and a door bone on the hinge at (-20, 25): only the door bone's rotation changes, about the vertical, as in run Z53."""
         names = ['Base', 'Door']
@@ -495,8 +544,10 @@ class NoPlacedDataTest(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertNotIn('OpportunityPoint', text)
                 self.assertNotIn('Sanctuary_Dynamic', text)
-                # A world coordinate is a number of four or more digits; the window size, timeouts, rotator units and date are named here.
-                numbers = [n for n in re.findall(r'-?\b\d{4,}(?:\.\d+)?\b', text) if n not in ('1280', '1800', '15000', '65536', '65536.0', '2026')]
+                # A world coordinate is a number of four or more digits; the window size, timeouts, rotator units and date are named here,
+                # and so is the pickup search radius (2000 uu, a host choice, not a position).
+                numbers = [n for n in re.findall(r'-?\b\d{4,}(?:\.\d+)?\b', text)
+                           if n not in ('1280', '1800', '15000', '65536', '65536.0', '2026', '2000.0')]
                 self.assertEqual(numbers, [])
 
 
