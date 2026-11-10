@@ -141,6 +141,9 @@ void UOpenWillowQuest::BeginPlay()
                 float Seconds = 0.f;
                 TWeakObjectPtr<UAudioComponent> Sound;
                 if (!OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds, &Sound)) return -1.0;
+                // Only sounds still playing are kept: a line that ended by itself drops out here, so the map stays as small as what is sounding.
+                for (auto It = LineSounds.CreateIterator(); It; ++It)
+                    if (!It.Value().IsValid() || !It.Value()->IsPlaying()) It.RemoveCurrent();
                 LineSounds.Add(Line.id, Sound);
                 return double(Seconds);
             });
