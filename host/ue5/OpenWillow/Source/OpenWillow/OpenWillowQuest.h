@@ -55,8 +55,8 @@ public:
     bool Accept();
     bool TurnIn();
     // A combat target took damage; only the quest's own dummy counts. DamageType: stock object path of the shot's
-    // damage type ("" = None).
-    void OnDummyDamaged(class AOpenWillowCombatTarget* Target, const FString& DamageType);
+    // damage type ("" = None). bStatusTick: a status effect's damage over time, not a shot's own hit (the test tells them apart).
+    void OnDummyDamaged(class AOpenWillowCombatTarget* Target, const FString& DamageType, bool bStatusTick = false);
     void NotifyRespawn();
     int32 Status() const;
     // Maya's maximum health at Level from the recovered formula; false without slice data.
@@ -237,6 +237,7 @@ private:
     int32 LevelBeforeReward = 0;
     FString LastDummyDamageType;
     TArray<FString> DummyDamageTypes;   // every dummy hit's damage type, in order (DummyShots entries)
+    TArray<bool> DummyStatusTicks;      // per DummyDamageTypes entry: true for a status effect's tick
     int32 DummyShots = 0;
     FString WrongId, WrongType;         // test: the equipped non-incendiary gun
     // test: bullets fly (OpenWillowProjectile), so a case fires, waits for the landing and checks; ShotPhase is the case's own sub-step, ShotsBefore the dummy's

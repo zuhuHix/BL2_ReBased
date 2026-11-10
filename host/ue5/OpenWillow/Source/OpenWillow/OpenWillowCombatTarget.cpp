@@ -697,7 +697,8 @@ float AOpenWillowCombatTarget::TakeDamage(float DamageAmount, const FDamageEvent
     // damage type path of the shot in flight ("" = None for damage that is not one of Maya's shots).
     if (const auto* Shooter = Cast<AOpenWillowWalker>(DamageCauser))
         if (UOpenWillowQuest* Quest = Shooter->GetQuest(); Quest && Quest->Enabled())
-            Quest->OnDummyDamaged(this, Shooter->ShotDamageType());
+            Quest->OnDummyDamaged(this, Shooter->ShotDamageType(), DamageEvent.IsOfType(FOpenWillowDamageEvent::ClassID)
+                && static_cast<const FOpenWillowDamageEvent&>(DamageEvent).Hit.Source == EOpenWillowHitSource::Status);
     const float Now = GetWorld()->GetTimeSeconds();
     bool bCritical = false;
     const float Dealt = AdjustIncomingDamage(DamageAmount, DamageEvent, bCritical);

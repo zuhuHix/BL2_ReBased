@@ -1053,14 +1053,16 @@ void UOpenWillowQuest::TestAdvanceObjectives()
     Pump();
 }
 
-void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FString& DamageType)
+void UOpenWillowQuest::OnDummyDamaged(AOpenWillowCombatTarget* Target, const FString& DamageType, bool bStatusTick)
 {
     if (!Impl || bFailed || !Target || Target != Dummy) return;
     // The shot's stock damage type path goes to the dummy's own OnTakeDamage (its CompareObject decides).
     LastDummyDamageType = DamageType;
     DummyDamageTypes.Add(DamageType);
+    DummyStatusTicks.Add(bStatusTick);
     ++DummyShots;
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy OnTakeDamage DamageType=%s"), DamageType.IsEmpty() ? TEXT("None") : *DamageType);
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST dummy OnTakeDamage DamageType=%s%s"), DamageType.IsEmpty() ? TEXT("None") : *DamageType,
+        bStatusTick ? TEXT(" (status tick)") : TEXT(""));
     Impl->Slice->damageDummy(TCHAR_TO_UTF8(*DamageType));
     Pump();
 }
@@ -1726,7 +1728,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         break;
     }
     case 15: {
-        if (TestWait < 0.5f) return;
+        if (ShotPhase == 0 && TestWait < 0.5f) return;
         if (ShotPhase == 0)
         {
             // Test fixture: the shotgun pellets of case 14 kick the dummy (its wobble tilts the hit capsule, its knock slides it), so wait for it
@@ -1747,10 +1749,20 @@ void UOpenWillowQuest::RunTest(float Delta)
         ShotPhase = 0;
         // The bullet's own hit comes first with the gun's damage type. The Maliwan firing mode then explodes at the impact
         // (its Behavior_Explode; WEAPON_PROJECTILES.md section 8), a second hit with the element's impact damage type.
+        // Only the shot's own hits count: a burn tick from the status effect the shot applied can land before this check (2026-11-10, run Z52)
+        // and is not part of the shot. Every shot hit must carry the lent pistol's damage type.
         const FOpenWillowWeaponItem* LentHeld = Walker->GetInventory()->ActiveWeapon();
-        Check(DummyShots == ShotsBefore + 1 + (LentHeld && LentHeld->Firing.bLoaded && LentHeld->Firing.Splash.bValid ? 1 : 0)
-            && DummyDamageTypes.IsValidIndex(ShotsBefore) && DummyDamageTypes[ShotsBefore] == MissionWeapon.DamageType,
-            TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
+        int32 ShotHits = 0, ShotHitsOfType = 0, Ticks = 0;
+        for (int32 Hit = ShotsBefore; Hit < DummyDamageTypes.Num(); ++Hit)
+        {
+            if (DummyStatusTicks.IsValidIndex(Hit) && DummyStatusTicks[Hit]) { ++Ticks; continue; }
+            ++ShotHits;
+            if (DummyDamageTypes[Hit] == MissionWeapon.DamageType) ++ShotHitsOfType;
+        }
+        const int32 Expected = 1 + (LentHeld && LentHeld->Firing.bLoaded && LentHeld->Firing.Splash.bValid ? 1 : 0);
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST lent pistol shot: %d shot hit(s) on the dummy (%d expected), %d with its damage type, %d status tick(s) ignored"),
+            ShotHits, Expected, ShotHitsOfType, Ticks);
+        Check(ShotHits == Expected && ShotHitsOfType == ShotHits, TEXT("lent_pistol_shot_carries_its_damage_type_to_dummy"));
         Check(Status() == 2, TEXT("incendiary_shot_completes_fire_objective_via_dummy_provider"));
         // The lent pistol is NOT taken back when the objective completes (observed in the real game: it stays in the inventory until the turn-in's
         // CompleteMission); it is removed at the turn-in (case 18). Meaning changed: this check was "mission_weapon_removed_after_objective".
