@@ -1,7 +1,7 @@
 # Lane brief: the rules every subagent needs, on one page
 
-For subagents and short tasks. This page condenses the binding rules of `CLAUDE.md`, `AGENTS.md`, `docs/LEGAL.md`
-and `docs/NATIVE_ANALYSIS.md`; it replaces none of them. Read it first, then open the long documents only for the part
+For subagents and short tasks. This page condenses the binding rules of `AGENTS.md` (which `CLAUDE.md` imports),
+`docs/LEGAL.md` and `docs/NATIVE_ANALYSIS.md`; it replaces none of them. Read it first, then open the long documents only for the part
 your task touches. If this page and a long document disagree, the long document wins; say so in your report.
 
 ## Never
