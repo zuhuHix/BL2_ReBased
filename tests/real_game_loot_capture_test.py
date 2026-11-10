@@ -419,17 +419,27 @@ class OpenedTest(unittest.TestCase):
         self.assertEqual(self.lc.lc_opened('Skel_Dumpster')['drops_tagged'], ['Map.DropB'])
         self.assertEqual({path: d['container'] for path, d in self.lc.LC['drops'].items()}, {'Map.DropA': 'Map.BoxA', 'Map.DropB': 'Map.BoxB'})
 
-    def test_a_drop_from_a_tilted_container_is_not_judged_a_floor_drop(self):
-        self.box.Rotation = types.SimpleNamespace(Yaw=0, Pitch=0, Roll=-4544)   # about 25 degrees, as the Z53d cardboard box read
+    def test_a_drop_from_a_tilted_container_is_chosen_for_the_use_key_but_not_walked_onto(self):
+        # Z54b's own numbers: the cardboard box's yaw and roll, and the clip 2.4 uu above it. Run Z54b collected this clip by the use key, so the
+        # yaw-only frame must still give the recorded offset (0.7, -0.7, 2.4), and the tilt must not refuse the pickup.
+        self.box.Location = types.SimpleNamespace(X=9999.0, Y=-1374.1, Z=4674.3)
+        self.box.Rotation = types.SimpleNamespace(Yaw=-26464, Pitch=0, Roll=-4544)   # about 25 degrees of roll
         self.lc.lc_stand('Skel_Box')
         self.ready_before()
-        floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
-        floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
-        self.world.pickups = [floor]
+        clip = self.world.pickup('Map.Clip', 'GD.ammodrop_sniper_rifle_cartridges')
+        clip.Location = types.SimpleNamespace(X=9998.0, Y=-1373.9, Z=4676.7)
+        self.world.pickups = [clip]
         self.box.bCanBeUsed = False
         result = self.lc.lc_opened('Skel_Box')
         self.assertTrue(result['drop_frame'].startswith('tilted'), result)
-        self.assertEqual((result['drops_tagged'], self.lc.LC['drops']), ([], {}))
+        self.assertEqual(result['drops_tagged'], ['Map.Clip'])
+        self.assertEqual(self.lc.LC['drops']['Map.Clip']['local'], [0.7, -0.7, 2.4])
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['reach']), ('Map.Clip', 'dropped on the floor'))
+        before = (self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y, self.world.pc.Pawn.Location.Z)
+        walk = self.lc.lc_over_pickup()
+        self.assertTrue(walk['walk_over'].startswith('skipped: the container is tilted'), walk)
+        self.assertEqual((self.world.pc.Pawn.Location.X, self.world.pc.Pawn.Location.Y, self.world.pc.Pawn.Location.Z), before)   # no fall
 
     def test_an_unreadable_rotation_is_not_level_either(self):
         self.box.Rotation = types.SimpleNamespace(Yaw=0)   # no pitch or roll to read

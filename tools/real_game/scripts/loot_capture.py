@@ -274,18 +274,19 @@ def _transform(actor):
     return {"pos": _xyz(actor.Location), "rot": _try(lambda: [rot.Pitch, rot.Yaw, rot.Roll]), "facing": round(_facing(actor), 1)}
 
 
-def _drop_frame(actor):
-    """None when the object's frame is level enough to judge its drops: pitch and roll each within TILT_UNITS (65536 units is a full turn, so
-    about 1 degree). Otherwise the reason. Fails closed: an unreadable rotation is not level. _local turns by yaw only."""
+def _tilt(actor):
+    """(readable, tilt). tilt is None when pitch and roll are each within TILT_UNITS (65536 units is a full turn, so about 1 degree), else the
+    reason. An unreadable rotation is not readable: no drop is tagged from it. _local turns by yaw only, so a tilted container's drop gets an
+    approximate use-key frame (VENDORS.md, section 9); the walk-over onto it is refused."""
     rot = actor.Rotation
     pitch, roll = _try(lambda: rot.Pitch), _try(lambda: rot.Roll)
     if not (_is_number(pitch) and _is_number(roll)):
-        return "rotation unreadable: drops not judged as floor drops"
+        return False, "rotation unreadable: no drops tagged"
     turn = 65536
     pitch, roll = (pitch + turn // 2) % turn - turn // 2, (roll + turn // 2) % turn - turn // 2   # to a signed angle
     if abs(pitch) > TILT_UNITS or abs(roll) > TILT_UNITS:
-        return f"tilted: pitch {pitch}, roll {roll} units: drops not judged as floor drops"
-    return None
+        return True, f"tilted: pitch {pitch}, roll {roll} units: tagged for the use key, no walk-over onto it"
+    return True, None
 
 
 def _local(actor, pos):
@@ -469,21 +470,22 @@ def lc_opened(leaf, radius=600.0):
     # The pickups before the press (lc_ready's snapshot, taken once per try); none means no drop is tagged.
     pre = LC.get("pre_press", {}).pop(leaf, None)
     pickups = _near((loc.X, loc.Y, loc.Z), radius, actor)
-    drop_frame = _drop_frame(actor)
+    readable, tilt = _tilt(actor)
     drops = LC.setdefault("drops", {})
     tagged = []
     # Only loot that appeared after this object's press, and that no earlier container already owns, is its drop. Its frame says where on it the
-    # loot lies, so a tilted frame (drop_frame) tags nothing: _local turns by yaw only.
-    if changed and pre is not None and drop_frame is None:
+    # loot lies: yaw only, so a tilted object's drop is approximate and carries its tilt, which refuses the walk-over onto it.
+    if changed and pre is not None and readable:
         for row in pickups:
             path = row["path"]
             if path in pre or path in drops or not isinstance(row.get("local"), list):
                 continue
-            drops[path] = {"container": actor._path_name(), "local": row["local"], "floor_z": round(loc.Z, 1)}
+            drops[path] = {"container": actor._path_name(), "local": row["local"], "floor_z": round(loc.Z, 1), "tilt": tilt}
             tagged.append(path)
     return {"object": actor._path_name(), "opened": bool(changed), "changed": changed, "state": state, "scalars_moved": moved,
             "transform": _transform(actor), "bones_closed": before.get("bones"), "bones": bones, "door": door,
-            "pickups": pickups, "drops_tagged": tagged, "drop_frame": drop_frame, "use_target": _use_target()}
+            "pickups": pickups, "drops_tagged": tagged, "drop_frame": tilt if readable else "rotation unreadable: no drops tagged",
+            "use_target": _use_target()}
 
 
 def lc_mods():
@@ -655,6 +657,8 @@ def lc_over_pickup():
     floor = drop.get("floor_z") if drop is not None else None
     if drop is None:
         reason = "no floor under the target was read (not a container's drop)"
+    elif drop.get("tilt"):
+        reason = "the container is tilted, so its floor is not judged: no fall onto its drop"
     elif not _is_number(floor):
         reason = "the container's floor was not read"
     elif not (loc.Z - REACH_BELOW <= floor <= loc.Z + REACH_ABOVE):
