@@ -146,6 +146,8 @@ public:
     // How far and how fast the dummy is swinging from hits (degrees, degrees per second).
     float WobbleSize() const { return float(Wobble.Size()); }
     float WobbleSpeed() const { return float(WobbleVelocity.Size()); }
+    // One integration of the hit swing spring over a frame, split into steps of at most 1/30 s (see the .cpp). Public for the test.
+    static void StepHitSpring(FVector2D& Angle, FVector2D& AngleVelocity, float DeltaSeconds);
     // Invulnerable: a hit is still recorded (popup, flash, wobble, log, quest hook, momentum) but does not lower health.
     void SetInvulnerable(bool bOn) { bInvulnerable = bOn; }
     bool IsInvulnerable() const { return bInvulnerable; }

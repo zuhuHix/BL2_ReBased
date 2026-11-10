@@ -541,6 +541,26 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
     return true;
 }
 
+// Hit swing spring: x'' = -60 x - 7 x' (x in degrees). Semi-implicit Euler is only stable for steps well below the spring's
+// period (about 0.9 s), so one long frame (a load stall) must not become one long step. Steps are at most 1/30 s: a frame of
+// up to 1/30 s integrates exactly as one step, as before, and a longer frame is split into equal steps. The envelope decays
+// as exp(-3.5 t), about 0.1% by 2 s, so a stall beyond 2 s is cut there.
+void AOpenWillowCombatTarget::StepHitSpring(FVector2D& Angle, FVector2D& AngleVelocity, float DeltaSeconds)
+{
+    constexpr float MaxStep = 1.f / 30.f;
+    constexpr float MaxSpan = 2.f;
+    const float Span = FMath::Min(DeltaSeconds, MaxSpan);
+    if (Span <= 0.f) return;
+    // The small tolerance keeps a frame of exactly 1/30 s (float rounding) from splitting in two.
+    const int32 Steps = FMath::Max(1, FMath::CeilToInt(Span / MaxStep - 1e-3f));
+    const float Step = Span / Steps;
+    for (int32 i = 0; i < Steps; ++i)
+    {
+        AngleVelocity += (-60.f * Angle - 7.f * AngleVelocity) * Step;
+        Angle += AngleVelocity * Step;
+    }
+}
+
 void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
@@ -583,9 +603,8 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
         Knock *= FMath::Max(0.f, 1.f - KnockFriction * DeltaSeconds);
     }
     else Knock = FVector::ZeroVector;
-    // Damped spring: hits kick the dummy, which settles back upright.
-    WobbleVelocity += (-60.f * Wobble - 7.f * WobbleVelocity) * DeltaSeconds;
-    Wobble += WobbleVelocity * DeltaSeconds;
+    // Damped spring: hits kick the dummy, which settles back upright (frame-time safe, see StepHitSpring).
+    StepHitSpring(Wobble, WobbleVelocity, DeltaSeconds);
     float Height = Pivot->GetRelativeLocation().Z;
     if (bPhaselocked)
     {
