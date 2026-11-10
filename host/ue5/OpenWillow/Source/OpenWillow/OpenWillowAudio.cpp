@@ -19,6 +19,7 @@
 #include "OpenWillowHitEvent.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Sound/SoundAttenuation.h"
 #include "Sound/SoundWaveProcedural.h"
 #include "TimerManager.h"
 #include "UnrealClient.h"
@@ -220,6 +221,18 @@ void RestoreSettings()
 
 // The wave a test can look at after the play: bytes the mixer has not pulled yet.
 TWeakObjectPtr<USoundWaveProcedural> GLastWave;
+// The engine's default attenuation for positioned sounds (section 5d): made once and kept for the process. Its falloff is the engine's,
+// not the game's (UNVERIFIED).
+USoundAttenuation* DefaultAttenuation()
+{
+    static USoundAttenuation* Settings = []()
+    {
+        USoundAttenuation* Made = NewObject<USoundAttenuation>(GetTransientPackage());
+        Made->AddToRoot();
+        return Made;
+    }();
+    return Settings;
+}
 // Seconds of sound the mixer may still hold after it has pulled the whole queue.
 constexpr float StopMargin = 0.25f;
 // How long past its length a sound may take to drain before it counts as stuck: a start can be late on a busy machine.
@@ -229,7 +242,8 @@ constexpr float DrainPoll = 0.05f;
 
 bool OpenWillowAudio::Enabled() { return OpenWillowAudioImpl::GEnabled; }
 
-bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds, TWeakObjectPtr<UAudioComponent>* OutComponent)
+bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds, TWeakObjectPtr<UAudioComponent>* OutComponent,
+    USceneComponent* AttachTo)
 {
     using namespace OpenWillowAudioImpl;
     if (!GEnabled) return false;
@@ -248,7 +262,12 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
     Wave->bLooping = false;
     Wave->SoundGroup = SOUNDGROUP_Default;
     Wave->QueueAudio(Wav.Pcm.GetData(), Wav.Pcm.Num());
-    UAudioComponent* Component = UGameplayStatics::SpawnSound2D(World, Wave);
+    // A sound with a place follows it, so a moving door or a walking talker carries it. The attenuation is the engine's default settings
+    // (FSoundAttenuationSettings as constructed): a sound with no attenuation asset is not spatialized at all, so one is needed. Host choice.
+    UAudioComponent* Component = AttachTo
+        ? UGameplayStatics::SpawnSoundAttached(Wave, AttachTo, NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset, true, 1.f, 1.f, 0.f,
+            DefaultAttenuation())
+        : UGameplayStatics::SpawnSound2D(World, Wave);
     if (!Component)
     {
         UE_LOG(LogTemp, Warning, TEXT("OWAUDIO play role=%s refused: no audio device or sound not played"), Role);
@@ -275,7 +294,8 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
             Component->Stop();
         }
     }), DrainPoll, true);
-    UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num());
+    UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d%s (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num(),
+        AttachTo ? *FString::Printf(TEXT(" at=%s"), *GetNameSafe(AttachTo->GetOwner())) : TEXT(""));
     Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
     if (OutSeconds) *OutSeconds = Seconds;
     if (OutComponent) *OutComponent = Component;

@@ -3,13 +3,15 @@
 #include "CoreMinimal.h"
 
 class UAudioComponent;
+class USceneComponent;
 
 // Plays slice sounds from plain PCM WAV files on the player's machine (SLICE_AUDIO_CHAIN.md section 5).
 //
 // -owaudioplay=<audio_play.json> (written by tools/prepare_slice_audio.py) maps a role ("fire", "hit", "phaselock_cast",
 // "pickup", "equip", "reload_out", "reload_in", "door_open", "door_close", and one "line:<dialog event tag>" per mission or Marcus line) to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
-// No Wwise logic: no bus, RTPC, state, attenuation or ducking; every sound plays 2D at full volume. A role with several
-// files picks one at random, because the real container's choice is UNVERIFIED.
+// No Wwise logic: no bus, RTPC, state or ducking. A sound plays 2D at full volume unless the caller gives a place in the world (AttachTo,
+// section 5d): then it follows that component with the engine's default attenuation and spatialization, whose falloff is a host choice
+// (the game's is UNVERIFIED). A role with several files picks one at random, because the real container's choice is UNVERIFIED.
 //
 // An "OWAUDIO play" log line means the host asked the engine to play, not that anyone has heard it or that it is right.
 //
@@ -48,7 +50,10 @@ OPENWILLOW_API bool ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& Out
 // True when the engine accepted the sound. WorldContext gives the world; a null context or missing role returns false.
 // OutSeconds, when given, receives the chosen file's length; OutComponent the playing sound, so a caller can stop it early (both left alone
 // when nothing plays). A sound stopped early ends there; its drain timer then stops checking it.
-OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds = nullptr, TWeakObjectPtr<UAudioComponent>* OutComponent = nullptr);
+// AttachTo, when given, is where the sound comes from (a door, a talking NPC): the sound is attached to it and positioned at the listener;
+// null plays 2D (the player's own sounds).
+OPENWILLOW_API bool Play(const UObject* WorldContext, const TCHAR* Role, float* OutSeconds = nullptr, TWeakObjectPtr<UAudioComponent>* OutComponent = nullptr,
+    USceneComponent* AttachTo = nullptr);
 
 // Whether -owaudioplay turned the sound on (the play map may still lack a role). Callers that change behaviour with sound, such as the
 // dialog line player (UOpenWillowQuest), ask this first so that a run without the switch is unchanged.

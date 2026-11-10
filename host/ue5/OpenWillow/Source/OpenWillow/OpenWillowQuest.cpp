@@ -129,6 +129,7 @@ void UOpenWillowQuest::BeginPlay()
             for (const auto& Pair : Counts) if (Best.IsEmpty() || Pair.Value > Counts[Best]) Best = Pair.Key;
             if (!Best.IsEmpty()) {
                 Impl->Slice->mission().dialog().registerTalker(TCHAR_TO_UTF8(*Best));
+                RegisteredTalker = Best;
                 UE_LOG(LogTemp, Display, TEXT("OWQUEST dialog talker registered: %s (host choice from the audio manifest)"), *Best);
             }
         }
@@ -140,7 +141,9 @@ void UOpenWillowQuest::BeginPlay()
             Impl->Slice->mission().dialog().setTimedLinePlayer([this](const vm::DialogSystem::Line& Line) {
                 float Seconds = 0.f;
                 TWeakObjectPtr<UAudioComponent> Sound;
-                if (!OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds, &Sound)) return -1.0;
+                // A line the VM gave to the registered talker comes from Marcus's pawn (section 5d); an echo caller or another talker stays 2D.
+                USceneComponent* From = !Line.echo && Marcus && RegisteredTalker == UTF8_TO_TCHAR(Line.talker.c_str()) ? Marcus->GetRootComponent() : nullptr;
+                if (!OpenWillowAudio::Play(GetOwner(), *(TEXT("line:") + FString(UTF8_TO_TCHAR(Line.eventTag.c_str()))), &Seconds, &Sound, From)) return -1.0;
                 // Only sounds still playing are kept: a line that ended by itself drops out here, so the map stays as small as what is sounding.
                 for (auto It = LineSounds.CreateIterator(); It; ++It)
                     if (!It.Value().IsValid() || !It.Value()->IsPlaying()) It.RemoveCurrent();

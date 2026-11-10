@@ -269,6 +269,7 @@ private:
     // The sound of each dialog line the host started (-owaudioplay only), by the VM's line id, so a line the dialog interrupts can be stopped
     // (SLICE_AUDIO_CHAIN.md section 5c). Entries of lines that ended normally stay until the run ends: a few dozen weak pointers at most.
     TMap<int32, TWeakObjectPtr<UAudioComponent>> LineSounds;
+    FString RegisteredTalker;   // the dialog talker name tag registered for Marcus; his lines play from his pawn
     TArray<int32> ArrivalMotions;       // door motion requested by each entered ArrivedAtMoveNode event
     FVector DummySpawnedAt = FVector::ZeroVector;
     FVector DummyAttachedAt = FVector::ZeroVector;   // dummy location right after the attach op ran

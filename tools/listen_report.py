@@ -73,13 +73,13 @@ ROLES = {
     'reload_in': ('the reload\'s clip-in notify, on the lent pistol only', 'manifest reload notify, clip in (the play map\'s timing)',
                   'the new magazine going in, later in the same reload. Its timing is UNVERIFIED against the game, as for clip out'),
     'door_open': ('the slice mover door starts to open', 'manifest door:open (one of the door\'s two sound keys)',
-                  'a wooden door opening, 2D, from wherever the listener stands. Only the one mover door has a sound; which of the two keys is the opening sound is UNVERIFIED'),
+                  'a wooden door opening, from the door: quieter the farther Maya stands (engine default falloff, UNVERIFIED against the game). Only the one mover door has a sound; which of the two keys is the opening sound is UNVERIFIED'),
     'door_close': ('the slice mover door starts to close', 'manifest door:close (the door\'s other sound key)',
-                   'a wooden door closing, 2D. The host starts it when the door starts to close, not at the key\'s own time in the game data (UNVERIFIED that the game does the same)'),
+                   'a wooden door closing, from the door, like the opening sound. The host starts it when the door starts to close, not at the key\'s own time in the game data (UNVERIFIED that the game does the same)'),
     'line:<event tag>': ('a mission line or a Marcus bark, when the stock dialog (run in the VM) starts it; the next line waits for its end',
                          'manifest dialog: or marcus_group: entry of that event tag',
                          'a voice line (the cue names its event tag). Which line plays and when is the stock dialog\'s choice in the VM; a bark with several takes is picked '
-                         'at random (the container\'s rule is UNVERIFIED). 2D, no radio (echo) filter, no ducking of the other sounds'),
+                         'at random (the container\'s rule is UNVERIFIED). From Marcus when he is the talker (an echo caller stays 2D); no radio (echo) filter, no ducking of the other sounds'),
 }
 LINE_ROLE = 'line:<event tag>'
 
@@ -302,7 +302,7 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     for role, (when, mapped, hear) in ROLES.items():
         mapped_text = f'`{names[role]}` ({mapped})' if role in names else (unresolved.get(role) or mapped)
         lines.append(f'| `{role}` | {when} | {mapped_text} | {hear} |')
-    lines += ['', 'Every sound plays 2D at full volume: no distance, no bus mix, no ducking. If something sounds too loud next to the game, that is part of what to note.', '',
+    lines += ['', "Maya's own sounds play 2D at full volume. The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No bus mix, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
               '## Step by step', '']
     for n, step in enumerate(steps, 1):
         lines.append(f'### {n}. {mmss(step["t"])} to {mmss(step["end"])}: {step["name"]}')
