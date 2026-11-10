@@ -1729,9 +1729,18 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (TestWait < 0.5f) return;
         if (ShotPhase == 0)
         {
+            // Test fixture: the shotgun pellets of case 14 kick the dummy (its wobble tilts the hit capsule, its knock slides it), so wait for it
+            // to stand still and aim at where it is now. Fired while it still swung, the bullet once passed the capsule and hit the wall behind;
+            // only the explosion's splash reached the dummy, one hit where the check expects two (2026-11-10, run Z51).
+            if (Waiting(!Dummy || (Dummy->WobbleSize() < 0.5f && Dummy->WobbleSpeed() < 2.f && Dummy->KnockVelocity().IsNearlyZero(1.f)), 4.f)) return;
+            if (Dummy && Walker->GetController())
+                Walker->GetController()->SetControlRotation((Dummy->AimPoint() - (Walker->GetActorLocation() + FVector(0, 0, 70))).Rotation());
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST lent pistol press after %.2f s: dummy wobble %.2f (speed %.2f), knock %.2f"), TestWait,
+                Dummy ? Dummy->WobbleSize() : -1.f, Dummy ? Dummy->WobbleSpeed() : -1.f, Dummy ? float(Dummy->KnockVelocity().Size()) : -1.f);
             ShotsBefore = DummyShots;
             Walker->FireOnce();
             ShotPhase = 1;
+            TestWait = 0;
             return;
         }
         if (Waiting(ProjectilesInFlight(GetWorld()) == 0 && DummyShots > ShotsBefore, 3.f)) return;
