@@ -4545,3 +4545,14 @@ AI-assisted (Claude Opus 5.5). Evidence: the listening run of 2026-11-10 (ignore
 - **Unchanged without sound.** Without `-owaudioplay` `Play` returns on its flag first and nothing new is logged.
 - **Verified (automated):** the UE module build through the audio-polish slot, ctest, `verify_packages.py`, `tests/prepare_slice_audio_test.py`, `tests/listen_report_test.py` (results in the PR).
 - **Not verified:** no editor or game run, nothing heard. The draw-count check, the attached sounds and the ` at=` log are UNVERIFIED in the engine until the next gate, mover and listening runs.
+
+## 2026-11-10: The lootable capture presses only on the usable object, and frames the opened strong box from its door side (vendors lane)
+
+AI-assisted (Claude Opus 5.5). Capture behaviour change in `tools/real_game/loot_capture.ps1` and `scripts/loot_capture.py`; record in `docs/verification/VENDORS.md` section 9 ("Strong box, next run").
+
+- **Press gate.** The use key is pressed only once the player's `CachedUsableObject` is the target, read up to 5 times per side with a nudge between reads (aim lower, step closer, re-aim). The reason: two real runs saw it set on all 5 tries that opened and empty on all 7 that did not. A side that never offers it is skipped unpressed, and a type that never offers it fails with a clear message. This applies to every lootable type.
+- **Strong box.** Up to `-StrongBoxes` (3) placed boxes are tried in path order. Once one opens, the capture saves a frame from the current angle, then frames from the side its furthest-moving bone went to and from the opposite side, at 150 uu. If no bone could be read, the object's facing stands in.
+- **Record.** The object's transform and its bones' world transforms (closed and opened) are saved. Nearby pickups now carry world positions and offsets in the object's frame, not only distances.
+- **Unchanged:** pending record, backup and verified restore, `block_saves`, input release, locks. The cleanup tail is still word for word the reviewed one, and every new step runs after the backup and the save block.
+- **Verified (automated):** `tests/real_game_loot_capture_test.py` and `tests/real_game_capture_safety_test.py` (new cases: no press without the usable object, moving on to another box, door frames only for the strong box).
+- **Not verified:** not run in the game. That the bone calls work in this build, that the moving bone marks the door side, and that the nudges make the strong box usable are all `UNVERIFIED` until the next run.

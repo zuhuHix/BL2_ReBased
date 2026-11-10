@@ -15,6 +15,8 @@ param(
     [string]$Lane = 'vendors',
     [string]$Character = 'Save0008.sav',
     [string]$Interactives = (Join-Path $PSScriptRoot '../../local/slice/interactives.json'),
+    # How many placed strong boxes to try, in path order, until one offers the prompt and opens.
+    [int]$StrongBoxes = 3,
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
     [int]$HubWaitMinutes = 120
@@ -48,21 +50,50 @@ $stagesRequested = @('objects', 'materials', 'ammo') + @($types.Keys) + @('ammo_
 
 function Test-Shot([string]$Name) { Test-Path -LiteralPath (Join-Path $Out $Name) }
 
-# Front, back, then the two sides, until the object's own state says it opened. A press that opens nothing moves on to the next side.
-function Capture-Type([string]$Mesh) {
-    $row = [ordered]@{ opened = $false; tries = @() }
-    foreach ($side in 0, 4, 2, 6) {
-        $try = [ordered]@{ side = $side; stand = Py "print(json.dumps(lc_stand('$Mesh', $side)))" }
-        Start-Sleep 2
-        $try.aim = Py "print(json.dumps(lc_aim('$Mesh')))"
-        Start-Sleep 1
+# Front, back, then the two sides, until the object's own state says it opened. The use key is pressed only once the player's
+# CachedUsableObject is this object (lc_ready, up to $UseReads reads with a nudge between); a side that never offers it is logged and
+# skipped. A press that opens nothing moves on to the next side. The strong box, which never offered the prompt in two runs, tries
+# up to $StrongBoxes placed boxes.
+$UseReads = 5
+function Capture-Type([string]$Mesh, [int]$Objects = 1) {
+    $row = [ordered]@{ opened = $false; tries = @(); objects = @() }
+    for ($o = 0; $o -lt $Objects -and -not $row.opened; $o++) {
+        if ($o -gt 0) {
+            $next = Py "print(json.dumps(lc_next_object('$Mesh')))"; $row.objects += $next
+            if ($null -eq ($next | ConvertFrom-Json).object) { break }
+        }
+        foreach ($side in 0, 4, 2, 6) {
+            $try = [ordered]@{ side = $side; stand = Py "print(json.dumps(lc_stand('$Mesh', $side)))"; ready = @(); usable = $false }
+            Start-Sleep 2
+            $try.aim = Py "print(json.dumps(lc_aim('$Mesh')))"
+            Start-Sleep 1
+            for ($n = 0; $n -lt $UseReads -and -not $try.usable; $n++) {
+                $ready = Py "print(json.dumps(lc_ready('$Mesh', $n)))"; $try.ready += $ready
+                if (($ready | ConvertFrom-Json).usable -eq $true) { $try.usable = $true } else { Start-Sleep 2 }
+            }
+            $row.tries += $try
+            if (-not $try.usable) { Write-Host "$Mesh side $side`: not the usable object after $UseReads reads; not pressed"; continue }
+            Assert-GameForeground
+            $try.closed = Save-Shot "$Folder/${Mesh}_${o}_${side}_closed.png"
+            $try.burst = (Invoke-Burst "$Folder/${Mesh}_${o}_${side}_open" 3 100 { Send-Key E } 1.0).frames
+            $try.after_shot = Save-Shot "$Folder/${Mesh}_${o}_${side}_after.png"
+            $try.result = Py "print(json.dumps(lc_opened('$Mesh')))" 60
+            if (($try.result | ConvertFrom-Json).opened -eq $true) { $row.opened = $true; break }
+        }
+    }
+    # The strong box's hinge is the open question (docs/verification/VENDORS.md, sections 7 and 9): once it is open, one more frame from where the
+    # press was made, then one from the side its lid moved to and one from the opposite side, each at a fixed distance.
+    if ($row.opened -and $Mesh -eq 'Skel_StrongBox') {
         Assert-GameForeground
-        $try.closed = Save-Shot "$Folder/${Mesh}_${side}_closed.png"
-        $try.burst = (Invoke-Burst "$Folder/${Mesh}_${side}_open" 3 100 { Send-Key E } 1.0).frames
-        $try.after_shot = Save-Shot "$Folder/${Mesh}_${side}_after.png"
-        $try.result = Py "print(json.dumps(lc_opened('$Mesh')))" 60
-        $row.tries += $try
-        if (($try.result | ConvertFrom-Json).opened -eq $true) { $row.opened = $true; break }
+        $row.current_shot = Save-Shot "$Folder/${Mesh}_opened_current.png"
+        foreach ($view in 'door', 'opposite') {
+            $row["${view}_view"] = Py "print(json.dumps(lc_view('$Mesh', '$view')))"
+            Start-Sleep 2
+            $row["${view}_aim"] = Py "print(json.dumps(lc_aim('$Mesh')))"
+            Start-Sleep 1
+            Assert-GameForeground
+            $row["${view}_shot"] = Save-Shot "$Folder/${Mesh}_opened_$view.png"
+        }
     }
     $row.side = Py "print(json.dumps(lc_side('$Mesh')))"
     Start-Sleep 2
@@ -202,9 +233,12 @@ try {
     foreach ($mesh in $types.Keys) {
         if (-not ($counts.$mesh -gt 0)) { $log.types[$mesh] = 'not in the world'; Set-Stage $mesh $false 'not in the world'; "$mesh`: not in the world"; continue }
         try {
-            $row = Capture-Type $mesh; $log.types[$mesh] = $row; "$mesh`: opened=$($row.opened) after $(@($row.tries).Count) side(s)"
+            $objects = if ($mesh -eq 'Skel_StrongBox') { $StrongBoxes } else { 1 }
+            $row = Capture-Type $mesh $objects; $log.types[$mesh] = $row; "$mesh`: opened=$($row.opened) after $(@($row.tries).Count) side(s)"
             # Frames alone are not enough: the first run counted lootables that never opened. The object's own state must have changed.
-            Set-Stage $mesh ($row.opened -eq $true) "did not open from $(@($row.tries).Count) side(s); no state field changed"
+            $pressed = @($row.tries | Where-Object { $_.usable }).Count
+            $why = if ($pressed -eq 0) { "never the usable object: $(@($row.tries).Count) side(s), $UseReads reads each; nothing pressed" } else { "did not open from $pressed pressed of $(@($row.tries).Count) side(s); no state field changed" }
+            Set-Stage $mesh ($row.opened -eq $true) $why
         } catch {
             if ($_.Exception.Message -match 'refusing to send input') { throw }
             $log.types[$mesh] = "failed: $($_.Exception.Message)"; Set-Stage $mesh $false $_.Exception.Message; "$mesh`: failed: $($_.Exception.Message)"

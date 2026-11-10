@@ -246,7 +246,7 @@ The frames of that run, host frames only and not compared with the real game, so
 
 - Textures: every lootable type is textured. "DAHL" reads correctly on the dumpster and the ammo chest, so no flipped V was seen where text can be read. Pickups in those frames are textured and show no floating label.
 - Storage locker: the handle is on the right edge when closed, and the door swings out on a hinge on its left edge, showing the inside. It reads as correct from these frames.
-- Strong box: its hinge stays `UNVERIFIED`. The only clear view is from behind, where the door stands off to the side of the box with its outer panel facing the camera. Whether that is right waits for `tools/real_game/loot_capture.ps1`'s side frame and its real-game frames.
+- Strong box: its hinge stays `UNVERIFIED`. The only clear view is from behind, where the door stands off to the side of the box with its outer panel facing the camera. Whether that is right waits for the real-game frames of `tools/real_game/loot_capture.ps1`. Since 2026-11-10 that capture presses only when the box is the player's `CachedUsableObject`, tries up to three strong boxes, and frames an opened one from the side its lid bone moved to (section 9, "Strong box, next run"). Not yet run.
 - Laundry machine, dumpster, DahlAmmo chest and cardboard box: as judged above, now textured.
 - Not read by anyone: the `mid` frames of the cardboard box, dumpster, DahlAmmo chest and laundry machine. The health vial and eridium pickups do not appear in the frames that were read, so how they look is unknown.
 - The saturated blue streak and green edge on a wall in the strong box frames are existing world, not this work: they are in the same place in a capture from before any lootable had a material. They have not been triaged.
@@ -320,9 +320,18 @@ Loot Collector, Better UI Controls, Dialog Skipper, Item Lights and Apple's Bord
 - **Per-object instances, `UNVERIFIED`:** placed lockers and strong boxes render a `MaterialInstanceConstant` of their own, not the slot's material. Their parents were not read, so whether `Mati_StorageLocker_GreenGlow` is involved is unknown, and the host's plain instance may differ from them.
 - **No labels:** no frame read shows floating text on loot, which agrees with PR #120 hiding the host's stand-in labels once the real mesh loads.
 
+**Strong box, next run (capture changed 2026-11-10, not yet run).** AI-assisted (Claude). `loot_capture.ps1` and `scripts/loot_capture.py` now do the following. Every part is a host choice, and nothing below has been seen in the game yet:
+
+- **Press gate, every type.** After standing and aiming, `lc_ready` reads `CachedUsableObject` up to 5 times on each side. Between reads it nudges in turn: aim at the lower half of the bounds, step to 90 uu (or radius + 40), aim at the centre again, then aim low again. The use key is pressed only when the object is the usable one. A side that never offers it is logged with each read and skipped, unpressed. A type that never offers it on any side fails as `never the usable object: N side(s), 5 reads each; nothing pressed`. A type that was pressed and did not open fails as before.
+- **More strong boxes.** If the first box (in path order) does not open from any of its four sides, `lc_next_object` moves to the next one, with a fresh closed state. Up to `-StrongBoxes` boxes are tried (3 by default). Frames are named `Skel_StrongBox_<box>_<side>_closed|open|after`.
+- **Door-side frames.** Once a strong box opens, three frames are saved: `Skel_StrongBox_opened_current.png` from where the press was made, then `Skel_StrongBox_opened_door.png` and `Skel_StrongBox_opened_opposite.png`, each 150 uu from the mesh's centre. The door direction is the floor-plane direction of the bone that moved furthest (over 2 uu) between the closed read and the opened read. If no bone can be read or none moved, the object's own facing (its yaw, +X) stands in, and `door_view.from` says which was used. That the moving bone points to the door side is an assumption; the frames are what check it.
+- **What the session records.** `lc_opened` (in `types.Skel_StrongBox.tries[].result`) adds the object's transform (position, pitch/yaw/roll, facing). It also adds each bone's world position and quaternion, both closed and opened. These come through `GetBoneName` / `GetBoneLocation` / `GetBoneQuaternion`; whether this build exposes them is `UNVERIFIED`, and a failed read is recorded as `<read>`. Each nearby pickup gets its world `pos` and a `local` offset (forward, right, up, from the yaw only), so a mirrored layout shows up where a distance cannot. This holds for every type that opens.
+
+**What the next run must show.** For a pass: `Skel_StrongBox` among the completed stages, with a try whose `ready` ends `usable: true` and whose `result` has `opened: true`. The `door` frame must show the opened door and inside the box. `door_view.from` should be `lid bone`, and `result.pickups` should list world positions. Only after that can the hinge and loot layout be compared with the host's, still by eye, and still with the other SDK mods on.
+
 **For a later run, not done.** A third run was judged not worth a launch before the pending merges.
 
-- Press only when `CachedUsableObject` is this object, and try other strong boxes until one offers the prompt.
+- Done in the capture, not yet run: press only when `CachedUsableObject` is this object, and try other strong boxes until one offers the prompt.
 - Keep eridium apart from cash, and judge each by the value it moves.
 - Record the player's position after the fall, so a walk-over shows whether it touched.
 - Choose pickups by a tighter test than the sphere, and stand on the side with the prompt.

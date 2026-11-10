@@ -115,6 +115,15 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         if ($scenario -eq 'opens_on_third_side' -and $global:OwOpenReads -lt 3) { return '{"opened": false, "changed": {}}' }
         return '{"opened": true, "changed": {"bCanBeUsed": [true, false]}}'
     }
+    if ($Code -match 'lc_ready') {
+        $global:OwReadyReads = 1 + [int]$global:OwReadyReads
+        if ($scenario -eq 'never_usable') { return '{"usable": false, "use_target": null, "next": "low"}' }
+        # The strong box offers the prompt only on its second object's third read.
+        if ($scenario -eq 'strongbox_usable_late' -and $Code -match 'Skel_StrongBox' -and !($global:OwNextObject -and ($global:OwReadyReads % 5) -eq 3)) { return '{"usable": false, "use_target": null, "next": "step"}' }
+        return '{"usable": true}'
+    }
+    if ($Code -match 'lc_next_object') { $global:OwNextObject = $true; $global:OwReadyReads = 0; return '{"object": "Map.Next", "count": 3}' }
+    if ($Code -match 'lc_view') { Add-Content -LiteralPath '__TMP__/views.log' $Code; return '{"view": "v", "from": "lid bone"}' }
     if ($Code -match 'lc_aim') { return '{}' }
     if ($Code -match 'lc_stand') {
         if ($scenario -eq 'script_error') { return "Traceback (most recent call last):`n LookupError" }
@@ -158,7 +167,7 @@ def run_script(script, scenario, earlier_session=None):
             path = tmp / name
             return path.read_text(encoding='utf-8').split() if path.exists() else []
         return {'code': done.returncode, 'out': done.stdout + done.stderr, 'session': session, 'files': contents, 'hub': hub.exists(),
-                'keys': logged('keys.log'), 'bursts': logged('bursts.log'),
+                'keys': logged('keys.log'), 'bursts': logged('bursts.log'), 'views': logged('views.log'),
                 'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups,
                 'kept': kept, 'kept_text': [(tmp / 'realgame' / SCRIPTS[script] / name).read_text(encoding='utf-8') for name in kept]}
 
@@ -334,8 +343,36 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         r = self.run_it('never_opens')
         self.assertEqual(r['code'], 1, r['out'])
         self.assertIn('incomplete: Skel_DahlChest_Ammo, Skel_Dumpster, Skel_StorageLocker, Skel_StrongBox, Skel_CardboardBox, Skel_LaundryMachine', r['session']['status'], r['out'])
-        self.assertEqual(len(r['session']['types']['Skel_StrongBox']['tries']), 4, r['out'])   # every side was tried
-        self.assertTrue(any('did not open from 4 side(s)' in p for p in r['session']['stage_problems']), r['out'])
+        self.assertEqual(len(r['session']['types']['Skel_Dumpster']['tries']), 4, r['out'])   # every side was tried
+        self.assertEqual(len(r['session']['types']['Skel_StrongBox']['tries']), 12, r['out'])   # on each of three strong boxes
+        self.assertTrue(any('did not open from 4 pressed of 4 side(s)' in p for p in r['session']['stage_problems']), r['out'])
+
+    def test_no_press_unless_the_object_is_the_usable_one(self):
+        r = self.run_it('never_usable')
+        self.assertEqual(r['code'], 1, r['out'])
+        self.assertNotIn('E', r['keys'], r['out'])
+        self.assertEqual([b for b in r['bursts'] if 'Skel_' in b], [], r['out'])
+        box = r['session']['types']['Skel_StrongBox']
+        self.assertEqual((len(box['tries']), len(box['tries'][0]['ready'])), (12, 5), r['out'])   # bounded: 5 reads, 4 sides, 3 boxes
+        self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object: 12 side(s), 5 reads each; nothing pressed') for p in r['session']['stage_problems']), r['out'])
+
+    def test_the_strong_box_moves_on_to_another_box_and_frames_its_door_side(self):
+        r = self.run_it('strongbox_usable_late')
+        self.assertEqual(r['session']['status'], 'completed', r['out'])
+        box = r['session']['types']['Skel_StrongBox']
+        self.assertEqual([t['usable'] for t in box['tries']], [False] * 4 + [True], r['out'])
+        self.assertEqual(len(box['tries'][-1]['ready']), 3, r['out'])
+        self.assertEqual(len(box['objects']), 1, r['out'])
+        self.assertTrue(box['tries'][-1]['closed'].endswith('Skel_StrongBox_1_0_closed.png'), r['out'])
+        for view in ('current', 'door', 'opposite'):
+            self.assertTrue(box[f'{view}_shot'].endswith(f'Skel_StrongBox_opened_{view}.png'), r['out'])
+        # The stub logs each lc_view call, split on spaces.
+        self.assertEqual(r['views'], ["print(json.dumps(lc_view('Skel_StrongBox',", "'door')))", "print(json.dumps(lc_view('Skel_StrongBox',", "'opposite')))"], r['out'])
+
+    def test_only_the_strong_box_gets_door_side_frames(self):
+        r = self.run_it('good')
+        self.assertIn('door_shot', r['session']['types']['Skel_StrongBox'], r['out'])
+        self.assertNotIn('door_shot', r['session']['types']['Skel_Dumpster'], r['out'])
 
     def test_it_stops_at_the_side_that_opens(self):
         r = self.run_it('opens_on_third_side')

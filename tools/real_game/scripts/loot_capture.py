@@ -10,7 +10,12 @@ pickup can be collected.
 - lc_goto(x, y, z): put the player near a position (from the ignored local data), for a type not found from the start.
 - lc_stand(mesh, side): stand near the object on that side, keeping its state from the first time. lc_aim(mesh): look at it from where the
   player landed. lc_side(mesh): the same from a quarter turn further round.
-- lc_opened(mesh): whether its state fields changed since then. Scalars that moved and the pickups near it go in the record.
+- lc_ready(mesh, attempt): whether the player's CachedUsableObject is that object, the game's own sign that a press reaches it. If not, one
+  nudge for the next read (aim lower, step closer, aim again). lc_next_object(mesh): the next placed object of that type, for a type that never
+  offers the prompt.
+- lc_opened(mesh): whether its state fields changed since then. Scalars that moved, the bones' world transforms, and the pickups near it (world
+  position and the offset in the object's own frame) go in the record.
+- lc_view(mesh, which): after an opening, stand at a fixed distance on the side the lid moved to ('door') or the other one ('opposite').
 - lc_mods(): the SDK mods loaded, for the record. Reads only; nothing is disabled.
 - lc_lower_ammo(): halve the ammo pools, recording them.
 - lc_choose_pickup(kind): the nearest pickup of that kind ('ammo' or 'cash'). lc_over_pickup(): fall onto it. lc_stand_pickup(kind) and
@@ -31,7 +36,11 @@ import unrealsdk
 LC_MESHES = ("Skel_DahlChest_Ammo", "Skel_Dumpster", "Skel_StorageLocker", "Skel_StrongBox", "Skel_CardboardBox",
              "Skel_LaundryMachine")
 LC_MESH_PACKAGE = "Prop_Lootables_02.Meshes."   # most live here; the read reports a miss rather than guessing
-LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "pickup": None}
+LC = globals().get("LC") or {"picked": {}, "side": {}, "before": {}, "door": {}, "pickup": None}
+# Applied in turn after each read of the usable object that is not this one: aim at its lower half, step closer, aim again from where the player
+# landed, aim lower again. Host choices; the strong box is small and sits under a shelf.
+NUDGES = ("low", "step", "center", "low")
+VIEW_DISTANCE = 150.0   # the door-side frame's fixed distance from the mesh's centre, in uu (host choice)
 # The fields on WillowInteractiveObject that describe its state. The second real run saw all three move on every opening and none on a failed try.
 OPEN_FIELDS = ("SimpleAnimState", "RepSimpleAnimState", "bCanBeUsed")
 # Which ammo pool a pickup fills, matched on the names of its definition and of the pool (read live; only the grenade pair has been seen to move).
@@ -112,9 +121,13 @@ def lc_discover(label):
     return counts
 
 
+def _placed(leaf):
+    return sorted((a for a in _live("WillowInteractiveObject") if (_row(a)["mesh"] or "").endswith("." + leaf)), key=lambda a: a._path_name())
+
+
 def _pick(leaf):
     """The placed object with this mesh, looked up afresh: the one this run chose before, else the first by path."""
-    rows = sorted((a for a in _live("WillowInteractiveObject") if (_row(a)["mesh"] or "").endswith("." + leaf)), key=lambda a: a._path_name())
+    rows = _placed(leaf)
     if not rows:
         raise LookupError(f"no placed object with mesh {leaf}")
     chosen = next((a for a in rows if a._path_name() == LC["picked"].get(leaf)), rows[0])
@@ -190,11 +203,15 @@ def _center(actor):
     return (loc.X, loc.Y, loc.Z + 45.0), 60.0
 
 
-def _stand_at(actor, side, height=70.0):
+def _facing(actor):
+    return (actor.Rotation.Yaw % 65536) * 360.0 / 65536.0
+
+
+def _stand_at(actor, side, height=70.0, yaw=None, distance=None):
+    """A spot round the mesh: eighths of a turn from the object's facing, or an absolute yaw in degrees."""
     center, radius = _center(actor)
-    facing = (actor.Rotation.Yaw % 65536) * 360.0 / 65536.0
-    a = math.radians(facing + 45.0 * side)
-    distance = max(170.0, radius + 120.0)
+    a = math.radians(yaw if yaw is not None else _facing(actor) + 45.0 * side)
+    distance = distance if distance is not None else max(170.0, radius + 120.0)
     return (center[0] + math.cos(a) * distance, center[1] + math.sin(a) * distance, actor.Location.Z + height), center
 
 
@@ -227,10 +244,60 @@ def _use_target():
     return _path(_field(get_pc(), "CachedUsableObject"))  # noqa: F821
 
 
+def _xyz(v, digits=1):
+    return _try(lambda: [round(v.X, digits), round(v.Y, digits), round(v.Z, digits)])
+
+
+def _transform(actor):
+    rot = actor.Rotation
+    return {"pos": _xyz(actor.Location), "rot": _try(lambda: [rot.Pitch, rot.Yaw, rot.Roll]), "facing": round(_facing(actor), 1)}
+
+
+def _local(actor, pos):
+    """A world position as an offset in the object's own frame (forward, right, up), from its yaw only; pitch and roll are in the record.
+    Unlike a distance, this shows a mirrored layout."""
+    loc = actor.Location
+    dx, dy, dz = pos[0] - loc.X, pos[1] - loc.Y, pos[2] - loc.Z
+    a = math.radians(_facing(actor))
+    return [round(dx * math.cos(a) + dy * math.sin(a), 1), round(-dx * math.sin(a) + dy * math.cos(a), 1), round(dz, 1)]
+
+
+def _bones(actor, limit=12):
+    """Each bone's world position and rotation, from the mesh component's bone calls (UE3's GetBoneName, GetBoneLocation and
+    GetBoneQuaternion, space 0 = world). That this build exposes them is UNVERIFIED; a failed read is recorded, not raised."""
+    component = _component(actor)
+    out = {}
+    for i in range(limit if component is not None else 0):
+        name = _try(lambda: component.GetBoneName(i))
+        if not isinstance(name, str) or name in ("", "None") or name.startswith("<error"):
+            if not out and isinstance(name, str) and name.startswith("<error"):
+                out["<read>"] = name
+            break
+        quat = _try(lambda: component.GetBoneQuaternion(name, 0))
+        out[name] = {"pos": _xyz(_try(lambda: component.GetBoneLocation(name, 0)), 2),
+                     "quat": _try(lambda: [round(quat.X, 4), round(quat.Y, 4), round(quat.Z, 4), round(quat.W, 4)])}
+    return out
+
+
+def _door(before, after):
+    """The side the lid swung to: the yaw of the bone that moved furthest across the floor between the closed and the opened read.
+    None if no bone moved more than 2 uu, or none could be read."""
+    best = None
+    for name, now in after.items():
+        then = before.get(name) if isinstance(before, dict) else None
+        if not (isinstance(then, dict) and isinstance(now, dict) and isinstance(then.get("pos"), list) and isinstance(now.get("pos"), list)):
+            continue
+        dx, dy = now["pos"][0] - then["pos"][0], now["pos"][1] - then["pos"][1]
+        moved = math.hypot(dx, dy)
+        if moved > 2.0 and (best is None or moved > best["moved"]):
+            best = {"bone": name, "moved": round(moved, 1), "yaw": round(math.degrees(math.atan2(dy, dx)), 1)}
+    return best
+
+
 def lc_stand(leaf, side=0):
     """Near the object on this side (in eighths of a turn from its front). Its state is kept from the first time, so a later side still compares with the start."""
     actor = _pick(leaf)
-    LC["before"].setdefault(leaf, {"state": _open_state(actor), "scalars": _scalars(actor)})
+    LC["before"].setdefault(leaf, {"state": _open_state(actor), "scalars": _scalars(actor), "bones": _bones(actor)})
     spot, target = _stand_at(actor, side)
     _place(*spot, target)
     LC["side"][leaf] = side
@@ -244,6 +311,54 @@ def lc_aim(leaf):
     center, radius = _center(actor)
     _aim(center, me.X, me.Y, me.Z)
     return {"object": actor._path_name(), "radius": radius, "use_target": _use_target()}
+
+
+def lc_ready(leaf, attempt=0):
+    """Whether the player's CachedUsableObject is this object. Two real runs: it was the object on all five tries that opened and empty on all
+    seven that did not, so the capture presses only when it is. If not, one nudge (NUDGES, in turn) for the next read."""
+    actor = _pick(leaf)
+    target = _use_target()
+    row = {"object": actor._path_name(), "attempt": attempt, "use_target": target, "usable": target == actor._path_name()}
+    if not row["usable"]:
+        nudge = NUDGES[attempt % len(NUDGES)]
+        center, radius = _center(actor)
+        goal = (center[0], center[1], center[2] - 0.5 * radius) if nudge == "low" else center
+        me = get_pc().Pawn.Location  # noqa: F821
+        if nudge == "step":
+            yaw = math.degrees(math.atan2(me.Y - center[1], me.X - center[0]))
+            spot, _ = _stand_at(actor, 0, yaw=yaw, distance=max(90.0, radius + 40.0))
+            _place(*spot, goal)
+        else:
+            _aim(goal, me.X, me.Y, me.Z)
+        row["next"] = nudge
+    return row
+
+
+def lc_next_object(leaf):
+    """Move on to the next placed object of this type by path, with a fresh closed state. None when there is no further one."""
+    paths = [a._path_name() for a in _placed(leaf)]
+    current = LC["picked"].get(leaf)
+    later = [p for p in paths if current is None or p > current]
+    if not later:
+        return {"object": None, "count": len(paths)}
+    LC["picked"][leaf] = later[0]
+    LC["before"].pop(leaf, None)
+    LC["door"].pop(leaf, None)
+    return {"object": later[0], "count": len(paths)}
+
+
+def lc_view(leaf, which="door"):
+    """After an opening: stand VIEW_DISTANCE from the mesh's centre on the side the lid moved to, or opposite it. Without a bone that moved,
+    the object's own facing stands in, and the record says so. lc_aim then looks at it from where the player landed."""
+    actor = _pick(leaf)
+    door = LC["door"].get(leaf)
+    yaw = door["yaw"] if door else _facing(actor)
+    if which == "opposite":
+        yaw += 180.0
+    spot, target = _stand_at(actor, 0, yaw=yaw, distance=VIEW_DISTANCE)
+    _place(*spot, target)
+    return {"object": actor._path_name(), "view": which, "yaw": round(yaw % 360.0, 1), "from": "lid bone" if door else "object facing",
+            "transform": _transform(actor)}
 
 
 def lc_side(leaf):
@@ -263,8 +378,13 @@ def lc_opened(leaf, radius=600.0):
     scalars = _scalars(actor)
     moved = {name: [before["scalars"].get(name), value] for name, value in scalars.items() if before["scalars"].get(name) != value}
     loc = actor.Location
+    bones = _bones(actor)
+    door = _door(before.get("bones"), bones) if changed else None
+    if door:
+        LC["door"][leaf] = door
     return {"object": actor._path_name(), "opened": bool(changed), "changed": changed, "state": state, "scalars_moved": moved,
-            "pickups": _near((loc.X, loc.Y, loc.Z), radius), "use_target": _use_target()}
+            "transform": _transform(actor), "bones_closed": before.get("bones"), "bones": bones, "door": door,
+            "pickups": _near((loc.X, loc.Y, loc.Z), radius, actor), "use_target": _use_target()}
 
 
 def lc_mods():
@@ -287,14 +407,20 @@ def _kind(pickup):
     return "other", text
 
 
-def _near(origin, radius):
+def _near(origin, radius, frame=None):
+    """Pickups within radius: world position and distance, and with a frame object the offset in that object's own frame."""
     rows = []
     for pickup in _live("WillowPickup"):
         loc = pickup.Location
-        distance = math.dist((loc.X, loc.Y, loc.Z), origin)
+        pos = (loc.X, loc.Y, loc.Z)
+        distance = math.dist(pos, origin)
         if distance <= radius:
             kind, definition = _kind(pickup)
-            rows.append({"path": pickup._path_name(), "kind": kind, "definition": definition, "distance": round(distance)})
+            row = {"path": pickup._path_name(), "kind": kind, "definition": definition, "distance": round(distance),
+                   "pos": [round(v, 1) for v in pos]}
+            if frame is not None:
+                row["local"] = _try(_local, frame, pos)
+            rows.append(row)
     return rows
 
 

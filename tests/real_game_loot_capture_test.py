@@ -266,6 +266,72 @@ class OpenedTest(unittest.TestCase):
         self.assertAlmostEqual(spots[4][0], -160.0)
         self.assertAlmostEqual(self.lc._stand_at(self.box, 0)[1][2], 30.0)
 
+    def test_ready_only_when_the_usable_object_is_this_one_and_nudges_otherwise(self):
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=210.0, Y=20.0, Z=30.0)
+        self.world.pc.CachedUsableObject = Thing('Map.Other')
+        first = self.lc.lc_ready('Skel_Box', 0)
+        self.assertEqual((first['usable'], first['use_target'], first['next']), (False, 'Map.Other', 'low'))
+        self.assertEqual(len(self.world.aims), 1)   # re-aimed for the next read
+        step = self.lc.lc_ready('Skel_Box', 1)
+        self.assertEqual(step['next'], 'step')
+        # Stepped closer on the same side: 90 uu from the centre at X=10, with the pawn put above the floor to fall.
+        self.assertAlmostEqual(self.world.pc.Pawn.Location.X, 100.0)
+        self.world.pc.CachedUsableObject = self.box
+        self.assertEqual(self.lc.lc_ready('Skel_Box', 2), {'object': 'Map.Box', 'attempt': 2, 'use_target': 'Map.Box', 'usable': True})
+
+    def test_next_object_moves_on_by_path_with_a_fresh_closed_state(self):
+        self.world.objects.append(Thing('Map.Box2', Mesh=self.box.Mesh, bDeleteMe=False, SimpleAnimState=0, RepSimpleAnimState=0, bCanBeUsed=True))
+        self.lc.lc_stand('Skel_Box')
+        self.assertIn('Skel_Box', self.lc.LC['before'])
+        self.assertEqual(self.lc.lc_next_object('Skel_Box'), {'object': 'Map.Box2', 'count': 2})
+        self.assertNotIn('Skel_Box', self.lc.LC['before'])
+        self.assertEqual(self.lc.lc_stand('Skel_Box')['object'], 'Map.Box2')
+        self.assertEqual(self.lc.lc_next_object('Skel_Box'), {'object': None, 'count': 2})
+
+    def test_pickups_have_world_positions_and_an_offset_that_shows_a_mirror(self):
+        self.box.Rotation = types.SimpleNamespace(Yaw=16384, Pitch=0, Roll=0)   # a quarter turn: forward is +Y
+        left, right = self.world.pickups
+        left.Location = types.SimpleNamespace(X=-10.0, Y=5.0, Z=2.0)
+        right.Location = types.SimpleNamespace(X=10.0, Y=5.0, Z=2.0)
+        self.lc.lc_stand('Skel_Box')
+        rows = {p['path']: p for p in self.lc.lc_opened('Skel_Box')['pickups']}
+        self.assertEqual(rows['Map.Pick_1']['pos'], [-10.0, 5.0, 2.0])
+        # The same distance on both, so a distance alone cannot tell them apart. The offset's right component can.
+        self.assertEqual(rows['Map.Pick_1']['distance'], rows['Map.Pick_2']['distance'])
+        self.assertEqual(rows['Map.Pick_1']['local'], [5.0, 10.0, 2.0])
+        self.assertEqual(rows['Map.Pick_2']['local'], [5.0, -10.0, 2.0])
+
+    def bones(self, lid):
+        names = ['Base', 'Lid']
+        spots = {'Base': (0.0, 0.0, 10.0), 'Lid': lid}
+        component = self.box.Mesh
+        component.GetBoneName = lambda i: names[i] if i < len(names) else 'None'
+        component.GetBoneLocation = lambda name, _space: types.SimpleNamespace(X=spots[name][0], Y=spots[name][1], Z=spots[name][2])
+        component.GetBoneQuaternion = lambda _name, _space: types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0, W=1.0)
+
+    def test_the_door_view_stands_on_the_side_the_lid_moved_to(self):
+        self.bones((0.0, 0.0, 20.0))
+        self.lc.lc_stand('Skel_Box')
+        self.bones((0.0, -12.0, 15.0))   # the lid swung out towards -Y
+        self.box.bCanBeUsed = False
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertEqual(result['door'], {'bone': 'Lid', 'moved': 12.0, 'yaw': -90.0})
+        self.assertEqual(result['bones_closed']['Lid']['pos'], [0.0, 0.0, 20.0])
+        view = self.lc.lc_view('Skel_Box', 'door')
+        self.assertEqual((view['from'], view['yaw']), ('lid bone', 270.0))
+        pawn = self.world.pc.Pawn.Location
+        self.assertAlmostEqual(pawn.X, 10.0)
+        self.assertAlmostEqual(pawn.Y, 20.0 - self.lc.VIEW_DISTANCE)   # on that side of the mesh's centre, at the fixed distance
+        self.assertEqual(self.lc.lc_view('Skel_Box', 'opposite')['yaw'], 90.0)
+
+    def test_without_a_bone_that_moved_the_facing_stands_in(self):
+        self.lc.lc_stand('Skel_Box')
+        self.box.bCanBeUsed = False
+        result = self.lc.lc_opened('Skel_Box')
+        self.assertIsNone(result['door'])
+        self.assertEqual(list(result['bones']), ['<read>'])   # this fake component has no bone calls: the failure is recorded
+        self.assertEqual(self.lc.lc_view('Skel_Box', 'door')['from'], 'object facing')
+
     def test_a_read_of_the_mods_changes_nothing_and_survives_failing(self):
         self.assertTrue(str(self.lc.lc_mods()).startswith('<error'))   # no mods_base here: recorded, not raised
 
