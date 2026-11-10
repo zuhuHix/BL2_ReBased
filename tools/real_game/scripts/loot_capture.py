@@ -54,8 +54,9 @@ SCALAR_KINDS = ("BoolProperty", "ByteProperty", "IntProperty", "FloatProperty", 
 # lies at most this far above the container's origin in the container's own frame: the Z53 cardboard box's clip lay 2.4 uu up, the
 # laundry machine's ammo 87 uu up inside it. Whether each type's origin is its floor is UNVERIFIED.
 FLOOR_UP = 12.0
-# Where a standing player's floor is, read from her centre (the pawn's location): a pickup must lie from REACH_BELOW under it to REACH_ABOVE
-# above it. The capsule height is not read, so these bounds are generous and UNVERIFIED.
+# For a loose pickup, the floor is the player's: read from her centre (the pawn's location), it must lie from REACH_BELOW under her to REACH_ABOVE
+# over her, and within SEARCH_RADIUS of her. The capsule height is not read, so these bounds are generous and UNVERIFIED. A drop is not
+# measured against the player (see lc_choose_pickup).
 REACH_BELOW = 130.0
 REACH_ABOVE = 10.0
 SEARCH_RADIUS = 2000.0   # uu from the player; the nearest reachable pickup inside it is chosen
@@ -546,8 +547,8 @@ def _chosen_pickup():
 def lc_choose_pickup(kind):
     """The nearest pickup of this kind that the player can reach. Two kinds count: one dropped from an opened container that lies on the floor
     in the container's frame (FLOOR_UP), and one loose in the open, outside every lootable's bounds. Loot still inside a container is skipped:
-    the Z53 ammo lay 87 uu up inside a laundry machine, where neither a fall nor the use key reached it. Each candidate must also lie in the
-    band a standing player reaches (REACH_BELOW, REACH_ABOVE) and within SEARCH_RADIUS. Inside means within the bounds of a lootable, since a
+    the Z53 ammo lay 87 uu up inside a laundry machine, where neither a fall nor the use key reached it. A loose pickup must also lie in the band
+    a standing player reaches (REACH_BELOW, REACH_ABOVE) and within SEARCH_RADIUS; a drop is judged in its container's frame alone. Inside means within the bounds of a lootable, since a
     line-of-sight trace never answered in this game. Its path and the ammo pool it fills are kept, so that one pickup is judged through both
     tries."""
     me = get_pc().Pawn.Location  # noqa: F821
@@ -558,8 +559,11 @@ def lc_choose_pickup(kind):
     reachable = []
     for p in rows:
         spot = (p.Location.X, p.Location.Y, p.Location.Z)
+        distance = math.dist(spot, here)
         drop = LC.get("drops", {}).get(p._path_name())
         if drop is not None:
+            # Judged in its container's frame only: lc_stand_pickup moves the player beside it, so where she stands now says nothing about
+            # its floor (run Z54: the cardboard box's clip, 2.4 uu above its box, was refused while she stood on another level).
             if drop["local"][2] > FLOOR_UP:
                 skipped["inside_container"] += 1
                 continue
@@ -568,14 +572,14 @@ def lc_choose_pickup(kind):
             skipped["inside_container"] += 1
             continue
         else:
+            # Loose: its floor is the player's, so it must lie in her reach and near her.
+            if not (-REACH_BELOW <= spot[2] - here[2] <= REACH_ABOVE):
+                skipped["above_reach"] += 1
+                continue
+            if distance > SEARCH_RADIUS:
+                skipped["too_far"] += 1
+                continue
             reach, container, local = "loose in the open", None, None
-        if not (-REACH_BELOW <= spot[2] - here[2] <= REACH_ABOVE):
-            skipped["above_reach"] += 1
-            continue
-        distance = math.dist(spot, here)
-        if distance > SEARCH_RADIUS:
-            skipped["too_far"] += 1
-            continue
         reachable.append((0 if drop is not None else 1, distance, p, reach, container, local))
     if not reachable:
         LC["pickup"] = None

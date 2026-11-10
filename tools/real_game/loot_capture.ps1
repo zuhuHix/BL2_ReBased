@@ -58,6 +58,23 @@ function Test-Shot([string]$Name) { Test-Path -LiteralPath (Join-Path $Out $Name
 # up to $StrongBoxes placed boxes. A step of the press that fails (other than a refused input, which stops the run) fails that side only, with
 # the script line it failed on, and the capture moves on: run Z53c lost a whole type to one bare null error.
 $UseReads = 5
+# One usable-object read. An empty reply is retried once; if it is still empty, or the game fails the read, the read counts as not usable: it is
+# kept in the try's ready list with its error, and the reads and sides go on. Run Z54 lost the strong box to one empty reply here. A refused
+# input still stops the run.
+function Read-Ready([string]$Mesh, [int]$Attempt) {
+    $code = "print(json.dumps(lc_ready('$Mesh', $Attempt)))"
+    $why = ''; $reads = 0
+    while ($reads -lt 2) {
+        $reads++
+        try { return (Py $code) } catch {
+            if ($_.Exception.Message -match 'refusing to send input') { throw }
+            $why = $_.Exception.Message
+            if ($why -notlike 'empty reply*') { break }
+        }
+    }
+    Write-Host "$Mesh read ${Attempt}: not usable, counted after $reads read(s): $why"
+    @{ usable = $false; use_target = $null; error = $why; reads = $reads } | ConvertTo-Json -Compress
+}
 function Capture-Type([string]$Mesh, [int]$Objects = 1) {
     $row = [ordered]@{ opened = $false; tries = @(); objects = @() }
     for ($o = 0; $o -lt $Objects -and -not $row.opened; $o++) {
@@ -71,7 +88,7 @@ function Capture-Type([string]$Mesh, [int]$Objects = 1) {
             $try.aim = Py "print(json.dumps(lc_aim('$Mesh')))"
             Start-Sleep 1
             for ($n = 0; $n -lt $UseReads -and -not $try.usable; $n++) {
-                $ready = Py "print(json.dumps(lc_ready('$Mesh', $n)))"; $try.ready += $ready
+                $ready = Read-Ready $Mesh $n; $try.ready += $ready
                 if (($ready | ConvertFrom-Json).usable -eq $true) { $try.usable = $true } else { Start-Sleep 2 }
             }
             $row.tries += $try

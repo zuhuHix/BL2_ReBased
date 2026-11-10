@@ -329,6 +329,19 @@ class OpenedTest(unittest.TestCase):
         self.assertEqual(chosen['pool'], 'Patrol_SMG')
         self.assertEqual(self.lc.LC['pickup']['path'], 'Map.Floor')
 
+    def test_a_drop_is_judged_in_its_containers_frame_not_from_where_the_player_stands(self):
+        # Run Z54: the cardboard box's clip, 2.4 uu above its box, was refused while the player stood on another level. Stands teleport the
+        # player beside the pickup, so only a loose pickup is measured from her.
+        self.lc.lc_stand('Skel_Box')
+        floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')
+        floor.Location = types.SimpleNamespace(X=5.0, Y=5.0, Z=2.0)
+        self.world.pickups = [floor]
+        self.box.bCanBeUsed = False
+        self.lc.lc_opened('Skel_Box')
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=9000.0, Y=9000.0, Z=3000.0)
+        chosen = self.lc.lc_choose_pickup('ammo')
+        self.assertEqual((chosen['pickup'], chosen['reach']), ('Map.Floor', 'dropped on the floor'))
+
     def test_a_pickup_by_a_box_that_did_not_open_is_not_a_drop(self):
         self.lc.lc_stand('Skel_Box')
         floor = self.world.pickup('Map.Floor', 'GD.ammodrop_patrol_smg_clip')

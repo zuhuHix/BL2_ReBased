@@ -119,6 +119,12 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     }
     if ($Code -match 'lc_ready') {
         $global:OwReadyReads = 1 + [int]$global:OwReadyReads
+        # Run Z54: the strong box's fifth read came back empty. Empty for the first N calls of that read (N = 1 or 2), then not usable.
+        if ($scenario -in 'ready_empty_once', 'ready_empty_twice' -and $Code -match 'Skel_StrongBox') {
+            $limit = if ($scenario -eq 'ready_empty_twice') { 2 } else { 1 }
+            if ($Code -match "Skel_StrongBox', 4\)" -and [int]$global:OwReadyEmpty -lt $limit) { $global:OwReadyEmpty = 1 + [int]$global:OwReadyEmpty; return $null }
+            return '{"usable": false, "use_target": null, "next": "step"}'
+        }
         if ($scenario -eq 'dumpster_late' -and $Code -match 'Skel_Dumpster') {
             # As in run Z53c: side 0 empty on all five reads, side 4 usable on its first.
             $global:OwDumpsterReads = 1 + [int]$global:OwDumpsterReads
@@ -390,6 +396,27 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertTrue(dumpster['opened'], r['out'])   # the next side was pressed and opened
         self.assertEqual(r['session']['status'], 'completed', r['out'])
         self.assertNotIn('null-valued', r['out'])
+
+    def test_an_empty_ready_read_twice_is_a_not_usable_read_and_the_type_goes_on(self):
+        # Run Z54: an empty lc_ready reply used to abort the whole strong box. Now it is retried once, then counted as not usable.
+        r = self.run_it('ready_empty_twice')
+        box = r['session']['types']['Skel_StrongBox']
+        self.assertIsInstance(box, dict, r['out'])   # not "failed: empty reply ..."
+        self.assertEqual(len(box['tries']), 12, r['out'])   # every side of every box still tried: 4 sides, 3 boxes
+        read = json.loads(box['tries'][0]['ready'][4])
+        self.assertEqual((read['usable'], read['reads']), (False, 2), r['out'])
+        self.assertIn('empty reply from the game to: print(json.dumps(lc_ready', read['error'], r['out'])
+        self.assertEqual(json.loads(box['tries'][1]['ready'][4]).get('error'), None, r['out'])   # the next side reads on
+        self.assertEqual([b for b in r['bursts'] if 'Skel_StrongBox' in b], [], r['out'])   # never usable, so never pressed
+        self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object: 12 side(s)') for p in r['session']['stage_problems']), r['out'])
+
+    def test_an_empty_ready_read_once_is_retried_and_the_retry_is_the_read(self):
+        r = self.run_it('ready_empty_once')
+        box = r['session']['types']['Skel_StrongBox']
+        self.assertIsInstance(box, dict, r['out'])
+        read = json.loads(box['tries'][0]['ready'][4])
+        self.assertEqual((read['usable'], 'error' in read), (False, False), r['out'])   # the retry's own reply, not counted as an error
+        self.assertEqual(len(box['tries']), 12, r['out'])
 
     def test_a_failed_press_step_names_its_line_and_a_type_failing_every_side_says_why(self):
         r = self.run_it('press_step_fails')
