@@ -72,13 +72,19 @@ function Capture-Type([string]$Mesh, [int]$Objects = 1) {
             $try.aim = Py "print(json.dumps(lc_aim('$Mesh')))"
             Start-Sleep 1
             for ($n = 0; $n -lt $UseReads -and -not $try.usable; $n++) {
-                $ready = Py "print(json.dumps(lc_ready('$Mesh', $n)))"; $try.ready += $ready
+                # No nudge after the last read: a blind press is made from the settled stand that read saw.
+                $nudge = if ($n -lt $UseReads - 1) { 'True' } else { 'False' }
+                $ready = Py "print(json.dumps(lc_ready('$Mesh', $n, $nudge)))"; $try.ready += $ready
                 if (($ready | ConvertFrom-Json).usable -eq $true) { $try.usable = $true } else { Start-Sleep 2 }
             }
             $row.tries += $try
             if (-not $try.usable) {
                 $empty = @($try.ready | Where-Object { $null -ne ($_ | ConvertFrom-Json).use_target }).Count -eq 0
                 if (-not ($empty -and $BlindFallback -contains $Mesh)) { Write-Host "$Mesh side $side`: not the usable object after $UseReads reads; not pressed"; continue }
+                # Checked once more right before the press: still empty, close enough, and looking at it.
+                $try.blind_check = Py "print(json.dumps(lc_blind_check('$Mesh')))"
+                $check = $try.blind_check | ConvertFrom-Json
+                if ($check.ok -ne $true) { Write-Host "$Mesh side $side`: blind press refused ($(@($check.problems) -join '; ')); not pressed"; continue }
                 $try.blind = $true
                 Write-Host "$Mesh side $side`: CachedUsableObject empty on all $UseReads reads; BLIND PRESS (fallback for this type only)"
             }

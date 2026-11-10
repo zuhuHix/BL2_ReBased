@@ -302,12 +302,15 @@ class OpenedTest(unittest.TestCase):
         self.assertEqual(rows['Map.Pick_1']['local'], [5.0, 10.0, 2.0])
         self.assertEqual(rows['Map.Pick_2']['local'], [5.0, -10.0, 2.0])
 
-    def bones(self, door_turn_degrees):
+    def bones(self, door_turn_degrees, base_turn_degrees=0.0, hinge=(-20.0, 25.0, 6.0)):
         """A root bone and a door bone on the hinge at (-20, 25): only the door bone's rotation changes, about the vertical, as in run Z53."""
         names = ['Base', 'Door']
-        spots = {'Base': (0.0, 0.0, 0.0), 'Door': (-20.0, 25.0, 6.0)}
-        half = math.radians(door_turn_degrees) / 2.0
-        quats = {'Base': (0.0, 0.0, 0.0, 1.0), 'Door': (0.0, 0.0, math.sin(half), math.cos(half))}
+        spots = {'Base': (0.0, 0.0, 0.0), 'Door': hinge}
+
+        def about_z(degrees):
+            half = math.radians(degrees) / 2.0
+            return (0.0, 0.0, math.sin(half), math.cos(half))
+        quats = {'Base': about_z(base_turn_degrees), 'Door': about_z(door_turn_degrees)}
         component = self.box.Mesh
         component.GetBoneName = lambda i: names[i] if i < len(names) else 'None'
         component.GetBoneLocation = lambda name, _space: types.SimpleNamespace(X=spots[name][0], Y=spots[name][1], Z=spots[name][2])
@@ -344,6 +347,44 @@ class OpenedTest(unittest.TestCase):
         self.bones(5.0)
         self.box.bCanBeUsed = False
         self.assertIsNone(self.lc.lc_opened('Skel_Box')['door'])
+
+    def open_with(self, **after):
+        self.bones(0.0, hinge=after.get('hinge', (-20.0, 25.0, 6.0)))
+        self.lc.lc_stand('Skel_Box')
+        self.bones(**after)
+        self.box.bCanBeUsed = False
+        return self.lc.lc_opened('Skel_Box')['door']
+
+    def test_two_bones_turning_alike_mark_no_door_and_the_view_falls_back(self):
+        self.assertIsNone(self.open_with(door_turn_degrees=90.0, base_turn_degrees=89.5))   # within 1 degree: no single door
+        self.assertEqual(self.lc.lc_view('Skel_Box', 'door')['from'], 'object facing')
+
+    def test_a_clear_strongest_bone_still_marks_the_door(self):
+        self.assertEqual(self.open_with(door_turn_degrees=90.0, base_turn_degrees=40.0)['bone'], 'Door')
+
+    def test_an_origin_that_barely_moves_marks_no_door(self):
+        # A hinge 0.4 uu from the origin: a quarter turn moves the origin well under 1 uu across the floor.
+        self.assertIsNone(self.open_with(door_turn_degrees=90.0, hinge=(-0.4, 0.0, 6.0)))
+        self.assertEqual(self.lc.lc_view('Skel_Box', 'door')['from'], 'object facing')
+
+    def blind(self, me, yaw_degrees, pitch_degrees=0.0, target=None):
+        self.world.pc.Pawn.Location = types.SimpleNamespace(**dict(zip('XYZ', me)))
+        self.world.pc.Pawn.BaseEyeHeight = 0.0
+        self.world.pc.Rotation = types.SimpleNamespace(Yaw=int(yaw_degrees * 65536 / 360) % 65536, Pitch=int(pitch_degrees * 65536 / 360) % 65536)
+        self.world.pc.CachedUsableObject = target
+        return self.lc.lc_blind_check('Skel_Box')
+
+    def test_a_blind_press_needs_an_empty_field_a_close_stand_and_a_true_aim(self):
+        ok = self.blind((10.0, -250.0, 30.0), 90.0)   # 270 uu south of the centre, looking north at it
+        self.assertEqual((ok['ok'], ok['distance'], ok['angle'], ok['problems']), (True, 270, 0.0, []))
+        self.assertFalse(self.blind((10.0, -250.0, 30.0), 90.0, target=Thing('Map.Other'))['ok'])   # another object would take the press
+        far = self.blind((10.0, -320.0, 30.0), 90.0)
+        self.assertEqual((far['ok'], far['problems']), (False, ['340 uu away, over 300']))
+        off = self.blind((10.0, -250.0, 30.0), 105.0)
+        self.assertEqual((off['ok'], off['angle']), (False, 15.0))
+        self.assertTrue(self.blind((10.0, -250.0, 30.0), 90.0, pitch_degrees=-5.0)['ok'])   # a little below: pitch past 32768 reads as negative
+        del self.world.pc.Rotation
+        self.assertEqual(self.lc.lc_blind_check('Skel_Box')['ok'], False)   # an unreadable aim fails
 
     def test_where_reports_the_press_stand_distance(self):
         self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-180.0, Z=30.0)

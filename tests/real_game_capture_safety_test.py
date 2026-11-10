@@ -118,12 +118,20 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     if ($Code -match 'lc_ready') {
         $global:OwReadyReads = 1 + [int]$global:OwReadyReads
         if ($scenario -eq 'never_usable') { return '{"usable": false, "use_target": "Map.Other", "next": "low"}' }
-        if ($scenario -eq 'usable_field_empty') { return '{"usable": false, "use_target": null, "next": "low"}' }
+        if ($scenario -in 'usable_field_empty', 'blind_target_appears', 'blind_too_far') {
+            Add-Content -LiteralPath '__TMP__/ready.log' $Code
+            return '{"usable": false, "use_target": null, "next": "low"}'
+        }
         # The strong box offers the prompt only on its second object's third read.
         if ($scenario -eq 'strongbox_usable_late' -and $Code -match 'Skel_StrongBox' -and !($global:OwNextObject -and ($global:OwReadyReads % 5) -eq 3)) { return '{"usable": false, "use_target": null, "next": "step"}' }
         return '{"usable": true}'
     }
     if ($Code -match 'lc_next_object') { $global:OwNextObject = $true; $global:OwReadyReads = 0; return '{"object": "Map.Next", "count": 3}' }
+    if ($Code -match 'lc_blind_check') {
+        if ($scenario -eq 'blind_target_appears') { return '{"ok": false, "use_target": "Map.Other", "problems": ["usable object is Map.Other"]}' }
+        if ($scenario -eq 'blind_too_far') { return '{"ok": false, "use_target": null, "distance": 420, "problems": ["420 uu away, over 300"]}' }
+        return '{"ok": true, "use_target": null, "distance": 280, "angle": 2.0, "problems": []}'
+    }
     if ($Code -match 'lc_where') { return '{"distance": 280}' }
     if ($Code -match 'lc_view') { Add-Content -LiteralPath '__TMP__/views.log' $Code; return '{"view": "v", "from": "lid bone"}' }
     if ($Code -match 'lc_aim') { return '{}' }
@@ -170,6 +178,7 @@ def run_script(script, scenario, earlier_session=None):
             return path.read_text(encoding='utf-8').split() if path.exists() else []
         return {'code': done.returncode, 'out': done.stdout + done.stderr, 'session': session, 'files': contents, 'hub': hub.exists(),
                 'keys': logged('keys.log'), 'bursts': logged('bursts.log'), 'views': logged('views.log'),
+                'ready': (tmp / 'ready.log').read_text(encoding='utf-8').splitlines() if (tmp / 'ready.log').exists() else [],
                 'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups,
                 'kept': kept, 'kept_text': [(tmp / 'realgame' / SCRIPTS[script] / name).read_text(encoding='utf-8') for name in kept]}
 
@@ -367,6 +376,22 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertEqual([b.rsplit('/', 1)[-1] for b in r['bursts'] if 'Skel_' in b], ['Skel_StorageLocker_0_0_open'], r['out'])   # no other type pressed
         self.assertIn('Skel_StorageLocker', r['session']['completed_stages'], r['out'])
         self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object') for p in r['session']['stage_problems']), r['out'])
+        self.assertIn('"ok": true', locker['tries'][0]['blind_check'], r['out'])
+        # No nudge after a side's last read, so the press is made from the stand that read saw.
+        ready = [line for line in r['ready'] if 'Skel_StorageLocker' in line]
+        self.assertEqual([line.endswith(', False)))') for line in ready], [False, False, False, False, True], r['out'])
+
+    def test_a_blind_press_is_refused_when_the_final_check_fails(self):
+        for scenario, why in (('blind_target_appears', 'usable object is Map.Other'), ('blind_too_far', '420 uu away')):
+            with self.subTest(scenario):
+                r = self.run_it(scenario)
+                self.assertEqual(r['code'], 1, r['out'])
+                self.assertNotIn('E', r['keys'], r['out'])
+                self.assertEqual([b for b in r['bursts'] if 'Skel_' in b], [], r['out'])
+                locker = r['session']['types']['Skel_StorageLocker']
+                self.assertEqual((locker['opened'], len(locker['tries'])), (False, 4), r['out'])
+                self.assertNotIn('blind', locker['tries'][0], r['out'])
+                self.assertIn(f'blind press refused ({why}', r['out'])
 
     def test_the_strong_box_moves_on_to_another_box_and_frames_its_door_side(self):
         r = self.run_it('strongbox_usable_late')
