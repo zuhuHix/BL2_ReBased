@@ -228,6 +228,8 @@ USoundAttenuation* DefaultAttenuation()
     static USoundAttenuation* Settings = []()
     {
         USoundAttenuation* Made = NewObject<USoundAttenuation>(GetTransientPackage());
+        // No reverb send: the slice applies no reverb (section 5d), and the engine's default would send to any active reverb.
+        Made->Attenuation.bEnableReverbSend = false;
         Made->AddToRoot();
         return Made;
     }();
