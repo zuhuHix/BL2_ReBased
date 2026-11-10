@@ -10,7 +10,8 @@ name it). The Psycho's slots' parent is unknown: they stay at a light/dark scale
 From Master_Creature's compiled shader (read locally; PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model") come only the two
 light/dark scales, ``p_HighlightsIntensity`` / ``p_ShadowsIntensity`` with their master default, and the use of the zone vectors as stored
 (no gamma step); tools/creature_zone.py picks those values. For a Master_Creature target the mask texture is imported as sRGB, as its
-package flag says (creature_zone.masks_srgb). Round 23's x^2.2 on the vectors is off by default (OPENWILLOW_ZONE_GAMMA=1 for an A/B). The rest is our host model, UNVERIFIED: the grey diffuse is coloured by the
+package flag says (creature_zone.masks_srgb). Round 23's x^2.2 on the vectors is off by default for Master_Creature targets and stays on for an unresolved parent (the Psycho);
+OPENWILLOW_ZONE_GAMMA overrides both for an A/B. The rest is our host model, UNVERIFIED: the grey diffuse is coloured by the
 zone vectors (p_?Color{Hilight,Midtone,Shadow}, p_ColorD) through ``p_Masks`` (left half light/dark map, right half zone mask), mixed as
 the citizens' ``M_OW_NPC_Zone`` (tools/ambient_npc_attach_editor.py) does; this step parents one instance to it. The values are the stock
 material instance's own (UModel props). Nothing here is checked in the running game; the dummy's pattern layer is not drawn.
@@ -92,9 +93,9 @@ for npc in job['npcs']:
             eal.save_loaded_asset(normal, only_if_is_dirty=False)
             mel.set_material_instance_texture_parameter_value(instance, 'Normal', normal)
         # Master_Creature's colour model (tools/creature_zone.py): the vectors as stored and the two light/dark scales, from the
-        # instance or the master's default. The vectors are used as stored, as the shader does; OPENWILLOW_ZONE_GAMMA=1 brings back the
-        # x^2.2 host fit (creature_zone.GAMMA_FIT_DEFAULT, off) for an A/B.
-        gamma = gamma_from_env(os.environ.get('OPENWILLOW_ZONE_GAMMA'))
+        # instance or the master's default. A Master_Creature target's vectors are used as stored, as the shader does; an unresolved
+        # parent keeps round 23's x^2.2 host fit (creature_zone.gamma_default). OPENWILLOW_ZONE_GAMMA overrides both for an A/B.
+        gamma = gamma_from_env(os.environ.get('OPENWILLOW_ZONE_GAMMA'), npc.get('master'))
         values = zone_parameters(slot, master=npc.get('master'), gamma=gamma)
         for parameter, rgba in values['vectors'].items():
             mel.set_material_instance_vector_parameter_value(instance, parameter, unreal.LinearColor(*rgba))

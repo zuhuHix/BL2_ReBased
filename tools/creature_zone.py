@@ -19,14 +19,18 @@ UNVERIFIED against the running game: this is a reading of compiled and package d
 # stored. It was the default from 2026-11-09 (an A/B in identical light, runner-z36 claude-z36d off / claude-z36e on, a Luna critic, colour
 # only, scored it 6.4/10 against 5.8), measured while the masks were still sampled raw. On the Bullymong's zone A (torso and the worn spikes)
 # it roughly doubles the albedo's saturation and moves its hue toward orange, the "too yellow / golden" the critic named, so it is off by
-# default again (2026-11-10). OPENWILLOW_ZONE_GAMMA=1 turns it on for an A/B.
-GAMMA_FIT_DEFAULT = False
+# default again (2026-11-10) for Master_Creature targets, the only parent the shader reading covers. A target whose parent is unresolved or
+# another master (the range's Psycho) keeps the fit, the earlier rule: no shader evidence says otherwise for it. OPENWILLOW_ZONE_GAMMA
+# overrides both for an A/B ('0' off, anything else on).
+def gamma_default(master=None):
+    """Whether the fit applies when OPENWILLOW_ZONE_GAMMA is unset: off for a Master_Creature target, on for any other or unknown parent."""
+    return master != 'Master_Creature'
 
 
-def gamma_from_env(value):
-    """OPENWILLOW_ZONE_GAMMA's value -> whether to apply the fit: unset uses GAMMA_FIT_DEFAULT, '0' turns it off, anything else on."""
+def gamma_from_env(value, master=None):
+    """OPENWILLOW_ZONE_GAMMA's value -> whether to apply the fit: unset uses gamma_default(master), '0' turns it off, anything else on."""
     if value is None or str(value).strip() == '':
-        return GAMMA_FIT_DEFAULT
+        return gamma_default(master)
     return str(value).strip() != '0'
 
 
@@ -46,14 +50,16 @@ def masks_srgb(master=None):
     return master == 'Master_Creature'
 
 
-def zone_parameters(slot, master=None, gamma=GAMMA_FIT_DEFAULT):
+def zone_parameters(slot, master=None, gamma=None):
     """{'vectors': {name: [r, g, b, a]}, 'scalars': {name: value}} for one material slot of an editor job.
 
     slot: the job's slot dict, with the stock instance's own 'vectors' and 'scalars' (UModel props). master: the instance's parent
     material as the job names it; only 'Master_Creature' has read defaults, any other master gets 1.0 (M_OW_NPC_Zone's default, the
-    earlier rule) unless the instance sets a value. gamma (default GAMMA_FIT_DEFAULT, False) applies round 23's host fit, each
-    colour channel raised to 2.2; gamma=False uses the values as stored, as the shader does.
+    earlier rule) unless the instance sets a value. gamma=True applies round 23's host fit, each colour channel raised to 2.2;
+    gamma=False uses the values as stored, as the shader does; None (the default) picks gamma_default(master).
     """
+    if gamma is None:
+        gamma = gamma_default(master)
     vectors = {}
     for name, value in (slot.get('vectors') or {}).items():
         if not (name.startswith('p_') and name.endswith(ZONE_VECTOR_ENDINGS) and value):

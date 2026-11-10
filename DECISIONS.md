@@ -4580,7 +4580,9 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.m
   both from data: the x^2.2 fit (the shader uses the vectors as stored; the fit roughly doubles zone A's saturation toward orange), and the masks'
   colour space (both creature mask textures have `SRGB` set in the package, so the game decodes them before the x2 light/dark scales; the host read
   them raw, about 1.7 times the highlight amount, toward zone A's pale yellow highlight).
-- **Change:** `tools/creature_zone.py`: `GAMMA_FIT_DEFAULT = False` (`OPENWILLOW_ZONE_GAMMA=1` for an A/B) and `masks_srgb()` (True for
-  `Master_Creature` targets); `tools/phaselock_target_editor.py` imports those masks as sRGB. Other masters and the citizens are unchanged.
+- **Change:** `tools/creature_zone.py`: the fit is chosen by the resolved parent, `gamma_default()`: off for `Master_Creature` targets, still on
+  for an unresolved or other parent (the range's Psycho), which the shader evidence does not cover (review r1). `OPENWILLOW_ZONE_GAMMA` overrides
+  both for an A/B. `masks_srgb()` (True for `Master_Creature` targets); `tools/phaselock_target_editor.py` imports those masks as sRGB. Other
+  masters and the citizens are otherwise unchanged.
 - **Checked:** `tests/creature_zone_test.py` (synthetic), `tests/editor_inputs_test.py`. No parsing change.
 - **Not verified:** no editor import or capture yet; whether the result matches the game's frames is for the next Phaselock capture and a critic.

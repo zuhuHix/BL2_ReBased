@@ -23,9 +23,19 @@ def test_only_zone_vectors_pass():
     assert 'p_PatternColor' not in names and 'p_EmissiveScale' not in names and 'p_BColorShadow' not in names
 
 
-def test_vectors_as_stored_are_the_default():
-    assert z.GAMMA_FIT_DEFAULT is False
-    assert z.zone_parameters(SLOT) == z.zone_parameters(SLOT, gamma=False)
+def test_vectors_as_stored_for_master_creature():
+    assert z.gamma_default('Master_Creature') is False
+    assert z.zone_parameters(SLOT, 'Master_Creature') == z.zone_parameters(SLOT, 'Master_Creature', gamma=False)
+
+
+def test_unresolved_or_other_parent_keeps_the_fit():
+    for master in (None, '', 'Master_SomethingElse'):
+        assert z.gamma_default(master) is True
+        assert z.zone_parameters(SLOT, master) == z.zone_parameters(SLOT, master, gamma=True)
+    # The Psycho's tool entry names no master, so it keeps the fit.
+    import prepare_phaselock_target as target
+    assert z.gamma_default(target.TARGETS['Psycho'].get('master')) is True
+    assert z.gamma_default(target.TARGETS['Bullymong'].get('master')) is False
 
 
 def test_gamma_fit_raises_rgb_only():
@@ -33,10 +43,15 @@ def test_gamma_fit_raises_rgb_only():
     assert abs(out[0] - 0.5 ** 2.2) < 1e-9 and abs(out[1] - 0.25 ** 2.2) < 1e-9 and out[2] == 1.0 and out[3] == 1.0
 
 
-def test_gamma_from_env():
-    assert z.gamma_from_env(None) is False and z.gamma_from_env('') is False
-    assert z.gamma_from_env('0') is False and z.gamma_from_env(' 0 ') is False
-    assert z.gamma_from_env('1') is True
+def test_gamma_from_env_default_follows_the_parent():
+    assert z.gamma_from_env(None, 'Master_Creature') is False and z.gamma_from_env('', 'Master_Creature') is False
+    assert z.gamma_from_env(None) is True and z.gamma_from_env('', None) is True
+
+
+def test_gamma_from_env_overrides_both():
+    for master in ('Master_Creature', None):
+        assert z.gamma_from_env('0', master) is False and z.gamma_from_env(' 0 ', master) is False
+        assert z.gamma_from_env('1', master) is True
 
 
 def test_masks_srgb_only_for_master_creature():
