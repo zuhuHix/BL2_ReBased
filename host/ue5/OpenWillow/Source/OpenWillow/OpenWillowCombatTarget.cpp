@@ -541,43 +541,64 @@ bool AOpenWillowCombatTarget::BeginPhaselock(float Now, const FOpenWillowPhaselo
     return true;
 }
 
+namespace
+{
+// Frame-time split shared by the dummy's integrators (hit spring, knock slide, fall). The steps are full steps of exactly
+// 1/30 s plus one shorter remainder step, so no step is longer than 1/30 s. A frame of up to 1/30 s is one step of its own
+// length, exactly as before. A stall is cut at 2 s (the hit swing has decayed to about 0.1% by then). Dt <= 0 gets one step.
+constexpr float SubstepMax = 1.f / 30.f;
+constexpr float SubstepSpanMax = 2.f;
+template <typename StepFn>
+void ForEachSubstep(float DeltaSeconds, StepFn&& Step)
+{
+    const float Span = FMath::Min(DeltaSeconds, SubstepSpanMax);
+    if (Span <= 0.f) { Step(DeltaSeconds); return; }
+    const int32 Full = FMath::FloorToInt(Span / SubstepMax);
+    for (int32 i = 0; i < Full; ++i) Step(SubstepMax);
+    const float Rest = Span - float(Full) * SubstepMax;
+    if (Rest > 0.f) Step(Rest);
+}
+}
+
 // Hit swing spring: x'' = -60 x - 7 x' (x in degrees). Semi-implicit Euler is only stable for steps well below the spring's
-// period (about 0.9 s), so one long frame (a load stall) must not become one long step. Steps are at most 1/30 s: a frame of
-// up to 1/30 s integrates exactly as one step, as before, and a longer frame is split into equal steps. The envelope decays
-// as exp(-3.5 t), about 0.1% by 2 s, so a stall beyond 2 s is cut there.
+// period (about 0.9 s), so one long frame (a load stall) must not become one long step (see ForEachSubstep).
 void AOpenWillowCombatTarget::StepHitSpring(FVector2D& Angle, FVector2D& AngleVelocity, float DeltaSeconds)
 {
-    constexpr float MaxStep = 1.f / 30.f;
-    constexpr float MaxSpan = 2.f;
-    const float Span = FMath::Min(DeltaSeconds, MaxSpan);
-    if (Span <= 0.f) return;
-    // The small tolerance keeps a frame of exactly 1/30 s (float rounding) from splitting in two.
-    const int32 Steps = FMath::Max(1, FMath::CeilToInt(Span / MaxStep - 1e-3f));
-    const float Step = Span / Steps;
-    for (int32 i = 0; i < Steps; ++i)
+    ForEachSubstep(DeltaSeconds, [&](float Step)
     {
         AngleVelocity += (-60.f * Angle - 7.f * AngleVelocity) * Step;
         Angle += AngleVelocity * Step;
-    }
+    });
 }
 
 // Knock slide: the knock velocity moves the dummy on the ground plane (X and Y) and is slowed by the friction stand-in
-// (velocity x (1 - friction step) per step). Same step split as StepHitSpring. Returns the ground offset for the frame.
-FVector AOpenWillowCombatTarget::KnockSlide(FVector& Velocity, float DeltaSeconds, float Friction)
+// (velocity x (1 - friction step) per step). Returns the ground offset for the frame, and the friction factor the whole
+// frame applies to the knock. The caller sweeps with the offset first and only then multiplies the knock by the factor,
+// which is the order the single-step code always had.
+FVector AOpenWillowCombatTarget::KnockSlide(const FVector& Velocity, float DeltaSeconds, float Friction, float& FrictionFactor)
 {
-    constexpr float MaxStep = 1.f / 30.f;
-    constexpr float MaxSpan = 2.f;
-    const float Span = FMath::Min(DeltaSeconds, MaxSpan);
+    FVector V = Velocity;
     FVector Offset = FVector::ZeroVector;
-    if (Span <= 0.f) return Offset;
-    const int32 Steps = FMath::Max(1, FMath::CeilToInt(Span / MaxStep - 1e-3f));
-    const float Step = Span / Steps;
-    for (int32 i = 0; i < Steps; ++i)
+    float Factor = 1.f;
+    ForEachSubstep(DeltaSeconds, [&](float Step)
     {
-        Offset += FVector(Velocity.X, Velocity.Y, 0.f) * Step;
-        Velocity *= FMath::Max(0.f, 1.f - Friction * Step);
-    }
+        Offset += FVector(V.X, V.Y, 0.f) * Step;
+        const float Keep = FMath::Max(0.f, 1.f - Friction * Step);
+        V *= Keep;
+        Factor *= Keep;
+    });
+    FrictionFactor = Factor;
     return Offset;
+}
+
+// Released target's fall under BL2's -500 cm/s^2 world gravity (same split, so a long frame does not land early).
+void AOpenWillowCombatTarget::StepFall(float& Height, float& FallVelocity, float DeltaSeconds)
+{
+    ForEachSubstep(DeltaSeconds, [&](float Step)
+    {
+        FallVelocity = Height > 0.f ? FallVelocity - 500.f * Step : 0.f;
+        Height = FMath::Max(0.f, Height + FallVelocity * Step);
+    });
 }
 
 void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
@@ -618,8 +639,11 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     // Momentum from hits: slide by the knock velocity on the ground plane, slowed by the friction stand-in.
     if (!Knock.IsNearlyZero(0.01f))
     {
-        const FVector Slide = KnockSlide(Knock, DeltaSeconds, KnockFriction);
+        // The sweep uses the knock as it was at the frame start; the friction is applied after it, as before.
+        float Friction = 1.f;
+        const FVector Slide = KnockSlide(Knock, DeltaSeconds, KnockFriction, Friction);
         if (!bPhaselocked) AddActorWorldOffset(Slide, true);
+        Knock *= Friction;
     }
     else Knock = FVector::ZeroVector;
     // Damped spring: hits kick the dummy, which settles back upright (frame-time safe, see StepHitSpring).
@@ -699,9 +723,8 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     }
     else
     {
-        // Released targets drop back under BL2's -500 cm/s^2 world gravity.
-        FallVelocity = Height > 0.f ? FallVelocity - 500.f * DeltaSeconds : 0.f;
-        Height = FMath::Max(0.f, Height + FallVelocity * DeltaSeconds);
+        // Released targets drop back under BL2's -500 cm/s^2 world gravity, in frame-safe steps (StepFall).
+        StepFall(Height, FallVelocity, DeltaSeconds);
         Pivot->SetRelativeRotation(FRotator(Wobble.Y, Pivot->GetRelativeRotation().Yaw, Wobble.X));
     }
     if (StockMesh && !bPhaselocked && !FMath::IsNearlyZero(MeshExtraZ, 0.05f))
