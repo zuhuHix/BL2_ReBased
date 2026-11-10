@@ -1,6 +1,7 @@
 """Synthetic tests for the lootable capture (no game or mod SDK needed): its output guard, its keeping to the safety pattern,
 and its tracked files holding no placed position or object id."""
 import importlib.util
+import math
 from pathlib import Path
 import re
 import sys
@@ -301,28 +302,57 @@ class OpenedTest(unittest.TestCase):
         self.assertEqual(rows['Map.Pick_1']['local'], [5.0, 10.0, 2.0])
         self.assertEqual(rows['Map.Pick_2']['local'], [5.0, -10.0, 2.0])
 
-    def bones(self, lid):
-        names = ['Base', 'Lid']
-        spots = {'Base': (0.0, 0.0, 10.0), 'Lid': lid}
+    def bones(self, door_turn_degrees):
+        """A root bone and a door bone on the hinge at (-20, 25): only the door bone's rotation changes, about the vertical, as in run Z53."""
+        names = ['Base', 'Door']
+        spots = {'Base': (0.0, 0.0, 0.0), 'Door': (-20.0, 25.0, 6.0)}
+        half = math.radians(door_turn_degrees) / 2.0
+        quats = {'Base': (0.0, 0.0, 0.0, 1.0), 'Door': (0.0, 0.0, math.sin(half), math.cos(half))}
         component = self.box.Mesh
         component.GetBoneName = lambda i: names[i] if i < len(names) else 'None'
         component.GetBoneLocation = lambda name, _space: types.SimpleNamespace(X=spots[name][0], Y=spots[name][1], Z=spots[name][2])
-        component.GetBoneQuaternion = lambda _name, _space: types.SimpleNamespace(X=0.0, Y=0.0, Z=0.0, W=1.0)
+        component.GetBoneQuaternion = lambda name, _space: types.SimpleNamespace(X=quats[name][0], Y=quats[name][1], Z=quats[name][2], W=quats[name][3])
 
-    def test_the_door_view_stands_on_the_side_the_lid_moved_to(self):
-        self.bones((0.0, 0.0, 20.0))
+    def test_the_door_view_stands_on_the_side_the_door_turned_to(self):
+        self.bones(0.0)
         self.lc.lc_stand('Skel_Box')
-        self.bones((0.0, -12.0, 15.0))   # the lid swung out towards -Y
+        self.bones(90.0)   # a hinge on the +Y face's corner, turned a quarter: the box's origin swings out to +Y
         self.box.bCanBeUsed = False
         result = self.lc.lc_opened('Skel_Box')
-        self.assertEqual(result['door'], {'bone': 'Lid', 'moved': 12.0, 'yaw': -90.0})
-        self.assertEqual(result['bones_closed']['Lid']['pos'], [0.0, 0.0, 20.0])
+        door = result['door']
+        self.assertEqual((door['bone'], door['turned'], door['yaw']), ('Door', 90.0, 90.0))
+        self.assertAlmostEqual(door['raw_yaw'], 83.7, delta=0.1)   # before the snap to a quarter turn of the facing
+        self.assertEqual(result['bones_closed']['Door']['pos'], result['bones']['Door']['pos'])   # the position did not move
         view = self.lc.lc_view('Skel_Box', 'door')
-        self.assertEqual((view['from'], view['yaw']), ('lid bone', 270.0))
+        self.assertEqual((view['from'], view['yaw']), ('lid bone', 90.0))
         pawn = self.world.pc.Pawn.Location
         self.assertAlmostEqual(pawn.X, 10.0)
-        self.assertAlmostEqual(pawn.Y, 20.0 - self.lc.VIEW_DISTANCE)   # on that side of the mesh's centre, at the fixed distance
-        self.assertEqual(self.lc.lc_view('Skel_Box', 'opposite')['yaw'], 90.0)
+        self.assertAlmostEqual(pawn.Y, 20.0 + self.lc.VIEW_DISTANCE)   # on that side of the mesh's centre, at the fixed distance
+        self.assertEqual(self.lc.lc_view('Skel_Box', 'opposite')['yaw'], 270.0)
+
+    def test_the_door_side_follows_the_objects_facing_and_a_wider_swing(self):
+        self.box.Rotation = types.SimpleNamespace(Yaw=384, Pitch=0, Roll=0)   # a little off the axes, as the Z53 box was
+        self.bones(0.0)
+        self.lc.lc_stand('Skel_Box')
+        self.bones(125.0)
+        self.box.bCanBeUsed = False
+        self.assertAlmostEqual(self.lc.lc_opened('Skel_Box')['door']['yaw'], 92.1, delta=0.1)   # facing + a quarter turn
+
+    def test_a_bone_that_turned_too_little_marks_no_door(self):
+        self.bones(0.0)
+        self.lc.lc_stand('Skel_Box')
+        self.bones(5.0)
+        self.box.bCanBeUsed = False
+        self.assertIsNone(self.lc.lc_opened('Skel_Box')['door'])
+
+    def test_where_reports_the_press_stand_distance(self):
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-180.0, Z=30.0)
+        self.assertEqual((self.lc.lc_where('Skel_Box')['distance'], self.lc.lc_where('Skel_Box')['floor_distance']), (200, 200))
+
+    def test_an_empty_read_records_the_objects_state_and_distance(self):
+        self.world.pc.Pawn.Location = types.SimpleNamespace(X=10.0, Y=-180.0, Z=30.0)
+        row = self.lc.lc_ready('Skel_Box', 0)
+        self.assertEqual((row['use_target'], row['state'], row['distance']), (None, {'SimpleAnimState': 0, 'RepSimpleAnimState': 0, 'bCanBeUsed': True}, 200))
 
     def test_without_a_bone_that_moved_the_facing_stands_in(self):
         self.lc.lc_stand('Skel_Box')

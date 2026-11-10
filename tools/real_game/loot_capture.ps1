@@ -55,6 +55,10 @@ function Test-Shot([string]$Name) { Test-Path -LiteralPath (Join-Path $Out $Name
 # skipped. A press that opens nothing moves on to the next side. The strong box, which never offered the prompt in two runs, tries
 # up to $StrongBoxes placed boxes.
 $UseReads = 5
+# Types that are pressed anyway when CachedUsableObject stayed empty on every read of a side (never when it held another object, which a
+# press would reach instead). The storage locker only: run 2 opened it from its first side, and in run Z53 the field stayed empty on all
+# 20 reads at the same object and spot. Each such press is logged as blind.
+$BlindFallback = @('Skel_StorageLocker')
 function Capture-Type([string]$Mesh, [int]$Objects = 1) {
     $row = [ordered]@{ opened = $false; tries = @(); objects = @() }
     for ($o = 0; $o -lt $Objects -and -not $row.opened; $o++) {
@@ -72,13 +76,18 @@ function Capture-Type([string]$Mesh, [int]$Objects = 1) {
                 if (($ready | ConvertFrom-Json).usable -eq $true) { $try.usable = $true } else { Start-Sleep 2 }
             }
             $row.tries += $try
-            if (-not $try.usable) { Write-Host "$Mesh side $side`: not the usable object after $UseReads reads; not pressed"; continue }
+            if (-not $try.usable) {
+                $empty = @($try.ready | Where-Object { $null -ne ($_ | ConvertFrom-Json).use_target }).Count -eq 0
+                if (-not ($empty -and $BlindFallback -contains $Mesh)) { Write-Host "$Mesh side $side`: not the usable object after $UseReads reads; not pressed"; continue }
+                $try.blind = $true
+                Write-Host "$Mesh side $side`: CachedUsableObject empty on all $UseReads reads; BLIND PRESS (fallback for this type only)"
+            }
             Assert-GameForeground
             $try.closed = Save-Shot "$Folder/${Mesh}_${o}_${side}_closed.png"
             $try.burst = (Invoke-Burst "$Folder/${Mesh}_${o}_${side}_open" 3 100 { Send-Key E } 1.0).frames
             $try.after_shot = Save-Shot "$Folder/${Mesh}_${o}_${side}_after.png"
             $try.result = Py "print(json.dumps(lc_opened('$Mesh')))" 60
-            if (($try.result | ConvertFrom-Json).opened -eq $true) { $row.opened = $true; break }
+            if (($try.result | ConvertFrom-Json).opened -eq $true) { $row.opened = $true; $row.opened_blind = [bool]$try.blind; break }
         }
     }
     # The strong box's hinge is the open question (docs/verification/VENDORS.md, sections 7 and 9): once it is open, one more frame from where the
@@ -86,6 +95,7 @@ function Capture-Type([string]$Mesh, [int]$Objects = 1) {
     if ($row.opened -and $Mesh -eq 'Skel_StrongBox') {
         Assert-GameForeground
         $row.current_shot = Save-Shot "$Folder/${Mesh}_opened_current.png"
+        $row.current_from = Py "print(json.dumps(lc_where('$Mesh')))"   # the press stand, not the views' fixed distance
         foreach ($view in 'door', 'opposite') {
             $row["${view}_view"] = Py "print(json.dumps(lc_view('$Mesh', '$view')))"
             Start-Sleep 2
@@ -236,7 +246,8 @@ try {
             $objects = if ($mesh -eq 'Skel_StrongBox') { $StrongBoxes } else { 1 }
             $row = Capture-Type $mesh $objects; $log.types[$mesh] = $row; "$mesh`: opened=$($row.opened) after $(@($row.tries).Count) side(s)"
             # Frames alone are not enough: the first run counted lootables that never opened. The object's own state must have changed.
-            $pressed = @($row.tries | Where-Object { $_.usable }).Count
+            $pressed = @($row.tries | Where-Object { $_.usable -or $_.blind }).Count
+            if ($row.opened_blind) { "$mesh`: opened by a BLIND press (CachedUsableObject stayed empty)" }
             $why = if ($pressed -eq 0) { "never the usable object: $(@($row.tries).Count) side(s), $UseReads reads each; nothing pressed" } else { "did not open from $pressed pressed of $(@($row.tries).Count) side(s); no state field changed" }
             Set-Stage $mesh ($row.opened -eq $true) $why
         } catch {

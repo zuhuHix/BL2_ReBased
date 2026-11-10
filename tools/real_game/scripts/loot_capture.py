@@ -15,7 +15,8 @@ pickup can be collected.
   offers the prompt.
 - lc_opened(mesh): whether its state fields changed since then. Scalars that moved, the bones' world transforms, and the pickups near it (world
   position and the offset in the object's own frame) go in the record.
-- lc_view(mesh, which): after an opening, stand at a fixed distance on the side the lid moved to ('door') or the other one ('opposite').
+- lc_view(mesh, which): after an opening, stand at a fixed distance on the side the door turned to ('door') or the other one ('opposite').
+  lc_where(mesh): the player's distance from it, for the frame taken from the press stand.
 - lc_mods(): the SDK mods loaded, for the record. Reads only; nothing is disabled.
 - lc_lower_ammo(): halve the ammo pools, recording them.
 - lc_choose_pickup(kind): the nearest pickup of that kind ('ammo' or 'cash'). lc_over_pickup(): fall onto it. lc_stand_pickup(kind) and
@@ -279,18 +280,45 @@ def _bones(actor, limit=12):
     return out
 
 
-def _door(before, after):
-    """The side the lid swung to: the yaw of the bone that moved furthest across the floor between the closed and the opened read.
-    None if no bone moved more than 2 uu, or none could be read."""
+def _quat_mul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz]
+
+
+def _unit(q):
+    length = math.sqrt(sum(c * c for c in q))
+    return [c / length for c in q] if length > 0 else None
+
+
+def _quat_rotate(q, v):
+    inverse = [-q[0], -q[1], -q[2], q[3]]
+    return _quat_mul(_quat_mul(q, [v[0], v[1], v[2], 0.0]), inverse)[:3]
+
+
+def _door(before, after, origin, facing):
+    """The side the door swung to. Run Z53: the strong box's door bone sits on the hinge, so its position hardly moves (0.02 uu) while its
+    rotation turns (about 125 degrees); a position test found nothing. So: take the bone whose rotation turned most (over 10 degrees),
+    turn the object's origin about that bone by the same turn, and take the floor direction it moved in. A point behind a door that swings
+    out moves outwards, whatever the angle. That direction is snapped to the nearest quarter turn of the object's facing, since the
+    sides of a box are. None if no bone turned or none could be read."""
     best = None
     for name, now in after.items():
         then = before.get(name) if isinstance(before, dict) else None
-        if not (isinstance(then, dict) and isinstance(now, dict) and isinstance(then.get("pos"), list) and isinstance(now.get("pos"), list)):
+        if not all(isinstance(x, dict) and isinstance(x.get("quat"), list) and isinstance(x.get("pos"), list) for x in (then, now)):
             continue
-        dx, dy = now["pos"][0] - then["pos"][0], now["pos"][1] - then["pos"][1]
-        moved = math.hypot(dx, dy)
-        if moved > 2.0 and (best is None or moved > best["moved"]):
-            best = {"bone": name, "moved": round(moved, 1), "yaw": round(math.degrees(math.atan2(dy, dx)), 1)}
+        q0, q1 = _unit(then["quat"]), _unit(now["quat"])   # the record rounds them to 4 places
+        if q0 is None or q1 is None:
+            continue
+        turn = _quat_mul(q1, [-q0[0], -q0[1], -q0[2], q0[3]])
+        angle = math.degrees(2.0 * math.acos(min(1.0, abs(turn[3]))))
+        if angle > 10.0 and (best is None or angle > best["turned"]):
+            arm = [origin[i] - then["pos"][i] for i in range(3)]
+            moved = _quat_rotate(turn, arm)
+            raw = math.degrees(math.atan2(moved[1] - arm[1], moved[0] - arm[0]))
+            yaw = facing + 90.0 * round(((raw - facing) % 360.0) / 90.0)
+            best = {"bone": name, "turned": round(angle, 1), "raw_yaw": round(raw % 360.0, 1), "yaw": round(yaw % 360.0, 1)}
     return best
 
 
@@ -320,6 +348,11 @@ def lc_ready(leaf, attempt=0):
     target = _use_target()
     row = {"object": actor._path_name(), "attempt": attempt, "use_target": target, "usable": target == actor._path_name()}
     if not row["usable"]:
+        # Run Z53: the storage locker's field stayed empty on all 20 reads, where run 2 read the locker itself from the same spot. Its own
+        # state and the player's distance go in the record, so the next empty read can be told apart from an already opened object.
+        me = get_pc().Pawn.Location  # noqa: F821
+        row["state"] = _open_state(actor)
+        row["distance"] = round(math.dist((me.X, me.Y, me.Z), _center(actor)[0]))
         nudge = NUDGES[attempt % len(NUDGES)]
         center, radius = _center(actor)
         goal = (center[0], center[1], center[2] - 0.5 * radius) if nudge == "low" else center
@@ -332,6 +365,15 @@ def lc_ready(leaf, attempt=0):
             _aim(goal, me.X, me.Y, me.Z)
         row["next"] = nudge
     return row
+
+
+def lc_where(leaf):
+    """Where the player stands now, and how far that is from the mesh's centre: the current-angle frame is taken from the press stand."""
+    actor = _pick(leaf)
+    me = get_pc().Pawn.Location  # noqa: F821
+    center = _center(actor)[0]
+    return {"object": actor._path_name(), "player": _xyz(me), "distance": round(math.dist((me.X, me.Y, me.Z), center)),
+            "floor_distance": round(math.hypot(me.X - center[0], me.Y - center[1]))}
 
 
 def lc_next_object(leaf):
@@ -379,7 +421,7 @@ def lc_opened(leaf, radius=600.0):
     moved = {name: [before["scalars"].get(name), value] for name, value in scalars.items() if before["scalars"].get(name) != value}
     loc = actor.Location
     bones = _bones(actor)
-    door = _door(before.get("bones"), bones) if changed else None
+    door = _door(before.get("bones"), bones, (loc.X, loc.Y, loc.Z), _facing(actor)) if changed else None
     if door:
         LC["door"][leaf] = door
     return {"object": actor._path_name(), "opened": bool(changed), "changed": changed, "state": state, "scalars_moved": moved,

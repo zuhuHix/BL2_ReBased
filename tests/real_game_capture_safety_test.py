@@ -117,12 +117,14 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     }
     if ($Code -match 'lc_ready') {
         $global:OwReadyReads = 1 + [int]$global:OwReadyReads
-        if ($scenario -eq 'never_usable') { return '{"usable": false, "use_target": null, "next": "low"}' }
+        if ($scenario -eq 'never_usable') { return '{"usable": false, "use_target": "Map.Other", "next": "low"}' }
+        if ($scenario -eq 'usable_field_empty') { return '{"usable": false, "use_target": null, "next": "low"}' }
         # The strong box offers the prompt only on its second object's third read.
         if ($scenario -eq 'strongbox_usable_late' -and $Code -match 'Skel_StrongBox' -and !($global:OwNextObject -and ($global:OwReadyReads % 5) -eq 3)) { return '{"usable": false, "use_target": null, "next": "step"}' }
         return '{"usable": true}'
     }
     if ($Code -match 'lc_next_object') { $global:OwNextObject = $true; $global:OwReadyReads = 0; return '{"object": "Map.Next", "count": 3}' }
+    if ($Code -match 'lc_where') { return '{"distance": 280}' }
     if ($Code -match 'lc_view') { Add-Content -LiteralPath '__TMP__/views.log' $Code; return '{"view": "v", "from": "lid bone"}' }
     if ($Code -match 'lc_aim') { return '{}' }
     if ($Code -match 'lc_stand') {
@@ -356,6 +358,16 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertEqual((len(box['tries']), len(box['tries'][0]['ready'])), (12, 5), r['out'])   # bounded: 5 reads, 4 sides, 3 boxes
         self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object: 12 side(s), 5 reads each; nothing pressed') for p in r['session']['stage_problems']), r['out'])
 
+    def test_an_empty_usable_field_presses_blind_for_the_storage_locker_only(self):
+        r = self.run_it('usable_field_empty')
+        self.assertEqual(r['code'], 1, r['out'])
+        locker = r['session']['types']['Skel_StorageLocker']
+        self.assertEqual((locker['opened'], locker['opened_blind'], len(locker['tries']), locker['tries'][0]['blind']), (True, True, 1, True), r['out'])
+        self.assertIn('Skel_StorageLocker: opened by a BLIND press', r['out'])
+        self.assertEqual([b.rsplit('/', 1)[-1] for b in r['bursts'] if 'Skel_' in b], ['Skel_StorageLocker_0_0_open'], r['out'])   # no other type pressed
+        self.assertIn('Skel_StorageLocker', r['session']['completed_stages'], r['out'])
+        self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object') for p in r['session']['stage_problems']), r['out'])
+
     def test_the_strong_box_moves_on_to_another_box_and_frames_its_door_side(self):
         r = self.run_it('strongbox_usable_late')
         self.assertEqual(r['session']['status'], 'completed', r['out'])
@@ -366,6 +378,7 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertTrue(box['tries'][-1]['closed'].endswith('Skel_StrongBox_1_0_closed.png'), r['out'])
         for view in ('current', 'door', 'opposite'):
             self.assertTrue(box[f'{view}_shot'].endswith(f'Skel_StrongBox_opened_{view}.png'), r['out'])
+        self.assertEqual(box['current_from'], '{"distance": 280}', r['out'])   # the current frame's real distance is recorded
         # The stub logs each lc_view call, split on spaces.
         self.assertEqual(r['views'], ["print(json.dumps(lc_view('Skel_StrongBox',", "'door')))", "print(json.dumps(lc_view('Skel_StrongBox',", "'opposite')))"], r['out'])
 
