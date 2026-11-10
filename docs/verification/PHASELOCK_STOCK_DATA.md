@@ -1538,15 +1538,16 @@ are not. What was checked, in our words (local numbers and sheets under ignored 
   hardly changes which zone a texel takes.
 - **Ruled out for this pawn:** the emissive term (diffuse x the light/dark map's blue x `p_EmissiveScale`): that channel is close to black
   over the whole map.
-- **Change (UNVERIFIED until a capture):** `tools/creature_zone.py` turns the x^2.2 fit off by default (`OPENWILLOW_ZONE_GAMMA=1` brings
-  it back for an A/B), and `masks_srgb()` says a `Master_Creature` target's `p_Masks` is imported as sRGB; `tools/phaselock_target_editor.py`
+- **Change (UNVERIFIED until a capture):** `tools/creature_zone.py` turns the x^2.2 fit off by default for `Master_Creature` targets
+  (`gamma_default()`). A target with an unresolved or other parent, today the range's Psycho, keeps the fit: the shader reading covers only
+  `Master_Creature` (review r1). `OPENWILLOW_ZONE_GAMMA` (`0` off, anything else on) overrides both for an A/B. `masks_srgb()` says a `Master_Creature` target's `p_Masks` is imported as sRGB; `tools/phaselock_target_editor.py`
   uses it and reports `masks_srgb` per target. Other masters keep the earlier raw import (their masks' flag was not read). The citizens'
   `M_OW_NPC_Zone` graph is unchanged: the sampler type was already Color; only the texture's flag changes.
 - **Needs (heavy tier):** `import_phaselock_target.ps1 -Steps zone` (and `seed_slice_npc_assets.ps1 -Steps zone` for the dummy), then the
   Phaselock capture with the round-18 switches and `-owcombatpawn=Bullymong`, compared with the matched real frames
   (`local/realgame/phaselock/matched_650/run2/frames_at/`) and with `claude-z36d` / `claude-z36e`.
 - **Still open:** UE5's lighting and tone curve against BL2's (the shader has no material specular; the host keeps 0.15 at roughness 0.85),
-  the dummy's pattern layer, and whether the citizens' masks are sRGB too.
+  the dummy's pattern layer, whether the citizens' masks are sRGB too, and the Psycho's slot parents (which would settle its fit and mask choice).
 
 ### Missing exports stop the target import instead of crashing Unreal (2026-11-09)
 
