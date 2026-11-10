@@ -115,7 +115,7 @@ The PR template asks for:
 
 This is a solo project and AI coding tools are part of its workflow; the
 project rules require saying so. If you use them too, the same rules apply to
-their output: [AGENTS.md](AGENTS.md) is the tool-neutral working brief,
-[CLAUDE.md](CLAUDE.md) adds the repository-specific rules, a pre-write hook
+their output: [AGENTS.md](AGENTS.md) is the tool-neutral working brief and holds the rules,
+[CLAUDE.md](CLAUDE.md) imports it and adds the Claude Code specifics, a pre-write hook
 reminds on sensitive-area edits and prompts for license/provenance files, and you are responsible for what you
 submit. Read what it writes.
