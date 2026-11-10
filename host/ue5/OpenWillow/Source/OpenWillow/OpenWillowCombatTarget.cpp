@@ -561,6 +561,25 @@ void AOpenWillowCombatTarget::StepHitSpring(FVector2D& Angle, FVector2D& AngleVe
     }
 }
 
+// Knock slide: the knock velocity moves the dummy on the ground plane (X and Y) and is slowed by the friction stand-in
+// (velocity x (1 - friction step) per step). Same step split as StepHitSpring. Returns the ground offset for the frame.
+FVector AOpenWillowCombatTarget::KnockSlide(FVector& Velocity, float DeltaSeconds, float Friction)
+{
+    constexpr float MaxStep = 1.f / 30.f;
+    constexpr float MaxSpan = 2.f;
+    const float Span = FMath::Min(DeltaSeconds, MaxSpan);
+    FVector Offset = FVector::ZeroVector;
+    if (Span <= 0.f) return Offset;
+    const int32 Steps = FMath::Max(1, FMath::CeilToInt(Span / MaxStep - 1e-3f));
+    const float Step = Span / Steps;
+    for (int32 i = 0; i < Steps; ++i)
+    {
+        Offset += FVector(Velocity.X, Velocity.Y, 0.f) * Step;
+        Velocity *= FMath::Max(0.f, 1.f - Friction * Step);
+    }
+    return Offset;
+}
+
 void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
@@ -599,8 +618,8 @@ void AOpenWillowCombatTarget::Tick(float DeltaSeconds)
     // Momentum from hits: slide by the knock velocity on the ground plane, slowed by the friction stand-in.
     if (!Knock.IsNearlyZero(0.01f))
     {
-        if (!bPhaselocked) AddActorWorldOffset(FVector(Knock.X, Knock.Y, 0.f) * DeltaSeconds, true);
-        Knock *= FMath::Max(0.f, 1.f - KnockFriction * DeltaSeconds);
+        const FVector Slide = KnockSlide(Knock, DeltaSeconds, KnockFriction);
+        if (!bPhaselocked) AddActorWorldOffset(Slide, true);
     }
     else Knock = FVector::ZeroVector;
     // Damped spring: hits kick the dummy, which settles back upright (frame-time safe, see StepHitSpring).

@@ -148,6 +148,8 @@ public:
     float WobbleSpeed() const { return float(WobbleVelocity.Size()); }
     // One integration of the hit swing spring over a frame, split into steps of at most 1/30 s (see the .cpp). Public for the test.
     static void StepHitSpring(FVector2D& Angle, FVector2D& AngleVelocity, float DeltaSeconds);
+    // Knock slide, same step split: updates the knock velocity by the friction and returns the ground offset for the frame.
+    static FVector KnockSlide(FVector& Velocity, float DeltaSeconds, float Friction);
     // Invulnerable: a hit is still recorded (popup, flash, wobble, log, quest hook, momentum) but does not lower health.
     void SetInvulnerable(bool bOn) { bInvulnerable = bOn; }
     bool IsInvulnerable() const { return bInvulnerable; }

@@ -51,6 +51,31 @@ bool FOpenWillowCombatTargetSwingTest::RunTest(const FString& Parameters)
     AOpenWillowCombatTarget::StepHitSpring(CutAngle, CutSpeed, 2.f);
     TestTrue(TEXT("a 10 s stall equals a 2 s stall"), LongAngle.Equals(CutAngle, 1e-3) && LongSpeed.Equals(CutSpeed, 1e-3));
 
+    // Knock slide (friction 8 per second, the host's KnockFriction): a 0.6 s stall slides as far as 18 frames of 1/30 s.
+    const FVector KnockKick(300.f, -120.f, 0.f);
+    FVector StallKnock = KnockKick;
+    const FVector StallOffset = AOpenWillowCombatTarget::KnockSlide(StallKnock, 0.6f, 8.f);
+    FVector FrameKnock = KnockKick;
+    FVector FrameOffset = FVector::ZeroVector;
+    for (int32 Frame = 0; Frame < 18; ++Frame) FrameOffset += AOpenWillowCombatTarget::KnockSlide(FrameKnock, 1.f / 30.f, 8.f);
+    TestTrue(TEXT("0.6 s knock slide equals 18 frames of 1/30 s"),
+        StallOffset.Equals(FrameOffset, 1e-2) && StallKnock.Equals(FrameKnock, 1e-3));
+
+    // A normal frame is one old step: offset = knock x dt (X, Y only), then friction x (1 - 8 dt).
+    const float KnockDt = 1.f / 60.f;
+    FVector OneKnock = KnockKick;
+    const FVector OneOffset = AOpenWillowCombatTarget::KnockSlide(OneKnock, KnockDt, 8.f);
+    const FVector OldOffset(KnockKick.X * KnockDt, KnockKick.Y * KnockDt, 0.f);
+    const FVector OldKnock = KnockKick * FMath::Max(0.f, 1.f - 8.f * KnockDt);
+    TestTrue(TEXT("normal knock frame integrates as one old step"),
+        OneOffset.Equals(OldOffset, 1e-6) && OneKnock.Equals(OldKnock, 1e-6));
+
+    // A 10 s stall slides as far as a 2 s stall.
+    FVector LongKnock = KnockKick, CutKnock = KnockKick;
+    const FVector LongOffset = AOpenWillowCombatTarget::KnockSlide(LongKnock, 10.f, 8.f);
+    const FVector CutOffset = AOpenWillowCombatTarget::KnockSlide(CutKnock, 2.f, 8.f);
+    TestTrue(TEXT("a 10 s knock stall equals a 2 s stall"), LongOffset.Equals(CutOffset, 1e-2) && LongKnock.Equals(CutKnock, 1e-3));
+
     return true;
 }
 
