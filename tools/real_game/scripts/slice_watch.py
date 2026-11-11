@@ -14,6 +14,7 @@ capture's own, already reviewed, steps.
     frames:      true to log one row per frame (perf_counter, game time, the tick's DeltaTime argument, the real and game deltas).
     snap_every:  seconds of real time between automatic state snapshots (0 = only the ones the capture asks for).
     pawns_every: seconds between enemy reads (class, pools, GroundSpeed, collision cylinder, draw scale, distance); 0 = off.
+    pawns_match: substrings; when given, only pawns whose path, class or AI class holds one of them are read (one NPC at 0.1 s).
     per_func_cap, row_cap, frame_cap: limits (a flood from one function cannot crowd out the rest).
   Every row has t (perf_counter since start), g (WorldInfo.TimeSeconds), f (frame index) and dt (the last frame's DeltaTime).
 - sw_snap(label): one state snapshot: player location, rotation, velocity, cylinder, health and shield (current and max, every reader
@@ -37,7 +38,7 @@ except ImportError:   # tests/slice_watch_test.py runs the pure parts without a 
 
 SW_TICK = "WillowGame.WillowGameViewportClient:Tick"
 SW_ID = "ow_slice_watch"
-SW_DEFAULTS = {"funcs": [], "frames": False, "snap_every": 0.0, "pawns_every": 0.0,
+SW_DEFAULTS = {"funcs": [], "frames": False, "snap_every": 0.0, "pawns_every": 0.0, "pawns_match": [],
                "per_func_cap": 5000, "row_cap": 200000, "frame_cap": 300000}
 SW = globals().get("SW") or {"on": False}
 
@@ -335,11 +336,14 @@ def sw_pawns(label):
         player = _pc().Pawn
         here = player.Location if player else None
         for pawn in _live(unrealsdk.find_all("WillowAIPawn", False)):
-            row = dict(_read(pawn, PAWN_FIELDS), name=pawn._path_name(), cls=pawn.Class.Name, cylinder=_cylinder(pawn))
+            row = dict(name=pawn._path_name(), cls=pawn.Class.Name)
             try:
                 row["ai_class"] = _p(pawn.AIClass)
             except Exception:
                 pass
+            if not pawn_wanted(row, SW["spec"]["pawns_match"]):
+                continue
+            row.update(_read(pawn, PAWN_FIELDS), cylinder=_cylinder(pawn))
             if here is not None:
                 try:
                     loc = pawn.Location
@@ -351,6 +355,11 @@ def sw_pawns(label):
         _err("pawns " + label, e)
     SW["pawns"].append(out)
     return {"label": label, "pawns": len(out["pawns"])}
+
+
+def pawn_wanted(row, match):
+    """No filter: every pawn. Otherwise a pawn whose path, class or AI class holds one of the substrings."""
+    return not match or any(m in str(row.get(k, "")) for m in match for k in ("name", "cls", "ai_class"))
 
 
 def sw_counts():
@@ -374,7 +383,8 @@ def sw_dump(name):
         raise ValueError(f"dump name must be a plain file name, got {name!r}")
     root = sw_root()
     root.mkdir(parents=True, exist_ok=True)
-    data = {"label": SW.get("label"), "spec": SW.get("spec"), "resolved": SW.get("resolved", []), "missing": SW.get("missing", []),
+    # t0_qpc: the recorder's start on the QPC clock (perf_counter on Windows), so its rows join a capture's own QPC press stamps.
+    data = {"label": SW.get("label"), "t0_qpc": SW.get("t0"), "spec": SW.get("spec"), "resolved": SW.get("resolved", []), "missing": SW.get("missing", []),
             "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}), "errors": SW.get("errors", []),
             "rows": SW.get("rows", []), "frames": SW.get("frames", []), "snaps": SW.get("snaps", []), "pawns": SW.get("pawns", [])}
     (root / f"{name}.json").write_text(json.dumps(data, default=str), encoding="utf-8")

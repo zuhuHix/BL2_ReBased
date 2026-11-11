@@ -80,6 +80,12 @@ class RecorderTest(unittest.TestCase):
         self.assertIsNone(watch._observer('Pkg.Pawn:TakeDamage', 'pre')(None, Args(), None, Func()))
         self.assertEqual(watch.SW['rows'], [])
 
+    def test_the_pawn_filter(self):
+        self.assertTrue(watch.pawn_wanted({'name': 'Lvl.TheWorld:PersistentLevel.WillowAIPawn_7'}, []))
+        self.assertTrue(watch.pawn_wanted({'name': 'Lvl.TheWorld:PersistentLevel.WillowAIPawn_7'}, ['WillowAIPawn_7']))
+        self.assertTrue(watch.pawn_wanted({'name': 'x', 'ai_class': 'CharClass_Invented'}, ['Invented']))
+        self.assertFalse(watch.pawn_wanted({'name': 'x', 'cls': 'y'}, ['WillowAIPawn_7']))
+
     def test_frame_rows_carry_three_deltas(self):
         first = watch.frame_row(0.0167, 1.0, 10.0)
         second = watch.frame_row(0.0167, 1.02, 10.0167)
@@ -165,6 +171,14 @@ class CheckerTest(unittest.TestCase):
         self.assertFalse(self.results(dump(snaps=[dict(start, mods=[{'error': 'x'}])]), checks)['mods_allowed'])
         self.assertFalse(self.results(dump(frames=frames[:40]), checks)['frames'])
         self.assertFalse(self.results(dump(pawns=[{'pawns': [{'cylinder': None, 'GroundSpeed': 2.0}]}]), checks)['pawns'])
+
+    def test_named_mods_must_be_off(self):
+        start = {'label': 'start', 'mods': [{'name': 'Better Thing', 'enabled': False}, {'name': 'Library X', 'enabled': True}]}
+        checks = {'mods_must_be_off': ['better thing']}
+        self.assertTrue(self.results(dump(snaps=[start]), checks)['mods_must_be_off'])
+        start['mods'][0]['enabled'] = True
+        self.assertFalse(self.results(dump(snaps=[start]), checks)['mods_must_be_off'])
+        self.assertFalse(self.results(dump(), checks)['mods_must_be_off'])   # no start snapshot: not shown off
 
     def test_errors_and_missing(self):
         self.assertFalse(self.results(dump(errors=['e']), {})['max_errors'])

@@ -21,6 +21,8 @@ Checks (all optional):
   snaps:             ["<label>", ...]: snapshots with these labels exist.
   snap_fields:       ["player", "pools", "cash", "checkpoint", "stations", ...]: present in every non-error snapshot.
   mods_allowed:      ["<mod name>", ...]: at the start snapshot, every enabled SDK mod is one of these.
+  mods_must_be_off:  ["<substring>", ...]: at the start snapshot the mod list was read, and no enabled mod's name holds one of these
+                     (case-insensitive).
   frames:            {"min": N, "dt_min": s, "dt_max": s, "share": 0.95}: at least N frame rows, and that share of them have a
                      positive tick DeltaTime inside [dt_min, dt_max].
   rows_have_dt:      true: hook rows carry the frame delta (dt) beside them.
@@ -88,6 +90,14 @@ def check(dump, checks):
         ok = start is not None and bool(mods) and not unread and not extra
         out.append(("mods_allowed", ok, f"{len(mods)} mods listed, {len(extra)} enabled outside the allowed list"
                     + (" (mod list unreadable)" if unread else "")))
+    if "mods_must_be_off" in checks:
+        start = next((s for s in snaps if s.get("label") == "start"), None)
+        mods = (start or {}).get("mods") or []
+        unread = not mods or any("error" in m for m in mods)
+        on = [m for m in mods if m.get("enabled") and any(w.lower() in str(m.get("name", "")).lower() for w in checks["mods_must_be_off"])]
+        enabled = sum(1 for m in mods if m.get("enabled"))
+        out.append(("mods_must_be_off", not unread and not on,
+                    f"{len(mods)} mods listed, {enabled} enabled, {len(on)} of the named ones still on" + (" (mod list unread)" if unread else "")))
     frames_check = checks.get("frames")
     if frames_check:
         frames = dump.get("frames", [])
