@@ -188,6 +188,8 @@ class CheckerTest(unittest.TestCase):
         self.assertFalse(self.results(dump(snaps=[start]), checks)['mods_allowed'])
         self.assertFalse(self.results(dump(snaps=[dict(start, mods=[{'error': 'x'}])]), checks)['mods_allowed'])
         self.assertFalse(self.results(dump(frames=frames[:40]), checks)['frames'])
+        self.assertTrue(self.results(dump(snaps=[start, {'label': 'auto'}]), checks)['snap_fields'])   # an automatic one may be short
+        self.assertFalse(self.results(dump(snaps=[start, {'label': 'end'}]), checks)['snap_fields'])
         self.assertFalse(self.results(dump(pawns=[{'pawns': [{'cylinder': None, 'GroundSpeed': 2.0}]}]), checks)['pawns'])
 
     def test_named_mods_must_be_off(self):

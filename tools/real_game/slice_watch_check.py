@@ -19,7 +19,8 @@ Checks (all optional):
   edges:             [{"func": "<substring>", "arg": "<argument>", "values": [v, ...]}]: rows of that hook carry each value (for example
                      an input event's press and release as separate rows).
   snaps:             ["<label>", ...]: snapshots with these labels exist.
-  snap_fields:       ["player", "pools", "cash", "checkpoint", "stations", ...]: present in every non-error snapshot.
+  snap_fields:       ["player", "pools", "cash", "checkpoint", "stations", ...]: present in every labelled snapshot (the
+                     capture's own, not the automatic once-a-second ones).
   mods_allowed:      ["<mod name>", ...]: at the start snapshot, every enabled SDK mod is one of these.
   mods_must_be_off:  ["<substring>", ...]: at the start snapshot the mod list was read, and no enabled mod's name holds one of these
                      (case-insensitive).
@@ -80,8 +81,9 @@ def check(dump, checks):
         out.append((f"snap {label}", label in labels, "present" if label in labels else "absent"))
     fields = checks.get("snap_fields", [])
     if fields:
-        bad = [s.get("label") for s in snaps if any(f not in s for f in fields)]
-        out.append(("snap_fields", bool(snaps) and not bad, f"{len(snaps)} snapshots, {len(bad)} lack a field"))
+        named = [s for s in snaps if s.get("label") != "auto"]
+        bad = [s.get("label") for s in named if any(f not in s for f in fields)]
+        out.append(("snap_fields", bool(named) and not bad, f"{len(named)} labelled snapshots, {len(bad)} lack a field"))
     if "mods_allowed" in checks:
         start = next((s for s in snaps if s.get("label") == "start"), None)
         mods = (start or {}).get("mods") or []
