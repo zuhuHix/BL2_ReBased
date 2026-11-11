@@ -270,7 +270,8 @@ try {
                 if ($WatchSpec) { Save-SliceWatchSnap 'after_respawn' }
             }
             $log.den_down_up_after_s = $upAt
-            Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null
+            # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence, so an error here is only logged.
+            try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null } catch { $log.den_down_trial_close = "$_" }
             Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt) "down after $downAt s (limit $DownSeconds), standing again after $upAt s (limit $RespawnSeconds)"
         } catch {
             Set-Stage 'den_down' $false "$_"
