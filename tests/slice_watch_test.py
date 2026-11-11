@@ -86,6 +86,9 @@ class RecorderTest(unittest.TestCase):
         self.assertTrue(watch.pawn_wanted({'name': 'x', 'ai_class': 'CharClass_Invented'}, ['Invented']))
         self.assertFalse(watch.pawn_wanted({'name': 'x', 'cls': 'y'}, ['WillowAIPawn_7']))
 
+    def test_the_player_read_is_empty_without_a_game(self):
+        self.assertEqual(watch._player_here(), {'loc': None})   # get_pc raises here: no exception escapes
+
     def test_frame_rows_carry_three_deltas(self):
         first = watch.frame_row(0.0167, 1.0, 10.0)
         second = watch.frame_row(0.0167, 1.02, 10.0167)

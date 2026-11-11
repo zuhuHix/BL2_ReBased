@@ -12,6 +12,8 @@ capture's own, already reviewed, steps.
     funcs:       ["Class.Function", ...]  every declaration of Function in Class and in Class's states is hooked, PRE and POST
                  (POST rows carry the return value); a full path "Package.Class:Function" is hooked as written.
     frames:      true to log one row per frame (perf_counter, game time, the tick's DeltaTime argument, the real and game deltas).
+    frame_player: true to add the player's location and hidden flag to each frame row (a teleport or holding cell shows as a jump).
+    pickups:     true to list every live pickup in each snapshot: its item definition, LifeSpan, draw scale and location.
     snap_every:  seconds of real time between automatic state snapshots (0 = only the ones the capture asks for).
     pawns_every: seconds between enemy reads (class, pools, GroundSpeed, collision cylinder, draw scale, distance); 0 = off.
     pawns_match: substrings; when given, only pawns whose path, class or AI class holds one of them are read (one NPC at 0.1 s).
@@ -38,7 +40,7 @@ except ImportError:   # tests/slice_watch_test.py runs the pure parts without a 
 
 SW_TICK = "WillowGame.WillowGameViewportClient:Tick"
 SW_ID = "ow_slice_watch"
-SW_DEFAULTS = {"funcs": [], "frames": False, "snap_every": 0.0, "pawns_every": 0.0, "pawns_match": [],
+SW_DEFAULTS = {"funcs": [], "frames": False, "frame_player": False, "pickups": False, "snap_every": 0.0, "pawns_every": 0.0, "pawns_match": [],
                "per_func_cap": 5000, "row_cap": 200000, "frame_cap": 300000}
 SW = globals().get("SW") or {"on": False}
 
@@ -180,6 +182,8 @@ def _tick(obj, args, ret, func):
         SW["dt"] = round(delta, 5) if isinstance(delta, float) else delta
         t_real = _now()
         row = frame_row(SW["dt"], t_real, _game_t())
+        if SW["spec"]["frame_player"]:
+            row.update(_player_here())
         if SW["spec"]["frames"] and len(SW["frames"]) < SW["spec"]["frame_cap"]:
             SW["frames"].append(row)
         if SW["spec"]["snap_every"] and t_real >= SW["next_snap"]:
@@ -191,6 +195,33 @@ def _tick(obj, args, ret, func):
     except Exception as e:
         _err("tick", e)
     return None
+
+
+def _player_here():
+    """The player's location and hidden flag, for a frame row (reads only); empty while there is no pawn."""
+    try:
+        pawn = _pc().Pawn
+        if pawn is None:
+            return {"loc": None}
+        loc = pawn.Location
+        return {"loc": [round(loc.X, 1), round(loc.Y, 1), round(loc.Z, 1)], "hidden": bool(pawn.bHidden)}
+    except Exception:
+        return {"loc": None}
+
+
+def _pickups():
+    rows = []
+    for pk in _live(unrealsdk.find_all("WillowPickup", False)):
+        row = dict(_read(pk, ("LifeSpan", "DrawScale", "Location", "bDeleteMe")), name=pk._path_name())
+        try:
+            row["item"] = _p(pk.Inventory.DefinitionData.ItemDefinition)
+        except Exception:
+            try:
+                row["item"] = _p(pk.Inventory.DefinitionData.WeaponTypeDefinition)
+            except Exception:
+                row["item"] = None
+        rows.append(row)
+    return rows
 
 
 def _declared(cls_name, func_name):
@@ -320,6 +351,8 @@ def sw_snap(label):
         snap["checkpoint"] = _read(pc.WorldInfo.GRI, ("ActiveRespawnCheckpointTeleportActor",))
         snap["stations"] = [dict(_read(s, STATION_FIELDS), name=s._path_name()) for s in _live(unrealsdk.find_all("TravelStation", False))]
         snap["pools"] = _pools()
+        if SW["spec"]["pickups"]:
+            snap["pickups"] = _pickups()
     except Exception as e:
         _err("snap " + label, e)
     if label in ("start", "end") or label.startswith("mods"):
