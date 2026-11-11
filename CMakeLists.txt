@@ -79,8 +79,7 @@ endif()
 # source tree. A test is added here only after it passes that way without skipping its cases; docs/verification/GATES.md "Tests outside ctest" lists the
 # ones left out and why:
 #   numpy: in OW_NUMPY_PY_TESTS below, registered only where numpy imports
-#   Pillow (CI's Python has none): gfx_to_swf, prepare_map_screen, prepare_minimap, prepare_mission_log,
-#     prepare_mission_screen, sanctuary_pillar (also numpy), weapon_paint, weapon_part_census
+#   Pillow: in OW_PILLOW_PY_TESTS below, registered only where Pillow and numpy import
 #   too slow for every PR (30-145 s each on the zuhu desktop): cash_capture, check_hud_minimap, controls_capture,
 #     provision_worktree, real_game_capture_safety, real_game_pending, realgame_snapshot, skills_live_probe
 #   refuses while any Unreal editor runs on the PC (exit 2, "NOT RUN"): run_ue_flash_hud
@@ -135,4 +134,17 @@ if(ow_numpy_rc EQUAL 0)
 else()
   list(LENGTH OW_NUMPY_PY_TESTS ow_count)
   message(STATUS "numpy does not import in ${Python3_EXECUTABLE}: the ${ow_count} tests in OW_NUMPY_PY_TESTS are not registered (docs/verification/GATES.md)")
+endif()
+
+# Tests that need Pillow (lane ci-test-deps commit 2, 2026-11-11; lands only with the maintainer's yes). sanctuary_pillar also
+# needs numpy, so the group needs both. Label needs-pillow.
+set(OW_PILLOW_PY_TESTS
+  gfx_to_swf prepare_map_screen prepare_minimap prepare_mission_log prepare_mission_screen sanctuary_pillar weapon_paint
+  weapon_part_census)
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy, PIL" RESULT_VARIABLE ow_pillow_rc OUTPUT_QUIET ERROR_QUIET)
+if(ow_pillow_rc EQUAL 0)
+  ow_add_tests(py needs-pillow ${Python3_EXECUTABLE} py ${OW_PILLOW_PY_TESTS})
+else()
+  list(LENGTH OW_PILLOW_PY_TESTS ow_count)
+  message(STATUS "Pillow and numpy do not both import in ${Python3_EXECUTABLE}: the ${ow_count} tests in OW_PILLOW_PY_TESTS are not registered (docs/verification/GATES.md)")
 endif()

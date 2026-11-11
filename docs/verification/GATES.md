@@ -75,9 +75,13 @@ otherwise configure prints which group it left out, and everything else still ru
 without numpy, which is why the check is made at configure time. CI's step "Case lines of the tests that need Node, numpy or
 Pillow" prints each such entry's last lines, to compare the cases run with a local run.
 
+Pillow (commit 2 of that lane, landed only with the maintainer's yes): CI installs `pillow==12.2.0`, and the 8 tests in
+`OW_PILLOW_PY_TESTS` (`gfx_to_swf`, `prepare_map_screen`, `prepare_minimap`, `prepare_mission_log`, `prepare_mission_screen`,
+`sanctuary_pillar`, `weapon_paint`, `weapon_part_census`) run as `py-<name>` where Pillow and numpy both import (`sanctuary_pillar`
+needs both). `prepare_mission_log` skips one of its 4 cases where file symlinks need a privilege (this PC).
+
 | Tests | Why not in ctest | Status on 2026-11-11 |
 |---|---|---|
-| `gfx_to_swf`, `prepare_map_screen`, `prepare_minimap`, `prepare_mission_log`, `prepare_mission_screen`, `sanctuary_pillar`, `weapon_paint`, `weapon_part_census` | need Pillow; CI's Python has none | pass with Pillow (`prepare_mission_log` skips one case without the symlink privilege) |
 | `realgame_snapshot` (144 s), `real_game_pending` (74 s), `real_game_capture_safety` (70 s), `skills_live_probe` (65 s), `controls_capture` (52 s), `cash_capture` (49 s), `provision_worktree` (36 s), `check_hud_minimap` (30 s) | too slow for every PR: about 520 s together | pass |
 | `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
 
