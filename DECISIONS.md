@@ -4579,7 +4579,8 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.m
 - **Found:** the host's zone and channel mapping matches Master_Creature's compiled shader (checked against the cache's uniform-expression
   list); not the cause. The worn spikes use the body's instance and sit in zone A with the torso, so "yellow skin" and "golden spikes" are one
   fault. The shader uses the zone vectors as stored. Both creature mask textures have `SRGB` set in the package (the normal maps do not), so
-  the game decodes them before the x2 light/dark scales; the host read them raw (about 1.7 times the highlight amount).
+  the game most likely decodes them before the x2 light/dark scales (UE3's usual sampling; UNVERIFIED in game); the host read them raw
+  (about 1.7 times the highlight amount).
 - **Change:** `masks_srgb()` in `tools/creature_zone.py` (True for `Master_Creature` targets); `tools/phaselock_target_editor.py` imports
   those masks as sRGB. Other masters and the citizens are unchanged.
 - **Critic (run Z55d, Luna, colour only, against the matched real frames):** sRGB masks with the vectors as stored 6.1/10 (too pale, cool);
