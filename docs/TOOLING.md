@@ -193,7 +193,8 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 ```
 
 `<head>` is the full 40-character commit that was reviewed and tested; `<tested-commit>` is the integration commit
-(current `main` plus exactly these PRs, in this order) that the in-engine suites passed on. The script rebases the
+(current `main` plus exactly these PRs, in this order) that the in-engine suites have passed on, in the sense of "What
+counts as passed" below. The script rebases the
 listed PRs into one chain on top of `origin/main`. One atomic push moves the PR branches to their commits in the chain
 (all or none); once GitHub shows the new heads, `main` fast-forwards in a second push, leased on the `main` the chain
 was built on. (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
@@ -216,11 +217,25 @@ tested one. A conflict rerere has not seen leaves the rebase open in the landing
 refuses to start while a rebase is in progress there. CI runs on the new `main`; PR workflows may also run once per
 moved PR branch. Read the run on `main` before landing the next batch. The log is `local/hub/land_batch.log`.
 
-**Standing approval (maintainer, 2026-11-08).** The coordinating assistant may land a PR without asking first when
-its independent review is clean and its in-engine suites passed on the tested commit given to `-t` (or, for a
-Markdown-only PR, its review is clean), and reports what landed afterwards. These still wait for the maintainer's
-explicit OK: changes to `THIRD_PARTY.md` or `LICENSE`, a new dependency or tool, `ROADMAP.md`, history rewrites,
-releases, and anything public outside the repository.
+**Standing approval (maintainer, 2026-11-08; "passed" amended 2026-11-11).** The coordinating assistant may land a PR
+without asking first when its independent review is clean and its in-engine suites have passed on the tested commit
+given to `-t` (or, for a Markdown-only PR, its review is clean), and reports what landed afterwards. These still wait
+for the maintainer's explicit OK: changes to `THIRD_PARTY.md` or `LICENSE`, a new dependency or tool, `ROADMAP.md`,
+history rewrites, releases, and anything public outside the repository.
+
+**What counts as passed.** A suite has passed on the tested commit when it ran green on that commit, or ran green on
+an earlier commit in which every file the suite covers is byte-identical to the tested commit's. What each suite
+covers is the path list in the ignored `local/hub/suites.txt`; a suite that is not listed there has no recorded
+coverage and runs on every tested commit as before. The hub skill's `suites-due.sh due <tested-commit>` prints the
+listed suites that have no such pass, and it must print none before the batch lands. Nothing else about the checks above
+changes: the chain's tree must still be byte-identical to the tested commit's.
+
+The earlier rule was every suite on every tested commit. Between 2026-11-08 and 2026-11-10 that meant rerunning
+suites each time `main` moved under a PR that had already passed, roughly three hours in all (an estimate from the
+hub's message timestamps), and in the cases on record none of those reruns found a failure the first run had not. The amended rule keeps a rerun whenever
+a covered file changed, which is the case where one can find something. It rests on the path lists being right: a
+list that is too narrow skips a run that was needed. The full regression the hub runs on `main` once per hub run is
+the check on that, and a failure there means widening the list.
 
 ## `ow-package`: the package reader
 
