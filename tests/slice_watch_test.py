@@ -137,6 +137,85 @@ class RecorderTest(unittest.TestCase):
         self.assertNotRegex(code, r'\b\w+\.\w+\s*=[^=]', 'an attribute assignment on a game object')
 
 
+class FakeObject:
+    """An invented game object: attributes as given, a path name, a class."""
+    def __init__(self, path, cls='Thing', **fields):
+        self._path = path
+        self.Class = type('C', (), {'Name': cls})()
+        self.__dict__.update(fields)
+
+    def _path_name(self):
+        return self._path
+
+
+class FakeGameTest(unittest.TestCase):
+    """sw_start to sw_stop against a stand-in SDK: the hooks it adds, a recorded call, a frame, a snapshot, a pawn read and the dump."""
+    def setUp(self):
+        self.hooks = {}
+        fn = lambda name, outer: type('F', (), {'Name': name, 'Outer': outer, 'Class': type('K', (), {'Name': 'Function'})(),
+                                               '_path_name': lambda _s: f'Pkg.{outer.Name}:{name}'})()
+        cls = type('Cls', (), {'Name': 'InventedPawn'})()
+        state = type('S', (), {'Name': 'Down', 'Class': type('K', (), {'Name': 'State'})(),
+                                '_fields': lambda _s: [type('F', (), {'Name': 'Hit', 'Class': type('K', (), {'Name': 'Function'})(),
+                                                                      '_path_name': lambda _t: 'Pkg.InventedPawn.Down:Hit'})()]})()
+        cls._fields = lambda: [fn('Hit', cls), state]
+        loc = type('V', (), {'X': 1.0, 'Y': 2.0, 'Z': 3.0})()
+        pawn = FakeObject('Lvl.PersistentLevel.Player_0', 'InventedPlayer', Location=loc, bHidden=False, GetHealth=lambda: 50.0,
+                          CylinderComponent=type('Cy', (), {'CollisionRadius': 1.5, 'CollisionHeight': 2.5})())
+        enemy = FakeObject('Lvl.PersistentLevel.Enemy_1', 'InventedEnemy', Location=loc, GroundSpeed=4.0, AIClass=None,
+                           CylinderComponent=type('Cy', (), {'CollisionRadius': 1.0, 'CollisionHeight': 2.0})())
+        world = type('W', (), {'TimeSeconds': 12.5, 'GRI': FakeObject('Lvl.GRI'), 'GetStreamingPersistentMapName': lambda _s=None: 'Invented_P'})()
+        pc = FakeObject('Lvl.PC', 'InventedPC', Pawn=pawn, WorldInfo=world,
+                        PlayerReplicationInfo=FakeObject('Lvl.PRI', GetCurrencyOnHand=lambda _k: 7, ExpLevel=3))
+        objects = {'WillowAIPawn': [enemy, FakeObject('Pkg.Default__Enemy')], 'ResourcePool': [FakeObject('Lvl.Pool_0', CurrentValue=1.0)],
+                   'TravelStation': [FakeObject('Lvl.Station_0', bShouldBeActive=True)], 'GameEngine': [], 'WillowPickup': []}
+        hooks = self.hooks
+
+        class Type:
+            PRE, POST, POST_UNCONDITIONAL = 'pre', 'post', 'post_unconditional'
+        watch.unrealsdk = type('SDK', (), {'find_class': staticmethod(lambda name: cls),
+                                           'find_all': staticmethod(lambda name, exact=True: list(objects.get(name, [])))})
+        watch.Type = Type
+        watch.add_hook = lambda path, kind, hid, f: hooks.__setitem__((path, kind, hid), f)
+        watch.remove_hook = lambda path, kind, hid: hooks.pop((path, kind, hid), None)
+        watch.has_hook = lambda path, kind, hid: (path, kind, hid) in hooks
+        watch.get_pc = lambda: pc
+
+    def tearDown(self):
+        watch.unrealsdk = None
+
+    def test_a_whole_recording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            (repo / '.git').mkdir(parents=True)
+            watch.RG_OUT = str(repo / 'local' / 'realgame' / 'x')
+            spec = {'funcs': ['InventedPawn.Hit', 'InventedPawn.Missing', 'Pkg.Other:Call'], 'frames': True, 'frame_player': True,
+                    'pickups': True, 'snap_every': 0.0, 'pawns_every': 0.0}
+            started = watch.sw_start('t', spec)
+            self.assertEqual(started['resolved'], 3)   # Hit, Down:Hit (a state's declaration) and Other:Call, each hooked PRE and POST
+            self.assertEqual(started['missing'], ['InventedPawn.Missing'])
+            self.assertIn(('Pkg.InventedPawn.Down:Hit', 'pre', 'ow_slice_watch_pre'), self.hooks)
+            tick = self.hooks[(watch.SW_TICK, 'post_unconditional', 'ow_slice_watch_tick')]
+            self.assertIsNone(tick(None, Args(DeltaTime=0.0167), None, None))
+            pre = self.hooks[('Pkg.InventedPawn:Hit', 'pre', 'ow_slice_watch_pre')]
+            self.assertIsNone(pre(None, Args(Amount=3.0), None, Func('Amount')))
+            snap = watch.sw_snap('before_down')
+            self.assertEqual(snap['cash'], 7)
+            self.assertEqual(snap['player']['cylinder'], {'radius': 1.5, 'height': 2.5})
+            self.assertEqual(len(snap['stations']), 1)
+            self.assertEqual(snap['pickups'], [])
+            self.assertEqual(watch.sw_pawns('arrival')['pawns'], 1)   # the Default__ object is left out
+            counts = watch.sw_dump('watch')
+            self.assertEqual((counts['rows'], counts['frames'], counts['errors']), (1, 1, 0), watch.SW['errors'])
+            data = json.loads((repo / 'local' / 'realgame' / 'x' / 'watch.json').read_text(encoding='utf-8'))
+            self.assertEqual(data['rows'][0]['args'], {'Amount': 3.0})
+            self.assertEqual(data['rows'][0]['dt'], 0.0167)
+            self.assertEqual(data['frames'][0]['loc'], [1.0, 2.0, 3.0])
+            self.assertEqual(data['snaps'][0]['label'], 'start')
+            self.assertEqual(watch.sw_stop(), 'stopped')
+            self.assertEqual(self.hooks, {})   # every hook it added is gone
+
+
 def dump(rows=(), frames=(), snaps=(), pawns=(), missing=(), errors=()):
     return {'rows': list(rows), 'frames': list(frames), 'snaps': list(snaps), 'pawns': list(pawns), 'missing': list(missing), 'errors': list(errors)}
 
