@@ -52,6 +52,7 @@ constexpr float BuySlateFor = 6.f;        // Enter through Slate this long, then
 constexpr float PhaselockReach = 1500.f;  // a target farther than this: Maya is placed 700 uu from it before the cast (teleport)
 constexpr float EnemyDownLimit = 90.f;    // Maya stands by the enemies without firing at most this long
 constexpr float DownRecoverWait = 50.f;   // a link group due while Maya is down waits this long (12 s bleed-out, then the respawn)
+constexpr float DownHitMargin = 0.5f;     // a range-enemy hit this close before a down (or a tick late) counts as its cause
 
 // A key press and release through Slate, as the keyboard sends them (the mission page suite presses its keys the same way): the mission
 // page's input processor gets it. Code is the Windows key code; Enter also carries its character, Escape none.
@@ -292,6 +293,22 @@ int32 UOpenWillowSliceGate::EnemyHitsTracked() const
     return Hits;
 }
 
+// Unforced: each living range enemy's spot, and a corpse for each one that has died since the last tick.
+void UOpenWillowSliceGate::TrackRangeDeaths()
+{
+    for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
+    {
+        if (It->IsAutoAimTarget()) LiveSpots.Add(*It, It->GetActorLocation());
+        else if (const FVector* Spot = LiveSpots.Find(*It)) { FreshCorpses.Add(*Spot); LiveSpots.Remove(*It); }
+    }
+}
+
+// Unforced: the down came from a range enemy when one of their hits was seen at most DownHitMargin before it (see LastEnemyHitAt).
+bool UOpenWillowSliceGate::EnemyCausedDown() const
+{
+    return LastEnemyHitAt >= Walker()->GetMayaState().DownAt - DownHitMargin;
+}
+
 void UOpenWillowSliceGate::PlaceNear(const AOpenWillowCombatTarget* Target, float Distance)
 {
     const FVector At = Target->GetActorLocation();
@@ -331,12 +348,7 @@ void UOpenWillowSliceGate::TickFarmLoot(AOpenWillowWalker* W, float Delta)
     if (FarmPhase != 0 || LootKills > 1) FarmTime += Delta;
     const FString Tally = FString::Printf(TEXT("kills=%d budget=%d, %.0fs of extra kills"), LootKills, FarmKillBudget, FarmTime);
     if (FarmPhase != 0 && FarmTime >= FarmTimeout) { FarmPhase = 0; FarmClock = FarmLookFor; }   // out of time: the check below ends the link
-    // Every death of a range enemy, aimed at or not (a stray shot, another enemy's blow), leaves a corpse its drop is checked against.
-    for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
-    {
-        if (It->IsAutoAimTarget()) LiveSpots.Add(*It, It->GetActorLocation());
-        else if (const FVector* Spot = LiveSpots.Find(*It)) { FreshCorpses.Add(*Spot); LiveSpots.Remove(*It); }
-    }
+    // Every death of a range enemy since the pickup snapshot, aimed at or not, has left a corpse (TrackRangeDeaths, top of the tick).
     if (FarmPhase == 0)
     {
         AOpenWillowInventoryPickup* Far = nullptr;
@@ -769,20 +781,21 @@ void UOpenWillowSliceGate::TickEnemyDown(AOpenWillowWalker* W)
         DeathLocation = W->GetActorLocation();
         if (W->IsDown())
         {
-            // Put down to an enemy only with a hit from a range enemy since the fight (the count runs from the end of Recover); a fall or
-            // an unknown cause does not pass, and the respawn link then has no how= token either.
+            // Put down to an enemy only when a range-enemy hit was seen at most DownHitMargin before this down (EnemyCausedDown); an
+            // older hit, a fall or an unknown cause does not pass, and the respawn link then has no how= token either.
             const int32 FromEnemies = EnemyHitsTracked();
             const int32 NoCauserSince = W->GetHitCountFrom(nullptr);
+            const float HitBeforeDown = W->GetMayaState().DownAt - LastEnemyHitAt;
             W->SetHitCauserTracking(false);
             EnemyDownPhase = 1;
-            if (FromEnemies > 0)
+            if (EnemyCausedDown())
             {
                 bEnemyDown = true;
-                PassLink(TEXT("go_down"), FString::Printf(TEXT("how=enemies: Maya was already down when this link was due (%s); %d hit(s) from range enemies since the fight (%d with no causer); this variant applies no lethal damage"),
-                    *Downed, FromEnemies, NoCauserSince));
+                PassLink(TEXT("go_down"), FString::Printf(TEXT("how=enemies: Maya was already down when this link was due (%s); the last range-enemy hit came %.2fs before the down (%d such hit(s) since the fight, %d with no causer); this variant applies no lethal damage"),
+                    *Downed, HitBeforeDown, FromEnemies, NoCauserSince));
             }
-            else FailLink(TEXT("go_down"), FString::Printf(TEXT("Maya was already down when this link was due (%s), but no hit from a range enemy since the fight (%d with no causer): the cause of the down is not known"),
-                *Downed, NoCauserSince));
+            else FailLink(TEXT("go_down"), FString::Printf(TEXT("Maya was already down when this link was due (%s), but no range-enemy hit came within %.1fs before the down (%d such hit(s) since the fight, %d with no causer): the cause of the down is not known"),
+                *Downed, DownHitMargin, FromEnemies, NoCauserSince));
             Next(EStep::Bleed);
             return;
         }
@@ -810,13 +823,14 @@ void UOpenWillowSliceGate::TickEnemyDown(AOpenWillowWalker* W)
     if (W->IsDown())
     {
         W->SetHitCauserTracking(false);
-        if (FromEnemies > 0)
+        if (FromEnemies > 0 && EnemyCausedDown())
         {
             bEnemyDown = true;
-            PassLink(TEXT("go_down"), FString::Printf(TEXT("how=enemies: down (%s) after %.1fs standing by the range enemies without firing, %d hit(s) (%d from range enemies), bleed-out %.1fs"),
-                *Downed, StepTime, Hits, FromEnemies, W->DownBleedTotal()));
+            PassLink(TEXT("go_down"), FString::Printf(TEXT("how=enemies: down (%s) after %.1fs standing by the range enemies without firing, %d hit(s) (%d from range enemies, the last %.2fs before the down), bleed-out %.1fs"),
+                *Downed, StepTime, Hits, FromEnemies, W->GetMayaState().DownAt - LastEnemyHitAt, W->DownBleedTotal()));
         }
-        else FailLink(TEXT("go_down"), FString::Printf(TEXT("down (%s) with no hit from a range enemy: %d hit(s), %d with no causer"), *Downed, Hits, NoCauser));
+        else FailLink(TEXT("go_down"), FString::Printf(TEXT("down (%s) with no range-enemy hit within %.1fs before it: %d hit(s), %d from range enemies, %d with no causer"),
+            *Downed, DownHitMargin, Hits, FromEnemies, NoCauser));
         Next(EStep::Bleed);
         return;
     }
@@ -848,6 +862,16 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     AOpenWillowWalker* W = Walker();
     if (!W || !GetWorld()) return;
     RunTime += Delta;
+    // Unforced only (both flags stay false otherwise), every tick, a paused one included: the corpses from the pickup snapshot to the
+    // end of the loot link, and the time of the last range-enemy hit from the end of Recover through the down link.
+    if (bTrackCorpses && uint8(Step) <= uint8(EStep::Loot)) TrackRangeDeaths();
+    if (bWatchEnemyHits)
+    {
+        const int32 SeenNow = EnemyHitsTracked();   // drops back when the down wait restarts the walker's count
+        const float Now = GetWorld()->GetTimeSeconds();
+        if (SeenNow > SeenEnemyHits && (!W->IsDown() || W->GetMayaState().DownAt >= Now - DownHitMargin)) LastEnemyHitAt = Now;
+        SeenEnemyHits = SeenNow;
+    }
     UseHeldFor += Delta;
     if (bUseHeld && UseHeldFor >= 0.1f)
     {
@@ -985,6 +1009,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 "fallback: the host stand-in target at %s next to Maya in Sanctuary"), *At.ToCompactString()));
         }
         for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
+        // Unforced: the corpses are recorded from this snapshot on, so a gun from any death in the fight or the recovery counts.
+        if (bUnforced) { bTrackCorpses = true; TrackRangeDeaths(); }
         HitsBeforeFight = W->GetHitCount();
         FightStartedAt = GetWorld()->GetTimeSeconds();
         W->SetHitCauserTracking(true);   // off again once link 4 has read it
@@ -1104,8 +1130,14 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (!bWasDown) Fixture(TEXT("Maya healed to full after the fight"));
             else if (!W->IsDown()) Fixture(TEXT("Maya revived to full health after the fight"));
         }
-        // Unforced: hits by causer are counted again from here, so that a down before the down link can be put down to an enemy.
-        if (bUnforced) W->SetHitCauserTracking(true);
+        // Unforced: hits by causer are counted again from here, and watched for the time of the last range-enemy hit, so that a down
+        // can be put down to an enemy (EnemyCausedDown).
+        if (bUnforced)
+        {
+            W->SetHitCauserTracking(true);
+            bWatchEnemyHits = true;
+            SeenEnemyHits = 0;
+        }
         Next(EStep::Loot);
         break;
     }
@@ -1326,7 +1358,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (Quest->Status() == 0 && (StepTime < 0.6f || (StepTime >= 1.5f && StepTime < 1.6f))) { if (!bUseHeld) PressUse(); return; }
             if (Quest->Status() == 0 && StepTime < 3.f) return;
         }
-        else if (Quest->IsScreenPageShown())
+        else if (Quest->IsScreenPageShown() && !bAcceptEscapeSent)
         {
             // Unforced: the use key opened Marcus's mission page; Enter on it accepts (the page's path, not the use key's).
             if (!bAcceptPageSeen) { bAcceptPageSeen = true; PageShownFor = 0.f; PageNextEnter = 0.5f; }
@@ -1340,12 +1372,16 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             }
             if (AcceptEnters > 0 && Quest->Status() == 1) bAcceptByPage = true;   // the page closes itself on the accept; the branch below grades
             if (PageShownFor < 8.f) return;
-            PressSlateKey(EKeys::Escape, 27);   // Enter did not accept: leave the page; the branch below falls back on the next tick
+            // Enter closes the offer page either way (it accepts or refuses inside the key call), so a page still up means the keys
+            // do not reach it. Escape once; the next tick falls back below whether or not the page has closed.
+            PressSlateKey(EKeys::Escape, 27);
+            bAcceptEscapeSent = true;
             return;
         }
         else
         {
-            // Unforced, no page up: one press, and a second one a second later if the first did not reach him.
+            // Unforced, no page up (or the offer page outlived Escape): one press, and a second one a second later if the first did
+            // not reach him. With the page seen there are no more presses, and StepTime is past the 4 s wait, so this falls through.
             if (Quest->Status() == 0 && (StepTime < 0.6f || (!bAcceptPageSeen && StepTime >= 1.5f && StepTime < 1.6f))) { if (!bUseHeld) PressUse(); return; }
             if (Quest->Status() == 0 && StepTime < 4.f) return;
             if (AcceptEnters > 0 && Quest->Status() == 1) bAcceptByPage = true;   // the accept came in the tick after the last Enter
@@ -1354,6 +1390,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             // objective and the turn-in links still run, as the older variants' stand-ins let the later links run.
             if (Quest->Status() == 0)
             {
+                // A page the keys cannot reach is still up: its own key handler is called directly to close it (once), so that the
+                // later steps are not left under it. Then the direct accept.
+                if (Quest->IsScreenPageShown())
+                {
+                    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note the mission page did not close after Escape; closing it through its key handler directly"));
+                    Quest->OnScreenKey(EKeys::Escape);
+                }
                 const bool bOk = Quest->Accept();
                 Fixture(TEXT("accepted by a direct call after the mission page did not accept"));
                 UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: the mission page did not accept (page shown %d, %d Enter press(es)); direct accept ok=%d, status %d"),

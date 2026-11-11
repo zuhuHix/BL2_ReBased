@@ -536,6 +536,56 @@ class SliceGateTest(unittest.TestCase):
         self.assertNotIn('checker:', self.row(out, 13))
         self.assertIn('unforced run: 13 of 14 links got there with no stand-in for play; not unforced: go_down', out)
 
+    # The start record is parsed strictly: only the forms the host prints.
+
+    def start_line(self, rest):
+        return PREFIX + 'OWSLICEGATE start map=Sanctuary_P quest=1 ' + rest
+
+    def test_host_start_lines_are_accepted(self):
+        for rest, unforced in (('range_command=1', False), ('range_command=0', False), ('range_command=1 unforced=1', True)):
+            with self.subTest(rest=rest):
+                lines = build(range_mode=True, unforced=unforced)
+                lines[0] = self.start_line(rest)
+                code, out = self.run_checker(self.write_log(lines))
+                self.assertEqual(code, 0, out)
+                self.assertEqual('unforced run:' in out, unforced)
+
+    def test_malformed_unforced_marker_fails_the_log(self):
+        for rest in ('range_command=1 unforced=1x', 'range_command=1 unforced=1.0', 'range_command=1 unforced=0',
+                     'range_command=1 unforced=1 unforced=1', 'unforced=1 range_command=1', 'range_command=1 xunforced=1'):
+            with self.subTest(rest=rest):
+                lines = build(range_mode=True)
+                lines[0] = self.start_line(rest)
+                code, out = self.run_checker(self.write_log(lines))
+                self.assertEqual(code, 1, out)
+                self.assertIn('error: malformed unforced marker on the start line', out)
+                self.assertIn('unforced run:', out)   # graded strictly as well
+
+    def test_malformed_range_command_fails_the_log(self):
+        for rest in ('range_command=1.0', 'range_command=1x', 'quest=1', 'range_command=1 range_command=1'):
+            with self.subTest(rest=rest):
+                lines = build(range_mode=True)
+                lines[0] = self.start_line(rest)
+                code, out = self.run_checker(self.write_log(lines))
+                self.assertEqual(code, 1, out)
+                self.assertIn('error: malformed range_command on the start line', out)
+
+    def test_two_start_lines_that_disagree_fail(self):
+        lines = build(range_mode=True, unforced=True)
+        lines.insert(1, self.start_line('range_command=1'))
+        code, out = self.run_checker(self.write_log(lines))
+        self.assertEqual(code, 1)
+        self.assertIn('a second start line', out)
+        self.assertIn('error: the start lines disagree on the variant (range_command or unforced)', out)
+
+    def test_two_start_lines_that_agree_still_fail(self):
+        lines = build(range_mode=True)
+        lines.insert(1, lines[0])
+        code, out = self.run_checker(self.write_log(lines))
+        self.assertEqual(code, 1)
+        self.assertIn('a second start line', out)
+        self.assertNotIn('disagree', out)
+
     def test_expect_unforced_fails_a_run_without_the_marker(self):
         code, out = self.run_checker(self.write_log(build(range_mode=True)), '--expect-unforced')
         self.assertEqual(code, 1)

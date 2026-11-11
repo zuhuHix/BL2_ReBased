@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "UObject/ObjectKey.h"
 #include "OpenWillowSliceGate.generated.h"
 
 // -owslicegate: one unattended run of the Phase 4 slice gate (ROADMAP.md) on Sanctuary with Maya, chaining the pieces
@@ -129,10 +130,13 @@ private:
     float FarmLookFor = 0.f;
     float LastFarmPlaceAt = -100.f;
     void TickFarmLoot(class AOpenWillowWalker* W, float Delta);
-    // Every range enemy's last living spot, and the spots of the deaths seen since the loot link began: a gun that a death the
-    // farm did not aim at (a stray shot) dropped counts at its own corpse.
+    // Every range enemy's last living spot, and the spots of the deaths seen from the pickup snapshot before the fight (Arena)
+    // to the end of the loot link: a gun that a death the gate did not aim at (a stray shot) dropped counts at its own corpse.
+    // TrackRangeDeaths runs at the top of every tick while bTrackCorpses is set and the step is not past Loot.
     TMap<TObjectKey<AActor>, FVector> LiveSpots;
     TArray<FVector> FreshCorpses;
+    bool bTrackCorpses = false;
+    void TrackRangeDeaths();
     // A gun pickup that was not there before the fight: the nearest within LootRadius of a corpse (the last kill's or a fresh
     // one), with that distance, else (OutFar) one further away from all of them.
     class AOpenWillowInventoryPickup* NewGunPickup(class AOpenWillowInventoryPickup*& OutFar, float& OutDistance) const;
@@ -149,6 +153,7 @@ private:
     // Turn-in: some page was shown, the turn-in page was (status 2 while shown), an Enter was sent to it, the turn-in came
     // through it (status 3 after that Enter), and the reward page was shown. The how= token needs the "by page" flags.
     bool bAcceptPageSeen = false, bAcceptByPage = false;
+    bool bAcceptEscapeSent = false;   // the offer page outlived 8 s and Escape was sent: the next tick falls back whatever the page does
     bool bTurnInAnyPage = false, bTurnInPageSeen = false, bTurnInEnterSent = false, bTurnInByPage = false, bRewardPageSeen = false;
     int32 AcceptEnters = 0, TurnInEnters = 0;
     float PageShownFor = 0.f, PageNextEnter = 0.f;
@@ -167,6 +172,13 @@ private:
     // Hits on Maya whose causer is a range enemy, counted since the walker's per-causer count was last started (unforced: from
     // the end of the Recover step, and again from the start of the down wait).
     int32 EnemyHitsTracked() const;
+    // From the end of Recover through the down link (bWatchEnemyHits): the world time of the last tick on which a new range-enemy
+    // hit was seen while Maya was Up, or within DownHitMargin of her going down. A down is put down to an enemy only when that
+    // time is at or after the down time minus DownHitMargin, so a hit minutes or a respawn older than the down does not count.
+    bool bWatchEnemyHits = false;
+    int32 SeenEnemyHits = 0;
+    float LastEnemyHitAt = -1.0e9f;
+    bool EnemyCausedDown() const;
     // Places Maya Distance uu from Target on her side of it, looking at it (the teleport fixture).
     void PlaceNear(const class AOpenWillowCombatTarget* Target, float Distance);
 };

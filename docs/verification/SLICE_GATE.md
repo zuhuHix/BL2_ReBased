@@ -35,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (58 since review round 1 of the unforced variant, 39 before it; all
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (63 since review round 2 of the unforced variant, 39 before it; all
   made-up log lines, plus three that read the runner script's text).
 
 ### How a link is graded (review round 1)
@@ -344,7 +344,8 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   enemies, the nearest living one each time, until a gun drops near a corpse. The fight's kill counts as the first. The budget
   is 100 kills or 720 s of extra kills, whichever comes first. A PASS says `how=kill_roll kills=<n> budget=100`. Any gun that
   was not on the ground before the fight counts when it lies within 1,500 uu of the last kill or of any range enemy that died
-  during the link (a stray shot's kill included); a gun far from all of them FAILs the link, but only after the 1 s drop wait.
+  from the pickup snapshot before the fight to the end of the link (a stray shot's kill, or a death during the fight or the
+  recovery, included); a gun far from all of them FAILs the link, but only after the 1 s drop wait.
 - **No heal or revive.** After the fight the range is not set passive and Maya is not restored. A link group that is due while
   she is down waits up to 50 s for her own second wind or her respawn. If she is still down after that, the older variants'
   skip applies.
@@ -363,8 +364,11 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   page, 2, from the reward page, 3). If no page is shown, the use key falls back to the older path and the link names
   `accepted by the use key without the mission page` (or `turned in ...`). The turn-in fixture is also named when the use key
   turned the mission in and a page showed only the reward. If the offer page is up but Enter does not accept within 8 s,
-  Escape closes it and `UOpenWillowQuest::Accept` is called directly, named `accepted by a direct call after the mission page
-  did not accept`, so the objective and turn-in links still run. Whether that direct call accepts with the screen closed is
+  Escape is sent once and, on the next tick whatever the page did, `UOpenWillowQuest::Accept` is called directly, named
+  `accepted by a direct call after the mission page did not accept`, so the objective and turn-in links still run. Enter
+  closes the offer page inside the key call (by accepting or refusing), so a page still up means the keys do not reach it;
+  the driver then closes it by calling the page's key handler (`OnScreenKey`) with Escape directly, logs that it did, and
+  accepts. No wait in this step is open-ended. Whether that direct call accepts with the screen closed is
   `UNVERIFIED`; if it does not, the link FAILs and the run goes on to the down link, as before.
   The runner starts the page server (`tools/movie_hud.ps1`, port 8786) and passes `-owflashskills` and
   `-owflashmissionscreen`. The gameplay HUD stays the canvas one, as in the other variants.
@@ -375,12 +379,14 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   1,200 uu away she is placed by it again, at most every 10 s. The time limit is 90 s. A PASS needs her down with at least one
   hit whose causer is an actor (`how=enemies`). With no down in 90 s the link FAILs. The detail gives the hits, her health and
   shield, and the enemies within 1,500 uu. The test's lethal damage then puts her down so that link 14 still runs, and link 14
-  names it. The walker's per-causer hit count restarts at the end of the Recover step, and again at the start of the wait.
-  "From an enemy" means a hit whose causer is a range enemy (`AOpenWillowEnemy`; those keep their actor through a death and
-  respawn). If she was already down when link 13 was due, the link passes on that down only with at least one such hit since
-  the end of Recover. Without one the cause is unknown (a fall, say) and the link FAILs; link 14 then lacks its token and
-  FAILs too. A hit from an enemy before a down that had another cause would still pass: the count does not say which hit
-  downed her.
+  names it. "From an enemy" means a hit whose causer is a range enemy (`AOpenWillowEnemy`; those keep their actor through a
+  death and respawn). From the end of the Recover step the driver watches, every tick, the walker's per-causer count for
+  those enemies and keeps the time of the last tick on which a new such hit was seen while Maya was Up, or within 0.5 s of
+  her going down (`DownHitMargin`). A down, during the wait or before it, is put down to an enemy only when that time is at
+  or after the down time (`FOpenWillowMayaState::DownAt`) minus 0.5 s. A hit minutes or a respawn older than the down, or
+  hits that land while she is already down, do not count. Without such a hit the cause is unknown (a fall, say) and the link
+  FAILs; link 14 then lacks its token and FAILs too. What is left: an enemy hit up to 0.5 s before a down with another cause
+  would still be credited.
 - **Respawn (link 14).** The walker's own bleed-out and respawn, after the enemy down (`how=after_enemy_down`).
 - **Kept:** teleports between places (`teleport`), the fight's hold on fire and one shot at a time, `FireOnce` ignoring the
   fire rate, the ammo refill, and the decoy link's two test drops. These are test shortcuts of the gate, not stand-ins for
@@ -388,7 +394,10 @@ without those stand-ins. Each link then shows whether the loop got there on its 
 
 **How it is graded** (`tools/check_slice_gate.py`; host grading rules, `UNVERIFIED` against the game):
 - The start line ends `unforced=1`. The runner passes `--expect-unforced`, and a log without the marker (a build without the
-  switch) then fails.
+  switch) then fails. The start record is parsed strictly, in every variant: `range_command=0` or `1` exactly once, and
+  `unforced=1` only as the last word. Any other form (`unforced=1x`, `unforced=1.0`, `range_command=1.0`), a second start
+  line, or start lines that disagree on the variant fail the log with a line that says why. A malformed marker is graded
+  strictly as well. The host prints only the accepted forms, so its logs grade as before.
 - Any link whose fixtures name a stand-in for play is a FAIL, whatever the host said. The list in the checker
   (`FORCING_FIXTURES`) has the forced gun, a gun the test dropped, the granted point, the passive or cleared range, the heal
   and the revive, all three lethal-damage fixtures, both use-key mission fixtures, and the `-Shield` fixtures.
@@ -475,6 +484,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-07 to 11-11 | hub batches Z26, Z35, Z37 (three runs), Z41 to Z52b, each on that batch's candidate or main, zuhu | 14 / 0 / 0 of 14, as reported | from the hub's log (ignored, local): it records "gate 14" or "14/0/0" per batch. This lane did not read those logs, and the log does not always say which variants ran |
 | 2026-11-11 | `-Unforced` added (feature/slice-gate-unforced) | not run | the driver was not compiled (build slot held by a batch); checker tests 55/55 |
 | 2026-11-11 | `-Unforced`, review round 1 of #218 | not run | every NOT_AVAILABLE fails an unforced run; the mission-page token needs the page to have done the work; an enemy hit is required for a down; the accept falls back to a named direct call; still not compiled; checker tests 58/58 |
+| 2026-11-11 | `-Unforced`, review round 2 of #218 | not run | the accept step can no longer wait on a page the keys do not reach; strict start record; corpses recorded from the pickup snapshot; a down needs a range-enemy hit within 0.5 s before it; still not compiled; checker tests 63/63 |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.

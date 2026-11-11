@@ -50,7 +50,6 @@ NO_SUMMARY = 'no SUMMARY line: the run did not finish (crash or timeout)'
 BOM = '﻿'
 
 START = re.compile(r'OWSLICEGATE start\b')
-RANGE_START = re.compile(r'OWSLICEGATE start\b.*\brange_command=1\b')
 LINK = re.compile(r'OWSLICEGATE link=(?P<name>\S+) result=(?P<result>PASS|FAIL|NOT_AVAILABLE)'
                   r'(?: fixtures=\[(?P<fixtures>[^\]]*)\])? detail=(?P<detail>.*)$')
 LINK_ANY = re.compile(r'OWSLICEGATE link=')
@@ -201,8 +200,35 @@ def cross_check(rows, errors, range_mode):
             row['detail'] = f'checker: {why}; host said NOT_AVAILABLE: {row["detail"]}'
 
 
-# The unforced variant (SLICE_GATE.md, "The unforced variant"). Its start line carries unforced=1.
-UNFORCED_START = re.compile(r'OWSLICEGATE start\b.*\bunforced=1\b')
+# The start record. The host prints `OWSLICEGATE start map=<map> quest=<0|1> range_command=<0|1>`, and in the unforced variant
+# (SLICE_GATE.md, "The unforced variant") ` unforced=1` as the last word. Those are the only forms accepted.
+START_RECORD = re.compile(r'OWSLICEGATE start\b(?P<rest>.*)$')
+UNFORCED_MARKER = 'unforced=1'
+
+
+def start_mode(line):
+    """(range_mode, unforced, problems) of one start line. Any other form of range_command or of the unforced marker is a
+    problem, which fails the run; a malformed marker is still graded strictly."""
+    words = START_RECORD.search(line)['rest'].split()
+    ranges = [w for w in words if w.startswith('range_command')]
+    markers = [w for w in words if 'unforced' in w]
+    problems = []
+    if len(ranges) != 1 or ranges[0] not in ('range_command=0', 'range_command=1'):
+        problems.append(f'malformed range_command on the start line ({" ".join(ranges) or "none"}): the host prints range_command=0 or 1')
+    if markers and (markers != [UNFORCED_MARKER] or words[-1] != UNFORCED_MARKER):
+        problems.append(f'malformed unforced marker on the start line ({" ".join(markers)}): the host prints only {UNFORCED_MARKER}, as the last word')
+    return ranges == ['range_command=1'], bool(markers), problems
+
+
+def start_modes(lines, errors):
+    """The run's (range_mode, unforced), from its first start line; the problems of every start line, and start lines that
+    disagree on the variant, go to errors."""
+    records = [start_mode(line) for line in lines if START.search(line)]
+    for _, _, problems in records:
+        errors.extend(problems)
+    if any(record[:2] != records[0][:2] for record in records[1:]):
+        errors.append('the start lines disagree on the variant (range_command or unforced)')
+    return records[0][:2]
 # The fixtures that stand in for play: the forced gun, the granted point, the passive or cleared range, the heal or revive,
 # the test's lethal damage, a gun the test dropped, and the old use-key mission path. Exact names, as the host logs them.
 FORCING_FIXTURES = (
@@ -323,9 +349,8 @@ def main(argv=None):
         return 2
 
     rows = build_rows(logged)
-    range_mode = any(RANGE_START.search(line) for line in lines)
+    range_mode, unforced = start_modes(lines, errors)
     cross_check(rows, errors, range_mode)
-    unforced = any(UNFORCED_START.search(line) for line in lines)
     if args.expect_unforced and not unforced:
         errors.append('the unforced variant was asked for, but the start line has no unforced=1 (a build without -owslicegateunforced?)')
     if unforced:
