@@ -386,7 +386,10 @@ def test_launcher_resolves_the_job_through_the_shared_function():
         resolved = Path(tmp) / 'editor_job.resolved.json'
         assert done.returncode == 0 and f'job={resolved}' in done.stdout, done
         assert json.loads(resolved.read_text(encoding='utf-8'))['slice_dir'] == str(ROOT / 'local/slice')
-        job.write_text(json.dumps({'tool': 'tools/slice_npc_assets.py', 'slice_dir': '../runner-z55/local/slice'}), encoding='utf-8')
+        # A sibling that cannot be this checkout: a fixed name such as runner-z55 resolves back into the root when the test runs in a
+        # worktree of that name (it did, in the hub's test worktree), and the job is then rightly accepted.
+        job.write_text(json.dumps({'tool': 'tools/slice_npc_assets.py', 'slice_dir': f'../{ROOT.name}-not-this-checkout/local/slice'}),
+                       encoding='utf-8')
         resolved.unlink()
         stale = run()
         assert stale.returncode != 0 and 'leaves the repository root' in stale.stderr and 'does not resolve' in stale.stderr, stale
