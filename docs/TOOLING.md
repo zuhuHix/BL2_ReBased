@@ -18,13 +18,13 @@ still applies.
 |---|---|---|
 | A value or behaviour the running game shows | **bl-sdk (unrealsdk + pyunrealsdk) live reads and hooks**, the way the maintainer's [RTSE](https://github.com/zuhuHix/Bl2_RTSE) save editor works (`find_object`/`find_all`, hooks, a game-thread job queue) | `tools/real_game/` (`realgame.ps1`, `scripts/*.py`, `openwillow_realgame` SDK mod); see "Driving the real game" below |
 | Decoding anything: native functions, binary formats, movies, runtime call tracing | **REA** ("reverse engineer anything", npm `rea-agents` 6.0.0, used through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/` (docs/NATIVE_ANALYSIS.md) |
-| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 | `C:\Users\yorad\Tools\`, `tools/ghidra_import.ps1` |
+| Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 | `%USERPROFILE%\Tools\`, `tools/ghidra_import.ps1` |
 | Meshes, textures, animations, sounds | UModel / UE Viewer build 1590 | "UModel / UE Viewer" below |
 | Package identity, properties, scene records | `ow-package` (ours) | "`ow-package`: the package reader" below |
 | UnrealScript bytecode | `research/script_disasm.py` (ours) | "Reading the game's UnrealScript" below |
 | The game's object dumps as an oracle | OpenBLCMM datapack | `tools/blcmm_dumps.py`, THIRD_PARTY.md |
 | BL2's Scaleform UI movies | Ruffle (desktop and web builds) | "BL2's HUD movie over UE5" below |
-| Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `C:\Users\yorad\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
+| Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `%USERPROFILE%\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
 
 REA is recorded in THIRD_PARTY.md ("REA (Reverse Engineer Anything) MCP server": 4.1.0 on 2026-10-07, updated to 6.0.0 on
 2026-10-08). Gibbed has no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open (2026-10-22).
@@ -52,7 +52,7 @@ limits: some material types are unsupported, exported material files are
 heuristic, and exported data does not prove UE5 material or gameplay parity.
 
 The current maintainer checkout is outside this repository at
-`C:\Users\zuhu\Documents\BL2_Tools\UEViewer-src`. Other machines must pass
+`%USERPROFILE%\Documents\BL2_Tools\UEViewer-src`. Other machines must pass
 their own path explicitly. The reusable wrapper is
 `tools/export_with_umodel.ps1`:
 

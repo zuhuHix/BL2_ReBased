@@ -8,7 +8,7 @@ running game** unless a line says how it was confirmed. Field names were matched
 oracle this note has. Script behaviour (spawn setup, death drop) was read with `ow-package --disasm` from the installed
 package and is labelled "script" where it is not native. Data counts were decoded from `Startup.upk` with the project
 reader and are quoted where a rule needs them. Game-derived output (decompilation, listings, my own census scripts and
-their results) is under ignored `local/p2/G1/` and `C:\Users\yorad\bl2-analysis-2\out`.
+their results) is under ignored `local/p2/G1/` and `%USERPROFILE%\bl2-analysis-2\out`.
 
 Scope: how a pool or a balance becomes inventory (`ItemPool` natives, the balance helpers they use), where a mission
 reward's items come from (pool-roll side only; lane C1 owns the tracker's turn-in chain), and the enemy drop on death at

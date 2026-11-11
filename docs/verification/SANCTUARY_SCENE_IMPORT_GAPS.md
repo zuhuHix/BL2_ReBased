@@ -166,7 +166,7 @@ other maps have none. (Host side: `host/ue5/*.py`, implemented by the other lane
 
 ### Where the matched shots live
 
-Local gallery, ignored and outside the repository: `C:\Users\yorad\Documents\BL2_ReBased\local\hub-gallery\2026-10-22\laneA\`.
+Local gallery, ignored and outside the repository: `%USERPROFILE%\Documents\BL2_ReBased\local\hub-gallery\2026-10-22\laneA\`.
 References are in `reference/`; each round has its own `host/` and `pairs/` folders (host left, reference right), and
 round 3 also has `review/` for the four-way comparisons. Capture scripts are under ignored `local/laneA-capture/`. Automation results: the
 eight-view Inspection test succeeded in each round. The import verifier (`ue-verify.json`) reports the decal, light
@@ -331,7 +331,7 @@ python tools/prepare_level.py --reader build/Release/ow-package.exe --game 'C:/P
 python tools/prepare_terrain.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --scene local/sanctuary --collision
 python tools/prepare_bsp.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --scene local/sanctuary --collision
 $env:PYTHONPATH = Join-Path (Get-Location) 'local/python-deps'
-python tools/prepare_sanctuary_pillar.py --umodel 'C:/Users/yorad/Tools/UEViewer/umodel.exe' --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --reader build/Release/ow-package.exe --scene local/sanctuary/scene.json --output local/sanctuary
+python tools/prepare_sanctuary_pillar.py --umodel "$env:USERPROFILE/Tools/UEViewer/umodel.exe" --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --reader build/Release/ow-package.exe --scene local/sanctuary/scene.json --output local/sanctuary
 python tools/refresh_collision.py --reader build/Release/ow-package.exe --game 'C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2' --scene local/sanctuary
 ```
 

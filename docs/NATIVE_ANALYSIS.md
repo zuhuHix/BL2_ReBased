@@ -158,7 +158,7 @@ database and any hand-made patches to imported content.
    `OPENWILLOW_PRIVATE` at. Use a private repository, a cloud-synced folder or an external drive, as you prefer.
    Large imported content is better regenerated than synced; GitHub rejects files over 100 MB.
 
-The maintainer's store is the private GitHub repository `zuhuHix/BL2_ReBased-private`, cloned to
+The maintainer's store is a separate private GitHub repository (its name is not published), cloned to
 `C:\Users\<you>\bl2-private` with `OPENWILLOW_PRIVATE` pointing at it. It is still a copy of game-derived material
 on a third party's servers: not public and not distributed, but a risk taken knowingly; a self-hosted or encrypted
 store avoids it. Keep that repository separate from this one, never add it as a submodule or a remote of this one,

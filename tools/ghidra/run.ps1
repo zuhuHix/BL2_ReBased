@@ -8,8 +8,8 @@ param(
     [int]$Callees = 0,
     # Label the natives a query resolves (persisted in the project).
     [switch]$Label,
-    [string]$Ghidra = $(if ($env:OPENWILLOW_GHIDRA) { $env:OPENWILLOW_GHIDRA } else { 'C:\Users\yorad\Tools\ghidra_12.1.4_PUBLIC' }),
-    [string]$Jdk = $(if ($env:OPENWILLOW_JDK) { $env:OPENWILLOW_JDK } else { 'C:\Users\yorad\Tools\jdk-21.0.12.1+1' }),
+    [string]$Ghidra = $(if ($env:OPENWILLOW_GHIDRA) { $env:OPENWILLOW_GHIDRA } else { (Join-Path $env:USERPROFILE 'Tools\ghidra_12.1.4_PUBLIC') }),
+    [string]$Jdk = $(if ($env:OPENWILLOW_JDK) { $env:OPENWILLOW_JDK } else { (Join-Path $env:USERPROFILE 'Tools\jdk-21.0.12.1+1') }),
     [string]$ProjectDir = $(if ($env:OPENWILLOW_ANALYSIS) { $env:OPENWILLOW_ANALYSIS } else { Join-Path $env:USERPROFILE 'bl2-analysis' }),
     [string]$ProjectName = 'bl2',
     [string]$Program = 'Borderlands2.exe',

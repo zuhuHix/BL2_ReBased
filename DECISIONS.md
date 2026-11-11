@@ -330,7 +330,7 @@ plan, that forbade disassembling or decompiling `Borderlands2.exe`.
   database file types; `tools/private_sync.ps1` added.
 - **Follow-up, same day (maintainer decisions):** Ghidra 12.1.4 with a portable Temurin JDK 21 is the chosen tool and has
   a `THIRD_PARTY.md` entry (checksums verified against the published ones); `tools/ghidra_import.ps1` imports and
-  analyses the executable headlessly. The private store is the private GitHub repository `zuhuHix/BL2_ReBased-private`.
+  analyses the executable headlessly. The private store is a separate private GitHub repository (its name is not published).
   All time-to-completion estimates were removed from ROADMAP.md, README.md and the plan documents; ROADMAP.md now has a
   "How it's going" section stating what was done in what elapsed time, with no forecast.
 - **Still open:** no native function has been analysed yet, and no analysis result is confirmed against the game.
@@ -4775,3 +4775,13 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/COMBAT_RANGE.md`, "Acc
 - **Stand distance rules (review r1, r2).** A live stand distance never goes inside body contact (the kind's radius plus Maya's). The run's last step is limited by the gap to Maya's current position, so where an enemy stands does not depend on the frame time and it follows her when she walks away. Only the checker grades the numbers. The cycle band's upper edge is raised by the step's longest frame, which the host logs. A frame over 0.2 s matters only when a cycle is over its plain band, and then the line asks for a rerun.
 - **Tests.** `tests/range_kind_melee_test.py` (new, in ctest): the host's per-kind rows equal `tools/check_range.py`'s table, and the brain uses them. It fails on main's host code. A new in-engine range step, `kind_melee`, is re-checked by the checker against the bands.
 - **Not verified:** the C++ is not compiled here, and nothing has run in the engine. Whether a closer adult changes the slice gate's fight or downs Maya without the test's help is still to be seen.
+
+## 2026-11-11: Personal identifiers in tracked files become placeholders (lane-identifiers)
+
+AI-assisted (Claude Opus 5.5). Policy change for tracked text and script defaults; no parser, tool output or host behaviour changes.
+
+- **Why.** The repository is public, and an audit on 2026-11-11 found a Windows user-profile path on 27 lines in 18 files, the Windows account name on 39 lines in 20 files, and the private store's repository named in `docs/NATIVE_ANALYSIS.md`. The maintainer decided the same day: from now on such identifiers are placeholders. History is not rewritten; only the tree changes.
+- **What.** Documentation and records use `%USERPROFILE%\...` or `<you>` for profile paths, and the zuhu PC's label in place of the account name. The private store is described without its name or URL, and the instruction never to link it stays. Script defaults no longer hard-code a profile path: the Ghidra and JDK defaults in `tools/ghidra_import.ps1` and `tools/ghidra/run.ps1` are built from `$env:USERPROFILE` (the `OPENWILLOW_GHIDRA` / `OPENWILLOW_JDK` overrides are unchanged), and the `-HubLock` default of eight capture and import scripts is derived from the git common directory, as the newer capture scripts already did. On this PC both resolve to the same paths as before.
+- **Left for the maintainer.** `THIRD_PARTY.md` still holds four profile paths; it is the maintainer's file, so the lane proposed replacements instead of editing it.
+- **Verified (automated):** the defaults resolve to the old paths on the zuhu PC; the gates are in the lane's report.
+- **Not verified:** no capture or Ghidra run was started with the new defaults.

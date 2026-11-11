@@ -3,7 +3,7 @@
 # Everything written is game data under ignored local/realgame/hud_layout/. Locks, save backup and save compare as in
 # action_skill_hud_capture.ps1; the resolution is given on the command line only (the ini is compared and restored).
 param(
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'laneC',
     [string]$Character = 'Save0008.sav',
     [string[]]$Resolutions = @('1280x720', '1920x1080')

@@ -162,7 +162,7 @@ vary little.
 
 ### Main cdf05d7 + c365984, before the hold on fire
 
-Main cdf05d7 plus this branch at c365984, yorad PC, 2026-11-06. Three runs, about 50 s of game time each. **14 PASS, 0
+Main cdf05d7 plus this branch at c365984, zuhu PC, 2026-11-06. Three runs, about 50 s of game time each. **14 PASS, 0
 FAIL, 0 NOT_AVAILABLE of 14 in all three**, graded by the current checker.
 
 | # | Link | Result in all three | Fixtures |
@@ -216,7 +216,7 @@ read their logs; the hub's runner ran them. All three variants in each.
 
 ### Before the Phaselock targeting fix (#111)
 
-Main dee84f6 (the range, #99 and #101 are on main) plus this branch at d5c9cfd, yorad PC, 2026-11-06. Three runs, about
+Main dee84f6 (the range, #99 and #101 are on main) plus this branch at d5c9cfd, zuhu PC, 2026-11-06. Three runs, about
 54 s of game time each. Link 9 FAILed in all three, and these were graded by the checker of that time.
 
 | # | Link | `-Shield` | no switch | `-DownAfterFight` |
@@ -316,7 +316,7 @@ equipped under a fixture that says the level rule was overridden (see "Why `-Shi
 stock-shield path has run only under that override.
 
 **The two machines' `-Shield` runs do not exercise the same path.** Which one runs depends on the machine's gear
-manifest. On the yorad PC (zuhu), the run used a manifest shield under the level override. On pc-hummer, it used the host
+manifest. On the zuhu PC, the run used a manifest shield under the level override. On pc-hummer, it used the host
 stand-in, which is not stock data. A PASS on one says nothing about the other's path.
 
 Earlier runs, on a throwaway local merge of f5d5d60 + this variant + `origin/feature/slice-range-loot` 90a7547 (pc-hummer,
@@ -472,12 +472,12 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-04 | main 195a016 (after #97, #81, #87), #98 review 1 and batch 6 fixes | 10 / 0 / 4 of 14 | new link 7 (aimed pickup past a nearer decoy) NOT_AVAILABLE; the card and picked ids are cross-checked; ctest 22/22, verify_packages exact, checker tests 21/21 |
 | 2026-11-04 | throwaway merge with the range stack | 12 / 1 / 1 of 14 | links 2 to 4 PASS with real range enemies; loot drop at the world origin (FAIL, range); passive, restore and clear fixtures named |
 | 2026-11-04 | throwaway merge with #89 90a7547, with and without `-Shield` | 13 / 0 / 1 of 14, both | loot drop at the corpse; link 7 did not test the decoy (its roll source was not read with a real drop; fixed since) |
-| 2026-11-06 | main dee84f6 + d5c9cfd, `-Shield`, yorad PC | 13 / 1 / 0 of 14 | link 7 PASS; link 4 names the stand-in shield; link 9 FAIL; ctest 22/22, verify_packages exact, checker tests 21/21 |
-| 2026-11-06 | main dee84f6 + d5c9cfd, no switch, yorad PC | 12 / 1 / 1 of 14 | link 4 NOT_AVAILABLE (the one hit came from another enemy); link 9 FAIL |
-| 2026-11-06 | main dee84f6 + d5c9cfd, `-DownAfterFight`, yorad PC | 12 / 1 / 1 of 14 | revive fixture ran for the first time (forced); link 4 NOT_AVAILABLE; link 9 FAIL |
-| 2026-11-06 | main cdf05d7 + c365984, `-Shield`, yorad PC | 14 / 0 / 0 of 14 | the #109 review fixes' first run; a manifest shield under the level-override fixture; ctest 22/22, verify_packages exact, checker tests 27/27 |
-| 2026-11-06 | main cdf05d7 + c365984, no switch, yorad PC | 14 / 0 / 0 of 14 | link 4 PASS with per-causer counting; ended the fight at 60/213, healed by the fixture |
-| 2026-11-06 | main cdf05d7 + c365984, `-DownAfterFight`, yorad PC | 14 / 0 / 0 of 14 | revive fixture ran (forced) |
+| 2026-11-06 | main dee84f6 + d5c9cfd, `-Shield`, zuhu PC | 13 / 1 / 0 of 14 | link 7 PASS; link 4 names the stand-in shield; link 9 FAIL; ctest 22/22, verify_packages exact, checker tests 21/21 |
+| 2026-11-06 | main dee84f6 + d5c9cfd, no switch, zuhu PC | 12 / 1 / 1 of 14 | link 4 NOT_AVAILABLE (the one hit came from another enemy); link 9 FAIL |
+| 2026-11-06 | main dee84f6 + d5c9cfd, `-DownAfterFight`, zuhu PC | 12 / 1 / 1 of 14 | revive fixture ran for the first time (forced); link 4 NOT_AVAILABLE; link 9 FAIL |
+| 2026-11-06 | main cdf05d7 + c365984, `-Shield`, zuhu PC | 14 / 0 / 0 of 14 | the #109 review fixes' first run; a manifest shield under the level-override fixture; ctest 22/22, verify_packages exact, checker tests 27/27 |
+| 2026-11-06 | main cdf05d7 + c365984, no switch, zuhu PC | 14 / 0 / 0 of 14 | link 4 PASS with per-causer counting; ended the fight at 60/213, healed by the fixture |
+| 2026-11-06 | main cdf05d7 + c365984, `-DownAfterFight`, zuhu PC | 14 / 0 / 0 of 14 | revive fixture ran (forced) |
 | 2026-11-06 | combined build of this branch at 402d81e with #112 and #113, refreshed data, pc-hummer, all three variants | 14 / 0 / 0 of 14, each | reported by the hub; this lane did not read those logs. `-Shield` used the host stand-in, not a manifest shield |
 | 2026-11-06 | Z10: #126 at 7f59924 + #133 at d02c70a, four enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | hold ended by a hit; passed by margin |
 | 2026-11-07 | Z13: #126 at 7f59924 + #133 at 716302b, five enemies, zuhu, all three variants | 13 / 1 / 0 of 14, each | link 4 FAIL: the burst killed the selected Psycho before the hold started; fixed in the driver by one shot at a time |

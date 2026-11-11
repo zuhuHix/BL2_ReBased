@@ -42,7 +42,7 @@ The cooked-only parts and skins are most likely ones the session never loaded (D
 
 ## 3. Extraction (UModel / UE Viewer build 1590)
 
-Benchmark and batch (`tools/export_weapon_skins.py`, `C:\Users\yorad\Tools\UEViewer\umodel.exe`, compiled 2022-12-23, official
+Benchmark and batch (`tools/export_weapon_skins.py`, `%USERPROFILE%\Tools\UEViewer\umodel.exe`, compiled 2022-12-23, official
 gildor2/UEViewer build): `umodel -path=<BL2 install root> -game=border -export -png -out=<root> <Package> <MIC> MaterialInstanceConstant`
 per skin. About 2 s per skin; 301 attempted, **301 exported and resolvable**, 0 failed (8 min wall clock, 4 workers). Every
 chain ends at a Material (293 at `Master_Gun`, 8 at the Anemone DLC's `Master_Gun_Anemone`); 211 have an intermediate `MasterMati_*`

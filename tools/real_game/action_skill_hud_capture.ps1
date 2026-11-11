@@ -5,7 +5,7 @@
 # Locks: the shared hub lock (waits while another lane holds it) and the run lock; saves are backed up, saving is
 # blocked in game, and afterwards the save folder is compared with the backup (changed files are restored from it).
 param(
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'laneC',
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya (Phaselock) in Sanctuary
     [switch]$ProbeOnly,                     # stop after reporting which HUD/pool reads work

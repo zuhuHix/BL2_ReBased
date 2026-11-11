@@ -8,7 +8,7 @@ param(
     # Optional '<Type>=<prepared reload JSON>' pairs (tools/weapon_reload_anims.py output): the same weapon reload clips
     # imported onto the library gestalt skeletons (host/ue5/import_weapon_reload_anims.py, library target).
     [string[]]$Reloads = @(),
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'weaponparts'
 )
 # AI-assisted. Imports the weapon part library (each gestalt mesh once, every skin as an instance of one master paint

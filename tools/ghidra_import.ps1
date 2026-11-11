@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Ghidra = $(if ($env:OPENWILLOW_GHIDRA) { $env:OPENWILLOW_GHIDRA } else { 'C:\Users\yorad\Tools\ghidra_12.1.4_PUBLIC' }),
-    [string]$Jdk = $(if ($env:OPENWILLOW_JDK) { $env:OPENWILLOW_JDK } else { 'C:\Users\yorad\Tools\jdk-21.0.12.1+1' }),
+    [string]$Ghidra = $(if ($env:OPENWILLOW_GHIDRA) { $env:OPENWILLOW_GHIDRA } else { (Join-Path $env:USERPROFILE 'Tools\ghidra_12.1.4_PUBLIC') }),
+    [string]$Jdk = $(if ($env:OPENWILLOW_JDK) { $env:OPENWILLOW_JDK } else { (Join-Path $env:USERPROFILE 'Tools\jdk-21.0.12.1+1') }),
     [string]$Game = $env:OPENWILLOW_BL2,
     [string]$Binary = 'Binaries\Win32\Borderlands2.exe',
     [string]$ProjectName = 'bl2',

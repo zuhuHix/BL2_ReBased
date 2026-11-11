@@ -139,7 +139,7 @@ UModel / UE Viewer build 1590 from the official
 `https://github.com/gildor2/UEViewer` repository (checkout
 `a0bfb468d42be831b126632fd8a0ae6b3614f981`) remains the first external
 candidate. The local executable was
-`C:\Users\yorad\Tools\UEViewer\umodel.exe` (SHA-256
+`%USERPROFILE%\Tools\UEViewer\umodel.exe` (SHA-256
 `13502E5A4D8F6B5F32252AFEBD6360F7302CCFACCF6B8DDA65BEFF0BE2D364A0`);
 Windows PE metadata says `0.0.0.0`, so the build number comes from the
 existing project benchmark record. A bounded attempt against the installed
@@ -1420,8 +1420,8 @@ picker's memory. They now use Down and Up in the transfer (`OpenWillowInventoryA
 past slot 2 in a backpack transfer, and a new step `locked_slot_transfer_cancel` cancels it: 50 steps.
 
 **Bounded recipe set rebuilt on pc-hummer.** The six-weapon set was not on this machine; it was rebuilt from the per-slot part
-names of the yorad copy (each slot forced to the named part in a local wrapper around `weapon_recipe.roll`, then
-`weapon_stats.py`, the glTF filter and `weapon_view_model.py`). The parts match; three name prefixes differ from the yorad copy
+names of the zuhu PC's copy (each slot forced to the named part in a local wrapper around `weapon_recipe.roll`, then
+`weapon_stats.py`, the glTF filter and `weapon_view_model.py`). The parts match; three name prefixes differ from the zuhu PC's copy
 (Infinity, Nukem, Volcano: the current name rule chooses another name part on the same parts), so card names differ there.
 
 **Checks.** Inventory suite **50 PASS / 0 FAIL / 0 NOT_RUN / 0 KNOWN_DIVERGENCE** (rebuilt bounded set; before the step-22 fix
@@ -1443,7 +1443,7 @@ and 'compare' frames); whether the game's selected card shows a red or a yellow 
 frame). From `ItemCardGFxObject.SetItemCardEx` (script): the strip shows only for a required level above 1, which the shared
 card code (`item_card.js`) now follows; overpower and DLC-restricted texts do not apply to the host.
 
-## Round 25 (2026-11-06, inventory lane, yorad PC)
+## Round 25 (2026-11-06, inventory lane, zuhu PC)
 
 AI-assisted (Claude; Luna (Codex) as the independent critic, a fresh agent each round). Frames, critic reports and side-by-sides stay under ignored
 `local/orch/inv25/`. Host runs: `-owinvshots` with the bounded recipe set, `-owlevel=36`, no gear, `-owslots=2 -owmoney=0 -owerid=0`, compared

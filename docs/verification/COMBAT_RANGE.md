@@ -342,7 +342,7 @@ generator manifest), loot_off, loot_seeded_roll.
   turned the collision off, so every ring trace missed and the fall-back put a gun at the world origin, 5,894 uu from the corpse. The rings now
   centre on the actor's location (its floor point), and the test's new `loot_near_corpse` step checks every drop lies within 400 uu of the corpse.
 
-## Batch 7 (yorad PC, 2026-11-04, default spot: 24 pass, 3 fail, 2 skip)
+## Batch 7 (zuhu PC, 2026-11-04, default spot: 24 pass, 3 fail, 2 skip)
 
 - **Sight at this spot.** approach stayed at level 1 with the enemy still. No notice fired: the ground between the enemy's home and the place "2000 uu in
   front" blocks the one centre-to-centre line. notice_sight had passed there only on a stale sample from the step before (the rule reads the previous

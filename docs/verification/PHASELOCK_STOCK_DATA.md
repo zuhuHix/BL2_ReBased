@@ -1144,7 +1144,7 @@ The +1.50 s bubble outer span now matches by the detector above, while the host 
 the game's dark navy centre. The target still reads cool grey-blue in Sanctuary where the Three Horns reference is brown/ochre;
 no colour fit was made because the scenes have different lighting and the material graph was not recovered. As a bounded
 inspection, UModel / UE Viewer build 1590 (MIT, `https://www.gildor.org/en/projects/umodel`) ran against the local
-`Master_Creature` in `WillowGame.upk`. Command: `C:\Users\yorad\Tools\UEViewer\umodel.exe -export -game=border
+`Master_Creature` in `WillowGame.upk`. Command: `%USERPROFILE%\Tools\UEViewer\umodel.exe -export -game=border
 -path="C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2\WillowGame\CookedPCConsole" -obj=Master_Creature
 -out=local/analysis/round18-master-creature -uc -png -nomesh -noanim -nostat WillowGame.upk Master_Creature Material`.
 The invocation took about 0.17 s. The output under ignored `local/analysis/round18-master-creature/` contained 1 `.log`,

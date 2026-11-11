@@ -5,7 +5,7 @@
 # Everything written is game data under ignored local/realgame/walking/. Saves are compared with the backup afterwards.
 param(
     [Parameter(Mandatory)][string]$Probes,          # JSON list from walking_routes.py candidates (plus any hand routes)
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'B',
     [string]$Character = 'Save0008.sav',            # quick_startup's -Character slot (a character standing in Sanctuary); '' = Continue
     [switch]$CallerHoldsHubLock,                    # the caller already took the shared UE/game lock

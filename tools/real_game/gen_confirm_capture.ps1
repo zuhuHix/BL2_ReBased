@@ -13,7 +13,7 @@ param(
     # Optional save slot (the quick_startup mod's -Character value). Without it the title screen's first option
     # (Continue, the most recent save) is used; the loaded character is recorded in session.json.
     [string]$Character = '',
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'genconfirm',
     [int]$WaitMinutes = 30,
     [int]$FrequencyRolls = 400,

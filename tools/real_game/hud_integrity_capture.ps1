@@ -7,7 +7,7 @@
 # Everything written is game data under ignored local/realgame/hud_integrity/. Locks, save backup, blocked saves and the
 # save comparison as in hud_parity_capture.ps1.
 param(
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'hudintegrity',
     # quick_startup's -Character slot: the user's own Maya save file name, loaded into Sanctuary.
     [Parameter(Mandatory=$true)][string]$Character,

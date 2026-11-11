@@ -11,7 +11,7 @@ param(
     [string]$Character = 'Save0008.sav',
     # Capture mode: a text file listing local recipe JSON paths, one per line (a file, because pwsh -File splits arrays).
     [string]$RecipeList = '',
-    [string]$HubLock = 'C:\Users\yorad\Documents\BL2_ReBased\local\hub-ue.lock',
+    [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'weaponparts',
     # Inspect frames too (needs the gun in an equipped slot; on 2026-10-23 the SDK-held gun stayed unslotted, so off by default).
     [switch]$Inspect
