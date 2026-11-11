@@ -89,7 +89,7 @@ The hand-inked, cel-shaded look was chosen partly to sidestep the fidelity race.
 
 ### 2.3 The honest counter-case
 
-BL2 is not universally adored, and the dissent is coherent. From harvested threads: gunplay recoil recovery is criticised (Jakobs weapons are said to take a second or two before recoil starts to recover), early-game guns are said to feel bad, movement is dated next to BL3's slide/mantle, and there is a real constituency arguing BL2 is their *least* favourite mainline entry. In negative reviews, "movement/gunplay feels dated" hits **8.7%**. One of the best-argued positive reviews concedes the point directly: the later games have smoother gunplay, better movement and more quality-of-life features, yet none of them fits the pieces together as well as BL2, which is also plainly janky and moves like an old game.
+BL2 is not universally adored, and the dissent is coherent. From harvested threads: gunplay recoil recovery is criticised (Jakobs weapons are said to take a second or two before recoil starts to recover), early-game guns are said to feel bad, movement is dated next to BL3's slide/mantle, and there is a real constituency arguing BL2 is their *least* favourite mainline entry. In negative reviews, "movement/gunplay feels dated" hits **8.7%**. One of the best-argued positive reviews concedes the point: BL2 hangs together better than its sequels and still feels rough, while the sequels play better.
 
 That concession is the thesis of the entire remaster opportunity.
 
@@ -127,7 +127,7 @@ Independent corroboration from Steam Discussions: of 247 recent threads, **multi
 
 #### Tier 1: Overwhelming, load-bearing
 
-**1. Make co-op work again.** Not a nice-to-have; the defining current complaint (14.3% of negative reviews describe multiplayer as broken). The highest-voted review in the corpus is a long-time co-op player saying that since the terms-of-service update, backend changes make playing with a friend almost impossible: switching the network mode or even loading the title screen can hard-lock the game. Other highly voted reviews make the same case: multiplayer now runs through SHiFT and is broken, with looping loading screens, where the old Steam servers worked; co-op is close to impossible in 2026 because of bugs and the SHiFT migration; and a player who rates it among the best games ever says they can no longer play it with friends after it worked for well over a decade.
+**1. Make co-op work again.** Not a nice-to-have; the defining current complaint (14.3% of negative reviews describe multiplayer as broken). The highest-voted review in the corpus is a long-time co-op player saying that since the terms-of-service update, backend changes make playing with a friend almost impossible: switching the network mode or even loading the title screen can hard-lock the game. Other reviews make the same case: multiplayer now runs through SHiFT and is broken, with looping loading screens, where the old Steam servers worked; co-op is close to impossible in 2026 because of bugs and the SHiFT migration; and a player who rates it among the best games ever says they can no longer play it with friends after it worked for well over a decade.
 
 Sub-asks clustering here: reliable session creation, no forced re-linking, no disconnect-every-30-minutes, and repeatedly **an option to connect directly, over LAN or through Steam again.**
 
@@ -144,7 +144,7 @@ Sub-asks clustering here: reliable session creation, no forced re-linking, no di
 **6. Rework UVHM / slag / OP levels.** The loudest *design* topic in Reddit discourse (12.4% of harvested threads, but this figure swung between 11% and 24% as the sample grew, so treat the magnitude as soft). What is *not* soft is the content: the complaint is unusually precise and repeats almost verbatim across independent threads.
 - Slag becomes mandatory rather than tactical: threads say it outclasses every other element so far that playing without it stops being a real choice.
 - OP levels compress build diversity: threads say they force players onto meta builds, push co-op players into playing solo, and are not worth the effort.
-- Melee scaling breaks at OP: the single most specific remaster ask found was proper balancing and scaling of melee damage in OP levels.
+- Melee scaling breaks at OP: the single most specific remaster ask found was for melee damage that keeps pace with enemies at the highest difficulty levels.
 - Underpowered gear tiers never got fixed: pearls and other weak weapons, and some skills (Raving Retribution is the example given), are asked to be reworked.
 
 #### Tier 3: Real but smaller
@@ -159,7 +159,7 @@ Sub-asks clustering here: reliable session creation, no forced re-linking, no di
 ### 3.3 What people explicitly do *not* want
 
 - **Graphics-first.** Modern graphics come up, but overwhelmingly as a re-release with modern graphics and slightly better gameplay, a garnish, not the ask. Meanwhile "art style holds up" is a *praise* category.
-- **Gearbox touching it.** Widespread stated distrust that a Gearbox-made remaster would repeat BL3/BL4 mistakes. Several threads argue that if Gearbox meant to remaster it, it would have done so for the 10th anniversary in 2022. "
+- **Gearbox touching it.** Widespread stated distrust that a Gearbox-made remaster would repeat BL3/BL4 mistakes. Several threads argue that if Gearbox meant to remaster it, it would have done so for the 10th anniversary in 2022.
 - **Changing the writing or the tone.** Zero appetite. This is the crown jewel and everyone knows it.
 - **A remaster that breaks mod compatibility.** For a large slice of the PC playerbase, BL2 *is* modded BL2.
 
