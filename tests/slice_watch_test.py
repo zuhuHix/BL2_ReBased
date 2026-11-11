@@ -534,10 +534,12 @@ class HelperTest(unittest.TestCase):
                     "(Get-SdkModsEnabled) -join ','\n"
                     "$log = [ordered]@{}\n"
                     "try { Invoke-SdkModsOffStep $log @('A') } catch { 'refused: ' + (\"$_\" -like '*nothing was changed*') }\n"
-                    "Invoke-SdkModsOffStep $log @('B', 'A')")
+                    "try { Invoke-SdkModsOffStep $log 'A,C' } catch { 'refused joined' }\n"
+                    "Invoke-SdkModsOffStep $log 'B, A'")
             out = ps(body).stdout
             self.assertIn('A,B', out)
             self.assertIn('refused: True', out)
+            self.assertIn('refused joined', out)   # a comma-joined list, as pwsh -File passes it, is split
             self.assertIn('SDK mods off for this run: WROTE', out)
             self.assertEqual(out.count('WROTE'), 1)   # the refused call wrote nothing
 

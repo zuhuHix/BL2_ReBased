@@ -97,6 +97,8 @@ function Get-SdkModsEnabled([string]$SettingsDir = (Join-Path $env:OPENWILLOW_BL
 # every root from the verified backup even when the launch never happens or the write stops half way. -Expected: the exact setting names the run
 # may turn off; any other set (one more, one less) is refused before anything is written.
 function Invoke-SdkModsOffStep($Log, [string[]]$Expected = @()) {
+    # pwsh -File passes 'a,b,c' as one string: split it.
+    $Expected = @($Expected | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if (@($Expected).Count) {
         $would = @(Get-SdkModsEnabled)
         $want = @($Expected | Sort-Object)
