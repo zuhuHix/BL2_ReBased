@@ -501,6 +501,15 @@ no test driver: no `-owslicegate*`, no `ow.RangeLoot`, no granted point, no forc
 not switches: the dependency mission counts as complete (`OWQUEST FIXTURE` in the log), and Marcus walks straight lines.
 It refuses to start, naming the file and the tool that makes it, when any of its local data is missing. It holds the
 machine-wide UE run lock while the window is open, saves to `local/playslice/save.json` and logs to `local/playslice/play-*.log`.
+Exit codes: 0 played or smoke passed, 1 a smoke item failed, 2 refused (missing data), 3 never launched (lock timeout, page
+server refused, or the editor would not start).
+
+The range and a resumed save. The range's start switch moves Maya to the range about 4 s after she stands, every launch. The
+host has no way to build the range where she is (`ow.Range` moves her too), and the quest save holds the mission and her
+progression but no position, so a resumed session starts at the map's spawn either way. Two choices:
+- default: the range is built and Maya is moved to it. Walk back to Marcus for the mission.
+- `-NoRange`: no range, so she stays at the spawn. There are no enemies, which means no kill loot and no down by enemies. The
+  range manifest is then not needed, and the smoke skips its range item.
 
 Keys as in the table above, plus M (map), L (missions log) and V (melee) since the controls lane
 ([CONTROLS.md](CONTROLS.md)). With the mission page up, Enter takes the offer, the turn-in and the reward, and Escape closes the
@@ -508,9 +517,10 @@ offer and the turn-in ([MISSION_SCREEN.md](MISSION_SCREEN.md)). E opens the page
 
 Route (host behaviour; the order of the mission's events matches one real play-through, FIRE_MISSION_GOLDEN_TRACE.md):
 1. About 4 s after she stands, Maya is moved to the range: dummies and the range's enemies, which notice her and attack. The
-   range is far from Marcus's shop (about 14,000 uu in one gate log) and its enemies respawn. Loot drops at the stock
-   chances (guns and gear 0.085 per kill, [COMBAT_LOOT.md](COMBAT_LOOT.md)), so a gun is rare: pick it up with E and equip it
-   in the inventory (I).
+   range is far from Marcus's shop (about 14,000 uu in one gate log) and its enemies respawn. The host rolls kill loot
+   from the stock pools. The stock `Pool_GunsAndGear` entry reads 0.085 per kill for one player, and it covers guns, shields
+   and grenade mods together ([COMBAT_LOOT.md](COMBAT_LOOT.md)), so a gun alone drops less often than that. The rate in this
+   host is UNVERIFIED in play. Pick a gun up with E and equip it in the inventory (I).
 2. K opens Skills: buy Phaselock (a fresh save at level 8 has skill points to spend; the log shows them in `OpenWillow Maya level 8, N skill points`). F casts it on a range enemy.
 3. Walk to Marcus's shop and press E, then Enter on the offer. The lent "Inflammatory Torment" goes to the backpack, not to
    a slot: open the inventory (I) and equip it.
@@ -521,8 +531,8 @@ Route (host behaviour; the order of the mission's events matches one real play-t
    mission gives XP only (the turn-in loot stand-in was removed on 2026-10-07).
 7. Let the range's enemies down her, or fall: she bleeds out and respawns at the station with the mission still complete.
 
-Not checked by a person yet: the launcher has only run in its unattended smoke (`-CheckSeconds`), and whether the range's
-enemies follow Maya to the mission, or take the mission's shots, is UNVERIFIED. The gate (`tools/test_slice_gate.ps1`)
+Not run yet: the launcher has not been started in Unreal, and its unattended smoke (`-CheckSeconds 180`) is pending. Nobody
+has played this route with it. Whether the range's enemies follow Maya to the mission, or take the mission's shots, is UNVERIFIED. The gate (`tools/test_slice_gate.ps1`)
 clears the range before the mission, so it has not seen the two together either.
 
 ## Progression, Phaselock rules and dummy behaviours (2026-10-01, second machine)

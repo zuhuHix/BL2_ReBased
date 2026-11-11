@@ -1,14 +1,19 @@
 """Tests tools/play_slice.ps1 with no editor: the real launcher and the helpers it calls, copied to a temporary repository with synthetic local data
-(empty or minimal files; nothing game-derived). -PrintCommandLine shows the line it would start and -GradeLog grades a synthetic log, so no lock,
-server or editor is ever started here. Windows only (the launcher is a PowerShell script)."""
+(empty or minimal files; nothing game-derived), in a folder whose path has a space. -PrintCommandLine shows the line it would start and -GradeLog
+grades a synthetic log. The Launch class runs the launch itself with a stub editor (pythonw on a small script, through -EditorExe) and a stand-in
+for tools/ue_lock.ps1, so it starts only the stub and serve.py, stops them by their own handles, and never waits on a real editor. Windows only."""
+import http.server
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -62,7 +67,7 @@ BAD_LINES = {
 @unittest.skipUnless(os.name == 'nt', 'the launcher is a Windows script')
 class PlaySlice(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix='ow_playslice_'))
+        self.root = Path(tempfile.mkdtemp(prefix='ow play slice '))   # a space: the launcher's quoting must hold
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         tools = self.root / 'tools'
         tools.mkdir()
@@ -79,7 +84,8 @@ class PlaySlice(unittest.TestCase):
             movie.parent.mkdir(parents=True, exist_ok=True)
             movie.write_bytes(b'')
         self.game = self.root / 'game'
-        self.game.mkdir()
+        (self.game / 'Binaries/Win32').mkdir(parents=True)
+        (self.game / 'Binaries/Win32/Borderlands2.exe').write_bytes(b'')
 
     def run_script(self, *arguments):
         return subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(self.root / 'tools/play_slice.ps1'),
@@ -175,7 +181,29 @@ class PlaySlice(unittest.TestCase):
         result = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(self.root / 'tools/play_slice.ps1'),
                                  '-PrintCommandLine', '-Game', str(self.root / 'nowhere')], capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 2)
-        self.assertIn('PLAY SLICE REFUSED: no Borderlands 2 folder', result.stdout)
+        self.assertIn('PLAY SLICE REFUSED: no Borderlands 2 install', result.stdout)
+
+    def test_a_folder_without_the_game_is_refused(self):
+        (self.game / 'Binaries/Win32/Borderlands2.exe').unlink()
+        result = self.run_script('-PrintCommandLine')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Binaries/Win32/Borderlands2.exe', result.stdout)
+
+    def test_no_range_leaves_the_range_out(self):
+        (self.root / 'local/range/range_manifest.json').unlink()
+        _, line = self.command_line('-NoRange')
+        self.assertFalse([a for a in line if a.startswith('-owrange')], line)
+        self.assertIn('-owquest', line)
+        self.assert_no_fixture(line)
+        result = self.run_script('-PrintCommandLine')
+        self.assertEqual(result.returncode, 2)   # without -NoRange the manifest is still required
+
+    def test_no_range_skips_the_range_item(self):
+        log = self.root / 'smoke.log'
+        log.write_text(GOOD_LOG.replace('OWRANGE start switch: built=1', ''))
+        result = self.run_script('-GradeLog', str(log), '-NoRange')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('SKIP range: -NoRange', result.stdout)
 
     def grade(self, text):
         log = self.root / 'smoke.log'
@@ -209,6 +237,122 @@ class PlaySlice(unittest.TestCase):
         result, verdicts = self.grade(text)
         self.assertEqual(verdicts['audio_map'], 'FAIL')
         self.assertEqual(verdicts['start_shield'], 'FAIL')
+
+
+# Stands in for the editor: the launcher starts pythonw with the project file first, and the project file is this script. It records its
+# arguments, writes the smoke log at -abslog, and then exits ('good') or waits to be stopped ('stall'). It is not named UnrealEditor.exe.
+STUB = """import json, os, sys, time
+args = sys.argv[1:]
+json.dump(args, open(os.environ['OW_STUB_ARGS'], 'w'))
+open(os.environ['OW_STUB_PID'], 'w').write(str(os.getpid()))
+log = next(a.split('=', 1)[1] for a in args if a.startswith('-abslog='))
+open(log, 'w').write(os.environ['OW_STUB_LOG'])
+if os.environ['OW_STUB_MODE'] == 'stall':
+    time.sleep(120)
+"""
+# Stands in for tools/ue_lock.ps1, so these runs never wait on a real editor on a shared PC (the real lock has its own test,
+# tests/ue_lock_test.py). It records whether the save still existed when the lock was taken, and the release.
+FAKE_LOCK = """function Enter-OwUeLock { param([string]$Owner, [int]$TimeoutSeconds)
+    if ($env:OW_FAKE_LOCK -eq 'timeout') { throw 'Another Unreal editor or the UE run lock is still present (fake)' }
+    Set-Content -LiteralPath $env:OW_FAKE_LOCK_LOG -Value "enter owner=$Owner save=$(Test-Path -LiteralPath $env:OW_FAKE_SAVE)"
+}
+function Exit-OwUeLock { Add-Content -LiteralPath $env:OW_FAKE_LOCK_LOG -Value 'exit' }
+"""
+
+
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+
+
+def serving(port):
+    try:
+        urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=2)
+        return True
+    except OSError:
+        return False
+
+
+@unittest.skipUnless(os.name == 'nt', 'the launcher is a Windows script')
+class Launch(unittest.TestCase):
+    """Lock, page server, start, timed stop and grading, with the stub editor and the fake lock. Starts only the stub and serve.py."""
+    setUp_repo = PlaySlice.setUp
+
+    def setUp(self):
+        self.setUp_repo()
+        shutil.copytree(REPO / 'tools' / 'hud_overlay', self.root / 'tools' / 'hud_overlay', ignore=shutil.ignore_patterns('__pycache__'))
+        (self.root / 'tools' / 'ue_lock.ps1').write_text(FAKE_LOCK, encoding='utf-8')
+        project = self.root / 'host/ue5/OpenWillow/OpenWillow.uproject'
+        project.parent.mkdir(parents=True)
+        project.write_text(STUB)
+        self.port = free_port()
+        self.save = self.root / 'local/playslice/smoke-save.json'
+        self.env = dict(os.environ, OW_STUB_ARGS=str(self.root / 'stub_args.json'), OW_STUB_PID=str(self.root / 'stub.pid'), OW_STUB_LOG=GOOD_LOG,
+                        OW_STUB_MODE='good', OW_FAKE_LOCK='', OW_FAKE_LOCK_LOG=str(self.root / 'lock.log'), OW_FAKE_SAVE=str(self.save))
+        self.addCleanup(self.stop_stub)
+
+    def stop_stub(self):
+        # Only the stub this test started, by its recorded id, and only while its command line names this test's folder.
+        pid_file = self.root / 'stub.pid'
+        if not pid_file.exists():
+            return
+        pid = pid_file.read_text().strip()
+        line = subprocess.run(['powershell', '-NoProfile', '-Command', f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").CommandLine'],
+                              capture_output=True, text=True).stdout
+        if str(self.root) in line:
+            subprocess.run(['taskkill', '/PID', pid, '/F'], capture_output=True)
+
+    def launch(self, *arguments, **env):
+        self.env.update(env)
+        pythonw = Path(sys.executable).with_name('pythonw.exe')
+        return subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(self.root / 'tools/play_slice.ps1'),
+                               '-Game', str(self.game), '-EditorExe', str(pythonw), '-Port', str(self.port), *arguments],
+                              capture_output=True, text=True, timeout=150, env=self.env)
+
+    def test_smoke_takes_the_lock_before_the_save_goes_and_grades(self):
+        self.save.parent.mkdir(parents=True, exist_ok=True)
+        self.save.write_text('{}')
+        result = self.launch('-CheckSeconds', '20')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Smoke PASS', result.stdout)
+        self.assertEqual((self.root / 'lock.log').read_text().split(), ['enter', 'owner=play_slice', 'save=True', 'exit'])
+        self.assertFalse(self.save.exists())
+        self.assertFalse(serving(self.port), 'the page server this run started is still up')
+        # The paths with a space arrived whole.
+        args = json.loads((self.root / 'stub_args.json').read_text())
+        self.assertIn(f'-owquestsave={self.save}', args)
+        self.assertTrue(any(a.startswith('-abslog=') and ' play slice ' in a for a in args), args)
+
+    def test_a_stalled_editor_is_stopped_and_the_log_still_graded(self):
+        result = self.launch('-CheckSeconds', '8', OW_STUB_MODE='stall', OW_STUB_LOG=GOOD_LOG.replace('built=1', 'built=0'))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('FAIL range: OWRANGE start switch: built=0', result.stdout)
+        self.assertNotIn('Could not stop', result.stdout)
+        pid = (self.root / 'stub.pid').read_text().strip()
+        self.assertNotIn(pid, subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'], capture_output=True, text=True).stdout)
+        self.assertFalse(serving(self.port))
+
+    def test_a_lock_timeout_is_never_launched(self):
+        result = self.launch('-CheckSeconds', '5', OW_FAKE_LOCK='timeout')
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn('PLAY SLICE NOT STARTED: the UE run lock', result.stdout)
+        self.assertFalse((self.root / 'stub.pid').exists())
+
+    def test_a_refused_port_is_never_launched(self):
+        # Another server on the port, without this checkout's pages header: Start-OwMovieHud refuses it.
+        server = http.server.HTTPServer(('127.0.0.1', self.port), http.server.SimpleHTTPRequestHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = self.launch('-CheckSeconds', '5')
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn('PLAY SLICE NOT STARTED: the page server', result.stdout)
+        self.assertFalse((self.root / 'stub.pid').exists())
+        self.assertIn('exit', (self.root / 'lock.log').read_text())
 
 
 class LogLinesExist(unittest.TestCase):

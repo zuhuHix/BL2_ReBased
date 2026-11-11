@@ -158,12 +158,16 @@ and holds the machine-wide UE run lock (below) while the window is open. Heavy: 
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -Fresh              # play; -Level N, -Save <file>, -Port N
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -CheckSeconds 180    # unattended smoke: PASS/FAIL per item
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -PrintCommandLine    # the line only; starts nothing
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -NoRange             # no range: Maya is not moved, no enemies
 ```
+
+Exit codes: 0 played or passed, 1 a smoke item failed, 2 refused (missing data), 3 never launched (lock timeout, page server
+refused, editor would not start).
 
 The smoke passes only when the log shows the mission ready, the range built, Phaselock's data, the audio play map, the start
 shield, and the HUD, inventory, skills, missions and mission-screen pages ready (`-GradeLog <log>` grades a log again). The
 route and what stays UNVERIFIED: [SANCTUARY_RPG_MISSION.md](verification/SANCTUARY_RPG_MISSION.md), "Hand play (updated)".
-Tests: `tests/play_slice_test.py` (CTest `play-slice-launcher`; synthetic data, starts nothing).
+Tests: `tests/play_slice_test.py` (CTest `play-slice-launcher`; synthetic data; the launch runs a stub editor and a stand-in lock, never Unreal).
 
 ### One Unreal run per machine
 
