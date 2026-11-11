@@ -80,7 +80,7 @@ private:
     void UpdatePatrol(float Now, float DeltaSeconds);
     void TurnToward(const FVector& Dir, float DeltaSeconds);
     void UpdateBrain(float Now, float DeltaSeconds);
-    void UpdateChase(const FVector& Target, bool bRun, float StopShort, float Now, float DeltaSeconds);
+    void UpdateChase(const FVector& Target, bool bRun, float StepLimit, float Now, float DeltaSeconds);
     void PlayMelee(float Now);
     void SetMoveAnim(bool bMoving, bool bRun = false);
     void UpdateHealthBars();

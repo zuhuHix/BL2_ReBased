@@ -17,7 +17,7 @@ struct FOpenWillowDamagePopup
 
 // Local Sanctuary combat stand-in until enemy pawn/AI data is hosted. It is a
 // host-made training dummy (engine shapes), not a BL2 enemy mesh or behavior.
-// True when the test switch -owcorpsenolimits runs with the kill row (-owrangekillrow): ragdolls then have no depenetration limit and no
+// True when the test switch -owcorpsenolimits runs with the kill row (-owrangestart -owrangekillrow): ragdolls then have no depenetration limit and no
 // speed caps. Ignored on any other run. The first call logs which applies.
 bool OpenWillowCorpseLimitsOff();
 

@@ -96,7 +96,7 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     const bool bInStartRange = bInVolume && (!bHasStartRange || FlatDistance <= In.SwingStartRange);
     // Where it stops running: the kind's live stand distance when it has one, but never inside body contact (its radius plus Maya's: the
     // enemy's root does not collide, so nothing else stops it there); else MeleeStopMargin inside its swing range (stand-in). With a live
-    // stand distance the enemy's last step is clamped to it (Orders.StopShort), so where it stands does not depend on the frame time.
+    // stand distance the enemy's last step is clamped to it (Orders.StepLimit), so where it stands does not depend on the frame time.
     const bool bLiveStand = In.StandDistance > 0.f;
     const float Contact = In.CollisionRadius + In.MayaRadius;
     const float StopAt = bLiveStand ? FMath::Max(In.StandDistance, Contact)
@@ -128,7 +128,9 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     Orders.bChase = (bAware || !bTargeting) && bHasTargetLocation;
     Orders.ChaseTo = TargetLocation;
     Orders.bRun = Orders.bChase && !bSwingPending && !(bAware && bInStop);
-    Orders.StopShort = (bAware && bLiveStand) ? StopAt : 0.f;
+    // Measured to where Maya is now, as the stop test is, not to ChaseTo (refreshed only on the state update): a Maya walking away is
+    // followed, not trailed by up to one update of her movement.
+    Orders.StepLimit = (bAware && bLiveStand) ? FMath::Max(0.f, FlatDistance - StopAt) : -1.f;
     Orders.bStandOnContact = bLiveStand && Contact > In.StandDistance;
     return Orders;
 }

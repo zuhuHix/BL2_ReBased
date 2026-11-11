@@ -80,9 +80,12 @@ class HostUsesTheRowsTest(unittest.TestCase):
         brain = text('OpenWillowEnemyAI.cpp')
         self.assertIn('const float Contact = In.CollisionRadius + In.MayaRadius;', brain)
         self.assertIn('FMath::Max(In.StandDistance, Contact)', brain)
-        self.assertIn('Orders.StopShort = (bAware && bLiveStand) ? StopAt : 0.f;', brain)
+        # Review r2: the limit is the gap to where Maya is now (FlatDistance), not to ChaseTo, which lags by up to one state update.
+        self.assertIn('Orders.StepLimit = (bAware && bLiveStand) ? FMath::Max(0.f, FlatDistance - StopAt) : -1.f;', brain)
         enemy = text('OpenWillowEnemy.cpp')
-        self.assertIn('if (StopShort > 0.f) Step = FMath::Min(Step, FMath::Max(0.f, Left - StopShort));', enemy)
+        self.assertIn('if (StepLimit > 0.f) Step = FMath::Min(Step, StepLimit);', enemy)
+        self.assertIn('if (!bRun || StepLimit == 0.f)', enemy)
+        self.assertNotIn('Left - StopShort', enemy)
         self.assertIn('is inside body contact', enemy)
 
     def test_the_enemy_fills_them_from_its_kind_and_says_where_they_came_from(self):
@@ -118,7 +121,13 @@ class CheckerTest(unittest.TestCase):
         # A slow editor frame makes a swing start late by up to that frame; the band's upper edge moves by exactly that much.
         self.assertIn('cycle', check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.017)))
         self.assertEqual(check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.05)), '')
-        self.assertIn('max_frame', check_range.kind_melee_problem(kind_line(max_frame=0.5)))
+        self.assertIn('max_frame', check_range.kind_melee_problem(kind_line(max_frame=-0.1)))
+
+    def test_a_stall_matters_only_when_the_allowance_is_needed(self):
+        # Review r2: one editor hitch in the step must not fail cycles that sit inside the plain band.
+        self.assertEqual(check_range.kind_melee_problem(kind_line(cycle=(1.250, 1.267), max_frame=0.25)), '')
+        problem = check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.25))
+        self.assertIn('stalled run, repeat it', problem)
         self.assertIn('lacks', check_range.kind_melee_problem(kind_line().replace(' max_frame=0.017', '')))
 
     def test_a_stand_inside_the_measured_band_needs_no_frame_allowance(self):

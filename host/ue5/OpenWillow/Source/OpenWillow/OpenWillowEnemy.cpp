@@ -419,7 +419,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     }
     if (Orders.bChase)
     {
-        UpdateChase(Orders.ChaseTo, Orders.bRun, Orders.StopShort, Now, DeltaSeconds);
+        UpdateChase(Orders.ChaseTo, Orders.bRun, Orders.StepLimit, Now, DeltaSeconds);
     }
     else
     {
@@ -428,7 +428,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     }
 }
 
-void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float StopShort, float Now, float DeltaSeconds)
+void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float StepLimit, float Now, float DeltaSeconds)
 {
     // Host stand-in (UNVERIFIED): turn toward Maya at 360 deg/s, run at the kind's RunSpeed (the walk clip when there is no run
     // clip) until the brain stops it inside the melee volume. Floor snapping as the patrol.
@@ -442,7 +442,9 @@ void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float StopS
         return;
     }
     FVector Dir = ToTarget / Left;
-    if (!bRun)
+    // Not running, or at its live stand distance with no step left (Maya inside it but outside the swing volume, for example far
+    // above): it turns to her and stands, with no run clip and no progress watch.
+    if (!bRun || StepLimit == 0.f)
     {
         TurnToward(Dir, DeltaSeconds);
         ChaseCheckAt = -1.f;
@@ -480,7 +482,7 @@ void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float StopS
 
     // A kind with a live stand distance does not run past it: the last step ends there, whatever the frame time.
     float Step = FMath::Min(Kind.RunSpeed * DeltaSeconds, Left);
-    if (StopShort > 0.f) Step = FMath::Min(Step, FMath::Max(0.f, Left - StopShort));
+    if (StepLimit > 0.f) Step = FMath::Min(Step, StepLimit);
     const FVector Next = Here + Dir * Step;
     FVector Floor;
     if (!TraceFloor(GetWorld(), FVector2D(Next.X, Next.Y), Here.Z + 100.f, Here.Z - 300.f, this, Floor))

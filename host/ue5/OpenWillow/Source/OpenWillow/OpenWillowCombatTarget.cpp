@@ -845,14 +845,15 @@ bool OpenWillowCorpseLimitsOff()
     static const bool bOff = []()
     {
         const bool bAsked = FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits"));
-        const bool bKillRow = FParse::Param(FCommandLine::Get(), TEXT("owrangekillrow"));
+        // The kill row's own condition (UOpenWillowRangeSubsystem::Initialize): -owrangestart and -owrangekillrow.
+        const bool bKillRow = FParse::Param(FCommandLine::Get(), TEXT("owrangestart")) && FParse::Param(FCommandLine::Get(), TEXT("owrangekillrow"));
         if (bAsked && bKillRow)
         {
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow corpse limits OFF (test switch -owcorpsenolimits with the kill row)"));
         }
         else if (bAsked)
         {
-            UE_LOG(LogTemp, Warning, TEXT("OpenWillow -owcorpsenolimits ignored: it is only for the kill row (-owrangekillrow)"));
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow -owcorpsenolimits ignored: it is only for the kill row (-owrangestart -owrangekillrow)"));
         }
         return bAsked && bKillRow;
     }();

@@ -47,7 +47,8 @@ ACCEPTANCE = {
     # stand: one baby, 347 samples, 106 to 118).
     "bullymong_baby": {"cycle": 1.133, "cycle_band": (1.128, 1.139), "stand": 111.0, "stand_band": (106.0, 118.0)},
 }
-# A frame longer than this is a stall, not a frame: the cycle allowance stops there (the host's state update is 0.2 s).
+# A frame longer than this is a stall, not a frame: the cycle allowance stops there (the host's state update is 0.2 s). It counts only when
+# a cycle is over its plain band; then the line asks for a rerun.
 MAX_FRAME = 0.2
 KEY_VALUE = re.compile(r"(\w+)=(\S+)")
 
@@ -66,11 +67,18 @@ def kind_melee_problem(detail):
         max_frame = float(fields["max_frame"])
     except (KeyError, ValueError):
         return "the line lacks cycle_min, cycle_max, stand_min, stand_max, first_swing, start_range or max_frame"
-    if not 0 <= max_frame <= MAX_FRAME:
-        return "max_frame %.3f s is not a frame time (0 to %.2f s): the cycle allowance would mean nothing" % (max_frame, MAX_FRAME)
+    if max_frame < 0:
+        return "max_frame %.3f s is not a frame time" % max_frame
     low, high = row["cycle_band"]
-    if not (low <= cycle[0] and cycle[1] <= high + max_frame):
-        return "cycle %.3f to %.3f s is outside the acceptance band %.3f to %.3f (+ max_frame %.3f)" % (cycle[0], cycle[1], low, high, max_frame)
+    # The allowance is needed only above the plain band; a long frame elsewhere in the step does not matter then.
+    if not (low <= cycle[0] and cycle[1] <= high):
+        if cycle[0] < low:
+            return "cycle %.3f to %.3f s is outside the acceptance band %.3f to %.3f" % (cycle[0], cycle[1], low, high)
+        if max_frame > MAX_FRAME:
+            return ("stalled run, repeat it: the cycle %.3f s is over the band's %.3f s and the step had a %.3f s frame, longer than the %.2f s "
+                    "the allowance covers" % (cycle[1], high, max_frame, MAX_FRAME))
+        if cycle[1] > high + max_frame:
+            return "cycle %.3f to %.3f s is outside the acceptance band %.3f to %.3f (+ max_frame %.3f)" % (cycle[0], cycle[1], low, high, max_frame)
     low, high = row["stand_band"]
     if not (low <= stand[0] and stand[1] <= high):
         return "stand %.0f to %.0f uu is outside the acceptance band %.0f to %.0f" % (stand[0], stand[1], low, high)

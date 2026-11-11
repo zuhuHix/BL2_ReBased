@@ -98,7 +98,8 @@ struct FOpenWillowBrainOrders
     FVector ChaseTo = FVector::ZeroVector;   // where Maya was last seen (the target's location, or a lost target's last-known spot)
     bool bRun = false;            // run at her (false inside the stop margin, or during a swing)
     bool bSwingStarted = false;   // a swing started this tick: play the melee clip
-    float StopShort = 0.f;        // with bRun, for a kind with a live stand distance: stop this far from ChaseTo (0 = no clamp)
+    float StepLimit = -1.f;       // with bRun, for a kind with a live stand distance: the most it may move this tick, the flat gap to
+                                  // Maya's current position minus the stop distance (never below 0); -1 = no limit
     bool bStandOnContact = false; // the live stand distance was inside body contact, so the stop is at contact
 };
 

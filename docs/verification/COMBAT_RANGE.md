@@ -177,7 +177,8 @@ was seen, though the frames cannot show floor contact, and the cap is holding th
 floor below them, 1.4 s and 3 s after death and just before the respawn, as well as which body was fastest and when. Each ragdoll logs its physics asset's bodies, constraints and the body pairs
 that do not collide. `tools/play_range.ps1 -KillRow -NoCorpseLimits` runs the kill row once without the depenetration limit and the speed caps, to see what they hide; it is a test switch (the host ignores `-owcorpsenolimits` without `-owrangekillrow` and logs one line at start-up either way), and how bodies
 are thrown in play does not change. None of this has run yet. The import's asset is auto-generated from the mesh, not the stock asset, so what these lines show is about the host's asset, and
-what they mean for the game's own is UNVERIFIED.
+what they mean for the game's own is UNVERIFIED. The floor trace looks for world static geometry only, so a body lying on another corpse, or on an object of
+another type, counts as "no floor below" (counted in the line) and is not measured against it.
 
 **The den read.** `tools/real_game/cash_capture.ps1` has a `den_read` stage after the cash read, with its own result (`stage_results` in `session.json`): the player
 stands immune 1,600 uu from an enemy with no input, and `scripts/den_probe.py` records melee calls, blows and positions. It reads one map's dens at one level; its
@@ -211,7 +212,7 @@ other record against it. Each value comes from one session and is UNVERIFIED bey
 | 2 | Adult stand distance | Den read: median 201 uu, 190 to 225, 181 samples, one adult; 192.0 to 198.2 at the damage moment (9 calls). No record disagrees: L-4 has the player "within about 300 uu", AI_AWARENESS_LIVE has members within 234 uu of her, and the radii of section 5 (adult 150, player 42) make contact 192 | 334 (394 - 60) | 201 | light as row 1; in engine: `kind_melee` `stand_min/max` in 190 to 225 | FAIL (334) | light PASS; engine not run |
 | 3 | Adult first swing inside the stock range | Den read: 368 uu, stock range 394 (one swing) | the rule since PR #133 | unchanged | `kind_melee` `first_swing` <= `start_range` | PASS (by the rule; not run) | engine not run |
 | 4 | Baby swing cycle (its grab) | Den read: mean 1.1334 s, 1.133 to 1.134, 31 gaps, two babies; no other record | 1.25 | 1.133 | light as row 1; in engine: `kind_melee` in 1.128 to 1.139 (+ `max_frame`) | FAIL (1.25) | light PASS; **the default range spawns no baby, so the engine check does not run there** |
-| 5 | Baby stand distance | Den read: median 111 uu, 106 to 118, 347 samples, one baby (the second was not sampled); 106.0 to 112.3 at the damage moment (31 calls) | 420 (480 - 60) | 111, but **184 in the host**: no stand goes inside body contact, and the host's baby has the borrowed adult-sized radius 150 (+ Maya's 34) | light as row 1; in engine as row 4, 106 to 118 | FAIL (420) | as row 4; when a baby is spawned this row FAILS on the body size, not on the rule |
+| 5 | Baby stand distance | Den read: median 111 uu, 106 to 118, 347 samples, one baby (the second was not sampled); 106.0 to 112.3 at the damage moment (31 calls) | 420 (480 - 60) | 111, but **192 in the host** (171 with Maya crouched): no stand goes inside body contact, and the host's baby has the borrowed adult-sized radius 150 (+ Maya's 42 standing, 21 crouched) | light as row 1; in engine as row 4, 106 to 118 | FAIL (420) | as row 4; when a baby is spawned this row FAILS on the body size, not on the rule |
 | 6 | Baby first swing inside the stock range | Den read: 425 uu, stock range 480 (one grab) | the rule | unchanged | as row 3 | PASS (by the rule) | as row 4 |
 | 7 | Regular bullymong: cycle and stand distance (three of the four default enemies) | **no live read** | 1.25 (the adult's), 260 (320 - 60) | unchanged | `melee_interval` (enemy 0 is a regular one) against its own value, 0.1 s | PASS (stand-in) | unchanged |
 | 8 | Slinger's melee, psycho | **no live read** of either swinging at the player (the den read's slingers only threw; its SavageLee swung at something 3,021 uu away) | 1.25, stop rule | unchanged | none | | |
@@ -231,7 +232,9 @@ don't: a row exists, four swings happened, and the first one started inside the 
 **What changed in the host.** `KindMeleeRows` (`OpenWillowEnemyAI.cpp`) gives the two kinds with a live read their cycle and stand distance. Every other kind
 keeps `SwingInterval` (1.25 s) and the old stop (60 uu inside its swing range). A live stand distance never goes inside body contact: the kind's collision
 radius plus Maya's capsule radius, because the enemy's root does not collide and nothing else stops it. When that floor applies, the enemy logs it once
-(`... is inside body contact ...: it stops at ...`). For the adult, 150 + 34 = 184 is under 201, so the floor does not apply. The enemy logs one line per spawn,
+(`... is inside body contact ...: it stops at ...`). Maya's radius is the walker's capsule: 42 standing (set in `BeginPlay`), 21 crouched. For the adult,
+150 + 42 = 192 is under 201 (171 crouched), so the floor does not apply. The run's last step is limited by the gap to Maya's current position, the same
+measure as the stop test, so an enemy follows a Maya who walks away instead of trailing her by one state update. The enemy logs one line per spawn,
 `OWRANGE enemy <name> kind_melee kind=... swing_interval=... stand=... source=live_read|stand-in_no_live_read`. So on the default range (three regular, one
 adult) the only behaviour that changes is where the adult stops: 201 uu instead of 334. A swing still starts once Maya is inside the stock range, so the
 adult's first swing still comes from up to 394 uu, and then it closes in.
@@ -251,6 +254,9 @@ throws, so its enemies only hit once they are close. A future read should captur
 - timing: take-off to landing (L-4 already has `Attack` to `Landed` 1.08 to 3.48 s, mean 1.68, n 157, kinds not separated), throw to impact, and the cycle between leaps or throws;
 - damage per blow, with momentum, and the definition or projectile behind each;
 - how often each kind leaps or throws compared with a plain swing.
+
+**Also open (host):** with Maya inside a kind's live stand distance but outside the swing volume (far above it, for example), the enemy stands and turns
+to her with no swing. Nothing else happens until she moves; that was so before this change as well (it ran under her then). What the game does there is unread.
 
 ## Live-read questions from the acceptance table
 
