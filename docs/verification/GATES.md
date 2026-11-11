@@ -71,9 +71,9 @@ that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11.
 | `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
 | all 18 `*_test.js` (`hud_*`, `inventory_*`, `map_screen`, `mission_log`, `mission_screen`, `pickup_card`, `skill_*`, `status_page_keys`, `vending*`) | need Node; CI does not install it (a maintainer decision) | 18/18 pass with Node 26.4 |
 
-Notes: a test that skips cases there, or skips all of them, does not count as passing. Five registered tests skip off Windows
-(`check_overlay_data`, `lootables_editor`, `private_sync`, `run_limit`, `serve_paths`: junctions, PowerShell launchers); CI runs
-on Windows, so they run there. `private_sync` also skips its UNC alias case without an administrative share. `game_colours` and
+Notes: a test that skips cases there, or skips all of them, does not count as passing. Four registered tests skip cases off Windows
+(`check_overlay_data`, `lootables_editor`, `private_sync`, `run_limit`: junctions, PowerShell launchers); CI runs
+on Windows, so they run there. `serve_paths` skips nothing: it makes a directory symlink, and on Windows falls back to a junction when that is refused. `private_sync` also skips its UNC alias case without an administrative share. `game_colours` and
 `prepare_hud_strings` create `local/` in a clean checkout (the second leaves it empty); it is git-ignored and harmless. The slowest registered entry
 that starts processes, `run_limit` (about 40 PowerShell runs), took 11.2 s on CI (PR #219, run 43062806521) and 15.4 s here, well under
 its 120 s timeout. On that CI run (Python 3.12) the new entries took 66 s of 172 s with LZO on.

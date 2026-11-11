@@ -1,5 +1,6 @@
 """tools/lootables_editor.py writes only under the repository's ignored local/ (synthetic paths, nothing game-derived)."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -22,6 +23,7 @@ class LocalOutputTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'must be inside'):
                 editor.local_output(value)
 
+    @unittest.skipUnless(os.name == 'nt', 'makes the link with a Windows junction (cmd /c mklink /J)')
     def test_a_local_folder_that_is_a_link_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             repo = Path(folder) / 'repo'

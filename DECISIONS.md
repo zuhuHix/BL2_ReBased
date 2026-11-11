@@ -4735,3 +4735,4 @@ AI-assisted (Claude Opus 5.5). Test registration only: no tool, parser or host b
 - **Verified (automated, zuhu desktop, Python 3.14.6):** ctest 119/119 (34 before), the new entries 76 s of the 211 s run; verify_packages 9 packages, all class bodies exact; the 18 JS tests 18/18 with Node 26.4.
 - **Not verified:** Python 3.12, which CI uses, was not available here; the first CI run is that check.
 - **Correction (review r1, PR #219).** `tests/slice_npc_assets_test.py` skips its only test class without numpy and exits 0, so on CI it would have passed having run nothing. It moved to the numpy group: 84 tests registered, 16 need numpy or Pillow, ctest 118. A test now counts as passing in a bare Python only if none of its cases skipped; none of the other 84 skipped there.
+- **Python 3.12 (review r2).** Checked on CI: run 43062806521 on 8324b15 used Python 3.12, and every ctest entry passed (LZO on 119/119, LZO off 117/117).
