@@ -111,6 +111,9 @@ The PR template asks for:
 
 `main` always builds; CI runs the synthetic suites on every PR.
 
+CI and the `pre-push` hook run the leak gate (`python tools/leak_gate.py --range origin/main..HEAD`), which refuses game files, decompiler output, dumps and personal identifiers.
+On a finding, fix the content or ask the maintainer for an allow-list entry ([docs/TOOLING.md](docs/TOOLING.md), "Leak gate").
+
 ## AI coding tools
 
 This is a solo project and AI coding tools are part of its workflow; the

@@ -1,0 +1,43 @@
+# Leak gate allow-list. The maintainer owns this file: an entry is a maintainer decision, like THIRD_PARTY.md.
+# Format: <rule> <path glob> [sha256=<64 hex>] -- <reason>, or allowed-address <exact address> -- <reason>     ('*' in a glob also matches '/'; matching is case-sensitive)
+# An entry exempts exactly one rule for the paths its glob matches. In a pull request the gate reads this file
+# from the base commit, so an entry must land on main before the change that needs it.
+
+# Files the tree may hold that would otherwise trip a rule.
+# The README banner is pinned by its sha256: a changed banner is refused until this hash is updated.
+forbidden-type .github/assets/banner.png sha256=ef4ee8db8fe65dc18f68947a99e8b21c4b07c3d49574755aff37a7343912c401 -- README banner, official promotional art, not a game file (docs/LEGAL.md)
+binary .github/assets/banner.png sha256=ef4ee8db8fe65dc18f68947a99e8b21c4b07c3d49574755aff37a7343912c401 -- README banner (docs/LEGAL.md)
+oversize .github/assets/banner.png sha256=ef4ee8db8fe65dc18f68947a99e8b21c4b07c3d49574755aff37a7343912c401 -- README banner, about 2.1 MB (docs/LEGAL.md)
+# The project's own UE5 configuration. Every .ini is still checked for the game's (UE3) section form (game-config).
+forbidden-type host/ue5/OpenWillow/Config/*.ini -- UE5 project settings written for this project, not game configuration
+
+# File types origin/main held on 2026-11-11 (git ls-files census). A type not listed here is reported as a
+# warning, not refused; add it here once it is meant to stay.
+unknown-type *.py -- Python tools, research prototypes and tests
+unknown-type *.md -- documentation
+unknown-type *.cpp -- C++ core and UE5 module sources
+unknown-type *.h -- C++ headers
+unknown-type *.hpp -- C++ headers
+unknown-type *.ps1 -- PowerShell tools
+unknown-type *.js -- HUD overlay scripts and their tests
+unknown-type *.svg -- hand-made README icons and diagrams
+unknown-type *.html -- HUD overlay pages
+unknown-type *.json -- tool configuration, synthetic test cases, research summaries
+unknown-type *.yml -- GitHub workflow and issue templates
+unknown-type *.txt -- tool lists and CMake files
+unknown-type *.schema -- tool array schemas
+unknown-type *.cs -- UE5 build rules
+unknown-type *.java -- Ghidra headless scripts (own code)
+unknown-type *.uproject -- UE5 project file
+unknown-type *.sh -- shell scripts
+unknown-type *.attributes -- git attribute fragments
+unknown-type .gitignore -- git configuration
+unknown-type .gitattributes -- git configuration
+unknown-type LICENSE -- project license
+unknown-type third_party/*/LICENSE -- vendored code licenses
+unknown-type .githooks/* -- git hooks (no extension by git's convention)
+
+# Exact e-mail addresses allowed in content and in commit metadata, besides GitHub's per-user noreply form
+# (<id>+<login>@users.noreply.github.com) and reserved example domains, which the gate allows by itself.
+allowed-address noreply@anthropic.com -- the Co-Authored-By trailer of AI-assisted commits (879 on main on 2026-11-11)
+allowed-address noreply@github.com -- GitHub's committer address on merges and web edits (51 on main on 2026-11-11)

@@ -1,0 +1,137 @@
+#!/bin/sh
+# OPENWILLOW_LEAK_GATE
+
+# Git runs this hook as: pre-push <remote name> <remote url>, with one line per pushed ref on stdin
+# ("<local ref> <local sha> <remote ref> <remote sha>"). It refuses the push on a leak gate finding, and whenever
+# it cannot establish what it needs: there is no fallback.
+#
+# Whatever the push target (a remote name, another remote, a URL), the push is judged by the gate and lists that
+# origin's main holds: refs/remotes/origin/main is refreshed from origin before every run, and the push is refused
+# when that fetch fails or main holds no gate. The one way out is a bootstrap run by the hub, for landing a gate
+# that main does not hold yet: OPENWILLOW_LEAK_GATE_BOOTSTRAP=<the full id of the commit whose gate and lists to
+# use>. It is printed in the output and is temporary (docs/TOOLING.md, "Leak gate").
+#
+# The interpreter must live outside this checkout and runs isolated (-I: no PYTHON* variables, no user site, no
+# script or current folder on the module path; -S: no site module, so no sitecustomize or .pth file of a virtual
+# environment runs; the gate needs only the standard library); the trusted copy runs from a temporary folder
+# outside the checkout. The fetch of origin's main keeps the clone's own git configuration (its ssh command and
+# credential helper), which is trusted: it is the configuration every push of this clone uses anyway. Nothing from the push target is printed: a URL can carry a token.
+# Installed by tools/install_worktree_assets_hook.ps1 or `python tools/leak_gate.py --install-hook`.
+set -u
+
+TRUSTED="refs/remotes/origin/main"
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "leak gate: not inside a git checkout, so the push was refused." >&2; exit 1; }
+canonical() {  # $1: a folder; its canonical form (Git Bash: the Windows path, so /tmp and /c/.../Temp agree)
+    (cd "$1" 2>/dev/null && { pwd -W 2>/dev/null || pwd -P; })
+}
+ROOT_REAL=$(canonical "$ROOT") || { echo "leak gate: the checkout folder cannot be resolved, so the push was refused." >&2; exit 1; }
+[ -n "$ROOT_REAL" ] || { echo "leak gate: the checkout folder cannot be resolved, so the push was refused." >&2; exit 1; }
+
+inside_checkout() {  # $1: a file or folder; true when it lies inside this checkout, or cannot be resolved
+    if [ -d "$1" ]; then DIR=$(canonical "$1") || return 0
+    else DIR=$(canonical "$(dirname "$1")") || return 0
+    fi
+    [ -n "$DIR" ] || return 0
+    LOW_DIR=$(printf '%s/' "$DIR" | tr 'A-Z' 'a-z')
+    LOW_ROOT=$(printf '%s/' "$ROOT_REAL" | tr 'A-Z' 'a-z')
+    case "$LOW_DIR" in "$LOW_ROOT"*) return 0 ;; esac
+    # Ask git as well: a folder whose work tree is this checkout lies inside it, however its path is spelt.
+    TOP=$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null) || return 1
+    LOW_TOP=$(printf '%s/' "$(canonical "$TOP")" | tr 'A-Z' 'a-z')
+    [ "$LOW_TOP" = "$LOW_ROOT" ] && return 0
+    return 1
+}
+
+# Git calls below read local objects only: replace objects off, no system or global configuration, no pager,
+# external diff or optional lock. (The fetch keeps the user's configuration: it needs their credentials.)
+EMPTY_CONFIG_DIR=$(mktemp -d 2>/dev/null) || { echo "leak gate: no temporary folder, so the push was refused." >&2; exit 1; }
+trap 'rm -rf "$EMPTY_CONFIG_DIR"' EXIT
+: > "$EMPTY_CONFIG_DIR/empty.gitconfig"
+lgit() {
+    env -u GIT_EXTERNAL_DIFF -u GIT_REPLACE_REF_BASE -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
+        GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_PAGER=cat GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL="$EMPTY_CONFIG_DIR/empty.gitconfig" git --no-replace-objects "$@"
+}
+
+# The first interpreter outside the checkout that really runs Python 3 (the Windows Store alias does not):
+# OPENWILLOW_PYTHON (a path), else every PATH entry in order, for python3, python and py. One inside the checkout
+# is skipped, never run, so a planted interpreter earlier on PATH neither runs nor hides the real one.
+PYTHON=""
+try_python() {  # $1: a file; sets PYTHON when it is a usable interpreter outside the checkout
+    [ -f "$1" ] && [ -x "$1" ] || return 1
+    if inside_checkout "$1"; then
+        echo "leak gate: WARN skipped an interpreter that lies inside the checkout." >&2
+        return 1
+    fi
+    "$1" -I -S -c 'import sys; sys.exit(sys.version_info < (3, 8))' </dev/null >/dev/null 2>&1 || return 1
+    PYTHON="$1"
+    return 0
+}
+if [ -n "${OPENWILLOW_PYTHON:-}" ]; then
+    FOUND=$(command -v "$OPENWILLOW_PYTHON" 2>/dev/null) && try_python "$FOUND"
+fi
+if [ -z "$PYTHON" ]; then
+    SAVED_IFS=$IFS
+    for NAME in python3 python py; do
+        IFS=:
+        for DIR in $PATH; do
+            IFS=$SAVED_IFS
+            [ -n "$DIR" ] || continue
+            for FILE in "$DIR/$NAME" "$DIR/$NAME.exe"; do
+                if try_python "$FILE"; then break 3; fi
+            done
+            IFS=:
+        done
+        IFS=$SAVED_IFS
+    done
+    IFS=$SAVED_IFS
+fi
+if [ -z "$PYTHON" ]; then
+    echo "leak gate: no Python 3 outside the checkout found (set OPENWILLOW_PYTHON), so the push was refused." >&2
+    exit 1
+fi
+
+BOOT="${OPENWILLOW_LEAK_GATE_BOOTSTRAP:-}"
+if [ -n "$BOOT" ]; then
+    case "$BOOT" in
+        *[!0-9a-f]*) echo "leak gate: OPENWILLOW_LEAK_GATE_BOOTSTRAP must be a full commit id, so the push was refused." >&2; exit 1 ;;
+    esac
+    if [ "${#BOOT}" -ne 40 ] && [ "${#BOOT}" -ne 64 ]; then
+        echo "leak gate: OPENWILLOW_LEAK_GATE_BOOTSTRAP must be a full commit id, so the push was refused." >&2; exit 1
+    fi
+    SOURCE="$BOOT"
+    echo "leak gate: WARN BOOTSTRAP run: judging this push with the gate and lists of commit $BOOT, not origin's main (temporary; docs/TOOLING.md, \"Leak gate\")." >&2
+else
+    if ! git --no-replace-objects -c core.fsmonitor=false fetch --quiet origin "+refs/heads/main:$TRUSTED" </dev/null >/dev/null 2>&1; then
+        echo "leak gate: the trusted copy of main could not be refreshed from origin, so the push was refused." >&2
+        echo "leak gate: fix the connection to origin and push again (docs/TOOLING.md, \"Leak gate\")." >&2
+        exit 1
+    fi
+    SOURCE="$TRUSTED"
+fi
+if ! lgit cat-file -e "$SOURCE^{commit}:tools/leak_gate.py" 2>/dev/null; then
+    echo "leak gate: the trusted commit holds no tools/leak_gate.py, so the push was refused." >&2
+    echo "leak gate: only the hub may run a bootstrap push for a gate main does not hold yet (docs/TOOLING.md, \"Leak gate\")." >&2
+    exit 1
+fi
+
+WORK=$(mktemp -d 2>/dev/null) || { echo "leak gate: no temporary folder, so the push was refused." >&2; exit 1; }
+trap 'rm -rf "$EMPTY_CONFIG_DIR" "$WORK"' EXIT
+if inside_checkout "$WORK"; then
+    echo "leak gate: the temporary folder lies inside the checkout, so the push was refused." >&2
+    exit 1
+fi
+lgit show "$SOURCE^{commit}:tools/leak_gate.py" > "$WORK/leak_gate.py" || {
+    echo "leak gate: could not read the trusted gate, so the push was refused." >&2; exit 1; }
+
+"$PYTHON" -I -S "$WORK/leak_gate.py" --pre-push origin --config-from "$SOURCE"
+STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+    if [ "$STATUS" -eq 1 ]; then
+        echo "leak gate: push refused. Fix the finding above, or ask the maintainer for an entry in tools/leak_gate_allow.txt." >&2
+    else
+        echo "leak gate: the gate could not run (exit $STATUS), so the push was refused." >&2
+    fi
+    exit 1
+fi
+exit 0

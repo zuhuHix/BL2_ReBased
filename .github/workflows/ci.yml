@@ -90,3 +90,93 @@ jobs:
           if ./build/Release/ow-package.exe; then
             echo "expected a non-zero exit with no arguments"; exit 1
           fi
+
+  leak-gate:
+    # tools/leak_gate.py (docs/TOOLING.md, "Leak gate"): game files, decompiler output, dumps and personal
+    # identifiers. A separate job with no path filter, so it can be made a required check. The gate script and its
+    # lists come from the trusted commit (the pull request's base, or the commit main held before a push), so a
+    # change cannot weaken the check that judges it. Only while that commit holds no gate does the job bootstrap
+    # with the change's own copy, and it says so. This job runs after publication: it is detection, not prevention.
+    name: Leak gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Pick the trusted gate
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          TRUSTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          GATE="$RUNNER_TEMP/leak_gate.py"
+          TRUSTED="${TRUSTED_SHA:-}"
+          RANGE_MODE=range
+          # A stacked pull request's base is its parent branch: that branch's gate and lists judge it.
+          if [ "$EVENT" = workflow_dispatch ]; then
+            TRUSTED=$(git rev-parse --verify --quiet "refs/remotes/origin/main^{commit}" || true)
+            echo "WARN a manual run: every commit the head reaches is judged, with main's gate and lists"
+            RANGE_MODE=whole
+          elif [ "$TRUSTED" = "0000000000000000000000000000000000000000" ]; then
+            echo "WARN a first push: no earlier main exists, so every commit is judged with the head's own gate and lists"
+            TRUSTED=""
+            RANGE_MODE=whole
+          elif [ -n "$TRUSTED" ] && ! git cat-file -e "$TRUSTED^{commit}" 2>/dev/null; then
+            git fetch --quiet origin "$TRUSTED" 2>/dev/null || true
+            if ! git cat-file -e "$TRUSTED^{commit}" 2>/dev/null; then
+              echo "::error::the trusted commit (the base, or main before this push) cannot be fetched: nothing was judged"
+              exit 1
+            fi
+          fi
+          if [ -n "$TRUSTED" ] && git cat-file -e "$TRUSTED:tools/leak_gate.py" 2>/dev/null; then
+            git show "$TRUSTED:tools/leak_gate.py" > "$GATE"
+            CONFIG_FROM="$TRUSTED"
+          elif [ -n "$TRUSTED" ]; then
+            echo "WARN BOOTSTRAP: the trusted commit $TRUSTED holds no gate; judging with the gate and lists of $HEAD_SHA"
+            git show "$HEAD_SHA:tools/leak_gate.py" > "$GATE"
+            CONFIG_FROM="$HEAD_SHA"
+          else
+            echo "WARN no trusted commit for this event; judging with the gate and lists of $HEAD_SHA"
+            git show "$HEAD_SHA:tools/leak_gate.py" > "$GATE"
+            CONFIG_FROM="$HEAD_SHA"
+          fi
+          {
+            echo "LEAK_GATE=$GATE"
+            echo "TRUSTED_SHA=$TRUSTED"
+            echo "CONFIG_FROM=$CONFIG_FROM"
+            echo "RANGE_MODE=$RANGE_MODE"
+            echo "HEAD_SHA=$HEAD_SHA"
+          } >> "$GITHUB_ENV"
+
+      - name: Commits, added lines and blobs
+        shell: bash
+        run: |
+          if [ "$RANGE_MODE" = whole ]; then
+            python -I "$LEAK_GATE" --range "..$HEAD_SHA" --whole-history --config-from "$CONFIG_FROM"
+          elif [ -n "$TRUSTED_SHA" ] && [ "$GITHUB_EVENT_NAME" = push ]; then
+            # After a push to main the checkout's origin/main already sits at the pushed head: the range's own base
+            # (main before the push) bounds the walk, so the trusted-ref exclusion is turned off.
+            python -I "$LEAK_GATE" --range "$TRUSTED_SHA..$HEAD_SHA" --config-from "$CONFIG_FROM" --no-trusted-exclude
+          elif [ -n "$TRUSTED_SHA" ]; then
+            python -I "$LEAK_GATE" --range "$TRUSTED_SHA..$HEAD_SHA" --config-from "$CONFIG_FROM"
+          else
+            echo "::error::no trusted commit to judge the range against (an event without a base): nothing was judged"
+            exit 1
+          fi
+
+      - name: Pull request title and description
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" | python -I "$LEAK_GATE" --text - --label pr-description --config-from "$CONFIG_FROM"
+
+      - name: Whole tree against the baseline
+        if: github.event_name != 'pull_request'
+        run: python -I "$LEAK_GATE" --all HEAD --config-from "$CONFIG_FROM"

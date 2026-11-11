@@ -1,0 +1,12 @@
+# Leak gate baseline: findings that were already on main when the gate arrived.
+# One line per rule, path and hash of the flagged line (never the line itself), with a count.
+# Written by tools/leak_gate.py --write-baseline from --all origin/main. Only findings not listed here fail.
+# Remove a line when its content is fixed; never add one by hand to let a new finding through.
+address-hex	docs/verification/NATIVE_USE_INTERACTION.md	2ebfbcd1a92d5b06	1
+address-hex	docs/verification/NATIVE_USE_INTERACTION.md	5acf4b0079468d47	1
+dump	research/native_by_class.json	5ec088d6379b500f	1
+unknown-type	ash-refresh.log	d589c600cebe51b4	1
+user-path	THIRD_PARTY.md	b17d69897a829019	1
+user-path	THIRD_PARTY.md	bab14509bca6d6b7	1
+user-path	THIRD_PARTY.md	d327c536e7bc83db	1
+user-path	THIRD_PARTY.md	e4534c448fa142da	1

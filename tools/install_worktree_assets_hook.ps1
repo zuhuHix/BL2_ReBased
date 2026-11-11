@@ -48,7 +48,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'worktree_seed_folders.txt') -De
 & $SeedProvisioner -FillSeedFrom $RepositoryRoot -SeedDirectory $SeedRoot
 if ($LASTEXITCODE -ne 0) { throw 'Filling the worktree seed failed (see the messages above).' }
 
-# 3. The post-checkout hook.
+# 3. The post-checkout hook, then the leak gate's pre-push hook (step 3b).
 $HookSource = Join-Path $RepositoryRoot '.githooks\post-checkout'
 $HooksDirectory = (& git -C $RepositoryRoot rev-parse --git-path hooks).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the Git hooks directory.' }
@@ -78,6 +78,22 @@ if ($LASTEXITCODE -ne 0) { throw "Could not make the hook executable: $HookDesti
 Remove-Item Env:\OPENWILLOW_HOOK_PATH
 Remove-Item Env:\OPENWILLOW_HOOK_UNIX_PATH
 
+# 3b. The pre-push hook that runs tools/leak_gate.py on every push (docs/TOOLING.md, "Leak gate"). Same rules as
+# above: an existing pre-push hook that is not ours is left untouched. The file is written with LF line endings.
+$PushHookDestination = Join-Path $HooksDirectory 'pre-push'
+if (Test-Path -LiteralPath $PushHookDestination) {
+    $ExistingPushHook = [IO.File]::ReadAllText($PushHookDestination)
+    if ($ExistingPushHook -notmatch 'OPENWILLOW_LEAK_GATE') {
+        throw "An existing pre-push hook was left untouched: $PushHookDestination"
+    }
+}
+$PushHookText = [IO.File]::ReadAllText((Join-Path $RepositoryRoot '.githooks\pre-push')) -replace "`r`n", "`n"
+[IO.File]::WriteAllText($PushHookDestination, $PushHookText, (New-Object Text.UTF8Encoding $false))
+$env:OPENWILLOW_HOOK_PATH = $PushHookDestination
+& $GitBashPath -lc 'chmod +x "$(cygpath -u "$OPENWILLOW_HOOK_PATH")"'
+if ($LASTEXITCODE -ne 0) { throw "Could not make the hook executable: $PushHookDestination" }
+Remove-Item Env:\OPENWILLOW_HOOK_PATH
+
 # 4. A manifest of what the seed holds (informational; nothing reads it).
 $Folders = [ordered]@{}
 foreach ($Name in @('Content') + @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'worktree_seed_folders.txt') -Encoding UTF8 |
@@ -95,4 +111,5 @@ $Manifest = [ordered]@{
 $Manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SeedRoot 'manifest.json') -Encoding utf8
 
 Write-Output "Installed shared post-checkout asset seeding at $HookDestination"
+Write-Output "Installed the leak gate pre-push hook at $PushHookDestination"
 Write-Output "Seed cache: $SeedRoot (Content: $($Folders['Content']) files)"

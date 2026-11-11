@@ -124,6 +124,137 @@ or with no argument (every title with its file and line), rather than opening th
 for a native name or a note file: `python tools/native_index_find.py <fragment> [...] [--note NAME]`.
 The synthetic tests are `tests/decisions_index_test.py` and `tests/native_index_find_test.py`.
 
+## Leak gate
+
+`tools/leak_gate.py` (plain Python, no dependency, no network) refuses some of what this repository must never
+publish. Where it stands, as the maintainer decided on 2026-11-11: the publishing ban stays in every brief, and every
+PR keeps an independent review. Only the coordinator (the hub) publishes branches, through this gate. The
+`pre-push` hook can be bypassed (`--no-verify`, a clone without it), so it is a backstop, not a guarantee. The
+`Leak gate` CI job runs after publication, so it detects; it does not prevent. When the gate cannot establish
+something, it refuses: it never guesses and never downgrades.
+
+```powershell
+python tools/leak_gate.py --range origin/main..HEAD     # every commit a branch adds, its blobs, messages, authors
+python tools/leak_gate.py --staged                      # the staged changes
+python tools/leak_gate.py --all HEAD                    # the whole tree, against the baseline
+python tools/leak_gate.py --text pr.md                  # free text, e.g. a PR description (- reads stdin)
+```
+
+Exit 0 is clean (warnings may be printed), 1 means at least one error, 2 means it could not run (bad arguments, no
+trusted lists, a broken config file, a git failure, an object it cannot read, input it cannot parse); 2 is never
+clean. With `--strict` (the coordinator's publish path), a run with no error but any warning other than
+`stale-baseline` exits 3; the summary line always names the warnings' rules. The hook and CI run without it. A finding prints its rule, `path:line`, the commit it came from, and a masked excerpt (at most the first
+four characters and the length; none at all for e-mail addresses and private names). A path that is itself the
+finding, or that holds an identifier or a control character, is masked too; `--show-paths` prints it for local use.
+Messages never quote the scanned input, an argument or a policy line.
+
+| Rule | Level | What it refuses |
+|---|---|---|
+| `forbidden-type` | error | game files (packages including script packages, texture caches, audio banks, movies, UI movies, saves, `.ini`), analysis databases, Unreal assets, UModel and other mesh, skeleton and animation exports, images, decoded audio and video. A name is normalised first (trailing dots and spaces, an alternate-stream suffix) |
+| `game-config` | error | a section in the game's UE3 form (`[Package.Class]`, `[IniVersion]`, a BOM or a trailing comment allowed): one in a `.ini`, two in any other text file. UE5's own `[/Script/...]` and `[Core.*]` sections pass |
+| `binary`, `oversize` | error | a binary file (a NUL byte in the first 8000 bytes, or decoded text holding a NUL) or a file over 1 MiB, outside the allow-list. Messages, names and PR text with NUL bytes are `binary` too |
+| `undecodable` | error | text that is neither UTF-8 (with or without a BOM) nor BOM-marked UTF-16 or UTF-32; it is still scanned with replacement characters |
+| `gitlink`, `lfs-pointer` | error | a submodule entry or a Git LFS pointer: content stored outside the tree, which the gate cannot see |
+| `local-path` | error | anything under `local/`, `build/` or the UE output folders (any letter case), and `Bl2Screens/` or `PromptUpgrade.md` anywhere |
+| `decompiler-mark` | error | names decompilers generate (Ghidra and IDA auto-names with an address suffix, their variable and register names, their sized types and helper calls), in every text file |
+| `decompiler-note-mark` | error | parameter and local names in the decompiler's numbered form and member access through `this`, in prose only (Markdown, text, HTML, commit and tag messages, PR text); `this` access inside a fenced block or an inline code span passes, since records quote the project's own code |
+| `dump` | error | rows of two-digit hex bytes (`4d` or `0x4d`; 8 or more lines, 48 or more bytes, some a-f digits), hex dump rows with offsets, base85 lines, and hex or base64 text however it is wrapped or quoted: each line is reduced to a fragment (quotes, commas, semicolons, brackets, `+` and `\x` removed) and a run of hex or base64 fragments joined to 160 hex digits or 256 base64 characters is refused, as is a base64 `data:` URI of 64 or more characters (also when split after its `base64,`), escaped bytes, and a numeric table about ten times larger than anything tracked (64 lines or 512 numbers in prose, 128 lines or 1024 numbers in code and data, 512 numbers on one line), per run and summed over the file, so a table cut into chunks adds up; a baselined sum covers that exact content (a hash of the numeric lines), so a changed value, or the file removed and added again, is judged anew. Base64 runs are judged joined (wrapped encodings share one line width). SVG skips only the numeric checks |
+| `email` | error | an address that is not GitHub's per-user noreply form (`<id>+<login>@users.noreply.github.com`), an exact `allowed-address` entry of the allow-list, a reserved example domain, or an image named for a pixel density (`icon@2x.png`). One function decides for file content and for the author, committer and tagger of every new commit and tag |
+| `user-path` | error | an absolute path inside a user profile: a drive, UNC or Git Bash root, then `Users`, `home` or `Documents and Settings`, with one to four slashes or backslashes (escaped JSON). Placeholders, variables and URL paths pass |
+| `account-id`, `credential` | error | Steam account ids; well-known token prefixes, JWTs, Slack and Discord webhook URLs and private-key blocks (encrypted ones too) |
+| `private-name` | error | a token from the private names list `local/leak_gate_names.txt` (ignored, never tracked; `OPENWILLOW_LEAK_NAMES` overrides the path). Its baseline sits next to it, not in the tracked baseline. The summary line says whether a list was found; without one the rule is not checked, as in CI |
+| `object-format` | error | a commit or tag header the gate does not know, an object id or type header of the wrong shape, or a signature block that is not armoured base64: what the gate cannot read is refused |
+| `dump-like` | warning | a numeric table larger than any the tree holds (8 lines and 48 numbers, 24 lines, or 64 numbers on one line), or 8 or more lines of hash-length hex (a hash list): reported, refused only at the `dump` sizes. Measured once on 2026-11-11: the longest numeric run is 6 lines with 12 numbers (`docs/verification/WEAPON_VISUALS.md`), the most numbers on one line 28 (`host/ue5/import_weapon_paint.py`), 24 in `tests/` (`tests/collision_test.py`); the only file whose numeric lines add up past the error size is `research/native_by_class.json`, held by the baseline as it is |
+| `unknown-type` | warning | a new file whose type the tree has never held |
+| `address-hex` | warning | a hex value in prose shaped like an address in the executable; constants share that range, so it is not refused |
+| `local-copy` | warning | a changed file byte-identical to a file under `local/` (64 bytes or more; copies of the repository itself under `local/` are skipped) |
+| `inspection-incomplete` | warning | the `local/` copy check could not list or read part of `local/`: it says which part, it is never silent |
+| `gate-change` | warning | the change edits or deletes the gate, its lists, `.githooks/`, `.github/workflows/` or a `.gitattributes` or `.gitmodules` (a deletion is named first, as `DELETES`): it needs the maintainer's yes before landing |
+| `stale-baseline` | warning | (`--all`) a baseline entry whose line is gone |
+
+The identifier rules (`email`, `user-path`, `account-id`, `credential`, `private-name`) also run over file names and
+over signature bodies (which are otherwise exempt from the blob shapes, being base64 by nature). Author, committer
+and tagger names and ref names get every content rule (decompiler marks and blob shapes too) and a limit of 160
+characters; tag names, encodings and armour headers get the prose rules. A shallow clone or a `.git/info/grafts`
+file can hide commits: then every outgoing commit must have its recorded parents present and listed as recorded,
+or nothing is judged.
+
+**How it judges a change.** Every commit that the pushed head reaches and that neither the destination's old value
+nor `refs/remotes/origin/main` reaches is compared with its first parent, and every new blob in that set is scanned
+whole, so content added in one commit and removed in the next is still caught. Nothing else is excluded: a graph no
+trusted ref reaches (an orphan branch, say) is judged whole, whatever other remotes have cached. A merge takes
+nothing from another parent as new: a file identical to another parent's is skipped, and a line counts as added
+only when it occurs more often than in every parent. Added lines come from comparing the blobs, not from `git diff`,
+so git attributes and diff drivers cannot hide them; a line is added when its content (whitespace aside) occurs more
+often than before. Moving a line adds nothing; a second copy does, and an added line is never covered by the
+baseline. A renamed file is a new path, so a baselined line in it is judged again and refused until its content is
+fixed. Every commit and tag header is read (unknown ones refused), annotated tags and merged tags included, and each
+ref of a push is judged on its own; the local source of a push may be a ref, `HEAD` or a raw commit id. The gate's git
+calls ignore replace refs and run without system or global configuration, pager, external diff or text conversion;
+the clone's own configuration still takes part. The hook's fetch of `origin/main` keeps the user's configuration,
+because it needs their credentials.
+
+**Whose gate and whose lists.** The hook runs the copy of `tools/leak_gate.py` that `origin`'s `main` holds, fetched
+into `refs/remotes/origin/main` before every run, whatever the push target, and reads the allow-list and baseline
+from the same commit. It refuses the push when that fetch fails or that commit holds no gate. There is no fallback to
+the working tree or the branch. CI runs the pull request base's copy (for a stacked PR, the parent branch it is
+based on) with that commit's lists; on a push to `main`, the copy `main` held before the push, over the range from
+that commit, with the trusted-ref exclusion off (`--no-trusted-exclude`, since the checkout's `origin/main` already
+sits at the pushed head). A push whose previous `main` cannot be fetched fails the job; a manual run judges every
+commit with `main`'s gate; a first push judges every commit with the head's own gate, and says so. The gate itself refuses in
+range, staged, pre-push and text mode when the trusted commit cannot be found or holds no lists.
+
+**Bootstrap: landing a gate that `main` does not hold, or a gate fix the old gate cannot judge.** This is the one
+way out, temporary, and only the hub runs it, after the maintainer's yes on that exact change:
+1. The fix is reviewed like any PR and carries the `gate-change` warning; the maintainer says yes to it.
+2. The hub pushes with `OPENWILLOW_LEAK_GATE_BOOTSTRAP=<the full id of the commit whose gate and lists judge the
+   push>`, normally the fix's own head. The hook prints that id; it judges with that commit's gate and lists.
+3. CI does the same by itself only while the trusted commit holds no gate at all (`WARN BOOTSTRAP` in the log); once
+   a gate is on `main`, CI judges with `main`'s copy, so a fix that `main`'s gate refuses shows red until it lands,
+   and the hub lands it on the maintainer's yes.
+4. After the first landing of this tool, step 3 no longer happens; steps 1 and 2 stay for later gate fixes.
+
+Two files configure it. `tools/leak_gate_allow.txt` belongs to the maintainer: `<rule> <path glob> [sha256=<hex>] --
+<reason>` per line, one rule per entry, with a hash for a pinned binary (the README banner), and `allowed-address
+<address> -- <reason>` for the exact addresses allowed (today the Co-Authored-By trailer and GitHub's web committer).
+`tools/leak_gate_baseline.txt` lists the findings that were on `main` when the gate arrived, by rule, path and a hash
+of the line, never the line; `--all` warns about entries whose line is gone. Regenerate it only for content that
+already sits on `main`: `python tools/leak_gate.py --all origin/main --worktree-config --write-baseline
+tools/leak_gate_baseline.txt` (private-name entries go to the ignored file next to the names list).
+
+**On a finding:** fix the content (move game-derived output back under `local/`, write the note in your own
+words, use a placeholder for a path), or ask the maintainer for an allow-list entry. Do not regenerate the baseline
+to let a new finding through, and do not skip the hook.
+
+**The hook.** `.githooks/pre-push` is installed the way `.githooks/post-checkout` is: copied into the clone's shared
+hooks folder (`git rev-parse --git-path hooks`, which every worktree of the clone uses). An existing clone picks it
+up by rerunning `tools/install_worktree_assets_hook.ps1`, or, without the worktree seed (on Linux, say), with
+`python tools/leak_gate.py --install-hook`. Neither overwrites a `pre-push` hook that is not ours. It uses an
+interpreter that lies outside the checkout (one inside is skipped, never run), runs it isolated and without the site
+module (`-I -S`: no `PYTHON*` variables, no user site, no `sitecustomize` or `.pth` file of a virtual environment;
+the gate needs only the standard library), and runs the trusted copy from a temporary folder outside the checkout.
+It prints nothing from the push target. Its fetch of `origin/main` runs without fsmonitor but keeps the clone's own
+git configuration (ssh command, credential helper): that configuration is trusted, because every push from the clone
+uses it anyway, and the fetch needs the user's credentials.
+
+**What this gate does not do.** It is partial detection of marks, file types and identifier shapes. A clean scan
+establishes neither originality nor permission to publish. A frozen copy of the gate still depends on what it is
+given: the trusted policy (the allow-list and baseline on `main`), the interpreter and git settings of the machine,
+the private names list, and complete history; with any of those wrong, a clean result means less. The hook can be
+bypassed, CI comes after publication, and other ways of publishing are outside it. It does not establish
+provenance, originality or licence: code translated from a decompiler listing by hand and renamed, game
+data rewritten as prose or kept under the dump sizes, GPL code with its notices removed, and personal names missing
+from the private list all pass. It sees only what goes through a `git push` from a checkout with the hook, or
+through CI after publication: API writes, PR text edited after the last push (the job reruns on the next push),
+issue and review comments, release assets and gists are not checked. The workflow that runs it is part of the pull
+request it checks, so a PR can keep the job's name and replace its commands; only a repository setting closes that
+(a ruleset on `main` that requires the `Leak gate` check and the maintainer's review for `.github/workflows/`,
+`.githooks/` and the gate's files), and `gate-change` is the visible half. Baseline hashes are deterministic, so a
+short line can be confirmed by guessing; the lines they hash are in the public tree already. A numeric table kept
+under the per-file sum, even cut into chunks, passes with at most a `dump-like` warning. The clone's own git
+configuration takes part in every git call. A checkout on a drive owned by another account may be refused, since
+the global `safe.directory` entries are not read.
+
 ## Build and test
 
 ```powershell

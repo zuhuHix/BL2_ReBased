@@ -24,3 +24,7 @@ __pycache__/
 *.idb
 *.i64
 *.bndb
+
+# Private material in the main checkout: never staged by an accidental `git add -A` (the leak gate also refuses them)
+/Bl2Screens/
+/PromptUpgrade.md
