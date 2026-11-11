@@ -78,14 +78,13 @@ endif()
 # no installed game, no network) under a Python with no third-party packages, as on CI. Registered as py-<name>, run from the
 # source tree. A test is added here only after it passes that way without skipping its cases; docs/verification/GATES.md "Tests outside ctest" lists the
 # ones left out and why:
-#   numpy or Pillow (CI's Python has neither): ambient_transform, creature_zone, gfx_to_swf, lootable_tracks,
-#     phaselock_target_attachments, prepare_map_screen, prepare_minimap, prepare_mission_log, prepare_mission_screen,
-#     prepare_phaselock_target, sanctuary_pillar, slice_npc_assets, weapon_paint, weapon_part_census, weapon_reload_anims,
-#     weapon_reload_library (slice_npc_assets skips its only test class without numpy, so it would pass on CI having run nothing)
+#   numpy: in OW_NUMPY_PY_TESTS below, registered only where numpy imports
+#   Pillow (CI's Python has none): gfx_to_swf, prepare_map_screen, prepare_minimap, prepare_mission_log,
+#     prepare_mission_screen, sanctuary_pillar (also numpy), weapon_paint, weapon_part_census
 #   too slow for every PR (30-145 s each on the zuhu desktop): cash_capture, check_hud_minimap, controls_capture,
 #     provision_worktree, real_game_capture_safety, real_game_pending, realgame_snapshot, skills_live_probe
 #   refuses while any Unreal editor runs on the PC (exit 2, "NOT RUN"): run_ue_flash_hud
-#   tests/*_test.js need Node, which CI does not install.
+#   tests/*_test.js: in OW_NODE_TESTS below, registered only where Node is found
 set(OW_STANDALONE_PY_TESTS
   audio_census blcmm_dumps block_saves bsp_calibration bsp build_phaselock_fx_constants check_action_skill_hud check_hud_down
   check_hud_shots check_interactives check_mission_page check_overlay_data check_phaselock_kill check_shield_check
@@ -105,3 +104,35 @@ foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   set_tests_properties(py-${ow_test} PROPERTIES TIMEOUT 120)
 endforeach()
+
+# Tests that need Node or numpy (lane ci-test-deps, 2026-11-11). CI installs both (.github/workflows/ci.yml). Elsewhere a group
+# is registered only when configure finds its tool, and configure says so when it does not, so a machine without Node or numpy
+# still runs everything else. Checking at configure time also keeps slice_npc_assets (which skips its only class without numpy)
+# from passing having run nothing. Labels needs-node / needs-numpy; CI prints each entry's last lines to compare case counts.
+function(ow_add_tests prefix label runner ext)
+  foreach(ow_test IN LISTS ARGN)
+    add_test(NAME ${prefix}-${ow_test} COMMAND ${runner} ${CMAKE_SOURCE_DIR}/tests/${ow_test}_test.${ext}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(${prefix}-${ow_test} PROPERTIES TIMEOUT 120 LABELS ${label})
+  endforeach()
+endfunction()
+set(OW_NODE_TESTS
+  hud_action_skill hud_fields hud_minimap hud_movie_loss hud_use_prompt_page hud_warp inventory_navigation inventory_preview_cache
+  map_screen mission_log mission_screen pickup_card skill_info skill_navigation skill_rules status_page_keys vending_movie vending)
+find_program(OW_NODE node)
+if(OW_NODE)
+  ow_add_tests(js needs-node ${OW_NODE} js ${OW_NODE_TESTS})
+else()
+  list(LENGTH OW_NODE_TESTS ow_count)
+  message(STATUS "Node not found: the ${ow_count} tests in OW_NODE_TESTS are not registered (docs/verification/GATES.md)")
+endif()
+set(OW_NUMPY_PY_TESTS
+  ambient_transform creature_zone lootable_tracks phaselock_target_attachments prepare_phaselock_target slice_npc_assets
+  weapon_reload_anims weapon_reload_library)
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy" RESULT_VARIABLE ow_numpy_rc OUTPUT_QUIET ERROR_QUIET)
+if(ow_numpy_rc EQUAL 0)
+  ow_add_tests(py needs-numpy ${Python3_EXECUTABLE} py ${OW_NUMPY_PY_TESTS})
+else()
+  list(LENGTH OW_NUMPY_PY_TESTS ow_count)
+  message(STATUS "numpy does not import in ${Python3_EXECUTABLE}: the ${ow_count} tests in OW_NUMPY_PY_TESTS are not registered (docs/verification/GATES.md)")
+endif()

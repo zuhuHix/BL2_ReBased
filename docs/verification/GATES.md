@@ -29,6 +29,10 @@ On main 7eee9ee (2026-11-07, zuhu, Z23): 14 PASS / 0 FAIL / 0 NOT_AVAILABLE of 1
 
 **Ungated tests registered (2026-11-11, zuhu, main c66f24e + fix/ungated-tests):** ctest 119/119 (34 before; the 85 new `py-*` entries took 76 s of the 211 s run); after review r1, 118 (84 `py-*`, `slice_npc_assets` moved out); verify_packages 9 packages, all class bodies exact. The tests left out are in "Tests outside ctest" below.
 
+**Node and numpy groups (2026-11-11, zuhu, main 969307f + feature/ci-test-deps, Node 26.4, numpy 2.5.4, Python 3.14.6):** ctest 145/145
+(119 before; `needs-node` 18 entries in 1.8 s, `needs-numpy` 8 in 2.5 s). Configured with a Python without numpy and no Node: 119
+entries and one message per group left out.
+
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):
   `export PATH="/c/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH"`,
@@ -63,13 +67,19 @@ a Python with no third-party packages, with none of its cases skipped, runs in c
 `level_test.py` and `viewer_test.py` directly. The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
 that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11.
 
+Since 2026-11-11 (lane ci-test-deps) CI also installs Node 26 and numpy 2.5.4 for tests only. The 18 `tests/*_test.js` run in
+ctest as `js-<name>` (`OW_NODE_TESTS`) and the 8 Python tests that need numpy as `py-<name>` (`OW_NUMPY_PY_TESTS`: `ambient_transform`,
+`creature_zone`, `lootable_tracks`, `phaselock_target_attachments`, `prepare_phaselock_target`, `slice_npc_assets`, `weapon_reload_anims`,
+`weapon_reload_library`). Each group is registered only when configure finds Node, or a `${Python3_EXECUTABLE}` that imports numpy;
+otherwise configure prints which group it left out, and everything else still runs. `slice_npc_assets` skips its whole class
+without numpy, which is why the check is made at configure time. CI's step "Case lines of the tests that need Node, numpy or
+Pillow" prints each such entry's last lines, to compare the cases run with a local run.
+
 | Tests | Why not in ctest | Status on 2026-11-11 |
 |---|---|---|
-| `ambient_transform`, `creature_zone`, `lootable_tracks`, `phaselock_target_attachments`, `prepare_phaselock_target`, `slice_npc_assets`, `weapon_reload_anims`, `weapon_reload_library` | need numpy; CI's Python has none (adding it is a maintainer decision). `slice_npc_assets` skips its whole class without numpy and exits 0, so in ctest it would pass on CI having run nothing | pass with numpy 2.5 |
 | `gfx_to_swf`, `prepare_map_screen`, `prepare_minimap`, `prepare_mission_log`, `prepare_mission_screen`, `sanctuary_pillar`, `weapon_paint`, `weapon_part_census` | need Pillow; CI's Python has none | pass with Pillow (`prepare_mission_log` skips one case without the symlink privilege) |
 | `realgame_snapshot` (144 s), `real_game_pending` (74 s), `real_game_capture_safety` (70 s), `skills_live_probe` (65 s), `controls_capture` (52 s), `cash_capture` (49 s), `provision_worktree` (36 s), `check_hud_minimap` (30 s) | too slow for every PR: about 520 s together | pass |
 | `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
-| all 18 `*_test.js` (`hud_*`, `inventory_*`, `map_screen`, `mission_log`, `mission_screen`, `pickup_card`, `skill_*`, `status_page_keys`, `vending*`) | need Node; CI does not install it (a maintainer decision) | 18/18 pass with Node 26.4 |
 
 Notes: a test that skips cases there, or skips all of them, does not count as passing. Four registered tests skip cases off Windows
 (`check_overlay_data`, `lootables_editor`, `private_sync`, `run_limit`: junctions, PowerShell launchers); CI runs
