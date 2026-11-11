@@ -86,6 +86,21 @@ class RecorderTest(unittest.TestCase):
         self.assertTrue(watch.pawn_wanted({'name': 'x', 'ai_class': 'CharClass_Invented'}, ['Invented']))
         self.assertFalse(watch.pawn_wanted({'name': 'x', 'cls': 'y'}, ['WillowAIPawn_7']))
 
+    def test_automatic_reads_wait_for_a_pawn_and_their_errors_are_apart(self):
+        watch.SW['spec']['snap_every'] = 0.001
+        watch._tick(None, Args(DeltaTime=0.0167), None, None)   # no game: no pawn, so no automatic snapshot
+        self.assertEqual(watch.SW['snaps'], [])
+        self.assertEqual(watch.SW['errors'], [])
+        real = watch._auto_reads_ok
+        watch._auto_reads_ok = lambda: True
+        try:
+            watch._tick(None, Args(DeltaTime=0.0167), None, None)   # the snapshot's reads fail without a game
+        finally:
+            watch._auto_reads_ok = real
+        self.assertEqual(len(watch.SW['snaps']), 1)
+        self.assertEqual(watch.SW['errors'], [])
+        self.assertGreaterEqual(watch.SW['soft_errors'], 1)
+
     def test_the_player_read_is_empty_without_a_game(self):
         self.assertEqual(watch._player_here(), {'loc': None})   # get_pc raises here: no exception escapes
 

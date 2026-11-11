@@ -50,7 +50,7 @@ def sw_reset(label="", spec=None):
     SW.clear()
     SW.update(on=False, label=label, spec=dict(SW_DEFAULTS, **(spec or {})), t0=time.perf_counter(), frame=0, dt=None,
               last_g=None, last_t=None, rows=[], frames=[], snaps=[], pawns=[], counts={}, dropped={}, resolved=[], missing=[],
-              hooks=[], errors=[], next_snap=0.0, next_pawns=0.0)
+              hooks=[], errors=[], soft_errors=0, next_snap=0.0, next_pawns=0.0)
     return SW
 
 
@@ -186,15 +186,30 @@ def _tick(obj, args, ret, func):
             row.update(_player_here())
         if SW["spec"]["frames"] and len(SW["frames"]) < SW["spec"]["frame_cap"]:
             SW["frames"].append(row)
-        if SW["spec"]["snap_every"] and t_real >= SW["next_snap"]:
-            SW["next_snap"] = t_real + SW["spec"]["snap_every"]
-            sw_snap("auto")
-        if SW["spec"]["pawns_every"] and t_real >= SW["next_pawns"]:
-            SW["next_pawns"] = t_real + SW["spec"]["pawns_every"]
-            sw_pawns("auto")
+        due_snap = SW["spec"]["snap_every"] and t_real >= SW["next_snap"]
+        due_pawns = SW["spec"]["pawns_every"] and t_real >= SW["next_pawns"]
+        if (due_snap or due_pawns) and _auto_reads_ok():
+            # The automatic reads: an error in one (a map load, a pawn going away) is counted apart, not as a hook error.
+            before = len(SW["errors"])
+            if due_snap:
+                SW["next_snap"] = t_real + SW["spec"]["snap_every"]
+                sw_snap("auto")
+            if due_pawns:
+                SW["next_pawns"] = t_real + SW["spec"]["pawns_every"]
+                sw_pawns("auto")
+            SW["soft_errors"] += len(SW["errors"]) - before
+            del SW["errors"][before:]
     except Exception as e:
         _err("tick", e)
     return None
+
+
+def _auto_reads_ok():
+    """Automatic reads only while there is a player pawn (none during a map load or the respawn's holding cell)."""
+    try:
+        return _pc().Pawn is not None
+    except Exception:
+        return False
 
 
 def _player_here():
@@ -399,7 +414,7 @@ def sw_counts():
     """Rows per function and tag, frames and snapshots so far: the in-game usability check reads this."""
     return {"rows": len(SW.get("rows", [])), "frames": len(SW.get("frames", [])), "snaps": len(SW.get("snaps", [])),
             "pawn_reads": len(SW.get("pawns", [])), "counts": dict(SW.get("counts", {})), "dropped": dict(SW.get("dropped", {})),
-            "errors": len(SW.get("errors", [])), "missing": list(SW.get("missing", []))}
+            "errors": len(SW.get("errors", [])), "soft_errors": SW.get("soft_errors", 0), "missing": list(SW.get("missing", []))}
 
 
 def sw_root():
@@ -419,6 +434,7 @@ def sw_dump(name):
     # t0_qpc: the recorder's start on the QPC clock (perf_counter on Windows), so its rows join a capture's own QPC press stamps.
     data = {"label": SW.get("label"), "t0_qpc": SW.get("t0"), "spec": SW.get("spec"), "resolved": SW.get("resolved", []), "missing": SW.get("missing", []),
             "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}), "errors": SW.get("errors", []),
+            "soft_errors": SW.get("soft_errors", 0),
             "rows": SW.get("rows", []), "frames": SW.get("frames", []), "snaps": SW.get("snaps", []), "pawns": SW.get("pawns", [])}
     (root / f"{name}.json").write_text(json.dumps(data, default=str), encoding="utf-8")
     return sw_counts()
