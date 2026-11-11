@@ -12,14 +12,15 @@ param(
     # Added to SeedFolders, for one run that needs a big folder, e.g. -ExtraSeedFolders sanctuary.
     [string[]]$ExtraSeedFolders = @(),
     # Per-run output: never copied from the seed or from -SourceWorktree, at any depth, and a pair whose own name is here is skipped.
-    # worktree-refresh-backup holds the files -RefreshStale replaced: this checkout's own, never copied anywhere.
+    # worktree-refresh-backup holds what -RefreshStale replaced in a seed (and, before 2026-11-11 round 2, in local\): never copied.
     [string[]]$ExcludeFolderNames = @('shots', 'screenshots', 'logs', 'captures', 'realgame', 'h4x', 'z3x', 'runs', 'worktree-refresh-backup'),
     # Generated files that are per-run or regenerable and that no suite or host code reads: never copied. observed_gear.json is
     # written by tools/prepare_inventory_gear.py from traces; the host reads only gear_manifest.json.
     # *.resolved.json beside a job is the per-checkout copy the editor launchers write (tools/checkout_guard.ps1); it holds absolute paths.
     [string[]]$ExcludeFileNames = @('observed_gear.json', 'editor_job.resolved.json', 'attach_job.resolved.json'),
     # Also replace a file that exists when the source's copy is newer and differs (size or content). The old file is first moved to
-    # local\worktree-refresh-backup\<time>\<path> (in seed mode: <seed>\worktree-refresh-backup\...), and both moves are printed as they
+    # <the worktree's git directory>\ow-refresh\<time-pid>\<path> (per worktree and never shared, also with a junctioned
+    # local\; in seed mode: <seed>\worktree-refresh-backup\...), and both moves are printed as they
     # happen. Off by default: without the switch existing files are never overwritten. A target that is a link is refused.
     [switch]$RefreshStale,
     # The seed folder (default: local\worktree-seed of the shared repository). The tests point it at a synthetic folder.
@@ -119,7 +120,13 @@ function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnch
             if (Test-Reparse $Target) { throw "Refusing to replace a junction or symlink: $Target (remove it or copy by hand)" }
             if (!(Test-Stale $File $Target)) { continue }
             $Backup = [IO.Path]::GetFullPath((Join-Path $BackupBase ($Target.Substring($DestinationAnchor.TrimEnd('\').Length).TrimStart('\'))))
-            Assert-NoReparse $DestinationAnchor (Split-Path -Parent $Backup)
+            if (!$BackupBase) { throw "No backup place for -RefreshStale (no git directory for this worktree); not replacing $Target" }
+            if (Test-Path -LiteralPath $BackupBase) { throw "The refresh backup folder already exists: $BackupBase (rerun)" }
+            # Windows PowerShell's .NET refuses paths of 260 characters or more (folders: 248); the backup path is longer than the target's.
+            if ($Backup.Length -ge 260 -or (Split-Path -Parent $Backup).Length -ge 248) {
+                throw "The refresh backup path would be too long for Windows ($($Backup.Length) characters): $Backup; not replacing $Target"
+            }
+            Assert-NoReparse $BackupAnchor (Split-Path -Parent $Backup)
         }
 
         [void]$Plan.Add(@{ Source = $File.FullName; Target = $Target; TargetDirectory = $TargetDirectory; Stamp = $File.LastWriteTimeUtc;
@@ -187,14 +194,17 @@ function Invoke-Pairs($Pairs, [bool]$SkipLocal, [string]$MissingNote) {
 }
 
 # Where -RefreshStale moves the files it replaces: one folder per run, below the destination (set per mode below).
-$RefreshStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
+# Milliseconds and the process id keep two runs in the same second apart; the preflight also refuses a folder that already exists.
+$RefreshStamp = '{0}-{1}' -f [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmssfff'), $PID
 $BackupBase = $null
+$BackupAnchor = $null
 
 if ($FillSeedFrom) {
     # Seed mode: the source is a checkout, the destination is the seed folder. No target worktree.
     if (!$SeedDirectory) { throw '-FillSeedFrom needs -SeedDirectory.' }
     $SourceRoot = [IO.Path]::GetFullPath($FillSeedFrom).TrimEnd('\')
     $SeedRoot = [IO.Path]::GetFullPath($SeedDirectory).TrimEnd('\')
+    $BackupAnchor = $SeedRoot
     $BackupBase = Join-Path $SeedRoot "worktree-refresh-backup\$RefreshStamp"
     if (!(Test-Path -LiteralPath (Join-Path $SourceRoot 'host\ue5\OpenWillow\Content') -PathType Container)) {
         throw "Required local asset directory is missing: $SourceRoot\host\ue5\OpenWillow\Content"
@@ -263,14 +273,20 @@ if ($SourceWorktree) {
 # A worktree whose local\ is itself a junction (a shared data root, e.g. on a runner) keeps that data: its local pairs are
 # skipped with one line, Content is still provisioned. Any other junction is refused by the preflight.
 $LocalIsJunction = Test-Reparse (Join-Path $WorktreeRoot 'local')
-$BackupBase = Join-Path $WorktreeRoot "local\worktree-refresh-backup\$RefreshStamp"
+# This worktree's own git directory (per worktree, never tracked, and not under local\, which may be a shared junctioned root): it
+# holds the provisioning marker and the -RefreshStale backups.
+$GitDir = (& git -C $WorktreeRoot rev-parse --path-format=absolute --git-dir).Trim()
+$HaveGitDir = ($LASTEXITCODE -eq 0 -and $GitDir)
+if ($HaveGitDir) {
+    $GitDir = [IO.Path]::GetFullPath($GitDir).TrimEnd('\')
+    $BackupAnchor = $GitDir
+    $BackupBase = Join-Path $GitDir "ow-refresh\$RefreshStamp"
+}
 $Lines = Invoke-Pairs $Pairs $LocalIsJunction $MissingNote
 $Header = "OpenWillow worktree assets provisioned for $WorktreeRoot"
 if ($LocalIsJunction) { $Lines = @('local\ is a junction (shared data root); not provisioning local') + $Lines }
-# The marker the post-checkout hook reads: in this worktree's own git directory (per worktree, never tracked, and not under local\,
-# which may be a shared junctioned root). It is written only after every copy above succeeded.
-$GitDir = (& git -C $WorktreeRoot rev-parse --path-format=absolute --git-dir).Trim()
-if ($LASTEXITCODE -eq 0 -and $GitDir) {
+# The marker the post-checkout hook reads, written only after every copy above succeeded.
+if ($HaveGitDir) {
     Set-Content -LiteralPath (Join-Path $GitDir 'openwillow-provisioned') -Value ([DateTimeOffset]::UtcNow.ToString('o')) -Encoding ascii
 }
 Write-Output ($Header + "`n" + ($Lines -join "`n"))

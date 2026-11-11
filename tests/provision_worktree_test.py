@@ -162,8 +162,9 @@ class ProvisionTest(unittest.TestCase):
         self.assertIn('local/slice: 0 missing files added, 0 stale files replaced', result.stdout)
         self.assertEqual(self.local('slice', 'manifest.json').read_text(encoding='utf-8'), 'own')
         self.assertEqual(os.path.getmtime(self.local('slice', 'same.json')), 1_000_000_000)
-        # The replaced file is kept, under local/worktree-refresh-backup/<time>/<its path>, and the move is printed.
-        backups = list(self.local('worktree-refresh-backup').glob('*/host/ue5/OpenWillow/Content/Zone.uasset'))
+        # The replaced file is kept, under <git dir>/ow-refresh/<time-pid>/<its path>, and the move is printed.
+        self.assertFalse(self.local('worktree-refresh-backup').exists())
+        backups = list((self.worktree / '.git' / 'ow-refresh').glob('*/host/ue5/OpenWillow/Content/Zone.uasset'))
         self.assertEqual(len(backups), 1, result.stdout)
         self.assertEqual(backups[0].read_text(encoding='utf-8'), 'old')
         self.assertIn(f"backed up: {content / 'Zone.uasset'} -> {backups[0]}", result.stdout)
@@ -178,7 +179,9 @@ class ProvisionTest(unittest.TestCase):
         try:
             os.symlink(outside, link)
         except OSError as error:   # creating a file symlink needs Developer Mode or elevation on Windows
-            self.skipTest(f'cannot create a file symlink here ({error}); the refusal is not exercised')
+            reason = f'cannot create a file symlink here ({error}); the refusal is not exercised'
+            print(f'\ntest_refresh_refuses_a_linked_target_before_writing: SKIPPED, {reason}', file=sys.stderr)   # visible at any verbosity
+            self.skipTest(reason)
         result = self.run_script('-RefreshStale')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f'Refusing to replace a junction or symlink: {link}', result.stdout + result.stderr)
@@ -258,6 +261,48 @@ class ProvisionTest(unittest.TestCase):
         self.assertTrue((hummer / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').is_file())
         self.assertFalse((shared / 'doors').exists())                  # nothing written into the shared root
         self.assertEqual(sorted(p.name for p in shared.iterdir()), ['slice'])
+
+    def test_refresh_works_with_a_junctioned_local(self):
+        """A worktree whose local\\ is a shared data root can still refresh stale Content: the backup goes to the worktree's own git
+        directory, never into the shared root."""
+        hummer = self.make_worktree(self.base / 'hummer')
+        shared = self.base / 'shared-data'
+        write(shared / 'slice' / 'shared.json', 'shared')
+        make_junction(hummer / 'local', shared)
+        stale = hummer / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap'
+        write(stale, 'old map')
+        os.utime(stale, (1_000_000_000, 1_000_000_000))
+        result = self.run_script('-RefreshStale', worktree=hummer)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(stale.read_text(encoding='utf-8'), 'map')
+        backups = list((hummer / '.git' / 'ow-refresh').glob('*/host/ue5/OpenWillow/Content/Maps/a.umap'))
+        self.assertEqual(len(backups), 1, result.stdout)
+        self.assertEqual(backups[0].read_text(encoding='utf-8'), 'old map')
+        self.assertEqual(sorted(p.name for p in shared.iterdir()), ['slice'])   # nothing written into the shared root
+
+    def test_refresh_refuses_a_backup_path_too_long_for_windows(self):
+        content = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content'
+        room = 250 - len(str(content)) - len('\\x.uasset')          # the target fits under 260, its backup (about 40 longer) does not
+        deep = content.joinpath(*(['d' * 40] * (room // 41)), 'x' * max(1, room % 41)) / 'x.uasset'
+        write(deep, 'old')
+        os.utime(deep, (1_000_000_000, 1_000_000_000))
+        write(self.seed.joinpath(deep.relative_to(self.worktree / 'host' / 'ue5' / 'OpenWillow')), 'new')
+        result = self.run_script('-RefreshStale')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('would be too long for Windows', result.stdout + result.stderr)
+        self.assertEqual(deep.read_text(encoding='utf-8'), 'old')
+
+    def test_two_refreshes_in_a_row_do_not_collide(self):
+        content = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content'
+        for text in ('first', 'second'):
+            write(content / 'Maps' / 'a.umap', text)
+            os.utime(content / 'Maps' / 'a.umap', (1_000_000_000, 1_000_000_000))
+            result = self.run_script('-RefreshStale')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runs = sorted((self.worktree / '.git' / 'ow-refresh').iterdir())
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(sorted(p.joinpath('host/ue5/OpenWillow/Content/Maps/a.umap').read_text(encoding='utf-8') for p in runs),
+                         ['first', 'second'])
 
     def test_junction_in_the_seed_is_refused(self):
         seed = self.base / 'seed-junction'

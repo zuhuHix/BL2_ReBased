@@ -9,10 +9,13 @@ PowerShell launchers resolve a job against their own checkout (``resolve-job`` b
 scripts keep reading plain absolute paths.
 
 A stored path must stay inside this checkout: a relative value that climbs out (``../other/local``), a rooted one (``/local/x``) or a
-drive-relative one (``C:foo``) is refused. Any path whose real location (junctions followed) is inside another checkout of this
-repository is refused, input or output. An old job with absolute paths is still read when they lie in this checkout; an absolute input
-outside every checkout (the game install, an export folder) is used if it exists. Every refusal names the job file, the path and the
-command that rewrites the job. Nothing is skipped silently.
+drive-relative one (``C:foo``) is refused. Junctions follow tools/worktree-assets.md: (a) the real location of ``<root>/local`` is this
+checkout's data root wherever it resolves (a shared data root may be another checkout's ``local``), so paths under it are ours; (b) any
+other path that really lies in another checkout of this repository is refused, input or output; (c) a junction or symlink on the way
+whose target is gone is refused; (d) a file or folder not written yet, below the deepest existing folder, is fine. An old job with
+absolute paths is still read when they lie in this checkout; an absolute input outside every checkout (the game install, an export
+folder) is used if it exists. Every refusal names the job file, the path and the command that rewrites the job. Nothing is skipped
+silently.
 """
 import argparse
 import json
@@ -54,6 +57,28 @@ def checkout_of(path):
     return None
 
 
+def _refuse_dangling(full, value, kind, source, regenerate):
+    """Rule (c): every component of ``full`` that exists as an entry must resolve; a junction or symlink whose target is gone is
+    refused. Rule (d): components after the deepest existing one (a file or folder not written yet) are fine, since nothing that does
+    not exist can redirect the path."""
+    parts = Path(full).parts
+    for count in range(1, len(parts) + 1):
+        prefix = os.path.join(*parts[:count])
+        if not os.path.lexists(prefix):
+            return
+        if not os.path.exists(prefix):
+            raise StalePath(f'{source}: {kind} path {value} goes through {prefix}, a junction or symlink whose target is gone. '
+                            f'Rewrite the job here: {regenerate}')
+
+
+def _in_data_root(full, root):
+    """Rule (a): ``full`` is lexically under ``<root>/local`` and really inside the real location of ``<root>/local``."""
+    local = os.path.join(root, 'local')
+    if not os.path.exists(local) or not _inside(full, local):
+        return False
+    return _inside(os.path.normcase(os.path.realpath(full)), os.path.normcase(os.path.realpath(local)))
+
+
 def to_repo(path, root=ROOT):
     """A path below ``root`` as a forward-slash relative string; anything else (outside, None, empty) unchanged."""
     if path is None or str(path).strip() in ('', 'None'):
@@ -79,6 +104,9 @@ def from_repo(value, root=ROOT, output=False, source='the job', regenerate='its 
         full = os.path.normpath(os.path.join(root, value))
         if not _inside(full, root):
             raise StalePath(f'{source}: {kind} path {value} leaves the repository root ({root}). Rewrite the job here: {regenerate}')
+    _refuse_dangling(full, value, kind, source, regenerate)
+    if _in_data_root(full, root):
+        return full          # rule (a): under <root>/local, wherever it really lives (a shared data root may be another checkout's local)
     home = checkout_of(full)
     if home is not None and not _same(home, root):
         raise StalePath(f'{source}: {kind} path {value} is inside another checkout ({home}), not this one ({root}); the job was '

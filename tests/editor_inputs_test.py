@@ -285,24 +285,51 @@ def test_absolute_input_in_another_checkout_is_refused_and_outside_every_checkou
         assert 'outside this checkout' in refused(str(export), here, output=True)
 
 
-def test_junction_into_another_checkout_is_refused():
+def junction(link, target):
+    """A directory junction (no elevation needed); None when this machine cannot make one, with the reason printed by the caller."""
+    made = subprocess.run(f'mklink /J "{link}" "{target}"', shell=True, capture_output=True, text=True)
+    return None if made.returncode == 0 else f'{made.stdout.strip()} {made.stderr.strip()}'
+
+
+def test_junction_rules():
+    """The junction rules of tools/worktree-assets.md, (a) to (d), each pinned on synthetic checkouts."""
     with tempfile.TemporaryDirectory() as tmp:
         here = synthetic_checkout(tmp, 'here')
-        other = synthetic_checkout(tmp, 'other')
-        (other / 'local').mkdir()
-        made = subprocess.run(f'mklink /J "{here / "local"}" "{other / "local"}"', shell=True, capture_output=True, text=True)
-        if made.returncode != 0:
-            print(f'test_junction_into_another_checkout_is_refused: skipped, mklink /J failed: {made.stdout.strip()} {made.stderr.strip()}')
+        main = synthetic_checkout(tmp, 'main')
+        (main / 'local/slice').mkdir(parents=True)
+        (main / 'local/slice/in.png').write_bytes(b'x')
+        failed = junction(here / 'local', main / 'local')
+        if failed:
+            print(f'test_junction_rules: skipped, mklink /J failed: {failed}')
             return
-        assert 'inside another checkout' in refused('local/slice', here, output=True)
-        assert 'inside another checkout' in refused(str(here / 'local/slice/report.json'), here, output=True)
-        assert 'inside another checkout' in refused('local/slice/in.png', here)
-        # A junction to a plain data folder (a runner's shared data root) is not another checkout: allowed.
+        # (a) local/ junctioned to another checkout's local/ (the shared data root): inputs, outputs, files not written yet are ours.
+        assert rp.from_repo('local/slice/in.png', here) == str(here / 'local/slice/in.png')
+        assert rp.from_repo('local/slice', here, output=True) == str(here / 'local/slice')
+        assert rp.from_repo('local/slice/new/report.json', here, output=True) == str(here / 'local/slice/new/report.json')   # (d)
+        assert rp.from_repo(str(here / 'local/slice/in.png'), here) == str(here / 'local/slice/in.png')
+        # (a) also for a local/ junctioned to a plain data folder.
         os.rmdir(here / 'local')
         shared = Path(tmp) / 'shared-data'
         shared.mkdir()
-        subprocess.run(f'mklink /J "{here / "local"}" "{shared}"', shell=True, check=True, capture_output=True)
+        assert junction(here / 'local', shared) is None
         assert rp.from_repo('local/slice', here, output=True) == str(here / 'local/slice')
+        # (b) a junction elsewhere into another checkout is refused: local/slice alone, and a folder outside local/.
+        os.rmdir(here / 'local')
+        (here / 'local').mkdir()
+        assert junction(here / 'local/slice', main / 'local/slice') is None
+        assert 'inside another checkout' in refused('local/slice/in.png', here)
+        assert 'inside another checkout' in refused('local/slice', here, output=True)
+        assert junction(here / 'host/data', main / 'local') is None
+        assert 'inside another checkout' in refused('host/data/slice/in.png', here)
+        # (c) delete the checkout the junction points into: the dangling junction is refused, relative and absolute, input and output.
+        shutil.rmtree(main)
+        for value, output in (('local/slice/in.png', False), ('local/slice', True), (str(here / 'local/slice/x.json'), True),
+                              ('host/data/slice/in.png', False)):
+            assert 'target is gone' in refused(value, here, output), value
+        # (d) a file and folders not written yet under real, verified folders are fine.
+        assert rp.from_repo('local/fresh/editor_report_zone.json', here, output=True) == str(here / 'local/fresh/editor_report_zone.json')
+        for link in (here / 'local/slice', here / 'host/data'):
+            os.rmdir(link)                                  # junctions only; the temp folder is removed afterwards
 
 
 POWERSHELL = shutil.which('powershell') or shutil.which('pwsh')
