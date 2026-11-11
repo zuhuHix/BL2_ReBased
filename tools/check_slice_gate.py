@@ -16,8 +16,8 @@ something the host lacks: it is owned by slice-gate and counted on its own line.
 
 The unforced variant (`tools/test_slice_gate.ps1 -Unforced`, `-owslicegateunforced`) marks its start line `unforced=1`. There,
 and only there, every link that names a fixture standing in for play (FORCING_FIXTURES) is a FAIL whatever the host said,
-and a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail. The other
-variants are graded as before. These are host grading rules, UNVERIFIED against the real game.
+a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail, and every
+NOT_AVAILABLE is a FAIL, so the run exits 0 only with all 14 links passed. The other variants are graded as before. These are host grading rules, UNVERIFIED against the real game.
 """
 import argparse
 import json
@@ -218,6 +218,7 @@ FORCING_FIXTURES = (
     'lethal damage applied by the test',
     "down state from the test's lethal damage",
     'accepted by the use key without the mission page',
+    'accepted by a direct call after the mission page did not accept',
     'turned in by the use key without the mission page',
 )
 # The -Shield variant's fixtures (a shield the test equipped) start with one of these.
@@ -240,8 +241,9 @@ def forcing(fixtures):
 
 
 def cross_check_unforced(rows, errors, range_mode):
-    """Unforced run: a link that relied on a forcing fixture is a FAIL, a PASS without its how= token is a FAIL, and with the
-    range there a NOT_AVAILABLE on the loot or the down link is a FAIL (its enemies can drop a gun and down her)."""
+    """Unforced run: a link that relied on a forcing fixture is a FAIL, a PASS without its how= token is a FAIL, and every
+    NOT_AVAILABLE is a FAIL, because a link that did not run the player's way did not happen unforced (with the range there
+    the loot and the down link say why: its enemies can drop a gun and down her)."""
     for row in rows:
         row['forced'] = forcing(row['fixtures'])
         if row['result'] == 'FAIL':
@@ -253,6 +255,8 @@ def cross_check_unforced(rows, errors, range_mode):
             why = f'no sign that it got there unforced (no {token} in the detail)'
         elif row['result'] == 'NOT_AVAILABLE' and range_mode and row['name'] in ('loot_drop_on_kill', 'go_down'):
             why = 'the range was there, so its enemies can ' + ('drop a gun' if row['name'] == 'loot_drop_on_kill' else 'down her')
+        elif row['result'] == 'NOT_AVAILABLE':
+            why = 'a NOT_AVAILABLE is not a pass in an unforced run (the link did not run the player\'s way)'
         else:
             continue
         errors.append(f'link {row["name"]}: {row["result"]} overruled, {why}')

@@ -27,8 +27,10 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 # -Unforced takes nothing from the two fixture variants: their shield and their lethal damage are stand-ins it leaves out.
 if ($Unforced -and ($Shield -or $DownAfterFight)) { throw '-Unforced cannot be combined with -Shield or -DownAfterFight.' }
-# Its loot link kills until a gun drops and its down link waits for the enemies, so it gets a longer limit unless one is given.
-if ($Unforced -and !$PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = 1500 }
+# Its loot link kills until a gun drops and its down link waits for the enemies, so it gets a longer limit unless one is given:
+# editor start (about 2 min), 720 s of kills, one 50 s wait for a downed Maya, the 30 s skills-page buy, the mission (about
+# 100 s), the 90 s down wait and the 40 s bleed-out come to about 1,700 s (SLICE_GATE.md, "The unforced variant").
+if ($Unforced -and !$PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = 2100 }
 if (!$Game) { throw 'Set OPENWILLOW_BL2 or pass -Game (the installed Borderlands 2 folder).' }
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $manifests = [ordered]@{

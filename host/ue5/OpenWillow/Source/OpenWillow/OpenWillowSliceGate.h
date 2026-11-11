@@ -129,18 +129,27 @@ private:
     float FarmLookFor = 0.f;
     float LastFarmPlaceAt = -100.f;
     void TickFarmLoot(class AOpenWillowWalker* W, float Delta);
-    // A gun pickup that was not there before the last kill: the nearest within LootRadius of the corpse, else (OutFar) one further away.
-    class AOpenWillowInventoryPickup* NewGunPickup(class AOpenWillowInventoryPickup*& OutFar) const;
+    // Every range enemy's last living spot, and the spots of the deaths seen since the loot link began: a gun that a death the
+    // farm did not aim at (a stray shot) dropped counts at its own corpse.
+    TMap<TObjectKey<AActor>, FVector> LiveSpots;
+    TArray<FVector> FreshCorpses;
+    // A gun pickup that was not there before the fight: the nearest within LootRadius of a corpse (the last kill's or a fresh
+    // one), with that distance, else (OutFar) one further away from all of them.
+    class AOpenWillowInventoryPickup* NewGunPickup(class AOpenWillowInventoryPickup*& OutFar, float& OutDistance) const;
     class AOpenWillowCombatTarget* NearestLiveEnemy() const;
     // The Phaselock point on the skills page: 0 not begun, 1 the page open and Enter pressed once a second, 2 done.
     int32 BuyPhase = 0;
     float BuyClock = 0.f, BuyNextPress = 0.f;
     int32 SlateEnters = 0, PageEnters = 0;
+    bool bLastBuyKeySlate = true;   // the kind of the last Enter before the spend: Slate, or the event dispatched on the page
     FString BuyNote;                // what the Phaselock link's detail adds: " how=skills_page ..." or why the page did not buy it
     bool bPhaselockPlaced = false;  // Maya was placed near a far target once before the cast
     bool TickBuyPhaselock(class AOpenWillowWalker* W, float Delta);
-    // The mission page: whether it was seen at the accept and at the turn-in, and the Enter presses sent to it.
-    bool bAcceptPageSeen = false, bTurnInPageSeen = false;
+    // The mission page. Accept: the offer page was shown, and the mission was accepted by an Enter on it (not by the fallback).
+    // Turn-in: some page was shown, the turn-in page was (status 2 while shown), an Enter was sent to it, the turn-in came
+    // through it (status 3 after that Enter), and the reward page was shown. The how= token needs the "by page" flags.
+    bool bAcceptPageSeen = false, bAcceptByPage = false;
+    bool bTurnInAnyPage = false, bTurnInPageSeen = false, bTurnInEnterSent = false, bTurnInByPage = false, bRewardPageSeen = false;
     int32 AcceptEnters = 0, TurnInEnters = 0;
     float PageShownFor = 0.f, PageNextEnter = 0.f;
     bool bSecondUse = false;
@@ -155,6 +164,9 @@ private:
     float LastDownPlaceAt = -100.f;
     bool bEnemyDown = false;
     void TickEnemyDown(class AOpenWillowWalker* W);
+    // Hits on Maya whose causer is a range enemy, counted since the walker's per-causer count was last started (unforced: from
+    // the end of the Recover step, and again from the start of the down wait).
+    int32 EnemyHitsTracked() const;
     // Places Maya Distance uu from Target on her side of it, looking at it (the teleport fixture).
     void PlaceNear(const class AOpenWillowCombatTarget* Target, float Distance);
 };

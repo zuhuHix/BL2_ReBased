@@ -35,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (55 since the unforced variant, 39 before it; all
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (58 since review round 1 of the unforced variant, 39 before it; all
   made-up log lines, plus three that read the runner script's text).
 
 ### How a link is graded (review round 1)
@@ -120,8 +120,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   `fallback=shapes`, for example a manifest with no mesh), `reach_fight_area` names the fixture `selected enemy on fallback
   shapes, no stock mesh`. It does not stop the run.
 - **Range mode only** (when `ow.Range` exists):
-  - `ow.RangeLoot always` before the fight (fixture `guaranteed loot roll`): a range kill rolls the stock 0.085 gun
-    chance, and this switch retries up to 8 seeds until a gun comes.
+  - `ow.RangeLoot always` before the fight (fixture `guaranteed loot roll`): a range kill rolls the stock 0.085 chance
+    of the guns-and-gear pool (a gun about 0.043, see the unforced variant), and this switch retries up to 8 seeds until a
+    gun comes.
   - After the fight, `ow.RangeMode passive` (fixture `range set passive after the fight`). The enemies stay alive as
     Phaselock targets.
   - Before the mission, `ow.RangeClear` (fixture `range cleared before the mission`), so no range actor attacks Maya or
@@ -341,19 +342,30 @@ without those stand-ins. Each link then shows whether the loop got there on its 
 **What it leaves out, link by link:**
 - **Loot (link 5).** The range's loot mode is set to `normal`, so each kill rolls the stock chance. The link kills range
   enemies, the nearest living one each time, until a gun drops near a corpse. The fight's kill counts as the first. The budget
-  is 100 kills or 720 s of extra kills, whichever comes first. A PASS says `how=kill_roll kills=<n> budget=100`.
+  is 100 kills or 720 s of extra kills, whichever comes first. A PASS says `how=kill_roll kills=<n> budget=100`. Any gun that
+  was not on the ground before the fight counts when it lies within 1,500 uu of the last kill or of any range enemy that died
+  during the link (a stray shot's kill included); a gun far from all of them FAILs the link, but only after the 1 s drop wait.
 - **No heal or revive.** After the fight the range is not set passive and Maya is not restored. A link group that is due while
   she is down waits up to 50 s for her own second wind or her respawn. If she is still down after that, the older variants'
   skip applies.
 - **Phaselock (link 9).** The point is bought on the skills page: the page opens on the action skill, and Enter is pressed
   once a second for up to 30 s. For the first 6 s Enter goes through Slate, as a keyboard sends it. After that it is also
   dispatched on the page itself (`SendPageKey`), because the page only sees a Slate key when it has the focus. The PASS says
-  `how=skills_page` and how many presses of each kind were sent. If the page buys nothing, the point is granted as in the
+  `how=skills_page`, `key=slate` or `key=page_event` for the kind of the last Enter before the spend, and how many presses of
+  each kind were sent. The token covers both kinds: each runs the page's own spend path (`spendSelected`, then the HUD's
+  `TrySpend`), but `key=page_event` is a synthetic browser event, not proof that a keyboard press reaches the page. If the page buys nothing, the point is granted as in the
   other variants. That is named as the fixture, so the cast is still tried, and the checker fails the link.
 - **Mission (links 10 and 12).** At Marcus, the use key opens his mission page. Enter on it accepts. At the turn-in, Enter
   turns the mission in and a second Enter takes the reward. The keys go through Slate to the page's own key handler
-  (`UOpenWillowQuest::OnScreenKey`), the way `tools/test_mission_page.ps1` presses them. If no page is shown, the use key
-  falls back to the older path and the link names `accepted by the use key without the mission page` (or `turned in ...`).
+  (`UOpenWillowQuest::OnScreenKey`), the way `tools/test_mission_page.ps1` presses them. The `how=mission_page` token is
+  printed only when the page did the work: at the accept, when the status became 1 after an Enter on the offer page; at the
+  turn-in, when the status went from 2 to 3 after an Enter sent while the turn-in page was up (the status tells the turn-in
+  page, 2, from the reward page, 3). If no page is shown, the use key falls back to the older path and the link names
+  `accepted by the use key without the mission page` (or `turned in ...`). The turn-in fixture is also named when the use key
+  turned the mission in and a page showed only the reward. If the offer page is up but Enter does not accept within 8 s,
+  Escape closes it and `UOpenWillowQuest::Accept` is called directly, named `accepted by a direct call after the mission page
+  did not accept`, so the objective and turn-in links still run. Whether that direct call accepts with the screen closed is
+  `UNVERIFIED`; if it does not, the link FAILs and the run goes on to the down link, as before.
   The runner starts the page server (`tools/movie_hud.ps1`, port 8786) and passes `-owflashskills` and
   `-owflashmissionscreen`. The gameplay HUD stays the canvas one, as in the other variants.
 - **The range during the mission (links 10 to 12).** It is neither cleared nor made passive. Its enemies may follow Maya,
@@ -363,8 +375,12 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   1,200 uu away she is placed by it again, at most every 10 s. The time limit is 90 s. A PASS needs her down with at least one
   hit whose causer is an actor (`how=enemies`). With no down in 90 s the link FAILs. The detail gives the hits, her health and
   shield, and the enemies within 1,500 uu. The test's lethal damage then puts her down so that link 14 still runs, and link 14
-  names it. If she was already down when link 13 was due, from hits during an earlier step, the link passes on that down,
-  since this variant applies no damage of its own.
+  names it. The walker's per-causer hit count restarts at the end of the Recover step, and again at the start of the wait.
+  "From an enemy" means a hit whose causer is a range enemy (`AOpenWillowEnemy`; those keep their actor through a death and
+  respawn). If she was already down when link 13 was due, the link passes on that down only with at least one such hit since
+  the end of Recover. Without one the cause is unknown (a fall, say) and the link FAILs; link 14 then lacks its token and
+  FAILs too. A hit from an enemy before a down that had another cause would still pass: the count does not say which hit
+  downed her.
 - **Respawn (link 14).** The walker's own bleed-out and respawn, after the enemy down (`how=after_enemy_down`).
 - **Kept:** teleports between places (`teleport`), the fight's hold on fire and one shot at a time, `FireOnce` ignoring the
   fire rate, the ammo refill, and the decoy link's two test drops. These are test shortcuts of the gate, not stand-ins for
@@ -377,7 +393,9 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   (`FORCING_FIXTURES`) has the forced gun, a gun the test dropped, the granted point, the passive or cleared range, the heal
   and the revive, all three lethal-damage fixtures, both use-key mission fixtures, and the `-Shield` fixtures.
 - A PASS on links 5, 9, 10, 12, 13 or 14 needs its `how=` token in the detail.
-- With the range there, a NOT_AVAILABLE on link 5 or 13 is a FAIL, since its enemies can drop a gun and can down her.
+- Every NOT_AVAILABLE is a FAIL, so the run exits 0 only when all 14 links passed. A link group skipped because Maya was
+  still down (for example the mission, with links 13 and 14 then passing on enemy hits) cannot leave the run green. With the
+  range there, links 5 and 13 say why: its enemies can drop a gun and can down her.
 - The report adds a line `unforced run: <n> of 14 links got there with no stand-in for play; not unforced: <links>`, and the
   JSON gains `unforced` and a `forced` list per link. The older variants' output is unchanged. Their synthetic tests pass as
   before, and 400 random older-variant logs graded the same with the checker on main and this one (exit code, table, JSON,
@@ -389,15 +407,22 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   shield or grenade mod pick (COMBAT_RANGE.md). The range draws an item stage per death (4 to 7 for an adult at level 6,
   COMBAT_RANGE.md); the share at the stages a level-8 range draws was not checked. With that
   chance, 100 kills miss a gun with probability 0.957^100, about 1.2 %. Three runs miss at least once about 3.6 % of the time.
-  A run needs about 23 kills on average. The kill time was not measured (one adult took 6.3 s in an early run, the Psycho
-  3.5 s with the hold), so the 720 s cap may end a run first. A FAIL then states the miss probability for the kills it made.
+  A run needs about 23 kills on average. **Not measured:** the 1.2 % holds only if 100 kills fit in 720 s, one kill every
+  7.2 s including the 1 s drop wait and the walk between targets. The kill time is unknown (one adult took 6.3 s in an early
+  run, the Psycho 3.5 s with the hold). If only 60 kills fit, a working drop misses about 7 % of the time (0.957^60). A FAIL
+  states the miss probability for the kills it made.
 - **"Stops fighting back" and the 90 s limit.** She stops firing and casting, nothing more: no walking away, no crouching.
   Z16 measured one round of the pack at 185 of 213 health, the stand-in start shield holds 383, and the swing interval is
   about 1.25 s, so a few rounds should be enough. The 90 s leaves room for noticing, closing in and the shield's recharge.
   Those numbers are arithmetic, not a run.
 - **Fallbacks keep the later links running.** When a link cannot get there unforced, the older variants' stand-in is used and
   named (granted point, test drop, lethal damage). The checker fails that link and its dependants, and the later links are
-  still tested. The runner's time limit is 1,500 s unless `-TimeoutSeconds` is given.
+  still tested.
+- **The runner's time limit** is 2,100 s for `-Unforced` unless `-TimeoutSeconds` is given. The sum it covers: editor start
+  (about 2 min), 720 s of kills, one 50 s wait for a downed Maya, the 30 s buy, the mission (about 100 s), the 90 s down
+  wait and the 40 s bleed-out, about 1,700 s. A stacked worst case (the 240 s kill timeout of the fight and a 50 s wait at
+  each of the seven link groups) can still exceed it, and a run cut off there logs no SUMMARY and grades every unreached link
+  FAIL.
 - `-Unforced` refuses `-Shield` and `-DownAfterFight`. The run starts with the stand-in start shield, as normal play does.
 
 **What it will not show even when it passes:** travel is still by teleport, the fight still uses the hold on fire and
@@ -449,6 +474,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-07 | Z23: main 7eee9ee, five enemies, zuhu, no switch twice, `-Shield`, `-DownAfterFight` | 14 / 0 / 0 of 14, each | the first runs of the 14 links on `main` itself; no `fallback=shapes` line in the four logs; ctest 28/28, verify_packages exact; logs under ignored `local/` |
 | 2026-11-07 to 11-11 | hub batches Z26, Z35, Z37 (three runs), Z41 to Z52b, each on that batch's candidate or main, zuhu | 14 / 0 / 0 of 14, as reported | from the hub's log (ignored, local): it records "gate 14" or "14/0/0" per batch. This lane did not read those logs, and the log does not always say which variants ran |
 | 2026-11-11 | `-Unforced` added (feature/slice-gate-unforced) | not run | the driver was not compiled (build slot held by a batch); checker tests 55/55 |
+| 2026-11-11 | `-Unforced`, review round 1 of #218 | not run | every NOT_AVAILABLE fails an unforced run; the mission-page token needs the page to have done the work; an enemy hit is required for a down; the accept falls back to a named direct call; still not compiled; checker tests 58/58 |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.

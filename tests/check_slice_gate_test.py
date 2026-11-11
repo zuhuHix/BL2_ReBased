@@ -438,6 +438,7 @@ class SliceGateTest(unittest.TestCase):
                  'lethal damage at the end of the fight': 'loot_drop_on_kill', 'lethal damage applied by the test': 'go_down',
                  "down state from the test's lethal damage": 'bleed_out_respawn',
                  'accepted by the use key without the mission page': 'mission_accept',
+                 'accepted by a direct call after the mission page did not accept': 'mission_accept',
                  'turned in by the use key without the mission page': 'mission_turn_in'}
         self.assertEqual(sorted(names), sorted(chk.FORCING_FIXTURES), 'a test for every forcing fixture')
         for fixture, name in names.items():
@@ -468,8 +469,21 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('host said NOT_AVAILABLE', self.row(out, 14))
 
+    # Written out here, so that dropping a link from the checker's mapping fails this test instead of removing its case.
+    EVIDENCE = {
+        'loot_drop_on_kill': 'how=kill_roll',
+        'phaselock_enemy': 'how=skills_page',
+        'mission_accept': 'how=mission_page',
+        'mission_turn_in': 'how=mission_page',
+        'go_down': 'how=enemies',
+        'bleed_out_respawn': 'how=after_enemy_down',
+    }
+
+    def test_unforced_evidence_mapping_is_the_six_links(self):
+        self.assertEqual(chk.UNFORCED_EVIDENCE, self.EVIDENCE)
+
     def test_unforced_pass_without_its_how_token_fails(self):
-        for name, token in chk.UNFORCED_EVIDENCE.items():
+        for name, token in self.EVIDENCE.items():
             with self.subTest(link=name):
                 code, out = self.run_checker(self.write_log(build({name: ('PASS', 'synthetic, no token')}, range_mode=True, unforced=True)))
                 self.assertEqual(code, 1)
@@ -487,9 +501,26 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('checker: the range was there, so its enemies can down her', self.row(out, 13))
         code, out = self.run_checker(self.write_log(build(results, range_mode=False, unforced=True)))
-        self.assertEqual(code, 0, out)
-        self.assertIn('NOT_AVAILABLE', self.row(out, 13))
+        self.assertEqual(code, 1, out)
+        self.assertIn("checker: a NOT_AVAILABLE is not a pass in an unforced run", self.row(out, 13))
         self.assertIn('not unforced: go_down', out)
+
+    def test_unforced_mission_skipped_while_down_fails(self):
+        """The review's case: Maya still down when the mission is due, links 10 to 12 skipped, 13 and 14 on enemy hits."""
+        skipped = ('NOT_AVAILABLE', 'Maya down from a previous link (injured, health 0/213) when this link was due to start')
+        results = {name: skipped for name in ('mission_accept', 'mission_objective', 'mission_turn_in')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True, unforced=True)), '--expect-unforced')
+        self.assertEqual(code, 1, out)
+        self.assertIn('slice gate: 11 PASS, 3 FAIL, 0 NOT_AVAILABLE of 14', out)
+        for index in (10, 11, 12):
+            self.assertIn('checker: a NOT_AVAILABLE is not a pass in an unforced run', self.row(out, index))
+        self.assertIn('not unforced: mission_accept, mission_objective, mission_turn_in', out)
+
+    def test_unforced_setup_gap_is_not_a_pass_either(self):
+        results = {chk.DECOY_LINK: ('NOT_AVAILABLE', chk.SETUP_GAP + ', synthetic: no source')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('FAIL', self.row(out, 7))
 
     def test_unforced_loot_not_available_fails_with_the_range(self):
         results = {'loot_drop_on_kill': ('NOT_AVAILABLE', 'synthetic')}
