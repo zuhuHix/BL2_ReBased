@@ -168,6 +168,112 @@ def test_npcs_mode_stops_before_clean_or_import():
     assert error and 'Broken/S p_Diffuse' in error and not touched(log), (error, touched(log))
 
 
+
+# --- repository-relative job paths (tools/repo_paths.py) and the launchers' checkout guard -----------------------------------------
+
+import repo_paths as rp  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def synthetic_checkout(base, name):
+    """A folder that looks like a checkout of this repository: a .git entry and the project file."""
+    root = Path(base) / name
+    (root / 'host/ue5/OpenWillow').mkdir(parents=True)
+    (root / 'host/ue5/OpenWillow/OpenWillow.uproject').write_text('{}', encoding='utf-8')
+    (root / '.git').mkdir()
+    return root
+
+
+def stored_job(root):
+    tex = root / 'local/external/umodel/slice-npc/TargetDummy/Textures/T_Mask.png'
+    tex.parent.mkdir(parents=True)
+    tex.write_bytes(b'x')
+    return {'tool': 'tools/slice_npc_assets.py', 'slice_dir': str(root / 'local/slice'), 'npcs': [
+        {'id': 'TargetDummy', 'gltf': None, 'tracks': str(root / 'local/slice/anim_tracks_TargetDummy.json'),
+         'reference_out': str(root / 'local/slice/ref_pose_TargetDummy.json'),
+         'slots': [{'slot': 'S', 'material': 'Mati_X', 'textures': {'p_Masks': str(tex), 'p_Diffuse': str(tex)}}]}]}
+
+
+def test_job_paths_round_trip_through_the_repository_root():
+    with tempfile.TemporaryDirectory() as tmp:
+        writer = synthetic_checkout(tmp, 'writer')
+        job = stored_job(writer)
+        stored = rp.job_to_repo(job, writer)
+        npc = stored['npcs'][0]
+        assert stored['slice_dir'] == 'local/slice' and npc['reference_out'] == 'local/slice/ref_pose_TargetDummy.json'
+        assert npc['slots'][0]['textures']['p_Masks'] == 'local/external/umodel/slice-npc/TargetDummy/Textures/T_Mask.png'
+        assert npc['gltf'] is None and npc['slots'][0]['material'] == 'Mati_X'          # no path: unchanged; names: untouched
+        assert rp.job_from_repo(stored, writer) == job
+        # Copied into another worktree, the same stored job resolves there, and the zone check sees that worktree's files.
+        reader = synthetic_checkout(tmp, 'reader')
+        shutil.copytree(writer / 'local', reader / 'local')
+        shutil.rmtree(writer)
+        resolved = rp.job_from_repo(stored, reader)
+        assert resolved['slice_dir'] == str(reader / 'local/slice')
+        assert e.zone_problem(resolved) is None
+
+
+def test_old_job_with_absolute_paths():
+    with tempfile.TemporaryDirectory() as tmp:
+        writer = synthetic_checkout(tmp, 'writer')
+        reader = synthetic_checkout(tmp, 'reader')
+        old = stored_job(reader)                          # absolute and present in this checkout: read as it is
+        assert rp.job_from_repo(old, reader) == old
+        gone = stored_job(writer)                         # absolute into a worktree that was deleted afterwards
+        gone['slice_dir'] = str(reader / 'local/slice')
+        for npc in gone['npcs']:
+            npc['reference_out'] = str(reader / 'local/slice/ref.json')
+        shutil.rmtree(writer)
+        job_file = reader / 'local/slice/editor_job.json'
+        job_file.parent.mkdir(parents=True, exist_ok=True)
+        job_file.write_text(json.dumps(gone), encoding='utf-8')
+        try:
+            rp.resolve_job_file(job_file, reader / 'local/slice/editor_job.resolved.json', reader)
+            raise AssertionError('a missing absolute path was accepted')
+        except rp.StalePath as problem:
+            text = str(problem)
+        assert str(job_file) in text and str(writer) in text and 'does not exist' in text and 'python tools/slice_npc_assets.py editor-job' in text, text
+        assert not (reader / 'local/slice/editor_job.resolved.json').exists()
+
+
+def test_old_job_writing_into_another_checkout_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        other = synthetic_checkout(tmp, 'other')          # still exists: the report would land there (2026-11-10)
+        here = synthetic_checkout(tmp, 'here')
+        job = {'tool': 'tools/prepare_phaselock_target.py', 'slice_dir': str(other / 'local/phaselock/target'), 'npcs': []}
+        try:
+            rp.job_from_repo(job, here, source='job.json', regenerate=rp.regenerate_command(job))
+            raise AssertionError('an output in another checkout was accepted')
+        except rp.StalePath as problem:
+            assert 'outside this checkout' in str(problem) and 'prepare_phaselock_target.py editor-job' in str(problem), problem
+
+
+POWERSHELL = shutil.which('powershell') or shutil.which('pwsh')
+
+
+def guard(cwd):
+    call = f". '{ROOT / 'tools' / 'checkout_guard.ps1'}'; $r = Assert-OwCheckout '{ROOT / 'tools'}'; Write-Output \"returned=$r\""
+    return subprocess.run([POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', call], cwd=cwd,
+                          capture_output=True, text=True, encoding='utf-8', errors='replace')
+
+
+def test_checkout_guard():
+    if not POWERSHELL:
+        print('test_checkout_guard: skipped (no PowerShell)')
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        other = synthetic_checkout(tmp, 'other')
+        (other / 'tools').mkdir()
+        refused = guard(other / 'tools')                  # cwd in another checkout of this repository
+        assert refused.returncode != 0 and 'another checkout of this repository' in refused.stderr + refused.stdout, refused
+        assert f'Repository root: {ROOT}' in refused.stdout, refused.stdout
+        plain = guard(tmp)                                 # cwd in no checkout at all: allowed
+        assert plain.returncode == 0 and f'returned={ROOT}' in plain.stdout, plain
+    ours = guard(ROOT / 'tools')                           # cwd in the script's own checkout
+    assert ours.returncode == 0 and f'returned={ROOT}' in ours.stdout, ours
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:

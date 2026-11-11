@@ -47,6 +47,7 @@ from prepare_character_anims import MIRROR, matrix, to_quat, ue_matrix  # noqa: 
 from prepare_character_pose import read_joints  # noqa: E402
 from prepare_sanctuary_pillar import block, numbers  # noqa: E402
 import filter_gestalt_gltf  # noqa: E402
+from repo_paths import job_to_repo, to_repo  # noqa: E402
 import weapon_recipe  # noqa: E402
 
 SLICE = ROOT / 'local/slice'
@@ -276,9 +277,10 @@ def run_umodel(umodel, cooked, job_id, group, package, obj, cls, formats, want_g
         else:
             siblings = sorted(target.parent.glob(target.stem + '.*')) if target.parent.is_dir() else []
         for item in siblings or [target]:
-            if not item.is_file() or any(o['path'] == str(item) for o in outputs + other):
+            # Stored relative to the repository root (tools/repo_paths.py), so a copied inventory does not point into another worktree.
+            if not item.is_file() or any(o['path'] == to_repo(item) for o in outputs + other):
                 continue
-            record = {'path': str(item), 'class': kind, 'object': name, 'bytes': item.stat().st_size}
+            record = {'path': to_repo(item), 'class': kind, 'object': name, 'bytes': item.stat().st_size}
             # With -groups the layout is <out>/<package>/<group>/<set>/: keep only the wanted group's set.
             if want_group and item.parent.parent.name != want_group:
                 other.append(record)
@@ -859,7 +861,8 @@ def editor_job_step(args):
                          'sample_fragments': pistol['sample']['fragments'] if 'sample' in pistol else [],
                          'candidate_fragments': [s['fragment'] for s in pistol['candidate_sections']['fragments']]
                          if 'candidate_sections' in pistol else []}
-    write_json(SLICE / 'editor_job.json', job)
+    # Paths are stored relative to the repository root; the launcher resolves them for the editor (tools/repo_paths.py resolve-job).
+    write_json(SLICE / 'editor_job.json', job_to_repo(job, ROOT))
     print(f'editor-job: wrote {SLICE / "editor_job.json"}')
     return job
 

@@ -28,7 +28,9 @@ param(
 # It never edits Maya's assets or the existing weapon items; it only (re)creates content under
 # /Game/OpenWillow/Characters/{Marcus,TargetDummy,Shared} and /Game/OpenWillow/Weapons/MaliwanPistol.
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path -Parent $PSScriptRoot
+# Prints the root and refuses when the current directory is in another checkout (tools/checkout_guard.ps1).
+. (Join-Path $PSScriptRoot 'checkout_guard.ps1')
+$repo = Assert-OwCheckout $PSScriptRoot
 if (!$Game -or !(Test-Path -LiteralPath $Game)) { throw 'Pass -Game <Borderlands 2 folder> or set OPENWILLOW_BL2' }
 if (!$UModel -or !(Test-Path -LiteralPath $UModel)) { throw 'Pass -UModel <umodel.exe> or set OPENWILLOW_UMODEL' }
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
@@ -58,7 +60,11 @@ function Use-EditorLock([scriptblock]$Body) {
 }
 
 function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
-    $env:OPENWILLOW_SLICE_JOB = Join-Path $slice 'editor_job.json'
+    # The stored job holds repo-relative paths; the editor reads a copy resolved against this checkout (tools/repo_paths.py).
+    $resolved = Join-Path $slice 'editor_job.resolved.json'
+    & $Python (Join-Path $PSScriptRoot 'repo_paths.py') resolve-job (Join-Path $slice 'editor_job.json') $resolved
+    if ($LASTEXITCODE -ne 0) { throw "the editor job does not resolve in $repo (see the message above)" }
+    $env:OPENWILLOW_SLICE_JOB = $resolved
     $env:OPENWILLOW_SLICE_MODE = $Mode
     $log = Join-Path $logs "editor-$Mode.log"
     $report = Join-Path $slice "editor_report_$Mode.json"

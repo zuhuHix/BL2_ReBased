@@ -2,7 +2,7 @@
 param(
     [string]$WorktreeRoot,
     # Copy missing ignored data from another populated worktree (Content and every local/ folder)
-    # instead of the older shared seed. Existing files are never overwritten.
+    # instead of the older shared seed. Existing files are never overwritten (unless -RefreshStale).
     [string]$SourceWorktree,
     # Fill the seed (-SeedDirectory) from this checkout instead of provisioning a worktree: Content and the seed folders.
     # tools/install_worktree_assets_hook.ps1 runs this, so the seed and the installer share this one code path.
@@ -15,7 +15,11 @@ param(
     [string[]]$ExcludeFolderNames = @('shots', 'screenshots', 'logs', 'captures', 'realgame', 'h4x', 'z3x', 'runs'),
     # Generated files that are per-run or regenerable and that no suite or host code reads: never copied. observed_gear.json is
     # written by tools/prepare_inventory_gear.py from traces; the host reads only gear_manifest.json.
-    [string[]]$ExcludeFileNames = @('observed_gear.json'),
+    # editor_job.resolved.json is the per-checkout copy the editor launchers write (tools/repo_paths.py); it holds absolute paths.
+    [string[]]$ExcludeFileNames = @('observed_gear.json', 'editor_job.resolved.json'),
+    # Also replace a file that exists when the source's copy is newer and differs (size or content), printing each one. Off by
+    # default: a worktree's own newer copy is never touched, and without the switch existing files are never overwritten.
+    [switch]$RefreshStale,
     # The seed folder (default: local\worktree-seed of the shared repository). The tests point it at a synthetic folder.
     [string]$SeedDirectory
 )
@@ -67,6 +71,14 @@ function Assert-NoReparse([string]$Anchor, [string]$Path) {
     }
 }
 
+function Test-Stale($SourceFile, [string]$Target) {
+    # Stale: the source's copy is strictly newer and differs (size first; the hash only when the sizes match).
+    $Existing = Get-Item -LiteralPath $Target -Force
+    if ($SourceFile.LastWriteTimeUtc -le $Existing.LastWriteTimeUtc) { return $false }
+    if ($SourceFile.Length -ne $Existing.Length) { return $true }
+    return ((Get-FileHash -LiteralPath $SourceFile.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash)
+}
+
 function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnchor, [string]$DestinationAnchor) {
     # Checks only, no writes: every file that would be copied, with its target. Refusals are thrown here, in the preflight.
     $SourceRoot = [IO.Path]::GetFullPath($Source).TrimEnd('\')
@@ -98,9 +110,14 @@ function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnch
             Assert-NoReparse $DestinationAnchor $TargetDirectory
             $CheckedTarget[$TargetDirectory] = $true
         }
-        if ([IO.File]::Exists($Target)) { continue }   # missing files only
+        $Replace = $false
+        if ([IO.File]::Exists($Target)) {
+            if (!$RefreshStale -or !(Test-Stale $File $Target)) { continue }   # missing files only, unless -RefreshStale
+            $Replace = $true
+        }
 
-        [void]$Plan.Add(@{ Source = $File.FullName; Target = $Target; TargetDirectory = $TargetDirectory; Stamp = $File.LastWriteTimeUtc })
+        [void]$Plan.Add(@{ Source = $File.FullName; Target = $Target; TargetDirectory = $TargetDirectory; Stamp = $File.LastWriteTimeUtc;
+                           Replace = $Replace })
     }
     return ,$Plan.ToArray()
 }
@@ -108,7 +125,14 @@ function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnch
 function Copy-Plan([string]$DestinationRoot, $Plan) {
     [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
     $Copied = 0
+    $Replaced = New-Object System.Collections.ArrayList
     foreach ($Item in $Plan) {
+        if ($Item.Replace) {
+            [IO.File]::Copy($Item.Source, $Item.Target, $true)
+            [IO.File]::SetLastWriteTimeUtc($Item.Target, $Item.Stamp)
+            [void]$Replaced.Add($Item.Target)
+            continue
+        }
         if ([IO.File]::Exists($Item.Target)) { continue }
         [IO.Directory]::CreateDirectory($Item.TargetDirectory) | Out-Null
         try {
@@ -120,7 +144,7 @@ function Copy-Plan([string]$DestinationRoot, $Plan) {
             if (![IO.File]::Exists($Item.Target)) { throw }
         }
     }
-    return $Copied
+    return @{ Copied = $Copied; Replaced = $Replaced.ToArray() }
 }
 
 function Invoke-Pairs($Pairs, [bool]$SkipLocal, [string]$MissingNote) {
@@ -143,8 +167,11 @@ function Invoke-Pairs($Pairs, [bool]$SkipLocal, [string]$MissingNote) {
         if ($Entry.Missing) {
             [void]$Lines.Add(('{0}: 0 missing files added{1}' -f $Entry.Pair.Name, $MissingNote)); continue
         }
-        $Count = Copy-Plan $Entry.Pair.Destination $Entry.Plan
-        [void]$Lines.Add(('{0}: {1} missing files added' -f $Entry.Pair.Name, $Count))
+        $Result = Copy-Plan $Entry.Pair.Destination $Entry.Plan
+        $Line = '{0}: {1} missing files added' -f $Entry.Pair.Name, $Result.Copied
+        if ($RefreshStale) { $Line += (', {0} stale files replaced' -f $Result.Replaced.Count) }
+        [void]$Lines.Add($Line)
+        foreach ($Target in $Result.Replaced) { [void]$Lines.Add("  replaced (the source's copy is newer): $Target") }
     }
     return ,$Lines.ToArray()
 }

@@ -137,6 +137,37 @@ class ProvisionTest(unittest.TestCase):
         self.assertIn('local/nosuchfolder: 0 missing files added (not in the seed)', result.stdout)
         self.assertIn('local/slice: 0 missing files added', result.stdout)
 
+    def test_refresh_stale_is_opt_in_and_lists_each_replaced_file(self):
+        """A worktree's stale seeded copy (an M_OW_NPC_Zone that predates new parameters, 2026-11-10): kept by default, replaced with
+        -RefreshStale only when the seed's copy is newer and differs, and named in the output. A newer worktree copy is never touched."""
+        content = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content'
+        seed_zone = self.seed / 'Content' / 'Zone.uasset'
+        write(seed_zone, 'new zone material')
+        write(content / 'Zone.uasset', 'old')
+        os.utime(content / 'Zone.uasset', (1_000_000_000, 1_000_000_000))       # older than the seed's copy
+        write(self.seed / 'slice' / 'same.json', 'same')
+        write(self.local('slice', 'same.json'), 'same')
+        os.utime(self.local('slice', 'same.json'), (1_000_000_000, 1_000_000_000))  # older but identical: not rewritten
+        # local/slice/manifest.json ('own') is newer than the seed's copy ('seed'): the worktree's own work, kept.
+        os.utime(self.seed / 'slice' / 'manifest.json', (1_000_000_000, 1_000_000_000))
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((content / 'Zone.uasset').read_text(encoding='utf-8'), 'old')
+        self.assertNotIn('replaced', result.stdout)
+        result = self.run_script('-RefreshStale')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((content / 'Zone.uasset').read_text(encoding='utf-8'), 'new zone material')
+        self.assertIn(f"replaced (the source's copy is newer): {content / 'Zone.uasset'}", result.stdout)
+        self.assertIn('Content: 0 missing files added, 1 stale files replaced', result.stdout)
+        self.assertIn('local/slice: 0 missing files added, 0 stale files replaced', result.stdout)
+        self.assertEqual(self.local('slice', 'manifest.json').read_text(encoding='utf-8'), 'own')
+        self.assertEqual(os.path.getmtime(self.local('slice', 'same.json')), 1_000_000_000)
+
+    def test_resolved_editor_job_is_never_copied(self):
+        write(self.seed / 'slice' / 'editor_job.resolved.json', '{}')   # absolute paths of the checkout that wrote it
+        self.run_script()
+        self.assertFalse(self.local('slice', 'editor_job.resolved.json').exists())
+
     def test_unsafe_folder_name_is_refused(self):
         result = self.run_script('-ExtraSeedFolders', '..\\escape')
         self.assertNotEqual(result.returncode, 0)

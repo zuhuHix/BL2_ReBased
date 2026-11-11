@@ -694,7 +694,7 @@ marker, or when the previous HEAD is all zeros (git passes that for `git worktre
 is provisioned at its first real checkout, and a provisioned worktree skips branch switches and rebases. File checkouts
 (`git checkout -- <path>`) always skip, because the provisioner scans the whole seed and each run took minutes. The marker is in the
 git directory, not under `local\`, because `local\` can be a shared junctioned root. `OPENWILLOW_PROVISION=1` forces a run. To top up an existing
-worktree, run it by hand: `powershell -File tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree>` (still missing files only).
+worktree, run it by hand: `powershell -File tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree>` (still missing files only; add `-RefreshStale` to also replace a file whose source copy is newer and differs, each one printed, see [tools/worktree-assets.md](../tools/worktree-assets.md)).
 
 **Refused, not copied.** Provisioning stops with an error when a junction or symlink sits on a destination path (`local\`, a
 `local\<folder>\`, `host\ue5\OpenWillow\Content\`) or on a seed or source path, and it checks that every write lands under the

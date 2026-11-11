@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slice_npc_assets as npc
 from editor_inputs import ZONE_TEXTURES, file_problem  # noqa: E402
+from repo_paths import job_to_repo, to_repo  # noqa: E402
 
 OUT = ROOT / 'local/phaselock/target'
 UMODEL_OUT = ROOT / 'local/external/umodel/phaselock-target'
@@ -231,7 +232,7 @@ def extract_step(args):
             record = go(f'{name}.material.{mic}', name, mic_package, mic, 'MaterialInstanceConstant', ['png'])
             props = npc.find_output(name, mic, ['props.txt'])
             info = npc.mic_textures(props) if props else {'textures': []}
-            slots.append({'name': default_mic, 'material': mic, 'package': mic_package, 'props': str(props) if props else None,
+            slots.append({'name': default_mic, 'material': mic, 'package': mic_package, 'props': to_repo(props) if props else None,
                           **info, 'export_record': record['id']})
         target['mesh_material_slots'] = slots
         pieces = {npc.leaf(att['static_mesh']): att for att in target['attachments']}
@@ -244,7 +245,7 @@ def extract_step(args):
                 record = go(f'{name}.material.{material}', name, mic_package, material, 'MaterialInstanceConstant', ['png'])
                 props = npc.find_output(name, material, ['props.txt'])
                 info = npc.mic_textures(props) if props else {'textures': []}
-                slots.append({'name': material, 'material': material, 'package': mic_package, 'props': str(props) if props else None,
+                slots.append({'name': material, 'material': material, 'package': mic_package, 'props': to_repo(props) if props else None,
                               **info, 'export_record': record['id']})
         anim_set = target['anim_sets'][0]
         group, set_name = group_of(anim_set['path'])
@@ -350,7 +351,8 @@ def editor_job_step(args):
         lines = '\n  '.join(problems)
         sys.exit('editor-job: the UModel exports are incomplete, so no job was written (the editor would assert or keep plain '
                  f'materials):\n  {lines}\nRun powershell -File tools/import_phaselock_target.ps1 -Steps prepare (UModel extract) first.')
-    npc.write_json(OUT / 'editor_job.json', job)
+    # Checked above with absolute paths; stored relative to the repository root (the launcher resolves them: tools/repo_paths.py).
+    npc.write_json(OUT / 'editor_job.json', job_to_repo(job, ROOT))
     npc.write_json(OUT / 'host_target.json', hosts)
     print(f'editor-job: wrote {OUT / "editor_job.json"} and host_target.json')
 

@@ -31,6 +31,21 @@ Provisioning copies missing files only, so it preserves worktree-specific
 generated assets. To repair a worktree manually, run
 `tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree-path>`.
 
+A file that already exists is never replaced by default, so a stale seeded copy survives (on 2026-11-10 a worktree kept an
+`M_OW_NPC_Zone` older than its newer scalar parameters, and an in-engine run was invalid). Add `-RefreshStale` to replace an
+existing file when the source's copy (the seed, `-SourceWorktree` or, with `-FillSeedFrom`, the checkout) is newer and differs.
+Each replaced file is printed and every folder line gains a count. A worktree file newer than the source is kept, as is an older
+file with identical contents. Refresh the seed first (`tools/install_worktree_assets_hook.ps1`) if the seed is the stale one.
+
+The slice-npc and Phaselock-target editor jobs (`local/slice/editor_job.json`, `local/phaselock/target/editor_job.json`) store
+paths relative to the repository root, so a copied job works in the worktree it is copied into.
+`tools/seed_slice_npc_assets.ps1` and `tools/import_phaselock_target.ps1` write `editor_job.resolved.json` for their own checkout
+before each editor run (`python tools/repo_paths.py resolve-job`). That file holds absolute paths and is never provisioned. An
+older job with absolute paths into another worktree stops there, naming the job, the path and the command that rewrites it
+(`python tools/slice_npc_assets.py editor-job` or `python tools/prepare_phaselock_target.py editor-job`). The same two
+scripts print `Repository root: ...` and refuse to run when the current directory is inside a different checkout of this
+repository (`tools/checkout_guard.ps1`): run the copy of the script that belongs to the worktree you mean.
+
 The shared seed is only as fresh as the last time it was refreshed. For a worktree that continues earlier work, copy everything from the most
 recent populated worktree instead (Content plus every `local/` folder: slice data, weapon tables, real-game
 captures, Phaselock data, analysis notes). Existing files are kept:

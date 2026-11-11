@@ -23,7 +23,9 @@ $ErrorActionPreference = 'Stop'
 $Steps = @($Steps | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $unknownSteps = @($Steps | Where-Object { $_ -notin 'all', 'prepare', 'mesh', 'anims', 'zone', 'attach' })
 if ($unknownSteps.Count -or !$Steps.Count) { throw "Unknown or empty -Steps: '$($unknownSteps -join ',')'. Use any of all, prepare, mesh, anims, zone, attach." }
-$repo = Split-Path -Parent $PSScriptRoot
+# Prints the root and refuses when the current directory is in another checkout (tools/checkout_guard.ps1).
+. (Join-Path $PSScriptRoot 'checkout_guard.ps1')
+$repo = Assert-OwCheckout $PSScriptRoot
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 $cmd = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
@@ -46,7 +48,11 @@ function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
     if (Get-Process UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
         throw 'An Unreal editor process is already running; leaving it untouched.'
     }
-    $env:OPENWILLOW_SLICE_JOB = Join-Path $out 'editor_job.json'
+    # The stored job holds repo-relative paths; the editor reads a copy resolved against this checkout (tools/repo_paths.py).
+    $resolved = Join-Path $out 'editor_job.resolved.json'
+    & $Python (Join-Path $PSScriptRoot 'repo_paths.py') resolve-job (Join-Path $out 'editor_job.json') $resolved
+    if ($LASTEXITCODE -ne 0) { throw "the editor job does not resolve in $repo (see the message above)" }
+    $env:OPENWILLOW_SLICE_JOB = $resolved
     $env:OPENWILLOW_SLICE_MODE = $Mode
     $log = Join-Path $logs "editor-$Mode.log"
     $report = Join-Path $out "editor_report_$Mode.json"
