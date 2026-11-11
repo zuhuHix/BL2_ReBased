@@ -259,6 +259,8 @@ try {
             $reached = Enter-IceMap
             if ($reached -notmatch 'Ice_P True') { throw "travel for the den down failed: $reached" }
             Start-Sleep 8; Send-Key Enter; Start-Sleep 1   # Send-Key asserts the game's focus itself
+            # The watch scans nothing until the new map has settled; its before_down snapshot must be taken before the immunity goes.
+            if ($WatchSpec) { $log.den_down_settled = Wait-SliceWatchSettled 40 }
             $first = Py 'print(dp_begin())'
             if ($first -eq 'None') { throw 'no enemy within reach for the den down' }
             if ($WatchSpec) { Save-SliceWatchSnap 'before_down'; $log.watch_before_down = Save-SliceWatchPawns 'before_down' }

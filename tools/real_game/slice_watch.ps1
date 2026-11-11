@@ -70,6 +70,17 @@ function Save-SliceWatchPawns([string]$Label) {
     try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json }
     catch { Write-Warning "slice watch pawns ${Label}: $_"; [pscustomobject]@{ error = "$_" } }
 }
+# After a map load, wait (at most $Seconds) until the recorder says the map has settled: the player has a pawn and the map's clock has passed the
+# spec's settle_seconds, so the watch's scans are allowed again. Reading only. True when settled; false on a timeout or with the watch off.
+function Wait-SliceWatchSettled([int]$Seconds = 40) {
+    if (!$script:SliceWatchOn) { return $false }
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        try { if ("$(Invoke-GamePy 'print(sw_settled())' 15)".Trim() -ceq 'True') { return $true } } catch { }
+        Start-Sleep 1
+    }
+    $false
+}
 # Before the game closes: an end snapshot, the end of the recording, the hooks off, then the usability check on the file. (On an error before this,
 # the observers stay until the capture's finalizer stops the game; they never block or write game state, the file keeps what was flushed, and
 # the finalizer is left word for word as reviewed.) Returns the counts, the check's lines (counts and pass/fail only) and usable.

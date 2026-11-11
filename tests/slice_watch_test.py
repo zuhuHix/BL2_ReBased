@@ -153,7 +153,7 @@ class BoundsTest(unittest.TestCase):
             watch.sw_reset('t', watch.sw_load_spec(spec))
             watch._sw_open('watch')
             watch.SW['on'] = True
-            watch.get_pc = lambda: type('PC', (), {'Pawn': object()})()   # a pawn is there, every read of it fails
+            watch.get_pc = lambda: type('PC', (), {'Pawn': object(), 'WorldInfo': type('W', (), {'TimeSeconds': 100.0})()})()   # settled; every read of the pawn fails
             watch._sw_sdk = type('SDK', (), {'find_all': staticmethod(lambda *a: [])})
             try:
                 for i in range(100):
@@ -216,6 +216,8 @@ class FakeObject:
     """An invented game object: attributes as given, a path name, a class."""
     def __init__(self, path, cls='Thing', **fields):
         self._path = path
+        self.Name = path.rsplit('.', 1)[-1].rsplit(':', 1)[-1]
+        self.bDeleteMe = False
         self.Class = type('C', (), {'Name': cls})()
         self.__dict__.update(fields)
 
@@ -237,21 +239,23 @@ class FakeGameTest(unittest.TestCase):
         loc = type('V', (), {'X': 1.0, 'Y': 2.0, 'Z': 3.0})()
         pawn = FakeObject('Lvl.PersistentLevel.Player_0', 'InventedPlayer', Location=loc, bHidden=False, GetHealth=lambda: 50.0,
                           CylinderComponent=type('Cy', (), {'CollisionRadius': 1.5, 'CollisionHeight': 2.5})())
-        enemy = FakeObject('Lvl.PersistentLevel.Enemy_1', 'InventedEnemy', Location=loc, GroundSpeed=4.0, AIClass=None,
+        enemy = FakeObject('Lvl.PersistentLevel.WillowAIPawn_1', 'WillowAIPawn', Location=loc, GroundSpeed=4.0, AIClass=None,
                            CylinderComponent=type('Cy', (), {'CollisionRadius': 1.0, 'CollisionHeight': 2.0})())
-        world = type('W', (), {'TimeSeconds': 12.5, 'GRI': FakeObject('Lvl.GRI', ActiveRespawnCheckpointTeleportActor=None),
+        world = type('W', (), {'TimeSeconds': 30.0, 'GRI': FakeObject('Lvl.GRI', ActiveRespawnCheckpointTeleportActor=None),
                                'GetStreamingPersistentMapName': lambda _s=None: 'Invented_P'})()
         pc = FakeObject('Lvl.PC', 'InventedPC', Pawn=pawn, WorldInfo=world,
                         PlayerReplicationInfo=FakeObject('Lvl.PRI', GetCurrencyOnHand=lambda _k: 7, ExpLevel=3))
         objects = {'WillowAIPawn': [enemy, FakeObject('Pkg.Default__Enemy')], 'ResourcePool': [FakeObject('Lvl.Pool_0', CurrentValue=1.0)],
                    'TravelStation': [FakeObject('Lvl.Station_0', bShouldBeActive=True)], 'GameEngine': [], 'WillowPickup': []}
         functions = {'Pkg.Other:Call'}
+        self.objects, self.world, self.enemy = objects, world, enemy
+        self.scans = []
         hooks = self.hooks
 
         class Type:
             PRE, POST, POST_UNCONDITIONAL = 'pre', 'post', 'post_unconditional'
         watch._sw_sdk = type('SDK', (), {'find_class': staticmethod(lambda name: cls),
-                                         'find_all': staticmethod(lambda name, exact=True: list(objects.get(name, []))),
+                                         'find_all': staticmethod(lambda name, exact=True: self.scan(name)),
                                          'find_object': staticmethod(lambda kind, path: (enemy if path == enemy._path else None) if kind == 'WillowAIPawn'
                                                                      else (object() if path in functions else None))})
         watch._SwType = Type
@@ -260,13 +264,81 @@ class FakeGameTest(unittest.TestCase):
         watch._sw_has_hook = lambda path, kind, hid: (path, kind, hid) in hooks
         watch.get_pc = lambda: pc
 
+    def scan(self, name):
+        self.scans.append(name)
+        found = self.objects.get(name, [])
+        if isinstance(found, Exception):
+            raise found
+        return list(found)
+
     def tearDown(self):
         watch._sw_sdk = None
+
+    def test_nothing_is_scanned_before_the_map_settles_and_labelled_reads_wait(self):
+        with RepoDir():
+            self.world.TimeSeconds = 2.0   # just after a map load
+            started = watch.sw_start('t', {'snap_every': 0.5, 'pawns_every': 0.1})
+            self.assertTrue(watch.SW['deferred'])   # the start snapshot waits
+            self.assertEqual(watch.sw_pawns('arrival')['deferred'], True)
+            tick = self.hooks[(watch.SW_TICK, 'post_unconditional', 'ow_slice_watch_tick')]
+            for _ in range(5):
+                tick(None, Args(DeltaTime=0.0167), None, None)
+            self.assertEqual(self.scans, [])   # no scan of any kind before the map settled
+            self.world.TimeSeconds = 20.0
+            tick(None, Args(DeltaTime=0.0167), None, None)
+            self.assertIn('WillowAIPawn', self.scans)
+            self.assertEqual(watch.SW['deferred'], [])
+            watch.sw_dump('watch')
+            data = checker.load_recording(watch.SW['path'])
+            start = next(x for x in data['snaps'] if x['label'] == 'start')
+            self.assertIn('asked_t', start)   # a deferred snapshot says when it was asked for
+            self.assertTrue(any(p['label'] == 'arrival' for p in data['pawns']))
+            self.assertEqual(started['resolved'], 0)
+
+    def test_a_scan_that_fails_after_travel_is_switched_off_not_retried(self):
+        with RepoDir():
+            self.objects['WillowAIPawn'] = RuntimeError('invented: objects pending destruction')
+            watch.sw_start('t', {'pawns_every': 0.1})
+            tick = self.hooks[(watch.SW_TICK, 'post_unconditional', 'ow_slice_watch_tick')]
+            for _ in range(20):
+                watch.SW['next_pawns'] = 0.0
+                tick(None, Args(DeltaTime=0.0167), None, None)
+            self.assertEqual(self.scans.count('WillowAIPawn'), 1)   # tried once, then off
+            self.assertIn('pawns', watch.SW['off'])
+            self.assertEqual(watch.sw_pawns('later')['failed'], ['off'])
+            self.objects['ResourcePool'] = RuntimeError('invented')
+            snap = watch.sw_snap('before_down')
+            self.assertIn('pools', snap['failed'])
+            self.assertIn('pools', watch.sw_snap('after')['off'])
+            counts = watch.sw_dump('watch')
+            self.assertEqual(sorted(counts['switched_off']), ['mods', 'pawns', 'pools'])   # no mods_base outside the game: off too
+
+    def test_no_native_getter_on_a_template_or_a_dying_pawn(self):
+        called = []
+        def getter(name):
+            def get():
+                called.append(name)
+                return 1.0
+            return get
+        template = FakeObject('GD_Invented.Population:Pawn_Invented', 'WillowAIPawn', GetHealth=getter('template'), Location=self.enemy.Location)
+        dying = FakeObject('Lvl.PersistentLevel.WillowAIPawn_9', 'WillowAIPawn', GetHealth=getter('dying'), Location=self.enemy.Location)
+        dying.bDeleteMe = True
+        live = FakeObject('Lvl.PersistentLevel.WillowAIPawn_3', 'WillowAIPawn', GetHealth=getter('live'), Location=self.enemy.Location)
+        self.objects['WillowAIPawn'] = [template, dying, live]
+        pool_getter = getter('pool')
+        self.objects['ResourcePool'] = [FakeObject('Lvl.Pool_1', CurrentValue=2.0, AssociatedProvider=live, GetMaxValue=pool_getter)]
+        with RepoDir():
+            watch.sw_start('t', {})
+            self.assertEqual(watch.sw_pawns('arrival')['pawns'], 1)
+            snap = watch.sw_snap('x')
+            self.assertEqual(called, ['live'])   # only the live WillowAIPawn_ instance; no pool getter either
+            self.assertEqual(snap['pools'][0]['CurrentValue'], 2.0)
+            watch.sw_stop()
 
     def test_a_whole_recording(self):
         with RepoDir() as d:
             spec = {'funcs': ['InventedPawn.Hit', 'InventedPawn.Missing', 'Pkg.Other:Call', 'Pkg.Nowhere:Call'], 'frames': True,
-                    'frame_player': True, 'pickups': True, 'pawns_paths': ['Lvl.PersistentLevel.Enemy_1', 'Lvl.Gone_2']}
+                    'frame_player': True, 'pickups': True, 'pawns_paths': ['Lvl.PersistentLevel.WillowAIPawn_1', 'Lvl.Gone_2']}
             started = watch.sw_start('t', spec)
             self.assertEqual(started['resolved'], 3)   # Hit, Down:Hit (a state's declaration) and Other:Call, each hooked PRE and POST
             self.assertEqual(started['missing'], ['InventedPawn.Missing', 'Pkg.Nowhere:Call'])   # a full path the game lacks is missing
@@ -517,6 +589,15 @@ class HelperTest(unittest.TestCase):
         for word in ('refused name', 'not started', 'stop after error: stopped', 'a snapshot while off does nothing',
                      'complete refused: True', 'a failed snapshot is only a warning'):
             self.assertIn(word, done.stdout, done.stdout + done.stderr)
+
+    def test_the_settle_wait(self):
+        body = ("function Start-Sleep { }\n"
+                "$script:n = 0; function Invoke-GamePy([string]$Code, [int]$T = 30) { $script:n++; if ($script:n -ge 3) { 'True' } else { 'False' } }\n"
+                "'off: ' + (Wait-SliceWatchSettled 5)\n"
+                "$script:SliceWatchOn = $true; 'on: ' + (Wait-SliceWatchSettled 5) + ' after ' + $script:n")
+        out = ps(body).stdout
+        self.assertIn('off: False', out)   # with the watch off it asks nothing
+        self.assertIn('on: True after 3', out)
 
     def test_a_bad_spec_and_too_little_disk_stop_before_anything(self):
         with tempfile.TemporaryDirectory() as tmp:

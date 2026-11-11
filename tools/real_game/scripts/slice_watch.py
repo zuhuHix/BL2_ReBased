@@ -4,8 +4,19 @@ Run through Invoke-GamePyFile (tools/real_game/realgame.ps1); tools/real_game/sl
 -WatchSpec switch. Our own code, no game data: the function names it hooks come from a spec file the runner passes (kept under the
 ignored local/), and everything it records goes to RG_OUT (the ignored local/realgame/<set>/).
 
-It only reads. Hooks are observers: they never return Block and never change an argument. Reads call getters and read fields;
-nothing here sets a field, calls a setter, spawns, damages, moves, travels or sends input.
+It only reads. Hooks are observers: they never return Block and never change an argument. Nothing here sets a field, calls a
+setter, spawns, damages, moves, travels or sends input.
+
+Safe by construction (after the 2026-11-11 session 2 crashes, an access violation about two seconds after the first pawn read, twice):
+- A native getter is called only on the player's own controller and pawn, and on live AI pawns: objects named WillowAIPawn_<n>,
+  of that exact class, not bDeleteMe. That is how the tracked probes do it (combat_probe.cb_enemies, den_probe.dp_begin): find_all of
+  the class, with the preloaded Pawn_<Type> templates left out. Every other object a scan returns (resource pools, travel stations,
+  pickups, the engine) is read by its fields only.
+- No scan at all until the player has a pawn AND the map's own clock (WorldInfo.TimeSeconds, which restarts at every map load) has
+  passed settle_seconds. A labelled snapshot or pawn read asked for earlier is deferred: the tick takes it once the map has settled,
+  and the line carries the time it was asked for.
+- Each kind of read is wrapped. Its first failure is counted and switches that kind off for the rest of the run (it is never retried
+  each tick); the line names it in 'off'.
 
 The driver runs every command script in ONE shared namespace (openwillow_realgame/__init__.py, `scope`), so every top-level name
 here starts with sw_, _sw_, SW or _Sw: nothing a tracked probe defines is replaced, and no probe can replace these
@@ -25,7 +36,9 @@ Spec (a dict or the path of a JSON file; sw_load_spec refuses unknown keys, wron
   snap_every    seconds between automatic snapshots (0 = none). Automatic snapshots are light: player, controller, level, cash,
                 checkpoint; pools, stations, pickups and mods come only in labelled snapshots (the capture's own sw_snap calls).
   pawns_every   seconds between automatic pawn reads (0 = none).
-  pawns_paths   full object paths: an automatic pawn read looks up only these (a name lookup, not a scan of every object).
+  pawns_paths   full object paths: an automatic pawn read looks up only these (a name lookup, not a scan of every object); each must
+                still be a live WillowAIPawn_<n>.
+  settle_seconds  the map clock a scan waits for after every load (default 15).
   pawns_match   substrings: when no paths are given, only pawns whose path, class or AI class holds one are kept.
   caps          per_func_cap, row_cap, frame_cap, snap_cap, pawn_cap, byte_cap; flush_every.
 """
@@ -53,7 +66,7 @@ SW_SPEC_KEYS = {
     "pawns_paths": (list, [], 0, 20), "pawns_match": (list, [], 0, 20),
     "per_func_cap": (int, 5000, 1, 20000), "row_cap": (int, 200000, 1, 400000), "frame_cap": (int, 300000, 1, 400000),
     "snap_cap": (int, 5000, 1, 20000), "pawn_cap": (int, 20000, 1, 50000), "byte_cap": (int, 300_000_000, 1_000_000, 1_000_000_000),
-    "flush_every": (float, 2.0, 0.5, 30.0),
+    "flush_every": (float, 2.0, 0.5, 30.0), "settle_seconds": (float, 15.0, 5.0, 120.0),
 }
 SW_DOC_KEYS = ("name", "notes", "checks")
 SW_LABELLED_CAP = 200   # labelled snapshots (the capture's own) are kept beyond snap_cap, up to this many
@@ -66,7 +79,8 @@ def sw_reset(label="", spec=None):
     SW.update(on=False, label=label, spec=dict(sw_defaults(), **(spec or {})), t0=_sw_time.perf_counter(), frame=0, dt=None,
               last_g=None, last_t=None, buf=[], fh=None, path=None, bytes=0,
               n={"row": 0, "frame": 0, "snap": 0, "pawns": 0, "labelled": 0}, counts={}, dropped={}, resolved=[], missing=[],
-              hooks=[], errors=[], auto_failures=0, next_snap=0.0, next_pawns=0.0, next_flush=0.0, busy=[])
+              hooks=[], errors=[], auto_failures=0, next_snap=0.0, next_pawns=0.0, next_flush=0.0, busy=[],
+              off=set(), switched_off={}, deferred=[])
     return SW
 
 
@@ -161,6 +175,25 @@ def _sw_args(args, func):
 def _sw_err(where, e):
     if len(SW["errors"]) < 200:
         SW["errors"].append(f"{where}: {repr(e)[:160]}")
+
+
+def sw_switch_off(kind, e):
+    """A read kind failed: count it, name it, and never try it again in this run."""
+    if kind not in SW["off"]:
+        SW["off"].add(kind)
+        SW["switched_off"][kind] = repr(e)[:160]
+    _sw_err("read " + kind, e)
+
+
+def sw_settled():
+    """Whether scans may run: the player has a pawn and the map's own clock has passed settle_seconds since this map loaded."""
+    try:
+        pc = _sw_pc()
+        if pc.Pawn is None:
+            return False
+        return float(pc.WorldInfo.TimeSeconds) >= SW["spec"]["settle_seconds"]
+    except Exception:
+        return False
 
 
 def _sw_pc():
@@ -264,13 +297,19 @@ def _sw_tick(obj, args, ret, func):
         SW["dt"] = round(delta, 5) if isinstance(delta, float) else delta
         t_real = _sw_now()
         row = sw_frame_row(SW["dt"], t_real, _sw_game_t())
-        if SW["spec"]["frame_player"]:
+        if SW["spec"]["frame_player"] and "frame_player" not in SW["off"]:
             row.update(_sw_player_here())
         SW["busy"] = []
         spec = SW["spec"]
         due_snap = spec["snap_every"] and t_real >= SW["next_snap"]
         due_pawns = spec["pawns_every"] and t_real >= SW["next_pawns"]
-        if (due_snap or due_pawns) and _sw_auto_reads_ok():
+        settled = (due_snap or due_pawns or SW["deferred"]) and sw_settled()
+        if settled and SW["deferred"]:
+            # Labelled reads asked for before the map settled, taken now, oldest first.
+            pending, SW["deferred"] = SW["deferred"], []
+            for kind, label, asked in pending:
+                _sw_timed("deferred", (sw_snap if kind == "snap" else sw_pawns), label, asked)
+        if (due_snap or due_pawns) and settled:
             if due_snap:
                 SW["next_snap"] = t_real + spec["snap_every"]
                 _sw_timed("snap", _sw_auto, sw_snap, "auto")
@@ -300,23 +339,17 @@ def _sw_auto(fn, label):
     return result
 
 
-def _sw_auto_reads_ok():
-    """Automatic reads only while there is a player pawn (none during a map load or the respawn's holding cell)."""
-    try:
-        return _sw_pc().Pawn is not None
-    except Exception:
-        return False
-
-
 def _sw_player_here():
-    """The player's location and hidden flag, for a frame row (reads only); empty while there is no pawn."""
+    """The player's location and hidden flag, for a frame row (fields of the player's own pawn); empty while there is no pawn.
+    A failure switches this read off."""
     try:
         pawn = _sw_pc().Pawn
         if pawn is None:
             return {"loc": None}
         loc = pawn.Location
         return {"loc": [round(loc.X, 1), round(loc.Y, 1), round(loc.Z, 1)], "hidden": bool(pawn.bHidden)}
-    except Exception:
+    except Exception as e:
+        sw_switch_off("frame_player", e)
         return {"loc": None}
 
 
@@ -421,7 +454,28 @@ SW_STATION_FIELDS = ("bShouldBeActive", "bIsCurrentlyActive", "Location")
 
 
 def _sw_live(objs):
-    return [o for o in objs if "Default__" not in o._path_name()]
+    """Scanned objects that are not class defaults and not being destroyed. Their fields may be read; no native getter is called on them."""
+    out = []
+    for o in objs:
+        if "Default__" in o._path_name():
+            continue
+        try:
+            if o.bDeleteMe:
+                continue
+        except Exception:
+            pass
+        out.append(o)
+    return out
+
+
+def sw_live_pawn(pawn):
+    """A live AI pawn, the only scanned object a native getter is called on: named WillowAIPawn_<n> (not a preloaded Pawn_<Type>
+    template), not a class default, not bDeleteMe (as combat_probe.cb_enemies and den_probe.dp_begin)."""
+    try:
+        return (pawn is not None and pawn.Name.startswith("WillowAIPawn_") and "Default__" not in pawn._path_name()
+                and not pawn.bDeleteMe)
+    except Exception:
+        return False
 
 
 def _sw_cylinder(pawn):
@@ -432,19 +486,36 @@ def _sw_cylinder(pawn):
         return None
 
 
+SW_POOL_FIELDS = ("Definition", "AssociatedProvider", "CurrentValue", "MaxValue", "MaxValueBaseValue")
+
+
+def _sw_fields(obj, names):
+    """Fields only: a name that is a function is skipped, never called."""
+    out = {}
+    for name in names:
+        try:
+            value = getattr(obj, name)
+            if not callable(value):
+                out[name] = _sw_p(value)
+        except Exception:
+            pass
+    return out
+
+
 def _sw_pools():
+    """Live pools that belong to someone (AssociatedProvider set), by their fields only (as action_skill_hud._find_pool reads them)."""
     rows = []
     for pool in _sw_live(_sw_sdk.find_all("ResourcePool", False)):
-        row = {"pool": pool._path_name()}
-        row.update(_sw_read(pool, ("Definition", "AssociatedProvider", "CurrentValue", "GetMaxValue", "MaxValue")))
-        rows.append(row)
+        row = dict(_sw_fields(pool, SW_POOL_FIELDS), pool=pool._path_name())
+        if row.get("AssociatedProvider"):
+            rows.append(row)
     return rows
 
 
 def _sw_pickups():
     rows = []
     for pk in _sw_live(_sw_sdk.find_all("WillowPickup", False)):
-        row = dict(_sw_read(pk, ("LifeSpan", "DrawScale", "Location", "bDeleteMe")), name=pk._path_name())
+        row = dict(_sw_fields(pk, ("LifeSpan", "DrawScale", "Location")), name=pk._path_name())
         try:
             row["item"] = _sw_p(pk.Inventory.DefinitionData.ItemDefinition)
         except Exception:
@@ -464,11 +535,11 @@ def _sw_mods():
 
 def _sw_engine():
     for engine in _sw_live(_sw_sdk.find_all("GameEngine", False)):
-        return _sw_read(engine, ("bSmoothFrameRate", "MinSmoothedFrameRate", "MaxSmoothedFrameRate"))
+        return _sw_fields(engine, ("bSmoothFrameRate", "MinSmoothedFrameRate", "MaxSmoothedFrameRate"))
     return {}
 
 
-def sw_snap(label):
+def sw_snap(label, asked=None):
     """One state snapshot (reads only), queued for the file and returned. Each part reads on its own; 'failed' names every part that
     raised, so a usability check can tell a failed read from an empty one. Automatic snapshots (label 'auto') are light; a labelled
     one adds stations, pools, pickups (when the spec asks), the engine's frame-rate settings and the loaded mods."""
@@ -479,8 +550,13 @@ def sw_snap(label):
     if not auto and SW["n"]["labelled"] >= SW_LABELLED_CAP:
         SW["dropped"]["labelled"] = SW["dropped"].get("labelled", 0) + 1
         return {}
+    if not auto and asked is None and not sw_settled():
+        SW["deferred"].append(("snap", label, _sw_now()))   # taken by the tick once the map has settled
+        return {"label": label, "deferred": True, "failed": []}
     failed = []
     snap = dict(_sw_stamp(), label=label)
+    if asked is not None:
+        snap["asked_t"] = asked
     parts = [("map", lambda pc: _sw_p(pc.WorldInfo.GetStreamingPersistentMapName())),
              ("player", lambda pc: dict(_sw_read(pc.Pawn, SW_PLAYER_FIELDS), cls=pc.Pawn.Class.Name, cylinder=_sw_cylinder(pc.Pawn))),
              ("controller", lambda pc: _sw_read(pc, ("Rotation", "LastVisitedTeleporter", "FocusCamReturnTime", "CurrentSeenPickupable",
@@ -489,7 +565,7 @@ def sw_snap(label):
              ("cash", lambda pc: int(pc.PlayerReplicationInfo.GetCurrencyOnHand(0))),
              ("checkpoint", lambda pc: _sw_p(pc.WorldInfo.GRI.ActiveRespawnCheckpointTeleportActor))]
     if not auto:
-        parts += [("stations", lambda pc: [dict(_sw_read(s, SW_STATION_FIELDS), name=s._path_name())
+        parts += [("stations", lambda pc: [dict(_sw_fields(s, SW_STATION_FIELDS), name=s._path_name())
                                            for s in _sw_live(_sw_sdk.find_all("TravelStation", False))]),
                   ("pools", lambda pc: _sw_pools()),
                   ("engine", lambda pc: _sw_engine()),
@@ -502,14 +578,18 @@ def sw_snap(label):
         pc = None
         _sw_err("snap " + label, e)
     for part, read in parts:
+        if part in SW["off"]:
+            failed.append(part)
+            continue
         try:
             if pc is None:
                 raise RuntimeError("no player controller")
             snap[part] = read(pc)
         except Exception as e:
             failed.append(part)
-            _sw_err(f"snap {label} {part}", e)
+            sw_switch_off(part, e)
     snap["failed"] = failed
+    snap["off"] = sorted(SW["off"])
     if auto:
         sw_emit("snap", snap, "snap_cap")
     else:
@@ -543,13 +623,21 @@ def _sw_pawn_fill(row, pawn, here):
     return row
 
 
-def sw_pawns(label):
-    """One read of the AI pawns: by exact path when the spec names paths (a lookup, no scan), else every live pawn, filtered."""
+def sw_pawns(label, asked=None):
+    """One read of the live AI pawns (sw_live_pawn): by exact path when the spec names paths (a lookup, no scan), else find_all of the
+    exact class, filtered. Native getters are called on these only. Deferred until the map has settled; switched off after a failure."""
     auto = label == "auto"
     if auto and SW["n"]["pawns"] >= SW["spec"]["pawn_cap"]:
         SW["dropped"]["pawns"] = SW["dropped"].get("pawns", 0) + 1
         return {"label": label, "pawns": 0, "failed": []}
+    if "pawns" in SW["off"]:
+        return {"label": label, "pawns": 0, "failed": ["off"]}
+    if not auto and asked is None and not sw_settled():
+        SW["deferred"].append(("pawns", label, _sw_now()))
+        return {"label": label, "deferred": True, "pawns": 0, "failed": []}
     out = dict(_sw_stamp(), label=label, pawns=[])
+    if asked is not None:
+        out["asked_t"] = asked
     failed = []
     try:
         player = _sw_pc().Pawn
@@ -560,18 +648,20 @@ def sw_pawns(label):
                     pawn = _sw_sdk.find_object("WillowAIPawn", path)
                 except Exception:
                     pawn = None
-                if pawn is None:
+                if not sw_live_pawn(pawn):
                     failed.append(path)
                     continue
                 out["pawns"].append(_sw_pawn_fill(_sw_pawn_row(pawn), pawn, here))
         else:
-            for pawn in _sw_live(_sw_sdk.find_all("WillowAIPawn", False)):
+            for pawn in _sw_sdk.find_all("WillowAIPawn"):   # the exact class, as the tracked probes scan it
+                if not sw_live_pawn(pawn):
+                    continue
                 row = _sw_pawn_row(pawn)
                 if sw_pawn_wanted(row, SW["spec"]["pawns_match"]):
                     out["pawns"].append(_sw_pawn_fill(row, pawn, here))
     except Exception as e:
         failed.append("read")
-        _sw_err("pawns " + label, e)
+        sw_switch_off("pawns", e)
     out["failed"] = failed
     if auto:
         sw_emit("pawns", out, "pawn_cap")
@@ -585,7 +675,8 @@ def sw_counts():
     """Lines per stream, hook rows per function, drops and errors so far: the in-game usability check reads this."""
     return {"lines": dict(SW.get("n", {})), "bytes": SW.get("bytes", 0), "counts": dict(SW.get("counts", {})),
             "dropped": dict(SW.get("dropped", {})), "errors": len(SW.get("errors", [])), "auto_failures": SW.get("auto_failures", 0),
-            "missing": list(SW.get("missing", [])), "file": str(SW.get("path"))}
+            "missing": list(SW.get("missing", [])), "file": str(SW.get("path")), "switched_off": dict(SW.get("switched_off", {})),
+            "deferred": len(SW.get("deferred", []))}
 
 
 def sw_root():
@@ -600,7 +691,8 @@ def _sw_close(stopped):
     if SW.get("fh") is None:
         return
     SW["buf"].append({"k": "end", "stopped": stopped, "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}),
-                      "errors": SW.get("errors", []), "auto_failures": SW.get("auto_failures", 0), "lines": SW.get("n", {})})
+                      "errors": SW.get("errors", []), "auto_failures": SW.get("auto_failures", 0), "lines": SW.get("n", {}),
+                      "switched_off": SW.get("switched_off", {}), "never_taken": [list(d) for d in SW.get("deferred", [])]})
     SW["spec"]["byte_cap"] += 1_000_000   # room for the end line, whatever the cap took
     try:
         sw_flush()
