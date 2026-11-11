@@ -70,32 +70,28 @@ From the unbiased Steam corpora (% of reviews touching the theme):
 ### 2.2 The design analysis: *why* those things work
 
 **a) The loot chase is tuned around a legible dopamine curve.**
-BL2's procedural gun system layers manufacturer identity (Jakobs = high-crit, no elemental; Torgue = explosive gyrojets; Maliwan = elemental; Tediore = throw-to-reload; Vladof = fire rate; Hyperion = reverse recoil; Bandit = magazine size; Dahl = burst-on-ADS) on top of parts-based stat rolls. Two effects most looters miss: guns are *readable at a glance by silhouette and colour*, and rarity actually maps to a felt power delta. A player who sees orange in a loot pile has been trained, correctly, that something has changed. One of the most-upvoted reviews I pulled says exactly this, in cruder terms:
-
-> "seeing the colour orange in a pile of loot after 10 hours of grinding makes me instantly start crying, nutting, and passing out from exhaustion all at once"
+BL2's procedural gun system layers manufacturer identity (Jakobs = high-crit, no elemental; Torgue = explosive gyrojets; Maliwan = elemental; Tediore = throw-to-reload; Vladof = fire rate; Hyperion = reverse recoil; Bandit = magazine size; Dahl = burst-on-ADS) on top of parts-based stat rolls. Two effects most looters miss: guns are *readable at a glance by silhouette and colour*, and rarity actually maps to a felt power delta. A player who sees orange in a loot pile has been trained, correctly, that something has changed. One of the most-upvoted reviews in the corpus makes exactly this point, as a joke about how a legendary's colour feels after a long farm.
 
 **b) Handsome Jack is structurally, not just tonally, well-built.**
 Jack is not merely well-written and well-performed (Dameon Clarke); he is *architecturally* embedded. He is on the ECHO constantly, he reacts to your progress, he kills characters you have met, and, critically, he is *funny*, which makes him likeable, which makes his cruelty land. He is also the only Borderlands antagonist who is a real narrative counterweight to the player: he thinks he is the hero, and the game commits to that. Later entries substituted volume (the Calypso Twins) or absence. The reviews notice: Jack is named in 3.4–3.5% of *all* reviews, which for a single named character is extraordinary.
 
 **c) Skill trees produce genuinely different games, not different numbers.**
-Salvador's Gunzerking (dual-wield, and the infamous Grog/DPUH combos), Zer0's Deception/melee, Krieg's Bloodlust/Mania self-damage economy, Gaige's Anarchy stacking (deliberately trading accuracy for damage), Maya's Phaselock as crowd control *and* support node, these are not skins on a damage stat. The build culture (thousands of hours of theorycrafting, `bl2.parts`) exists because the trees support it. Harvested Reddit threads repeatedly frame BL1's trees as "really quite boring" by comparison.
+Salvador's Gunzerking (dual-wield, and the infamous Grog/DPUH combos), Zer0's Deception/melee, Krieg's Bloodlust/Mania self-damage economy, Gaige's Anarchy stacking (deliberately trading accuracy for damage), Maya's Phaselock as crowd control *and* support node, these are not skins on a damage stat. The build culture (thousands of hours of theorycrafting, `bl2.parts`) exists because the trees support it. Harvested Reddit threads repeatedly describe BL1's trees as dull by comparison.
 
 **d) The DLC is, unusually, the best content in the game.**
-*Tiny Tina's Assault on Dragon Keep* is widely treated as the high-water mark of the franchise's writing, a tabletop-framing device that turns a loot shooter into a grief narrative without dropping the comedy. *Captain Scarlett*, *Mr. Torgue* and *Hammerlock* are all substantial. Combined with the Season Pass structure, this is why "best value as a full package" recurs. 4–5% of reviews reference DLC unprompted.
+*Tiny Tina's Assault on Dragon Keep* is widely treated as the high-water mark of the franchise's writing, a tabletop-framing device that turns a loot shooter into a grief narrative without dropping the comedy. *Captain Scarlett*, *Mr. Torgue* and *Hammerlock* are all substantial. Combined with the Season Pass structure, this is why reviews keep calling the complete edition good value. 4–5% of reviews reference DLC unprompted.
 
 **e) Co-op is the delivery mechanism for all of the above.**
 Four-player drop-in, shared world, no instanced loot, which creates the arguments, the ninja-looting folklore, the social memory. The second-most-upvoted review in the entire all-time corpus is a joke about a friend stealing a gun. This matters enormously for the remaster question: **co-op is not a feature of BL2, it is the medium of BL2.**
 
 **f) The art style is a technical decision that aged into an aesthetic advantage.**
-The hand-inked, cel-shaded look was chosen partly to sidestep the fidelity race. The consequence in 2026 is that BL2 does not read as "an old game" the way a photoreal 2012 title does, it reads as *stylised*. This is why so few players ask for a graphical overhaul, and the strongest argument *against* making one the centrepiece.
+The hand-inked, cel-shaded look was chosen partly to sidestep the fidelity race. The consequence in 2026 is that BL2 does not read as an old game the way a photoreal 2012 title does, it reads as *stylised*. This is why so few players ask for a graphical overhaul, and the strongest argument *against* making one the centrepiece.
 
 ### 2.3 The honest counter-case
 
-BL2 is not universally adored, and the dissent is coherent. From harvested threads: gunplay recoil recovery is criticised (Jakobs weapons "taking 1–2 seconds before they start recovering"), early-game guns "feel really bad", movement is dated next to BL3's slide/mantle, and there is a real constituency arguing BL2 is their *least* favourite mainline entry. In negative reviews, "movement/gunplay feels dated" hits **8.7%**. One of the best-articulated positive reviews concedes the point directly:
+BL2 is not universally adored, and the dissent is coherent. From harvested threads: gunplay recoil recovery is criticised (Jakobs weapons are said to take a second or two before recoil starts to recover), early-game guns are said to feel bad, movement is dated next to BL3's slide/mantle, and there is a real constituency arguing BL2 is their *least* favourite mainline entry. In negative reviews, "movement/gunplay feels dated" hits **8.7%**. One of the best-argued positive reviews concedes the point directly: the later games have smoother gunplay, better movement and more quality-of-life features, yet none of them fits the pieces together as well as BL2, which is also plainly janky and moves like an old game.
 
-> "Later entries have smoother gunplay, better movement, and plenty of quality-of-life improvements, but none of them put everything together quite as well… It is also undeniably janky. Movement feels old."
-
-That sentence is the thesis of the entire remaster opportunity.
+That concession is the thesis of the entire remaster opportunity.
 
 ---
 
@@ -131,19 +127,11 @@ Independent corroboration from Steam Discussions: of 247 recent threads, **multi
 
 #### Tier 1: Overwhelming, load-bearing
 
-**1. Make co-op work again.** Not a nice-to-have; the defining current complaint. From the highest-voted review in the corpus (+48):
+**1. Make co-op work again.** Not a nice-to-have; the defining current complaint (14.3% of negative reviews describe multiplayer as broken). The highest-voted review in the corpus is a long-time co-op player saying that since the terms-of-service update, backend changes make playing with a friend almost impossible: switching the network mode or even loading the title screen can hard-lock the game. Other highly voted reviews make the same case: multiplayer now runs through SHiFT and is broken, with looping loading screens, where the old Steam servers worked; co-op is close to impossible in 2026 because of bugs and the SHiFT migration; and a player who rates it among the best games ever says they can no longer play it with friends after it worked for well over a decade.
 
-> "This used to be one of my favorite games to play with friends. It used to work incredibly well… With the ToS updates have seemingly come some new backend changes that make it almost impossible to play with my friend… Changing network settings to switch from offline mode to friends only? The game hardlocks. Booting up the game and trying to load the title screen? 25% chance the game hardlocks."
+Sub-asks clustering here: reliable session creation, no forced re-linking, no disconnect-every-30-minutes, and repeatedly **an option to connect directly, over LAN or through Steam again.**
 
-And (+36): *"Shift is what they use for multiplayer and it is completely broken. Looping loading screens & glitches galore. Should've stayed with Steam's free servers."*
-And (+11): *"Nearly impossible to play with friends in 2026 due to bugs, glitches, and the migration to the SHiFT servers."*
-And (+2, 232h played): *"One of the best games of all time, that I will never be able to play again with my friends… I don't know how its possible to screw something up so royally after it had been functioning for literal decades."*
-
-Sub-asks clustering here: reliable session creation, no forced re-linking, no disconnect-every-30-minutes, and repeatedly **"give us back direct/LAN/Steam-native connection as an option."**
-
-**2. Kill the account/ToS/ads friction.** 13.5% of negatives. Players object to mandatory SHiFT linking on a single-player game, to the Take-Two ToS/data-collection change (there is a *pinned* Gearbox thread titled "Response to Recent Community Concerns About Take-Two's Terms of Service"), and, with real venom, to BL4 advertisements patched into a 2012 game. The most-cited line of the whole exercise:
-
-> "if they can update the game to put in ads, then they can update the game to fix the problems that have persisted for years"
+**2. Kill the account/ToS/ads friction.** 13.5% of negatives. Players object to mandatory SHiFT linking on a single-player game, to the Take-Two ToS/data-collection change (there is a *pinned* Gearbox thread answering community concerns about Take-Two's terms of service), and, with real venom, to BL4 advertisements patched into a 2012 game. The argument cited most often in the whole exercise: a publisher that can patch ads into the game can also patch the problems that have gone unfixed for years.
 
 **3. Stability.** Crashes, fatal errors on join, out-of-video-memory. 10.3% of negatives, 10.5% of forum threads. Substantially traceable to the Ultra HD texture pack (see §4.2).
 
@@ -151,13 +139,13 @@ Sub-asks clustering here: reliable session creation, no forced re-linking, no di
 
 **4. Inventory / bank / UI overhaul.** 8.7% of negatives, tied with movement as the largest *design* complaint in the unbiased corpus, and a persistent Reddit thread topic (4.9%). Concrete asks: more backpack and bank space, sorting and filtering, item comparison, mark-as-junk/lock (both of which *Borderlands GOTY Enhanced already added to BL1*, the precedent exists), and a less clumsy item card.
 
-**5. Modernise movement and gunplay feel, carefully.** 8.7% of negatives. The asks are specific and modest: slide, mantle/climb, better ADS transitions, faster recoil recovery, BL3-grade gunfeel. Strong counter-current: a visible faction insists this would make it "not BL2." Recommended framing: **optional module, default off.**
+**5. Modernise movement and gunplay feel, carefully.** 8.7% of negatives. The asks are specific and modest: slide, mantle/climb, better ADS transitions, faster recoil recovery, BL3-grade gunfeel. Strong counter-current: a visible faction insists this would stop it being BL2. Recommended framing: **optional module, default off.**
 
 **6. Rework UVHM / slag / OP levels.** The loudest *design* topic in Reddit discourse (12.4% of harvested threads, but this figure swung between 11% and 24% as the sample grew, so treat the magnitude as soft). What is *not* soft is the content: the complaint is unusually precise and repeats almost verbatim across independent threads.
-- Slag becomes mandatory rather than tactical: *"Slag is so much better than everything else… it made getting no slag basically not an option"*; *"slag (the Pickle of Borderlands game mechanics) is essential."*
-- OP levels compress build diversity: *"it limits the build diversity a lot, you are forced to play the meta builds"*; *"OP levels turned Borderlands into a solo game"*; *"OP levels aren't worth it."*
-- Melee scaling breaks at OP: the single most-specific remaster ask I found was *"proper balancing and scaling for Melee damage in OP levels."*
-- Underpowered gear tiers never got fixed: *"fix pearls and under powered weapons as well as revamping certain skills such as raving retribution."*
+- Slag becomes mandatory rather than tactical: threads say it outclasses every other element so far that playing without it stops being a real choice.
+- OP levels compress build diversity: threads say they force players onto meta builds, push co-op players into playing solo, and are not worth the effort.
+- Melee scaling breaks at OP: the single most specific remaster ask found was proper balancing and scaling of melee damage in OP levels.
+- Underpowered gear tiers never got fixed: pearls and other weak weapons, and some skills (Raving Retribution is the example given), are asked to be reworked.
 
 #### Tier 3: Real but smaller
 
@@ -165,13 +153,13 @@ Sub-asks clustering here: reliable session creation, no forced re-linking, no di
 8. Drop rates and farming tedium.
 9. Backtracking; fast-travel-from-anywhere (already a popular mod, "BSABT").
 10. FOV slider, proper ultrawide, 4K, unlocked framerate.
-11. Playable TPS/other Vault Hunters in the BL2 campaign, a recurring wish, e.g. *"I want to play the BL2 campaign as Athena."*
+11. Playable TPS/other Vault Hunters in the BL2 campaign, a recurring wish, for example playing the BL2 campaign as Athena.
 12. PC split-screen (essentially zero organic mentions, currently served by Nucleus Co-op / Universal Split Screen).
 
 ### 3.3 What people explicitly do *not* want
 
-- **Graphics-first.** "Modern graphics" appears, but overwhelmingly as *"rerelease the game but with modern graphics and slightly improved gameplay"*, a garnish, not the ask. Meanwhile "art style holds up" is a *praise* category.
-- **Gearbox touching it.** Widespread stated distrust that a Gearbox-made remaster would repeat BL3/BL4 mistakes. Several threads argue "if they were going to, they'd have done it for the 10th anniversary in 2022."
+- **Graphics-first.** Modern graphics come up, but overwhelmingly as a re-release with modern graphics and slightly better gameplay, a garnish, not the ask. Meanwhile "art style holds up" is a *praise* category.
+- **Gearbox touching it.** Widespread stated distrust that a Gearbox-made remaster would repeat BL3/BL4 mistakes. Several threads argue that if Gearbox meant to remaster it, it would have done so for the 10th anniversary in 2022. "
 - **Changing the writing or the tone.** Zero appetite. This is the crown jewel and everyone knows it.
 - **A remaster that breaks mod compatibility.** For a large slice of the PC playerbase, BL2 *is* modded BL2.
 
