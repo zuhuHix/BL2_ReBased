@@ -32,6 +32,7 @@ struct FWav
     int32 SampleRate = 0;
     TArray<uint8> Pcm;   // 16-bit little-endian samples
     float GainDb = 0.f;  // from the play map's "gains"; 0 when it has none
+    FString Name;        // the file's name (no folder), logged with each play so a recording's report knows which file was picked
 };
 
 // Limits, mirrored in tools/prepare_slice_audio.py (a test compares them). The longest slice sound is well under 10 MB; the rate range

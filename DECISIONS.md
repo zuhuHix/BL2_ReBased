@@ -4747,3 +4747,12 @@ AI-assisted (Claude Opus 5.5). CI and test registration only: no tool, parser or
 - **Verified (automated, zuhu desktop, Python 3.14.6, Node 26.4):** ctest 145/145 (119 before), the Node group 1.8 s and the numpy group 2.5 s. Configured with a numpy-less Python and no Node: 119 entries and both messages.
 - **Not verified here:** the same versions on Python 3.12; the PR's CI run is that check.
 - **Pillow (commit 2, lands only with the maintainer's yes).** CI also installs `pillow==12.2.0` (this PC's version; PyPI has a Python 3.12 Windows wheel), and the 8 tests in `OW_PILLOW_PY_TESTS` run as `py-<name>` where Pillow and numpy both import (`sanctuary_pillar` needs both). Here: 8/8 in 3.3 s, ctest 153. Dropping this commit leaves the Node and numpy groups as they were.
+
+
+## 2026-11-11: The listening report measures the gain the host applied by fitting each played file; the play line names its file (audio mix lane, follow-up to PR #217)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/SLICE_AUDIO_CHAIN.md` section 7a.
+
+- **Finding.** In the first recording with the game's gains, every 2D sound reaches the mix at its map gain minus about 3 dB, mono and stereo alike (least-squares fit of the played file: equip -9.0 for -6, Phaselock -5.0 for -2, correlation 1.000). The 8 dB the RMS table showed came from its reference: the shot's window also holds its impact and a second shot 3 ms later.
+- **Change.** `OpenWillowAudio` logs `file=<name>` with each play. `tools/listen_report.py` fits each cue's file in the recording (numpy) and bases "off by" on the applied gain minus the map gain, against the shot's. A cue with another cue of its role within 0.4 s gets no fit.
+- **Verified.** On that recording equip -0.2, Phaselock -0.2, clip in 0.0, clip out +0.4 dB off. Python tests (synthetic): listen report 34/34. **UNVERIFIED:** where the common 3 dB comes from; the C++ change is uncompiled; nobody has listened.

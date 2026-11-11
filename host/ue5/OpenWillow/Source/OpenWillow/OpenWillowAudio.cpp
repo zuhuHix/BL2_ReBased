@@ -216,6 +216,7 @@ void LoadOnce()
                     UE_LOG(LogTemp, Warning, TEXT("OWAUDIO gain role=%s file=%s refused, played at 0 dB: %s"), *Role, *FPaths::GetCleanFilename(Path), *GainError);
                 }
                 Wav.GainDb = Db;
+                Wav.Name = FPaths::GetCleanFilename(Path);
                 Used += Size;
                 Roles().FindOrAdd(Role).Add(MoveTemp(Wav));
             }
@@ -361,8 +362,8 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
             Component->Stop();
         }
     }), DrainPoll, true);
-    UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d gain_db=%.1f%s%s (the host called play; not heard)"), Role, Channels,
-        Wav.SampleRate, Pcm.Num(), Wav.GainDb, bUpmix ? TEXT(" upmix=mono_to_stereo") : TEXT(""),
+    UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d gain_db=%.1f file=%s%s%s (the host called play; not heard)"), Role, Channels,
+        Wav.SampleRate, Pcm.Num(), Wav.GainDb, Wav.Name.IsEmpty() ? TEXT("-") : *Wav.Name, bUpmix ? TEXT(" upmix=mono_to_stereo") : TEXT(""),
         AttachTo ? *FString::Printf(TEXT(" at=%s"), *GetNameSafe(AttachTo->GetOwner())) : TEXT(""));
     Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
     if (OutSeconds) *OutSeconds = Seconds;

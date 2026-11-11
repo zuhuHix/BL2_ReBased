@@ -406,5 +406,91 @@ class LevelTableTest(unittest.TestCase):
         self.assertEqual(next(r for r in levels if r['role'] == 'hit')['game_vs_shot_db'], 1.0)
 
 
+try:
+    import numpy
+except ImportError:   # the fit needs numpy; the report says so without it
+    numpy = None
+
+
+@unittest.skipUnless(numpy, 'numpy is not installed')
+class FitTest(unittest.TestCase):
+    """The applied-gain fit on invented noise bursts: the recording holds a known scale of each file, overlapping another sound."""
+
+    RATE = 8000
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.rng = numpy.random.default_rng(7)
+
+    def save(self, name, frames):
+        path = self.tmp / name
+        data = numpy.clip(numpy.round(frames * 32767), -32768, 32767).astype('<i2')
+        with wave.open(str(path), 'wb') as w:
+            w.setnchannels(frames.shape[1])
+            w.setsampwidth(2)
+            w.setframerate(self.RATE)
+            w.writeframes(data.tobytes())
+        return path
+
+    def burst(self, name, seconds=0.5, amplitude=0.5):
+        frames = (self.rng.standard_normal((int(seconds * self.RATE), 1)) * amplitude / 3).clip(-1, 1)
+        return self.save(name, frames), frames
+
+    def recording(self, placements, seconds=6.0):
+        """placements: (start s, mono frames, gain dB). Written as stereo, the same in both channels (a 2D sound after the upmix)."""
+        mix = numpy.zeros((int(seconds * self.RATE), 2))
+        for start, frames, db in placements:
+            a = int(start * self.RATE)
+            mix[a:a + len(frames)] += frames * 10 ** (db / 20)
+        return self.save('listen.wav', mix)
+
+    def test_the_fit_finds_the_files_gain_under_an_overlapping_sound(self):
+        _, equip = self.burst('a.wav')
+        _, other = self.burst('b.wav')
+        wav = self.recording([(1.13, equip, -9.0), (1.10, other, -3.0)])
+        rate, recording = lr.read_channels(wav)
+        db, corr, lag = lr.fit_gain(recording, rate, 1.0, self.RATE, equip)
+        self.assertAlmostEqual(db, -9.0, delta=0.3)
+        self.assertAlmostEqual(lag, 0.13, delta=0.002)
+        self.assertGreater(corr, FIT_CORR_FLOOR)
+
+    def play_line(self, role, file, db):
+        return f'LogTemp: Display: OWAUDIO play role={role} channels=2 rate=8000 bytes=8000 gain_db={db:.1f} file={file} upmix=mono_to_stereo (the host called play; not heard)'
+
+    def test_the_balance_comes_from_the_fit_and_holds_under_overlap(self):
+        a_path, a = self.burst('a.wav')
+        b_path, b = self.burst('b.wav')
+        c_path, c = self.burst('c.wav')
+        # fire plays b at -12 and its map gain is -12; equip plays a at -6 (map -6): both 3 dB under their map gain, as the host's recordings are.
+        wav = self.recording([(1.13, b, -15.0), (1.135, c, -14.0), (3.13, a, -9.0)])   # the impact about as loud as the shot, as recorded
+        cues = [{'kind': 'sound', 'name': 'fire', 't': 1.0}, {'kind': 'sound', 'name': 'hit', 't': 1.005}, {'kind': 'sound', 'name': 'equip', 't': 3.0}]
+        log_text = '\n'.join([self.play_line('fire', 'b.wav', -12), self.play_line('hit', 'c.wav', -11), self.play_line('equip', 'a.wav', -6)])
+        play = {'roles': {'fire': [str(a_path), str(b_path)], 'hit': [str(c_path)], 'equip': [str(a_path)]},
+                'gains': {'fire': [-20.0, -12.0], 'hit': [-11.0], 'equip': [-6.0]}}
+        fits = lr.fit_cues(cues, log_text, wav, play)
+        self.assertEqual(Path(fits[0]['file']).name, 'b.wav')        # the logged file, not the role's first one
+        for cue in cues:
+            cue['level'] = {'rms_dbfs': -20.0}
+        rows = {r['role']: r for r in lr.level_table(cues, log_text, play, fits)}
+        self.assertAlmostEqual(rows['fire']['applied_minus_map_db'], -3.0, delta=0.3)
+        self.assertAlmostEqual(rows['equip']['off_by_db'], 0.0, delta=0.4)
+        self.assertEqual(rows['equip']['off_by_from'], 'fit')
+
+    def test_two_cues_of_one_role_close_together_get_no_fit(self):
+        a_path, a = self.burst('a.wav')
+        wav = self.recording([(1.13, a, -9.0), (1.134, a, -9.0)])     # two identical sounds 4 ms apart add up to about +6 dB
+        cues = [{'kind': 'sound', 'name': 'equip', 't': 1.0}, {'kind': 'sound', 'name': 'equip', 't': 1.004}]
+        fits = lr.fit_cues(cues, '', wav, {'roles': {'equip': [str(a_path)]}})
+        self.assertEqual(fits, {})
+
+    def test_the_play_line_with_a_file_still_reads_its_role_gain_and_place(self):
+        line = 'OWAUDIO play role=door_open channels=1 rate=32000 bytes=64170 gain_db=-10.0 file=1.wav at=StaticMeshActor_1 (the host called play; not heard)'
+        m = lr.PLAYED.search(line)
+        self.assertEqual((m.group(1), m.group(2), m.group(3), m.group(4)), ('door_open', '-10.0', '1.wav', ' at=StaticMeshActor_1'))
+
+
+FIT_CORR_FLOOR = 0.3
+
+
 if __name__ == '__main__':
     unittest.main()
