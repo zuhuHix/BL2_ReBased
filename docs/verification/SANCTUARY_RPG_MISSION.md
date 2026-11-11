@@ -291,6 +291,8 @@ lies 70.6 uu from the world.json walk segment between nodes 12 and 26 (18,117.7 
 
 ### Hand play
 
+The launcher for hand play is now `tools/play_slice.ps1`: see "Hand play (updated)" below. This section is the 2026-10-01 record.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/run_quest.ps1 -Fresh    # optional: -Level N, -Save <file>, -Seconds N
 ```
@@ -482,21 +484,46 @@ The agent then stopped that window about six minutes after the last input; the m
 
 ### Hand play (updated)
 
+**Since 2026-11-11 the whole slice has one launcher, `tools/play_slice.ps1`.** `tools/run_quest.ps1` still starts the mission
+alone, but it has no enemies, no sounds and no skills page, so from a fresh save Phaselock cannot be bought there
+(`AOpenWillowMayaHUD::OpenStatusMenu` returns while the skills URL is empty).
+
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/run_quest.ps1 -Fresh    # Maya at the slice gear level (8)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -Fresh     # -Level N, -Save <file>, -Port N
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -PrintCommandLine   # the line only; starts nothing
 ```
 
-Keys are unchanged from the table above. E near Marcus now falls through to pickups when there is nothing to accept or
-turn in. Route:
-1. Maya starts holding the Jakobs slice pistol. Walk to Marcus's shop and press E to accept.
-2. Follow him to the range and step into the centre lane's waypoint cylinder. The lent "Inflammatory Torment" is put
-   in a slot and drawn, and the dummy rolls forward.
-3. Shoot the dummy with it. Another slice gun does not complete the objective. Fire completes, the pistol is taken
-   back, and the dummy rolls back and is removed.
-4. Press E at Marcus to turn in: +395 XP since 2026-10-02 (396 before; bar at bottom centre). Press E again by the dropped shotgun to pick it up.
-5. K opens Skills: buy Phaselock (Maya has 4 points at level 8 from the start). F casts it. The only liftable target
-   in this session is the stock dummy while it is on the range, so buy Phaselock before shooting it if you want to
-   lift it. After it is removed, F only shows the miss.
+It starts Sanctuary_P with the Fire mission (`-owquest` and the `run_quest.ps1` manifests), the gun range (`-owrangestart`,
+normal mode), Phaselock's data, the sounds (`-owaudioplay`), BL2's HUD movie and the inventory, skills, missions, map and
+mission-screen pages from `tools/hud_overlay/serve.py`, and the start shield (the host's default when
+`local/slice/stand_in_shield.json` exists). Maya's level is the slice gear level (8, an UNVERIFIED slice choice). The line has
+no test driver: no `-owslicegate*`, no `ow.RangeLoot`, no granted point, no forced damage. Two host stand-ins remain and are
+not switches: the dependency mission counts as complete (`OWQUEST FIXTURE` in the log), and Marcus walks straight lines.
+It refuses to start, naming the file and the tool that makes it, when any of its local data is missing. It holds the
+machine-wide UE run lock while the window is open, saves to `local/playslice/save.json` and logs to `local/playslice/play-*.log`.
+
+Keys as in the table above, plus M (map), L (missions log) and V (melee) since the controls lane
+([CONTROLS.md](CONTROLS.md)). With the mission page up, Enter takes the offer, the turn-in and the reward, and Escape closes the
+offer and the turn-in ([MISSION_SCREEN.md](MISSION_SCREEN.md)). E opens the page at Marcus.
+
+Route (host behaviour; the order of the mission's events matches one real play-through, FIRE_MISSION_GOLDEN_TRACE.md):
+1. About 4 s after she stands, Maya is moved to the range: dummies and the range's enemies, which notice her and attack. The
+   range is far from Marcus's shop (about 14,000 uu in one gate log) and its enemies respawn. Loot drops at the stock
+   chances (guns and gear 0.085 per kill, [COMBAT_LOOT.md](COMBAT_LOOT.md)), so a gun is rare: pick it up with E and equip it
+   in the inventory (I).
+2. K opens Skills: buy Phaselock (a fresh save at level 8 has skill points to spend; the log shows them in `OpenWillow Maya level 8, N skill points`). F casts it on a range enemy.
+3. Walk to Marcus's shop and press E, then Enter on the offer. The lent "Inflammatory Torment" goes to the backpack, not to
+   a slot: open the inventory (I) and equip it.
+4. Follow him to the range of the mission (a different place from the gun range) and step into the centre lane's waypoint
+   cylinder. The dummy rolls forward.
+5. Shoot the dummy with the lent pistol. Another gun does not complete the objective. The dummy rolls back and is removed.
+6. Press E at Marcus, Enter on the turn-in, then Enter on the reward page: +395 XP, and the lent pistol is taken back. The
+   mission gives XP only (the turn-in loot stand-in was removed on 2026-10-07).
+7. Let the range's enemies down her, or fall: she bleeds out and respawns at the station with the mission still complete.
+
+Not checked by a person yet: the launcher has only run in its unattended smoke (`-CheckSeconds`), and whether the range's
+enemies follow Maya to the mission, or take the mission's shots, is UNVERIFIED. The gate (`tools/test_slice_gate.ps1`)
+clears the range before the mission, so it has not seen the two together either.
 
 ## Progression, Phaselock rules and dummy behaviours (2026-10-01, second machine)
 

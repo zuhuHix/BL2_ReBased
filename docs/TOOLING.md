@@ -147,13 +147,31 @@ decompressed packages and skips the container, asset and compressed tests. The
 LZO decoder is the vendored MIT-licensed lzokay; see
 [THIRD_PARTY.md](../THIRD_PARTY.md).
 
+### Playing the slice by hand (`tools/play_slice.ps1`, 2026-11-11)
+
+One command for the vertical slice with no test driver: Sanctuary_P with Marcus's Fire mission, the gun range's enemies
+(`-owrangestart`), Phaselock's data, the sounds (`-owaudioplay`), BL2's HUD movie and status pages from
+`tools/hud_overlay/serve.py`, and the start shield. It refuses to start, naming each missing file and the tool that makes it,
+and holds the machine-wide UE run lock (below) while the window is open. Heavy: it opens the editor in `-game`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -Fresh              # play; -Level N, -Save <file>, -Port N
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -CheckSeconds 180    # unattended smoke: PASS/FAIL per item
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -PrintCommandLine    # the line only; starts nothing
+```
+
+The smoke passes only when the log shows the mission ready, the range built, Phaselock's data, the audio play map, the start
+shield, and the HUD, inventory, skills, missions and mission-screen pages ready (`-GradeLog <log>` grades a log again). The
+route and what stays UNVERIFIED: [SANCTUARY_RPG_MISSION.md](verification/SANCTUARY_RPG_MISSION.md), "Hand play (updated)".
+Tests: `tests/play_slice_test.py` (CTest `play-slice-launcher`; synthetic data, starts nothing).
+
 ### One Unreal run per machine
 
 Every script that launches `UnrealEditor.exe` or `UnrealEditor-Cmd.exe` (the suites, the seed and import scripts,
 the shot runners, the `run_ue_*` launchers, `test_ue_viewer.ps1`) and the real-game helpers (`tools/real_game/realgame.ps1`)
 hold one lock file per machine, `%LOCALAPPDATA%\OpenWillow\ue_run.lock`, from before the launch until the process has
 exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.ps1`, `run_ue_character.ps1 -Play`,
-`run_quest.ps1`) therefore keep their PowerShell window busy until the editor is closed. All of it lives in
+`run_quest.ps1`, `play_slice.ps1`) therefore keep their PowerShell window busy until the editor is closed. All of it lives in
 `tools/ue_lock.ps1`, which the scripts dot-source:
 
 - `Enter-OwUeLock -Owner <script>` waits while any `UnrealEditor`/`UnrealEditor-Cmd` process runs and the lock is held,
