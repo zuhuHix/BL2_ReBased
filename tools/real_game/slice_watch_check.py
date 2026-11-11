@@ -17,7 +17,11 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
                      unless its label is in expect_not_taken; a label in expect_not_taken that was taken fails too. A labelled read
                      taken late (it carries asked_t) fails unless it is 'start' or 'arrival', the only ones the watch may defer. A
                      read kind the watch switched off fails unless it is in allow_switched_off. A deferred read never taken fails.
-  expect_not_taken:  ["<label>", ...]: labels that must be recorded as not taken (S0's deliberate early read).
+  expect_not_taken:  ["<label>", ...]: labels that must be recorded as not taken (S0's deliberate early read); every instance of such
+                     a label must be not taken.
+  allow_not_taken:   ["<label>", ...]: labels that may be recorded as not taken without failing (a down first seen with no pawn);
+                     such a line counts as present for snaps.
+  max_defer_seconds: how late a deferred start or arrival read may land after it was asked for (default 60).
   allow_switched_off: ["<kind>", ...]: read kinds that may be switched off without failing the recording.
   max_dropped:       {"row"|"frame"|"snap"|"pawns"|"labelled"|"bytes"|"per_func": N}: how many lines a cap may drop, per kind
                      ("per_func" counts the rows dropped by per_func_cap, all functions together). Every kind not named allows 0.
@@ -28,7 +32,8 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   gap:               [{"from": "<substring>", "to": "<substring>", "min": s, "max": s}]: game seconds from the first <from> row to the
                      first <to> row after it lie in [min, max].
   edges:             [{"func": "<substring>", "arg": "<argument>", "values": [v, ...]}]: rows of that hook carry each value.
-  snaps:             ["<label>", ...]: labelled snapshots with these labels exist.
+  snaps:             ["<label>" | ["<label>", "<alternative>", ...], ...]: labelled snapshots with these labels exist (for a list,
+                     any one of them).
   snap_content:      {"<part>": "present"|"dict"|"nonempty"|"number"}: in every labelled snapshot the part read without failing and
                      holds that kind of value (present: read, may be null; dict: a non-empty object; nonempty: a non-empty list;
                      number: a number).
@@ -36,8 +41,9 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   frames:            {"min": N, "dt_min": s, "dt_max": s, "share": 0.95}: at least N frame rows, and that share of the frames in which no
                      automatic read or flush ran have a positive tick DeltaTime inside [dt_min, dt_max].
   rows_have_dt:      true: hook rows carry the frame delta (dt).
-  pawns:             {"min_reads": N, "min_pawns": K, "fields": [...]}: pawn reads without a failed part, each with K+ pawns that all
-                     carry those fields with a value.
+  pawns:             {"min_reads": N, "min_pawns": K, "fields": [...]}: pawn reads without a failed part, each with K+ pawns that
+                     carry every one of those fields with a value; when "health_pool" is a field, a pawn whose health pool is flagged
+                     stale (no pool, GUID differs, shut down, not in its slot) does not count.
 """
 import argparse
 import importlib.util
@@ -46,7 +52,7 @@ import sys
 from pathlib import Path
 
 DEFERRABLE = ("start", "arrival")
-CHECK_KEYS = {"no_missing", "max_errors", "max_dropped", "expect_not_taken", "allow_switched_off", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
+CHECK_KEYS = {"no_missing", "max_errors", "max_dropped", "expect_not_taken", "allow_switched_off", "allow_not_taken", "max_defer_seconds", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
               "mods_must_be_off", "frames", "rows_have_dt", "pawns"}
 CONTENT_KINDS = {"present", "dict", "nonempty", "number"}
 
@@ -94,7 +100,10 @@ def validate_spec(spec_path):
     md = checks.get("max_dropped", {})
     if not isinstance(md, dict) or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in md.values())             or set(md) - {"row", "frame", "snap", "pawns", "labelled", "bytes", "per_func"}:
         raise ValueError("max_dropped must map row, frame, snap, pawns, labelled, bytes or per_func to a whole number")
-    for key in ("snaps", "mods_must_be_off", "expect_not_taken", "allow_switched_off"):
+    snaps = checks.get("snaps", [])
+    if not isinstance(snaps, list) or not all(isinstance(x, str) or (isinstance(x, list) and x and all(isinstance(y, str) for y in x)) for x in snaps):
+        raise ValueError("snaps must be a list of labels or of lists of alternative labels")
+    for key in ("mods_must_be_off", "expect_not_taken", "allow_switched_off", "allow_not_taken"):
         if key in checks and not (isinstance(checks[key], list) and all(isinstance(x, str) for x in checks[key])):
             raise ValueError(f"{key} must be a list of strings")
     return spec
@@ -169,22 +178,33 @@ def check(dump, checks):
         out.append((f"edges {edge['func']}.{edge['arg']}", not lacking, f"{len(edge['values']) - len(lacking)} of {len(edge['values'])} values seen"))
     every_labelled = [s for s in dump.get("snaps", []) + dump.get("pawns", []) if s.get("label") != "auto"]
     expected = set(checks.get("expect_not_taken", []))
+    allowed_nt = set(checks.get("allow_not_taken", []))
     not_taken = {s.get("label") for s in every_labelled if s.get("not_taken")}
-    unexpected = sorted(not_taken - expected)
+    taken = {s.get("label") for s in every_labelled if not s.get("not_taken")}
+    unexpected = sorted(not_taken - expected - allowed_nt)
     missing_expected = sorted(expected - not_taken)
-    out.append(("not_taken", not unexpected and not missing_expected,
+    also_taken = sorted(expected & taken)
+    out.append(("not_taken", not unexpected and not missing_expected and not also_taken,
                 f"{len(not_taken)} labelled reads not taken; unexpected: {', '.join(unexpected) or 'none'}; "
-                f"expected but taken or absent: {', '.join(missing_expected) or 'none'}"))
+                f"expected but absent: {', '.join(missing_expected) or 'none'}; expected but also taken: {', '.join(also_taken) or 'none'}"))
     late = sorted({s.get("label") for s in every_labelled if "asked_t" in s and not s.get("not_taken") and s.get("label") not in DEFERRABLE})
     out.append(("taken_late", not late, f"labelled reads taken late other than start/arrival: {', '.join(late) or 'none'}"))
+    bound = checks.get("max_defer_seconds", 60)
+    slow = sorted({s.get("label") for s in every_labelled if "asked_t" in s and not s.get("not_taken")
+                   and isinstance(s.get("t"), (int, float)) and isinstance(s.get("asked_t"), (int, float)) and s["t"] - s["asked_t"] > bound})
+    out.append(("defer_bound", not slow, f"deferred reads later than {bound} s: {', '.join(slow) or 'none'}"))
     switched = sorted(set((end or {}).get("switched_off", {}) or {}) - set(checks.get("allow_switched_off", [])))
     out.append(("switched_off", end is not None and not switched, f"read kinds switched off: {', '.join(switched) or 'none'}"))
     never = (end or {}).get("never_taken", []) or []
     out.append(("never_taken", end is not None and not never, f"{len(never)} deferred reads never taken"))
     labelled = [s for s in dump.get("snaps", []) if s.get("label") != "auto" and not s.get("not_taken")]
     labels = {s.get("label") for s in labelled}
+    present = labels | {s.get("label") for s in every_labelled if s.get("not_taken") and s.get("label") in allowed_nt}
     for label in checks.get("snaps", []):
-        out.append((f"snap {label}", label in labels, "present" if label in labels else "absent"))
+        options = label if isinstance(label, list) else [label]
+        name = "/".join(options)
+        ok = any(o in present for o in options)
+        out.append((f"snap {name}", ok, "present" if ok else "absent"))
     content = checks.get("snap_content", {})
     if content:
         bad = sum(1 for s in labelled for part, kind in content.items() if not _content_ok(s, part, kind))
@@ -213,10 +233,17 @@ def check(dump, checks):
     if pawns:
         reads = dump.get("pawns", [])
         need = pawns.get("fields", [])
-        full = [r for r in reads if not r.get("failed") and not r.get("not_taken") and len(r.get("pawns", [])) >= pawns.get("min_pawns", 1)
-                and all(all(p.get(f) is not None for f in need) for p in r["pawns"])]
+
+        def good(p):
+            if not all(p.get(f) is not None for f in need):
+                return False
+            return not ("health_pool" in need and (p.get("health_pool") or {}).get("stale"))
+        full = [r for r in reads if not r.get("failed") and not r.get("not_taken")
+                and sum(1 for p in r.get("pawns", []) if good(p)) >= pawns.get("min_pawns", 1)]
+        stale = sum(1 for r in reads for p in r.get("pawns", []) if (p.get("health_pool") or {}).get("stale"))
         ok = len(full) >= pawns.get("min_reads", 1)
-        out.append(("pawns", ok, f"{len(full)} of {len(reads)} reads clean, with {pawns.get('min_pawns', 1)}+ pawns and every field"))
+        out.append(("pawns", ok, f"{len(full)} of {len(reads)} reads clean, with {pawns.get('min_pawns', 1)}+ pawns carrying every field; "
+                                 f"{stale} pawn rows with a stale health pool"))
     return out
 
 

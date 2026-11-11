@@ -21,6 +21,12 @@ in two captures; see local/dossier/watch-crash-analysis.md):
   it was asked for); any other labelled read asked for before the map settled is NOT taken late: a line records it as not taken,
   because a 'before_down' taken after the immunity is gone, or a 'down' taken at the respawn, would carry the right label at the
   wrong moment.
+- Observers read a hooked function's PARAMETERS only, never its locals: for an event the engine sends natively, a local can lie past
+  the caller's parameter buffer, and reading an object-typed local would dereference whatever is there. A property counts as a
+  parameter only if it is among the function's first NumParams properties and lies wholly inside ParamsSize (reflection fields the
+  SDK exposes; the second test is the structural check that the first holds). If the layout does not fit, nothing is read.
+  ReturnValue is not read before the call; after it, the hook's own return value is recorded. Object parameters are recorded by path
+  name only, and only when not None.
 - Each kind of read is wrapped: its first Python exception is counted and switches that kind off for the rest of the run. This guard
   does nothing against an access violation in native code, which ends the game before any Python exception exists; the rules above
   are the protection against that class, not this guard.
@@ -169,13 +175,43 @@ def _sw_p(value, depth=0):
     return repr(value)[:120]
 
 
+def sw_param_names(func):
+    """The names of a function's parameters, never its locals: the first NumParams properties, each lying wholly inside ParamsSize.
+    Empty when the function's layout cannot be read or does not fit that rule (then nothing is read). ReturnValue is left out (the hook
+    passes the return value after the call). Cached per function path."""
+    inner = getattr(func, "func", func)
+    try:
+        key = inner._path_name()
+    except Exception:
+        key = None
+    cache = SW.setdefault("params", {})
+    if key is not None and key in cache:
+        return cache[key]
+    names = []
+    try:
+        count, size = int(inner.NumParams), int(inner.ParamsSize)
+        for i, q in enumerate(inner._properties()):
+            if i >= count:
+                break
+            end = int(q.Offset_Internal) + int(q.ElementSize) * int(q.ArrayDim)
+            if end > size:
+                names = []   # a property among the first NumParams lies outside the parameters: read nothing
+                break
+            if q.Name != "ReturnValue":
+                names.append(q.Name)
+    except Exception:
+        names = []
+    if key is not None:
+        cache[key] = names
+    return names
+
+
 def _sw_args(args, func):
+    """The hooked call's parameters (sw_param_names), by value; an object parameter by path name only, None when it is None."""
     out = {}
     try:
-        inner = getattr(func, "func", func)
-        for q in inner._properties():
-            if hasattr(args, q.Name):
-                out[q.Name] = _sw_p(getattr(args, q.Name))
+        for name in sw_param_names(func):
+            out[name] = _sw_p(getattr(args, name))
     except Exception as e:
         out["args_error"] = repr(e)[:100]
     return out
@@ -484,22 +520,60 @@ def _sw_player_getters(pawn):
     return out
 
 
+def sw_pool_check(ref_guid, ref_index, pool_guid, pool_def, slot_path, pool_path):
+    """Why a pool read through a reference cannot be trusted, or None: the reference's cache is only a cache (NATIVE_COMBAT_GROUNDWORK
+    section 1). 'no pool': nothing cached; 'guid differs': the pool's GUID is not the reference's; 'shut down': the pool has no
+    Definition (a deleted pool keeps its object with zeroed values); 'not in its slot': the manager's slot holds another object."""
+    if pool_path is None:
+        return "no pool"
+    if ref_guid is not None and pool_guid is not None and ref_guid != pool_guid:
+        return "guid differs"
+    if pool_def is None:
+        return "shut down"
+    if slot_path is not None and slot_path != pool_path:
+        return "not in its slot"
+    return None
+
+
 def _sw_pool_of(ref):
-    """The pool a pawn's pool reference points at (HealthPool, ShieldArmor), by its fields: ref.Data, as combat_probe._pool reads it."""
+    """The pool a pawn's pool reference points at (HealthPool, ShieldArmor), by fields only: the reference's PoolManager,
+    PoolIndexInManager and PoolGUID, its cached Data (as combat_probe._pool reads it), the pool's own PoolGUID, Definition and
+    AssociatedProvider, and the manager's slot. 'stale' says why the values cannot be trusted (sw_pool_check), or is None."""
+    out = {}
+    ref_fields = _sw_fields(ref, ("PoolIndexInManager", "PoolGUID"))
+    out["ref_index"], out["ref_guid"] = ref_fields.get("PoolIndexInManager"), ref_fields.get("PoolGUID")
+    try:
+        manager = ref.PoolManager
+        manager = None if callable(manager) else manager
+    except Exception:
+        manager = None
+    out["manager"] = _sw_p(manager)
     try:
         pool = ref.Data
+        pool = None if callable(pool) else pool
     except Exception:
-        return None
-    if pool is None or callable(pool):
-        return None
-    return _sw_fields(pool, SW_POOL_STATE)
+        pool = None
+    pool_path = _sw_p(pool) if pool is not None else None
+    slot_path = None
+    if manager is not None and isinstance(out["ref_index"], int) and 0 <= out["ref_index"] < 16:
+        try:
+            slot_path = _sw_p(manager.ResourcePools[out["ref_index"]])
+        except Exception:
+            slot_path = None
+    if pool is not None:
+        out.update(_sw_fields(pool, SW_POOL_STATE + ("PoolGUID", "Definition", "AssociatedProvider")))
+    out["pool"] = pool_path
+    out["stale"] = sw_pool_check(out["ref_guid"], out["ref_index"], out.get("PoolGUID"), out.get("Definition"), slot_path, pool_path)
+    return out
 
 
 def _sw_pool_refs(pawn):
+    """Both pool references of a pawn. A pawn without a readable reference gets None (the usability check treats that as missing)."""
     out = {}
     for key, name in (("health_pool", "HealthPool"), ("shield_pool", "ShieldArmor")):
         try:
-            out[key] = _sw_pool_of(getattr(pawn, name))
+            ref = getattr(pawn, name)
+            out[key] = None if ref is None or callable(ref) else _sw_pool_of(ref)
         except Exception:
             out[key] = None
     return out
@@ -694,6 +768,11 @@ def sw_pawns(label, asked=None):
     out = dict(_sw_stamp(), label=label, pawns=[], beyond_radius=0)
     if asked is not None:
         out["asked_t"] = asked
+    if not auto:
+        try:
+            out["map"] = _sw_p(_sw_pc().WorldInfo.GetStreamingPersistentMapName())   # one of the listed calls on the player's own world
+        except Exception:
+            out["map"] = None
     failed = []
     radius = SW["spec"]["pawns_radius"]
     try:

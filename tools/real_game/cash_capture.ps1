@@ -296,7 +296,12 @@ try {
                 Start-Sleep 1
             }
             $log.den_down_after_s = $downAt
-            if ($WatchSpec -and $null -ne $downAt) { Save-SliceWatchSnap 'down' }
+            # The snapshot is labelled by what was seen: 'down' only when the injured flag fired (the moment of the down); a down first seen as
+            # no health (bleed-out) or no pawn is labelled so, and taken (or recorded not taken) as such, never as 'down'.
+            if ($WatchSpec -and $null -ne $downAt) {
+                $log.den_down_label = switch ($log.den_down_reason) { 'injured_flag' { 'down' } 'no_health' { 'down_seen_no_health' } default { 'down_seen_no_pawn' } }
+                Save-SliceWatchSnap $log.den_down_label
+            }
             $upAt = $null
             if ($null -ne $downAt) {
                 $t1 = Get-Date

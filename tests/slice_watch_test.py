@@ -32,10 +32,24 @@ class Args:
         self.__dict__.update(values)
 
 
+class Prop:
+    """An invented property of a function: a name, an offset and a size."""
+    def __init__(self, name, offset, size=4, dim=1):
+        self.Name, self.Offset_Internal, self.ElementSize, self.ArrayDim = name, offset, size, dim
+
+
 class Func:
-    """A hook's func argument: its parameters are at .func._properties() (as tests/den_probe_test.py's BoundFunction)."""
-    def __init__(self, *names):
-        self.func = type('F', (), {'_properties': lambda _self: [type('P', (), {'Name': n}) for n in names]})()
+    """A hook's func argument: its properties at .func._properties() (as tests/den_probe_test.py's BoundFunction), parameters first,
+    then locals placed after ParamsSize, as a compiled function lays them out. `bad` puts a parameter past ParamsSize."""
+    def __init__(self, *names, locals=(), bad=False):
+        props = [Prop(n, 4 * i) for i, n in enumerate(names)]
+        size = 4 * len(names)
+        props += [Prop(n, size + 4 * j) for j, n in enumerate(locals)]
+        if bad and props:
+            props[0].Offset_Internal = size + 64
+        path = 'Pkg.Invented:' + '_'.join(names + tuple(locals)) + ('_bad' if bad else '')
+        self.func = type('F', (), {'_properties': lambda _self: props, 'NumParams': len(names), 'ParamsSize': size,
+                                   '_path_name': lambda _self: path})()
 
 
 def no_game():
@@ -104,6 +118,27 @@ class RecorderTest(unittest.TestCase):
         self.assertIsNone(post(None, Args(), 7, Func()))
         self.assertEqual(watch.SW['n']['row'], 3)   # row_cap 3
         self.assertEqual(watch.SW['dropped']['row'], 1)
+
+    def test_locals_are_never_read_only_parameters(self):
+        class Args:
+            def __init__(self):
+                self.read = []
+            def __getattr__(self, name):
+                self.read.append(name)
+                if name == 'OwnerLocal':
+                    raise AssertionError('a local was read')
+                return {'Param': 3.0, 'Other': None, 'ReturnValue': 7}.get(name)
+            def __hasattr__(self, name):
+                return True
+        args = Args()
+        row = watch.sw_add_row('Pkg.P:Fired', 'pre', None, args, None, Func('Param', 'Other', 'ReturnValue', locals=('OwnerLocal',)))
+        self.assertEqual(row['args'], {'Param': 3.0, 'Other': None})   # ReturnValue is not read before the call; the local never
+        self.assertNotIn('OwnerLocal', args.read)
+        self.assertNotIn('ReturnValue', args.read)
+        bad = Args()
+        self.assertEqual(watch.sw_add_row('Pkg.P:Odd', 'pre', None, bad, None, Func('Param', locals=('OwnerLocal',), bad=True))['args'], {})
+        self.assertEqual(bad.read, [])   # a layout that does not fit the rule: nothing is read at all
+        self.assertEqual(watch.sw_param_names(type('NoLayout', (), {'_properties': lambda _s: [Prop('X', 0)]})()), [])
 
     def test_an_error_in_a_row_is_counted_not_raised(self):
         hook = watch._sw_observer('Pkg.Pawn:TakeDamage', 'pre')
@@ -276,6 +311,65 @@ class FakeGameTest(unittest.TestCase):
 
     def tearDown(self):
         watch._sw_sdk = None
+
+    def test_a_whole_recording(self):
+        """Restored after the review of 465232c: start to stop, every hook gone, declarations in states resolved, missing names
+        listed, the read-by-path branch session 1 uses."""
+        with RepoDir() as d:
+            spec = {'funcs': ['InventedPawn.Hit', 'InventedPawn.Missing', 'Pkg.Other:Call', 'Pkg.Nowhere:Call'], 'frames': True,
+                    'frame_player': True, 'pickups': True, 'pawns_paths': ['Lvl.PersistentLevel.WillowAIPawn_1', 'Lvl.Gone_2']}
+            started = watch.sw_start('t', spec)
+            self.assertEqual(started['resolved'], 3)   # Hit, Down:Hit (a state's declaration) and Other:Call, each hooked PRE and POST
+            self.assertEqual(started['missing'], ['InventedPawn.Missing', 'Pkg.Nowhere:Call'])   # a full path the game lacks is missing
+            self.assertEqual(started['start_failed'], ['mods'])   # no mods_base outside the game: named, not hidden
+            self.assertIn(('Pkg.InventedPawn.Down:Hit', 'pre', 'ow_slice_watch_pre'), self.hooks)
+            self.assertIn(('Pkg.InventedPawn.Down:Hit', 'post', 'ow_slice_watch_post'), self.hooks)
+            tick = self.hooks[(watch.SW_TICK, 'post_unconditional', 'ow_slice_watch_tick')]
+            self.assertIsNone(tick(None, Args(DeltaTime=0.0167), None, None))
+            pre = self.hooks[('Pkg.InventedPawn:Hit', 'pre', 'ow_slice_watch_pre')]
+            self.assertIsNone(pre(None, Args(Amount=3.0), None, Func('Amount')))
+            post = self.hooks[('Pkg.InventedPawn:Hit', 'post', 'ow_slice_watch_post')]
+            self.assertIsNone(post(None, Args(Amount=3.0), 5, Func('Amount')))
+            snap = watch.sw_snap('before_down')
+            self.assertEqual(snap['cash'], 7)
+            self.assertEqual(snap['player']['cylinder'], {'radius': 1.5, 'height': 2.5})
+            self.assertEqual(snap['player']['GetHealth'], 50.0)   # the player's own pawn: one of the listed native calls
+            self.assertEqual(len(snap['stations']), 1)
+            self.assertEqual(snap['pickups'], [])
+            self.assertEqual(snap['failed'], ['mods'])   # switched off after the start snapshot's failure, and named
+            pawns = watch.sw_pawns('arrival')
+            self.assertEqual((pawns['pawns'], pawns['failed']), (1, ['Lvl.Gone_2']))   # looked up by path; a missing one is named
+            watch.sw_dump('watch')
+            data = checker.load_recording(d.out / 'watch.jsonl')
+            self.assertEqual(data['rows'][0]['args'], {'Amount': 3.0})
+            self.assertEqual(data['rows'][1]['ret'], 5)
+            self.assertEqual(data['rows'][0]['dt'], 0.0167)
+            self.assertEqual(data['frames'][0]['loc'], [1.0, 2.0, 3.0])
+            self.assertEqual([s['label'] for s in data['snaps']], ['start', 'before_down'])
+            self.assertEqual(data['missing'], ['InventedPawn.Missing', 'Pkg.Nowhere:Call'])
+            arrival = next(p for p in data['pawns'] if p['label'] == 'arrival')
+            self.assertEqual(arrival['map'], 'Invented_P')   # a labelled pawn read carries its map
+            self.assertEqual(watch.sw_stop(), 'stopped')
+            self.assertEqual(self.hooks, {})   # every hook it added is gone
+
+    def test_stale_pool_references_are_flagged(self):
+        real = watch._SwUObject
+        watch._SwUObject = FakeObject   # stand-in objects are recorded by path name, as the SDK's are
+        self.addCleanup(setattr, watch, '_SwUObject', real)
+        manager = FakeObject('Lvl.Manager_0', 'ResourcePoolManager')
+        good_pool = FakeObject('Lvl.Pool_7', 'ResourcePool', PoolGUID=4, Definition=object(), CurrentValue=10.0, MaxValue=20.0)
+        manager.ResourcePools = [None] * 3 + [good_pool] + [None] * 12
+        ref = lambda pool, guid=4, index=3: type('Ref', (), {'PoolManager': manager, 'PoolIndexInManager': index, 'PoolGUID': guid, 'Data': pool})()
+        self.assertIsNone(watch._sw_pool_of(ref(good_pool))['stale'])
+        self.assertEqual(watch._sw_pool_of(ref(None))['stale'], 'no pool')
+        self.assertEqual(watch._sw_pool_of(ref(good_pool, guid=5))['stale'], 'guid differs')
+        shut = FakeObject('Lvl.Pool_8', 'ResourcePool', PoolGUID=4, Definition=None, CurrentValue=0.0)
+        manager.ResourcePools[4] = shut
+        self.assertEqual(watch._sw_pool_of(ref(shut, index=4))['stale'], 'shut down')
+        other = FakeObject('Lvl.Pool_9', 'ResourcePool', PoolGUID=4, Definition=object())
+        self.assertEqual(watch._sw_pool_of(ref(other, index=3))['stale'], 'not in its slot')
+        row = watch._sw_pool_of(ref(good_pool))
+        self.assertEqual((row['ref_index'], row['ref_guid'], row['PoolGUID'], row['CurrentValue'], row['manager']), (3, 4, 4, 10.0, 'Lvl.Manager_0'))
 
     def test_nothing_is_scanned_before_the_map_settles_and_labelled_reads_wait(self):
         with RepoDir():
@@ -461,6 +555,32 @@ class CheckerTest(unittest.TestCase):
         self.assertTrue(self.results(per_func, {'max_dropped': {'per_func': 15}})['max_dropped'])
         self.assertTrue(self.results(dump(), {})['max_dropped'])
         self.assertFalse(self.results(dump(ended=False), {})['max_dropped'])
+
+    def test_expected_not_taken_alternatives_and_the_defer_bound(self):
+        nt = {'label': 'smoke_unsettled', 'not_taken': 'asked before the map settled', 'asked_t': 1.0}
+        both = dump(snaps=[nt, dict(GOOD_SNAP, label='smoke_unsettled')])
+        self.assertFalse(self.results(both, {'expect_not_taken': ['smoke_unsettled']})['not_taken'])   # one instance was taken
+        alt = {'snaps': [['down', 'down_seen_no_health', 'down_seen_no_pawn']], 'allow_not_taken': ['down_seen_no_pawn']}
+        self.assertTrue(self.results(dump(snaps=[dict(GOOD_SNAP, label='down_seen_no_health')]), alt)['snap down/down_seen_no_health/down_seen_no_pawn'])
+        no_pawn = dump(snaps=[{'label': 'down_seen_no_pawn', 'not_taken': 'asked before the map settled', 'asked_t': 1.0}])
+        got = self.results(no_pawn, alt)
+        self.assertTrue(got['snap down/down_seen_no_health/down_seen_no_pawn'])
+        self.assertTrue(got['not_taken'])   # allowed not taken
+        self.assertFalse(self.results(dump(snaps=[dict(GOOD_SNAP, label='other')]), alt)['snap down/down_seen_no_health/down_seen_no_pawn'])
+        slow = dump(snaps=[dict(GOOD_SNAP, asked_t=1.0, t=100.0)])
+        self.assertFalse(self.results(slow, {})['defer_bound'])
+        self.assertTrue(self.results(slow, {'max_defer_seconds': 120})['defer_bound'])
+
+    def test_stale_health_pools_do_not_count(self):
+        p = {'pawns': {'min_reads': 1, 'min_pawns': 1, 'fields': ['cylinder', 'health_pool']}}
+        ok = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'health_pool': {'stale': None}}]}
+        self.assertTrue(self.results(dump(pawns=[ok]), p)['pawns'])
+        stale = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'health_pool': {'stale': 'guid differs'}}]}
+        self.assertFalse(self.results(dump(pawns=[stale]), p)['pawns'])
+        missing = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'health_pool': None}]}
+        self.assertFalse(self.results(dump(pawns=[missing]), p)['pawns'])
+        mixed = {'failed': [], 'pawns': stale['pawns'] + ok['pawns']}   # one dying pawn does not spoil a read with a good one
+        self.assertTrue(self.results(dump(pawns=[mixed]), p)['pawns'])
 
     def test_late_switched_off_and_never_taken_fail(self):
         late = dump(snaps=[dict(GOOD_SNAP, label='before_down', asked_t=3.0)])
@@ -704,7 +824,9 @@ class WiringTest(unittest.TestCase):
         self.assertIn('cp_immune_off()', block)
         self.assertIn('@($off.remaining).Count', block)   # every path is asked, and any one left stops the trial
         self.assertIn("-in 'up', 'no_pawn', 'no_health', 'injured_flag'", block)   # only an exact state counts
-        self.assertIn("if (!$log.den_down_settled) { throw", block)   # no settle, no den down: before_down must come before the immunity goes
+        self.assertIn("if (!$log.den_down_settled) { throw", block)
+        self.assertIn("'injured_flag' { 'down' } 'no_health' { 'down_seen_no_health' } default { 'down_seen_no_pawn' }", block)
+        self.assertNotIn("Save-SliceWatchSnap 'down'", block)   # 'down' only through the label rule   # no settle, no den down: before_down must come before the immunity goes
         smoke = [line for line in text.splitlines() if '$WatchSmoke -and $WatchSpec' in line]
         self.assertEqual(len(smoke), 2)
         self.assertFalse(any('Send-' in line for line in smoke))   # the smoke switch adds reads, never input
