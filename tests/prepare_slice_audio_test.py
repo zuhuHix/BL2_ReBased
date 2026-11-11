@@ -9,6 +9,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import wave
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
@@ -521,6 +522,40 @@ class GameMixTest(unittest.TestCase):
         chain = psa.volume_chain(30, index, index, buses)
         self.assertEqual(sum(node['volume_db'] for node in chain), -12.0)
         self.assertTrue(chain[2]['effects'])
+
+    def test_a_stray_count_at_the_end_of_a_switch_is_a_mix_error_not_a_crash(self):
+        """The child list (1 child, 30) sits before the search's start, and a stray count of 1 lies 6 bytes before the end."""
+        index, _ = invented_bank()
+        body = struct.pack('<III', 20, 1, 30) + b'\x00' * 8 + struct.pack('<I', 1) + b'\x00\x00'
+        with self.assertRaises(psa.MixError):
+            psa.switch_values(body, 20, index)
+
+    def test_a_truncated_switch_leaves_its_source_null_and_the_others_resolve(self):
+        index, buses = invented_bank()
+        index[20] = (6, mixer_body(20, 10, tail=switch_tail([30, 31], [(FIRST, [30]), (THIRD, [31])], THIRD))[:-6])
+        index[40] = (2, sound_body(40, 78, 10, props={0: -3.0}))
+        mix = psa.GameMix.__new__(psa.GameMix)
+        mix.install, mix.indexes, mix.global_index, mix.buses = None, {1: index}, index, buses
+        rows = {'rows': [{'bank': 1, 'action': 5, 'sounds': [{'sound': 30, 'source': 77}, {'sound': 40, 'source': 78}]}]}
+        entry = {'ak_event': {'short_id': 1}, 'media': [{'source': 77}, {'source': 78}]}
+        with mock.patch.object(psa.audio_census, 'resolve', return_value=rows):
+            found = mix.entry_gains(entry, 'fire')
+        self.assertIsNone(found[77][0])
+        self.assertIn('unresolved', found[77][1][0])
+        self.assertEqual(found[78][0], -11.0)
+
+    def test_a_child_under_both_perspective_values_is_found_in_either_order(self):
+        for values in ([(FIRST, [30]), (THIRD, [30, 31])], [(THIRD, [30, 31]), (FIRST, [30])]):
+            index, buses = invented_bank()
+            index[20] = (6, mixer_body(20, 10, tail=switch_tail([30, 31], values, THIRD)))
+            rows = {1: {5: [psa.volume_chain(s, index, index, buses) for s in (30, 31)]}}
+            self.assertEqual(psa.source_gain(rows, 77, FIRST)[0], -12.0, values)
+
+    def test_a_record_with_neither_parent_nor_bus_is_refused(self):
+        index, buses = invented_bank()
+        index[10] = (7, mixer_body(10, 0, bus=0, props={0: -1.0}))
+        with self.assertRaisesRegex(psa.MixError, 'neither a parent nor an output bus'):
+            psa.volume_chain(30, index, index, buses)
 
     def test_a_game_path_that_is_not_a_folder_is_an_error(self):
         folder = tempfile.mkdtemp()

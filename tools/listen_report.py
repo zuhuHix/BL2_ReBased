@@ -223,7 +223,8 @@ def level_table(cues, log_text: str, play_map: dict | None):
             prediction = 'no game prediction'
         else:
             prediction = 'from %d of %d file(s)' % (len(pairs), len(files)) if len(pairs) < len(files) else 'game data'
-        table.append({'role': role, 'cues': len(measured), 'measured_rms_dbfs': round(median(measured), 1),
+        table.append({'role': role, 'cues': sum(1 for c in cues if c['kind'] == 'sound' and c['name'] == role),
+                      'measured_cues': len(measured), 'measured_rms_dbfs': round(median(measured), 1),
                       'source_rms_dbfs': None if not pairs else round(median([level for level, _ in pairs]), 1),
                       'gain_db': median([gain for _, gain in pairs]), 'positioned': role in positioned, 'prediction': prediction,
                       'gain_note': notes.get(role), 'expected_rms_dbfs': None if expected is None else round(expected, 1)})
@@ -375,8 +376,10 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
                   '| Role | Cues | Measured RMS | File RMS | Gain | Game RMS | Measured vs shot | Game vs shot | Off by |', '|---|---|---|---|---|---|---|---|---|']
         for row in sorted(levels, key=lambda r: (r['role'].startswith('line:'), r['role'])):
             cell = lambda v, unit=' dB': '-' if v is None else f'{v:.1f}{unit}'
-            lines.append(f'| `{row["role"]}` | {row["cues"]} | {cell(row["measured_rms_dbfs"], " dBFS")} | {cell(row["source_rms_dbfs"], " dBFS")} | {cell(row["gain_db"])} | '
-                         + (cell(row['expected_rms_dbfs'], ' dBFS') if row['expected_rms_dbfs'] is not None else row['prediction'])
+            counted = row['cues'] if row['measured_cues'] == row['cues'] else f'{row["cues"]} ({row["measured_cues"]} measured)'
+            lines.append(f'| `{row["role"]}` | {counted} | {cell(row["measured_rms_dbfs"], " dBFS")} | {cell(row["source_rms_dbfs"], " dBFS")} | {cell(row["gain_db"])} | '
+                         + (cell(row['expected_rms_dbfs'], ' dBFS') + ('' if row['prediction'] == 'game data' else f' ({row["prediction"]})')
+                            if row['expected_rms_dbfs'] is not None else row['prediction'])
                          + f' | {cell(row["measured_vs_shot_db"])} | {cell(row["game_vs_shot_db"])} | {cell(row["off_by_db"])} |')
     lines += ['', "Maya's own sounds play 2D at the game's static level for each file (the play map's gains; 0 dB when it has none). The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No RTPC, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
               '## Step by step', '']

@@ -99,6 +99,20 @@ bool OpenWillowAudio::GainMultiplier(double Db, float& OutMultiplier, FString& O
     return true;
 }
 
+float OpenWillowAudio::GainDbFromJson(const TSharedPtr<FJsonValue>& Value, FString& OutError)
+{
+    double Db = 0.;
+    float Unused = 1.f;
+    OutError.Reset();
+    if (!Value.IsValid() || !Value->TryGetNumber(Db))
+    {
+        OutError = TEXT("not a number (null: the banks gave no game value)");
+        return 0.f;
+    }
+    if (!GainMultiplier(Db, Unused, OutError)) return 0.f;
+    return float(Db);
+}
+
 void OpenWillowAudio::MonoToStereo(const TArray<uint8>& Mono, TArray<uint8>& OutStereo)
 {
     const int32 Frames = Mono.Num() / 2;
@@ -195,16 +209,13 @@ void LoadOnce()
             else OpenWillowAudio::ParseWav(Bytes, Wav, Error);
             if (Error.IsEmpty())
             {
-                double Db = 0.;
-                float Unused = 1.f;
                 FString GainError;
-                if (Gains && (!(*Gains)[Index]->TryGetNumber(Db) || !OpenWillowAudio::GainMultiplier(Db, Unused, GainError)))
+                const float Db = Gains ? OpenWillowAudio::GainDbFromJson((*Gains)[Index], GainError) : 0.f;
+                if (!GainError.IsEmpty())
                 {
-                    UE_LOG(LogTemp, Warning, TEXT("OWAUDIO gain role=%s file=%s refused, played at 0 dB: %s"), *Role, *FPaths::GetCleanFilename(Path),
-                        GainError.IsEmpty() ? TEXT("not a number") : *GainError);
-                    Db = 0.;
+                    UE_LOG(LogTemp, Warning, TEXT("OWAUDIO gain role=%s file=%s refused, played at 0 dB: %s"), *Role, *FPaths::GetCleanFilename(Path), *GainError);
                 }
-                Wav.GainDb = float(Db);
+                Wav.GainDb = Db;
                 Used += Size;
                 Roles().FindOrAdd(Role).Add(MoveTemp(Wav));
             }
@@ -499,6 +510,11 @@ void RunTest(UWorld* World)
     TArray<uint8> Stereo;
     MonoToStereo(TArray<uint8>({1, 2, 3, 4}), Stereo);
     Check(Stereo == TArray<uint8>({1, 2, 1, 2, 3, 4, 3, 4}), TEXT("mono_to_stereo_duplicates_frames"));
+    // A null in the map's gains (no game value) plays at 0 dB with a reason to log; a number is kept.
+    FString NullError, NumberError;
+    const float NullDb = GainDbFromJson(MakeShared<FJsonValueNull>(), NullError);
+    const float NumberDb = GainDbFromJson(MakeShared<FJsonValueNumber>(-6.0), NumberError);
+    Check(NullDb == 0.f && !NullError.IsEmpty() && NumberDb == -6.f && NumberError.IsEmpty(), TEXT("gain_null_plays_unity_with_a_reason"));
     Check(!Play(World, TEXT("no_such_role")), TEXT("unknown_role_plays_nothing"));
     Check(!Play(nullptr, TEXT("test_tone")), TEXT("null_world_plays_nothing"));
     const bool bPlayed = Play(World, TEXT("test_tone"));

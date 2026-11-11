@@ -14,7 +14,7 @@ EXPECTED = ('parse_good_wav', 'parse_odd_chunk_padded', 'refuse_truncated_data',
             'refuse_chunk_after_data_past_riff_size', 'refuse_partial_chunk_at_riff_end', 'parse_odd_final_chunk_padded', 'refuse_odd_final_chunk_no_pad',
             'accept_at_the_limits', 'refuse_file_over_limit',
             'refuse_total_over_limit', 'gain_zero_db_is_unity', 'gain_minus_6_db', 'gain_refuse_nan', 'gain_refuse_over_limit',
-            'mono_to_stereo_duplicates_frames', 'unknown_role_plays_nothing', 'null_world_plays_nothing', 'tone_accepted_by_engine', 'mixer_pulled_all_bytes')
+            'mono_to_stereo_duplicates_frames', 'gain_null_plays_unity_with_a_reason', 'unknown_role_plays_nothing', 'null_world_plays_nothing', 'tone_accepted_by_engine', 'mixer_pulled_all_bytes')
 ROW = re.compile(r'OWAUDIOTEST (PASS|FAIL) (\S+)(.*)')
 SUMMARY = re.compile(r'OWAUDIOTEST SUMMARY result=(\S+) passed=(\d+) failed=(\d+)')
 PLAY = re.compile(r'OWAUDIO play role=test_tone channels=\d+ rate=\d+ bytes=(\d+)')

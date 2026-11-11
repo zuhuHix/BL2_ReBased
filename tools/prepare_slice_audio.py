@@ -300,6 +300,8 @@ def node_links(kind, body, ident, index, buses):
     effects = body[at + 1]
     at += 2 + (1 + FX_ENTRY_BYTES * effects if effects else 0)
     bus, parent = _u32(body, at), _u32(body, at + 4)
+    if not parent and not bus:
+        raise MixError('object %d names neither a parent nor an output bus (a layout misread lands on zero bytes)' % ident)
     if parent and index.get(parent, (None,))[0] not in CONTAINER_KINDS:
         raise MixError('object %d names parent %d, which is not a container in its bank' % (ident, parent))
     if bus and bus not in buses:
@@ -317,16 +319,20 @@ def bus_links(body, ident):
 
 
 def switch_values(body, ident, index):
-    """(group, default value, {child id: switch value}) of a switch container. The child list is found as the longest run of ids in the
+    """(group, default value, {child id: set of switch values}) of a switch container. The child list is found as the longest run of ids in the
     bank (audio_census.container_children); just before it sit the group and the default value and a flag byte, and after it a u32 count of
     switch values, each a u32 value, a u32 count and that many child ids. Anything that does not fit raises MixError."""
     children = audio_census.container_children(body, set(index))
     if not children:
         raise MixError('switch %d: no child list found' % ident)
     for at in range(13, len(body) - 4):
+        if at + 4 + 4 * len(children) > len(body):
+            break    # no room for the list from here on
         if _u32(body, at) == len(children) and list(struct.unpack_from('<%dI' % len(children), body, at + 4)) == children:
             break
     else:
+        at = None
+    if at is None or at + 4 + 4 * len(children) > len(body):
         raise MixError('switch %d: child list not found again' % ident)
     group, default = _u32(body, at - 9), _u32(body, at - 5)
     at += 4 + 4 * len(children)
@@ -337,7 +343,7 @@ def switch_values(body, ident, index):
         for child in struct.unpack_from('<%dI' % n, body, at + 12):
             if child not in children:
                 raise MixError('switch %d: value %d names %d, not one of its children' % (ident, value, child))
-            found[child] = value
+            found.setdefault(child, set()).add(value)   # a child may sit under several values
         at += 8 + 4 * n
     return group, default, found
 
@@ -348,7 +354,7 @@ def perspective_values():
 
 def volume_chain(sound, index, global_index, buses):
     """The objects a sound plays through, sound first, as dicts (kind, id, volume_db, ranged, effects, perspective). `perspective` is set
-    on the child of a switch whose values are the perspective pair: (the value that child is under, the switch's default). Other switch
+    on the child of a switch whose values are the perspective pair: (the set of values that child is under, the switch's default). Other switch
     groups are not choices the host makes, so they are not recorded. Raises MixError for data it does not accept, including a cycle."""
     chain, bus, current, below, seen = [], 0, sound, None, set()
     pair = perspective_values()
@@ -362,8 +368,8 @@ def volume_chain(sound, index, global_index, buses):
         out_bus, parent, props, ranged, effects = node_links(kind, body, current, index, buses)
         if below is not None and kind == SWITCH_KIND:
             _, default, values = switch_values(body, current, index)
-            if set(values.values()) & pair or default in pair:
-                chain[-1]['perspective'] = (values.get(below), default)
+            if set().union(*values.values()) & pair or default in pair:
+                chain[-1]['perspective'] = (values.get(below, set()), default)
         chain.append({'kind': kind, 'id': current, 'volume_db': checked_volume(props.get(VOLUME_PROP, 0.0), kind, current),
                       'ranged': VOLUME_PROP in ranged, 'effects': effects, 'perspective': None})
         bus = bus or out_bus
@@ -390,8 +396,8 @@ def wanted_perspective(chain, perspective):
     A chain through no perspective switch plays either way."""
     for node in chain:
         if node['perspective']:
-            value, default = node['perspective']
-            if value != (perspective if perspective is not None else default):
+            values, default = node['perspective']
+            if (perspective if perspective is not None else default) not in values:
                 return False
     return True
 
@@ -462,6 +468,8 @@ class GameMix:
                     chain = volume_chain(sound['sound'], self.indexes[row['bank']], self.global_index, self.buses)
                 except MixError as error:
                     chain = error
+                except (struct.error, IndexError) as error:   # a read this reader did not guard: still one unresolved source, never a stopped tool
+                    chain = MixError('sound %d: unreadable record (%s)' % (sound['sound'], error))
                 rows.setdefault(sound['source'], {}).setdefault(row['bank'], {}).setdefault(row['action'], []).append(chain)
         return {media['source']: source_gain(rows.get(media['source'], {}), media['source'], perspective) for media in entry['media']}
 

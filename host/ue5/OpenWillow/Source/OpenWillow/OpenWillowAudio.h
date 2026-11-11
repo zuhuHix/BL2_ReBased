@@ -4,6 +4,7 @@
 
 class UAudioComponent;
 class USceneComponent;
+class FJsonValue;
 
 // Plays slice sounds from plain PCM WAV files on the player's machine (SLICE_AUDIO_CHAIN.md section 5).
 //
@@ -45,6 +46,10 @@ inline constexpr double MaxGainDb = 12.0;
 
 // Whether Db is a usable gain (finite, within the limits above); OutMultiplier is its linear volume. False, with a reason, when it is not.
 OPENWILLOW_API bool GainMultiplier(double Db, float& OutMultiplier, FString& OutError);
+
+// The dB to play one entry of the map's "gains" at: the number when it is a usable gain, else 0 with OutError saying why (a null means
+// the banks gave no game value). OutError is empty when the number is used.
+OPENWILLOW_API float GainDbFromJson(const TSharedPtr<FJsonValue>& Value, FString& OutError);
 
 // Two equal channels from mono 16-bit PCM: each frame's sample written twice, unscaled.
 OPENWILLOW_API void MonoToStereo(const TArray<uint8>& Mono, TArray<uint8>& OutStereo);

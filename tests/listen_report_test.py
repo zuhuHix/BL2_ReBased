@@ -373,6 +373,24 @@ class LevelTableTest(unittest.TestCase):
         self.assertAlmostEqual(row['expected_rms_dbfs'], round(lr.file_level(Path(files[0])) - 6, 1), places=1)
         self.assertEqual(row['prediction'], 'from 1 of 2 file(s)')
 
+    def test_the_guide_shows_partial_coverage_and_counts_every_cue(self):
+        files = [self.source('1.wav', 0.5, 0.5), self.source('2.wav', 0.5, 0.05)]
+        play_map = self.tmp / 'play.json'
+        play_map.write_text(json.dumps({'roles': {'fire': files, 'hit': files}, 'gains': {'fire': [-12.0, None], 'hit': [-11.0, -11.0]}, 'unresolved': {}}),
+                            encoding='utf-8')
+        wav = self.tmp / 'listen.wav'
+        write_wav(wav, 9.0, ((2.5, 0.5),))
+        # A second fire cue past the recording's end has no level: it is still counted.
+        extra = '\n[x]LogTemp: Display: OWAUDIOREC cue t=50.000 label=fire seconds=0.500 frame=-'
+        text = log().replace('label=fire seconds=0.500 frame=-', 'label=fire seconds=0.500 frame=-' + extra)
+        lr.build(text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
+        guide = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
+        fire = next(line for line in guide.splitlines() if line.startswith('| `fire` |') and 'dBFS' in line)
+        self.assertIn('(from 1 of 2 file(s))', fire)
+        self.assertIn('| 2 (1 measured) |', fire)
+        hit = next(line for line in guide.splitlines() if line.startswith('| `hit` |') and 'dBFS' in line)
+        self.assertNotIn('file(s))', hit)
+
     def test_the_guide_has_the_table_and_cues_json_the_rows(self):
         shot = self.source('1.wav', 0.5, 0.5)
         play_map = self.tmp / 'play.json'
