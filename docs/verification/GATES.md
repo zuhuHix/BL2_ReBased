@@ -27,6 +27,8 @@ On main 8bb74a0 (after #88): 10 PASS / 0 FAIL / 3 NOT_AVAILABLE (the pickup link
 On main 195a016: 10 PASS / 0 FAIL / 4 NOT_AVAILABLE of 14 (new decoy-pickup link); ctest 22/22.
 On main 7eee9ee (2026-11-07, zuhu, Z23): 14 PASS / 0 FAIL / 0 NOT_AVAILABLE of 14 in four runs (no switch twice, `-Shield`, `-DownAfterFight`); ctest 28/28; verify_packages exact; range 36 / 0; firing 14 of 14; interactives 11 / 0; mission page 21 of 21 on its rerun (the first run failed 4 rows with the movie unavailable). `-Tracker` 3 of 4 (`tracker_page` saw 6 of 7 states) on this PC.
 
+**Ungated tests registered (2026-11-11, zuhu, main c66f24e + fix/ungated-tests):** ctest 119/119 (34 before; the 85 new `py-*` entries took 76 s of the 211 s run); verify_packages 9 packages, all class bodies exact. The tests left out are in "Tests outside ctest" below.
+
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):
   `export PATH="/c/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH"`,
@@ -54,3 +56,17 @@ On main 7eee9ee (2026-11-07, zuhu, Z23): 14 PASS / 0 FAIL / 0 NOT_AVAILABLE of 1
 
 ## Records
 - `python tools/decisions_index.py --check` after moving decisions between files.
+
+## Tests outside ctest
+Since 2026-11-11 every `tests/*_test.py` that passes in a clean export (no `local/`, no build, no installed game, no network) under
+a Python with no third-party packages runs in ctest as `py-<name>` (the list at the end of `CMakeLists.txt`). CI also runs
+`level_test.py` and `viewer_test.py` directly. The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
+that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11.
+
+| Tests | Why not in ctest | Status on 2026-11-11 |
+|---|---|---|
+| `ambient_transform`, `creature_zone`, `lootable_tracks`, `phaselock_target_attachments`, `prepare_phaselock_target`, `weapon_reload_anims`, `weapon_reload_library` | need numpy; CI's Python has none (adding it is a maintainer decision) | pass with numpy 2.5 |
+| `gfx_to_swf`, `prepare_map_screen`, `prepare_minimap`, `prepare_mission_log`, `prepare_mission_screen`, `sanctuary_pillar`, `weapon_paint`, `weapon_part_census` | need Pillow; CI's Python has none | pass with Pillow (`prepare_mission_log` skips one case without the symlink privilege) |
+| `realgame_snapshot` (144 s), `real_game_pending` (74 s), `real_game_capture_safety` (70 s), `skills_live_probe` (65 s), `controls_capture` (52 s), `cash_capture` (49 s), `provision_worktree` (36 s), `check_hud_minimap` (30 s) | too slow for every PR: about 520 s together | pass |
+| `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
+| all 18 `*_test.js` (`hud_*`, `inventory_*`, `map_screen`, `mission_log`, `mission_screen`, `pickup_card`, `skill_*`, `status_page_keys`, `vending*`) | need Node; CI does not install it (a maintainer decision) | 18/18 pass with Node 26.4 |

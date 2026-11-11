@@ -4723,3 +4723,14 @@ AI-assisted (Claude Opus 5.5). Follows the two entries above; test behaviour onl
 - **Down.** A down is put down to an enemy only when a range-enemy hit was seen at most 0.5 s before it, while Maya was Up. Before, any such hit since the fight counted, including one minutes old.
 - **Verified (automated):** `tests/check_slice_gate_test.py` 63 of 63. 400 random older-variant logs grade the same with the checker on main.
 - **Not verified:** still no compile and no engine run. The 0.5 s margin is a host choice, UNVERIFIED.
+
+## 2026-11-11: Standalone Python tests run in ctest, so CI runs them on every PR (lane-ungated-tests)
+
+AI-assisted (Claude Opus 5.5). Test registration only: no tool, parser or host behaviour changes.
+
+- **Why.** Of the 161 `tests/*_test.py` and `*_test.js` files on main c66f24e, 127 were named in neither `CMakeLists.txt` nor `.github/workflows/ci.yml`. They ran only when a lane remembered to run them, and one had been failing unnoticed since PR #195.
+- **What.** 85 of them are now ctest entries named `py-<name>`, listed in one block at the end of `CMakeLists.txt` (each run from the source tree, 120 s timeout). A test is listed only if it passed in a clean export of the repository (no `local/`, no build, no installed game) under a Python venv with no third-party packages, which is how CI runs. The ones left out and why are listed in `docs/verification/GATES.md` under "Tests outside ctest": numpy or Pillow (15), too slow (8, about 520 s together), refuses while an editor runs (1), Node (18).
+- **The stale test.** `tests/phaselock_target_attachments_test.py` gave the editor step a glTF name that never existed. Since `7750ffe` the step checks every source file before it imports anything, so it stopped, correctly. The fixture now writes a small non-empty file. The tool is unchanged.
+- **The other five failures the hub saw.** `realgame_snapshot`, `real_game_capture_safety` and `skills_live_probe` pass, but take 65 to 144 s, over the hub's 60 s limit. `real_game_pending` passes (42/42) in a checkout outside `%TEMP%`; in an export placed under `%TEMP%`, two cases fail by design, because they expect the repository's `local/` to sit outside the temporary folder. `run_ue_flash_hud` prints `NOT RUN` and exits 2 while any Unreal editor runs on the PC; one was up.
+- **Verified (automated, zuhu desktop, Python 3.14.6):** ctest 119/119 (34 before), the new entries 76 s of the 211 s run; verify_packages 9 packages, all class bodies exact; the 18 JS tests 18/18 with Node 26.4.
+- **Not verified:** Python 3.12, which CI uses, was not available here; the first CI run is that check.

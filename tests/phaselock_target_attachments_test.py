@@ -98,8 +98,12 @@ def run_editor(mesh, loads=True, exists=True, saves=True, material='Fur'):
     stub.load_asset = lambda path: Named(path) if loads else None
     with tempfile.TemporaryDirectory() as tmp:
         job = Path(tmp) / 'job.json'
+        # The step checks every source file before it imports anything (tools/editor_inputs.py), so the piece needs a real,
+        # non-empty file; its content is never read by the stub importer.
+        gltf = Path(tmp) / 'Spike.gltf'
+        gltf.write_text('{}', encoding='utf-8')
         job.write_text(json.dumps({'slice_dir': tmp, 'npcs': [{'id': 'T', 'dest': '/Game/X', 'attachment_meshes': [
-            {'id': 'Spike', 'gltf': 'Spike.gltf', 'material': material}]}]}), encoding='utf-8')
+            {'id': 'Spike', 'gltf': str(gltf), 'material': material}]}]}), encoding='utf-8')
         os.environ['OPENWILLOW_SLICE_JOB'] = str(job)
         sys.modules['unreal'] = stub
         error = None

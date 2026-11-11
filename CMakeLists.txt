@@ -74,3 +74,33 @@ if(OPENWILLOW_LZO)
   add_test(NAME container-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/package_test.py $<TARGET_FILE:ow-package> --compressed)
   add_test(NAME assets-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/assets_test.py $<TARGET_FILE:ow-package>)
 endif()
+# Standalone Python tests (lane-ungated-tests, 2026-11-11). Each passed in a clean export of the repository (no local/, no build,
+# no installed game, no network) under a Python with no third-party packages, as on CI. Registered as py-<name>, run from the
+# source tree. A test is added here only after it passes that way; docs/verification/GATES.md "Tests outside ctest" lists the
+# ones left out and why:
+#   numpy or Pillow (CI's Python has neither): ambient_transform, creature_zone, gfx_to_swf, lootable_tracks,
+#     phaselock_target_attachments, prepare_map_screen, prepare_minimap, prepare_mission_log, prepare_mission_screen,
+#     prepare_phaselock_target, sanctuary_pillar, weapon_paint, weapon_part_census, weapon_reload_anims, weapon_reload_library
+#   too slow for every PR (30-145 s each on the zuhu desktop): cash_capture, check_hud_minimap, controls_capture,
+#     provision_worktree, real_game_capture_safety, real_game_pending, realgame_snapshot, skills_live_probe
+#   refuses while any Unreal editor runs on the PC (exit 2, "NOT RUN"): run_ue_flash_hud
+#   tests/*_test.js need Node, which CI does not install.
+set(OW_STANDALONE_PY_TESTS
+  audio_census blcmm_dumps block_saves bsp_calibration bsp build_phaselock_fx_constants check_action_skill_hud check_hud_down
+  check_hud_shots check_interactives check_mission_page check_overlay_data check_phaselock_kill check_shield_check
+  check_slice_gate check_vendors check_weapon_firing collision crosscheck_blcmm_dumps crosscheck_bsp_polys
+  crosscheck_umodel_assets crosscheck_umodel den_probe editor_inputs game_colours gen_confirm gestalt_sockets
+  golden_card_compare gun_ads_capture import_phaselock_fx_source inspection_views inventory_gear loot_pools lootables_editor
+  material_assignment material_audit material_resource mission_camera_probe mission_screen_capture particle_system
+  phaselock_attachment_check phaselock_fx_inputs phaselock_integrity_probe prepare_action_skill prepare_hud_strings
+  prepare_interactives prepare_inventory_movie prepare_vendors private_sync range_tools real_game_finalizer_recheck
+  real_game_loot_capture real_game_menus_paths real_game_migration real_game_minimap_paths run_limit sanctuary_geometry
+  sanctuary_host_flags sanctuary_visual_rules serve_paths skill_effects skill_stats sky_census slice_npc_assets slice_world
+  start_shield terrain_geometry terrain_material terrain_probe terrain terrain_weightmap ui_trace_returns walking_routes
+  weapon_assembly_oracle weapon_assembly_sample weapon_balance weapon_capture_items weapon_catalog weapon_library
+  weapon_muzzle_fx weapon_parity2_probe weapon_parity_probe weapon_recipe weapon_stats weapon_view_model)
+foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
+  add_test(NAME py-${ow_test} COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/${ow_test}_test.py
+           WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  set_tests_properties(py-${ow_test} PROPERTIES TIMEOUT 120)
+endforeach()
