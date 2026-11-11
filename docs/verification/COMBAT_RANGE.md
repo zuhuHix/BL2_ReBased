@@ -243,7 +243,7 @@ adult's first swing still comes from up to 394 uu, and then it closes in.
 has a row, its first enemy is placed back home and Maya 600 uu in front of it. That is outside both stock swing ranges and inside the proximity rule, so the
 enemy notices her at once. The step records four swing starts with their distances and logs `kind=... cycle_min cycle_max stand_min stand_max first_swing
 start_range max_frame ... stop_at`. Swings 2 to 4 give the stand distances and two full cycles. Maya's health is put back to full between blows (a test fixture, like the den
-read's immunity). The step fails, and does not skip, when no kind with a row is on the range. `melee_interval` now compares enemy 0's gap with that enemy's own
+read's immunity). The step fails, and does not skip, when no kind with a row is on the range. The checker ties each result to the log's spawn records (`OWRANGE enemy <name> kind_melee kind=... source=live_read`): every kind spawned with a live row needs exactly one passing result, from an enemy (`enemy=`) spawned as that kind. Each field must appear exactly once, `swings` must be at least 4, every number must be finite, `max_frame` must be above 0, and each minimum must not exceed its maximum. Anything else fails. `melee_interval` now compares enemy 0's gap with that enemy's own
 cycle; for the regular bullymong that is the same 1.25 s as before.
 
 **The main open gap: leaps and thrown rocks (not implemented).** In the den read, most first blows on the player were not the plain melee. Trial 1: a slinger's

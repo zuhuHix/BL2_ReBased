@@ -12,11 +12,16 @@ import prepare_range  # noqa: E402
 
 
 # A kind_melee PASS line must carry numbers inside the acceptance bands (tools/check_range.py); this one does (invented, adult).
-KIND_MELEE_OK = ('kind=bullymong_adult cycle_min=1.250 cycle_max=1.267 stand_min=201 stand_max=201 first_swing=380 start_range=394 max_frame=0.017 swings=4')
+KIND_MELEE_OK = ('kind=bullymong_adult enemy=E_3 cycle_min=1.250 cycle_max=1.267 stand_min=201 stand_max=201 first_swing=380 start_range=394 '
+                 'max_frame=0.017 swings=4')
+SPAWN_ADULT = 'OWRANGE enemy E_3 kind_melee kind=bullymong_adult swing_interval=1.250 stand=201 source=live_read'
 
 
 def passing(step):
-    return 'OWRANGETEST step=%s result=PASS %s' % (step, KIND_MELEE_OK if step == 'kind_melee' else 'x=1')
+    # kind_melee's result is tied to a spawn record of the same log, so its line comes with one (invented names).
+    if step == 'kind_melee':
+        return SPAWN_ADULT + '\nOWRANGETEST step=kind_melee result=PASS ' + KIND_MELEE_OK
+    return 'OWRANGETEST step=%s result=PASS x=1' % step
 
 
 class PrepareRangeTest(unittest.TestCase):

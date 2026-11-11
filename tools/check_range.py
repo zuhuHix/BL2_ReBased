@@ -10,9 +10,11 @@
 # Usage: python tools/check_range.py <log> [--steps a,b,c]
 import argparse
 import json
+import math
 import os
 import re
 import sys
+from collections import Counter
 
 # The steps of the driver, in order (OpenWillowRange.cpp): PR1's, then PR2's enemy AI (TickAITest, steps 16-36), then PR3's loot
 # on death (TickLootTest, steps 37-44).
@@ -53,22 +55,45 @@ MAX_FRAME = 0.2
 KEY_VALUE = re.compile(r"(\w+)=(\S+)")
 
 
+# The fields a kind_melee result must carry, each exactly once. The host needs four swings: the first on the way in, three where it stands.
+KIND_MELEE_FIELDS = ("kind", "enemy", "cycle_min", "cycle_max", "stand_min", "stand_max", "first_swing", "start_range", "max_frame", "swings")
+KIND_MELEE_SWINGS = 4
+# One per range enemy at its setup (AOpenWillowEnemy::SetupKind): which kind it was spawned as and where its melee comes from.
+SPAWN_LINE = re.compile(r"OWRANGE enemy (\S+) kind_melee kind=(\S+) swing_interval=\S+ stand=\S+ source=(\S+)")
+
+
 def kind_melee_problem(detail):
     """Why a kind_melee PASS line does not land in the acceptance table, or "". The host judges its own run too; this re-checks the logged
-    numbers against the table above, so a host that carries other numbers cannot pass."""
-    fields = dict(KEY_VALUE.findall(detail))
-    row = ACCEPTANCE.get(fields.get("kind", ""))
+    numbers against the table above, so a host that carries other numbers cannot pass. Incomplete or impossible evidence fails."""
+    pairs = KEY_VALUE.findall(detail)
+    counts = Counter(key for key, _ in pairs)
+    repeated = sorted(key for key, n in counts.items() if n > 1)
+    if repeated:
+        return "the line repeats %s (each field must appear once)" % ", ".join(repeated)
+    missing = [key for key in KIND_MELEE_FIELDS if key not in counts]
+    if missing:
+        return "the line lacks %s" % ", ".join(missing)
+    fields = dict(pairs)
+    row = ACCEPTANCE.get(fields["kind"])
     if row is None:
-        return "kind %s has no row in the acceptance table" % fields.get("kind", "(none)")
-    try:
-        cycle = (float(fields["cycle_min"]), float(fields["cycle_max"]))
-        stand = (float(fields["stand_min"]), float(fields["stand_max"]))
-        first, start_range = float(fields["first_swing"]), float(fields["start_range"])
-        max_frame = float(fields["max_frame"])
-    except (KeyError, ValueError):
-        return "the line lacks cycle_min, cycle_max, stand_min, stand_max, first_swing, start_range or max_frame"
-    if max_frame < 0:
-        return "max_frame %.3f s is not a frame time" % max_frame
+        return "kind %s has no row in the acceptance table" % fields["kind"]
+    numbers = {}
+    for key in ("cycle_min", "cycle_max", "stand_min", "stand_max", "first_swing", "start_range", "max_frame"):
+        try:
+            numbers[key] = float(fields[key])
+        except ValueError:
+            return "%s=%s is not a number" % (key, fields[key])
+        if not math.isfinite(numbers[key]):
+            return "%s=%s is not a finite number" % (key, fields[key])
+    if not re.fullmatch(r"\d+", fields["swings"]) or int(fields["swings"]) < KIND_MELEE_SWINGS:
+        return "swings=%s: the step needs at least %d swing starts" % (fields["swings"], KIND_MELEE_SWINGS)
+    cycle = (numbers["cycle_min"], numbers["cycle_max"])
+    stand = (numbers["stand_min"], numbers["stand_max"])
+    first, start_range, max_frame = numbers["first_swing"], numbers["start_range"], numbers["max_frame"]
+    if not max_frame > 0:
+        return "max_frame %.3f s is not a frame time (it must be above 0)" % max_frame
+    if cycle[0] > cycle[1] or stand[0] > stand[1]:
+        return "a minimum is above its maximum (cycle %.3f to %.3f, stand %.0f to %.0f)" % (cycle[0], cycle[1], stand[0], stand[1])
     low, high = row["cycle_band"]
     # The allowance is needed only above the plain band; a long frame elsewhere in the step does not matter then.
     if not (low <= cycle[0] and cycle[1] <= high):
@@ -85,6 +110,39 @@ def kind_melee_problem(detail):
     if not (0 < first <= start_range):
         return "the first swing started %.0f uu out, not inside the stock range %.0f" % (first, start_range)
     return ""
+
+
+def kind_melee_graded(results, spawns):
+    """The kind_melee results with the checker's verdicts: each PASS needs good numbers (kind_melee_problem) from an enemy spawned as that kind
+    with a live row, and every kind spawned with a live row needs exactly one such result. spawns: enemy name -> (kind, source)."""
+    expected = sorted({kind for kind, source in spawns.values() if source == "live_read"})
+    graded, passed = [], Counter()
+    for verdict, detail in results:
+        if verdict != "PASS":
+            graded.append((verdict, detail))
+            continue
+        fields = dict(KEY_VALUE.findall(detail))
+        problem = kind_melee_problem(detail)
+        if not problem:
+            spawned = spawns.get(fields.get("enemy", ""))
+            if spawned is None or spawned[0] != fields["kind"] or spawned[1] != "live_read":
+                problem = "enemy %s was not spawned as %s with a live melee row (its spawn record: %s)" % (fields.get("enemy"), fields["kind"], spawned)
+        if problem:
+            graded.append(("FAIL", detail + " (checker: " + problem + ")"))
+            continue
+        passed[fields["kind"]] += 1
+        graded.append(("PASS", detail))
+    if not expected:
+        graded.append(("FAIL", "(checker: no enemy was spawned with a live melee row: no 'OWRANGE enemy ... kind_melee ... source=live_read' line)"))
+    for kind in expected:
+        if passed[kind] != 1:
+            graded.append(("FAIL", "(checker: %d passing results for spawned kind %s, exactly 1 wanted)" % (passed[kind], kind)))
+    return graded
+
+
+class ParsedSteps(dict):
+    """Step name -> [(verdict, detail)], plus .spawns: enemy name -> (kind, melee source) from the spawn lines of the same log."""
+    spawns = None
 
 
 # The status ends at whitespace or the end of the line: result=SKIP_typo is no status, so its step counts as missing.
@@ -114,8 +172,13 @@ SUMMARY = re.compile(r"OWRANGETEST SUMMARY result=(PASS|FAIL)(?=\s|$)(.*)")
 
 
 def parse(text):
-    steps, summary = {}, None
+    steps, summary = ParsedSteps(), None
+    steps.spawns = {}
     for line in text.splitlines():
+        m = SPAWN_LINE.search(line)
+        if m:
+            steps.spawns[m.group(1)] = (m.group(2), m.group(3))
+            continue
         m = LINE.search(line)
         if m:
             steps.setdefault(m.group(1), []).append((m.group(2), m.group(3).strip()))
@@ -136,8 +199,9 @@ def grade(steps, summary, expected=EXPECTED):
             ok = False
             continue
         if step == "kind_melee":
-            # Each PASS line must also carry numbers inside the acceptance bands (the host's own verdict is not enough).
-            results = [("FAIL", d + " (checker: " + kind_melee_problem(d) + ")") if r == "PASS" and kind_melee_problem(d) else (r, d) for r, d in results]
+            # Each PASS line must carry numbers inside the acceptance bands and come from an enemy spawned as that kind, one per spawned
+            # kind with a live row (the host's own verdict is not enough). Steps not read from a log carry no spawns: that fails here.
+            results = kind_melee_graded(results, getattr(steps, "spawns", None) or {})
         verdicts = [r for r, _ in results]
         verdict = "FAIL" if "FAIL" in verdicts else ("SKIP" if "SKIP" in verdicts else "PASS")
         detail = next((d for r, d in results if r == verdict), "")

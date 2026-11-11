@@ -33,9 +33,21 @@ def host_rows():
     return {kind: (float(cycle), float(stand)) for kind, cycle, stand in ROW.findall(block)}
 
 
-def kind_line(kind='bullymong_adult', cycle=(1.25, 1.267), stand=(201, 201), first=380, start_range=394, max_frame=0.017):
-    return ('kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=4'
-            % (kind, cycle[0], cycle[1], stand[0], stand[1], first, start_range, max_frame))
+def kind_line(kind='bullymong_adult', cycle=(1.25, 1.267), stand=(201, 201), first=380, start_range=394, max_frame=0.017, enemy='E_3', swings=4):
+    return ('kind=%s enemy=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=%s'
+            % (kind, enemy, cycle[0], cycle[1], stand[0], stand[1], first, start_range, max_frame, swings))
+
+
+def spawn(enemy, kind, source='live_read'):
+    return 'OWRANGE enemy %s kind_melee kind=%s swing_interval=1.250 stand=201 source=%s' % (enemy, kind, source)
+
+
+def graded_kind_melee(*lines):
+    """The checker's kind_melee row for a log of these lines (spawn records and results), every other step passing."""
+    others = ['OWRANGETEST step=%s result=PASS x=1' % s for s in check_range.EXPECTED if s != 'kind_melee']
+    text = '\n'.join(others + list(lines) + ['OWRANGETEST SUMMARY result=PASS pass=1 fail=0 skip=0']) + '\n'
+    ok, rows = check_range.grade(*check_range.parse(text))
+    return ok, dict((s, (v, d)) for s, v, d in rows)['kind_melee']
 
 
 class HostRowsTest(unittest.TestCase):
@@ -122,6 +134,7 @@ class CheckerTest(unittest.TestCase):
         self.assertIn('cycle', check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.017)))
         self.assertEqual(check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.05)), '')
         self.assertIn('max_frame', check_range.kind_melee_problem(kind_line(max_frame=-0.1)))
+        self.assertIn('max_frame', check_range.kind_melee_problem(kind_line(max_frame=0)))
 
     def test_a_stall_matters_only_when_the_allowance_is_needed(self):
         # Review r2: one editor hitch in the step must not fail cycles that sit inside the plain band.
@@ -144,12 +157,75 @@ class CheckerTest(unittest.TestCase):
         self.assertIn('no row', check_range.kind_melee_problem(kind_line('bullymong')))
         self.assertIn('lacks', check_range.kind_melee_problem('kind=bullymong_adult cycle_min=1.25'))
 
-    def test_a_host_pass_with_numbers_outside_the_bands_is_graded_fail(self):
-        lines = ['OWRANGETEST step=%s result=PASS %s' % (s, kind_line(stand=(328, 334)) if s == 'kind_melee' else 'x=1') for s in check_range.EXPECTED]
-        lines.append('OWRANGETEST SUMMARY result=PASS pass=1 fail=0 skip=0')
-        ok, rows = check_range.grade(*check_range.parse('\n'.join(lines) + '\n'))
+    def test_incomplete_or_impossible_evidence_fails(self):
+        # Review r3 (second family): each of these passed before.
+        problem = check_range.kind_melee_problem
+        self.assertIn('lacks swings', problem(kind_line().replace(' swings=4', '')))
+        self.assertIn('swings=0', problem(kind_line(swings=0)))
+        self.assertIn('swings=3', problem(kind_line(swings=3)))
+        self.assertIn('swings=4.5', problem(kind_line(swings='4.5')))
+        self.assertIn('minimum is above its maximum', problem(kind_line(cycle=(99, 0))))
+        self.assertIn('minimum is above its maximum', problem(kind_line(stand=(9999, 0))))
+        self.assertIn('repeats stand_min', problem(kind_line() + ' stand_min=201'))
+        self.assertIn('repeats kind', problem(kind_line() + ' kind=bullymong_baby'))
+        self.assertIn('not a finite number', problem(kind_line().replace('stand_max=201', 'stand_max=inf')))
+        self.assertIn('not a finite number', problem(kind_line().replace('cycle_min=1.250', 'cycle_min=nan')))
+        self.assertIn('not a number', problem(kind_line().replace('first_swing=380', 'first_swing=far')))
+        self.assertIn('lacks enemy', problem(kind_line().replace(' enemy=E_3', '')))
+
+
+class ResultsTiedToSpawnsTest(unittest.TestCase):
+    def test_one_result_per_spawned_kind_passes(self):
+        ok, (verdict, _) = graded_kind_melee(spawn('E_0', 'bullymong', 'stand-in_no_live_read'), spawn('E_3', 'bullymong_adult'),
+                                             'OWRANGETEST step=kind_melee result=PASS ' + kind_line())
+        self.assertTrue(ok)
+        self.assertEqual(verdict, 'PASS')
+
+    def test_a_result_for_a_kind_that_was_not_spawned_fails(self):
+        ok, (verdict, detail) = graded_kind_melee(spawn('E_3', 'bullymong_adult'),
+                                                  'OWRANGETEST step=kind_melee result=PASS ' + kind_line(),
+                                                  'OWRANGETEST step=kind_melee result=PASS ' + kind_line('bullymong_baby', (1.133, 1.140), (111, 111), 470, 480, enemy='E_9'))
         self.assertFalse(ok)
-        self.assertIn('checker:', dict((s, d) for s, _, d in rows)['kind_melee'])
+        self.assertIn('was not spawned as bullymong_baby', detail)
+
+    def test_a_two_kind_run_missing_one_result_fails(self):
+        ok, (verdict, detail) = graded_kind_melee(spawn('E_3', 'bullymong_adult'), spawn('E_4', 'bullymong_baby'),
+                                                  'OWRANGETEST step=kind_melee result=PASS ' + kind_line())
+        self.assertFalse(ok)
+        self.assertIn('0 passing results for spawned kind bullymong_baby', detail)
+
+    def test_a_duplicated_result_fails(self):
+        line = 'OWRANGETEST step=kind_melee result=PASS ' + kind_line()
+        ok, (verdict, detail) = graded_kind_melee(spawn('E_3', 'bullymong_adult'), line, line)
+        self.assertFalse(ok)
+        self.assertIn('2 passing results for spawned kind bullymong_adult', detail)
+
+    def test_a_result_from_an_enemy_of_another_kind_fails(self):
+        ok, (verdict, detail) = graded_kind_melee(spawn('E_0', 'bullymong', 'stand-in_no_live_read'), spawn('E_3', 'bullymong_adult'),
+                                                  'OWRANGETEST step=kind_melee result=PASS ' + kind_line(enemy='E_0'))
+        self.assertFalse(ok)
+        self.assertIn('enemy E_0 was not spawned as bullymong_adult', detail)
+
+    def test_no_spawn_record_fails(self):
+        ok, (verdict, detail) = graded_kind_melee('OWRANGETEST step=kind_melee result=PASS ' + kind_line())
+        self.assertFalse(ok)
+        self.assertIn('its spawn record: None', detail)
+        details = ' '.join(d for _, d in check_range.kind_melee_graded([('PASS', kind_line())], {}))
+        self.assertIn('no enemy was spawned with a live melee row', details)
+        # Steps built by hand, not read from a log, carry no spawns: they fail too.
+        self.assertFalse(check_range.grade({'kind_melee': [('PASS', kind_line())]}, ('PASS', ''), expected=['kind_melee'])[0])
+
+    def test_the_host_logs_the_spawn_record_the_checker_reads(self):
+        enemy = text('OpenWillowEnemy.cpp')
+        self.assertIn('OWRANGE enemy %s kind_melee kind=%s swing_interval=%.3f stand=%s source=%s', enemy)
+        self.assertIn('TEXT("live_read")', enemy)
+        self.assertIn('kind=%s enemy=%s cycle_min=%.3f', text('OpenWillowRange.cpp'))
+
+    def test_a_host_pass_with_numbers_outside_the_bands_is_graded_fail(self):
+        ok, (verdict, detail) = graded_kind_melee(spawn('E_3', 'bullymong_adult'), 'OWRANGETEST step=kind_melee result=PASS ' + kind_line(stand=(328, 334)))
+        self.assertFalse(ok)
+        self.assertEqual(verdict, 'FAIL')
+        self.assertIn('checker:', detail)
 
 
 if __name__ == '__main__':

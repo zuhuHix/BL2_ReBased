@@ -2292,8 +2292,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         // The host reports; the numbers are graded in one place, tools/check_range.py, against the acceptance bands (the cycle's upper edge
         // plus max_frame). The host's verdict covers only what the bands do not: a row, four swings, the first one inside the stock range.
         const bool bOk = Row && StartRange > 0.f && TestKindDistances[0] > 0.f && TestKindDistances[0] <= StartRange;
-        TestCheck(TEXT("kind_melee"), bOk, FString::Printf(TEXT("kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=%d row_cycle=%.3f row_stand=%.0f stop_at=%.0f"),
-            *KindName, CycleMin, CycleMax, StandMin, StandMax, TestKindDistances[0], StartRange, TestKindMaxFrame, TestKindStarts.Num(),
+        TestCheck(TEXT("kind_melee"), bOk, FString::Printf(TEXT("kind=%s enemy=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=%d row_cycle=%.3f row_stand=%.0f stop_at=%.0f"),
+            *KindName, *Enemy->GetName(), CycleMin, CycleMax, StandMin, StandMax, TestKindDistances[0], StartRange, TestKindMaxFrame, TestKindStarts.Num(),
             Row ? Row->SwingInterval : 0.f, Row ? Row->StandDistance : 0.f, KindBrain.LastStopAt));
         TestStep = 94;
         return;
