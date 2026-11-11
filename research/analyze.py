@@ -1,5 +1,10 @@
 import json, re, sys, collections, os
 
+import corpus_paths
+
+# Usage: analyze.py [--corpus DIR]  (see corpus_paths.py)
+CORPUS = corpus_paths.corpus_dir()
+
 def load(p):
     out=[]
     if not os.path.exists(p): return out
@@ -56,11 +61,14 @@ def analyze(path, label):
         bar = "#"*int(c/n*100/2)
         print(f"  {k:<38} {c:>5}  {c/n*100:>5.1f}%  {bar}")
 
-for path,label in [
+SOURCES = [
   ("reviews_bl2_recent.jsonl","BL2 — RECENT reviews"),
   ("reviews_bl2_helpful.jsonl","BL2 — MOST HELPFUL (all time)"),
   ("reviews_bl2_negative.jsonl","BL2 — NEGATIVE only"),
   ("reviews_bl4_recent.jsonl","BL4 — RECENT reviews"),
   ("reviews_bl3_helpful.jsonl","BL3 — MOST HELPFUL"),
-]:
-    analyze(path,label)
+]
+if not any(os.path.exists(os.path.join(CORPUS, name)) for name, _ in SOURCES):
+    corpus_paths.missing_corpus(CORPUS, [name for name, _ in SOURCES], "research/fetch_steam_reviews.py")
+for name,label in SOURCES:
+    analyze(os.path.join(CORPUS, name),label)

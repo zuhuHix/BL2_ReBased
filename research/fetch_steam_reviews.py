@@ -1,7 +1,12 @@
 import json, sys, time, urllib.parse, urllib.request
 
+import corpus_paths
+
+# Usage: fetch_steam_reviews.py [APP] [OUT] [FILTER] [PAGES] [--corpus DIR]
+# OUT is a file name in the corpus folder (see corpus_paths.py).
+CORPUS = corpus_paths.corpus_dir()
 APP = sys.argv[1] if len(sys.argv) > 1 else "49520"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "reviews_49520.jsonl"
+OUT = corpus_paths.output_path(CORPUS, sys.argv[2] if len(sys.argv) > 2 else "reviews_49520.jsonl")
 FILTER = sys.argv[3] if len(sys.argv) > 3 else "recent"
 PAGES = int(sys.argv[4]) if len(sys.argv) > 4 else 15
 

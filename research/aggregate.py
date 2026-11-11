@@ -1,5 +1,11 @@
 import json,re,os,collections
 
+import corpus_paths
+
+# Usage: aggregate.py [--corpus DIR]  (see corpus_paths.py)
+CORPUS = corpus_paths.corpus_dir()
+REVIEW_FILES = ["reviews_bl2_recent.jsonl", "reviews_bl2_helpful.jsonl", "reviews_bl2_negative.jsonl"]
+
 # ---- unified theme lexicon (applied to every source) ----
 T = {
  # praise
@@ -38,9 +44,11 @@ def jl(p, key="text"):
     if not os.path.exists(p): return []
     return [json.loads(l)[key] for l in open(p,encoding="utf-8") if l.strip()]
 
-add_texts("Steam reviews (recent)",   jl("reviews_bl2_recent.jsonl"))
-add_texts("Steam reviews (helpful)",  jl("reviews_bl2_helpful.jsonl"))
-add_texts("Steam reviews (negative)", jl("reviews_bl2_negative.jsonl"))
+if not any(os.path.exists(os.path.join(CORPUS, n)) for n in REVIEW_FILES):
+    corpus_paths.missing_corpus(CORPUS, REVIEW_FILES, "research/fetch_steam_reviews.py")
+add_texts("Steam reviews (recent)",   jl(os.path.join(CORPUS, "reviews_bl2_recent.jsonl")))
+add_texts("Steam reviews (helpful)",  jl(os.path.join(CORPUS, "reviews_bl2_helpful.jsonl")))
+add_texts("Steam reviews (negative)", jl(os.path.join(CORPUS, "reviews_bl2_negative.jsonl")))
 try:
     add_texts("Steam forum threads", [t["title"] for t in json.load(open("steam_topics_bl2.json",encoding="utf-8"))])
 except Exception: pass

@@ -1,10 +1,13 @@
 import subprocess, json, sys, time, urllib.parse, urllib.request
+import corpus_paths
+# Writes reviews_bl2_negative.jsonl into the corpus folder (see corpus_paths.py).
+OUT=corpus_paths.output_path(corpus_paths.corpus_dir(),"reviews_bl2_negative.jsonl")
 def get(url):
     req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
     import json as j
     with urllib.request.urlopen(req, timeout=40) as r: return j.loads(r.read().decode("utf-8","replace"))
 cursor="*"; n=0; seen=set()
-with open("reviews_bl2_negative.jsonl","w",encoding="utf-8") as f:
+with open(OUT,"w",encoding="utf-8") as f:
     for i in range(12):
         url=("https://store.steampowered.com/appreviews/49520?json=1&filter=all&language=english"
              "&review_type=negative&purchase_type=all&num_per_page=100&cursor=%s"%urllib.parse.quote(cursor,safe=""))
@@ -19,4 +22,4 @@ with open("reviews_bl2_negative.jsonl","w",encoding="utf-8") as f:
         cursor=d.get("cursor","")
         if not cursor: break
         time.sleep(0.6)
-print("WROTE",n)
+print("WROTE",n,"reviews to",OUT)
