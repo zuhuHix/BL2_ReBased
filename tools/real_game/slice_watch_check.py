@@ -13,6 +13,12 @@ is refused.
 
 Always checked: the recording ended (its end line is there: a crash or a stopped recorder fails this), at most max_errors hook or read
 errors (default 0), and nothing dropped by a cap (see max_dropped). Optional checks:
+  labelled reads:    always checked. A labelled snapshot or pawn read recorded as not taken (asked for before the map settled) fails,
+                     unless its label is in expect_not_taken; a label in expect_not_taken that was taken fails too. A labelled read
+                     taken late (it carries asked_t) fails unless it is 'start' or 'arrival', the only ones the watch may defer. A
+                     read kind the watch switched off fails unless it is in allow_switched_off. A deferred read never taken fails.
+  expect_not_taken:  ["<label>", ...]: labels that must be recorded as not taken (S0's deliberate early read).
+  allow_switched_off: ["<kind>", ...]: read kinds that may be switched off without failing the recording.
   max_dropped:       {"row"|"frame"|"snap"|"pawns"|"labelled"|"bytes"|"per_func": N}: how many lines a cap may drop, per kind
                      ("per_func" counts the rows dropped by per_func_cap, all functions together). Every kind not named allows 0.
   no_missing:        true: every name in funcs resolved.
@@ -39,7 +45,8 @@ import json
 import sys
 from pathlib import Path
 
-CHECK_KEYS = {"no_missing", "max_errors", "max_dropped", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
+DEFERRABLE = ("start", "arrival")
+CHECK_KEYS = {"no_missing", "max_errors", "max_dropped", "expect_not_taken", "allow_switched_off", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
               "mods_must_be_off", "frames", "rows_have_dt", "pawns"}
 CONTENT_KINDS = {"present", "dict", "nonempty", "number"}
 
@@ -87,7 +94,7 @@ def validate_spec(spec_path):
     md = checks.get("max_dropped", {})
     if not isinstance(md, dict) or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in md.values())             or set(md) - {"row", "frame", "snap", "pawns", "labelled", "bytes", "per_func"}:
         raise ValueError("max_dropped must map row, frame, snap, pawns, labelled, bytes or per_func to a whole number")
-    for key in ("snaps", "mods_must_be_off"):
+    for key in ("snaps", "mods_must_be_off", "expect_not_taken", "allow_switched_off"):
         if key in checks and not (isinstance(checks[key], list) and all(isinstance(x, str) for x in checks[key])):
             raise ValueError(f"{key} must be a list of strings")
     return spec
@@ -160,7 +167,21 @@ def check(dump, checks):
         seen = {r.get("args", {}).get(edge["arg"]) for r in _match(rows, edge["func"])}
         lacking = [v for v in edge["values"] if v not in seen]
         out.append((f"edges {edge['func']}.{edge['arg']}", not lacking, f"{len(edge['values']) - len(lacking)} of {len(edge['values'])} values seen"))
-    labelled = [s for s in dump.get("snaps", []) if s.get("label") != "auto"]
+    every_labelled = [s for s in dump.get("snaps", []) + dump.get("pawns", []) if s.get("label") != "auto"]
+    expected = set(checks.get("expect_not_taken", []))
+    not_taken = {s.get("label") for s in every_labelled if s.get("not_taken")}
+    unexpected = sorted(not_taken - expected)
+    missing_expected = sorted(expected - not_taken)
+    out.append(("not_taken", not unexpected and not missing_expected,
+                f"{len(not_taken)} labelled reads not taken; unexpected: {', '.join(unexpected) or 'none'}; "
+                f"expected but taken or absent: {', '.join(missing_expected) or 'none'}"))
+    late = sorted({s.get("label") for s in every_labelled if "asked_t" in s and not s.get("not_taken") and s.get("label") not in DEFERRABLE})
+    out.append(("taken_late", not late, f"labelled reads taken late other than start/arrival: {', '.join(late) or 'none'}"))
+    switched = sorted(set((end or {}).get("switched_off", {}) or {}) - set(checks.get("allow_switched_off", [])))
+    out.append(("switched_off", end is not None and not switched, f"read kinds switched off: {', '.join(switched) or 'none'}"))
+    never = (end or {}).get("never_taken", []) or []
+    out.append(("never_taken", end is not None and not never, f"{len(never)} deferred reads never taken"))
+    labelled = [s for s in dump.get("snaps", []) if s.get("label") != "auto" and not s.get("not_taken")]
     labels = {s.get("label") for s in labelled}
     for label in checks.get("snaps", []):
         out.append((f"snap {label}", label in labels, "present" if label in labels else "absent"))
@@ -192,7 +213,7 @@ def check(dump, checks):
     if pawns:
         reads = dump.get("pawns", [])
         need = pawns.get("fields", [])
-        full = [r for r in reads if not r.get("failed") and len(r.get("pawns", [])) >= pawns.get("min_pawns", 1)
+        full = [r for r in reads if not r.get("failed") and not r.get("not_taken") and len(r.get("pawns", [])) >= pawns.get("min_pawns", 1)
                 and all(all(p.get(f) is not None for f in need) for p in r["pawns"])]
         ok = len(full) >= pawns.get("min_reads", 1)
         out.append(("pawns", ok, f"{len(full)} of {len(reads)} reads clean, with {pawns.get('min_pawns', 1)}+ pawns and every field"))

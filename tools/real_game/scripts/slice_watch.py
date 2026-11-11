@@ -7,16 +7,23 @@ ignored local/), and everything it records goes to RG_OUT (the ignored local/rea
 It only reads. Hooks are observers: they never return Block and never change an argument. Nothing here sets a field, calls a
 setter, spawns, damages, moves, travels or sends input.
 
-Safe by construction (after the 2026-11-11 session 2 crashes, an access violation about two seconds after the first pawn read, twice):
-- A native getter is called only on the player's own controller and pawn, and on live AI pawns: objects named WillowAIPawn_<n>,
-  of that exact class, not bDeleteMe. That is how the tracked probes do it (combat_probe.cb_enemies, den_probe.dp_begin): find_all of
-  the class, with the preloaded Pawn_<Type> templates left out. Every other object a scan returns (resource pools, travel stations,
-  pickups, the engine) is read by its fields only.
+Safe by construction (after the 2026-11-11 session 2 crashes: an access violation in the same second as the watch's first pawn read,
+in two captures; see local/dossier/watch-crash-analysis.md):
+- No native function is called on any object a scan returns. Native calls are made only on the player's own objects, and only the
+  ones the tracked probes make too (the list is above SW_PLAYER_GETTERS). Everything else, AI pawns included, is read by fields:
+  _sw_fields never calls a callable. An AI pawn's health and shield come from the fields of the pools its references point at
+  (HealthPool.Data, ShieldArmor.Data), as combat_probe._pool reads them.
+- AI pawns are found as the tracked probes find them (combat_probe.cb_enemies, den_probe.dp_begin): find_all of the exact class
+  WillowAIPawn, only objects named WillowAIPawn_<n> (not the preloaded Pawn_<Type> templates), not class defaults, not bDeleteMe, and
+  only within pawns_radius of the player (default 4000, cb_enemies' radius; at most 6000, dp_begin's). The distance is recorded.
 - No scan at all until the player has a pawn AND the map's own clock (WorldInfo.TimeSeconds, which restarts at every map load) has
-  passed settle_seconds. A labelled snapshot or pawn read asked for earlier is deferred: the tick takes it once the map has settled,
-  and the line carries the time it was asked for.
-- Each kind of read is wrapped. Its first failure is counted and switches that kind off for the rest of the run (it is never retried
-  each tick); the line names it in 'off'.
+  passed settle_seconds. Only the 'start' snapshot and the 'arrival' pawn read may be deferred until then (the line carries the time
+  it was asked for); any other labelled read asked for before the map settled is NOT taken late: a line records it as not taken,
+  because a 'before_down' taken after the immunity is gone, or a 'down' taken at the respawn, would carry the right label at the
+  wrong moment.
+- Each kind of read is wrapped: its first Python exception is counted and switches that kind off for the rest of the run. This guard
+  does nothing against an access violation in native code, which ends the game before any Python exception exists; the rules above
+  are the protection against that class, not this guard.
 
 The driver runs every command script in ONE shared namespace (openwillow_realgame/__init__.py, `scope`), so every top-level name
 here starts with sw_, _sw_, SW or _Sw: nothing a tracked probe defines is replaced, and no probe can replace these
@@ -39,6 +46,7 @@ Spec (a dict or the path of a JSON file; sw_load_spec refuses unknown keys, wron
   pawns_paths   full object paths: an automatic pawn read looks up only these (a name lookup, not a scan of every object); each must
                 still be a live WillowAIPawn_<n>.
   settle_seconds  the map clock a scan waits for after every load (default 15).
+  pawns_radius  the distance from the player within which AI pawns are read (default 4000, at most 6000).
   pawns_match   substrings: when no paths are given, only pawns whose path, class or AI class holds one are kept.
   caps          per_func_cap, row_cap, frame_cap, snap_cap, pawn_cap, byte_cap; flush_every.
 """
@@ -67,6 +75,7 @@ SW_SPEC_KEYS = {
     "per_func_cap": (int, 5000, 1, 20000), "row_cap": (int, 200000, 1, 400000), "frame_cap": (int, 300000, 1, 400000),
     "snap_cap": (int, 5000, 1, 20000), "pawn_cap": (int, 20000, 1, 50000), "byte_cap": (int, 300_000_000, 1_000_000, 1_000_000_000),
     "flush_every": (float, 2.0, 0.5, 30.0), "settle_seconds": (float, 15.0, 5.0, 120.0),
+    "pawns_radius": (float, 4000.0, 500.0, 6000.0),
 }
 SW_DOC_KEYS = ("name", "notes", "checks")
 SW_LABELLED_CAP = 200   # labelled snapshots (the capture's own) are kept beyond snap_cap, up to this many
@@ -434,27 +443,70 @@ def sw_start(label, spec, name="watch"):
 
 
 # ---------------------------------------------------------------- reads
-def _sw_read(obj, names):
-    """Each name that answers: a field, or a getter called with no arguments (getters only, by the caller's choice of names)."""
+# Every native call the watch can make, each on the player's own objects only, and each made by the tracked probes too:
+#   the player's pawn (pc.Pawn):         GetHealth, GetMaxHealth, GetShieldStrength, GetMaxShieldStrength
+#                                        (den_probe dp_begin/dp_end, cash_probe cp_up, combat_probe _pawn_state);
+#   the player's world (pc.WorldInfo):   GetStreamingPersistentMapName (every capture's map check);
+#   the player's replication info:       GetCurrencyOnHand(0) (cash_probe cp_cash).
+# Each runs inside a wrapped snapshot part, only in a snapshot (never per frame), and only when the player has a pawn. Nothing else is
+# called: every other read below goes through _sw_fields, which skips anything callable.
+SW_PLAYER_GETTERS = ("GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength")
+SW_PLAYER_FIELDS = ("Location", "Rotation", "Velocity", "Physics", "GroundSpeed", "DrawScale", "Health", "HealthMax",
+                    "NumSuccessiveInjuries", "bHidden")
+SW_PAWN_FIELDS = ("Location", "GroundSpeed", "WalkingPct", "DrawScale", "DrawScale3D", "Health", "HealthMax", "Physics")
+SW_POOL_STATE = ("CurrentValue", "MaxValue", "MinValue", "MaxValueBaseValue")
+SW_STATION_FIELDS = ("bShouldBeActive", "bIsCurrentlyActive", "Location")
+SW_POOL_FIELDS = ("Definition", "AssociatedProvider", "CurrentValue", "MaxValue", "MaxValueBaseValue")
+SW_DEFERRABLE = ("start", "arrival")   # the only labelled reads that may wait for the map to settle
+
+
+def _sw_fields(obj, names):
+    """Fields only: a name that is a function is skipped, never called."""
     out = {}
     for name in names:
         try:
             value = getattr(obj, name)
-            out[name] = _sw_p(value() if callable(value) else value)
+            if not callable(value):
+                out[name] = _sw_p(value)
         except Exception:
             pass
     return out
 
 
-SW_PLAYER_FIELDS = ("Location", "Rotation", "Velocity", "Physics", "GroundSpeed", "DrawScale", "Health", "HealthMax",
-                    "GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength", "NumSuccessiveInjuries", "bHidden")
-SW_PAWN_FIELDS = ("Location", "GroundSpeed", "WalkingPct", "DrawScale", "DrawScale3D", "Health", "HealthMax",
-                  "GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength", "Physics")
-SW_STATION_FIELDS = ("bShouldBeActive", "bIsCurrentlyActive", "Location")
+def _sw_player_getters(pawn):
+    """The four health and shield getters, on the player's own pawn only (see the list above)."""
+    out = {}
+    for name in SW_PLAYER_GETTERS:
+        try:
+            out[name] = _sw_p(getattr(pawn, name)())
+        except Exception:
+            pass
+    return out
+
+
+def _sw_pool_of(ref):
+    """The pool a pawn's pool reference points at (HealthPool, ShieldArmor), by its fields: ref.Data, as combat_probe._pool reads it."""
+    try:
+        pool = ref.Data
+    except Exception:
+        return None
+    if pool is None or callable(pool):
+        return None
+    return _sw_fields(pool, SW_POOL_STATE)
+
+
+def _sw_pool_refs(pawn):
+    out = {}
+    for key, name in (("health_pool", "HealthPool"), ("shield_pool", "ShieldArmor")):
+        try:
+            out[key] = _sw_pool_of(getattr(pawn, name))
+        except Exception:
+            out[key] = None
+    return out
 
 
 def _sw_live(objs):
-    """Scanned objects that are not class defaults and not being destroyed. Their fields may be read; no native getter is called on them."""
+    """Scanned objects that are not class defaults and not being destroyed. Their fields may be read; nothing is called on them."""
     out = []
     for o in objs:
         if "Default__" in o._path_name():
@@ -469,8 +521,8 @@ def _sw_live(objs):
 
 
 def sw_live_pawn(pawn):
-    """A live AI pawn, the only scanned object a native getter is called on: named WillowAIPawn_<n> (not a preloaded Pawn_<Type>
-    template), not a class default, not bDeleteMe (as combat_probe.cb_enemies and den_probe.dp_begin)."""
+    """A live AI pawn: named WillowAIPawn_<n> (not a preloaded Pawn_<Type> template), not a class default, not bDeleteMe
+    (as combat_probe.cb_enemies and den_probe.dp_begin). Read by fields only, like every scanned object."""
     try:
         return (pawn is not None and pawn.Name.startswith("WillowAIPawn_") and "Default__" not in pawn._path_name()
                 and not pawn.bDeleteMe)
@@ -484,22 +536,6 @@ def _sw_cylinder(pawn):
         return {"radius": _sw_p(c.CollisionRadius), "height": _sw_p(c.CollisionHeight)}
     except Exception:
         return None
-
-
-SW_POOL_FIELDS = ("Definition", "AssociatedProvider", "CurrentValue", "MaxValue", "MaxValueBaseValue")
-
-
-def _sw_fields(obj, names):
-    """Fields only: a name that is a function is skipped, never called."""
-    out = {}
-    for name in names:
-        try:
-            value = getattr(obj, name)
-            if not callable(value):
-                out[name] = _sw_p(value)
-        except Exception:
-            pass
-    return out
 
 
 def _sw_pools():
@@ -539,6 +575,15 @@ def _sw_engine():
     return {}
 
 
+def _sw_not_taken(kind, label):
+    """A labelled read asked for before the map settled, other than start and arrival: recorded as not taken, never taken late."""
+    line = dict(_sw_stamp(), label=label, not_taken="asked before the map settled", asked_t=_sw_now(), failed=[])
+    if SW["n"]["labelled"] < SW_LABELLED_CAP:
+        SW["n"]["labelled"] += 1
+        SW["buf"].append(dict(line, k=kind))
+    return {"label": label, "not_taken": True, "failed": [], "pawns": 0}
+
+
 def sw_snap(label, asked=None):
     """One state snapshot (reads only), queued for the file and returned. Each part reads on its own; 'failed' names every part that
     raised, so a usability check can tell a failed read from an empty one. Automatic snapshots (label 'auto') are light; a labelled
@@ -551,6 +596,8 @@ def sw_snap(label, asked=None):
         SW["dropped"]["labelled"] = SW["dropped"].get("labelled", 0) + 1
         return {}
     if not auto and asked is None and not sw_settled():
+        if label not in SW_DEFERRABLE:
+            return _sw_not_taken("snap", label)
         SW["deferred"].append(("snap", label, _sw_now()))   # taken by the tick once the map has settled
         return {"label": label, "deferred": True, "failed": []}
     failed = []
@@ -558,10 +605,11 @@ def sw_snap(label, asked=None):
     if asked is not None:
         snap["asked_t"] = asked
     parts = [("map", lambda pc: _sw_p(pc.WorldInfo.GetStreamingPersistentMapName())),
-             ("player", lambda pc: dict(_sw_read(pc.Pawn, SW_PLAYER_FIELDS), cls=pc.Pawn.Class.Name, cylinder=_sw_cylinder(pc.Pawn))),
-             ("controller", lambda pc: _sw_read(pc, ("Rotation", "LastVisitedTeleporter", "FocusCamReturnTime", "CurrentSeenPickupable",
-                                                    "CurrentTouchedPickupable", "bCinematicMode"))),
-             ("pri", lambda pc: _sw_read(pc.PlayerReplicationInfo, ("ExpLevel", "GeneralSkillPoints"))),
+             ("player", lambda pc: dict(_sw_fields(pc.Pawn, SW_PLAYER_FIELDS), **_sw_player_getters(pc.Pawn), **_sw_pool_refs(pc.Pawn),
+                                        cls=pc.Pawn.Class.Name, cylinder=_sw_cylinder(pc.Pawn))),
+             ("controller", lambda pc: _sw_fields(pc, ("Rotation", "LastVisitedTeleporter", "FocusCamReturnTime", "CurrentSeenPickupable",
+                                                      "CurrentTouchedPickupable", "bCinematicMode"))),
+             ("pri", lambda pc: _sw_fields(pc.PlayerReplicationInfo, ("ExpLevel", "GeneralSkillPoints"))),
              ("cash", lambda pc: int(pc.PlayerReplicationInfo.GetCurrencyOnHand(0))),
              ("checkpoint", lambda pc: _sw_p(pc.WorldInfo.GRI.ActiveRespawnCheckpointTeleportActor))]
     if not auto:
@@ -582,8 +630,8 @@ def sw_snap(label, asked=None):
             failed.append(part)
             continue
         try:
-            if pc is None:
-                raise RuntimeError("no player controller")
+            if pc is None or pc.Pawn is None:
+                raise RuntimeError("no player controller or pawn")
             snap[part] = read(pc)
         except Exception as e:
             failed.append(part)
@@ -606,26 +654,32 @@ def sw_pawn_wanted(row, match):
 def _sw_pawn_row(pawn):
     row = dict(name=pawn._path_name(), cls=pawn.Class.Name)
     try:
-        row["ai_class"] = _sw_p(pawn.AIClass)
+        ai = pawn.AIClass
+        row["ai_class"] = None if callable(ai) else _sw_p(ai)
     except Exception:
         pass
     return row
 
 
-def _sw_pawn_fill(row, pawn, here):
-    row.update(_sw_read(pawn, SW_PAWN_FIELDS), cylinder=_sw_cylinder(pawn))
-    if here is not None:
-        try:
-            loc = pawn.Location
-            row["dist"] = round(((loc.X - here.X) ** 2 + (loc.Y - here.Y) ** 2 + (loc.Z - here.Z) ** 2) ** 0.5, 1)
-        except Exception:
-            pass
+def _sw_dist(pawn, here):
+    """Distance from the player, from the Location fields; None when either cannot be read."""
+    try:
+        loc = pawn.Location
+        return round(((loc.X - here.X) ** 2 + (loc.Y - here.Y) ** 2 + (loc.Z - here.Z) ** 2) ** 0.5, 1)
+    except Exception:
+        return None
+
+
+def _sw_pawn_fill(row, pawn):
+    row.update(_sw_fields(pawn, SW_PAWN_FIELDS), cylinder=_sw_cylinder(pawn))
+    row.update(_sw_pool_refs(pawn))
     return row
 
 
 def sw_pawns(label, asked=None):
-    """One read of the live AI pawns (sw_live_pawn): by exact path when the spec names paths (a lookup, no scan), else find_all of the
-    exact class, filtered. Native getters are called on these only. Deferred until the map has settled; switched off after a failure."""
+    """One read of the live AI pawns within pawns_radius (sw_live_pawn), by fields only: by exact path when the spec names paths (a
+    lookup, no scan), else find_all of the exact class. Deferred until the map has settled ('arrival' only; any other label is recorded
+    as not taken); switched off after a Python failure."""
     auto = label == "auto"
     if auto and SW["n"]["pawns"] >= SW["spec"]["pawn_cap"]:
         SW["dropped"]["pawns"] = SW["dropped"].get("pawns", 0) + 1
@@ -633,16 +687,22 @@ def sw_pawns(label, asked=None):
     if "pawns" in SW["off"]:
         return {"label": label, "pawns": 0, "failed": ["off"]}
     if not auto and asked is None and not sw_settled():
+        if label not in SW_DEFERRABLE:
+            return _sw_not_taken("pawns", label)
         SW["deferred"].append(("pawns", label, _sw_now()))
         return {"label": label, "deferred": True, "pawns": 0, "failed": []}
-    out = dict(_sw_stamp(), label=label, pawns=[])
+    out = dict(_sw_stamp(), label=label, pawns=[], beyond_radius=0)
     if asked is not None:
         out["asked_t"] = asked
     failed = []
+    radius = SW["spec"]["pawns_radius"]
     try:
         player = _sw_pc().Pawn
-        here = player.Location if player else None
+        here = player.Location if player is not None else None
+        if here is None:
+            raise RuntimeError("no player pawn")
         if SW["spec"]["pawns_paths"]:
+            candidates = []
             for path in SW["spec"]["pawns_paths"]:
                 try:
                     pawn = _sw_sdk.find_object("WillowAIPawn", path)
@@ -651,14 +711,18 @@ def sw_pawns(label, asked=None):
                 if not sw_live_pawn(pawn):
                     failed.append(path)
                     continue
-                out["pawns"].append(_sw_pawn_fill(_sw_pawn_row(pawn), pawn, here))
+                candidates.append(pawn)
         else:
-            for pawn in _sw_sdk.find_all("WillowAIPawn"):   # the exact class, as the tracked probes scan it
-                if not sw_live_pawn(pawn):
-                    continue
-                row = _sw_pawn_row(pawn)
-                if sw_pawn_wanted(row, SW["spec"]["pawns_match"]):
-                    out["pawns"].append(_sw_pawn_fill(row, pawn, here))
+            candidates = [p for p in _sw_sdk.find_all("WillowAIPawn") if sw_live_pawn(p)]   # the exact class, as the probes scan it
+        for pawn in candidates:
+            dist = _sw_dist(pawn, here)
+            if dist is None or dist > radius:
+                out["beyond_radius"] += 1
+                continue
+            row = _sw_pawn_row(pawn)
+            if sw_pawn_wanted(row, SW["spec"]["pawns_match"]):
+                row["dist"] = dist
+                out["pawns"].append(_sw_pawn_fill(row, pawn))
     except Exception as e:
         failed.append("read")
         sw_switch_off("pawns", e)

@@ -58,11 +58,18 @@ function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
     }
 }
 # One labelled state snapshot, or one read of the AI pawns. Nothing when the watch is off; a failure is a warning (and the snapshot's absence fails
-# the usability check), never an error that would end the capture.
+# the usability check), never an error that would end the capture. Returns one line saying what happened, so the runner sees it in the log:
+# taken, deferred (start and arrival only, until the map settles), NOT TAKEN (asked before the map settled), or the parts that failed.
 function Save-SliceWatchSnap([string]$Label) {
     Assert-WatchName $Label
     if (!$script:SliceWatchOn) { return }
-    try { Test-WatchReply (Invoke-GamePy "print(len(sw_snap('$Label')))" 30) "snap $Label" | Out-Null } catch { Write-Warning "slice watch snapshot ${Label}: $_" }
+    try {
+        $r = Test-WatchReply (Invoke-GamePy "import json; r = sw_snap('$Label'); print(json.dumps({'deferred': bool(r.get('deferred')), 'not_taken': bool(r.get('not_taken')), 'failed': r.get('failed', [])}))" 30) "snap $Label" | ConvertFrom-Json
+        if ($r.not_taken) { "slice watch snapshot ${Label}: NOT TAKEN (asked before the map settled)" }
+        elseif ($r.deferred) { "slice watch snapshot ${Label}: deferred until the map settles" }
+        elseif (@($r.failed).Count) { "slice watch snapshot ${Label}: taken, failed parts: $(@($r.failed) -join ', ')" }
+        else { "slice watch snapshot ${Label}: taken" }
+    } catch { Write-Warning "slice watch snapshot ${Label}: $_" }
 }
 function Save-SliceWatchPawns([string]$Label) {
     Assert-WatchName $Label
@@ -88,7 +95,7 @@ function Complete-SliceWatch([string]$Spec, [string]$OutDir, [string]$Name = 'wa
     Assert-WatchName $Name
     if (!$script:SliceWatchOn) { throw "the watch did not start: $script:SliceWatchError" }
     $full = Resolve-WatchSpec $Spec
-    Save-SliceWatchSnap 'end'
+    $null = Save-SliceWatchSnap 'end'
     $counts = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json
     Test-WatchReply (Invoke-GamePy 'print(sw_stop())' 30) 'stop' | Out-Null
     $script:SliceWatchOn = $false

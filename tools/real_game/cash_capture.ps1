@@ -36,6 +36,9 @@ param(
     # Slice sessions: after the den read, one more den trial with the immunity hook removed, so the pack can down Maya (no input; she stands
     # still). It waits up to -DownSeconds for the down, then -RespawnSeconds for her to stand again. Needs the den read (not with -SkipDen).
     [switch]$DenDown,
+    # The S0 smoke item only (with -WatchSpec): in each den trial, one labelled snapshot asked for right after the travel, before the map settles
+    # (the watch must record it as not taken), then one wait for the settle. Reads only.
+    [switch]$WatchSmoke,
     [int]$DownSeconds = 150,
     [int]$RespawnSeconds = 90,
     # What to dot-source for the real-game functions. Only tests/cash_capture_test.py passes another file.
@@ -226,7 +229,9 @@ try {
             for ($trial = 0; $trial -lt $DenTrials; $trial++) {
                 $reached = Enter-IceMap   # a fresh population: the cash read killed what was near
                 if ($reached -notmatch 'Ice_P True') { throw "travel for trial $trial failed: $reached" }
+                if ($WatchSmoke -and $WatchSpec) { $log["smoke_unsettled_$trial"] = Save-SliceWatchSnap 'smoke_unsettled'; $log["smoke_unsettled_$trial"] }
                 Start-Sleep 8; Assert-GameForeground; Send-Key Enter; Start-Sleep 1
+                if ($WatchSmoke -and $WatchSpec) { $log["smoke_settled_$trial"] = Wait-SliceWatchSettled 40 }
                 if ((Py 'print(cp_immune())') -ne 'True') { throw "the immunity hook is gone before trial $trial" }
                 $first = Py 'print(dp_begin())'
                 if ($first -eq 'None') { continue }
@@ -260,7 +265,10 @@ try {
             if ($reached -notmatch 'Ice_P True') { throw "travel for the den down failed: $reached" }
             Start-Sleep 8; Send-Key Enter; Start-Sleep 1   # Send-Key asserts the game's focus itself
             # The watch scans nothing until the new map has settled; its before_down snapshot must be taken before the immunity goes.
-            if ($WatchSpec) { $log.den_down_settled = Wait-SliceWatchSettled 40 }
+            if ($WatchSpec) {
+                $log.den_down_settled = Wait-SliceWatchSettled 40
+                if (!$log.den_down_settled) { throw 'the map did not settle within 40 s, so the watch could not take before_down: the den down is not attempted' }
+            }
             $first = Py 'print(dp_begin())'
             if ($first -eq 'None') { throw 'no enemy within reach for the den down' }
             if ($WatchSpec) { Save-SliceWatchSnap 'before_down'; $log.watch_before_down = Save-SliceWatchPawns 'before_down' }
