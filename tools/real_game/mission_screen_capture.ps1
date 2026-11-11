@@ -9,6 +9,11 @@ param(
     [string]$Lane = 'mission-screen',
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya in Sanctuary
     [switch]$SkipRespawn,
+    # Slice sessions (2026-11-11): every SDK mod's setting turned off for this run (Set-SdkModsOff; the restore puts the settings back from the backup).
+    [switch]$SdkModsOff,
+    # Slice sessions: a slice_watch spec (tools/real_game/scripts/slice_watch.py). The read-only recorder runs beside the stages, and its dump is
+    # checked (tools/real_game/slice_watch_check.py) before the game closes. Empty: no watch.
+    [string]$WatchSpec = '',
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
     [int]$HubWaitMinutes = 120
@@ -16,6 +21,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
+. (Join-Path $PSScriptRoot 'slice_watch.ps1')
 $Out = Join-Path $script:RG 'mission_screen'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind. Kept under a new name, not deleted: after a run that
@@ -83,7 +89,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors')
+$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors') + $(if ($WatchSpec) { @('watch') } else { @() })
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -122,6 +128,7 @@ try {
         if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
     Save-VerifiedBackupRecord $bak $roots $snapshots
+    if ($SdkModsOff) { Invoke-SdkModsOffStep $log }
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
     $driverAttempted = $true   # before the call: a failed install can leave the folder behind
@@ -144,6 +151,7 @@ try {
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
     foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null }
     $log.hooks = PyJson 'ms_start()'
+    if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'mission_screen' 'mission_screen' }
     Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0) "functions not found, so their rows can never come: $(@($log.hooks.missing) -join '; ')"
     $log.before = Read-After 'before'
     if ($map -notmatch 'Sanctuary') { throw "not in Sanctuary, so Marcus is not here: $map" }
@@ -223,6 +231,7 @@ try {
     if (!$SkipRespawn) {
         # Downing Maya with the screen open is the crash risk: stop here unless the screen is confirmed closed.
         if ($closed.open -ne $false -or $closed.movie_playing -eq $true -or 'closed' -notin $stagesDone) { throw "the screen is not confirmed closed (open $($closed.open), movie playing $($closed.movie_playing)); not going on to the respawn" }
+        if ($WatchSpec) { Save-SliceWatchSnap 'before_down' }
         $down = PyJson 'ms_down()'
         if ($down.refused) { throw "ms_down refused: $($down.refused)" }
         $log.cash_before = $down.read.cash
@@ -234,12 +243,18 @@ try {
         }
         $log.respawn_frames = $n; $log.dialog_frame = $dialogAt; $log.cash_after = $row.cash
         $log.respawn = PyJson 'ms_respawn()'
+        if ($WatchSpec) { Save-SliceWatchSnap 'after_respawn' }
         Py "print(ms_dump('screen'))" | Out-Null
         Set-Stage 'respawn' ($log.respawn.ok -eq $true) "no down, respawn, dialog and matching charge in order: $($log.respawn | ConvertTo-Json -Compress)"
     }
     $log.hook_errors = PyJson 'ms_errors()'
     Set-Stage 'hook_errors' ($log.hook_errors.hook_errors -eq 0) "errors in the hooks, so rows may be missing: $($log.hook_errors | ConvertTo-Json -Compress)"
     Py 'print(ms_stop())' | Out-Null
+    # The watch's usability check, while the game still runs: a failed check is this stage's failure, and the run still quits and restores in order.
+    if ($WatchSpec) {
+        try { $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
+        catch { Set-Stage 'watch' $false "$_" }
+    }
     # The game may close before it answers this one.
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }

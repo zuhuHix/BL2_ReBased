@@ -18,7 +18,7 @@ import math
 
 try:
     import unrealsdk
-    from unrealsdk.hooks import Block, Type, add_hook, has_hook
+    from unrealsdk.hooks import Block, Type, add_hook, has_hook, remove_hook
 except ImportError:   # tests/den_probe_test.py exercises the arithmetic without a game
     unrealsdk = None
 
@@ -60,6 +60,16 @@ def cp_start():
             add_hook(path, Type.PRE, CP_IMMUNE_ID, hook)
             CP["hooks"].append((path, Type.PRE, CP_IMMUNE_ID))
     return {"immune": cp_immune(), "paths": CP["immune_paths"], "mods_off": cb_mods_off()}
+
+
+def cp_immune_off():
+    """Remove this probe's own immunity hooks (cash_capture.ps1 -DenDown: the pack may reach Maya). Nothing else changes.
+    Returns cp_immune() afterwards, which is False once every hook is gone."""
+    for path in CP.get("immune_paths") or []:
+        if has_hook(path, Type.PRE, CP_IMMUNE_ID):
+            remove_hook(path, Type.PRE, CP_IMMUNE_ID)
+    CP["hooks"] = [h for h in CP["hooks"] if h[2] != CP_IMMUNE_ID]
+    return cp_immune()
 
 
 def cp_immune():

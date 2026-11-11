@@ -12,6 +12,11 @@ param(
     [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'audio-events',
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya (Phaselock) in Sanctuary
+    # Slice sessions (2026-11-11): every SDK mod's setting turned off for this run (Set-SdkModsOff; the restore puts the settings back from the backup).
+    [switch]$SdkModsOff,
+    # Slice sessions: a slice_watch spec (tools/real_game/scripts/slice_watch.py). The read-only recorder runs beside the stages, and its dump is
+    # checked (tools/real_game/slice_watch_check.py) before the game closes. Empty: no watch.
+    [string]$WatchSpec = '',
     [switch]$ProbeOnly,                     # stop after installing the hooks
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
@@ -20,6 +25,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
+. (Join-Path $PSScriptRoot 'slice_watch.ps1')
 $Out = Join-Path $script:RG 'audio_events'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind. Kept under a new name, not deleted: after a run that
@@ -86,6 +92,7 @@ $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
 $stagesRequested = if ($ProbeOnly) { @('hooks') } else { @('hooks', 'baseline', 'phaselock', 'fire_away', 'fire_hit', 'pickup') }
+if ($WatchSpec -and !$ProbeOnly) { $stagesRequested = @($stagesRequested) + @('watch') }
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -117,6 +124,7 @@ try {
         if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
     Save-VerifiedBackupRecord $bak $roots $snapshots
+    if ($SdkModsOff) { Invoke-SdkModsOffStep $log }
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
     $driverAttempted = $true   # before the call: a failed install can leave the folder behind
@@ -146,6 +154,7 @@ try {
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
     foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py', 'audio_events.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") audio_events | Out-Null }
+    if ($WatchSpec -and !$ProbeOnly) { $log.watch_start = Start-SliceWatch $WatchSpec 'audio_events' 'audio_events'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
     $log.hooks = Py 'import json; print(json.dumps(ae_install()))' | ConvertFrom-Json
     "hooked $(@($log.hooks.hooked).Count), missing: $($log.hooks.missing -join ' ')"
     Set-Stage 'hooks' (@($log.hooks.hooked).Count -gt 0) 'no sound function could be hooked'
@@ -232,6 +241,11 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
     Set-Stage 'pickup' (!$pickupErrors -and $gone -and @($log.window_pickup.tied).Count -gt 0) "${pickupErrors}pickup '$pickup' of '$($log.thrown.thrown)' gone: $gone, or no new sound event followed the press"
     # A tied event that other windows also saw is weaker evidence: kept beside the results rather than decided here.
     $log.event_overlap = Py 'import json; print(json.dumps(ae_overlap()))' | ConvertFrom-Json
+    # The watch's usability check, while the game still runs: a failed check is this stage's failure, and the run still quits and restores in order.
+    if ($WatchSpec -and !$ProbeOnly) {
+        try { $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
+        catch { Set-Stage 'watch' $false "$_" }
+    }
     # The game may close before it answers this one.
     try { Invoke-GamePy 'ae_remove(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }

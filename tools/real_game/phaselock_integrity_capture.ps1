@@ -12,6 +12,11 @@ param(
     [string]$HubLock = (Join-Path (Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir)) 'local\hub-ue.lock'),
     [string]$Lane = 'phaselock-integrity',
     [string]$Character = 'Save0008.sav',   # quick_startup's -Character slot: the level-8 Maya (Phaselock) in Sanctuary
+    # Slice sessions (2026-11-11): every SDK mod's setting turned off for this run (Set-SdkModsOff; the restore puts the settings back from the backup).
+    [switch]$SdkModsOff,
+    # Slice sessions: a slice_watch spec (tools/real_game/scripts/slice_watch.py). The read-only recorder runs beside the stages, and its dump is
+    # checked (tools/real_game/slice_watch_check.py) before the game closes. Empty: no watch.
+    [string]$WatchSpec = '',
     [switch]$ProbeOnly,                     # stop after pi_discover / pi_flags
     [switch]$SkipDown,
     # Instead of the hit, miss and down casts, two separate reads: kill the lifted target (the skill, and the HUD emblem through
@@ -26,6 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
+. (Join-Path $PSScriptRoot 'slice_watch.ps1')
 $Out = Join-Path $script:RG 'phaselock_integrity'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind. Kept under a new name, not deleted: after a run that
@@ -91,6 +97,7 @@ $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
 $stagesRequested = if ($ProbeOnly) { @('discover') } elseif ($ShieldOnly) { @('discover', 'shield_levels') } elseif ($KillAndShield) { @('discover', 'kill', 'shield_levels') } elseif ($SkipDown) { @('hit', 'miss') } else { @('hit', 'miss', 'down') }
+if ($WatchSpec -and !$ProbeOnly) { $stagesRequested = @($stagesRequested) + @('watch') }
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -123,6 +130,7 @@ try {
         if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
     Save-VerifiedBackupRecord $bak $roots $snapshots
+    if ($SdkModsOff) { Invoke-SdkModsOffStep $log }
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
     $driverAttempted = $true   # before the call: a failed install can leave the folder behind
@@ -152,6 +160,7 @@ try {
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
     foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py', 'action_skill_hud.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") phaselock_integrity | Out-Null }
+    if ($WatchSpec -and !$ProbeOnly) { $log.watch_start = Start-SliceWatch $WatchSpec 'phaselock_integrity' 'phaselock_integrity'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
 
     # The exact Adult or nothing: a variant has its own archetype, attachments and material, so its reads would answer another question.
     for ($i = 0; $i -lt 24 -and !$target -and !$ShieldOnly; $i++) {
@@ -330,6 +339,11 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
         "down: $($log[$log.down_attempt].action)"
         Set-Stage 'down' (($downResult.target_lifted -eq $true) -and ($downResult.injure.injured -eq $true) -and (Test-CaptureComplete $log[$log.down_attempt] $downShots)) 'target not lifted, Maya not down, or frames or shots missing'
     }
+    }
+    # The watch's usability check, while the game still runs: a failed check is this stage's failure, and the run still quits and restores in order.
+    if ($WatchSpec -and !$ProbeOnly) {
+        try { $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
+        catch { Set-Stage 'watch' $false "$_" }
     }
     # The game may close before it answers this one (2026-11-06: the empty reply stopped the script after all the casts).
     try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }

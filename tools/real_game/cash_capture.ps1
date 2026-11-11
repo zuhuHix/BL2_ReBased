@@ -26,12 +26,23 @@ param(
     [int]$DenTrials = 3,
     [int]$DenSeconds = 25,
     [switch]$SkipDen,
+    # Slice sessions (2026-11-11): every SDK mod's setting turned off for this run (Set-SdkModsOff; the restore puts the settings back from the backup).
+    [switch]$SdkModsOff,
+    # Slice sessions: a slice_watch spec (tools/real_game/scripts/slice_watch.py). The read-only recorder runs beside the stages, and its dump is
+    # checked (tools/real_game/slice_watch_check.py) before the game closes. Empty: no watch.
+    [string]$WatchSpec = '',
+    # Slice sessions: after the den read, one more den trial with the immunity hook removed, so the pack can down Maya (no input; she stands
+    # still). It waits up to -DownSeconds for the down, then -RespawnSeconds for her to stand again. Needs the den read (not with -SkipDen).
+    [switch]$DenDown,
+    [int]$DownSeconds = 150,
+    [int]$RespawnSeconds = 90,
     # What to dot-source for the real-game functions. Only tests/cash_capture_test.py passes another file.
     [string]$Helpers = (Join-Path $PSScriptRoot 'realgame.ps1')
 )
 $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . $Helpers
+. (Join-Path $PSScriptRoot 'slice_watch.ps1')
 $Out = Join-Path $script:RG 'cash'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind, and a dump that fails must not be checked against an earlier
@@ -57,6 +68,9 @@ $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
 $snapshots = @{}
 $stagesRequested = @('travel', 'readings'); if (!$SkipDen) { $stagesRequested += 'den_read' }
+if ($DenDown -and $SkipDen) { throw '-DenDown needs the den read; it cannot be combined with -SkipDen' }
+if ($DenDown) { $stagesRequested += 'den_down' }
+if ($WatchSpec) { $stagesRequested += 'watch' }
 $stageResults = [ordered]@{}; foreach ($stage in $stagesRequested) { $stageResults[$stage] = 'not run' }
 $log.requested_stages = $stagesRequested
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
@@ -108,6 +122,7 @@ try {
     }
     # The record outlives this process: the printed recovery command restores from it, and refuses a root that changed since.
     Save-VerifiedBackupRecord $bak $roots $snapshots
+    if ($SdkModsOff) { Invoke-SdkModsOffStep $log }
     # -Exclusive re-checks the folder is absent and removes its own partial install on failure, so it is ours only once this returns.
     $driverAttempted = $true   # before the call: a failed install can leave the folder behind
     Install-Driver -BlockSavesAtStart -Exclusive
@@ -143,6 +158,7 @@ try {
     $started = $log.start | ConvertFrom-Json
     if (!$started -or $started.immune -ne $true) { throw "the immunity hook is not installed: $($log.start)" }
     $log.player_level = Py 'print(cp_level())'; $log.cash_start = Py 'print(cp_cash())'
+    if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'cash' 'cash'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
     "player level $($log.player_level), cash $($log.cash_start)"
 
     $deadline = (Get-Date).AddMinutes($MaxMinutes)
@@ -221,6 +237,50 @@ try {
             Set-Stage 'den_read' $false "$_"
             "den read: $_"
         }
+    }
+    # The den down: the same placement as a den trial, then the immunity hook (this run's own, cp_start) is removed and Maya stands still. No key
+    # is pressed. The game's own pack downs her, she bleeds out and respawns; the watch records the hits, the down and the respawn. Saves stay blocked.
+    if ($DenDown) {
+        try {
+            if (!$denLoaded) { Use-Probe 'den_probe.py'; $denLoaded = $true }
+            $reached = Enter-IceMap
+            if ($reached -notmatch 'Ice_P True') { throw "travel for the den down failed: $reached" }
+            Start-Sleep 8; Send-Key Enter; Start-Sleep 1   # Send-Key asserts the game's focus itself
+            $first = Py 'print(dp_begin())'
+            if ($first -eq 'None') { throw 'no enemy within reach for the den down' }
+            if ($WatchSpec) { Save-SliceWatchSnap 'before_down'; $log.watch_before_down = Save-SliceWatchPawns 'before_down' }
+            $log.den_down_immune_after_off = Py 'print(cp_immune_off())'
+            if ($log.den_down_immune_after_off -ne 'False') { throw "the immunity hook is still installed: $($log.den_down_immune_after_off)" }
+            $downAt = $null; $t0 = Get-Date
+            while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds) {
+                if ((Py 'print(cp_up())') -ne 'True') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); break }
+                Start-Sleep 1
+            }
+            $log.den_down_after_s = $downAt
+            if ($WatchSpec -and $null -ne $downAt) { Save-SliceWatchSnap 'down' }
+            $upAt = $null
+            if ($null -ne $downAt) {
+                $t1 = Get-Date
+                while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds) {
+                    Start-Sleep 2
+                    if ((Py 'print(cp_up())') -eq 'True') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
+                }
+                # The respawn dialog and the fee come a few seconds after she stands: leave them time before the last snapshot.
+                Start-Sleep 15
+                if ($WatchSpec) { Save-SliceWatchSnap 'after_respawn' }
+            }
+            $log.den_down_up_after_s = $upAt
+            Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null
+            Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt) "down after $downAt s (limit $DownSeconds), standing again after $upAt s (limit $RespawnSeconds)"
+        } catch {
+            Set-Stage 'den_down' $false "$_"
+            "den down: $_"
+        }
+    }
+    # The watch's usability check, while the game still runs.
+    if ($WatchSpec) {
+        try { $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
+        catch { Set-Stage 'watch' $false "$_" }
     }
     $log.shot = Save-Shot 'cash/shot.png'
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }

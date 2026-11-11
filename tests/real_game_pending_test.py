@@ -747,7 +747,8 @@ $out.release = Release-HeldInputs
 
 class ScriptWiringTest(unittest.TestCase):
     """Every capture uses the shared pending records and guarded input."""
-    SCRIPTS = sorted(p for p in (ROOT / 'tools/real_game').glob('*.ps1') if p.name not in ('realgame.ps1', 'pending.ps1'))
+    # The helpers the captures dot-source are not captures: realgame.ps1, pending.ps1 and slice_watch.ps1 (the -WatchSpec helpers).
+    SCRIPTS = sorted(p for p in (ROOT / 'tools/real_game').glob('*.ps1') if p.name not in ('realgame.ps1', 'pending.ps1', 'slice_watch.ps1'))
 
     def test_every_capture_refuses_on_a_record_first_and_releases_input_in_its_finally(self):
         self.assertGreaterEqual(len(self.SCRIPTS), 18)
