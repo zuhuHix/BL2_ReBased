@@ -38,6 +38,10 @@ public:
     // The range's threat record (shared by the range's enemies). Null: the enemy patrols only.
     void SetDen(FOpenWillowThreatDen* InDen) { Den = InDen; }
     const FOpenWillowEnemyBrain& GetBrain() const { return Brain; }
+    // The kind's swing cycle: its live row (FindKindMelee), else the stand-in OpenWillowThreat::SwingInterval.
+    float SwingIntervalNow() const { return KindMelee ? KindMelee->SwingInterval : OpenWillowThreat::SwingInterval; }
+    // The kind's live row (cycle and stand distance), or null when no live read covers the kind.
+    const FOpenWillowKindMelee* GetKindMelee() const { return KindMelee; }
     // Test fixture (the range test's AI steps): the enemy back at home at full health, facing Yaw, with no target, no swing and
     // no chase, and its patrol held for HoldSeconds, so each step's scene is laid out from the same place.
     void ResetForAITest(float Now, float Yaw, float HoldSeconds);
@@ -82,6 +86,7 @@ private:
     void UpdateHealthBars();
 
     FOpenWillowRangeKind Kind;
+    const FOpenWillowKindMelee* KindMelee = nullptr;   // a row of the static table in OpenWillowEnemyAI.cpp (set by SetupKind)
     UPROPERTY() TObjectPtr<class USphereComponent> CritVolume;
     UPROPERTY() TObjectPtr<class UAnimSequence> WalkClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunClip;

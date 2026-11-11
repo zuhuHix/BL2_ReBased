@@ -22,7 +22,8 @@ constexpr float AICloseThreatRadius = 768.f; // proximity rule (AI_AWARENESS_LIV
 // Melee (AI_MELEE_TARGETING_LIVE 4-5, MeleeDef_PrimalBeast_Melee): the damage moment and the swing interval are read; the
 // volume is the fitted rule of section 5 (UNVERIFIED as the native formula).
 constexpr float SwingDamageDelay = 0.41f;    // seconds from the swing start to the damage moment
-constexpr float SwingInterval = 1.25f;       // seconds from one swing start to the next
+constexpr float SwingInterval = 1.25f;       // seconds from one swing start to the next: one adult's median (section 4); kinds with no row in
+                                             // KindMeleeRows (OpenWillowEnemyAI.cpp) borrow it as a stand-in
 constexpr float MeleeReach = 640.f;          // horizontal radius from the origin
 constexpr float MeleeBackOffset = 100.f;     // the origin is this far behind the enemy, along its facing
 constexpr float MeleeHalfAngleDegrees = 64.f;
@@ -72,7 +73,21 @@ struct FOpenWillowBrainInput
     float ArrivalDamage = 0.f;                 // manifest melee_arrival_by_level at the enemy's level (0 = no melee)
     float Ratio = 0.f;                         // manifest melee_ratio_by_level at the enemy's level (0 = no melee)
     float SwingStartRange = 0.f;               // manifest melee_start_range, the stock attack range (0 = an old manifest: the reach decides)
+    float SwingInterval = OpenWillowThreat::SwingInterval;   // the kind's swing cycle (FindKindMelee), else the stand-in
+    float StandDistance = 0.f;                 // the kind's live stand distance (FindKindMelee); 0 = the stand-in stop inside the swing range
 };
+
+// Melee per range kind from live reads: the acceptance table of docs/verification/COMBAT_RANGE.md, held to tools/check_range.py's
+// ACCEPTANCE by tests/range_kind_melee_test.py. One session per value, UNVERIFIED beyond it. A kind with no row has no live read and keeps
+// the stand-ins (SwingInterval; a stop MeleeStopMargin inside its swing range).
+struct FOpenWillowKindMelee
+{
+    const TCHAR* Kind;      // the range manifest's kind name
+    float SwingInterval;    // s, one swing start to the next
+    float StandDistance;    // uu, horizontal, the enemy's origin to Maya's, where it stands to swing once it has closed
+};
+// The row for Kind (case-sensitive), or null when no live read covers it.
+const FOpenWillowKindMelee* FindKindMelee(const FString& Kind);
 
 // What the brain asks the enemy to do this tick.
 struct FOpenWillowBrainOrders

@@ -133,6 +133,11 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
     UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind=%s level=%d stock=%s walk_speed=%.0f run_speed=%.0f swing_start=%.0f patrol=%.0f shield=%.0f respawn=%.0f"),
         *GetName(), *Kind.Name, InLevel, bStock ? TEXT("yes") : TEXT("no"), Kind.WalkSpeed, Kind.RunSpeed, Kind.MeleeStartRange, Kind.PatrolRadius,
         ShieldMax, RespawnSeconds);
+    // The kind's melee from a live read (the acceptance table), or the stand-ins: the log says which.
+    KindMelee = FindKindMelee(Kind.Name);
+    const FString Stand = KindMelee ? FString::Printf(TEXT("%.0f"), KindMelee->StandDistance) : FString(TEXT("stand-in"));
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind_melee kind=%s swing_interval=%.3f stand=%s source=%s"), *GetName(), *Kind.Name, SwingIntervalNow(),
+        *Stand, KindMelee ? TEXT("live_read") : TEXT("stand-in_no_live_read"));
     return bStock;
 }
 
@@ -399,6 +404,8 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     if (OpenWillowValueAtLevel(Kind.MeleeArrivalByLevel, GetLevel(), Arrival)) In.ArrivalDamage = Arrival;
     if (OpenWillowValueAtLevel(Kind.MeleeRatioByLevel, GetLevel(), Ratio)) In.Ratio = Ratio;
     In.SwingStartRange = Kind.MeleeStartRange;
+    In.SwingInterval = SwingIntervalNow();
+    In.StandDistance = KindMelee ? KindMelee->StandDistance : 0.f;
 
     const FOpenWillowBrainOrders Orders = Brain.Tick(Now, In, *Den, bDamagedByMaya);
     if (Orders.bSwingStarted) PlayMelee(Now);
@@ -477,9 +484,9 @@ void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float Now, 
 void AOpenWillowEnemy::PlayMelee(float Now)
 {
     // Host stand-in (UNVERIFIED in game): the melee clip plays at the swing start, and the move clips wait out the swing
-    // interval (AI_MELEE_TARGETING_LIVE 4: the action restarts every 1.25 s).
+    // interval (the kind's cycle; AI_MELEE_TARGETING_LIVE 4: the adult's action restarts every 1.25 s).
     bMeleePlaying = true;
-    MeleeEndsAt = Now + OpenWillowThreat::SwingInterval;
+    MeleeEndsAt = Now + SwingIntervalNow();
     MoveClipNow = nullptr;
     if (StockMesh && MeleeClip) PlayStock(MeleeClip, false);
 }

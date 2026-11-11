@@ -19,7 +19,7 @@ import sys
 EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "popup_crit", "crit_minds_eye", "crit_trace", "shield_order", "invulnerable",
             "passive", "patrol", "death", "ragdoll", "respawn", "dummy_respawn",
             "notice_proximity", "notice_sight", "no_notice_far", "provoked", "approach", "melee_hit", "melee_interval",
-            "melee_miss", "forget", "passive_no_melee", "swing_range", "corpse_limp", "corpse_cap", "psycho_melee",
+            "melee_miss", "forget", "passive_no_melee", "swing_range", "corpse_limp", "corpse_cap", "psycho_melee", "kind_melee",
             "loot_near_corpse", "loot_roll", "loot_money_pickup", "loot_weapon_item", "loot_off", "loot_seeded_roll", "refusal_no_spot"]
 # Steps that may be SKIP when their data is absent: no imported stock mesh / physics asset (ragdoll), and no weapon generator
 # manifest (loot_weapon_item: no gun is rolled, the money checks still decide), no imported psycho (psycho_melee: it isn't spawned then),
@@ -30,6 +30,45 @@ NO_STOCK_MESH = "reason=the manifest names no stock mesh"
 NO_PSYCHO = "reason=no psycho on this range (its mesh is not imported)"
 SKIP_ONLY_FOR = {"crit_minds_eye": "reason=no local skill effects file", "ragdoll": NO_STOCK_MESH, "corpse_limp": NO_STOCK_MESH, "corpse_cap": NO_STOCK_MESH,
                  "psycho_melee": NO_PSYCHO}
+
+# The acceptance table of docs/verification/COMBAT_RANGE.md ("Acceptance table: melee per kind"): per range kind with a live read, the
+# swing cycle (s, one swing start to the next) and the distance it stands at to swing once it has closed (uu, horizontal, enemy origin
+# to Maya's). "value" is what the host uses (OpenWillowEnemyAI.cpp, KindMeleeRows; tests/range_kind_melee_test.py holds the two to
+# each other); a kind_melee result must land in the band. Sources and how each band was chosen are in the record. Kinds not listed have
+# no live read and keep the host stand-ins. Every row is one session's measurement, UNVERIFIED beyond it.
+ACCEPTANCE = {
+    # cycle: AI_MELEE_TARGETING_LIVE 4 (one adult, 34 gaps). The den read of 2026-11-07 disagrees (1.216 to 1.217 s, 9 gaps): open.
+    # stand: the den read (one adult, 181 samples, 190 to 225).
+    "bullymong_adult": {"cycle": 1.25, "cycle_band": (1.221, 1.386), "stand": 201.0, "stand_band": (176.0, 225.0)},
+    # both from the den read (grab cycle: two babies, 31 gaps, 1.133 to 1.134; stand: one baby, 347 samples, 106 to 118).
+    "bullymong_baby": {"cycle": 1.133, "cycle_band": (1.128, 1.167), "stand": 111.0, "stand_band": (92.0, 118.0)},
+}
+KEY_VALUE = re.compile(r"(\w+)=(\S+)")
+
+
+def kind_melee_problem(detail):
+    """Why a kind_melee PASS line does not land in the acceptance table, or "". The host judges its own run too; this re-checks the logged
+    numbers against the table above, so a host that carries other numbers cannot pass."""
+    fields = dict(KEY_VALUE.findall(detail))
+    row = ACCEPTANCE.get(fields.get("kind", ""))
+    if row is None:
+        return "kind %s has no row in the acceptance table" % fields.get("kind", "(none)")
+    try:
+        cycle = (float(fields["cycle_min"]), float(fields["cycle_max"]))
+        stand = (float(fields["stand_min"]), float(fields["stand_max"]))
+        first, start_range = float(fields["first_swing"]), float(fields["start_range"])
+    except (KeyError, ValueError):
+        return "the line lacks cycle_min, cycle_max, stand_min, stand_max, first_swing or start_range"
+    low, high = row["cycle_band"]
+    if not (low <= cycle[0] and cycle[1] <= high):
+        return "cycle %.3f to %.3f s is outside the acceptance band %.3f to %.3f" % (cycle[0], cycle[1], low, high)
+    low, high = row["stand_band"]
+    if not (low <= stand[0] and stand[1] <= high):
+        return "stand %.0f to %.0f uu is outside the acceptance band %.0f to %.0f" % (stand[0], stand[1], low, high)
+    if not (0 < first <= start_range):
+        return "the first swing started %.0f uu out, not inside the stock range %.0f" % (first, start_range)
+    return ""
+
 
 # The status ends at whitespace or the end of the line: result=SKIP_typo is no status, so its step counts as missing.
 SURVEY_DONE = re.compile(r"OWRANGESURVEY done candidates=\d+ accepted=([1-9]\d*)(?:\s|$)", re.M)
@@ -79,6 +118,9 @@ def grade(steps, summary, expected=EXPECTED):
             rows.append((step, "MISSING", ""))
             ok = False
             continue
+        if step == "kind_melee":
+            # Each PASS line must also carry numbers inside the acceptance bands (the host's own verdict is not enough).
+            results = [("FAIL", d + " (checker: " + kind_melee_problem(d) + ")") if r == "PASS" and kind_melee_problem(d) else (r, d) for r, d in results]
         verdicts = [r for r, _ in results]
         verdict = "FAIL" if "FAIL" in verdicts else ("SKIP" if "SKIP" in verdicts else "PASS")
         detail = next((d for r, d in results if r == verdict), "")

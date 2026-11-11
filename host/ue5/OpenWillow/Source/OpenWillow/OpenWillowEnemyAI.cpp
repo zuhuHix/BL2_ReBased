@@ -27,6 +27,15 @@ bool WithinMeleeVolume(const FVector& EnemyLocation, float YawDegrees, const FVe
     return FVector::DotProduct(Forward, ToMaya / Distance) >= FMath::Cos(FMath::DegreesToRadians(MeleeHalfAngleDegrees));
 }
 
+// The acceptance table's values (COMBAT_RANGE.md, "Acceptance table: melee per kind"). Adult: the cycle is AI_MELEE_TARGETING_LIVE 4's
+// median of 34 gaps (the den read of 2026-11-07 measured 1.216 to 1.217 s over 9 gaps: the two reads disagree, open); the stand distance
+// is the den read's median (190 to 225 uu, 181 samples). Baby: both from the den read (its grab: 1.133 to 1.134 s over 31 gaps; 106 to
+// 118 uu, 347 samples). The default range spawns no baby.
+const FOpenWillowKindMelee KindMeleeRows[] = {
+    {TEXT("bullymong_adult"), 1.25f, 201.f},
+    {TEXT("bullymong_baby"), 1.133f, 111.f},
+};
+
 void LogThreat(float Now, int32 Level, const TCHAR* Reason, const AActor* Who)
 {
     const FString Name = Who ? Who->GetName() : FString(TEXT("den"));
@@ -85,8 +94,10 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     const float FlatDistance = In.bHasMaya ? float(FVector::Dist2D(In.Location, In.MayaLocation)) : 0.f;
     const bool bHasStartRange = In.SwingStartRange > 0.f;
     const bool bInStartRange = bInVolume && (!bHasStartRange || FlatDistance <= In.SwingStartRange);
-    const float StopAt = FMath::Max(In.SwingStartRange - MeleeStopMargin, FMath::Min(In.CollisionRadius, In.SwingStartRange));
-    const bool bInStop = bHasStartRange ? (bInVolume && FlatDistance <= StopAt)
+    // Where it stops running: the kind's live stand distance when it has one, else MeleeStopMargin inside its swing range (stand-in).
+    const float StopAt = In.StandDistance > 0.f ? In.StandDistance
+        : FMath::Max(In.SwingStartRange - MeleeStopMargin, FMath::Min(In.CollisionRadius, In.SwingStartRange));
+    const bool bInStop = (bHasStartRange || In.StandDistance > 0.f) ? (bInVolume && FlatDistance <= StopAt)
         : In.bHasMaya && WithinMeleeVolume(In.Location, In.YawDegrees, In.MayaLocation, MeleeStopMargin);
 
     // The damage moment of a swing: SwingDamageDelay after its start, Maya takes the hit if she is still in the volume.
@@ -96,10 +107,10 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
         ResolveSwing(Now, In, bInVolume);
     }
 
-    // A swing cycle starts when Maya is inside the start range, one SwingInterval after the previous start. No melee without the
+    // A swing cycle starts when Maya is inside the start range, one kind's SwingInterval after the previous start. No melee without the
     // manifest's melee numbers for this level.
     const bool bCanSwing = In.ArrivalDamage > 0.f && In.Ratio > 0.f;
-    if (bAware && bCanSwing && !bSwingPending && bInStartRange && Now >= LastSwingStart + SwingInterval)
+    if (bAware && bCanSwing && !bSwingPending && bInStartRange && Now >= LastSwingStart + In.SwingInterval)
     {
         LastSwingDistance = FlatDistance;
         StartSwing(Now, In);
@@ -113,6 +124,15 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     Orders.ChaseTo = TargetLocation;
     Orders.bRun = Orders.bChase && !bSwingPending && !(bAware && bInStop);
     return Orders;
+}
+
+const FOpenWillowKindMelee* FindKindMelee(const FString& Kind)
+{
+    for (const FOpenWillowKindMelee& Row : KindMeleeRows)
+    {
+        if (Kind.Equals(Row.Kind, ESearchCase::CaseSensitive)) return &Row;
+    }
+    return nullptr;
 }
 
 void FOpenWillowEnemyBrain::GiveUp(float Now, float Seconds)

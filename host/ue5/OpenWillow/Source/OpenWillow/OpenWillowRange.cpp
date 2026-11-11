@@ -1163,7 +1163,7 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     AOpenWillowEnemy* Enemy1 = Enemies.Num() > 1 ? Enemies[1].Get() : nullptr;
     AOpenWillowCombatTarget* Dummy0 = Dummies.Num() > 0 ? Dummies[0].Get() : nullptr;
 
-    if ((TestStep >= 16 && TestStep < 37) || (TestStep >= 90 && TestStep <= 93))
+    if ((TestStep >= 16 && TestStep < 37) || (TestStep >= 90 && TestStep <= 95))
     {
         // The AI steps need the AI; the target steps before them ran with it off (an alerted range swarmed Maya and put her
         // down before the AI steps began, batch 2).
@@ -1632,7 +1632,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         const TCHAR* Names[] = {TEXT("notice_proximity"), TEXT("notice_sight"), TEXT("no_notice_far"), TEXT("provoked"),
             TEXT("approach"), TEXT("melee_hit"), TEXT("melee_interval"), TEXT("melee_miss"), TEXT("forget"), TEXT("passive_no_melee"),
-            TEXT("swing_range")};
+            TEXT("swing_range"), TEXT("kind_melee")};
         for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no enemy"));
         TestStep = 37;
         return;
@@ -1929,9 +1929,11 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         }
         // The second swing is still pending at its start: wait for it to resolve, so its hit cannot land inside the next step.
         if (Brain.IsSwingPending()) return;
+        // Against E0's own kind's cycle (the acceptance table's, else the stand-in); kind_melee holds the measured kinds to their bands.
         const float Gap = Brain.LastSwingStart - Brain.PrevSwingStart;
-        TestCheck(TEXT("melee_interval"), FMath::Abs(Gap - OpenWillowThreat::SwingInterval) <= 0.1f,
-            FString::Printf(TEXT("%.3f s between the last two swing starts"), Gap));
+        TestCheck(TEXT("melee_interval"), FMath::Abs(Gap - E0->SwingIntervalNow()) <= 0.1f,
+            FString::Printf(TEXT("%.3f s between the last two swing starts, kind %s cycle %.3f (%s)"), Gap, *EnemyKinds.FindRef(E0),
+                E0->SwingIntervalNow(), E0->GetKindMelee() ? TEXT("live read") : TEXT("stand-in")));
         TestStep = 30;
         return;
     }
@@ -2110,13 +2112,14 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         Reset(TEXT("psycho"));
         TestPsycho = nullptr;
+        bTestKindQueued = false;   // kind_melee (case 94) builds its queue afresh on this run
         for (const auto& Pair : EnemyKinds)
             if (Pair.Value == TEXT("psycho")) TestPsycho = const_cast<AOpenWillowEnemy*>(Pair.Key);
         AOpenWillowEnemy* Psycho = TestPsycho.Get();
         if (!Psycho)
         {
             TestSkip(TEXT("psycho_melee"), TEXT("no psycho on this range (its mesh is not imported)"));
-            TestStep = 37;
+            TestStep = 94;
             return;
         }
         Psycho->ResetForAITest(Now, (SpotNow - Psycho->GetHome()).Rotation().Yaw, 3.f);
@@ -2124,7 +2127,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         if (!PlaceInVolume(Psycho))
         {
             TestCheck(TEXT("psycho_melee"), false, TEXT("no floor in front of the psycho"));
-            TestStep = 37;
+            TestStep = 94;
             return;
         }
         TestResolvedBase = Psycho->GetBrain().MeleeResolved;
@@ -2139,7 +2142,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         if (!Psycho)
         {
             TestCheck(TEXT("psycho_melee"), false, TEXT("the psycho is gone"));
-            TestStep = 37;
+            TestStep = 94;
             return;
         }
         const FOpenWillowEnemyBrain& PsychoBrain = Psycho->GetBrain();
@@ -2148,7 +2151,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             if (Now - StepStart > 3.f)
             {
                 TestCheck(TEXT("psycho_melee"), false, TEXT("no swing resolved in 3 s"));
-                TestStep = 37;
+                TestStep = 94;
             }
             return;
         }
@@ -2168,7 +2171,128 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         const bool bOk = bTable && bOwnMesh && PsychoBrain.LastHit && Expected > 0.f && FMath::IsNearlyEqual(Delta, Expected, 0.01f);
         TestCheck(TEXT("psycho_melee"), bOk, FString::Printf(TEXT("mesh %s (own %d), hit %d, arrival %.2f x ratio %.4f, pools %.1f -> %.1f, expected loss %.2f"),
             *AssetPath, bOwnMesh ? 1 : 0, PsychoBrain.LastHit ? 1 : 0, Arrival, Ratio, TestHealthBefore, Pools(), Expected));
-        TestStep = 37;
+        TestStep = 94;
+        return;
+    }
+    case 94: // kind_melee: for each kind on the range with a row in the acceptance table, its first enemy closes on Maya from 600 uu and swings.
+    {
+        // 600 uu: outside every listed kind's stock swing range (the first swing must start inside it), inside the proximity rule (768),
+        // so the enemy notices at once without a sight line. The queue is built once, on the first visit.
+        if (!bTestKindQueued)
+        {
+            bTestKindQueued = true;
+            TestKindQueue.Reset();
+            TSet<FString> KindsSeen;
+            for (const auto& Weak : Enemies)
+            {
+                AOpenWillowEnemy* Enemy = Weak.Get();
+                if (!Enemy || !Enemy->GetKindMelee()) continue;
+                const FString Kind = EnemyKinds.FindRef(Enemy);
+                if (KindsSeen.Contains(Kind)) continue;
+                KindsSeen.Add(Kind);
+                TestKindQueue.Add(Enemy);
+            }
+            if (TestKindQueue.Num() == 0)
+            {
+                TestCheck(TEXT("kind_melee"), false, TEXT("no enemy of a kind with a live melee row (bullymong_adult, bullymong_baby) on this range"));
+                TestStep = 37;
+                return;
+            }
+        }
+        if (TestKindQueue.Num() == 0)
+        {
+            TestStep = 37;
+            return;
+        }
+        AOpenWillowEnemy* Enemy = TestKindQueue[0].Get();
+        TestKindQueue.RemoveAt(0);
+        if (!Enemy)
+        {
+            TestCheck(TEXT("kind_melee"), false, TEXT("the enemy is gone"));
+            return;
+        }
+        Reset(TEXT("kind melee"));
+        Enemy->ResetForAITest(Now, (SpotNow - Enemy->GetHome()).Rotation().Yaw, 3.f);
+        OnlyActive(Enemy);
+        const FVector At = Enemy->GetActorLocation() + Forward(Enemy) * 600.f;
+        if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, Enemy->GetActorLocation())))
+        {
+            TestCheck(TEXT("kind_melee"), false, FString::Printf(TEXT("kind=%s no floor 600 uu in front of the enemy"), *EnemyKinds.FindRef(Enemy)));
+            return;
+        }
+        TestKindEnemy = Enemy;
+        TestKindStarts.Reset();
+        TestKindDistances.Reset();
+        TestSwingBase = Enemy->GetBrain().SwingCount;
+        StepStart = Now;
+        TestStep = 95;
+        return;
+    }
+    case 95:
+    {
+        AOpenWillowEnemy* Enemy = TestKindEnemy.Get();
+        AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(Pawn);
+        if (!Enemy || !Maya)
+        {
+            TestCheck(TEXT("kind_melee"), false, TEXT("the enemy or Maya is gone"));
+            TestStep = 94;
+            return;
+        }
+        const FString KindName = EnemyKinds.FindRef(Enemy);
+        if (Maya->IsDown())
+        {
+            TestCheck(TEXT("kind_melee"), false, FString::Printf(TEXT("kind=%s Maya is down (not restored)"), *KindName));
+            TestStep = 94;
+            return;
+        }
+        const FOpenWillowEnemyBrain& KindBrain = Enemy->GetBrain();
+        // At most one swing starts per tick: each new one is recorded with its distance.
+        if (KindBrain.SwingCount > TestSwingBase + TestKindStarts.Num())
+        {
+            TestKindStarts.Add(KindBrain.LastSwingStart);
+            TestKindDistances.Add(KindBrain.LastSwingDistance);
+        }
+        // Test fixture, as the den read kept the player immune: Maya back to full health between blows, so the step runs to its end.
+        if (!KindBrain.IsSwingPending() && Maya->GetHealth() < Maya->GetMaxHealth())
+        {
+            Maya->ApplyScriptHealth(Maya->GetMaxHealth(), Maya->GetMaxHealth());
+        }
+        constexpr int32 Wanted = 4;
+        if (TestKindStarts.Num() < Wanted || KindBrain.IsSwingPending())
+        {
+            if (Now - StepStart > 10.f)
+            {
+                TestCheck(TEXT("kind_melee"), false, FString::Printf(TEXT("kind=%s %d of %d swing starts in 10 s"), *KindName, TestKindStarts.Num(), Wanted));
+                TestStep = 94;
+            }
+            return;
+        }
+        // The first swing comes on the way in. Swings 2 to 4 start where it stands once it has closed, and the gaps 2-3 and 3-4 are full cycles.
+        const FOpenWillowKindMelee* Row = Enemy->GetKindMelee();
+        const FOpenWillowRangeKind* Kind = Manifest.Kinds.Find(KindName);
+        const float StartRange = Kind ? Kind->MeleeStartRange : 0.f;
+        float CycleMin = TNumericLimits<float>::Max(), CycleMax = 0.f, StandMin = TNumericLimits<float>::Max(), StandMax = 0.f;
+        for (int32 Index = 1; Index < TestKindStarts.Num() && Index < TestKindDistances.Num(); ++Index)
+        {
+            StandMin = FMath::Min(StandMin, TestKindDistances[Index]);
+            StandMax = FMath::Max(StandMax, TestKindDistances[Index]);
+            if (Index >= 2)
+            {
+                const float Gap = TestKindStarts[Index] - TestKindStarts[Index - 1];
+                CycleMin = FMath::Min(CycleMin, Gap);
+                CycleMax = FMath::Max(CycleMax, Gap);
+            }
+        }
+        // The host's own verdict: the row's values, allowing the host's one-frame lag (a swing starts on the first frame past its time, up to
+        // 0.034 s at 30 fps; the run stops on the first frame inside the stand distance, up to 14 uu at 400 uu/s and 30 fps).
+        // tools/check_range.py re-checks the logged numbers against its acceptance bands.
+        const bool bOk = Row && StartRange > 0.f && TestKindDistances[0] > 0.f && TestKindDistances[0] <= StartRange
+            && CycleMin >= Row->SwingInterval - 0.005f && CycleMax <= Row->SwingInterval + 0.034f
+            && StandMin >= Row->StandDistance - 14.f && StandMax <= Row->StandDistance + 0.5f;
+        TestCheck(TEXT("kind_melee"), bOk, FString::Printf(TEXT("kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f swings=%d row_cycle=%.3f row_stand=%.0f"),
+            *KindName, CycleMin, CycleMax, StandMin, StandMax, TestKindDistances[0], StartRange, TestKindStarts.Num(),
+            Row ? Row->SwingInterval : 0.f, Row ? Row->StandDistance : 0.f));
+        TestStep = 94;
         return;
     }
     default:

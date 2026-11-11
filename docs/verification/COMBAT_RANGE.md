@@ -106,8 +106,8 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Approach | turn at 360 deg/s, run at `run_speed` (400 uu/s, stand-in) with the run clip (walk as fallback) | host stand-in |
 | Blocked chase | under 10 uu of progress in 1 s counts as blocked: side-steps (70 degrees, alternating sides); blocked for 3 s, the enemy drops the target for 5 s | host choice |
 | Melee volume (does a swing land) | horizontal 640 from a point 100 uu behind the enemy, 64 degree half angle, Maya's centre -143 to +339 uu from the enemy's location | AI_MELEE_TARGETING_LIVE 5 (fitted) |
-| Swing start (may a swing begin) | Maya inside the volume and within the kind's `melee_start_range`, the farthest range of its plain melee attack actions, read by `tools/prepare_range.py` from the stock AI definition; it stops running 60 uu inside it | the stock attack range is data; the horizontal measure from the enemy's location and the choice of actions by animation name are UNVERIFIED. The live swings had the player within about 300 uu |
-| Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing 1.25 s after the previous start | AI_MELEE_TARGETING_LIVE 4 |
+| Swing start (may a swing begin) | Maya inside the volume and within the kind's `melee_start_range`, the farthest range of its plain melee attack actions, read by `tools/prepare_range.py` from the stock AI definition; it stops running at the kind's live stand distance (adult 201, baby 111: the acceptance table below), else 60 uu inside its swing range | the stock attack range is data; the horizontal measure from the enemy's location and the choice of actions by animation name are UNVERIFIED. The live swings had the player within about 300 uu |
+| Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing one cycle after the previous start: 1.25 s, the baby's 1.133 s (the acceptance table below) | AI_MELEE_TARGETING_LIVE 4 (the adult's 1.25; other kinds without a row borrow it); the den read (the baby) |
 | Melee damage | the VM's swing rows per kind and level (`arrival` x `ratio`, both from `ow-package --combat-run maya:L spawn:<kind>:L swing:<n>:melee`), x the level scale (1.0 at or below Maya, 1.1 / 1.2 one / two levels up; a straight line to 3.0 at sixteen beyond that, stand-in) | COMBAT_MELEE (the VM rows reproduce adult L5/6/7 73.6974 / 83.2781 / 94.1042, regular L6 24.9834, baby L6 12.4917, ratios 0.715 / 0.728 / 0.741) |
 | Delivery | one function, `RangeDamagePlayer`: the maya lane's `OpenWillowApplyDamageToPlayer` (PR #72), shield first, then health, then Fight For Your Life; the test's melee checks compare health plus shield | host |
 
@@ -123,7 +123,7 @@ Not modelled: momentum on Maya (75,000 for the adult swing), leaps and the sling
 the stock AI tree's perch, random and leap nodes.
 
 Test steps added to `-owrangetest` and `tools/check_range.py`: notice_proximity, notice_sight, no_notice_far, provoked, approach, melee_hit, melee_interval,
-melee_miss, forget, passive_no_melee, swing_range (the first enemy's kind only), corpse_limp and corpse_cap (SKIP only when the manifest names no stock mesh).
+melee_miss, forget, passive_no_melee, swing_range (the first enemy's kind only), corpse_limp and corpse_cap (SKIP only when the manifest names no stock mesh), kind_melee (2026-11-11: each kind with a live melee row, see the acceptance table).
 The host builds no range, says why on screen and has the slice gate report `range refused: <reason>` on `reach_fight_area`, when any spawn has no kind, no melee tables or no swing range (an old or `--no-vm` manifest), however it was started, so no
 tool can pass on the old rule. `tools/check_range.py --preflight` refuses the same manifests. A run with no psycho reads "no Psycho exercised" in its result, and `-RequirePsycho`
 makes it fail.
@@ -193,7 +193,75 @@ First run (2026-11-07, one session, three trials, Three Horns Divide, Maya at le
 - **Speed:** moving medians of 500 for the slinger, 300 to 450 for the baby and 608 to 866 for adults, leaps included, with long pauses. The host's 400 is not too fast by this read; no number is taken from it.
 - **Notice:** members took a target 0.06 and 0.12 s apart in two trials: weak evidence, at 0.05 s sampling, that their updates are not in step.
 
-Options for the maintainer, none taken: swing cycles per kind; closer stopping distances; leaps and throws (the ranged lane). The money read in the same session gave no value: one collect took two pickups at once for +5, and the item's own value call returns 0, so the money stand-in stays.
+Options for the maintainer, none taken at the time (2026-11-11: see the acceptance table below): swing cycles per kind; closer stopping distances; leaps and throws (the ranged lane). The money read in the same session gave no value: one collect took two pickups at once for +5, and the item's own value call returns 0, so the money stand-in stays.
+
+## Acceptance table: melee per kind (2026-11-11)
+
+AI-assisted (Claude Opus 5.5). This table was written first: the checks hold the host to the live values, and the host changed only where a value has no
+other record against it. Each value comes from one session and is UNVERIFIED beyond that session. Two sources:
+- **L-4:** AI_MELEE_TARGETING_LIVE section 4, one adult in one long fight with the player next to it.
+- **Den read:** the 2026-11-07 session above. The numbers here come from that session's ignored `den.json` and are worked out the same way for each kind.
+  The swing cycle is the gap between one attacker's consecutive melee calls with one definition, counting only gaps under 1.5 s (a longer one is a break:
+  a leap, or a move). The stand distance is that attacker's sampled horizontal distance to the player (samples every 0.05 s), from its second call to its last.
+  The first call is left out because it comes on the way in.
+
+| # | Quantity | Live value (spread, count, source) | Host before | Host now | Check | Before | After |
+|---|---|---|---|---|---|---|---|
+| 1 | Adult swing cycle | **Two live reads disagree, open.** L-4: median 1.249 s, 33 of 34 gaps 1.221 to 1.386 (one 1.813 after another action). Den read: mean 1.2168 s, 1.216 to 1.217, 9 gaps, one adult (a second adult, swinging at something 2,850 uu from the player, gave 1.208 to 1.217 over 8 gaps; not counted) | 1.25 | 1.25 (kept: the larger read) | light: `range_kind_melee_test` (host row = table); in engine: `kind_melee` `cycle_min/max` in 1.221 to 1.386 | light FAIL (no per-kind row) | light PASS; engine not run |
+| 2 | Adult stand distance | Den read: median 201 uu, 190 to 225, 181 samples, one adult; 192.0 to 198.2 at the damage moment (9 calls). No record disagrees: L-4 has the player "within about 300 uu", AI_AWARENESS_LIVE has members within 234 uu of her, and the radii of section 5 (adult 150, player 42) make contact 192 | 334 (394 - 60) | 201 | light as row 1; in engine: `kind_melee` `stand_min/max` in 176 to 225 | FAIL (334) | light PASS; engine not run |
+| 3 | Adult first swing inside the stock range | Den read: 368 uu, stock range 394 (one swing) | the rule since PR #133 | unchanged | `kind_melee` `first_swing` <= `start_range` | PASS (by the rule; not run) | engine not run |
+| 4 | Baby swing cycle (its grab) | Den read: mean 1.1334 s, 1.133 to 1.134, 31 gaps, two babies; no other record | 1.25 | 1.133 | light as row 1; in engine: `kind_melee` in 1.128 to 1.167 | FAIL (1.25) | light PASS; **the default range spawns no baby, so the engine check does not run there** |
+| 5 | Baby stand distance | Den read: median 111 uu, 106 to 118, 347 samples, one baby (the second was not sampled); 106.0 to 112.3 at the damage moment (31 calls) | 420 (480 - 60) | 111 | light as row 1; in engine as row 4, 92 to 118 | FAIL (420) | as row 4 |
+| 6 | Baby first swing inside the stock range | Den read: 425 uu, stock range 480 (one grab) | the rule | unchanged | as row 3 | PASS (by the rule) | as row 4 |
+| 7 | Regular bullymong: cycle and stand distance (three of the four default enemies) | **no live read** | 1.25 (the adult's), 260 (320 - 60) | unchanged | `melee_interval` (enemy 0 is a regular one) against its own value, 0.1 s | PASS (stand-in) | unchanged |
+| 8 | Slinger's melee, psycho | **no live read** of either swinging at the player (the den read's slingers only threw; its SavageLee swung at something 3,021 uu away) | 1.25, stop rule | unchanged | none | | |
+| 9 | First blow, leaps and thrown rocks | see "The main open gap" below | not modelled | not modelled | none | | |
+
+**How the bands were chosen.**
+- Adult cycle: L-4's spread (1.221 to 1.386). The den read's 1.217 falls outside it, which is the conflict the table records; neither read is thrown out.
+- Baby cycle: the measured 1.133 to 1.134, lowered by 0.005 s for rounding (both logs keep milliseconds). The upper edge is raised by 0.034 s because the host
+  starts a swing on the first frame after it is due, so it can be up to one frame late (0.033 s at 30 fps). 1.25 is still outside the band.
+- Stand distances: the measured minimum to maximum, with the lower edge lowered by 14 uu because the host's run stops on the first frame inside the stand
+  distance (400 uu/s for 1/30 s is 13.3 uu). The host's value is the median of the samples. The old 334 and 420 are outside the bands.
+- The host's own `kind_melee` verdict uses the same frame allowances around its row. `tools/check_range.py` then checks the logged numbers against the bands
+  above, so a host PASS outside a band is graded FAIL.
+
+**What changed in the host.** `KindMeleeRows` (`OpenWillowEnemyAI.cpp`) gives the two kinds with a live read their cycle and stand distance. Every other kind
+keeps `SwingInterval` (1.25 s) and the old stop (60 uu inside its swing range). The enemy logs one line per spawn,
+`OWRANGE enemy <name> kind_melee kind=... swing_interval=... stand=... source=live_read|stand-in_no_live_read`. So on the default range (three regular, one
+adult) the only behaviour that changes is where the adult stops: 201 uu instead of 334. A swing still starts once Maya is inside the stock range, so the
+adult's first swing still comes from up to 394 uu, and then it closes in.
+
+**The in-engine step.** `kind_melee` (heavy, part of `tools/test_range.ps1`, about 6 s per kind; 37 range steps now, 36 before): for each kind on the range that
+has a row, its first enemy is placed back home and Maya 600 uu in front of it. That is outside both stock swing ranges and inside the proximity rule, so the
+enemy notices her at once. The step records four swing starts with their distances and logs `kind=... cycle_min cycle_max stand_min stand_max first_swing
+start_range`. Swings 2 to 4 give the stand distances and two full cycles. Maya's health is put back to full between blows (a test fixture, like the den
+read's immunity). The step fails, and does not skip, when no kind with a row is on the range. `melee_interval` now compares enemy 0's gap with that enemy's own
+cycle; for the regular bullymong that is the same 1.25 s as before.
+
+**The main open gap: leaps and thrown rocks (not implemented).** In the den read, most first blows on the player were not the plain melee. Trial 1: a slinger's
+rock 2.8 s after it took its target, then a baby's leap 3.9 s after its target. Trial 2: a baby's grab, 4.1 s. Trial 3: an adult's first hit (249.8 damage) came
+with no melee call, 6.7 s after its target, so it was something other than the plain swing, probably a leap (unread). The range has neither leaps nor
+throws, so its enemies only hit once they are close. A future read should capture, for each kind:
+- what triggers the attack: the distance at take-off or throw, and the time since the target was taken;
+- timing: take-off to landing (L-4 already has `Attack` to `Landed` 1.08 to 3.48 s, mean 1.68, n 157, kinds not separated), throw to impact, and the cycle between leaps or throws;
+- damage per blow, with momentum, and the definition or projectile behind each;
+- how often each kind leaps or throws compared with a plain swing.
+
+## Live-read questions from the acceptance table
+
+1. **The adult cycle conflict.** Is the cycle the swing clip's length plus a whole number of frames? It is only an observation (UNVERIFIED), but both
+   den-read cycles are whole numbers of sixtieths of a second: 1.2167 = 73/60 and 1.1333 = 68/60. L-4's 1.221 to 1.386 would fit the same clip at a lower,
+   uneven frame rate. Two cheap sources answer this:
+   - the clip lengths, from package data with no game needed. No record holds them yet: the clips are the ones `AnimRandom_PrimalBeastMelee` picks for the
+     adult's Close Melee, and the baby's grab animation. Decoding them is not this lane's job.
+   - one live read at a fixed frame rate that logs each frame's time next to each gap: adult and baby, in one session, with the player standing still and
+     then moving.
+2. **The regular bullymong** (three of the four default enemies): its swing cycle and stand distance at the player, ten or more gaps, sampled every 0.05 s.
+3. **Is the stand distance just contact?** We need each kind's collision cylinder radius and the player's, in the same session as the distances. The adult's
+   150 + 42 = 192 matches its damage-moment 192.0, but the baby's radius is in no record.
+4. **Leaps and rocks:** the list under "The main open gap" above.
+5. **Time to the first blow** after a member takes its target, per kind, against a player who stands still and one who moves.
 
 ## Range spot: candidates and the textured-floor rule (PR2 follow-up)
 

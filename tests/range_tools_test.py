@@ -11,6 +11,14 @@ import check_range  # noqa: E402
 import prepare_range  # noqa: E402
 
 
+# A kind_melee PASS line must carry numbers inside the acceptance bands (tools/check_range.py); this one does (invented, adult).
+KIND_MELEE_OK = ('kind=bullymong_adult cycle_min=1.250 cycle_max=1.267 stand_min=195 stand_max=201 first_swing=380 start_range=394 swings=4')
+
+
+def passing(step):
+    return 'OWRANGETEST step=%s result=PASS %s' % (step, KIND_MELEE_OK if step == 'kind_melee' else 'x=1')
+
+
 class PrepareRangeTest(unittest.TestCase):
     def test_levels(self):
         self.assertEqual(prepare_range.parse_levels('3'), [3])
@@ -330,7 +338,7 @@ class PreflightTest(unittest.TestCase):
         import io
         import os
         import tempfile
-        passes = ['OWRANGETEST step=%s result=PASS' % s for s in check_range.EXPECTED if s != 'psycho_melee']
+        passes = [passing(s) for s in check_range.EXPECTED if s != 'psycho_melee']
         tail = ['OWRANGETEST SUMMARY result=PASS']
 
         def run(reason, *flags):
@@ -350,7 +358,7 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual(run('no enemy')[0], 1)
 
     def test_ragdoll_steps_skip_only_when_no_stock_mesh_is_asked_for(self):
-        passes = ['OWRANGETEST step=%s result=PASS' % s for s in check_range.EXPECTED if s not in ('ragdoll', 'corpse_limp', 'corpse_cap')]
+        passes = [passing(s) for s in check_range.EXPECTED if s not in ('ragdoll', 'corpse_limp', 'corpse_cap')]
         tail = ['OWRANGETEST SUMMARY result=PASS']
         graded = lambda reason: check_range.grade(*check_range.parse(log(
             *passes, *['OWRANGETEST step=%s result=SKIP reason=%s' % (s, reason) for s in ('ragdoll', 'corpse_limp', 'corpse_cap')], *tail)))[0]
@@ -372,8 +380,8 @@ class PreflightTest(unittest.TestCase):
 class CheckRangeTest(unittest.TestCase):
     def steps(self, overrides=None, summary='PASS'):
         overrides = overrides or {}
-        lines = ['OWRANGETEST step=%s result=%s x=1' % (s, overrides.get(s, 'PASS')) for s in check_range.EXPECTED
-                 if overrides.get(s) != 'DROP']
+        lines = [passing(s) if overrides.get(s, 'PASS') == 'PASS' else 'OWRANGETEST step=%s result=%s x=1' % (s, overrides[s])
+                 for s in check_range.EXPECTED if overrides.get(s) != 'DROP']
         lines.append('OWRANGETEST SUMMARY result=%s pass=1 fail=0 skip=0' % summary)
         return check_range.parse(log(*lines))
 
@@ -396,7 +404,7 @@ class CheckRangeTest(unittest.TestCase):
         self.assertFalse(check_range.grade(*self.steps({'death': 'SKIP'}))[0])
 
     def test_step_status_needs_a_boundary(self):
-        text = log(*['OWRANGETEST step=%s result=%s x=1' % (s, 'SKIP_typo' if s == 'ragdoll' else 'PASS') for s in check_range.EXPECTED],
+        text = log(*['OWRANGETEST step=ragdoll result=SKIP_typo x=1' if s == 'ragdoll' else passing(s) for s in check_range.EXPECTED],
                    'OWRANGETEST SUMMARY result=PASS')
         ok, rows = check_range.grade(*check_range.parse(text))
         self.assertFalse(ok)
@@ -413,7 +421,7 @@ class CheckRangeTest(unittest.TestCase):
         self.assertEqual(summary, ('PASS', ''))
 
     def crit_skip(self, reason):
-        lines = ['OWRANGETEST step=%s result=%s' % (s, ('SKIP ' + reason) if s == 'crit_minds_eye' else 'PASS') for s in check_range.EXPECTED]
+        lines = ['OWRANGETEST step=crit_minds_eye result=SKIP ' + reason if s == 'crit_minds_eye' else passing(s) for s in check_range.EXPECTED]
         return check_range.grade(*check_range.parse(log(*lines, 'OWRANGETEST SUMMARY result=PASS')))
 
     def test_crit_minds_eye_skips_only_without_the_file(self):

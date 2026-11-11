@@ -4764,3 +4764,13 @@ AI-assisted (Claude Opus 5.5). Record: docs/verification/COMBAT_RANGE.md. Host l
 - Each simulated corpse logs its bodies' height above the floor, the fastest body and when, and its physics asset's bodies, constraints and non-colliding pairs. Not yet run.
 - `tools/play_range.ps1 -KillRow -NoCorpseLimits` runs the kill row without the limits, once, to compare. Why bodies are thrown stays UNVERIFIED.
 - The den read of 2026-11-07 is recorded, with its limits; what it suggests is left as options for the maintainer. No money value came from the same session, so the stand-in stays.
+
+## 2026-11-11: Range melee per kind from live reads: an acceptance table first, then one stop distance changed (lane-range-den)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/COMBAT_RANGE.md`, "Acceptance table: melee per kind". Host behaviour and tests; no parsing change.
+
+- **Method.** The table of live values, with spreads, counts and sources, and the checks that hold the host to them were written before the host changed. The bands come from the measured spreads, plus a one-frame allowance where the host lags by up to a frame; the record says how each was chosen.
+- **Adult swing cycle stays 1.25 s.** Two live reads disagree: AI_MELEE_TARGETING_LIVE 4 (median 1.249 s, 33 of 34 gaps 1.221 to 1.386) and the den read of 2026-11-07 (1.216 to 1.217 s, 9 gaps). The host keeps the larger read's value. The conflict is recorded as open, with the question that would settle it (clip length plus whole frames, UNVERIFIED).
+- **Changed:** the adult stops 201 uu from Maya instead of 334, the den read's median (190 to 225 uu, 181 samples), which no other record contradicts. The baby swings every 1.133 s and stops at 111 uu instead of 1.25 s and 420. The default range spawns no baby, so that part is not exercised there. Every other kind (the regular bullymong, which is three of the four default enemies, the slinger's melee, the psycho) has no live read and keeps the stand-ins. Leaps and thrown rocks are still not implemented: they are recorded as the main open gap.
+- **Tests.** `tests/range_kind_melee_test.py` (new, in ctest): the host's per-kind rows equal `tools/check_range.py`'s table, and the brain uses them. It fails on main's host code. A new in-engine range step, `kind_melee`, is re-checked by the checker against the bands.
+- **Not verified:** the C++ is not compiled here, and nothing has run in the engine. Whether a closer adult changes the slice gate's fight or downs Maya without the test's help is still to be seen.

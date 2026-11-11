@@ -157,6 +157,12 @@ private:
     int32 TestResolvedBase = 0;
     float TestHealthBefore = 0.f;
     TWeakObjectPtr<AOpenWillowEnemy> TestPsycho;   // the psycho of the psycho_melee step
+    // The kind_melee step: one enemy per kind with a live melee row, the one under test, its swing starts and their distances.
+    bool bTestKindQueued = false;
+    TArray<TWeakObjectPtr<AOpenWillowEnemy>> TestKindQueue;
+    TWeakObjectPtr<AOpenWillowEnemy> TestKindEnemy;
+    TArray<float> TestKindStarts;
+    TArray<float> TestKindDistances;
     FString TestWhere;                  // where PlaceInSight put Maya (for the step's log line)
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;
