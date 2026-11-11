@@ -35,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (63 since review round 2 of the unforced variant, 39 before it; all
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (67 since review round 3 of the unforced variant, 39 before it; all
   made-up log lines, plus three that read the runner script's text).
 
 ### How a link is graded (review round 1)
@@ -394,9 +394,11 @@ without those stand-ins. Each link then shows whether the loop got there on its 
 
 **How it is graded** (`tools/check_slice_gate.py`; host grading rules, `UNVERIFIED` against the game):
 - The start line ends `unforced=1`. The runner passes `--expect-unforced`, and a log without the marker (a build without the
-  switch) then fails. The start record is parsed strictly, in every variant: `range_command=0` or `1` exactly once, and
-  `unforced=1` only as the last word. Any other form (`unforced=1x`, `unforced=1.0`, `range_command=1.0`), a second start
-  line, or start lines that disagree on the variant fail the log with a line that says why. A malformed marker is graded
+  switch) then fails. The start record is parsed strictly, in every variant, by one anchored pattern of what the host
+  prints: `map=<map> quest=<n> range_command=<0|1>`, optionally ` unforced=1`, and nothing else (a trailing carriage return
+  and trailing spaces are stripped). The map is one token of the characters a package name may hold, and it is never
+  searched for the markers. Any other form (`unforced=1x`, a line cut off after `range_command=1 unforc`, extra words), a
+  second start line, or start lines that disagree on the variant fail the log with a line that says why. A malformed marker is graded
   strictly as well. The host prints only the accepted forms, so its logs grade as before.
 - Any link whose fixtures name a stand-in for play is a FAIL, whatever the host said. The list in the checker
   (`FORCING_FIXTURES`) has the forced gun, a gun the test dropped, the granted point, the passive or cleared range, the heal

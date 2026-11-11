@@ -200,24 +200,25 @@ def cross_check(rows, errors, range_mode):
             row['detail'] = f'checker: {why}; host said NOT_AVAILABLE: {row["detail"]}'
 
 
-# The start record. The host prints `OWSLICEGATE start map=<map> quest=<0|1> range_command=<0|1>`, and in the unforced variant
-# (SLICE_GATE.md, "The unforced variant") ` unforced=1` as the last word. Those are the only forms accepted.
-START_RECORD = re.compile(r'OWSLICEGATE start\b(?P<rest>.*)$')
-UNFORCED_MARKER = 'unforced=1'
+# The start record, exactly as the host prints it (OpenWillowSliceGate.cpp, EStep::Start):
+# `OWSLICEGATE start map=%s quest=%d range_command=%d%s`, the last part "" or " unforced=1" (SLICE_GATE.md, "The unforced
+# variant"). The map is UWorld::GetMapName(): the asset name after the last "/" of a long package name, which cannot hold a
+# space, tab, CR, LF or any of \:*?"<>|',.&!~@# (the engine's INVALID_LONGPACKAGE_CHARACTERS). The map value is opaque: it is
+# matched as one token and never searched for the markers.
+START_RECORD = re.compile(r'OWSLICEGATE start map=[^\\:*?"<>|\' ,.&!~\n\r\t@#/]+ quest=\d+ '
+                          r'range_command=(?P<range>[01])(?P<unforced> unforced=1)?$')
 
 
 def start_mode(line):
-    """(range_mode, unforced, problems) of one start line. Any other form of range_command or of the unforced marker is a
-    problem, which fails the run; a malformed marker is still graded strictly."""
-    words = START_RECORD.search(line)['rest'].split()
-    ranges = [w for w in words if w.startswith('range_command')]
-    markers = [w for w in words if 'unforced' in w]
-    problems = []
-    if len(ranges) != 1 or ranges[0] not in ('range_command=0', 'range_command=1'):
-        problems.append(f'malformed range_command on the start line ({" ".join(ranges) or "none"}): the host prints range_command=0 or 1')
-    if markers and (markers != [UNFORCED_MARKER] or words[-1] != UNFORCED_MARKER):
-        problems.append(f'malformed unforced marker on the start line ({" ".join(markers)}): the host prints only {UNFORCED_MARKER}, as the last word')
-    return ranges == ['range_command=1'], bool(markers), problems
+    """(range_mode, unforced, problems) of one start line. A trailing carriage return and trailing spaces are stripped, nothing
+    more. A line that does not match START_RECORD is a problem, which fails the run, and it is graded strictly (unforced,
+    with the range)."""
+    match = START_RECORD.search(line.rstrip('\r '))
+    if match:
+        return match['range'] == '1', bool(match['unforced']), []
+    record = line[line.index('OWSLICEGATE start'):]
+    return True, True, [f'malformed start line, not the form the host prints '
+                        f'("map=<map> quest=<n> range_command=<0|1>", optionally " unforced=1"): {record}']
 
 
 def start_modes(lines, errors):

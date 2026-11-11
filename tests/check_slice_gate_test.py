@@ -48,7 +48,7 @@ def build(results=None, stop_after=None, summary='auto', start=True, extra=(), f
     range_mode marks the run as one with the range on its start line; unforced marks it as the unforced variant, and its
     default details then carry each link's how= token."""
     results = results or {}
-    lines = [PREFIX + f'OWSLICEGATE start synthetic run range_command={int(range_mode)}' + (' unforced=1' if unforced else '')] if start else []
+    lines = [PREFIX + f'OWSLICEGATE start map=Sanctuary_P quest=1 range_command={int(range_mode)}' + (' unforced=1' if unforced else '')] if start else []
     effective = {}
     fixtures = fixtures or {}
     for index, name in enumerate(order or chk.NAMES, 1):
@@ -558,7 +558,7 @@ class SliceGateTest(unittest.TestCase):
                 lines[0] = self.start_line(rest)
                 code, out = self.run_checker(self.write_log(lines))
                 self.assertEqual(code, 1, out)
-                self.assertIn('error: malformed unforced marker on the start line', out)
+                self.assertIn('error: malformed start line', out)
                 self.assertIn('unforced run:', out)   # graded strictly as well
 
     def test_malformed_range_command_fails_the_log(self):
@@ -568,7 +568,48 @@ class SliceGateTest(unittest.TestCase):
                 lines[0] = self.start_line(rest)
                 code, out = self.run_checker(self.write_log(lines))
                 self.assertEqual(code, 1, out)
-                self.assertIn('error: malformed range_command on the start line', out)
+                self.assertIn('error: malformed start line', out)
+
+    MARKER_MAPS = ('Invented_unforced_P', 'Invented_unforced=1_P', 'range_command=1_P', 'unforced=1')
+
+    def test_map_token_with_marker_text_is_not_searched(self):
+        for map_name in self.MARKER_MAPS:
+            for unforced in (False, True):
+                with self.subTest(map=map_name, unforced=unforced):
+                    lines = build(range_mode=True, unforced=unforced)
+                    lines[0] = PREFIX + f'OWSLICEGATE start map={map_name} quest=1 range_command=1' + (' unforced=1' if unforced else '')
+                    code, out = self.run_checker(self.write_log(lines))
+                    self.assertEqual(code, 0, out)
+                    self.assertEqual('unforced run:' in out, unforced)
+                    self.assertNotIn('error', out)
+
+    def test_truncated_start_line_fails(self):
+        for rest in ('range_command=1 unforc', 'range_command=1 unforced', 'range_command=1 unforced=', 'range_command='):
+            with self.subTest(rest=rest):
+                lines = build(range_mode=True)
+                lines[0] = self.start_line(rest)
+                code, out = self.run_checker(self.write_log(lines))
+                self.assertEqual(code, 1, out)
+                self.assertIn('error: malformed start line', out)
+                self.assertIn('unforced run:', out)   # graded strictly, not as a default run
+
+    def test_extra_words_after_the_marker_fail(self):
+        lines = build(range_mode=True, unforced=True)
+        lines[0] = self.start_line('range_command=1 unforced=1 extra')
+        code, out = self.run_checker(self.write_log(lines))
+        self.assertEqual(code, 1)
+        self.assertIn('error: malformed start line', out)
+
+    def test_trailing_spaces_and_carriage_return_are_accepted(self):
+        for tail in ('   ', '\r', ' \r'):
+            with self.subTest(tail=repr(tail)):
+                self.assertEqual(chk.start_mode(self.start_line('range_command=1 unforced=1') + tail), (True, True, []))
+                self.assertEqual(chk.start_mode(self.start_line('range_command=0') + tail), (False, False, []))
+                lines = build(range_mode=True, unforced=True)
+                lines[0] += tail
+                code, out = self.run_checker(self.write_log(lines))
+                self.assertEqual(code, 0, out)
+                self.assertIn('unforced run:', out)
 
     def test_two_start_lines_that_disagree_fail(self):
         lines = build(range_mode=True, unforced=True)
