@@ -588,7 +588,7 @@ Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/
 - [THIRD_PARTY.md](THIRD_PARTY.md): dependency and reference provenance
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute, and the sensitive areas
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): Contributor Covenant 2.1
-- [research/](research/README.md): the community-demand corpus and the original Python package reader
+- [research/](research/README.md): the community-demand fetch and analysis scripts (the fetched text stays in ignored `local/`) and the original Python package reader
 
 </details>
 

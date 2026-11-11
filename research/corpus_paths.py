@@ -7,6 +7,10 @@ it, in one folder outside the tracked tree:
 1. ``--corpus DIR`` on the command line, if given;
 2. otherwise the ``OW_RESEARCH_CORPUS`` environment variable;
 3. otherwise ``local/research_corpus`` under the repository root (ignored by git).
+
+A relative ``--corpus`` is taken from the current folder. Fetchers refuse to
+write anywhere inside the repository except under the root ``local/`` folder,
+so fetched text cannot land in a tracked or un-ignored place by accident.
 """
 import os
 import sys
@@ -24,23 +28,46 @@ def corpus_dir(argv=None):
     """
     if argv is None:
         argv = sys.argv
+    path = None
     for i, arg in enumerate(argv):
         if arg == "--corpus":
-            if i + 1 >= len(argv):
+            if i + 1 >= len(argv) or not argv[i + 1]:
                 sys.exit("--corpus needs a folder")
             path = argv[i + 1]
             del argv[i:i + 2]
-            return os.path.abspath(path)
+            break
         if arg.startswith("--corpus="):
+            path = arg.split("=", 1)[1]
+            if not path:
+                sys.exit("--corpus= needs a folder")
             del argv[i]
-            return os.path.abspath(arg.split("=", 1)[1])
-    return os.path.abspath(os.environ.get(ENV_VAR) or DEFAULT_DIR)
+            break
+    if path is None:
+        path = os.environ.get(ENV_VAR) or DEFAULT_DIR
+    path = os.path.abspath(path)
+    if os.path.exists(path) and not os.path.isdir(path):
+        sys.exit("The research corpus location %s is a file, not a folder." % path)
+    return path
+
+
+def _within(path, root):
+    path = os.path.normcase(os.path.realpath(path))
+    root = os.path.normcase(os.path.realpath(root))
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
 def output_path(folder, name):
-    """Path for a fetcher's output file; creates the folder if needed."""
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, name)
+    """Path for a fetcher's output file; creates its folder if needed.
+
+    Refuses a path inside the repository that is not under the root local/.
+    """
+    target = os.path.abspath(os.path.join(folder, name))
+    if _within(target, REPO_ROOT) and not _within(target, os.path.join(REPO_ROOT, "local")):
+        sys.exit("Refusing to write fetched text to %s: it is inside the repository but not under "
+                 "%s, so git could track it. Use the default folder or one outside the "
+                 "repository." % (target, os.path.join(REPO_ROOT, "local")))
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    return target
 
 
 def resolve(folder, name):

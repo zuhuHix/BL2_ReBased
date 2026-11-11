@@ -19,7 +19,8 @@ them, and the analysis scripts read them, in one folder:
 `corpus_paths.py` implements that order. A reader given an empty folder stops
 and names `fetch_steam_reviews.py`. To fetch the review files again (run from
 `research/`; the counts below were what came back on 2026-09-09, and a new
-fetch returns current reviews, not the same ones):
+fetch returns current reviews, not the same ones; the `recent` and `all`
+filter arguments are UNVERIFIED reconstructions as well):
 
 ```
 python fetch_steam_reviews.py 49520 reviews_bl2_recent.jsonl recent 15

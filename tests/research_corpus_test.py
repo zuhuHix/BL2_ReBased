@@ -11,7 +11,8 @@ import subprocess
 import sys
 import tempfile
 
-RESEARCH = Path(__file__).resolve().parents[1] / 'research'
+REPO = Path(__file__).resolve().parents[1]
+RESEARCH = REPO / 'research'
 
 # Invented reviews: not copied from any source.
 REVIEWS = [
@@ -46,7 +47,38 @@ def write_reviews(folder, name):
             f.write(json.dumps(r) + '\n')
 
 
+def output_checks():
+    """Fetchers refuse to write inside the repository outside local/ (no network: zero pages)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        stray = RESEARCH / 'local'
+        existed = stray.exists()
+        r = run('fetch_steam_reviews.py', '49520', 'x.jsonl', 'recent', '0', '--corpus', 'local/x', cwd=RESEARCH)
+        check('relative --corpus inside research/ is refused',
+              r.returncode != 0 and 'Refusing' in r.stderr and (existed or not stray.exists()), r.stdout + r.stderr)
+        if stray.exists() and not existed:
+            import shutil
+            shutil.rmtree(stray)
+        r = run('fetch_steam_reviews.py', '49520', 'x.jsonl', 'recent', '0', '--corpus=', cwd=tmp)
+        check('empty --corpus= is refused', r.returncode != 0 and 'needs a folder' in r.stderr, r.stdout + r.stderr)
+        target = RESEARCH / 'research_corpus_test_out.jsonl'
+        r = run('fetch_steam_reviews.py', '49520', str(target), 'recent', '0', cwd=tmp)
+        check('absolute output path in the tree is refused',
+              r.returncode != 0 and 'Refusing' in r.stderr and not target.exists(), r.stdout + r.stderr)
+        if target.exists():
+            target.unlink()
+        r = run('fetch_steam_reviews.py', '49520', 'x.jsonl', 'recent', '0', '--corpus', str(tmp / 'out'), cwd=tmp)
+        check('a folder outside the repository is accepted',
+              r.returncode == 0 and (tmp / 'out' / 'x.jsonl').exists(), r.stdout + r.stderr)
+        a_file = tmp / 'not_a_folder'
+        a_file.write_text('', encoding='utf-8')
+        r = run('analyze.py', env_dir=a_file, cwd=tmp)
+        check('a corpus path that is a file is named as such',
+              r.returncode != 0 and 'is a file, not a folder' in r.stderr, r.stdout + r.stderr)
+
+
 def main():
+    output_checks()
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         full = tmp / 'full'
