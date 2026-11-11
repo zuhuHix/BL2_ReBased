@@ -1,5 +1,6 @@
 """tools/listen_report.py's applied-gain fit on invented noise bursts (no game data). Needs numpy: not registered in ctest's bare-Python
 group, run by hand for now (docs/verification/GATES.md, "Tests outside ctest")."""
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -139,6 +140,33 @@ class FitTest(unittest.TestCase):
             cue['level'] = {'rms_dbfs': -20.0}
         rows = {r['role']: r for r in lr.level_table(cues, log_text, play, fits)}
         self.assertIsNone(rows['equip']['off_by_db'])     # equip's window is silent: no fit, and no RMS number in its place
+
+    def test_the_guide_says_why_off_by_is_empty_when_the_shot_has_no_fit(self):
+        """Two shots inside one search window (automatic fire) leave the reference without a fit: the guide must say so."""
+        a_path, a = self.burst('a.wav')
+        b_path, b = self.burst('b.wav')
+        wav = self.recording([(int(1.1306 * RATE), b, -15.0), (int(1.1346 * RATE), b, -15.0), (int(3.1311 * RATE), a, -9.0)])
+        log_text = '\n'.join(['LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
+                              'LogTemp: Display: OWAUDIOREC cue t=0.500 label=step Fight frame=-',
+                              self.play('fire', 'b.wav', -12), self.cue('fire', 1.0), self.play('fire', 'b.wav', -12), self.cue('fire', 1.004),
+                              self.play('equip', 'a.wav', -6), self.cue('equip', 3.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
+        play_map = self.tmp / 'play.json'
+        play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-12.0], 'equip': [-6.0]},
+                                        'unresolved': {}}), encoding='utf-8')
+        lr.build(log_text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
+        guide = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('No "Off by" in this table: the reference role `fire` has no fit', guide)
+        equip = next(line for line in guide.splitlines() if line.startswith('| `equip` |') and 'dBFS' in line)
+        self.assertIn('| -3.0 dB | - |', equip)                # its own applied-minus-map still shown, no off by
+
+    def test_a_sound_that_starts_just_before_its_cue_fits(self):
+        """The first equip of both listening runs started 2 and 8 ms before its cue (the clocks are not calibrated)."""
+        _, burst = self.burst('a.wav')
+        wav = self.recording([(RATE - 384, burst, -9.0)])     # 8 ms before the cue at 1.0 s
+        rate, recording = lr.read_channels(wav)
+        db, corr, lag, _ = lr.fit_gain(recording, rate, 1.0, RATE, burst)
+        self.assertAlmostEqual(db, -9.0, delta=0.05)
+        self.assertAlmostEqual(lag, -0.008, delta=0.0001)
 
     def test_clipping_is_flagged(self):
         _, burst = self.burst('a.wav', amplitude=0.9)

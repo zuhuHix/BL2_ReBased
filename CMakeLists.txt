@@ -146,7 +146,7 @@ else()
 endif()
 set(OW_NUMPY_PY_TESTS
   ambient_transform creature_zone lootable_tracks phaselock_target_attachments prepare_phaselock_target slice_npc_assets
-  weapon_reload_anims weapon_reload_library)
+  weapon_reload_anims weapon_reload_library listen_report_fit)
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy" RESULT_VARIABLE ow_numpy_rc OUTPUT_QUIET ERROR_QUIET)
 if(ow_numpy_rc EQUAL 0)
   ow_add_tests(py needs-numpy ${Python3_EXECUTABLE} py ${OW_NUMPY_PY_TESTS})
