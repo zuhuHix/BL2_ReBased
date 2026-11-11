@@ -155,7 +155,8 @@ class FitTest(unittest.TestCase):
                                         'unresolved': {}}), encoding='utf-8')
         lr.build(log_text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
         guide = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
-        self.assertIn('No "Off by" in this table: the reference role `fire` has no fit', guide)
+        self.assertIn('No "Off by" in this table: the reference role `fire` gives no balance', guide)
+        self.assertIn('none of its 2 cue(s) fitted', guide)
         equip = next(line for line in guide.splitlines() if line.startswith('| `equip` |') and 'dBFS' in line)
         self.assertIn('| -3.0 dB | - |', equip)                # its own applied-minus-map still shown, no off by
 
@@ -167,6 +168,34 @@ class FitTest(unittest.TestCase):
         db, corr, lag, _ = lr.fit_gain(recording, rate, 1.0, RATE, burst)
         self.assertAlmostEqual(db, -9.0, delta=0.05)
         self.assertAlmostEqual(lag, -0.008, delta=0.0001)
+
+    def test_a_cue_in_the_first_50_ms_searches_from_the_files_start(self):
+        _, burst = self.burst('a.wav')
+        wav = self.recording([(0, burst, -9.0)])                # the sound at frame 0, its cue at 0.02 s
+        rate, recording = lr.read_channels(wav)
+        db, corr, lag, _ = lr.fit_gain(recording, rate, 0.02, RATE, burst)
+        self.assertAlmostEqual(db, -9.0, delta=0.05)
+        self.assertGreater(corr, 0.99)
+        self.assertAlmostEqual(lag, -0.020, delta=0.0001)
+
+    def test_a_cue_with_a_negative_time_gets_no_fit(self):
+        _, burst = self.burst('a.wav')
+        wav = self.recording([(RATE, burst, -9.0)])
+        rate, recording = lr.read_channels(wav)
+        self.assertIsNone(lr.fit_gain(recording, rate, -0.5, RATE, burst))
+
+    def test_the_no_off_by_line_names_a_missing_map_gain(self):
+        """The shot fitted, but its file's map gain is null: the guide must say that, not that it found no fit."""
+        b_path, b = self.burst('b.wav')
+        wav = self.recording([(int(1.1306 * RATE), b, -15.0)])
+        log_text = chr(10).join(['LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
+                              'LogTemp: Display: OWAUDIOREC cue t=0.500 label=step Fight frame=-',
+                              self.play('fire', 'b.wav', 0), self.cue('fire', 1.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
+        play_map = self.tmp / 'play.json'
+        play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)]}, 'gains': {'fire': [None]}, 'unresolved': {}}), encoding='utf-8')
+        lr.build(log_text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
+        guide = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn('its file has no game gain', guide)
 
     def test_clipping_is_flagged(self):
         _, burst = self.burst('a.wav', amplitude=0.9)

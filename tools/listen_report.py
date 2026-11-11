@@ -205,10 +205,12 @@ def fit_gain(recording, rate, t, source_rate, source):
         return None
     grid = numpy.arange(n) * source_rate / rate
     x = numpy.stack([numpy.interp(grid, numpy.arange(len(source)), source[:, c]) for c in range(source.shape[1])], 1)
-    # The search starts FIT_LEAD_S before the cue: the cue's clock and the recording's are not calibrated, and the first equip of both
-    # listening runs started 2 and 8 ms before its cue, so a search from the cue on missed it.
+    # The search starts FIT_LEAD_S before the cue: the first equip of both listening runs started 2 and 8 ms before its cue, so a search
+    # from the cue on missed it (why it comes early is UNVERIFIED; the clocks of cues and recording are assumed, not shown, to differ).
     a = int(t * rate)
-    first = max(0, a - int(FIT_LEAD_S * rate))
+    if a < 0:
+        return None   # a cue before the recording started: nothing of it can be in the file
+    first = max(0, a - int(FIT_LEAD_S * rate))   # a cue in the first FIT_LEAD_S searches from the file's start
     segment = recording[first:a + int(FIT_SEARCH_S * rate) + n]
     if len(segment) < n:
         return None
@@ -259,7 +261,7 @@ def fit_cues(cues, log_text: str, wav: Path, play_map: dict | None):
         files = roles.get(cue['name'], [])
         # Another cue of the same role within the search window would be found too (two identical sounds a few ms apart even add up),
         # so such a cue gets no fit rather than a wrong one.
-        if any(j != index and other['kind'] == 'sound' and other['name'] == cue['name'] and abs(other['t'] - cue['t']) < FIT_SEARCH_S
+        if any(j != index and other['kind'] == 'sound' and other['name'] == cue['name'] and abs(other['t'] - cue['t']) < FIT_SEARCH_S + FIT_LEAD_S
                for j, other in enumerate(cues)):
             continue
         named = next((f for f in files if name and Path(f).name == name), None)
@@ -535,9 +537,16 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
                          + (f'{cell(row["off_by_db"])} ({row["off_by_from"]})' if row['off_by_db'] is not None else '-') + ' |')
         reference = next((r for r in levels if r['role'] == REFERENCE_ROLE), None)
         if fits is not None and (reference is None or reference['applied_minus_map_db'] is None):
-            lines += ['', f'**No "Off by" in this table: the reference role `{REFERENCE_ROLE}` has no fit in this recording**'
-                          + (' (no cue of it).' if reference is None else ' (each of its cues had another of its cues within 0.4 s, or no file matched).')
-                          + ' "Applied - map" per role still holds.']
+            shots = sum(1 for c in run['cues'] if c['kind'] == 'sound' and c['name'] == REFERENCE_ROLE)
+            if not shots:
+                why = 'there is no cue of it'
+            elif reference is not None and reference['fit_gain_db'] is not None:
+                why = 'it fitted, but its file has no game gain (null in the play map), so there is nothing to compare'
+            else:
+                why = (f'none of its {shots} cue(s) fitted: another of its cues within {FIT_SEARCH_S + FIT_LEAD_S:.2f} s, no level measured, '
+                       'no file matched, or a correlation under the floor')
+            lines += ['', f'**No "Off by" in this table: the reference role `{REFERENCE_ROLE}` gives no balance in this recording** ({why}).'
+                          ' "Applied - map" per role still holds.']
     lines += ['', "Maya's own sounds play 2D at the game's static level for each file (the play map's gains; 0 dB when it has none). The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No RTPC, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
               '## Step by step', '']
     for n, step in enumerate(steps, 1):
