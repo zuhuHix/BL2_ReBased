@@ -26,8 +26,8 @@ still applies.
 | BL2's Scaleform UI movies | Ruffle (desktop and web builds) | "BL2's HUD movie over UE5" below |
 | Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `C:\Users\yorad\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
 
-REA and Gibbed have no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open
-(2026-10-22).
+REA is recorded in THIRD_PARTY.md ("REA (Reverse Engineer Anything) MCP server": 4.1.0 on 2026-10-07, updated to 6.0.0 on
+2026-10-08). Gibbed has no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open (2026-10-22).
 
 ## External tools
 
