@@ -6,10 +6,9 @@ import sys
 import tempfile
 import unittest
 
-try:
-    import numpy  # noqa: F401  (tools/slice_npc_assets.py imports it at module level)
-except ImportError:
-    numpy = None
+# tools/slice_npc_assets.py imports numpy at module level. No skip without it: ctest registers this file only where numpy
+# imports (CMakeLists.txt, OW_NUMPY_PY_TESTS), so a missing numpy must fail here, not pass having run nothing.
+import numpy  # noqa: F401
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 
 
@@ -35,7 +34,6 @@ def table(*entries):
     return parts
 
 
-@unittest.skipIf(numpy is None, 'numpy is not installed for this interpreter')
 class CandidateSectionsTest(unittest.TestCase):
     def run_case(self, parts, fragments):
         import slice_npc_assets

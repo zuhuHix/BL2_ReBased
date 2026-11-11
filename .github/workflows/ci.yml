@@ -33,7 +33,7 @@ jobs:
       # it (CMakeLists.txt, OW_NODE_TESTS and OW_NUMPY_PY_TESTS). Neither is used by the build.
       - uses: actions/setup-node@v6
         with:
-          node-version: "26"
+          node-version: "26.4.0"
           package-manager-cache: false
 
       - name: Install numpy for the tests that need it
@@ -45,7 +45,7 @@ jobs:
 
       - name: Configure
         # Default generator: whichever Visual Studio the runner image ships.
-        run: cmake -S . -B build -A x64 -DOPENWILLOW_LZO=${{ matrix.lzo }}
+        run: cmake -S . -B build -A x64 -DOPENWILLOW_LZO=${{ matrix.lzo }} -DOW_REQUIRE_TEST_TOOLS=ON
 
       - name: Build
         run: cmake --build build --config Release
@@ -53,20 +53,30 @@ jobs:
       - name: Synthetic CTest suites
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Case lines of the tests that need Node, numpy or Pillow
-        # A test that skips itself must not pass having run nothing: compare these lines with a local run.
+      - name: Case counts of the tests labelled needs-*
+        # The tests that need Node or a Python module must run every case: any skip fails the job. Each entry's case count
+        # comes from unittest's "Ran N tests", else the test's own "N passed" line; a test that prints no count says so.
         if: always()
         shell: pwsh
         run: |
           $log = Get-Content build/Testing/Temporary/LastTest.log -Raw
-          $names = ctest --test-dir build -C Release -N -L 'needs-' | Select-String 'Test +#\d+: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          $names = @(ctest --test-dir build -C Release -N -L 'needs-' | Select-String 'Test +#\d+: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+          $bad = 0
           foreach ($name in $names) {
             $m = [regex]::Match($log, "(?ms)^\d+/\d+ Test: $([regex]::Escape($name))\r?\n.*?^Output:\r?\n-+\r?\n(.*?)^<end of output>")
-            $lines = @($m.Groups[1].Value -split '\r?\n' | Where-Object { $_.Trim() })
-            $cases = @($lines | Where-Object { $_ -match '^(ok|PASS)\b' }).Count
-            "$name | ok/PASS lines: $cases | last: $(($lines | Select-Object -Last 2) -join ' / ')"
+            if (-not $m.Success) { "$name | FAIL: no output in LastTest.log"; $bad++; continue }
+            $out = $m.Groups[1].Value
+            $lines = @($out -split '\r?\n' | Where-Object { $_.Trim() })
+            $summary = $lines | Where-Object { $_ -cmatch '\d+(/\d+)? .*passed' } | Select-Object -Last 1
+            if ($out -cmatch 'Ran (\d+) tests?') { $cases = "$($Matches[1]) (unittest)" }
+            elseif ($summary -and $summary -cmatch '(\d+)(/\d+)? ') { $cases = "$($Matches[1]) (its summary line)" }
+            else { $cases = 'no count printed' }
+            $skips = if ($out -cmatch 'skipped=(\d+)') { [int]$Matches[1] } else { 0 }
+            if ($skips) { $bad++ }
+            "$name | cases: $cases | skipped: $skips | last: $(($lines | Select-Object -Last 2) -join ' / ')"
           }
-          "$(@($names).Count) entries labelled needs-*"
+          "$($names.Count) entries labelled needs-*"
+          if ($bad) { throw "$bad needs-* entries skipped cases or left no output" }
 
       - name: Scene preparation unit tests
         run: python tests/level_test.py

@@ -67,13 +67,13 @@ a Python with no third-party packages, with none of its cases skipped, runs in c
 `level_test.py` and `viewer_test.py` directly. The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
 that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11.
 
-Since 2026-11-11 (lane ci-test-deps) CI also installs Node 26 and numpy 2.5.4 for tests only. The 18 `tests/*_test.js` run in
+Since 2026-11-11 (lane ci-test-deps) CI also installs Node 26.4.0 and numpy 2.5.4 for tests only. The 18 `tests/*_test.js` run in
 ctest as `js-<name>` (`OW_NODE_TESTS`) and the 8 Python tests that need numpy as `py-<name>` (`OW_NUMPY_PY_TESTS`: `ambient_transform`,
 `creature_zone`, `lootable_tracks`, `phaselock_target_attachments`, `prepare_phaselock_target`, `slice_npc_assets`, `weapon_reload_anims`,
 `weapon_reload_library`). Each group is registered only when configure finds Node, or a `${Python3_EXECUTABLE}` that imports numpy;
-otherwise configure prints which group it left out, and everything else still runs. `slice_npc_assets` skips its whole class
-without numpy, which is why the check is made at configure time. CI's step "Case lines of the tests that need Node, numpy or
-Pillow" prints each such entry's last lines, to compare the cases run with a local run.
+otherwise configure prints which group it left out, and everything else still runs. CI configures with
+`-DOW_REQUIRE_TEST_TOOLS=ON`, which turns a group left out into a configure error. CI's step "Case counts of the tests labelled
+needs-*" prints each such entry's case count and fails the job if any of them skipped a case.
 
 Pillow (commit 2 of that lane, landed only with the maintainer's yes): CI installs `pillow==12.2.0`, and the 8 tests in
 `OW_PILLOW_PY_TESTS` (`gfx_to_swf`, `prepare_map_screen`, `prepare_minimap`, `prepare_mission_log`, `prepare_mission_screen`,
@@ -90,4 +90,5 @@ Notes: a test that skips cases there, or skips all of them, does not count as pa
 on Windows, so they run there. `serve_paths` skips nothing: it makes a directory symlink, and on Windows falls back to a junction when that is refused. `private_sync` also skips its UNC alias case without an administrative share. `game_colours` and
 `prepare_hud_strings` create `local/` in a clean checkout (the second leaves it empty); it is git-ignored and harmless. The slowest registered entry
 that starts processes, `run_limit` (about 40 PowerShell runs), took 11.2 s on CI (PR #219, run 43062806521) and 15.4 s here, well under
-its 120 s timeout. On that CI run (Python 3.12) the new entries took 66 s of 172 s with LZO on.
+its 120 s timeout. On that CI run (Python 3.12) the new entries took 66 s of 172 s with LZO on. `weapon_reload_library`
+skips its junction case when `mklink /J` fails; on CI that skip fails the job.

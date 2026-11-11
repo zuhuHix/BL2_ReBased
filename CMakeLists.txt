@@ -115,6 +115,25 @@ function(ow_add_tests prefix label runner ext)
     set_tests_properties(${prefix}-${ow_test} PROPERTIES TIMEOUT 120 LABELS ${label})
   endforeach()
 endfunction()
+# CI configures with OW_REQUIRE_TEST_TOOLS=ON, so a group left out (Node not found, a Python that lacks the module) fails the job
+# instead of passing with fewer tests. The check runs at the end of this file and covers every OW_<group>_TESTS list defined by
+# then, so it needs no count and no change when a group is added or removed.
+option(OW_REQUIRE_TEST_TOOLS "Fail configure when a group of tests that needs Node, numpy or Pillow cannot be registered" OFF)
+function(ow_require_test_groups)
+  get_cmake_property(ow_vars VARIABLES)
+  foreach(ow_var IN LISTS ow_vars)
+    if(ow_var MATCHES "^OW_.+_TESTS$" AND NOT ow_var STREQUAL "OW_STANDALONE_PY_TESTS")
+      foreach(ow_test IN LISTS ${ow_var})
+        if(NOT TEST js-${ow_test} AND NOT TEST py-${ow_test})
+          message(FATAL_ERROR "OW_REQUIRE_TEST_TOOLS is ON and ${ow_test} (${ow_var}) is not registered: its tool is missing (message above)")
+        endif()
+      endforeach()
+    endif()
+  endforeach()
+endfunction()
+if(OW_REQUIRE_TEST_TOOLS)
+  cmake_language(DEFER CALL ow_require_test_groups)
+endif()
 set(OW_NODE_TESTS
   hud_action_skill hud_fields hud_minimap hud_movie_loss hud_use_prompt_page hud_warp inventory_navigation inventory_preview_cache
   map_screen mission_log mission_screen pickup_card skill_info skill_navigation skill_rules status_page_keys vending_movie vending)
