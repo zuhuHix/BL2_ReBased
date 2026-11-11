@@ -148,22 +148,36 @@ if ($PrintCommandLine) {
     exit 0
 }
 
-$editor = if ($EditorExe) { $EditorExe } else { Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe' }
-if (!(Test-Path -LiteralPath $editor)) { Write-Host "PLAY SLICE REFUSED: UnrealEditor.exe not found under $Engine (pass -Engine or set OPENWILLOW_UE)"; exit 2 }
+# Every path above comes from $PSScriptRoot (or is given), and the same strings go to the editor and to the grading, so the run uses one form
+# throughout, whatever form the checkout's path takes (a CI runner's temp folder is an 8.3 short path; PowerShell gives the long one here).
+if ($EditorExe) {
+    if (!(Test-Path -LiteralPath $EditorExe)) { Write-Host "PLAY SLICE REFUSED: the test editor $EditorExe does not exist"; exit 2 }
+    $editor = $EditorExe
+    Write-Host "Note: test editor $editor (not Unreal; tests/play_slice_test.py)"
+} else {
+    $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
+    if (!(Test-Path -LiteralPath $editor)) { Write-Host "PLAY SLICE REFUSED: UnrealEditor.exe not found under $Engine (pass -Engine or set OPENWILLOW_UE)"; exit 2 }
+}
+$tag = if ($EditorExe) { ' (test editor, not Unreal)' } else { '' }
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
 New-Item -ItemType Directory -Force $outDir | Out-Null
+# The page server's id while it runs, for a cleanup that outlives this script (the test's, if its timeout kills this PowerShell before the finally).
+$serverPidFile = Join-Path $outDir 'page-server.pid'
 try { Enter-OwUeLock -Owner 'play_slice' -TimeoutSeconds $WaitForEditorSeconds }
 catch { Write-Host "PLAY SLICE NOT STARTED: the UE run lock: $($_.Exception.Message)"; exit 3 }
 $code = 0
 $movie = $null
 $process = $null
 try {
-    # Only now, under the lock: a second run waiting for it must not delete the save of the session that holds it.
-    if (($Fresh -or $CheckSeconds -gt 0) -and (Test-Path -LiteralPath $Save)) { Remove-Item -LiteralPath $Save -Force }
-    $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
-    $stage = 'the page server'
+    $stage = 'the save'
     try {
+        # Only now, under the lock: a second run waiting for it must not delete the save of the session that holds it.
+        if (($Fresh -or $CheckSeconds -gt 0) -and (Test-Path -LiteralPath $Save)) { Remove-Item -LiteralPath $Save -Force }
+        $stage = 'the game folder'
+        $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
+        $stage = 'the page server'
         $movie = Start-OwMovieHud -Port $Port
+        if ($movie.Server) { Set-Content -LiteralPath $serverPidFile -Value $movie.Server.Id }
         $stage = 'the editor'
         $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
         [void]$process.Handle   # open now: stopping it later goes through this object (run_limit.ps1)
@@ -182,7 +196,7 @@ try {
             }
             Start-Sleep -Seconds 3
             $code = if (Test-OwPlaySliceLog -Log $log) { 0 } else { 1 }
-            Write-Host "Smoke $(if ($code -eq 0) { 'PASS' } else { 'FAIL' }): $log"
+            Write-Host "Smoke $(if ($code -eq 0) { 'PASS' } else { 'FAIL' })${tag}: $log"
         } else {
             [void](Wait-OwStartedProcess -Process $process)
             Select-String -LiteralPath $log -Pattern 'OWQUEST READY|OWQUEST ERROR|OWRANGE start switch|Phaselock data|Phaselock unavailable|OWAUDIO play map|HUD path|Maya level|starts with no' -ErrorAction SilentlyContinue |
@@ -191,6 +205,7 @@ try {
     }
 } finally {
     Stop-OwMovieHud $movie
+    if ($movie -and $movie.Server -and $movie.Server.HasExited) { Remove-Item -LiteralPath $serverPidFile -Force -ErrorAction SilentlyContinue }
     Exit-OwUeLock
 }
 exit $code

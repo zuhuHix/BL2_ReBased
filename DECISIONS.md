@@ -4649,3 +4649,13 @@ AI-assisted (Claude Opus 5.5). Follows the launcher entry above; PR #216 review 
 - **A stalled editor.** When it cannot be stopped, the lock is still released, as after Ctrl+C in hand play. The next `Enter-OwUeLock` waits on any running editor. Children it leaves are listed with `Write-OwLeftChildren` and are not stopped.
 - **Record.** `SANCTUARY_RPG_MISSION.md` now says the launcher has not run and its smoke is pending. The loot rate on the route is marked UNVERIFIED in the host, and the sentence says the stock 0.085 is the guns-and-gear pool entry, not guns alone.
 - **Checked.** `tests/play_slice_test.py` 20/20. The test folder's path has a space, and four runs go through lock, page server, start, timed stop and grading with a stub editor (pythonw through `-EditorExe`) and a stand-in for `ue_lock.ps1`. The launcher has still not run in Unreal (UNVERIFIED).
+
+## 2026-11-11: Play-slice launcher, review round 2: CI's short temp path, a locked save, the test editor marked (play-slice lane)
+
+AI-assisted (Claude Opus 5.5). PR #216 review round 2 and its CI failure; launcher and test only.
+
+- **CI failure.** On the runner `%TEMP%` is an 8.3 short path (`RUNNER~1`). The test compared its own short-form save path with the launcher's, and the launcher passes every path in the long form. The CI log shows all of them as `runneradmin`, built from `$PSScriptRoot`. The test now resolves its temp folder to the long form once. A new test starts the launcher through the folder's short name and checks that the six paths reach the editor in the long form, and that the grading reads the same log path. This PC also gives the folder an 8.3 name, so the test ran here instead of skipping. The launcher was not changed for this.
+- **Never launched.** A save that cannot be deleted (held open by another program) and an unresolvable game folder now exit 3 with `PLAY SLICE NOT STARTED: the save` (or `the game folder`). Before, they exited 1.
+- **Test editor.** A run with `-EditorExe` prints `Note: test editor <path>` and tags its verdict `(test editor, not Unreal)`. A missing one is refused by its own name.
+- **Page server id.** While the server it started runs, the launcher records the server's id in `local/playslice/page-server.pid`, and deletes the file once the server is stopped. If the test's timeout kills the launcher before its `finally`, the test's cleanup stops that id. It first checks that the command line holds `serve.py`, the port and the test folder, never the image name.
+- **Checked.** `tests/play_slice_test.py` 23/23. The launcher has still not run in Unreal (UNVERIFIED).

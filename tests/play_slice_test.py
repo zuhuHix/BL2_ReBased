@@ -2,6 +2,7 @@
 (empty or minimal files; nothing game-derived), in a folder whose path has a space. -PrintCommandLine shows the line it would start and -GradeLog
 grades a synthetic log. The Launch class runs the launch itself with a stub editor (pythonw on a small script, through -EditorExe) and a stand-in
 for tools/ue_lock.ps1, so it starts only the stub and serve.py, stops them by their own handles, and never waits on a real editor. Windows only."""
+import ctypes
 import http.server
 import json
 import os
@@ -67,7 +68,9 @@ BAD_LINES = {
 @unittest.skipUnless(os.name == 'nt', 'the launcher is a Windows script')
 class PlaySlice(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix='ow play slice '))   # a space: the launcher's quoting must hold
+        # A space, so the launcher's quoting must hold. Resolved to the long form once: on a CI runner %TEMP% is an 8.3 short path (RUNNER~1),
+        # and the launcher works from its own folder's long form, so every path compared below is in that form.
+        self.root = Path(tempfile.mkdtemp(prefix='ow play slice ')).resolve()
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         tools = self.root / 'tools'
         tools.mkdir()
@@ -290,23 +293,27 @@ class Launch(unittest.TestCase):
         self.save = self.root / 'local/playslice/smoke-save.json'
         self.env = dict(os.environ, OW_STUB_ARGS=str(self.root / 'stub_args.json'), OW_STUB_PID=str(self.root / 'stub.pid'), OW_STUB_LOG=GOOD_LOG,
                         OW_STUB_MODE='good', OW_FAKE_LOCK='', OW_FAKE_LOCK_LOG=str(self.root / 'lock.log'), OW_FAKE_SAVE=str(self.save))
-        self.addCleanup(self.stop_stub)
+        # The stub, and the page server if a timeout killed the launcher before its finally (it records the server's id under local/playslice).
+        self.addCleanup(self.stop_recorded, self.root / 'stub.pid', [str(self.root)])
+        self.addCleanup(self.stop_recorded, self.root / 'local/playslice/page-server.pid', ['serve.py', f'--port {self.port}', str(self.root)])
 
-    def stop_stub(self):
-        # Only the stub this test started, by its recorded id, and only while its command line names this test's folder.
-        pid_file = self.root / 'stub.pid'
+    def stop_recorded(self, pid_file, expected):
+        # Only a process this test's run started, by its recorded id, and only while its command line holds every expected piece (the check
+        # run_limit.ps1's Stop-OwStartedProcess makes). Never by image name.
         if not pid_file.exists():
             return
         pid = pid_file.read_text().strip()
+        if not pid.isdigit():
+            return
         line = subprocess.run(['powershell', '-NoProfile', '-Command', f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").CommandLine'],
-                              capture_output=True, text=True).stdout
-        if str(self.root) in line:
+                              capture_output=True, text=True).stdout.lower()
+        if line and all(piece.lower() in line for piece in expected):
             subprocess.run(['taskkill', '/PID', pid, '/F'], capture_output=True)
 
-    def launch(self, *arguments, **env):
+    def launch(self, *arguments, script=None, editor=None, **env):
         self.env.update(env)
-        pythonw = Path(sys.executable).with_name('pythonw.exe')
-        return subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(self.root / 'tools/play_slice.ps1'),
+        pythonw = editor or Path(sys.executable).with_name('pythonw.exe')
+        return subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script or self.root / 'tools/play_slice.ps1'),
                                '-Game', str(self.game), '-EditorExe', str(pythonw), '-Port', str(self.port), *arguments],
                               capture_output=True, text=True, timeout=150, env=self.env)
 
@@ -315,7 +322,9 @@ class Launch(unittest.TestCase):
         self.save.write_text('{}')
         result = self.launch('-CheckSeconds', '20')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Smoke PASS', result.stdout)
+        self.assertIn('Note: test editor ', result.stdout)
+        self.assertIn('Smoke PASS (test editor, not Unreal)', result.stdout)
+        self.assertFalse((self.root / 'local/playslice/page-server.pid').exists(), 'the stopped server is still recorded')
         self.assertEqual((self.root / 'lock.log').read_text().split(), ['enter', 'owner=play_slice', 'save=True', 'exit'])
         self.assertFalse(self.save.exists())
         self.assertFalse(serving(self.port), 'the page server this run started is still up')
@@ -332,6 +341,41 @@ class Launch(unittest.TestCase):
         pid = (self.root / 'stub.pid').read_text().strip()
         self.assertNotIn(pid, subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/NH'], capture_output=True, text=True).stdout)
         self.assertFalse(serving(self.port))
+
+    def test_started_through_a_short_path_it_uses_one_form(self):
+        # The checkout reached through its 8.3 short name, as on a CI runner: the editor gets the long form throughout, and the grading reads
+        # the log at the same path it gave the editor.
+        buffer = ctypes.create_unicode_buffer(1024)
+        ctypes.windll.kernel32.GetShortPathNameW(str(self.root), buffer, len(buffer))
+        short = Path(buffer.value)
+        if not buffer.value or str(short) == str(self.root):
+            self.skipTest('this volume gives the folder no 8.3 short name')
+        result = self.launch('-CheckSeconds', '20', script=short / 'tools/play_slice.ps1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        args = json.loads((self.root / 'stub_args.json').read_text())
+        self.assertIn(f'-owquestsave={self.save}', args)
+        paths = [a.split('=', 1)[1] for a in args if a.startswith(('-owmover=', '-owslice=', '-owquestsave=', '-owrange=', '-owaudioplay=', '-abslog='))]
+        self.assertEqual(len(paths), 6, args)
+        for path in paths:
+            self.assertTrue(path.startswith(str(self.root)), f'{path} is not in the long form {self.root}')
+        log = next(a.split('=', 1)[1] for a in args if a.startswith('-abslog='))
+        self.assertIn(f'Smoke PASS (test editor, not Unreal): {log}', result.stdout)
+
+    def test_a_locked_save_is_never_launched(self):
+        self.save.parent.mkdir(parents=True, exist_ok=True)
+        self.save.write_text('{}')
+        with open(self.save) as held:   # held open without delete sharing: Remove-Item fails
+            result = self.launch('-CheckSeconds', '5')
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn('PLAY SLICE NOT STARTED: the save:', result.stdout)
+        self.assertFalse((self.root / 'stub.pid').exists())
+        self.assertIn('exit', (self.root / 'lock.log').read_text())
+
+    def test_a_missing_test_editor_is_refused_by_its_own_name(self):
+        result = self.launch('-CheckSeconds', '5', editor=self.root / 'no such editor.exe')
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn('PLAY SLICE REFUSED: the test editor', result.stdout)
+        self.assertNotIn('UnrealEditor.exe not found', result.stdout)
 
     def test_a_lock_timeout_is_never_launched(self):
         result = self.launch('-CheckSeconds', '5', OW_FAKE_LOCK='timeout')
