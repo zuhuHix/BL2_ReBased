@@ -347,11 +347,31 @@ class LevelTableTest(unittest.TestCase):
         self.assertTrue(rows[0]['positioned'])
         self.assertIsNone(rows[0]['expected_rms_dbfs'])
 
-    def test_without_gains_in_the_map_the_logged_gain_is_used(self):
+    def test_without_a_game_gain_there_is_no_game_prediction(self):
+        """A logged gain_db is what the host applied, which is 0 dB for a fallback: it is not the game's balance."""
         shot = self.source('1.wav', 0.5, 0.5)
-        text = 'LogTemp: Display: OWAUDIO play role=fire channels=2 rate=8000 bytes=8000 gain_db=-12.0 upmix=mono_to_stereo (the host called play; not heard)'
-        rows = lr.level_table([self.cue('fire', -20.0)], text, {'roles': {'fire': [shot]}})
-        self.assertEqual(rows[0]['gain_db'], -12.0)
+        text = 'LogTemp: Display: OWAUDIO play role=fire channels=2 rate=8000 bytes=8000 gain_db=0.0 upmix=mono_to_stereo (the host called play; not heard)'
+        for play in ({'roles': {'fire': [shot]}}, {'roles': {'fire': [shot]}, 'gains': {'fire': [None]}, 'gain_notes': {'fire': 'no game value: no game data given'}}):
+            rows = lr.level_table([self.cue('fire', -20.0)], text, play)
+            self.assertIsNone(rows[0]['expected_rms_dbfs'])
+            self.assertEqual(rows[0]['prediction'], 'no game prediction')
+        self.assertIn('no game data', rows[0]['gain_note'])
+
+    def test_each_gain_goes_with_its_own_file_before_the_median(self):
+        files = [self.source('%d.wav' % n, 0.5, amplitude) for n, amplitude in ((1, 0.9), (2, 0.285), (3, 0.09))]   # about 10 dB apart
+        levels = [lr.file_level(Path(f)) for f in files]
+        play = {'roles': {'hit': files}, 'gains': {'hit': [-20.0, 0.0, 0.0]}}
+        row = lr.level_table([self.cue('hit', -30.0)], '', play)[0]
+        paired = sorted([levels[0] - 20, levels[1], levels[2]])[1]
+        unpaired = sorted(levels)[1] + 0.0          # the median level plus the median gain: what the table must not do
+        self.assertAlmostEqual(row['expected_rms_dbfs'], round(paired, 1), places=1)
+        self.assertGreater(abs(row['expected_rms_dbfs'] - unpaired), 5)
+
+    def test_a_role_with_some_null_gains_predicts_from_the_others_and_says_so(self):
+        files = [self.source('1.wav', 0.5, 0.5), self.source('2.wav', 0.5, 0.05)]
+        row = lr.level_table([self.cue('hit', -30.0)], '', {'roles': {'hit': files}, 'gains': {'hit': [-6.0, None]}})[0]
+        self.assertAlmostEqual(row['expected_rms_dbfs'], round(lr.file_level(Path(files[0])) - 6, 1), places=1)
+        self.assertEqual(row['prediction'], 'from 1 of 2 file(s)')
 
     def test_the_guide_has_the_table_and_cues_json_the_rows(self):
         shot = self.source('1.wav', 0.5, 0.5)

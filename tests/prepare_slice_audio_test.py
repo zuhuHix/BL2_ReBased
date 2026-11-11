@@ -402,8 +402,11 @@ class GameMixTest(unittest.TestCase):
 
     def test_banks_that_disagree_are_noted(self):
         index, buses = invented_bank()
-        first, third = (psa.volume_chain(s, index, index, buses) for s in (30, 31))
-        _, notes = psa.source_gain({1: {5: [first]}, 2: {5: [third]}}, 77, FIRST)
+        index[40] = (2, sound_body(40, 77, 10, props={0: -3.0}))
+        index[41] = (2, sound_body(41, 77, 10, props={0: -8.0}))
+        one, other = (psa.volume_chain(s, index, index, buses) for s in (40, 41))
+        db, notes = psa.source_gain({1: {5: [one]}, 2: {5: [other]}}, 77, FIRST)
+        self.assertEqual(db, -11.0)
         self.assertTrue(any('banks disagree' in n for n in notes))
 
     def test_a_random_volume_range_is_noted_not_applied(self):
@@ -416,22 +419,118 @@ class GameMixTest(unittest.TestCase):
     def test_a_source_not_reached_has_no_level(self):
         self.assertIsNone(psa.source_gain({}, 77, FIRST)[0])
 
-    def test_without_game_data_every_gain_is_unity_and_says_so(self):
+    def test_without_game_data_every_game_gain_is_null_and_says_so(self):
         gains, notes = psa.build_gains({'fire': ['a/1.wav', 'a/2.wav'], 'test_tone': ['t.wav']}, None, None)
-        self.assertEqual(gains, {'fire': [0.0, 0.0], 'test_tone': [0.0]})
+        self.assertEqual(gains, {'fire': [None, None], 'test_tone': [0.0]})
         self.assertIn('no game data', notes['fire'])
 
-    def test_gains_follow_the_files_order_and_a_missing_level_is_unity(self):
+    def test_gains_follow_the_files_order_a_missing_level_is_null_and_a_clamp_is_noted(self):
         class FakeMix:
             def entry_gains(self, entry, role):
-                self.role = role
-                return {1: (-12.0, []), 2: (None, ['source 2 not reached from the event']), 3: (-200.0, [])}
-        mix = FakeMix()
+                return {1: (-12.0, []), 2: (None, ['unresolved: source 2 not reached from the event']), 3: (-200.0, [])}
         man = manifest([{'source': 1}, {'source': 2}, {'source': 3}])
-        gains, notes = psa.build_gains({'fire': [os.path.join('d', '3.wav'), os.path.join('d', '1.wav'), os.path.join('d', '2.wav')]}, man, mix)
-        self.assertEqual(gains['fire'], [psa.MIN_GAIN_DB, -12.0, 0.0])   # clamped to the host's floor; no level means 0 dB
+        gains, notes = psa.build_gains({'fire': [os.path.join('d', '3.wav'), os.path.join('d', '1.wav'), os.path.join('d', '2.wav')]}, man, FakeMix())
+        self.assertEqual(gains['fire'], [psa.MIN_GAIN_DB, -12.0, None])   # clamped to the host's floor; no level is null, never 0 dB
         self.assertIn('source 2', notes['fire'])
+        self.assertIn('source 3: sum -200.0 dB clamped to -144.0 dB', notes['fire'])
         self.assertTrue(notes['fire'].startswith('game data'))
+
+    def test_two_entries_that_disagree_on_a_source_are_noted(self):
+        class FakeMix:
+            def __init__(self):
+                self.calls = 0
+
+            def entry_gains(self, entry, role):
+                self.calls += 1
+                return {1: (-3.0 if self.calls == 1 else -10.0, [])}
+        man = {'schema': 'ow-audio-v1', 'entries': [
+            {'key': 'weapon:reload_anim_A_at_0.1s', 'trigger': {'role': 'reload anim A @0.1s'}, 'ak_event': {'wwise_name': 'Play_X_Clip_Out'}, 'media': [{'source': 1}]},
+            {'key': 'weapon:reload_anim_B_at_0.2s', 'trigger': {'role': 'reload anim B @0.2s'}, 'ak_event': {'wwise_name': 'Play_X_Clip_Out'}, 'media': [{'source': 1}]}]}
+        gains, notes = psa.build_gains({'reload_out': [os.path.join('d', '1.wav')]}, man, FakeMix())
+        self.assertEqual(gains['reload_out'], [-3.0])
+        self.assertIn('entries give -3.0 and -10.0 dB', notes['reload_out'])
+
+    def test_a_chain_through_two_switches_filters_only_on_the_perspective_one(self):
+        """Perspective switch 20 picks surface switch 21 (first person) or 22 (third person); each surface switch holds one sound of source 77."""
+        index, buses = invented_bank()
+        surface = (0x55, 0x66)
+        index[20] = (6, mixer_body(20, 10, tail=switch_tail([21, 22], [(FIRST, [21]), (THIRD, [22])], THIRD)))
+        index[21] = (6, mixer_body(21, 20, tail=switch_tail([30], [(surface[0], [30])], surface[0])))
+        index[22] = (6, mixer_body(22, 20, tail=switch_tail([31], [(surface[1], [31])], surface[0])))
+        index[30] = (2, sound_body(30, 77, 21, props={0: -4.0}))
+        index[31] = (2, sound_body(31, 77, 22, props={0: -2.0}))
+        rows = {1: {5: [psa.volume_chain(s, index, index, buses) for s in (30, 31)]}}
+        self.assertEqual(psa.source_gain(rows, 77, FIRST)[0], -12.0)   # -4 -1 -5 -2; the third-person -10 must not win
+        self.assertEqual(psa.source_gain(rows, 77, None)[0], -10.0)
+
+    def test_an_action_wholly_on_the_other_perspective_adds_nothing(self):
+        index, buses = invented_bank()
+        first, third = (psa.volume_chain(s, index, index, buses) for s in (30, 31))
+        db, notes = psa.source_gain({1: {5: [first, third], 6: [third]}}, 77, FIRST)
+        self.assertEqual(db, -12.0)
+        self.assertFalse(any('summed' in n for n in notes))
+
+    def test_a_switch_list_that_does_not_parse_leaves_the_source_unresolved(self):
+        index, buses = invented_bank()
+        index[20] = (6, mixer_body(20, 10, tail=switch_tail([30, 31], [(FIRST, [30, 999])], THIRD)))
+        with self.assertRaises(psa.MixError):
+            psa.volume_chain(30, index, index, buses)
+        db, notes = psa.source_gain({1: {5: [psa.MixError('switch 20: bad')]}}, 77, FIRST)
+        self.assertIsNone(db)
+        self.assertIn('unresolved', notes[0])
+
+    def test_several_levels_with_nothing_to_choose_between_are_unresolved(self):
+        index, buses = invented_bank()
+        index[10] = (7, mixer_body(10, 0, bus=901, props={0: -1.0}))
+        index[40] = (2, sound_body(40, 77, 10, props={0: -3.0}))
+        index[41] = (2, sound_body(41, 77, 10, props={0: -8.0}))
+        db, notes = psa.source_gain({1: {5: [psa.volume_chain(s, index, index, buses) for s in (40, 41)]}}, 77, FIRST)
+        self.assertIsNone(db)
+        self.assertIn('nothing to choose', notes[0])
+
+    def test_a_record_naming_a_missing_parent_is_refused_not_read_further_on(self):
+        index, buses = invented_bank()
+        # A container without effects that names parent 999; later bytes hold a plausible bus and parent pair (901, 20) and a -6 dB bundle.
+        index[50] = (7, mixer_body(50, 999, tail=struct.pack('<II', 901, 20) + b'\x00\x00' + bundle({0: -6.0})))
+        index[51] = (2, sound_body(51, 78, 50))
+        with self.assertRaisesRegex(psa.MixError, 'parent 999'):
+            psa.volume_chain(51, index, index, buses)
+
+    def test_a_volume_that_is_not_a_volume_is_refused(self):
+        for bad in (float('nan'), float('inf'), 50.0, -120.0):
+            index, buses = invented_bank()
+            index[30] = (2, sound_body(30, 77, 20, props={0: bad}))
+            with self.assertRaisesRegex(psa.MixError, 'object 30'):
+                psa.volume_chain(30, index, index, buses)
+
+    def test_a_cycle_in_the_parents_or_the_buses_is_refused(self):
+        index, buses = invented_bank()
+        index[10] = (7, mixer_body(10, 11, bus=901))
+        index[11] = (7, mixer_body(11, 10))
+        with self.assertRaisesRegex(psa.MixError, 'loops back'):
+            psa.volume_chain(30, index, index, buses)
+        index, buses = invented_bank()
+        index[900] = (8, bus_body(900, 901, -2.0))
+        with self.assertRaisesRegex(psa.MixError, 'bus chain .* loops back'):
+            psa.volume_chain(30, index, index, buses)
+
+    def test_effects_are_stepped_over_by_their_layout(self):
+        index, buses = invented_bank()
+        effects = b'\x00\x02' + b'\x00' + b'\x01' * 7 * 2          # override flag, 2 effects, bypass bits, 7 bytes each
+        index[10] = (7, struct.pack('<I', 10) + effects + struct.pack('<II', 901, 0) + b'\x00\x00' + bundle({0: -1.0}))
+        chain = psa.volume_chain(30, index, index, buses)
+        self.assertEqual(sum(node['volume_db'] for node in chain), -12.0)
+        self.assertTrue(chain[2]['effects'])
+
+    def test_a_game_path_that_is_not_a_folder_is_an_error(self):
+        folder = tempfile.mkdtemp()
+        man = os.path.join(folder, 'm.json')
+        with open(man, 'w', encoding='utf-8') as fh:
+            json.dump(manifest([]), fh)
+        with self.assertRaises(SystemExit) as raised:
+            psa.main(['--manifest', man, '--decoded-dir', folder, '--game', os.path.join(folder, 'no_such_game'),
+                      '--out', os.path.join(folder, 'p.json'), '--tone', os.path.join(folder, 't.wav')])
+        self.assertIn('not a folder', str(raised.exception))
 
     def test_the_gain_limits_match_the_host(self):
         header = (Path(__file__).resolve().parent.parent / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowAudio.h').read_text(encoding='utf-8')

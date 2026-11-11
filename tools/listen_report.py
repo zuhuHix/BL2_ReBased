@@ -192,34 +192,41 @@ def file_level(path: Path):
 
 
 def level_table(cues, log_text: str, play_map: dict | None):
-    """Per role: the measured RMS of its cues (median), and what the game's mix predicts: the median level of the role's files plus its
-    gain from the play map. Positioned roles (a play line with at=) depend on where Maya stood, so they get no prediction. The balance
-    column puts both next to the shot (REFERENCE_ROLE), which cancels any offset the whole mix shares."""
-    positioned, logged_gain = set(), {}
-    for m in PLAYED.finditer(log_text):
-        if m.group(3):
-            positioned.add(m.group(1))
-        if m.group(2) is not None:
-            logged_gain.setdefault(m.group(1), float(m.group(2)))
+    """Per role: the measured RMS of its cues (median), and what the game's mix predicts: each file's level plus that file's own gain from
+    the play map, then the median of those. A file whose gain is null (no game value) is left out, and a role with none left gets no
+    prediction: a fallback 0 dB is not the game's balance. Positioned roles (a play line with at=) depend on where Maya stood, so they get
+    no prediction either. The balance column puts both next to the shot (REFERENCE_ROLE), which cancels any offset the whole mix shares."""
+    positioned = {m.group(1) for m in PLAYED.finditer(log_text) if m.group(3)}
     roles = (play_map or {}).get('roles', {})
     gains = (play_map or {}).get('gains', {})
+    notes = (play_map or {}).get('gain_notes', {})
     rows = {}
     for cue in cues:
         if cue['kind'] != 'sound' or not cue.get('level') or cue['level']['rms_dbfs'] == float('-inf'):
             continue
         rows.setdefault(cue['name'], []).append(cue['level']['rms_dbfs'])
+    median = lambda values: sorted(values)[len(values) // 2] if values else None
     table = []
     for role, measured in rows.items():
-        measured = sorted(measured)[len(measured) // 2]
         files = roles.get(role, [])
         role_gains = gains.get(role) or []
-        gain = sorted(role_gains)[len(role_gains) // 2] if role_gains else logged_gain.get(role)
-        levels = sorted(v for v in (file_level(Path(f)) for f in files) if v is not None and v != float('-inf'))
-        source = levels[len(levels) // 2] if levels else None
-        expected = None if role in positioned or source is None else source + (gain or 0.0)
-        table.append({'role': role, 'cues': len([c for c in cues if c['name'] == role]), 'measured_rms_dbfs': round(measured, 1),
-                      'source_rms_dbfs': None if source is None else round(source, 1), 'gain_db': gain, 'positioned': role in positioned,
-                      'expected_rms_dbfs': None if expected is None else round(expected, 1)})
+        pairs = []   # (file level, its gain) for files with a game gain
+        for index, path in enumerate(files):
+            gain = role_gains[index] if index < len(role_gains) else None
+            level = file_level(Path(path))
+            if isinstance(gain, (int, float)) and level is not None and level != float('-inf'):
+                pairs.append((level, float(gain)))
+        expected = median([level + gain for level, gain in pairs]) if pairs and role not in positioned else None
+        if role in positioned:
+            prediction = 'positioned'
+        elif not pairs:
+            prediction = 'no game prediction'
+        else:
+            prediction = 'from %d of %d file(s)' % (len(pairs), len(files)) if len(pairs) < len(files) else 'game data'
+        table.append({'role': role, 'cues': len(measured), 'measured_rms_dbfs': round(median(measured), 1),
+                      'source_rms_dbfs': None if not pairs else round(median([level for level, _ in pairs]), 1),
+                      'gain_db': median([gain for _, gain in pairs]), 'positioned': role in positioned, 'prediction': prediction,
+                      'gain_note': notes.get(role), 'expected_rms_dbfs': None if expected is None else round(expected, 1)})
     reference = next((r for r in table if r['role'] == REFERENCE_ROLE), None)
     for row in table:
         row['measured_vs_shot_db'] = round(row['measured_rms_dbfs'] - reference['measured_rms_dbfs'], 1) if reference else None
@@ -364,12 +371,12 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
                   "Median RMS of each role's cues, next to what the game's static mix predicts: the median level of the role's files (measured like a cue window) "
                   'plus its gain from the play map (SLICE_AUDIO_CHAIN.md section 7). "vs shot" is the difference to the `fire` cues, which cancels an offset the whole mix '
                   "shares; \"off by\" is our balance minus the game's. A shot's cue window also holds its bullet impact, and a line can overlap other sounds, so a few dB "
-                  'are noise. Positioned roles depend on where Maya stood and get no prediction. Measurements of the mix, not a listen.', '',
+                  'are noise. Positioned roles depend on where Maya stood and get no prediction, and neither does a role whose files have no game gain (null in the play map: the host played them at 0 dB). File RMS and Gain are medians; Game RMS applies to each file its own gain before its median. Measurements of the mix, not a listen.', '',
                   '| Role | Cues | Measured RMS | File RMS | Gain | Game RMS | Measured vs shot | Game vs shot | Off by |', '|---|---|---|---|---|---|---|---|---|']
         for row in sorted(levels, key=lambda r: (r['role'].startswith('line:'), r['role'])):
             cell = lambda v, unit=' dB': '-' if v is None else f'{v:.1f}{unit}'
             lines.append(f'| `{row["role"]}` | {row["cues"]} | {cell(row["measured_rms_dbfs"], " dBFS")} | {cell(row["source_rms_dbfs"], " dBFS")} | {cell(row["gain_db"])} | '
-                         + ('positioned' if row['positioned'] else cell(row['expected_rms_dbfs'], ' dBFS'))
+                         + (cell(row['expected_rms_dbfs'], ' dBFS') if row['expected_rms_dbfs'] is not None else row['prediction'])
                          + f' | {cell(row["measured_vs_shot_db"])} | {cell(row["game_vs_shot_db"])} | {cell(row["off_by_db"])} |')
     lines += ['', "Maya's own sounds play 2D at the game's static level for each file (the play map's gains; 0 dB when it has none). The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No RTPC, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
               '## Step by step', '']

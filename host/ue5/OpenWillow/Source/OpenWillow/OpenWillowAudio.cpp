@@ -25,6 +25,8 @@
 #include "UnrealClient.h"
 #include "UObject/UObjectGlobals.h"
 
+#include <limits>
+
 // RIFF reading is a few explicit bounds checks rather than the engine's FWaveModInfo, so the test below can state exactly
 // which files are refused.
 bool OpenWillowAudio::ParseWav(const TArray<uint8>& Bytes, FWav& Out, FString& OutError)
@@ -487,6 +489,16 @@ void RunTest(UWorld* World)
     Check(WithinLimits(MaxFileBytes, MaxTotalBytes - MaxFileBytes, Error), TEXT("accept_at_the_limits"));
     Check(!WithinLimits(MaxFileBytes + 1, 0, Error), TEXT("refuse_file_over_limit"));
     Check(!WithinLimits(1, MaxTotalBytes, Error), TEXT("refuse_total_over_limit"));
+    // The play map's gains (section 7): dB to a linear volume, and the limits the prepare tool also applies.
+    float Multiplier = 0.f;
+    Check(GainMultiplier(0., Multiplier, Error) && Multiplier == 1.f, TEXT("gain_zero_db_is_unity"));
+    Check(GainMultiplier(-6., Multiplier, Error) && FMath::IsNearlyEqual(Multiplier, 0.50119f, 0.0001f), TEXT("gain_minus_6_db"));
+    Check(!GainMultiplier(std::numeric_limits<double>::quiet_NaN(), Multiplier, Error), TEXT("gain_refuse_nan"));
+    Check(!GainMultiplier(13., Multiplier, Error), TEXT("gain_refuse_over_limit"));
+    // A 2D mono file goes out as two equal channels: each 2-byte frame written twice, so the byte count doubles.
+    TArray<uint8> Stereo;
+    MonoToStereo(TArray<uint8>({1, 2, 3, 4}), Stereo);
+    Check(Stereo == TArray<uint8>({1, 2, 1, 2, 3, 4, 3, 4}), TEXT("mono_to_stereo_duplicates_frames"));
     Check(!Play(World, TEXT("no_such_role")), TEXT("unknown_role_plays_nothing"));
     Check(!Play(nullptr, TEXT("test_tone")), TEXT("null_world_plays_nothing"));
     const bool bPlayed = Play(World, TEXT("test_tone"));

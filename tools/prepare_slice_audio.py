@@ -15,7 +15,8 @@ check: it does not show the sound is the right one, and nothing here means anyon
 
 Gains (section 7): with --game (or OPENWILLOW_BL2) each file also gets the game's static level in dB, the sum of the volumes on its Wwise
 sound, containers, actor-mixers and buses, read from the installed sound banks; the map's "gains" block holds one per file, in the order of
-"roles", and "gain_notes" says per role where they came from. Without the install every gain is 0 dB. RTPCs, states, ducking, 3D falloff
+"roles" (null where the banks give no one level), and "gain_notes" says per role where they came from. Without the install every
+game gain is null, and a path that is not a folder is an error. RTPCs, states, ducking, 3D falloff
 and random volume ranges are not applied.
 """
 import argparse
@@ -222,105 +223,177 @@ def build_play_map(manifest, decoded_dir):
 # Every Wwise object a sound plays through (the sound, its containers and actor-mixers up the parent chain, then its output bus and that
 # bus's parents) can carry a volume in dB. The game's level for a sound is the sum of those volumes. Layouts below were fitted on this
 # install's banks (bank version 62) and checked over the whole install, not taken from a spec; the oracles are in section 7.
+# Anything the reader does not recognise makes the source unresolved (gain null, with a note); it never guesses a number.
 VOLUME_PROP = 0              # property id 0: values -96.3 .. -1 over the install, -96.3 being Wwise's volume floor
+MIN_VOLUME_DB = -96.3        # Wwise's range for one object's volume; a value outside it is refused as a misread
+MAX_VOLUME_DB = 12.0
 CONTAINER_KINDS = (5, 6, 7, 9)
 SOUND_KIND, SWITCH_KIND, BUS_KIND = 2, 6, 8
+CODEC_PLUGIN, SOURCE_PLUGIN = 1, 2   # the low 4 bits of a sound's plugin id (0x00040001 Vorbis; 0x00650002 carries a parameter block)
+FX_ENTRY_BYTES = 7                   # per effect, after one byte of bypass bits: fitted on all 89 objects with effects (1 to 4 of them)
 # The weapon events' switch containers pick a child by a two-value switch. FNV-1 of these names gives those two values: the player's own
 # sounds take the first-person child; anything else takes the container's default (third person in every slice case).
 FIRST_PERSON = 'firstperson'
+THIRD_PERSON = 'thirdperson'
 PLAYER_ROLES = ('fire', 'hit', 'phaselock_cast', 'pickup', 'equip', 'reload_out', 'reload_in')   # the 2D roles (section 5d)
 # Gains the host accepts (OpenWillowAudio.h; a test compares them). Wwise allows +12 dB on one object; a sum below -144 dB is silence in 16 bits.
 MIN_GAIN_DB = -144.0
 MAX_GAIN_DB = 12.0
 
 
+class MixError(ValueError):
+    """Bank data the reader does not accept: the source it belongs to is left unresolved."""
+
+
 def _u32(body, at):
+    if at + 4 > len(body):
+        raise MixError('record of %d bytes ends before offset %d' % (len(body), at + 4))
     return struct.unpack_from('<I', body, at)[0]
+
+
+def _need(body, end, what):
+    if end > len(body):
+        raise MixError('%s runs past the end of its %d-byte record' % (what, len(body)))
+
+
+def checked_volume(value, kind, ident):
+    if not math.isfinite(value) or not MIN_VOLUME_DB - 0.001 <= value <= MAX_VOLUME_DB:
+        raise MixError('volume %r on object %d (kind %d) is outside %.1f..%.1f dB' % (value, ident, kind, MIN_VOLUME_DB, MAX_VOLUME_DB))
+    return value
 
 
 def prop_bundle(body, at):
     """{prop id: value} and {prop id: (min, max)} of the two property bundles at `at`: u8 count, the ids, a float per id; then the same with
     a (min, max) pair per id (random ranges)."""
+    _need(body, at + 1, 'property bundle')
     n = body[at]
+    _need(body, at + 1 + 5 * n + 1, 'property bundle')
     ids = body[at + 1:at + 1 + n]
     values = struct.unpack_from('<%df' % n, body, at + 1 + n)
     at += 1 + 5 * n
     m = body[at]
+    _need(body, at + 1 + 9 * m, 'random-range bundle')
     ranged_ids = body[at + 1:at + 1 + m]
     pairs = struct.unpack_from('<%df' % (2 * m), body, at + 1 + m)
     return dict(zip(ids, values)), {ranged_ids[j]: (pairs[2 * j], pairs[2 * j + 1]) for j in range(m)}
 
 
-def node_links(kind, body, index, buses):
-    """(output bus, parent, props, ranged, shifted) of a sound or container. The parent id follows the output bus id; for a sound the pair
-    sits after the source description, whose length depends on the stream type; for a container right after its own id and two effect
-    bytes. An object with effects has a longer effect block: then the pair is searched for, and `shifted` says so."""
-    base = {0: 35, 1: 27, 2: 35}.get(_u32(body, 8)) if kind == SOUND_KIND else 10
-    if base is None:
-        raise ValueError('unknown stream type %d' % _u32(body, 8))
-    for at in range(base, min(base + 64, len(body) - 4)):
-        bus, parent = _u32(body, at - 4), _u32(body, at)
-        parent_ok = parent == 0 or index.get(parent, (None,))[0] in CONTAINER_KINDS
-        if parent_ok and (bus == 0 or bus in buses) and (parent or bus):
-            props, ranged = prop_bundle(body, at + 6)    # two flag bytes, then the bundles
-            return bus, parent, props, ranged, at != base
-    raise ValueError('no parent or bus found')
+def node_links(kind, body, ident, index, buses):
+    """(output bus, parent, props, ranged, has effects) of a sound or container, read in order: for a sound its source description (plugin,
+    stream type, source, file id, offset and size when in bank or prefetched, a bits byte, a source plugin's parameter block), then for both
+    the effect block (override flag, count, and when there are effects a bypass byte and 7 bytes each), output bus, parent, two flag bytes
+    and the bundles. A parent that is not a container in the same bank, or a bus that is not a bus, is refused."""
+    if kind == SOUND_KIND:
+        plugin, stream = _u32(body, 4), _u32(body, 8)
+        if stream not in (0, 1, 2):
+            raise MixError('sound %d: unknown stream type %d' % (ident, stream))
+        at = 20 + (8 if stream in (0, 2) else 0) + 1
+        if plugin & 0xF == SOURCE_PLUGIN:
+            at += 4 + _u32(body, at)
+        elif plugin & 0xF != CODEC_PLUGIN:
+            raise MixError('sound %d: plugin type %d not supported' % (ident, plugin & 0xF))
+    elif kind in CONTAINER_KINDS:
+        at = 4
+    else:
+        raise MixError('object %d: kind %d is not a sound or container' % (ident, kind))
+    _need(body, at + 2, 'effect block of object %d' % ident)
+    effects = body[at + 1]
+    at += 2 + (1 + FX_ENTRY_BYTES * effects if effects else 0)
+    bus, parent = _u32(body, at), _u32(body, at + 4)
+    if parent and index.get(parent, (None,))[0] not in CONTAINER_KINDS:
+        raise MixError('object %d names parent %d, which is not a container in its bank' % (ident, parent))
+    if bus and bus not in buses:
+        raise MixError('object %d names output bus %d, which is not a bus' % (ident, bus))
+    props, ranged = prop_bundle(body, at + 10)    # two flag bytes after the parent
+    return bus, parent, props, ranged, effects > 0
 
 
-def bus_links(body):
+def bus_links(body, ident):
     """(parent bus, props) of a bus: its id, its parent's id, then one property bundle."""
+    _need(body, 9, 'bus %d' % ident)
     n = body[8]
+    _need(body, 9 + 5 * n, 'bus %d property bundle' % ident)
     return _u32(body, 4), dict(zip(body[9:9 + n], struct.unpack_from('<%df' % n, body, 9 + n)))
 
 
-def switch_values(body, index):
-    """{child id: switch value} of a switch container, and its default value. Children are the container's child list; after it a u32
-    count of switch values, each a u32 value, a u32 count and that many child ids. The group and default value sit just before the list."""
+def switch_values(body, ident, index):
+    """(group, default value, {child id: switch value}) of a switch container. The child list is found as the longest run of ids in the
+    bank (audio_census.container_children); just before it sit the group and the default value and a flag byte, and after it a u32 count of
+    switch values, each a u32 value, a u32 count and that many child ids. Anything that does not fit raises MixError."""
     children = audio_census.container_children(body, set(index))
-    for at in range(4, len(body) - 4):
+    if not children:
+        raise MixError('switch %d: no child list found' % ident)
+    for at in range(13, len(body) - 4):
         if _u32(body, at) == len(children) and list(struct.unpack_from('<%dI' % len(children), body, at + 4)) == children:
             break
     else:
-        return {}, None
-    default = _u32(body, at - 5)
+        raise MixError('switch %d: child list not found again' % ident)
+    group, default = _u32(body, at - 9), _u32(body, at - 5)
     at += 4 + 4 * len(children)
     found = {}
     for _ in range(_u32(body, at)):
-        value, n = struct.unpack_from('<II', body, at + 4)
+        value, n = _u32(body, at + 4), _u32(body, at + 8)
+        _need(body, at + 12 + 4 * n, 'switch %d value list' % ident)
         for child in struct.unpack_from('<%dI' % n, body, at + 12):
+            if child not in children:
+                raise MixError('switch %d: value %d names %d, not one of its children' % (ident, value, child))
             found[child] = value
         at += 8 + 4 * n
-    return found, default
+    return group, default, found
+
+
+def perspective_values():
+    return {audio_census.fnv1_32(FIRST_PERSON), audio_census.fnv1_32(THIRD_PERSON)}
 
 
 def volume_chain(sound, index, global_index, buses):
-    """The objects a sound plays through, sound first, as dicts (kind, id, volume_db, ranged, shifted, switch value it was reached by)."""
-    chain, bus, current, below = [], 0, sound, None
+    """The objects a sound plays through, sound first, as dicts (kind, id, volume_db, ranged, effects, perspective). `perspective` is set
+    on the child of a switch whose values are the perspective pair: (the value that child is under, the switch's default). Other switch
+    groups are not choices the host makes, so they are not recorded. Raises MixError for data it does not accept, including a cycle."""
+    chain, bus, current, below, seen = [], 0, sound, None, set()
+    pair = perspective_values()
     while current:
+        if current in seen:
+            raise MixError('parent chain of sound %d loops back to %d' % (sound, current))
+        seen.add(current)
+        if current not in index:
+            raise MixError('object %d not in the bank' % current)
         kind, body = index[current]
-        out_bus, parent, props, ranged, shifted = node_links(kind, body, index, buses)
+        out_bus, parent, props, ranged, effects = node_links(kind, body, current, index, buses)
         if below is not None and kind == SWITCH_KIND:
-            values, default = switch_values(body, index)
-            chain[-1]['switch'] = (values.get(below), default)
-        chain.append({'kind': kind, 'id': current, 'volume_db': props.get(VOLUME_PROP, 0.0), 'ranged': VOLUME_PROP in ranged, 'shifted': shifted, 'switch': None})
+            _, default, values = switch_values(body, current, index)
+            if set(values.values()) & pair or default in pair:
+                chain[-1]['perspective'] = (values.get(below), default)
+        chain.append({'kind': kind, 'id': current, 'volume_db': checked_volume(props.get(VOLUME_PROP, 0.0), kind, current),
+                      'ranged': VOLUME_PROP in ranged, 'effects': effects, 'perspective': None})
         bus = bus or out_bus
         below, current = current, parent
+    if not bus:
+        raise MixError('sound %d reaches no output bus' % sound)
+    seen_buses = set()
     while bus:
-        parent, props = bus_links((index.get(bus) or global_index[bus])[1])
-        chain.append({'kind': BUS_KIND, 'id': bus, 'volume_db': props.get(VOLUME_PROP, 0.0), 'ranged': False, 'shifted': False, 'switch': None})
+        if bus in seen_buses:
+            raise MixError('bus chain of sound %d loops back to %d' % (sound, bus))
+        seen_buses.add(bus)
+        item = index.get(bus) or global_index.get(bus)
+        if item is None or item[0] != BUS_KIND:
+            raise MixError('bus %d not found' % bus)
+        parent, props = bus_links(item[1], bus)
+        chain.append({'kind': BUS_KIND, 'id': bus, 'volume_db': checked_volume(props.get(VOLUME_PROP, 0.0), BUS_KIND, bus), 'ranged': False,
+                      'effects': False, 'perspective': None})
         bus = parent
     return chain
 
 
-def pick_by_switch(chains, perspective):
-    """Of several chains for one source under one play action, those reached through the wanted switch value (`perspective`, a value id),
-    or through each switch's default when `perspective` is None. Chains with no switch on the way are kept either way."""
-    kept = []
-    for chain in chains:
-        choices = [node['switch'] for node in chain if node['switch']]
-        if all(value == (perspective if perspective is not None else default) for value, default in choices):
-            kept.append(chain)
-    return kept
+def wanted_perspective(chain, perspective):
+    """Whether a chain plays for the wanted perspective (a value id), or for each perspective switch's default when `perspective` is None.
+    A chain through no perspective switch plays either way."""
+    for node in chain:
+        if node['perspective']:
+            value, default = node['perspective']
+            if value != (perspective if perspective is not None else default):
+                return False
+    return True
 
 
 def coherent_sum_db(levels):
@@ -330,25 +403,34 @@ def coherent_sum_db(levels):
 
 
 def source_gain(rows, source, perspective):
-    """(gain in dB, notes) for one source from resolved rows: {bank: {action: [chain, ...]}}. Banks must agree; actions add up."""
+    """(gain in dB or None, notes) for one source from resolved rows: {bank: {action: [chain or MixError, ...]}}. Within an action only the
+    wanted perspective's chains count, and they must agree on one level; an action wholly on the other perspective adds nothing; actions
+    add up; banks must agree. None, with the reason in the notes, when the data does not give one level."""
     per_bank, notes = {}, set()
     for bank, actions in sorted(rows.items()):
         levels = []
         for action, chains in sorted(actions.items()):
-            kept = pick_by_switch(chains, perspective) or chains
+            errors = [str(c) for c in chains if isinstance(c, Exception)]
+            if errors:
+                return None, sorted({'unresolved: ' + e for e in errors})
+            kept = [c for c in chains if wanted_perspective(c, perspective)]
+            if not kept:
+                continue
             values = sorted({round(sum(node['volume_db'] for node in chain), 2) for chain in kept})
             if len(values) > 1:
-                notes.add('several levels under one action (%s dB); the highest is used' % ', '.join('%.1f' % v for v in values))
+                return None, ['unresolved: several levels under one action (%s dB) and nothing to choose between them' % ', '.join('%.1f' % v for v in values)]
             if any(node['ranged'] for chain in kept for node in chain):
                 notes.add('a random volume range is not applied')
-            if any(node['shifted'] for chain in kept for node in chain):
-                notes.add('an object with effects (its layout was searched, UNVERIFIED)')
-            levels.append(values[-1])
+            if any(node['effects'] for chain in kept for node in chain):
+                notes.add('an object with effects on the way (effect block layout fitted, UNVERIFIED)')
+            levels.append(values[0])
+        if not levels:
+            return None, ['unresolved: no chain for the wanted perspective in bank %d' % bank]
         if len(levels) > 1:
             notes.add('%d play actions on this source, summed' % len(levels))
         per_bank[bank] = coherent_sum_db(levels)
     if not per_bank:
-        return None, ['source %s not reached from the event' % source]
+        return None, ['unresolved: source %s not reached from the event' % source]
     if len({round(v, 2) for v in per_bank.values()}) > 1:
         notes.add('banks disagree (%s); the first bank by id is used' % ', '.join('%.1f' % v for v in per_bank.values()))
     return round(next(iter(per_bank.values())), 2), sorted(notes)
@@ -371,13 +453,15 @@ class GameMix:
         perspective = audio_census.fnv1_32(FIRST_PERSON) if role in PLAYER_ROLES else None
         short_id = (entry.get('ak_event') or {}).get('short_id')
         if short_id is None:
-            return {media['source']: (None, ['the manifest entry names no AkEvent']) for media in entry['media']}
+            return {media['source']: (None, ['unresolved: the manifest entry names no AkEvent']) for media in entry['media']}
         resolved = audio_census.resolve(self.install, '0x%x' % short_id)
         rows = {}
         for row in resolved['rows']:
             for sound in row.get('sounds', []):
-                index = self.indexes[row['bank']]
-                chain = volume_chain(sound['sound'], index, self.global_index, self.buses)
+                try:
+                    chain = volume_chain(sound['sound'], self.indexes[row['bank']], self.global_index, self.buses)
+                except MixError as error:
+                    chain = error
                 rows.setdefault(sound['source'], {}).setdefault(row['bank'], {}).setdefault(row['action'], []).append(chain)
         return {media['source']: source_gain(rows.get(media['source'], {}), media['source'], perspective) for media in entry['media']}
 
@@ -396,29 +480,36 @@ def role_entries(manifest):
 
 
 def build_gains(roles, manifest, mix):
-    """gains: {role: [dB per file, in the order of roles[role]]}; notes: {role: where the numbers came from}. Without game data (`mix` None)
-    every gain is 0 dB and the note says so. A file whose source the banks do not give a level for gets 0 dB, also with a note."""
+    """gains: {role: [dB or None per file, in the order of roles[role]]}; notes: {role: where the numbers came from}. None means no game
+    value: no game data was given, or the banks did not give this file one level. The host plays a None at 0 dB and logs it, and the
+    listening report shows no game prediction for it. The synthetic tone is not a game sound: 0 dB."""
     gains, notes = {}, {}
     sources = role_entries(manifest) if manifest else {}
     for role, files in roles.items():
+        if role == 'test_tone':
+            gains[role], notes[role] = [0.0] * len(files), 'unity: not a game sound (host default)'
+            continue
         if mix is None or role not in sources:
-            gains[role] = [0.0] * len(files)
-            notes[role] = 'unity: no game data given (host default, UNVERIFIED)' if mix is None else 'unity: not a game sound (host default)'
+            gains[role] = [None] * len(files)
+            notes[role] = 'no game value: ' + ('no game data given' if mix is None else 'no manifest entry for this role')
             continue
         levels, why = {}, set()
         for entry in sources[role]:
             for source, (db, entry_notes) in mix.entry_gains(entry, role).items():
+                if db is not None and source in levels and abs(levels[source] - db) > 0.005:
+                    why.add('source %d: entries give %.1f and %.1f dB; the first is used' % (source, levels[source], db))
                 if source not in levels and db is not None:
                     levels[source] = db
-                why.update(entry_notes)
+                why.update('source %d: %s' % (source, n) if n.startswith('unresolved') else n for n in entry_notes)
         role_gains = []
         for path in files:
             source = int(os.path.splitext(os.path.basename(path))[0])
             db = levels.get(source)
-            if db is None:
-                why.add('source %d: no level in the banks, unity used' % source)
-                db = 0.0
-            role_gains.append(min(MAX_GAIN_DB, max(MIN_GAIN_DB, db)))
+            if db is not None and not MIN_GAIN_DB <= db <= MAX_GAIN_DB:
+                clamped = min(MAX_GAIN_DB, max(MIN_GAIN_DB, db))
+                why.add('source %d: sum %.1f dB clamped to %.1f dB' % (source, db, clamped))
+                db = clamped
+            role_gains.append(db)
         gains[role] = role_gains
         perspective = ' (first person where a switch picks)' if role in PLAYER_ROLES else ''
         notes[role] = 'game data: summed object and bus volumes%s' % perspective + ('; ' + '; '.join(sorted(why)) if why else '')
@@ -430,7 +521,7 @@ def main(argv=None):
     ap.add_argument('--manifest', default='local/slice/audio.json')
     ap.add_argument('--decoded-dir', default='local/audio/decoded')
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'),
-                    help='the installed game (default OPENWILLOW_BL2): its sound banks give each file its gain; without it every gain is 0 dB')
+                    help='the installed game (default OPENWILLOW_BL2): its sound banks give each file its gain; without it every game gain is null')
     ap.add_argument('--out', default='local/slice/audio_play.json')
     ap.add_argument('--tone', default='local/audio/test_tone.wav', help='synthetic tone, always written, role test_tone')
     ap.add_argument('--tone-only', action='store_true', help='map only the synthetic tone; reads no game data')
@@ -445,10 +536,12 @@ def main(argv=None):
             sys.exit('%s is not an ow-audio-v1 manifest' % args.manifest)
         roles, unresolved = build_play_map(manifest, args.decoded_dir)
         timing = {'reload': reload_timing(manifest)}
-        if args.game and os.path.isdir(args.game):
+        if args.game:
+            if not os.path.isdir(args.game):
+                sys.exit('the game install %s (--game or OPENWILLOW_BL2) is not a folder: fix the path, or leave both unset to write no gains' % args.game)
             mix = GameMix(args.game)
         else:
-            print('no game install given (--game or OPENWILLOW_BL2): every gain is 0 dB, not the game mix')
+            print('no game install given (--game or OPENWILLOW_BL2): every game gain is null, played at 0 dB, not the game mix')
     write_tone(args.tone)
     roles['test_tone'] = [os.path.abspath(args.tone)]
     gains, gain_notes = build_gains(roles, manifest, mix)
@@ -456,8 +549,8 @@ def main(argv=None):
     with open(args.out, 'w', encoding='utf-8') as fh:
         json.dump({'schema': PLAY_SCHEMA, 'roles': roles, 'unresolved': unresolved, 'timing': timing, 'gains': gains, 'gain_notes': gain_notes}, fh, indent=1)
     for role, files in sorted(roles.items()):
-        levels = sorted(set(gains[role]))
-        print('role %s: %d file(s), gain %s dB (%s)' % (role, len(files), ' / '.join('%.1f' % g for g in levels), gain_notes[role]))
+        levels = sorted({'%.1f' % g if g is not None else 'null' for g in gains[role]})
+        print('role %s: %d file(s), gain %s dB (%s)' % (role, len(files), ' / '.join(levels), gain_notes[role]))
     for role, reason in sorted(unresolved.items()):
         print('role %s: UNRESOLVED (%s)' % (role, reason))
     for clip, slot in sorted(timing.get('reload', {}).items()):
