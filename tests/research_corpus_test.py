@@ -67,6 +67,12 @@ def output_checks():
               r.returncode != 0 and 'Refusing' in r.stderr and not target.exists(), r.stdout + r.stderr)
         if target.exists():
             target.unlink()
+        if os.name == 'nt':
+            r = run('fetch_steam_reviews.py', '49520', '\\\\?\\' + str(target), 'recent', '0', cwd=tmp)
+            check('output path with the \\\\?\\ prefix in the tree is refused',
+                  r.returncode != 0 and 'Refusing' in r.stderr and not target.exists(), r.stdout + r.stderr)
+            if target.exists():
+                target.unlink()
         r = run('fetch_steam_reviews.py', '49520', 'x.jsonl', 'recent', '0', '--corpus', str(tmp / 'out'), cwd=tmp)
         check('a folder outside the repository is accepted',
               r.returncode == 0 and (tmp / 'out' / 'x.jsonl').exists(), r.stdout + r.stderr)

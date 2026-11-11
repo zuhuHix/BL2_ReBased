@@ -798,7 +798,7 @@ affected). New worktrees get only part of this data from the seed; see [tools/wo
 | `tools/` | Census, probe/level preparation, material refresh, UE launch scripts, array schemas |
 | `host/ue5/` | Minimal UE5 C++ project, editor-Python importer/verifier, in-game map selector, viewer/walking/selector/profile automation tests |
 | `third_party/lzokay/` | Vendored MIT LZO1X decoder (provenance in `THIRD_PARTY.md`) |
-| `research/` | Community-demand fetch and analysis scripts (the fetched text stays in ignored `local/`) and the original Python package reader used as a comparison oracle |
+| `research/` | Community-demand fetch and analysis scripts (the Steam review text they fetch stays in ignored `local/`) and the original Python package reader used as a comparison oracle |
 | `docs/` | Plan, research, verification records; this file |
 | `local/` | Ignored. Every game-derived output lands here |
 

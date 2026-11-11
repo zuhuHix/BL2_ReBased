@@ -50,9 +50,23 @@ def corpus_dir(argv=None):
     return path
 
 
+def _plain(path):
+    """Resolved, case-folded path with any Windows long-path prefix removed."""
+    for _ in range(2):  # before and after resolving
+        if path.startswith("\\\\?\\UNC\\"):
+            path = "\\\\" + path[8:]
+        elif path.startswith("\\\\?\\"):
+            path = path[4:]
+        path = os.path.realpath(path)
+    return os.path.normcase(path)
+
+
 def _within(path, root):
-    path = os.path.normcase(os.path.realpath(path))
-    root = os.path.normcase(os.path.realpath(root))
+    # Not covered: a UNC path (\\host\share\...) that reaches the repository's disk
+    # is not recognised as inside it, and a local/ folder that is itself a junction or
+    # link into the tracked tree is trusted, because both resolve as written.
+    path = _plain(path)
+    root = _plain(root)
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
