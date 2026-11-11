@@ -304,5 +304,69 @@ class ListenReportTest(unittest.TestCase):
         out, _, _, _ = self.run_build(text=applied, tones=((2.0, 0.2), (3.0, 0.5)))
         self.assertIn('she reloads before turning in', (out / 'LISTEN.md').read_text(encoding='utf-8'))
 
+
+class LevelTableTest(unittest.TestCase):
+    """The per-role level table against the game's mix, on synthetic files and an invented log."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def source(self, name, seconds, amplitude, channels=1):
+        path = self.tmp / name
+        write_wav(path, seconds, ((0.0, seconds),), channels=channels, amplitude=amplitude)
+        return str(path)
+
+    def cue(self, name, rms):
+        return {'kind': 'sound', 'name': name, 'level': {'rms_dbfs': rms}}
+
+    def test_balance_against_the_shot_matches_when_the_mix_is_the_games(self):
+        shot = self.source('1.wav', 0.5, 0.5)
+        equip = self.source('2.wav', 0.5, 0.125)    # 12 dB under the shot's file
+        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [-12.0], 'equip': [-6.0]}}
+        shot_file, equip_file = lr.file_level(Path(shot)), lr.file_level(Path(equip))
+        self.assertAlmostEqual(shot_file - equip_file, 20 * math.log10(4), places=1)
+        # Recorded as the game would mix it, plus a 3 dB offset shared by the whole mix.
+        cues = [self.cue('fire', shot_file - 12 - 3), self.cue('equip', equip_file - 6 - 3)]
+        rows = {r['role']: r for r in lr.level_table(cues, '', play)}
+        self.assertAlmostEqual(rows['equip']['game_vs_shot_db'], -12 + 6, delta=0.15)   # the files are 12.04 dB apart; levels round to 0.1
+        self.assertAlmostEqual(rows['equip']['off_by_db'], 0.0, delta=0.15)
+        self.assertEqual(rows['fire']['off_by_db'], 0.0)
+
+    def test_a_role_quieter_than_the_games_balance_shows_how_far(self):
+        shot = self.source('1.wav', 0.5, 0.5)
+        equip = self.source('2.wav', 0.5, 0.5)
+        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [0.0], 'equip': [0.0]}}
+        level = lr.file_level(Path(shot))
+        rows = {r['role']: r for r in lr.level_table([self.cue('fire', level), self.cue('equip', level - 9)], '', play)}
+        self.assertEqual(rows['equip']['off_by_db'], -9.0)
+
+    def test_a_positioned_role_gets_no_prediction(self):
+        line = self.source('3.wav', 0.5, 0.5)
+        text = 'LogTemp: Display: OWAUDIO play role=line:x channels=1 rate=8000 bytes=8000 gain_db=-3.0 at=Marcus_0 (the host called play; not heard)'
+        rows = lr.level_table([self.cue('line:x', -30.0)], text, {'roles': {'line:x': [line]}, 'gains': {'line:x': [-3.0]}})
+        self.assertTrue(rows[0]['positioned'])
+        self.assertIsNone(rows[0]['expected_rms_dbfs'])
+
+    def test_without_gains_in_the_map_the_logged_gain_is_used(self):
+        shot = self.source('1.wav', 0.5, 0.5)
+        text = 'LogTemp: Display: OWAUDIO play role=fire channels=2 rate=8000 bytes=8000 gain_db=-12.0 upmix=mono_to_stereo (the host called play; not heard)'
+        rows = lr.level_table([self.cue('fire', -20.0)], text, {'roles': {'fire': [shot]}})
+        self.assertEqual(rows[0]['gain_db'], -12.0)
+
+    def test_the_guide_has_the_table_and_cues_json_the_rows(self):
+        shot = self.source('1.wav', 0.5, 0.5)
+        play_map = self.tmp / 'play.json'
+        play_map.write_text(json.dumps({'roles': {'fire': [shot], 'hit': [shot]}, 'gains': {'fire': [-12.0], 'hit': [-11.0]}, 'unresolved': {}}), encoding='utf-8')
+        wav = self.tmp / 'listen.wav'
+        write_wav(wav, 9.0, ((2.5, 0.5),))
+        lr.build(log(), wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
+        text = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
+        self.assertIn("## Levels against the game's mix", text)
+        self.assertIn('| `fire` | 1 |', text)
+        levels = json.loads((self.tmp / 'out' / 'cues.json').read_text(encoding='utf-8'))['levels']
+        self.assertEqual(sorted(r['role'] for r in levels), ['fire', 'hit'])
+        self.assertEqual(next(r for r in levels if r['role'] == 'hit')['game_vs_shot_db'], 1.0)
+
+
 if __name__ == '__main__':
     unittest.main()

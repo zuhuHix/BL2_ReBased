@@ -197,7 +197,7 @@ The two live roles were seen in one real-game session (2026-11-07): one map (Ice
 enabled, among them RTSE and Dialog Skipper with `Autoskip Dialog` on, which blocks dialog events from friendly NPCs, so heard lines and timing around lines from a live session are not stock. Neither role comes from a dialog event. They are not read
 from a package reference: the Wwise name is the object name without `Ak_` (holds for all 47 entries read from packages on this machine), and its FNV-1 id resolves in the banks, so `checks.fnv1_matches_short_id` is `null`, not `true`, and with no AkEvent range to compare with, so is the duration check. Nothing here has been heard.
 
-A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state or ducking. Until section 5d every sound was 2D at full
+A random file is chosen when a role has several, because the container's rule is UNVERIFIED. No bus, RTPC, state or ducking (since section 7, the game's static object and bus volumes are applied as per-file gains). Until section 5d every sound was 2D at full
 volume; since then the door and Marcus's lines are positioned in the world and the player's own sounds stay 2D. Dialog lines are hooked only with `-owaudioplay` (section 5c); without it the quest suite's `dialog_hook_finds_every_line_and_plays_nothing` still describes the host.
 
 Refused by both the host and the prepare tool, with the same rules, after walking the whole declared RIFF: a RIFF size past the file, a chunk or its pad past the RIFF size (also after
@@ -325,9 +325,67 @@ manifest and Marcus's assets). The third: slice gate 14 of 14 PASS, editor exit 
 one Phaselock cast (peak -4.5 dBFS, RMS -22.9 dBFS over its 4.1 s), at the dummy 1 shot and 1 impact (peak -1.6 dBFS); every pause before a step measured silent.
 For sounds that started in silence, the onset relative to the cue was 0.134 to 0.145 s (clocks not calibrated; not a latency). Nobody has listened to it yet; the guide went to the maintainer.
 
+## 7. The game's static mix (2026-11-11, AI-assisted, Claude Opus 5.5)
+
+**State: gains are read from the game's banks and applied by the host. The C++ has not been compiled or run, and nothing has been heard.**
+
+**Why the maintainer heard only the shots.** The 2026-11-10 listening run (`local/audio_listen/2026-11-10/020023/` in the runner's worktree) measured equip about 21 to 25 dB under the shots. It has two causes, both measured:
+
+- **The decoded files differ already.** Whole-file RMS, max channel per frame: shot -16.4 dBFS, impact -12.7 to -21.0, equip -28.7, clip out -29.5, clip in -30.7, door -20.1 / -20.4, Phaselock cast -21.4, lines -18.7 to -27.3. Most files peak at or near full scale. The files are not balanced against each other: the game's mix sets the balance, and the host applied none.
+- **The host lost 6 dB on mono 2D sounds.** Fitting the recording against each source file by least squares: equip (mono, 2D) came out at -9.0 dB on both channels (correlation 1.000), and the Phaselock cast (stereo, 2D) at -3.0 dB on its left channel. Every play used volume 1.0, so the engine's mono-to-stereo upmix of a 2D sound halved each channel (presumably the linear upmix; the engine setting was not read). The 3 dB the stereo sound lost as well is not explained (UNVERIFIED). It cancels when roles are compared with each other.
+
+**Where the game's levels are.** Every Wwise object a sound plays through can carry a volume in dB: the sound, its containers and actor-mixers up the parent chain, then its output bus and that bus's parents. The game's static level for a sound is their sum. These layouts are this install's (bank version 62). They were fitted on the banks and checked over the whole install, not taken from a spec:
+
+| Object | Layout used (after the id) | Oracle over the install |
+|---|---|---|
+| sound | plugin, stream type, source, file id, (in bank or prefetch: offset, size), a bits byte, 2 effect bytes, output bus, parent, 2 flag bytes, property bundle, random-range bundle | the parent at +27 (streamed) or +35 (in bank, prefetch) resolves to a container or actor-mixer for 143,478 of 144,568 sounds; of the rest, 276 are the plugin sounds (parent 4 bytes later) and the others have an effect block or no container parent |
+| container, actor-mixer | 2 effect bytes, output bus, parent, 2 flag bytes, the two bundles | all 25,034 without effects have a resolving parent, a resolving output bus, or both (0 exceptions) |
+| bus | parent bus, property bundle | volumes seen: -4, -5, -8, -96.3 dB |
+| property bundle | u8 count, that many u8 ids, a float per id; then u8 count, ids, a (min, max) pair per id | ids 0, 2, 3, 4, 5, 6 only (and 12 on containers) |
+| switch container | after the bundles: group, default value, a flag, the child list, then a count of values, each a value, a count and child ids | 994 of 995: every value's children are among the container's children |
+
+Property id 0 is taken as the volume. Over the install it runs from -96.3 (Wwise's volume floor) to -1, in whole dB on the slice's objects. Id 2 is in whole cents from -1090 to +1470 (pitch, by its range; not used). Id 4 runs from 10 to 100 (probably priority; not used). These names come from the value ranges and are UNVERIFIED as names.
+
+**Rules (`tools/prepare_slice_audio.py`).** Each manifest entry's event is resolved as before (`tools/audio_census.py`: event, play actions, leaf sounds, source). Then, for each source:
+
+1. Walk each reached sound object up to the top of its chain, then along the output bus chain, adding the volumes.
+2. When one play action reaches two sound objects for a source and they differ only by a switch, the switch decides. The weapon and equip switch containers all use one switch group with two values. FNV-1 of `firstperson` is the value that picks the 2D child (the sound with no positioning block). FNV-1 of `thirdperson` is the default and picks the positioned child. The player's own roles (`fire`, `hit`, `phaselock_cast`, `pickup`, `equip`, `reload_out`, `reload_in`) take first person; every other role takes the default. This also explains why each source appears twice in the lent pistol's switch container (section 2).
+3. Two play actions on one source start the same signal together, so their amplitudes add.
+4. An event held in several banks must give one value. If the banks disagree, the first bank by id is used and a note says so (no slice event disagrees).
+5. A random volume range is noted and not applied (the slice has none). Sums are clamped to -144..+12 dB, the host's limits.
+
+**Gains on this install (2026-11-11).**
+
+| Role | Game level | Made of |
+|---|---|---|
+| `fire` | -12 dB | buses -7 and -5 (third person: -10, one bus) |
+| `hit` | -11 dB for most files, -16 / -17 for a few | switch container -4, buses -2 and -5; some random-container children add -5 or -6 |
+| `phaselock_cast` | -2 dB | a bus |
+| `equip` | -6 dB | switch container -4, a bus -2 |
+| `reload_out`, `reload_in` | -3 dB | a bus (third person: -10) |
+| `door_open` / `door_close` | -10 / -13 dB | the sound itself -8 / -11, a bus -2 |
+| `line:` echo lines (29 in the mission's group) | -3 dB | two play actions: one at -3 (a bus), one through a -96.3 dB bus (muted at its base volume); summed |
+| `line:` live lines (6) | 0 dB | nothing |
+| `line:` Marcus's barks (4) | -4 dB | a bus |
+
+One live line (`07c_Live_HypBot`) has an effect on its chain, so its layout was searched for and its 0 dB is UNVERIFIED. With these gains, the game puts equip about 8.6 dB under the shot (file levels plus gains, measured like a cue window). The 11-10 run had it about 25 dB under.
+
+**Host.** `audio_play.json` gains two blocks: `gains` (per role, one dB value per file, in the order of `roles`) and `gain_notes` (per role, where the numbers came from). `prepare_slice_audio.py --game <install>` writes them (default: `OPENWILLOW_BL2`). Without the install every gain is 0 dB and the note says so; the synthetic tone is always 0 dB. `OpenWillowAudio` reads the gains and spawns each file at its gain. A gain that is missing, not a number, or outside -144..+12 dB plays at 0 dB with a warning; a map without the block plays as before. A mono file played 2D is now sent as two equal channels, so it takes a stereo file's path through the mix; a positioned mono sound stays mono for the spatializer. The play line gains `gain_db=<dB>`, plus `upmix=mono_to_stereo` for a 2D mono file. How loud the game's own centred mono plays against its stereo is **UNVERIFIED** (an equal-power centre would be 3 dB lower than this).
+
+**The report.** `tools/listen_report.py` adds "Levels against the game's mix" to LISTEN.md and `levels` to cues.json. Per role it gives:
+
+- the median cue RMS;
+- the median file level, measured like a cue window (file length plus 0.1 s, max channel per frame);
+- the gain, from the play map or else the logged one;
+- both balances against the `fire` cues, and their difference ("off by").
+
+Positioned roles (a play line with `at=`) get no prediction. Run against the 11-10 recording with these gains as the reference, it reports equip off by -16.3 dB, Phaselock -13.7 dB, the reloads -1.0 / -1.9 dB, and the impact +2.9 dB. The shot's window also holds its impact, so "vs shot" carries a few dB of noise.
+
+**Not applied (UNVERIFIED).** RTPCs (including any distance curve and the options menu's volume sliders), states, ducking (for instance of effects under dialog), the game's 3D attenuation and spread, HDR or limiting, and the master output level. Also unknown: what the -96.3 dB bus on the echo lines' second path is for (a state may raise it). No real-game recording has compared these levels yet. Tests: `tests/prepare_slice_audio_test.py` (`GameMixTest`: an invented bank built byte by byte, gains without game data, the limits against the header) and `tests/listen_report_test.py` (`LevelTableTest`, synthetic WAVs).
+
 ## UNVERIFIED list
 
 Container fields beyond the oracles above (the externals table, `block_size` use, the 678 longer play actions, 10 unresolved play targets, 1 unresolved
 prefetch source); plugin `0x650002` meaning; container child extraction (longest run of in-bank ids, used for the pistol switch container and Marcus's random
 containers); which child a switch/random container selects; Vorbis sample-count offset (only duration-oracle checked); event-with-null-`OutputAction` pairing
-rule; why two actions share a source; door key semantics, including which key is the opening sound and whether the game waits for the close key's own time (section 5b); whether the gate's Marcus walk closes the door through the mover; the positioned sounds' falloff, spread and reverb against the game's (section 5d); the HypEngineer name-tag mismatch; the reload notify times against the imported clip and the game's reload, and which of the lent pistol's two reload sequences the game plays (section 5a); whether a plain draw plays the pickup-and-equip sound (section 5a); nothing here was decoded, auditioned or compared to the original game.
+rule; why two actions share a source (for the echo lines one path runs through a -96.3 dB bus, section 7; what raises it, if anything, is not known); the game's mix beyond its static volumes, the names of the property ids, and the host's mono 2D level against the game's (section 7); door key semantics, including which key is the opening sound and whether the game waits for the close key's own time (section 5b); whether the gate's Marcus walk closes the door through the mover; the positioned sounds' falloff, spread and reverb against the game's (section 5d); the HypEngineer name-tag mismatch; the reload notify times against the imported clip and the game's reload, and which of the lent pistol's two reload sequences the game plays (section 5a); whether a plain draw plays the pickup-and-equip sound (section 5a); nothing here was decoded, auditioned or compared to the original game.

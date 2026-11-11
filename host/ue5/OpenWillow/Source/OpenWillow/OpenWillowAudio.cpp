@@ -86,6 +86,28 @@ bool OpenWillowAudio::WithinLimits(int64 FileBytes, int64 UsedBytes, FString& Ou
     return true;
 }
 
+bool OpenWillowAudio::GainMultiplier(double Db, float& OutMultiplier, FString& OutError)
+{
+    if (!FMath::IsFinite(Db) || Db < MinGainDb || Db > MaxGainDb)
+    {
+        OutError = FString::Printf(TEXT("gain %g dB is outside %g..%g dB"), Db, MinGainDb, MaxGainDb);
+        return false;
+    }
+    OutMultiplier = float(FMath::Pow(10.0, Db / 20.0));
+    return true;
+}
+
+void OpenWillowAudio::MonoToStereo(const TArray<uint8>& Mono, TArray<uint8>& OutStereo)
+{
+    const int32 Frames = Mono.Num() / 2;
+    OutStereo.SetNumUninitialized(Frames * 4);
+    for (int32 Frame = 0; Frame < Frames; ++Frame)
+    {
+        OutStereo[Frame * 4] = OutStereo[Frame * 4 + 2] = Mono[Frame * 2];
+        OutStereo[Frame * 4 + 1] = OutStereo[Frame * 4 + 3] = Mono[Frame * 2 + 1];
+    }
+}
+
 namespace OpenWillowAudioImpl
 {
 TMap<FString, TArray<OpenWillowAudio::FWav>>& Roles()
@@ -142,15 +164,25 @@ void LoadOnce()
     }
     const TSharedPtr<FJsonObject>* RoleObject = nullptr;
     if (!Root->TryGetObjectField(TEXT("roles"), RoleObject)) return;
+    // Gains in dB, one per file in the order of "roles". A map written before them has none: every file then plays at 0 dB.
+    const TSharedPtr<FJsonObject>* GainObject = nullptr;
+    Root->TryGetObjectField(TEXT("gains"), GainObject);
     int64 Used = 0;
     for (const auto& Pair : (*RoleObject)->Values)
     {
         const FString Role(Pair.Key);
         const TArray<TSharedPtr<FJsonValue>>* Files = nullptr;
         if (!Pair.Value->TryGetArray(Files)) continue;
-        for (const TSharedPtr<FJsonValue>& Value : *Files)
+        const TArray<TSharedPtr<FJsonValue>>* Gains = nullptr;
+        if (GainObject && !(*GainObject)->TryGetArrayField(Role, Gains)) Gains = nullptr;
+        if (Gains && Gains->Num() != Files->Num())
         {
-            const FString Path = Value->AsString();
+            UE_LOG(LogTemp, Warning, TEXT("OWAUDIO gains role=%s: %d gains for %d files, all played at 0 dB"), *Role, Gains->Num(), Files->Num());
+            Gains = nullptr;
+        }
+        for (int32 Index = 0; Index < Files->Num(); ++Index)
+        {
+            const FString Path = (*Files)[Index]->AsString();
             TArray<uint8> Bytes;
             OpenWillowAudio::FWav Wav;
             FString Error;
@@ -161,6 +193,16 @@ void LoadOnce()
             else OpenWillowAudio::ParseWav(Bytes, Wav, Error);
             if (Error.IsEmpty())
             {
+                double Db = 0.;
+                float Unused = 1.f;
+                FString GainError;
+                if (Gains && (!(*Gains)[Index]->TryGetNumber(Db) || !OpenWillowAudio::GainMultiplier(Db, Unused, GainError)))
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("OWAUDIO gain role=%s file=%s refused, played at 0 dB: %s"), *Role, *FPaths::GetCleanFilename(Path),
+                        GainError.IsEmpty() ? TEXT("not a number") : *GainError);
+                    Db = 0.;
+                }
+                Wav.GainDb = float(Db);
                 Used += Size;
                 Roles().FindOrAdd(Role).Add(MoveTemp(Wav));
             }
@@ -254,22 +296,32 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
     UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr;
     if (!Files || Files->IsEmpty() || !World) return false;
     const FWav& Wav = (*Files)[FMath::RandHelper(Files->Num())];
+    // A 2D mono file goes out as two equal channels, the path a stereo file takes (OpenWillowAudio.h). A positioned one stays mono: the
+    // spatializer places it.
+    const bool bUpmix = !AttachTo && Wav.Channels == 1;
+    TArray<uint8> Stereo;
+    if (bUpmix) MonoToStereo(Wav.Pcm, Stereo);
+    const TArray<uint8>& Pcm = bUpmix ? Stereo : Wav.Pcm;
+    const int32 Channels = bUpmix ? 2 : Wav.Channels;
+    float Volume = 1.f;
+    FString GainError;
+    GainMultiplier(Wav.GainDb, Volume, GainError);   // checked at load, so always within the limits here
     // A procedural wave plays its queue once, so each play gets its own; the audio component keeps it alive.
     USoundWaveProcedural* Wave = NewObject<USoundWaveProcedural>(GetTransientPackage());
     Wave->SetSampleRate(Wav.SampleRate);
-    Wave->NumChannels = Wav.Channels;
+    Wave->NumChannels = Channels;
     // ParseWav's limits keep this positive and small; computed wide so it cannot overflow on the way.
-    const float Seconds = float(double(Wav.Pcm.Num()) / (2.0 * Wav.Channels * Wav.SampleRate));
+    const float Seconds = float(double(Pcm.Num()) / (2.0 * Channels * Wav.SampleRate));
     Wave->Duration = Seconds;
     Wave->bLooping = false;
     Wave->SoundGroup = SOUNDGROUP_Default;
-    Wave->QueueAudio(Wav.Pcm.GetData(), Wav.Pcm.Num());
+    Wave->QueueAudio(Pcm.GetData(), Pcm.Num());
     // A sound with a place follows it, so a moving door or a walking talker carries it. The attenuation is the engine's default settings
     // (FSoundAttenuationSettings as constructed): a sound with no attenuation asset is not spatialized at all, so one is needed. Host choice.
     UAudioComponent* Component = AttachTo
-        ? UGameplayStatics::SpawnSoundAttached(Wave, AttachTo, NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset, true, 1.f, 1.f, 0.f,
+        ? UGameplayStatics::SpawnSoundAttached(Wave, AttachTo, NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset, true, Volume, 1.f, 0.f,
             DefaultAttenuation())
-        : UGameplayStatics::SpawnSound2D(World, Wave);
+        : UGameplayStatics::SpawnSound2D(World, Wave, Volume);
     if (!Component)
     {
         UE_LOG(LogTemp, Warning, TEXT("OWAUDIO play role=%s refused: no audio device or sound not played"), Role);
@@ -296,7 +348,8 @@ bool OpenWillowAudio::Play(const UObject* WorldContext, const TCHAR* Role, float
             Component->Stop();
         }
     }), DrainPoll, true);
-    UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d%s (the host called play; not heard)"), Role, Wav.Channels, Wav.SampleRate, Wav.Pcm.Num(),
+    UE_LOG(LogTemp, Display, TEXT("OWAUDIO play role=%s channels=%d rate=%d bytes=%d gain_db=%.1f%s%s (the host called play; not heard)"), Role, Channels,
+        Wav.SampleRate, Pcm.Num(), Wav.GainDb, bUpmix ? TEXT(" upmix=mono_to_stereo") : TEXT(""),
         AttachTo ? *FString::Printf(TEXT(" at=%s"), *GetNameSafe(AttachTo->GetOwner())) : TEXT(""));
     Cue(World, FString::Printf(TEXT("%s seconds=%.3f"), Role, Seconds));
     if (OutSeconds) *OutSeconds = Seconds;

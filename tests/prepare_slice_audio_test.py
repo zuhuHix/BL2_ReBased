@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic tests for tools/prepare_slice_audio.py: every WAV and manifest here is generated, no game data."""
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -12,6 +13,9 @@ import wave
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
 import prepare_slice_audio as psa  # noqa: E402
+
+# Synthetic only: main() must never find the installed game through the environment.
+os.environ.pop('OPENWILLOW_BL2', None)
 
 
 def wav_bytes(rate=48000, channels=1, frames=48000, data=None, riff_size=None, before_fmt=b'', after_data=b''):
@@ -322,6 +326,124 @@ class PrepareSliceAudioTest(unittest.TestCase):
         psa.main(['--tone-only', '--out', out, '--tone', os.path.join(self.dir, 'tone.wav')])
         with open(out, encoding='utf-8') as fh:
             self.assertEqual(json.load(fh)['timing'], {})
+
+
+
+# ---- The game's static mix (SLICE_AUDIO_CHAIN.md section 7): an invented bank, built byte by byte -----------------------------------
+def bundle(props=None, ranged=None):
+    props, ranged = props or {}, ranged or {}
+    out = bytes([len(props)]) + bytes(props) + b''.join(struct.pack('<f', v) for v in props.values())
+    return out + bytes([len(ranged)]) + bytes(ranged) + b''.join(struct.pack('<ff', *v) for v in ranged.values())
+
+
+def sound_body(ident, source, parent, bus=0, props=None, ranged=None):
+    """A streamed sound (stream type 1): id, plugin, stream type, source, file id, a bits byte, two effect bytes, bus, parent, two flag bytes, bundles."""
+    return struct.pack('<IIIII', ident, 0x00040001, 1, source, 0) + b'\x00' + b'\x00\x00' + struct.pack('<II', bus, parent) + b'\x00\x00' + bundle(props, ranged)
+
+
+def mixer_body(ident, parent, bus=0, props=None, tail=b''):
+    return struct.pack('<I', ident) + b'\x00\x00' + struct.pack('<II', bus, parent) + b'\x00\x00' + bundle(props) + tail
+
+
+def switch_tail(children, values, default):
+    """The part of a switch container after its bundles that the reader uses: group, default, a flag, children, then each value's children."""
+    out = b'\x00' + struct.pack('<II', 0x1234, default) + b'\x00' + struct.pack('<I', len(children)) + struct.pack('<%dI' % len(children), *children)
+    out += struct.pack('<I', len(values))
+    for value, kids in values:
+        out += struct.pack('<II', value, len(kids)) + struct.pack('<%dI' % len(kids), *kids)
+    return out
+
+
+def bus_body(ident, parent, volume=None):
+    props = {0: volume} if volume is not None else {}
+    return struct.pack('<II', ident, parent) + bytes([len(props)]) + bytes(props) + b''.join(struct.pack('<f', v) for v in props.values()) + b'\x00' * 8
+
+
+FIRST, THIRD = psa.audio_census.fnv1_32('firstperson'), psa.audio_census.fnv1_32('thirdperson')
+
+
+def invented_bank():
+    """Master bus (-2) <- sfx bus (-5) <- mixer (-1) <- switch (0) <- two sounds of source 77: first person (-4), third person (-9)."""
+    index = {
+        900: (8, bus_body(900, 0, -2.0)),
+        901: (8, bus_body(901, 900, -5.0)),
+        10: (7, mixer_body(10, 0, bus=901, props={0: -1.0, 4: 50.0})),
+        20: (6, mixer_body(20, 10, tail=switch_tail([30, 31], [(FIRST, [30]), (THIRD, [31])], THIRD))),
+        30: (2, sound_body(30, 77, 20, props={0: -4.0})),
+        31: (2, sound_body(31, 77, 20, props={0: -9.0})),
+    }
+    return index, {900, 901}
+
+
+class GameMixTest(unittest.TestCase):
+    def test_a_chain_sums_the_object_and_bus_volumes(self):
+        index, buses = invented_bank()
+        chain = psa.volume_chain(30, index, index, buses)
+        self.assertEqual([node['id'] for node in chain], [30, 20, 10, 901, 900])
+        self.assertAlmostEqual(sum(node['volume_db'] for node in chain), -4.0 - 1.0 - 5.0 - 2.0)
+
+    def test_a_property_other_than_volume_is_not_a_volume(self):
+        index, buses = invented_bank()
+        self.assertEqual(psa.volume_chain(10, index, index, buses)[0]['volume_db'], -1.0)   # prop 4 = 50 is ignored
+
+    def test_the_player_takes_the_first_person_child_and_others_the_default(self):
+        index, buses = invented_bank()
+        chains = [psa.volume_chain(s, index, index, buses) for s in (30, 31)]
+        rows = {1: {5: chains}}
+        self.assertEqual(psa.source_gain(rows, 77, FIRST)[0], -12.0)
+        self.assertEqual(psa.source_gain(rows, 77, None)[0], -17.0)
+
+    def test_two_play_actions_on_one_source_add_as_amplitudes(self):
+        index, buses = invented_bank()
+        chain = psa.volume_chain(30, index, index, buses)
+        db, notes = psa.source_gain({1: {5: [chain], 6: [chain]}}, 77, FIRST)
+        self.assertAlmostEqual(db, -12.0 + 20 * math.log10(2), places=2)
+        self.assertTrue(any('2 play actions' in n for n in notes))
+
+    def test_banks_that_disagree_are_noted(self):
+        index, buses = invented_bank()
+        first, third = (psa.volume_chain(s, index, index, buses) for s in (30, 31))
+        _, notes = psa.source_gain({1: {5: [first]}, 2: {5: [third]}}, 77, FIRST)
+        self.assertTrue(any('banks disagree' in n for n in notes))
+
+    def test_a_random_volume_range_is_noted_not_applied(self):
+        index, buses = invented_bank()
+        index[30] = (2, sound_body(30, 77, 20, props={0: -4.0}, ranged={0: (-3.0, 0.0)}))
+        db, notes = psa.source_gain({1: {5: [psa.volume_chain(30, index, index, buses)]}}, 77, FIRST)
+        self.assertEqual(db, -12.0)
+        self.assertTrue(any('random volume range' in n for n in notes))
+
+    def test_a_source_not_reached_has_no_level(self):
+        self.assertIsNone(psa.source_gain({}, 77, FIRST)[0])
+
+    def test_without_game_data_every_gain_is_unity_and_says_so(self):
+        gains, notes = psa.build_gains({'fire': ['a/1.wav', 'a/2.wav'], 'test_tone': ['t.wav']}, None, None)
+        self.assertEqual(gains, {'fire': [0.0, 0.0], 'test_tone': [0.0]})
+        self.assertIn('no game data', notes['fire'])
+
+    def test_gains_follow_the_files_order_and_a_missing_level_is_unity(self):
+        class FakeMix:
+            def entry_gains(self, entry, role):
+                self.role = role
+                return {1: (-12.0, []), 2: (None, ['source 2 not reached from the event']), 3: (-200.0, [])}
+        mix = FakeMix()
+        man = manifest([{'source': 1}, {'source': 2}, {'source': 3}])
+        gains, notes = psa.build_gains({'fire': [os.path.join('d', '3.wav'), os.path.join('d', '1.wav'), os.path.join('d', '2.wav')]}, man, mix)
+        self.assertEqual(gains['fire'], [psa.MIN_GAIN_DB, -12.0, 0.0])   # clamped to the host's floor; no level means 0 dB
+        self.assertIn('source 2', notes['fire'])
+        self.assertTrue(notes['fire'].startswith('game data'))
+
+    def test_the_gain_limits_match_the_host(self):
+        header = (Path(__file__).resolve().parent.parent / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowAudio.h').read_text(encoding='utf-8')
+        for name, value in (('MinGainDb', psa.MIN_GAIN_DB), ('MaxGainDb', psa.MAX_GAIN_DB)):
+            self.assertEqual(float(re.search(name + r' = (-?[\d.]+);', header).group(1)), value)
+
+    def test_tone_only_map_has_a_unity_gain_per_file(self):
+        out = os.path.join(tempfile.mkdtemp(), 'play.json')
+        psa.main(['--tone-only', '--out', out, '--tone', os.path.join(os.path.dirname(out), 't.wav')])
+        with open(out, encoding='utf-8') as fh:
+            data = json.load(fh)
+        self.assertEqual(data['gains'], {'test_tone': [0.0]})
 
 
 if __name__ == '__main__':

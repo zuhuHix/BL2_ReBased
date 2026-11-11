@@ -9,7 +9,11 @@ class USceneComponent;
 //
 // -owaudioplay=<audio_play.json> (written by tools/prepare_slice_audio.py) maps a role ("fire", "hit", "phaselock_cast",
 // "pickup", "equip", "reload_out", "reload_in", "door_open", "door_close", and one "line:<dialog event tag>" per mission or Marcus line) to WAV files under ignored local/. Its "timing" block gives the reload notify times. Without the option, or for a role the map does not have, Play does nothing.
-// No Wwise logic: no bus, RTPC, state or ducking. A sound plays 2D at full volume unless the caller gives a place in the world (AttachTo,
+// Each file plays at the gain the map's "gains" block gives it (dB, one per file in the order of "roles"; prepare_slice_audio.py writes them
+// from the game's own object and bus volumes, SLICE_AUDIO_CHAIN.md section 7). A missing or bad gain is 0 dB. A mono file played 2D is sent
+// as two equal channels, so it reaches the mix by the path a stereo file takes: the engine's own mono upmix cost a mono 2D sound 6 dB against
+// a stereo one in the 2026-11-10 recording. How loud the game's centred mono is against its stereo is UNVERIFIED.
+// No other Wwise logic: no RTPC, state, ducking or the game's 3D falloff. A sound plays 2D unless the caller gives a place in the world (AttachTo,
 // section 5d): then it follows that component with the engine's default attenuation and spatialization, whose falloff is a host choice
 // (the game's is UNVERIFIED). A role with several files picks one at random, because the real container's choice is UNVERIFIED.
 //
@@ -26,6 +30,7 @@ struct FWav
     int32 Channels = 0;
     int32 SampleRate = 0;
     TArray<uint8> Pcm;   // 16-bit little-endian samples
+    float GainDb = 0.f;  // from the play map's "gains"; 0 when it has none
 };
 
 // Limits, mirrored in tools/prepare_slice_audio.py (a test compares them). The longest slice sound is well under 10 MB; the rate range
@@ -34,6 +39,15 @@ inline constexpr int32 MinSampleRate = 8000;
 inline constexpr int32 MaxSampleRate = 96000;
 inline constexpr int64 MaxFileBytes = 64 * 1024 * 1024;
 inline constexpr int64 MaxTotalBytes = 256 * 1024 * 1024;
+// Gains, mirrored in tools/prepare_slice_audio.py: Wwise allows +12 dB on one object, and below -144 dB a 16-bit sound is silence.
+inline constexpr double MinGainDb = -144.0;
+inline constexpr double MaxGainDb = 12.0;
+
+// Whether Db is a usable gain (finite, within the limits above); OutMultiplier is its linear volume. False, with a reason, when it is not.
+OPENWILLOW_API bool GainMultiplier(double Db, float& OutMultiplier, FString& OutError);
+
+// Two equal channels from mono 16-bit PCM: each frame's sample written twice, unscaled.
+OPENWILLOW_API void MonoToStereo(const TArray<uint8>& Mono, TArray<uint8>& OutStereo);
 
 // Called once from the module's startup, when the command line is ready: reads the flag and binds what the flag turns on.
 // Assumes one call for the life of the process: the delegates it binds are never removed.

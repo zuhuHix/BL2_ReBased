@@ -174,6 +174,61 @@ def measure(mono, rate, start, length):
             'clipped': peak >= 0.999}
 
 
+PLAYED = re.compile(r'OWAUDIO play role=(\S+) channels=\d+ rate=\d+ bytes=\d+(?: gain_db=(-?[\d.]+))?.*?( at=\S+)?\s+\(the host called play')
+REFERENCE_ROLE = 'fire'
+
+
+def file_level(path: Path):
+    """RMS in dBFS of one played file as the recording's cue window would see it: per frame the loudest channel (as read_wav), over the
+    file's length plus the 0.1 s the cue window adds, so the two are measured alike. None when the file cannot be read."""
+    try:
+        rate, _, mono = read_wav(path)
+    except (OSError, ValueError, wave.Error, EOFError):
+        return None
+    if not mono:
+        return None
+    frames = len(mono) + int(0.1 * rate)
+    return dbfs(math.sqrt(sum(v * v for v in mono) / frames))
+
+
+def level_table(cues, log_text: str, play_map: dict | None):
+    """Per role: the measured RMS of its cues (median), and what the game's mix predicts: the median level of the role's files plus its
+    gain from the play map. Positioned roles (a play line with at=) depend on where Maya stood, so they get no prediction. The balance
+    column puts both next to the shot (REFERENCE_ROLE), which cancels any offset the whole mix shares."""
+    positioned, logged_gain = set(), {}
+    for m in PLAYED.finditer(log_text):
+        if m.group(3):
+            positioned.add(m.group(1))
+        if m.group(2) is not None:
+            logged_gain.setdefault(m.group(1), float(m.group(2)))
+    roles = (play_map or {}).get('roles', {})
+    gains = (play_map or {}).get('gains', {})
+    rows = {}
+    for cue in cues:
+        if cue['kind'] != 'sound' or not cue.get('level') or cue['level']['rms_dbfs'] == float('-inf'):
+            continue
+        rows.setdefault(cue['name'], []).append(cue['level']['rms_dbfs'])
+    table = []
+    for role, measured in rows.items():
+        measured = sorted(measured)[len(measured) // 2]
+        files = roles.get(role, [])
+        role_gains = gains.get(role) or []
+        gain = sorted(role_gains)[len(role_gains) // 2] if role_gains else logged_gain.get(role)
+        levels = sorted(v for v in (file_level(Path(f)) for f in files) if v is not None and v != float('-inf'))
+        source = levels[len(levels) // 2] if levels else None
+        expected = None if role in positioned or source is None else source + (gain or 0.0)
+        table.append({'role': role, 'cues': len([c for c in cues if c['name'] == role]), 'measured_rms_dbfs': round(measured, 1),
+                      'source_rms_dbfs': None if source is None else round(source, 1), 'gain_db': gain, 'positioned': role in positioned,
+                      'expected_rms_dbfs': None if expected is None else round(expected, 1)})
+    reference = next((r for r in table if r['role'] == REFERENCE_ROLE), None)
+    for row in table:
+        row['measured_vs_shot_db'] = round(row['measured_rms_dbfs'] - reference['measured_rms_dbfs'], 1) if reference else None
+        both = reference and row['expected_rms_dbfs'] is not None and reference['expected_rms_dbfs'] is not None
+        row['game_vs_shot_db'] = round(row['expected_rms_dbfs'] - reference['expected_rms_dbfs'], 1) if both else None
+        row['off_by_db'] = round(row['measured_vs_shot_db'] - row['game_vs_shot_db'], 1) if both else None
+    return table
+
+
 def fmt_db(v):
     return '-inf' if v is None or v == float('-inf') else f'{v:.1f}'
 
@@ -267,9 +322,11 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
         step['gap'] = measure(mono, rate, quiet_from, step['end'] - quiet_from) if mono and step['end'] - quiet_from > 0.2 else None
 
     names = load_names(manifest)
-    unresolved = {}
+    unresolved, play = {}, None
     if play_map and play_map.exists():
-        unresolved = json.loads(play_map.read_text(encoding='utf-8')).get('unresolved', {})
+        play = json.loads(play_map.read_text(encoding='utf-8'))
+        unresolved = play.get('unresolved', {})
+    levels = level_table(run['cues'], log_text, play) if mono else []
     onsets = sorted(c['level']['onset_s'] for c in run['cues'] if c['kind'] == 'sound' and c['level'] and c['level']['onset_s'] is not None)
     median_onset = onsets[len(onsets) // 2] if onsets else None
 
@@ -277,7 +334,7 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     out.mkdir(parents=True, exist_ok=True)
     (out / 'cues.json').write_text(json.dumps({'wav': str(wav), 'rate': rate, 'channels': channels, 'length_s': round(length, 3),
                                                'peak_dbfs': round(dbfs(overall_peak), 1) if mono else None, 'median_onset_s': median_onset,
-                                               'problems': problems, 'links': run['links'], 'cues': run['cues']}, indent=1), encoding='utf-8')
+                                               'problems': problems, 'links': run['links'], 'cues': run['cues'], 'levels': levels}, indent=1), encoding='utf-8')
 
     lines = ['# Listening guide: our host\'s sounds over one slice gate run', '',
              'AI-assisted (Claude). Written by `tools/listen_report.py` from the run\'s log and the WAV the host\'s audio mixer recorded. '
@@ -302,7 +359,19 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
     for role, (when, mapped, hear) in ROLES.items():
         mapped_text = f'`{names[role]}` ({mapped})' if role in names else (unresolved.get(role) or mapped)
         lines.append(f'| `{role}` | {when} | {mapped_text} | {hear} |')
-    lines += ['', "Maya's own sounds play 2D at full volume. The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No bus mix, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
+    if levels:
+        lines += ['', "## Levels against the game's mix", '',
+                  "Median RMS of each role's cues, next to what the game's static mix predicts: the median level of the role's files (measured like a cue window) "
+                  'plus its gain from the play map (SLICE_AUDIO_CHAIN.md section 7). "vs shot" is the difference to the `fire` cues, which cancels an offset the whole mix '
+                  "shares; \"off by\" is our balance minus the game's. A shot's cue window also holds its bullet impact, and a line can overlap other sounds, so a few dB "
+                  'are noise. Positioned roles depend on where Maya stood and get no prediction. Measurements of the mix, not a listen.', '',
+                  '| Role | Cues | Measured RMS | File RMS | Gain | Game RMS | Measured vs shot | Game vs shot | Off by |', '|---|---|---|---|---|---|---|---|---|']
+        for row in sorted(levels, key=lambda r: (r['role'].startswith('line:'), r['role'])):
+            cell = lambda v, unit=' dB': '-' if v is None else f'{v:.1f}{unit}'
+            lines.append(f'| `{row["role"]}` | {row["cues"]} | {cell(row["measured_rms_dbfs"], " dBFS")} | {cell(row["source_rms_dbfs"], " dBFS")} | {cell(row["gain_db"])} | '
+                         + ('positioned' if row['positioned'] else cell(row['expected_rms_dbfs'], ' dBFS'))
+                         + f' | {cell(row["measured_vs_shot_db"])} | {cell(row["game_vs_shot_db"])} | {cell(row["off_by_db"])} |')
+    lines += ['', "Maya's own sounds play 2D at the game's static level for each file (the play map's gains; 0 dB when it has none). The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No RTPC, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
               '## Step by step', '']
     for n, step in enumerate(steps, 1):
         lines.append(f'### {n}. {mmss(step["t"])} to {mmss(step["end"])}: {step["name"]}')
