@@ -178,7 +178,7 @@ PLAYED = re.compile(r'OWAUDIO play role=(\S+) channels=\d+ rate=\d+ bytes=\d+(?:
 REFERENCE_ROLE = 'fire'
 FIT_SEARCH_S = 0.4      # how late after its cue a sound may start in the recording (the mixer starts about 0.13 s late)
 FIT_MIN_CORR = 0.3      # below this the fit has not found the file in the recording: no applied gain is reported
-FIT_DECIMATE = 8        # the lag is searched on every 8th sample first, then refined at full rate
+FIT_MIN_FRAMES = 32     # a file shorter than this is not fitted
 FIT_MAX_CANDIDATES = 8  # without a logged file, a role with at most this many files has each tried
 
 
@@ -197,10 +197,10 @@ def fit_gain(recording, rate, t, source_rate, source):
     """The gain at which `source` (frames x channels) sits in `recording`, starting up to FIT_SEARCH_S after t: the least-squares scale of
     the source against the recording at the best-correlated lag, per recording channel (a mono source against each), combined as the RMS
     of the channel gains. A different sound overlapping it adds little to the fit, which is why this, not a window's RMS, measures what the
-    host applied. Returns (gain dB, correlation, lag s) or None."""
+    host applied. Returns (gain dB, correlation, lag s, clipped) or None."""
     import numpy
     n = int(len(source) * rate / source_rate)
-    if n < FIT_DECIMATE * 4:
+    if n < FIT_MIN_FRAMES:
         return None
     grid = numpy.arange(n) * source_rate / rate
     x = numpy.stack([numpy.interp(grid, numpy.arange(len(source)), source[:, c]) for c in range(source.shape[1])], 1)
@@ -214,40 +214,44 @@ def fit_gain(recording, rate, t, source_rate, source):
         y = sm[lag:lag + n]
         return float(numpy.dot(xm, y) / (math.sqrt(float(numpy.dot(xm, xm)) * float(numpy.dot(y, y))) + 1e-12))
 
-    coarse_x, coarse_s = xm[::FIT_DECIMATE], sm[::FIT_DECIMATE]
-    raw = numpy.correlate(coarse_s, coarse_x, 'valid')
-    energy = numpy.sqrt(numpy.convolve(coarse_s * coarse_s, numpy.ones(len(coarse_x)), 'valid')) + 1e-12
-    first = int(numpy.argmax(raw / energy)) * FIT_DECIMATE
-    lags = [lag for lag in range(first - FIT_DECIMATE, first + FIT_DECIMATE + 1) if 0 <= lag <= len(sm) - n]
-    best = max(lags, key=correlation)
+    # Every lag at full rate, by FFT: a broadband sound (a shot, an impact) correlates only at its exact lag, so a search on a decimated
+    # signal can miss it entirely (review r1 on PR #221).
+    count = len(sm) - n + 1
+    size = 1 << (len(sm) + n).bit_length()
+    raw = numpy.fft.irfft(numpy.fft.rfft(sm, size) * numpy.conj(numpy.fft.rfft(xm, size)), size)[:count]
+    running = numpy.concatenate([[0.0], numpy.cumsum(sm * sm)])
+    energy = numpy.sqrt(numpy.maximum(running[n:n + count] - running[:count], 0.0)) + 1e-12
+    best = int(numpy.argmax(raw / energy))
     y = segment[best:best + n]
     gains = []
     for c in range(y.shape[1]):
+        # A mono source fits each recording channel; a stereo source fits channel for channel. A stereo source against a mono recording
+        # would fit only its left channel (the recorder writes stereo, so this does not arise today).
         xc = x[:, min(c, x.shape[1] - 1)]
         gains.append(float(numpy.dot(xc, y[:, c])) / (float(numpy.dot(xc, xc)) + 1e-12))
-    return dbfs(math.sqrt(sum(g * g for g in gains) / len(gains))), correlation(best), best / rate
+    # A clipped recording flattens the peaks the fit scales against, which biases the gain low: flagged, not corrected.
+    clipped = bool(numpy.max(numpy.abs(y)) >= 0.999)
+    return dbfs(math.sqrt(sum(g * g for g in gains) / len(gains))), correlation(best), best / rate, clipped
 
 
 def fit_cues(cues, log_text: str, wav: Path, play_map: dict | None):
-    """Per sound cue (by its index in `cues`): {'file', 'fit_gain_db', 'fit_corr'}. A cue is paired with its role's play line in the same
-    order (Play logs its line, then its cue). The file is the one the play line's file= names among the role's files, else the role's only
-    file. None when numpy is missing (the report then says so)."""
+    """Per sound cue (by its index in `cues`): {'file', 'fit_gain_db', 'fit_corr', 'file_logged', 'file_guessed', 'clipped'}. Each cue line
+    is paired with the play line of its role just before it (Play logs its line, then its cue), so a play outside the recording, which logs
+    no cue, shifts nothing. The file is the one that play line's file= names among the role's files; without one, a role's only file, or
+    each of a small role's files tried and the best kept (file_guessed). None when numpy is missing (the report then says so)."""
     try:
         rate, recording = read_channels(wav)
     except ImportError:
         return None
     roles = (play_map or {}).get('roles', {})
-    plays = {}
-    for m in PLAYED.finditer(log_text):
-        plays.setdefault(m.group(1), []).append(m.group(3))
-    seen, sources, found = {}, {}, {}
+    logged_files = cue_play_files(log_text)
+    if len(logged_files) != len(cues):
+        logged_files = [None] * len(cues)   # cues not taken from this log: nothing to pair them with
+    sources, found = {}, {}
     for index, cue in enumerate(cues):
         if cue['kind'] != 'sound':
             continue
-        order = seen.get(cue['name'], 0)
-        seen[cue['name']] = order + 1
-        logged = plays.get(cue['name'], [])
-        name = logged[order] if order < len(logged) else None
+        name = logged_files[index]
         files = roles.get(cue['name'], [])
         # Another cue of the same role within the search window would be found too (two identical sounds a few ms apart even add up),
         # so such a cue gets no fit rather than a wrong one.
@@ -268,8 +272,24 @@ def fit_cues(cues, log_text: str, wav: Path, play_map: dict | None):
             if fitted and (best is None or fitted[1] > best[1][1]):
                 best = (path, fitted)
         if best and best[1][1] >= FIT_MIN_CORR:
-            found[index] = {'file': best[0], 'fit_gain_db': round(best[1][0], 2), 'fit_corr': round(best[1][1], 3), 'file_logged': bool(named)}
+            found[index] = {'file': best[0], 'fit_gain_db': round(best[1][0], 2), 'fit_corr': round(best[1][1], 3), 'file_logged': bool(named), 'file_guessed': not named and len(candidates) > 1,
+                            'clipped': best[1][3]}
     return found
+
+
+def cue_play_files(log_text: str):
+    """For each OWAUDIOREC cue line, in order: the file= of the play line of its role logged after that role's previous cue and before this
+    one (the last such), or None (a step cue, or no file logged)."""
+    events = sorted([(m.start(), 'play', m.group(1), m.group(3)) for m in PLAYED.finditer(log_text)]
+                    + [(m.start(), 'cue', m.group(2).strip(), None) for m in CUE.finditer(log_text)])
+    pending, files = {}, []
+    for _, kind, label, file in events:
+        if kind == 'play':
+            pending[label] = file
+            continue
+        role = re.sub(r' seconds=[\d.]+$', '', label)
+        files.append(pending.pop(role, None))
+    return files
 
 
 def file_level(path: Path):
@@ -327,6 +347,7 @@ def level_table(cues, log_text: str, play_map: dict | None, fits: dict | None = 
         table.append({'fit_gain_db': None if not fitted else round(median([f['fit_gain_db'] for f in fitted]), 1),
                       'fit_corr': None if not fitted else round(median([f['fit_corr'] for f in fitted]), 2), 'fitted_cues': len(fitted),
                       'applied_minus_map_db': None if not offsets else round(median(offsets), 1),
+                      'file_guessed': any(f.get('file_guessed') for f in fitted), 'fit_clipped': any(f.get('clipped') for f in fitted),
                       'role': role, 'cues': sum(1 for c in cues if c['kind'] == 'sound' and c['name'] == role),
                       'measured_cues': len(measured), 'measured_rms_dbfs': round(median(measured), 1),
                       'source_rms_dbfs': None if not pairs else round(median([level for level, _ in pairs]), 1),
@@ -339,9 +360,12 @@ def level_table(cues, log_text: str, play_map: dict | None, fits: dict | None = 
         row['game_vs_shot_db'] = round(row['expected_rms_dbfs'] - reference['expected_rms_dbfs'], 1) if both else None
         row['off_by_db'] = round(row['measured_vs_shot_db'] - row['game_vs_shot_db'], 1) if both else None
         row['off_by_from'] = 'rms' if row['off_by_db'] is not None else None
-        if reference and not row['positioned'] and row['applied_minus_map_db'] is not None and reference['applied_minus_map_db'] is not None:
-            row['off_by_db'] = round(row['applied_minus_map_db'] - reference['applied_minus_map_db'], 1)
-            row['off_by_from'] = 'fit'
+        if fits is not None:
+            # With fits the RMS balance is known to be several dB off (overlapping sounds), so a role without a fit shows none.
+            row['off_by_db'], row['off_by_from'] = None, None
+            if reference and not row['positioned'] and row['applied_minus_map_db'] is not None and reference['applied_minus_map_db'] is not None:
+                row['off_by_db'] = round(row['applied_minus_map_db'] - reference['applied_minus_map_db'], 1)
+                row['off_by_from'] = 'fit'
     return table
 
 
@@ -487,7 +511,8 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
                   '"Applied" is the gain at which the played file itself sits in the recording: a least-squares fit of the file against the recording at the best lag '
                   '(median over the cues it found, with the median correlation). It is not moved by other sounds playing at the same time, as a window\'s RMS is. '
                   '"Applied - map" is that minus the file\'s gain in the play map: the same number for every 2D role means the host kept the game\'s balance. '
-                  'When fits exist, "Off by" is a role\'s "Applied - map" minus the shot\'s (marked fit); otherwise it is the RMS balance (marked rms).'
+                  'When fits exist, "Off by" is a role\'s "Applied - map" minus the shot\'s (marked fit), and a role without a fit shows none; without numpy it is the RMS balance (marked rms). '
+                  '"(file guessed)": the log named no file, so each of the role\'s files was tried and the best fit kept. "(clipped)": the recording clips there, which biases the fit low.'
                   + ('' if fits is not None else ' **No fit in this report: numpy is not installed in the Python that ran it.**'), '',
                   '| Role | Cues | Measured RMS | File RMS | Gain | Game RMS | Measured vs shot | Game vs shot | Applied (corr) | Applied - map | Off by |',
                   '|---|---|---|---|---|---|---|---|---|---|---|']
@@ -498,7 +523,9 @@ def build(log_text: str, wav: Path, out: Path, manifest: Path | None = None, pla
                          + (cell(row['expected_rms_dbfs'], ' dBFS') + ('' if row['prediction'] == 'game data' else f' ({row["prediction"]})')
                             if row['expected_rms_dbfs'] is not None else row['prediction'])
                          + f' | {cell(row["measured_vs_shot_db"])} | {cell(row["game_vs_shot_db"])} | '
-                         + (f'{row["fit_gain_db"]:.1f} dB ({row["fit_corr"]:.2f}, {row["fitted_cues"]} cue(s))' if row['fit_gain_db'] is not None else '-')
+                         + (f'{row["fit_gain_db"]:.1f} dB ({row["fit_corr"]:.2f}, {row["fitted_cues"]} cue(s))'
+                            + (' (file guessed)' if row['file_guessed'] else '') + (' (clipped)' if row['fit_clipped'] else '')
+                            if row['fit_gain_db'] is not None else '-')
                          + f' | {cell(row["applied_minus_map_db"])} | '
                          + (f'{cell(row["off_by_db"])} ({row["off_by_from"]})' if row['off_by_db'] is not None else '-') + ' |')
     lines += ['', "Maya's own sounds play 2D at the game's static level for each file (the play map's gains; 0 dB when it has none). The door and Marcus's lines come from where they are, with the engine's default falloff (UNVERIFIED against the game), and the recording is the mix at Maya's camera, so their levels depend on her distance. No RTPC, no ducking, no reverb. If something sounds too loud or too quiet next to the game, that is part of what to note.", '',
