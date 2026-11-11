@@ -1,4 +1,4 @@
-"""Repository-relative file paths in the slice-npc and Phaselock-target job files, and their resolution when read.
+"""Repository-relative file paths in the slice-npc, ambient-npc and Phaselock-target job files, and their resolution when read.
 
 AI-assisted (Claude Opus 5.5), 2026-11-11. Plain Python (no ``unreal``), tested by tests/editor_inputs_test.py.
 
@@ -8,8 +8,11 @@ target dummy's zone step found no textures (2026-11-10). The writers now store p
 PowerShell launchers resolve a job against their own checkout (``resolve-job`` below) before the editor reads it, so the editor
 scripts keep reading plain absolute paths.
 
-An old job with absolute paths is still read: an input that exists is used as it is; an input that does not, and any output outside
-this checkout, stops with the job file, the path and the command that rewrites the job. Nothing is skipped silently.
+A stored path must stay inside this checkout: a relative value that climbs out (``../other/local``), a rooted one (``/local/x``) or a
+drive-relative one (``C:foo``) is refused. Any path whose real location (junctions followed) is inside another checkout of this
+repository is refused, input or output. An old job with absolute paths is still read when they lie in this checkout; an absolute input
+outside every checkout (the game install, an export folder) is used if it exists. Every refusal names the job file, the path and the
+command that rewrites the job. Nothing is skipped silently.
 """
 import argparse
 import json
@@ -29,11 +32,26 @@ class StalePath(Exception):
 
 
 def _inside(path, root):
+    """Lexical containment after normalisation (``..`` folded)."""
     try:
-        Path(os.path.abspath(path)).relative_to(Path(os.path.abspath(root)))
+        Path(os.path.normpath(os.path.abspath(path))).relative_to(Path(os.path.normpath(os.path.abspath(root))))
         return True
     except ValueError:
         return False
+
+
+def _same(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def checkout_of(path):
+    """The checkout of this repository that really holds ``path`` (junctions followed): the nearest folder upwards with a ``.git``
+    entry and ``host/ue5/OpenWillow/OpenWillow.uproject``, as tools/checkout_guard.ps1 tests it. None when there is none."""
+    folder = Path(os.path.realpath(path))
+    for candidate in (folder, *folder.parents):
+        if (candidate / '.git').exists() and (candidate / 'host/ue5/OpenWillow/OpenWillow.uproject').is_file():
+            return candidate
+    return None
 
 
 def to_repo(path, root=ROOT):
@@ -42,25 +60,36 @@ def to_repo(path, root=ROOT):
         return path
     if not Path(path).is_absolute() or not _inside(path, root):
         return str(path)
-    return Path(os.path.abspath(path)).relative_to(Path(os.path.abspath(root))).as_posix()
+    return Path(os.path.normpath(os.path.abspath(path))).relative_to(Path(os.path.normpath(os.path.abspath(root)))).as_posix()
 
 
 def from_repo(value, root=ROOT, output=False, source='the job', regenerate='its producer'):
-    """The absolute path for a stored value. Relative: below ``root``. Absolute (an old job): kept if it lies in this checkout; outside
-    it, an input is used only if it exists and an output is refused. None / "" / "None" are returned unchanged (tools/editor_inputs.py
-    reports them)."""
+    """The absolute path for a stored value, or StalePath (see the module text for the rules). None / "" / "None" are returned
+    unchanged (tools/editor_inputs.py reports them)."""
     if value is None or str(value).strip() in ('', 'None'):
         return value
+    kind = 'output' if output else 'input'
     path = Path(value)
-    if not path.is_absolute():
-        return str(Path(root) / path)
-    if _inside(path, root):
-        return str(path)     # this checkout's own path; a file not written yet (anim tracks) is editor_inputs.py's business
+    if path.is_absolute():
+        full = os.path.normpath(value)
+    elif path.drive or path.root:
+        raise StalePath(f'{source}: {kind} path {value} is rooted or drive-relative, not relative to the repository root. '
+                        f'Rewrite the job here: {regenerate}')
+    else:
+        full = os.path.normpath(os.path.join(root, value))
+        if not _inside(full, root):
+            raise StalePath(f'{source}: {kind} path {value} leaves the repository root ({root}). Rewrite the job here: {regenerate}')
+    home = checkout_of(full)
+    if home is not None and not _same(home, root):
+        raise StalePath(f'{source}: {kind} path {value} is inside another checkout ({home}), not this one ({root}); the job was '
+                        f'written there, or a folder on the way is a junction into it. Rewrite the job here: {regenerate}')
+    if _inside(full, root):
+        return full          # this checkout's own path; a file not written yet (anim tracks) is editor_inputs.py's business
     if output:
         raise StalePath(f'{source}: output path {value} is outside this checkout ({root}); the job was written in another worktree. '
                         f'Rewrite it here: {regenerate}')
-    if path.exists():
-        return str(path)
+    if os.path.exists(full):
+        return full          # outside every checkout: the game install, an export folder
     raise StalePath(f'{source}: {value} does not exist (an absolute path from an older job, probably written in another worktree). '
                     f'Rewrite the job here: {regenerate}')
 
@@ -94,6 +123,9 @@ def job_from_repo(job, root=ROOT, source='the job', regenerate='its producer'):
 
 
 def regenerate_command(job):
+    if 'ambient' in str(job.get('tool', '')).lower():
+        return ('python tools/ambient_npc_assets.py editor-job, or attachments for attach_job.json '
+                '(or powershell -File tools/seed_ambient_npc_assets.ps1)')
     if 'phaselock' in str(job.get('tool', '')).lower():
         return 'python tools/prepare_phaselock_target.py editor-job (or powershell -File tools/import_phaselock_target.ps1 -Steps prepare)'
     return 'python tools/slice_npc_assets.py editor-job (or powershell -File tools/seed_slice_npc_assets.ps1 -Steps import)'

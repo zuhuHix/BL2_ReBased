@@ -30,7 +30,9 @@ param(
 # process that is not ours is running this script stops instead of touching it. It only (re)creates content under
 # /Game/OpenWillow/Characters/Ambient (Marcus, the dummy, Maya and every weapon asset are untouched).
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path -Parent $PSScriptRoot
+# Prints the root and refuses when the current directory is in another checkout (tools/checkout_guard.ps1).
+. (Join-Path $PSScriptRoot 'checkout_guard.ps1')
+$repo = Assert-OwCheckout $PSScriptRoot
 if (!$Game -or !(Test-Path -LiteralPath $Game)) { throw 'Pass -Game <Borderlands 2 folder> or set OPENWILLOW_BL2' }
 if (!$UModel -or !(Test-Path -LiteralPath $UModel)) { throw 'Pass -UModel <umodel.exe> or set OPENWILLOW_UMODEL' }
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
@@ -58,7 +60,8 @@ function Use-EditorLock([scriptblock]$Body) {
 }
 
 function Invoke-Editor([string]$Mode) {
-    $env:OPENWILLOW_SLICE_JOB = Join-Path $ambient 'editor_job.json'
+    # Stored with repo-relative paths; the editor reads a copy resolved against this checkout (tools/checkout_guard.ps1).
+    $env:OPENWILLOW_SLICE_JOB = Resolve-OwEditorJob $Python (Join-Path $ambient 'editor_job.json')
     $env:OPENWILLOW_SLICE_MODE = $Mode
     $log = Join-Path $logs "ambient-editor-$Mode.log"
     $report = Join-Path $ambient "editor_report_$Mode.json"
@@ -80,7 +83,7 @@ function Invoke-Editor([string]$Mode) {
 }
 
 function Invoke-AttachEditor {
-    $env:OPENWILLOW_AMBIENT_ATTACH_JOB = Join-Path $ambient 'attach_job.json'
+    $env:OPENWILLOW_AMBIENT_ATTACH_JOB = Resolve-OwEditorJob $Python (Join-Path $ambient 'attach_job.json')
     $log = Join-Path $logs 'ambient-editor-attach.log'
     $report = Join-Path $ambient 'editor_report_attach.json'
     if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report -Force }
@@ -101,7 +104,7 @@ function Invoke-AttachEditor {
 
 function Invoke-OutlineEditor {
     # Only the ink-line material is rebuilt (the attach report and every other asset stay as they are).
-    $env:OPENWILLOW_AMBIENT_ATTACH_JOB = Join-Path $ambient 'attach_job.json'
+    $env:OPENWILLOW_AMBIENT_ATTACH_JOB = Resolve-OwEditorJob $Python (Join-Path $ambient 'attach_job.json')
     $env:OPENWILLOW_AMBIENT_OUTLINE_ONLY = '1'
     $log = Join-Path $logs 'ambient-editor-outline.log'
     $script = Join-Path $PSScriptRoot 'ambient_npc_attach_editor.py'

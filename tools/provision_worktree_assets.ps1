@@ -12,13 +12,15 @@ param(
     # Added to SeedFolders, for one run that needs a big folder, e.g. -ExtraSeedFolders sanctuary.
     [string[]]$ExtraSeedFolders = @(),
     # Per-run output: never copied from the seed or from -SourceWorktree, at any depth, and a pair whose own name is here is skipped.
-    [string[]]$ExcludeFolderNames = @('shots', 'screenshots', 'logs', 'captures', 'realgame', 'h4x', 'z3x', 'runs'),
+    # worktree-refresh-backup holds the files -RefreshStale replaced: this checkout's own, never copied anywhere.
+    [string[]]$ExcludeFolderNames = @('shots', 'screenshots', 'logs', 'captures', 'realgame', 'h4x', 'z3x', 'runs', 'worktree-refresh-backup'),
     # Generated files that are per-run or regenerable and that no suite or host code reads: never copied. observed_gear.json is
     # written by tools/prepare_inventory_gear.py from traces; the host reads only gear_manifest.json.
-    # editor_job.resolved.json is the per-checkout copy the editor launchers write (tools/repo_paths.py); it holds absolute paths.
-    [string[]]$ExcludeFileNames = @('observed_gear.json', 'editor_job.resolved.json'),
-    # Also replace a file that exists when the source's copy is newer and differs (size or content), printing each one. Off by
-    # default: a worktree's own newer copy is never touched, and without the switch existing files are never overwritten.
+    # *.resolved.json beside a job is the per-checkout copy the editor launchers write (tools/checkout_guard.ps1); it holds absolute paths.
+    [string[]]$ExcludeFileNames = @('observed_gear.json', 'editor_job.resolved.json', 'attach_job.resolved.json'),
+    # Also replace a file that exists when the source's copy is newer and differs (size or content). The old file is first moved to
+    # local\worktree-refresh-backup\<time>\<path> (in seed mode: <seed>\worktree-refresh-backup\...), and both moves are printed as they
+    # happen. Off by default: without the switch existing files are never overwritten. A target that is a link is refused.
     [switch]$RefreshStale,
     # The seed folder (default: local\worktree-seed of the shared repository). The tests point it at a synthetic folder.
     [string]$SeedDirectory
@@ -110,14 +112,18 @@ function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnch
             Assert-NoReparse $DestinationAnchor $TargetDirectory
             $CheckedTarget[$TargetDirectory] = $true
         }
-        $Replace = $false
+        $Backup = $null
         if ([IO.File]::Exists($Target)) {
-            if (!$RefreshStale -or !(Test-Stale $File $Target)) { continue }   # missing files only, unless -RefreshStale
-            $Replace = $true
+            if (!$RefreshStale) { continue }   # missing files only, unless -RefreshStale
+            # Writing through a file symlink would land outside the destination; refused before it is read or hashed.
+            if (Test-Reparse $Target) { throw "Refusing to replace a junction or symlink: $Target (remove it or copy by hand)" }
+            if (!(Test-Stale $File $Target)) { continue }
+            $Backup = [IO.Path]::GetFullPath((Join-Path $BackupBase ($Target.Substring($DestinationAnchor.TrimEnd('\').Length).TrimStart('\'))))
+            Assert-NoReparse $DestinationAnchor (Split-Path -Parent $Backup)
         }
 
         [void]$Plan.Add(@{ Source = $File.FullName; Target = $Target; TargetDirectory = $TargetDirectory; Stamp = $File.LastWriteTimeUtc;
-                           Replace = $Replace })
+                           Backup = $Backup })
     }
     return ,$Plan.ToArray()
 }
@@ -125,12 +131,17 @@ function Get-CopyPlan([string]$Source, [string]$Destination, [string]$SourceAnch
 function Copy-Plan([string]$DestinationRoot, $Plan) {
     [IO.Directory]::CreateDirectory($DestinationRoot) | Out-Null
     $Copied = 0
-    $Replaced = New-Object System.Collections.ArrayList
+    $Replaced = 0
     foreach ($Item in $Plan) {
-        if ($Item.Replace) {
-            [IO.File]::Copy($Item.Source, $Item.Target, $true)
+        if ($Item.Backup) {
+            # Printed as each step happens, so a failure (a file the editor holds open) still leaves the record of what was done.
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $Item.Backup)) | Out-Null
+            [IO.File]::Move($Item.Target, $Item.Backup)
+            Write-Host "  backed up: $($Item.Target) -> $($Item.Backup)"
+            [IO.File]::Copy($Item.Source, $Item.Target, $false)
             [IO.File]::SetLastWriteTimeUtc($Item.Target, $Item.Stamp)
-            [void]$Replaced.Add($Item.Target)
+            Write-Host "  replaced (the source's copy is newer): $($Item.Target)"
+            $Replaced++
             continue
         }
         if ([IO.File]::Exists($Item.Target)) { continue }
@@ -144,7 +155,7 @@ function Copy-Plan([string]$DestinationRoot, $Plan) {
             if (![IO.File]::Exists($Item.Target)) { throw }
         }
     }
-    return @{ Copied = $Copied; Replaced = $Replaced.ToArray() }
+    return @{ Copied = $Copied; Replaced = $Replaced }
 }
 
 function Invoke-Pairs($Pairs, [bool]$SkipLocal, [string]$MissingNote) {
@@ -169,18 +180,22 @@ function Invoke-Pairs($Pairs, [bool]$SkipLocal, [string]$MissingNote) {
         }
         $Result = Copy-Plan $Entry.Pair.Destination $Entry.Plan
         $Line = '{0}: {1} missing files added' -f $Entry.Pair.Name, $Result.Copied
-        if ($RefreshStale) { $Line += (', {0} stale files replaced' -f $Result.Replaced.Count) }
+        if ($RefreshStale) { $Line += (', {0} stale files replaced' -f $Result.Replaced) }
         [void]$Lines.Add($Line)
-        foreach ($Target in $Result.Replaced) { [void]$Lines.Add("  replaced (the source's copy is newer): $Target") }
     }
     return ,$Lines.ToArray()
 }
+
+# Where -RefreshStale moves the files it replaces: one folder per run, below the destination (set per mode below).
+$RefreshStamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
+$BackupBase = $null
 
 if ($FillSeedFrom) {
     # Seed mode: the source is a checkout, the destination is the seed folder. No target worktree.
     if (!$SeedDirectory) { throw '-FillSeedFrom needs -SeedDirectory.' }
     $SourceRoot = [IO.Path]::GetFullPath($FillSeedFrom).TrimEnd('\')
     $SeedRoot = [IO.Path]::GetFullPath($SeedDirectory).TrimEnd('\')
+    $BackupBase = Join-Path $SeedRoot "worktree-refresh-backup\$RefreshStamp"
     if (!(Test-Path -LiteralPath (Join-Path $SourceRoot 'host\ue5\OpenWillow\Content') -PathType Container)) {
         throw "Required local asset directory is missing: $SourceRoot\host\ue5\OpenWillow\Content"
     }
@@ -248,6 +263,7 @@ if ($SourceWorktree) {
 # A worktree whose local\ is itself a junction (a shared data root, e.g. on a runner) keeps that data: its local pairs are
 # skipped with one line, Content is still provisioned. Any other junction is refused by the preflight.
 $LocalIsJunction = Test-Reparse (Join-Path $WorktreeRoot 'local')
+$BackupBase = Join-Path $WorktreeRoot "local\worktree-refresh-backup\$RefreshStamp"
 $Lines = Invoke-Pairs $Pairs $LocalIsJunction $MissingNote
 $Header = "OpenWillow worktree assets provisioned for $WorktreeRoot"
 if ($LocalIsJunction) { $Lines = @('local\ is a junction (shared data root); not provisioning local') + $Lines }

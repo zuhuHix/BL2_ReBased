@@ -162,11 +162,44 @@ class ProvisionTest(unittest.TestCase):
         self.assertIn('local/slice: 0 missing files added, 0 stale files replaced', result.stdout)
         self.assertEqual(self.local('slice', 'manifest.json').read_text(encoding='utf-8'), 'own')
         self.assertEqual(os.path.getmtime(self.local('slice', 'same.json')), 1_000_000_000)
+        # The replaced file is kept, under local/worktree-refresh-backup/<time>/<its path>, and the move is printed.
+        backups = list(self.local('worktree-refresh-backup').glob('*/host/ue5/OpenWillow/Content/Zone.uasset'))
+        self.assertEqual(len(backups), 1, result.stdout)
+        self.assertEqual(backups[0].read_text(encoding='utf-8'), 'old')
+        self.assertIn(f"backed up: {content / 'Zone.uasset'} -> {backups[0]}", result.stdout)
 
-    def test_resolved_editor_job_is_never_copied(self):
+    def test_refresh_refuses_a_linked_target_before_writing(self):
+        outside = self.base / 'outside.uasset'
+        write(outside, 'outside the worktree')
+        os.utime(outside, (1_000_000_000, 1_000_000_000))
+        write(self.seed / 'Content' / 'Linked.uasset', 'new')
+        link = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Linked.uasset'
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.symlink(outside, link)
+        except OSError as error:   # creating a file symlink needs Developer Mode or elevation on Windows
+            self.skipTest(f'cannot create a file symlink here ({error}); the refusal is not exercised')
+        result = self.run_script('-RefreshStale')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f'Refusing to replace a junction or symlink: {link}', result.stdout + result.stderr)
+        self.assertEqual(outside.read_text(encoding='utf-8'), 'outside the worktree')
+        self.assertFalse((self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').exists())   # preflight
+
+    def test_backups_are_never_copied_from_a_source_worktree(self):
+        source = self.make_worktree(self.base / 'source')
+        write(source / 'local' / 'worktree-refresh-backup' / '20261111-000000' / 'x.txt', 'old')
+        write(source / 'local' / 'slice' / 'fresh.json', 'fresh')
+        result = self.run_script('-SourceWorktree', str(source))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.local('slice', 'fresh.json').is_file())
+        self.assertFalse(self.local('worktree-refresh-backup').exists())
+
+    def test_resolved_editor_jobs_are_never_copied(self):
         write(self.seed / 'slice' / 'editor_job.resolved.json', '{}')   # absolute paths of the checkout that wrote it
+        write(self.seed / 'slice' / 'ambient' / 'attach_job.resolved.json', '{}')
         self.run_script()
         self.assertFalse(self.local('slice', 'editor_job.resolved.json').exists())
+        self.assertFalse(self.local('slice', 'ambient', 'attach_job.resolved.json').exists())
 
     def test_unsafe_folder_name_is_refused(self):
         result = self.run_script('-ExtraSeedFolders', '..\\escape')

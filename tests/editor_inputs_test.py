@@ -246,7 +246,63 @@ def test_old_job_writing_into_another_checkout_is_refused():
             rp.job_from_repo(job, here, source='job.json', regenerate=rp.regenerate_command(job))
             raise AssertionError('an output in another checkout was accepted')
         except rp.StalePath as problem:
-            assert 'outside this checkout' in str(problem) and 'prepare_phaselock_target.py editor-job' in str(problem), problem
+            assert 'inside another checkout' in str(problem) and 'prepare_phaselock_target.py editor-job' in str(problem), problem
+
+
+def refused(value, root, output=False):
+    try:
+        rp.from_repo(value, root, output, source='job.json', regenerate='REWRITE')
+    except rp.StalePath as problem:
+        assert 'job.json' in str(problem) and 'REWRITE' in str(problem), problem
+        return str(problem)
+    raise AssertionError(f'{value!r} was accepted')
+
+
+def test_relative_values_must_stay_in_the_root():
+    with tempfile.TemporaryDirectory() as tmp:
+        here = synthetic_checkout(tmp, 'runner-z5')
+        synthetic_checkout(tmp, 'runner-z55')
+        for output in (False, True):
+            assert 'leaves the repository root' in refused('../runner-z55/local/slice', here, output)
+            assert 'leaves the repository root' in refused('local/../../runner-z55/local', here, output)
+            assert 'rooted or drive-relative' in refused(r'\local\x', here, output)
+            assert 'rooted or drive-relative' in refused('C:foo', here, output)
+        assert rp.from_repo('local/./slice/../slice/x.json', here) == str(here / 'local/slice/x.json')
+
+
+def test_absolute_input_in_another_checkout_is_refused_and_outside_every_checkout_is_used():
+    with tempfile.TemporaryDirectory() as tmp:
+        here = synthetic_checkout(tmp, 'here')
+        other = synthetic_checkout(tmp, 'runner-z55')
+        held = other / 'local/x.png'
+        held.parent.mkdir()
+        held.write_bytes(b'x')
+        assert 'inside another checkout' in refused(str(held), here)            # exists, but it is another worktree's file
+        export = Path(tmp) / 'exports/T.png'                                       # the game install, an export folder: allowed
+        export.parent.mkdir()
+        export.write_bytes(b'x')
+        assert rp.from_repo(str(export), here) == str(export)
+        assert 'outside this checkout' in refused(str(export), here, output=True)
+
+
+def test_junction_into_another_checkout_is_refused():
+    with tempfile.TemporaryDirectory() as tmp:
+        here = synthetic_checkout(tmp, 'here')
+        other = synthetic_checkout(tmp, 'other')
+        (other / 'local').mkdir()
+        made = subprocess.run(f'mklink /J "{here / "local"}" "{other / "local"}"', shell=True, capture_output=True, text=True)
+        if made.returncode != 0:
+            print(f'test_junction_into_another_checkout_is_refused: skipped, mklink /J failed: {made.stdout.strip()} {made.stderr.strip()}')
+            return
+        assert 'inside another checkout' in refused('local/slice', here, output=True)
+        assert 'inside another checkout' in refused(str(here / 'local/slice/report.json'), here, output=True)
+        assert 'inside another checkout' in refused('local/slice/in.png', here)
+        # A junction to a plain data folder (a runner's shared data root) is not another checkout: allowed.
+        os.rmdir(here / 'local')
+        shared = Path(tmp) / 'shared-data'
+        shared.mkdir()
+        subprocess.run(f'mklink /J "{here / "local"}" "{shared}"', shell=True, check=True, capture_output=True)
+        assert rp.from_repo('local/slice', here, output=True) == str(here / 'local/slice')
 
 
 POWERSHELL = shutil.which('powershell') or shutil.which('pwsh')
@@ -272,6 +328,42 @@ def test_checkout_guard():
         assert plain.returncode == 0 and f'returned={ROOT}' in plain.stdout, plain
     ours = guard(ROOT / 'tools')                           # cwd in the script's own checkout
     assert ours.returncode == 0 and f'returned={ROOT}' in ours.stdout, ours
+    # The same checkout reached through a junction is the same checkout (compared by physical path, not by text).
+    with tempfile.TemporaryDirectory() as tmp:
+        link = Path(tmp) / 'via-junction'
+        made = subprocess.run(f'mklink /J "{link}" "{ROOT}"', shell=True, capture_output=True, text=True)
+        if made.returncode != 0:
+            print(f'test_checkout_guard: junction case skipped, mklink /J failed: {made.stdout.strip()} {made.stderr.strip()}')
+            return
+        try:
+            through = guard(link / 'tools')
+            assert through.returncode == 0 and f'returned={ROOT}' in through.stdout, through
+        finally:
+            os.rmdir(link)                                 # removes the junction only, never the checkout behind it
+
+
+def test_launcher_resolves_the_job_through_the_shared_function():
+    """The wiring the three launchers use: Resolve-OwEditorJob runs the resolver, returns the resolved file for OPENWILLOW_SLICE_JOB,
+    and throws on a job that does not resolve. Runs without Unreal."""
+    if not POWERSHELL:
+        print('test_launcher_resolves_the_job_through_the_shared_function: skipped (no PowerShell)')
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        job = Path(tmp) / 'editor_job.json'
+        job.write_text(json.dumps({'tool': 'tools/slice_npc_assets.py', 'slice_dir': 'local/slice', 'npcs': []}), encoding='utf-8')
+        call = (f". '{ROOT / 'tools' / 'checkout_guard.ps1'}'; $env:OPENWILLOW_SLICE_JOB = Resolve-OwEditorJob '{sys.executable}' "
+                f"'{job}'; Write-Output \"job=$env:OPENWILLOW_SLICE_JOB\"")
+        run = lambda: subprocess.run([POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', call], cwd=tmp,
+                                     capture_output=True, text=True, encoding='utf-8', errors='replace')
+        done = run()
+        resolved = Path(tmp) / 'editor_job.resolved.json'
+        assert done.returncode == 0 and f'job={resolved}' in done.stdout, done
+        assert json.loads(resolved.read_text(encoding='utf-8'))['slice_dir'] == str(ROOT / 'local/slice')
+        job.write_text(json.dumps({'tool': 'tools/slice_npc_assets.py', 'slice_dir': '../runner-z55/local/slice'}), encoding='utf-8')
+        resolved.unlink()
+        stale = run()
+        assert stale.returncode != 0 and 'leaves the repository root' in stale.stderr and 'does not resolve' in stale.stderr, stale
+        assert 'job=' not in stale.stdout and not resolved.exists(), stale
 
 
 if __name__ == '__main__':

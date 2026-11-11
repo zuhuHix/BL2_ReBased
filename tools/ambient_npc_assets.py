@@ -33,6 +33,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slice_npc_assets as S  # noqa: E402
+from repo_paths import job_to_repo  # noqa: E402
 
 AMBIENT = ROOT / 'local/slice/ambient'
 CENSUS = ROOT / 'local/slice/ambient_npcs.json'
@@ -394,7 +395,8 @@ def attachments_step(args):
            'parent_materials': list(materials.values()),
            'heads': list(heads.values()), 'bodies': list(bodies.values()),
            'missing_meshes': [k for k, m in meshes.items() if not m.get('gltf')]}
-    S.write_json(AMBIENT / 'attach_job.json', job)
+    # Paths stored relative to the repository root; the launcher resolves them for the editor (tools/repo_paths.py).
+    S.write_json(AMBIENT / 'attach_job.json', job_to_repo(job, ROOT))
     S.write_json(AMBIENT / 'attach_extract.json', {'tool': TOOL, 'generated': S.now(), 'records': records})
     failed = [r['id'] for r in records if not r['success']]
     print(f'attachments: {len(job["meshes"])} meshes, {len(job["parent_materials"])} attachment materials, {len(job["heads"])} head variants, '
@@ -422,7 +424,7 @@ def editor_job_step(args):
         job['npcs'].append({'id': name, 'dest': npc['dest'], 'mesh_name': mesh, 'gltf': str(gltf), 'slots': slots,
                             'tracks': str(AMBIENT / f'anim_tracks_{name}.json'), 'roles': list(roles),
                             'reference_out': str(AMBIENT / f'ref_pose_{name}.json')})
-    S.write_json(AMBIENT / 'editor_job.json', job)
+    S.write_json(AMBIENT / 'editor_job.json', job_to_repo(job, ROOT))
     print(f'editor-job: wrote {AMBIENT / "editor_job.json"}')
 
 

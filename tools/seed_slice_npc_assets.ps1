@@ -60,11 +60,8 @@ function Use-EditorLock([scriptblock]$Body) {
 }
 
 function Invoke-Editor([string]$Mode, [string]$Script = $editorScript) {
-    # The stored job holds repo-relative paths; the editor reads a copy resolved against this checkout (tools/repo_paths.py).
-    $resolved = Join-Path $slice 'editor_job.resolved.json'
-    & $Python (Join-Path $PSScriptRoot 'repo_paths.py') resolve-job (Join-Path $slice 'editor_job.json') $resolved
-    if ($LASTEXITCODE -ne 0) { throw "the editor job does not resolve in $repo (see the message above)" }
-    $env:OPENWILLOW_SLICE_JOB = $resolved
+    # The stored job holds repo-relative paths; the editor reads a copy resolved against this checkout (tools/checkout_guard.ps1).
+    $env:OPENWILLOW_SLICE_JOB = Resolve-OwEditorJob $Python (Join-Path $slice 'editor_job.json')
     $env:OPENWILLOW_SLICE_MODE = $Mode
     $log = Join-Path $logs "editor-$Mode.log"
     $report = Join-Path $slice "editor_report_$Mode.json"
