@@ -9,7 +9,9 @@ param(
     [switch]$SkipBuild,
     [switch]$Shield,                    # -owslicegateshield: Maya fights with a shield (a fixture; see SLICE_GATE.md)
     [switch]$DownAfterFight,            # -owslicegatedownafterfight: lethal damage after the fight, to run the revive fixture
-    [string]$AudioPlay                  # -owaudioplay=<audio_play.json>: the host's sounds on during the run (tools/prepare_slice_audio.py); off when absent
+    [string]$AudioPlay,                 # -owaudioplay=<audio_play.json>: the host's sounds on during the run (tools/prepare_slice_audio.py); off when absent
+    [switch]$Unforced,                  # -owslicegateunforced: the stand-ins for play left out (SLICE_GATE.md, "The unforced variant"); starts the page server
+    [int]$Port = 8786                   # -Unforced only: the page server (tools/hud_overlay/serve.py) for the skills page and Marcus's mission page
 )
 # The Phase 4 slice gate as one unattended run (ROADMAP.md): Maya in Sanctuary_P with the Fire mission (-owquest, the
 # same manifests as tools/test_quest.ps1) and -owslicegate, the host sequence in OpenWillowSliceGate.cpp. It spawns Maya,
@@ -23,6 +25,10 @@ param(
 # against the real game.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+# -Unforced takes nothing from the two fixture variants: their shield and their lethal damage are stand-ins it leaves out.
+if ($Unforced -and ($Shield -or $DownAfterFight)) { throw '-Unforced cannot be combined with -Shield or -DownAfterFight.' }
+# Its loot link kills until a gun drops and its down link waits for the enemies, so it gets a longer limit unless one is given.
+if ($Unforced -and !$PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = 1500 }
 if (!$Game) { throw 'Set OPENWILLOW_BL2 or pass -Game (the installed Borderlands 2 folder).' }
 $env:OPENWILLOW_BL2 = (Resolve-Path -LiteralPath $Game).Path
 $manifests = [ordered]@{
@@ -43,6 +49,7 @@ $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $buildScript = Join-Path $Engine 'Engine/Build/BatchFiles/Build.bat'
 if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under $Engine" }
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+. (Join-Path $PSScriptRoot 'movie_hud.ps1')
 $outDir = Join-Path $repo 'local/slicegate'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 $save = Join-Path $outDir 'save.json'
@@ -61,8 +68,11 @@ if (!$SkipBuild) {
 }
 
 $code = 2
+$pages = $null
 Enter-OwUeLock -Owner 'test_slice_gate' -TimeoutSeconds $WaitForEditorSeconds
 try {
+    # -Unforced buys the Phaselock point on the skills page and takes the mission on Marcus's mission page: both need the page server.
+    if ($Unforced) { $pages = Start-OwMovieHud -Port $Port }
     $arguments = @("`"$project`"", '/Game/OpenWillow/Sanctuary_P/Sanctuary_P', '-owwalk', '-owmaya', '-owcanvashud',
         "-owmover=`"$($manifests.mover)`"", "-owslice=`"$($manifests.slice)`"", "-ownpcs=`"$($manifests.npcs)`"",
         "-owaudio=`"$($manifests.audio)`"", '-owquest', "-owquestsave=`"$save`"", "-owitems=`"$itemDir`"",
@@ -73,6 +83,7 @@ try {
     # The two variants keep the no-start-shield baseline their fixtures were written against (SLICE_GATE.md). The plain run starts as normal play does.
     if ($Shield -or $DownAfterFight) { $arguments += '-ownostartshield' }
     if ($AudioPlay) { $arguments += "-owaudioplay=`"$AudioPlay`"" }
+    if ($Unforced) { $arguments += @('-owslicegateunforced', "-owflashskills=$($pages.Url)skills.html", "-owflashmissionscreen=$($pages.Url)mission_screen.html") }
     $arguments += @('-game', '-windowed', '-ResX=1280', '-ResY=720', '-nosplash', '-unattended',
         '-ddc=InstalledNoZenLocalFallback', '-d3d11', "-abslog=`"$log`"")
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
@@ -86,12 +97,16 @@ try {
     }
     Start-Sleep -Seconds 3
     if (!(Test-Path -LiteralPath $log)) { throw "No log written: $log" }
-    Select-String -LiteralPath $log -Pattern 'OWSLICEGATE|ow\.RollGun|ow\.Range' |
+    $shown = if ($Unforced) { 'OWSLICEGATE|ow\.RollGun|ow\.Range|OpenWillow Skills spend|OWQUEST mission page' } else { 'OWSLICEGATE|ow\.RollGun|ow\.Range' }
+    Select-String -LiteralPath $log -Pattern $shown |
         ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
-    & python (Join-Path $repo 'tools/check_slice_gate.py') $log --json (Join-Path $outDir "links-$stamp.json") --markdown (Join-Path $outDir "links-$stamp.md")
+    $checkArgs = @($log, '--json', (Join-Path $outDir "links-$stamp.json"), '--markdown', (Join-Path $outDir "links-$stamp.md"))
+    if ($Unforced) { $checkArgs += '--expect-unforced' }
+    & python (Join-Path $repo 'tools/check_slice_gate.py') @checkArgs
     $code = $LASTEXITCODE
     Write-Host "Log: $log"
 } finally {
+    Stop-OwMovieHud $pages
     Exit-OwUeLock
 }
 exit $code

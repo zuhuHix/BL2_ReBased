@@ -23,19 +23,40 @@ CARD_DETAIL = 'aimed_drop=item_x card_id=item_x picked_id=item_x accepted=1 synt
 DECOY_DETAIL = 'aimed_drop=item_x nearer_decoy=item_y card_id=item_x picked_id=item_x accepted=1 synthetic detail'
 
 
-def build(results=None, stop_after=None, summary='auto', start=True, extra=(), fixtures=None, order=None, range_mode=False):
+# The fixtures each link of the three older variants names in a real run (SLICE_GATE.md's tables), in one synthetic log.
+OLD_VARIANT_FIXTURES = {
+    'reach_fight_area': 'selected enemy on fallback shapes, no stock mesh',
+    'kill_enemy': 'level rule overridden by the test: shield s1 of level 20 equipped on Maya of level 8; one shot at a time until the selected enemy was wounded; fire held until the selected enemy hit Maya',
+    'enemy_attacks_maya': 'level rule overridden by the test: shield s1 of level 20 equipped on Maya of level 8; fire held until the selected enemy hit Maya',
+    'loot_drop_on_kill': 'range set passive after the fight; lethal damage at the end of the fight; Maya revived to full health after the fight; guaranteed loot roll',
+    'pick_up_gun': 'teleport; gun rolled and dropped by the test',
+    'pick_up_aimed_not_nearest': 'two guns rolled and dropped by the test; teleport',
+    'phaselock_enemy': 'phaselock point granted',
+    'mission_accept': 'range cleared before the mission; teleport',
+    'mission_objective': 'teleport',
+    'mission_turn_in': 'teleport',
+    'go_down': 'lethal damage applied by the test',
+    'bleed_out_respawn': "down state from the test's lethal damage",
+}
+
+
+def build(results=None, stop_after=None, summary='auto', start=True, extra=(), fixtures=None, order=None, range_mode=False,
+          unforced=False):
     """Synthetic log lines: a start line, one link line per link (PASS unless results says otherwise, and only up to
     stop_after), the extra lines, then the SUMMARY line (counted from the results, unless summary is given or None).
     fixtures maps a link name to its fixtures text; order, a list of link names, replaces the expected order;
-    range_mode marks the run as one with the range on its start line."""
+    range_mode marks the run as one with the range on its start line; unforced marks it as the unforced variant, and its
+    default details then carry each link's how= token."""
     results = results or {}
-    lines = [PREFIX + f'OWSLICEGATE start synthetic run range_command={int(range_mode)}'] if start else []
+    lines = [PREFIX + f'OWSLICEGATE start synthetic run range_command={int(range_mode)}' + (' unforced=1' if unforced else '')] if start else []
     effective = {}
     fixtures = fixtures or {}
     for index, name in enumerate(order or chk.NAMES, 1):
         if stop_after is not None and index > stop_after:
             break
         default = {'pick_up_gun': CARD_DETAIL, chk.DECOY_LINK: DECOY_DETAIL}.get(name, 'synthetic detail')
+        if unforced and name in chk.UNFORCED_EVIDENCE:
+            default = f'{chk.UNFORCED_EVIDENCE[name]} synthetic detail'
         result, detail = results.get(name, ('PASS', default))
         effective[name] = result
         lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} fixtures=[{fixtures.get(name, "")}] detail={detail}')
@@ -365,12 +386,159 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
 
+    # The older variants (default, -Shield, -DownAfterFight) are graded as before: their forcing fixtures are not graded.
+
+    def test_older_variants_keep_their_fixtures_and_verdicts(self):
+        for range_mode in (False, True):
+            json_path = self.dir / f'old-{range_mode}.json'
+            code, out = self.run_checker(self.write_log(build(fixtures=OLD_VARIANT_FIXTURES, range_mode=range_mode)),
+                                         '--json', str(json_path))
+            self.assertEqual(code, 0, out)
+            self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
+            self.assertNotIn('unforced', out)
+            self.assertNotIn('error', out)
+            report = json.loads(json_path.read_text(encoding='utf-8'))
+            self.assertEqual(sorted(report), ['errors', 'fail', 'links', 'not_available', 'pass', 'summary_seen'])
+            self.assertEqual(sorted(report['links'][0]), ['detail', 'fixtures', 'index', 'name', 'owner', 'result'])
+            self.assertEqual(report['links'][8]['fixtures'], ['phaselock point granted'])
+
+    def test_older_variants_need_no_how_token(self):
+        details = {name: ('PASS', 'synthetic detail, no token') for name in chk.UNFORCED_EVIDENCE}
+        code, out = self.run_checker(self.write_log(build(details, range_mode=True)))
+        self.assertEqual(code, 0, out)
+
+    def test_older_variants_keep_the_old_not_available_rules(self):
+        results = {'go_down': ('NOT_AVAILABLE', 'Maya down from a previous link before the lethal damage was due'),
+                   'loot_drop_on_kill': ('NOT_AVAILABLE', 'no pickup appeared, and this build cannot force a gun roll')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True)))
+        self.assertEqual(code, 0, out)
+        self.assertIn('slice gate: 12 PASS, 0 FAIL, 2 NOT_AVAILABLE of 14', out)
+
+    # The unforced variant (-Unforced; the start line says unforced=1).
+
+    def test_unforced_run_with_every_link_unforced_passes(self):
+        fixtures = {'pick_up_gun': 'teleport', chk.DECOY_LINK: 'two guns rolled and dropped by the test; teleport',
+                    'kill_enemy': 'one shot at a time until the selected enemy was wounded; fire held until the selected enemy hit Maya',
+                    'go_down': 'teleport'}
+        json_path = self.dir / 'unforced.json'
+        code, out = self.run_checker(self.write_log(build(fixtures=fixtures, range_mode=True, unforced=True)),
+                                     '--expect-unforced', '--json', str(json_path))
+        self.assertEqual(code, 0, out)
+        self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
+        self.assertIn('unforced run: 14 of 14 links got there with no stand-in for play', out)
+        report = json.loads(json_path.read_text(encoding='utf-8'))
+        self.assertTrue(report['unforced'])
+        self.assertEqual([link['forced'] for link in report['links']], [[]] * TOTAL)
+
+    def test_unforced_run_fails_every_forcing_fixture(self):
+        names = {chk.FORCED_LOOT: 'loot_drop_on_kill', 'gun rolled and dropped by the test': 'pick_up_gun',
+                 "gun from the test's drop, not a kill": 'equip_gun', 'phaselock point granted': 'phaselock_enemy',
+                 'range set passive after the fight': 'loot_drop_on_kill', 'range cleared before the mission': 'mission_accept',
+                 'Maya healed to full after the fight': 'loot_drop_on_kill', 'Maya revived to full health after the fight': 'loot_drop_on_kill',
+                 'lethal damage at the end of the fight': 'loot_drop_on_kill', 'lethal damage applied by the test': 'go_down',
+                 "down state from the test's lethal damage": 'bleed_out_respawn',
+                 'accepted by the use key without the mission page': 'mission_accept',
+                 'turned in by the use key without the mission page': 'mission_turn_in'}
+        self.assertEqual(sorted(names), sorted(chk.FORCING_FIXTURES), 'a test for every forcing fixture')
+        for fixture, name in names.items():
+            with self.subTest(fixture=fixture):
+                json_path = self.dir / 'forced.json'
+                code, out = self.run_checker(self.write_log(build(fixtures={name: f'teleport; {fixture}'}, range_mode=True, unforced=True)),
+                                             '--json', str(json_path))
+                self.assertEqual(code, 1, out)
+                index = chk.NAMES.index(name) + 1
+                self.assertIn(f'checker: forced in an unforced run ({fixture}); host said PASS', self.row(out, index))
+                self.assertIn(f'error: link {name}: PASS overruled, forced in an unforced run', out)
+                self.assertIn(f'not unforced: {name}', out)
+                report = json.loads(json_path.read_text(encoding='utf-8'))
+                self.assertEqual(report['links'][index - 1]['forced'], [fixture])
+
+    def test_unforced_run_fails_a_shield_fixture(self):
+        for fixture in ('shield s1 equipped from the gear manifest', 'level rule overridden by the test: shield s1 of level 20 equipped on Maya of level 8',
+                        'host stand-in shield of 213 (no shield could be equipped from the gear manifest; not stock data)'):
+            with self.subTest(fixture=fixture):
+                code, out = self.run_checker(self.write_log(build(fixtures={'kill_enemy': fixture}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 1)
+                self.assertIn('checker: forced in an unforced run', self.row(out, 3))
+
+    def test_unforced_not_available_with_a_forcing_fixture_fails(self):
+        results = {'bleed_out_respawn': ('NOT_AVAILABLE', 'synthetic')}
+        fixtures = {'bleed_out_respawn': "down state from the test's lethal damage"}
+        code, out = self.run_checker(self.write_log(build(results, fixtures=fixtures, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('host said NOT_AVAILABLE', self.row(out, 14))
+
+    def test_unforced_pass_without_its_how_token_fails(self):
+        for name, token in chk.UNFORCED_EVIDENCE.items():
+            with self.subTest(link=name):
+                code, out = self.run_checker(self.write_log(build({name: ('PASS', 'synthetic, no token')}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 1)
+                self.assertIn(f'checker: no sign that it got there unforced (no {token} in the detail)', self.row(out, chk.NAMES.index(name) + 1))
+
+    def test_unforced_how_token_must_be_a_word_of_its_own(self):
+        results = {'go_down': ('PASS', 'synthetic xhow=enemies')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('no how=enemies in the detail', self.row(out, 13))
+
+    def test_unforced_down_not_available_fails_with_the_range(self):
+        results = {'go_down': ('NOT_AVAILABLE', 'synthetic: no enemy downed her')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: the range was there, so its enemies can down her', self.row(out, 13))
+        code, out = self.run_checker(self.write_log(build(results, range_mode=False, unforced=True)))
+        self.assertEqual(code, 0, out)
+        self.assertIn('NOT_AVAILABLE', self.row(out, 13))
+        self.assertIn('not unforced: go_down', out)
+
+    def test_unforced_loot_not_available_fails_with_the_range(self):
+        results = {'loot_drop_on_kill': ('NOT_AVAILABLE', 'synthetic')}
+        code, out = self.run_checker(self.write_log(build(results, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1)
+        self.assertIn('checker: the range was there, so its enemies can drop a gun', self.row(out, 5))
+
+    def test_unforced_fail_keeps_the_hosts_reason(self):
+        reason = 'no gun from 100 kill(s) (budget 100)'
+        code, out = self.run_checker(self.write_log(build({'go_down': ('FAIL', reason)}, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1)
+        self.assertIn(reason, self.row(out, 13))
+        self.assertNotIn('checker:', self.row(out, 13))
+        self.assertIn('unforced run: 13 of 14 links got there with no stand-in for play; not unforced: go_down', out)
+
+    def test_expect_unforced_fails_a_run_without_the_marker(self):
+        code, out = self.run_checker(self.write_log(build(range_mode=True)), '--expect-unforced')
+        self.assertEqual(code, 1)
+        self.assertIn('error: the unforced variant was asked for, but the start line has no unforced=1', out)
+
     def test_command_line_exit_code(self):
         script = Path(chk.__file__)
         done = subprocess.run([sys.executable, str(script), str(self.write_log(build(start=False)))],
                               capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(done.returncode, 2)
         self.assertIn('no slice-gate run in this log', done.stdout)
+
+
+class RunnerSourceTest(unittest.TestCase):
+    """tools/test_slice_gate.ps1: -Unforced changes nothing the older variants launch (read from the script's text)."""
+
+    def setUp(self):
+        self.source = (Path(__file__).resolve().parents[1] / 'tools' / 'test_slice_gate.ps1').read_text(encoding='utf-8')
+
+    def test_base_arguments_have_no_unforced_switch_or_page(self):
+        base = self.source[self.source.index('$arguments = @('):self.source.index("if ($Gun)")]
+        for switch in ('-owslicegateunforced', '-owflashskills', '-owflashmissionscreen', '-owflashhud'):
+            self.assertNotIn(switch, base)
+        self.assertIn("'-owcanvashud'", base)
+
+    def test_unforced_switches_are_added_only_under_the_switch(self):
+        code = [line.split('#')[0].strip() for line in self.source.splitlines()]
+        lines = [line for line in code if '-owslicegateunforced' in line or '--expect-unforced' in line or 'Start-OwMovieHud -Port' in line]
+        self.assertEqual(len(lines), 3, lines)
+        for line in lines:
+            self.assertTrue(line.startswith('if ($Unforced)'), line)
+
+    def test_unforced_refuses_the_fixture_variants(self):
+        self.assertIn("if ($Unforced -and ($Shield -or $DownAfterFight)) { throw", self.source)
 
 
 if __name__ == '__main__':

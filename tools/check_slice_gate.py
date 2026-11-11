@@ -13,6 +13,11 @@ it is overruled to FAIL where the capability is there: `enemy_attacks_maya` in a
 (`range_command=1` on the start line), `loot_drop_on_kill` with the gun roll forced, and a card link whose ids show a
 pickup attempt was made. A NOT_AVAILABLE whose detail starts "test setup gap" is this test's own setup or local data, not
 something the host lacks: it is owned by slice-gate and counted on its own line.
+
+The unforced variant (`tools/test_slice_gate.ps1 -Unforced`, `-owslicegateunforced`) marks its start line `unforced=1`. There,
+and only there, every link that names a fixture standing in for play (FORCING_FIXTURES) is a FAIL whatever the host said,
+and a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail. The other
+variants are graded as before. These are host grading rules, UNVERIFIED against the real game.
 """
 import argparse
 import json
@@ -196,6 +201,65 @@ def cross_check(rows, errors, range_mode):
             row['detail'] = f'checker: {why}; host said NOT_AVAILABLE: {row["detail"]}'
 
 
+# The unforced variant (SLICE_GATE.md, "The unforced variant"). Its start line carries unforced=1.
+UNFORCED_START = re.compile(r'OWSLICEGATE start\b.*\bunforced=1\b')
+# The fixtures that stand in for play: the forced gun, the granted point, the passive or cleared range, the heal or revive,
+# the test's lethal damage, a gun the test dropped, and the old use-key mission path. Exact names, as the host logs them.
+FORCING_FIXTURES = (
+    FORCED_LOOT,
+    'gun rolled and dropped by the test',
+    "gun from the test's drop, not a kill",
+    'phaselock point granted',
+    'range set passive after the fight',
+    'range cleared before the mission',
+    'Maya healed to full after the fight',
+    'Maya revived to full health after the fight',
+    'lethal damage at the end of the fight',
+    'lethal damage applied by the test',
+    "down state from the test's lethal damage",
+    'accepted by the use key without the mission page',
+    'turned in by the use key without the mission page',
+)
+# The -Shield variant's fixtures (a shield the test equipped) start with one of these.
+FORCING_PREFIXES = ('shield ', 'level rule overridden by the test', 'host stand-in shield')
+# What a PASS must say to show the link got there the player's way: a kill's own roll, the skills page, the mission page,
+# an enemy's hits, the respawn after that down.
+UNFORCED_EVIDENCE = {
+    'loot_drop_on_kill': 'how=kill_roll',
+    'phaselock_enemy': 'how=skills_page',
+    'mission_accept': 'how=mission_page',
+    'mission_turn_in': 'how=mission_page',
+    'go_down': 'how=enemies',
+    'bleed_out_respawn': 'how=after_enemy_down',
+}
+
+
+def forcing(fixtures):
+    """The fixtures in the list that stand in for play."""
+    return [f for f in fixtures if f in FORCING_FIXTURES or f.startswith(FORCING_PREFIXES)]
+
+
+def cross_check_unforced(rows, errors, range_mode):
+    """Unforced run: a link that relied on a forcing fixture is a FAIL, a PASS without its how= token is a FAIL, and with the
+    range there a NOT_AVAILABLE on the loot or the down link is a FAIL (its enemies can drop a gun and down her)."""
+    for row in rows:
+        row['forced'] = forcing(row['fixtures'])
+        if row['result'] == 'FAIL':
+            continue
+        token = UNFORCED_EVIDENCE.get(row['name'])
+        if row['forced']:
+            why = f'forced in an unforced run ({"; ".join(row["forced"])})'
+        elif row['result'] == 'PASS' and token and not re.search(rf'(?<!\S){re.escape(token)}\b', row['detail']):
+            why = f'no sign that it got there unforced (no {token} in the detail)'
+        elif row['result'] == 'NOT_AVAILABLE' and range_mode and row['name'] in ('loot_drop_on_kill', 'go_down'):
+            why = 'the range was there, so its enemies can ' + ('drop a gun' if row['name'] == 'loot_drop_on_kill' else 'down her')
+        else:
+            continue
+        errors.append(f'link {row["name"]}: {row["result"]} overruled, {why}')
+        row['detail'] = f'checker: {why}; host said {row["result"]}: {row["detail"]}'
+        row['result'] = 'FAIL'
+
+
 def build_rows(logged):
     """One row per expected link, in order. A link that was never logged is a FAIL (not reached)."""
     rows = []
@@ -244,6 +308,8 @@ def main(argv=None):
     parser.add_argument('log')
     parser.add_argument('--json', metavar='OUT', help='write the rows and totals as JSON')
     parser.add_argument('--markdown', metavar='OUT', help='write the rows as a markdown table')
+    parser.add_argument('--expect-unforced', action='store_true',
+                        help='the run was asked for the unforced variant: fail unless its start line says unforced=1')
     args = parser.parse_args(argv)
 
     lines = read_log(args.log)
@@ -253,7 +319,13 @@ def main(argv=None):
         return 2
 
     rows = build_rows(logged)
-    cross_check(rows, errors, any(RANGE_START.search(line) for line in lines))
+    range_mode = any(RANGE_START.search(line) for line in lines)
+    cross_check(rows, errors, range_mode)
+    unforced = any(UNFORCED_START.search(line) for line in lines)
+    if args.expect_unforced and not unforced:
+        errors.append('the unforced variant was asked for, but the start line has no unforced=1 (a build without -owslicegateunforced?)')
+    if unforced:
+        cross_check_unforced(rows, errors, range_mode)
     totals = {result: sum(1 for row in rows if row['result'] == result) for result in RESULTS}
     logged_counts = Counter(result for result, _, _ in logged.values())
     if summary is None:
@@ -272,6 +344,10 @@ def main(argv=None):
     gaps = sum(1 for row in rows if row['result'] == 'NOT_AVAILABLE' and row['detail'].startswith(SETUP_GAP))
     if gaps:
         print(f'{gaps} of those NOT_AVAILABLE are test setup gaps, not missing host capabilities: the link did not test the host')
+    if unforced:
+        not_unforced = [row['name'] for row in rows if row['result'] != 'PASS']
+        print(f'unforced run: {totals["PASS"]} of {len(LINKS)} links got there with no stand-in for play'
+              + (f'; not unforced: {", ".join(not_unforced)}' if not_unforced else ''))
     for error in errors:
         print(f'error: {error}')
 
@@ -285,6 +361,11 @@ def main(argv=None):
             'summary_seen': summary is not None,
             'errors': errors,
         }
+        if unforced:
+            # Only the unforced variant adds these keys, so the other variants' JSON stays as it was.
+            report['unforced'] = True
+            for entry, row in zip(report['links'], rows):
+                entry['forced'] = row['forced']
         Path(args.json).write_text(json.dumps(report, indent=1) + '\n', encoding='utf-8')
     if args.markdown:
         Path(args.markdown).write_text(markdown_text(rows), encoding='utf-8')

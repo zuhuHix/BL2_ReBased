@@ -1,8 +1,10 @@
 #include "OpenWillowSliceGate.h"
 #include "OpenWillowAudio.h"
 #include "OpenWillowCombatTarget.h"
+#include "OpenWillowEnemy.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryPickup.h"
+#include "OpenWillowMayaHUD.h"
 #include "OpenWillowNpc.h"
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
@@ -14,6 +16,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
@@ -36,6 +39,30 @@ constexpr float PhaselockTargetWait = 12.f;
 constexpr float WalkTimeout = 45.f;
 constexpr float DummyTimeout = 20.f;
 constexpr float BleedTimeout = 40.f;
+
+// -owslicegateunforced (SLICE_GATE.md, "The unforced variant"). Host choices, UNVERIFIED in game.
+constexpr int32 FarmKillBudget = 100;     // kills the loot link may take for a gun: 100 at the chance below misses 1.2% of the time
+constexpr float FarmTimeout = 720.f;      // ...and seconds of the extra kills
+constexpr float FarmGunChance = 0.043f;   // estimated gun chance per kill: 0.085 (Pool_GunsAndGear fires) x 0.508 (a weapon, stage-8 table)
+constexpr float FarmDropWait = 1.f;       // a kill's roll runs inside the death (HandleEnemyDied), so its drop is there at once
+constexpr float FarmTargetTimeout = 30.f; // fire at one enemy at most this long, then choose another
+constexpr float FarmReach = 2500.f;       // an enemy farther than this: Maya is placed 700 uu from it (teleport)
+constexpr float BuyTimeout = 30.f;        // the skills page loads and takes Enter in this time
+constexpr float BuySlateFor = 6.f;        // Enter through Slate this long, then also dispatched on the page
+constexpr float PhaselockReach = 1500.f;  // a target farther than this: Maya is placed 700 uu from it before the cast (teleport)
+constexpr float EnemyDownLimit = 90.f;    // Maya stands by the enemies without firing at most this long
+constexpr float DownRecoverWait = 50.f;   // a link group due while Maya is down waits this long (12 s bleed-out, then the respawn)
+
+// A key press and release through Slate, as the keyboard sends them (the mission page suite presses its keys the same way): the mission
+// page's input processor gets it. Code is the Windows key code; Enter also carries its character, Escape none.
+void PressSlateKey(const FKey& Key, uint32 Code)
+{
+    if (!FSlateApplication::IsInitialized()) return;
+    FSlateApplication& Slate = FSlateApplication::Get();
+    const FKeyEvent Event(Key, Slate.GetModifierKeys(), 0, false, Key == EKeys::Enter ? 13u : 0u, Code);
+    Slate.ProcessKeyDownEvent(Event);
+    Slate.ProcessKeyUpEvent(Event);
+}
 }
 
 UOpenWillowSliceGate::UOpenWillowSliceGate()
@@ -243,6 +270,207 @@ AOpenWillowCombatTarget* UOpenWillowSliceGate::NearestLiveTarget(bool bPreferEne
         if (Score < BestScore) { BestScore = Score; Best = *It; }
     }
     return Best;
+}
+
+// Unforced: the nearest living range enemy (the range's moving pawns; its static dummies roll no loot).
+AOpenWillowCombatTarget* UOpenWillowSliceGate::NearestLiveEnemy() const
+{
+    const FVector From = Walker()->GetActorLocation();
+    AOpenWillowCombatTarget* Best = nullptr;
+    float BestDistance = TNumericLimits<float>::Max();
+    for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
+        if (It->IsAutoAimTarget())
+            if (const float D = FVector::Dist(From, It->GetActorLocation()); D < BestDistance) { BestDistance = D; Best = *It; }
+    return Best;
+}
+
+void UOpenWillowSliceGate::PlaceNear(const AOpenWillowCombatTarget* Target, float Distance)
+{
+    const FVector At = Target->GetActorLocation();
+    FVector Away = (Walker()->GetActorLocation() - At).GetSafeNormal2D();
+    if (Away.IsNearlyZero()) Away = FVector::ForwardVector;
+    Place(At + Away * Distance + FVector(0, 0, 100.f), Target->AimPoint());
+}
+
+// Unforced: a gun that was not on the ground before the last kill. A gear item, or a range money or ammo pickup (another class), is not one.
+AOpenWillowInventoryPickup* UOpenWillowSliceGate::NewGunPickup(AOpenWillowInventoryPickup*& OutFar) const
+{
+    AOpenWillowInventoryPickup* Best = nullptr;
+    float BestDistance = LootRadius;
+    OutFar = nullptr;
+    for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
+    {
+        if (PickupsBeforeKill.Contains(*It) || It->GetItem().bIsGear) continue;
+        const float D = FVector::Dist(It->GetActorLocation(), KillLocation);
+        if (D < BestDistance) { BestDistance = D; Best = *It; }
+        else if (!OutFar) OutFar = *It;
+    }
+    return Best;
+}
+
+// Unforced loot (range mode): no forced roll, so a kill rolls the stock chance. The link kills range enemies until one drops a gun, within
+// FarmKillBudget kills and FarmTimeout seconds; the fight's kill is the first. Maya fires as in the fight (FireOnce) and is neither healed
+// nor revived: a kill while she is down gives her a second wind, a bleed-out ends in the walker's own respawn. The detail of a FAIL gives
+// the chance that a working drop would have missed in that many kills.
+void UOpenWillowSliceGate::TickFarmLoot(AOpenWillowWalker* W, float Delta)
+{
+    if (FarmLookFor <= 0.f) { FarmLookFor = LootWait; FarmPhase = 0; FarmClock = 0.f; }   // the fight's kill: looked for as long as the other variants do
+    FarmClock += Delta;
+    if (FarmPhase != 0 || LootKills > 1) FarmTime += Delta;
+    const FString Tally = FString::Printf(TEXT("kills=%d budget=%d, %.0fs of extra kills"), LootKills, FarmKillBudget, FarmTime);
+    if (FarmPhase != 0 && FarmTime >= FarmTimeout) { FarmPhase = 0; FarmClock = FarmLookFor; }   // out of time: the check below ends the link
+    if (FarmPhase == 0)
+    {
+        AOpenWillowInventoryPickup* Far = nullptr;
+        if (!Drop) Drop = NewGunPickup(Far);
+        if (Drop)
+        {
+            PassLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("how=kill_roll %s: pickup \"%s\" %.0f uu from the corpse of kill %d (the stock roll, no gun forced)"),
+                *Tally, *Drop->DisplayName(), FVector::Dist(Drop->GetActorLocation(), KillLocation), LootKills));
+            Next(EStep::Pickup);
+            return;
+        }
+        if (Far)
+        {
+            FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("%s: a gun \"%s\" appeared after kill %d, but at %s, %.0f uu from the corpse at %s (more than %.0f)"), *Tally,
+                *Far->DisplayName(), LootKills, *Far->GetActorLocation().ToCompactString(), FVector::Dist(Far->GetActorLocation(), KillLocation),
+                *KillLocation.ToCompactString(), LootRadius));
+            Next(EStep::Pickup);
+            return;
+        }
+        if (FarmClock < FarmLookFor) return;
+        if (LootKills >= FarmKillBudget || FarmTime >= FarmTimeout)
+        {
+            FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no gun dropped in %d kill(s) (%s); at the estimated %.3f gun chance per kill a working drop gives no gun in that many kills %.1f%% of the time"),
+                LootKills, *Tally, FarmGunChance, 100.f * FMath::Pow(1.f - FarmGunChance, float(LootKills))));
+            Next(EStep::Pickup);
+            return;
+        }
+        FarmPhase = 1;
+        FarmClock = 0.f;
+        return;
+    }
+    if (FarmPhase == 1)
+    {
+        if (W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead) return;   // the walker's own respawn is due
+        FarmTarget = NearestLiveEnemy();
+        if (!FarmTarget) return;   // all dead just now: the range respawns them
+        if (FVector::Dist(W->GetActorLocation(), FarmTarget->GetActorLocation()) > FarmReach && RunTime - LastFarmPlaceAt > 5.f)
+        {
+            LastFarmPlaceAt = RunTime;
+            PlaceNear(FarmTarget, 700.f);
+        }
+        PickupsBeforeKill.Reset();
+        for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
+        FarmPhase = 2;
+        FarmClock = 0.f;
+        ShotClock = 0.f;
+        return;
+    }
+    if (FarmTarget && FarmTarget->IsAutoAimTarget())
+    {
+        LastEnemyLocation = FarmTarget->GetActorLocation();
+        if (FarmClock < FarmTargetTimeout) { ShootAt(FarmTarget, 0.f); return; }
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note loot: %s still alive after %.0fs of fire, choosing another enemy"), *FarmTarget->GetName(), FarmTargetTimeout);
+        FarmPhase = 1;
+        return;
+    }
+    if (!FarmTarget) { FarmPhase = 1; return; }
+    KillLocation = LastEnemyLocation;
+    ++LootKills;
+    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note loot: kill %d, %s at %s, %.0fs of extra kills; Maya health %.0f/%.0f, shield %.0f, down %d"), LootKills,
+        *FarmTarget->GetName(), *KillLocation.ToCompactString(), FarmTime, W->GetHealth(), W->GetMaxHealth(), W->GetShield(), W->IsDown());
+    FarmTarget = nullptr;
+    FarmLookFor = FarmDropWait;
+    FarmPhase = 0;
+    FarmClock = 0.f;
+}
+
+// Unforced: the Phaselock point bought the way a player buys it. The skills page (tools/hud_overlay/skills.js) opens on the action skill, and
+// its Enter reports the spend (OWSKILL) that the HUD makes ("OpenWillow Skills spend" in the log). Enter goes through Slate first, as the
+// keyboard sends it (the page must have the focus); after BuySlateFor it is also dispatched on the page itself, and the detail says how
+// many of each were sent. True when done. If the page did not buy it, the point is granted as in the other variants, named as the fixture
+// the checker fails, so that the cast is still tried.
+bool UOpenWillowSliceGate::TickBuyPhaselock(AOpenWillowWalker* W, float Delta)
+{
+    UOpenWillowSkills* Skills = W->GetSkills();
+    APlayerController* PC = Cast<APlayerController>(W->GetController());
+    AOpenWillowMayaHUD* Hud = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr;
+    FString Why;
+    if (BuyPhase == 0)
+    {
+        if (Skills->GetActionGrade() >= 1) Why = TEXT("Phaselock was trained before the run, so nothing was bought");
+        else if (!Hud) Why = TEXT("no Maya HUD to open the skills page");
+        else
+        {
+            Hud->ToggleSkills();
+            if (Hud->IsSkillsOpen() && !Hud->IsInventoryOpen() && !Hud->IsMissionsOpen() && !Hud->IsMapOpen())
+            {
+                BuyPhase = 1;
+                BuyClock = 0.f;
+                BuyNextPress = 1.f;
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note skills page open: %d point(s) to spend, action grade %d"), Skills->AvailablePoints(), Skills->GetActionGrade());
+                return false;
+            }
+            Why = TEXT("the skills page did not open (no -owflashskills page, or no web browser in this engine)");
+        }
+    }
+    else
+    {
+        BuyClock += Delta;
+        if (Skills->GetActionGrade() >= 1)
+        {
+            BuyNote = FString::Printf(TEXT(" how=skills_page (the point bought on the skills page after %.1fs: %d Enter through Slate, %d dispatched on the page)"),
+                BuyClock, SlateEnters, PageEnters);
+            if (Hud) Hud->CloseSkills();
+            BuyPhase = 2;
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note skills page bought Phaselock:%s"), *BuyNote);
+            return true;
+        }
+        if (BuyClock < BuyTimeout)
+        {
+            if (Hud && Hud->IsSkillsOpen() && BuyClock >= BuyNextPress)
+            {
+                BuyNextPress = BuyClock + 1.f;
+                if (BuyClock < BuySlateFor) { Hud->SendSlateKey(TEXT("Enter")); ++SlateEnters; }
+                else { Hud->SendPageKey(TEXT("Enter")); ++PageEnters; }
+            }
+            return false;
+        }
+        Why = FString::Printf(TEXT("no spend in %.0fs on the skills page (%d Enter through Slate, %d dispatched on the page; the log's \"OpenWillow Skills\" lines say what the HUD did)"),
+            BuyTimeout, SlateEnters, PageEnters);
+        if (Hud) Hud->CloseSkills();
+    }
+    BuyPhase = 2;
+    if (Skills->GetActionGrade() < 1)
+    {
+        FString Reason;
+        bPhaselockPointGranted = Skills->TrySpend(-1, -1, -1, Reason);
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: the skills page did not buy Phaselock (%s); action skill point spent=%d %s"), *Why,
+            bPhaselockPointGranted, *Reason);
+    }
+    BuyNote = FString::Printf(TEXT(" (skills page: %s)"), *Why);
+    return true;
+}
+
+// Unforced turn-in: the use key (the TurnIn step) opens Marcus's turn-in page, Enter turns the mission in, and Enter on the reward page that
+// follows takes the reward and closes it. With no page shown, the other variants' second use-key press takes the reward on the old path,
+// named as the fixture the checker fails. True when done.
+bool UOpenWillowSliceGate::TickPageTurnIn(AOpenWillowWalker* W, float Delta)
+{
+    UOpenWillowQuest* Quest = W->GetQuest();
+    if (Quest && Quest->IsScreenPageShown())
+    {
+        if (!bTurnInPageSeen) { bTurnInPageSeen = true; PageShownFor = 0.f; PageNextEnter = 0.5f; }
+        PageShownFor += Delta;
+        if (PageShownFor >= PageNextEnter && TurnInEnters < 4) { PageNextEnter = PageShownFor + 1.f; ++TurnInEnters; PressSlateKey(EKeys::Enter, 13); }
+        if (PageShownFor < 10.f) return false;
+        PressSlateKey(EKeys::Escape, 27);   // stuck: leave the page so the later links can run (the reward page refuses it)
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note mission page still shown after %.0fs and %d Enter press(es); Escape sent"), PageShownFor, TurnInEnters);
+        return true;
+    }
+    if (!bTurnInPageSeen && !bSecondUse && StepTime >= 1.f) { bSecondUse = true; if (!bUseHeld) PressUse(); return false; }
+    return StepTime >= 2.5f;
 }
 
 // Marcus is the NPC standing at the quest's giver marker (eligible or turn-in); ambient NPCs are AOpenWillowNpc too.
@@ -459,6 +687,112 @@ bool UOpenWillowSliceGate::SkipWhileDown()
     return true;
 }
 
+// Unforced: a link group due to start while Maya is down waits for what the walker does by itself (a second wind, or the respawn after the
+// bleed-out), at most DownRecoverWait, and then starts; nothing revives her. Past that the skip above logs the group NOT_AVAILABLE. Runs
+// before the step's clock starts, so the step starts from its first tick once she is Up. Off in the other variants.
+bool UOpenWillowSliceGate::WaitWhileDown(AOpenWillowWalker* W, float Delta)
+{
+    if (!bUnforced || (StepTime > 0.f && DownWaitFor <= 0.f)) return false;
+    const TArray<const TCHAR*> Links = LinksFrom(uint8(Step), uint8(EStep::Pickup), uint8(EStep::PickupDecoy), uint8(EStep::Equip),
+        uint8(EStep::Phaselock), uint8(EStep::Accept), uint8(EStep::WaitWalk), uint8(EStep::TurnIn));
+    if (Links.IsEmpty()) return false;
+    if (!W->IsDown())
+    {
+        if (DownWaitFor > 0.f)
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note Maya Up again after %.1fs of waiting, with no revive (health %.0f/%.0f); %s starts now"), DownWaitFor,
+                W->GetHealth(), W->GetMaxHealth(), Links[0]);
+        DownWaitFor = 0.f;
+        return false;
+    }
+    if (DownWaitFor >= DownRecoverWait) { DownWaitFor = 0.f; return false; }
+    if (DownWaitFor <= 0.f)
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note Maya down (%s) when %s was due; waiting up to %.0fs for her own second wind or respawn"),
+            W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead ? TEXT("dead") : TEXT("injured"), Links[0], DownRecoverWait);
+    DownWaitFor += Delta;
+    return true;
+}
+
+// Unforced: an enemy must down Maya. She stands by the nearest living range enemy and does not fire (no shot, no Phaselock), so no kill
+// gives her a second wind, for at most EnemyDownLimit. No enemy, or no down in time, is the link's result; the test's lethal damage then
+// puts her down so the respawn link still runs, and that link names it (the fixture the checker fails).
+void UOpenWillowSliceGate::TickEnemyDown(AOpenWillowWalker* W)
+{
+    const auto FallbackLethal = [this, W]()
+    {
+        bLethalApplied = true;
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: lethal damage after the down link, so the respawn link still runs"));
+        FHitResult Hit;
+        UGameplayStatics::ApplyPointDamage(W, 1.0e6f, FVector::ForwardVector, Hit, nullptr, nullptr, UDamageType::StaticClass());
+        Next(EStep::Bleed);
+    };
+    const FString Downed = FString::Printf(TEXT("%s, health %.0f/%.0f"), W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead ? TEXT("dead") : TEXT("injured"),
+        W->GetHealth(), W->GetMaxHealth());
+    if (EnemyDownPhase == 0)
+    {
+        RespawnAtBefore = W->LastRespawnAt();
+        DeathLocation = W->GetActorLocation();
+        if (W->IsDown())
+        {
+            bEnemyDown = true;
+            EnemyDownPhase = 1;
+            PassLink(TEXT("go_down"), FString::Printf(TEXT("how=enemies: Maya was already down when this link was due (%s), from hits during an earlier step; this variant applies no lethal damage"), *Downed));
+            Next(EStep::Bleed);
+            return;
+        }
+        AOpenWillowCombatTarget* Near = bRangeMode ? NearestLiveEnemy() : nullptr;
+        if (!Near && bRangeMode && StepTime < 15.f) return;   // all dead just now: the range respawns them
+        EnemyDownPhase = 1;
+        if (!Near)
+        {
+            MissingLink(TEXT("go_down"), bRangeMode ? TEXT("no living range enemy within 15s to down Maya") : TEXT("no ow.Range on this build, so no enemy can down Maya"));
+            FallbackLethal();
+            return;
+        }
+        PlaceNear(Near, 250.f);
+        LastDownPlaceAt = StepTime;
+        DownHitsBefore = W->GetHitCount();
+        W->SetHitCauserTracking(true);
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note down: Maya placed by %s and stops firing; health %.0f/%.0f, shield %.0f/%.0f"), *Near->GetName(),
+            W->GetHealth(), W->GetMaxHealth(), W->GetShield(), W->GetShieldCapacity());
+        return;
+    }
+    const int32 Hits = W->GetHitCount() - DownHitsBefore;
+    const int32 NoCauser = W->GetHitCountFrom(nullptr);
+    if (W->IsDown())
+    {
+        W->SetHitCauserTracking(false);
+        if (Hits - NoCauser > 0)
+        {
+            bEnemyDown = true;
+            PassLink(TEXT("go_down"), FString::Printf(TEXT("how=enemies: down (%s) after %.1fs standing by the range enemies without firing, %d hit(s) (%d with an enemy as the causer), bleed-out %.1fs"),
+                *Downed, StepTime, Hits, Hits - NoCauser, W->DownBleedTotal()));
+        }
+        else FailLink(TEXT("go_down"), FString::Printf(TEXT("down (%s) with no hit from an enemy: %d hit(s), %d with no causer"), *Downed, Hits, NoCauser));
+        Next(EStep::Bleed);
+        return;
+    }
+    AOpenWillowCombatTarget* Near = NearestLiveEnemy();
+    if (StepTime < EnemyDownLimit)
+    {
+        // Stay by them: an enemy that has lost her is walked up to again (the teleport fixture), at most every 10 s. Aim only, no shot.
+        if (Near) AimAt(Near->AimPoint());
+        if (Near && StepTime - LastDownPlaceAt > 10.f && FVector::Dist(W->GetActorLocation(), Near->GetActorLocation()) > 1200.f)
+        {
+            LastDownPlaceAt = StepTime;
+            PlaceNear(Near, 250.f);
+        }
+        return;
+    }
+    W->SetHitCauserTracking(false);
+    int32 Close = 0;
+    for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
+        if (It->IsAutoAimTarget() && FVector::Dist(W->GetActorLocation(), It->GetActorLocation()) < 1500.f) ++Close;
+    FailLink(TEXT("go_down"), FString::Printf(TEXT("no enemy downed Maya in %.0fs standing by the range enemies without firing: %d hit(s) (%d with an enemy as the causer), health %.0f/%.0f, shield %.0f/%.0f, %d living enemies within 1500 uu, the nearest %.0f uu away"),
+        EnemyDownLimit, Hits, Hits - NoCauser, W->GetHealth(), W->GetMaxHealth(), W->GetShield(), W->GetShieldCapacity(), Close,
+        Near ? FVector::Dist(W->GetActorLocation(), Near->GetActorLocation()) : -1.f));
+    FallbackLethal();
+}
+
 void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorComponentTickFunction* Function)
 {
     Super::TickComponent(Delta, Type, Function);
@@ -473,6 +807,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         bUseHeld = false;
     }
     if (HoldLeft > 0.f) { HoldLeft -= Delta; return; }
+    if (WaitWhileDown(W, Delta)) return;   // unforced only
     // Names in EStep's order, for a recording's cue log; Cue does nothing without -owrecordaudio.
     static const TCHAR* const StepNames[] = {TEXT("Start"), TEXT("Spawn"), TEXT("Arena"), TEXT("Fight"), TEXT("Recover"), TEXT("Loot"), TEXT("Pickup"),
         TEXT("PickupDecoy"), TEXT("Equip"), TEXT("Phaselock"), TEXT("Accept"), TEXT("WaitWalk"), TEXT("Trigger"), TEXT("ShootDummy"), TEXT("TurnIn"),
@@ -490,8 +825,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         StepPause = FMath::Clamp(StepPause, 0.f, 10.f);
         // -owslicegatemag=<n> (test only, off by default): see ApplyMagazineFixture.
         FParse::Value(FCommandLine::Get(), TEXT("owslicegatemag="), MagazineFixture);
-        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE start map=%s quest=%d range_command=%d"), *GetWorld()->GetMapName(),
-            Quest && Quest->Enabled(), IConsoleManager::Get().FindConsoleObject(TEXT("ow.Range")) != nullptr);
+        bUnforced = FParse::Param(FCommandLine::Get(), TEXT("owslicegateunforced"));
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE start map=%s quest=%d range_command=%d%s"), *GetWorld()->GetMapName(),
+            Quest && Quest->Enabled(), IConsoleManager::Get().FindConsoleObject(TEXT("ow.Range")) != nullptr, bUnforced ? TEXT(" unforced=1") : TEXT(""));
+        if (bUnforced)
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note unforced variant: no forced gun (at most %d kills or %.0fs of extra kills), the point bought on the skills page, "
+                "the mission on Marcus's mission page, the range left as it is, no heal or revive, no lethal damage (enemies have %.0fs to down Maya)"),
+                FarmKillBudget, FarmTimeout, EnemyDownLimit);
         Next(EStep::Spawn);
         break;
 
@@ -506,7 +846,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             W->GetHealth(), W->GetMaxHealth(), W->GetCharacterMovement()->IsMovingOnGround(), Held ? *Held->Name : TEXT("nothing"));
         if (bGood) PassLink(TEXT("spawn_maya"), Detail); else FailLink(TEXT("spawn_maya"), Detail);
         // Test fixture: Phaselock needs one point in the action skill; spend it the way the skills page does.
-        if (W->GetSkills()->GetActionGrade() < 1)
+        if (!bUnforced && W->GetSkills()->GetActionGrade() < 1)   // unforced: bought on the skills page at the Phaselock link
         {
             FString Reason;
             const bool bSpent = W->GetSkills()->TrySpend(-1, -1, -1, Reason);
@@ -557,8 +897,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 // (it retries up to 8 seeds). Named as a fixture on the loot link.
                 if (IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeLoot")))
                 {
-                    GEngine->Exec(GetWorld(), TEXT("ow.RangeLoot always"));
-                    bLootForced = true;
+                    // Unforced: the stock chance. Normal is the range's own default, set so that the log shows it.
+                    GEngine->Exec(GetWorld(), bUnforced ? TEXT("ow.RangeLoot normal") : TEXT("ow.RangeLoot always"));
+                    bLootForced = !bUnforced;
                 }
                 GEngine->Exec(GetWorld(), TEXT("ow.Range"));
                 return;
@@ -650,6 +991,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (HeldFireFor > 0.f) Fixture(HoldFixture());
             PassLink(TEXT("kill_enemy"), FString::Printf(TEXT("%s killed with %d FireOnce shots from %s in %.1fs, %.1fs of it with fire held (hold ended by: %s)"), *Enemy->GetName(), KillShots,
                 Held ? *Held->Name : TEXT("?"), StepTime, HeldFireFor, HoldEnd.IsEmpty() ? TEXT("no hold") : *HoldEnd));
+            ++LootKills;   // the unforced loot link counts it as its first kill
         }
         else FailLink(TEXT("kill_enemy"), TEXT("the enemy disappeared before it died"));
         // Only a hit whose causer is the selected enemy counts; others are reported, not credited. Link cleared the list,
@@ -681,14 +1023,17 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (!bRecoverStarted)
         {
             bRecoverStarted = true;
-            if (bRangeMode && IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeMode")))
+            if (bUnforced)
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note unforced: the range stays as it is and Maya is not restored after the fight (health %.0f/%.0f, shield %.0f, down %d)"),
+                    W->GetHealth(), W->GetMaxHealth(), W->GetShield(), W->IsDown());
+            if (!bUnforced && bRangeMode && IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeMode")))
             {
                 GEngine->Exec(GetWorld(), TEXT("ow.RangeMode passive"));
                 Fixture(TEXT("range set passive after the fight"));
             }
             // -owslicegatedownafterfight: a fight has never left Maya down (a kill gives her a second wind), so this puts
             // her down here to run the revive below. The damage lands now; the next tick sees her Injured.
-            if (FParse::Param(FCommandLine::Get(), TEXT("owslicegatedownafterfight")) && !W->IsDown())
+            if (!bUnforced && FParse::Param(FCommandLine::Get(), TEXT("owslicegatedownafterfight")) && !W->IsDown())
             {
                 Fixture(TEXT("lethal damage at the end of the fight"));
                 FHitResult Hit;
@@ -701,7 +1046,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         const bool bWasDown = W->IsDown();
         // With a shield (-owslicegateshield) only a downed Maya is restored: her health after the fight is kept. A Maya
         // still Dead after the wait is not touched (SetHealth does not revive from Dead): the next links log NOT_AVAILABLE.
-        if (W->GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead && (bWasDown || (ShieldFixture.IsEmpty() && W->GetHealth() < W->GetMaxHealth())))
+        if (!bUnforced && W->GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead && (bWasDown || (ShieldFixture.IsEmpty() && W->GetHealth() < W->GetMaxHealth())))
         {
             const float FromHealth = W->GetHealth();
             State.SetHealth(State.Base.MaxHealth, State.Base.MaxHealth, GetWorld()->GetTimeSeconds());
@@ -715,6 +1060,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Loot: {
+        if (bUnforced && bRangeMode) { TickFarmLoot(W, Delta); break; }
         if (!Drop)
             for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It)
                 if (!PickupsBeforeKill.Contains(*It) && FVector::Dist(It->GetActorLocation(), KillLocation) < LootRadius) { Drop = *It; break; }
@@ -835,6 +1181,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Equip: {
         if (StepTime < 0.3f) return;
         FString Why;
+        if (bUnforced && bTestDrop && !GunId.IsEmpty()) Fixture(TEXT("gun from the test's drop, not a kill"));
         if (GunId.IsEmpty()) FailLink(TEXT("equip_gun"), TEXT("blocked: no looted or rolled gun in the backpack"));
         else if (EquipAndDraw(GunId, Why)) PassLink(TEXT("equip_gun"), Why);
         else FailLink(TEXT("equip_gun"), Why);
@@ -843,6 +1190,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Phaselock: {
+        // Unforced: the point is bought on the skills page first; the step's clock then starts again.
+        if (bUnforced && BuyPhase < 2) { if (TickBuyPhaselock(W, Delta)) StepTime = 0.f; return; }
         // Before any result, so that a failing path names it too.
         if (bPhaselockPointGranted) Fixture(TEXT("phaselock point granted"));
         // The killed enemy respawns (stand-in 3 s, range 8 s); any other live target near Maya serves too.
@@ -850,7 +1199,14 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (StepTime < 1.f || (!W->LastPhaselockTarget() && !Target && StepTime < PhaselockTargetWait)) return;
         if (!W->LastPhaselockTarget() || W->LastPhaselockCastAt() < RunTime - StepTime)
         {
-            if (!Target) { FailLink(TEXT("phaselock_enemy"), TEXT("no live target to cast at")); Next(EStep::Accept); return; }
+            if (!Target) { FailLink(TEXT("phaselock_enemy"), FString(TEXT("no live target to cast at")) + BuyNote); Next(EStep::Accept); return; }
+            // Unforced: Maya may have respawned far away; she is placed near the target first (the teleport fixture).
+            if (bUnforced && !bPhaselockPlaced && FVector::Dist(W->GetActorLocation(), Target->GetActorLocation()) > PhaselockReach)
+            {
+                bPhaselockPlaced = true;
+                PlaceNear(Target, 700.f);
+                return;
+            }
             AimAt(Target->AimPoint());
             FString Reason;
             if (!W->CanCastPhaselock(Reason))
@@ -858,9 +1214,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 if (StepTime < PhaselockTargetWait) return;   // e.g. still drawing the new gun
                 // A miss leaves no target and a short cooldown, so the last retry usually falls inside that cooldown. The misses
                 // are the result, not the refusal; a cast that never went out reports its reason.
-                FailLink(TEXT("phaselock_enemy"), PhaselockCasts > 0
+                FailLink(TEXT("phaselock_enemy"), (PhaselockCasts > 0
                     ? FString::Printf(TEXT("%d cast(s) went out and all missed: no preferred target (the log's \"Phaselock targeting\" line says why)"), PhaselockCasts)
-                    : FString::Printf(TEXT("no cast went out: %s"), *Reason));
+                    : FString::Printf(TEXT("no cast went out: %s"), *Reason)) + BuyNote);
                 Next(EStep::Accept);
                 return;
             }
@@ -871,9 +1227,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         // The cast went out on an earlier tick.
         if (W->LastPhaselockHit() && W->LastPhaselockTarget() == Enemy && Enemy->IsPhaselocked())
-            PassLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("%s lifted, lock %.1fs left"), *Enemy->GetName(), W->PhaselockRemaining()));
+            PassLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("%s lifted, lock %.1fs left"), *Enemy->GetName(), W->PhaselockRemaining()) + BuyNote);
         else FailLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("cast hit=%d blocked=%d target=%s"), W->LastPhaselockHit(), W->LastPhaselockBlocked(),
-            W->LastPhaselockTarget() ? *W->LastPhaselockTarget()->GetName() : TEXT("none")));
+            W->LastPhaselockTarget() ? *W->LastPhaselockTarget()->GetName() : TEXT("none")) + BuyNote);
         Next(EStep::Accept);
         break;
     }
@@ -885,7 +1241,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (W->IsPhaselockActive() && StepTime < 20.f) return;
             bAcceptStarted = true;
             // The range is done with: clear it (fixture) so no range actor takes the mission's shots or attacks Maya.
-            if (bRangeMode && IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeClear")))
+            if (!bUnforced && bRangeMode && IConsoleManager::Get().FindConsoleObject(TEXT("ow.RangeClear")))   // unforced: the range stays as it is
             {
                 GEngine->Exec(GetWorld(), TEXT("ow.RangeClear"));
                 Fixture(TEXT("range cleared before the mission"));
@@ -913,13 +1269,36 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             SnapshotBackpack();
             return;
         }
-        // One press, and a second one a second later if the first did not reach him.
-        if (Quest->Status() == 0 && (StepTime < 0.6f || (StepTime >= 1.5f && StepTime < 1.6f))) { if (!bUseHeld) PressUse(); return; }
-        if (Quest->Status() == 0 && StepTime < 3.f) return;
+        if (!bUnforced)
+        {
+            // One press, and a second one a second later if the first did not reach him.
+            if (Quest->Status() == 0 && (StepTime < 0.6f || (StepTime >= 1.5f && StepTime < 1.6f))) { if (!bUseHeld) PressUse(); return; }
+            if (Quest->Status() == 0 && StepTime < 3.f) return;
+        }
+        else if (Quest->IsScreenPageShown())
+        {
+            // Unforced: the use key opened Marcus's mission page; Enter on it accepts (the page's path, not the use key's).
+            if (!bAcceptPageSeen) { bAcceptPageSeen = true; PageShownFor = 0.f; PageNextEnter = 0.5f; }
+            PageShownFor += Delta;
+            if (Quest->Status() == 0 && PageShownFor >= PageNextEnter && AcceptEnters < 3) { PageNextEnter = PageShownFor + 1.5f; ++AcceptEnters; PressSlateKey(EKeys::Enter, 13); }
+            if (PageShownFor < 8.f) return;
+            PressSlateKey(EKeys::Escape, 27);   // Enter did not accept: leave the page so the later links can run
+        }
+        else
+        {
+            // Unforced, no page up: one press, and a second one a second later if the first did not reach him.
+            if (Quest->Status() == 0 && (StepTime < 0.6f || (!bAcceptPageSeen && StepTime >= 1.5f && StepTime < 1.6f))) { if (!bUseHeld) PressUse(); return; }
+            if (Quest->Status() == 0 && StepTime < 4.f) return;
+            if (Quest->Status() == 1 && !bAcceptPageSeen) Fixture(TEXT("accepted by the use key without the mission page"));
+        }
         LentId = NewBackpackItem();
-        if (Quest->Status() == 1) PassLink(TEXT("mission_accept"), FString::Printf(TEXT("use key at Marcus accepted the Fire mission; lent weapon %s"),
+        // Unforced only (empty otherwise, so the other variants' lines are as before): which path accepted.
+        const FString AcceptHow = !bUnforced ? FString()
+            : bAcceptPageSeen ? FString::Printf(TEXT("how=mission_page: the use key opened Marcus's mission page and Enter on it (%d press(es)) answered; "), AcceptEnters)
+            : FString(TEXT("no mission page was shown (no -owflashmissionscreen page, or not ready: the log's OWQUEST lines say which); "));
+        if (Quest->Status() == 1) PassLink(TEXT("mission_accept"), AcceptHow + FString::Printf(TEXT("use key at Marcus accepted the Fire mission; lent weapon %s"),
             LentId.IsEmpty() ? TEXT("not in the backpack") : *LentId));
-        else { FailLink(TEXT("mission_accept"), FString::Printf(TEXT("mission status %d after the use key at Marcus"), Quest->Status())); Next(EStep::Down); return; }
+        else { FailLink(TEXT("mission_accept"), AcceptHow + FString::Printf(TEXT("mission status %d after the use key at Marcus"), Quest->Status())); Next(EStep::Down); return; }
         Next(EStep::WaitWalk);
         break;
     }
@@ -985,9 +1364,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     }
 
     case EStep::Confirm:
-        if (StepTime < 1.0f) return;
-        if (StepTime < 1.05f) { if (!bUseHeld) PressUse(); return; }
-        if (StepTime < 2.5f) return;
+        if (bUnforced) { if (!TickPageTurnIn(W, Delta)) return; }
+        else
+        {
+            if (StepTime < 1.0f) return;
+            if (StepTime < 1.05f) { if (!bUseHeld) PressUse(); return; }
+            if (StepTime < 2.5f) return;
+        }
     {
         // All three, as SLICE_GATE.md records them: the mission complete, the experience reward, and the lent pistol
         // taken back (neither in the backpack nor held).
@@ -995,7 +1378,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
         const bool bReturned = !LentId.IsEmpty() && Inventory->FindItemIndexById(LentId) == INDEX_NONE
             && !(Held && UOpenWillowInventory::StableId(*Held) == LentId);
-        const FString Detail = FString::Printf(TEXT("status %d (want 3), experience %+lld (want > 0), lent weapon %s %s"), Quest->Status(), Gained,
+        if (bUnforced && !bTurnInPageSeen) Fixture(TEXT("turned in by the use key without the mission page"));
+        const FString TurnInHow = !bUnforced ? FString()
+            : bTurnInPageSeen ? FString::Printf(TEXT("how=mission_page: Enter on the turn-in and reward pages (%d press(es)); "), TurnInEnters)
+            : FString(TEXT("no mission page was shown; "));
+        const FString Detail = TurnInHow + FString::Printf(TEXT("status %d (want 3), experience %+lld (want > 0), lent weapon %s %s"), Quest->Status(), Gained,
             LentId.IsEmpty() ? TEXT("(none recorded)") : *LentId, bReturned ? TEXT("taken back") : TEXT("NOT taken back"));
         if (Quest->Status() == 3 && Gained > 0 && bReturned) PassLink(TEXT("mission_turn_in"), Detail);
         else FailLink(TEXT("mission_turn_in"), Detail);
@@ -1005,6 +1392,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
 
     case EStep::Down:
         if (StepTime < 0.5f) return;
+        if (bUnforced) { TickEnemyDown(W); break; }
         if (RespawnAtBefore == 0.f)
         {
             RespawnAtBefore = W->LastRespawnAt();
@@ -1033,7 +1421,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (!bRespawned && StepTime < BleedTimeout) return;
         if (bLethalApplied) Fixture(TEXT("down state from the test's lethal damage"));
         if (bRespawned && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
-            PassLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
+            PassLink(TEXT("bleed_out_respawn"), FString(bUnforced && bEnemyDown && !bLethalApplied ? TEXT("how=after_enemy_down: ") : TEXT(""))
+                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
                 StepTime, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation), W->GetHealth(), W->GetMaxHealth(),
                 Quest ? Quest->Status() : -1));
         else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, down %d, health %.0f/%.0f after %.0fs"),

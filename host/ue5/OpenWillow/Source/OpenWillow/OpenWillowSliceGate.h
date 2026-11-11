@@ -112,4 +112,49 @@ private:
     void SnapshotBackpack();
     FString NewBackpackItem() const;
     bool EquipAndDraw(const FString& Id, FString& OutWhy);
+
+    // -owslicegateunforced (tools/test_slice_gate.ps1 -Unforced): the run without the stand-ins for play. No forced gun, no granted
+    // point, no passive or cleared range, no heal or revive, no lethal damage: the loot link kills until a gun drops, the point is
+    // bought on the skills page, the mission is taken and turned in on Marcus's mission page, and enemies must down Maya. A link
+    // that falls back to a stand-in names it as a fixture, and tools/check_slice_gate.py fails it. The start line says unforced=1.
+    // Off, nothing below runs and the other variants log what they did before. SLICE_GATE.md, "The unforced variant".
+    bool bUnforced = false;
+    // Loot: kills counted so far (the fight's kill is the first), seconds spent on the extra kills, the enemy being killed, the
+    // phase (0 looking for the last kill's drop, 1 choosing the next enemy, 2 shooting it) and how long the drop is looked for.
+    int32 LootKills = 0;
+    float FarmTime = 0.f;
+    UPROPERTY() TObjectPtr<class AOpenWillowCombatTarget> FarmTarget;
+    int32 FarmPhase = 0;
+    float FarmClock = 0.f;
+    float FarmLookFor = 0.f;
+    float LastFarmPlaceAt = -100.f;
+    void TickFarmLoot(class AOpenWillowWalker* W, float Delta);
+    // A gun pickup that was not there before the last kill: the nearest within LootRadius of the corpse, else (OutFar) one further away.
+    class AOpenWillowInventoryPickup* NewGunPickup(class AOpenWillowInventoryPickup*& OutFar) const;
+    class AOpenWillowCombatTarget* NearestLiveEnemy() const;
+    // The Phaselock point on the skills page: 0 not begun, 1 the page open and Enter pressed once a second, 2 done.
+    int32 BuyPhase = 0;
+    float BuyClock = 0.f, BuyNextPress = 0.f;
+    int32 SlateEnters = 0, PageEnters = 0;
+    FString BuyNote;                // what the Phaselock link's detail adds: " how=skills_page ..." or why the page did not buy it
+    bool bPhaselockPlaced = false;  // Maya was placed near a far target once before the cast
+    bool TickBuyPhaselock(class AOpenWillowWalker* W, float Delta);
+    // The mission page: whether it was seen at the accept and at the turn-in, and the Enter presses sent to it.
+    bool bAcceptPageSeen = false, bTurnInPageSeen = false;
+    int32 AcceptEnters = 0, TurnInEnters = 0;
+    float PageShownFor = 0.f, PageNextEnter = 0.f;
+    bool bSecondUse = false;
+    bool TickPageTurnIn(class AOpenWillowWalker* W, float Delta);
+    // A link group due to start while Maya is down waits for the walker's own outcome (a second wind or the respawn), at most
+    // DownRecoverWait, instead of the skip; nothing revives her.
+    float DownWaitFor = 0.f;
+    bool WaitWhileDown(class AOpenWillowWalker* W, float Delta);
+    // The down link: 0 not begun, 1 Maya standing by the enemies without firing. The hits counted from there, and whether an enemy downed her.
+    int32 EnemyDownPhase = 0;
+    int32 DownHitsBefore = 0;
+    float LastDownPlaceAt = -100.f;
+    bool bEnemyDown = false;
+    void TickEnemyDown(class AOpenWillowWalker* W);
+    // Places Maya Distance uu from Target on her side of it, looking at it (the teleport fixture).
+    void PlaceNear(const class AOpenWillowCombatTarget* Target, float Distance);
 };

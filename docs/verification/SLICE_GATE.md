@@ -35,7 +35,8 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (38, all made-up log lines).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (55 since the unforced variant, 39 before it; all
+  made-up log lines, plus three that read the runner script's text).
 
 ### How a link is graded (review round 1)
 
@@ -109,8 +110,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   granted`, reported on `phaselock_enemy`).
 - When a gun's magazine and reserve are both empty, its reserve is refilled (fixture `ammo reserve refilled`). The stand-in target has 20,000 health, sized
   for level-30 guns, so a level-8 pistol needs about 470 shots.
-- **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6), because no enemy can attack Maya yet. It is named on
-  `go_down`, and `bleed_out_respawn` names the down state it started from.
+- **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6). It was written before the range, when no enemy could attack
+  Maya; the range's enemies attack her now (link 4), but none has downed her in a gate run. It is named on `go_down`, and
+  `bleed_out_respawn` names the down state it started from. The unforced variant below leaves it out.
 - **`FireOnce` ignores the gun's fire rate.** It fires whenever the driver calls it, every tick outside the wait for the
   wound, so link 3's shot counts and kill times are not what the gun would do in play. Link 3 does not grade time.
 - The lent mission pistol is readied with `EquipItem` + `DrawItemById`, as in `test_quest`.
@@ -324,13 +326,97 @@ Earlier runs, on a throwaway local merge of f5d5d60 + this variant + `origin/fea
 - **Both:** `loot_drop_on_kill` PASS (the drop 62-63 uu from the corpse, with the range's drop fix), and `pick_up_gun`
   PASS on that real drop, without the test-drop fixture.
 
+## The unforced variant (`-Unforced`, 2026-11-11)
+
+AI-assisted (Claude Opus 5.5), lane unforced-gate. **Not run yet, and the C++ was not compiled when this was written:** the
+build slot was held by a test batch. Everything in this section describes the driver and the checker as written. None of it
+is a result, and none of it is checked against the real game.
+
+The three older variants show that the host can do each step. Four of their links pass only on stand-ins: the forced gun
+(`ow.RangeLoot always`), the granted Phaselock point, the lethal-damage down, and the respawn that follows from that down.
+The mission is accepted and turned in with the use key alone, the range is cleared before it, and Maya is healed after the
+fight. `tools/test_slice_gate.ps1 -Unforced` (host switch `-owslicegateunforced`) runs the same 14 links in the same order
+without those stand-ins. Each link then shows whether the loop got there on its own.
+
+**What it leaves out, link by link:**
+- **Loot (link 5).** The range's loot mode is set to `normal`, so each kill rolls the stock chance. The link kills range
+  enemies, the nearest living one each time, until a gun drops near a corpse. The fight's kill counts as the first. The budget
+  is 100 kills or 720 s of extra kills, whichever comes first. A PASS says `how=kill_roll kills=<n> budget=100`.
+- **No heal or revive.** After the fight the range is not set passive and Maya is not restored. A link group that is due while
+  she is down waits up to 50 s for her own second wind or her respawn. If she is still down after that, the older variants'
+  skip applies.
+- **Phaselock (link 9).** The point is bought on the skills page: the page opens on the action skill, and Enter is pressed
+  once a second for up to 30 s. For the first 6 s Enter goes through Slate, as a keyboard sends it. After that it is also
+  dispatched on the page itself (`SendPageKey`), because the page only sees a Slate key when it has the focus. The PASS says
+  `how=skills_page` and how many presses of each kind were sent. If the page buys nothing, the point is granted as in the
+  other variants. That is named as the fixture, so the cast is still tried, and the checker fails the link.
+- **Mission (links 10 and 12).** At Marcus, the use key opens his mission page. Enter on it accepts. At the turn-in, Enter
+  turns the mission in and a second Enter takes the reward. The keys go through Slate to the page's own key handler
+  (`UOpenWillowQuest::OnScreenKey`), the way `tools/test_mission_page.ps1` presses them. If no page is shown, the use key
+  falls back to the older path and the link names `accepted by the use key without the mission page` (or `turned in ...`).
+  The runner starts the page server (`tools/movie_hud.ps1`, port 8786) and passes `-owflashskills` and
+  `-owflashmissionscreen`. The gameplay HUD stays the canvas one, as in the other variants.
+- **The range during the mission (links 10 to 12).** It is neither cleared nor made passive. Its enemies may follow Maya,
+  attack her or take the mission's shots. This is the first gate run of the range and the mission together.
+- **Down (link 13).** Maya is placed 250 uu from the nearest living range enemy and stops fighting back. She fires no shot and
+  casts no Phaselock, so no kill can give her a second wind, and she aims at the nearest enemy. If that enemy is more than
+  1,200 uu away she is placed by it again, at most every 10 s. The time limit is 90 s. A PASS needs her down with at least one
+  hit whose causer is an actor (`how=enemies`). With no down in 90 s the link FAILs. The detail gives the hits, her health and
+  shield, and the enemies within 1,500 uu. The test's lethal damage then puts her down so that link 14 still runs, and link 14
+  names it. If she was already down when link 13 was due, from hits during an earlier step, the link passes on that down,
+  since this variant applies no damage of its own.
+- **Respawn (link 14).** The walker's own bleed-out and respawn, after the enemy down (`how=after_enemy_down`).
+- **Kept:** teleports between places (`teleport`), the fight's hold on fire and one shot at a time, `FireOnce` ignoring the
+  fire rate, the ammo refill, and the decoy link's two test drops. These are test shortcuts of the gate, not stand-ins for
+  the four links above. The checker does not fail them.
+
+**How it is graded** (`tools/check_slice_gate.py`; host grading rules, `UNVERIFIED` against the game):
+- The start line ends `unforced=1`. The runner passes `--expect-unforced`, and a log without the marker (a build without the
+  switch) then fails.
+- Any link whose fixtures name a stand-in for play is a FAIL, whatever the host said. The list in the checker
+  (`FORCING_FIXTURES`) has the forced gun, a gun the test dropped, the granted point, the passive or cleared range, the heal
+  and the revive, all three lethal-damage fixtures, both use-key mission fixtures, and the `-Shield` fixtures.
+- A PASS on links 5, 9, 10, 12, 13 or 14 needs its `how=` token in the detail.
+- With the range there, a NOT_AVAILABLE on link 5 or 13 is a FAIL, since its enemies can drop a gun and can down her.
+- The report adds a line `unforced run: <n> of 14 links got there with no stand-in for play; not unforced: <links>`, and the
+  JSON gains `unforced` and a `forced` list per link. The older variants' output is unchanged. Their synthetic tests pass as
+  before, and 400 random older-variant logs graded the same with the checker on main and this one (exit code, table, JSON,
+  markdown).
+
+**Choices made here** (simpler option taken each time; host choices, `UNVERIFIED`):
+- **The kill budget.** The gun chance per kill is estimated at 0.043: `Pool_GunsAndGear` fires at 0.085 (COMBAT_LOOT.md), and
+  in the stage-8 table weapons are 50.8 % of what it gives (WEAPON_BALANCE_DECODE.md); the host's roll drops nothing for a
+  shield or grenade mod pick (COMBAT_RANGE.md). The range draws an item stage per death (4 to 7 for an adult at level 6,
+  COMBAT_RANGE.md); the share at the stages a level-8 range draws was not checked. With that
+  chance, 100 kills miss a gun with probability 0.957^100, about 1.2 %. Three runs miss at least once about 3.6 % of the time.
+  A run needs about 23 kills on average. The kill time was not measured (one adult took 6.3 s in an early run, the Psycho
+  3.5 s with the hold), so the 720 s cap may end a run first. A FAIL then states the miss probability for the kills it made.
+- **"Stops fighting back" and the 90 s limit.** She stops firing and casting, nothing more: no walking away, no crouching.
+  Z16 measured one round of the pack at 185 of 213 health, the stand-in start shield holds 383, and the swing interval is
+  about 1.25 s, so a few rounds should be enough. The 90 s leaves room for noticing, closing in and the shield's recharge.
+  Those numbers are arithmetic, not a run.
+- **Fallbacks keep the later links running.** When a link cannot get there unforced, the older variants' stand-in is used and
+  named (granted point, test drop, lethal damage). The checker fails that link and its dependants, and the later links are
+  still tested. The runner's time limit is 1,500 s unless `-TimeoutSeconds` is given.
+- `-Unforced` refuses `-Shield` and `-DownAfterFight`. The run starts with the stand-in start shield, as normal play does.
+
+**What it will not show even when it passes:** travel is still by teleport, the fight still uses the hold on fire and
+`FireOnce` without the fire rate, the pages are driven by key events rather than a person, and frames are not captured.
+Nothing is checked against the real game.
+
+**Expected first result:** `go_down` FAIL or NOT_AVAILABLE (no gate run has had an enemy down her), and a FAIL on
+`bleed_out_respawn` from the lethal fallback. Links 10 to 12 may show what the live range does to the mission.
+
 ## Gaps, with the owning lane
 
 | Gap | Link(s) | Owner | What closes it |
 |---|---|---|---|
-| No fight has left Maya down | revive fixture, 13, 14 | slice-gate | Only the test's lethal damage has downed her so far |
-| No low-level stock shield in the gear manifest | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8 would remove the level-override fixture. Maya still has no shield at spawn, so the restore fixture stays |
-| Generated guns have no firing block | 7 (not graded) | projectiles | `ow.RollGun` guns fire the host's fallback trace (WEAPON_PROJECTILES.md, "Generated guns have no firing block yet"). The equip link does not grade the gun's firing |
+| No enemy has downed Maya in a gate run | revive fixture, 13, 14 | range / slice-gate | Every down so far came from the test's lethal damage. The `-Unforced` variant now asks the range's enemies to do it (90 s, Maya not firing). Not run yet |
+| The gun drop is forced | 5, 6 | slice-gate | `-Unforced` kills until a gun drops (budget 100 kills). Not run yet |
+| The Phaselock point is granted | 9 | slice-gate | `-Unforced` buys it on the skills page. Not run yet |
+| The mission is taken with the use key alone, and the range is cleared first | 10 to 12 | slice-gate | `-Unforced` uses the mission page's Enter and leaves the range as it is. Not run yet; the range and the mission have never run together in the gate |
+| `-Shield` needs the level override | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8 would remove the level-override fixture. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
+| The equip link does not grade the gun's firing | 8 | projectiles | Generated guns take their firing block from templates since 2026-11-06 (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates"); that firing is `UNVERIFIED` in game |
 
 Links that pass now but rest on rules still `UNVERIFIED` in game are covered in their own records:
 - Phaselock: PHASELOCK_STOCK_DATA.md, NATIVE_PHASELOCK_TARGETING.md.
@@ -361,6 +447,8 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-07 | Z13: #126 at 7f59924 + #133 at 716302b, five enemies, zuhu, all three variants | 13 / 1 / 0 of 14, each | link 4 FAIL: the burst killed the selected Psycho before the hold started; fixed in the driver by one shot at a time |
 | 2026-11-07 | Z16: #126 at 5a39f57 + #133 at 51deb95, five enemies, zuhu, all three variants | 14 / 0 / 0 of 14, each | one shot at a time and the hold both ran; Maya 28/213 after the fight without a shield; no enemy downed her |
 | 2026-11-07 | Z23: main 7eee9ee, five enemies, zuhu, no switch twice, `-Shield`, `-DownAfterFight` | 14 / 0 / 0 of 14, each | the first runs of the 14 links on `main` itself; no `fallback=shapes` line in the four logs; ctest 28/28, verify_packages exact; logs under ignored `local/` |
+| 2026-11-07 to 11-11 | hub batches Z26, Z35, Z37 (three runs), Z41 to Z52b, each on that batch's candidate or main, zuhu | 14 / 0 / 0 of 14, as reported | from the hub's log (ignored, local): it records "gate 14" or "14/0/0" per batch. This lane did not read those logs, and the log does not always say which variants ran |
+| 2026-11-11 | `-Unforced` added (feature/slice-gate-unforced) | not run | the driver was not compiled (build slot held by a batch); checker tests 55/55 |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
