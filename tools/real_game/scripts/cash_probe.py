@@ -64,12 +64,47 @@ def cp_start():
 
 def cp_immune_off():
     """Remove this probe's own immunity hooks (cash_capture.ps1 -DenDown: the pack may reach Maya). Nothing else changes.
-    Returns cp_immune() afterwards, which is False once every hook is gone."""
+    Returns {"remaining": [...]}: every path that still has this probe's hook, asked of the SDK path by path. Empty means none is left."""
     for path in CP.get("immune_paths") or []:
         if has_hook(path, Type.PRE, CP_IMMUNE_ID):
             remove_hook(path, Type.PRE, CP_IMMUNE_ID)
     CP["hooks"] = [h for h in CP["hooks"] if h[2] != CP_IMMUNE_ID]
-    return cp_immune()
+    return {"remaining": immune_remaining(CP.get("immune_paths") or [], lambda path: has_hook(path, Type.PRE, CP_IMMUNE_ID))}
+
+
+def immune_remaining(paths, hooked):
+    """The paths among `paths` that still carry the immunity hook, by hooked(path)."""
+    return [path for path in paths if hooked(path)]
+
+
+def down_state(pawn, health, injured):
+    """Why Maya counts as down or up, from what could be read: 'no_pawn', 'no_health', 'injured_flag' or 'up'. `injured` is None when
+    the pawn has no readable bIsInjured field, so a down shows only at bleed-out ('no_health' / 'no_pawn') and is not taken for the time
+    to the down."""
+    if pawn is None:
+        return "no_pawn"
+    if health is None or health <= 0:
+        return "no_health"
+    if injured:
+        return "injured_flag"
+    return "up"
+
+
+def cp_down_state():
+    """Maya's state for the den down, reads only: the condition, the health, whether the injured field could be read, the state name."""
+    pawn = get_pc().Pawn
+    if pawn is None:
+        return {"state": down_state(None, None, None), "injured_field": None}
+    health = pawn.GetHealth()
+    try:
+        injured = bool(pawn.bIsInjured)
+    except Exception:
+        injured = None
+    try:
+        state_name = str(pawn.GetStateName())
+    except Exception:
+        state_name = None
+    return {"state": down_state(pawn, health, injured), "injured_field": injured is not None, "state_name": state_name}
 
 
 def cp_immune():

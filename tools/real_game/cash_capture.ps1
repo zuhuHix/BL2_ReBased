@@ -28,6 +28,8 @@ param(
     [switch]$SkipDen,
     # Slice sessions (2026-11-11): every SDK mod's setting turned off for this run (Set-SdkModsOff; the restore puts the settings back from the backup).
     [switch]$SdkModsOff,
+    # With -SdkModsOff: the exact setting names it may turn off; any other enabled set is refused before anything is written.
+    [string[]]$SdkModsExpected = @(),
     # Slice sessions: a slice_watch spec (tools/real_game/scripts/slice_watch.py). The read-only recorder runs beside the stages, and its dump is
     # checked (tools/real_game/slice_watch_check.py) before the game closes. Empty: no watch.
     [string]$WatchSpec = '',
@@ -43,6 +45,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . $Helpers
 . (Join-Path $PSScriptRoot 'slice_watch.ps1')
+# Slice sessions: a bad spec, or too little free disk for the backups and the recording, stops the run here, before anything is changed.
+if ($WatchSpec) { Assert-WatchSpec $WatchSpec }
+if ($WatchSpec -or $SdkModsOff) { $null = Assert-DiskReserve }
 $Out = Join-Path $script:RG 'cash'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind, and a dump that fails must not be checked against an earlier
@@ -122,7 +127,6 @@ try {
     }
     # The record outlives this process: the printed recovery command restores from it, and refuses a root that changed since.
     Save-VerifiedBackupRecord $bak $roots $snapshots
-    if ($SdkModsOff) { Invoke-SdkModsOffStep $log }
     # -Exclusive re-checks the folder is absent and removes its own partial install on failure, so it is ours only once this returns.
     $driverAttempted = $true   # before the call: a failed install can leave the folder behind
     Install-Driver -BlockSavesAtStart -Exclusive
@@ -131,6 +135,9 @@ try {
     $foreign = Get-ForeignGamesSeen $null
     if ($foreign) { throw "a game this run did not start is running (pid $foreign); not launching" }
     $launchAttempted = $true
+    # After the flag: from here the unchanged finalizer restores every root from the verified backup, so settings turned off here are put back
+    # even when the launch never happens or the write stops half way.
+    if ($SdkModsOff) { Invoke-SdkModsOffStep $log $SdkModsExpected }
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
@@ -249,11 +256,27 @@ try {
             $first = Py 'print(dp_begin())'
             if ($first -eq 'None') { throw 'no enemy within reach for the den down' }
             if ($WatchSpec) { Save-SliceWatchSnap 'before_down'; $log.watch_before_down = Save-SliceWatchPawns 'before_down' }
-            $log.den_down_immune_after_off = Py 'print(cp_immune_off())'
-            if ($log.den_down_immune_after_off -ne 'False') { throw "the immunity hook is still installed: $($log.den_down_immune_after_off)" }
+            $off = Py 'import json; print(json.dumps(cp_immune_off()))' | ConvertFrom-Json
+            $log.den_down_immune_remaining = @($off.remaining)
+            if ($null -eq $off.remaining -or @($off.remaining).Count) { throw "the immunity hook is still installed on: $(@($off.remaining) -join ', ')" }
+            # Only an exact state counts: 'up', or a named down condition. Any other reply (a traceback, an empty answer) is a failed poll, counted;
+            # five in a row fail the stage. The condition that first fired is kept, so a down seen only at bleed-out is not read as the time to the down.
+            $script:pollErrors = 0; $script:inARow = 0
+            $poll = {
+                try {
+                    $r = Py 'import json; print(json.dumps(cp_down_state()))' | ConvertFrom-Json
+                    if ($r.state -in 'up', 'no_pawn', 'no_health', 'injured_flag') { $script:inARow = 0; return $r }
+                    throw "unexpected state '$($r.state)'"
+                } catch {
+                    $script:pollErrors++; $script:inARow++
+                    if ($script:inARow -ge 5) { throw "five den-down polls in a row failed: $_" }
+                    return $null
+                }
+            }
             $downAt = $null; $t0 = Get-Date
             while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds) {
-                if ((Py 'print(cp_up())') -ne 'True') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); break }
+                $r = & $poll
+                if ($r -and $r.state -ne 'up') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
                 Start-Sleep 1
             }
             $log.den_down_after_s = $downAt
@@ -263,12 +286,14 @@ try {
                 $t1 = Get-Date
                 while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds) {
                     Start-Sleep 2
-                    if ((Py 'print(cp_up())') -eq 'True') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
+                    $r = & $poll
+                    if ($r -and $r.state -eq 'up') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
                 }
                 # The respawn dialog and the fee come a few seconds after she stands: leave them time before the last snapshot.
                 Start-Sleep 15
                 if ($WatchSpec) { Save-SliceWatchSnap 'after_respawn' }
             }
+            $log.den_down_poll_errors = $script:pollErrors
             $log.den_down_up_after_s = $upAt
             # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence, so an error here is only logged.
             try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null } catch { $log.den_down_trial_close = "$_" }

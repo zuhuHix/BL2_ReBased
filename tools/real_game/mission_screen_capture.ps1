@@ -11,6 +11,8 @@ param(
     [switch]$SkipRespawn,
     # Slice sessions (2026-11-11): every SDK mod's setting turned off for this run (Set-SdkModsOff; the restore puts the settings back from the backup).
     [switch]$SdkModsOff,
+    # With -SdkModsOff: the exact setting names it may turn off; any other enabled set is refused before anything is written.
+    [string[]]$SdkModsExpected = @(),
     # Slice sessions: a slice_watch spec (tools/real_game/scripts/slice_watch.py). The read-only recorder runs beside the stages, and its dump is
     # checked (tools/real_game/slice_watch_check.py) before the game closes. Empty: no watch.
     [string]$WatchSpec = '',
@@ -22,6 +24,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2' }
 . (Join-Path $PSScriptRoot 'realgame.ps1')
 . (Join-Path $PSScriptRoot 'slice_watch.ps1')
+# Slice sessions: a bad spec, or too little free disk for the backups and the recording, stops the run here, before anything is changed.
+if ($WatchSpec) { Assert-WatchSpec $WatchSpec }
+if ($WatchSpec -or $SdkModsOff) { $null = Assert-DiskReserve }
 $Out = Join-Path $script:RG 'mission_screen'
 New-Item -ItemType Directory -Force $Out | Out-Null
 # Stale evidence: a final write that fails must not leave an earlier run's completed behind. Kept under a new name, not deleted: after a run that
@@ -128,7 +133,6 @@ try {
         if (Test-Path -LiteralPath $extraRoots[$d]) { $snapshots[$d] = New-VerifiedSnapshot $extraRoots[$d] (Join-Path $bak $d) } else { $snapshots[$d] = 'absent' }
     }
     Save-VerifiedBackupRecord $bak $roots $snapshots
-    if ($SdkModsOff) { Invoke-SdkModsOffStep $log }
     # -Exclusive re-checks that the folder is absent (it may have appeared while this run waited for the locks) and removes
     # its own partial install on failure, so the folder is this run's only once the call has returned.
     $driverAttempted = $true   # before the call: a failed install can leave the folder behind
@@ -140,6 +144,9 @@ try {
     $foreign = Get-ForeignGamesSeen $null
     if ($foreign) { throw "Borderlands2 (pid $foreign) started during the setup; not launching a second one" }
     $launchAttempted = $true
+    # After the flag: from here the unchanged finalizer restores every root from the verified backup, so settings turned off here are put back
+    # even when the launch never happens or the write stops half way.
+    if ($SdkModsOff) { Invoke-SdkModsOffStep $log $SdkModsExpected }
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }

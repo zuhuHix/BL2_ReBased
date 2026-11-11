@@ -5,166 +5,239 @@ Run through Invoke-GamePyFile (tools/real_game/realgame.ps1); tools/real_game/sl
 ignored local/), and everything it records goes to RG_OUT (the ignored local/realgame/<set>/).
 
 It only reads. Hooks are observers: they never return Block and never change an argument. Reads call getters and read fields;
-nothing here sets a field, calls a setter, spawns, damages, moves, travels or sends input. What a capture does to the game stays the
-capture's own, already reviewed, steps.
+nothing here sets a field, calls a setter, spawns, damages, moves, travels or sends input.
 
-- sw_start(label, spec): spec is a dict (or the path of a JSON file) with
-    funcs:       ["Class.Function", ...]  every declaration of Function in Class and in Class's states is hooked, PRE and POST
-                 (POST rows carry the return value); a full path "Package.Class:Function" is hooked as written.
-    frames:      true to log one row per frame (perf_counter, game time, the tick's DeltaTime argument, the real and game deltas).
-    frame_player: true to add the player's location and hidden flag to each frame row (a teleport or holding cell shows as a jump).
-    pickups:     true to list every live pickup in each snapshot: its item definition, LifeSpan, draw scale and location.
-    snap_every:  seconds of real time between automatic state snapshots (0 = only the ones the capture asks for).
-    pawns_every: seconds between enemy reads (class, pools, GroundSpeed, collision cylinder, draw scale, distance); 0 = off.
-    pawns_match: substrings; when given, only pawns whose path, class or AI class holds one of them are read (one NPC at 0.1 s).
-    per_func_cap, row_cap, frame_cap: limits (a flood from one function cannot crowd out the rest).
-  Every row has t (perf_counter since start), g (WorldInfo.TimeSeconds), f (frame index) and dt (the last frame's DeltaTime).
-- sw_snap(label): one state snapshot: player location, rotation, velocity, cylinder, health and shield (current and max, every reader
-  that answers), every live resource pool (definition, current, max), cash, level, skill points, the respawn checkpoint, every
-  travel station's active flags, the frame-rate settings, and the loaded SDK mods with their enabled flag.
-- sw_pawns(label): one read of every live AI pawn.
-- sw_counts(), sw_dump(name), sw_stop().
+The driver runs every command script in ONE shared namespace (openwillow_realgame/__init__.py, `scope`), so every top-level name
+here starts with sw_, _sw_, SW or _Sw: nothing a tracked probe defines is replaced, and no probe can replace these
+(tests/slice_watch_test.py checks it against each capture's scripts in their real order).
+
+Output: one JSON-lines file, RG_OUT/<name>.jsonl, written as it goes (flushed every flush_every seconds of real time), so a crash
+keeps what came before and memory holds only the last few seconds. Line kinds: meta (first), row, frame, snap, pawns, end (last;
+absent after a crash). Every stream has a cap, and so has the file's total size; what a cap drops is counted.
+
+Spec (a dict or the path of a JSON file; sw_load_spec refuses unknown keys, wrong types and values outside fixed bounds):
+  funcs         ["Class.Function" | "Package.Class:Function"]: every declaration of Function in Class and its states, PRE and POST;
+                a full path is looked up first and listed as missing when the game has no such function.
+  frames        bool: one row per frame (perf_counter, game time, the tick's DeltaTime, real and game deltas, and 'busy' with the
+                milliseconds of any automatic read or flush that ran in that frame, so the analysis can leave those frames out).
+  frame_player  bool: the player's location and hidden flag in each frame row.
+  pickups       bool: every live pickup in each LABELLED snapshot (item definition, LifeSpan, draw scale, location).
+  snap_every    seconds between automatic snapshots (0 = none). Automatic snapshots are light: player, controller, level, cash,
+                checkpoint; pools, stations, pickups and mods come only in labelled snapshots (the capture's own sw_snap calls).
+  pawns_every   seconds between automatic pawn reads (0 = none).
+  pawns_paths   full object paths: an automatic pawn read looks up only these (a name lookup, not a scan of every object).
+  pawns_match   substrings: when no paths are given, only pawns whose path, class or AI class holds one are kept.
+  caps          per_func_cap, row_cap, frame_cap, snap_cap, pawn_cap, byte_cap; flush_every.
 """
-import json
-import re
-import time
-from pathlib import Path
+import json as _sw_json
+import math as _sw_math
+import re as _sw_re
+import time as _sw_time
+from pathlib import Path as _SwPath
 
 try:
-    import unrealsdk
-    from unrealsdk.hooks import Type, add_hook, has_hook, remove_hook
-    from unrealsdk.unreal import UObject, WrappedArray, WrappedStruct
+    import unrealsdk as _sw_sdk
+    from unrealsdk.hooks import Type as _SwType, add_hook as _sw_add_hook, has_hook as _sw_has_hook, remove_hook as _sw_remove_hook
+    from unrealsdk.unreal import UObject as _SwUObject, WrappedArray as _SwArray, WrappedStruct as _SwStruct
 except ImportError:   # tests/slice_watch_test.py runs the pure parts without a game
-    unrealsdk = None
-    UObject = WrappedArray = WrappedStruct = ()
+    _sw_sdk = None
+    _SwType = _sw_add_hook = _sw_has_hook = _sw_remove_hook = None
+    _SwUObject = _SwArray = _SwStruct = ()
 
 SW_TICK = "WillowGame.WillowGameViewportClient:Tick"
 SW_ID = "ow_slice_watch"
-SW_DEFAULTS = {"funcs": [], "frames": False, "frame_player": False, "pickups": False, "snap_every": 0.0, "pawns_every": 0.0, "pawns_match": [],
-               "per_func_cap": 5000, "row_cap": 200000, "frame_cap": 300000}
+# name: (type, default, lowest, highest). Numbers must be finite; a cadence of 0 means off, otherwise it must lie in its range.
+SW_SPEC_KEYS = {
+    "funcs": (list, [], 0, 300), "frames": (bool, False, None, None), "frame_player": (bool, False, None, None),
+    "pickups": (bool, False, None, None), "snap_every": (float, 0.0, 0.5, 600.0), "pawns_every": (float, 0.0, 0.1, 600.0),
+    "pawns_paths": (list, [], 0, 20), "pawns_match": (list, [], 0, 20),
+    "per_func_cap": (int, 5000, 1, 20000), "row_cap": (int, 200000, 1, 400000), "frame_cap": (int, 300000, 1, 400000),
+    "snap_cap": (int, 5000, 1, 20000), "pawn_cap": (int, 20000, 1, 50000), "byte_cap": (int, 300_000_000, 1_000_000, 1_000_000_000),
+    "flush_every": (float, 2.0, 0.5, 30.0),
+}
+SW_DOC_KEYS = ("name", "notes", "checks")
+SW_LABELLED_CAP = 200   # labelled snapshots (the capture's own) are kept beyond snap_cap, up to this many
 SW = globals().get("SW") or {"on": False}
 
 
 def sw_reset(label="", spec=None):
     """The recorder's state, fresh. Kept in the shared namespace so a second load of this file does not silently drop a recording."""
     SW.clear()
-    SW.update(on=False, label=label, spec=dict(SW_DEFAULTS, **(spec or {})), t0=time.perf_counter(), frame=0, dt=None,
-              last_g=None, last_t=None, rows=[], frames=[], snaps=[], pawns=[], counts={}, dropped={}, resolved=[], missing=[],
-              hooks=[], errors=[], soft_errors=0, next_snap=0.0, next_pawns=0.0)
+    SW.update(on=False, label=label, spec=dict(sw_defaults(), **(spec or {})), t0=_sw_time.perf_counter(), frame=0, dt=None,
+              last_g=None, last_t=None, buf=[], fh=None, path=None, bytes=0,
+              n={"row": 0, "frame": 0, "snap": 0, "pawns": 0, "labelled": 0}, counts={}, dropped={}, resolved=[], missing=[],
+              hooks=[], errors=[], auto_failures=0, next_snap=0.0, next_pawns=0.0, next_flush=0.0, busy=[])
     return SW
 
 
-def load_spec(spec):
-    """A spec dict, from a dict or a JSON file. Unknown keys are refused (a typo would silently record nothing)."""
+def sw_defaults():
+    return {k: (list(v[1]) if isinstance(v[1], list) else v[1]) for k, v in SW_SPEC_KEYS.items()}
+
+
+def sw_load_spec(spec):
+    """A checked spec dict, from a dict or a JSON file. Refuses unknown keys, wrong types, non-finite numbers and values out of range."""
     if isinstance(spec, str):
-        spec = json.loads(Path(spec).read_text(encoding="utf-8"))
+        spec = _sw_json.loads(_SwPath(spec).read_text(encoding="utf-8"))
     if not isinstance(spec, dict):
         raise ValueError("spec must be a JSON object")
-    known = set(SW_DEFAULTS) | {"name", "notes", "checks"}
-    unknown = sorted(set(spec) - known)
+    unknown = sorted(set(spec) - set(SW_SPEC_KEYS) - set(SW_DOC_KEYS))
     if unknown:
         raise ValueError(f"unknown spec keys: {unknown}")
-    funcs = spec.get("funcs", [])
-    if not isinstance(funcs, list) or not all(isinstance(f, str) and parse_func(f) for f in funcs):
-        raise ValueError("funcs must be a list of 'Class.Function' or 'Package.Class:Function' names")
-    return {k: v for k, v in spec.items() if k in SW_DEFAULTS}
+    out = sw_defaults()
+    for key, (kind, _default, lo, hi) in SW_SPEC_KEYS.items():
+        if key not in spec:
+            continue
+        value = spec[key]
+        cadence = key in ("snap_every", "pawns_every")
+        if kind is bool:
+            if not isinstance(value, bool):
+                raise ValueError(f"{key} must be true or false")
+        elif kind is list:
+            if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value) or len(value) > hi:
+                raise ValueError(f"{key} must be a list of at most {hi} non-empty strings")
+        else:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not _sw_math.isfinite(value):
+                raise ValueError(f"{key} must be a finite number")
+            if kind is int and value != int(value):
+                raise ValueError(f"{key} must be a whole number")
+            if not (cadence and value == 0) and not (lo <= value <= hi):
+                raise ValueError(f"{key} must be {'0 or ' if cadence else ''}between {lo} and {hi}")
+            value = kind(value)
+        out[key] = value
+    bad = [f for f in out["funcs"] if not sw_parse_func(f)]
+    if bad:
+        raise ValueError(f"funcs holds names that are neither 'Class.Function' nor 'Package.Class:Function': {bad[:3]}")
+    if "checks" in spec and not isinstance(spec["checks"], dict):
+        raise ValueError("checks must be a JSON object")
+    return out
 
 
-def parse_func(name):
+def sw_parse_func(name):
     """('path', full) for a full hook path, ('decl', (class, function)) for Class.Function, or None for anything else."""
-    if re.fullmatch(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)+:[A-Za-z_]\w*", name):
+    if _sw_re.fullmatch(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)+:[A-Za-z_]\w*", name):
         return ("path", name)
-    m = re.fullmatch(r"([A-Za-z_]\w*)\.([A-Za-z_]\w*)", name)
+    m = _sw_re.fullmatch(r"([A-Za-z_]\w*)\.([A-Za-z_]\w*)", name)
     return ("decl", (m.group(1), m.group(2))) if m else None
 
 
-def _p(value, depth=0):
-    """A plain, JSON-safe copy of a value: objects become their path names, structs dicts, arrays lists (16 items at most)."""
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return round(value, 4) if isinstance(value, float) else value
-    if UObject and isinstance(value, UObject):
+def _sw_p(value, depth=0):
+    """A plain, JSON-safe copy of a value: objects become their path names, structs dicts, arrays lists (the first 16 items only)."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return round(value, 4) if _sw_math.isfinite(value) else repr(value)
+    if _SwUObject and isinstance(value, _SwUObject):
         try:
             return value._path_name()
         except Exception:
             return repr(value)[:120]
     if depth >= 2:
         return repr(value)[:120]
-    if WrappedStruct and isinstance(value, WrappedStruct):
+    if _SwStruct and isinstance(value, _SwStruct):
         out = {}
         for q in value._type._properties():
             try:
-                out[q.Name] = _p(getattr(value, q.Name), depth + 1)
+                out[q.Name] = _sw_p(getattr(value, q.Name), depth + 1)
             except Exception:
                 pass
         return out
-    if WrappedArray and isinstance(value, WrappedArray):
-        return [_p(v, depth + 1) for v in list(value)[:16]]
+    if _SwArray and isinstance(value, _SwArray):
+        return [_sw_p(value[i], depth + 1) for i in range(min(len(value), 16))]   # by index: no copy of the whole array
     return repr(value)[:120]
 
 
-def _args(args, func):
+def _sw_args(args, func):
     out = {}
     try:
         inner = getattr(func, "func", func)
         for q in inner._properties():
             if hasattr(args, q.Name):
-                out[q.Name] = _p(getattr(args, q.Name))
+                out[q.Name] = _sw_p(getattr(args, q.Name))
     except Exception as e:
         out["args_error"] = repr(e)[:100]
     return out
 
 
-def _err(where, e):
+def _sw_err(where, e):
     if len(SW["errors"]) < 200:
         SW["errors"].append(f"{where}: {repr(e)[:160]}")
 
 
-def _pc():
+def _sw_pc():
     return get_pc()  # noqa: F821 - the driver's namespace provides get_pc
 
 
-def _game_t():
+def _sw_game_t():
     try:
-        return round(_pc().WorldInfo.TimeSeconds, 4)
+        return round(_sw_pc().WorldInfo.TimeSeconds, 4)
     except Exception:
         return None
 
 
-def _now():
-    return round(time.perf_counter() - SW["t0"], 4)
+def _sw_now():
+    return round(_sw_time.perf_counter() - SW["t0"], 4)
 
 
-def _stamp():
-    return {"t": _now(), "g": _game_t(), "f": SW["frame"], "dt": SW["dt"]}
+def _sw_stamp():
+    return {"t": _sw_now(), "g": _sw_game_t(), "f": SW["frame"], "dt": SW["dt"]}
 
 
-def add_row(path, tag, obj, args, ret, func):
-    """One hook row, within the caps. Pure apart from the reads; the hook wrapper calls it."""
+# ---------------------------------------------------------------- the stream
+def sw_emit(kind, record, cap_key):
+    """Queue one line, within its stream's cap; counts what a cap drops. The tick writes the queue out (sw_flush)."""
+    if SW["n"][kind] >= SW["spec"][cap_key]:
+        SW["dropped"][kind] = SW["dropped"].get(kind, 0) + 1
+        return False
+    SW["n"][kind] += 1
+    SW["buf"].append(dict(record, k=kind))
+    return True
+
+
+def sw_flush():
+    """Write the queued lines and flush the file; stop writing (count as dropped) once byte_cap is reached."""
+    fh = SW.get("fh")
+    buf, SW["buf"] = SW.get("buf", []), []
+    if fh is None:
+        return 0
+    written = 0
+    for record in buf:
+        line = _sw_json.dumps(record, default=str) + "\n"
+        if SW["bytes"] + len(line) > SW["spec"]["byte_cap"]:
+            SW["dropped"]["bytes"] = SW["dropped"].get("bytes", 0) + 1
+            continue
+        fh.write(line)
+        SW["bytes"] += len(line)
+        written += 1
+    fh.flush()
+    return written
+
+
+def sw_add_row(path, tag, obj, args, ret, func):
+    """One hook row, within the per-function and row caps."""
     count = SW["counts"].get(path + "|" + tag, 0) + 1
     SW["counts"][path + "|" + tag] = count
-    if count > SW["spec"]["per_func_cap"] or len(SW["rows"]) >= SW["spec"]["row_cap"]:
+    if count > SW["spec"]["per_func_cap"]:
         SW["dropped"][path] = SW["dropped"].get(path, 0) + 1
         return None
-    row = dict(_stamp(), func=path, tag=tag, obj=_p(obj), args=_args(args, func))
+    row = dict(_sw_stamp(), func=path, tag=tag, obj=_sw_p(obj), args=_sw_args(args, func))
     if tag == "post":
-        row["ret"] = _p(ret)
-    SW["rows"].append(row)
-    return row
+        row["ret"] = _sw_p(ret)
+    return row if sw_emit("row", row, "row_cap") else None
 
 
-def _observer(path, tag):
+def _sw_observer(path, tag):
     def hook(obj, args, ret, func):
         if not SW.get("on"):
             return None
         try:
-            add_row(path, tag, obj, args, ret, func)
+            sw_add_row(path, tag, obj, args, ret, func)
         except Exception as e:
-            _err(path, e)
+            _sw_err(path, e)
         return None   # an observer: never Block, never a replacement value
     return hook
 
 
-def frame_row(delta_arg, t_real, g):
+def sw_frame_row(delta_arg, t_real, g):
     """The per-frame row: the tick's own DeltaTime argument beside the real and game-clock deltas since the last frame."""
     row = {"t": t_real, "g": g, "f": SW["frame"], "dt_arg": delta_arg,
            "dt_real": None if SW["last_t"] is None else round(t_real - SW["last_t"], 5),
@@ -173,49 +246,72 @@ def frame_row(delta_arg, t_real, g):
     return row
 
 
-def _tick(obj, args, ret, func):
+def _sw_timed(name, fn, *a):
+    """Run an automatic read or the flush, and note its milliseconds against this frame."""
+    start = _sw_time.perf_counter()
+    try:
+        return fn(*a)
+    finally:
+        SW["busy"].append([name, round((_sw_time.perf_counter() - start) * 1000.0, 2)])
+
+
+def _sw_tick(obj, args, ret, func):
     if not SW.get("on"):
         return None
     try:
         SW["frame"] += 1
         delta = getattr(args, "DeltaTime", None)
         SW["dt"] = round(delta, 5) if isinstance(delta, float) else delta
-        t_real = _now()
-        row = frame_row(SW["dt"], t_real, _game_t())
+        t_real = _sw_now()
+        row = sw_frame_row(SW["dt"], t_real, _sw_game_t())
         if SW["spec"]["frame_player"]:
-            row.update(_player_here())
-        if SW["spec"]["frames"] and len(SW["frames"]) < SW["spec"]["frame_cap"]:
-            SW["frames"].append(row)
-        due_snap = SW["spec"]["snap_every"] and t_real >= SW["next_snap"]
-        due_pawns = SW["spec"]["pawns_every"] and t_real >= SW["next_pawns"]
-        if (due_snap or due_pawns) and _auto_reads_ok():
-            # The automatic reads: an error in one (a map load, a pawn going away) is counted apart, not as a hook error.
-            before = len(SW["errors"])
+            row.update(_sw_player_here())
+        SW["busy"] = []
+        spec = SW["spec"]
+        due_snap = spec["snap_every"] and t_real >= SW["next_snap"]
+        due_pawns = spec["pawns_every"] and t_real >= SW["next_pawns"]
+        if (due_snap or due_pawns) and _sw_auto_reads_ok():
             if due_snap:
-                SW["next_snap"] = t_real + SW["spec"]["snap_every"]
-                sw_snap("auto")
+                SW["next_snap"] = t_real + spec["snap_every"]
+                _sw_timed("snap", _sw_auto, sw_snap, "auto")
             if due_pawns:
-                SW["next_pawns"] = t_real + SW["spec"]["pawns_every"]
-                sw_pawns("auto")
-            SW["soft_errors"] += len(SW["errors"]) - before
-            del SW["errors"][before:]
+                SW["next_pawns"] = t_real + spec["pawns_every"]
+                _sw_timed("pawns", _sw_auto, sw_pawns, "auto")
+        if t_real >= SW["next_flush"]:
+            SW["next_flush"] = t_real + spec["flush_every"]
+            _sw_timed("flush", sw_flush)
+        if SW["busy"]:
+            row["busy"] = SW["busy"]
+        if spec["frames"]:
+            sw_emit("frame", row, "frame_cap")
     except Exception as e:
-        _err("tick", e)
+        _sw_err("tick", e)
     return None
 
 
-def _auto_reads_ok():
+def _sw_auto(fn, label):
+    """An automatic read: a failure (a map load, a pawn going away) is counted as an automatic failure, not a hook error."""
+    before = len(SW["errors"])
+    result = fn(label)
+    failed = len(SW["errors"]) - before
+    if failed or (isinstance(result, dict) and result.get("failed")):
+        SW["auto_failures"] += 1
+    del SW["errors"][before:]
+    return result
+
+
+def _sw_auto_reads_ok():
     """Automatic reads only while there is a player pawn (none during a map load or the respawn's holding cell)."""
     try:
-        return _pc().Pawn is not None
+        return _sw_pc().Pawn is not None
     except Exception:
         return False
 
 
-def _player_here():
+def _sw_player_here():
     """The player's location and hidden flag, for a frame row (reads only); empty while there is no pawn."""
     try:
-        pawn = _pc().Pawn
+        pawn = _sw_pc().Pawn
         if pawn is None:
             return {"loc": None}
         loc = pawn.Location
@@ -224,24 +320,10 @@ def _player_here():
         return {"loc": None}
 
 
-def _pickups():
-    rows = []
-    for pk in _live(unrealsdk.find_all("WillowPickup", False)):
-        row = dict(_read(pk, ("LifeSpan", "DrawScale", "Location", "bDeleteMe")), name=pk._path_name())
-        try:
-            row["item"] = _p(pk.Inventory.DefinitionData.ItemDefinition)
-        except Exception:
-            try:
-                row["item"] = _p(pk.Inventory.DefinitionData.WeaponTypeDefinition)
-            except Exception:
-                row["item"] = None
-        rows.append(row)
-    return rows
-
-
-def _declared(cls_name, func_name):
+# ---------------------------------------------------------------- hooks
+def _sw_declared(cls_name, func_name):
     """Path names of every declaration of func_name in the class and in its states (as combat_probe._declared_paths)."""
-    cls = unrealsdk.find_class(cls_name)
+    cls = _sw_sdk.find_class(cls_name)
     paths = []
     for field in cls._fields():
         kind = field.Class.Name
@@ -257,196 +339,296 @@ def _declared(cls_name, func_name):
     return paths
 
 
-def _hook(path, kind, tag, fn):
+def _sw_exists(path):
+    """A full function path exists in the running game (looked up first, as the driver's save block does)."""
+    try:
+        return _sw_sdk.find_object("Function", path) is not None
+    except Exception:
+        return False
+
+
+def _sw_hook(path, kind, tag, fn):
     hid = f"{SW_ID}_{tag}"
-    if has_hook(path, kind, hid):
-        remove_hook(path, kind, hid)
-    add_hook(path, kind, hid, fn)
+    if _sw_has_hook(path, kind, hid):
+        _sw_remove_hook(path, kind, hid)
+    _sw_add_hook(path, kind, hid, fn)
     SW["hooks"].append((path, kind, hid))
 
 
-def sw_start(label, spec):
-    """Hook every function the spec names and start the tick. Returns what resolved and what did not."""
+def _sw_open(name):
+    root = sw_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{name}.jsonl"
+    if path.exists():   # an earlier run's file is kept under a new name, never overwritten
+        path.rename(root / f"{name}.{_sw_time.strftime('%Y%m%d-%H%M%S')}.jsonl")
+    SW["path"] = path
+    SW["fh"] = open(path, "w", encoding="utf-8")
+
+
+def sw_start(label, spec, name="watch"):
+    """Check the spec, open RG_OUT/<name>.jsonl, hook every function the spec names, start the tick. Returns what resolved and what not."""
+    if not isinstance(name, str) or not _sw_re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+        raise ValueError(f"output name must be a plain file name, got {name!r}")
+    checked = sw_load_spec(spec)
     sw_stop()
-    sw_reset(label, load_spec(spec))
-    _hook(SW_TICK, Type.POST_UNCONDITIONAL, "tick", _tick)
-    for name in SW["spec"]["funcs"]:
-        kind, what = parse_func(name)
+    sw_reset(label, checked)
+    _sw_open(name)
+    _sw_hook(SW_TICK, _SwType.POST_UNCONDITIONAL, "tick", _sw_tick)
+    for fname in SW["spec"]["funcs"]:
+        kind, what = sw_parse_func(fname)
         try:
-            paths = [what] if kind == "path" else _declared(*what)
+            paths = ([what] if _sw_exists(what) else []) if kind == "path" else _sw_declared(*what)
         except Exception as e:
             paths = []
-            _err(name, e)
+            _sw_err(fname, e)
         if not paths:
-            SW["missing"].append(name)
+            SW["missing"].append(fname)
             continue
         for path in paths:
             try:
-                _hook(path, Type.PRE, "pre", _observer(path, "pre"))
-                _hook(path, Type.POST, "post", _observer(path, "post"))
+                _sw_hook(path, _SwType.PRE, "pre", _sw_observer(path, "pre"))
+                _sw_hook(path, _SwType.POST, "post", _sw_observer(path, "post"))
                 SW["resolved"].append(path)
             except Exception as e:
                 SW["missing"].append(f"{path} ({repr(e)[:80]})")
+    SW["buf"].append({"k": "meta", "label": label, "t0_qpc": SW["t0"], "spec": SW["spec"], "resolved": SW["resolved"],
+                      "missing": SW["missing"]})
     SW["on"] = True
     first = sw_snap("start")
-    return {"label": label, "resolved": len(SW["resolved"]), "missing": SW["missing"], "start_snap_keys": sorted(first)}
+    sw_flush()
+    return {"label": label, "file": str(SW["path"]), "resolved": len(SW["resolved"]), "missing": SW["missing"],
+            "start_failed": first.get("failed", [])}
 
 
-def _read(obj, names):
+# ---------------------------------------------------------------- reads
+def _sw_read(obj, names):
     """Each name that answers: a field, or a getter called with no arguments (getters only, by the caller's choice of names)."""
     out = {}
     for name in names:
         try:
             value = getattr(obj, name)
-            out[name] = _p(value() if callable(value) else value)
+            out[name] = _sw_p(value() if callable(value) else value)
         except Exception:
             pass
     return out
 
 
-PLAYER_FIELDS = ("Location", "Rotation", "Velocity", "Physics", "GroundSpeed", "DrawScale", "Health", "HealthMax",
-                 "GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength", "NumSuccessiveInjuries", "bHidden")
-PAWN_FIELDS = ("Location", "GroundSpeed", "WalkingPct", "DrawScale", "DrawScale3D", "Health", "HealthMax",
-               "GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength", "Physics")
-STATION_FIELDS = ("bShouldBeActive", "bIsCurrentlyActive", "Location")
+SW_PLAYER_FIELDS = ("Location", "Rotation", "Velocity", "Physics", "GroundSpeed", "DrawScale", "Health", "HealthMax",
+                    "GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength", "NumSuccessiveInjuries", "bHidden")
+SW_PAWN_FIELDS = ("Location", "GroundSpeed", "WalkingPct", "DrawScale", "DrawScale3D", "Health", "HealthMax",
+                  "GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength", "Physics")
+SW_STATION_FIELDS = ("bShouldBeActive", "bIsCurrentlyActive", "Location")
 
 
-def _live(objs):
+def _sw_live(objs):
     return [o for o in objs if "Default__" not in o._path_name()]
 
 
-def _cylinder(pawn):
+def _sw_cylinder(pawn):
     try:
         c = pawn.CylinderComponent
-        return {"radius": _p(c.CollisionRadius), "height": _p(c.CollisionHeight)}
+        return {"radius": _sw_p(c.CollisionRadius), "height": _sw_p(c.CollisionHeight)}
     except Exception:
         return None
 
 
-def _pools():
+def _sw_pools():
     rows = []
-    for pool in _live(unrealsdk.find_all("ResourcePool", False)):
+    for pool in _sw_live(_sw_sdk.find_all("ResourcePool", False)):
         row = {"pool": pool._path_name()}
-        row.update(_read(pool, ("Definition", "AssociatedProvider", "CurrentValue", "GetMaxValue", "MaxValue")))
+        row.update(_sw_read(pool, ("Definition", "AssociatedProvider", "CurrentValue", "GetMaxValue", "MaxValue")))
         rows.append(row)
     return rows
 
 
-def _mods():
-    try:
-        import mods_base
-        return [{"name": m.name, "enabled": bool(getattr(m, "is_enabled", False)), "type": _p(getattr(m, "mod_type", None))}
-                for m in mods_base.get_ordered_mod_list()]
-    except Exception as e:
-        return [{"error": repr(e)[:120]}]
+def _sw_pickups():
+    rows = []
+    for pk in _sw_live(_sw_sdk.find_all("WillowPickup", False)):
+        row = dict(_sw_read(pk, ("LifeSpan", "DrawScale", "Location", "bDeleteMe")), name=pk._path_name())
+        try:
+            row["item"] = _sw_p(pk.Inventory.DefinitionData.ItemDefinition)
+        except Exception:
+            try:
+                row["item"] = _sw_p(pk.Inventory.DefinitionData.WeaponTypeDefinition)
+            except Exception:
+                row["item"] = None
+        rows.append(row)
+    return rows
 
 
-def _engine():
-    for engine in _live(unrealsdk.find_all("GameEngine", False)):
-        return _read(engine, ("bSmoothFrameRate", "MinSmoothedFrameRate", "MaxSmoothedFrameRate"))
-    return None
+def _sw_mods():
+    import mods_base as _sw_mods_base
+    return [{"name": m.name, "enabled": bool(getattr(m, "is_enabled", False)), "type": _sw_p(getattr(m, "mod_type", None))}
+            for m in _sw_mods_base.get_ordered_mod_list()]
+
+
+def _sw_engine():
+    for engine in _sw_live(_sw_sdk.find_all("GameEngine", False)):
+        return _sw_read(engine, ("bSmoothFrameRate", "MinSmoothedFrameRate", "MaxSmoothedFrameRate"))
+    return {}
 
 
 def sw_snap(label):
-    """One state snapshot (reads only), kept in the dump and returned."""
-    snap = dict(_stamp(), label=label)
-    try:
-        pc = _pc()
-        pawn = pc.Pawn
-        pri = pc.PlayerReplicationInfo
-        snap["map"] = _p(pc.WorldInfo.GetStreamingPersistentMapName())
-        snap["player"] = dict(_read(pawn, PLAYER_FIELDS), cls=pawn.Class.Name, cylinder=_cylinder(pawn)) if pawn else None
-        snap["controller"] = _read(pc, ("Rotation", "LastVisitedTeleporter", "FocusCamReturnTime", "CurrentSeenPickupable",
-                                        "CurrentTouchedPickupable", "bCinematicMode"))
-        snap["pri"] = _read(pri, ("ExpLevel", "GeneralSkillPoints"))
-        try:
-            snap["cash"] = pri.GetCurrencyOnHand(0)
-        except Exception as e:
-            snap["cash"] = repr(e)[:80]
-        snap["checkpoint"] = _read(pc.WorldInfo.GRI, ("ActiveRespawnCheckpointTeleportActor",))
-        snap["stations"] = [dict(_read(s, STATION_FIELDS), name=s._path_name()) for s in _live(unrealsdk.find_all("TravelStation", False))]
-        snap["pools"] = _pools()
+    """One state snapshot (reads only), queued for the file and returned. Each part reads on its own; 'failed' names every part that
+    raised, so a usability check can tell a failed read from an empty one. Automatic snapshots (label 'auto') are light; a labelled
+    one adds stations, pools, pickups (when the spec asks), the engine's frame-rate settings and the loaded mods."""
+    auto = label == "auto"
+    if auto and SW["n"]["snap"] >= SW["spec"]["snap_cap"]:
+        SW["dropped"]["snap"] = SW["dropped"].get("snap", 0) + 1
+        return {}
+    if not auto and SW["n"]["labelled"] >= SW_LABELLED_CAP:
+        SW["dropped"]["labelled"] = SW["dropped"].get("labelled", 0) + 1
+        return {}
+    failed = []
+    snap = dict(_sw_stamp(), label=label)
+    parts = [("map", lambda pc: _sw_p(pc.WorldInfo.GetStreamingPersistentMapName())),
+             ("player", lambda pc: dict(_sw_read(pc.Pawn, SW_PLAYER_FIELDS), cls=pc.Pawn.Class.Name, cylinder=_sw_cylinder(pc.Pawn))),
+             ("controller", lambda pc: _sw_read(pc, ("Rotation", "LastVisitedTeleporter", "FocusCamReturnTime", "CurrentSeenPickupable",
+                                                    "CurrentTouchedPickupable", "bCinematicMode"))),
+             ("pri", lambda pc: _sw_read(pc.PlayerReplicationInfo, ("ExpLevel", "GeneralSkillPoints"))),
+             ("cash", lambda pc: int(pc.PlayerReplicationInfo.GetCurrencyOnHand(0))),
+             ("checkpoint", lambda pc: _sw_p(pc.WorldInfo.GRI.ActiveRespawnCheckpointTeleportActor))]
+    if not auto:
+        parts += [("stations", lambda pc: [dict(_sw_read(s, SW_STATION_FIELDS), name=s._path_name())
+                                           for s in _sw_live(_sw_sdk.find_all("TravelStation", False))]),
+                  ("pools", lambda pc: _sw_pools()),
+                  ("engine", lambda pc: _sw_engine()),
+                  ("mods", lambda pc: _sw_mods())]
         if SW["spec"]["pickups"]:
-            snap["pickups"] = _pickups()
+            parts.append(("pickups", lambda pc: _sw_pickups()))
+    try:
+        pc = _sw_pc()
     except Exception as e:
-        _err("snap " + label, e)
-    if label in ("start", "end") or label.startswith("mods"):
-        snap["mods"] = _mods()
-        snap["engine"] = _engine()
-    SW["snaps"].append(snap)
+        pc = None
+        _sw_err("snap " + label, e)
+    for part, read in parts:
+        try:
+            if pc is None:
+                raise RuntimeError("no player controller")
+            snap[part] = read(pc)
+        except Exception as e:
+            failed.append(part)
+            _sw_err(f"snap {label} {part}", e)
+    snap["failed"] = failed
+    if auto:
+        sw_emit("snap", snap, "snap_cap")
+    else:
+        SW["n"]["labelled"] += 1
+        SW["buf"].append(dict(snap, k="snap"))
     return snap
 
 
-def sw_pawns(label):
-    """One read of every live AI pawn: class, pools, speeds, cylinder, scale, distance to the player."""
-    out = dict(_stamp(), label=label, pawns=[])
-    try:
-        player = _pc().Pawn
-        here = player.Location if player else None
-        for pawn in _live(unrealsdk.find_all("WillowAIPawn", False)):
-            row = dict(name=pawn._path_name(), cls=pawn.Class.Name)
-            try:
-                row["ai_class"] = _p(pawn.AIClass)
-            except Exception:
-                pass
-            if not pawn_wanted(row, SW["spec"]["pawns_match"]):
-                continue
-            row.update(_read(pawn, PAWN_FIELDS), cylinder=_cylinder(pawn))
-            if here is not None:
-                try:
-                    loc = pawn.Location
-                    row["dist"] = round(((loc.X - here.X) ** 2 + (loc.Y - here.Y) ** 2 + (loc.Z - here.Z) ** 2) ** 0.5, 1)
-                except Exception:
-                    pass
-            out["pawns"].append(row)
-    except Exception as e:
-        _err("pawns " + label, e)
-    SW["pawns"].append(out)
-    return {"label": label, "pawns": len(out["pawns"])}
-
-
-def pawn_wanted(row, match):
+def sw_pawn_wanted(row, match):
     """No filter: every pawn. Otherwise a pawn whose path, class or AI class holds one of the substrings."""
     return not match or any(m in str(row.get(k, "")) for m in match for k in ("name", "cls", "ai_class"))
 
 
+def _sw_pawn_row(pawn):
+    row = dict(name=pawn._path_name(), cls=pawn.Class.Name)
+    try:
+        row["ai_class"] = _sw_p(pawn.AIClass)
+    except Exception:
+        pass
+    return row
+
+
+def _sw_pawn_fill(row, pawn, here):
+    row.update(_sw_read(pawn, SW_PAWN_FIELDS), cylinder=_sw_cylinder(pawn))
+    if here is not None:
+        try:
+            loc = pawn.Location
+            row["dist"] = round(((loc.X - here.X) ** 2 + (loc.Y - here.Y) ** 2 + (loc.Z - here.Z) ** 2) ** 0.5, 1)
+        except Exception:
+            pass
+    return row
+
+
+def sw_pawns(label):
+    """One read of the AI pawns: by exact path when the spec names paths (a lookup, no scan), else every live pawn, filtered."""
+    auto = label == "auto"
+    if auto and SW["n"]["pawns"] >= SW["spec"]["pawn_cap"]:
+        SW["dropped"]["pawns"] = SW["dropped"].get("pawns", 0) + 1
+        return {"label": label, "pawns": 0, "failed": []}
+    out = dict(_sw_stamp(), label=label, pawns=[])
+    failed = []
+    try:
+        player = _sw_pc().Pawn
+        here = player.Location if player else None
+        if SW["spec"]["pawns_paths"]:
+            for path in SW["spec"]["pawns_paths"]:
+                try:
+                    pawn = _sw_sdk.find_object("WillowAIPawn", path)
+                except Exception:
+                    pawn = None
+                if pawn is None:
+                    failed.append(path)
+                    continue
+                out["pawns"].append(_sw_pawn_fill(_sw_pawn_row(pawn), pawn, here))
+        else:
+            for pawn in _sw_live(_sw_sdk.find_all("WillowAIPawn", False)):
+                row = _sw_pawn_row(pawn)
+                if sw_pawn_wanted(row, SW["spec"]["pawns_match"]):
+                    out["pawns"].append(_sw_pawn_fill(row, pawn, here))
+    except Exception as e:
+        failed.append("read")
+        _sw_err("pawns " + label, e)
+    out["failed"] = failed
+    if auto:
+        sw_emit("pawns", out, "pawn_cap")
+    elif SW["n"]["labelled"] < SW_LABELLED_CAP:
+        SW["n"]["labelled"] += 1
+        SW["buf"].append(dict(out, k="pawns"))
+    return {"label": label, "pawns": len(out["pawns"]), "failed": failed}
+
+
 def sw_counts():
-    """Rows per function and tag, frames and snapshots so far: the in-game usability check reads this."""
-    return {"rows": len(SW.get("rows", [])), "frames": len(SW.get("frames", [])), "snaps": len(SW.get("snaps", [])),
-            "pawn_reads": len(SW.get("pawns", [])), "counts": dict(SW.get("counts", {})), "dropped": dict(SW.get("dropped", {})),
-            "errors": len(SW.get("errors", [])), "soft_errors": SW.get("soft_errors", 0), "missing": list(SW.get("missing", []))}
+    """Lines per stream, hook rows per function, drops and errors so far: the in-game usability check reads this."""
+    return {"lines": dict(SW.get("n", {})), "bytes": SW.get("bytes", 0), "counts": dict(SW.get("counts", {})),
+            "dropped": dict(SW.get("dropped", {})), "errors": len(SW.get("errors", [])), "auto_failures": SW.get("auto_failures", 0),
+            "missing": list(SW.get("missing", [])), "file": str(SW.get("path"))}
 
 
 def sw_root():
     """RG_OUT resolved, refused unless it lies inside a repository's ignored local/ folder (as loot_capture.lc_root)."""
-    root = Path(RG_OUT).resolve()  # noqa: F821 - the command channel's prelude sets RG_OUT
+    root = _SwPath(RG_OUT).resolve()  # noqa: F821 - the command channel's prelude sets RG_OUT
     if not any(a.name == "local" and (a.parent / ".git").exists() for a in root.parents):
         raise ValueError(f"RG_OUT {root} is not inside a repository's local/ folder")
     return root
 
 
-def sw_dump(name):
-    """Write everything to RG_OUT/<name>.json; the name must be a plain file name. Returns the counts."""
-    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
-        raise ValueError(f"dump name must be a plain file name, got {name!r}")
-    root = sw_root()
-    root.mkdir(parents=True, exist_ok=True)
-    # t0_qpc: the recorder's start on the QPC clock (perf_counter on Windows), so its rows join a capture's own QPC press stamps.
-    data = {"label": SW.get("label"), "t0_qpc": SW.get("t0"), "spec": SW.get("spec"), "resolved": SW.get("resolved", []), "missing": SW.get("missing", []),
-            "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}), "errors": SW.get("errors", []),
-            "soft_errors": SW.get("soft_errors", 0),
-            "rows": SW.get("rows", []), "frames": SW.get("frames", []), "snaps": SW.get("snaps", []), "pawns": SW.get("pawns", [])}
-    (root / f"{name}.json").write_text(json.dumps(data, default=str), encoding="utf-8")
+def _sw_close(stopped):
+    if SW.get("fh") is None:
+        return
+    SW["buf"].append({"k": "end", "stopped": stopped, "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}),
+                      "errors": SW.get("errors", []), "auto_failures": SW.get("auto_failures", 0), "lines": SW.get("n", {})})
+    SW["spec"]["byte_cap"] += 1_000_000   # room for the end line, whatever the cap took
+    try:
+        sw_flush()
+    finally:
+        SW["fh"].close()
+        SW["fh"] = None
+
+
+def sw_dump(name="watch"):
+    """The end of a recording: the queue written, the end line, the file closed. Returns the counts (the file is RG_OUT/<name>.jsonl)."""
+    if SW.get("path") is not None and SW["path"].stem != name:
+        raise ValueError(f"this recording writes {SW['path'].name}, not {name}.jsonl")
+    SW["on"] = False
+    _sw_close(stopped=False)
     return sw_counts()
 
 
 def sw_stop():
-    """Remove every hook this recorder added. Safe to call twice."""
+    """Remove every hook this recorder added and close its file (with an end line saying it was stopped). Safe to call twice."""
     SW["on"] = False
     for path, kind, hid in SW.get("hooks", []):
         try:
-            remove_hook(path, kind, hid)
+            _sw_remove_hook(path, kind, hid)
         except Exception:
             pass
     SW["hooks"] = []
+    try:
+        _sw_close(stopped=True)
+    except Exception:
+        pass
     return "stopped"

@@ -114,6 +114,17 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
 if ($scenario -eq 'bad_snapshot') {
     function Assert-SnapshotMatches([string]$Live, [string]$Snapshot) { if ($Snapshot -like '*Config') { throw 'snapshot differs' }; Get-TreeHashes $Snapshot }
 }
+# The -SdkModsOff faults (lane capture-prep): the driver install fails, the launch fails after mods off, or the settings write stops half way.
+if ($scenario -eq 'driver_fails') { function Install-Driver { throw 'driver install failed (test)' } }
+if ($scenario -eq 'launch_fails') { function Start-Game { throw 'launch failed (test)' } }
+if ($scenario -eq 'partial_mods') {
+    function Set-SdkModsOff {
+        Add-PendingChange 'SDK mods off (test: stops half way)'
+        $first = Get-ChildItem -LiteralPath (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings') -Filter *.json | Sort-Object Name | Select-Object -First 1
+        [IO.File]::WriteAllText($first.FullName, '{"enabled": false}')
+        throw 'stopped half way (test)'
+    }
+}
 if ($scenario -eq 'mismatch') { function Restore-Tree { [pscustomobject]@{ file = 'x'; status = 'MISMATCH after restore' } } }
 if ($scenario -eq 'restore_throws') { function Restore-Tree { throw 'disk full' } }
 """
@@ -135,13 +146,13 @@ class CashCaptureTest(unittest.TestCase):
             path.write_text(text, encoding='utf-8')
         self.hub = self.work / 'hub.lock'
 
-    def run_capture(self, scenario):
+    def run_capture(self, scenario, extra=()):
         stub = self.work / 'stub.ps1'
         stub.write_text(STUB.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__WORK__', str(self.work)),
                         encoding='utf-8-sig')
         env = dict(os.environ, OPENWILLOW_BL2=str(self.game), OW_SCENARIO=scenario)
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(CAPTURE),
-                               '-HubLock', str(self.hub), '-Helpers', str(stub)],
+                               '-HubLock', str(self.hub), '-Helpers', str(stub), *extra],
                               capture_output=True, text=True, env=env, timeout=180)
         session = json.loads((self.work / 'rg/cash/session.json').read_text(encoding='utf-8-sig'))
         return done, session
@@ -419,6 +430,55 @@ class CashCaptureTest(unittest.TestCase):
         self.assertEqual(self.backups(), [])
         self.assertEqual(self.hub.read_text(encoding='utf-8'), 'someone 2026')
         self.assertFalse((self.work / 'run.lock').exists())
+
+
+
+
+class SdkModsOffRollbackTest(unittest.TestCase):
+    """-SdkModsOff (lane capture-prep, 2026-11-11): whatever stops the run after the backup, the settings end byte-identical to before.
+    The mods-off step runs after $launchAttempted is set, so the unchanged finalizer restores every root; a failure before it changes nothing."""
+    # The harness of CashCaptureTest, without inheriting its tests.
+    run_capture = CashCaptureTest.run_capture
+    locks_held = CashCaptureTest.locks_held
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+        self.settings = self.game / 'sdk_mods/settings'
+        (self.settings / 'python-sdk.json').write_text('{"enabled": true}', encoding='utf-8')
+        (self.settings / 'other.json').write_text('{"keybinds": {}, "enabled": true}', encoding='utf-8')
+        self.before = {f.name: f.read_bytes() for f in self.settings.iterdir()}
+
+    def assert_settings_identical(self, session):
+        after = {f.name: f.read_bytes() for f in self.settings.iterdir()}
+        self.assertEqual(after, self.before, session.get('cleanup'))
+        self.assertTrue(str(session['cleanup']['pending']).startswith('removed'), session['cleanup'])
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_a_failed_driver_install_leaves_the_settings_untouched(self):
+        done, session = self.run_capture('driver_fails', ['-SdkModsOff'])
+        self.assertEqual(done.returncode, 1)
+        self.assertNotIn('sdk_mods_off', session)   # the step never ran: it comes after the driver
+        self.assert_settings_identical(session)
+
+    def test_a_failed_launch_after_mods_off_restores_the_settings(self):
+        done, session = self.run_capture('launch_fails', ['-SdkModsOff'])
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(sorted(session['sdk_mods_off']), ['other', 'python-sdk'])   # they were really turned off
+        self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
+        self.assert_settings_identical(session)
+
+    def test_a_settings_write_stopped_half_way_is_restored(self):
+        done, session = self.run_capture('partial_mods', ['-SdkModsOff'])
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('stopped half way', session['status'])
+        self.assert_settings_identical(session)
+
+    def test_an_unexpected_set_of_mods_is_refused_before_any_write(self):
+        done, session = self.run_capture('launch_fails', ['-SdkModsOff', '-SdkModsExpected', 'python-sdk'])
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('refusing SDK mods off', session['status'])
+        self.assertNotIn('sdk_mods_off', session)
+        self.assert_settings_identical(session)
 
 
 if __name__ == '__main__':
