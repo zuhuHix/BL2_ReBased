@@ -72,6 +72,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             }
             if ($scenario -eq 'run_error') { throw 'channel lost' }
             if ($scenario -eq 'not_immune') { return '{"immune": false}' }
+            if ($scenario -eq 'loot_mods_error') { return '{"immune": true, "mods_off": ["Loot Collector", "Drop Chance Multiplier: AttributeError(invented)"]}' }
+            if ($scenario -eq 'loot_mods_ok') { return '{"immune": true, "mods_off": ["Drop Chance Multiplier", "Loot Collector", "Be Gone Out Of Bounds Loot"]}' }
             if ($scenario -eq 'traceback') { return "Traceback (most recent call last):`n  True block" }
             return '{"immune": true}'
         }
@@ -472,6 +474,19 @@ class SdkModsOffRollbackTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn('stopped half way', session['status'])
         self.assert_settings_identical(session)
+
+    def test_a_loot_mod_left_on_in_memory_stops_the_run_before_any_kill(self):
+        done, session = self.run_capture('loot_mods_error')
+        self.assertEqual(done.returncode, 1)
+        self.assertIn('was not switched off in memory', session['status'])
+        self.assertIn('loot mods off in memory: Loot Collector; Drop Chance Multiplier: AttributeError', done.stdout)
+        self.assertEqual(session.get('kills', 0), 0)
+        self.assert_settings_identical(session)
+
+    def test_the_loot_mods_list_is_printed_and_kept(self):
+        done, session = self.run_capture('loot_mods_ok', ['-SkipDen'])
+        self.assertEqual(session['loot_mods_off'], ['Drop Chance Multiplier', 'Loot Collector', 'Be Gone Out Of Bounds Loot'])
+        self.assertIn('loot mods off in memory: Drop Chance Multiplier; Loot Collector; Be Gone Out Of Bounds Loot', done.stdout)
 
     def test_an_unexpected_set_of_mods_is_refused_before_any_write(self):
         done, session = self.run_capture('launch_fails', ['-SdkModsOff', '-SdkModsExpected', 'python-sdk'])

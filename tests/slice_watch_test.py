@@ -368,6 +368,18 @@ class CheckerTest(unittest.TestCase):
         self.assertFalse(self.results(dump(pawns=[dict(ok, failed=['read'])]), p)['pawns'])
         self.assertFalse(self.results(dump(pawns=[{'failed': [], 'pawns': [{'cylinder': None, 'GroundSpeed': 2.0}]}]), p)['pawns'])
 
+    def test_anything_a_cap_dropped_fails_unless_allowed(self):
+        capped = dump()
+        capped['end']['dropped'] = {'frame': 3}
+        self.assertFalse(self.results(capped, {})['max_dropped'])
+        self.assertTrue(self.results(capped, {'max_dropped': {'frame': 3}})['max_dropped'])
+        per_func = dump()
+        per_func['end']['dropped'] = {'Pkg.P:F': 10, 'Pkg.P:G': 5}
+        self.assertFalse(self.results(per_func, {'max_dropped': {'per_func': 14}})['max_dropped'])
+        self.assertTrue(self.results(per_func, {'max_dropped': {'per_func': 15}})['max_dropped'])
+        self.assertTrue(self.results(dump(), {})['max_dropped'])
+        self.assertFalse(self.results(dump(ended=False), {})['max_dropped'])
+
     def test_errors_missing_and_the_end(self):
         self.assertFalse(self.results(dump(errors=['e']), {})['max_errors'])
         self.assertTrue(self.results(dump(errors=['e']), {'max_errors': 1})['max_errors'])

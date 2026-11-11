@@ -11,8 +11,10 @@ is meant to measure stays UNVERIFIED until a person reads it. The output is coun
 may be pasted into a report. Exit 0 when every check passes, 1 otherwise, 2 when the recording or the spec cannot be read or the spec
 is refused.
 
-Always checked: the recording ended (its end line is there: a crash or a stopped recorder fails this), and at most max_errors hook or
-read errors (default 0). Optional checks:
+Always checked: the recording ended (its end line is there: a crash or a stopped recorder fails this), at most max_errors hook or read
+errors (default 0), and nothing dropped by a cap (see max_dropped). Optional checks:
+  max_dropped:       {"row"|"frame"|"snap"|"pawns"|"labelled"|"bytes"|"per_func": N}: how many lines a cap may drop, per kind
+                     ("per_func" counts the rows dropped by per_func_cap, all functions together). Every kind not named allows 0.
   no_missing:        true: every name in funcs resolved.
   max_auto_failures: the most automatic snapshots or pawn reads with a failed part (default: no limit).
   require:           [{"func": "<substring of a hook path>", "tag": "pre"|"post", "min": N, "max": M}]
@@ -37,7 +39,7 @@ import json
 import sys
 from pathlib import Path
 
-CHECK_KEYS = {"no_missing", "max_errors", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
+CHECK_KEYS = {"no_missing", "max_errors", "max_dropped", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
               "mods_must_be_off", "frames", "rows_have_dt", "pawns"}
 CONTENT_KINDS = {"present", "dict", "nonempty", "number"}
 
@@ -82,6 +84,9 @@ def validate_spec(spec_path):
     bad = {k: v for k, v in checks.get("snap_content", {}).items() if v not in CONTENT_KINDS}
     if bad:
         raise ValueError(f"snap_content kinds must be one of {sorted(CONTENT_KINDS)}: {bad}")
+    md = checks.get("max_dropped", {})
+    if not isinstance(md, dict) or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in md.values())             or set(md) - {"row", "frame", "snap", "pawns", "labelled", "bytes", "per_func"}:
+        raise ValueError("max_dropped must map row, frame, snap, pawns, labelled, bytes or per_func to a whole number")
     for key in ("snaps", "mods_must_be_off"):
         if key in checks and not (isinstance(checks[key], list) and all(isinstance(x, str) for x in checks[key])):
             raise ValueError(f"{key} must be a list of strings")
@@ -121,6 +126,15 @@ def check(dump, checks):
     errors = len((end or {}).get("errors", []))
     limit = checks.get("max_errors", 0)
     out.append(("max_errors", end is not None and errors <= limit, f"{errors} errors (limit {limit})"))
+    allowed = checks.get("max_dropped", {})
+    dropped = (end or {}).get("dropped", {}) or {}
+    kinds = {}
+    for key, n in dropped.items():
+        kind = "per_func" if ":" in key else key
+        kinds[kind] = kinds.get(kind, 0) + int(n)
+    over = sorted(k for k, n in kinds.items() if n > allowed.get(k, 0))
+    out.append(("max_dropped", end is not None and not over,
+                f"{sum(kinds.values())} lines dropped by caps; over the allowance: {', '.join(over) if over else 'none'}"))
     if "max_auto_failures" in checks:
         n = (end or {}).get("auto_failures", 0)
         out.append(("max_auto_failures", end is not None and n <= checks["max_auto_failures"],

@@ -164,6 +164,12 @@ try {
     $log.start = Py 'import json; print(json.dumps(cp_start(), default=str))'
     $started = $log.start | ConvertFrom-Json
     if (!$started -or $started.immune -ne $true) { throw "the immunity hook is not installed: $($log.start)" }
+    # What cb_mods_off switched off in memory: a mod's name, or "name: error" when it failed. Printed for the runner; any error stops the run before
+    # the first kill, since a live loot mod would change what is read.
+    $log.loot_mods_off = @($started.mods_off)
+    "loot mods off in memory: $(@($log.loot_mods_off) -join '; ')"
+    $lootErrors = @($log.loot_mods_off | Where-Object { "$_" -match ': ' })
+    if ($lootErrors.Count) { throw "a loot mod was not switched off in memory: $($lootErrors -join '; ')" }
     $log.player_level = Py 'print(cp_level())'; $log.cash_start = Py 'print(cp_cash())'
     if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'cash' 'cash'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
     "player level $($log.player_level), cash $($log.cash_start)"
