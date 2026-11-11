@@ -135,6 +135,7 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
         ShieldMax, RespawnSeconds);
     // The kind's melee from a live read (the acceptance table), or the stand-ins: the log says which.
     KindMelee = FindKindMelee(Kind.Name);
+    bStandOnContactLogged = false;
     const FString Stand = KindMelee ? FString::Printf(TEXT("%.0f"), KindMelee->StandDistance) : FString(TEXT("stand-in"));
     UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind_melee kind=%s swing_interval=%.3f stand=%s source=%s"), *GetName(), *Kind.Name, SwingIntervalNow(),
         *Stand, KindMelee ? TEXT("live_read") : TEXT("stand-in_no_live_read"));
@@ -389,6 +390,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     if (In.bHasMaya)
     {
         In.MayaLocation = Walker->GetActorLocation();
+        In.MayaRadius = Walker->GetCapsuleComponent() ? Walker->GetCapsuleComponent()->GetScaledCapsuleRadius() : 0.f;
         // Exposure stand-in (UNVERIFIED): a Visibility line from the enemy's centre to Maya's centre, both ignored. Sampled only
         // on the brain's state updates (the only time it reads it); in between the last sample is passed on.
         // Not while passive, lifted or dead: the brain then skips its updates (NextUpdateAt does not advance), so "due" would
@@ -409,9 +411,15 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
 
     const FOpenWillowBrainOrders Orders = Brain.Tick(Now, In, *Den, bDamagedByMaya);
     if (Orders.bSwingStarted) PlayMelee(Now);
+    if (Orders.bStandOnContact && !bStandOnContactLogged)
+    {
+        bStandOnContactLogged = true;
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind_melee kind=%s stand %.0f is inside body contact (%.0f + %.0f): it stops at %.0f"), *GetName(), *Kind.Name,
+            In.StandDistance, In.CollisionRadius, In.MayaRadius, Brain.LastStopAt);
+    }
     if (Orders.bChase)
     {
-        UpdateChase(Orders.ChaseTo, Orders.bRun, Now, DeltaSeconds);
+        UpdateChase(Orders.ChaseTo, Orders.bRun, Orders.StopShort, Now, DeltaSeconds);
     }
     else
     {
@@ -420,7 +428,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     }
 }
 
-void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float Now, float DeltaSeconds)
+void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float StopShort, float Now, float DeltaSeconds)
 {
     // Host stand-in (UNVERIFIED): turn toward Maya at 360 deg/s, run at the kind's RunSpeed (the walk clip when there is no run
     // clip) until the brain stops it inside the melee volume. Floor snapping as the patrol.
@@ -470,7 +478,10 @@ void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float Now, 
     if (ChaseBlockedSince >= 0.f) Dir = Dir.RotateAngleAxis(ChaseSideSign * ChaseSideStepDegrees, FVector::UpVector);
     TurnToward(Dir, DeltaSeconds);
 
-    const FVector Next = Here + Dir * FMath::Min(Kind.RunSpeed * DeltaSeconds, Left);
+    // A kind with a live stand distance does not run past it: the last step ends there, whatever the frame time.
+    float Step = FMath::Min(Kind.RunSpeed * DeltaSeconds, Left);
+    if (StopShort > 0.f) Step = FMath::Min(Step, FMath::Max(0.f, Left - StopShort));
+    const FVector Next = Here + Dir * Step;
     FVector Floor;
     if (!TraceFloor(GetWorld(), FVector2D(Next.X, Next.Y), Here.Z + 100.f, Here.Z - 300.f, this, Floor))
     {

@@ -94,10 +94,15 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     const float FlatDistance = In.bHasMaya ? float(FVector::Dist2D(In.Location, In.MayaLocation)) : 0.f;
     const bool bHasStartRange = In.SwingStartRange > 0.f;
     const bool bInStartRange = bInVolume && (!bHasStartRange || FlatDistance <= In.SwingStartRange);
-    // Where it stops running: the kind's live stand distance when it has one, else MeleeStopMargin inside its swing range (stand-in).
-    const float StopAt = In.StandDistance > 0.f ? In.StandDistance
+    // Where it stops running: the kind's live stand distance when it has one, but never inside body contact (its radius plus Maya's: the
+    // enemy's root does not collide, so nothing else stops it there); else MeleeStopMargin inside its swing range (stand-in). With a live
+    // stand distance the enemy's last step is clamped to it (Orders.StopShort), so where it stands does not depend on the frame time.
+    const bool bLiveStand = In.StandDistance > 0.f;
+    const float Contact = In.CollisionRadius + In.MayaRadius;
+    const float StopAt = bLiveStand ? FMath::Max(In.StandDistance, Contact)
         : FMath::Max(In.SwingStartRange - MeleeStopMargin, FMath::Min(In.CollisionRadius, In.SwingStartRange));
-    const bool bInStop = (bHasStartRange || In.StandDistance > 0.f) ? (bInVolume && FlatDistance <= StopAt)
+    LastStopAt = StopAt;
+    const bool bInStop = (bHasStartRange || bLiveStand) ? (bInVolume && FlatDistance <= StopAt + (bLiveStand ? StandTolerance : 0.f))
         : In.bHasMaya && WithinMeleeVolume(In.Location, In.YawDegrees, In.MayaLocation, MeleeStopMargin);
 
     // The damage moment of a swing: SwingDamageDelay after its start, Maya takes the hit if she is still in the volume.
@@ -123,6 +128,8 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     Orders.bChase = (bAware || !bTargeting) && bHasTargetLocation;
     Orders.ChaseTo = TargetLocation;
     Orders.bRun = Orders.bChase && !bSwingPending && !(bAware && bInStop);
+    Orders.StopShort = (bAware && bLiveStand) ? StopAt : 0.f;
+    Orders.bStandOnContact = bLiveStand && Contact > In.StandDistance;
     return Orders;
 }
 

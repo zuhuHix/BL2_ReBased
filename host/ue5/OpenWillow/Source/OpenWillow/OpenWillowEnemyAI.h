@@ -30,6 +30,7 @@ constexpr float MeleeHalfAngleDegrees = 64.f;
 constexpr float MeleeBelow = -143.f;         // Maya's centre Z minus the enemy's Z, lowest and highest
 constexpr float MeleeAbove = 339.f;
 constexpr float MeleeStopMargin = 60.f;      // host choice: the enemy stops running this far inside its swing range (or the reach)
+constexpr float StandTolerance = 1.f;        // host choice: within this of a live stand distance counts as there (the run is clamped to it)
 constexpr float DefaultCollisionRadius = 50.f;  // host stand-in when the kind's collision radius is 0
 constexpr float SearchArrival = 100.f;       // host choice: a lost target's last-known spot counts as reached this close
 }
@@ -75,6 +76,7 @@ struct FOpenWillowBrainInput
     float SwingStartRange = 0.f;               // manifest melee_start_range, the stock attack range (0 = an old manifest: the reach decides)
     float SwingInterval = OpenWillowThreat::SwingInterval;   // the kind's swing cycle (FindKindMelee), else the stand-in
     float StandDistance = 0.f;                 // the kind's live stand distance (FindKindMelee); 0 = the stand-in stop inside the swing range
+    float MayaRadius = 0.f;                    // Maya's capsule radius: with CollisionRadius, the body contact a live stand distance never goes inside
 };
 
 // Melee per range kind from live reads: the acceptance table of docs/verification/COMBAT_RANGE.md, held to tools/check_range.py's
@@ -96,6 +98,8 @@ struct FOpenWillowBrainOrders
     FVector ChaseTo = FVector::ZeroVector;   // where Maya was last seen (the target's location, or a lost target's last-known spot)
     bool bRun = false;            // run at her (false inside the stop margin, or during a swing)
     bool bSwingStarted = false;   // a swing started this tick: play the melee clip
+    float StopShort = 0.f;        // with bRun, for a kind with a live stand distance: stop this far from ChaseTo (0 = no clamp)
+    bool bStandOnContact = false; // the live stand distance was inside body contact, so the stop is at contact
 };
 
 // The range enemy's brain: the threat rules (on the state update) and the melee timing (every tick). A plain class: the
@@ -129,6 +133,7 @@ public:
     float LastScale = 1.f;
     float LastApplied = 0.f;        // what the delivery applied (0 on a miss)
     float LastSwingDistance = -1.f; // the horizontal distance to Maya at the last swing start
+    float LastStopAt = 0.f;         // where it stops running toward Maya (the last tick's value)
 
 private:
     void UpdateThreat(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool bDamaged, bool bSightBefore);

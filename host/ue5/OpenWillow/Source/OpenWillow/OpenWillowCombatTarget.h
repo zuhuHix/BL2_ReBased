@@ -17,6 +17,10 @@ struct FOpenWillowDamagePopup
 
 // Local Sanctuary combat stand-in until enemy pawn/AI data is hosted. It is a
 // host-made training dummy (engine shapes), not a BL2 enemy mesh or behavior.
+// True when the test switch -owcorpsenolimits runs with the kill row (-owrangekillrow): ragdolls then have no depenetration limit and no
+// speed caps. Ignored on any other run. The first call logs which applies.
+bool OpenWillowCorpseLimitsOff();
+
 UCLASS()
 class OPENWILLOW_API AOpenWillowCombatTarget : public AActor, public IOpenWillowHitTarget
 {
@@ -116,7 +120,7 @@ public:
     float CorpsePeakDrift() const { return CorpseDrift; }
     float CorpsePeakSpeed() const { return CorpseSpeed; }
     int32 CorpseSpeedCaps() const { return CorpseCaps; }
-    // How far the lowest and the highest simulating body stood above the floor below it at the last reading (a second before the respawn: at rest, if it rests).
+    // How far the lowest and the highest simulating body stood above the floor below it at the last reading (0.25 s before the respawn: at rest, if it rests).
     // -1 when no floor was found under any body.
     float CorpseLowestGap() const { return CorpseGapLow; }
     float CorpseHighestGap() const { return CorpseGapHigh; }

@@ -34,15 +34,21 @@ SKIP_ONLY_FOR = {"crit_minds_eye": "reason=no local skill effects file", "ragdol
 # The acceptance table of docs/verification/COMBAT_RANGE.md ("Acceptance table: melee per kind"): per range kind with a live read, the
 # swing cycle (s, one swing start to the next) and the distance it stands at to swing once it has closed (uu, horizontal, enemy origin
 # to Maya's). "value" is what the host uses (OpenWillowEnemyAI.cpp, KindMeleeRows; tests/range_kind_melee_test.py holds the two to
-# each other); a kind_melee result must land in the band. Sources and how each band was chosen are in the record. Kinds not listed have
-# no live read and keep the host stand-ins. Every row is one session's measurement, UNVERIFIED beyond it.
+# each other); a kind_melee result must land in the band. The bands are the measured spreads; the one host allowance is on the cycle's
+# upper edge, raised by the run's longest frame (max_frame, logged by the host), because a swing starts on the first frame after it is due.
+# The stand distance needs none: the host clamps the last step of the run to it. This checker is the only place the numbers are graded.
+# Sources and how each band was chosen are in the record. Kinds not listed have no live read and keep the host stand-ins. Every row is
+# one session's measurement, UNVERIFIED beyond it.
 ACCEPTANCE = {
     # cycle: AI_MELEE_TARGETING_LIVE 4 (one adult, 34 gaps). The den read of 2026-11-07 disagrees (1.216 to 1.217 s, 9 gaps): open.
     # stand: the den read (one adult, 181 samples, 190 to 225).
-    "bullymong_adult": {"cycle": 1.25, "cycle_band": (1.221, 1.386), "stand": 201.0, "stand_band": (176.0, 225.0)},
-    # both from the den read (grab cycle: two babies, 31 gaps, 1.133 to 1.134; stand: one baby, 347 samples, 106 to 118).
-    "bullymong_baby": {"cycle": 1.133, "cycle_band": (1.128, 1.167), "stand": 111.0, "stand_band": (92.0, 118.0)},
+    "bullymong_adult": {"cycle": 1.25, "cycle_band": (1.221, 1.386), "stand": 201.0, "stand_band": (190.0, 225.0)},
+    # both from the den read (grab cycle: two babies, 31 gaps, 1.133 to 1.134, widened 0.005 each way for the logs' millisecond rounding;
+    # stand: one baby, 347 samples, 106 to 118).
+    "bullymong_baby": {"cycle": 1.133, "cycle_band": (1.128, 1.139), "stand": 111.0, "stand_band": (106.0, 118.0)},
 }
+# A frame longer than this is a stall, not a frame: the cycle allowance stops there (the host's state update is 0.2 s).
+MAX_FRAME = 0.2
 KEY_VALUE = re.compile(r"(\w+)=(\S+)")
 
 
@@ -57,11 +63,14 @@ def kind_melee_problem(detail):
         cycle = (float(fields["cycle_min"]), float(fields["cycle_max"]))
         stand = (float(fields["stand_min"]), float(fields["stand_max"]))
         first, start_range = float(fields["first_swing"]), float(fields["start_range"])
+        max_frame = float(fields["max_frame"])
     except (KeyError, ValueError):
-        return "the line lacks cycle_min, cycle_max, stand_min, stand_max, first_swing or start_range"
+        return "the line lacks cycle_min, cycle_max, stand_min, stand_max, first_swing, start_range or max_frame"
+    if not 0 <= max_frame <= MAX_FRAME:
+        return "max_frame %.3f s is not a frame time (0 to %.2f s): the cycle allowance would mean nothing" % (max_frame, MAX_FRAME)
     low, high = row["cycle_band"]
-    if not (low <= cycle[0] and cycle[1] <= high):
-        return "cycle %.3f to %.3f s is outside the acceptance band %.3f to %.3f" % (cycle[0], cycle[1], low, high)
+    if not (low <= cycle[0] and cycle[1] <= high + max_frame):
+        return "cycle %.3f to %.3f s is outside the acceptance band %.3f to %.3f (+ max_frame %.3f)" % (cycle[0], cycle[1], low, high, max_frame)
     low, high = row["stand_band"]
     if not (low <= stand[0] and stand[1] <= high):
         return "stand %.0f to %.0f uu is outside the acceptance band %.0f to %.0f" % (stand[0], stand[1], low, high)

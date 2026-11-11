@@ -175,7 +175,7 @@ was seen, though the frames cannot show floor contact, and the cap is holding th
 
 **Floor gap and the physics asset (follow-up, 2026-11).** `rose` cannot say whether a body is on the ground, so each simulated corpse now logs how far its lowest and highest bodies stand above the
 floor below them, 1.4 s and 3 s after death and just before the respawn, as well as which body was fastest and when. Each ragdoll logs its physics asset's bodies, constraints and the body pairs
-that do not collide. `tools/play_range.ps1 -KillRow -NoCorpseLimits` runs the kill row once without the depenetration limit and the speed caps, to see what they hide; it is a test switch, and how bodies
+that do not collide. `tools/play_range.ps1 -KillRow -NoCorpseLimits` runs the kill row once without the depenetration limit and the speed caps, to see what they hide; it is a test switch (the host ignores `-owcorpsenolimits` without `-owrangekillrow` and logs one line at start-up either way), and how bodies
 are thrown in play does not change. None of this has run yet. The import's asset is auto-generated from the mesh, not the stock asset, so what these lines show is about the host's asset, and
 what they mean for the game's own is UNVERIFIED.
 
@@ -188,7 +188,7 @@ First run (2026-11-07, one session, three trials, Three Horns Divide, Maya at le
 - **They can land close together:** two babies that had converged landed 14 pairs of blows within 0.05 s, on the same swing cycle.
 - **Their first blows were mostly not melee:** a slinger's rock from 800 uu and more, at about 3 s, and leaps. The range's enemies have neither.
 - **Swing start:** an adult's first swing came at 368 uu and a baby's first grab at 425, each inside its stock range, which supports the rule on those two samples. Regular bullymong and psycho: no read.
-- **Closing:** once there, the adult stood about 190 to 220 uu from Maya and the baby about 106. The host's adult stops at 334 and its regular at 260.
+- **Closing:** once there, the adult stood about 190 to 225 uu from Maya and the baby about 106. The host's adult stops at 334 and its regular at 260.
 - **Swing cycles:** adult 1.217 s, baby grab 1.133 s; the host uses 1.25 s for every kind.
 - **Speed:** moving medians of 500 for the slinger, 300 to 450 for the baby and 608 to 866 for adults, leaps included, with long pauses. The host's 400 is not too fast by this read; no number is taken from it.
 - **Notice:** members took a target 0.06 and 0.12 s apart in two trials: weak evidence, at 0.05 s sampling, that their updates are not in step.
@@ -207,27 +207,31 @@ other record against it. Each value comes from one session and is UNVERIFIED bey
 
 | # | Quantity | Live value (spread, count, source) | Host before | Host now | Check | Before | After |
 |---|---|---|---|---|---|---|---|
-| 1 | Adult swing cycle | **Two live reads disagree, open.** L-4: median 1.249 s, 33 of 34 gaps 1.221 to 1.386 (one 1.813 after another action). Den read: mean 1.2168 s, 1.216 to 1.217, 9 gaps, one adult (a second adult, swinging at something 2,850 uu from the player, gave 1.208 to 1.217 over 8 gaps; not counted) | 1.25 | 1.25 (kept: the larger read) | light: `range_kind_melee_test` (host row = table); in engine: `kind_melee` `cycle_min/max` in 1.221 to 1.386 | light FAIL (no per-kind row) | light PASS; engine not run |
-| 2 | Adult stand distance | Den read: median 201 uu, 190 to 225, 181 samples, one adult; 192.0 to 198.2 at the damage moment (9 calls). No record disagrees: L-4 has the player "within about 300 uu", AI_AWARENESS_LIVE has members within 234 uu of her, and the radii of section 5 (adult 150, player 42) make contact 192 | 334 (394 - 60) | 201 | light as row 1; in engine: `kind_melee` `stand_min/max` in 176 to 225 | FAIL (334) | light PASS; engine not run |
+| 1 | Adult swing cycle | **Two live reads disagree, open.** L-4: median 1.249 s, 33 of 34 gaps 1.221 to 1.386 (one 1.813 after another action). Den read: mean 1.2168 s, 1.216 to 1.217, 9 gaps, one adult (a second adult, swinging at something 2,850 uu from the player, gave 1.208 to 1.217 over 8 gaps; not counted) | 1.25 | 1.25 (kept: the larger read) | light: `range_kind_melee_test` (host row = table); in engine: `kind_melee` `cycle_min/max` in 1.221 to 1.386 (+ `max_frame`) | light FAIL (no per-kind row) | light PASS; engine not run |
+| 2 | Adult stand distance | Den read: median 201 uu, 190 to 225, 181 samples, one adult; 192.0 to 198.2 at the damage moment (9 calls). No record disagrees: L-4 has the player "within about 300 uu", AI_AWARENESS_LIVE has members within 234 uu of her, and the radii of section 5 (adult 150, player 42) make contact 192 | 334 (394 - 60) | 201 | light as row 1; in engine: `kind_melee` `stand_min/max` in 190 to 225 | FAIL (334) | light PASS; engine not run |
 | 3 | Adult first swing inside the stock range | Den read: 368 uu, stock range 394 (one swing) | the rule since PR #133 | unchanged | `kind_melee` `first_swing` <= `start_range` | PASS (by the rule; not run) | engine not run |
-| 4 | Baby swing cycle (its grab) | Den read: mean 1.1334 s, 1.133 to 1.134, 31 gaps, two babies; no other record | 1.25 | 1.133 | light as row 1; in engine: `kind_melee` in 1.128 to 1.167 | FAIL (1.25) | light PASS; **the default range spawns no baby, so the engine check does not run there** |
-| 5 | Baby stand distance | Den read: median 111 uu, 106 to 118, 347 samples, one baby (the second was not sampled); 106.0 to 112.3 at the damage moment (31 calls) | 420 (480 - 60) | 111 | light as row 1; in engine as row 4, 92 to 118 | FAIL (420) | as row 4 |
+| 4 | Baby swing cycle (its grab) | Den read: mean 1.1334 s, 1.133 to 1.134, 31 gaps, two babies; no other record | 1.25 | 1.133 | light as row 1; in engine: `kind_melee` in 1.128 to 1.139 (+ `max_frame`) | FAIL (1.25) | light PASS; **the default range spawns no baby, so the engine check does not run there** |
+| 5 | Baby stand distance | Den read: median 111 uu, 106 to 118, 347 samples, one baby (the second was not sampled); 106.0 to 112.3 at the damage moment (31 calls) | 420 (480 - 60) | 111, but **184 in the host**: no stand goes inside body contact, and the host's baby has the borrowed adult-sized radius 150 (+ Maya's 34) | light as row 1; in engine as row 4, 106 to 118 | FAIL (420) | as row 4; when a baby is spawned this row FAILS on the body size, not on the rule |
 | 6 | Baby first swing inside the stock range | Den read: 425 uu, stock range 480 (one grab) | the rule | unchanged | as row 3 | PASS (by the rule) | as row 4 |
 | 7 | Regular bullymong: cycle and stand distance (three of the four default enemies) | **no live read** | 1.25 (the adult's), 260 (320 - 60) | unchanged | `melee_interval` (enemy 0 is a regular one) against its own value, 0.1 s | PASS (stand-in) | unchanged |
 | 8 | Slinger's melee, psycho | **no live read** of either swinging at the player (the den read's slingers only threw; its SavageLee swung at something 3,021 uu away) | 1.25, stop rule | unchanged | none | | |
 | 9 | First blow, leaps and thrown rocks | see "The main open gap" below | not modelled | not modelled | none | | |
 
-**How the bands were chosen.**
-- Adult cycle: L-4's spread (1.221 to 1.386). The den read's 1.217 falls outside it, which is the conflict the table records; neither read is thrown out.
-- Baby cycle: the measured 1.133 to 1.134, lowered by 0.005 s for rounding (both logs keep milliseconds). The upper edge is raised by 0.034 s because the host
-  starts a swing on the first frame after it is due, so it can be up to one frame late (0.033 s at 30 fps). 1.25 is still outside the band.
-- Stand distances: the measured minimum to maximum, with the lower edge lowered by 14 uu because the host's run stops on the first frame inside the stand
-  distance (400 uu/s for 1/30 s is 13.3 uu). The host's value is the median of the samples. The old 334 and 420 are outside the bands.
-- The host's own `kind_melee` verdict uses the same frame allowances around its row. `tools/check_range.py` then checks the logged numbers against the bands
-  above, so a host PASS outside a band is graded FAIL.
+**How the bands were chosen.** `tools/check_range.py` grades the numbers, and only there. The host's `kind_melee` verdict covers only what the bands
+don't: a row exists, four swings happened, and the first one started inside the stock range.
+- Adult cycle: L-4's spread (1.221 to 1.386). The den read's 1.217 falls outside it, so the gate follows the older, larger read, and rejects the den
+  read's value, until a third read settles which is right. A test asserts that rejection.
+- Baby cycle: the measured 1.133 to 1.134, widened 0.005 s each way because both logs round to the millisecond.
+- The one host allowance, on every cycle band: the upper edge is raised by `max_frame`, the longest frame the step saw (the host logs it). The host starts a
+  swing on the first frame after it is due, so a slow frame makes it late by up to that frame. A `max_frame` above 0.2 s (one state update) is a stall, and the
+  line fails.
+- Stand distances: the measured minimum to maximum, with no allowance. The host clamps the last step of the run to the stand distance, so a slow frame
+  cannot carry the enemy past it. The host's value is the median of the samples. The old 334 and 420 are outside the bands.
 
 **What changed in the host.** `KindMeleeRows` (`OpenWillowEnemyAI.cpp`) gives the two kinds with a live read their cycle and stand distance. Every other kind
-keeps `SwingInterval` (1.25 s) and the old stop (60 uu inside its swing range). The enemy logs one line per spawn,
+keeps `SwingInterval` (1.25 s) and the old stop (60 uu inside its swing range). A live stand distance never goes inside body contact: the kind's collision
+radius plus Maya's capsule radius, because the enemy's root does not collide and nothing else stops it. When that floor applies, the enemy logs it once
+(`... is inside body contact ...: it stops at ...`). For the adult, 150 + 34 = 184 is under 201, so the floor does not apply. The enemy logs one line per spawn,
 `OWRANGE enemy <name> kind_melee kind=... swing_interval=... stand=... source=live_read|stand-in_no_live_read`. So on the default range (three regular, one
 adult) the only behaviour that changes is where the adult stops: 201 uu instead of 334. A swing still starts once Maya is inside the stock range, so the
 adult's first swing still comes from up to 394 uu, and then it closes in.
@@ -235,7 +239,7 @@ adult's first swing still comes from up to 394 uu, and then it closes in.
 **The in-engine step.** `kind_melee` (heavy, part of `tools/test_range.ps1`, about 6 s per kind; 37 range steps now, 36 before): for each kind on the range that
 has a row, its first enemy is placed back home and Maya 600 uu in front of it. That is outside both stock swing ranges and inside the proximity rule, so the
 enemy notices her at once. The step records four swing starts with their distances and logs `kind=... cycle_min cycle_max stand_min stand_max first_swing
-start_range`. Swings 2 to 4 give the stand distances and two full cycles. Maya's health is put back to full between blows (a test fixture, like the den
+start_range max_frame ... stop_at`. Swings 2 to 4 give the stand distances and two full cycles. Maya's health is put back to full between blows (a test fixture, like the den
 read's immunity). The step fails, and does not skip, when no kind with a row is on the range. `melee_interval` now compares enemy 0's gap with that enemy's own
 cycle; for the regular bullymong that is the same 1.25 s as before.
 
@@ -259,7 +263,8 @@ throws, so its enemies only hit once they are close. A future read should captur
      then moving.
 2. **The regular bullymong** (three of the four default enemies): its swing cycle and stand distance at the player, ten or more gaps, sampled every 0.05 s.
 3. **Is the stand distance just contact?** We need each kind's collision cylinder radius and the player's, in the same session as the distances. The adult's
-   150 + 42 = 192 matches its damage-moment 192.0, but the baby's radius is in no record.
+   150 + 42 = 192 matches its damage-moment 192.0. **The small kind's (the baby's) collision radius is in no record**: it is needed next to its distances,
+   since the host's baby borrows the adult-sized 150 and so cannot stand at 111.
 4. **Leaps and rocks:** the list under "The main open gap" above.
 5. **Time to the first blow** after a member takes its target, per kind, against a player who stands still and one who moves.
 

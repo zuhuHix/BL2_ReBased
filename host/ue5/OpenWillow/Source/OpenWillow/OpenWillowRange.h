@@ -163,6 +163,8 @@ private:
     TWeakObjectPtr<AOpenWillowEnemy> TestKindEnemy;
     TArray<float> TestKindStarts;
     TArray<float> TestKindDistances;
+    float TestKindLastTick = 0.f;
+    float TestKindMaxFrame = 0.f;
     FString TestWhere;                  // where PlaceInSight put Maya (for the step's log line)
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;

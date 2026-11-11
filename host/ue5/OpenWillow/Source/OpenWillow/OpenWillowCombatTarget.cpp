@@ -26,12 +26,6 @@
 
 namespace
 {
-// -owcorpsenolimits (test only, tools/play_range.ps1 -KillRow -NoCorpseLimits): the ragdoll without the depenetration limit and the speed caps, to see what they hide.
-bool CorpseLimitsOff()
-{
-    static const bool bOff = FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits"));
-    return bOff;
-}
 const FLinearColor BodyColor(0.20f, 0.07f, 0.04f);
 const FLinearColor HeadColor(0.55f, 0.42f, 0.30f);
 // Host calibration (UNVERIFIED): factor between the data's light brightness and UE5's unitless intensity (see UpdatePresentation).
@@ -844,6 +838,27 @@ void AOpenWillowCombatTarget::SetRespawn(bool bEnabled, float DelaySeconds)
     if (DelaySeconds > 0.f) RespawnDelay = DelaySeconds;
 }
 
+// -owcorpsenolimits (test only, tools/play_range.ps1 -KillRow -NoCorpseLimits): the ragdoll without the depenetration limit and the speed
+// caps, to see what they hide. Ignored unless the kill row runs too (-owrangekillrow); the first call logs which applies.
+bool OpenWillowCorpseLimitsOff()
+{
+    static const bool bOff = []()
+    {
+        const bool bAsked = FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits"));
+        const bool bKillRow = FParse::Param(FCommandLine::Get(), TEXT("owrangekillrow"));
+        if (bAsked && bKillRow)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow corpse limits OFF (test switch -owcorpsenolimits with the kill row)"));
+        }
+        else if (bAsked)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("OpenWillow -owcorpsenolimits ignored: it is only for the kill row (-owrangekillrow)"));
+        }
+        return bAsked && bKillRow;
+    }();
+    return bOff;
+}
+
 void AOpenWillowCombatTarget::TickStockRespawn(float Now)
 {
     // Host stand-in (UNVERIFIED): the death clip plays; after RagdollDelay the mesh goes limp (physics only when the imported
@@ -852,9 +867,24 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
     if (bRagdollSimulating)
     {
         TrackCorpse();
-        // At the times of the kill row's frames, and a moment before the respawn: at rest, if it rests.
+        // At the times of the kill row's frames, and 0.25 s before the respawn: at rest, if it rests. A reading that would not come before the
+        // respawn, or not after the one before it (a respawn delay of 3.25 s or less), is skipped and the log says so.
         const float Marks[] = {1.4f, 3.f, RespawnDelay - 0.25f};
-        if (CorpseGapReadings < UE_ARRAY_COUNT(Marks) && Since >= Marks[CorpseGapReadings]) ReadCorpseFloorGap(Since);
+        const int32 MarkCount = int32(UE_ARRAY_COUNT(Marks));
+        while (CorpseGapReadings < MarkCount)
+        {
+            const float Mark = Marks[CorpseGapReadings];
+            const float Before = CorpseGapReadings > 0 ? Marks[CorpseGapReadings - 1] : 0.f;
+            if (Mark >= RespawnDelay || Mark <= Before)
+            {
+                UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s corpse reading at %.2f s skipped: not between %.2f s and the respawn at %.2f s"), *GetName(), Mark,
+                    Before, RespawnDelay);
+                ++CorpseGapReadings;
+                continue;
+            }
+            if (Since >= Mark) ReadCorpseFloorGap(Since);
+            break;
+        }
     }
     if (!bRagdoll && Since >= RagdollDelay)
     {
@@ -870,14 +900,14 @@ void AOpenWillowCombatTarget::TickStockRespawn(float Now)
             // Nothing throws a corpse on purpose: the death zeroed the knock, and no velocity is handed to the ragdoll. What can is the
             // moment physics takes over, with bodies overlapping each other or the floor (the suspect for the flung corpses of the first
             // playtest, UNVERIFIED): so that push is limited, and TrackCorpse caps what still gets through and logs it.
-            if (!CorpseLimitsOff())
+            if (!OpenWillowCorpseLimitsOff())
                 for (FBodyInstance* Body : StockMesh->Bodies)
                     if (Body) Body->SetMaxDepenetrationVelocity(RagdollDepenetrationSpeed);
             // What may be fighting itself: bodies that can collide with each other, and the joints holding them. Read only.
             const UPhysicsAsset* Asset = StockMesh->GetPhysicsAsset();
             const int32 BodyCount = Asset->SkeletalBodySetups.Num();
             UE_LOG(LogTemp, Display, TEXT("OpenWillow target %s physics asset %s: %d bodies, %d constraints, %d of %d body pairs not colliding, limits %s"), *GetName(), *Asset->GetName(),
-                BodyCount, Asset->ConstraintSetup.Num(), Asset->CollisionDisableTable.Num(), BodyCount * (BodyCount - 1) / 2, CorpseLimitsOff() ? TEXT("OFF (test)") : TEXT("on"));
+                BodyCount, Asset->ConstraintSetup.Num(), Asset->CollisionDisableTable.Num(), BodyCount * (BodyCount - 1) / 2, OpenWillowCorpseLimitsOff() ? TEXT("OFF (test)") : TEXT("on"));
             StockMesh->SetSimulatePhysics(true);
             StockMesh->SetAllPhysicsLinearVelocity(FVector::ZeroVector);
             StockMesh->SetAllPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
@@ -945,7 +975,7 @@ void AOpenWillowCombatTarget::TrackCorpse()
             CorpseFastBone = StockMesh->GetBoneName(Body->InstanceBoneIndex);
             CorpseFastAt = GetWorld()->GetTimeSeconds() - CorpseStartAt;
         }
-        if (CorpseLimitsOff()) continue;
+        if (OpenWillowCorpseLimitsOff()) continue;
         const FVector2D Flat(Velocity.X, Velocity.Y);
         const double FlatSpeed = Flat.Size();
         if (Velocity.Z <= RagdollMaxRiseSpeed && FlatSpeed <= RagdollMaxFlatSpeed) continue;
@@ -972,7 +1002,8 @@ void AOpenWillowCombatTarget::ReadCorpseFloorGap(float Since)
         const FVector At = Body->GetUnrealWorldTransform().GetLocation();
         FHitResult Floor;
         // From a little above: a body sunk into the floor still reads, as a small gap.
-        if (!GetWorld()->LineTraceSingleByChannel(Floor, At + FVector(0.f, 0.f, 50.f), At - FVector(0.f, 0.f, 5000.f), ECC_WorldStatic, Query))
+        // World static geometry only: a trace by channel also stops on another corpse or a pawn's capsule.
+        if (!GetWorld()->LineTraceSingleByObjectType(Floor, At + FVector(0.f, 0.f, 50.f), At - FVector(0.f, 0.f, 5000.f), FCollisionObjectQueryParams(ECC_WorldStatic), Query))
         {
             ++NoFloor;
             continue;

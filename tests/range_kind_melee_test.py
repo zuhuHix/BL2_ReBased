@@ -33,9 +33,9 @@ def host_rows():
     return {kind: (float(cycle), float(stand)) for kind, cycle, stand in ROW.findall(block)}
 
 
-def kind_line(kind='bullymong_adult', cycle=(1.25, 1.267), stand=(195, 201), first=380, start_range=394):
-    return ('kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f swings=4'
-            % (kind, cycle[0], cycle[1], stand[0], stand[1], first, start_range))
+def kind_line(kind='bullymong_adult', cycle=(1.25, 1.267), stand=(201, 201), first=380, start_range=394, max_frame=0.017):
+    return ('kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=4'
+            % (kind, cycle[0], cycle[1], stand[0], stand[1], first, start_range, max_frame))
 
 
 class HostRowsTest(unittest.TestCase):
@@ -73,8 +73,17 @@ class HostUsesTheRowsTest(unittest.TestCase):
     def test_the_brain_reads_cycle_and_stand_from_its_input(self):
         brain = text('OpenWillowEnemyAI.cpp')
         self.assertIn('Now >= LastSwingStart + In.SwingInterval', brain)
-        self.assertIn('const float StopAt = In.StandDistance > 0.f ? In.StandDistance', brain)
+        self.assertIn('const bool bLiveStand = In.StandDistance > 0.f;', brain)
         self.assertNotIn('LastSwingStart + SwingInterval', brain)
+
+    def test_a_live_stand_distance_never_goes_inside_body_contact_and_the_run_stops_on_it(self):
+        brain = text('OpenWillowEnemyAI.cpp')
+        self.assertIn('const float Contact = In.CollisionRadius + In.MayaRadius;', brain)
+        self.assertIn('FMath::Max(In.StandDistance, Contact)', brain)
+        self.assertIn('Orders.StopShort = (bAware && bLiveStand) ? StopAt : 0.f;', brain)
+        enemy = text('OpenWillowEnemy.cpp')
+        self.assertIn('if (StopShort > 0.f) Step = FMath::Min(Step, FMath::Max(0.f, Left - StopShort));', enemy)
+        self.assertIn('is inside body contact', enemy)
 
     def test_the_enemy_fills_them_from_its_kind_and_says_where_they_came_from(self):
         enemy = text('OpenWillowEnemy.cpp')
@@ -87,7 +96,8 @@ class HostUsesTheRowsTest(unittest.TestCase):
     def test_the_range_test_logs_what_the_checker_reads(self):
         source = text('OpenWillowRange.cpp')
         step = source[source.index('case 94: // kind_melee'):source.index('// ---------------------------------------------------------------------------------------------- loot driver')]
-        for field in ('kind=%s', 'cycle_min=%.3f', 'cycle_max=%.3f', 'stand_min=%.0f', 'stand_max=%.0f', 'first_swing=%.0f', 'start_range=%.0f'):
+        for field in ('kind=%s', 'cycle_min=%.3f', 'cycle_max=%.3f', 'stand_min=%.0f', 'stand_max=%.0f', 'first_swing=%.0f', 'start_range=%.0f',
+                      'max_frame=%.3f'):
             self.assertIn(field, step)
         self.assertIn('kind_melee', check_range.EXPECTED)
         # C2181 (project memory): no brace-less if holding a UE_LOG before an else.
@@ -97,12 +107,23 @@ class HostUsesTheRowsTest(unittest.TestCase):
 class CheckerTest(unittest.TestCase):
     def test_a_host_inside_the_bands_passes(self):
         self.assertEqual(check_range.kind_melee_problem(kind_line()), '')
-        self.assertEqual(check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.150), (100, 111), 470, 480)), '')
+        self.assertEqual(check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.140), (111, 111), 470, 480)), '')
 
     def test_the_old_stand_ins_fail(self):
         # Before the table: the adult stopped 60 uu inside its swing range (334), the baby at 420, and the baby swung every 1.25 s.
         self.assertIn('stand', check_range.kind_melee_problem(kind_line(stand=(328, 334))))
         self.assertIn('cycle', check_range.kind_melee_problem(kind_line('bullymong_baby', (1.25, 1.267), (414, 420), 470, 480)))
+
+    def test_the_cycle_allowance_is_the_logged_longest_frame(self):
+        # A slow editor frame makes a swing start late by up to that frame; the band's upper edge moves by exactly that much.
+        self.assertIn('cycle', check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.017)))
+        self.assertEqual(check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.05)), '')
+        self.assertIn('max_frame', check_range.kind_melee_problem(kind_line(max_frame=0.5)))
+        self.assertIn('lacks', check_range.kind_melee_problem(kind_line().replace(' max_frame=0.017', '')))
+
+    def test_a_stand_inside_the_measured_band_needs_no_frame_allowance(self):
+        # The host clamps the run's last step to the stand distance, so a frame cannot carry it inside the band.
+        self.assertIn('stand', check_range.kind_melee_problem(kind_line(stand=(187, 201), max_frame=0.05)))
 
     def test_the_den_reads_adult_cycle_is_outside_the_band_the_host_is_held_to(self):
         self.assertIn('cycle', check_range.kind_melee_problem(kind_line(cycle=(1.217, 1.217))))

@@ -476,6 +476,7 @@ void UOpenWillowRangeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     bSurveyMode = FParse::Param(FCommandLine::Get(), TEXT("owrangesurvey"));
     bStartSwitch = FParse::Param(FCommandLine::Get(), TEXT("owrangestart"));
     bKillRow = bStartSwitch && FParse::Param(FCommandLine::Get(), TEXT("owrangekillrow"));
+    OpenWillowCorpseLimitsOff();   // logs its one start-up line when the test switch is on
     FString ModeSwitch;
     if (FParse::Value(FCommandLine::Get(), TEXT("owrangemode="), ModeSwitch))
     {
@@ -1131,12 +1132,12 @@ void UOpenWillowRangeSubsystem::TickKillRow(float Now)
     }
     case 2: // frames at the playtest's times after the death: 0.56 s and 2.17 s into the ragdoll
         if (Now - KillAt < 1.4f) return;
-        RequestRangeShot(FString::Printf(TEXT("kill%s_%d_a.png"), FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits")) ? TEXT("_nolimits") : TEXT(""), KillGun));
+        RequestRangeShot(FString::Printf(TEXT("kill%s_%d_a.png"), OpenWillowCorpseLimitsOff() ? TEXT("_nolimits") : TEXT(""), KillGun));
         KillStage = 3;
         return;
     case 3:
         if (Now - KillAt < 3.f) return;
-        RequestRangeShot(FString::Printf(TEXT("kill%s_%d_b.png"), FParse::Param(FCommandLine::Get(), TEXT("owcorpsenolimits")) ? TEXT("_nolimits") : TEXT(""), KillGun));
+        RequestRangeShot(FString::Printf(TEXT("kill%s_%d_b.png"), OpenWillowCorpseLimitsOff() ? TEXT("_nolimits") : TEXT(""), KillGun));
         KillStage = 4;
         return;
     default: // after its respawn: what the corpse did
@@ -2225,6 +2226,8 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         TestKindDistances.Reset();
         TestSwingBase = Enemy->GetBrain().SwingCount;
         StepStart = Now;
+        TestKindLastTick = Now;
+        TestKindMaxFrame = 0.f;
         TestStep = 95;
         return;
     }
@@ -2246,6 +2249,9 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             return;
         }
         const FOpenWillowEnemyBrain& KindBrain = Enemy->GetBrain();
+        // The longest frame of the step: a swing can start up to one frame after it is due (the checker allows that much on the cycle).
+        TestKindMaxFrame = FMath::Max(TestKindMaxFrame, Now - TestKindLastTick);
+        TestKindLastTick = Now;
         // At most one swing starts per tick: each new one is recorded with its distance.
         if (KindBrain.SwingCount > TestSwingBase + TestKindStarts.Num())
         {
@@ -2283,15 +2289,12 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
                 CycleMax = FMath::Max(CycleMax, Gap);
             }
         }
-        // The host's own verdict: the row's values, allowing the host's one-frame lag (a swing starts on the first frame past its time, up to
-        // 0.034 s at 30 fps; the run stops on the first frame inside the stand distance, up to 14 uu at 400 uu/s and 30 fps).
-        // tools/check_range.py re-checks the logged numbers against its acceptance bands.
-        const bool bOk = Row && StartRange > 0.f && TestKindDistances[0] > 0.f && TestKindDistances[0] <= StartRange
-            && CycleMin >= Row->SwingInterval - 0.005f && CycleMax <= Row->SwingInterval + 0.034f
-            && StandMin >= Row->StandDistance - 14.f && StandMax <= Row->StandDistance + 0.5f;
-        TestCheck(TEXT("kind_melee"), bOk, FString::Printf(TEXT("kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f swings=%d row_cycle=%.3f row_stand=%.0f"),
-            *KindName, CycleMin, CycleMax, StandMin, StandMax, TestKindDistances[0], StartRange, TestKindStarts.Num(),
-            Row ? Row->SwingInterval : 0.f, Row ? Row->StandDistance : 0.f));
+        // The host reports; the numbers are graded in one place, tools/check_range.py, against the acceptance bands (the cycle's upper edge
+        // plus max_frame). The host's verdict covers only what the bands do not: a row, four swings, the first one inside the stock range.
+        const bool bOk = Row && StartRange > 0.f && TestKindDistances[0] > 0.f && TestKindDistances[0] <= StartRange;
+        TestCheck(TEXT("kind_melee"), bOk, FString::Printf(TEXT("kind=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=%d row_cycle=%.3f row_stand=%.0f stop_at=%.0f"),
+            *KindName, CycleMin, CycleMax, StandMin, StandMax, TestKindDistances[0], StartRange, TestKindMaxFrame, TestKindStarts.Num(),
+            Row ? Row->SwingInterval : 0.f, Row ? Row->StandDistance : 0.f, KindBrain.LastStopAt));
         TestStep = 94;
         return;
     }

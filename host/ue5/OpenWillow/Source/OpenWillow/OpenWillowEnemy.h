@@ -80,13 +80,14 @@ private:
     void UpdatePatrol(float Now, float DeltaSeconds);
     void TurnToward(const FVector& Dir, float DeltaSeconds);
     void UpdateBrain(float Now, float DeltaSeconds);
-    void UpdateChase(const FVector& Target, bool bRun, float Now, float DeltaSeconds);
+    void UpdateChase(const FVector& Target, bool bRun, float StopShort, float Now, float DeltaSeconds);
     void PlayMelee(float Now);
     void SetMoveAnim(bool bMoving, bool bRun = false);
     void UpdateHealthBars();
 
     FOpenWillowRangeKind Kind;
     const FOpenWillowKindMelee* KindMelee = nullptr;   // a row of the static table in OpenWillowEnemyAI.cpp (set by SetupKind)
+    bool bStandOnContactLogged = false;                // the "stand inside body contact" line is logged once per setup
     UPROPERTY() TObjectPtr<class USphereComponent> CritVolume;
     UPROPERTY() TObjectPtr<class UAnimSequence> WalkClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> RunClip;
