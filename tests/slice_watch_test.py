@@ -272,6 +272,7 @@ class HelperTest(unittest.TestCase):
             spec.write_text(json.dumps({'funcs': ['Pawn.Died'], 'checks': {'require': [{'func': 'Died', 'min': 1}]}}), encoding='utf-8')
             (Path(tmp) / 'watch.json').write_text(json.dumps(dump([row('X.Pawn:Died', 1.0)])), encoding='utf-8')
             body = ("function Invoke-GamePy([string]$Code, [int]$T = 30) { $script:sent += @($Code); if ($Code -like '*sw_dump*') { '{\"rows\": 1}' } elseif ($Code -like '*sw_stop*') { 'stopped' } else { '3' } }\n"
+                    "$script:SliceWatchOn = $true\n"
                     f"$w = Complete-SliceWatch '{spec}' '{tmp}'\n"
                     "'usable=' + $w.usable; 'sent=' + $script:sent.Count; $w.check")
             done = self.run_ps(body)
@@ -282,13 +283,19 @@ class HelperTest(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == 'win32', 'the capture helpers run on Windows')
     def test_refusals(self):
+        """A watch that does not start never ends the capture: its snapshots do nothing, a failed snapshot is a warning, and only
+        Complete-SliceWatch (inside the capture's 'watch' stage) refuses."""
         body = ("function Invoke-GamePy([string]$Code, [int]$T = 30) { 'Traceback (most recent call last): boom' }\n"
+                "function Invoke-GamePyFile([string]$P, [string]$O) { 'Traceback (most recent call last): boom' }\n"
                 "try { Save-SliceWatchSnap 'a b' } catch { 'refused name' }\n"
-                "try { Save-SliceWatchSnap 'ok' } catch { 'refused traceback' }\n"
-                "try { Start-SliceWatch 'C:\\no\\such\\spec.json' 'x' 'x' } catch { 'refused spec' }")
-        out = self.run_ps(body).stdout
-        for word in ('refused name', 'refused traceback', 'refused spec'):
-            self.assertIn(word, out)
+                "$r = Start-SliceWatch 'C:\\no\\such\\spec.json' 'x' 'x' 3>$null; if ($r.error) { 'not started: spec' }\n"
+                "Save-SliceWatchSnap 'ok'; 'a snapshot while off does nothing'\n"
+                "try { Complete-SliceWatch 'C:\\no\\such\\spec.json' 'C:\\' } catch { 'complete refused: ' + (\"$_\" -like '*did not start*') }\n"
+                "$script:SliceWatchOn = $true; Save-SliceWatchSnap 'ok' 3>$null; 'a failed snapshot is only a warning'")
+        done = self.run_ps(body)
+        for word in ('refused name', 'not started: spec', 'a snapshot while off does nothing', 'complete refused: True',
+                     'a failed snapshot is only a warning'):
+            self.assertIn(word, done.stdout, done.stdout + done.stderr)
 
 
 if __name__ == '__main__':

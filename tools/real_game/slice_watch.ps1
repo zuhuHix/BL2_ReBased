@@ -17,32 +17,50 @@ function Resolve-WatchSpec([string]$Spec) {
     if ($full -match "['\r\n]") { throw "slice watch spec path $full holds a quote or a line break" }
     $full
 }
-# Load the recorder into the capture's output folder (the same RG_OUT as the capture's own probes) and start it. Returns its answer: how many hooks
-# resolved and which names did not.
+# The watch never stops a capture: a watch that does not start leaves the capture's own steps to run, its snapshots do nothing, and only the
+# capture's 'watch' stage fails (Complete-SliceWatch throws inside that stage's try).
+$script:SliceWatchOn = $false
+$script:SliceWatchError = 'not started'
+# Load the recorder into the capture's output folder (the same RG_OUT as the capture's own probes) and start it. Returns its answer (how many hooks
+# resolved, which names did not), or an object with only 'error' when it did not start.
 function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
     Assert-WatchName $Label
-    $full = Resolve-WatchSpec $Spec
-    Test-WatchReply "$(Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/slice_watch.py') $OutFolder)" 'load' | Out-Null
-    Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_start('$Label', r'$full'), default=str))" 120) 'start' | ConvertFrom-Json
+    try {
+        $full = Resolve-WatchSpec $Spec
+        Test-WatchReply "$(Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/slice_watch.py') $OutFolder)" 'load' | Out-Null
+        $answer = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_start('$Label', r'$full'), default=str))" 120) 'start' | ConvertFrom-Json
+        $script:SliceWatchOn = $true; $script:SliceWatchError = ''
+        $answer
+    } catch {
+        $script:SliceWatchOn = $false; $script:SliceWatchError = "$_"
+        Write-Warning "slice watch not started: $_"
+        [pscustomobject]@{ error = "$_" }
+    }
 }
-# One labelled state snapshot, or one read of every AI pawn.
+# One labelled state snapshot, or one read of every AI pawn. Nothing when the watch is off; a failure is a warning (and the snapshot's absence fails
+# the usability check), never an error that would end the capture.
 function Save-SliceWatchSnap([string]$Label) {
     Assert-WatchName $Label
-    Test-WatchReply (Invoke-GamePy "print(len(sw_snap('$Label')))" 30) "snap $Label" | Out-Null
+    if (!$script:SliceWatchOn) { return }
+    try { Test-WatchReply (Invoke-GamePy "print(len(sw_snap('$Label')))" 30) "snap $Label" | Out-Null } catch { Write-Warning "slice watch snapshot ${Label}: $_" }
 }
 function Save-SliceWatchPawns([string]$Label) {
     Assert-WatchName $Label
-    Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json
+    if (!$script:SliceWatchOn) { return }
+    try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json }
+    catch { Write-Warning "slice watch pawns ${Label}: $_"; [pscustomobject]@{ error = "$_" } }
 }
 # Before the game closes: an end snapshot, the dump, the hooks off, then the usability check on the file. (On an error before this, the
 # observers stay until the capture's finalizer stops the game; they never block or write, and the finalizer is left word for word as reviewed.) Returns the counts, the check's lines
 # (counts and pass/fail only) and usable (true only when the check exited 0).
 function Complete-SliceWatch([string]$Spec, [string]$OutDir, [string]$Name = 'watch') {
     Assert-WatchName $Name
+    if (!$script:SliceWatchOn) { throw "the watch did not start: $script:SliceWatchError" }
     $full = Resolve-WatchSpec $Spec
     Save-SliceWatchSnap 'end'
     $counts = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json
     Test-WatchReply (Invoke-GamePy 'print(sw_stop())' 30) 'stop' | Out-Null
+    $script:SliceWatchOn = $false
     $file = Join-Path $OutDir "$Name.json"
     if (!(Test-Path -LiteralPath $file)) { throw "slice watch: $file was not written" }
     $lines = @(& python (Join-Path $PSScriptRoot 'slice_watch_check.py') $file --spec $full 2>&1 | ForEach-Object { "$_" })
