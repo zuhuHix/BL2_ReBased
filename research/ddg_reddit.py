@@ -1,4 +1,7 @@
 import urllib.request, urllib.parse, re, html, time, json, sys, collections
+import corpus_paths
+# Writes reddit_ddg.json into the corpus folder (see corpus_paths.py).
+OUT = corpus_paths.output_path(corpus_paths.corpus_dir(), "reddit_ddg.json")
 
 QUERIES = [
  "site:reddit.com borderlands 2 remaster what would you want",
@@ -48,6 +51,6 @@ for q in QUERIES:
         results.append({"q":q,"title":clean(t),"snippet":sn})
     time.sleep(2.0)
 
-with open("reddit_ddg.json","w",encoding="utf-8") as f:
+with open(OUT,"w",encoding="utf-8") as f:
     json.dump(results,f,indent=1,ensure_ascii=False)
 print("COLLECTED",len(results),"results")

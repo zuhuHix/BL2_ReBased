@@ -78,6 +78,23 @@ def main():
         check('top fails on an empty folder',
               r.returncode != 0 and 'research/fetch_steam_reviews.py' in r.stderr, r.stdout + r.stderr)
 
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        full = tmp / 'full'
+        empty = tmp / 'empty'
+        for d in (full, empty):
+            d.mkdir()
+        # Invented thread titles.
+        topics = [{'title': 'Invented thread: co-op will not connect', 'replies': 12},
+                  {'title': 'Invented thread: best build for the skill tree', 'replies': 4}]
+        (full / 'steam_topics_bl2.json').write_text(json.dumps(topics), encoding='utf-8')
+        r = run('topic_themes.py', '--corpus', str(full), cwd=tmp)
+        check('topic_themes reads the corpus folder', r.returncode == 0 and 'recent 2 threads' in r.stdout,
+              r.stdout + r.stderr)
+        r = run('topic_themes.py', env_dir=empty, cwd=tmp)
+        check('topic_themes fails on an empty folder',
+              r.returncode != 0 and 'research/steam_forum.py' in r.stderr, r.stdout + r.stderr)
+
     if failures:
         print(f'{len(failures)} failure(s)')
         for f in failures:

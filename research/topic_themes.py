@@ -1,5 +1,12 @@
-import json,re,collections,sys
-topics=json.load(open(sys.argv[1],encoding="utf-8"))
+import json,re,collections,sys,os
+import corpus_paths
+# Usage: topic_themes.py [FILE] [--corpus DIR]
+# FILE defaults to steam_topics_bl2.json in the corpus folder (see corpus_paths.py).
+CORPUS=corpus_paths.corpus_dir()
+name=sys.argv[1] if len(sys.argv)>1 else "steam_topics_bl2.json"
+path=corpus_paths.resolve(CORPUS,name)
+if not os.path.isfile(path): corpus_paths.missing_corpus(CORPUS,[name],"research/steam_forum.py")
+topics=json.load(open(path,encoding="utf-8"))
 THEMES={
  "multiplayer/coop/connection":r"co-?op|multiplayer|online|connect|join|host|lobby|lan|session|crossplay|matchmak|disconnect|нет онлайна",
  "crashes/technical/perf":r"crash|freez|fps|stutter|lag|launch|start(ing)? (issue|problem)|black screen|error|fix|bug|broken|won'?t (run|open)|performance",

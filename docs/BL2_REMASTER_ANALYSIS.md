@@ -369,8 +369,8 @@ Selective hero-asset retexturing within the memory budget. Set expectations hone
 
 ## 8. Source data
 
-Re-runnable scripts live in `research/`. The fetched review files are not
-tracked; the scripts keep them in an ignored local folder (`research/README.md`,
+Re-runnable scripts live in `research/`. The fetched review, forum and search
+files are not tracked; the scripts keep them in an ignored local folder (`research/README.md`,
 "Where the corpus lives"), and commits before 2026-11-11 still contain them:
 
 - `fetch_steam_reviews.py`, `fetch_neg.py`: Steam public review API collectors

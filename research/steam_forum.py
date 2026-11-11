@@ -1,4 +1,8 @@
 import urllib.request, urllib.parse, re, html, time, json, sys
+import corpus_paths
+# Usage: steam_forum.py [APP] [PAGES] [OUT] [--corpus DIR]
+# OUT is a file name in the corpus folder (see corpus_paths.py).
+CORPUS = corpus_paths.corpus_dir()
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 def get(url):
@@ -21,7 +25,7 @@ def parse(h):
 
 APP = sys.argv[1] if len(sys.argv)>1 else "49520"
 PAGES = int(sys.argv[2]) if len(sys.argv)>2 else 40
-OUT = sys.argv[3] if len(sys.argv)>3 else "steam_topics_bl2.json"
+OUT = corpus_paths.output_path(CORPUS, sys.argv[3] if len(sys.argv)>3 else "steam_topics_bl2.json")
 
 topics=[]; seen=set()
 for p in range(1, PAGES+1):
@@ -39,4 +43,4 @@ for p in range(1, PAGES+1):
     if not got: break
     time.sleep(1.2)
 json.dump(topics, open(OUT,"w",encoding="utf-8"), indent=1, ensure_ascii=False)
-print("SAVED", len(topics))
+print("SAVED", len(topics), "to", OUT)

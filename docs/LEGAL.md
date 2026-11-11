@@ -34,10 +34,9 @@ descriptively.
 - Planning, research and verification documents.
 - Re-runnable scripts that collect a research corpus of public Steam review
   text and forum/search snippets via public APIs, and analyse it (see
-  [`research/README.md`](../research/README.md)). The fetched review text is
-  not in the repository: the scripts write it to the ignored `local/` folder,
-  and commits made before 2026-11-11 still contain it. The forum and search
-  snippets are still tracked.
+  [`research/README.md`](../research/README.md)). The fetched text is not in
+  the repository: the scripts write it to the ignored `local/` folder, and
+  commits made before 2026-11-11 still contain it.
 - One vendored third-party library (lzokay, MIT) with recorded provenance.
 
 ## What this repository does not contain, and never will

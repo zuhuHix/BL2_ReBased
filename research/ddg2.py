@@ -1,4 +1,7 @@
 import urllib.request, urllib.parse, re, html, time, json, random
+import corpus_paths
+# Reads queries.txt from the current folder; writes reddit_ddg.json into the corpus folder (see corpus_paths.py).
+OUT=corpus_paths.output_path(corpus_paths.corpus_dir(),"reddit_ddg.json")
 
 UAS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
@@ -44,5 +47,5 @@ for i,q in enumerate(QUERIES):
     for g in got[:10]:
         g["q"]=q; allres.append(g)
     time.sleep(random.uniform(3.5,6.0))
-json.dump(allres,open("reddit_ddg.json","w",encoding="utf-8"),indent=1,ensure_ascii=False)
+json.dump(allres,open(OUT,"w",encoding="utf-8"),indent=1,ensure_ascii=False)
 print("TOTAL",len(allres))

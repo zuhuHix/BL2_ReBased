@@ -50,10 +50,10 @@ add_texts("Steam reviews (recent)",   jl(os.path.join(CORPUS, "reviews_bl2_recen
 add_texts("Steam reviews (helpful)",  jl(os.path.join(CORPUS, "reviews_bl2_helpful.jsonl")))
 add_texts("Steam reviews (negative)", jl(os.path.join(CORPUS, "reviews_bl2_negative.jsonl")))
 try:
-    add_texts("Steam forum threads", [t["title"] for t in json.load(open("steam_topics_bl2.json",encoding="utf-8"))])
+    add_texts("Steam forum threads", [t["title"] for t in json.load(open(os.path.join(CORPUS, "steam_topics_bl2.json"),encoding="utf-8"))])
 except Exception: pass
 try:
-    rd=json.load(open("reddit_ddg_all.json",encoding="utf-8"))
+    rd=json.load(open(os.path.join(CORPUS, "reddit_ddg_all.json"),encoding="utf-8"))
     add_texts("Reddit threads", [ (r["title"]+" "+r.get("snippet","")) for r in rd ])
 except Exception: pass
 

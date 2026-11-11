@@ -1,4 +1,8 @@
 import urllib.request, urllib.parse, re, html, time, json, random, sys
+import corpus_paths
+# Usage: ddg3.py QUERIES_FILE [--corpus DIR]
+# Resumes and writes reddit_ddg_all.json in the corpus folder (see corpus_paths.py).
+OUT=corpus_paths.output_path(corpus_paths.corpus_dir(),"reddit_ddg_all.json")
 UAS=["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
      "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0"]
@@ -16,7 +20,7 @@ def parse(h):
     return out
 qs=[l.strip() for l in open(sys.argv[1],encoding="utf-8") if l.strip()]
 allres=[]
-try: allres=json.load(open("reddit_ddg_all.json",encoding="utf-8"))
+try: allres=json.load(open(OUT,encoding="utf-8"))
 except: pass
 done={r["q"] for r in allres}
 for q in qs:
@@ -29,6 +33,6 @@ for q in qs:
         time.sleep(8+a*8)
     print(f"{len(got):>2} :: {q[:72]}", flush=True)
     for g in got[:10]: g["q"]=q; allres.append(g)
-    json.dump(allres,open("reddit_ddg_all.json","w",encoding="utf-8"),indent=1,ensure_ascii=False)
+    json.dump(allres,open(OUT,"w",encoding="utf-8"),indent=1,ensure_ascii=False)
     time.sleep(random.uniform(6,10))
 print("TOTAL",len(allres))
