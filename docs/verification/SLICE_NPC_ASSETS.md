@@ -206,6 +206,9 @@ instance per slot. Marcus's MICs use only `p_Diffuse`/`p_Normal`. The dummy's MI
 host's zone colours (our model, UNVERIFIED) with the light/dark scales and as-stored vectors read from that master's compiled shader
 (PHASELOCK_STOCK_DATA.md, "Master_Creature's colour model";
 UNVERIFIED in game). Its pattern texture is still not drawn.
+**Update 2026-11-10:** the x^2.2 host fit is on by default again (`OPENWILLOW_ZONE_GAMMA=0` gives the vectors as stored), and the dummy's
+masks import as sRGB at its next zone step (PHASELOCK_STOCK_DATA.md, "Why the skin reads yellow and the spikes golden"). The dummy's look
+with both was not checked.
 
 Fresh-session check (`preview` mode, a new editor process that only loads from disk): all meshes, skeletons and 9 AnimSequences
 loaded; every AnimSequence's skeleton equals its mesh's skeleton; lengths: Marcus idle 2.0 s; Marcus walk 1.0 s; Marcus run 0.667 s; Marcus gesture_casual 10.667 s; Marcus gesture_emphatic 5.333 s; TargetDummy idle 6.767 s; TargetDummy death_fire 3.233 s; TargetDummy death_corrosive 2.433 s; TargetDummy death_shock 3.533 s.

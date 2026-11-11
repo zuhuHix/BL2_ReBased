@@ -79,6 +79,15 @@ def test_psycho_slots_stay_at_one():
         assert 'parent unknown, scale left at 1.0' in z.scale_note(slot, master)
 
 
+def test_creature_targets_name_their_master():
+    # The zone step takes sRGB masks and the master's scales from the job entry's 'master'. A spec that loses it would quietly go back to
+    # raw masks and a scale of 1.0, so both creature specs are pinned here.
+    import prepare_phaselock_target as target
+    import slice_npc_assets as npcs
+    assert target.TARGETS['Bullymong'].get('master') == 'Master_Creature'
+    assert npcs.NPC_START['TargetDummy'].get('master') == 'Master_Creature'
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:

@@ -4587,4 +4587,7 @@ AI-assisted (Claude Opus 5.5). Record: `docs/verification/PHASELOCK_STOCK_DATA.m
   stays on for every target (`OPENWILLOW_ZONE_GAMMA=0` for an A/B), an UNVERIFIED host fit; the remaining paleness is most likely UE5's
   tone curve and the host's 0.15 specular (the shader has none), not checked yet.
 - **Checked:** `tests/creature_zone_test.py` (synthetic), `tests/editor_inputs_test.py`. No parsing change.
-- **Not verified:** the look against the running game beyond this critic score.
+- **Not verified:** the look against the running game beyond this critic score. That the game samples these masks decoded is read from the
+  package's `SRGB` flag and UE3's usual sampling of such a texture; it was not seen in the running game (UNVERIFIED). The range dummy is a
+  `Master_Creature` target too, so its masks become sRGB at its next zone step (`tools/seed_slice_npc_assets.ps1 -Steps zone`); the critic
+  scored the Bullymong only, and the dummy was not re-imported or looked at.

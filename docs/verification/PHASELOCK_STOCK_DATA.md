@@ -1550,7 +1550,11 @@ are not. What was checked, in our words (local numbers and sheets under ignored 
   stored, so the remaining paleness most likely comes from what the host does not model, UE5's lighting and tone curve and the host's
   0.15 specular (the shader has none). Not checked yet.
 - **Still open:** UE5's tone curve and the host's specular against BL2's, the dummy's pattern layer, whether the citizens' masks are sRGB
-  too, and the Psycho's slot parents (its mask choice).
+  too, and the Psycho's slot parents (its mask choice). Cause 2 is UNVERIFIED in the running game: the flag is read from the package and
+  the decoding is UE3's usual sampling of such a texture; neither was observed live.
+- **Needs (heavy tier):** the range dummy is a `Master_Creature` target, so `seed_slice_npc_assets.ps1 -Steps zone` now imports its masks
+  as sRGB as well. The critic above scored the Bullymong only; the dummy was not re-imported or looked at with this change. Run that step,
+  then a range capture, before calling the dummy's look checked.
 
 ### Missing exports stop the target import instead of crashing Unreal (2026-11-09)
 
