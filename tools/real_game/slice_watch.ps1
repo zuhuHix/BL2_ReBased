@@ -125,8 +125,11 @@ function Complete-SliceWatch([string]$Spec, [string]$OutDir, [string]$Name = 'wa
     if ($script:SliceWatchDriverLost) { throw "skipped: the driver stopped answering ($script:SliceWatchDriverLost)" }
     $full = Resolve-WatchSpec $Spec
     $null = Save-SliceWatchSnap 'end'
-    $counts = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json
-    Test-WatchReply (Invoke-GamePy 'print(sw_stop())' 30) 'stop' | Out-Null
+    # One driver-lost condition: a reply that never came, here or before, latches it, and nothing more is sent to the game.
+    if ($script:SliceWatchDriverLost) { throw "the driver stopped answering at the end snapshot ($script:SliceWatchDriverLost): no dump or stop was sent" }
+    try { $counts = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json }
+    catch { Set-SliceWatchDriverLost $_; throw }
+    try { Test-WatchReply (Invoke-GamePy 'print(sw_stop())' 30) 'stop' | Out-Null } catch { Set-SliceWatchDriverLost $_; throw }
     $script:SliceWatchOn = $false
     $file = Join-Path $OutDir "$Name.jsonl"
     if (!(Test-Path -LiteralPath $file)) { throw "slice watch: $file was not written" }

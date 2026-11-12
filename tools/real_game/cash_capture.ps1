@@ -400,9 +400,13 @@ try {
             }
             $log.den_down_poll_errors = $script:pollErrors
             $log.den_down_up_after_s = $upAt
-            # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence, so an error here is only logged.
+            # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence: any other error is only logged.
             if (Get-DriverLost) { $log.den_down_trial_close = "not sent: the driver stopped answering ($(Get-DriverLost))" }
-            else { try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null } catch { $log.den_down_trial_close = "$_" } }
+            else {
+                # Its rows are not evidence, but a reply that never came is the driver lost: latched, so the stage fails and nothing more is sent.
+                try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null }
+                catch { $log.den_down_trial_close = "$_"; if ("$_" -match 'no reply') { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" } }
+            }
             # A driver lost anywhere in the stage fails it, even after the down and the respawn were seen (the after_respawn snapshot then is not).
             $why = if (Get-DriverLost) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
                    elseif ($null -eq $downAt) { "no down in $DownSeconds s after $($log.den_down_replacements) re-placements" }
@@ -433,13 +437,15 @@ try {
     $cleanup = [ordered]@{}
     $cleanup.inputs = Release-HeldInputs   # every key and button this run still holds is let go before anything else
     # A throw in the den read leaves its per-frame hook reading pawns into shutdown: stop it while the game can still answer.
-    if ($denLoaded -and $proc -and !$proc.HasExited) {
+    if ($denLoaded -and $proc -and !$proc.HasExited -and (Get-DriverLost)) { $cleanup.hooks = "not sent: the driver stopped answering ($(Get-DriverLost))" }
+    elseif ($denLoaded -and $proc -and !$proc.HasExited) {
         # Py returns a traceback as text, so only the exact answer counts.
         try { $reply = Py 'dp_stop(); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
         catch { $cleanup.hooks = "not stopped: $_" }
     }
     # The watch's hooks too, best effort, the same shape: only while this run's game lives, 5 s, only the exact reply counts.
-    if ($WatchSpec -and $proc -and !$proc.HasExited) {
+    if ($WatchSpec -and $proc -and !$proc.HasExited -and (Get-DriverLost)) { $cleanup.watch = "not sent: the driver stopped answering ($(Get-DriverLost))" }
+    elseif ($WatchSpec -and $proc -and !$proc.HasExited) {
         # A run that failed before the watch was loaded has nothing to stop: that is a result, not an error.
         try { $reply = Py "print(sw_stop() if 'sw_stop' in globals() else 'nothing to stop')" 5; $cleanup.watch = if ($reply -ceq 'stopped') { 'stopped' } elseif ($reply -ceq 'nothing to stop') { 'nothing to stop: never loaded' } else { "not stopped: $reply" } }
         catch { $cleanup.watch = "not stopped: $_" }

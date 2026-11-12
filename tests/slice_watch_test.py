@@ -1099,7 +1099,9 @@ class WiringTest(unittest.TestCase):
             # best-effort watch stop beside its den stop, exactly this block, and nothing else of the watch.
             tail = text[at['finally']:]
             # Since session 2 of 2026-11-12: a run that failed before the watch was loaded gets 'nothing to stop', not a NameError.
-            stop = ("    if ($WatchSpec -and $proc -and !$proc.HasExited) {\n"
+            # Since the review of #245: not sent at all once the driver is lost.
+            stop = ("    if ($WatchSpec -and $proc -and !$proc.HasExited -and (Get-DriverLost)) { $cleanup.watch = \"not sent: the driver stopped answering ($(Get-DriverLost))\" }\n"
+                    "    elseif ($WatchSpec -and $proc -and !$proc.HasExited) {\n"
                     "        # A run that failed before the watch was loaded has nothing to stop: that is a result, not an error.\n"
                     "        try { $reply = Py \"print(sw_stop() if 'sw_stop' in globals() else 'nothing to stop')\" 5; $cleanup.watch = if ($reply -ceq 'stopped') { 'stopped' } elseif ($reply -ceq 'nothing to stop') { 'nothing to stop: never loaded' } else { \"not stopped: $reply\" } }\n"
                     "        catch { $cleanup.watch = \"not stopped: $_\" }\n    }\n")

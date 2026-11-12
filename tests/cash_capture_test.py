@@ -59,10 +59,10 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
         '*sw_settled*' { return 'True' }
-        '*sw_snap(*' { if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
-        '*sw_dump(*' { return '{}' }
-        '*sw_stop*' { return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
+        '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
+        '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
         '*block_saves*' {
             if ($scenario -eq 'saves_open') { return 'False' }
             if ($scenario -eq 'saves_traceback') { return 'Traceback: True, block_saves' }
@@ -132,13 +132,17 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*cp_down_state*' {
             # The den down's poll (invented values): up with a steady pool unless the scenario says otherwise.
             $script:polls++
-            if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
+            if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost', 'close_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
             if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
             if ($scenario -eq 'poll_lost' -and $script:polls -eq 2) { throw 'no reply to c-invented' }   # one poll unanswered, the next ones answered
             if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "pool": null}' }   # the shield cannot be read
             return '{"state": "up", "injured_field": true, "pool": 100.0}'
         }
-        '*dp_end*' { return '{"counts": true}' }
+        '*dp_end*' {
+            $script:ends++
+            if ($scenario -eq 'close_lost' -and $script:ends -gt 3) { throw 'no reply to c-invented' }   # the 3 den trials' closes answer; the den down's does not
+            return '{"counts": true}'
+        }
         '*dp_dump*' {
             $trials = if ($scenario -eq 'den_no_enemy') { 0 } else { 3 }
             if ($scenario -ne 'den_dump_missing') {
@@ -675,6 +679,28 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertNotIn('den_down', session['completed_stages'])
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
         self.assertTrue(session['den_down_trial_close'].startswith('not sent'))
+
+    def sent(self):
+        f = self.work / 'sent.txt'
+        return f.read_text(encoding='utf-8').split() if f.exists() else []
+
+    def test_a_lost_reply_at_the_end_snapshot_sends_no_dump_and_no_stop(self):
+        # Review of #245: the end snapshot's timeout latched the flag, and the dump and the stop were sent anyway.
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_capture('end_snap_lost', ['-WatchSpec', str(spec)])
+        self.assertEqual(self.sent(), [])   # neither sw_dump nor sw_stop, not even in the finalizer
+        self.assertIn('the driver stopped answering at the end snapshot', session['stage_results']['watch'])
+
+    def test_a_lost_reply_to_the_trial_close_fails_the_den_down(self):
+        # Review of #245: a timeout of dp_end was only logged, so den_down could pass after the driver was lost.
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_down('close_lost', '-WatchSpec', str(spec), '-DownSeconds', '3')
+        self.assertIsNotNone(session['den_down_up_after_s'])   # down and up were both seen
+        self.assertNotIn('den_down', session['completed_stages'])
+        self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
+        self.assertNotIn('sw_dump', self.sent())   # and the watch's check sent nothing afterwards
 
     def test_an_unreadable_shield_never_reads_as_unhit(self):
         done, session = self.run_down('pool_none', '-DownSeconds', '2', '-ReplaceAfterSeconds', '0')
