@@ -26,6 +26,10 @@ param(
     [switch]$KillAndShield,
     # Only the shield read of -KillAndShield: no target is needed, and none is picked.
     [switch]$ShieldOnly,
+    # The save's load after the menu's Enter (Wait-PlayerPawn in realgame.ps1): how long the game may stay on the menu creating its online
+    # session, then how long the load may take once the menu is left. Session 2 of 2026-11-12 stopped twice at the first; tests pass small values.
+    [int]$MenuWaitSeconds = 240,
+    [int]$LoadWaitSeconds = 240,
     # Give up waiting for the hub lock after this long and report its contents; a stale lock is removed by its owner or the
     # maintainer, never by this script.
     [int]$HubWaitMinutes = 120
@@ -154,9 +158,12 @@ try {
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'phaselock_integrity/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
-    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
-    $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
-    "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'phaselock_integrity/load_failed.png' | Out-Null; throw "no player pawn: $map" }
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
+    # The save loads: reads only, bounded (Wait-PlayerPawn, realgame.ps1), with the menu's online-session wait named when it runs out.
+    $log.load_wait = Wait-PlayerPawn $enterAt $proc $MenuWaitSeconds $LoadWaitSeconds
+    $map = $log.load_wait.map
+    "map: $map ($($log.load_wait.after_enter_s) s after the Enter)"
+    if (!$log.load_wait.ok) { Save-Shot 'phaselock_integrity/load_failed.png' | Out-Null; throw "no player pawn: $($log.load_wait.why)" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
@@ -368,7 +375,8 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     # A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.
     if ($proc -and !$proc.HasExited) {
         # Py returns a traceback as text, so only the exact answer counts.
-        try { $reply = Py 'pi_stop(); unmark_lock(); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+        # Each stop only if its probe was loaded; a run that failed before the probes has nothing to stop, which is a result, not an error.
+        try { $reply = Py "fs = [globals().get(n) for n in ('pi_stop', 'unmark_lock')]; [f() for f in fs if f]; print('stopped' if any(fs) else 'nothing to stop')" 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } elseif ($reply -ceq 'nothing to stop') { 'nothing to stop: never loaded' } else { "not stopped: $reply" } }
         catch { $cleanup.hooks = "not stopped: $_" }
     }
     $gameGone = $true

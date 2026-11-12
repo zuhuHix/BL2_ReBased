@@ -54,7 +54,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
         '*cp_immune_off*' { return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
-        '*sw_start(*' { return '{"label": "cash", "resolved": 1, "missing": []}' }
+        '*sw_start(*' { $script:watchStarted = $true; return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
@@ -62,13 +62,21 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_snap(*' { if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { return '{}' }
-        '*sw_stop*' { return 'stopped' }
+        '*sw_stop*' { return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
         '*block_saves*' {
             if ($scenario -eq 'saves_open') { return 'False' }
             if ($scenario -eq 'saves_traceback') { return 'Traceback: True, block_saves' }
             return '5'
         }
-        '*pc.Pawn.Class.Name*' { return 'Sanctuary_P WillowPlayerPawn' }
+        '*pc.Pawn.Class.Name*' {
+            # The save's load after the menu's Enter (Wait-PlayerPawn): on the menu while its online session is created, then the pawn.
+            $script:loadReads++
+            if ($scenario -eq 'load_late') { return $(if ($script:loadReads -le 3) { 'menumap None' } else { 'Sanctuary_P WillowPlayerPawn' }) }
+            if ($scenario -eq 'never_loads') { return 'menumap None' }
+            if ($scenario -eq 'load_lost') { throw 'no reply to c-invented' }
+            if ($scenario -eq 'load_stuck') { return 'Loader None' }   # the menu was left, the pawn never comes
+            return 'Sanctuary_P WillowPlayerPawn'
+        }
         '*ow_clock_before*' { return $(if ($scenario -eq 'travel_clock') { '50.0' } else { 'None' }) }
         '*pc.Pawn is not None*' {
             if ($scenario -eq 'travel_clock') { $script:polls++; return $(if ($script:polls -lt 3) { 'Ice_P True 55.0' } else { 'Ice_P True 1.5' }) }
@@ -680,6 +688,76 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertEqual(session['den_down_replacements'], 1)
         self.assertIn('not_up', session['den_down_replace_results'][0])   # logged, no placement
         self.assertEqual(session['den_down_reason'], 'injured_flag')   # the next poll saw the down
+
+
+class LoadWaitTest(unittest.TestCase):
+    """The save's load after the menu's Enter (Wait-PlayerPawn in realgame.ps1, session 2 of 2026-11-12): the game may sit on the menu creating
+    its online session; the capture waits for the pawn within named bounds, and a run that fails there stops nothing it never loaded."""
+    run_capture = CashCaptureTest.run_capture
+    locks_held = CashCaptureTest.locks_held
+    saves = CashCaptureTest.saves
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+
+    def test_a_load_that_comes_late_is_waited_for(self):
+        done, session = self.run_capture('load_late', ['-MenuWaitSeconds', '30', '-LoadWaitSeconds', '30'])
+        self.assertTrue(session['load_wait']['ok'], session.get('load_wait'))
+        self.assertEqual(session['status'], 'completed', done.stdout + done.stderr)
+
+    def test_a_menu_that_never_loads_fails_naming_the_online_session_wait_and_restores(self):
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_capture('never_loads', ['-WatchSpec', str(spec), '-MenuWaitSeconds', '2', '-LoadWaitSeconds', '2'])
+        self.assertFalse(session['load_wait']['ok'])
+        self.assertIn('no player pawn: still on the main menu', session['status'])
+        self.assertIn('online session', session['status'])
+        self.assertIn('ran out at 2 s', session['status'])
+        self.assertEqual(self.saves(), 'original save')   # the finalizer restored as always
+        self.assertEqual(self.locks_held(), (False, False))
+        # The watch was never loaded: nothing to stop, which is not an error.
+        self.assertEqual(session['cleanup']['watch'], 'nothing to stop: never loaded')
+        self.assertNotIn('NameError', done.stdout + done.stderr)
+
+    def test_a_driver_lost_while_loading_fails_within_the_bound(self):
+        done, session = self.run_capture('load_lost', ['-MenuWaitSeconds', '2', '-LoadWaitSeconds', '2'])
+        self.assertFalse(session['load_wait']['ok'])
+        self.assertIn('the driver did not answer for', session['status'])
+        self.assertEqual(self.saves(), 'original save')
+
+    def test_a_load_that_never_brings_the_pawn_fails_on_the_load_bound(self):
+        done, session = self.run_capture('load_stuck', ['-MenuWaitSeconds', '2', '-LoadWaitSeconds', '2'])
+        self.assertIn('the menu was left, but no player pawn', session['status'])
+
+
+class FinalizerStopTextTest(unittest.TestCase):
+    """The finalizers' stop commands as the game runs them: each stops only what was loaded, and says 'nothing to stop' when nothing was
+    (a run that failed at the load printed a NameError there on 2026-11-12). The Python is taken from the scripts' own text."""
+
+    def command(self, script, needle):
+        text = (ROOT / 'tools/real_game' / script).read_text(encoding='utf-8')
+        line = next(l for l in text.splitlines() if needle in l and "'nothing to stop'" in l and 'Py "' in l)
+        return line.split('Py "', 1)[1].split('" 5;', 1)[0].replace('`n', '\n')
+
+    def run_in(self, code, defined):
+        import contextlib
+        import io
+        calls = []
+        scope = {name: (lambda name=name: calls.append(name) or 'stopped') for name in defined}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            exec(code, scope)
+        return out.getvalue().strip(), calls
+
+    def test_each_stop_is_quiet_when_nothing_was_loaded_and_stops_what_was(self):
+        for script, needle, names in (('cash_capture.ps1', 'sw_stop', ['sw_stop']),
+                                      ('phaselock_integrity_capture.ps1', 'pi_stop', ['pi_stop', 'unmark_lock']),
+                                      ('mission_screen_capture.ps1', 'ms_stop', ['ms_stop'])):
+            code = self.command(script, needle)
+            self.assertEqual(self.run_in(code, []), ('nothing to stop', []), script)
+            self.assertEqual(self.run_in(code, names), ('stopped', names), script)
+        code = self.command('phaselock_integrity_capture.ps1', 'pi_stop')
+        self.assertEqual(self.run_in(code, ['unmark_lock']), ('stopped', ['unmark_lock']))   # loaded half way: what is there is stopped
 
 
 class DpReplaceTest(unittest.TestCase):

@@ -47,6 +47,10 @@ param(
     # most -MaxReplacements times inside -DownSeconds. None after a down; once the driver is lost, no further command of the stage is sent.
     [int]$ReplaceAfterSeconds = 10,
     [ValidateRange(0, 4)][int]$MaxReplacements = 4,
+    # The save's load after the menu's Enter (Wait-PlayerPawn in realgame.ps1): how long the game may stay on the menu creating its online
+    # session, then how long the load may take once the menu is left. Session 2 of 2026-11-12 stopped twice at the first; tests pass small values.
+    [int]$MenuWaitSeconds = 240,
+    [int]$LoadWaitSeconds = 240,
     # What to dot-source for the real-game functions. Only tests/cash_capture_test.py passes another file.
     [string]$Helpers = (Join-Path $PSScriptRoot 'realgame.ps1')
 )
@@ -188,13 +192,11 @@ try {
     }
     if (-not $ok) { Save-Shot 'cash/boot.png' | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
-    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
-    $map = ''
-    for ($i = 0; $i -lt 6 -and $map -notmatch 'WillowPlayerPawn'; $i++) {   # the level load can hold the command channel
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)' 30 }
-        catch { Start-Sleep 10 }
-    }
-    if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'cash/load_failed.png' | Out-Null; throw "no player pawn: $map" }
+    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
+    # The save loads: reads only, bounded (Wait-PlayerPawn, realgame.ps1), with the menu's online-session wait named when it runs out.
+    $log.load_wait = Wait-PlayerPawn $enterAt $proc $MenuWaitSeconds $LoadWaitSeconds
+    "load: $(if ($log.load_wait.ok) { 'player pawn' } else { 'failed' }) $($log.load_wait.after_enter_s) s after the Enter"
+    if (!$log.load_wait.ok) { Save-Shot 'cash/load_failed.png' | Out-Null; throw "no player pawn: $($log.load_wait.why)" }
     $map = Enter-IceMap
     "map: $map"; $log.map = $map
     Set-Stage 'travel' ($map -match 'Ice_P True') "travel to Ice_P failed: $map"
@@ -438,7 +440,8 @@ try {
     }
     # The watch's hooks too, best effort, the same shape: only while this run's game lives, 5 s, only the exact reply counts.
     if ($WatchSpec -and $proc -and !$proc.HasExited) {
-        try { $reply = Py 'print(sw_stop())' 5; $cleanup.watch = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+        # A run that failed before the watch was loaded has nothing to stop: that is a result, not an error.
+        try { $reply = Py "print(sw_stop() if 'sw_stop' in globals() else 'nothing to stop')" 5; $cleanup.watch = if ($reply -ceq 'stopped') { 'stopped' } elseif ($reply -ceq 'nothing to stop') { 'nothing to stop: never loaded' } else { "not stopped: $reply" } }
         catch { $cleanup.watch = "not stopped: $_" }
     }
     $gameGone = $true

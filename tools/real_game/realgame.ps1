@@ -592,6 +592,36 @@ function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$Time
     Invoke-GamePy ("RG_OUT = r'$out'`n" + [IO.File]::ReadAllText((Resolve-Path $Path))) $TimeoutSeconds
 }
 
+# After the Enter on the main menu that continues the save: wait for the player pawn, reads only (the map name and whether a pawn is
+# there), no key or click. The first read comes 45 s after the Enter, as every capture's fixed wait did, so a normal load is read at the
+# same moment as before. While the game is still on the menu map without a pawn (where it shows "Creating online session / Please
+# wait..."; usually a few seconds, but two launches on 2026-11-12 never left it; the timings are in the private dossier), it reads
+# again every 5 s up to $MenuSeconds after the Enter. Once the menu is left, the load
+# gets $LoadSeconds more; replies that do not come (the load holds the command channel) are waited out for $LoadSeconds in a row at most.
+# Returns ok, the last read (map), why it failed (naming the wait that ran out) and the seconds from the Enter.
+function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, [int]$LoadSeconds = 240) {
+    $read = 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
+    $first = 45 - ((Get-Date) - $EnterAt).TotalSeconds
+    if ($first -gt 0) { Start-Sleep -Milliseconds ([int]($first * 1000)) }
+    $leftMenu = $null; $last = ''; $lastReply = Get-Date
+    $result = { param($Ok, $Why) [pscustomobject]@{ ok = $Ok; map = $last; why = $Why; after_enter_s = [math]::Round(((Get-Date) - $EnterAt).TotalSeconds, 1) } }
+    while ($true) {
+        if ($Process -and $Process.HasExited) { return (& $result $false "the game exited before a player pawn (last read: $last)") }
+        $replied = $false
+        try { $last = "$(Invoke-GamePy $read 30)".Trim(); $lastReply = Get-Date; $replied = $true }
+        catch { $last = "$_" }
+        $now = Get-Date; $since = [math]::Round(($now - $EnterAt).TotalSeconds)
+        if ($replied -and $last -match 'WillowPlayerPawn' -and $last -notmatch 'Traceback') { return (& $result $true '') }
+        if ($replied -and $last -match '^menumap\b') {
+            if ($since -ge $MenuSeconds) { return (& $result $false "still on the main menu $since s after the Enter: the wait for the game's online session (shown on the menu as 'Creating online session') ran out at $MenuSeconds s; last read: $last") }
+        } elseif ($replied -and $null -eq $leftMenu) { $leftMenu = $now }   # another map, or a read that failed in the game: the load is under way
+        $noReply = [math]::Round(($now - $lastReply).TotalSeconds)
+        if ($noReply -ge $LoadSeconds) { return (& $result $false "the driver did not answer for $noReply s while the save loaded (limit $LoadSeconds s): $last") }
+        if ($leftMenu -and ($now - $leftMenu).TotalSeconds -ge $LoadSeconds) { return (& $result $false "the menu was left, but no player pawn $([math]::Round(($now - $leftMenu).TotalSeconds)) s later (limit $LoadSeconds s); last read: $last") }
+        Start-Sleep 5
+    }
+}
+
 # Rapid capture: grab frames into memory for $Seconds, then write them with QPC timestamps.
 function Invoke-Burst([string]$Folder, [double]$Seconds = 3, [int]$IntervalMs = 50, [scriptblock]$Trigger, [double]$Scale = 0.5) {
     $rect = Get-GameRect; $frames = New-Object Collections.Generic.List[object]

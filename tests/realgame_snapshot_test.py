@@ -216,7 +216,7 @@ def test_a_failed_run_stops_the_hooks_while_the_game_is_alive():
     alive = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
     calls = "function Remove-Driver { }\nfunction Py([string]$Code, [int]$Timeout = 30) { 'py: ' + $Code | Write-Host; if (__FAILS__) { throw 'no reply' }; 'stopped' }"
     done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$false'))
-    assert 'py: pi_stop(); unmark_lock()' in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
+    assert "py: fs = [globals().get(n) for n in ('pi_stop', 'unmark_lock')]" in done.stdout and 'cleanup hooks: stopped' in done.stdout, done.stdout
     done = run_tail("throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$true'))
     assert 'cleanup hooks: not stopped' in done.stdout and 'cleanup game:' in done.stdout, done.stdout    # the rest of the cleanup still runs
     done = run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $true; Id = 1 }', stubs=calls.replace('__FAILS__', '$true'))

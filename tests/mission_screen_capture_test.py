@@ -79,7 +79,7 @@ def test_the_finalizer_is_the_hardened_one_with_only_the_hook_stop_changed():
         return text[text.index('\n} catch {\n    $runError') + 1:]
     mine = tail_of(CAPTURE)
     theirs = tail_of(ROOT / 'tools/real_game/phaselock_integrity_capture.ps1')
-    for a, b in (('pi_stop(); unmark_lock(); print("stopped")', 'ms_stop(); print("stopped")'),
+    for a, b in (("('pi_stop', 'unmark_lock')", "('ms_stop',)"),
                  ('A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.',
                   'A throw between ms_start and ms_stop leaves the hooks and the per-frame down job running into shutdown: stop them while the game can still answer.'),
                  ("so -ProbeOnly's return passes through it too", 'so an early return passes through it too')):
