@@ -680,6 +680,33 @@ $out.native = @($global:native)
         self.assertFalse(record.exists())
         self.assertIn('completed by another run', out['lines'][0])
 
+    def test_a_run_stopped_inside_the_focus_alt_tap_leaves_it_recorded_and_the_next_run_releases_it(self):
+        """Review of #245: the focus helper's Alt went down and up inside one try/finally, so a run stopped between the two left Alt held
+        system-wide with nothing recorded. Now it is journalled before the down and cleared after the up."""
+        mock = r"""
+$global:native = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:native.Add("key $Vk $Scan $Flags"); if ($global:stopAtAlt -and $Vk -eq 0x12 -and $Flags -eq 0) { [Environment]::Exit(0) } }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
+function Get-RunGameProcess { [pscustomobject]@{ MainWindowHandle = [IntPtr]::Zero } }
+"""
+        # A tap that completes is journalled and cleared again.
+        out = self.run_ps(mock + r"""$bak = Backup-Saves; Focus-Game | Out-Null
+$out.held = @((Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).held_inputs); $out.native = @($global:native)
+Complete-PendingRecord $true | Out-Null""")
+        self.assertEqual(out['held'], [])
+        self.assertEqual(out['native'], ['key 18 56 0', 'key 18 56 2'])
+        # The process ends between the down and the up (no finally runs): the record names the Alt, and the next run releases it.
+        try:
+            self.run_ps("New-Item -ItemType Directory -Force (Join-Path $script:Game 'sdk_mods') | Out-Null\n$bak = Backup-Saves\n" + mock
+                        + "$global:stopAtAlt = $true; Focus-Game | Out-Null")
+        except ValueError:
+            pass   # it printed nothing: it stopped inside the tap
+        record = self.pending / self.records()[0]
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key LAlt'])
+        out = self.run_ps(mock + r"""$out.lines = @(Assert-NoPendingRecords); $out.native = @($global:native)""")
+        self.assertEqual(out['native'], ['key 0 56 10'])   # the left Alt's release, by scan code
+        self.assertFalse(record.exists())
+
     def test_a_release_that_fails_stays_recorded(self):
         mock = r"""
 $global:native = [Collections.Generic.List[string]]::new()

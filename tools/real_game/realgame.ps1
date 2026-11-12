@@ -444,8 +444,12 @@ function Get-RunGameProcess {
 function Focus-Game {
     $p = Get-RunGameProcess; if (!$p) { throw 'game not running' }
     $h = $p.MainWindowHandle
-    # A harmless Alt tap lets SetForegroundWindow succeed from a background process.
-    try { Invoke-NativeKey 0x12 0x38 0 } finally { Invoke-NativeKey 0x12 0x38 2 }
+    # A harmless Alt tap lets SetForegroundWindow succeed from a background process. It is journalled like any held key before it is sent
+    # (straight into the record: no focus check again), so a run stopped between the down and the up leaves 'key LAlt' named for the next
+    # run's release; it is cleared once the up went out (review of #245).
+    if (!$script:HeldInputs.Contains('key LAlt')) { $script:HeldInputs.Add('key LAlt') }
+    try { Save-HeldInputs } catch { [void]$script:HeldInputs.Remove('key LAlt'); throw "refusing the focus Alt tap: $_" }
+    try { Invoke-NativeKey 0x12 0x38 0 } finally { Invoke-NativeKey 0x12 0x38 2; if ($script:HeldInputs.Remove('key LAlt')) { Save-HeldInputs -Release } }
     [OWRG.Native]::ShowWindow($h, 9) | Out-Null
     [OWRG.Native]::SetForegroundWindow($h) | Out-Null
     Start-Sleep -Milliseconds 200
@@ -483,7 +487,7 @@ function Save-Shot([string]$Name, [Drawing.Rectangle]$Rect = (Get-GameRect)) {
 # Scan-code key input (DirectInput-style games ignore virtual-key-only events).
 $script:Scan = @{ Esc=0x01; '1'=0x02; '2'=0x03; '3'=0x04; '4'=0x05; Tab=0x0F; Q=0x10; W=0x11; E=0x12; R=0x13; I=0x17;
     A=0x1E; S=0x1F; D=0x20; F=0x21; G=0x22; Enter=0x1C; Space=0x39; LShift=0x2A; LCtrl=0x1D; M=0x32; L=0x26; K=0x25; Tilde=0x29; F6=0x40;
-    C=0x2E; N=0x31; B=0x30; V=0x2F; X=0x2D; Z=0x2C; T=0x14; Y=0x15; U=0x16; O=0x18; P=0x19; H=0x23; J=0x24; '5'=0x06 }
+    C=0x2E; N=0x31; B=0x30; V=0x2F; X=0x2D; Z=0x2C; T=0x14; Y=0x15; U=0x16; O=0x18; P=0x19; H=0x23; J=0x24; '5'=0x06; LAlt=0x38 }
 function Assert-Key([string]$Key) { if (-not ($script:Scan.ContainsKey($Key) -or $script:ScanExt.ContainsKey($Key))) { throw "no scan code for key '$Key'" } }
 # Arrow keys are extended scan codes (KEYEVENTF_EXTENDEDKEY).
 $script:ScanExt = @{ Up=0x48; Down=0x50; Left=0x4B; Right=0x4D }
