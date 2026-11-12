@@ -841,6 +841,21 @@ class CheckerTest(unittest.TestCase):
         self.assertFalse(self.results(dump(pawns=[dict(ok, failed=['read'])]), p)['pawns'])
         self.assertFalse(self.results(dump(pawns=[{'failed': [], 'pawns': [{'cylinder': None, 'GroundSpeed': 2.0}]}]), p)['pawns'])
 
+    def test_the_named_npc_needs_its_own_clean_reads(self):
+        # Session 1 analysis, A5: the pawns check counted any pawn's reads, so Marcus's 100 clean reads were never checked by name.
+        marcus = {'name': 'Sanctuary_P.TheWorld:PersistentLevel.WillowAIPawn_8', 'cylinder': {'radius': 1.0}, 'GroundSpeed': 2.0}
+        other = dict(marcus, name='Sanctuary_P.TheWorld:PersistentLevel.WillowAIPawn_2')
+        rule = {'pawns': {'min_reads': 100, 'fields': ['cylinder', 'GroundSpeed'], 'name': 'WillowAIPawn_8'}}
+        others = [{'failed': [], 'pawns': [other]}] * 120
+        self.assertFalse(self.results(dump(pawns=others), rule)['pawns named WillowAIPawn_8'])   # 120 reads of someone else
+        self.assertTrue(self.results(dump(pawns=[{'failed': [], 'pawns': [marcus, other]}] * 100), rule)['pawns named WillowAIPawn_8'])
+        self.assertFalse(self.results(dump(pawns=[{'failed': [], 'pawns': [marcus]}] * 99), rule)['pawns named WillowAIPawn_8'])
+        tool = str(ROOT / 'tools/real_game/slice_watch_check.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Path(tmp) / 'spec.json'
+            s.write_text(json.dumps({'checks': {'pawns': {'min_reads': 1, 'name': ''}}}), encoding='utf-8')
+            self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 2)
+
     def test_anything_a_cap_dropped_fails_unless_allowed(self):
         capped = dump()
         capped['end']['dropped'] = {'frame': 3}

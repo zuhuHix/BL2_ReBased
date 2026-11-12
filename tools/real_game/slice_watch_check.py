@@ -55,9 +55,10 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   frames:            {"min": N, "dt_min": s, "dt_max": s, "share": 0.95}: at least N frame rows, and that share of the frames in which no
                      automatic read or flush ran have a positive tick DeltaTime inside [dt_min, dt_max].
   rows_have_dt:      true: hook rows carry the frame delta (dt).
-  pawns:             {"min_reads": N, "min_pawns": K, "fields": [...]}: pawn reads without a failed part, each with K+ pawns that
-                     carry every one of those fields with a value; when "health_pool" is a field, a pawn whose health pool is flagged
-                     stale (no pool, GUID differs, shut down, not in its slot) does not count.
+  pawns:             {"min_reads": N, "min_pawns": K, "fields": [...], "name": "<substring>"}: pawn reads without a failed part, each
+                     with K+ pawns that carry every one of those fields with a value; when "health_pool" is a field, a pawn whose
+                     health pool is flagged stale (no pool, GUID differs, shut down, not in its slot) does not count. With "name",
+                     only pawns whose path holds it count: the named NPC's own clean reads, not any pawn's.
 """
 import argparse
 import importlib.util
@@ -139,6 +140,8 @@ def validate_spec(spec_path):
     snaps = checks.get("snaps", [])
     if not isinstance(snaps, list) or not all(isinstance(x, str) or (isinstance(x, list) and x and all(isinstance(y, str) for y in x)) for x in snaps):
         raise ValueError("snaps must be a list of labels or of lists of alternative labels")
+    if "pawns" in checks and "name" in checks["pawns"] and not (isinstance(checks["pawns"]["name"], str) and checks["pawns"]["name"]):
+        raise ValueError("pawns: name must be a non-empty substring of the NPC's path")
     for key in ("mods_must_be_off", "expect_not_taken", "allow_switched_off", "allow_not_taken", "must_fire"):
         if key in checks and not (isinstance(checks[key], list) and all(isinstance(x, str) for x in checks[key])):
             raise ValueError(f"{key} must be a list of strings")
@@ -323,7 +326,11 @@ def check(dump, checks):
                 return False
             return all(isinstance(pool.get(k), (int, float)) and not isinstance(pool.get(k), bool) for k in ("CurrentValue", "MaxValue"))
 
+        named = pawns.get("name")
+
         def good(p):
+            if named is not None and named not in str(p.get("name", "")):
+                return False
             if not all(p.get(f) is not None for f in need):
                 return False
             return not ("health_pool" in need and not healthy(p.get("health_pool")))
@@ -331,7 +338,8 @@ def check(dump, checks):
                 and sum(1 for p in r.get("pawns", []) if good(p)) >= pawns.get("min_pawns", 1)]
         stale = sum(1 for r in reads for p in r.get("pawns", []) if not healthy(p.get("health_pool")))
         ok = len(full) >= pawns.get("min_reads", 1)
-        out.append(("pawns", ok, f"{len(full)} of {len(reads)} reads clean, with {pawns.get('min_pawns', 1)}+ pawns carrying every field; "
+        who = f" named {named}" if named is not None else ""
+        out.append(("pawns" + who, ok, f"{len(full)} of {len(reads)} reads clean, with {pawns.get('min_pawns', 1)}+ pawns{who} carrying every field; "
                                  f"{stale} pawn rows without a healthy health pool"))
     return out
 
