@@ -9,13 +9,18 @@ rewritten.
 Edits: docs/decisions/2026-11/2026-11-03-11-maya-s-shield-and-survival-state-in-the-host-maya-lane-item.md
 Edits: docs/decisions/2026-11/2026-11-07-19-the-stand-in-shield-rule-takes-the-maintainer-s-numbers-maya.md
 
-Those entries gave the old delay and rate, and the old capacity anchor; they now say what the values were without the amounts.
+Those entries gave the old delay and rate, and the old capacity anchor at level 8; they now read as before without the amounts.
+Both were save values: the delay and rate were the read of the maintainer's own shield, and the level 3 shield behind the old
+capacity anchor was the maintainer's own shield too. The delay and rate are replaced by this change; the anchor was replaced on
+2026-11-07 by the fit.
 
 - **Now:** a delay of 2.0 s, then 40 per second whatever the capacity. Round numbers chosen for the host and labelled in code
   as invented. They are not game data and not any player's shield. A card's own `Recharge Delay` and `Recharge Rate` still win.
 - **Why not game data:** no prepared data gives a stock shield's delay or rate. The player shield pool
-  (`D_Resourcepools.PlayerPools.ShieldPool`, read from the installed packages for this change) has no base delay or rate; they
-  come from the shield's parts at the item's level, and no prep tool evaluates those (`tools/prepare_vendors.py` resolves
+  (`D_Resourcepools.PlayerPools.ShieldPool`) was read from the installed packages on 2026-11-12 with `ow-package`, through
+  `tools/weapon_recipe.py`'s `Package` and the schema of `tools/slice_values.py`: the pool object carries no base delay or rate.
+  That the shield's parts at the item's level supply them is a reading of that data, `UNVERIFIED` in the running game. No prep
+  tool evaluates the parts' delay or rate (`tools/prepare_vendors.py` resolves
   shield parts only for the price). Doing so is new decoding work, so it is left as the follow-up that would replace both.
 - **Capacity unchanged:** the stand-in fit in ignored `local/slice/stand_in_shield.json` (`COMBAT_DOWN_RESPAWN.md`, "Stand-in
   shield capacity"), already `UNVERIFIED`. The slice gate's fallback keeps her maximum health as its capacity and takes the new

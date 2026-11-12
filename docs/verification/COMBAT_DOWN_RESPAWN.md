@@ -152,8 +152,10 @@ the walker passes game time in and does the presentation (weapon put-away, Phase
   and have not been seen in the local card data: UNVERIFIED). A card without a delay or rate takes an **invented** HOST STAND-IN since
   2026-11-12: 2.0 s, then 40 per second whatever the capacity. These are round numbers chosen for the host, not game data and not any
   player's shield; until then the stand-in was the read of the maintainer's own shield, a save value that rule 1 keeps out of the tree.
-  No prepared data gives a stock shield's delay or rate: the player shield pool (`D_Resourcepools.PlayerPools.ShieldPool`) has none, as
-  they come from the shield's parts, and no prep tool resolves those (`tools/prepare_vendors.py` resolves shield parts only for the
+  No prepared data gives a stock shield's delay or rate. The player shield pool (`D_Resourcepools.PlayerPools.ShieldPool`), read from the
+  installed packages on 2026-11-12 with `ow-package` (through `tools/weapon_recipe.py`'s `Package` and the schema of `tools/slice_values.py`),
+  carries no base delay or rate. That the shield's parts supply them is a reading of that data, UNVERIFIED in the running game, and no
+  prep tool resolves the parts' delay or rate (`tools/prepare_vendors.py` resolves shield parts only for the
   price). A prep step that evaluates the stock parts' delay and rate at the item's level would replace both. UNVERIFIED against the game.
 - **Host rules, UNVERIFIED:** no recharge while down; the session's first shield starts full; a swapped shield starts empty and waits its
   delay; the second wind raises the shield to 90 % of its capacity (live: section D) and the respawn fills it.
