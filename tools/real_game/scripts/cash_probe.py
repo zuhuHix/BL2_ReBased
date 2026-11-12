@@ -78,15 +78,16 @@ def immune_remaining(paths, hooked):
 
 
 def down_state(pawn, health, injured):
-    """Why Maya counts as down or up, from what could be read: 'no_pawn', 'no_health', 'injured_flag' or 'up'. `injured` is None when
-    the pawn has no readable bIsInjured field, so a down shows only at bleed-out ('no_health' / 'no_pawn') and is not taken for the time
-    to the down."""
+    """Why Maya counts as down or up, from what could be read: 'no_pawn', 'injured_flag', 'no_health' or 'up'. The injured flag is tested
+    before the health: in the four downs of session 2 (2026-11-12) the health had already read 0 at the poll that saw the down, so testing
+    the health first labelled every down 'no_health' and the flag was never reported. `injured` is None when the pawn has no readable
+    bIsInjured field; then a down shows only as 'no_health' or 'no_pawn'."""
     if pawn is None:
         return "no_pawn"
-    if health is None or health <= 0:
-        return "no_health"
     if injured:
         return "injured_flag"
+    if health is None or health <= 0:
+        return "no_health"
     return "up"
 
 

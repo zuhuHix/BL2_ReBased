@@ -412,6 +412,10 @@ try {
                 if ($WatchSpec) { Save-SliceWatchSnap 'after_respawn' }
             }
             $log.den_down_poll_errors = $script:pollErrors
+            # What 'up' after the down measures: the health back above 0 with the injured flag clear, which the game does in the holding cell
+            # at the respawn (session 2 of 2026-11-12), before she is placed at the station and shown: not the moment she stands. The watch's
+            # rows give the teleport and the unhide. den_down_up_after_s is kept, with the same value, for the readers of earlier runs.
+            $log.den_down_health_back_s = $upAt
             $log.den_down_up_after_s = $upAt
             # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence: any other error is only logged.
             if (Get-DriverLost) { $log.den_down_trial_close = "not sent: the driver stopped answering ($(Get-DriverLost))" }
@@ -423,8 +427,8 @@ try {
             # A driver lost anywhere in the stage fails it, even after the down and the respawn were seen (the after_respawn snapshot then is not).
             $why = if (Get-DriverLost) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
                    elseif ($null -eq $downAt) { "no down in $DownSeconds s after $($log.den_down_replacements) re-placements" }
-                   elseif ($null -eq $upAt) { "down after $downAt s (limit $DownSeconds), not standing again within $RespawnSeconds s" }
-                   else { "down after $downAt s (limit $DownSeconds), standing again after $upAt s (limit $RespawnSeconds)" }
+                   elseif ($null -eq $upAt) { "down after $downAt s (limit $DownSeconds), health not back within $RespawnSeconds s" }
+                   else { "down after $downAt s (limit $DownSeconds), health back (holding cell, not standing) after $upAt s (limit $RespawnSeconds)" }
             Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt -and !(Get-DriverLost)) $why
         } catch {
             Set-Stage 'den_down' $false "$_"

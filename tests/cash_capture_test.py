@@ -697,6 +697,7 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertNotIn('den_down', session['completed_stages'])
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
         self.assertTrue(session['den_down_trial_close'].startswith('not sent'))
+        self.assertEqual(session['den_down_health_back_s'], session['den_down_up_after_s'])   # named for what it is: health back, not standing
 
     def sent(self):
         f = self.work / 'sent.txt'

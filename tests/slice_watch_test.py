@@ -1208,6 +1208,9 @@ class DownStateTest(unittest.TestCase):
         self.assertEqual(ds(object(), 5.0, True), 'injured_flag')
         self.assertEqual(ds(object(), 5.0, False), 'up')
         self.assertEqual(ds(object(), 5.0, None), 'up')   # no injured field: a down shows only at bleed-out, as no_health or no_pawn
+        # The flag first (session 2 of 2026-11-12: the health already read 0 when the flag was set, and every down was labelled no_health).
+        self.assertEqual(ds(object(), 0.0, True), 'injured_flag')
+        self.assertEqual(ds(object(), None, True), 'injured_flag')
 
     def test_immune_remaining(self):
         self.assertEqual(self.cash.immune_remaining(['a', 'b', 'c'], lambda p: p == 'b'), ['b'])
