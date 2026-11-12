@@ -75,6 +75,10 @@ OBSERVED_COLLISION = {"bullymong_baby": (64.0, 48.0)}
 # here: its field also reads 500, but its measured chase median was 375 in 4 of 6 trials, unexplained (UNVERIFIED), so it keeps the
 # stand-ins of kind_entry (run 400, walk 150), as does the psycho (no read).
 OBSERVED_SPEED = {"bullymong_adult": (500.0, 125.0), "bullymong_slinger": (500.0, 125.0), "bullymong_baby": (300.0, 75.0)}
+# The documented step that writes the worn pieces' placements into host_target.json (docs/verification/COMBAT_RANGE.md). An earlier editor
+# job can rewrite that file without them; the range must then not be built on enemies that lost their worn parts (2026-11-12).
+ATTACH_STEP = ("powershell -File tools/import_phaselock_target.ps1 -Steps attach (its last step is python tools/prepare_phaselock_target.py "
+               "attachments), then python tools/prepare_range.py")
 # Extra spawns of kinds that join the range only once their own mesh is imported (an engine-shape psycho would prove nothing).
 SPAWNS_WITH_ASSET = [{"kind": "psycho", "count": 1}]
 # The range's default population (host choice).
@@ -161,6 +165,31 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
         if entry["idle"]:
             entry.update(find_clips(entry["idle"], listing))
     return entry
+
+
+def worn_counts(targets, identity, target_path, identity_path):
+    """Asset -> how many worn pieces its imported pawn carries, from the import's own read of the pawn's body composition (identity.json,
+    targets.<asset>.attachments, which tools/prepare_phaselock_target.py checks against its expected set). The truth comes from the data,
+    not from a count kept here: an asset whose pawn wears nothing gets 0 and is fine. Stops (SystemExit) when host_target.json carries a
+    different number of placements than the identity has pieces, or the identity has no entry for an imported asset, because the manifest
+    would then hold enemies without their worn parts and say nothing."""
+    counts, problems = {}, []
+    for asset, target in sorted(targets.items()):
+        if not isinstance(target, dict) or not target.get("mesh"):
+            continue
+        entry = (identity.get("targets") or {}).get(asset)
+        if not isinstance(entry, dict):
+            problems.append("%s: no entry in %s" % (asset, identity_path))
+            continue
+        counts[asset] = len(entry.get("attachments") or [])
+        placed = len(target.get("attachments") or [])
+        if placed != counts[asset]:
+            problems.append("%s: %d attachment placements in %s, %d worn pieces in %s" % (asset, placed, target_path, counts[asset], identity_path))
+    if problems:
+        raise SystemExit("the imported enemies' worn attachments do not match the import (%s): the placements were lost, for example by "
+                         "an editor job that rewrote host_target.json, or never written. No manifest was written. Re-run %s"
+                         % ("; ".join(problems), ATTACH_STEP))
+    return counts
 
 
 def apply_observed(name, entry):
@@ -444,6 +473,7 @@ def main(argv=None):
     parser.add_argument("--reader", default=os.path.join(REPO, "build", "Release", "ow-package.exe"))
     parser.add_argument("--levels", default="1-50")
     parser.add_argument("--target", default=os.path.join(REPO, "local", "phaselock", "target", "host_target.json"))
+    parser.add_argument("--identity", help="the import's identity.json (worn pieces per asset); default: next to --target")
     parser.add_argument("--out", default=os.path.join(REPO, "local", "range", "range_manifest.json"))
     parser.add_argument("--terrain", default=os.path.join(REPO, "local", "sanctuary", "terrain-runtime.json"),
                         help="terrain probes of the level import (spot candidates); missing: the host scouts rings only")
@@ -455,7 +485,8 @@ def main(argv=None):
                         help="write the manifest without candidates or a scout centre (the range then needs -owrangeat or range.json)")
     parser.add_argument("--no-vm", action="store_true", help="skip the VM run (empty health tables: the host uses its stand-in)")
     args = parser.parse_args(argv)
-    for name in ("reader", "target", "out", "terrain", "views"):
+    args.identity = args.identity or os.path.join(os.path.dirname(from_repo(args.target)), "identity.json")
+    for name in ("reader", "target", "identity", "out", "terrain", "views"):
         setattr(args, name, from_repo(getattr(args, name)))
     args.out = local_output(args.out)
     run = {} if args.no_vm else run_vm(args.reader, parse_levels(args.levels))
@@ -463,6 +494,11 @@ def main(argv=None):
     if os.path.isfile(args.target):
         with open(args.target, encoding="utf-8") as f:
             targets = json.load(f)
+    identity = {}
+    if targets and os.path.isfile(args.identity):
+        with open(args.identity, encoding="utf-8") as f:
+            identity = json.load(f)
+    worn = worn_counts(targets, identity, args.target, args.identity)
     kinds = {}
     ranges = {} if args.no_vm else start_ranges(args.reader)
     loot = loot_tables(run)
@@ -473,6 +509,9 @@ def main(argv=None):
                                  arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"),
                                  loot=loot.get(row_class))
         apply_observed(name, kinds[name])
+        # How many worn pieces the kind's enemies must carry (tools/check_range.py's preflight holds the manifest to it); engine shapes wear
+        # none.
+        kinds[name]["attachments_expected"] = worn.get(KIND_ASSETS.get(name), 0) if kinds[name]["mesh"] else 0
         kinds[name]["melee_status"] = melee_status(name)
         if name in ranges:
             kinds[name]["melee_start_range"] = ranges[name]
@@ -509,8 +548,8 @@ def main(argv=None):
         json.dump(manifest, f, indent=1)
     for name, kind in kinds.items():
         levels = kind["health_by_level"]
-        print("%s: %d health levels, %d melee levels, %d loot levels, assets %s, walk %s, hit %s, melee %s" % (name, len(levels), len(kind["melee_arrival_by_level"]), len(kind["loot_by_level"]), "yes" if kind["mesh"] else "no",
-              kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-"))
+        print("%s: %d health levels, %d melee levels, %d loot levels, assets %s, walk %s, hit %s, melee %s, worn %d of %d" % (name, len(levels), len(kind["melee_arrival_by_level"]), len(kind["loot_by_level"]), "yes" if kind["mesh"] else "no",
+              kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-", len(kind.get("attachments") or []), kind["attachments_expected"]))
     print("spot candidates: %d (%d on the gate terrain), default candidate index %d" % (len(candidates),
           sum(c["gate_terrain"] for c in candidates), args.spot_candidate if candidates else -1))
     print("wrote " + args.out)

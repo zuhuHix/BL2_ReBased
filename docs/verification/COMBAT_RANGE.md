@@ -57,6 +57,13 @@ incomplete range is a failed build and nothing is left standing. The test's plac
   (`tools/import_phaselock_target.ps1`, the bullymong). Walk, run, hit and melee clips are picked by name from the imported clips next to the idle
   (a name match; the manifest says which file was taken). One imported bullymong serves all four bullymong kinds (the adult, baby and slinger
   meshes are not imported). Without the manifest the host uses one engine-shape stand-in kind with 400 health and says so.
+- **Worn pieces (2026-11-12).** Each kind with an imported mesh carries `attachments_expected`, the number of worn pieces the import itself read on
+  that pawn (`local/phaselock/target/identity.json`, checked there against the expected set); engine shapes get 0. `tools/prepare_range.py` writes no
+  manifest when `host_target.json` has a different number of placements, or the identity has no entry for an imported asset, and
+  `tools/check_range.py --preflight` refuses a manifest whose spawned kinds carry fewer or more pieces than that, or that has no such field (exit 2).
+  Both name the step to rerun: `tools/import_phaselock_target.ps1 -Steps attach` (it ends with `tools/prepare_phaselock_target.py attachments`),
+  then `tools/prepare_range.py`. Before this, a `host_target.json` rewritten without placements gave a manifest with empty `attachments` that the
+  preflight passed, and in-engine suites ran green on enemies without their worn parts.
 - Without the imported bullymong, the enemies are engine shapes (logged `fallback=shapes`). The bandit and the psycho are not in the VM's
   spawnable kinds, so they are not on the range yet.
 

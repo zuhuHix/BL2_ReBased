@@ -269,6 +269,31 @@ def live_read_problem(manifest_path, kinds):
             % (manifest_path, ", ".join(stale)))
 
 
+def attachments_problem(manifest_path, kinds, spawned):
+    """Why a spawned kind's enemies would run without their worn pieces, or "". prepare_range writes attachments_expected per kind, from
+    the import's own read of the pawn (identity.json); a kind on engine shapes (no mesh) wears nothing, and a pawn that wears nothing has 0,
+    so neither is refused. A manifest without the field predates this check (2026-11-12)."""
+    old, short = [], []
+    for name in sorted(str(n) for n in spawned):
+        kind = kinds.get(name) or {}
+        if not kind.get("mesh"):
+            continue
+        expected = kind.get("attachments_expected")
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            old.append(name)
+            continue
+        have = len(kind.get("attachments") or [])
+        if have != expected:
+            short.append("%s %d of %d" % (name, have, expected))
+    if old:
+        return ("the manifest %s predates the worn-attachment check (no attachments_expected for %s): re-run python tools/prepare_range.py"
+                % (manifest_path, ", ".join(old)))
+    if short:
+        return ("the manifest %s has enemies without their worn attachments (%s pieces): local/phaselock/target/host_target.json lost its "
+                "placements. Re-run %s" % (manifest_path, ", ".join(short), prepare_range.ATTACH_STEP))
+    return ""
+
+
 def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
     """Why a test run must not start on this manifest ("" when it may). A failed or old tools/prepare_range.py leaves a manifest without
     the default spot: the host would then quietly fall through to another candidate and the run could go green at the wrong place."""
@@ -289,7 +314,7 @@ def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
         return ("the manifest %s lacks melee_arrival_by_level, melee_ratio_by_level or a positive melee_start_range for %s: it is old, written "
                 "with --no-vm, or tools/prepare_range.py could not read them. Re-run it without --no-vm and read its message"
                 % (manifest_path, ", ".join(stale)))
-    problem = live_read_problem(manifest_path, kinds)
+    problem = live_read_problem(manifest_path, kinds) or attachments_problem(manifest_path, kinds, spawned)
     if problem:
         return problem
     if survey:

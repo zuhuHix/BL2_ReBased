@@ -156,6 +156,9 @@ class PrepareRangeTest(unittest.TestCase):
             target = os.path.join(folder, 'target.json')
             with open(target, 'w', encoding='utf-8') as f:
                 json.dump({'Bullymong': {'mesh': '/Game/M.M', 'idle': '', 'death': '', 'collision_radius': 130.0, 'collision_height': 70.0}}, f)
+            # The import's identity sits next to the target: this invented pawn wears nothing, so nothing is expected.
+            with open(os.path.join(folder, 'identity.json'), 'w', encoding='utf-8') as f:
+                json.dump({'targets': {'Bullymong': {'attachments': []}}}, f)
             prepare_range.main(['--no-vm', '--allow-missing-spot-data', '--views', views_path, '--terrain', none, '--target', target, '--out', out])
             with open(out, encoding='utf-8') as f:
                 manifest = json.load(f)
@@ -165,6 +168,55 @@ class PrepareRangeTest(unittest.TestCase):
             self.assertEqual((baby['mesh'], baby['collision_radius'], baby['collision_height']), ('/Game/M.M', 64.0, 48.0))
             self.assertEqual((adult['collision_radius'], adult['collision_height']), (130.0, 70.0))
             self.assertEqual((adult['run_speed'], baby['run_speed'], manifest['kinds']['bullymong']['run_speed']), (500.0, 300.0, 400.0))
+            self.assertEqual(adult['attachments_expected'], 0)
+            self.assertEqual(manifest['kinds']['psycho']['attachments_expected'], 0)   # no imported psycho: engine shapes wear nothing
+
+    def write_import(self, folder, placed, worn):
+        """An invented import: host_target.json with `placed` placements on one asset, identity.json with `worn` pieces on it."""
+        import json
+        import os
+        target = os.path.join(folder, 'host_target.json')
+        with open(target, 'w', encoding='utf-8') as f:
+            json.dump({'Bullymong': {'mesh': '/Game/M.M', 'idle': '', 'death': '',
+                                     'attachments': [{'mesh': '/Game/P%d.P%d' % (i, i), 'bone': 'b%d' % i} for i in range(placed)]}}, f)
+        with open(os.path.join(folder, 'identity.json'), 'w', encoding='utf-8') as f:
+            json.dump({'targets': {'Bullymong': {'attachments': [{'component': 'C%d' % i} for i in range(worn)]}}}, f)
+        return target
+
+    def prepare(self, target):
+        import os
+        out = os.path.join(prepare_range.REPO, 'local', 'range', 'test_worn_manifest.json')
+        self.addCleanup(lambda: os.path.exists(out) and os.remove(out))
+        none = os.path.join(os.path.dirname(target), 'none.json')
+        prepare_range.main(['--no-vm', '--allow-missing-spot-data', '--views', none, '--terrain', none, '--target', target, '--out', out])
+        return out
+
+    def test_placements_lost_from_the_target_write_no_manifest(self):
+        # 2026-11-12: an editor job had rewritten host_target.json without placements; the manifest came out with empty attachments and
+        # eight suites ran green on enemies without their worn parts.
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            target = self.write_import(folder, 0, 3)
+            with self.assertRaises(SystemExit) as stop:
+                self.prepare(target)
+            self.assertIn('-Steps attach', str(stop.exception))
+            self.assertIn('Bullymong: 0 attachment placements', str(stop.exception))
+            self.assertFalse(os.path.exists(os.path.join(prepare_range.REPO, 'local', 'range', 'test_worn_manifest.json')))
+            os.remove(os.path.join(folder, 'identity.json'))
+            with self.assertRaises(SystemExit) as stop:   # no identity: the expectation is unknown, so no manifest either
+                self.prepare(target)
+            self.assertIn('no entry in', str(stop.exception))
+
+    def test_the_manifest_carries_the_worn_count_from_the_import(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            with open(self.prepare(self.write_import(folder, 3, 3)), encoding='utf-8') as f:
+                kinds = json.load(f)['kinds']
+            for name in ('bullymong', 'bullymong_adult', 'bullymong_baby', 'bullymong_slinger'):
+                self.assertEqual((len(kinds[name]['attachments']), kinds[name]['attachments_expected']), (3, 3), name)
+            self.assertEqual(kinds['psycho']['attachments_expected'], 0)
 
     def test_spot_data_message_names_the_plaza_views(self):
         import json
@@ -353,6 +405,31 @@ class PreflightTest(unittest.TestCase):
         fresh['bullymong_adult']['run_speed'] = 400.0
         self.assertIn('bullymong_adult speed', self.run_preflight(dict(self.GOOD, kinds=fresh)))
         self.assertEqual(self.run_preflight(dict(self.GOOD, kinds={'bullymong': {'run_speed': 400.0}})), '')
+
+    WHOLE = {'mesh': '/Game/M.M', 'melee_arrival_by_level': {'1': 2.0}, 'melee_ratio_by_level': {'1': 0.5}, 'melee_start_range': 111.0}
+
+    def worn(self, kind):
+        return self.run_preflight({'spawns': [{'kind': 'made'}], 'kinds': {'made': dict(self.WHOLE, **kind)}}, has_at=True)
+
+    def test_enemies_without_their_worn_attachments_stop_the_run(self):
+        problem = self.worn({'attachments': [], 'attachments_expected': 6})
+        self.assertIn('without their worn attachments (made 0 of 6 pieces)', problem)
+        self.assertIn('import_phaselock_target.ps1 -Steps attach', problem)
+        self.assertIn('prepare_phaselock_target.py attachments', problem)
+        self.assertIn('made 5 of 6', self.worn({'attachments': [{}] * 5, 'attachments_expected': 6}))
+
+    def test_a_manifest_with_its_worn_attachments_passes(self):
+        self.assertEqual(self.worn({'attachments': [{}] * 6, 'attachments_expected': 6}), '')
+
+    def test_a_kind_that_wears_nothing_passes(self):
+        self.assertEqual(self.worn({'attachments_expected': 0}), '')
+        self.assertEqual(self.worn({'mesh': '', 'attachments_expected': 0}), '')
+        self.assertEqual(self.worn({'mesh': ''}), '')   # engine shapes wear nothing, whatever the manifest's age
+
+    def test_a_manifest_from_before_the_worn_check_stops_the_run(self):
+        for expected in (None, '6', -1, True):
+            kind = {'attachments': [{}] * 6} if expected is None else {'attachments': [{}] * 6, 'attachments_expected': expected}
+            self.assertIn('predates the worn-attachment check', self.worn(kind), expected)
 
     def test_a_spawned_kind_must_be_able_to_swing(self):
         whole = {'melee_arrival_by_level': {'1': 2.0}, 'melee_ratio_by_level': {'1': 0.5}, 'melee_start_range': 111.0}
