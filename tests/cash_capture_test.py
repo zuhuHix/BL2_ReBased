@@ -75,6 +75,11 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             if ($scenario -eq 'never_loads') { return 'menumap None' }
             if ($scenario -eq 'load_lost') { throw 'no reply to c-invented' }
             if ($scenario -eq 'load_stuck') { return 'Loader None' }   # the menu was left, the pawn never comes
+            if ($scenario -eq 'late_pawn') {   # the menu is left at once; the pawn's reply takes 5 s, past a 4 s load bound
+                if ($script:loadReads -eq 1) { return 'Loader None' }
+                if ($TimeoutSeconds -lt 5) { [Threading.Thread]::Sleep($TimeoutSeconds * 1000); throw 'no reply to c-invented' }
+                [Threading.Thread]::Sleep(5000); return 'Sanctuary_P WillowPlayerPawn'
+            }
             return 'Sanctuary_P WillowPlayerPawn'
         }
         '*ow_clock_before*' { return $(if ($scenario -eq 'travel_clock') { '50.0' } else { 'None' }) }
@@ -135,6 +140,10 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost', 'close_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
             if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
             if ($scenario -eq 'poll_lost' -and $script:polls -eq 2) { throw 'no reply to c-invented' }   # one poll unanswered, the next ones answered
+            if ($scenario -eq 'slow_poll') {   # each reply takes 2.5 s: a wait shorter than that gets no reply
+                if ($TimeoutSeconds -lt 3) { [Threading.Thread]::Sleep($TimeoutSeconds * 1000); throw 'no reply to c-invented' }
+                [Threading.Thread]::Sleep(2500); return '{"state": "up", "injured_field": true, "pool": 100.0}'
+            }
             if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "pool": null}' }   # the shield cannot be read
             return '{"state": "up", "injured_field": true, "pool": 100.0}'
         }
@@ -615,10 +624,10 @@ class DenDownReplacementTest(unittest.TestCase):
         CashCaptureTest.setUp(self)
 
     def run_down(self, scenario, *extra):
-        return self.run_capture(scenario, ['-DenDown', '-RespawnSeconds', '1', *extra])
+        return self.run_capture(scenario, ['-DenDown', '-RespawnSeconds', '3', *extra])
 
     def test_unhit_for_the_wait_means_one_replacement(self):
-        done, session = self.run_down('replace_one', '-DownSeconds', '3', '-ReplaceAfterSeconds', '2')
+        done, session = self.run_down('replace_one', '-DownSeconds', '5', '-ReplaceAfterSeconds', '2')
         self.assertEqual(session['den_down_replacements'], 1)
         self.assertEqual(len(session['den_down_replace_results']), 1)
         self.assertIn(('den_down', 'replace1'), [(m['stage'], m['event']) for m in session['stage_marks']])
@@ -626,17 +635,17 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertIn('failed', session['stage_results']['den_down'])   # still no down: the stage fails as before
 
     def test_the_cap_is_four(self):
-        done, session = self.run_down('replace_cap', '-DownSeconds', '2', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('replace_cap', '-DownSeconds', '4', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 4)
         self.assertEqual(sum(1 for m in session['stage_marks'] if m['event'].startswith('replace')), 4)
 
     def test_none_after_a_down(self):
-        done, session = self.run_down('replace_after_down', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('replace_after_down', '-DownSeconds', '5', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_reason'], 'injured_flag')
         self.assertEqual(session['den_down_replacements'], 1)   # the one before the down; none after it
 
     def test_none_while_hits_keep_coming(self):
-        done, session = self.run_down('replace_hit', '-DownSeconds', '2', '-ReplaceAfterSeconds', '1')
+        done, session = self.run_down('replace_hit', '-DownSeconds', '4', '-ReplaceAfterSeconds', '1')
         self.assertEqual(session['den_down_replacements'], 0)
 
     def replace_calls(self):
@@ -645,7 +654,7 @@ class DenDownReplacementTest(unittest.TestCase):
 
     def test_none_once_the_driver_is_lost(self):
         # Poll 2 gets no reply and the polls after it would answer: without the rethrow the loop would go on placing her.
-        done, session = self.run_down('poll_lost', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('poll_lost', '-DownSeconds', '40', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 1)   # the one after poll 1; none after the lost reply
         self.assertEqual(self.replace_calls(), 1)
         self.assertIn('no reply', session['stage_results']['den_down'])
@@ -655,7 +664,7 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_lost_driver_found_by_the_stamp_sends_no_placement(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('mark_lost', '-WatchSpec', str(spec), '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('mark_lost', '-WatchSpec', str(spec), '-DownSeconds', '5', '-ReplaceAfterSeconds', '0')
         self.assertEqual(self.replace_calls(), 0)   # the stamp's watch mark got no reply: dp_replace is not sent
         self.assertEqual(session['den_down_replacements'], 0)
         self.assertIn(('den_down', 'replace1'), [(m['stage'], m['event']) for m in session['stage_marks']])   # the stamp itself is on disk
@@ -665,7 +674,7 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_lost_driver_at_the_down_snapshot_sends_no_respawn_poll_and_no_trial_close(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('snap_lost', '-WatchSpec', str(spec), '-DownSeconds', '3')
+        done, session = self.run_down('snap_lost', '-WatchSpec', str(spec), '-DownSeconds', '5')
         self.assertEqual(session['den_down_reason'], 'injured_flag')
         self.assertIsNone(session['den_down_up_after_s'])   # a respawn poll would have answered 'up': none was sent
         self.assertTrue(session['den_down_trial_close'].startswith('not sent: the driver stopped answering'))
@@ -674,7 +683,7 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_lost_driver_at_after_respawn_fails_the_stage_although_she_stood_again(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('after_lost', '-WatchSpec', str(spec), '-DownSeconds', '3')
+        done, session = self.run_down('after_lost', '-WatchSpec', str(spec), '-DownSeconds', '5')
         self.assertIsNotNone(session['den_down_up_after_s'])   # down and up were both seen
         self.assertNotIn('den_down', session['completed_stages'])
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
@@ -696,20 +705,26 @@ class DenDownReplacementTest(unittest.TestCase):
         # Review of #245: a timeout of dp_end was only logged, so den_down could pass after the driver was lost.
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('close_lost', '-WatchSpec', str(spec), '-DownSeconds', '3')
+        done, session = self.run_down('close_lost', '-WatchSpec', str(spec), '-DownSeconds', '5')
         self.assertIsNotNone(session['den_down_up_after_s'])   # down and up were both seen
         self.assertNotIn('den_down', session['completed_stages'])
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
         self.assertNotIn('sw_dump', self.sent())   # and the watch's check sent nothing afterwards
 
+    def test_no_placement_after_the_window_even_when_a_poll_answers_late(self):
+        # Review of #245: a poll started near the end of the 150 s window could return 'up' after it and still bring a re-placement.
+        done, session = self.run_down('slow_poll', '-DownSeconds', '6', '-ReplaceAfterSeconds', '0')
+        times = [float(r.split(' s:')[0]) for r in session['den_down_replace_results']]
+        self.assertTrue(times and all(t < 6 for t in times), times)
+
     def test_an_unreadable_shield_never_reads_as_unhit(self):
-        done, session = self.run_down('pool_none', '-DownSeconds', '2', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('pool_none', '-DownSeconds', '4', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 0)
         self.assertEqual(self.replace_calls(), 0)
-        self.assertIn('no down in 2 s after 0 re-placements', session['stage_results']['den_down'])
+        self.assertIn('no down in 4 s after 0 re-placements', session['stage_results']['den_down'])
 
     def test_a_down_between_the_poll_and_the_call_is_left_to_the_next_poll(self):
-        done, session = self.run_down('down_at_replace', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('down_at_replace', '-DownSeconds', '5', '-ReplaceAfterSeconds', '0')
         self.assertEqual(self.replace_calls(), 1)
         self.assertEqual(session['den_down_replacements'], 1)
         self.assertIn('not_up', session['den_down_replace_results'][0])   # logged, no placement
@@ -734,11 +749,11 @@ class LoadWaitTest(unittest.TestCase):
     def test_a_menu_that_never_loads_fails_naming_the_online_session_wait_and_restores(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_capture('never_loads', ['-WatchSpec', str(spec), '-MenuWaitSeconds', '2', '-LoadWaitSeconds', '2'])
+        done, session = self.run_capture('never_loads', ['-WatchSpec', str(spec), '-MenuWaitSeconds', '4', '-LoadWaitSeconds', '4'])
         self.assertFalse(session['load_wait']['ok'])
         self.assertIn('no player pawn: still on the main menu', session['status'])
         self.assertIn('online session', session['status'])
-        self.assertIn('ran out at 2 s', session['status'])
+        self.assertIn('ran out at 4 s', session['status'])
         self.assertEqual(self.saves(), 'original save')   # the finalizer restored as always
         self.assertEqual(self.locks_held(), (False, False))
         # The watch was never loaded: nothing to stop, which is not an error.
@@ -746,13 +761,20 @@ class LoadWaitTest(unittest.TestCase):
         self.assertNotIn('NameError', done.stdout + done.stderr)
 
     def test_a_driver_lost_while_loading_fails_within_the_bound(self):
-        done, session = self.run_capture('load_lost', ['-MenuWaitSeconds', '2', '-LoadWaitSeconds', '2'])
+        done, session = self.run_capture('load_lost', ['-MenuWaitSeconds', '4', '-LoadWaitSeconds', '4'])
         self.assertFalse(session['load_wait']['ok'])
         self.assertIn('the driver did not answer for', session['status'])
         self.assertEqual(self.saves(), 'original save')
 
+    def test_a_pawn_reply_after_the_load_bound_is_not_taken(self):
+        # Review of #245: a read that started before the load bound and answered after it was taken as a success.
+        done, session = self.run_capture('late_pawn', ['-MenuWaitSeconds', '4', '-LoadWaitSeconds', '4'])
+        self.assertFalse(session['load_wait']['ok'], session['load_wait'])
+        self.assertLess(session['load_wait']['after_enter_s'], 6)
+        self.assertIn('no player pawn', session['status'])
+
     def test_a_load_that_never_brings_the_pawn_fails_on_the_load_bound(self):
-        done, session = self.run_capture('load_stuck', ['-MenuWaitSeconds', '2', '-LoadWaitSeconds', '2'])
+        done, session = self.run_capture('load_stuck', ['-MenuWaitSeconds', '4', '-LoadWaitSeconds', '4'])
         self.assertIn('the menu was left, but no player pawn', session['status'])
 
 

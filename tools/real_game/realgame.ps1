@@ -600,28 +600,39 @@ function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$Time
 # there), no key or click. The first read comes 45 s after the Enter, as every capture's fixed wait did, so a normal load is read at the
 # same moment as before. While the game is still on the menu map without a pawn (where it shows "Creating online session / Please
 # wait..."; usually a few seconds, but two launches on 2026-11-12 never left it; the timings are in the private dossier), it reads
-# again every 5 s up to $MenuSeconds after the Enter. Once the menu is left, the load
-# gets $LoadSeconds more; replies that do not come (the load holds the command channel) are waited out for $LoadSeconds in a row at most.
-# Returns ok, the last read (map), why it failed (naming the wait that ran out) and the seconds from the Enter.
+# again every 5 s up to $MenuSeconds after the Enter. Once the menu is left, the load gets $LoadSeconds more; and the driver may stay
+# silent (the load holds the command channel) for $LoadSeconds from the Enter or its last reply, no longer. Whichever of these bounds applies
+# ends the wait: no read waits past it (each reply wait is clamped to the time left, less 1 s), and a reply that comes after it is not
+# taken (review of #245). So the whole step ends at most $MenuSeconds + $LoadSeconds after the Enter. Returns ok, the last read (map),
+# why it failed (naming the bound that ran out) and the seconds from the Enter.
 function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, [int]$LoadSeconds = 240) {
     $read = 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
     $first = 45 - ((Get-Date) - $EnterAt).TotalSeconds
     if ($first -gt 0) { Start-Sleep -Milliseconds ([int]($first * 1000)) }
-    $leftMenu = $null; $last = ''; $lastReply = Get-Date
+    $leftMenu = $null; $last = ''; $lastReply = $EnterAt; $replied = $false
     $result = { param($Ok, $Why) [pscustomobject]@{ ok = $Ok; map = $last; why = $Why; after_enter_s = [math]::Round(((Get-Date) - $EnterAt).TotalSeconds, 1) } }
     while ($true) {
         if ($Process -and $Process.HasExited) { return (& $result $false "the game exited before a player pawn (last read: $last)") }
+        # The bound that applies now: the earlier of the driver's silence and the menu's or the load's. When it runs out, the message names the
+        # driver's silence if that bound was the earlier one or the last read got no reply, else the phase's.
+        $silentUntil = $lastReply.AddSeconds($LoadSeconds)
+        $phaseUntil = if ($leftMenu) { $leftMenu.AddSeconds($LoadSeconds) } else { $EnterAt.AddSeconds($MenuSeconds) }
+        $until = if ($silentUntil -le $phaseUntil) { $silentUntil } else { $phaseUntil }
+        $now = Get-Date; $left = ($until - $now).TotalSeconds
+        if ($left -le 0) {
+            $since = [math]::Round(($now - $EnterAt).TotalSeconds)
+            if (!$replied -or $silentUntil -lt $phaseUntil) { return (& $result $false "the driver did not answer for $([math]::Round(($now - $lastReply).TotalSeconds)) s while the save loaded (limit $LoadSeconds s): $last") }
+            if (!$leftMenu) { return (& $result $false "still on the main menu $since s after the Enter: the wait for the game's online session (shown on the menu as 'Creating online session') ran out at $MenuSeconds s; last read: $last") }
+            return (& $result $false "the menu was left, but no player pawn $([math]::Round(($now - $leftMenu).TotalSeconds)) s later (limit $LoadSeconds s); last read: $last")
+        }
+        if ($left -lt 2) { Start-Sleep -Milliseconds ([int]($left * 1000) + 50); continue }   # too little left for a read: the bound ends the wait
         $replied = $false
-        try { $last = "$(Invoke-GamePy $read 30)".Trim(); $lastReply = Get-Date; $replied = $true }
+        try { $last = "$(Invoke-GamePy $read ([int][math]::Min(30, [math]::Floor($left - 1))))".Trim(); $lastReply = Get-Date; $replied = $true }
         catch { $last = "$_" }
-        $now = Get-Date; $since = [math]::Round(($now - $EnterAt).TotalSeconds)
+        $now = Get-Date
+        if ($now -gt $until) { continue }   # the bound passed during the read: a reply after it is not taken, and the next turn names it
         if ($replied -and $last -match 'WillowPlayerPawn' -and $last -notmatch 'Traceback') { return (& $result $true '') }
-        if ($replied -and $last -match '^menumap\b') {
-            if ($since -ge $MenuSeconds) { return (& $result $false "still on the main menu $since s after the Enter: the wait for the game's online session (shown on the menu as 'Creating online session') ran out at $MenuSeconds s; last read: $last") }
-        } elseif ($replied -and $null -eq $leftMenu) { $leftMenu = $now }   # another map, or a read that failed in the game: the load is under way
-        $noReply = [math]::Round(($now - $lastReply).TotalSeconds)
-        if ($noReply -ge $LoadSeconds) { return (& $result $false "the driver did not answer for $noReply s while the save loaded (limit $LoadSeconds s): $last") }
-        if ($leftMenu -and ($now - $leftMenu).TotalSeconds -ge $LoadSeconds) { return (& $result $false "the menu was left, but no player pawn $([math]::Round(($now - $leftMenu).TotalSeconds)) s later (limit $LoadSeconds s); last read: $last") }
+        if ($replied -and $last -notmatch '^menumap\b' -and $null -eq $leftMenu) { $leftMenu = $now }   # another map, or a read that failed in the game: the load is under way
         Start-Sleep 5
     }
 }

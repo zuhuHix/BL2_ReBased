@@ -340,23 +340,30 @@ try {
             # Only an exact state counts: 'up', or a named down condition. Any other reply (a traceback, an empty answer) is a failed poll, counted;
             # five in a row fail the stage. The condition that first fired is kept, so a down seen only at bleed-out is not read as the time to the down.
             $script:pollErrors = 0; $script:inARow = 0
+            # Each poll waits only for the time left in its window, less 1 s (review of #245): a reply never comes after the window, and no poll
+            # starts with under 2 s left. A clamped wait that runs out is the window ending, not a lost driver; a full 30 s one is the driver lost.
             $poll = {
+                param([datetime]$Until)
+                $left = ($Until - (Get-Date)).TotalSeconds
+                if ($left -lt 2) { return $null }
+                $wait = [int][math]::Min(30, [math]::Floor($left - 1))
                 try {
-                    $r = Py 'import json; print(json.dumps(cp_down_state()))' | ConvertFrom-Json
+                    $r = Py 'import json; print(json.dumps(cp_down_state()))' $wait | ConvertFrom-Json
                     if ($r.state -in 'up', 'no_pawn', 'no_health', 'injured_flag') { $script:inARow = 0; return $r }
                     throw "unexpected state '$($r.state)'"
                 } catch {
                     # A reply that never came is the driver lost, not a failed poll: set the one condition and end the stage.
+                    if ("$_" -match 'no reply' -and $wait -lt 30) { return $null }
                     if ("$_" -match 'no reply') { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_"; throw }
                     $script:pollErrors++; $script:inARow++
                     if ($script:inARow -ge 5) { throw "five den-down polls in a row failed: $_" }
                     return $null
                 }
             }
-            $downAt = $null; $t0 = Get-Date
+            $downAt = $null; $t0 = Get-Date; $downUntil = $t0.AddSeconds($DownSeconds)
             $lastHit = $t0; $lastPool = $null; $log.den_down_replacements = 0; $log.den_down_replace_results = @()
             while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds -and !(Get-DriverLost)) {
-                $r = & $poll
+                $r = & $poll $downUntil
                 if ($r -and $r.state -ne 'up') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
                 # A drop of health plus shield since the last poll means a hit reached her (regeneration only raises it).
                 if ($r -and $null -ne $r.pool) {
@@ -366,10 +373,11 @@ try {
                 # Up, a pool read since the last placement (an unreadable shield never reads as unhit), unhit for -ReplaceAfterSeconds, under
                 # the cap, the driver answering: placed again. The stamp is on disk first; a stamp whose watch mark finds the driver lost ends it.
                 if ($r -and $r.state -eq 'up' -and $null -ne $lastPool -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
-                    ((Get-Date) - $lastHit).TotalSeconds -ge $ReplaceAfterSeconds) {
+                    ((Get-Date) - $lastHit).TotalSeconds -ge $ReplaceAfterSeconds -and (Get-Date) -lt $downUntil) {
                     $n = $log.den_down_replacements + 1
                     Write-StageMark 'den_down' "replace$n"
                     if (Get-DriverLost) { break }
+                    if ((Get-Date) -ge $downUntil) { break }   # the window ended during the stamp: no placement after it
                     $log.den_down_replacements = $n
                     # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace).
                     $again = Py 'import json; print(json.dumps(dp_replace()))'
@@ -391,7 +399,7 @@ try {
                 $t1 = Get-Date
                 while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds -and !(Get-DriverLost)) {
                     Start-Sleep 2
-                    $r = & $poll
+                    $r = & $poll $t1.AddSeconds($RespawnSeconds)
                     if ($r -and $r.state -eq 'up') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
                 }
                 # The respawn dialog and the fee come a few seconds after she stands: leave them time before the last snapshot.
