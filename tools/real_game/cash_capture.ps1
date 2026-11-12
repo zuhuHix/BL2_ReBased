@@ -41,13 +41,14 @@ param(
     # The S0 smoke item only (with -WatchSpec): in each den trial, one labelled snapshot asked for right after the travel, before the map settles
     # (the watch must record it as not taken), then one wait for the settle. Reads only.
     [switch]$WatchSmoke,
-    [int]$DownSeconds = 150,
+    [int]$DownSeconds = 240,
     [int]$RespawnSeconds = 90,
-    # The den down's re-placement (S0 of 2026-11-12: each melee hit knocked Maya away, and the pack let go before a down). While she is up, a
-    # pool has been read since the last placement and her health plus shield has not dropped for -ReplaceAfterSeconds, dp_replace puts her at
-    # dp_begin's distance and bearing from the nearest living enemy again (in one game call that places her only while she is still up), at
-    # most -MaxReplacements times inside -DownSeconds. None after a down; once the driver is lost, no further command of the stage is sent.
-    [int]$ReplaceAfterSeconds = 10,
+    # The den down's re-placement (S0 of 2026-11-12: each melee hit knocked Maya away, and the pack let go before a down; session 2 analysis,
+    # A6: her shield refilled between engagements, so a health-plus-shield rule re-placed her too late or not at all). While she is up, her
+    # health has been read since the last placement and has not fallen for -ReplaceAfterSeconds, whatever the shield does, dp_replace puts
+    # her at the pack again: the strongest kind in reach first (an adult), by AI class (in one game call that places her only while she is
+    # still up), at most -MaxReplacements times inside -DownSeconds. None after a down; once the driver is lost, nothing more is sent.
+    [int]$ReplaceAfterSeconds = 20,
     [ValidateRange(0, 4)][int]$MaxReplacements = 4,
     # The save's load after the menu's Enter (Wait-PlayerPawn in realgame.ps1): how long the game may stay on the menu creating its online
     # session, then how long the load may take once the menu is left. Session 2 of 2026-11-12 stopped twice at the first; tests pass small values.
@@ -402,18 +403,19 @@ try {
                 }
             }
             $downAt = $null; $t0 = Get-Date; $downUntil = $t0.AddSeconds($DownSeconds)
-            $lastHit = $t0; $lastPool = $null; $log.den_down_replacements = 0; $log.den_down_replace_results = @()
+            $lastHit = $t0; $lastHealth = $null; $log.den_down_replacements = 0; $log.den_down_replace_results = @()
             while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds -and !(Get-DriverLost)) {
                 $r = & $poll $downUntil
                 if ($r -and $r.state -ne 'up') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
-                # A drop of health plus shield since the last poll means a hit reached her (regeneration only raises it).
-                if ($r -and $null -ne $r.pool) {
-                    if ($null -ne $lastPool -and [double]$r.pool -lt [double]$lastPool) { $lastHit = Get-Date }
-                    $lastPool = $r.pool
+                # A fall of her health since the last poll means a hit reached her body. The shield is not counted: it refills between
+                # engagements and absorbs the first hits, so a fall of health plus shield said little about whether the pack still fought her.
+                if ($r -and $null -ne $r.health) {
+                    if ($null -ne $lastHealth -and [double]$r.health -lt [double]$lastHealth) { $lastHit = Get-Date }
+                    $lastHealth = $r.health
                 }
-                # Up, a pool read since the last placement (an unreadable shield never reads as unhit), unhit for -ReplaceAfterSeconds, under
-                # the cap, the driver answering: placed again. The stamp is on disk first; a stamp whose watch mark finds the driver lost ends it.
-                if ($r -and $r.state -eq 'up' -and $null -ne $lastPool -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
+                # Up, her health read since the last placement (an unreadable health never reads as unhit), unhit for -ReplaceAfterSeconds,
+                # under the cap, the driver answering: placed again. The stamp is on disk first; a stamp whose mark finds the driver lost ends it.
+                if ($r -and $r.state -eq 'up' -and $null -ne $lastHealth -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
                     ((Get-Date) - $lastHit).TotalSeconds -ge $ReplaceAfterSeconds -and (Get-Date) -lt $downUntil) {
                     $n = $log.den_down_replacements + 1
                     Write-StageMark 'den_down' "replace$n"
@@ -423,7 +425,7 @@ try {
                     # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace).
                     $again = Py 'import json; print(json.dumps(dp_replace()))'
                     $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))
-                    $lastHit = Get-Date; $lastPool = $null
+                    $lastHit = Get-Date; $lastHealth = $null
                 }
                 Start-Sleep 1
             }

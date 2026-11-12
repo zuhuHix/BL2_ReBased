@@ -147,16 +147,17 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             # The den down's poll (invented values): up with a steady pool unless the scenario says otherwise.
             $script:polls++
             if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost', 'close_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
-            if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
+            if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "health": ' + (1000 - $script:polls) + ', "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
+            if ($scenario -eq 'shield_only') { return ('{"state": "up", "injured_field": true, "health": 100.0, "pool": ' + (1000 - $script:polls) + '}') }   # only the shield falls
             if ($scenario -eq 'poll_lost' -and $script:polls -eq 2) { throw 'no reply to c-invented' }   # one poll unanswered, the next ones answered
             if ($scenario -eq 'short_timeout' -and $TimeoutSeconds -lt 30) { throw 'no reply to c-invented' }   # a shortened wait runs out
             if ($scenario -eq 'late_down') { [Threading.Thread]::Sleep(($TimeoutSeconds + 2) * 1000); return '{"state": "injured_flag", "injured_field": true, "pool": 0.0}' }   # answers after its window
             if ($scenario -eq 'slow_poll') {   # each reply takes 2.5 s: a wait shorter than that gets no reply
                 if ($TimeoutSeconds -lt 3) { [Threading.Thread]::Sleep($TimeoutSeconds * 1000); throw 'no reply to c-invented' }
-                [Threading.Thread]::Sleep(2500); return '{"state": "up", "injured_field": true, "pool": 100.0}'
+                [Threading.Thread]::Sleep(2500); return '{"state": "up", "injured_field": true, "health": 100.0, "pool": 100.0}'
             }
-            if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "pool": null}' }   # the shield cannot be read
-            return '{"state": "up", "injured_field": true, "pool": 100.0}'
+            if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "health": null, "pool": null}' }   # the health cannot be read
+            return '{"state": "up", "injured_field": true, "health": 100.0, "pool": 100.0}'
         }
         '*dp_end*' {
             $script:ends++
@@ -749,7 +750,18 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertNotIn('den_down_reason', session)
         self.assertIn('no down in 8 s', session['stage_results']['den_down'])
 
-    def test_an_unreadable_shield_never_reads_as_unhit(self):
+    def test_a_falling_shield_alone_is_not_a_hit(self):
+        # Session 2 analysis, A6: her shield refilled between engagements, so a health-plus-shield rule saw hits where only the shield
+        # fell. A re-placement now waits on her health only: a falling shield does not hold it back.
+        done, session = self.run_down('shield_only', '-DownSeconds', '9', '-ReplaceAfterSeconds', '1')
+        self.assertGreaterEqual(session['den_down_replacements'], 1)
+
+    def test_the_den_down_defaults_are_240_s_and_20_s_of_health_unhit(self):
+        text = CAPTURE.read_text(encoding='utf-8')
+        self.assertIn('[int]$DownSeconds = 240,', text)
+        self.assertIn('[int]$ReplaceAfterSeconds = 20,', text)
+
+    def test_an_unreadable_health_never_reads_as_unhit(self):
         done, session = self.run_down('pool_none', '-DownSeconds', '8', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 0)
         self.assertEqual(self.replace_calls(), 0)
@@ -1140,9 +1152,9 @@ class DpReplaceTest(unittest.TestCase):
         def __init__(self, **kw):
             self.__dict__.update(kw)
 
-    def pawn(self, n, dist, health, live=True, controller=True, at=None):
+    def pawn(self, n, dist, health, live=True, controller=True, at=None, kind=None):
         return self.Obj(Name=f'WillowAIPawn_{n}', live=live, dist=dist, health=health, controller=self.Obj() if controller else None,
-                        Location=self.Obj(X=at[0], Y=at[1], Z=0.0) if at else self.Obj(X=dist, Y=0.0, Z=0.0))
+                        Location=self.Obj(X=at[0], Y=at[1], Z=0.0) if at else self.Obj(X=dist, Y=0.0, Z=0.0), kind=kind)
 
     def setUp(self):
         self.ns = {}
@@ -1164,12 +1176,12 @@ class DpReplaceTest(unittest.TestCase):
             get_pc=lambda: self.Obj(Pawn=self.Obj(Location=here)),
             unrealsdk=self.Obj(find_all=lambda cls: list(self.pawns)),
             sw_live_pawn=lambda p: p.live, _sw_dist=lambda p, h: p.dist, _sw_pool_refs=lambda p: {'health_pool': p.health},
-            _sw_fields=lambda p, names: {'Controller': p.controller},
+            _sw_fields=lambda p, names: {'Controller': p.controller, 'AIClass': p.kind},
             cb_place=lambda name, distance, bearing: self.placed.append((name, distance, round(bearing, 1))))
 
     def test_without_the_first_enemy_the_nearest_living_one_on_her_side(self):
         got = self.ns['dp_replace']()
-        self.assertEqual((got['result'], got['rule']), ('placed', 'nearest_my_side'))
+        self.assertEqual((got['result'], got['rule']), ('placed', 'kind_my_side'))
         # stale, empty, not live, too far and without a Controller are passed over; she stays on her side of it (it is at +Y, she at 0)
         self.assertEqual(self.placed, [('WillowAIPawn_6', 1600.0, -90.0)])
 
@@ -1180,8 +1192,30 @@ class DpReplaceTest(unittest.TestCase):
         self.assertEqual(self.placed, [('WillowAIPawn_1', 1600.0, 180.0)])
         self.placed.clear()
         self.ns['DP']['trial'] = {'first': 'WillowAIPawn_3'}   # the first enemy dead: the nearest on her side
-        self.assertEqual(self.ns['dp_replace']()['rule'], 'nearest_my_side')
+        self.assertEqual(self.ns['dp_replace']()['rule'], 'kind_my_side')
         self.assertEqual(self.placed, [('WillowAIPawn_6', 1600.0, -90.0)])
+
+    def test_the_strongest_kind_in_reach_comes_first(self):
+        # Session 2 analysis, A6: the nearest enemy could be a lone baby or slinger that never downed her. The adult comes first, then the
+        # regular, the slinger, any other kind and the baby last, read from the AIClass field; the first placement's enemy only wins
+        # within its own kind.
+        fresh = {'stale': None, 'CurrentValue': 50.0}
+        gd = 'GD_Invented.Character.'
+        self.pawns = [self.pawn(11, 200.0, fresh, kind=gd + 'CharClass_PrimalBeastBaby'),
+                      self.pawn(12, 500.0, fresh, kind=gd + 'CharClass_PrimalBeast'),
+                      self.pawn(13, 800.0, fresh, kind=gd + 'CharClass_PrimalBeast_Ranged'),
+                      self.pawn(14, 3000.0, fresh, kind=gd + 'CharClass_PrimalBeastAdult', at=(0.0, 3000.0))]
+        self.ns['DP']['trial'] = {'first': 'WillowAIPawn_12'}   # the first placement was at a regular
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['rule'], got['enemy'], got['kind']), ('kind_my_side', 'WillowAIPawn_14', gd + 'CharClass_PrimalBeastAdult'))
+        self.assertEqual(self.placed, [('WillowAIPawn_14', 1600.0, -90.0)])
+        self.placed.clear()
+        self.pawns = self.pawns[:3]   # no adult: the regular, which is also the first placement's enemy, at bearing 180
+        self.assertEqual(self.ns['dp_replace']()['rule'], 'first')
+        self.assertEqual(self.placed, [('WillowAIPawn_12', 1600.0, 180.0)])
+        self.assertEqual([self.ns['dp_kind_rank'](gd + k) for k in ('CharClass_PrimalBeastAdult', 'CharClass_PrimalBeast',
+                          'CharClass_PrimalBeast_Ranged', 'CharClass_Invented', 'CharClass_PrimalBeastBaby')], [0, 1, 2, 3, 4])
+        self.assertEqual(self.ns['dp_kind_rank'](None), 3)
 
     def test_not_up_places_nothing(self):
         for state in ('injured_flag', 'no_health', 'no_pawn'):
