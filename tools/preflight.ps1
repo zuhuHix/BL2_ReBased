@@ -3,8 +3,9 @@
 # AI-assisted (Claude Opus 5.5), 2026-11-12. It only looks: it deletes no lock, stops no process and writes nothing but its
 # report (stdout, and the -Report file when given); -CheckLock may create the lock's folder, never the lock, and git runs
 # with --no-optional-locks so the worktree's index is not refreshed. Every check is off until its parameter is passed, so a
-# driver passes what applies to one suite. One line per check; exit 0 when none failed, 1 when one or more did, 2 when the
-# call itself is wrong.
+# driver passes what applies to one suite. One line per check (ok, FAIL, NOTE, or UNKNOWN when the check cannot tell);
+# exit 0 when none failed, 1 when one or more did, 2 when the call itself is wrong. UNKNOWN is not a failure and never
+# means ok: the summary counts it, and a driver that needs a known answer reads it.
 #
 #   -Data <path>[,<path>]               each path (relative to -Worktree, or absolute) is a file, or a folder holding a file
 #   -Generators <data>=<gen>[,...]       each data path is newer than the last commit of its tracked generator
@@ -17,17 +18,20 @@
 #   -CheckLock                           the machine-wide run lock (tools/ue_lock.ps1; OPENWILLOW_UE_LOCK) is absent
 #   -AlsoLock <path>[,<path>]            these extra lock files are absent
 #   -ReportHold <path>[,<path>]          a hold file is reported when present; never a failure
-#   -CheckBuild                          -ModuleLibrary and -CoreLibrary are newer than the last commit touching
-#                                        host/ue5/OpenWillow/Source, src and CMakeLists.txt, and those have no uncommitted changes
+#   -CheckBuild                          -ModuleLibrary is newer (file times) than the files it is built from; -CoreLibrary
+#                                        matches the input stamp the last CMake build wrote next to it (<lib>.inputs, see
+#                                        ow-build-stamp in CMakeLists.txt). UNKNOWN, not ok, when that cannot be told: no stamp, a
+#                                        stamp from a build with uncommitted inputs, a newer build description
 #   -CheckEngine                         the engine folder (-Engine; OPENWILLOW_UE or the default) holds the editor binary
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/preflight.ps1 -NoEditor -CheckLock -Port 8795 -CheckBuild -CheckEngine
 #
-# Commit times are committer dates, which cuts both ways for -Generators and -CheckBuild: a rebase after the build makes the
-# build look older than the code although nothing changed, and a checkout of a commit dated before the build (a fast-forward
-# to older-dated work, a switch to another branch) makes it look fresh although the code differs. Uncommitted changes are
-# caught by their own line. Rebuild, or read the line and decide. Test seam: -ProcessList <file> (one process name per line) replaces the live
-# process list for -NoEditor, so the tests never match a real editor.
+# -Generators compares with committer dates, which cuts both ways: a rebase after the generator ran makes the data look
+# older than the generator although nothing changed, and a checkout of a commit dated before the run (a fast-forward to
+# older-dated work, a switch to another branch) makes it look fresh although the generator differs. Uncommitted changes
+# are caught by their own line. Regenerate, or read the line and decide. -CheckBuild uses no commit dates.
+# Test seam: -ProcessList <file> (one process name per line) replaces the live process list for -NoEditor, so the tests
+# never match a real editor.
 param(
     [string]$Worktree = (Split-Path -Parent $PSScriptRoot),
     [string[]]$Data = @(),
@@ -51,10 +55,12 @@ $ErrorActionPreference = 'Stop'
 
 $lines = New-Object System.Collections.Generic.List[string]
 $failed = 0
+$unknown = 0
 function Out-Line([string]$Kind, [string]$Check, [string]$Text) {
     $line = "PREFLIGHT $Kind ${Check}: $Text"
     $script:lines.Add($line)
     if ($Kind -eq 'FAIL') { $script:failed++ }
+    if ($Kind -eq 'UNKNOWN') { $script:unknown++ }
 }
 # -Data a,b arrives as one array; "-Data 'a,b'" from a -Command string arrives as one string. Accept both.
 function Split-List([string[]]$Items) { @($Items | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
@@ -110,6 +116,11 @@ function Get-NewestWriteUtc([string]$Path) {
         if ($null -eq $newest -or $t -gt $newest) { $newest = $t }
     }
     return $newest
+}
+function Get-TreeName([string]$Path) {
+    # A path under the worktree as the worktree-relative name, for the report.
+    if ($Path.StartsWith($Worktree + '\', [StringComparison]::OrdinalIgnoreCase)) { return $Path.Substring($Worktree.Length + 1) }
+    return $Path
 }
 function Format-Utc($t) { if ($null -eq $t) { 'none' } else { $t.ToString('yyyy-MM-ddTHH:mm:ssZ') } }
 
@@ -248,19 +259,76 @@ foreach ($h in $ReportHold) {
 }
 
 if ($CheckBuild) {
+    # The module DLL, by file times as Unreal's build tool judges it: it must be newer than every file it is built from
+    # (host/ue5/OpenWillow/Source, the headers under src, the two CMake libraries it links). A newer build description
+    # (*.Build.cs, *.Target.cs, the .uproject) need not change the DLL, so that is unknown, never fresh and never stale.
     Invoke-Check 'build' {
-        $code = @('host/ue5/OpenWillow/Source', 'src', 'CMakeLists.txt')
-        $commit = Get-LastCommitUtc $code
-        $dirty = @(Get-UncommittedChange $code)
-        if ($dirty.Count) { Out-Line 'FAIL' 'build' "git status is not clean for the code the build is compared with: $($dirty -join '; ')" }
-        if ($null -eq $commit) { Out-Line 'FAIL' 'build' "no commit touches host/ue5/OpenWillow/Source, src or CMakeLists.txt in $Worktree (or not a git checkout)"; return }
-        foreach ($lib in @($ModuleLibrary, $CoreLibrary)) {
-            $full = Resolve-InTree $lib
-            if (!(Test-Path -LiteralPath $full -PathType Leaf)) { Out-Line 'FAIL' 'build' "$lib is missing: build it"; continue }
-            $t = (Get-Item -LiteralPath $full -Force).LastWriteTimeUtc
-            if ($t -gt $commit) { Out-Line 'ok' 'build' "$lib ($(Format-Utc $t)) is newer than the code ($(Format-Utc $commit))" }
-            else { Out-Line 'FAIL' 'build' "$lib ($(Format-Utc $t)) is older than the last code commit ($(Format-Utc $commit)): rebuild" }
+        $dll = Resolve-InTree $ModuleLibrary
+        if (!(Test-Path -LiteralPath $dll -PathType Leaf)) { Out-Line 'FAIL' 'build' "$ModuleLibrary is missing: build it"; return }
+        $built = [IO.File]::GetLastWriteTimeUtc($dll)
+        $code = New-Object System.Collections.Generic.List[string]
+        $descriptions = New-Object System.Collections.Generic.List[string]
+        $source = Join-Path $Worktree 'host\ue5\OpenWillow\Source'
+        if (Test-Path -LiteralPath $source -PathType Container) {
+            foreach ($f in [IO.Directory]::EnumerateFiles($source, '*', [IO.SearchOption]::AllDirectories)) {
+                if ($f -match '\.(Build|Target)\.cs$') { $descriptions.Add($f) } else { $code.Add($f) }
+            }
         }
+        $src = Join-Path $Worktree 'src'
+        if (Test-Path -LiteralPath $src -PathType Container) {
+            foreach ($f in [IO.Directory]::EnumerateFiles($src, '*', [IO.SearchOption]::AllDirectories)) { if ($f -match '\.(h|hpp)$') { $code.Add($f) } }
+        }
+        $core = Resolve-InTree $CoreLibrary
+        foreach ($f in @($core, (Join-Path (Split-Path -Parent $core) 'ow-lzokay.lib'))) { if (Test-Path -LiteralPath $f -PathType Leaf) { $code.Add($f) } }
+        $project = Join-Path $Worktree 'host\ue5\OpenWillow\OpenWillow.uproject'
+        if (Test-Path -LiteralPath $project -PathType Leaf) { $descriptions.Add($project) }
+        $newer = @($code | Where-Object { [IO.File]::GetLastWriteTimeUtc($_) -gt $built })
+        $newerDesc = @($descriptions | Where-Object { [IO.File]::GetLastWriteTimeUtc($_) -gt $built })
+        if ($newer.Count) {
+            $shown = @($newer | Select-Object -First 3 | ForEach-Object { Get-TreeName $_ }) -join ', '
+            Out-Line 'FAIL' 'build' "$ModuleLibrary ($(Format-Utc $built)) is older than $($newer.Count) file(s) it is built from ($shown): rebuild"
+        } elseif ($newerDesc.Count) {
+            $shown = @($newerDesc | ForEach-Object { Get-TreeName $_ }) -join ', '
+            Out-Line 'UNKNOWN' 'build' "$ModuleLibrary ($(Format-Utc $built)) is older than the build description $shown, which may or may not change it: a module build decides"
+        } else { Out-Line 'ok' 'build' "$ModuleLibrary ($(Format-Utc $built)) is newer than the $($code.Count) file(s) it is built from" }
+    }
+    # The core library, by content: the stamp the last finished CMake build wrote next to it (ow-build-stamp in CMakeLists.txt)
+    # against git's entries for the same paths now. File and commit times are not used, so a file the build rightly ignored
+    # does not look stale, and a rebase or checkout that leaves the inputs alone does not either.
+    Invoke-Check 'build' {
+        $stampPaths = @('src', 'third_party/lzokay', 'CMakeLists.txt', 'tests/CMakeLists.txt')   # = PATHS of ow-build-stamp in CMakeLists.txt
+        $howTo = 'cmake --build build --config Release (every build writes it, also when nothing is rebuilt)'
+        $lib = Resolve-InTree $CoreLibrary
+        $stamp = "$lib.inputs"
+        if (!(Test-Path -LiteralPath $lib -PathType Leaf)) { Out-Line 'FAIL' 'build' "$CoreLibrary is missing: build it"; return }
+        if (!(Test-Path -LiteralPath $stamp -PathType Leaf)) { Out-Line 'UNKNOWN' 'build' "$CoreLibrary has no input stamp ($CoreLibrary.inputs), so its inputs cannot be compared; get one with $howTo"; return }
+        $rows = @((Read-SharedText $stamp) -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ })
+        if ($rows.Count -lt 4 -or $rows[0] -ne 'ow-build-stamp 1' -or $rows[1] -ne "paths $($stampPaths -join ' ')" -or
+            $rows[2] -notmatch '^commit [0-9a-f]{7,}$' -or $rows[3] -notmatch '^dirty \d+$') {
+            Out-Line 'UNKNOWN' 'build' "the input stamp of $CoreLibrary is damaged or from another version of the stamp step; rewrite it with $howTo"; return
+        }
+        $at = $rows[2].Substring(7, 7)
+        if ([IO.File]::GetLastWriteTimeUtc($lib) -gt [IO.File]::GetLastWriteTimeUtc($stamp)) {
+            Out-Line 'UNKNOWN' 'build' "$CoreLibrary is newer than its input stamp (built without the stamp step, as with --target ow-core); rewrite it with $howTo"; return
+        }
+        if ($rows[3] -ne 'dirty 0') {
+            Out-Line 'UNKNOWN' 'build' "$CoreLibrary was built at $at with uncommitted changes to its inputs, which the stamp does not record; commit or revert them, then $howTo"; return
+        }
+        $status = Invoke-Git (@('status', '--porcelain', '--') + $stampPaths)
+        $entries = Invoke-Git (@('ls-files', '-s', '--') + $stampPaths)
+        if ($status.Code -ne 0 -or $entries.Code -ne 0) {
+            Out-Line 'UNKNOWN' 'build' "git failed in $Worktree (status exit $($status.Code), ls-files exit $($entries.Code)), so the inputs of $CoreLibrary cannot be compared with its stamp"; return
+        }
+        $dirty = @($status.Lines | Where-Object { $_ })
+        if ($dirty.Count) { Out-Line 'FAIL' 'build' "$CoreLibrary was built at $at from committed inputs, and these have changed since: $($dirty -join '; ')"; return }
+        $then = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]@($rows | Select-Object -Skip 4)), ([StringComparer]::Ordinal)
+        $now = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]@($entries.Lines | Where-Object { $_ })), ([StringComparer]::Ordinal)
+        $changed = @(@($then | Where-Object { !$now.Contains($_) }) + @($now | Where-Object { !$then.Contains($_) }) |
+                     ForEach-Object { ($_ -split "`t", 2)[-1] } | Sort-Object -Unique)
+        if ($changed.Count) {
+            $shown = @($changed | Select-Object -First 5) -join ', '
+            Out-Line 'FAIL' 'build' "$CoreLibrary was built at $at; $($changed.Count) of its input file(s) differ now ($shown): rebuild"
+        } else { Out-Line 'ok' 'build' "$CoreLibrary was built at $at from the inputs checked out now ($($now.Count) file(s))" }
     }
 }
 
@@ -275,7 +343,7 @@ if ($CheckEngine) {
 }
 
 $lines | ForEach-Object { Write-Output $_ }
-$summary = "PREFLIGHT SUMMARY failed=$failed checks=$($lines.Count)"
+$summary = "PREFLIGHT SUMMARY failed=$failed checks=$($lines.Count) unknown=$unknown"
 Write-Output $summary
 if ($Report) { [IO.File]::WriteAllLines([IO.Path]::GetFullPath($Report), [string[]]($lines + $summary)) }
 if ($failed) { exit 1 }

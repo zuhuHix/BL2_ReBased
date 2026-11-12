@@ -347,12 +347,16 @@ checks the owner and staleness rules against temporary lock files.
   `-Generators <data>=<generator>` (data newer than the generator's last commit), `-CheckLinks` (no link under `local\`
   resolves outside the worktree), `-Port`, `-NoEditor` (the two editor names `ue_lock.ps1` always waits for, not a caller's
   extra names), `-CheckLock` (the run lock above) and `-AlsoLock <file>`, `-ReportHold <file>` (reported, never a failure),
-  `-CheckBuild` (the module DLL and `build\Release\ow-core.lib` newer than the last commit touching
-  `host/ue5/OpenWillow/Source`, `src` or `CMakeLists.txt`), `-CheckEngine`. It prints one `PREFLIGHT ok|FAIL|NOTE` line per
-  check and a summary, also when git or a check fails, and exits 1 when a check failed, 2 for a wrong call. `-Generators`
-  and `-CheckBuild` compare file times with committer dates, which cuts both ways: a rebase after a build makes the build
-  look stale, and a checkout of a commit dated before the build (a fast-forward to older-dated work, another branch) makes
-  it look fresh although the code differs. Uncommitted changes to the generator or the code (`git status --porcelain`)
+  `-CheckBuild`, `-CheckEngine`. `-CheckBuild` judges the module DLL by file times against what it is built from (files
+  under `host/ue5/OpenWillow/Source`, headers under `src`, the two CMake libraries), and `build\Release\ow-core.lib` by
+  content: every CMake build, also one that rebuilds nothing, writes `ow-core.lib.inputs` next to it
+  (target `ow-build-stamp` in `CMakeLists.txt`: git's entries for `src`, `third_party/lzokay` and the two `CMakeLists.txt`), and the
+  preflight compares that with the entries now. It says `UNKNOWN`, never ok, when it cannot tell: no stamp yet (run
+  `cmake --build build --config Release` once), a stamp from a build with uncommitted inputs, a newer `*.Build.cs`,
+  `*.Target.cs` or `.uproject`. It prints one `PREFLIGHT ok|FAIL|NOTE|UNKNOWN` line per check and a summary, also when
+  git or a check fails, and exits 1 when a check failed (`UNKNOWN` is not a failure), 2 for a wrong call. `-Generators`
+  compares file times with committer dates, which cuts both ways: a rebase after the generator ran makes the data look
+  stale, and a checkout of a commit dated before the run makes it look fresh. Uncommitted changes to the generator
   fail on their own line. CTest `py-preflight`, run under Windows PowerShell 5.1 and pwsh where each is present.
 
   ```powershell

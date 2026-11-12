@@ -23,6 +23,9 @@ SCRIPT = ROOT / 'tools' / 'preflight.ps1'
 SHELLS = {name: path for name, path in (('powershell', shutil.which('powershell')), ('pwsh', shutil.which('pwsh'))) if path}
 OLD = datetime.datetime(2019, 6, 1, tzinfo=datetime.timezone.utc).timestamp()     # before every commit below
 COMMITTED = '2020-01-01T12:00:00+00:00'
+# For the one case that runs the stamp script of CMakeLists.txt in script mode: cmake on PATH, else the Build Tools copy GATES.md names.
+CMAKE = shutil.which('cmake') or next((str(p) for p in [Path(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'))
+        / 'Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'] if p.is_file()), None)
 
 
 def long_path(path):
@@ -215,28 +218,195 @@ class Cases:
         self.assertEqual(rc, 0, out)
         self.assertLines(lines, 'hold', ['NOTE'])
 
-    def test_build_newer_than_the_code(self):
+    # -CheckBuild. The module DLL is judged by file times against what it is built from; the core library by the input stamp
+    # the CMake build writes next to it. stamp() writes that stamp as target ow-build-stamp does (test_stamp_writer_matches
+    # checks that the two agree, line endings aside).
+    STAMP_PATHS = ['src', 'third_party/lzokay', 'CMakeLists.txt', 'tests/CMakeLists.txt']
+    BUILD = ['-CheckBuild', '-ModuleLibrary', 'bin/module.dll', '-CoreLibrary', 'bin/core.lib']
+
+    def git_out(self, *args):
+        return subprocess.run(['git', '--no-optional-locks', '-C', str(self.wt), *args], check=True, capture_output=True,
+                              text=True).stdout
+
+    def stamp(self, lib='bin/core.lib'):
+        status = self.git_out('status', '--porcelain', '--', *self.STAMP_PATHS)
+        text = (f"ow-build-stamp 1\npaths {' '.join(self.STAMP_PATHS)}\ncommit {self.git_out('rev-parse', 'HEAD').strip()}\n"
+                f"dirty {len([l for l in status.splitlines() if l])}\n"
+                + self.git_out('ls-files', '-s', '--', *self.STAMP_PATHS))
+        path = self.wt / (lib + '.inputs')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text.encode())
+        return path
+
+    def at(self, rel, when):
+        os.utime(self.wt / rel, (when, when))
+
+    def commit(self, rel, text, message='change'):
+        (self.wt / rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.wt / rel).write_text(text)
+        git(self.wt, 'add', rel)
+        git(self.wt, 'commit', '-q', '-m', message)
+
+    def core_line(self, lines):
+        return [l for l in lines if 'bin/core.lib' in l][0]
+
+    def test_core_library_against_its_stamp(self):
         self.put('bin/module.dll')
-        self.put('bin/core.lib')
-        args = ['-CheckBuild', '-ModuleLibrary', 'bin/module.dll', '-CoreLibrary', 'bin/core.lib']
-        rc, lines, out = self.run_ps(*args)
+        self.put('bin/core.lib', old=True)
+        rc, lines, out = self.run_ps(*self.BUILD)              # no stamp: a checkout built before the stamp existed
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'UNKNOWN'])
+        self.assertIn('no input stamp', self.core_line(lines))
+        self.assertIn('cmake --build build --config Release', self.core_line(lines))
+        self.assertIn('unknown=1', out)
+        self.stamp()
+        rc, lines, out = self.run_ps(*self.BUILD)
         self.assertEqual(rc, 0, out)
         self.assertLines(lines, 'build', ['ok', 'ok'])
-        self.put('bin/core.lib', old=True)
-        rc, lines, out = self.run_ps(*args)
+        # The #228 case: CMakeLists.txt changes in a way the library does not depend on; the build runs, rebuilds nothing
+        # and rewrites the stamp. The library stays older than CMakeLists.txt and its commit, and is still fresh.
+        self.commit('CMakeLists.txt', 'invented, test registration moved\n')
+        self.stamp()
+        self.assertLess((self.wt / 'bin/core.lib').stat().st_mtime, (self.wt / 'CMakeLists.txt').stat().st_mtime)
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'ok'])
+        # A real input changes and is committed, with no build after it: stale, and the file is named.
+        self.commit('src/core.cpp', 'invented, edited\n')
+        rc, lines, out = self.run_ps(*self.BUILD)
         self.assertEqual(rc, 1, out)
         self.assertLines(lines, 'build', ['ok', 'FAIL'])
-        (self.wt / 'bin' / 'module.dll').unlink()
-        rc, lines, out = self.run_ps(*args)
+        self.assertIn('src/core.cpp', self.core_line(lines))
+        # Built after that; then the input changes again, not committed, with a file time older than the library: stale.
+        self.stamp()
+        (self.wt / 'src' / 'core.cpp').write_text('invented, edited again\n')
+        self.at('src/core.cpp', OLD)
+        rc, lines, out = self.run_ps(*self.BUILD)
         self.assertEqual(rc, 1, out)
-        self.assertLines(lines, 'build', ['FAIL', 'FAIL'])
+        self.assertLines(lines, 'build', ['ok', 'FAIL'])
+        self.assertIn('src/core.cpp', self.core_line(lines))
+        # Built with that uncommitted change: the stamp cannot say what was built, so unknown, never ok.
+        self.stamp()
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'UNKNOWN'])
+        self.assertIn('uncommitted', self.core_line(lines))
+
+    def test_core_stamp_from_another_commit(self):
         self.put('bin/module.dll')
-        self.put('bin/core.lib')
-        self.put('src/new_file.cpp')                            # untracked source: the build may not hold it
-        rc, lines, out = self.run_ps(*args)
+        self.put('bin/core.lib', old=True)
+        stamp = self.stamp()
+        built = self.git_out('rev-parse', 'HEAD').strip()
+        start = self.git_out('rev-parse', '--abbrev-ref', 'HEAD').strip()
+        self.commit('docs/notes.md', 'invented\n', 'docs only')   # not an input: the commit differs, the inputs do not
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'ok'])
+        self.assertIn(built[:7], self.core_line(lines))
+        mine = stamp.read_bytes()
+        git(self.wt, 'checkout', '-q', '-b', 'other', built)     # another branch, where an input differs
+        self.commit('third_party/lzokay/lzokay.cpp', 'invented\n')
+        other = self.stamp().read_bytes()                       # the library was last built there
+        git(self.wt, 'checkout', '-q', start)
+        stamp.write_bytes(other)
+        rc, lines, out = self.run_ps(*self.BUILD)
         self.assertEqual(rc, 1, out)
-        self.assertLines(lines, 'build', ['FAIL', 'ok', 'ok'])
-        self.assertIn('src/new_file.cpp', out)
+        self.assertLines(lines, 'build', ['ok', 'FAIL'])
+        self.assertIn('third_party/lzokay/lzokay.cpp', self.core_line(lines))
+        stamp.write_bytes(mine)
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'ok'])
+
+    def test_core_stamp_that_cannot_be_trusted(self):
+        self.put('bin/module.dll')
+        self.put('bin/core.lib', old=True)
+        stamp = self.stamp()
+        good = stamp.read_bytes()
+        for damaged in (b'', b'ow-build-stamp 2\n' + good.split(b'\n', 1)[1], good.replace(b'paths src ', b'paths ')):
+            stamp.write_bytes(damaged)
+            rc, lines, out = self.run_ps(*self.BUILD)
+            self.assertEqual(rc, 0, out)
+            self.assertLines(lines, 'build', ['ok', 'UNKNOWN'])
+            self.assertIn('damaged or from another version', self.core_line(lines))
+        stamp.write_bytes(good)
+        os.utime(stamp, (OLD - 10, OLD - 10))                   # the library was built after the stamp, without the stamp step
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'UNKNOWN'])
+        self.assertIn('newer than its input stamp', self.core_line(lines))
+        (self.wt / 'bin' / 'core.lib').unlink()
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 1, out)
+        self.assertLines(lines, 'build', ['ok', 'FAIL'])
+        self.assertIn('bin/core.lib is missing', out)
+
+    def test_module_against_the_files_it_is_built_from(self):
+        now = datetime.datetime.now().timestamp()
+        for rel in ('host/ue5/OpenWillow/Source/OpenWillow/OpenWillow.Build.cs', 'host/ue5/OpenWillow/OpenWillow.uproject',
+                    'src/core.hpp', 'bin/core.lib', 'bin/ow-lzokay.lib'):
+            self.put(rel)
+        git(self.wt, 'add', '.')
+        git(self.wt, 'commit', '-q', '-m', 'module inputs')
+        for p in [p for p in self.wt.rglob('*') if p.is_file() and '.git' not in p.parts]:
+            os.utime(p, (now - 100, now - 100))
+        self.put('bin/module.dll')
+        self.stamp()
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'ok'])
+        # The #228 case for the module: CMakeLists.txt and a .cpp under src are not what the DLL is built from.
+        self.at('CMakeLists.txt', now + 50)
+        self.at('src/core.cpp', now + 50)
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'ok'])
+        for rel in ('host/ue5/OpenWillow/Source/OpenWillow/Thing.cpp', 'src/core.hpp', 'bin/ow-lzokay.lib'):
+            self.at(rel, now + 50)
+            rc, lines, out = self.run_ps(*self.BUILD)
+            self.assertEqual(rc, 1, out)
+            self.assertLines(lines, 'build', ['FAIL', 'ok'])
+            self.assertIn(rel.replace('/', '\\'), lines[0])
+            self.at(rel, now - 100)
+        self.put('host/ue5/OpenWillow/Source/OpenWillow/New.cpp')   # untracked: the build tool compiles it all the same
+        self.at('host/ue5/OpenWillow/Source/OpenWillow/New.cpp', now + 50)
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 1, out)
+        self.assertLines(lines, 'build', ['FAIL', 'ok'])
+        self.at('host/ue5/OpenWillow/Source/OpenWillow/New.cpp', now - 100)
+        for rel in ('host/ue5/OpenWillow/Source/OpenWillow/OpenWillow.Build.cs', 'host/ue5/OpenWillow/OpenWillow.uproject'):
+            self.at(rel, now + 50)                              # a build description: may or may not change the DLL
+            rc, lines, out = self.run_ps(*self.BUILD)
+            self.assertEqual(rc, 0, out)
+            self.assertLines(lines, 'build', ['UNKNOWN', 'ok'])
+            self.at(rel, now - 100)
+        (self.wt / 'bin' / 'module.dll').unlink()
+        rc, lines, out = self.run_ps(*self.BUILD)
+        self.assertEqual(rc, 1, out)
+        self.assertLines(lines, 'build', ['FAIL', 'ok'])
+
+    @unittest.skipUnless(CMAKE, 'no cmake found (PATH, or the Visual Studio Build Tools copy)')
+    def test_stamp_writer_matches(self):
+        # The stamp script in CMakeLists.txt, which the build runs, and stamp() above write the same bytes. It is taken from
+        # between the brackets, as configure does, and run in script mode only (-P): it runs git and writes the one file; no
+        # configure, no build.
+        cmakelists = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
+        script = self.base / 'ow_build_stamp.cmake'
+        script.write_text(cmakelists.split('ow_build_stamp.cmake" [==[\n', 1)[1].split(']==]', 1)[0])
+        (self.wt / 'src' / 'core.cpp').write_text('dirty\n')    # so the dirty count is not 0
+        out = self.base / 'from cmake.inputs'
+        writer = [CMAKE, f'-DGIT={shutil.which("git")}', f'-DOUT={out}', '-P', str(script)]
+        subprocess.run(writer[:2] + [f'-DREPO={self.wt}'] + writer[2:], check=True, capture_output=True, timeout=120)
+        # CMake's file(WRITE) ends lines with CRLF on Windows; the preflight reads either.
+        written = out.read_bytes().replace(b'\r\n', b'\n')
+        self.assertEqual(written, self.stamp().read_bytes())
+        self.assertIn(b'\ndirty 1\n', written)
+        self.assertFalse((self.base / 'from cmake.inputs.tmp').exists())
+        bare = self.base / 'no repo'
+        bare.mkdir()
+        subprocess.run(writer[:2] + [f'-DREPO={bare}'] + writer[2:], check=True, capture_output=True, timeout=120,
+                       env=dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.base)))
+        self.assertFalse(out.exists())                          # git failed: the old stamp is gone and none is written
 
     def test_engine(self):
         engine = self.base / 'Invented UE'
@@ -262,11 +432,14 @@ class Cases:
         os.utime(tracked, (later, later))
         before = (index.read_bytes(), index.stat().st_mtime_ns)
         self.put('local/fresh/one.json')
+        self.put('bin/core.lib', old=True)
         self.put('bin/module.dll')
-        self.put('bin/core.lib')
-        rc, _, out = self.run_ps('-Generators', 'local/fresh=tools/make_data.py', '-CheckBuild',
-                                 '-ModuleLibrary', 'bin/module.dll', '-CoreLibrary', 'bin/core.lib')
+        self.stamp()                                            # its git calls use --no-optional-locks too
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), before)
+        rc, lines, out = self.run_ps('-Generators', 'local/fresh=tools/make_data.py', '-CheckBuild',
+                                     '-ModuleLibrary', 'bin/module.dll', '-CoreLibrary', 'bin/core.lib')
         self.assertEqual(rc, 0, out)
+        self.assertLines(lines, 'build', ['ok', 'ok'])          # same bytes, new time: the stamp's comparison still matches
         self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), before)
         self.assertFalse((self.wt / '.git' / 'index.lock').exists())
         git(self.wt, 'status', '--porcelain')
