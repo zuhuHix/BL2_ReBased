@@ -751,11 +751,13 @@ This is the vertical slice; once met, broad map and character coverage
 
 Gate progress (2026-11-11; "in the host" means the UE5 build, with labelled stand-ins; none of it is parity).
 The Phase 4 gate is not claimed as met. `tools/test_slice_gate.ps1` runs the whole loop in one session; its forced
-variants have passed 14 of 14 links in every recorded run since 2026-11-07, on main or on a batch's candidate
+variants have passed 14 of 14 links in every recorded run since their first run on main (7eee9ee, 2026-11-07), on
+main or on a batch's candidate; the later runs are as the hub's log reported them
 ([slice gate](docs/verification/SLICE_GATE.md)). Its `-Unforced` variant takes four of the test's stand-ins away:
 the gun drop comes from the host's own loot roll, the Phaselock point is bought on the skills page, the mission is
 accepted and turned in on the mission page, and Maya is downed by the range's enemies. Teleports and the fight's
-fixtures (the hold on fire, one shot at a time, the ammo refill, the decoy drops) stay. In 8 unforced runs on
+fixtures (the hold on fire, one shot at a time, shots that ignore the gun's fire rate, the ammo refill, the decoy
+drops) stay. In 8 unforced runs on
 2026-11-11, 5 passed all 14 links and 109 of 112 link attempts passed; the three failures were two pickups with an
 enemy standing in the view line and one Phaselock cast refused because Maya was already down.
 - Spawn: Maya spawns in Sanctuary with first-person arms, collision and a stand-in start shield (a slice choice).
@@ -766,12 +768,12 @@ enemy standing in the view line and one Phaselock cast refused because Maya was 
   kills. The pickup card and the use key take the aimed drop.
 - Equip: the gate equips through the call the inventory page uses. The page's own equip is covered by the
   inventory suite, on a bounded item set.
-- Phaselock: bought on the skills page and cast on a range enemy in the gate. Its lift bob and its cast gates
-  (during a reload, during a weapon swap) are confirmed in game. A critic agent scored the Phaselock record's
-  captures 5.1 to 5.7 of 10, not parity.
+- Phaselock: bought on the skills page and cast on a range enemy in the gate. Confirmed in game: its lift bob, that
+  it casts during a reload (and aborts the reload), and that it is refused during a weapon swap. A critic agent
+  scored the Phaselock record's captures 5.1 to 5.7 of 10, not parity.
 - One mission: the Fire mission runs from accept to turn-in in the gate and in the quest suite, and its event
-  order in the VM was compared with one live trace (45 events matched, 2 out of order, 4 extra). It gives XP only
-  (maintainer decision, 2026-10-07).
+  order in the VM was compared with one live trace (45 events matched, 2 out of order, 4 extra). It gives XP only,
+  as the stock data does (a host loot stand-in was removed by maintainer decision, 2026-10-07).
 - Die and respawn: Maya is downed by the range's enemies, bleeds out (12 s for a first down) and respawns at the
   decoded station with full health. Which station the game picks, the steps of the respawn wait and what is
   refilled are read from the game's script but not yet confirmed in a live session.
@@ -781,7 +783,8 @@ Records: [arms and held guns](docs/verification/WEAPON_VISUALS.md), [walking](CO
 [death](docs/verification/COMBAT_DEATH.md), [melee](docs/verification/COMBAT_MELEE.md),
 [loot](docs/verification/COMBAT_LOOT.md), [inventory](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md),
 [Phaselock](docs/verification/PHASELOCK_STOCK_DATA.md), [mission](docs/verification/SANCTUARY_RPG_MISSION.md),
-[golden trace](docs/verification/FIRE_MISSION_GOLDEN_TRACE.md), [down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md).
+[golden trace](docs/verification/FIRE_MISSION_GOLDEN_TRACE.md), [down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md),
+[real-game reads](docs/verification/REALGAME_GROUND_TRUTH.md).
 
 ---
 
