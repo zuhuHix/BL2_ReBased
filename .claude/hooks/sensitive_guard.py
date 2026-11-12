@@ -68,8 +68,8 @@ for pat, why in EDIT_THEN_WARN.items():
     if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(base, pat):
         out("allow",
             f"SENSITIVE AREA (edit allowed): '{rel}' - {why}. Never loosen a bounds check to make "
-            "something work, keep ctest + tools/verify_packages.py green, add a DECISIONS.md entry "
-            "if parsing behavior changes, and WARN THE MAINTAINER in the final message that this "
+            "something work, keep ctest + tools/verify_packages.py green, add a decision record "
+            "(DECISIONS.md says where) if parsing behavior changes, and WARN THE MAINTAINER in the final message that this "
             "file was touched (what changed, what is verified vs UNVERIFIED).",
             f"Sensitive file edited: {rel} ({why}); report it at the end.")
 

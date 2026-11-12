@@ -62,7 +62,8 @@ entries and one message per group left out.
   added); baseline 50 pass / 0 fail.
 
 ## Records
-- `python tools/decisions_index.py --check` after moving decisions between files.
+- `python tools/decisions_index.py --check --baseline origin/main` after adding, editing or moving decisions (with the
+  default baseline, `HEAD`, it passes trivially on committed work). Add `--at HEAD` to check the committed blobs.
 
 ## Tests outside ctest
 Since 2026-11-11 every `tests/*_test.py` that passes in a clean export (no `local/`, no build, no installed game, no network) under
