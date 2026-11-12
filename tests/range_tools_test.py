@@ -164,6 +164,7 @@ class PrepareRangeTest(unittest.TestCase):
             baby, adult = manifest['kinds']['bullymong_baby'], manifest['kinds']['bullymong_adult']
             self.assertEqual((baby['mesh'], baby['collision_radius'], baby['collision_height']), ('/Game/M.M', 64.0, 48.0))
             self.assertEqual((adult['collision_radius'], adult['collision_height']), (130.0, 70.0))
+            self.assertEqual((adult['run_speed'], baby['run_speed'], manifest['kinds']['bullymong']['run_speed']), (500.0, 300.0, 400.0))
 
     def test_spot_data_message_names_the_plaza_views(self):
         import json
@@ -274,6 +275,21 @@ class PrepareRangeTest(unittest.TestCase):
         self.assertIn('live read', entry['collision_source'])
         untouched = prepare_range.apply_observed('bullymong', {'collision_radius': 150.0, 'collision_height': 90.0})
         self.assertEqual(untouched, {'collision_radius': 150.0, 'collision_height': 90.0})
+
+    def test_run_and_walk_per_kind_and_the_regular_keeps_the_stand_in(self):
+        # Live read 2026-11-12: GroundSpeed 500 (adult, slinger) and 300 (baby), WalkingPct 0.25. The regular's chase read 375, unexplained.
+        speeds = {'bullymong_adult': (500.0, 125.0), 'bullymong_slinger': (500.0, 125.0), 'bullymong_baby': (300.0, 75.0)}
+        self.assertEqual(prepare_range.OBSERVED_SPEED, speeds)
+        for kind, (run, walk) in speeds.items():
+            with self.subTest(kind=kind):
+                entry = prepare_range.apply_observed(kind, prepare_range.kind_entry('Made', None, {}, 'test'))
+                self.assertEqual((entry['run_speed'], entry['walk_speed']), (run, walk))
+                self.assertEqual(walk, run * 0.25)
+        for kind in ('bullymong', 'psycho'):
+            with self.subTest(kind=kind):
+                entry = prepare_range.apply_observed(kind, prepare_range.kind_entry('Made', None, {}, 'test'))
+                self.assertEqual((entry['run_speed'], entry['walk_speed']), (400.0, 150.0))
+                self.assertNotIn('speed_source', entry)
 
     def test_kind_entry_without_assets(self):
         entry = prepare_range.kind_entry('Made Beast', None, {1: 10.0}, 'test')

@@ -69,6 +69,12 @@ KIND_ASSETS = {"bullymong": "Bullymong", "bullymong_adult": "Bullymong", "bullym
 # height 48 on every baby pawn read in session 2 of 2026-11-12 (Three Horns Divide, Maya level 8, six den recordings); its 189 swing calls
 # all came at 106.0 uu or more from Maya, which is 64 plus her radius 42 (standing). The mesh stays the borrowed adult's (host stand-in).
 OBSERVED_COLLISION = {"bullymong_baby": (64.0, 48.0)}
+# Chase run and patrol walk per kind (uu/s): GroundSpeed and GroundSpeed x WalkingPct (0.25) of the kind's pawn, read live in every den
+# recording of session 2 of 2026-11-12 (GroundSpeed 500 for the adult and the slinger, 300 for the baby). The slinger's moving medians were
+# 500 in 4 of 4 trials, the adult's in 6 of 11 (leaps and knockback in the rest), the baby's 300 in 4 of 8. The regular bullymong is not
+# here: its field also reads 500, but its measured chase median was 375 in 4 of 6 trials, unexplained (UNVERIFIED), so it keeps the
+# stand-ins of kind_entry (run 400, walk 150), as does the psycho (no read).
+OBSERVED_SPEED = {"bullymong_adult": (500.0, 125.0), "bullymong_slinger": (500.0, 125.0), "bullymong_baby": (300.0, 75.0)}
 # Extra spawns of kinds that join the range only once their own mesh is imported (an engine-shape psycho would prove nothing).
 SPAWNS_WITH_ASSET = [{"kind": "psycho", "count": 1}]
 # The range's default population (host choice).
@@ -162,6 +168,9 @@ def apply_observed(name, entry):
     if name in OBSERVED_COLLISION:
         entry["collision_radius"], entry["collision_height"] = OBSERVED_COLLISION[name]
         entry["collision_source"] = "live read 2026-11-12 (own cylinder; the asset is borrowed)"
+    if name in OBSERVED_SPEED:
+        entry["run_speed"], entry["walk_speed"] = OBSERVED_SPEED[name]
+        entry["speed_source"] = "live read 2026-11-12 (GroundSpeed, WalkingPct 0.25)"
     return entry
 
 
