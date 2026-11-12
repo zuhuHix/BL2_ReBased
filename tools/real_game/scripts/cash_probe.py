@@ -23,6 +23,15 @@ except ImportError:   # tests/den_probe_test.py exercises the arithmetic without
     unrealsdk = None
 
 CP = globals().get("CP") or {"hooks": [], "real": [], "sweeps": [], "items": [], "definition": None, "kills": 0}
+# The readings loop (session 2 analysis, A2): a pickup that gave no reading is skipped from then on, not retried; each try notes whether the
+# touch event fired and the pickup's location and physics fields; deaths are counted apart from kill attempts.
+CP.setdefault("skip", [])
+CP.setdefault("touches", 0)
+CP.setdefault("deaths", 0)
+CP_TOUCH = "WillowGame.WillowPlayerController:TouchedPickupable"
+CP_TOUCH_ID = "ow_cp_touch"
+# The pickup's own fields recorded per try: where it is and whether it can be touched. Fields only: a name that is a function is skipped.
+CP_PICKUP_FIELDS = ("Physics", "bCollideActors", "bBlockActors", "bHidden", "bDeleteMe")
 # Names to try for the item's own value: which of these the class has is itself a result, so all are recorded.
 VALUE_CALLS = ("GetMonetaryValue", "GetMonetaryValueAfterModifiers")
 VALUE_FIELDS = ("MonetaryValue",)
@@ -55,11 +64,47 @@ def cp_start():
         except Exception:
             pass
     CP["immune_paths"] = immune_paths(_declared_paths)
+    # The touch counter: an observer that counts the calls and reads nothing, never blocks. A path this build lacks is reported, not fatal.
+    try:
+        unrealsdk.find_object("Function", CP_TOUCH)
+        if not has_hook(CP_TOUCH, Type.PRE, CP_TOUCH_ID):
+            add_hook(CP_TOUCH, Type.PRE, CP_TOUCH_ID, _count_touch)
+            CP["hooks"].append((CP_TOUCH, Type.PRE, CP_TOUCH_ID))
+        CP["touch_hook"] = "installed"
+    except Exception as error:
+        CP["touch_hook"] = "not installed: " + repr(error)[:80]
     for path in CP["immune_paths"]:
         if not has_hook(path, Type.PRE, CP_IMMUNE_ID):
             add_hook(path, Type.PRE, CP_IMMUNE_ID, hook)
             CP["hooks"].append((path, Type.PRE, CP_IMMUNE_ID))
     return {"immune": cp_immune(), "paths": CP["immune_paths"], "mods_off": cb_mods_off()}
+
+
+def _count_touch(obj, args, ret, func):
+    CP["touches"] = CP.get("touches", 0) + 1
+
+
+def _fields(obj, names):
+    """Plain fields of an object; a name that is a function is skipped, never called."""
+    out = {}
+    for name in names:
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if not callable(value):
+            out[name] = value if isinstance(value, (bool, int, float, str)) or value is None else str(value)
+    return out
+
+
+def _where(pk):
+    """A pickup's location and its touch-related fields, by fields only."""
+    try:
+        loc = pk.Location
+        at = [round(loc.X), round(loc.Y), round(loc.Z)]
+    except Exception:
+        at = None
+    return dict(_fields(pk, CP_PICKUP_FIELDS), location=at)
 
 
 def cp_immune_off():
@@ -187,23 +232,34 @@ def cp_target(radius=6000.0):
 
 
 def cp_ready_kill(name):
-    """Stand 500 uu from the enemy, aim at it and leave it one hit point: the caller's real shot then runs the stock death and loot."""
+    """Stand 500 uu from the enemy, aim at it and leave it one hit point: the caller's real shot then runs the stock death and loot.
+    CP["kills"] counts these attempts; cp_died says whether the attempt killed."""
     cb_place(name, 500.0, 180.0)
     _find_ai(name).SetHealth(1.0)
     CP["kills"] += 1
     return name
 
 
+def cp_died(name):
+    """Whether the enemy of the last kill attempt died: gone, being destroyed or marked dead, by its fields only. Counted in CP["deaths"]."""
+    pawn = _find_ai(name)
+    died = pawn is None or bool(_fields(pawn, ("bDeleteMe",)).get("bDeleteMe")) or bool(_fields(pawn, ("bPlayedDeath",)).get("bPlayedDeath"))
+    if died:
+        CP["deaths"] = CP.get("deaths", 0) + 1
+    return died
+
+
 def cp_collect_start():
-    """Stand on the nearest money pickup. Returns the state the matching cp_collect_end compares with, or None without a pickup."""
-    items = _money_pickups()
+    """Stand on the nearest money pickup not yet skipped. Returns the state the matching cp_collect_end compares with, or None without one."""
+    items = [i for i in _money_pickups() if i[0].Name not in CP["skip"]]
     if not items:
         return None
     me = get_pc().Pawn.Location
     items.sort(key=lambda i: math.dist((me.X, me.Y, me.Z), (i[0].Location.X, i[0].Location.Y, i[0].Location.Z)))
     pk, inv, balance = items[0]
     CP["pending"] = {"before": cp_cash(), "target": _item_row(pk, inv, balance), "present": [i[0].Name for i in items],
-                     "levels": {i[0].Name: _g(i[1], "ExpLevel") for i in items}}
+                     "levels": {i[0].Name: _g(i[1], "ExpLevel") for i in items}, "touches_before": CP.get("touches", 0),
+                     "where_before": _where(pk)}
     loc = pk.Location
     get_pc().Pawn.Location = unrealsdk.make_struct("Vector", X=loc.X, Y=loc.Y, Z=loc.Z + 60.0)
     return CP["pending"]["target"]["name"]
@@ -220,6 +276,15 @@ def cp_collect_end():
     row = {"cash_before": pending["before"], "cash_after": after, "delta": after - pending["before"], "gone": gone,
            "gone_levels": [pending["levels"].get(n) for n in gone], "target": pending["target"], "player_level": cp_level()}
     row["value_per_item"] = value_per_item(row["delta"], gone, pending["target"]["name"])
+    # Why a try gave no reading: whether the touch event fired, and where the pickup was before and is now (fields only).
+    target = pending["target"]["name"]
+    row["touches"] = CP.get("touches", 0) - pending.get("touches_before", 0)
+    row["where_before"] = pending.get("where_before")
+    left = [i[0] for i in _money_pickups() if i[0].Name == target]
+    row["where_after"] = _where(left[0]) if left else None
+    if row["value_per_item"] is None and target not in CP["skip"]:
+        CP["skip"].append(target)   # not retried: the next try takes another pickup
+        row["skipped_from_now"] = True
     CP["real"].append(row)
     CP["pending"] = None
     return row
@@ -261,10 +326,11 @@ def cp_definition():
 
 
 def cp_dump(name="cash.json"):
-    summary = {"kills": CP["kills"], "player_level": cp_level(), "real": CP["real"], "items": CP["items"], "sweeps": CP["sweeps"],
-               "definition": CP["definition"]}
+    summary = {"kills": CP["kills"], "deaths": CP.get("deaths", 0), "player_level": cp_level(), "real": CP["real"], "items": CP["items"],
+               "sweeps": CP["sweeps"], "definition": CP["definition"], "skipped": CP["skip"], "touch_hook": CP.get("touch_hook")}
     with open(RG_OUT + "/" + name, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=1, default=str)
     single = [r for r in CP["real"] if r["value_per_item"] is not None]
-    return {"kills": CP["kills"], "collected": len(CP["real"]), "single_item_rows": len(single),
+    return {"kills": CP["kills"], "deaths": CP.get("deaths", 0), "collected": len(CP["real"]), "single_item_rows": len(single),
+            "skipped": len(CP["skip"]), "touch_hook": CP.get("touch_hook"),
             "values_by_level": sorted({(r["gone_levels"][0], r["value_per_item"]) for r in single}, key=str)}

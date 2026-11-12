@@ -111,7 +111,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_level*' { return '8' }
         '*cp_cash*' { return '100' }
-        '*cp_collect_start*' { return $(if ($scenario -eq 'no_money') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills') { 'None' } else { 'WillowPickup_1' }) }
         '*cp_collect_end*' {
             $script:collects++
             if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
@@ -120,7 +120,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
-        '*cp_target*' { return 'None' }
+        '*cp_target*' { return $(if ($scenario -eq 'kills') { 'WillowAIPawn_2' } else { 'None' }) }
+        '*cp_died*' { $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
         '*cp_dump*' {
             if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
             $real = @(for ($i = 0; $i -lt $script:collects; $i++) { @{ value_per_item = $(if ($i -lt $script:singles) { 3 } else { $null }) } })
@@ -325,7 +326,7 @@ class CashCaptureTest(unittest.TestCase):
 
     def test_a_pickup_that_cannot_be_collected_stops_the_loop(self):
         done, session = self.run_capture('never_single')
-        self.assertIn('6 collects in a row', session['stopped'])
+        self.assertIn('6 distinct pickups in a row', session['stopped'])
         self.assertEqual(session['status'], 'incomplete: readings')
 
     def test_a_failed_travel_is_not_completed(self):
@@ -756,6 +757,45 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertEqual(session['den_down_replacements'], 1)
         self.assertIn('not_up', session['den_down_replace_results'][0])   # logged, no placement
         self.assertEqual(session['den_down_reason'], 'injured_flag')   # the next poll saw the down
+
+
+class ReadingsLoopTest(unittest.TestCase):
+    """The readings loop (session 2 analysis, A2): deaths are counted apart from kill attempts, and a pickup that gave no reading is
+    skipped from then on instead of retried. Invented values."""
+    run_capture = CashCaptureTest.run_capture
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+
+    def test_deaths_are_counted_apart_from_kill_attempts(self):
+        done, session = self.run_capture('kills', ['-MaxKills', '4'])
+        self.assertEqual(session['kill_attempts'], 4)
+        self.assertEqual(session['deaths'], 2)   # every other attempt killed
+
+    def test_a_pickup_that_gave_no_reading_is_skipped_not_retried(self):
+        class Obj:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+        ns = {}
+        path = ROOT / 'tools/real_game/scripts/cash_probe.py'
+        exec(compile(path.read_text(encoding='utf-8'), str(path), 'exec'), ns)
+        at = lambda x: Obj(X=x, Y=0.0, Z=0.0)
+        money = Obj(DefinitionData=Obj(BalanceDefinition='GD_Invented.Currency_Money_Little'), ExpLevel=7, GameStage=7)
+        near = Obj(Name='WillowPickup_1', _path_name=lambda: 'Ice_P.TheWorld:PersistentLevel.WillowPickup_1', Location=at(100.0), Inventory=money, Physics=2, bCollideActors=True, bHidden=False, bDeleteMe=False)
+        far = Obj(Name='WillowPickup_2', _path_name=lambda: 'Ice_P.TheWorld:PersistentLevel.WillowPickup_2', Location=at(900.0), Inventory=money, Physics=2, bCollideActors=True, bHidden=False, bDeleteMe=False)
+        player = Obj(Location=at(0.0), GetExpLevel=lambda: 8)
+        ns.update(unrealsdk=Obj(find_all=lambda cls: [near, far], make_struct=lambda kind, **kw: Obj(**kw)),
+                  get_pc=lambda: Obj(Pawn=player, PlayerReplicationInfo=Obj(GetCurrencyOnHand=lambda n: 100)),
+                  _p=lambda v, depth=0: v, _g=lambda o, n, d=None: getattr(o, n, d))
+        self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_1')
+        ns['_count_touch'](None, None, None, None)   # the touch event fired, but no cash came and the pickup stayed
+        row = ns['cp_collect_end']()
+        self.assertIsNone(row['value_per_item'])
+        self.assertEqual(row['touches'], 1)
+        self.assertEqual(row['where_before']['location'], [100, 0, 0])
+        self.assertEqual(row['where_before']['Physics'], 2)
+        self.assertTrue(row['skipped_from_now'])
+        self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_2')   # the failed one is not retried
 
 
 class LoadWaitTest(unittest.TestCase):

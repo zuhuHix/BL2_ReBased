@@ -221,7 +221,7 @@ try {
     if ($WatchSmoke) { $log.groups_stage1 = Install-SliceWatchGroups 'stage1' }
 
     $deadline = (Get-Date).AddMinutes($MaxMinutes)
-    $kills = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0
+    $kills = 0; $deaths = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0; $failedPickups = 0
     while ($kills -lt $MaxKills -and $single -lt $WantItems -and (Get-Date) -lt $deadline) {
         # Money on the ground first: walk onto it.
         $name = Py 'print(cp_collect_start())'
@@ -230,9 +230,13 @@ try {
             $row = Py 'import json; print(json.dumps(cp_collect_end(), default=str))'
             $log.last_collect = $row
             "collect: $row"
-            # A pickup the walk cannot collect would be tried for ever: stop after a few tries in a row without a reading.
+            # A pickup that gave no reading is skipped from then on (cp_collect_end), so each failure is another pickup: stop after six in a
+            # row, all distinct (session 2 analysis, A2: the same pickup was retried until the loop gave up).
             if ($row -match '"value_per_item": \d') { $single++; $noReading = 0 }
-            elseif (++$noReading -ge 6) { $log.stopped = "6 collects in a row without a single-item reading"; break }
+            else {
+                $failedPickups++
+                if (++$noReading -ge 6) { $log.stopped = "6 distinct pickups in a row without a single-item reading (each skipped after its one try)"; break }
+            }
             continue
         }
         $target = Py 'print(cp_target())'
@@ -244,8 +248,9 @@ try {
         Py "print(cp_ready_kill('$target'))" | Out-Null
         Start-Sleep 1; Assert-GameForeground
         for ($shot = 0; $shot -lt 3; $shot++) { Send-Click; Start-Sleep -Milliseconds 700 }
-        $kills++
+        $kills++   # a kill attempt; whether it killed is asked next, by the enemy's fields only
         Start-Sleep 3   # the loot lands
+        if ((Py "print(cp_died('$target'))") -eq 'True') { $deaths++ }
         # The first money seen: the item's own value call at other levels, and its definition. Before any walk onto it.
         if (-not $swept -and (Py 'print(len(cp_money()))') -ne '0') {
             $log.sweep = Py 'import json; print(json.dumps(cp_sweep(), default=str))'
@@ -254,7 +259,7 @@ try {
             "sweep: $($log.sweep)"
         }
     }
-    $log.kills = $kills; $log.single_item_readings = $single
+    $log.kills = $kills; $log.kill_attempts = $kills; $log.deaths = $deaths; $log.failed_pickups = $failedPickups; $log.single_item_readings = $single
     $log.dump = Py 'import json; print(json.dumps(cp_dump(), default=str))' 60
     "dump: $($log.dump)"
     $dumpProblem = ''
