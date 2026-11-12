@@ -1491,6 +1491,47 @@ honours that folder only in the explicit test mode (`OW_TEST_PENDING_DIR` under 
 `OW_TEST_MODE=synthetic-real-game`), and in that mode only on save, game and driver folders under Temp. Either variable
 alone, or test mode pointed at real folders, refuses to start: a real run must set neither.
 
+### Slice-session switches (2026-11-12)
+
+Four captures (`cash_capture`, `mission_screen_capture`, `phaselock_integrity_capture`, `audio_events_capture`) take extra
+switches for the slice capture sessions. Each is off by default, so a run without them is unchanged.
+
+- **`-WatchSpec <spec.json>`**: a read-only recorder (`scripts/slice_watch.py`, helpers in `slice_watch.ps1`) runs beside the
+  capture. It hooks the functions the spec names with observers that never block, and records per-frame rows, labelled snapshots
+  and enemy reads to `<set>/watch.jsonl` under ignored `local/realgame/`. It sets nothing and sends no input. After two game
+  crashes on 2026-11-11 it was rewritten to call no native function on any object a scan returns: AI pawns and their pools are
+  read by fields only, only within a radius, and only after the map has settled; hooked functions are read by their parameters
+  only, and only when the parameter layout fits; each read kind that fails once is switched off for the run. Hooks can be put in
+  groups installed at the stage where they can fire, each behind a flushed marker line, so a crash names its last step. Every
+  stream and the total size are capped, and free disk is checked first. A watch that fails to start never stops the capture;
+  only its own `watch` stage fails.
+- **The check** (`slice_watch_check.py <watch.jsonl> --spec <spec.json>`, or `--validate-spec <spec.json>`) says whether a
+  recording is usable before the game closes. It checks shape only (the end line is there, hooks fired, order, wide gap bands,
+  labelled reads taken in time, nothing dropped by a cap, named mods off) and prints counts and pass/fail, never a recorded value.
+- **`-SdkModsOff [-SdkModsExpected a,b]`**: turns off every enabled SDK mod setting for the run (`Set-SdkModsOff`). It runs only
+  after the backup and the pending record cover `sdk_mods/settings`, and right after the launch flag is set, so the capture's
+  unchanged finalizer restores the settings from the verified backup even when the install or launch fails or the write stops half
+  way. With `-SdkModsExpected`, any other set of enabled settings is refused before anything is written. `cash_capture` also stops
+  before its first kill if a loot mod still answers in memory.
+- **`cash_capture -DenDown`**: one more den trial with the run's own immunity hook removed (checked path by path), so the pack downs
+  Maya with no input and she bleeds out and respawns. While she stays up and unhit for `-ReplaceAfterSeconds` (10), she is placed at
+  the pack again, at most `-MaxReplacements` (4) times inside `-DownSeconds` (150), and never once a down was seen. The snapshot is
+  labelled by what fired. `-WatchSmoke` is the smoke item: one deliberately early snapshot and one settle wait, reads only.
+- **Bounded load wait** (`Wait-PlayerPawn`, `-MenuWaitSeconds` 240, `-LoadWaitSeconds` 240): while the game is still on the menu map
+  (its online session) the capture reads every 5 s, then gives the load a bounded time. Reads only; a failure names the wait that
+  ran out.
+- **Driver lost**: one condition shared by the helpers and every stage. After a reply that never came, nothing more is sent to the
+  driver, the remaining stages are skipped, and the run fails. Each stage is stamped to `stages-<run>.log` before its risky command.
+- **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
+  window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
+  held input is never completed.
+
+Tests (no game, invented objects): `tests/slice_watch_test.py` (in ctest as `py-slice_watch`) runs the recorder against a stand-in
+SDK and pins that nothing is called on a scanned template, dying pawn or pool, that locals are never read, that stop removes every
+hook, and the checker's rules. `tests/cash_capture_test.py` pins the settings rollback (failed install, failed launch after mods off,
+partial write, unexpected mod set), the den-down re-placement limits and the driver-lost rule. `tests/real_game_pending_test.py`
+pins the input releases. Runs against the game: `docs/verification/REALGAME_GROUND_TRUTH.md`, "Slice capture sessions".
+
 ## Sanctuary ambient NPCs (host, behind a flag)
 
 Off by default. `-owambient=<manifest>` (or `OPENWILLOW_AMBIENT`) spawns the town's citizens and runs the stock perch

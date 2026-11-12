@@ -364,3 +364,24 @@ Phaselock cast. The full record is [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.
 Also observed: **a level-up resets the action-skill cooldown to 0 in the same call** (at the cooldown's maximum and during the drain). The 4 s
 shield boost and the 30 s weapon-damage scale were seen again. All 60 hashed files (saves, config, the SDK settings, Sanity Saver's private
 backups) match after the session. The one file the Sanity Saver mod rewrote at load was restored from the backup.
+
+## Slice capture sessions (2026-11-12): the capture tools' safety
+
+AI-assisted (Claude Code). What these runs show about the tools, not about the game: the switches are described in
+`docs/TOOLING.md`, "Slice-session switches". The private reports stay under ignored `local/`; this section holds counts only.
+
+- **2026-11-11:** two watch items of that night's session crashed the game, each about two seconds after the watch's first pawn
+  read. The watch was then rewritten to call nothing on scanned objects (the commits from "slice_watch: safe by construction" on
+  tell how). Which of the candidate causes it was is not proven: no crash dump was read.
+- **2026-11-12, two unattended sessions at commit a627b82** (the unpublished original of this change, same tool files), against
+  the maintainer's own installed game, under the standing word of that day: session 2 ran 7 item runs (the smoke item, which
+  passed, then six captures, one of them a rerun), session 1 ran 2. **0 game crashes and 0 crash files in all 9.** After every
+  item the saves, the config, the SDK settings and the mods list were compared with the state before and were identical, and the
+  pending record was removed after its tree-hash check; no manual recovery was needed. The load wait ended on its first read
+  every time (45 s after the menu's Enter), so its longer bounds were not exercised.
+- Not every capture stage passed: the cash items' `readings` stage failed in each run, and three watch checks said NOT USABLE
+  (the first den-down run, whose rerun with a longer down window was usable, and two Phaselock items on the frames check). What
+  these items were meant to measure stays `UNVERIFIED`.
+- Hooks installed but never fired in these sessions (the watch check's "exercised" line lists them) are untested in the game.
+- **Outside what the tools restore:** Steam Cloud. The runs checked beforehand that the cloud was quiet; the tools neither save
+  nor restore its state.
