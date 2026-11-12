@@ -77,6 +77,8 @@ foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   set_tests_properties(py-${ow_test} PROPERTIES TIMEOUT 120)
 endforeach()
+# preflight runs every case under Windows PowerShell 5.1 and under pwsh (about 50 s on the zuhu desktop).
+set_tests_properties(py-preflight PROPERTIES TIMEOUT 300)
 
 # Tests that need Node or numpy (lane ci-test-deps, 2026-11-11). CI installs both (.github/workflows/ci.yml). Elsewhere a group
 # is registered only when configure finds its tool, and configure says so when it does not, so a machine without Node or numpy

@@ -4,7 +4,8 @@ AI-assisted (Claude Opus 5.5), 2026-11-12. Synthetic: no editor and no script is
 (System.Management.Automation.Language.Parser) and evaluates only the default expression of its -Engine parameter,
 once with OPENWILLOW_UE pointing at an invented folder and once with it unset. Parsing launches nothing, unlike running
 a script up to its "UnrealEditor.exe not found" stop, which would first dot-source helpers and, in some scripts, take the
-run lock or start a page server. Windows PowerShell or pwsh needed; the static checks run without it.
+run lock or start a page server. It runs under Windows PowerShell 5.1 and under pwsh, each when present; the static
+checks run without either.
 """
 import json
 import os
@@ -14,7 +15,8 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-POWERSHELL = shutil.which('pwsh') or shutil.which('powershell')
+# Both shells, each when present: the suites run under Windows PowerShell 5.1.
+SHELLS = {n: p for n, p in (('powershell', shutil.which('powershell')), ('pwsh', shutil.which('pwsh'))) if p}
 DEFAULT = r'C:\Program Files\Epic Games\UE_5.8'
 INVENTED = r'X:\nowhere\Invented UE'
 # The ten scripts that used a fixed path or a mandatory -Engine until 2026-11-12, and the gate script whose expression they copy.
@@ -51,14 +53,15 @@ class StaticTest(unittest.TestCase):
                 self.assertIn(gate, [line.strip() for line in text.splitlines()])
 
 
-@unittest.skipUnless(POWERSHELL, 'PowerShell not installed')
-class DefaultTest(unittest.TestCase):
+class DefaultCases:
+    POWERSHELL = None   # set per shell by the classes at the end
+
     def defaults(self, ue):
         env = dict(os.environ)
         env.pop('OPENWILLOW_UE', None)
         if ue is not None:
             env['OPENWILLOW_UE'] = ue
-        done = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-Command', '& {' + EVAL + '}', *paths()],
+        done = subprocess.run([self.POWERSHELL, '-NoProfile', '-NonInteractive', '-Command', '& {' + EVAL + '}', *paths()],
                               capture_output=True, text=True, env=env, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout)
@@ -74,6 +77,10 @@ class DefaultTest(unittest.TestCase):
         for path, value in self.defaults(None).items():
             with self.subTest(script=Path(path).name):
                 self.assertEqual(value, DEFAULT)
+
+
+for _name, _path in SHELLS.items():
+    globals()[f'Default_{_name}'] = type(f'Default_{_name}', (DefaultCases, unittest.TestCase), {'POWERSHELL': _path})
 
 
 if __name__ == '__main__':

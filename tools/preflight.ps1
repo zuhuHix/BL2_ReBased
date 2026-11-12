@@ -4,23 +4,27 @@
 # report (stdout, and the -Report file when given). Every check is off until its parameter is passed, so a driver passes what
 # applies to one suite. One line per check; exit 0 when none failed, 1 when one or more did, 2 when the call itself is wrong.
 #
-#   -Data <path>[,<path>]               each path (relative to -Worktree, or absolute) exists
+#   -Data <path>[,<path>]               each path (relative to -Worktree, or absolute) is a file, or a folder holding a file
 #   -Generators <data>=<gen>[,...]       each data path is newer than the last commit of its tracked generator
-#                                        (git log -1 --format=%cI -- <gen>); for a folder, its newest file counts
+#                                        (git log -1 --format=%cI -- <gen>); for a folder, its newest file counts. Fails
+#                                        too when the generator has uncommitted changes (git status --porcelain)
 #   -CheckLinks                          no junction or symbolic link under <worktree>\local resolves outside the worktree
 #   -Port <n>[,<n>]                      no TCP listener holds the port
-#   -NoEditor                            no Unreal editor or commandlet process runs (the processes ue_lock.ps1 waits for)
+#   -NoEditor                            no Unreal editor or commandlet process runs (the two names ue_lock.ps1 always
+#                                        waits for; extra names a caller passes to Enter-OwUeLock -AlsoWaitFor are not checked)
 #   -CheckLock                           the machine-wide run lock (tools/ue_lock.ps1; OPENWILLOW_UE_LOCK) is absent
 #   -AlsoLock <path>[,<path>]            these extra lock files are absent
 #   -ReportHold <path>[,<path>]          a hold file is reported when present; never a failure
 #   -CheckBuild                          -ModuleLibrary and -CoreLibrary are newer than the last commit touching
-#                                        host/ue5/OpenWillow/Source, src and CMakeLists.txt
+#                                        host/ue5/OpenWillow/Source, src and CMakeLists.txt, and those have no uncommitted changes
 #   -CheckEngine                         the engine folder (-Engine; OPENWILLOW_UE or the default) holds the editor binary
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/preflight.ps1 -NoEditor -CheckLock -Port 8795 -CheckBuild -CheckEngine
 #
-# Commit times are committer dates: a rebase after the build makes the build look older than the code although nothing
-# changed. Rebuild, or read the line and decide. Test seam: -ProcessList <file> (one process name per line) replaces the live
+# Commit times are committer dates, which cuts both ways for -Generators and -CheckBuild: a rebase after the build makes the
+# build look older than the code although nothing changed, and a checkout of a commit dated before the build (a fast-forward
+# to older-dated work, a switch to another branch) makes it look fresh although the code differs. Uncommitted changes are
+# caught by their own line. Rebuild, or read the line and decide. Test seam: -ProcessList <file> (one process name per line) replaces the live
 # process list for -NoEditor, so the tests never match a real editor.
 param(
     [string]$Worktree = (Split-Path -Parent $PSScriptRoot),
@@ -56,11 +60,42 @@ function Resolve-InTree([string]$Path) {
     if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
     return [IO.Path]::GetFullPath((Join-Path $Worktree $Path))
 }
+function Invoke-Git([string[]]$GitArgs) {
+    # stdout lines and the exit code. Windows PowerShell 5.1 turns a native program's stderr into an error record, which
+    # $ErrorActionPreference = 'Stop' makes terminating even under 2>$null; 'Continue' here keeps one git message from
+    # ending the run before the report is printed.
+    $ErrorActionPreference = 'Continue'
+    $out = @(& git -C $Worktree @GitArgs 2>$null)
+    return [pscustomobject]@{ Lines = @($out | ForEach-Object { "$_" }); Code = $LASTEXITCODE }
+}
 function Get-LastCommitUtc([string[]]$Paths) {
-    # Committer time of the last commit touching any of the paths, or $null when none did.
-    $out = & git -C $Worktree log -1 --format=%cI -- @Paths 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace("$out")) { return $null }
-    return [DateTimeOffset]::Parse("$out".Trim(), [Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+    # Committer time of the last commit touching any of the paths, or $null when none did (or this is no git checkout).
+    $r = Invoke-Git (@('log', '-1', '--format=%cI', '--') + $Paths)
+    $out = ($r.Lines -join '').Trim()
+    if ($r.Code -ne 0 -or !$out) { return $null }
+    return [DateTimeOffset]::Parse($out, [Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+}
+function Get-UncommittedChange([string[]]$Paths) {
+    # git status --porcelain lines for the paths (modified, staged, untracked); one line saying git failed when it did.
+    $r = Invoke-Git (@('status', '--porcelain', '--') + $Paths)
+    if ($r.Code -ne 0) { return @("(git status failed, exit $($r.Code))") }
+    return @($r.Lines | Where-Object { $_ })
+}
+function Test-HoldsFile([string]$Path) {
+    # A file, or a folder with at least one file somewhere under it.
+    if (Test-Path -LiteralPath $Path -PathType Leaf) { return $true }
+    if (!(Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+    foreach ($f in [IO.Directory]::EnumerateFiles($Path, '*', [IO.SearchOption]::AllDirectories)) { return $true }
+    return $false
+}
+function Read-SharedText([string]$Path) {
+    # The file's text, opened so that its owner can still write or delete it meanwhile (File.ReadAllText shares read only,
+    # so a delete landing during the read would fail); $null when it cannot be read.
+    try {
+        $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $stream = New-Object IO.FileStream($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+        try { return (New-Object IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+    } catch { return $null }
 }
 function Get-NewestWriteUtc([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
@@ -85,17 +120,27 @@ if (!($checks -or $CheckLinks -or $NoEditor -or $CheckLock -or $CheckBuild -or $
     [Console]::Error.WriteLine('preflight: no check asked for (see the header of tools/preflight.ps1)'); exit 2
 }
 
+foreach ($pair in $Generators) {
+    $at = $pair.IndexOf('=')
+    if ($at -lt 1 -or $at -eq $pair.Length - 1) { [Console]::Error.WriteLine("preflight: -Generators wants <data>=<generator>, got '$pair'"); exit 2 }
+}
+
+# Every check below runs inside one try, left at the outer indentation: an error nobody expected becomes a FAIL line, and the
+# report and summary are still printed.
+try {
 foreach ($d in $Data) {
-    if (Test-Path -LiteralPath (Resolve-InTree $d)) { Out-Line 'ok' 'data' "$d exists" }
+    if (Test-HoldsFile (Resolve-InTree $d)) { Out-Line 'ok' 'data' "$d exists" }
+    elseif (Test-Path -LiteralPath (Resolve-InTree $d)) { Out-Line 'FAIL' 'data' "$d is a folder that holds no file" }
     else { Out-Line 'FAIL' 'data' "$d is missing" }
 }
 
 foreach ($pair in $Generators) {
     $at = $pair.IndexOf('=')
-    if ($at -lt 1 -or $at -eq $pair.Length - 1) { [Console]::Error.WriteLine("preflight: -Generators wants <data>=<generator>, got '$pair'"); exit 2 }
     $d = $pair.Substring(0, $at).Trim(); $gen = $pair.Substring($at + 1).Trim()
     $commit = Get-LastCommitUtc @($gen)
-    if ($null -eq $commit) { Out-Line 'FAIL' 'fresh' "$gen has no commit in $Worktree (not a tracked generator?)"; continue }
+    if ($null -eq $commit) { Out-Line 'FAIL' 'fresh' "$gen has no commit in $Worktree (not a tracked generator, or not a git checkout?)"; continue }
+    $dirty = @(Get-UncommittedChange @($gen))
+    if ($dirty.Count) { Out-Line 'FAIL' 'fresh' "git status is not clean for $gen, so its commit time says nothing about ${d}: $($dirty -join '; ')"; continue }
     $full = Resolve-InTree $d
     if (!(Test-Path -LiteralPath $full)) { Out-Line 'FAIL' 'fresh' "$d is missing (its generator $gen)"; continue }
     $written = Get-NewestWriteUtc $full
@@ -162,8 +207,11 @@ if ($CheckLock) {
     # Get-OwUeLockPath creates the lock's folder when it is missing (as every suite does); it never creates the lock.
     $lock = Get-OwUeLockPath
     if (Test-Path -LiteralPath $lock) {
-        $owner = Get-OwUeLockOwner $lock
-        $who = if ($owner) { "owner $($owner.owner), pid $($owner.pid)" } else { 'no owner fields' }
+        # Read with delete sharing, not through Get-OwUeLockOwner (File.ReadAllText): a look must never delay the owner's release.
+        $owner = $null
+        $text = Read-SharedText $lock
+        if ($text) { try { $owner = $text | ConvertFrom-Json -ErrorAction Stop } catch { $owner = $null } }
+        $who = if ($owner -and $null -ne $owner.pid) { "owner $($owner.owner), pid $($owner.pid)" } else { 'no owner fields read' }
         Out-Line 'FAIL' 'lock' "the run lock $lock is held ($who)"
     } else { Out-Line 'ok' 'lock' "the run lock $lock is free" }
 }
@@ -177,8 +225,11 @@ foreach ($h in $ReportHold) {
 }
 
 if ($CheckBuild) {
-    $commit = Get-LastCommitUtc @('host/ue5/OpenWillow/Source', 'src', 'CMakeLists.txt')
-    if ($null -eq $commit) { Out-Line 'FAIL' 'build' "no commit touches host/ue5/OpenWillow/Source, src or CMakeLists.txt in $Worktree" }
+    $code = @('host/ue5/OpenWillow/Source', 'src', 'CMakeLists.txt')
+    $commit = Get-LastCommitUtc $code
+    $dirty = @(Get-UncommittedChange $code)
+    if ($dirty.Count) { Out-Line 'FAIL' 'build' "git status is not clean for the code the build is compared with: $($dirty -join '; ')" }
+    if ($null -eq $commit) { Out-Line 'FAIL' 'build' "no commit touches host/ue5/OpenWillow/Source, src or CMakeLists.txt in $Worktree (or not a git checkout)" }
     else {
         foreach ($lib in @($ModuleLibrary, $CoreLibrary)) {
             $full = Resolve-InTree $lib
@@ -196,6 +247,9 @@ if ($CheckEngine) {
     $binary = Join-Path $Engine ('Engine\Binaries\Win64\UnrealEditor' + '.exe')
     if (Test-Path -LiteralPath $binary -PathType Leaf) { Out-Line 'ok' 'engine' "$binary exists" }
     else { Out-Line 'FAIL' 'engine' "no editor binary at $binary (set OPENWILLOW_UE or pass -Engine)" }
+}
+} catch {
+    Out-Line 'FAIL' 'preflight' "stopped by an unexpected error, later checks not run: $($_.Exception.Message)"
 }
 
 $lines | ForEach-Object { Write-Output $_ }

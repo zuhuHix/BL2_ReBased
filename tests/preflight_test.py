@@ -4,7 +4,9 @@ AI-assisted (Claude Opus 5.5), 2026-11-12. Synthetic: every case runs the real s
 in a temporary folder with invented files and dated commits (GIT_COMMITTER_DATE). The run lock is a temporary path
 (OPENWILLOW_UE_LOCK, with LOCALAPPDATA also pointed at the temporary folder), the port check uses a socket this test
 opens, and the editor check is fed an invented process list through -ProcessList, so no real lock, editor or other
-process is read, matched or touched. Windows only (PowerShell, and mklink /J for the link check).
+process is read, matched or touched. Windows only (PowerShell, and mklink /J for the link check). Every case runs under
+Windows PowerShell 5.1 and under pwsh, each when present: the suites run under 5.1, where a native program's stderr
+behaves differently.
 """
 import datetime
 import os
@@ -18,7 +20,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'tools' / 'preflight.ps1'
-POWERSHELL = shutil.which('pwsh') or shutil.which('powershell')
+SHELLS = {name: path for name, path in (('powershell', shutil.which('powershell')), ('pwsh', shutil.which('pwsh'))) if path}
 OLD = datetime.datetime(2019, 6, 1, tzinfo=datetime.timezone.utc).timestamp()     # before every commit below
 COMMITTED = '2020-01-01T12:00:00+00:00'
 
@@ -31,8 +33,8 @@ def git(repo, *args, date=None):
     subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, env=env)
 
 
-@unittest.skipUnless(POWERSHELL and sys.platform == 'win32', 'Windows PowerShell needed')
-class PreflightTest(unittest.TestCase):
+class Cases:
+    POWERSHELL = None   # set per shell by the classes at the end
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
@@ -65,7 +67,7 @@ class PreflightTest(unittest.TestCase):
         e['OPENWILLOW_UE_LOCK'] = str(self.lock)
         e['LOCALAPPDATA'] = self.tmp.name
         e.update(env or {})
-        done = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
+        done = subprocess.run([self.POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
                                '-Worktree', str(self.wt), *args], capture_output=True, text=True, env=e, timeout=120)
         lines = [l for l in done.stdout.splitlines() if l.startswith('PREFLIGHT ') and 'SUMMARY' not in l]
         return done.returncode, lines, done.stdout + done.stderr
@@ -80,13 +82,28 @@ class PreflightTest(unittest.TestCase):
 
     def test_data(self):
         self.put('local/a/data.json')
-        rc, lines, out = self.run_ps('-Data', 'local/a/data.json')
+        (self.wt / 'local' / 'empty' / 'sub').mkdir(parents=True)
+        rc, lines, out = self.run_ps('-Data', 'local/a/data.json,local/a')
         self.assertEqual(rc, 0, out)
-        self.assertLines(lines, 'data', ['ok'])
-        rc, lines, out = self.run_ps('-Data', 'local/a/data.json,local/missing.json')
+        self.assertLines(lines, 'data', ['ok', 'ok'])
+        rc, lines, out = self.run_ps('-Data', 'local/a/data.json,local/missing.json,local/empty')
         self.assertEqual(rc, 1, out)
-        self.assertLines(lines, 'data', ['ok', 'FAIL'])
+        self.assertLines(lines, 'data', ['ok', 'FAIL', 'FAIL'])
         self.assertIn('local/missing.json is missing', out)
+        self.assertIn('local/empty is a folder that holds no file', out)
+
+    def test_not_a_git_checkout_still_reports(self):
+        # The reviewer's reproduction: under 5.1, git's stderr used to end the run with no PREFLIGHT line and no summary.
+        bare = Path(self.tmp.name) / 'no repo'
+        bare.mkdir()
+        e = dict(os.environ, OPENWILLOW_UE_LOCK=str(self.lock), LOCALAPPDATA=self.tmp.name, GIT_CEILING_DIRECTORIES=self.tmp.name)
+        done = subprocess.run([self.POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
+                               '-Worktree', str(bare), '-Generators', 'a=b.py', '-CheckBuild'],
+                              capture_output=True, text=True, env=e, timeout=120)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn('PREFLIGHT FAIL fresh: b.py has no commit', done.stdout)
+        self.assertIn('PREFLIGHT FAIL build:', done.stdout)
+        self.assertRegex(done.stdout, r'PREFLIGHT SUMMARY failed=\d+ checks=\d+')
 
     def test_data_newer_than_its_generator(self):
         self.put('local/fresh/one.json')                     # written now, after the 2020 commit
@@ -101,6 +118,11 @@ class PreflightTest(unittest.TestCase):
         self.assertIn('older than the last commit of tools/make_data.py', out)
         rc, _, out = self.run_ps('-Generators', 'local/fresh')
         self.assertEqual(rc, 2, out)
+        (self.wt / 'tools' / 'make_data.py').write_text('edited, not committed\n')
+        rc, lines, out = self.run_ps('-Generators', 'local/fresh=tools/make_data.py')
+        self.assertEqual(rc, 1, out)
+        self.assertLines(lines, 'fresh', ['FAIL'])
+        self.assertIn('git status is not clean for tools/make_data.py', out)
 
     def test_links_stay_inside_the_worktree(self):
         (self.wt / 'local' / 'deep').mkdir(parents=True)
@@ -157,6 +179,9 @@ class PreflightTest(unittest.TestCase):
         self.assertLines(lines, 'lock', ['FAIL'])
         self.assertIn('owner someone', out)
         self.assertTrue(self.lock.exists())                     # looked at, never removed
+        script = SCRIPT.read_text(encoding='utf-8')
+        self.assertNotIn('Get-OwUeLockOwner $lock', script)     # File.ReadAllText would block the owner's delete
+        self.assertIn('[IO.FileShare]::Delete', script)
         self.lock.unlink()
         self.put('local/hub-ue.lock')
         rc, lines, out = self.run_ps('-CheckLock', '-AlsoLock', 'local/hub-ue.lock')
@@ -187,6 +212,13 @@ class PreflightTest(unittest.TestCase):
         rc, lines, out = self.run_ps(*args)
         self.assertEqual(rc, 1, out)
         self.assertLines(lines, 'build', ['FAIL', 'FAIL'])
+        self.put('bin/module.dll')
+        self.put('bin/core.lib')
+        self.put('src/new_file.cpp')                            # untracked source: the build may not hold it
+        rc, lines, out = self.run_ps(*args)
+        self.assertEqual(rc, 1, out)
+        self.assertLines(lines, 'build', ['FAIL', 'ok', 'ok'])
+        self.assertIn('src/new_file.cpp', out)
 
     def test_engine(self):
         engine = Path(self.tmp.name) / 'Invented UE'
@@ -208,6 +240,17 @@ class PreflightTest(unittest.TestCase):
         text = report.read_text()
         self.assertIn('PREFLIGHT FAIL data', text)
         self.assertIn('PREFLIGHT SUMMARY failed=1', text)
+
+
+for _name, _path in SHELLS.items():
+    globals()[f'Preflight_{_name}'] = unittest.skipUnless(sys.platform == 'win32', 'Windows only')(
+        type(f'Preflight_{_name}', (Cases, unittest.TestCase), {'POWERSHELL': _path}))
+
+
+class ShellsTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
+    def test_windows_powershell_is_among_them(self):
+        self.assertIn('powershell', SHELLS)
 
 
 if __name__ == '__main__':
