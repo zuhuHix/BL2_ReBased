@@ -1555,6 +1555,10 @@ python tools/prepare_ambient_world.py                    # host manifest local/s
 powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
 ```
 
+With `--compose`, `prepare_ambient_world.py` stops (since 2026-11-12) when a worn piece the capture shows on a used bone is missing from
+`local/slice/ambient/editor_report_attach.json` and the attach job did not record its mesh as unavailable: rerun the attach step above
+with the same capture.
+
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 
 `research/script_disasm.py` (Python, read-only) turns every script function in the code

@@ -233,11 +233,18 @@ def component_transform(bone_rel, att):
     return [round(float(v), 4) for v in total[:3, 3]], [round(float(v), 6) for v in to_quat(rotation)], [round(float(v), 5) for v in sizes]
 
 
-def annotate_looks(spawns, compose_file, kinds, report):
-    """Add head material and attachments (hair, hats, gear) to the observed spawns from an amb_compose capture."""
+AMBIENT_ATTACH_STEP = 'powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <the same amb_compose json>'
+
+
+def annotate_looks(spawns, compose_file, kinds, report, known_missing=()):
+    """Add head material and attachments (hair, hats, gear) to the observed spawns from an amb_compose capture.
+    A piece on a used bone whose mesh is neither in the attach editor's report nor among the meshes the attach job itself recorded as
+    unavailable (attach_job.json missing_meshes) stops the tool: the report is stale or partial, and the citizens would lose pieces
+    without a word (2026-11-12, the same hole as the Phaselock target's placements)."""
     compose = {row['path']: row for row in json.loads(Path(compose_file).read_text(encoding='utf-8'))}
     transforms = {kind: attachment_transforms(kind, {'Head', 'Jaw', 'Spine3'}) for kind in kinds}
     missing = 0
+    lost = set()
     for spawn in spawns:
         row = compose.get(spawn.get('pawn_path'))
         if not row:
@@ -258,8 +265,12 @@ def annotate_looks(spawns, compose_file, kinds, report):
         items = []
         for att in row['attachments']:
             mesh = att.get('static_mesh')
-            info = report['meshes'].get(mesh.rsplit('.', 1)[-1]) if mesh else None
-            if not info or att['bone'] not in transforms[spawn['kind']]:
+            if not mesh or att['bone'] not in transforms[spawn['kind']]:
+                continue
+            info = report['meshes'].get(mesh.rsplit('.', 1)[-1])
+            if not info:
+                if mesh not in known_missing:
+                    lost.add(mesh.rsplit('.', 1)[-1])
                 continue
             mat = None
             mats = [m for m in att.get('materials') or [] if m]
@@ -276,6 +287,9 @@ def annotate_looks(spawns, compose_file, kinds, report):
                 item['tint'] = [round(min(1.0, v * HAIR_GAIN), 4) for v in a[:3]]
             items.append(item)
         spawn['attachments'] = items
+    if lost:
+        sys.exit(f'the ambient attach report lacks {len(lost)} worn meshes the capture shows ({", ".join(sorted(lost)[:5])}): it is stale or '
+                 f'partial, so the citizens would lose pieces. No manifest was written. Re-run {AMBIENT_ATTACH_STEP}')
     return missing
 
 
@@ -429,7 +443,9 @@ def build(args):
         spawns = observed_spawns(args, nodes, perches, kinds)
         if args.compose:
             report = json.loads((ROOT / 'local/slice/ambient/editor_report_attach.json').read_text(encoding='utf-8'))
-            notes['compose_missing'] = annotate_looks(spawns, args.compose, kinds, report)
+            job_path = ROOT / 'local/slice/ambient/attach_job.json'
+            job = json.loads(job_path.read_text(encoding='utf-8')) if job_path.is_file() else {}
+            notes['compose_missing'] = annotate_looks(spawns, args.compose, kinds, report, set(job.get('missing_meshes') or []))
             if args.stops_from:
                 notes['round1_stops'] = add_round1_stops(spawns, args, {n['name']: n for n in nodes})
         notes['points_realised'] = len(spawns)

@@ -66,5 +66,43 @@ class ComponentTransformTest(unittest.TestCase):
         self.assertLess(np.abs(yaw90 @ np.array([1.0, 0.0, 0.0]) - np.array([0.0, 1.0, 0.0])).max(), 1e-9)
 
 
+class AnnotateLooksTest(unittest.TestCase):
+    """annotate_looks on an invented capture: one citizen wearing a hat on Head and a pack on Spine3 (made-up names)."""
+
+    def setUp(self):
+        saved = P.attachment_transforms
+        P.attachment_transforms = lambda kind, bones: {bone: np.eye(4) for bone in bones}
+        self.addCleanup(setattr, P, 'attachment_transforms', saved)
+
+    def run_looks(self, report_meshes, known_missing=()):
+        import json
+        import tempfile
+        compose = [{'path': 'P.Citizen_1', 'materials': [], 'attachments': [
+            {'static_mesh': 'Pkg.Mesh.Hat_A', 'bone': 'Head', 'materials': []},
+            {'static_mesh': 'Pkg.Mesh.Pack_A', 'bone': 'Spine3', 'materials': []},
+            {'static_mesh': 'Pkg.Mesh.Ring_A', 'bone': 'Finger', 'materials': []}]}]   # a bone the host does not use
+        report = {'meshes': {name: {'asset': f'/Game/X/{name}.{name}'} for name in report_meshes}, 'materials': {}, 'heads': {}, 'zone': {}}
+        spawns = [{'pawn_path': 'P.Citizen_1', 'kind': 'CitizenMale'}]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'compose.json'
+            path.write_text(json.dumps(compose), encoding='utf-8')
+            P.annotate_looks(spawns, str(path), ['CitizenMale'], report, set(known_missing))
+        return spawns[0]['attachments']
+
+    def test_every_piece_in_the_report_is_placed(self):
+        self.assertEqual([a['bone'] for a in self.run_looks(['Hat_A', 'Pack_A'])], ['Head', 'Spine3'])
+
+    def test_a_piece_missing_from_the_attach_report_stops_the_tool(self):
+        # 2026-11-12: a generated input that lost data must not become "nothing to place".
+        with self.assertRaises(SystemExit) as stop:
+            self.run_looks(['Hat_A'])
+        self.assertIn('lacks 1 worn meshes', str(stop.exception))
+        self.assertIn('Pack_A', str(stop.exception))
+        self.assertIn('-Steps attach', str(stop.exception))
+
+    def test_a_mesh_the_attach_job_recorded_as_unavailable_is_left_out(self):
+        self.assertEqual([a['bone'] for a in self.run_looks(['Hat_A'], ['Pkg.Mesh.Pack_A'])], ['Head'])
+
+
 if __name__ == '__main__':
     unittest.main()
