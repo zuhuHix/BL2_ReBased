@@ -232,3 +232,46 @@ decision before implementation.
 
 - tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
   Approved for the same benchmark; not yet downloaded or built.
+
+## Test-only tools (CI and ctest)
+
+Since PR #222 (lane ci-test-deps, 2026-11-11) CI installs these three tools to run tests, and ctest registers the tests
+that need them only where configure finds them (`tests/CMakeLists.txt`; `docs/verification/GATES.md`, "Tests outside
+ctest"). They are used by tests only: the build, the reader and the UE5 host do not use them, nothing is shipped with
+them, none is vendored, and no code or file from them is copied into the repository. No `package.json` or requirements
+file pins them; the pins are the CI steps below. Licences were read from each project's upstream licence file at that
+version on 2026-11-12. What a downloaded binary or wheel bundles beyond that file was not checked.
+
+### Node.js 26.4.0
+
+- Source: https://github.com/nodejs/node, tag `v26.4.0`; builds from https://nodejs.org.
+- Licence: Node.js itself is under an MIT-style permission notice (upstream `LICENSE`, which does not name it). The
+  same file lists the externally maintained libraries Node.js includes, under their own licences: mostly MIT,
+  BSD-style, Apache-2.0 and ISC, plus the Unicode and ICU licences (ICU), the zlib licence, the Artistic License 2.0
+  (npm), the Blue Oak Model License 1.0.0 (minimatch), and public-domain or CC0 dedications. Two build-script files
+  inside ICU's notices are under the GPL (v2 or later, and v3 or later with an autoconf exception). No component of
+  Node.js is copied or redistributed here.
+- How it is obtained: CI uses `actions/setup-node@v6` with `node-version: "26.4.0"` and no package-manager cache
+  (`.github/workflows/ci.yml`). Locally, whatever `node` configure finds; the zuhu desktop runs 26.4.0. How it was
+  installed there: not checked.
+- Used by: the 18 `tests/*_test.js` in `OW_NODE_TESTS`, registered as `js-<name>` (label `needs-node`).
+
+### numpy 2.5.4
+
+- Source: https://github.com/numpy/numpy, tag `v2.5.4`; wheels from https://pypi.org/project/numpy/.
+- Licence: BSD 3-Clause (upstream `LICENSE.txt`, "NumPy Developers"). Which libraries the Windows wheel bundles,
+  and under which licences: not checked.
+- How it is obtained: CI runs `python -m pip install numpy==2.5.4` (exact version, no hash pin). Locally, whatever
+  the configuring Python imports; the zuhu desktop has 2.5.4 under Python 3.14.6.
+- Used by: the 9 tests in `OW_NUMPY_PY_TESTS`, registered as `py-<name>` (label `needs-numpy`), and
+  `sanctuary_pillar` in the Pillow group.
+
+### Pillow 12.2.0
+
+- Source: https://github.com/python-pillow/Pillow, tag `12.2.0`; wheels from https://pypi.org/project/pillow/.
+- Licence: MIT-CMU (upstream `LICENSE`). Which image libraries the Windows wheel bundles, and under which licences:
+  not checked.
+- How it is obtained: CI runs `python -m pip install pillow==12.2.0` (exact version, no hash pin). Locally, as for
+  numpy; the zuhu desktop has 12.2.0.
+- Used by: the 8 tests in `OW_PILLOW_PY_TESTS`, registered as `py-<name>` (label `needs-pillow`) where Pillow and
+  numpy both import.
