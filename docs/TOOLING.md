@@ -210,7 +210,8 @@ checks the owner and staleness rules against temporary lock files.
   still require `-Engine` with no default (`run_ue_level.ps1`, `run_ue_character.ps1`, `run_ue_flash_hud.ps1`,
   `run_ue_probe.ps1`, `import_maya_combat_anims.ps1`). CTest `py-engine_default`.
 - **`tools/preflight.ps1`** looks before a run and changes nothing: it deletes no lock, stops no process and writes nothing
-  but its report, and it reads a lock with delete sharing so the owner's release is never delayed. Each check is off until
+  but its report (it may create the lock's folder, never the lock; git runs with `--no-optional-locks`, so the
+  worktree's index is not refreshed), and it reads a lock with delete sharing so the owner's release is never delayed. Each check is off until
   its parameter is passed, so a driver asks for what applies to one suite: `-Data` (a file, or a folder holding one),
   `-Generators <data>=<generator>` (data newer than the generator's last commit), `-CheckLinks` (no link under `local\`
   resolves outside the worktree), `-Port`, `-NoEditor` (the two editor names `ue_lock.ps1` always waits for, not a caller's

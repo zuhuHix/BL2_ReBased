@@ -1,8 +1,10 @@
 # Before an in-engine suite: look for the things that made earlier runs fail or pass falsely, and report them.
 #
 # AI-assisted (Claude Opus 5.5), 2026-11-12. It only looks: it deletes no lock, stops no process and writes nothing but its
-# report (stdout, and the -Report file when given). Every check is off until its parameter is passed, so a driver passes what
-# applies to one suite. One line per check; exit 0 when none failed, 1 when one or more did, 2 when the call itself is wrong.
+# report (stdout, and the -Report file when given); -CheckLock may create the lock's folder, never the lock, and git runs
+# with --no-optional-locks so the worktree's index is not refreshed. Every check is off until its parameter is passed, so a
+# driver passes what applies to one suite. One line per check; exit 0 when none failed, 1 when one or more did, 2 when the
+# call itself is wrong.
 #
 #   -Data <path>[,<path>]               each path (relative to -Worktree, or absolute) is a file, or a folder holding a file
 #   -Generators <data>=<gen>[,...]       each data path is newer than the last commit of its tracked generator
@@ -65,7 +67,9 @@ function Invoke-Git([string[]]$GitArgs) {
     # $ErrorActionPreference = 'Stop' makes terminating even under 2>$null; 'Continue' here keeps one git message from
     # ending the run before the report is printed.
     $ErrorActionPreference = 'Continue'
-    $out = @(& git -C $Worktree @GitArgs 2>$null)
+    # --no-optional-locks: a plain git status refreshes the index (index.lock, a rewritten index), which a look must not do
+    # to a worktree another lane may be committing in.
+    $out = @(& git --no-optional-locks -C $Worktree @GitArgs 2>$null)
     return [pscustomobject]@{ Lines = @($out | ForEach-Object { "$_" }); Code = $LASTEXITCODE }
 }
 function Get-LastCommitUtc([string[]]$Paths) {
@@ -125,112 +129,131 @@ foreach ($pair in $Generators) {
     if ($at -lt 1 -or $at -eq $pair.Length - 1) { [Console]::Error.WriteLine("preflight: -Generators wants <data>=<generator>, got '$pair'"); exit 2 }
 }
 
-# Every check below runs inside one try, left at the outer indentation: an error nobody expected becomes a FAIL line, and the
-# report and summary are still printed.
-try {
+# Each check runs in its own try (Invoke-Check): an error nobody expected becomes a FAIL line for that check only, the
+# other checks still run, and the report and summary are always printed. Inside a check, return ends it early.
+function Invoke-Check([string]$Check, [scriptblock]$Body) {
+    try { . $Body } catch { Out-Line 'FAIL' $Check "stopped by an unexpected error: $($_.Exception.Message)" }
+}
+
 foreach ($d in $Data) {
-    if (Test-HoldsFile (Resolve-InTree $d)) { Out-Line 'ok' 'data' "$d exists" }
-    elseif (Test-Path -LiteralPath (Resolve-InTree $d)) { Out-Line 'FAIL' 'data' "$d is a folder that holds no file" }
-    else { Out-Line 'FAIL' 'data' "$d is missing" }
+    Invoke-Check 'data' {
+        if (Test-HoldsFile (Resolve-InTree $d)) { Out-Line 'ok' 'data' "$d exists" }
+        elseif (Test-Path -LiteralPath (Resolve-InTree $d)) { Out-Line 'FAIL' 'data' "$d is a folder that holds no file" }
+        else { Out-Line 'FAIL' 'data' "$d is missing" }
+    }
 }
 
 foreach ($pair in $Generators) {
-    $at = $pair.IndexOf('=')
-    $d = $pair.Substring(0, $at).Trim(); $gen = $pair.Substring($at + 1).Trim()
-    $commit = Get-LastCommitUtc @($gen)
-    if ($null -eq $commit) { Out-Line 'FAIL' 'fresh' "$gen has no commit in $Worktree (not a tracked generator, or not a git checkout?)"; continue }
-    $dirty = @(Get-UncommittedChange @($gen))
-    if ($dirty.Count) { Out-Line 'FAIL' 'fresh' "git status is not clean for $gen, so its commit time says nothing about ${d}: $($dirty -join '; ')"; continue }
-    $full = Resolve-InTree $d
-    if (!(Test-Path -LiteralPath $full)) { Out-Line 'FAIL' 'fresh' "$d is missing (its generator $gen)"; continue }
-    $written = Get-NewestWriteUtc $full
-    if ($null -eq $written) { Out-Line 'FAIL' 'fresh' "$d holds no file"; continue }
-    if ($written -gt $commit) { Out-Line 'ok' 'fresh' "$d ($(Format-Utc $written)) is newer than $gen ($(Format-Utc $commit))" }
-    else { Out-Line 'FAIL' 'fresh' "$d ($(Format-Utc $written)) is older than the last commit of $gen ($(Format-Utc $commit)): regenerate it" }
+    Invoke-Check 'fresh' {
+        $at = $pair.IndexOf('=')
+        $d = $pair.Substring(0, $at).Trim(); $gen = $pair.Substring($at + 1).Trim()
+        $commit = Get-LastCommitUtc @($gen)
+        if ($null -eq $commit) { Out-Line 'FAIL' 'fresh' "$gen has no commit in $Worktree (not a tracked generator, or not a git checkout?)"; return }
+        $dirty = @(Get-UncommittedChange @($gen))
+        if ($dirty.Count) { Out-Line 'FAIL' 'fresh' "git status is not clean for $gen, so its commit time says nothing about ${d}: $($dirty -join '; ')"; return }
+        $full = Resolve-InTree $d
+        if (!(Test-Path -LiteralPath $full)) { Out-Line 'FAIL' 'fresh' "$d is missing (its generator $gen)"; return }
+        $written = Get-NewestWriteUtc $full
+        if ($null -eq $written) { Out-Line 'FAIL' 'fresh' "$d holds no file"; return }
+        if ($written -gt $commit) { Out-Line 'ok' 'fresh' "$d ($(Format-Utc $written)) is newer than $gen ($(Format-Utc $commit))" }
+        else { Out-Line 'FAIL' 'fresh' "$d ($(Format-Utc $written)) is older than the last commit of $gen ($(Format-Utc $commit)): regenerate it" }
+    }
 }
 
 if ($CheckLinks) {
-    $root = Get-OwPhysicalPath $Worktree
-    $local = Join-Path $Worktree 'local'
-    $bad = 0; $seen = 0
-    if (Test-Path -LiteralPath $local -PathType Container) {
-        # Walk by hand and do not descend into a link: Get-ChildItem -Recurse follows junctions in Windows PowerShell 5.1.
-        $stack = New-Object System.Collections.Generic.Stack[string]
-        $stack.Push($local)
-        while ($stack.Count) {
-            $dir = $stack.Pop()
-            foreach ($entry in ([IO.DirectoryInfo]$dir).EnumerateFileSystemInfos()) {
-                if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-                    $seen++
-                    $target = Get-OwPhysicalPath $entry.FullName
-                    if ($target.Equals($entry.FullName.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
-                        $raw = (Get-Item -LiteralPath $entry.FullName -Force).Target   # a dangling link does not open
-                        $target = if ($raw) { [IO.Path]::GetFullPath([string]@($raw)[0]).TrimEnd('\') } else { $null }
+    Invoke-Check 'links' {
+        $root = Get-OwPhysicalPath $Worktree
+        $local = Join-Path $Worktree 'local'
+        $bad = 0; $seen = 0
+        if (Test-Path -LiteralPath $local -PathType Container) {
+            # Walk by hand and do not descend into a link: Get-ChildItem -Recurse follows junctions in Windows PowerShell 5.1.
+            $stack = New-Object System.Collections.Generic.Stack[string]
+            $stack.Push($local)
+            while ($stack.Count) {
+                $dir = $stack.Pop()
+                foreach ($entry in ([IO.DirectoryInfo]$dir).EnumerateFileSystemInfos()) {
+                    if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        $seen++
+                        $target = Get-OwPhysicalPath $entry.FullName
+                        if ($target.Equals($entry.FullName.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+                            $raw = (Get-Item -LiteralPath $entry.FullName -Force).Target   # a dangling link does not open
+                            $target = if ($raw) { [IO.Path]::GetFullPath([string]@($raw)[0]).TrimEnd('\') } else { $null }
+                        }
+                        $inside = $target -and ($target.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+                                                $target.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase))
+                        if (!$inside) {
+                            $bad++
+                            $shown = if ($target) { $target } else { '(cannot be resolved)' }
+                            Out-Line 'FAIL' 'links' "$($entry.FullName) points to $shown, outside $root"
+                        }
+                    } elseif ($entry -is [IO.DirectoryInfo]) {
+                        $stack.Push($entry.FullName)
                     }
-                    $inside = $target -and ($target.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
-                                            $target.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase))
-                    if (!$inside) {
-                        $bad++
-                        $shown = if ($target) { $target } else { '(cannot be resolved)' }
-                        Out-Line 'FAIL' 'links' "$($entry.FullName) points to $shown, outside $root"
-                    }
-                } elseif ($entry -is [IO.DirectoryInfo]) {
-                    $stack.Push($entry.FullName)
                 }
             }
         }
+        if (!$bad) { Out-Line 'ok' 'links' "$seen link(s) under local\, none outside the worktree" }
     }
-    if (!$bad) { Out-Line 'ok' 'links' "$seen link(s) under local\, none outside the worktree" }
 }
 
 if ($Port.Count) {
-    $listening = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | ForEach-Object { $_.Port })
-    foreach ($p in $Port) {
-        if ($listening -contains [int]$p) { Out-Line 'FAIL' 'port' "$p is held by a listening process (find it: Get-NetTCPConnection -State Listen -LocalPort $p)" }
-        else { Out-Line 'ok' 'port' "$p is free" }
+    Invoke-Check 'port' {
+        $listening = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | ForEach-Object { $_.Port })
+        foreach ($p in $Port) {
+            if ($listening -contains [int]$p) { Out-Line 'FAIL' 'port' "$p is held by a listening process (find it: Get-NetTCPConnection -State Listen -LocalPort $p)" }
+            else { Out-Line 'ok' 'port' "$p is free" }
+        }
     }
 }
 
 if ($NoEditor) {
-    if ($ProcessList) { $names = @(Get-Content -LiteralPath $ProcessList | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
-    else {
-        . (Join-Path $PSScriptRoot 'ue_lock.ps1')
-        $names = @(Get-OwUeBusyProcess | ForEach-Object { "$($_.ProcessName) $($_.Id)" })
+    Invoke-Check 'editor' {
+        if ($ProcessList) { $names = @(Get-Content -LiteralPath $ProcessList | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+        else {
+            . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+            $names = @(Get-OwUeBusyProcess | ForEach-Object { "$($_.ProcessName) $($_.Id)" })
+        }
+        $editors = @($names | Where-Object { $_ -match '^UnrealEditor(-Cmd)?(\.exe)?(\s|$)' })
+        if ($editors.Count) { Out-Line 'FAIL' 'editor' "an Unreal editor runs: $($editors -join ', ')" }
+        else { Out-Line 'ok' 'editor' 'no Unreal editor runs' }
     }
-    $editors = @($names | Where-Object { $_ -match '^UnrealEditor(-Cmd)?(\.exe)?(\s|$)' })
-    if ($editors.Count) { Out-Line 'FAIL' 'editor' "an Unreal editor runs: $($editors -join ', ')" }
-    else { Out-Line 'ok' 'editor' 'no Unreal editor runs' }
 }
 
 if ($CheckLock) {
-    . (Join-Path $PSScriptRoot 'ue_lock.ps1')
-    # Get-OwUeLockPath creates the lock's folder when it is missing (as every suite does); it never creates the lock.
-    $lock = Get-OwUeLockPath
-    if (Test-Path -LiteralPath $lock) {
+    Invoke-Check 'lock' {
+        . (Join-Path $PSScriptRoot 'ue_lock.ps1')
+        # Get-OwUeLockPath creates the lock's folder when it is missing (as every suite does); it never creates the lock.
+        $lock = Get-OwUeLockPath
+        if (!(Test-Path -LiteralPath $lock)) { Out-Line 'ok' 'lock' "the run lock $lock is free"; return }
         # Read with delete sharing, not through Get-OwUeLockOwner (File.ReadAllText): a look must never delay the owner's release.
         $owner = $null
         $text = Read-SharedText $lock
+        if (!$text -and !(Test-Path -LiteralPath $lock)) { Out-Line 'ok' 'lock' "the run lock $lock is free (released while it was read)"; return }
         if ($text) { try { $owner = $text | ConvertFrom-Json -ErrorAction Stop } catch { $owner = $null } }
         $who = if ($owner -and $null -ne $owner.pid) { "owner $($owner.owner), pid $($owner.pid)" } else { 'no owner fields read' }
         Out-Line 'FAIL' 'lock' "the run lock $lock is held ($who)"
-    } else { Out-Line 'ok' 'lock' "the run lock $lock is free" }
+    }
 }
 foreach ($l in $AlsoLock) {
-    $full = Resolve-InTree $l
-    if (Test-Path -LiteralPath $full) { Out-Line 'FAIL' 'lock' "$full is held" } else { Out-Line 'ok' 'lock' "$full is free" }
+    Invoke-Check 'lock' {
+        $full = Resolve-InTree $l
+        if (Test-Path -LiteralPath $full) { Out-Line 'FAIL' 'lock' "$full is held" } else { Out-Line 'ok' 'lock' "$full is free" }
+    }
 }
 foreach ($h in $ReportHold) {
-    $full = Resolve-InTree $h
-    if (Test-Path -LiteralPath $full) { Out-Line 'NOTE' 'hold' "$full is present" } else { Out-Line 'ok' 'hold' "$full is absent" }
+    Invoke-Check 'hold' {
+        $full = Resolve-InTree $h
+        if (Test-Path -LiteralPath $full) { Out-Line 'NOTE' 'hold' "$full is present" } else { Out-Line 'ok' 'hold' "$full is absent" }
+    }
 }
 
 if ($CheckBuild) {
-    $code = @('host/ue5/OpenWillow/Source', 'src', 'CMakeLists.txt')
-    $commit = Get-LastCommitUtc $code
-    $dirty = @(Get-UncommittedChange $code)
-    if ($dirty.Count) { Out-Line 'FAIL' 'build' "git status is not clean for the code the build is compared with: $($dirty -join '; ')" }
-    if ($null -eq $commit) { Out-Line 'FAIL' 'build' "no commit touches host/ue5/OpenWillow/Source, src or CMakeLists.txt in $Worktree (or not a git checkout)" }
-    else {
+    Invoke-Check 'build' {
+        $code = @('host/ue5/OpenWillow/Source', 'src', 'CMakeLists.txt')
+        $commit = Get-LastCommitUtc $code
+        $dirty = @(Get-UncommittedChange $code)
+        if ($dirty.Count) { Out-Line 'FAIL' 'build' "git status is not clean for the code the build is compared with: $($dirty -join '; ')" }
+        if ($null -eq $commit) { Out-Line 'FAIL' 'build' "no commit touches host/ue5/OpenWillow/Source, src or CMakeLists.txt in $Worktree (or not a git checkout)"; return }
         foreach ($lib in @($ModuleLibrary, $CoreLibrary)) {
             $full = Resolve-InTree $lib
             if (!(Test-Path -LiteralPath $full -PathType Leaf)) { Out-Line 'FAIL' 'build' "$lib is missing: build it"; continue }
@@ -242,14 +265,13 @@ if ($CheckBuild) {
 }
 
 if ($CheckEngine) {
-    # The name is put together so that tests/ue_lock_test.py, which requires every script naming the editor binary to take
-    # the run lock, does not count this script as a launcher: it only tests that the file exists.
-    $binary = Join-Path $Engine ('Engine\Binaries\Win64\UnrealEditor' + '.exe')
-    if (Test-Path -LiteralPath $binary -PathType Leaf) { Out-Line 'ok' 'engine' "$binary exists" }
-    else { Out-Line 'FAIL' 'engine' "no editor binary at $binary (set OPENWILLOW_UE or pass -Engine)" }
-}
-} catch {
-    Out-Line 'FAIL' 'preflight' "stopped by an unexpected error, later checks not run: $($_.Exception.Message)"
+    Invoke-Check 'engine' {
+        # The name is put together so that tests/ue_lock_test.py, which requires every script naming the editor binary to take
+        # the run lock, does not count this script as a launcher: it only tests that the file exists.
+        $binary = Join-Path $Engine ('Engine\Binaries\Win64\UnrealEditor' + '.exe')
+        if (Test-Path -LiteralPath $binary -PathType Leaf) { Out-Line 'ok' 'engine' "$binary exists" }
+        else { Out-Line 'FAIL' 'engine' "no editor binary at $binary (set OPENWILLOW_UE or pass -Engine)" }
+    }
 }
 
 $lines | ForEach-Object { Write-Output $_ }

@@ -25,6 +25,9 @@ Errors, each one line; the exit code is 1 when there is any, 2 when the map or t
    that does not set $repo uses its caller's), in single or double quotes without a $ inside; a path built from a
    variable ("host/ue5/$job") is not read. Loaded .ps1 files are followed in turn, so a helper's helper counts. Only
    tracked files count (a folder or a local/ path does not), matched without regard to case as PowerShell does.
+   Two edge cases: a script at the repository root that sets $repo with Split-Path -Parent is treated as if $repo were
+   the root (the real value would be the folder above); a helper that sets $repo in a spelling the lint does not know
+   keeps its caller's base instead.
    The lint does not read switches: a load behind a switch the suite never passes is reported too. List such a pair in
    --switch-only (one "<suite> <repo path>" per line, # comments allowed) to accept it.
 3. uncovered-core: a tracked file under host/ue5/OpenWillow/Source/ or src/ that no suite covers except a whole-tree one

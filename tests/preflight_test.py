@@ -179,6 +179,8 @@ class Cases:
         self.assertLines(lines, 'lock', ['FAIL'])
         self.assertIn('owner someone', out)
         self.assertTrue(self.lock.exists())                     # looked at, never removed
+        # A text check only: no handle is held against a real delete here, it asserts that the script opens the lock with
+        # delete sharing instead of through Get-OwUeLockOwner.
         script = SCRIPT.read_text(encoding='utf-8')
         self.assertNotIn('Get-OwUeLockOwner $lock', script)     # File.ReadAllText would block the owner's delete
         self.assertIn('[IO.FileShare]::Delete', script)
@@ -232,6 +234,39 @@ class Cases:
         rc, lines, out = self.run_ps('-CheckEngine', env={'OPENWILLOW_UE': str(engine)})
         self.assertEqual(rc, 0, out)
         self.assertLines(lines, 'engine', ['ok'])
+
+    def test_git_leaves_the_index_alone(self):
+        # Behavioural. A tracked file is rewritten with the same bytes and a new time, so a plain git status would refresh
+        # the index (take index.lock, rewrite the index); with --no-optional-locks the preflight's git calls must not.
+        # The last step runs a plain status to show that the setup really would have changed the index.
+        index = self.wt / '.git' / 'index'
+        tracked = self.wt / 'src' / 'core.cpp'
+        tracked.write_text('invented\n')
+        later = datetime.datetime.now().timestamp() + 5
+        os.utime(tracked, (later, later))
+        before = (index.read_bytes(), index.stat().st_mtime_ns)
+        self.put('local/fresh/one.json')
+        self.put('bin/module.dll')
+        self.put('bin/core.lib')
+        rc, _, out = self.run_ps('-Generators', 'local/fresh=tools/make_data.py', '-CheckBuild',
+                                 '-ModuleLibrary', 'bin/module.dll', '-CoreLibrary', 'bin/core.lib')
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((index.read_bytes(), index.stat().st_mtime_ns), before)
+        self.assertFalse((self.wt / '.git' / 'index.lock').exists())
+        git(self.wt, 'status', '--porcelain')
+        self.assertNotEqual((index.read_bytes(), index.stat().st_mtime_ns), before, 'the setup would not refresh the index')
+
+    def test_one_failing_check_does_not_stop_the_others(self):
+        # -ProcessList names a file that does not exist, so the editor check throws; the checks after it still run.
+        self.put('local/a/data.json')
+        rc, lines, out = self.run_ps('-Data', 'local/a/data.json', '-NoEditor', '-ProcessList', str(Path(self.tmp.name) / 'none.txt'),
+                                     '-ReportHold', 'local/batch.hold')
+        self.assertEqual(rc, 1, out)
+        self.assertLines(lines, 'data', ['ok'])
+        self.assertLines(lines, 'editor', ['FAIL'])
+        self.assertIn('editor: stopped by an unexpected error', out)
+        self.assertLines(lines, 'hold', ['ok'])
+        self.assertIn('PREFLIGHT SUMMARY failed=1 checks=3', out)
 
     def test_report_file(self):
         report = Path(self.tmp.name) / 'report.txt'

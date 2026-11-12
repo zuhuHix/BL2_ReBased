@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,13 @@ class DefaultCases:
 
 for _name, _path in SHELLS.items():
     globals()[f'Default_{_name}'] = type(f'Default_{_name}', (DefaultCases, unittest.TestCase), {'POWERSHELL': _path})
+
+
+class ShellsTest(unittest.TestCase):
+    # Without any shell the loop above makes no test; this one makes that a failure on Windows and a skip elsewhere.
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
+    def test_windows_powershell_is_among_them(self):
+        self.assertIn('powershell', SHELLS)
 
 
 if __name__ == '__main__':
