@@ -610,7 +610,10 @@ class WatchStopPolicyTest(unittest.TestCase):
         self.assertIn('the driver stopped answering', results['den_read'])
         self.assertIn('the driver stopped answering', results['den_down'])
         self.assertIn('the driver stopped answering', results['watch'])
-        self.assertNotIn('watch', session['cleanup'])   # the game had quit by the cleanup: no stop is sent to a gone game
+        # No quit is sent to a lost driver (review of #245, round 2): the game is still there at the cleanup, is sent nothing, and is
+        # stopped by its PID. The first lost reply is the reason everywhere.
+        self.assertEqual(session['cleanup']['watch'], 'not sent: the driver stopped answering (no reply to c-invented)')
+        self.assertEqual(session['cleanup']['game'], 'stopped')
 
 
 class DenDownReplacementTest(unittest.TestCase):

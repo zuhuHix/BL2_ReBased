@@ -308,7 +308,7 @@ try {
         } catch {
             Set-Stage 'den_read' $false "$_"
             "den read: $_"
-            if ("$_" -match 'no reply') { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }
+            if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }   # the first reason is kept
         }
         # S0's settled five-minute hold: the map settled and the hold ran with an enemy in reach, or the stage fails.
         if ($WatchSmoke) { Set-Stage 'smoke_hold' $smokeHeld $smokeWhy }
@@ -413,7 +413,7 @@ try {
             else {
                 # Its rows are not evidence, but a reply that never came is the driver lost: latched, so the stage fails and nothing more is sent.
                 try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null }
-                catch { $log.den_down_trial_close = "$_"; if ("$_" -match 'no reply') { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" } }
+                catch { $log.den_down_trial_close = "$_"; if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" } }
             }
             # A driver lost anywhere in the stage fails it, even after the down and the respawn were seen (the after_respawn snapshot then is not).
             $why = if (Get-DriverLost) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
@@ -424,7 +424,7 @@ try {
         } catch {
             Set-Stage 'den_down' $false "$_"
             "den down: $_"
-            if ("$_" -match 'no reply') { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }
+            if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }   # the first reason is kept
         }
         Write-StageMark 'den_down' 'done'
     }
