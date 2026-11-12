@@ -646,7 +646,8 @@ def sw_start(label, spec, name="watch"):
 SW_PLAYER_GETTERS = ("GetHealth", "GetMaxHealth", "GetShieldStrength", "GetMaxShieldStrength")
 SW_PLAYER_FIELDS = ("Location", "Rotation", "Velocity", "Physics", "GroundSpeed", "DrawScale", "Health", "HealthMax",
                     "NumSuccessiveInjuries", "bHidden")
-SW_PAWN_FIELDS = ("Location", "GroundSpeed", "WalkingPct", "DrawScale", "DrawScale3D", "Health", "HealthMax", "Physics")
+# Velocity (session 1 analysis, A3): a pawn's speed and slow-down read from the field, not from position differences.
+SW_PAWN_FIELDS = ("Location", "Velocity", "GroundSpeed", "WalkingPct", "DrawScale", "DrawScale3D", "Health", "HealthMax", "Physics")
 SW_POOL_STATE = ("CurrentValue", "MaxValue", "MinValue", "MaxValueBaseValue")
 SW_STATION_FIELDS = ("bShouldBeActive", "bIsCurrentlyActive", "Location")
 SW_POOL_FIELDS = ("Definition", "AssociatedProvider", "CurrentValue", "MaxValue", "MaxValueBaseValue")

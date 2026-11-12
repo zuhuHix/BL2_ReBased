@@ -548,7 +548,7 @@ class FakeGameTest(unittest.TestCase):
         template = FakeObject('GD_Invented.Population:Pawn_Invented', 'WillowAIPawn', GetHealth=getter('template'), Location=here)
         dying = FakeObject('Lvl.PersistentLevel.WillowAIPawn_9', 'WillowAIPawn', GetHealth=getter('dying'), Location=here)
         dying.bDeleteMe = True
-        live = FakeObject('Lvl.PersistentLevel.WillowAIPawn_3', 'WillowAIPawn', GetHealth=getter('live'), GetShieldStrength=getter('live shield'),
+        live = FakeObject('Lvl.PersistentLevel.WillowAIPawn_3', 'WillowAIPawn', GetHealth=getter('live'), GetShieldStrength=getter('live shield'), Velocity=7.5,
                           Location=here, Health=40, HealthPool=ref(pool), ShieldArmor=ref(shield), AIClass=getter('ai class'))
         subclass = FakeObject('Lvl.PersistentLevel.WillowAIPawn_5', 'WillowVehiclePawn', GetHealth=getter('subclass'), Location=here)
         subclass.Class.base = 'WillowAIPawn'
@@ -569,6 +569,7 @@ class FakeGameTest(unittest.TestCase):
             self.assertIsNone(row['health_pool']['stale'])
             self.assertIn('dist', row)
             self.assertEqual(line['beyond_radius'], 1)   # the far one is counted, not read
+            self.assertEqual(row['Velocity'], 7.5)   # the pawn's velocity, a field (session 1 analysis, A3)
             self.assertIsNone(row.get('ai_class'))   # a callable is never called, even where a field was expected
 
     def test_each_frame_row_carries_the_controller_s_cinematic_and_input_ignore_fields(self):
