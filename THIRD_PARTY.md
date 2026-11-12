@@ -45,25 +45,29 @@ Audiokinetic's public Wwise SDK documentation (Audiokinetic Inc., the Wwise
 documentation library reached from https://www.audiokinetic.com/) is a format
 reference for the audio work, approved by the maintainer on 2026-11-12. It is
 read to learn the sound-bank structure fields for the bank version the game
-uses (version 62, `docs/verification/SLICE_AUDIO_CHAIN.md`). Checked on
-2026-11-12: the library opens without an account, and its version list goes
-back only to Wwise 2021.1.14; the addresses tried for two older versions
-(2019.2.15, 2016.2.6) led to the current documentation. So the documentation
-for the game's bank version is not publicly readable, and the approval covers
-the public documentation only. Which Wwise release wrote bank version 62, and
-whether the public pages describe the bank's fields at all: not checked.
-Terms: Audiokinetic's site Terms of Use (last updated 2026-07-15) say the
-site's material belongs to Audiokinetic or its licensors, allow copying or
-printing a document only for internal reference or personal use, forbid
-distributing what is copied, and forbid robots or other automatic copying of
-pages. They allow links to the home page and forbid deep links that would
-suggest endorsement by Audiokinetic, so only the home page is linked here.
-That version check was made on 2026-11-12 by fetching six pages with a script,
-before the terms had been read; those copies were deleted the same day. From
-then on pages are read one at a time in a browser or a reading tool, nothing
-is saved and nothing is fetched by script. Nothing is copied: no SDK download,
-no SDK headers or code, no text copied, and no account was created. Anything
-written here from it is in our own words.
+uses (version 62, `docs/verification/SLICE_AUDIO_CHAIN.md`). Seen on
+2026-11-12: the library opened without an account, its version list showed no
+version before Wwise 2021.1.14, and the addresses tried for two older versions
+(2019.2.15, 2016.2.6) led to the current documentation. So it is assumed, not
+checked, that the public library does not cover bank version 62; the approval
+covers the public documentation only. Which Wwise release wrote bank version
+62, and whether the public pages describe the bank's fields at all: not
+checked. Terms: as read once on 2026-11-12, Audiokinetic's site Terms of Use
+(last updated 2026-07-15) say the site's material belongs to Audiokinetic or
+its licensors, allow copying or printing a document only for internal
+reference or personal use, forbid distributing what is copied, and forbid
+robots or other automatic copying of pages. They allow links to the home page
+and forbid deep links that would suggest endorsement by Audiokinetic, so only
+the home page is linked here. This summary comes from that one reading, was
+not re-checked (a later fetch of the terms page was refused by the site), and
+may be incomplete. The version check was made on 2026-11-12 by fetching six
+documentation and terms pages with a script, before the terms had been read;
+the copies sat in a scratch folder outside the repository and were deleted the
+same day. From then on pages of that site are read by a person in a browser
+only: no agent or tool fetches them, and nothing is saved. So this reference
+is for the maintainer's own reading, and notes from it reach the project in
+the maintainer's own words. Nothing is copied: no SDK download, no SDK headers
+or code, no text copied, and no account was created.
 
 ## Oracles (run, not copied)
 
@@ -257,14 +261,19 @@ decision before implementation.
 - tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
   Approved for the same benchmark; not yet downloaded or built.
 
-## Test-only tools (CI and ctest)
+## Tools CI installs for the tests (Node.js, numpy, Pillow)
 
-Since PR #222 (lane ci-test-deps, 2026-11-11) CI installs these three tools to run tests, and ctest registers the tests
-that need them only where configure finds them (`tests/CMakeLists.txt`; `docs/verification/GATES.md`, "Tests outside
-ctest"). They are used by tests only: the build, the reader and the UE5 host do not use them, nothing is shipped with
-them, none is vendored, and no code or file from them is copied into the repository. No `package.json` or requirements
-file pins them; the pins are the CI steps below. Licences were read from each project's upstream licence file at that
-version on 2026-11-12. What a downloaded binary or wheel bundles beyond that file was not checked.
+Since PR #222 (lane ci-test-deps, 2026-11-11) CI installs these three tools only to run tests, and ctest registers the
+tests that need them only where configure finds them (`tests/CMakeLists.txt`; `docs/verification/GATES.md`, "Tests
+outside ctest"). They are not test-only on a developer's machine: by `git grep` on 2026-11-12, 10 tracked scripts
+under `tools/` import numpy and 8 import Pillow, all local helpers (data preparation, a cross-check against UModel
+output, visual comparisons and contact sheets, the listening report, a real-game frame helper); 5 scripts import both.
+No tracked script outside `tests/` runs Node.js; the overlay scripts in `tools/hud_overlay/` run in the UE browser,
+not in Node.js. Node.js is also what runs REA locally (see "REA (Reverse Engineer Anything) MCP server" above). The
+build, the reader and the UE5 host do not use any of the three, nothing is shipped with them, none is vendored, and no
+code or file from them is copied into the repository. No `package.json` or requirements file pins them; the pins are
+the CI steps below. Licences were read from each project's upstream licence file at that version on 2026-11-12. What a
+downloaded binary or wheel bundles beyond that file was not checked.
 
 ### Node.js 26.4.0
 
@@ -272,23 +281,25 @@ version on 2026-11-12. What a downloaded binary or wheel bundles beyond that fil
 - Licence: Node.js itself is under an MIT-style permission notice (upstream `LICENSE`, which does not name it). The
   same file lists the externally maintained libraries Node.js includes, under their own licences: mostly MIT,
   BSD-style, Apache-2.0 and ISC, plus the Unicode and ICU licences (ICU), the zlib licence, the Artistic License 2.0
-  (npm), the Blue Oak Model License 1.0.0 (minimatch), and public-domain or CC0 dedications. Two build-script files
-  inside ICU's notices are under the GPL (v2 or later, and v3 or later with an autoconf exception). No component of
-  Node.js is copied or redistributed here.
+  (npm), the Blue Oak Model License 1.0.0 (minimatch), and public-domain or CC0 dedications. Inside ICU's notices
+  the file names exactly two GPL files, both marked "only for ICU4C": `aclocal.m4` under GPL v2 or later and
+  `config.guess` under GPL v3 or later, each with its own autoconf exception. No component of Node.js is copied or
+  redistributed here.
 - How it is obtained: CI uses `actions/setup-node@v6` with `node-version: "26.4.0"` and no package-manager cache
   (`.github/workflows/ci.yml`). Locally, whatever `node` configure finds; the zuhu desktop runs 26.4.0. How it was
   installed there: not checked.
-- Used by: the 18 `tests/*_test.js` in `OW_NODE_TESTS`, registered as `js-<name>` (label `needs-node`).
+- Used by: in CI, the 18 `tests/*_test.js` in `OW_NODE_TESTS`, registered as `js-<name>` (label `needs-node`).
+  Outside the tests, no tracked script runs it; locally it also runs REA (entry above).
 
 ### numpy 2.5.4
 
 - Source: https://github.com/numpy/numpy, tag `v2.5.4`; wheels from https://pypi.org/project/numpy/.
-- Licence: BSD 3-Clause (upstream `LICENSE.txt`, "NumPy Developers"). Which libraries the Windows wheel bundles,
-  and under which licences: not checked.
+- Licence: the BSD 3-clause text, "NumPy Developers" (upstream `LICENSE.txt`, which does not name it). Which
+  libraries the Windows wheel bundles, and under which licences: not checked.
 - How it is obtained: CI runs `python -m pip install numpy==2.5.4` (exact version, no hash pin). Locally, whatever
   the configuring Python imports; the zuhu desktop has 2.5.4 under Python 3.14.6.
-- Used by: the 9 tests in `OW_NUMPY_PY_TESTS`, registered as `py-<name>` (label `needs-numpy`), and
-  `sanctuary_pillar` in the Pillow group.
+- Used by: in CI, the 9 tests in `OW_NUMPY_PY_TESTS`, registered as `py-<name>` (label `needs-numpy`), and the
+  whole Pillow group (below). Outside the tests, 10 local scripts under `tools/` import it.
 
 ### Pillow 12.2.0
 
@@ -297,5 +308,6 @@ version on 2026-11-12. What a downloaded binary or wheel bundles beyond that fil
   not checked.
 - How it is obtained: CI runs `python -m pip install pillow==12.2.0` (exact version, no hash pin). Locally, as for
   numpy; the zuhu desktop has 12.2.0.
-- Used by: the 8 tests in `OW_PILLOW_PY_TESTS`, registered as `py-<name>` (label `needs-pillow`) where Pillow and
-  numpy both import.
+- Used by: in CI, the 8 tests in `OW_PILLOW_PY_TESTS`, registered as `py-<name>` (label `needs-pillow`).
+  Configure registers the group only where Pillow and numpy both import, so all 8 need numpy too. Outside the tests,
+  8 local scripts under `tools/` import it.
