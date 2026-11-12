@@ -16,7 +16,8 @@ mod off as read in the game; two runs of the same scripted steps, so two samples
 - **The suite** (`-owmissionpagetest`) sends the two edges a step apart where it checks them. New rows:
   `offer_escape_press_does_nothing`, `offer_enter_press_does_nothing`, `turn_in_enter_press_does_nothing`,
   `reward_enter_press_does_nothing`; renamed: `offer_escape_closes` is `mission_escape_release_closes`,
-  `offer_enter_accepts_and_closes` is `mission_enter_release_accepts`. `tools/check_mission_page.py` expects 37 rows.
+  `offer_enter_accepts_and_closes` is `mission_enter_release_accepts`. `tools/check_mission_page.py` expects 38 rows: the last one added, `marcus_walk_ends_before_the_turn_in`, comes from
+  the slower walk (below).
 - **Not changed, open:** after the reward the game's page goes back to its list (one eligible entry in that save) and
   stays open until Escape; the host closes it at once. Escape on the offer before an accept, and a left click, a gamepad
   button or Start on the reward page, were not observed with the mods off and are not built.
@@ -27,7 +28,11 @@ mod off as read in the game; two runs of the same scripted steps, so two samples
   The host now uses 150 as a constant for this walk and still reads and checks the class fields (logged with the walk's
   start). The host does not model the turn at node 35. Where the 150 comes from is `UNVERIFIED`; a possible source is the
   Patrol stance's SpeedScale 0.51 (294 x 0.51 = 150), which SANCTUARY_AMBIENT_NPCS.md records for a citizen's patrol walk;
-  Marcus's own stance was not read. The node percentage still multiplies it (1.0 on every node).
+  Marcus's own stance was not read. The node percentage still multiplies it (1.0 on every node). The slower walk
+  broke the mission page suite in its first in-engine run (12 of 37 rows failed): its turn-in stand was taken in front
+  of Marcus while he was still walking, so the use key's ray missed him a second later and E opened nothing. At 294 his
+  walk had ended before that step. The suite now waits (bounded, 30 s) for the walk to end before it stands, and the
+  new row `marcus_walk_ends_before_the_turn_in` says so. The host's use rule is unchanged.
 
 Verified: `python tests/check_mission_page_test.py` (synthetic); the core build, ctest and `verify_packages.py`; the
 Unreal module build. Review r1 on PR #246: the suite's last step (the view after its forced failure), which

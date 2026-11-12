@@ -13,10 +13,10 @@ def log(names=EXPECTED, result='PASS', summary=None):
 
 
 assert grade(log())[1] == [], grade(log())[1]
-assert len(EXPECTED) == 37, len(EXPECTED)
+assert len(EXPECTED) == 38, len(EXPECTED)
 # The release edge: each key the page acts on has a row for its press alone, and the release rows are required.
 for name in ('offer_escape_press_does_nothing', 'mission_escape_release_closes', 'offer_enter_press_does_nothing', 'mission_enter_release_accepts',
-             'turn_in_enter_press_does_nothing', 'reward_enter_press_does_nothing'):
+             'turn_in_enter_press_does_nothing', 'reward_enter_press_does_nothing', 'marcus_walk_ends_before_the_turn_in'):
     assert any(f'{name} appears 0 times' in p for p in grade(log(tuple(n for n in EXPECTED if n != name)))[1]), name
 # The rows of the key-down build are gone: a log from it fails.
 old = tuple(n for n in EXPECTED if n not in ('mission_escape_release_closes', 'mission_enter_release_accepts')) + ('offer_escape_closes', 'offer_enter_accepts_and_closes')

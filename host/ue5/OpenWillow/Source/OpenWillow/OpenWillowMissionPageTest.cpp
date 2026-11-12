@@ -253,43 +253,50 @@ void UOpenWillowQuest::TickScreenPageTest()
         }
         Row(TEXT("mission_ready_to_turn_in"), Status() == 2, State());
         if (Status() != 2) { Finish(); return; }
+        break;
+    case 14:
+        // Accepting starts his walk to the range, and the turn-in stand faces where he is: the use key's ray (InTalkReach) aims there, so a stand
+        // taken while he still walks misses him a second later and E opens nothing. Wait for the end of the walk (bounded), then stand.
+        if (!Await(Marcus && !Marcus->IsWalking())) return;
+        Row(TEXT("marcus_walk_ends_before_the_turn_in"), Marcus && !Marcus->IsWalking() && Marcus->NodesReached() > 0,
+            FString::Printf(TEXT("walking=%d nodes=%d waited=%.1fs %s"), Marcus && Marcus->IsWalking() ? 1 : 0, Marcus ? Marcus->NodesReached() : -1, Now - ScreenStepAt, *State()));
         Stand();
         Wait = 1.;
         break;
-    case 14:
+    case 15:
         ViewBefore();
         UseE();
         break;
-    case 15:
+    case 16:
         if (!Await(ScreenPage->IsShown())) return;
         Row(TEXT("e_opens_the_turn_in"), UseArrived() && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
         break;
-    case 16:
+    case 17:
         if (!Await(Drawn())) return;
         Row(TEXT("turn_in_drawn"), Drawn(), State());
         Wait = 1.;
         break;
-    case 17:
+    case 18:
         HudRow(TEXT("hud_hidden_behind_the_turn_in"), true);
         FocusRow(TEXT("camera_on_marcus_turn_in"), true);
         PageShot(TEXT("4_TurnIn"));
         Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
         Wait = 1.;
         break;
-    case 18:
+    case 19:
         Row(TEXT("turn_in_enter_press_does_nothing"), PageEdge(EKeys::Enter, false) && Status() == 2 && ScreenPage->IsShown() && ScreenPageOn == TEXT("turnin") && RewardPages == 0, State());
         Wait = 1.;
         break;
-    case 19:   // the release turns in; the next row sees the reward page
+    case 20:   // the release turns in; the next row sees the reward page
         PageEdge(EKeys::Enter, true);
         break;
-    case 20:
+    case 21:
         if (!Await(ScreenPageOn == TEXT("reward") && Drawn())) return;
         Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
             && RewardPages == 1 && RewardsReceived == 0 && Drawn(), State());
         Wait = 1.;
         break;
-    case 21:
+    case 22:
         HudRow(TEXT("hud_hidden_behind_the_reward"), true);
         FocusRow(TEXT("camera_on_marcus_reward"), true);
         PageShot(TEXT("5_Reward"));
@@ -297,23 +304,23 @@ void UOpenWillowQuest::TickScreenPageTest()
         Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
         Wait = 1.;
         break;
-    case 22:
+    case 23:
         Row(TEXT("reward_enter_press_does_nothing"), PageEdge(EKeys::Enter, false) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
         Wait = 1.;
         break;
-    case 23:
+    case 24:
         // The release takes it, then the host closes the page (the game goes back to its list and stays open until Escape: an open difference).
         Row(TEXT("enter_takes_the_reward_and_closes"), PageEdge(EKeys::Enter, true) && Status() == 3 && !ScreenPage->IsShown() && !ScreenOpenInVm() && !RewardPendingInVm() && RewardsReceived == 1, State());
         Wait = 1.5;
         break;
-    case 24:
+    case 25:
         HudRow(TEXT("hud_back_after_the_reward"), false);
         FocusRow(TEXT("camera_back_after_the_reward"), false);
         PageShot(TEXT("6_Closed"));
         Row(TEXT("first_person_back_after_the_reward"), Maya->AreArmsShown(), State());
         UseE();
         break;
-    case 25:
+    case 26:
         // Nothing here changes when the press lands, so the row waits for the press itself.
         if (!Await(UseArrived())) return;
         Row(TEXT("e_afterwards_opens_nothing"), UseArrived() && !ScreenPage->IsShown(), State());

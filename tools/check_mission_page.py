@@ -13,7 +13,7 @@ import sys
 EXPECTED = ('page_ready', 'e_refused_under_a_status_page', 'control_gun_fires_before_the_page', 'first_e_opens_the_page', 'offer_drawn', 'held_trigger_does_not_fire_under_the_page',
             'offer_e_does_nothing', 'offer_escape_press_does_nothing', 'mission_escape_release_closes', 'gun_fires_again_after_the_close', 'e_opens_the_offer_again',
             'offer_drawn_again', 'offer_enter_press_does_nothing', 'mission_enter_release_accepts',
-            'mission_ready_to_turn_in', 'e_opens_the_turn_in', 'turn_in_drawn', 'turn_in_e_does_nothing', 'turn_in_enter_press_does_nothing', 'enter_shows_the_reward_page',
+            'mission_ready_to_turn_in', 'marcus_walk_ends_before_the_turn_in', 'e_opens_the_turn_in', 'turn_in_drawn', 'turn_in_e_does_nothing', 'turn_in_enter_press_does_nothing', 'enter_shows_the_reward_page',
             'reward_waits_for_enter', 'reward_enter_press_does_nothing', 'enter_takes_the_reward_and_closes', 'first_person_back_after_the_reward', 'e_afterwards_opens_nothing',
             'hud_hidden_behind_the_offer', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_the_reward',
             'camera_on_marcus_offer', 'camera_back_after_escape', 'camera_on_marcus_turn_in', 'camera_on_marcus_reward', 'camera_back_after_the_reward',

@@ -15,7 +15,7 @@ class FJsonObject;
 namespace OpenWillowMissionPageSuite
 {
 constexpr int32 ObjectivesStep = 13;
-constexpr int32 ViewAfterFailureStep = 27;
+constexpr int32 ViewAfterFailureStep = 28;
 }
 
 // Host binding of the Sanctuary slice mission (-owquest). Runs the installed "Rock, Paper, Genocide: Fire Weapons!"
