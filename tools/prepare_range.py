@@ -181,13 +181,19 @@ def worn_counts(targets, identity, target_path, identity_path):
         if not isinstance(entry, dict):
             problems.append("%s: no entry in %s" % (asset, identity_path))
             continue
-        counts[asset] = len(entry.get("attachments") or [])
+        # The import's identity step always writes the key; one without it (an identity.json from before 2026-11-06) knows nothing about
+        # worn pieces, and reading that as "wears nothing" would let a target without placements through.
+        if not isinstance(entry.get("attachments"), list):
+            problems.append("%s: no attachments list in %s (written before the import read worn pieces)" % (asset, identity_path))
+            continue
+        counts[asset] = len(entry["attachments"])
         placed = len(target.get("attachments") or [])
         if placed != counts[asset]:
             problems.append("%s: %d attachment placements in %s, %d worn pieces in %s" % (asset, placed, target_path, counts[asset], identity_path))
     if problems:
-        raise SystemExit("the imported enemies' worn attachments do not match the import (%s): the placements were lost, for example by "
-                         "an editor job that rewrote host_target.json, or never written. No manifest was written. Re-run %s"
+        raise SystemExit("the imported enemies' worn attachments do not match the import (%s): the placements were lost (for example by "
+                         "an editor job that rewrote host_target.json) or never written, or the identity is older than the import's read of worn "
+                         "pieces. No manifest was written. Re-run %s"
                          % ("; ".join(problems), ATTACH_STEP))
     return counts
 
@@ -496,8 +502,13 @@ def main(argv=None):
             targets = json.load(f)
     identity = {}
     if targets and os.path.isfile(args.identity):
-        with open(args.identity, encoding="utf-8") as f:
-            identity = json.load(f)
+        try:
+            with open(args.identity, encoding="utf-8") as f:
+                identity = json.load(f)
+        except (OSError, ValueError) as error:
+            raise SystemExit("cannot read the import's identity %s (%s): no manifest was written. Re-run %s" % (args.identity, error, ATTACH_STEP))
+        if not isinstance(identity, dict):
+            raise SystemExit("the import's identity %s is not a JSON object: no manifest was written. Re-run %s" % (args.identity, ATTACH_STEP))
     worn = worn_counts(targets, identity, args.target, args.identity)
     kinds = {}
     ranges = {} if args.no_vm else start_ranges(args.reader)

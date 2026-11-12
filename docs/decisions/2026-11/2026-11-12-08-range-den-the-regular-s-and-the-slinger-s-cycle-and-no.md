@@ -8,8 +8,8 @@ follow-up named in `2026-11-12-07-range-den-baby-collision-per-kind-speeds-and-t
   regular's cycle at medians of 1.2200 to 1.2227 s per recording (96 gaps over three recordings; it uses the adult's melee
   definition) and a slinger's melee at the player at a median of 1.2224 s (28 gaps, one recording). `KindMeleeRows` gives both kinds
   a row with stand distance 0, which means "no live stand distance": the brain keeps its stand-in stop, 60 uu inside the stock
-  swing range (260 for the regular). The checker's bands are the medians widened 0.005 s each way, as for the adult: regular 1.215
-  to 1.228, slinger 1.217 to 1.227. A row without a stand distance grades the cycle only. Because the regular now has a row, the
+  swing range (260 for the regular). The checker's bands are the medians widened 0.005 s each way, as for the adult, each edge
+  rounded outward to the millisecond: regular 1.215 to 1.228, slinger 1.217 to 1.228. A row without a stand distance grades the cycle only. Because the regular now has a row, the
   in-engine `kind_melee` step runs for it on the default range too (about 6 s more), and `melee_interval` holds enemy 0, a regular,
   to 1.222 instead of 1.25.
 - **The stand distance stays open.** No stand distance was sampled for either kind, and the regular's median call distance sat 70
@@ -20,12 +20,17 @@ follow-up named in `2026-11-12-07-range-den-baby-collision-per-kind-speeds-and-t
   suites ran green on enemies without their worn parts. The expectation now comes from the import's own read of each pawn
   (`identity.json` next to the target, which `tools/prepare_phaselock_target.py` checks against its expected set), not from a count
   in the range tools. `tools/prepare_range.py` stops without writing when the placements differ from that read, or when the identity
-  has no entry for an imported asset, and writes `attachments_expected` per kind (0 on engine shapes, 0 for a pawn that wears
+  has no entry for an imported asset, no `attachments` list in that entry (an identity from before 2026-11-06) or cannot be read,
+  and writes `attachments_expected` per kind (0 on engine shapes, 0 for a pawn that wears
   nothing). `tools/check_range.py --preflight` refuses a manifest whose spawned kinds carry a different number of pieces, or that
   has no such field, with exit 2 and the step to rerun (`tools/import_phaselock_target.ps1 -Steps attach`, then
-  `tools/prepare_range.py`). Every manifest written before this change is refused once and must be regenerated.
+  `tools/prepare_range.py`). Every manifest written before this change is refused once and must be regenerated. Known limit: the
+  preflight trusts the manifest's own `attachments_expected` and does not read `identity.json` again, so a hand-edited manifest
+  (0 expected, no pieces) passes; the manifest is a generated file.
 
-Verified live (one map, one level, one session): the regular's and the slinger's cycle values, at about 120 frames per second.
+Verified live: the regular's cycle (96 gaps over three recordings) and the slinger's melee cycle (28 gaps, one recording), at about
+120 frames per second. Confirmed in session 2 of 2026-11-12, den capture on Three Horns Divide, Maya level 8; SDK mods loaded (the
+three loot mods off in memory for the cash runs; the cheats mod's options off as read); one map, one level, one session.
 
 Tested in the host only: `tests/range_kind_melee_test.py` (the host rows equal the table, the medians inside the bands, 1.25
 outside them, a cycle-only row graded on its cycle) and `tests/range_tools_test.py` (lost placements write no manifest, the preflight

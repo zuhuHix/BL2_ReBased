@@ -208,6 +208,39 @@ class PrepareRangeTest(unittest.TestCase):
                 self.prepare(target)
             self.assertIn('no entry in', str(stop.exception))
 
+    def test_an_identity_without_the_attachments_key_is_not_wears_nothing(self):
+        # Review r1 of PR #250: an identity.json from before 2026-11-06 has no attachments key; with a target without placements that read
+        # as 0 expected, and the bare enemies passed.
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            target = self.write_import(folder, 0, 0)
+            identity = os.path.join(folder, 'identity.json')
+            with open(identity, 'w', encoding='utf-8') as f:
+                json.dump({'targets': {'Bullymong': {'pawn': 'P'}}}, f)
+            with self.assertRaises(SystemExit) as stop:
+                prepare_range.worn_counts(json.load(open(target, encoding='utf-8')), json.load(open(identity, encoding='utf-8')), target, identity)
+            self.assertIn('Bullymong: no attachments list in', str(stop.exception))
+            self.assertIn('-Steps attach', str(stop.exception))
+            with self.assertRaises(SystemExit):
+                self.prepare(target)
+
+    def test_an_unreadable_identity_stops_with_the_attach_step(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            target = self.write_import(folder, 3, 3)
+            identity = os.path.join(folder, 'identity.json')
+            for content, word in (('{not json', 'cannot read'), ('[1, 2]', 'not a JSON object')):
+                with self.subTest(content=content):
+                    with open(identity, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    with self.assertRaises(SystemExit) as stop:
+                        self.prepare(target)
+                    self.assertIn(word, str(stop.exception))
+                    self.assertIn('-Steps attach', str(stop.exception))
+
     def test_the_manifest_carries_the_worn_count_from_the_import(self):
         import json
         import tempfile

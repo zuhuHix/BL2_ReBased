@@ -55,11 +55,13 @@ ACCEPTANCE = {
     # stand: one baby, 347 samples, 106 to 118).
     "bullymong_baby": {"cycle": 1.133, "cycle_band": (1.128, 1.139), "stand": 111.0, "stand_band": (106.0, 118.0)},
     # The cycle only (2026-11-12): stand None means no live stand distance, so the host keeps its stand-in stop and no stand band is graded.
-    # Regular: session 2 of 2026-11-12, medians 1.2200 to 1.2227 s per recording, 96 gaps over three, widened 0.005 each way like the adult's.
+    # Regular: session 2 of 2026-11-12, medians 1.2200 to 1.2227 s per recording, 96 gaps over three, widened 0.005 each way like the adult's
+    # (each edge rounded outward to the millisecond, as for all three bullymong cycle bands).
     # Its median call distance sat 70 to 85 uu beyond contact, unexplained, and no stand distance was sampled: the stand stays open.
     "bullymong": {"cycle": 1.222, "cycle_band": (1.215, 1.228), "stand": None, "stand_band": None},
-    # Slinger's melee: the same session, median 1.2224 s, 28 gaps, one recording, widened 0.005 each way. No stand distance sampled.
-    "bullymong_slinger": {"cycle": 1.222, "cycle_band": (1.217, 1.227), "stand": None, "stand_band": None},
+    # Slinger's melee: the same session, median 1.2224 s, 28 gaps, one recording, widened 0.005 each way (1.2174 to 1.2274) and rounded
+    # outward to the millisecond. No stand distance sampled.
+    "bullymong_slinger": {"cycle": 1.222, "cycle_band": (1.217, 1.228), "stand": None, "stand_band": None},
 }
 # A frame longer than this is a stall, not a frame: the cycle allowance stops there (the host's state update is 0.2 s). It counts only when
 # a cycle is over its plain band; then the line asks for a rerun.
