@@ -206,7 +206,8 @@ def _item_row(pk, inv, balance):
 
 
 def _values(inv):
-    """Whatever the item itself says it is worth; a call the class lacks is recorded as such, not guessed around."""
+    """Whatever the item itself says it is worth; a call the class lacks is recorded as such, not guessed around. Not fields only: the
+    item's value functions are called (inherited since e7b5fa3; docs/TOOLING.md, "What the fields-only rule binds")."""
     out = {}
     for call in VALUE_CALLS:
         try:
@@ -238,7 +239,9 @@ def cp_target(radius=6000.0):
 
 def cp_ready_kill(name):
     """Stand 500 uu from the enemy, aim at it and leave it one hit point: the caller's real shot then runs the stock death and loot.
-    CP["kills"] counts these attempts; cp_died says whether the attempt killed."""
+    CP["kills"] counts these attempts; cp_died says whether the attempt killed. Not fields only: SetHealth is called on the kill target,
+    and cp_target's cb_enemies calls the four health and shield getters on each pawn in its radius (inherited since e7b5fa3; ran in the
+    sessions of 2026-11-12; docs/TOOLING.md, "What the fields-only rule binds")."""
     cb_place(name, 500.0, 180.0)
     _find_ai(name).SetHealth(1.0)
     CP["kills"] += 1

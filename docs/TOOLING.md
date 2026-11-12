@@ -1522,10 +1522,12 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   lasts only as long as the time left in its bound, and a reply after the bound is not taken and changes nothing, so the step ends
   within the two bounds' sum. Reads only; a failure names the wait that ran out. The den down's polls are clamped to their windows
   the same way: none starts in a window's last 6 s, a reply after the window is not taken, and no re-placement starts after it.
-- **Driver lost**: one condition shared by the helpers and every stage. After a reply that never came (any stage's, a den-down
-  poll's even when its wait was shortened by the window, the watch's end snapshot, dump and stop, the den trial's close), nothing
-  more is sent to the driver, not the quit and not the finalizer's best-effort stops; the remaining stages are skipped, the run
-  fails, and the finalizer stops the run's own game by its PID and restores without the driver. Each stage is stamped to `stages-<run>.log` before its risky command.
+- **Driver lost**: one condition shared by the helpers and every stage. A reply that never came sets it: to any of the capture's
+  own commands (its `Py`, a probe load), to a den-down poll even when the window shortened its wait, to the watch's settle read,
+  snapshots, pawn reads, end snapshot, dump and stop, or to the den trial's close. From then on the capture's `Py` refuses every
+  command, so no key, click, placement or probe call follows in that stage; the later stages report themselves as skipped; no quit
+  and no finalizer stop is sent; and the finalizer stops the run's own game by its PID and restores without the driver. The waits
+  that expect silence for a while (the boot wait, a travel's map polls, the load step) refuse once it is set but do not set it. Each stage is stamped to `stages-<run>.log` before its risky command.
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
   window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
   held input is never completed. A record is rewritten in one replace. After a failed rewrite either the old record or its
@@ -1561,6 +1563,17 @@ before, but a run's kill count and length can differ from the sessions'.
 - The watch: `frame_controller` puts the player's own controller's `bCinematicMode`, `IgnoreMoveInput` and `IgnoreLookInput`
   (fields) in each frame row, and the AI pawn read carries `Velocity`. The checker's `pawns` rule takes a `name`, so a named NPC's
   own clean reads are counted.
+
+**What the fields-only rule binds, and what it does not.** The rule "nothing is called on a scanned object" binds the watch
+(`scripts/slice_watch.py`) and the den down's re-placement (`dp_replace`). Three older probe paths, unchanged since e7b5fa3, still call
+native functions on objects they found by a scan or by name: `cb_enemies` (`scripts/combat_probe.py`, `_pawn_state`) calls
+`GetHealth`, `GetMaxHealth`, `GetShieldStrength` and `GetMaxShieldStrength` on every `WillowAIPawn_<n>` within its radius that is not
+marked for deletion, before its controller filter, and is reached by `cp_target` (the kill target) and `dp_begin` (the den trials and
+each den down's first placement); `cp_ready_kill` calls `SetHealth(1.0)` on the kill target; `_values` (`scripts/cash_probe.py`)
+calls the item's value functions (`GetMonetaryValue`, `GetMonetaryValueAfterModifiers`) on a money pickup's inventory item. All
+three ran in each of the six `cash_capture` items of 2026-11-12 (three smoke items and three S2.1 or S2.5 runs, 1 to 6 kill attempts
+each, every den trial and each den down's first placement), with 0 game crashes. That is a record of runs, not proof that they cannot
+crash the game. Known follow-up: the first placement and the kill target could be picked by pool fields, as `dp_replace` does.
 
 ## Sanctuary ambient NPCs (host, behind a flag)
 

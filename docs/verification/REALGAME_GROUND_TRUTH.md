@@ -397,3 +397,8 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
   first at the new commit. The mission screen's two new controller calls (`GetPlayerViewPoint`, `GetFOVAngle`) are in no smoke item,
   so their first real run is the mission item itself: the runbook's rule for a first-run read applies, and a crash in that item's
   first minutes is treated as theirs. The readings loop's skip list is the one change to what a run does in the game (TOOLING).
+- **What these runs show for the older probe paths:** the fields-only rule binds the watch and the den down's re-placement. Three
+  older paths still call native functions on objects found by a scan or by name (`cb_enemies` with its four health and shield
+  getters, reached by `cp_target` and `dp_begin`; `cp_ready_kill`'s `SetHealth(1.0)`; `_values` on a pickup's item). All three ran
+  in the six `cash_capture` items of 2026-11-12 with 0 game crashes; that is a record, not proof against a crash
+  (`docs/TOOLING.md`, "What the fields-only rule binds").

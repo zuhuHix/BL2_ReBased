@@ -24,7 +24,13 @@ the limits are the same as before, but a run's kill count and length can differ 
   takes a `name`, so a named NPC's own clean reads are counted (with a name, at least one read and one pawn are required).
 
 The watch's properties stay as they were: nothing is called on a scanned object, hooked functions are read by their parameters only,
-pools fail closed, nothing is scanned before the map settles, and recordings are streamed and capped. The calls added are on the
+pools fail closed, nothing is scanned before the map settles, and recordings are streamed and capped. That fields-only rule binds the
+watch and the den down's re-placement only. Three older probe paths, unchanged since e7b5fa3, still call native functions on objects
+found by a scan or by name: `cb_enemies` (`_pawn_state`'s four health and shield getters on every live `WillowAIPawn_<n>` in its
+radius, reached by `cp_target` and `dp_begin`), `cp_ready_kill` (`SetHealth(1.0)` on the kill target) and `_values` (the value
+functions of a money pickup's inventory item). They ran in each of the six `cash_capture` items of 2026-11-12 with 0 game crashes,
+which is a record of runs, not proof against a crash. The driver-lost condition now also binds the capture's own commands: once it
+is set, `Py` refuses every command, and a reply that never comes sets it. The calls added are on the
 player's own controller only (`GetPlayerViewPoint`, `GetFOVAngle`) and in the cash probe's existing scans (`cp_died` reads fields of
 the pawn it finds by name).
 
