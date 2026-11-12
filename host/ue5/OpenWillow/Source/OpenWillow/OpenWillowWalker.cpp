@@ -303,7 +303,7 @@ void AOpenWillowWalker::TickDown(float Now, float DeltaSeconds)
 AOpenWillowWalker::FShieldStats AOpenWillowWalker::ReadShieldStats(const FOpenWillowGearItem* Item, const FOpenWillowStandInShieldRule& Rule)
 {
     // The card stats: "Capacity" (as the HUD reads it), "Recharge Rate" and "Recharge Delay" (labels as BL2's shield card shows them;
-    // the local card data was not seen with the last two, UNVERIFIED). A card without them keeps the live-read stand-ins of
+    // the local card data was not seen with the last two, UNVERIFIED). A card without them keeps the invented host stand-ins of
     // FOpenWillowMayaStats. A card without a capacity (stand-in gear) takes the stand-in rule's at the item's level.
     const FOpenWillowMayaStats Defaults;
     FShieldStats Out;

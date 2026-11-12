@@ -91,6 +91,21 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         Carded.Stats.Add(Stat);
         const AOpenWillowWalker::FShieldStats FromCard = AOpenWillowWalker::ReadShieldStats(&Carded, Rule);
         TestTrue(TEXT("a card's own capacity wins"), !FromCard.bStandIn && FromCard.Capacity == 1250.f);
+        // The recharge stand-ins (invented host defaults) apply only to a card without its own recharge stats; the values are not pinned here.
+        const FOpenWillowMayaStats Defaults;
+        TestTrue(TEXT("the recharge stand-ins are set"), Defaults.ShieldRechargeDelay > 0.f && Defaults.ShieldRechargeRate > 0.f);
+        TestTrue(TEXT("a card without recharge stats keeps the stand-ins"),
+            FromRule.RechargeDelay == Defaults.ShieldRechargeDelay && FromRule.RechargeRate == Defaults.ShieldRechargeRate
+            && FromCard.RechargeDelay == Defaults.ShieldRechargeDelay && FromCard.RechargeRate == Defaults.ShieldRechargeRate);
+        FOpenWillowGearItem Recharged = Carded;
+        Stat.Label = TEXT("Recharge Delay");
+        Stat.Value = TEXT("3.5");
+        Recharged.Stats.Add(Stat);
+        Stat.Label = TEXT("Recharge Rate");
+        Stat.Value = TEXT("12");
+        Recharged.Stats.Add(Stat);
+        const AOpenWillowWalker::FShieldStats FromRecharge = AOpenWillowWalker::ReadShieldStats(&Recharged, Rule);
+        TestTrue(TEXT("a card's own recharge stats win"), FromRecharge.RechargeDelay == 3.5f && FromRecharge.RechargeRate == 12.f);
 
         FOpenWillowMayaState Maya = Synthetic();
         Maya.EquipShield(FromRule.Capacity, FromRule.RechargeDelay, FromRule.RechargeRate, true, 0.f);

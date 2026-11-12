@@ -115,8 +115,8 @@ FOpenWillowMayaState::ETickEvent FOpenWillowMayaState::Tick(float Now, float Del
     Shield = FMath::Min(Shield, S.ShieldCapacity);
     if (Phase == EOpenWillowDownPhase::Up)
     {
-        // The shield waits the delay after the last hit, then rises at the rate (live: 1.613-1.618 s, one frame past the
-        // read delay, then about 25.9 per second; step 10). Not while down (host rule, UNVERIFIED).
+        // The shield waits the delay after the last hit, then rises at a constant rate (live: it rose one frame past the pool's
+        // read delay, at the read rate; COMBAT_GOLDEN_TRACE.md step 10). Not while down (host rule, UNVERIFIED).
         if (Now - LastDamageAt >= S.ShieldRechargeDelay && Shield < S.ShieldCapacity)
             Shield = FMath::Min(S.ShieldCapacity, Shield + S.ShieldRechargeRate * DeltaSeconds);
         if (S.HealthRegenRate > 0.f && Health > 0.f)

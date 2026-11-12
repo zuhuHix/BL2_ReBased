@@ -33,8 +33,12 @@ struct OPENWILLOW_API FOpenWillowMayaStats
     float MaxHealth = 400.f;              // replaced by the level formula with -owquest
     float HealthRegenRate = 0.f;          // per second; live: 0 (health did not regenerate, COMBAT_GOLDEN_TRACE.md step 10)
     float ShieldCapacity = 0.f;           // 0: no shield equipped
-    float ShieldRechargeDelay = 1.611f;   // s after the last hit; live read for one shield (step 10), the stand-in when the card has none
-    float ShieldRechargeRate = 25.88f;    // per second; live read for the same shield (step 10), the stand-in when the card has none
+    // The recharge of a shield whose card has no "Recharge Delay" / "Recharge Rate" (vendor, loot and start shields are stand-in gear).
+    // INVENTED round host stand-ins, not game data and not any player's shield: no prepared data gives a stock shield's delay or rate
+    // (the player shield pool has none; they come from the shield's parts, which no prep tool resolves yet). UNVERIFIED. To be replaced
+    // by the stock shield parts' values at the item's level once a prep step computes them (COMBAT_DOWN_RESPAWN.md "The host's state").
+    float ShieldRechargeDelay = 2.f;      // s after the last hit
+    float ShieldRechargeRate = 40.f;      // per second, whatever the capacity
     float BleedoutMultiplier = 1.f;       // TimeToBeRevivedMultiplier (attribute default 1)
     float SecondWindHealthPct = 0.25f;    // RejuvenatedHealthPctOfMax (data 0.25; live 136.97 = 0.25 x 547.874)
     float RevivalHealthMultiplier = 1.f;  // the attribute, 1 at its default
