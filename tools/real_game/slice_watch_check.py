@@ -28,9 +28,16 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   no_missing:        true: every name in funcs resolved.
   max_auto_failures: the most automatic snapshots or pawn reads with a failed part (default: no limit).
   require:           [{"func": "<substring of a hook path>", "tag": "pre"|"post", "min": N, "max": M}]
-  order:             [["<first>", "<then>"]]: some row matching <then> comes after the first row matching <first> (game time).
-  gap:               [{"from": "<substring>", "to": "<substring>", "min": s, "max": s}]: game seconds from the first <from> row to the
-                     first <to> row after it lie in [min, max].
+  order:             [["<first>", "<then>"]]: some row matching <then> comes after the first row matching <first>, on the
+                     recording's own clock (t, real seconds since the watch started; the map clock restarts at every travel).
+  gap:               [{"from": "<substring>", "to": "<substring>", "min": s, "max": s}]: seconds on that clock from the first <from> row
+                     to the first <to> row after it lie in [min, max].
+  must_fire:         ["<substring>", ...]: a hooked function whose path holds it fired at least once (the end line's per-function
+                     record). Every recording also gets an 'exercised' line: how many hooked functions fired, and the ones installed
+                     but never exercised (a long item that relies on one of those makes its first real run).
+  groups:            always checked when the spec has groups: every group was installed (its marker lines are in the recording).
+  args_nonempty:     [{"func": "<substring>", "tag": "pre"|"post", "min": N}]: at least N rows of that hook, and every one of them carries
+                     non-empty arguments (a function known to have parameters: an empty list there means the reader refused it).
   edges:             [{"func": "<substring>", "arg": "<argument>", "values": [v, ...]}]: rows of that hook carry each value.
   snaps:             ["<label>" | ["<label>", "<alternative>", ...], ...]: labelled snapshots with these labels exist (for a list,
                      any one of them).
@@ -52,7 +59,7 @@ import sys
 from pathlib import Path
 
 DEFERRABLE = ("start", "arrival")
-CHECK_KEYS = {"no_missing", "max_errors", "max_dropped", "expect_not_taken", "allow_switched_off", "allow_not_taken", "max_defer_seconds", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
+CHECK_KEYS = {"must_fire", "args_nonempty", "no_missing", "max_errors", "max_dropped", "expect_not_taken", "allow_switched_off", "allow_not_taken", "max_defer_seconds", "max_auto_failures", "require", "order", "gap", "edges", "snaps", "snap_content",
               "mods_must_be_off", "frames", "rows_have_dt", "pawns"}
 CONTENT_KINDS = {"present", "dict", "nonempty", "number"}
 
@@ -60,7 +67,7 @@ CONTENT_KINDS = {"present", "dict", "nonempty", "number"}
 def load_recording(path):
     """The JSON-lines recording as one dict: meta fields, rows, frames, snaps, pawns, and the end line (None after a crash). A last line
     cut short by a crash is skipped."""
-    out = {"rows": [], "frames": [], "snaps": [], "pawns": [], "missing": [], "end": None}
+    out = {"rows": [], "frames": [], "snaps": [], "pawns": [], "missing": [], "end": None, "groups": [], "marks": []}
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
         if not line.strip():
@@ -73,11 +80,15 @@ def load_recording(path):
             raise
         kind = rec.pop("k", None)
         if kind == "meta":
-            out.update(missing=rec.get("missing", []), resolved=rec.get("resolved", []), spec=rec.get("spec"))
+            out.update(missing=rec.get("missing", []), resolved=rec.get("resolved", []), spec=rec.get("spec"), params_misfit=rec.get("params_misfit", {}))
         elif kind in ("row", "frame", "snap"):
             out[kind + "s"].append(rec)
         elif kind == "pawns":
             out["pawns"].append(rec)
+        elif kind == "group":
+            out["groups"].append(rec)
+        elif kind == "mark":
+            out["marks"].append(rec)
         elif kind == "end":
             out["end"] = rec
     return out
@@ -103,7 +114,7 @@ def validate_spec(spec_path):
     snaps = checks.get("snaps", [])
     if not isinstance(snaps, list) or not all(isinstance(x, str) or (isinstance(x, list) and x and all(isinstance(y, str) for y in x)) for x in snaps):
         raise ValueError("snaps must be a list of labels or of lists of alternative labels")
-    for key in ("mods_must_be_off", "expect_not_taken", "allow_switched_off", "allow_not_taken"):
+    for key in ("mods_must_be_off", "expect_not_taken", "allow_switched_off", "allow_not_taken", "must_fire"):
         if key in checks and not (isinstance(checks[key], list) and all(isinstance(x, str) for x in checks[key])):
             raise ValueError(f"{key} must be a list of strings")
     return spec
@@ -114,8 +125,9 @@ def _match(rows, needle, tag=None):
 
 
 def _g(row):
-    g = row.get("g")
-    return g if isinstance(g, (int, float)) and not isinstance(g, bool) else None
+    """A row's time on the recording's own clock (t): it never restarts, unlike the map clock (g), which a travel resets."""
+    t = row.get("t")
+    return t if isinstance(t, (int, float)) and not isinstance(t, bool) else None
 
 
 def _content_ok(snap, part, kind):
@@ -160,6 +172,28 @@ def check(dump, checks):
         lo, hi = req.get("min", 1), req.get("max")
         ok = n >= lo and (hi is None or n <= hi)
         out.append((f"require {req['func']} {req.get('tag', '')}".strip(), ok, f"{n} rows (want {lo}..{hi if hi is not None else 'any'})"))
+    fn = (end or {}).get("fn") or {}
+    if fn:
+        fired = [p for p, r in fn.items() if (r or {}).get("n", 0) > 0]
+        never = sorted(p for p, r in fn.items() if not (r or {}).get("n", 0))
+        out.append(("exercised", True, f"{len(fired)} of {len(fn)} hooked functions fired; installed, never exercised: {', '.join(never) or 'none'}"))
+    for need in checks.get("must_fire", []):
+        hit = [p for p, r in fn.items() if need in p and (r or {}).get("n", 0) > 0]
+        out.append((f"must_fire {need}", end is not None and bool(hit), f"{len(hit)} matching functions fired"))
+    spec_groups = [g.get("name") for g in ((dump.get("spec") or {}).get("groups") or [])]
+    if spec_groups:
+        installed = set((end or {}).get("groups_installed", []) or []) | {g.get("name") for g in dump.get("groups", []) if g.get("event") == "installed"}
+        not_installed = [g for g in spec_groups if g not in installed]
+        out.append(("groups", not not_installed, f"{len(spec_groups) - len(not_installed)} of {len(spec_groups)} groups installed; "
+                                                 f"not installed: {', '.join(not_installed) or 'none'}"))
+    for req in checks.get("args_nonempty", []):
+        matched = _match(rows, req["func"], req.get("tag"))
+        empty = [r for r in matched if not {k: v for k, v in (r.get("args") or {}).items() if k != "args_error"}]
+        ok = len(matched) >= req.get("min", 1) and not empty
+        out.append((f"args_nonempty {req['func']} {req.get('tag', '')}".strip(), ok, f"{len(matched)} rows, {len(empty)} with no arguments"))
+    misfit = (end or {}).get("params_misfit") or dump.get("params_misfit") or {}
+    if misfit:
+        out.append(("params_misfit", True, f"{len(misfit)} hooked functions whose parameters were refused (listed in the recording; counted as errors)"))
     for first, then in checks.get("order", []):
         a = [_g(r) for r in _match(rows, first) if _g(r) is not None]
         b = [_g(r) for r in _match(rows, then) if _g(r) is not None]
@@ -234,16 +268,22 @@ def check(dump, checks):
         reads = dump.get("pawns", [])
         need = pawns.get("fields", [])
 
+        def healthy(pool):
+            """A health pool counts only when every condition was shown: a record, no stale reason, numeric values."""
+            if not isinstance(pool, dict) or "stale" not in pool or pool.get("stale") is not None:
+                return False
+            return all(isinstance(pool.get(k), (int, float)) and not isinstance(pool.get(k), bool) for k in ("CurrentValue", "MaxValue"))
+
         def good(p):
             if not all(p.get(f) is not None for f in need):
                 return False
-            return not ("health_pool" in need and (p.get("health_pool") or {}).get("stale"))
+            return not ("health_pool" in need and not healthy(p.get("health_pool")))
         full = [r for r in reads if not r.get("failed") and not r.get("not_taken")
                 and sum(1 for p in r.get("pawns", []) if good(p)) >= pawns.get("min_pawns", 1)]
-        stale = sum(1 for r in reads for p in r.get("pawns", []) if (p.get("health_pool") or {}).get("stale"))
+        stale = sum(1 for r in reads for p in r.get("pawns", []) if not healthy(p.get("health_pool")))
         ok = len(full) >= pawns.get("min_reads", 1)
         out.append(("pawns", ok, f"{len(full)} of {len(reads)} reads clean, with {pawns.get('min_pawns', 1)}+ pawns carrying every field; "
-                                 f"{stale} pawn rows with a stale health pool"))
+                                 f"{stale} pawn rows without a healthy health pool"))
     return out
 
 

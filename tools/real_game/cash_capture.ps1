@@ -78,6 +78,8 @@ $snapshots = @{}
 $stagesRequested = @('travel', 'readings'); if (!$SkipDen) { $stagesRequested += 'den_read' }
 if ($DenDown -and $SkipDen) { throw '-DenDown needs the den read; it cannot be combined with -SkipDen' }
 if ($DenDown) { $stagesRequested += 'den_down' }
+if ($WatchSmoke -and !$WatchSpec) { throw '-WatchSmoke needs -WatchSpec' }
+if ($WatchSmoke) { $stagesRequested += 'smoke_hold' }
 if ($WatchSpec) { $stagesRequested += 'watch' }
 $stageResults = [ordered]@{}; foreach ($stage in $stagesRequested) { $stageResults[$stage] = 'not run' }
 $log.requested_stages = $stagesRequested
@@ -101,16 +103,39 @@ function Test-CashDump([string]$Reply, [int]$Kills, [int]$Single) {
     if ($said.collected -ne $rows.Count) { throw "cash.json holds $($rows.Count) collects, the probe said $($said.collected)" }
     if ($said.kills -ne $Kills -or $file.kills -ne $Kills) { throw "cash.json says $($file.kills) kills, the probe said $($said.kills), the run counted $Kills" }
 }
+# A number the game printed, or $null.
+function ConvertTo-Clock([string]$Text) {
+    $d = 0.0
+    if ([double]::TryParse("$Text".Trim(), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { $d } else { $null }
+}
+# Travel to Ice_P. The map clock is read before the travel is sent; a reply counts as the arrival only once the clock has restarted below
+# that value (the new map), so the old map's state is never taken for the arrival (the same map is loaded again for every den trial).
 function Enter-IceMap {
+    $before = $null
+    try { $before = ConvertTo-Clock (Py 'print(get_pc().WorldInfo.TimeSeconds)  # ow_clock_before' 8) } catch { }
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     $reached = ''
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep 3
-        try { $reached = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 } catch { continue }
+        try { $reply = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None, pc.WorldInfo.TimeSeconds)' 8 } catch { continue }
+        $parts = @("$reply".Trim() -split '\s+')
+        $clock = if ($parts.Count -ge 3) { ConvertTo-Clock $parts[2] } else { $null }
+        if ($null -ne $before -and ($null -eq $clock -or $clock -ge $before)) { continue }   # still the old map
+        $reached = $reply
         if ($reached -match 'Ice_P True') { break }
     }
     $reached
 }
+# The stage log: each stage's entry and end, stamped before its first risky command, in session.json, on the console and as a flushed mark
+# in the watch's recording, so a crash is attributed to a stage by time, not by line order.
+function Write-StageMark([string]$Stage, [string]$Event) {
+    $mark = [ordered]@{ stage = $Stage; event = $Event; utc = (Get-Date).ToUniversalTime().ToString('o') }
+    $log.stage_marks = @(@($log.stage_marks) + @($mark) | Where-Object { $_ })
+    "stage $Stage $Event $($mark.utc)"
+    if ($WatchSpec) { Save-SliceWatchMark "$Stage.$Event" }
+}
+# The game this run started is still there. Once it is gone, no later stage is attempted.
+function Test-RunGameAlive { $null -ne $proc -and !$proc.HasExited }
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $driverAttempted = $false; $launchAttempted = $false; $denLoaded = $false
 $marker = "-owrun=$Lane-$PID"   # an argument the game ignores; Stop-OwnGame looks for it on the command line
 try {
@@ -176,6 +201,8 @@ try {
     $log.player_level = Py 'print(cp_level())'; $log.cash_start = Py 'print(cp_cash())'
     if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'cash' 'cash'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
     "player level $($log.player_level), cash $($log.cash_start)"
+    Write-StageMark 'readings' 'enter'
+    if ($WatchSmoke) { $log.groups_stage1 = Install-SliceWatchGroups 'stage1' }
 
     $deadline = (Get-Date).AddMinutes($MaxMinutes)
     $kills = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0
@@ -219,9 +246,15 @@ try {
     # Readings taken with Maya down, or with the immunity gone, are not this stage's readings.
     if (!$dumpProblem -and (Py 'print(cp_up() and cp_immune())') -ne 'True') { $dumpProblem = 'Maya is down or the immunity is gone after the readings' }
     Set-Stage 'readings' (($single -ge $WantItems) -and !$dumpProblem) $(if ($dumpProblem) { $dumpProblem } else { "$single of $WantItems single-item readings in $kills kills" })
+    Write-StageMark 'readings' 'done'
+    $driverLost = ''
     # The den read has its own result: whatever fails in here is that stage's failure, and the session still quits and restores in order.
     if (!$SkipDen) {
+        Write-StageMark 'den_read' 'enter'
         try {
+            if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }
+            if ($WatchSmoke) { $log.groups_stage2 = Install-SliceWatchGroups 'stage2' }
+            $smokeHeld = $false; $smokeWhy = 'the smoke hold did not run'
             Use-Probe 'den_probe.py'
             $denLoaded = $true
             $log.den_hooks = Py 'print(dp_start())'
@@ -231,12 +264,16 @@ try {
                 if ($reached -notmatch 'Ice_P True') { throw "travel for trial $trial failed: $reached" }
                 if ($WatchSmoke -and $WatchSpec) { $log["smoke_unsettled_$trial"] = Save-SliceWatchSnap 'smoke_unsettled'; $log["smoke_unsettled_$trial"] }
                 Start-Sleep 8; Assert-GameForeground; Send-Key Enter; Start-Sleep 1
-                if ($WatchSmoke -and $WatchSpec) { $log["smoke_settled_$trial"] = Wait-SliceWatchSettled 40 }
+                if ($WatchSmoke -and $WatchSpec) {
+                    $log["smoke_settled_$trial"] = Wait-SliceWatchSettled 40
+                    if (!$log["smoke_settled_$trial"]) { $smokeWhy = "trial ${trial}: the map did not settle within 40 s" }
+                }
                 if ((Py 'print(cp_immune())') -ne 'True') { throw "the immunity hook is gone before trial $trial" }
                 $first = Py 'print(dp_begin())'
-                if ($first -eq 'None') { continue }
+                if ($first -eq 'None') { if ($WatchSmoke) { $smokeWhy = "trial ${trial}: no enemy within reach, so the hold did not run" }; continue }
                 $tried++
                 Start-Sleep $DenSeconds
+                if ($WatchSmoke -and $log["smoke_settled_$trial"]) { $smokeHeld = $true; $smokeWhy = '' }
                 $row = Py 'import json; print(json.dumps(dp_end(), default=str))' 60
                 "den trial ${trial}: $row"
                 if ($row -match '"counts": true') { $counted++ }
@@ -254,12 +291,19 @@ try {
         } catch {
             Set-Stage 'den_read' $false "$_"
             "den read: $_"
+            if ("$_" -match 'no reply' -or !(Test-RunGameAlive)) { $driverLost = "$_" }
         }
+        # S0's settled five-minute hold: the map settled and the hold ran with an enemy in reach, or the stage fails.
+        if ($WatchSmoke) { Set-Stage 'smoke_hold' $smokeHeld $smokeWhy }
+        Write-StageMark 'den_read' 'done'
     }
     # The den down: the same placement as a den trial, then the immunity hook (this run's own, cp_start) is removed and Maya stands still. No key
     # is pressed. The game's own pack downs her, she bleeds out and respawns; the watch records the hits, the down and the respawn. Saves stay blocked.
     if ($DenDown) {
+        Write-StageMark 'den_down' 'enter'
         try {
+            if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }
+            if ($driverLost) { throw "skipped: the driver stopped answering in an earlier stage ($driverLost)" }
             if (!$denLoaded) { Use-Probe 'den_probe.py'; $denLoaded = $true }
             $reached = Enter-IceMap
             if ($reached -notmatch 'Ice_P True') { throw "travel for the den down failed: $reached" }
@@ -269,6 +313,7 @@ try {
                 $log.den_down_settled = Wait-SliceWatchSettled 40
                 if (!$log.den_down_settled) { throw 'the map did not settle within 40 s, so the watch could not take before_down: the den down is not attempted' }
             }
+            if ($WatchSmoke) { $log.groups_stage3 = Install-SliceWatchGroups 'stage3' }
             $first = Py 'print(dp_begin())'
             if ($first -eq 'None') { throw 'no enemy within reach for the den down' }
             if ($WatchSpec) { Save-SliceWatchSnap 'before_down'; $log.watch_before_down = Save-SliceWatchPawns 'before_down' }
@@ -323,10 +368,11 @@ try {
             Set-Stage 'den_down' $false "$_"
             "den down: $_"
         }
+        Write-StageMark 'den_down' 'done'
     }
-    # The watch's usability check, while the game still runs.
+    # The watch's usability check, while the game still runs (not attempted once the game is gone).
     if ($WatchSpec) {
-        try { $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
+        try { if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }; $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
         catch { Set-Stage 'watch' $false "$_" }
     }
     $log.shot = Save-Shot 'cash/shot.png'

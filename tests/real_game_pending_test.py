@@ -607,14 +607,27 @@ function Assert-GameForeground { }
         self.assertEqual(out['native'], ['key 17 10', 'mouse 16'])
         self.assertIn('Borderlands 2 is running', out['refusal'])
         self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], [])
-        # A killed run whose game has closed too: nothing is held, nothing is sent, and the record completes as usual.
+        # A killed run whose game has closed too: the keys were synthesised system-wide, and the game's exit does not release them, so
+        # the releases are still sent, the entries cleared only after that, and the record completes as usual.
         (self.tmp / 'game_running').unlink()
         record.unlink()
-        record = self.leave(mock + "Send-KeyDown W")
+        record = self.leave(mock + "Send-KeyDown W; Send-MouseEvent 0x8")
         out = self.run_ps(mock + r"""$out.lines = @(Assert-NoPendingRecords); $out.native = @($global:native)""")
-        self.assertEqual(out['native'], [])
-        self.assertIn('no game runs, so nothing is held: key W', out['lines'][0])
+        self.assertEqual(out['native'], ['key 17 10', 'mouse 16'])
+        self.assertIn('released what the run that wrote', out['lines'][0])
         self.assertFalse(record.exists())
+
+    def test_a_release_that_fails_stays_recorded(self):
+        mock = r"""
+$global:native = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { if ($Scan -eq 17) { throw 'invented: the release failed' }; $global:native.Add("key $Scan $Flags") }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
+function Assert-GameForeground { }
+"""
+        record = self.leave(mock.replace("if ($Scan -eq 17) { throw 'invented: the release failed' }; ", '') + "Send-KeyDown W; Send-MouseEvent 0x8")
+        out = self.run_ps(mock + r"""$out.text = Fail-Text { Restore-PendingRecord '__RECORD__' }; $out.native = @($global:native)""".replace('__RECORD__', str(record)))
+        self.assertEqual(out['native'], ['mouse 16'])   # the button's release went out; the key's failed
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key W'])   # kept, not cleared
 
     def test_a_game_running_without_a_window_keeps_the_held_list(self):
         mock = r"""

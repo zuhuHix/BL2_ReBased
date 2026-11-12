@@ -77,6 +77,20 @@ function Save-SliceWatchPawns([string]$Label) {
     try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json }
     catch { Write-Warning "slice watch pawns ${Label}: $_"; [pscustomobject]@{ error = "$_" } }
 }
+# Install the spec's hook groups for one point of the capture's run (sw_install_groups_at): each group's marker line is flushed before its
+# first hook goes in. Nothing when the watch is off; a failure is a warning, never an error that ends the capture.
+function Install-SliceWatchGroups([string]$At) {
+    if ($At -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]*$') { throw "slice watch: '$At' is not a plain group point" }
+    if (!$script:SliceWatchOn) { return }
+    try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_install_groups_at('$At'), default=str))" 120) "groups $At" | ConvertFrom-Json }
+    catch { Write-Warning "slice watch groups ${At}: $_"; [pscustomobject]@{ error = "$_" } }
+}
+# A flushed marker line in the recording (sw_mark): a stage boundary, so a crash after it is attributed to that stage.
+function Save-SliceWatchMark([string]$Label) {
+    if ($Label -notmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]*$') { throw "slice watch: '$Label' is not a plain mark" }
+    if (!$script:SliceWatchOn) { return }
+    try { Test-WatchReply (Invoke-GamePy "print(sw_mark('$Label'))" 15) "mark $Label" | Out-Null } catch { Write-Warning "slice watch mark ${Label}: $_" }
+}
 # After a map load, wait (at most $Seconds) until the recorder says the map has settled: the player has a pawn and the map's clock has passed the
 # spec's settle_seconds, so the watch's scans are allowed again. Reading only. True when settled; false on a timeout or with the watch off.
 function Wait-SliceWatchSettled([int]$Seconds = 40) {

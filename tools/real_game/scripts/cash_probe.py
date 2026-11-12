@@ -91,7 +91,8 @@ def down_state(pawn, health, injured):
 
 
 def cp_down_state():
-    """Maya's state for the den down, reads only: the condition, the health, whether the injured field could be read, the state name."""
+    """Maya's state for the den down, reads only: the condition, the health and whether the injured field could be read. Native calls:
+    GetHealth on the player's own pawn only (one of the calls the watch lists; the state-name getter was dropped)."""
     pawn = get_pc().Pawn
     if pawn is None:
         return {"state": down_state(None, None, None), "injured_field": None}
@@ -100,11 +101,7 @@ def cp_down_state():
         injured = bool(pawn.bIsInjured)
     except Exception:
         injured = None
-    try:
-        state_name = str(pawn.GetStateName())
-    except Exception:
-        state_name = None
-    return {"state": down_state(pawn, health, injured), "injured_field": injured is not None, "state_name": state_name}
+    return {"state": down_state(pawn, health, injured), "injured_field": injured is not None}
 
 
 def cp_immune():

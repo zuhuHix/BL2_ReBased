@@ -32,23 +32,43 @@ class Args:
         self.__dict__.update(values)
 
 
+CPF_PARM, CPF_OUT, CPF_RET = 0x80, 0x100, 0x400   # as tests/combat_test.py defines them
+
+
 class Prop:
-    """An invented property of a function: a name, an offset and a size."""
-    def __init__(self, name, offset, size=4, dim=1):
-        self.Name, self.Offset_Internal, self.ElementSize, self.ArrayDim = name, offset, size, dim
+    """An invented property of a function: a name, an offset, an element size, a static-array length and its flags."""
+    def __init__(self, name, offset, size=4, dim=1, flags=0):
+        self.Name, self.Offset_Internal, self.ElementSize, self.ArrayDim, self.PropertyFlags = name, offset, size, dim, flags
 
 
 class Func:
-    """A hook's func argument: its properties at .func._properties() (as tests/den_probe_test.py's BoundFunction), parameters first,
-    then locals placed after ParamsSize, as a compiled function lays them out. `bad` puts a parameter past ParamsSize."""
-    def __init__(self, *names, locals=(), bad=False):
-        props = [Prop(n, 4 * i) for i, n in enumerate(names)]
-        size = 4 * len(names)
-        props += [Prop(n, size + 4 * j) for j, n in enumerate(locals)]
-        if bad and props:
-            props[0].Offset_Internal = size + 64
-        path = 'Pkg.Invented:' + '_'.join(names + tuple(locals)) + ('_bad' if bad else '')
-        self.func = type('F', (), {'_properties': lambda _self: props, 'NumParams': len(names), 'ParamsSize': size,
+    """A hook's func argument, laid out as a compiled function is: parameters first (each with the parameter flag), then locals placed
+    after ParamsSize (without it). A parameter is a name (a 4-byte scalar) or (name, element size, array length, extra flags): a struct
+    is a larger element, a static array has dim > 1, an out parameter carries CPF_OUT; ReturnValue gets CPF_OUT | CPF_RET.
+    `bad` breaks one condition: 'offset' (a parameter past ParamsSize), 'flag' (a parameter without the flag), 'local_flag' (the first
+    local carries the flag), 'count' (NumParams counts the first local too)."""
+    def __init__(self, *params, locals=(), bad=None):
+        props, offset = [], 0
+        for p in params:
+            name, size, dim, extra = (p, 4, 1, 0) if isinstance(p, str) else p
+            if name == 'ReturnValue':
+                extra |= CPF_OUT | CPF_RET
+            props.append(Prop(name, offset, size, dim, CPF_PARM | extra))
+            offset += size * dim
+        count, size_all = len(props), offset
+        for n in locals:
+            props.append(Prop(n, offset, 4, 1, 0))
+            offset += 4
+        if bad == 'offset' and props:
+            props[0].Offset_Internal = size_all + 64
+        elif bad == 'flag' and props:
+            props[0].PropertyFlags = 0
+        elif bad == 'local_flag' and len(props) > count:
+            props[count].PropertyFlags = CPF_PARM
+        elif bad == 'count':
+            count += 1
+        path = 'Pkg.Invented:' + '_'.join(str(p if isinstance(p, str) else p[0]) for p in params) + '_' + '_'.join(locals) + (f'_{bad}' if bad else '')
+        self.func = type('F', (), {'_properties': lambda _self: props, 'NumParams': count, 'ParamsSize': size_all,
                                    '_path_name': lambda _self: path})()
 
 
@@ -120,6 +140,8 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(watch.SW['dropped']['row'], 1)
 
     def test_locals_are_never_read_only_parameters(self):
+        watch.sw_reset('t', watch.sw_load_spec({}))   # default caps: every case below gets its row
+        watch.SW['on'] = True
         class Args:
             def __init__(self):
                 self.read = []
@@ -135,10 +157,29 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(row['args'], {'Param': 3.0, 'Other': None})   # ReturnValue is not read before the call; the local never
         self.assertNotIn('OwnerLocal', args.read)
         self.assertNotIn('ReturnValue', args.read)
-        bad = Args()
-        self.assertEqual(watch.sw_add_row('Pkg.P:Odd', 'pre', None, bad, None, Func('Param', locals=('OwnerLocal',), bad=True))['args'], {})
-        self.assertEqual(bad.read, [])   # a layout that does not fit the rule: nothing is read at all
-        self.assertEqual(watch.sw_param_names(type('NoLayout', (), {'_properties': lambda _s: [Prop('X', 0)]})()), [])
+        for how in ('offset', 'flag', 'local_flag', 'count'):
+            bad = Args()
+            row = watch.sw_add_row(f'Pkg.P:Odd_{how}', 'pre', None, bad, None, Func('Param', locals=('OwnerLocal',), bad=how))
+            self.assertEqual(row['args'], {}, how)
+            self.assertEqual(bad.read, [], how)   # a layout that fails either condition: nothing is read at all
+        self.assertEqual(len(watch.SW['params_misfit']), 4)   # each misfit is listed (the meta and end lines carry the list)
+        self.assertEqual(len(watch.SW['errors']), 4)          # and counted as an error, not left silent
+        self.assertEqual(watch.sw_param_names(type('NoLayout', (), {'_properties': lambda _s: [Prop('X', 0, flags=CPF_PARM)]})()), [])
+
+    def test_every_kind_of_parameter_is_read_and_no_local(self):
+        class Args:
+            def __init__(self):
+                self.read = []
+            def __getattr__(self, name):
+                self.read.append(name)
+                if name.startswith('Local'):
+                    raise AssertionError('a local was read')
+                return {'Point': None, 'Hits': 2, 'Out': 5.0, 'Flag': True, 'Scalar': 1.5}.get(name)
+        args = Args()
+        f = Func('Scalar', ('Point', 12, 1, 0), ('Hits', 4, 3, 0), ('Out', 4, 1, CPF_OUT), 'Flag', 'ReturnValue', locals=('LocalObject', 'LocalArray'))
+        row = watch.sw_add_row('Pkg.P:Many', 'pre', None, args, None, f)
+        self.assertEqual(row['args'], {'Scalar': 1.5, 'Point': None, 'Hits': 2, 'Out': 5.0, 'Flag': True})
+        self.assertEqual(sorted(args.read), ['Flag', 'Hits', 'Out', 'Point', 'Scalar'])
 
     def test_an_error_in_a_row_is_counted_not_raised(self):
         hook = watch._sw_observer('Pkg.Pawn:TakeDamage', 'pre')
@@ -293,7 +334,7 @@ class FakeGameTest(unittest.TestCase):
         watch._sw_sdk = type('SDK', (), {'find_class': staticmethod(lambda name: cls),
                                          'find_all': staticmethod(lambda name, exact=True: self.scan(name, exact)),
                                          'find_object': staticmethod(lambda kind, path: (enemy if path == enemy._path else None) if kind == 'WillowAIPawn'
-                                                                     else (object() if path in functions else None))})
+                                                                     else (Func('In', ('Result', 4, 1, CPF_OUT)).func if path in functions else None))})
         watch._SwType = Type
         watch._sw_add_hook = lambda path, kind, hid, f: hooks.__setitem__((path, kind, hid), f)
         watch._sw_remove_hook = lambda path, kind, hid: hooks.pop((path, kind, hid), None)
@@ -352,24 +393,75 @@ class FakeGameTest(unittest.TestCase):
             self.assertEqual(watch.sw_stop(), 'stopped')
             self.assertEqual(self.hooks, {})   # every hook it added is gone
 
+    def test_groups_are_installed_late_with_a_flushed_marker_first(self):
+        with RepoDir() as d:
+            spec = {'funcs': ['InventedPawn.Hit'], 'groups': [{'name': 'later', 'at': 'stage2', 'funcs': ['Pkg.Other:Call']}]}
+            watch.sw_start('t', spec)
+            self.assertNotIn(('Pkg.Other:Call', 'pre', 'ow_slice_watch_pre'), self.hooks)   # not before its point
+            installs = []
+            real_hook = watch._sw_add_hook
+            def spy(path, kind, hid, f):
+                # when the first hook of the group goes in, its marker line is already on disk
+                lines = [json.loads(x) for x in (d.out / 'watch.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()]
+                installs.append(any(x.get('k') == 'group' and x.get('event') == 'installing' and x.get('name') == 'later' for x in lines))
+                real_hook(path, kind, hid, f)
+            watch._sw_add_hook = spy
+            try:
+                self.assertEqual(watch.sw_install_groups_at('stage2'), [{'group': 'later', 'resolved': 1, 'missing': []}])
+            finally:
+                watch._sw_add_hook = real_hook
+            self.assertTrue(installs and all(installs))
+            self.assertEqual(watch.sw_install_group('later'), {'group': 'later', 'already': True})   # once only
+            hook = self.hooks[('Pkg.Other:Call', 'pre', 'ow_slice_watch_pre')]
+            hook(None, Args(In=1.0, Result=2.0), None, Func('In', ('Result', 4, 1, CPF_OUT)))
+            hook(None, Args(In=1.0, Result=2.0), None, Func('In', ('Result', 4, 1, CPF_OUT)))
+            watch.sw_mark('den_read.enter')
+            on_disk = (d.out / 'watch.jsonl').read_text(encoding='utf-8')
+            self.assertIn('"k": "mark"', on_disk)   # a mark is flushed at once
+            watch.sw_dump('watch')
+            data = checker.load_recording(d.out / 'watch.jsonl')
+            fn = data['end']['fn']
+            self.assertEqual((fn['Pkg.Other:Call']['group'], fn['Pkg.Other:Call']['n']), ('later', 2))
+            self.assertIsNotNone(fn['Pkg.Other:Call']['first_t'])
+            self.assertEqual(fn['Pkg.InventedPawn:Hit']['n'], 0)   # installed, never exercised
+            rows = [r for r in data['rows'] if r['func'] == 'Pkg.Other:Call']
+            self.assertEqual(rows[0]['out_params_at_call'], ['Result'])   # labelled: the caller's copy at call time, not a result
+            detail = {n: dd for n, ok, dd in checker.check(data, {})}
+            self.assertIn('installed, never exercised: Pkg.InventedPawn.Down:Hit, Pkg.InventedPawn:Hit', detail['exercised'])
+            self.assertTrue({n: ok for n, ok, _ in checker.check(data, {})}['groups'])
+            watch.sw_stop()
+
     def test_stale_pool_references_are_flagged(self):
         real = watch._SwUObject
         watch._SwUObject = FakeObject   # stand-in objects are recorded by path name, as the SDK's are
         self.addCleanup(setattr, watch, '_SwUObject', real)
         manager = FakeObject('Lvl.Manager_0', 'ResourcePoolManager')
-        good_pool = FakeObject('Lvl.Pool_7', 'ResourcePool', PoolGUID=4, Definition=object(), CurrentValue=10.0, MaxValue=20.0)
-        manager.ResourcePools = [None] * 3 + [good_pool] + [None] * 12
-        ref = lambda pool, guid=4, index=3: type('Ref', (), {'PoolManager': manager, 'PoolIndexInManager': index, 'PoolGUID': guid, 'Data': pool})()
-        self.assertIsNone(watch._sw_pool_of(ref(good_pool))['stale'])
-        self.assertEqual(watch._sw_pool_of(ref(None))['stale'], 'no pool')
-        self.assertEqual(watch._sw_pool_of(ref(good_pool, guid=5))['stale'], 'guid differs')
-        shut = FakeObject('Lvl.Pool_8', 'ResourcePool', PoolGUID=4, Definition=None, CurrentValue=0.0)
-        manager.ResourcePools[4] = shut
-        self.assertEqual(watch._sw_pool_of(ref(shut, index=4))['stale'], 'shut down')
-        other = FakeObject('Lvl.Pool_9', 'ResourcePool', PoolGUID=4, Definition=object())
-        self.assertEqual(watch._sw_pool_of(ref(other, index=3))['stale'], 'not in its slot')
-        row = watch._sw_pool_of(ref(good_pool))
-        self.assertEqual((row['ref_index'], row['ref_guid'], row['PoolGUID'], row['CurrentValue'], row['manager']), (3, 4, 4, 10.0, 'Lvl.Manager_0'))
+        good = FakeObject('Lvl.Pool_7', 'ResourcePool', PoolGUID=4, Definition=object(), CurrentValue=10.0, MaxValue=20.0)
+        manager.ResourcePools = [None] * 3 + [good] + [None] * 12
+        def ref(cache=good, guid=4, index=3, mgr=manager):
+            return type('Ref', (), {'PoolManager': mgr, 'PoolIndexInManager': index, 'PoolGUID': guid, 'Data': cache})()
+        stale = lambda r: watch._sw_pool_of(r)['stale']
+        self.assertIsNone(stale(ref()))
+        self.assertIsNone(stale(ref(cache=None)))   # an uncached reference resolves through the slot: values from the slot's pool
+        self.assertEqual(watch._sw_pool_of(ref(cache=None))['CurrentValue'], 10.0)
+        self.assertEqual(stale(ref(guid=5)), 'guid differs')
+        self.assertEqual(stale(ref(guid=None)), 'guid unreadable')   # a missing GUID is a reason, not a pass
+        self.assertEqual(stale(ref(index=5)), 'slot empty')   # the slot was read and is empty: never a healthy pool
+        self.assertEqual(stale(ref(index=200)), 'index invalid')
+        self.assertEqual(stale(ref(index=None)), 'index invalid')
+        self.assertEqual(stale(ref(mgr=None)), 'no manager')
+        manager.ResourcePools[4] = FakeObject('Lvl.Pool_8', 'ResourcePool', PoolGUID=4, Definition=None, CurrentValue=0.0, MaxValue=0.0)
+        self.assertEqual(stale(ref(index=4)), 'shut down')
+        manager.ResourcePools[6] = FakeObject('Lvl.Pool_10', 'ResourcePool', PoolGUID=4, Definition=object())   # no values on it
+        self.assertEqual(stale(ref(index=6)), 'values unreadable')
+        broken = FakeObject('Lvl.Manager_1', 'ResourcePoolManager')   # its slots cannot be read
+        self.assertEqual(stale(ref(mgr=broken)), 'slot not read')
+        other = FakeObject('Lvl.Pool_9', 'ResourcePool', PoolGUID=4, Definition=object(), CurrentValue=1.0, MaxValue=2.0)
+        row = watch._sw_pool_of(ref(cache=other))   # a cache that is not the slot's pool: the slot wins, and the mismatch is recorded
+        self.assertEqual((row['stale'], row['cache_matches'], row['CurrentValue']), (None, False, 10.0))
+        row = watch._sw_pool_of(ref())
+        self.assertEqual((row['ref_index'], row['ref_guid'], row['PoolGUID'], row['CurrentValue'], row['manager'], row['slot']),
+                         (3, 4, 4, 10.0, 'Lvl.Manager_0', 'Lvl.Pool_7'))
 
     def test_nothing_is_scanned_before_the_map_settles_and_labelled_reads_wait(self):
         with RepoDir():
@@ -418,9 +510,12 @@ class FakeGameTest(unittest.TestCase):
                 return 1.0
             return get
         here = self.enemy.Location
-        pool = FakeObject('Lvl.HealthPool_3', 'ResourcePool', CurrentValue=40.0, MaxValue=50.0, GetMaxValue=getter('pool'))
-        shield = FakeObject('Lvl.ShieldPool_3', 'ResourcePool', CurrentValue=9.0, MaxValue=10.0)
-        ref = lambda p: type('Ref', (), {'Data': p})()
+        pool = FakeObject('Lvl.HealthPool_3', 'ResourcePool', CurrentValue=40.0, MaxValue=50.0, PoolGUID=1, Definition=object(),
+                          GetMaxValue=getter('pool'))
+        shield = FakeObject('Lvl.ShieldPool_3', 'ResourcePool', CurrentValue=9.0, MaxValue=10.0, PoolGUID=2, Definition=object())
+        manager = FakeObject('Lvl.Manager_3', 'ResourcePoolManager')
+        manager.ResourcePools = [pool, shield] + [None] * 14
+        ref = lambda p: type('Ref', (), {'PoolManager': manager, 'PoolIndexInManager': p.PoolGUID - 1, 'PoolGUID': p.PoolGUID, 'Data': p})()
         template = FakeObject('GD_Invented.Population:Pawn_Invented', 'WillowAIPawn', GetHealth=getter('template'), Location=here)
         dying = FakeObject('Lvl.PersistentLevel.WillowAIPawn_9', 'WillowAIPawn', GetHealth=getter('dying'), Location=here)
         dying.bDeleteMe = True
@@ -442,6 +537,7 @@ class FakeGameTest(unittest.TestCase):
             line = next(p for p in checker.load_recording(d.out / 'watch.jsonl')['pawns'] if p['label'] == 'arrival')
             row = line['pawns'][0]
             self.assertEqual((row['health_pool']['CurrentValue'], row['shield_pool']['MaxValue'], row['Health']), (40.0, 10.0, 40))
+            self.assertIsNone(row['health_pool']['stale'])
             self.assertIn('dist', row)
             self.assertEqual(line['beyond_radius'], 1)   # the far one is counted, not read
             self.assertIsNone(row.get('ai_class'))   # a callable is never called, even where a field was expected
@@ -477,8 +573,9 @@ def dump(rows=(), frames=(), snaps=(), pawns=(), missing=(), errors=(), ended=Tr
             'end': {'errors': list(errors), 'auto_failures': auto_failures, 'stopped': False} if ended else None}
 
 
-def row(func, g, tag='pre', dt=0.0167, **args):
-    return {'func': func, 'g': g, 'tag': tag, 'dt': dt, 'args': args}
+def row(func, g, tag='pre', dt=0.0167, t=None, **args):
+    """A hook row: g the map clock, t the recording's own clock (the same as g unless a travel is invented)."""
+    return {'func': func, 'g': g, 't': g if t is None else t, 'tag': tag, 'dt': dt, 'args': args}
 
 
 GOOD_SNAP = {'label': 'start', 'failed': [], 'player': {'Location': {}}, 'pools': [{'pool': 'p'}], 'cash': 7, 'checkpoint': None,
@@ -504,6 +601,20 @@ class CheckerTest(unittest.TestCase):
         self.assertFalse(got['order ShowRespawnDialog -> NotifyTeleported'])
         self.assertTrue(got['gap ResurrectPlayer -> ShowRespawnDialog'])
         self.assertFalse(got['gap ResurrectPlayer -> NotifyTeleported'])
+
+    def test_order_and_gap_survive_a_travel_and_arguments_must_be_there(self):
+        # the map clock restarts at a travel between the two rows; the recording's own clock does not
+        rows = [row('X.Pawn:ResurrectPlayer', 200.0, t=500.0), row('X.Pawn:ShowRespawnDialog', 3.0, t=511.0)]
+        got = self.results(dump(rows), {'order': [['ResurrectPlayer', 'ShowRespawnDialog']],
+                                        'gap': [{'from': 'ResurrectPlayer', 'to': 'ShowRespawnDialog', 'min': 3, 'max': 40}]})
+        self.assertTrue(got['order ResurrectPlayer -> ShowRespawnDialog'])
+        self.assertTrue(got['gap ResurrectPlayer -> ShowRespawnDialog'])
+        rule = {'args_nonempty': [{'func': 'WillowPlayerPawn:TakeDamage', 'tag': 'pre', 'min': 1}]}
+        hit = row('W.WillowPlayerPawn:TakeDamage', 1.0, DamageAmount=3.0)
+        self.assertTrue(self.results(dump([hit]), rule)['args_nonempty WillowPlayerPawn:TakeDamage pre'])
+        refused = row('W.WillowPlayerPawn:TakeDamage', 2.0)   # the reader refused the layout: no arguments at all
+        self.assertFalse(self.results(dump([hit, refused]), rule)['args_nonempty WillowPlayerPawn:TakeDamage pre'])
+        self.assertFalse(self.results(dump([]), rule)['args_nonempty WillowPlayerPawn:TakeDamage pre'])
 
     def test_press_and_release_must_both_be_rows(self):
         both = [row('X.Movie:HandleInputKey', 1.0, ukey='Enter', uevent=0), row('X.Movie:HandleInputKey', 1.1, ukey='Enter', uevent=1)]
@@ -571,9 +682,34 @@ class CheckerTest(unittest.TestCase):
         self.assertFalse(self.results(slow, {})['defer_bound'])
         self.assertTrue(self.results(slow, {'max_defer_seconds': 120})['defer_bound'])
 
+    def test_the_reviewers_empty_s0_recording_fails(self):
+        """The synthetic recording the second review built against 8f0aa1d: a missing hook, empty arguments, empty health pools. It passed
+        21 of 21 checks then. With S0's checks it must fail, on each of those three."""
+        hit = row('W.WillowPlayerPawn:TakeDamage', 1.0)   # no arguments
+        empty = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'GroundSpeed': 1.0, 'dist': 5.0, 'health_pool': {}}]}
+        data = dump([hit], snaps=[GOOD_SNAP, dict(GOOD_SNAP, label='end')], pawns=[empty] * 30, missing=['WillowPawn.Died'])
+        data['end']['fn'] = {'W.WillowPlayerPawn:TakeDamage': {'n': 1}, 'W.WillowPawn:BeginState': {'n': 0}}
+        checks = {'no_missing': True, 'args_nonempty': [{'func': 'WillowPlayerPawn:TakeDamage', 'tag': 'pre', 'min': 1}],
+                  'pawns': {'min_reads': 20, 'min_pawns': 1, 'fields': ['cylinder', 'GroundSpeed', 'dist', 'health_pool']},
+                  'snaps': ['start', 'end'], 'must_fire': ['BeginState']}
+        got = self.results(data, checks)
+        for name in ('no_missing', 'args_nonempty WillowPlayerPawn:TakeDamage pre', 'pawns', 'must_fire BeginState'):
+            self.assertFalse(got[name], name)
+        self.assertFalse(all(got.values()))   # NOT USABLE
+        detail = {n: d for n, ok, d in checker.check(data, checks)}
+        self.assertIn('installed, never exercised: W.WillowPawn:BeginState', detail['exercised'])
+
+    def test_groups_must_be_installed(self):
+        data = dump()
+        data['spec'] = {'groups': [{'name': 'states'}, {'name': 'respawn'}]}
+        data['end']['groups_installed'] = ['states']
+        self.assertFalse(self.results(data, {})['groups'])
+        data['end']['groups_installed'] = ['states', 'respawn']
+        self.assertTrue(self.results(data, {})['groups'])
+
     def test_stale_health_pools_do_not_count(self):
         p = {'pawns': {'min_reads': 1, 'min_pawns': 1, 'fields': ['cylinder', 'health_pool']}}
-        ok = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'health_pool': {'stale': None}}]}
+        ok = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'health_pool': {'stale': None, 'CurrentValue': 4.0, 'MaxValue': 5.0}}]}
         self.assertTrue(self.results(dump(pawns=[ok]), p)['pawns'])
         stale = {'failed': [], 'pawns': [{'cylinder': {'radius': 1.0}, 'health_pool': {'stale': 'guid differs'}}]}
         self.assertFalse(self.results(dump(pawns=[stale]), p)['pawns'])
@@ -820,13 +956,13 @@ class WiringTest(unittest.TestCase):
 
     def test_den_down_removes_only_its_own_hook_and_sends_no_new_input(self):
         text = (ROOT / 'tools/real_game/cash_capture.ps1').read_text(encoding='utf-8')
-        block = text[text.index('if ($DenDown) {\n        try {'):text.index("Set-Stage 'den_down' ($null")]
+        block = text[text.index("if ($DenDown) {\n        Write-StageMark 'den_down' 'enter'\n        try {"):text.index("Set-Stage 'den_down' ($null")]
         self.assertIn('cp_immune_off()', block)
         self.assertIn('@($off.remaining).Count', block)   # every path is asked, and any one left stops the trial
         self.assertIn("-in 'up', 'no_pawn', 'no_health', 'injured_flag'", block)   # only an exact state counts
-        self.assertIn("if (!$log.den_down_settled) { throw", block)
+        self.assertIn("if (!$log.den_down_settled) { throw", block)   # no settle, no den down: before_down must come before the immunity goes
         self.assertIn("'injured_flag' { 'down' } 'no_health' { 'down_seen_no_health' } default { 'down_seen_no_pawn' }", block)
-        self.assertNotIn("Save-SliceWatchSnap 'down'", block)   # 'down' only through the label rule   # no settle, no den down: before_down must come before the immunity goes
+        self.assertNotIn("Save-SliceWatchSnap 'down'", block)   # 'down' only through the label rule
         smoke = [line for line in text.splitlines() if '$WatchSmoke -and $WatchSpec' in line]
         self.assertEqual(len(smoke), 2)
         self.assertFalse(any('Send-' in line for line in smoke))   # the smoke switch adds reads, never input

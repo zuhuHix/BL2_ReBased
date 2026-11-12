@@ -131,6 +131,9 @@ function Get-UncoveredRoots([string]$Backup) {
 }
 function Get-PendingProblems($Record) {
     $problems = @()
+    # An input still recorded as held was never released: the record that names it must stay (it is the only place that says so).
+    $stillHeld = @($Record.held_inputs | Where-Object { $_ })
+    if ($stillHeld.Count) { $problems += "inputs recorded as held were not released: $($stillHeld -join ', ')" }
     $uncovered = @(Get-UncoveredRoots ([string]$Record.backup))
     if ($uncovered.Count) { $problems += "the backup manifest does not cover $($uncovered -join ', '): nothing can vouch for them (an older record; only Restore-PendingRecord handles it)" }
     $backup = [string]$Record.backup
@@ -208,19 +211,19 @@ function Release-RecordedInputs([string]$File, $Record) {
         # A game process without a window (starting or closing): nothing to send the releases to yet, and the session may still hold them.
         return "recorded as held and a game runs without a window: kept ($($held -join ', '))"
     }
-    if (!$games.Count) {
-        # No game process: the keys were held only inside the game session, which has ended, so there is nothing to release.
-        $Record | Add-Member -NotePropertyName held_inputs -NotePropertyValue @() -Force
-        Write-PendingFile $File $Record
-        return "recorded as held, but no game runs, so nothing is held: $($held -join ', ')"
-    }
+    # The releases are sent whether or not a game runs: the keys and buttons were synthesised system-wide, and a game exiting does not release
+    # them (review of 2026-11-12). An entry is cleared only after its own release went out; one that fails stays recorded.
+    $left = @()
     foreach ($item in $held) {
-        $kind, $name = $item -split ' ', 2
-        if ($kind -ceq 'key') { Send-KeyUp $name }
-        else { $b = @($script:MouseButtons | Where-Object { $_[2] -ceq $name }); if ($b.Count) { Send-MouseEvent $b[0][1] } }
+        try {
+            $kind, $name = $item -split ' ', 2
+            if ($kind -ceq 'key') { Send-KeyUp $name }
+            else { $b = @($script:MouseButtons | Where-Object { $_[2] -ceq $name }); if (!$b.Count) { throw "no such button: $name" }; Send-MouseEvent $b[0][1] }
+        } catch { $left += $item }
     }
-    $Record | Add-Member -NotePropertyName held_inputs -NotePropertyValue @() -Force
+    $Record | Add-Member -NotePropertyName held_inputs -NotePropertyValue @($left) -Force
     Write-PendingFile $File $Record
+    if ($left.Count) { return "released what the run that wrote $File left held, except: $($left -join ', ') (kept recorded)" }
     "released what the run that wrote $File left held: $($held -join ', ')"
 }
 

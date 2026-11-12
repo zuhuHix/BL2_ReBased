@@ -23,10 +23,19 @@ in two captures; see local/dossier/watch-crash-analysis.md):
   wrong moment.
 - Observers read a hooked function's PARAMETERS only, never its locals: for an event the engine sends natively, a local can lie past
   the caller's parameter buffer, and reading an object-typed local would dereference whatever is there. A property counts as a
-  parameter only if it is among the function's first NumParams properties and lies wholly inside ParamsSize (reflection fields the
-  SDK exposes; the second test is the structural check that the first holds). If the layout does not fit, nothing is read.
+  parameter only when two independent conditions hold for the whole function: every one of its first NumParams properties carries
+  the parameter flag (CPF_Parm, 0x80, the value tests/combat_test.py and tests/mission_script_test.py use) and the property after them,
+  if any, does not; and every one of them lies wholly inside ParamsSize. If either fails, nothing of that function is read, the
+  misfit counts as an error and the function is listed in the recording's meta line (params_misfit). An out parameter (CPF_Out,
+  0x100) is recorded with the rest but named in the row's out_params_at_call: its value is the caller's copy at call time, not a
+  result.
   ReturnValue is not read before the call; after it, the hook's own return value is recorded. Object parameters are recorded by path
   name only, and only when not None.
+- Hooks can be installed in groups (spec "groups"): the capture calls sw_install_group at the point of its run where that group's
+  functions can fire. Before a group is installed, a marker line naming it, its functions and the time is written and flushed, so a
+  crash at the first call of a newly hooked function (the mod loader copies a call's parameters before any observer runs; nothing the
+  watch reads can prevent that) points at a group. Per function the end line records when it was installed, when it first fired and
+  how often: a hook that never fired was installed, not exercised.
 - Each kind of read is wrapped: its first Python exception is counted and switches that kind off for the rest of the run. This guard
   does nothing against an access violation in native code, which ends the game before any Python exception exists; the rules above
   are the protection against that class, not this guard.
@@ -83,7 +92,7 @@ SW_SPEC_KEYS = {
     "flush_every": (float, 2.0, 0.5, 30.0), "settle_seconds": (float, 15.0, 5.0, 120.0),
     "pawns_radius": (float, 4000.0, 500.0, 6000.0),
 }
-SW_DOC_KEYS = ("name", "notes", "checks")
+SW_DOC_KEYS = ("name", "notes", "checks", "groups")
 SW_LABELLED_CAP = 200   # labelled snapshots (the capture's own) are kept beyond snap_cap, up to this many
 SW = globals().get("SW") or {"on": False}
 
@@ -100,7 +109,9 @@ def sw_reset(label="", spec=None):
 
 
 def sw_defaults():
-    return {k: (list(v[1]) if isinstance(v[1], list) else v[1]) for k, v in SW_SPEC_KEYS.items()}
+    out = {k: (list(v[1]) if isinstance(v[1], list) else v[1]) for k, v in SW_SPEC_KEYS.items()}
+    out["groups"] = []
+    return out
 
 
 def sw_load_spec(spec):
@@ -138,6 +149,21 @@ def sw_load_spec(spec):
         raise ValueError(f"funcs holds names that are neither 'Class.Function' nor 'Package.Class:Function': {bad[:3]}")
     if "checks" in spec and not isinstance(spec["checks"], dict):
         raise ValueError("checks must be a JSON object")
+    groups = spec.get("groups", [])
+    if not isinstance(groups, list) or len(groups) > 12:
+        raise ValueError("groups must be a list of at most 12 groups")
+    names = set()
+    for g in groups:
+        if not isinstance(g, dict) or set(g) - {"name", "at", "funcs", "notes"} or not isinstance(g.get("name"), str) \
+                or not _sw_re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", g["name"]) or g["name"] in names:
+            raise ValueError("each group needs a unique plain name and only name, at, funcs and notes")
+        names.add(g["name"])
+        if not isinstance(g.get("at", ""), str) or not isinstance(g.get("funcs"), list) or not g["funcs"] \
+                or not all(isinstance(f, str) and sw_parse_func(f) for f in g["funcs"]):
+            raise ValueError(f"group {g['name']}: funcs must be a non-empty list of function names, at a string")
+    if len(out["funcs"]) + sum(len(g["funcs"]) for g in groups) > 300:
+        raise ValueError("at most 300 function names in all")
+    out["groups"] = [{"name": g["name"], "at": g.get("at", ""), "funcs": list(g["funcs"])} for g in groups]
     return out
 
 
@@ -159,9 +185,9 @@ def _sw_p(value, depth=0):
         try:
             return value._path_name()
         except Exception:
-            return repr(value)[:120]
+            return "<object>"
     if depth >= 2:
-        return repr(value)[:120]
+        return f"<{type(value).__name__}>"   # its type only: printing it would bypass the 16-item bound
     if _SwStruct and isinstance(value, _SwStruct):
         out = {}
         for q in value._type._properties():
@@ -172,45 +198,74 @@ def _sw_p(value, depth=0):
         return out
     if _SwArray and isinstance(value, _SwArray):
         return [_sw_p(value[i], depth + 1) for i in range(min(len(value), 16))]   # by index: no copy of the whole array
-    return repr(value)[:120]
+    return f"<{type(value).__name__}>"   # an unknown kind: its type only, no text is built from it
 
 
-def sw_param_names(func):
-    """The names of a function's parameters, never its locals: the first NumParams properties, each lying wholly inside ParamsSize.
-    Empty when the function's layout cannot be read or does not fit that rule (then nothing is read). ReturnValue is left out (the hook
-    passes the return value after the call). Cached per function path."""
-    inner = getattr(func, "func", func)
-    try:
-        key = inner._path_name()
-    except Exception:
-        key = None
-    cache = SW.setdefault("params", {})
-    if key is not None and key in cache:
-        return cache[key]
-    names = []
+SW_CPF_PARM = 0x80   # the parameter flag, as tests/combat_test.py and tests/mission_script_test.py define it
+SW_CPF_OUT = 0x100   # an out parameter, as the same tests define it
+
+
+def sw_param_layout(inner):
+    """(names, None) for a function whose layout passes both conditions, or ([], why) when it does not. Never raises.
+    Condition 1: each of the first NumParams properties carries the parameter flag, and the next property, if any, does not.
+    Condition 2: each of the first NumParams properties lies wholly inside ParamsSize."""
     try:
         count, size = int(inner.NumParams), int(inner.ParamsSize)
-        for i, q in enumerate(inner._properties()):
-            if i >= count:
-                break
-            end = int(q.Offset_Internal) + int(q.ElementSize) * int(q.ArrayDim)
-            if end > size:
-                names = []   # a property among the first NumParams lies outside the parameters: read nothing
-                break
+        props = list(inner._properties())
+    except Exception as e:
+        return [], f"layout not readable: {repr(e)[:80]}"
+    if count < 0 or count > len(props):
+        return [], f"NumParams {count} does not fit {len(props)} properties"
+    names, outs = [], []
+    try:
+        for q in props[:count]:
+            if not int(q.PropertyFlags) & SW_CPF_PARM:
+                return [], f"{q.Name} among the first NumParams lacks the parameter flag"
+            if int(q.Offset_Internal) + int(q.ElementSize) * int(q.ArrayDim) > size:
+                return [], f"{q.Name} lies outside ParamsSize"
             if q.Name != "ReturnValue":
                 names.append(q.Name)
-    except Exception:
-        names = []
-    if key is not None:
-        cache[key] = names
+                if int(q.PropertyFlags) & SW_CPF_OUT:
+                    outs.append(q.Name)
+        if count < len(props) and int(props[count].PropertyFlags) & SW_CPF_PARM:
+            return [], f"{props[count].Name} after the first NumParams carries the parameter flag"
+    except Exception as e:
+        return [], f"flags or offsets not readable: {repr(e)[:80]}"
+    SW.setdefault("param_outs", {})[id(inner)] = outs
+    return names, None
+
+
+def sw_param_names(func, path=None):
+    """The names of a function's parameters, never its locals (sw_param_layout). Worked out once per function, at hook time when the
+    watch starts, else at the first call; a misfit is an error, kept in SW['params_misfit']. ReturnValue is left out (the hook passes
+    the return value after the call)."""
+    inner = getattr(func, "func", func)
+    if path is None:
+        try:
+            path = inner._path_name()
+        except Exception:
+            path = None
+    cache = SW.setdefault("params", {})
+    if path is not None and path in cache:
+        return cache[path]
+    names, why = sw_param_layout(inner)
+    outs = SW.get("param_outs", {}).pop(id(inner), [])
+    if path is not None and outs:
+        SW.setdefault("outs", {})[path] = outs
+    if why is not None:
+        SW.setdefault("params_misfit", {})[str(path)] = why
+        if "errors" in SW:
+            _sw_err("params " + str(path), RuntimeError(why))
+    if path is not None:
+        cache[path] = names
     return names
 
 
-def _sw_args(args, func):
+def _sw_args(args, func, path=None):
     """The hooked call's parameters (sw_param_names), by value; an object parameter by path name only, None when it is None."""
     out = {}
     try:
-        for name in sw_param_names(func):
+        for name in sw_param_names(func, path):
             out[name] = _sw_p(getattr(args, name))
     except Exception as e:
         out["args_error"] = repr(e)[:100]
@@ -297,10 +352,23 @@ def sw_add_row(path, tag, obj, args, ret, func):
     if count > SW["spec"]["per_func_cap"]:
         SW["dropped"][path] = SW["dropped"].get(path, 0) + 1
         return None
-    row = dict(_sw_stamp(), func=path, tag=tag, obj=_sw_p(obj), args=_sw_args(args, func))
+    row = dict(_sw_stamp(), func=path, tag=tag, obj=_sw_p(obj), args=_sw_args(args, func, path))
+    outs = SW.get("outs", {}).get(path)
+    if outs:
+        row["out_params_at_call"] = outs   # copies of the caller's values at call time, not results
     if tag == "post":
         row["ret"] = _sw_p(ret)
     return row if sw_emit("row", row, "row_cap") else None
+
+
+def _sw_fired(path, tag):
+    """Installed, first fired, times fired: for each hooked function (PRE calls are counted)."""
+    if tag != "pre":
+        return
+    rec = SW.setdefault("fn", {}).setdefault(path, {"group": None, "installed_t": None, "first_t": None, "n": 0})
+    rec["n"] += 1
+    if rec["first_t"] is None:
+        rec["first_t"] = _sw_now()
 
 
 def _sw_observer(path, tag):
@@ -308,6 +376,7 @@ def _sw_observer(path, tag):
         if not SW.get("on"):
             return None
         try:
+            _sw_fired(path, tag)
             sw_add_row(path, tag, obj, args, ret, func)
         except Exception as e:
             _sw_err(path, e)
@@ -443,6 +512,73 @@ def _sw_open(name):
     SW["fh"] = open(path, "w", encoding="utf-8")
 
 
+def _sw_install(fnames, group):
+    """Resolve and hook each name (PRE and POST observers), work out each function's parameter layout, and note when it was
+    installed. Returns (resolved paths, missing names)."""
+    resolved, missing = [], []
+    for fname in fnames:
+        kind, what = sw_parse_func(fname)
+        try:
+            paths = ([what] if _sw_exists(what) else []) if kind == "path" else _sw_declared(*what)
+        except Exception as e:
+            paths = []
+            _sw_err(fname, e)
+        if not paths:
+            missing.append(fname)
+            continue
+        for path in paths:
+            try:
+                fobj = _sw_sdk.find_object("Function", path)
+            except Exception:
+                fobj = None
+            if fobj is not None:
+                sw_param_names(fobj, path)
+            try:
+                _sw_hook(path, _SwType.PRE, "pre", _sw_observer(path, "pre"))
+                _sw_hook(path, _SwType.POST, "post", _sw_observer(path, "post"))
+                resolved.append(path)
+                rec = SW.setdefault("fn", {}).setdefault(path, {"group": None, "installed_t": None, "first_t": None, "n": 0})
+                rec["group"], rec["installed_t"] = group, _sw_now()
+            except Exception as e:
+                missing.append(f"{path} ({repr(e)[:80]})")
+    SW["resolved"].extend(resolved)
+    SW["missing"].extend(missing)
+    return resolved, missing
+
+
+def sw_install_group(name):
+    """Install one of the spec's groups, once. A marker line (the group, its functions, the time) is written and FLUSHED before the
+    first hook goes in, and a second line after, so a crash during the install or at a first call points at this group."""
+    group = next((g for g in SW["spec"].get("groups", []) if g["name"] == name), None)
+    if group is None:
+        raise ValueError(f"no group {name!r} in the spec")
+    done = SW.setdefault("groups_installed", [])
+    if name in done:
+        return {"group": name, "already": True}
+    SW["buf"].append(dict(_sw_stamp(), k="group", name=name, at=group["at"], funcs=group["funcs"], event="installing"))
+    sw_flush()
+    resolved, missing = _sw_install(group["funcs"], name)
+    done.append(name)
+    SW["buf"].append(dict(_sw_stamp(), k="group", name=name, event="installed", resolved=resolved, missing=missing,
+                          params_misfit=[p for p in resolved if p in SW.get("params_misfit", {})]))
+    sw_flush()
+    return {"group": name, "resolved": len(resolved), "missing": missing}
+
+
+def sw_install_groups_at(at):
+    """Every group of the spec whose 'at' is this point of the capture's run, in spec order."""
+    return [sw_install_group(g["name"]) for g in SW["spec"].get("groups", []) if g["at"] == at]
+
+
+def sw_mark(label):
+    """A flushed marker line: a capture's stage boundary, so a crash after it is attributed to that stage."""
+    if not isinstance(label, str) or not _sw_re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", label):
+        raise ValueError(f"mark label must be plain, got {label!r}")
+    SW["buf"].append(dict(_sw_stamp(), k="mark", label=label))
+    sw_flush()
+    return label
+
+
 def sw_start(label, spec, name="watch"):
     """Check the spec, open RG_OUT/<name>.jsonl, hook every function the spec names, start the tick. Returns what resolved and what not."""
     if not isinstance(name, str) or not _sw_re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
@@ -452,25 +588,9 @@ def sw_start(label, spec, name="watch"):
     sw_reset(label, checked)
     _sw_open(name)
     _sw_hook(SW_TICK, _SwType.POST_UNCONDITIONAL, "tick", _sw_tick)
-    for fname in SW["spec"]["funcs"]:
-        kind, what = sw_parse_func(fname)
-        try:
-            paths = ([what] if _sw_exists(what) else []) if kind == "path" else _sw_declared(*what)
-        except Exception as e:
-            paths = []
-            _sw_err(fname, e)
-        if not paths:
-            SW["missing"].append(fname)
-            continue
-        for path in paths:
-            try:
-                _sw_hook(path, _SwType.PRE, "pre", _sw_observer(path, "pre"))
-                _sw_hook(path, _SwType.POST, "post", _sw_observer(path, "post"))
-                SW["resolved"].append(path)
-            except Exception as e:
-                SW["missing"].append(f"{path} ({repr(e)[:80]})")
+    _sw_install(SW["spec"]["funcs"], "base")
     SW["buf"].append({"k": "meta", "label": label, "t0_qpc": SW["t0"], "spec": SW["spec"], "resolved": SW["resolved"],
-                      "missing": SW["missing"]})
+                      "missing": SW["missing"], "params_misfit": dict(SW.get("params_misfit", {}))})
     SW["on"] = True
     first = sw_snap("start")
     sw_flush()
@@ -520,25 +640,35 @@ def _sw_player_getters(pawn):
     return out
 
 
-def sw_pool_check(ref_guid, ref_index, pool_guid, pool_def, slot_path, pool_path):
-    """Why a pool read through a reference cannot be trusted, or None: the reference's cache is only a cache (NATIVE_COMBAT_GROUNDWORK
-    section 1). 'no pool': nothing cached; 'guid differs': the pool's GUID is not the reference's; 'shut down': the pool has no
-    Definition (a deleted pool keeps its object with zeroed values); 'not in its slot': the manager's slot holds another object."""
-    if pool_path is None:
-        return "no pool"
-    if ref_guid is not None and pool_guid is not None and ref_guid != pool_guid:
+def sw_pool_check(manager_ok, ref_index, slot_read, slot_path, ref_guid, slot_guid, slot_def, values_ok):
+    """Why a pool reference's values cannot be trusted, or None. Fails closed: every condition must be shown, an unreadable one is a
+    reason. The pool is resolved through its manager's slot (the reference's cached Data is only a cache: NATIVE_COMBAT_GROUNDWORK
+    section 1): 'no manager'; 'index invalid' (not 0-15); 'slot not read'; 'slot empty'; 'guid unreadable' (either GUID not a number);
+    'guid differs'; 'shut down' (no Definition: a deleted pool keeps its object with zeroed values); 'values unreadable'."""
+    if not manager_ok:
+        return "no manager"
+    if not isinstance(ref_index, int) or isinstance(ref_index, bool) or not 0 <= ref_index < 16:
+        return "index invalid"
+    if not slot_read:
+        return "slot not read"
+    if slot_path is None:
+        return "slot empty"
+    if not isinstance(ref_guid, int) or not isinstance(slot_guid, int) or isinstance(ref_guid, bool) or isinstance(slot_guid, bool):
+        return "guid unreadable"
+    if ref_guid != slot_guid:
         return "guid differs"
-    if pool_def is None:
+    if slot_def is None:
         return "shut down"
-    if slot_path is not None and slot_path != pool_path:
-        return "not in its slot"
+    if not values_ok:
+        return "values unreadable"
     return None
 
 
 def _sw_pool_of(ref):
-    """The pool a pawn's pool reference points at (HealthPool, ShieldArmor), by fields only: the reference's PoolManager,
-    PoolIndexInManager and PoolGUID, its cached Data (as combat_probe._pool reads it), the pool's own PoolGUID, Definition and
-    AssociatedProvider, and the manager's slot. 'stale' says why the values cannot be trusted (sw_pool_check), or is None."""
+    """The pool a pawn's pool reference resolves to, by fields only, through its manager's slot: the reference's PoolManager,
+    PoolIndexInManager and PoolGUID; the slot's pool (manager.ResourcePools[index]) with its PoolGUID, Definition, AssociatedProvider
+    and values; the cached Data's path beside it (cache_matches). 'stale' says why the values cannot be trusted (sw_pool_check), or is
+    None; a record with stale set is never read as a healthy pool."""
     out = {}
     ref_fields = _sw_fields(ref, ("PoolIndexInManager", "PoolGUID"))
     out["ref_index"], out["ref_guid"] = ref_fields.get("PoolIndexInManager"), ref_fields.get("PoolGUID")
@@ -549,21 +679,27 @@ def _sw_pool_of(ref):
         manager = None
     out["manager"] = _sw_p(manager)
     try:
-        pool = ref.Data
-        pool = None if callable(pool) else pool
+        cache = ref.Data
+        cache = None if callable(cache) else cache
     except Exception:
-        pool = None
-    pool_path = _sw_p(pool) if pool is not None else None
-    slot_path = None
-    if manager is not None and isinstance(out["ref_index"], int) and 0 <= out["ref_index"] < 16:
+        cache = None
+    out["cache"] = _sw_p(cache) if cache is not None else None
+    slot, slot_read = None, False
+    index = out["ref_index"]
+    if manager is not None and isinstance(index, int) and not isinstance(index, bool) and 0 <= index < 16:
         try:
-            slot_path = _sw_p(manager.ResourcePools[out["ref_index"]])
+            slot = manager.ResourcePools[index]
+            slot = None if callable(slot) else slot
+            slot_read = True
         except Exception:
-            slot_path = None
-    if pool is not None:
-        out.update(_sw_fields(pool, SW_POOL_STATE + ("PoolGUID", "Definition", "AssociatedProvider")))
-    out["pool"] = pool_path
-    out["stale"] = sw_pool_check(out["ref_guid"], out["ref_index"], out.get("PoolGUID"), out.get("Definition"), slot_path, pool_path)
+            slot_read = False
+    out["slot"] = _sw_p(slot) if slot is not None else None
+    if slot is not None:
+        out.update(_sw_fields(slot, SW_POOL_STATE + ("PoolGUID", "Definition", "AssociatedProvider")))
+    out["cache_matches"] = out["cache"] is None or out["cache"] == out["slot"]
+    values_ok = all(isinstance(out.get(k), (int, float)) and not isinstance(out.get(k), bool) for k in ("CurrentValue", "MaxValue"))
+    out["stale"] = sw_pool_check(manager is not None, index, slot_read, out["slot"], out["ref_guid"], out.get("PoolGUID"),
+                                 out.get("Definition"), values_ok)
     return out
 
 
@@ -835,7 +971,9 @@ def _sw_close(stopped):
         return
     SW["buf"].append({"k": "end", "stopped": stopped, "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}),
                       "errors": SW.get("errors", []), "auto_failures": SW.get("auto_failures", 0), "lines": SW.get("n", {}),
-                      "switched_off": SW.get("switched_off", {}), "never_taken": [list(d) for d in SW.get("deferred", [])]})
+                      "switched_off": SW.get("switched_off", {}), "never_taken": [list(d) for d in SW.get("deferred", [])],
+                      "params_misfit": dict(SW.get("params_misfit", {})), "fn": dict(SW.get("fn", {})),
+                      "groups_installed": list(SW.get("groups_installed", []))})
     SW["spec"]["byte_cap"] += 1_000_000   # room for the end line, whatever the cap took
     try:
         sw_flush()

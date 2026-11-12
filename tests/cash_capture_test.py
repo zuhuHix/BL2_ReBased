@@ -58,7 +58,11 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             return '5'
         }
         '*pc.Pawn.Class.Name*' { return 'Sanctuary_P WillowPlayerPawn' }
-        '*pc.Pawn is not None*' { return $(if ($scenario -eq 'no_travel') { 'Sanctuary_P True' } else { 'Ice_P True' }) }
+        '*ow_clock_before*' { return $(if ($scenario -eq 'travel_clock') { '50.0' } else { 'None' }) }
+        '*pc.Pawn is not None*' {
+            if ($scenario -eq 'travel_clock') { $script:polls++; return $(if ($script:polls -lt 3) { 'Ice_P True 55.0' } else { 'Ice_P True 1.5' }) }
+            return $(if ($scenario -eq 'no_travel') { 'Sanctuary_P True' } else { 'Ice_P True' })
+        }
         '*cp_start*' {
             # What a session does to the player's files, as seen on the real machine: a restore must undo all of this.
             Set-Content -LiteralPath (Join-Path $script:WillowDir 'SaveData/save.sav') 'changed by the run'
@@ -90,6 +94,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
         '*cp_target*' { return 'None' }
         '*cp_dump*' {
+            if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
             $real = @(for ($i = 0; $i -lt $script:collects; $i++) { @{ value_per_item = $(if ($i -lt $script:singles) { 3 } else { $null }) } })
             $written = if ($scenario -eq 'dump_short') { @() } else { $real }
             if ($scenario -ne 'dump_missing') {
@@ -494,6 +499,34 @@ class SdkModsOffRollbackTest(unittest.TestCase):
         self.assertIn('refusing SDK mods off', session['status'])
         self.assertNotIn('sdk_mods_off', session)
         self.assert_settings_identical(session)
+
+
+class StageGateTest(unittest.TestCase):
+    """The travel waits for the map clock to restart; once the game is gone no later stage is attempted; every stage is stamped."""
+    run_capture = CashCaptureTest.run_capture
+    locks_held = CashCaptureTest.locks_held
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+
+    def test_the_travel_waits_for_the_new_map(self):
+        done, session = self.run_capture('travel_clock', ['-SkipDen'])
+        self.assertTrue(session['map'].endswith(' 1.5'), session['map'])   # the replies of the old map (55.0 > 50.0) were not taken
+
+    def test_once_the_game_is_gone_the_remaining_stages_are_skipped(self):
+        done, session = self.run_capture('game_gone', ['-DenDown'])
+        self.assertIn('skipped: the game has exited', session['stage_results']['den_read'])
+        self.assertIn('skipped: the game has exited', session['stage_results']['den_down'])
+        marks = [(m['stage'], m['event']) for m in session['stage_marks']]
+        self.assertEqual(marks, [('readings', 'enter'), ('readings', 'done'), ('den_read', 'enter'), ('den_read', 'done'),
+                                 ('den_down', 'enter'), ('den_down', 'done')])
+        self.assertTrue(all(m['utc'] for m in session['stage_marks']))
+
+    def test_the_smoke_switch_needs_a_watch(self):
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(CAPTURE), '-WatchSmoke'],
+                              capture_output=True, text=True, timeout=120, env=dict(os.environ, OPENWILLOW_BL2=str(self.game)))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('-WatchSmoke needs -WatchSpec', done.stdout + done.stderr)
 
 
 if __name__ == '__main__':
