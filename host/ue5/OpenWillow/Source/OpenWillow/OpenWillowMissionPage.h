@@ -14,7 +14,8 @@ class SWidget;
 class FOpenWillowMissionPage
 {
 public:
-    using FOnKey = TFunction<void(const FKey& Key)>;
+    // bRelease: the key's release; only Enter and Escape are passed on at both edges, every other key at its press only.
+    using FOnKey = TFunction<void(const FKey& Key, bool bRelease)>;
     explicit FOpenWillowMissionPage(FOnKey InOnKey);
     ~FOpenWillowMissionPage();
 
@@ -27,7 +28,7 @@ public:
     // The page has logged OWMISSIONREADY: with or without the movie, it can draw.
     bool IsReady() const { return bReady; }
     bool IsShown() const { return bShown; }
-    // Shows it and takes the keys; every key press goes to OnKey until Hide. The world goes on running.
+    // Shows it and takes the keys; every key press, and the release of Enter and Escape, goes to OnKey until Hide. The world goes on running.
     void Show(APlayerController* PC);
     void Hide(APlayerController* PC);
     // Runs window.owMissionScreenState(json).

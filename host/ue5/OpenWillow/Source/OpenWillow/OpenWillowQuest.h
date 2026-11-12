@@ -93,10 +93,11 @@ public:
     // are the active set's (MissionSystem::trackerLines, the HUD tracker's view); "tracked" is true while the mission is Active or ReadyToTurnIn (the one
     // mission is the tracker's active mission then). Docs: docs/verification/MENUS_PARITY.md.
     FString MissionLogJson() const;
-    // A key pressed while the mission page is shown (FOpenWillowMissionPage takes them all). Enter confirms, Escape leaves the offer or the turn-in and is
-    // refused on the reward page, the scroll keys go to the page, and every other key does nothing, E included: the installed script binds no others to these
-    // pages (docs/verification/MISSION_SCREEN.md; UNVERIFIED in game until the live read).
-    void OnScreenKey(const FKey& Key);
+    // A key edge while the mission page is shown (FOpenWillowMissionPage takes every press, and the release of Enter and Escape). Enter confirms and
+    // Escape leaves the offer or the turn-in and is refused on the reward page, both on the release (bRelease) with the press doing nothing; the scroll
+    // keys go to the page on the press, and every other key does nothing, E included: the installed script binds no others to these pages
+    // (docs/verification/MISSION_SCREEN.md: the release edge observed in the real game, the rest of the key set UNVERIFIED in game).
+    void OnScreenKey(const FKey& Key, bool bRelease);
 
     // The mission page is on screen: the HUD reads this every frame to stay hidden behind it.
     bool IsScreenPageShown() const;
@@ -125,7 +126,7 @@ private:
     bool bScreenPageTest = false;
     double ScreenTestAt = 0.;
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
-    // Presses that reached OnScreenKey and TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
+    // Key edges that reached OnScreenKey, and presses that reached TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
     int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0, ScreenTestUses = 0;
     // The view just before the page opened (control rotation, FOV), for the rows that check it comes back after the close.
     FRotator ScreenTestControl = FRotator::ZeroRotator;

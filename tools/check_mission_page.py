@@ -1,6 +1,7 @@
 """Grade one tools/test_mission_page.ps1 run from its log: the exact expected rows, each once and PASS, and a matching summary.
 
-A summary of "failed=0" alone would pass a run that lost a row or renamed one. A pass says the host did this, not that it matches the
+A summary of "failed=0" alone would pass a run that lost a row or renamed one. Enter and Escape act on the key's release: each key the page acts on has a
+"..._press_does_nothing" row for its press alone, sent a step before the release. A pass says the host did this, not that it matches the
 real game (docs/verification/MISSION_SCREEN.md).
 
 Usage: python tools/check_mission_page.py <log>. Exit 0 pass, 1 fail.
@@ -10,9 +11,10 @@ import re
 import sys
 
 EXPECTED = ('page_ready', 'e_refused_under_a_status_page', 'control_gun_fires_before_the_page', 'first_e_opens_the_page', 'offer_drawn', 'held_trigger_does_not_fire_under_the_page',
-            'offer_e_does_nothing', 'offer_escape_closes', 'gun_fires_again_after_the_close', 'e_opens_the_offer_again', 'offer_drawn_again', 'offer_enter_accepts_and_closes',
-            'mission_ready_to_turn_in', 'e_opens_the_turn_in', 'turn_in_drawn', 'turn_in_e_does_nothing', 'enter_shows_the_reward_page', 'reward_waits_for_enter',
-            'enter_takes_the_reward_and_closes', 'first_person_back_after_the_reward', 'e_afterwards_opens_nothing',
+            'offer_e_does_nothing', 'offer_escape_press_does_nothing', 'mission_escape_release_closes', 'gun_fires_again_after_the_close', 'e_opens_the_offer_again',
+            'offer_drawn_again', 'offer_enter_press_does_nothing', 'mission_enter_release_accepts',
+            'mission_ready_to_turn_in', 'e_opens_the_turn_in', 'turn_in_drawn', 'turn_in_e_does_nothing', 'turn_in_enter_press_does_nothing', 'enter_shows_the_reward_page',
+            'reward_waits_for_enter', 'reward_enter_press_does_nothing', 'enter_takes_the_reward_and_closes', 'first_person_back_after_the_reward', 'e_afterwards_opens_nothing',
             'hud_hidden_behind_the_offer', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_the_reward',
             'camera_on_marcus_offer', 'camera_back_after_escape', 'camera_on_marcus_turn_in', 'camera_on_marcus_reward', 'camera_back_after_the_reward',
             'failure_closes_the_page_and_gives_the_view_back')

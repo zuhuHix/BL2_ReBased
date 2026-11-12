@@ -13,7 +13,14 @@ def log(names=EXPECTED, result='PASS', summary=None):
 
 
 assert grade(log())[1] == [], grade(log())[1]
-assert len(EXPECTED) == 33, len(EXPECTED)
+assert len(EXPECTED) == 37, len(EXPECTED)
+# The release edge: each key the page acts on has a row for its press alone, and the release rows are required.
+for name in ('offer_escape_press_does_nothing', 'mission_escape_release_closes', 'offer_enter_press_does_nothing', 'mission_enter_release_accepts',
+             'turn_in_enter_press_does_nothing', 'reward_enter_press_does_nothing'):
+    assert any(f'{name} appears 0 times' in p for p in grade(log(tuple(n for n in EXPECTED if n != name)))[1]), name
+# The rows of the key-down build are gone: a log from it fails.
+old = tuple(n for n in EXPECTED if n not in ('mission_escape_release_closes', 'mission_enter_release_accepts')) + ('offer_escape_closes', 'offer_enter_accepts_and_closes')
+assert any('unexpected row offer_enter_accepts_and_closes' in p for p in grade(log(old))[1])
 # The HUD behind the page and after each way out are required rows.
 for name in ('hud_hidden_behind_the_offer', 'hud_hidden_behind_the_turn_in', 'hud_hidden_behind_the_reward', 'hud_back_after_escape', 'hud_back_after_accepting', 'hud_back_after_the_reward',
              'camera_on_marcus_offer', 'camera_back_after_escape', 'camera_on_marcus_turn_in', 'camera_on_marcus_reward', 'camera_back_after_the_reward',

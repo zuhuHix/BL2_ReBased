@@ -973,10 +973,18 @@ void UOpenWillowQuest::TickFocusCamera()
     }
 }
 
-void UOpenWillowQuest::OnScreenKey(const FKey& Key)
+void UOpenWillowQuest::OnScreenKey(const FKey& Key, bool bRelease)
 {
     if (!Impl || bFailed || !ScreenPage || !ScreenPage->IsShown()) return;
     ++ScreenKeysSeen;
+    // Enter and Escape act on the release, in the release's own frame; their press does nothing. Observed in the real game for Enter on the offer,
+    // the turn-in and the reward and for Escape on the page after the reward (session 1 of 2026-11-12); the same edge for Escape on the offer and
+    // the turn-in is UNVERIFIED. docs/verification/MISSION_SCREEN.md.
+    if ((Key == EKeys::Enter || Key == EKeys::Escape) && !bRelease)
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST mission page: %s pressed on %s; it acts on the release"), *Key.ToString(), *ScreenPageOn);
+        return;
+    }
     if (Key == EKeys::PageUp) { ScreenPage->SendKey(TEXT("PageUp")); return; }
     if (Key == EKeys::PageDown) { ScreenPage->SendKey(TEXT("PageDown")); return; }
     const int32 Before = Status();
@@ -1022,7 +1030,7 @@ void UOpenWillowQuest::TickScreenPage()
         bScreenPageTried = true;
         if (!FOpenWillowMissionPage::PageUrl().IsEmpty())
         {
-            ScreenPage = MakeShared<FOpenWillowMissionPage>([this](const FKey& Key) { OnScreenKey(Key); });
+            ScreenPage = MakeShared<FOpenWillowMissionPage>([this](const FKey& Key, bool bRelease) { OnScreenKey(Key, bRelease); });
             ScreenPage->Preload();
             bScreenPageTest = FParse::Param(FCommandLine::Get(), TEXT("owmissionpagetest"));
         }

@@ -22,15 +22,23 @@
 
 namespace
 {
-// A press and release through Slate, as the keyboard sends them. The codes are Windows' (OpenWillowMayaHUD's SendSlateKey has the same ones).
-void PressKey(const FKey& Key)
+// One edge of a key through Slate, as the keyboard sends it: the page acts on Enter and Escape at the release, so the suite sends the two edges apart where
+// it checks that. The codes are Windows' (OpenWillowMayaHUD's SendSlateKey has the same ones).
+void KeyEdge(const FKey& Key, bool bRelease)
 {
     if (!FSlateApplication::IsInitialized()) return;
     const uint32 Code = Key == EKeys::Enter ? 13 : Key == EKeys::Escape ? 27 : 'E';
     const uint32 Char = Key == EKeys::Enter ? 13 : Key == EKeys::Escape ? 0 : 'e';
     FSlateApplication& Slate = FSlateApplication::Get();
-    Slate.ProcessKeyDownEvent(FKeyEvent(Key, Slate.GetModifierKeys(), 0, false, Char, Code));
-    Slate.ProcessKeyUpEvent(FKeyEvent(Key, Slate.GetModifierKeys(), 0, false, Char, Code));
+    const FKeyEvent Event(Key, Slate.GetModifierKeys(), 0, false, Char, Code);
+    if (bRelease) Slate.ProcessKeyUpEvent(Event);
+    else Slate.ProcessKeyDownEvent(Event);
+}
+// A press and its release in one go.
+void PressKey(const FKey& Key)
+{
+    KeyEdge(Key, false);
+    KeyEdge(Key, true);
 }
 // Through the player's input binding, as the use key and the trigger reach the walker.
 void BindingKey(APlayerController* PC, const FKey& Key, EInputEvent Event)
@@ -86,8 +94,10 @@ void UOpenWillowQuest::TickScreenPageTest()
     // The binding fires on the player's next input tick, not inside InputKey: this only sends the press. The row that needs it runs at the next step, against ScreenTestUses.
     const auto UseE = [&] { ScreenTestUses = ScreenUsesSeen; BindingKey(PC, EKeys::E, IE_Pressed); BindingKey(PC, EKeys::E, IE_Released); };
     const auto UseArrived = [&] { return ScreenUsesSeen == ScreenTestUses + 1; };
-    // A press the page must take: true when exactly one key reached OnScreenKey.
-    const auto PageKey = [&](const FKey& Key) { const int32 Before = ScreenKeysSeen; PressKey(Key); return ScreenKeysSeen == Before + 1; };
+    // A whole key stroke the page must take: true when its edges reached OnScreenKey (Enter and Escape reach it at both edges, other keys at the press).
+    const auto PageKey = [&](const FKey& Key) { const int32 Before = ScreenKeysSeen; PressKey(Key); return ScreenKeysSeen == Before + (Key == EKeys::Enter || Key == EKeys::Escape ? 2 : 1); };
+    // One edge of Enter or Escape: true when it reached OnScreenKey.
+    const auto PageEdge = [&](const FKey& Key, bool bRelease) { const int32 Before = ScreenKeysSeen; KeyEdge(Key, bRelease); return ScreenKeysSeen == Before + 1; };
     const bool bExpectMovie = !FParse::Param(FCommandLine::Get(), TEXT("owmissionpagenomovie"));
     // The gameplay HUD behind the page and after each way out. Under -owcanvashud this shows only the canvas path; the report says which.
     const auto HudRow = [&](const TCHAR* Name, bool bHidden)
@@ -136,7 +146,7 @@ void UOpenWillowQuest::TickScreenPageTest()
     // run in the frame after it, before the page has had a chance to answer.
     ++ScreenStepTicks;
     const auto Await = [&](bool bState) { return bState || (Now - ScreenStepAt >= 30. && ScreenStepTicks >= 30); };
-    if (ScreenTestStep != 0 && ScreenTestStep != 11 && (Now < ScreenTestAt || ScreenStepTicks < 5)) return;
+    if (ScreenTestStep != 0 && ScreenTestStep != 13 && (Now < ScreenTestAt || ScreenStepTicks < 5)) return;
     double Wait = 0.;
     switch (ScreenTestStep)
     {
@@ -195,11 +205,15 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.;
         break;
     }
-    case 5:
-        Row(TEXT("offer_escape_closes"), PageKey(EKeys::Escape) && Status() == 0 && !ScreenPage->IsShown() && !ScreenOpenInVm(), State());
-        Wait = 1.5;
+    case 5:   // Escape's press alone: the page and the VM's screen stay; its release, a step later, closes (the edge the game showed after the reward)
+        Row(TEXT("offer_escape_press_does_nothing"), PageEdge(EKeys::Escape, false) && Status() == 0 && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer") && ScreenOpenInVm(), State());
+        Wait = 1.;
         break;
     case 6:
+        Row(TEXT("mission_escape_release_closes"), PageEdge(EKeys::Escape, true) && Status() == 0 && !ScreenPage->IsShown() && !ScreenOpenInVm(), State());
+        Wait = 1.5;
+        break;
+    case 7:
         HudRow(TEXT("hud_back_after_escape"), false);
         FocusRow(TEXT("camera_back_after_escape"), false);
         PageShot(TEXT("2_AfterEscape"));
@@ -207,25 +221,29 @@ void UOpenWillowQuest::TickScreenPageTest()
         Row(TEXT("gun_fires_again_after_the_close"), Maya->AreArmsShown() && Maya->FireOnce(), State());
         UseE();
         break;
-    case 7:
+    case 8:
         if (!Await(ScreenPage->IsShown())) return;
         Row(TEXT("e_opens_the_offer_again"), UseArrived() && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer"), State());
         break;
-    case 8:
+    case 9:
         if (!Await(Drawn())) return;
         Row(TEXT("offer_drawn_again"), Drawn(), State());
         Wait = 1.;
         break;
-    case 9:
-        Row(TEXT("offer_enter_accepts_and_closes"), PageKey(EKeys::Enter) && Status() == 1 && !ScreenPage->IsShown() && !ScreenOpenInVm() && RewardPages == 0, State());
+    case 10:   // Enter's press alone does not accept; its release, a step later, accepts and closes (observed in the real game)
+        Row(TEXT("offer_enter_press_does_nothing"), PageEdge(EKeys::Enter, false) && Status() == 0 && ScreenPage->IsShown() && ScreenPageOn == TEXT("offer") && ScreenOpenInVm(), State());
+        Wait = 1.;
+        break;
+    case 11:
+        Row(TEXT("mission_enter_release_accepts"), PageEdge(EKeys::Enter, true) && Status() == 1 && !ScreenPage->IsShown() && !ScreenOpenInVm() && RewardPages == 0, State());
         Wait = 1.5;
         break;
-    case 10:
+    case 12:
         HudRow(TEXT("hud_back_after_accepting"), false);
         PageShot(TEXT("3_Accepted"));
         ScreenTestRetries = 0;
         break;
-    case 11:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
+    case 13:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
         if (Now < ScreenTestAt) return;
         if (Status() != 2)
         {
@@ -238,50 +256,64 @@ void UOpenWillowQuest::TickScreenPageTest()
         Stand();
         Wait = 1.;
         break;
-    case 12:
+    case 14:
         ViewBefore();
         UseE();
         break;
-    case 13:
+    case 15:
         if (!Await(ScreenPage->IsShown())) return;
         Row(TEXT("e_opens_the_turn_in"), UseArrived() && ScreenPageOn == TEXT("turnin") && ScreenPage->IsShown() && Status() == 2, State());
         break;
-    case 14:
+    case 16:
         if (!Await(Drawn())) return;
         Row(TEXT("turn_in_drawn"), Drawn(), State());
         Wait = 1.;
         break;
-    case 15:
+    case 17:
         HudRow(TEXT("hud_hidden_behind_the_turn_in"), true);
         FocusRow(TEXT("camera_on_marcus_turn_in"), true);
         PageShot(TEXT("4_TurnIn"));
         Row(TEXT("turn_in_e_does_nothing"), PageKey(EKeys::E) && Status() == 2 && ScreenPageOn == TEXT("turnin"), State());
-        PageKey(EKeys::Enter);
+        Wait = 1.;
         break;
-    case 16:
+    case 18:
+        Row(TEXT("turn_in_enter_press_does_nothing"), PageEdge(EKeys::Enter, false) && Status() == 2 && ScreenPage->IsShown() && ScreenPageOn == TEXT("turnin") && RewardPages == 0, State());
+        Wait = 1.;
+        break;
+    case 19:   // the release turns in; the next row sees the reward page
+        PageEdge(EKeys::Enter, true);
+        break;
+    case 20:
         if (!Await(ScreenPageOn == TEXT("reward") && Drawn())) return;
         Row(TEXT("enter_shows_the_reward_page"), Status() == 3 && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm()
             && RewardPages == 1 && RewardsReceived == 0 && Drawn(), State());
         Wait = 1.;
         break;
-    case 17:
+    case 21:
         HudRow(TEXT("hud_hidden_behind_the_reward"), true);
         FocusRow(TEXT("camera_on_marcus_reward"), true);
         PageShot(TEXT("5_Reward"));
+        // E, and Escape at both edges: the game's reward page did nothing with Escape at either edge.
         Row(TEXT("reward_waits_for_enter"), PageKey(EKeys::E) && PageKey(EKeys::Escape) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
+        Wait = 1.;
         break;
-    case 18:
-        Row(TEXT("enter_takes_the_reward_and_closes"), PageKey(EKeys::Enter) && Status() == 3 && !ScreenPage->IsShown() && !ScreenOpenInVm() && !RewardPendingInVm() && RewardsReceived == 1, State());
+    case 22:
+        Row(TEXT("reward_enter_press_does_nothing"), PageEdge(EKeys::Enter, false) && ScreenPageOn == TEXT("reward") && ScreenPage->IsShown() && RewardPendingInVm() && RewardsReceived == 0, State());
+        Wait = 1.;
+        break;
+    case 23:
+        // The release takes it, then the host closes the page (the game goes back to its list and stays open until Escape: an open difference).
+        Row(TEXT("enter_takes_the_reward_and_closes"), PageEdge(EKeys::Enter, true) && Status() == 3 && !ScreenPage->IsShown() && !ScreenOpenInVm() && !RewardPendingInVm() && RewardsReceived == 1, State());
         Wait = 1.5;
         break;
-    case 19:
+    case 24:
         HudRow(TEXT("hud_back_after_the_reward"), false);
         FocusRow(TEXT("camera_back_after_the_reward"), false);
         PageShot(TEXT("6_Closed"));
         Row(TEXT("first_person_back_after_the_reward"), Maya->AreArmsShown(), State());
         UseE();
         break;
-    case 20:
+    case 25:
         // Nothing here changes when the press lands, so the row waits for the press itself.
         if (!Await(UseArrived())) return;
         Row(TEXT("e_afterwards_opens_nothing"), UseArrived() && !ScreenPage->IsShown(), State());
@@ -290,7 +322,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         ShowScreenPage(TEXT("offer"));
         Wait = 1.;
         break;
-    case 21:
+    case 26:
     {
         // The failure itself. The quest stops ticking the page from here; only the next step runs (UOpenWillowQuest::TickComponent), after the camera
         // manager has updated the view a few times (the step waits a second and five ticks, as every step does).
@@ -300,7 +332,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.;
         break;
     }
-    case 22:
+    case 27:
     {
         // The view the player sees: the camera manager's rotation and FOV against those from just before the page opened, and the control rotation unchanged.
         const APlayerCameraManager* View = PC->PlayerCameraManager;

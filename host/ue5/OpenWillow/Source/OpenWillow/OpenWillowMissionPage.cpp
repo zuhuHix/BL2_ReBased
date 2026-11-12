@@ -15,8 +15,10 @@ namespace
 // Above the HUD (5), and the same level as the shop: the two are never open together, since this one takes the keys.
 constexpr int32 MissionPageZOrder = 20;
 
-// While the page is shown every key press goes to the owner, so the walker reads none of them. Key releases pass, so a key held
-// when the page opened is released as usual. Alt stays with the system (Alt+F4).
+// While the page is shown every key press goes to the owner, so the walker reads none of them. Enter and Escape act on their release, as the game's
+// page does (docs/verification/MISSION_SCREEN.md): their press is passed on with bRelease false and does nothing there, and their release is taken
+// and passed on only when the page saw the press, so a key held from before the page opened does nothing when it is let go (that guard is the
+// host's choice, UNVERIFIED). Other releases pass, so a key held when the page opened is released as usual. Alt stays with the system (Alt+F4).
 class FMissionPageKeys : public IInputProcessor
 {
 public:
@@ -25,9 +27,21 @@ public:
     virtual bool HandleKeyDownEvent(FSlateApplication&, const FKeyEvent& Event) override
     {
         if (Event.IsAltDown()) return false;
-        if (!Event.IsRepeat() && OnKey) OnKey(Event.GetKey());
+        if (Event.IsRepeat()) return true;
+        if (IsReleaseKey(Event.GetKey())) Pressed.Add(Event.GetKey());
+        if (OnKey) OnKey(Event.GetKey(), false);
         return true;
     }
+    virtual bool HandleKeyUpEvent(FSlateApplication&, const FKeyEvent& Event) override
+    {
+        if (!IsReleaseKey(Event.GetKey()) || Pressed.Remove(Event.GetKey()) == 0) return false;
+        // The owner may close the page here, which drops this processor: nothing of it is touched after the call.
+        if (OnKey) OnKey(Event.GetKey(), true);
+        return true;
+    }
+private:
+    static bool IsReleaseKey(const FKey& Key) { return Key == EKeys::Enter || Key == EKeys::Escape; }
+    TSet<FKey> Pressed;   // Enter and Escape pressed since the page took the keys
 private:
     FOpenWillowMissionPage::FOnKey OnKey;
 };

@@ -1396,7 +1396,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 if (Quest->IsScreenPageShown())
                 {
                     UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note the mission page did not close after Escape; closing it through its key handler directly"));
-                    Quest->OnScreenKey(EKeys::Escape);
+                    Quest->OnScreenKey(EKeys::Escape, true);   // the release, the edge that acts
                 }
                 const bool bOk = Quest->Accept();
                 Fixture(TEXT("accepted by a direct call after the mission page did not accept"));
