@@ -49,6 +49,9 @@ Derived timeline (script formulas, data numbers; `UNVERIFIED` until a game captu
 | Base, same target again within 25 s | 3.7 | 0.7 - 2.6 | 2.6 | 3.7 | 4.7 |
 | Suspension grade g, first lock | 5.7 + 0.5g | 0.7 - (4.6 + 0.5g) | 4.6 + 0.5g | 5.7 + 0.5g | 6.7 + 0.5g |
 
+**Live, 2026-11-12:** the base first-lock row's release (5.7) and end (6.7) were confirmed live within about two frames on two casts, and a
+miss's fizzle and end after 1 s on two; see "Six casts timed live" below. The other rows were not seen.
+
 Formulas: SkillDuration = LiftDuration + LockDuration(Maya) * TimeScale(target); LockTarget at
 LiftDuration; StartOutro at SkillDuration - LockFadeOutTime; release at SkillDuration; EndSkill at
 SkillDuration + ReleaseBufferTime.
@@ -1449,6 +1452,36 @@ AI-assisted (Claude). `tools/real_game/phaselock_integrity_capture.ps1 -KillAndS
 - **The stand-in's anchor was wrong and is corrected.** `local/slice/stand_in_shield.json` called its capacity the value at level 8, because that was the player's level, but it is her level 3 shield's. The maintainer adopted the fit (2026-11-07): `COMBAT_DOWN_RESPAWN.md`, "Stand-in shield capacity".
 - Shields of levels 15, 30 and 50 spawned but did not equip, most likely because they are above the player's level (reason not read: UNVERIFIED). The stage now asks only for levels at or below the player's. That change has not been run.
 - Restoring worked on every row read: her shield and backpack ended as they started.
+
+### Six casts timed live (2026-11-12, session 2)
+
+AI-assisted (Claude Code). Written in our own words from a private analysis; the recordings stay under ignored `local/`.
+`tools/real_game/phaselock_integrity_capture.ps1` on Three Horns Divide (Ice_P), Maya level 8, three recordings (a gate run, a full run and a
+kill-and-shield run): six casts, two hits, two misses, one lock then a down, one kill. The targets were exact Adults
+(`CharClass_PrimalBeastAdult`) at 650 uu. SDK mods loaded, the loot mods on; no enabled mod is known to touch the skill, and the cheats mod's
+Instant Cooldown read off. **What the capture did:** it protected Maya, moved every enemy but the target away, set the target's ground speed and
+placed Maya; in the down stage it hit her with scripted hits, and in the kill stage it killed the lifted target by a script call and spawned test
+shields. The timings are the game's response. One map, one level, one session.
+
+- **Key press to `StartActionSkill`:** inside one frame on all six casts. On a hit, `PhaseLockTarget`, the `Phaselock_TatooGlow` effect and
+  `ActionSkillCallback(true)` come in that same frame.
+- **Hit, base first lock (two casts):** `ReleaseTarget` 5.743 and 5.730 s after the cast, the skill's end (`ActionSkillCallback(false)`) 6.717 and
+  6.719 s. The derived 5.7 and 6.7 are confirmed live within about two frames; the 2026-10-21 probe's 5.72 agrees.
+- **Miss (two casts):** no `PhaseLockTarget`; the skill runs `SelectTarget`, `FizzleOut`, `Fizzled` and `EndSkill`, and `Fizzled` and the skill's end
+  come in one frame, 1.008 and 1.018 s after the cast. The fizzle, UNVERIFIED on 2026-11-06, is confirmed for these two.
+- **Kill in the lift (one cast):** the target's `Dying.BeginState` 2.129 s after the cast, `ReleaseTarget` in the next frame, `InterruptPhaseLock`
+  and no `StartOutro`, and the skill's end 1.001 s after the release (the 1 s release buffer). The kill was the capture's; the release and the end
+  were the game's.
+- **Down during the lock (one cast):** the injured state began 4.160 s after the cast, from the capture's scripted hits. `ActionSkillCallback(false)`
+  and then `ReleaseTarget` came at the next game-clock reading, 0.144 s later (most likely the same long frame), with no outro and no release
+  buffer. The lock-against-down rule, UNVERIFIED on 2026-11-06, is confirmed for this one cast
+  ([NATIVE_PHASELOCK_TARGETING.md](NATIVE_PHASELOCK_TARGETING.md), section 4). Casting while injured is still untested.
+- **Cooldown, not decided:** after a miss the next cast came 7.85 s after the fizzle, and after a hit 13.9 to 14.0 s after the skill's end (two).
+  Both are upper bounds set by the capture's waiting, so the cooldown semantics above stay UNVERIFIED.
+- **Shield capacity against level (the kill-and-shield run):** one random spawn per level of a common standard shield balance at levels 1, 5 and 8,
+  her own shield and backpack restored on every row. This contradicts the stand-in's level 8 anchor for this read: the level 8 read is about 30 %
+  below it, and the level 8 read is about 1.7 times the level 1 read here, against about 2.5 times on 2026-11-07. Names differ per spawn, so parts
+  vary; one read per level widens the spread and gives no new rule. SanitySaver hooks the inventory manager, so a mod effect is not ruled out.
 
 
 ### The suction refraction (2026-11-08, showcase follow-up; read from the shader cache, no game run)

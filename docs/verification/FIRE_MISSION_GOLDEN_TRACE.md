@@ -363,6 +363,10 @@ so `dismissal_dialog`, `dialog`, `mission_interface_closed` precede the `status`
 and `MissionRewardsReceived` still runs inside the turn-in. With it open the turn-in gives `experience`, `reward_page`, `status Complete`, `mission_weapon_removed`, `reward`, `turn_in_dialog`
 and the reward waits; `confirmreward` gives exactly `reward_received`; `close` (Escape) runs the movie's `extChoiceCancelled` and gives the dismissal tag and `mission_interface_closed`.
 
+*Added 2026-11-12:* in the real game with the SDK mods off (session 1, two runs of one path), Escape's release on the list after the reward closed the
+screen through `OnClose` with no `extChoiceCancelled`. If the VM's `close` step stands in for that Escape, the game did not do it that way on this page.
+Whether Escape on the offer page calls `extChoiceCancelled` was not observed ([MISSION_SCREEN.md](MISSION_SCREEN.md), "The keys with the SDK mods off").
+
 **Why the rows are built in C++.** The movie's `DetermineQuestEntries` grows arrays of structs from empty with `DynArrayInsert`; the VM keeps no element type for an empty array, so the elements would
 be untyped. The override runs the same director calls (`GetRedeemableMissions`, `GetEligibleMissions`, `GetInProgressMissions`: the observed `CanEndMission` / `CanStartMission` rows) and builds
 the rows with the rule the script has (redeemable first with status 3, then eligible with 0; in progress apart). The VM was not changed for this. (A first version of the override iterated a temporary and

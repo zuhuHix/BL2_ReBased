@@ -96,6 +96,10 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
    With the slot limit raised in memory: `PickupSomething` -> `DenyPickupAttempt` (false) -> `GiveTo` -> `HandlePickup` ->
    `ServerAnnounceWeaponPickup` -> `AddInventory` -> `AddInventoryToBackpack` -> `PickedUpBy` -> `Destroyed` -> `UnTouchedPickupable`, all in
    one frame; the pistol went to the backpack (13 -> 14), not equipped.
+   *Added 2026-11-12:* the "3 each" above is inferred from the sum of three pickups, not read per pickup. In session 2 of 2026-11-12 (Three Horns
+   Divide, Maya level 8, the three loot mods off in memory) a pair of level 7 pickups touched in one frame paid 4 together, so the value per pickup at
+   one level varies (why is UNVERIFIED; the items carry part definitions). That session also saw no `AddCurrencyOnHand` call for a money pickup,
+   which fits "the pickup's native money credit" ([COMBAT_RANGE.md](COMBAT_RANGE.md), "Den reads of session 2").
 
 ### C. The player is hit
 

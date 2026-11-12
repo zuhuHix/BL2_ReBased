@@ -13,9 +13,12 @@ The first scripted playtest showed one E accepting the mission with no text, no 
 | E at Marcus opens a screen; Enter on the offer accepts; Enter on the turn-in entry turns in; Enter again on a reward page takes the reward; the reward came 14.9 s after the turn-in, on that press | Live trace, [FIRE_MISSION_GOLDEN_TRACE.md](FIRE_MISSION_GOLDEN_TRACE.md) | Observed in game |
 | Accepting closes the screen by itself, because the entry list is then empty | Live trace plus the installed script | Observed in game |
 | After the reward the screen stayed open, listing the next mission | Live trace | Observed in game; the host closes instead, because the slice has one mission |
-| Enter accepts, turns in and takes the reward, each on the key's release | Live capture, one run each | Observed in game, on the game's own handler. The mod below does not act on Enter here |
+| Enter accepts, turns in and takes the reward, each on the key's release | Live capture, one run each | Observed in game, on the game's own handler. The mod below does not act on Enter here. Also with the SDK mods off, two runs (2026-11-12, below): the press returns false, and the action runs in the release's own frame, inside the handler call |
 | Escape closes an offer | Live capture, one press, on the next mission's offer | Observed in game |
-| Escape does nothing on the reward page: both handler calls return false and the page stays | Live capture, one press | Observed in game |
+| Escape does nothing on the reward page: both handler calls return false and the page stays | Live capture, one press | Observed in game; also with the SDK mods off, two runs (2026-11-12) |
+| F on the offer does nothing: press and release return false, no callback | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game |
+| After the reward is taken the page goes back to its list and stays open until Escape (one eligible entry in that save) | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game |
+| Escape's release on that list closes the page through `OnClose`, then `EndFocus`, with no `extChoiceCancelled` | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game on that page; Escape on the offer page itself was not pressed with the mods off |
 | The page-up and page-down keys scroll the description | Installed script (`QuestAcceptGFxMovie.HandleInputKey`), read with `research/script_disasm.py` | UNVERIFIED in game |
 | What E and WASD do on these pages | The script binds no such key. One read at the offer, with the mod below loaded: the game's handler returned false on E's press and release, and the mod's own hook then sent `Enter`, so the press as a whole accepted. WASD was not pressed | Without the mod: UNVERIFIED until a stock run. The host's rule that they do nothing comes from the script |
 | The prompts' text | The install's localization and `DefaultGame.ini`, through `tools/prepare_mission_screen.py` | The strings are the game's; where they appear is from the script |
@@ -79,7 +82,8 @@ Three sessions with `tools/real_game/mission_screen_capture.ps1` on the zuhu PC,
 **Confirmed, on keys the mod does not touch (one run each):**
 - E from the world opens the screen and nothing is accepted. Enter's release accepts, and the screen closes inside that press.
 - Enter's release turns in: status and experience change in that press, before the reward is taken, and the reward page shows.
-- The page waits. The mouse and Escape do nothing there. Enter's release runs `AcceptReward` and `MissionRewardsReceived`.
+- The page waits. The mouse and Escape do nothing there. Enter's release runs `AcceptReward` and `MissionRewardsReceived`. (The capture's mouse
+  step, since it was written, is ten small mouse moves, not a click, so a left click on the page is untested.)
 - With another mission available, the page then goes to that mission's offer rather than closing. The host closes, because the slice has one mission.
 - The world is not paused under the screen: game time runs and NPCs idle. `bPauseGameWhileActive` and `bCaptureInput` read false. The mouse moved nothing, though `IsLookInputIgnored` reads false; why is unread.
 - F on the offer reaches the handler, which returns false, and the screen stays.
@@ -89,6 +93,28 @@ Three sessions with `tools/real_game/mission_screen_capture.ps1` on the zuhu PC,
 **The look, open and not done by the host:** the panel on one side, tilted; the panel has a level and difficulty row; the turn-in's body has a turn-in text and the objective lines; the prompt line sits under the panel; the reward page has an animated figure.
 
 **The HUD, done by the host since 2026-11-07:** the HUD, minimap and tracker are hidden, as well as the gun. The offer, turn-in and reward frames each show none of them. One capture of each, with the mods above loaded. When it hides and returns, and what hides it, were not read.
+
+## The keys with the SDK mods off (2026-11-12)
+
+AI-assisted (Claude Code). Written in our own words from a private analysis. Observed in the real game, session 1 of 2026-11-12:
+`tools/real_game/mission_screen_capture.ps1` with the read-only watch, Sanctuary, Maya level 8, every SDK mod of the session list off as read in the
+game (three ways: the session record, the in-game mod list in every labelled snapshot, and the watch's check); only Quick Startup stayed on. Better
+UI Controls and Dialog Skipper were off throughout. Two runs of the same scripted steps, so two samples of one path. The Fire objective was completed
+by the capture's memory shortcut, not played.
+
+| Page, key | Edge that acts | What runs on it |
+|---|---|---|
+| Offer, F | none | nothing; press and release return false |
+| Offer, Enter | release | `extChoiceConfirmed`, `extAcceptConfirmed`, the accept, `OnClose`, `EndFocus` |
+| Turn-in, Enter | release | `extChoiceConfirmed`, `extCompleteConfirmed`, the turn-in, the reward page |
+| Reward, Escape | none | nothing; `HandleRewardInputKey` and the panel's `PanelOnInputKey` return false on both edges, and the page stays |
+| Reward, Enter | release | `AcceptReward` (choice -1), `MissionRewardsReceived`, then the movie goes back to its list |
+| The list after the reward, Escape | release | `OnClose`, `EndFocus`; no `extChoiceCancelled` |
+
+- **No delay:** in all ten actions the callbacks run inside the release's own handler call, in its frame. The press of each of these keys returns
+  false. The gap between press and release is the capture's own key hold.
+- **Not tested:** A, Start and the left mouse button on the reward page (the capture's mouse step is a mouse move, and it sends no gamepad key);
+  Escape on the offer page before an accept; Space, E, W/A/S/D and the page keys on the pages.
 
 ## The camera on the giver (2026-11-08, interim, UNVERIFIED)
 
@@ -103,6 +129,15 @@ AI-assisted (Claude). **What the real game does, as far as it was seen:** with t
 **Checked:** the synthetic `OpenWillow.FocusCam` test (the aim lands the point where asked over several eyes, FOVs and aspects; the zoom; the file's checks) and `tests/mission_camera_probe_test.py` for the probe's geometry. The suite `tools/test_mission_page.ps1` gains six rows: `camera_on_marcus_offer`, `camera_on_marcus_turn_in`, `camera_on_marcus_reward` (his bone within 0.06 of the screen point in the view the player sees); `camera_back_after_escape`, `camera_back_after_the_reward` (the view is the control rotation again, and the control rotation and FOV are those from just before the page opened); and, last, `failure_closes_the_page_and_gives_the_view_back` (a quest failure forced with the page up closes it; a second later the camera manager's rotation and FOV, and the control rotation, are those from before the page). Without the local file the three "on" rows and the failure row fail and name the file.
 
 **Every close gives the view back:** the release is part of closing the page (Enter, Escape, Maya down, a lost page, end of play), and a quest failure closes the page, since a failed quest no longer ticks the page or takes its keys. A pass says the host aimed where its numbers say; whether it looks like the real frames is a side-by-side comparison.
+
+**The focus hooks, live with the SDK mods off (2026-11-12, session 1 as above, two runs, four page closes):** the screen's `Start` and
+`BeginFocus` (User = Maya) run in the frame of the use dialog event that opens the page, and `EndFocus` runs inside `OnClose`, in the frame of the
+closing key's release. `FocusCamReturnTime` takes `EndFocus`'s world time and is back to -1 within 0.98 to 1.05 s of it (where the four brackets
+from 1 s snapshots overlap). A 1.0 s blend back fits that, but it is a fit (UNVERIFIED), and that -1 marks the blend's end is UNVERIFIED too.
+`ResetFocusCam` is not part of the page: it fired only in the respawn, three times per run. The controller's `FocusObject` read Marcus's pawn while
+the page was open and None otherwise. Marcus's `FocusRadius` 65 and `FocusOffset` (-0.35, -0.1, 0) were read live and equal the data. **The camera
+itself was still not read:** the probe asked the controller's `PlayerCamera`, which is None in this game, so every camera row of both runs was an
+error, and the questions above stay open.
 
 ## The stall on the first E (2026-11-06)
 

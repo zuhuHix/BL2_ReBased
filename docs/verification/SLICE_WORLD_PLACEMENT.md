@@ -71,6 +71,13 @@ unit as placed today), rotation degrees = units x 360 / 65536 as `[Pitch, Yaw, R
 - `UNVERIFIED`: the leg from the placed pawn to node 12 is native navmesh pathing (the manifest gives a
   straight line); that the AI walks the `NextNodes` chain after reaching its destination and fires `Finished`
   at the chain end (inferred from the data layout, not from code); speed scaling by AISpeedPercentageHere.
+- **Observed walk, 2026-11-12** (session 1: `tools/real_game/mission_screen_capture.ps1` with the read-only watch, Sanctuary, Maya level 8, every
+  SDK mod of the session list off as read in the game; two runs of the same scripted steps, so two samples of one path; Marcus's pawn read about
+  every 0.1 s). He walked at a plateau of **150 uu/s**, while `GroundSpeed` 294 and `WalkingPct` 1.0 were read in the same rows, so the walk is not
+  `GroundSpeed` x `WalkingPct`. No slow-down before nodes 12, 26 or 40: he passed 12 and 26 at full speed, cutting the corners inside the 128 uu
+  arrival radius, and stopped within one read about 47 to 50 uu from node 40, inside that radius. The only slow part is a 0.8 s turn at node 35.
+  About 1,230 to 1,240 uu in 9.2 to 9.6 s. The walk began 18.0 to 18.1 s after the accept; what it waits on (probably his accept line) is
+  UNVERIFIED. The source of the 150 is UNVERIFIED: the read has positions only, no velocity or movement-mode field.
 
 ## 1c. Target dummy — recovered (spawn trigger UNVERIFIED)
 
@@ -150,6 +157,15 @@ caller of `SetStationActivatedState` was not traced). Note: `WillowCoopPlayerSta
 4571 uu (planar) and 179 uu (vertical) from `ResurrectTravelStation_0`, inside its 5000/240 touch values; if
 those values are the activation rule, a player entering at the start would activate it and it would win over
 the nearest-station rule. Not established.
+
+**Runtime state, observed 2026-11-12** (session 1, two runs, as in 1b; session 2's four downs on Three Horns Divide show the same pattern): with
+that save the replication info's `ActiveRespawnCheckpointTeleportActor` read `StationTeleporterDestination_0` from the load on, with no station
+touched in the run. The load placed Maya on that destination's first exit point (1.15 uu above it, the standing pawn), facing 90 deg. On the
+respawn `GetBestPlayerPlacementPoint(false)` returned the checkpoint, and the first respawn used `StationTeleporterExitPoint_1`, 170 uu along X
+from the first, with the same facing, not `StationTeleporterExitPoint_0` as a counter starting at 0 would give. The arrival registers the station
+again (`Behavior_RegisterStation`, `bFromLoad` false, then `SetStationActivatedState(true)`); `ReplacePreviouslyActivatedStation` was not called.
+Only FastTravelStation_0 was active (the other three read inactive), and it is also the nearest, so the selection order is still not told apart.
+The load chain was not hooked, so which rule placed her at the load is not seen, and that the load advances the exit counter is UNVERIFIED.
 
 ## 2a. XP reward — inputs recovered, amount UNVERIFIED (native)
 

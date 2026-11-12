@@ -214,8 +214,8 @@ other record against it. Each value comes from one session and is UNVERIFIED bey
 | 4 | Baby swing cycle (its grab) | Den read: mean 1.1334 s, 1.133 to 1.134, 31 gaps, two babies; no other record | 1.25 | 1.133 | light as row 1; in engine: `kind_melee` in 1.128 to 1.139 (+ `max_frame`) | FAIL (1.25) | light PASS; **the default range spawns no baby, so the engine check does not run there** |
 | 5 | Baby stand distance | Den read: median 111 uu, 106 to 118, 347 samples, one baby (the second was not sampled); 106.0 to 112.3 at the damage moment (31 calls) | 420 (480 - 60) | 111, but **192 in the host** (171 with Maya crouched): no stand goes inside body contact, and the host's baby has the borrowed adult-sized radius 150 (+ Maya's 42 standing, 21 crouched) | light as row 1; in engine as row 4, 106 to 118 | FAIL (420) | as row 4; when a baby is spawned this row FAILS on the body size, not on the rule |
 | 6 | Baby first swing inside the stock range | Den read: 425 uu, stock range 480 (one grab) | the rule | unchanged | as row 3 | PASS (by the rule) | as row 4 |
-| 7 | Regular bullymong: cycle and stand distance (three of the four default enemies) | **no live read** | 1.25 (the adult's), 260 (320 - 60) | unchanged | `melee_interval` (enemy 0 is a regular one) against its own value, 0.1 s | PASS (stand-in) | unchanged |
-| 8 | Slinger's melee, psycho | **no live read** of either swinging at the player (the den read's slingers only threw; its SavageLee swung at something 3,021 uu away) | 1.25, stop rule | unchanged | none | | |
+| 7 | Regular bullymong: cycle and stand distance (three of the four default enemies) | **no live read** in the den read; session 2 of 2026-11-12 (below): cycle median 1.220 to 1.223 s, 96 gaps over 3 recordings; distance at its swing calls 142.0 uu at the closest (100 + 42), median 209 to 227 uu (a call distance, not this table's sampled stand distance) | 1.25 (the adult's), 260 (320 - 60) | unchanged | `melee_interval` (enemy 0 is a regular one) against its own value, 0.1 s | PASS (stand-in) | unchanged |
+| 8 | Slinger's melee, psycho | **no live read** of either swinging at the player (the den read's slingers only threw; its SavageLee swung at something 3,021 uu away). Session 2 of 2026-11-12 (below): a slinger's melee at the player was seen, cycle median 1.222 s (28 gaps, one recording), closest call 192.0 uu; still no psycho swing at the player | 1.25, stop rule | unchanged | none | | |
 | 9 | First blow, leaps and thrown rocks | see "The main open gap" below | not modelled | not modelled | none | | |
 
 **How the bands were chosen.** `tools/check_range.py` grades the numbers, and only there. The host's `kind_melee` verdict covers only what the bands
@@ -274,6 +274,44 @@ to her with no swing. Nothing else happens until she moves; that was so before t
 4. **Leaps and rocks:** the list under "The main open gap" above.
 5. **Time to the first blow** after a member takes its target, per kind, against a player who stands still and one who moves.
 
+## Den reads of session 2 (2026-11-12)
+
+AI-assisted (Claude Code). Written in our own words from a private analysis of the session's `tools/real_game/cash_capture.ps1` runs (the
+`den_read`, `den_down` and cash stages); the recordings stay under ignored `local/`. Three Horns Divide (Ice_P), Maya level 8, six den recordings in
+one day (two from earlier attempts), about 120 fps. SDK mods loaded, with the three loot mods switched off in memory for the cash runs. **What the
+capture did:** Maya stood immune during the reads, she was moved 1,600 uu from a pack, each money target was set to 1 health before its kill, and
+she was moved onto each money pickup by a location write. One map, one level, one session: nothing below speaks for other dens. The acceptance
+table's rows 1 to 6 are left as they are here; rows 7 and 8 point to this section.
+
+- **The kind is the AI class.** Every enemy's actor class is `WillowAIPawn`; the kinds are told apart by the AI class (`CharClass_PrimalBeast`, the
+  regular, and `_Adult`, `_Ranged` the slinger, `_Badass`, `_Baby`). Regular bullymongs were present in every den recording and swung at Maya.
+- **Fields, read live on every pawn of those kinds:** `GroundSpeed` 500 for the regular, the adult, the slinger and the badass, 300 for the baby;
+  `WalkingPct` 0.25 for all; `DrawScale` 1.0. Collision cylinder (radius / half-height): baby 64 / 48, regular 100 / 90; Maya 42 / 80.
+- **The closest swing call is contact: the attacker's radius plus Maya's 42, standing.** Adult and slinger 192.0 uu (a radius of 150 for both),
+  regular 142.0, baby 106.0. None of 189 baby calls came closer than 106.0, median 106.0 to 106.1 per recording. This answers live-read question 3 for
+  these kinds; the crouched floor was not observed.
+- **Moving speeds** (medians of moving stretches, leaps and knockback included): slinger 500 in 4 of 4, adult 500 in 6 of 11, baby 300 in 4 of 8.
+  For those kinds the field is the chase speed. **The regular read 375 in 4 of 6 medians** (the others 549 and 750), below its field of 500;
+  why is unexplained (UNVERIFIED).
+- **Swing cycles** (one attacker's consecutive calls with one definition, gaps of 3 s or less, medians per recording): adult 1.2200 to 1.2230 s, 407
+  gaps over 4 recordings; regular 1.2200 to 1.2227 s, 96 gaps over 3 (it uses the adult's `MeleeDef_PrimalBeast_Melee`); slinger melee 1.2224 s,
+  28 gaps, one recording; baby grab 1.1330 to 1.1337 s, 131 gaps over 3. The adult value is a third read beside L-4's 1.249 s and the 2026-11-07 den
+  read's 1.2168 s, and it agrees with the den read. These are the values a clip rounded to whole frames at 60 fps would give (1.2167, 1.1333) although
+  the game ran at about 120 fps, so the cycle does not seem to follow the frame rate as live-read question 1 supposed (UNVERIFIED: the frame time was
+  not fixed). The gap window here (3 s) is wider than the acceptance table's (1.5 s).
+- **The regular, beyond the table:** its median call distance stands 70 to 85 uu beyond contact, where the adult's sits at contact (why: open).
+- **The psycho:** `CharClass_SavageLee`, a named enemy, swung only at targets 1,192 to 2,986 uu away, so there is still no psycho swing at the player.
+- **Money:** at item level 5 two pickups paid 2 each, each the only pickup taken in its collect; at level 7 a pair touched in the same frame paid 4
+  together. With [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md) item 8 (three level 7 pickups paid 9 together), one value per level cannot give both
+  sums, so "one value per level" is contradicted (weakly: one pair). The money items carry part definitions, a candidate cause (UNVERIFIED). The
+  range's `round(4 x 1.13^level)` stays wrong-high and stays a stand-in. All 8 money items whose balance was read were `Money_Little`, none big, which
+  at that count says nothing about the big share.
+- **The money credit is not an `AddCurrencyOnHand` call:** five money pickups raised the cash and no such call came; the only calls in the session
+  were the respawn fees. Money is taken on touch with no key: `TouchedPickupable` then `PickupSomething` (`bReadyAfterPickup` false) in the same
+  frame, five touches. The item's own value calls (`GetMonetaryValue`, `MonetaryValue`) return 0 again.
+- **Some pickups took no touch** when the capture moved Maya onto them, so the cash stage ended early each time. Why (still settling, lying in
+  geometry, or a location write raising no touch) is UNVERIFIED.
+
 ## Range spot: candidates and the textured-floor rule (PR2 follow-up)
 
 `tools/prepare_range.py` writes `spot_candidates` from the level import's terrain probes (`local/sanctuary/terrain-runtime.json`), Sanctuary_P
@@ -322,6 +360,7 @@ sphere above it, else the enemy's feet. The range's own pickups expire after 60 
 removes every drop with the range.
 
 **Known wrong: the money stand-in reads high.** At item level 7 it gives 9 per pickup, about 3 times the one live number on record (COMBAT_GOLDEN_TRACE.md item 8: three `Money_Little` pickups raised the cash by 9, so 3 each). A real-game read is queued; the stand-in stays until that gives the value at more levels, since one point would not give a rule. Only the range's own pickups use it.
+Session 2 of 2026-11-12 read two more values and contradicts one value per level ("Den reads of session 2" above); the stand-in stays.
 
 `ow.RangeLoot normal|always|off`: `always` tries every weapon, money and ammo pool (for testing guns), `off` drops nothing. The range pickups (money,
 ammo) are engine-shape stand-ins collected on touch. Test steps: loot_roll, loot_money_pickup, loot_weapon_item (may SKIP without the weapon

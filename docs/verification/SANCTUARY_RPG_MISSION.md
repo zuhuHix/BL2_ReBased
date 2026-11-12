@@ -499,6 +499,9 @@ mission-screen pages from `tools/hud_overlay/serve.py`, and the start shield (th
 `local/slice/stand_in_shield.json` exists). Maya's level is the slice gear level (8, an UNVERIFIED slice choice). The line has
 no test driver: no `-owslicegate*`, no `ow.RangeLoot`, no granted point, no forced damage. Two host stand-ins remain and are
 not switches: the dependency mission counts as complete (`OWQUEST FIXTURE` in the log), and Marcus walks straight lines.
+In the real game his walk ran at 150 uu/s, about half the 294 of the class's `GroundSpeed` x `WalkingPct` that the host takes from the data (live,
+2026-11-12, SDK mods off, two runs of one path: [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1b; whether the current local data gives the
+host 294 was not checked).
 It refuses to start, naming the file and the tool that makes it, when any of its local data is missing. It holds the
 machine-wide UE run lock while the window is open, saves to `local/playslice/save.json` and logs to `local/playslice/play-*.log`.
 Exit codes: 0 played or smoke passed, 1 a smoke item failed, 2 refused (missing data), 3 never launched (lock timeout, page

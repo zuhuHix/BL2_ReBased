@@ -106,7 +106,7 @@ three Phaselock constraints fail to `SKILL_Deactivated`.
 | Constraint | When | Native `Evaluate` reading | Host mapping today |
 |---|---|---|---|
 | `WeaponActionAvailableExpressionEvaluator` | activation only | calls script `WillowPlayerController.CanPerformWeaponAction(0)`: true unless `bWeaponsRestricted`; with a pawn holding a `WillowWeapon`, that weapon's `CanPerformAction()` (true, except in states `WeaponPuttingDown` and `Inactive`); and false while `bPerformingSharedWeaponAction` | "not reloading" (`OpenWillowPhaselock.cpp:176-178`). **Differs:** reloading does not block; putting a weapon away, a holstered weapon, restricted weapons and a shared weapon action (melee/grenade-style) do |
-| `HealthStateExpressionEvaluator` (`bHealthy`) | activation and while active | true if the controller's pawn is alive and well (`Pawn.IsAliveAndWell`); `bInjured` / `bDead` would test `IsInjured` / `IsDead`; no pawn → false | `Health > 0` at activation only. **Differs:** an injured (Fight For Your Life) Maya cannot cast, and becoming injured during the lock deactivates the skill |
+| `HealthStateExpressionEvaluator` (`bHealthy`) | activation and while active | true if the controller's pawn is alive and well (`Pawn.IsAliveAndWell`); `bInjured` / `bDead` would test `IsInjured` / `IsDead`; no pawn → false | `Health > 0` at activation only. **Differs:** an injured (Fight For Your Life) Maya cannot cast, and becoming injured during the lock deactivates the skill (the second part confirmed live once, 2026-11-12, below) |
 | `VehiclePassengerExpressionEvaluator` (`bNotInVehicle`, `bAttachedRider`) | activation, while active and while paused | not in a vehicle → `bNotInVehicle`; in one → true if `bDriver` and it is a `WillowVehicle`, or `bAttachedRider` / `bPassenger` matches the seat kind | always true (no vehicles). Consistent for the slice |
 
 `Pawn.IsAliveAndWell` itself was not read (only that the evaluator calls it); "alive and not injured" is the reading
@@ -122,6 +122,12 @@ skill state): during a manual reload the cast starts and lifts the target, and i
 (`OnAbortReload`); during a swap put-down (`IsPuttingDown()` true) the skill stays idle and no cooldown is used, 2 of 2,
 with a control cast right after each succeeding. Not tested: going down while a target is held, casting while injured
 ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+
+**Confirmed in game on 2026-11-12, one cast** (session 2, `tools/real_game/phaselock_integrity_capture.ps1`, its `down` stage, S2.3; Three Horns
+Divide, Maya level 8, SDK mods loaded, none known to touch the skill): with an Adult held, Maya went down 4.16 s after the cast from the capture's
+scripted hits. The skill ended (`ActionSkillCallback(false)`) and the target was released (`ReleaseTarget`) within about 0.14 s, most likely in the
+same long frame, with no outro and no release buffer. The down was the capture's; the skill's end was the game's. Casting while injured is still
+not tested ([PHASELOCK_STOCK_DATA.md](PHASELOCK_STOCK_DATA.md), "Six casts timed live").
 
 ## 5. Lift bob and the held target
 

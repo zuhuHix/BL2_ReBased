@@ -87,6 +87,7 @@ kill-frame health (below), the sidearm switch, any animation, and the station.
   empty stand-in, and with it the camera ended after 0.77 s.
 - **The 11.8 s to the fee.** The script's own part is small: `AwaitingRespawnDisplayRespawnCost` sets a 2.0 s timer for `ShowRespawnDialog` (the VM has no timers, so the driver calls the dialog itself).
   The remaining 9.8 s are the station path's and its caller was not traced; the 11.8 s is a live input, not a result.
+  (2026-11-12: the station path's parts are now split live, six samples; see "A down and a respawn in the real game" below.)
 - **The respawn point** and **`ResetAI`, `SetAnchor`, `Actor.SetLocation`, the teleport effect** (stubs; `NoFailSetPawnLocation` is bound to write the location, because the script falls back to it when `SetLocation` does nothing).
 
 ## Natives bound for this step (all `UNVERIFIED`, in `src/combat_down.cpp`, enabled with `enableDeaths`)
@@ -164,6 +165,7 @@ AI-assisted (Claude). A first playtest logged capacity 0 on a bought shield: ven
 
 - **Rule, UNVERIFIED:** a shield whose card has no "Capacity" stat takes `round(capacity x growth ^ (max(1, item level) - anchor level))` when equipped; a card's own capacity wins. It is not derived from the shield's parts, so every shield of one level is the same, where real shields of one level vary.
 - **Numbers:** about 383 at level 8, growing 1.14 per level, adopted by the maintainer (2026-11-07), in ignored `local/slice/stand_in_shield.json` (`at_level`, `capacity`, `growth_per_level`). They are a log fit over five live reads of one shield balance at levels 1 to 8, from one save in one session of runs, with other SDK mods loaded (`PHASELOCK_STOCK_DATA.md`, "Shield capacity against level"). UNVERIFIED at other levels: above level 8 it is extrapolation, as the game did not equip those shields at player level 8. **Correction:** the file used to say 181 at level 8. That 181 belongs to her level 3 shield, and 8 was the player's level, so a level 8 stand-in had about half the read value. Without the file a warning is logged and such a shield still protects nothing.
+- **One more read, 2026-11-12:** session 2 (`tools/real_game/phaselock_integrity_capture.ps1`, its shield stage, Three Horns Divide, player level 8, SDK mods loaded) read one random spawn per level again. Its level 8 read is about 30 % below the stand-in's level 8 anchor ([PHASELOCK_STOCK_DATA.md](PHASELOCK_STOCK_DATA.md), "Six casts timed live"). One read per level of random parts widens the spread and gives no new rule. The stand-in stays UNVERIFIED; whether to refit it is the maintainer's call.
 - **Checked:** the synthetic `OpenWillow.MayaState` covers parsing, reading a good, a bad and a missing file, growth, a card's capacity winning, and a stand-in shield through equip, damage and recharge. The walker's own path and equip have not been run by that test; a play run has to show "stand-in rule read from" with the real path, and the capacity line.
 - **Live check, test-only:** `powershell -File tools/run_hud_shots.ps1 -StandInShield` starts the host with `-owshieldcheck`, adds a stat-less shield, equips it through the inventory's own call, hits Maya through `OpenWillowApplyDamageToPlayer` and waits for the recharge, then `tools/check_shield_check.py` grades the log and frames. It shows the real path, `TickShield`, the damage entry point, the recharge and the HUD frames in a live host. It does not show a real buy or a loot pickup (the Vendor suite covers the buy; both make the same stat-less item) or the rule's numbers against the game.
 - **Not changed:** the card and backpack row still show no stats, and Maya starts with no shield until she gets one. (Superseded for normal play on 2026-11-08: see "Start shield".)
@@ -176,7 +178,7 @@ AI-assisted (Claude). `FOpenWillowRespawnFee`. The first playtest found a respaw
 
 **What the host does:** 11.8 s after a respawn it charges `0.07 x cash` rounded half up, at most the cash, and shows a timed panel for 7 s: no pause, no key. With no fee it shows the waived text. A second respawn before the charge replaces it, and the charge still falls due while she is down again or dead (host rules, UNVERIFIED). The 7 s start when the HUD can first draw the panel, so a status page open at the charge does not use them up (a host choice, UNVERIFIED: the real game was not read with a page open). The text is the game's, read at run time from the install's `WillowGame.int`, and none of it is in this repository; without the install, or with a file too large or missing a string, a neutral text stands in, and the quest suite fails if the install is there and that happens.
 
-**Open:** the panel is a plain stand-in, not the game's look. Not done: the death camera, the digital tunnel and Maya's digistruct effect at the station, input staying locked until about 11 s after the respawn, and the HUD's red fee line and money counter. The other-player and waived-for-a-partner strings are not used; the slice has one player.
+**Open:** the panel is a plain stand-in, not the game's look. Not done: the death camera, the digital tunnel and Maya's digistruct effect at the station, input staying locked until 9.4 to 10.4 s after `ResurrectPlayer` (6.4 to 7.4 s after the arrival at the station; bracketed by 1 s reads, 2026-11-12, see below), and the HUD's red fee line and money counter. The other-player and waived-for-a-partner strings are not used; the slice has one player.
 
 ## Start shield (2026-11-08, maya lane)
 
@@ -188,3 +190,63 @@ AI-assisted (Claude). Slice choice by the maintainer (2026-11-08): Maya may star
 - **Watch, not verified:** the stand-in sits in the gear backpack under its test name, "Shield Check Stand-in" (renaming it means changing `tools/check_shield_check.py` too). Once one shield has been equipped, a later shield change starts empty (`FOpenWillowMayaState::EquipShield` fills only the first equip), so swapping shields in normal play now starts at zero. What the game does on a swap is not known.
 - **UNVERIFIED:** that the real game starts Maya in a shield at all. This is a slice choice by the maintainer, not game behaviour, and the stand-in rule above stays UNVERIFIED.
 - **Checked:** `tests/start_shield_test.py` (source text only) and the UE module build. Not run in the editor: the in-engine suites named in the PR are for the integration run.
+
+## A down and a respawn in the real game (2026-11-12, sessions 2 and 1)
+
+AI-assisted (Claude Code). Written in our own words from two private analyses of the day's capture sessions. The recordings, and every value that
+comes from the player's save, stay under ignored `local/`. Everything here was seen at one player level (8), from one save, on the station path only.
+
+**How it was seen.**
+- **Session 2, a pack down, four samples.** `tools/real_game/cash_capture.ps1`, its `den_down` stage, on Three Horns Divide (Ice_P), Maya level 8:
+  three downs from the session and one from an earlier attempt the same day. SDK mods loaded, with the three loot mods switched off in memory; the
+  cheats mod's options read off in its settings file (read outside the session, so UNVERIFIED for the session itself). What the capture did: it kept
+  Maya immune during the earlier reads, moved her 1,600 uu from a pack and removed the immunity for this stage. The hits, the down and everything
+  after are the game's.
+- **Session 1, a scripted down, two samples.** `tools/real_game/mission_screen_capture.ps1` with the read-only watch, Sanctuary, Maya level 8,
+  every SDK mod of the session list off as read in the game (Quick Startup stayed on). Two runs of the same scripted steps, so two samples of one
+  path. What the capture did: one scripted 1,000,000-damage hit at the turn-in stand, then reads only.
+
+**Order and gaps** (game clock; each range covers the samples of that session):
+
+| Gap | Session 2, Ice_P (4) | Session 1, Sanctuary (2) | Record |
+|---|---|---|---|
+| injured state begins | inside the killing hit's `TakeDamage`, same frame | same frame as the hit | |
+| injured start to the `Player_Digistruct` effect | 15.03 to 15.05 s | 15.035 s | |
+| injured start to `ResurrectPlayer` (reason 1) | 20.04 to 20.05 s | 20.040 s | 2.28 + 12.0 + 5.76 = 20.04 s (verdict 3, "Bleed-out") |
+| `ResurrectPlayer` to the arrival (`NotifyTeleported`, `AwaitingRespawn` begins): the holding cell | 3.00 to 3.01 s | 3.0005 to 3.0024 s | |
+| arrival to `Player_ReRez` (she is shown again) | 1.50 s | 1.502 to 1.506 s | |
+| arrival to `RezGear` | 4.50 to 4.51 s | 4.505 to 4.511 s | |
+| `Player_ReRez` on | 5.00 s | 5.006 to 5.009 s | |
+| effect off to `AwaitingRespawnDisplayRespawnCost` | 0.288 to 0.292 s | 0.2925 to 0.2974 s | 0.95 of a 0.3 s zoom (0.285); the samples do not tell 0.285 from 0.3 |
+| cost display to `ShowRespawnDialog` and the fee | 2.00 s | 2.003 to 2.006 s | the script's 2.0 s timer |
+| **`ResurrectPlayer` to `ShowRespawnDialog`** | **11.80 to 11.81 s** | **11.811 to 11.814 s** | 11.8 s, the driver's live input above |
+
+- **Confirmed live, six samples over two maps:** the station path's split of the 11.8 s, each part within a frame or two of the record's and the
+  script's values, and the 20.04 s from the injured start to `ResurrectPlayer`. The path without a station was not seen.
+- **The 12.0 s bleed-out is not a row of its own.** No dead-state hook (`Dying`, `MostlyDead`, the client states) fired for the player, so the
+  20.04 s fits the sum 2.28 + 12.0 + 5.76 to a frame in all six, and its parts are consistent with it, not measured one by one. In session 1 the
+  player's `StopTalking` came 14.28 s after the hit, where 2.28 + 12.0 puts the dead state's start; that it marks that start is UNVERIFIED.
+- **Health reads 0 from the injured state's first frame** (session 2, four downs). `NumSuccessiveInjuries` read 0 throughout: all six were first
+  injuries, so the successive-injury cut was not exercised.
+- **Hits while down did not change the timing.** The four pack downs took different numbers and sizes of hits while injured (at least three each),
+  session 1's took none, and the totals agree within 0.02 s.
+- **The holding cell:** from `ResurrectPlayer` to the arrival she is hidden far below the map, with health and shield full.
+- **Input** (session 1, two runs; 1 s snapshots, so brackets only): kept during the bleed-out, ignored (`IsMoveInputIgnored`, `IsLookInputIgnored`)
+  from 13.3 to 14.5 s after the hit, and back 6.4 to 7.4 s after the arrival, together with `bCinematicMode` going false. The bracket holds the cost
+  display (about 6.8 s after the arrival); the frame is not decided. `SetCinematicMode` was hooked and never fired, so the game sets the flag another
+  way (which one: UNVERIFIED).
+- **The fee:** charged inside `ShowRespawnDialog` (`AddCurrencyOnHand(0, -amount)` in session 2; in session 1 the cash fell across the dialog), the
+  0.07 share of the cash on hand that the rule above gives, in all six. All six had the same balance, so they are one point of the rule, not six.
+- **Where she comes back:** at the replication info's checkpoint (`ActiveRespawnCheckpointTeleportActor`, the destination of the one active
+  fast-travel station). `GetBestPlayerPlacementPoint(false)` returned it inside `ResurrectPlayer`, `GetNextExitPoint` ran on the holding area and then
+  on that destination, and the arrival registered the same station again (`Behavior_RegisterStation`, `bFromLoad` false) with no
+  `ReplacePreviouslyActivatedStation`. In every sample that station was also the only active one and the nearest, so checkpoint first, first active
+  and nearest capable give the same answer: the selection order is not told apart ([SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1e).
+- **The exit point turns:** the load had placed Maya on the destination's first exit point, and the first respawn after it used the next one, six of
+  six. That the load advances the same counter is UNVERIFIED (the load chain was not hooked).
+- **Ammo** (the five refills that leave rockets out): in three of the pack downs one pool was below its cap before the down and at its cap after the
+  respawn, the other pools were full both times, and the rocket pool stayed empty. In session 1 the five refilled pools were already full before the
+  down, and the rocket pool was empty before and after. This fits five refills without rockets; the 32 % size is not seen, because no refill could
+  show below a cap.
+- **For anyone reading these recordings:** `ResurrectPlayer` with reason 0 and the holding cell skipped also fires at every map arrival; only
+  reason 1 is a respawn.
