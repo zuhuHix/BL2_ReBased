@@ -18,7 +18,8 @@ Steps (``all`` runs identity, extract, editor-job; ``anims`` needs the editor's 
                  checks that the four PhaseLock clips and the chosen idle/death clips exist in the exported set.
 * ``extract``    UModel: mesh glTF + MD5, the component's material instances, the AnimSet as MD5 clips.
 * ``editor-job`` the job file for ``tools/slice_npc_editor.py`` (modes ``npcs`` then ``anims``), plus
-                 ``host_target.json``: the UE asset paths and the pawn numbers the host reads.
+                 ``host_target.json``: the UE asset paths and the pawn numbers the host reads. It keeps the placements an
+                 earlier ``attachments`` step wrote when they match the worn pieces, and otherwise says to rerun that step.
 * ``anims``      convert the chosen MD5 clips to UE bone tracks (needs ``ref_pose_<Id>.json`` from the editor).
 * ``attachments`` add the worn static meshes to ``host_target.json`` (needs the editor's ``attach`` report).
 
@@ -322,6 +323,29 @@ def job_problems(job):
     return problems
 
 
+ATTACH_STEP = 'powershell -File tools/import_phaselock_target.ps1 -Steps attach'
+
+
+def keep_placements(hosts, previous, identity):
+    """Carries the attach step's placements from the previous host_target.json into the one editor-job writes, and returns one line per
+    target about them. editor-job owns everything host_target() writes; the `attachments` list belongs to the attachments step, which
+    runs later (-Steps attach). Rewriting the file from scratch dropped them (2026-11-12: eight suites then ran on bare enemies).
+    Placements are kept only when their number equals the worn pieces of this identity; otherwise they are left out and the line names
+    the step to rerun, so a later step can never be silently undone and stale placements are never kept."""
+    notes = []
+    for name, host in hosts.items():
+        worn = len(identity['targets'][name].get('attachments') or [])
+        old = (previous or {}).get(name)
+        placed = old.get('attachments') if isinstance(old, dict) else None
+        if isinstance(placed, list) and len(placed) == worn:
+            host['attachments'] = placed
+            notes.append(f'{name}: kept {len(placed)} attachment placements of the attach step')
+        elif worn:
+            why = 'none yet' if placed is None else f'{len(placed)} placements for {worn} worn pieces, left out'
+            notes.append(f'{name}: no attachment placements ({why}): run {ATTACH_STEP} next')
+    return notes
+
+
 def editor_job_step(args):
     identity = npc.read_json(OUT / 'identity.json')
     job = {'tool': TOOL, 'generated': npc.now(), 'npcs': [], 'slice_dir': str(OUT)}
@@ -353,8 +377,11 @@ def editor_job_step(args):
                  f'materials):\n  {lines}\nRun powershell -File tools/import_phaselock_target.ps1 -Steps prepare (UModel extract) first.')
     # Checked above with absolute paths; stored relative to the repository root (the launcher resolves them: tools/repo_paths.py).
     npc.write_json(OUT / 'editor_job.json', job_to_repo(job, ROOT))
+    notes = keep_placements(hosts, npc.read_json(OUT / 'host_target.json'), identity)
     npc.write_json(OUT / 'host_target.json', hosts)
     print(f'editor-job: wrote {OUT / "editor_job.json"} and host_target.json')
+    for note in notes:
+        print(f'editor-job: {note}')
 
 
 def anims_step(args):

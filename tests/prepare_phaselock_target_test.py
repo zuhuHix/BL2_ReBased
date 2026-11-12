@@ -110,6 +110,60 @@ def test_job_problems_names_every_missing_input():
         assert any('p_Masks not in the UModel output' in p for p in problems) and any('p_Normal' in p for p in problems)
 
 
+def run_editor_job(folder, previous, worn=2):
+    """editor-job on an invented import in `folder` (identity with `worn` pieces, one glTF export), over a host_target.json holding
+    `previous` (None: no file). Returns the host_target.json it wrote and what it printed."""
+    import contextlib
+    import io
+    import json
+    out, exports = Path(folder) / 'target', Path(folder) / 'exports'
+    out.mkdir()
+    exports.mkdir()
+    (exports / 'Skel_Fake.gltf').write_text('{}', encoding='utf-8')
+    pieces = [{'component': f'P.C_{i}', 'bone': f'B{i}', 'static_mesh': 'Pkg.Mesh.Spike', 'materials': []} for i in range(worn)]
+    identity = {'targets': {'Beast': {'dest': '/Game/X/Beast', 'skeletal_mesh': {'path': 'Char_Fake.Mesh.Skel_Fake'},
+                                      'mesh_component_properties': {'translation': {'Z': 0}},
+                                      'observed': {'collision_radius': 70.0, 'collision_height': 48.0, 'source': 'made up'},
+                                      'attachments': pieces}}}
+    (out / 'identity.json').write_text(json.dumps(identity), encoding='utf-8')
+    if previous is not None:
+        (out / 'host_target.json').write_text(json.dumps(previous), encoding='utf-8')
+    saved = t.OUT, t.TARGETS, t.npc.find_output
+    t.OUT, t.TARGETS = out, {'Beast': {'master': None, 'roles': [('Idle', 'Idle_A'), ('Death', 'Death_A')]}}
+    t.npc.find_output = lambda group, name, extensions: exports / f'{name}.gltf' if (exports / f'{name}.gltf').is_file() else None
+    (exports / 'Spike.gltf').write_text('{}', encoding='utf-8')
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            t.editor_job_step(None)
+    finally:
+        t.OUT, t.TARGETS, t.npc.find_output = saved
+    return json.loads((out / 'host_target.json').read_text(encoding='utf-8')), printed.getvalue()
+
+
+def test_editor_job_keeps_the_attach_steps_placements():
+    # 2026-11-12: -Steps prepare reran editor-job, which rewrote host_target.json from scratch and dropped the placements the attach step had
+    # written; the range was then built on enemies without their worn parts.
+    placed = [{'mesh': '/Game/X/P0.P0', 'bone': 'B0'}, {'mesh': '/Game/X/P1.P1', 'bone': 'B1'}]
+    with tempfile.TemporaryDirectory() as folder:
+        hosts, printed = run_editor_job(folder, {'Beast': {'mesh': '/Game/Old.Old', 'attachments': placed}})
+        assert hosts['Beast']['attachments'] == placed, hosts
+        assert hosts['Beast']['mesh'].endswith('Skel_Fake.Skel_Fake')   # what editor-job owns is rewritten
+        assert 'kept 2 attachment placements' in printed, printed
+
+
+def test_editor_job_names_the_attach_step_when_placements_are_missing_or_stale():
+    with tempfile.TemporaryDirectory() as folder:
+        hosts, printed = run_editor_job(folder, None)
+        assert 'attachments' not in hosts['Beast'] and '-Steps attach' in printed and 'none yet' in printed, printed
+    with tempfile.TemporaryDirectory() as folder:   # placements of an earlier identity are not kept
+        hosts, printed = run_editor_job(folder, {'Beast': {'attachments': [{'bone': 'B0'}]}})
+        assert 'attachments' not in hosts['Beast'] and '1 placements for 2 worn pieces' in printed, printed
+    with tempfile.TemporaryDirectory() as folder:   # a pawn that wears nothing needs no attach step
+        hosts, printed = run_editor_job(folder, None, worn=0)
+        assert 'attachments' not in hosts['Beast'] and 'attach' not in printed, printed
+
+
 if __name__ == '__main__':
     for name, fn in list(globals().items()):
         if name.startswith('test_'):
