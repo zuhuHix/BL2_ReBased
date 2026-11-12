@@ -59,7 +59,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
         '*sw_settled*' { return 'True' }
-        '*sw_snap(*' { if ($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { return '{}' }
         '*sw_stop*' { return 'stopped' }
@@ -124,7 +124,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*cp_down_state*' {
             # The den down's poll (invented values): up with a steady pool unless the scenario says otherwise.
             $script:polls++
-            if ($script:downNow -or ($scenario -eq 'snap_lost' -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
+            if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
             if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
             if ($scenario -eq 'poll_lost' -and $script:polls -eq 2) { throw 'no reply to c-invented' }   # one poll unanswered, the next ones answered
             if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "pool": null}' }   # the shield cannot be read
@@ -659,6 +659,15 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertTrue(session['den_down_trial_close'].startswith('not sent: the driver stopped answering'))
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
 
+    def test_a_lost_driver_at_after_respawn_fails_the_stage_although_she_stood_again(self):
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_down('after_lost', '-WatchSpec', str(spec), '-DownSeconds', '3')
+        self.assertIsNotNone(session['den_down_up_after_s'])   # down and up were both seen
+        self.assertNotIn('den_down', session['completed_stages'])
+        self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
+        self.assertTrue(session['den_down_trial_close'].startswith('not sent'))
+
     def test_an_unreadable_shield_never_reads_as_unhit(self):
         done, session = self.run_down('pool_none', '-DownSeconds', '2', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 0)
@@ -674,11 +683,16 @@ class DenDownReplacementTest(unittest.TestCase):
 
 
 class DpReplaceTest(unittest.TestCase):
-    """den_probe.dp_replace with invented objects: one call that checks she is up, then picks the nearest living enemy by fields only."""
+    """den_probe.dp_replace with invented objects: one call that checks she is up, then picks a living enemy by fields only: the first
+    placement's enemy at bearing 180 while it lives, else the nearest on the side she is on now."""
 
     class Obj:
         def __init__(self, **kw):
             self.__dict__.update(kw)
+
+    def pawn(self, n, dist, health, live=True, controller=True, at=None):
+        return self.Obj(Name=f'WillowAIPawn_{n}', live=live, dist=dist, health=health, controller=self.Obj() if controller else None,
+                        Location=self.Obj(X=at[0], Y=at[1], Z=0.0) if at else self.Obj(X=dist, Y=0.0, Z=0.0))
 
     def setUp(self):
         self.ns = {}
@@ -687,23 +701,37 @@ class DpReplaceTest(unittest.TestCase):
         self.placed = []
         here = self.Obj(X=0.0, Y=0.0, Z=0.0)
         self.state = 'up'
-        self.pawns = [self.Obj(Name='WillowAIPawn_1', live=True, dist=3000.0, health={'stale': None, 'CurrentValue': 50.0}),
-                      self.Obj(Name='WillowAIPawn_2', live=True, dist=1000.0, health={'stale': 'guid differs', 'CurrentValue': 50.0}),
-                      self.Obj(Name='WillowAIPawn_3', live=True, dist=900.0, health={'stale': None, 'CurrentValue': 0.0}),
-                      self.Obj(Name='WillowAIPawn_4', live=False, dist=800.0, health={'stale': None, 'CurrentValue': 50.0}),
-                      self.Obj(Name='WillowAIPawn_5', live=True, dist=7000.0, health={'stale': None, 'CurrentValue': 50.0}),
-                      self.Obj(Name='WillowAIPawn_6', live=True, dist=2000.0, health={'stale': None, 'CurrentValue': 10.0})]
+        fresh = {'stale': None, 'CurrentValue': 50.0}
+        self.pawns = [self.pawn(1, 3000.0, fresh),
+                      self.pawn(2, 1000.0, {'stale': 'guid differs', 'CurrentValue': 50.0}),
+                      self.pawn(3, 900.0, {'stale': None, 'CurrentValue': 0.0}),
+                      self.pawn(4, 800.0, fresh, live=False),
+                      self.pawn(5, 7000.0, fresh),
+                      self.pawn(7, 1500.0, fresh, controller=False),   # still spawning or being destroyed
+                      self.pawn(6, 2000.0, {'stale': None, 'CurrentValue': 10.0}, at=(0.0, 2000.0))]
         self.ns.update(
             cp_down_state=lambda: {'state': self.state},
             get_pc=lambda: self.Obj(Pawn=self.Obj(Location=here)),
             unrealsdk=self.Obj(find_all=lambda cls: list(self.pawns)),
             sw_live_pawn=lambda p: p.live, _sw_dist=lambda p, h: p.dist, _sw_pool_refs=lambda p: {'health_pool': p.health},
-            cb_place=lambda name, distance, bearing: self.placed.append((name, distance, bearing)))
+            _sw_fields=lambda p, names: {'Controller': p.controller},
+            cb_place=lambda name, distance, bearing: self.placed.append((name, distance, round(bearing, 1))))
 
-    def test_the_nearest_living_enemy_by_fields(self):
+    def test_without_the_first_enemy_the_nearest_living_one_on_her_side(self):
         got = self.ns['dp_replace']()
-        self.assertEqual(got['result'], 'placed')
-        self.assertEqual(self.placed, [('WillowAIPawn_6', 1600.0, 180.0)])   # stale, empty, not live and too far are passed over
+        self.assertEqual((got['result'], got['rule']), ('placed', 'nearest_my_side'))
+        # stale, empty, not live, too far and without a Controller are passed over; she stays on her side of it (it is at +Y, she at 0)
+        self.assertEqual(self.placed, [('WillowAIPawn_6', 1600.0, -90.0)])
+
+    def test_the_first_enemy_while_it_lives_at_bearing_180(self):
+        self.ns['DP']['trial'] = {'first': 'WillowAIPawn_1'}
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['rule'], got['enemy']), ('first', 'WillowAIPawn_1'))   # chosen over the nearer one
+        self.assertEqual(self.placed, [('WillowAIPawn_1', 1600.0, 180.0)])
+        self.placed.clear()
+        self.ns['DP']['trial'] = {'first': 'WillowAIPawn_3'}   # the first enemy dead: the nearest on her side
+        self.assertEqual(self.ns['dp_replace']()['rule'], 'nearest_my_side')
+        self.assertEqual(self.placed, [('WillowAIPawn_6', 1600.0, -90.0)])
 
     def test_not_up_places_nothing(self):
         for state in ('injured_flag', 'no_health', 'no_pawn'):
@@ -712,13 +740,55 @@ class DpReplaceTest(unittest.TestCase):
         self.assertEqual(self.placed, [])
 
     def test_nobody_in_reach_and_errors_are_results_not_tracebacks(self):
-        self.pawns = self.pawns[1:5]
+        self.pawns = self.pawns[1:6]
         self.assertEqual(self.ns['dp_replace'](), {'result': 'no_enemy'})
         self.ns['get_pc'] = lambda: self.Obj(Pawn=None)   # the pawn gone in that moment
         self.assertEqual(self.ns['dp_replace']()['result'], 'error')
         del self.ns['sw_live_pawn']
         self.assertEqual(self.ns['dp_replace'](), {'result': 'no_watch'})
         self.assertEqual(self.placed, [])
+
+
+class DpReplaceWatchHelpersTest(unittest.TestCase):
+    """dp_replace with the watch's real helpers (slice_watch.py, loaded first into the same namespace, as the driver runs them) and invented
+    pawns and pools, so the shape of a real _sw_pool_refs record is what dp_replace reads."""
+
+    class Obj:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    def pawn(self, n, x, value=50.0, guid=7, slot_guid=7, controller=True):
+        pool = self.Obj(CurrentValue=value, MaxValue=100.0, MinValue=0.0, MaxValueBaseValue=100.0, PoolGUID=slot_guid,
+                        Definition=self.Obj(), AssociatedProvider=self.Obj())
+        ref = self.Obj(PoolIndexInManager=0, PoolGUID=guid, PoolManager=self.Obj(ResourcePools=[pool]), Data=pool)
+        path = f'Ice_P.TheWorld:PersistentLevel.WillowAIPawn_{n}'
+        return self.Obj(Name=f'WillowAIPawn_{n}', _path_name=lambda: path, bDeleteMe=False, Location=self.Obj(X=x, Y=0.0, Z=0.0),
+                        Controller=self.Obj() if controller else None, HealthPool=ref, ShieldArmor=None)
+
+    def setUp(self):
+        self.ns = {}
+        for name in ('slice_watch.py', 'den_probe.py'):
+            path = ROOT / 'tools/real_game/scripts' / name
+            exec(compile(path.read_text(encoding='utf-8'), str(path), 'exec'), self.ns)
+        self.placed = []
+        here = self.Obj(X=0.0, Y=0.0, Z=0.0)
+        self.pawns = []
+        self.ns.update(
+            cp_down_state=lambda: {'state': 'up'},
+            get_pc=lambda: self.Obj(Pawn=self.Obj(Location=here)),
+            unrealsdk=self.Obj(find_all=lambda cls: list(self.pawns)),
+            cb_place=lambda name, distance, bearing: self.placed.append((name, round(bearing, 1))))
+
+    def test_a_real_pool_record_is_read_and_a_bad_one_skipped(self):
+        self.pawns = [self.pawn(1, 500.0, guid=7, slot_guid=8),   # the slot holds another pool: stale
+                      self.pawn(2, 600.0, value=0.0),             # dead
+                      self.pawn(3, 700.0, controller=False),      # no Controller
+                      self.pawn(4, 900.0)]
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['result'], got['enemy']), ('placed', 'WillowAIPawn_4'), got)
+        self.assertEqual(self.placed, [('WillowAIPawn_4', 180.0)])   # she is at -X of it: her own side is bearing 180
+        self.pawns = self.pawns[:3]
+        self.assertEqual(self.ns['dp_replace'](), {'result': 'no_enemy'})
 
 
 if __name__ == '__main__':

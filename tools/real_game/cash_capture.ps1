@@ -401,11 +401,12 @@ try {
             # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence, so an error here is only logged.
             if (Get-DriverLost) { $log.den_down_trial_close = "not sent: the driver stopped answering ($(Get-DriverLost))" }
             else { try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null } catch { $log.den_down_trial_close = "$_" } }
-            $why = if ((Get-DriverLost) -and $null -eq $upAt) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
+            # A driver lost anywhere in the stage fails it, even after the down and the respawn were seen (the after_respawn snapshot then is not).
+            $why = if (Get-DriverLost) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
                    elseif ($null -eq $downAt) { "no down in $DownSeconds s after $($log.den_down_replacements) re-placements" }
                    elseif ($null -eq $upAt) { "down after $downAt s (limit $DownSeconds), not standing again within $RespawnSeconds s" }
                    else { "down after $downAt s (limit $DownSeconds), standing again after $upAt s (limit $RespawnSeconds)" }
-            Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt) $why
+            Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt -and !(Get-DriverLost)) $why
         } catch {
             Set-Stage 'den_down' $false "$_"
             "den down: $_"

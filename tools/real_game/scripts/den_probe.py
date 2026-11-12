@@ -195,11 +195,14 @@ def dp_begin(distance=1600.0, radius=6000.0, near=3500.0):
 
 
 def dp_replace(distance=1600.0, radius=6000.0):
-    """The den down's re-placement (cash_capture.ps1), as ONE call, so nothing runs in the game between the check and the move: Maya is put
-    `distance` from the nearest living enemy within `radius` of where she stands, at dp_begin's bearing, only while she is still up. The enemy
-    is picked by the watch's fields-only pawn read (slice_watch.py: sw_live_pawn, _sw_dist, _sw_pool_refs, which ran in S0 of 2026-11-12),
-    so nothing is called on a scanned pawn, unlike dp_begin's pick through cb_enemies, which calls the health and shield getters on each.
-    Living here means a health pool resolved through its manager (not stale) above 0; no Controller check, which that read does not make.
+    """The den down's re-placement (cash_capture.ps1), as ONE call, so nothing runs in the game between the check and the move: only while
+    Maya is still up, she is put `distance` from a living enemy within `radius` of where she stands. The enemy is picked by the watch's
+    fields-only pawn read (slice_watch.py: sw_live_pawn, _sw_dist, _sw_pool_refs, _sw_fields, which ran in S0 of 2026-11-12), so nothing
+    is called on a scanned pawn, unlike dp_begin's pick through cb_enemies, which calls the health and shield getters on each. Living means
+    a Controller field set and a health pool resolved through its manager (not stale) above 0.
+    Where: the first placement's enemy (dp_begin's trial 'first') while it is still living and in range, at dp_begin's bearing 180, the
+    one side proven open ground (result 'first'); otherwise the nearest living enemy, on the side she is on now, the bearing from the
+    two Location fields (result 'nearest_my_side'), since another pawn's bearing 180 may be rock, a ledge or the far side of the pack.
     The open den trial is left as dp_begin opened it. Never raises: the reply is always a result word for the log, and 'not_up' leaves
     the down to the next poll."""
     try:
@@ -209,23 +212,31 @@ def dp_replace(distance=1600.0, radius=6000.0):
         if "sw_live_pawn" not in globals():
             return {"result": "no_watch"}
         here = get_pc().Pawn.Location
-        best = None
+        first = (DP.get("trial") or {}).get("first")
+        best, chosen = None, None
         for pawn in unrealsdk.find_all("WillowAIPawn"):
             if not sw_live_pawn(pawn):
                 continue
             dist = _sw_dist(pawn, here)
-            if dist is None or dist > radius:
+            if dist is None or dist > radius or _sw_fields(pawn, ("Controller",)).get("Controller") is None:
                 continue
             health = _sw_pool_refs(pawn).get("health_pool") or {}
             value = health.get("CurrentValue")
             if health.get("stale") is not None or not isinstance(value, (int, float)) or value <= 0:
                 continue
+            if pawn.Name == first:
+                chosen = (dist, pawn.Name, None)
             if best is None or dist < best[0]:
-                best = (dist, pawn.Name)
-        if best is None:
+                best = (dist, pawn.Name, pawn.Location)
+        if chosen is None and best is None:
             return {"result": "no_enemy"}
-        cb_place(best[1], distance, 180.0)
-        return {"result": "placed", "enemy": best[1], "dist": best[0]}
+        if chosen is not None:
+            cb_place(chosen[1], distance, 180.0)
+            return {"result": "placed", "rule": "first", "enemy": chosen[1], "dist": chosen[0]}
+        t = best[2]
+        bearing = math.degrees(math.atan2(here.Y - t.Y, here.X - t.X))
+        cb_place(best[1], distance, bearing)
+        return {"result": "placed", "rule": "nearest_my_side", "enemy": best[1], "dist": best[0], "bearing": round(bearing, 1)}
     except Exception as error:
         return {"result": "error", "why": repr(error)[:160]}
 
