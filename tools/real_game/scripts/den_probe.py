@@ -194,6 +194,42 @@ def dp_begin(distance=1600.0, radius=6000.0, near=3500.0):
     return rows[0]["name"]
 
 
+def dp_replace(distance=1600.0, radius=6000.0):
+    """The den down's re-placement (cash_capture.ps1), as ONE call, so nothing runs in the game between the check and the move: Maya is put
+    `distance` from the nearest living enemy within `radius` of where she stands, at dp_begin's bearing, only while she is still up. The enemy
+    is picked by the watch's fields-only pawn read (slice_watch.py: sw_live_pawn, _sw_dist, _sw_pool_refs, which ran in S0 of 2026-11-12),
+    so nothing is called on a scanned pawn, unlike dp_begin's pick through cb_enemies, which calls the health and shield getters on each.
+    Living here means a health pool resolved through its manager (not stale) above 0; no Controller check, which that read does not make.
+    The open den trial is left as dp_begin opened it. Never raises: the reply is always a result word for the log, and 'not_up' leaves
+    the down to the next poll."""
+    try:
+        state = cp_down_state().get("state")   # GetHealth and GetShieldStrength on the player's own pawn only
+        if state != "up":
+            return {"result": "not_up", "state": state}
+        if "sw_live_pawn" not in globals():
+            return {"result": "no_watch"}
+        here = get_pc().Pawn.Location
+        best = None
+        for pawn in unrealsdk.find_all("WillowAIPawn"):
+            if not sw_live_pawn(pawn):
+                continue
+            dist = _sw_dist(pawn, here)
+            if dist is None or dist > radius:
+                continue
+            health = _sw_pool_refs(pawn).get("health_pool") or {}
+            value = health.get("CurrentValue")
+            if health.get("stale") is not None or not isinstance(value, (int, float)) or value <= 0:
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, pawn.Name)
+        if best is None:
+            return {"result": "no_enemy"}
+        cb_place(best[1], distance, 180.0)
+        return {"result": "placed", "enemy": best[1], "dist": best[0]}
+    except Exception as error:
+        return {"result": "error", "why": repr(error)[:160]}
+
+
 def dp_end():
     """Stops recording. The trial's answers, and whether they count."""
     trial = DP["trial"]

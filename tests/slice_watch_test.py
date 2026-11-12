@@ -654,11 +654,31 @@ class CheckerTest(unittest.TestCase):
         no_snap = self.results(dump([arrival, respawn, dialog]), checks)   # the snapshot absent: nothing counts
         self.assertFalse(no_snap['require ResurrectPlayer after before_down'])
 
+    def test_the_anchor_is_a_taken_snapshot_and_its_own_time_counts(self):
+        """A snapshot recorded as not taken anchors nothing; a row at the snapshot's own time counts; an absent snapshot fails order and gap."""
+        respawn = row('W.WillowPlayerPawn:ResurrectPlayer', 2.0, t=400.0)   # exactly at the snapshot
+        dialog = row('W.WillowPlayerPawn:ShowRespawnDialog', 7.0, t=405.0)
+        checks = {'require': [{'func': 'ResurrectPlayer', 'min': 1, 'after': 'before_down'}],
+                  'order': [{'first': 'ResurrectPlayer', 'then': 'ShowRespawnDialog', 'after': 'before_down'}],
+                  'gap': [{'from': 'ResurrectPlayer', 'to': 'ShowRespawnDialog', 'min': 3, 'max': 40, 'after': 'before_down'}]}
+        taken = self.results(dump([respawn, dialog], snaps=[dict(GOOD_SNAP, label='before_down', t=400.0)]), checks)
+        self.assertTrue(taken['require ResurrectPlayer after before_down'])
+        self.assertTrue(taken['order ResurrectPlayer -> ShowRespawnDialog after before_down'])
+        self.assertTrue(taken['gap ResurrectPlayer -> ShowRespawnDialog'])
+        not_taken = {'label': 'before_down', 't': 300.0, 'not_taken': True, 'failed': []}
+        for snaps in ([not_taken], []):   # recorded as not taken, or absent: nothing counts
+            got = self.results(dump([respawn, dialog], snaps=snaps), checks)
+            self.assertFalse(got['require ResurrectPlayer after before_down'], snaps)
+            self.assertFalse(got['order ResurrectPlayer -> ShowRespawnDialog after before_down'], snaps)
+            self.assertFalse(got['gap ResurrectPlayer -> ShowRespawnDialog'], snaps)
+
     def test_the_after_option_is_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = Path(tmp) / 'spec.json'
             tool = str(ROOT / 'tools/real_game/slice_watch_check.py')
-            for bad in ({'order': [{'first': 'A', 'then': 'B', 'when': 'x'}]}, {'order': [['A']]}, {'require': [{'func': 'A', 'after': 3}]}):
+            for bad in ({'order': [{'first': 'A', 'then': 'B', 'when': 'x'}]}, {'order': [['A']]}, {'require': [{'func': 'A', 'after': 3}]},
+                        {'order': [{'first': 'A', 'then': 'B', 'after': None}]}, {'order': [{'first': 'A', 'then': 'B', 'after': ''}]},
+                        {'require': [{'func': 'A', 'after': None}]}, {'gap': [{'from': 'A', 'to': 'B', 'after': None}]}):
                 s.write_text(json.dumps({'checks': bad}), encoding='utf-8')
                 self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 2, bad)
             s.write_text(json.dumps({'checks': {'order': [{'first': 'A', 'then': 'B', 'after': 'before_down'}, ['C', 'D']],

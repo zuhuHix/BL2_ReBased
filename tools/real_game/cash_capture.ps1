@@ -41,9 +41,10 @@ param(
     [switch]$WatchSmoke,
     [int]$DownSeconds = 150,
     [int]$RespawnSeconds = 90,
-    # The den down's re-placement (S0 of 2026-11-12: each melee hit knocked Maya away, and after 9 hits the pack had let go). While she is up
-    # and her health plus shield has not dropped for -ReplaceAfterSeconds, the stage's own placement (dp_begin) puts her at the pack again,
-    # at most -MaxReplacements times inside -DownSeconds. Never once a down was seen or the driver is lost.
+    # The den down's re-placement (S0 of 2026-11-12: each melee hit knocked Maya away, and the pack let go before a down). While she is up, a
+    # pool has been read since the last placement and her health plus shield has not dropped for -ReplaceAfterSeconds, dp_replace puts her at
+    # dp_begin's distance and bearing from the nearest living enemy again (in one game call that places her only while she is still up), at
+    # most -MaxReplacements times inside -DownSeconds. None after a down; once the driver is lost, no further command of the stage is sent.
     [int]$ReplaceAfterSeconds = 10,
     [ValidateRange(0, 4)][int]$MaxReplacements = 4,
     # What to dot-source for the real-game functions. Only tests/cash_capture_test.py passes another file.
@@ -343,6 +344,8 @@ try {
                     if ($r.state -in 'up', 'no_pawn', 'no_health', 'injured_flag') { $script:inARow = 0; return $r }
                     throw "unexpected state '$($r.state)'"
                 } catch {
+                    # A reply that never came is the driver lost, not a failed poll: set the one condition and end the stage.
+                    if ("$_" -match 'no reply') { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_"; throw }
                     $script:pollErrors++; $script:inARow++
                     if ($script:inARow -ge 5) { throw "five den-down polls in a row failed: $_" }
                     return $null
@@ -350,7 +353,7 @@ try {
             }
             $downAt = $null; $t0 = Get-Date
             $lastHit = $t0; $lastPool = $null; $log.den_down_replacements = 0; $log.den_down_replace_results = @()
-            while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds) {
+            while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds -and !(Get-DriverLost)) {
                 $r = & $poll
                 if ($r -and $r.state -ne 'up') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
                 # A drop of health plus shield since the last poll means a hit reached her (regeneration only raises it).
@@ -358,19 +361,23 @@ try {
                     if ($null -ne $lastPool -and [double]$r.pool -lt [double]$lastPool) { $lastHit = Get-Date }
                     $lastPool = $r.pool
                 }
-                # Up, unhit for -ReplaceAfterSeconds, under the cap, the driver answering: the same placement again. The stamp is on disk first.
-                if ($r -and $r.state -eq 'up' -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
+                # Up, a pool read since the last placement (an unreadable shield never reads as unhit), unhit for -ReplaceAfterSeconds, under
+                # the cap, the driver answering: placed again. The stamp is on disk first; a stamp whose watch mark finds the driver lost ends it.
+                if ($r -and $r.state -eq 'up' -and $null -ne $lastPool -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
                     ((Get-Date) - $lastHit).TotalSeconds -ge $ReplaceAfterSeconds) {
                     $n = $log.den_down_replacements + 1
-                    $log.den_down_replacements = $n
                     Write-StageMark 'den_down' "replace$n"
-                    $again = Py 'print(dp_begin())'
+                    if (Get-DriverLost) { break }
+                    $log.den_down_replacements = $n
+                    # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace).
+                    $again = Py 'import json; print(json.dumps(dp_replace()))'
                     $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))
                     $lastHit = Get-Date; $lastPool = $null
                 }
                 Start-Sleep 1
             }
             $log.den_down_after_s = $downAt
+            if (Get-DriverLost) { throw "the driver stopped answering during the den down ($(Get-DriverLost))" }
             # The snapshot is labelled by what was seen: 'down' only when the injured flag fired (the moment of the down); a down first seen as
             # no health (bleed-out) or no pawn is labelled so, and taken (or recorded not taken) as such, never as 'down'.
             if ($WatchSpec -and $null -ne $downAt) {
@@ -378,9 +385,9 @@ try {
                 Save-SliceWatchSnap $log.den_down_label
             }
             $upAt = $null
-            if ($null -ne $downAt) {
+            if ($null -ne $downAt -and !(Get-DriverLost)) {
                 $t1 = Get-Date
-                while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds) {
+                while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds -and !(Get-DriverLost)) {
                     Start-Sleep 2
                     $r = & $poll
                     if ($r -and $r.state -eq 'up') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
@@ -392,8 +399,13 @@ try {
             $log.den_down_poll_errors = $script:pollErrors
             $log.den_down_up_after_s = $upAt
             # dp_begin opened a den trial for the placement; close it. Its rows are not this stage's evidence, so an error here is only logged.
-            try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null } catch { $log.den_down_trial_close = "$_" }
-            Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt) "down after $downAt s (limit $DownSeconds), standing again after $upAt s (limit $RespawnSeconds)"
+            if (Get-DriverLost) { $log.den_down_trial_close = "not sent: the driver stopped answering ($(Get-DriverLost))" }
+            else { try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null } catch { $log.den_down_trial_close = "$_" } }
+            $why = if ((Get-DriverLost) -and $null -eq $upAt) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
+                   elseif ($null -eq $downAt) { "no down in $DownSeconds s after $($log.den_down_replacements) re-placements" }
+                   elseif ($null -eq $upAt) { "down after $downAt s (limit $DownSeconds), not standing again within $RespawnSeconds s" }
+                   else { "down after $downAt s (limit $DownSeconds), standing again after $upAt s (limit $RespawnSeconds)" }
+            Set-Stage 'den_down' ($null -ne $downAt -and $null -ne $upAt) $why
         } catch {
             Set-Stage 'den_down' $false "$_"
             "den down: $_"

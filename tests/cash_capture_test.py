@@ -57,9 +57,9 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_start(*' { return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
-        '*sw_mark(*' { $script:marks++; return 'ok' }
+        '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
         '*sw_settled*' { return 'True' }
-        '*sw_snap(*' { return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if ($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { return '{}' }
         '*sw_stop*' { return 'stopped' }
@@ -114,16 +114,20 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             return (ConvertTo-Json @{ kills = 0; collected = $script:collects; single_item_rows = $script:singles })
         }
         '*dp_start*' { if ($scenario -eq 'den_channel') { throw 'channel lost in the den read' }; return '[]' }
-        '*dp_begin*' {
-            $script:begins++
-            if ($scenario -eq 'replace_lost' -and $script:begins -gt 4) { throw 'no reply to c-invented' }   # the 3 den trials' and the den down's first placement answer
-            return $(if ($scenario -eq 'den_no_enemy') { 'None' } else { 'WillowAIPawn_1' })
+        '*dp_begin*' { return $(if ($scenario -eq 'den_no_enemy') { 'None' } else { 'WillowAIPawn_1' }) }
+        '*dp_replace*' {
+            # The den down's re-placement; every call is counted on disk, so a test sees one that was sent when it should not have been.
+            Add-Content -LiteralPath (Join-Path $work 'replace_calls.txt') 'sent'
+            if ($scenario -eq 'down_at_replace') { $script:downNow = $true; return '{"result": "not_up", "state": "injured_flag"}' }   # down since the poll
+            return '{"result": "placed", "enemy": "WillowAIPawn_1", "dist": 900.0}'
         }
         '*cp_down_state*' {
             # The den down's poll (invented values): up with a steady pool unless the scenario says otherwise.
             $script:polls++
-            if ($scenario -eq 'replace_after_down' -and $script:polls -ge 2) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
+            if ($script:downNow -or ($scenario -eq 'snap_lost' -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
             if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
+            if ($scenario -eq 'poll_lost' -and $script:polls -eq 2) { throw 'no reply to c-invented' }   # one poll unanswered, the next ones answered
+            if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "pool": null}' }   # the shield cannot be read
             return '{"state": "up", "injured_field": true, "pool": 100.0}'
         }
         '*dp_end*' { return '{"counts": true}' }
@@ -623,11 +627,98 @@ class DenDownReplacementTest(unittest.TestCase):
         done, session = self.run_down('replace_hit', '-DownSeconds', '2', '-ReplaceAfterSeconds', '1')
         self.assertEqual(session['den_down_replacements'], 0)
 
+    def replace_calls(self):
+        f = self.work / 'replace_calls.txt'
+        return len(f.read_text(encoding='utf-8').split()) if f.exists() else 0
+
     def test_none_once_the_driver_is_lost(self):
-        done, session = self.run_down('replace_lost', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
-        self.assertEqual(session['den_down_replacements'], 1)   # the attempt whose reply never came; no other after it
+        # Poll 2 gets no reply and the polls after it would answer: without the rethrow the loop would go on placing her.
+        done, session = self.run_down('poll_lost', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(session['den_down_replacements'], 1)   # the one after poll 1; none after the lost reply
+        self.assertEqual(self.replace_calls(), 1)
         self.assertIn('no reply', session['stage_results']['den_down'])
+        self.assertNotIn('den_down_poll_errors', session)   # the stage ended at the lost reply, before the respawn polls and dp_end
         self.assertEqual(sum(1 for m in session['stage_marks'] if m['event'].startswith('replace')), 1)
+
+    def test_a_lost_driver_found_by_the_stamp_sends_no_placement(self):
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_down('mark_lost', '-WatchSpec', str(spec), '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(self.replace_calls(), 0)   # the stamp's watch mark got no reply: dp_replace is not sent
+        self.assertEqual(session['den_down_replacements'], 0)
+        self.assertIn(('den_down', 'replace1'), [(m['stage'], m['event']) for m in session['stage_marks']])   # the stamp itself is on disk
+        self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
+        self.assertIn('the driver stopped answering', session['stage_results']['watch'])
+
+    def test_a_lost_driver_at_the_down_snapshot_sends_no_respawn_poll_and_no_trial_close(self):
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_down('snap_lost', '-WatchSpec', str(spec), '-DownSeconds', '3')
+        self.assertEqual(session['den_down_reason'], 'injured_flag')
+        self.assertIsNone(session['den_down_up_after_s'])   # a respawn poll would have answered 'up': none was sent
+        self.assertTrue(session['den_down_trial_close'].startswith('not sent: the driver stopped answering'))
+        self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
+
+    def test_an_unreadable_shield_never_reads_as_unhit(self):
+        done, session = self.run_down('pool_none', '-DownSeconds', '2', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(session['den_down_replacements'], 0)
+        self.assertEqual(self.replace_calls(), 0)
+        self.assertIn('no down in 2 s after 0 re-placements', session['stage_results']['den_down'])
+
+    def test_a_down_between_the_poll_and_the_call_is_left_to_the_next_poll(self):
+        done, session = self.run_down('down_at_replace', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(self.replace_calls(), 1)
+        self.assertEqual(session['den_down_replacements'], 1)
+        self.assertIn('not_up', session['den_down_replace_results'][0])   # logged, no placement
+        self.assertEqual(session['den_down_reason'], 'injured_flag')   # the next poll saw the down
+
+
+class DpReplaceTest(unittest.TestCase):
+    """den_probe.dp_replace with invented objects: one call that checks she is up, then picks the nearest living enemy by fields only."""
+
+    class Obj:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    def setUp(self):
+        self.ns = {}
+        path = ROOT / 'tools/real_game/scripts/den_probe.py'
+        exec(compile(path.read_text(encoding='utf-8'), str(path), 'exec'), self.ns)
+        self.placed = []
+        here = self.Obj(X=0.0, Y=0.0, Z=0.0)
+        self.state = 'up'
+        self.pawns = [self.Obj(Name='WillowAIPawn_1', live=True, dist=3000.0, health={'stale': None, 'CurrentValue': 50.0}),
+                      self.Obj(Name='WillowAIPawn_2', live=True, dist=1000.0, health={'stale': 'guid differs', 'CurrentValue': 50.0}),
+                      self.Obj(Name='WillowAIPawn_3', live=True, dist=900.0, health={'stale': None, 'CurrentValue': 0.0}),
+                      self.Obj(Name='WillowAIPawn_4', live=False, dist=800.0, health={'stale': None, 'CurrentValue': 50.0}),
+                      self.Obj(Name='WillowAIPawn_5', live=True, dist=7000.0, health={'stale': None, 'CurrentValue': 50.0}),
+                      self.Obj(Name='WillowAIPawn_6', live=True, dist=2000.0, health={'stale': None, 'CurrentValue': 10.0})]
+        self.ns.update(
+            cp_down_state=lambda: {'state': self.state},
+            get_pc=lambda: self.Obj(Pawn=self.Obj(Location=here)),
+            unrealsdk=self.Obj(find_all=lambda cls: list(self.pawns)),
+            sw_live_pawn=lambda p: p.live, _sw_dist=lambda p, h: p.dist, _sw_pool_refs=lambda p: {'health_pool': p.health},
+            cb_place=lambda name, distance, bearing: self.placed.append((name, distance, bearing)))
+
+    def test_the_nearest_living_enemy_by_fields(self):
+        got = self.ns['dp_replace']()
+        self.assertEqual(got['result'], 'placed')
+        self.assertEqual(self.placed, [('WillowAIPawn_6', 1600.0, 180.0)])   # stale, empty, not live and too far are passed over
+
+    def test_not_up_places_nothing(self):
+        for state in ('injured_flag', 'no_health', 'no_pawn'):
+            self.state = state
+            self.assertEqual(self.ns['dp_replace'](), {'result': 'not_up', 'state': state})
+        self.assertEqual(self.placed, [])
+
+    def test_nobody_in_reach_and_errors_are_results_not_tracebacks(self):
+        self.pawns = self.pawns[1:5]
+        self.assertEqual(self.ns['dp_replace'](), {'result': 'no_enemy'})
+        self.ns['get_pc'] = lambda: self.Obj(Pawn=None)   # the pawn gone in that moment
+        self.assertEqual(self.ns['dp_replace']()['result'], 'error')
+        del self.ns['sw_live_pawn']
+        self.assertEqual(self.ns['dp_replace'](), {'result': 'no_watch'})
+        self.assertEqual(self.placed, [])
 
 
 if __name__ == '__main__':

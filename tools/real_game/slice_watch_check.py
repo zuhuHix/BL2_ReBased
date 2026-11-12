@@ -126,9 +126,10 @@ def validate_spec(spec_path):
                 raise ValueError("an order entry is [first, then] or {first, then, after}")
         elif not (isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry)):
             raise ValueError("an order entry is [first, then] or {first, then, after}")
-    for key in ("require", "gap"):
+    # "after" anchors a check to a snapshot; a null or empty one would leave it unanchored without saying so, in every form that takes it.
+    for key in ("require", "order", "gap"):
         for entry in checks.get(key, []):
-            if "after" in entry and not isinstance(entry["after"], str):
+            if isinstance(entry, dict) and "after" in entry and not (isinstance(entry["after"], str) and entry["after"]):
                 raise ValueError(f"{key}: after must be a snapshot label")
     snaps = checks.get("snaps", [])
     if not isinstance(snaps, list) or not all(isinstance(x, str) or (isinstance(x, list) and x and all(isinstance(y, str) for y in x)) for x in snaps):
