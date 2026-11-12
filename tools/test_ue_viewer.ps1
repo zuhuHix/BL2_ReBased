@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)][string]$Engine,
+    [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [Parameter(Mandatory=$true)][string]$Game,
     [Parameter(Mandatory=$true)][string]$Scene,
     [switch]$Walk,

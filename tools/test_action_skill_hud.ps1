@@ -1,5 +1,5 @@
 param(
-    [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
+    [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [string]$Game = $env:OPENWILLOW_BL2,
     # Optional machine-wide lock shared by several checkouts (taken before the UE run lock (tools/ue_lock.ps1), released after).
     [string]$SharedLock,

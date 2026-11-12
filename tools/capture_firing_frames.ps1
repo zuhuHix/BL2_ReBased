@@ -1,5 +1,5 @@
 param(
-    [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
+    [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [string]$Game = $env:OPENWILLOW_BL2,
     [string[]]$Guns = @('pistol_bandit', 'sg_jakobs', 'rl_bandit', 'ar_torgue_gyrojet', 'pistol_maliwan_shock', 'ar_bandit_fire',
         'slice_shotgun', 'slice_smg'),

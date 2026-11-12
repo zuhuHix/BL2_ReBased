@@ -1,5 +1,5 @@
 param(
-    [string]$Engine = 'C:\Program Files\Epic Games\UE_5.8',
+    [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     [string]$PlayMap,
     [int]$TimeoutSeconds = 180,
     [int]$ExitWaitSeconds = 60,
