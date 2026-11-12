@@ -337,11 +337,13 @@ def check(dump, checks):
 
 
 def _reason(error, path):
-    """An error for the printed line, with the file's name only: this output may be pasted into a report, and a full path names the user."""
+    """An error for the printed line, with a file's name only: this output may be pasted into a report, and a full path names the user.
+    The file is the one the error names when it names one (a missing recorder module is not the spec), else the file being read."""
+    culprit = error.filename if isinstance(error, OSError) and error.filename else path
     text = error.strerror if isinstance(error, OSError) and error.strerror else str(error)
-    for p in {str(path), str(Path(path).resolve())}:
-        text = text.replace(p, Path(path).name)
-    return f"{Path(path).name}: {text}"
+    for p in {str(path), str(Path(path).resolve()), str(culprit)}:
+        text = text.replace(p, Path(p).name)
+    return f"{Path(culprit).name}: {text}"
 
 
 def main(argv=None):

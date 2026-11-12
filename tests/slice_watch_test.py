@@ -706,6 +706,17 @@ class CheckerTest(unittest.TestCase):
                 self.assertNotIn(str(Path(tmp).resolve()), done.stdout, args)
                 self.assertRegex(done.stdout, r'(invented-spec|absent-spec|no-such-recording)\.json', args)
 
+    def test_an_error_names_the_file_it_is_about(self):
+        # Review of #245, round 2: every OSError was labelled with the spec's name, so a missing recorder module read as a refused spec.
+        import contextlib
+        import io
+        missing = OSError(2, 'No such file or directory', str(Path(tempfile.gettempdir()) / 'invented' / 'slice_watch.py'))
+        spec = Path(tempfile.gettempdir()) / 'invented' / 'my-spec.json'
+        text = checker._reason(missing, str(spec))
+        self.assertEqual(text, 'slice_watch.py: No such file or directory')
+        self.assertNotIn(tempfile.gettempdir(), text)
+        self.assertEqual(checker._reason(ValueError('unknown checks'), str(spec)), 'my-spec.json: unknown checks')
+
     def test_the_after_option_is_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = Path(tmp) / 'spec.json'
@@ -734,6 +745,9 @@ class CheckerTest(unittest.TestCase):
         rule = {'edges': [{'func': 'HandleInputKey', 'arg': 'uevent', 'values': [0, 1], 'after': 'start'}]}
         got = self.results(dump(early, snaps=[dict(GOOD_SNAP, label='start', t=50.0)]), rule)
         self.assertFalse(got['edges HandleInputKey.uevent'])   # the rows before the snapshot do not count
+        at_and_after = early + [row('X.Movie:HandleInputKey', 50.0, t=50.0, uevent=0), row('X.Movie:HandleInputKey', 51.0, t=51.0, uevent=1)]
+        got = self.results(dump(at_and_after, snaps=[dict(GOOD_SNAP, label='start', t=50.0)]), rule)
+        self.assertTrue(got['edges HandleInputKey.uevent'])   # a row at the snapshot's own time and one after it count (round 2 of #245)
 
     def test_order_and_gap_survive_a_travel_and_arguments_must_be_there(self):
         # the map clock restarts at a travel between the two rows; the recording's own clock does not
