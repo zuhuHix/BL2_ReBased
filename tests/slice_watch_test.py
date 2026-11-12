@@ -571,6 +571,22 @@ class FakeGameTest(unittest.TestCase):
             self.assertEqual(line['beyond_radius'], 1)   # the far one is counted, not read
             self.assertIsNone(row.get('ai_class'))   # a callable is never called, even where a field was expected
 
+    def test_each_frame_row_carries_the_controller_s_cinematic_and_input_ignore_fields(self):
+        # Session 1 analysis, A2: the controller's cinematic flag and move and look input-ignore state per frame, by fields only: a function
+        # of the same kind on the controller is never called.
+        called = []
+        pc = watch._sw_pc()
+        pc.bCinematicMode, pc.IgnoreMoveInput, pc.IgnoreLookInput = True, 1, 0
+        pc.IsMoveInputIgnored = lambda: called.append('IsMoveInputIgnored')
+        with RepoDir() as d:
+            watch.sw_start('t', {'frames': True, 'frame_controller': True})
+            tick = self.hooks[(watch.SW_TICK, 'post_unconditional', 'ow_slice_watch_tick')]
+            tick(None, Args(DeltaTime=0.0167), None, None)
+            watch.sw_dump('watch')
+            frames = checker.load_recording(d.out / 'watch.jsonl')['frames']
+            self.assertEqual(frames[0]['ctl'], [True, 1, 0])
+            self.assertEqual(called, [])
+
     def test_a_drop_snapshot_reads_each_pickup_s_balance_and_forty_fit_under_the_cap(self):
         # Session 2 analysis, A3: one labelled 'drop' snapshot after each kill; its pickups part names the item's balance (little or big
         # money), by fields only, and about 40 of them fit under the labelled cap with the run's other labels.

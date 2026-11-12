@@ -54,6 +54,8 @@ Spec (a dict or the path of a JSON file; sw_load_spec refuses unknown keys, wron
   frames        bool: one row per frame (perf_counter, game time, the tick's DeltaTime, real and game deltas, and 'busy' with the
                 milliseconds of any automatic read or flush that ran in that frame, so the analysis can leave those frames out).
   frame_player  bool: the player's location and hidden flag in each frame row.
+  frame_controller  bool: the player's own controller's bCinematicMode, IgnoreMoveInput and IgnoreLookInput in each frame row ("ctl"),
+                fields only.
   pickups       bool: every live pickup in each LABELLED snapshot (item definition, LifeSpan, draw scale, location).
   snap_every    seconds between automatic snapshots (0 = none). Automatic snapshots are light: player, controller, level, cash,
                 checkpoint; pools, stations, pickups and mods come only in labelled snapshots (the capture's own sw_snap calls).
@@ -85,6 +87,7 @@ SW_ID = "ow_slice_watch"
 # name: (type, default, lowest, highest). Numbers must be finite; a cadence of 0 means off, otherwise it must lie in its range.
 SW_SPEC_KEYS = {
     "funcs": (list, [], 0, 300), "frames": (bool, False, None, None), "frame_player": (bool, False, None, None),
+    "frame_controller": (bool, False, None, None),
     "pickups": (bool, False, None, None), "snap_every": (float, 0.0, 0.5, 600.0), "pawns_every": (float, 0.0, 0.1, 600.0),
     "pawns_paths": (list, [], 0, 20), "pawns_match": (list, [], 0, 20),
     "per_func_cap": (int, 5000, 1, 20000), "row_cap": (int, 200000, 1, 400000), "frame_cap": (int, 300000, 1, 400000),
@@ -421,6 +424,8 @@ def _sw_tick(obj, args, ret, func):
         row = sw_frame_row(SW["dt"], t_real, _sw_game_t())
         if SW["spec"]["frame_player"] and "frame_player" not in SW["off"]:
             row.update(_sw_player_here())
+        if SW["spec"]["frame_controller"] and "frame_controller" not in SW["off"]:
+            row.update(_sw_controller_here())
         SW["busy"] = []
         spec = SW["spec"]
         due_snap = spec["snap_every"] and t_real >= SW["next_snap"]
@@ -473,6 +478,22 @@ def _sw_player_here():
     except Exception as e:
         sw_switch_off("frame_player", e)
         return {"loc": None}
+
+
+# The player's own controller's state in each frame row (spec frame_controller; session 1 analysis, A2): its cinematic flag and its move and
+# look input-ignore counts, as plain fields (no IsMoveInputIgnored or IsLookInputIgnored call is needed).
+SW_CONTROLLER_FIELDS = ("bCinematicMode", "IgnoreMoveInput", "IgnoreLookInput")
+
+
+def _sw_controller_here():
+    """[bCinematicMode, IgnoreMoveInput, IgnoreLookInput] of the player's own controller, by fields only; a field this build lacks reads
+    None. A failure switches this read off."""
+    try:
+        fields = _sw_fields(_sw_pc(), SW_CONTROLLER_FIELDS)
+        return {"ctl": [fields.get(name) for name in SW_CONTROLLER_FIELDS]}
+    except Exception as e:
+        sw_switch_off("frame_controller", e)
+        return {"ctl": None}
 
 
 # ---------------------------------------------------------------- hooks
