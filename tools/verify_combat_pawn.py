@@ -64,7 +64,7 @@ BLEED_BASE = 12.0            # TotalBleedoutTime of an injury with no successive
 CAMERA_LENGTH = 5.76         # s from the dead state to the end of the death camera (live: 5.761, 5.765, 5.762)
 CAMERA_TOLERANCE = 0.05      # s: one frame of the run plus the live spread
 BLEED_OVERSHOOT = 0.05       # s: how far the script's timer may be past the total in the frame that ends the bleed-out (the live bleed-outs were 12.00 to 12.04 s)
-SECOND_WIND_HEALTH = 0.25    # share of maximum health after a second wind (136.97 = 0.25 x 547.874)
+SECOND_WIND_HEALTH = 0.25    # share of maximum health after a second wind (live: 0.2500 of the maximum)
 RESPAWN_HEALTH = 1.0
 FEE_RATE = 0.07
 

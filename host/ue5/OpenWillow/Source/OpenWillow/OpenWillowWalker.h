@@ -224,8 +224,8 @@ public:
     // The sum of the scale modifiers still running at game time `Now` (0 when none).
     float WeaponDamageScaleAt(float Now) const;
     // The damage of one shot of `Weapon` at game time `Now`. The stock rule is damage = (base + PreAdd) x (1 + up) / (1 + down) + PostAdd over the weapon's
-    // stack (NATIVE_ATTRIBUTES.md section 3; the card's "damage_stack" holds the terms), a running Scale s joins `up` (observed: sum 2.017 to 3.017, damage
-    // 41.40 to 61.92). A weapon without the stack (a recipe from before the field) falls back to card damage x (1 + s): HOST STAND-IN (UNVERIFIED), S taken
+    // stack (NATIVE_ATTRIBUTES.md section 3; the card's "damage_stack" holds the terms), a running Scale s joins `up` (observed: a +1.0 Scale joined the existing
+    // sum; the amounts are in the maintainer's private record). A weapon without the stack (a recipe from before the field) falls back to card damage x (1 + s): HOST STAND-IN (UNVERIFIED), S taken
     // as 1, an overstatement when other Scale modifiers are on the weapon. Which of the two applies is the weapon's, not a setting.
     float ShotDamage(const FOpenWillowWeaponItem& Weapon, float Now) const;
 private:

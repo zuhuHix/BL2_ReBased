@@ -491,7 +491,7 @@ float AOpenWillowWalker::ShotDamage(const FOpenWillowWeaponItem& Weapon, float N
     // Skills lane hook: the trained skills' WeaponDamage modifiers join the weapon's own stack (OpenWillowSkillEffects.h).
     const FOpenWillowModifierStack Skill = OpenWillowSkillEffects::Stack(this, OpenWillowSkillEffects::Attr::WeaponDamage);
     if (Scale == 0.f && Skill.IsEmpty()) return Weapon.Damage;
-    // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: the sum 2.017 to 3.017 took 41.40 to 61.92): the Scale joins the up-sum.
+    // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: a +1.0 Scale joined the existing sum; the amounts are in the maintainer's private record): the Scale joins the up-sum.
     if (Weapon.bHasDamageStack)
         return (Weapon.DamageBase + Weapon.DamagePreAdd + Skill.PreAdd) * (1.f + Weapon.DamageScaleUp + Scale + Skill.ScaleUp)
             / (1.f + Weapon.DamageScaleDown - Skill.ScaleDown) + Weapon.DamagePostAdd + Skill.PostAdd;
@@ -2082,7 +2082,7 @@ bool AOpenWillowWalker::ThrowGrenade()
     // WillowPlayerController.ThrowGrenade (script, read): a throw needs the weapon to be able to act and a grenade to
     // spend (CanThrowGrenade: not while downed unless an attribute allows it); it then runs as a shared weapon action for
     // the throw special move's length. The host blocks a throw while the menus are open, while Maya is not active and
-    // during the 1.05 s lockout. Live (4 throws of the save's Sky Rocket mod, WEAPON_PROJECTILES.md section 12): the throw
+    // during the 1.05 s lockout. Live (4 throws of the save's own grenade mod, not the frag, WEAPON_PROJECTILES.md section 12): the throw
     // completes 1.04-1.19 s after the press and the projectile appears 0.52-0.53 s after it; UNVERIFIED for the stock frag.
     const float Now = GetWorld()->GetTimeSeconds();
     if (!bMayaActive || bInventoryPresentation || IsDown() || Now < ThrowLockUntil || !Inventory) return false;
@@ -2119,7 +2119,7 @@ void AOpenWillowWalker::ReleaseGrenade()
 {
     GrenadeReleaseAt = 0.f;
     if (!Camera || !GrenadeData.bLoaded) return;
-    // Live, same 4 Sky Rocket throws: first seen 84-110 uu ahead of the eye (up to one frame of flight included), about
+    // Live, the same 4 throws of the save's mod: first seen 84-110 uu ahead of the eye (up to one frame of flight included), about
     // 20 uu to its left, along the aim at the projectile's speed. UNVERIFIED for the stock frag. The data's upward bonus applies at launch (WEAPON_PROJECTILES.md section 14).
     AOpenWillowProjectile::FLaunch Launch;
     Launch.Data = &GrenadeData;

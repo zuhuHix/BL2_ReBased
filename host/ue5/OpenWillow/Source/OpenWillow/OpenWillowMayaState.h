@@ -40,7 +40,7 @@ struct OPENWILLOW_API FOpenWillowMayaStats
     float ShieldRechargeDelay = 2.f;      // s after the last hit
     float ShieldRechargeRate = 40.f;      // per second, whatever the capacity
     float BleedoutMultiplier = 1.f;       // TimeToBeRevivedMultiplier (attribute default 1)
-    float SecondWindHealthPct = 0.25f;    // RejuvenatedHealthPctOfMax (data 0.25; live 136.97 = 0.25 x 547.874)
+    float SecondWindHealthPct = 0.25f;    // RejuvenatedHealthPctOfMax (data 0.25; live 0.2500 of the maximum)
     float RevivalHealthMultiplier = 1.f;  // the attribute, 1 at its default
     float SecondWindShieldPct = 0.9f;     // live: the shield went to 90 % at a second wind (COMBAT_GOLDEN_TRACE.md section D)
     float RespawnHealthPct = 1.f;         // ResurrectedHealthPctOfMax (data 1.0)
