@@ -87,7 +87,7 @@ event); `IMissionDirector.EMissionBranchEnding` EMBE_None 0, EMBE_PathA 1, EMBE_
 ## Layout caveats
 
 Offsets are given as field names. The computed `WillowAIPawn` layout is a few bytes below the native one around `bUsable` /
-`bCostsToUse` / `CostsToUseType`, and further below around `MissionDirectives` (the native code reads those fields a few bytes
+`bCostsToUse` / `CostsToUseType`, and further below around `MissionDirectives` (the native code reads those fields
 higher than `class_layout.py` predicts), so for the AI pawn the names below are matched by meaning (a value set from the same data,
 the same width, the neighbouring fields), not by number. For `WillowPlayerController` the computed offsets of `CurrentUsableObject`,
 `CurrentInteractionIcon[2]`, `CachedUsableObject`, `CachedUsableHitComponent`, `UsableObjectUpdateTime`, `UsableObjectUpdateRate`,
@@ -245,7 +245,7 @@ stays open, see G4).
 Presentation bookkeeping for the compass and the map ("quest giver here" icons); it does not decide what the screen offers.
 
 - **RegisterMissionDirector(Director):** ignores a null director. Adds it to the tracker's list of registered directors (no duplicates). Unless a
-  tracker flag (one tracker flag, meaning not identified) is set it asks the director through one interface method (a presentation refresh, not
+  tracker flag (meaning not identified) is set it asks the director through one interface method (a presentation refresh, not
   identified). On the authority it then asks `HasAnyMissionsForPlayer`; if true the director is entered in the tracker's **table of directors that
   currently have missions** (14 slots; each slot stores the director, its `GetMissionDirectorLocation` and some presentation data) and the tracker's
   replication word is marked dirty. On a client (not the authority) it walks a 10-slot local table and re-runs the matching slot's update with false.
@@ -257,7 +257,7 @@ Presentation bookkeeping for the compass and the map ("quest giver here" icons);
   valid): `Tracker.RegisterMissionDirector(Self as IMissionDirector)` once `Tracker != None && Tracker.IsDataValid()`.
 - **Slice relevance:** none for the accept path. A headless host may record the registration and skip the table; the C1 note's "directors get a
   status-changed call" refers to the same registered list.
-- **Open:** which interface method the register call makes (one interface method), what the 14-slot and 10-slot structures store beyond the director
+- **Open:** which interface method the register call makes, what the 14-slot and 10-slot structures store beyond the director
   and its location, the tracker flag bit.
 
 ## MissionTracker.GetCompletedBranch

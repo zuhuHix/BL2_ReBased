@@ -346,12 +346,12 @@ argument (probably an actor to ignore; unverified).
 Walks the same level lists as `AllActors` (including index 0 of the persistent level), skipping null, destroyed and
 `bHidden` actors, applying the class filter. If `Radius` is not 0, the actor must be strictly closer to `Loc` than
 `Radius` (squared distance compared). It then needs a clear line to the actor: a trace from `Loc` toward the actor's
-location with one fixed set of trace flags (the value is in the maintainer's private notes; not read as flag names); the actor is accepted when the trace hits nothing or hits the candidate
+location with one fixed set of trace flags (the value is in the maintainer's private notes; not yet read as flag names); the actor is accepted when the trace hits nothing or hits the candidate
 itself.
 
 ### Actor.VisibleCollidingActors
 Like `CollidingActors` for candidate selection (always overlap-style, `bCollideActors` required) and then like
-`VisibleActors` for the line test, with a second fixed set of trace flags, or a wider third set that contains the second when `bTraceActors` is true (both values are in the maintainer's private notes; not read as flag names). `bIgnoreHidden`,
+`VisibleActors` for the line test, with a second fixed set of trace flags, or a wider third set that contains the second when `bTraceActors` is true (both values are in the maintainer's private notes; not yet read as flag names). The wider set presumably also lets actors block the line (UNVERIFIED, inferred from the parameter's name). `bIgnoreHidden`,
 `Extent`, `bSkipTraceTest` and `HitInfo` are honoured as their names say; the exact handling of `Extent` and
 `bSkipTraceTest` was not traced. Low confidence.
 
