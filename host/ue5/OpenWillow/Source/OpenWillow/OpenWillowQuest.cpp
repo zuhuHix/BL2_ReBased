@@ -1271,7 +1271,7 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
     Super::TickComponent(Delta, Type, Function);
     TickFocusCamera();   // before the failure return; a failure itself closes the page and gives the view back (Fail)
     // The page suite's last step checks the view after its own forced failure, so it still runs then (and nothing else does).
-    if (bFailed && bScreenPageTest && ScreenTestStep == ScreenTestViewAfterFailureStep) TickScreenPageTest();
+    if (bFailed && bScreenPageTest && ScreenTestStep == OpenWillowMissionPageSuite::ViewAfterFailureStep) TickScreenPageTest();
     if (!Impl || bFailed) return;
     if (bReleaseUse) {
         if (auto* Pawn = Cast<APawn>(GetOwner())) if (auto* PC = Cast<APlayerController>(Pawn->GetController()))

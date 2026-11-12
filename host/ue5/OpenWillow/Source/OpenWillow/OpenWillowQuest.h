@@ -9,6 +9,15 @@ class UAudioComponent;
 
 class FJsonObject;
 
+// The mission page suite's steps named outside their own case (OpenWillowMissionPageTest.cpp): the objectives step runs by its own clock, and the last
+// step (the view after the forced failure) is run by UOpenWillowQuest::TickComponent after the failure. Renumber the suite's steps here, not in a
+// literal. Namespace scope, since a static constexpr member of the exported class does not compile (C2487).
+namespace OpenWillowMissionPageSuite
+{
+constexpr int32 ObjectivesStep = 13;
+constexpr int32 ViewAfterFailureStep = 27;
+}
+
 // Host binding of the Sanctuary slice mission (-owquest). Runs the installed "Rock, Paper, Genocide: Fire Weapons!"
 // mission and the target dummy's own behavior provider through vm::FireMissionSlice, and the map's installed Kismet
 // sequence through the door's UOpenWillowMover (one sequence instance). World data comes from the ignored manifests
@@ -126,9 +135,6 @@ private:
     bool bScreenPageTest = false;
     double ScreenTestAt = 0.;
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
-    // Steps named outside their own case: the objectives step runs by its own clock, and the last step (the view after the forced failure) is run by
-    // TickComponent after bFailed. Renumber the suite's steps here, not in a literal.
-    static constexpr int32 ScreenTestObjectivesStep = 13, ScreenTestViewAfterFailureStep = 27;
     // Key edges that reached OnScreenKey, and presses that reached TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
     int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0, ScreenTestUses = 0;
     // The view just before the page opened (control rotation, FOV), for the rows that check it comes back after the close.

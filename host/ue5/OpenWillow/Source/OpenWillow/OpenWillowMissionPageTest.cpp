@@ -146,7 +146,7 @@ void UOpenWillowQuest::TickScreenPageTest()
     // run in the frame after it, before the page has had a chance to answer.
     ++ScreenStepTicks;
     const auto Await = [&](bool bState) { return bState || (Now - ScreenStepAt >= 30. && ScreenStepTicks >= 30); };
-    if (ScreenTestStep != 0 && ScreenTestStep != ScreenTestObjectivesStep && (Now < ScreenTestAt || ScreenStepTicks < 5)) return;
+    if (ScreenTestStep != 0 && ScreenTestStep != OpenWillowMissionPageSuite::ObjectivesStep && (Now < ScreenTestAt || ScreenStepTicks < 5)) return;
     double Wait = 0.;
     switch (ScreenTestStep)
     {
@@ -243,7 +243,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         PageShot(TEXT("3_Accepted"));
         ScreenTestRetries = 0;
         break;
-    case ScreenTestObjectivesStep:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
+    case OpenWillowMissionPageSuite::ObjectivesStep:   // the objectives by direct calls; the dummy's spawn has timed steps, so retry
         if (Now < ScreenTestAt) return;
         if (Status() != 2)
         {
@@ -322,7 +322,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         ShowScreenPage(TEXT("offer"));
         Wait = 1.;
         break;
-    case ScreenTestViewAfterFailureStep - 1:   // the step before the last, so the two stay together
+    case OpenWillowMissionPageSuite::ViewAfterFailureStep - 1:   // the step before the last, so the two stay together
     {
         // The failure itself. The quest stops ticking the page from here; only the next step runs (UOpenWillowQuest::TickComponent), after the camera
         // manager has updated the view a few times (the step waits a second and five ticks, as every step does).
@@ -332,7 +332,7 @@ void UOpenWillowQuest::TickScreenPageTest()
         Wait = 1.;
         break;
     }
-    case ScreenTestViewAfterFailureStep:
+    case OpenWillowMissionPageSuite::ViewAfterFailureStep:
     {
         // The view the player sees: the camera manager's rotation and FOV against those from just before the page opened, and the control rotation unchanged.
         const APlayerCameraManager* View = PC->PlayerCameraManager;
