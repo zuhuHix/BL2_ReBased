@@ -321,14 +321,14 @@ class LevelTableTest(unittest.TestCase):
 
     def test_balance_against_the_shot_matches_when_the_mix_is_the_games(self):
         shot = self.source('1.wav', 0.5, 0.5)
-        equip = self.source('2.wav', 0.5, 0.125)    # 12 dB under the shot's file
-        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [-12.0], 'equip': [-6.0]}}
+        equip = self.source('2.wav', 0.5, 0.25)    # 6 dB under the shot's file
+        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [-14.0], 'equip': [-5.0]}}
         shot_file, equip_file = lr.file_level(Path(shot)), lr.file_level(Path(equip))
-        self.assertAlmostEqual(shot_file - equip_file, 20 * math.log10(4), places=1)
+        self.assertAlmostEqual(shot_file - equip_file, 20 * math.log10(2), places=1)
         # Recorded as the game would mix it, plus a 3 dB offset shared by the whole mix.
-        cues = [self.cue('fire', shot_file - 12 - 3), self.cue('equip', equip_file - 6 - 3)]
+        cues = [self.cue('fire', shot_file - 14 - 3), self.cue('equip', equip_file - 5 - 3)]
         rows = {r['role']: r for r in lr.level_table(cues, '', play)}
-        self.assertAlmostEqual(rows['equip']['game_vs_shot_db'], -12 + 6, delta=0.15)   # the files are 12.04 dB apart; levels round to 0.1
+        self.assertAlmostEqual(rows['equip']['game_vs_shot_db'], -6 - 5 + 14, delta=0.15)   # the files are 6.02 dB apart; levels round to 0.1
         self.assertAlmostEqual(rows['equip']['off_by_db'], 0.0, delta=0.15)
         self.assertEqual(rows['fire']['off_by_db'], 0.0)
 
@@ -342,8 +342,8 @@ class LevelTableTest(unittest.TestCase):
 
     def test_a_positioned_role_gets_no_prediction(self):
         line = self.source('3.wav', 0.5, 0.5)
-        text = 'LogTemp: Display: OWAUDIO play role=line:x channels=1 rate=8000 bytes=8000 gain_db=-3.0 at=Marcus_0 (the host called play; not heard)'
-        rows = lr.level_table([self.cue('line:x', -30.0)], text, {'roles': {'line:x': [line]}, 'gains': {'line:x': [-3.0]}})
+        text = 'LogTemp: Display: OWAUDIO play role=line:x channels=1 rate=8000 bytes=8000 gain_db=-7.0 at=Marcus_0 (the host called play; not heard)'
+        rows = lr.level_table([self.cue('line:x', -30.0)], text, {'roles': {'line:x': [line]}, 'gains': {'line:x': [-7.0]}})
         self.assertTrue(rows[0]['positioned'])
         self.assertIsNone(rows[0]['expected_rms_dbfs'])
 
@@ -376,7 +376,7 @@ class LevelTableTest(unittest.TestCase):
     def test_the_guide_shows_partial_coverage_and_counts_every_cue(self):
         files = [self.source('1.wav', 0.5, 0.5), self.source('2.wav', 0.5, 0.05)]
         play_map = self.tmp / 'play.json'
-        play_map.write_text(json.dumps({'roles': {'fire': files, 'hit': files}, 'gains': {'fire': [-12.0, None], 'hit': [-11.0, -11.0]}, 'unresolved': {}}),
+        play_map.write_text(json.dumps({'roles': {'fire': files, 'hit': files}, 'gains': {'fire': [-9.0, None], 'hit': [-15.0, -15.0]}, 'unresolved': {}}),
                             encoding='utf-8')
         wav = self.tmp / 'listen.wav'
         write_wav(wav, 9.0, ((2.5, 0.5),))
@@ -394,7 +394,7 @@ class LevelTableTest(unittest.TestCase):
     def test_the_guide_has_the_table_and_cues_json_the_rows(self):
         shot = self.source('1.wav', 0.5, 0.5)
         play_map = self.tmp / 'play.json'
-        play_map.write_text(json.dumps({'roles': {'fire': [shot], 'hit': [shot]}, 'gains': {'fire': [-12.0], 'hit': [-11.0]}, 'unresolved': {}}), encoding='utf-8')
+        play_map.write_text(json.dumps({'roles': {'fire': [shot], 'hit': [shot]}, 'gains': {'fire': [-9.0], 'hit': [-15.0]}, 'unresolved': {}}), encoding='utf-8')
         wav = self.tmp / 'listen.wav'
         write_wav(wav, 9.0, ((2.5, 0.5),))
         lr.build(log(), wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
@@ -403,20 +403,20 @@ class LevelTableTest(unittest.TestCase):
         self.assertIn('| `fire` | 1 |', text)
         levels = json.loads((self.tmp / 'out' / 'cues.json').read_text(encoding='utf-8'))['levels']
         self.assertEqual(sorted(r['role'] for r in levels), ['fire', 'hit'])
-        self.assertEqual(next(r for r in levels if r['role'] == 'hit')['game_vs_shot_db'], 1.0)
+        self.assertEqual(next(r for r in levels if r['role'] == 'hit')['game_vs_shot_db'], -6.0)
 
 
 class PlayLineTest(unittest.TestCase):
     """The play line and its pairing with cue lines: pattern matching only, no numpy."""
 
     def test_the_play_line_with_a_file_still_reads_its_role_gain_and_place(self):
-        line = 'OWAUDIO play role=door_open channels=1 rate=32000 bytes=64170 gain_db=-10.0 file=1.wav at=StaticMeshActor_1 (the host called play; not heard)'
+        line = 'OWAUDIO play role=door_open channels=1 rate=32000 bytes=64170 gain_db=-8.0 file=1.wav at=StaticMeshActor_1 (the host called play; not heard)'
         m = lr.PLAYED.search(line)
-        self.assertEqual((m.group(1), m.group(2), m.group(3), m.group(4)), ('door_open', '-10.0', '1.wav', ' at=StaticMeshActor_1'))
+        self.assertEqual((m.group(1), m.group(2), m.group(3), m.group(4)), ('door_open', '-8.0', '1.wav', ' at=StaticMeshActor_1'))
 
     def test_each_cue_takes_the_file_of_the_play_just_before_it(self):
         """A play logged before the recording started has no cue: it must not shift the later cues onto its file."""
-        play = 'LogTemp: Display: OWAUDIO play role=fire channels=2 rate=8000 bytes=8000 gain_db=-12.0 file={} (the host called play; not heard)'
+        play = 'LogTemp: Display: OWAUDIO play role=fire channels=2 rate=8000 bytes=8000 gain_db=-7.0 file={} (the host called play; not heard)'
         cue = 'LogTemp: Display: OWAUDIOREC cue t={} label=fire seconds=0.500 frame=-'
         text = chr(10).join([play.format('a.wav'),                                   # before OWAUDIOREC start: no cue follows
                           'LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',

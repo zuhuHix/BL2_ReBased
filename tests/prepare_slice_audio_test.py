@@ -428,10 +428,10 @@ class GameMixTest(unittest.TestCase):
     def test_gains_follow_the_files_order_a_missing_level_is_null_and_a_clamp_is_noted(self):
         class FakeMix:
             def entry_gains(self, entry, role):
-                return {1: (-12.0, []), 2: (None, ['unresolved: source 2 not reached from the event']), 3: (-200.0, [])}
+                return {1: (-7.0, []), 2: (None, ['unresolved: source 2 not reached from the event']), 3: (-200.0, [])}
         man = manifest([{'source': 1}, {'source': 2}, {'source': 3}])
         gains, notes = psa.build_gains({'fire': [os.path.join('d', '3.wav'), os.path.join('d', '1.wav'), os.path.join('d', '2.wav')]}, man, FakeMix())
-        self.assertEqual(gains['fire'], [psa.MIN_GAIN_DB, -12.0, None])   # clamped to the host's floor; no level is null, never 0 dB
+        self.assertEqual(gains['fire'], [psa.MIN_GAIN_DB, -7.0, None])   # clamped to the host's floor; no level is null, never 0 dB
         self.assertIn('source 2', notes['fire'])
         self.assertIn('source 3: sum -200.0 dB clamped to -144.0 dB', notes['fire'])
         self.assertTrue(notes['fire'].startswith('game data'))
@@ -443,13 +443,13 @@ class GameMixTest(unittest.TestCase):
 
             def entry_gains(self, entry, role):
                 self.calls += 1
-                return {1: (-3.0 if self.calls == 1 else -10.0, [])}
+                return {1: (-5.0 if self.calls == 1 else -10.0, [])}
         man = {'schema': 'ow-audio-v1', 'entries': [
             {'key': 'weapon:reload_anim_A_at_0.1s', 'trigger': {'role': 'reload anim A @0.1s'}, 'ak_event': {'wwise_name': 'Play_X_Clip_Out'}, 'media': [{'source': 1}]},
             {'key': 'weapon:reload_anim_B_at_0.2s', 'trigger': {'role': 'reload anim B @0.2s'}, 'ak_event': {'wwise_name': 'Play_X_Clip_Out'}, 'media': [{'source': 1}]}]}
         gains, notes = psa.build_gains({'reload_out': [os.path.join('d', '1.wav')]}, man, FakeMix())
-        self.assertEqual(gains['reload_out'], [-3.0])
-        self.assertIn('entries give -3.0 and -10.0 dB', notes['reload_out'])
+        self.assertEqual(gains['reload_out'], [-5.0])
+        self.assertIn('entries give -5.0 and -10.0 dB', notes['reload_out'])
 
     def test_a_chain_through_two_switches_filters_only_on_the_perspective_one(self):
         """Perspective switch 20 picks surface switch 21 (first person) or 22 (third person); each surface switch holds one sound of source 77."""
