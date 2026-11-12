@@ -20,8 +20,9 @@
 #   -ReportHold <path>[,<path>]          a hold file is reported when present; never a failure
 #   -CheckBuild                          -ModuleLibrary is newer (file times) than the files it is built from; -CoreLibrary
 #                                        matches the input stamp the last CMake build wrote next to it (<lib>.inputs, see
-#                                        ow-build-stamp in CMakeLists.txt). UNKNOWN, not ok, when that cannot be told: no stamp, a
-#                                        stamp from a build with uncommitted inputs, a newer build description
+#                                        ow-build-stamp in CMakeLists.txt). UNKNOWN, not ok, when that cannot be told: no
+#                                        stamp, uncommitted inputs at the last build, a configure after it,
+#                                        a newer build description
 #   -CheckEngine                         the engine folder (-Engine; OPENWILLOW_UE or the default) holds the editor binary
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/preflight.ps1 -NoEditor -CheckLock -Port 8795 -CheckBuild -CheckEngine
@@ -260,8 +261,12 @@ foreach ($h in $ReportHold) {
 
 if ($CheckBuild) {
     # The module DLL, by file times as Unreal's build tool judges it: it must be newer than every file it is built from
-    # (host/ue5/OpenWillow/Source, the headers under src, the two CMake libraries it links). A newer build description
-    # (*.Build.cs, *.Target.cs, the .uproject) need not change the DLL, so that is unknown, never fresh and never stale.
+    # (host/ue5/OpenWillow/Source, the headers under src, the two CMake libraries it links); a newer file is stale. The
+    # Source folder and every folder under it are looked at too: a file deleted or renamed there leaves no newer file, but
+    # Windows gives its folder a new time. A folder's time also moves when a file is added and removed again (two
+    # checkouts through another file set), after which the build tool rightly relinks nothing, so a newer folder alone is
+    # unknown, never stale and never fresh. So is a newer build description (*.Build.cs, *.Target.cs, the .uproject),
+    # which need not change the DLL either.
     Invoke-Check 'build' {
         $dll = Resolve-InTree $ModuleLibrary
         if (!(Test-Path -LiteralPath $dll -PathType Leaf)) { Out-Line 'FAIL' 'build' "$ModuleLibrary is missing: build it"; return }
@@ -273,7 +278,8 @@ if ($CheckBuild) {
             foreach ($f in [IO.Directory]::EnumerateFiles($source, '*', [IO.SearchOption]::AllDirectories)) {
                 if ($f -match '\.(Build|Target)\.cs$') { $descriptions.Add($f) } else { $code.Add($f) }
             }
-        }
+            $folders = @($source) + @([IO.Directory]::EnumerateDirectories($source, '*', [IO.SearchOption]::AllDirectories))
+        } else { $folders = @() }
         $src = Join-Path $Worktree 'src'
         if (Test-Path -LiteralPath $src -PathType Container) {
             foreach ($f in [IO.Directory]::EnumerateFiles($src, '*', [IO.SearchOption]::AllDirectories)) { if ($f -match '\.(h|hpp)$') { $code.Add($f) } }
@@ -283,10 +289,14 @@ if ($CheckBuild) {
         $project = Join-Path $Worktree 'host\ue5\OpenWillow\OpenWillow.uproject'
         if (Test-Path -LiteralPath $project -PathType Leaf) { $descriptions.Add($project) }
         $newer = @($code | Where-Object { [IO.File]::GetLastWriteTimeUtc($_) -gt $built })
+        $newerFolders = @($folders | Where-Object { [IO.Directory]::GetLastWriteTimeUtc($_) -gt $built })
         $newerDesc = @($descriptions | Where-Object { [IO.File]::GetLastWriteTimeUtc($_) -gt $built })
         if ($newer.Count) {
             $shown = @($newer | Select-Object -First 3 | ForEach-Object { Get-TreeName $_ }) -join ', '
             Out-Line 'FAIL' 'build' "$ModuleLibrary ($(Format-Utc $built)) is older than $($newer.Count) file(s) it is built from ($shown): rebuild"
+        } elseif ($newerFolders.Count) {
+            $shown = @($newerFolders | Select-Object -First 3 | ForEach-Object { Get-TreeName $_ }) -join ', '
+            Out-Line 'UNKNOWN' 'build' "$ModuleLibrary ($(Format-Utc $built)) is older than the folder(s) ${shown}: a file there was added, deleted or renamed since, so the DLL may or may not hold the current file set; a module build decides, and this line stays until the DLL is relinked"
         } elseif ($newerDesc.Count) {
             $shown = @($newerDesc | ForEach-Object { Get-TreeName $_ }) -join ', '
             Out-Line 'UNKNOWN' 'build' "$ModuleLibrary ($(Format-Utc $built)) is older than the build description $shown, which may or may not change it: a module build decides"
@@ -310,6 +320,13 @@ if ($CheckBuild) {
         $at = $rows[2].Substring(7, 7)
         if ([IO.File]::GetLastWriteTimeUtc($lib) -gt [IO.File]::GetLastWriteTimeUtc($stamp)) {
             Out-Line 'UNKNOWN' 'build' "$CoreLibrary is newer than its input stamp (built without the stamp step, as with --target ow-core); rewrite it with $howTo"; return
+        }
+        # A configure after the last build (a changed option, a new compiler) changes nothing git sees. The cache sits next to
+        # the library (single-config generators) or one folder up (build\Release).
+        $cache = @((Join-Path (Split-Path -Parent $lib) 'CMakeCache.txt'), (Join-Path (Split-Path -Parent (Split-Path -Parent $lib)) 'CMakeCache.txt') |
+                   Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
+        if ($cache.Count -and [IO.File]::GetLastWriteTimeUtc($cache[0]) -gt [IO.File]::GetLastWriteTimeUtc($stamp)) {
+            Out-Line 'UNKNOWN' 'build' "$(Get-TreeName $cache[0]) is newer than the input stamp of ${CoreLibrary}: configured after the last build, so the library may have been built with other settings; run $howTo"; return
         }
         if ($rows[3] -ne 'dirty 0') {
             Out-Line 'UNKNOWN' 'build' "$CoreLibrary was built at $at with uncommitted changes to its inputs, which the stamp does not record; commit or revert them, then $howTo"; return

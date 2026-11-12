@@ -39,10 +39,18 @@ endif()
 # into the build folder at configure time and run there with cmake -P; tests/preflight_test.py runs it the same way.
 # The stamp is text: a version line, the paths, the commit, how many `git status --porcelain` lines the paths had (not 0
 # means the build saw uncommitted inputs, which the preflight reports as unknown), then their `git ls-files -s` lines.
-# Only git runs, with --no-optional-locks. When git fails, no stamp is left, which the preflight reads as unknown.
+# Only git runs, with --no-optional-locks. With no library or a failing git, no stamp is left, which reads as unknown.
+# Checked with a real build on 2026-11-12: with the project's build command, a failed ow-core stops the build before this
+# step, so the old stamp stays untouched. A build driver that keeps going after a failed project and still runs this
+# step was not tested, and the check does not cover it.
 # Keep PATHS equal to $stampPaths in tools/preflight.ps1.
 file(WRITE "${CMAKE_BINARY_DIR}/ow_build_stamp.cmake" [==[
 set(PATHS src third_party/lzokay CMakeLists.txt tests/CMakeLists.txt)
+if(NOT EXISTS "${LIB}")
+  file(REMOVE "${OUT}")
+  message(STATUS "build stamp: no ${LIB}, no stamp written")
+  return()
+endif()
 execute_process(COMMAND "${GIT}" --no-optional-locks -C "${REPO}" rev-parse HEAD
                 OUTPUT_VARIABLE commit RESULT_VARIABLE rc_commit OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND "${GIT}" --no-optional-locks -C "${REPO}" status --porcelain -- ${PATHS}
@@ -63,7 +71,8 @@ file(RENAME "${OUT}.tmp" "${OUT}")
 find_package(Git QUIET)
 if(GIT_FOUND)
   add_custom_target(ow-build-stamp ALL
-    COMMAND "${CMAKE_COMMAND}" "-DGIT=${GIT_EXECUTABLE}" "-DREPO=${CMAKE_SOURCE_DIR}" "-DOUT=$<TARGET_FILE:ow-core>.inputs"
+    COMMAND "${CMAKE_COMMAND}" "-DGIT=${GIT_EXECUTABLE}" "-DREPO=${CMAKE_SOURCE_DIR}" "-DLIB=$<TARGET_FILE:ow-core>"
+            "-DOUT=$<TARGET_FILE:ow-core>.inputs"
             -P "${CMAKE_BINARY_DIR}/ow_build_stamp.cmake"
     VERBATIM)
   add_dependencies(ow-build-stamp ow-core)

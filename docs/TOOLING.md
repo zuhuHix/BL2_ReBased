@@ -352,8 +352,14 @@ checks the owner and staleness rules against temporary lock files.
   content: every CMake build, also one that rebuilds nothing, writes `ow-core.lib.inputs` next to it
   (target `ow-build-stamp` in `CMakeLists.txt`: git's entries for `src`, `third_party/lzokay` and the two `CMakeLists.txt`), and the
   preflight compares that with the entries now. It says `UNKNOWN`, never ok, when it cannot tell: no stamp yet (run
-  `cmake --build build --config Release` once), a stamp from a build with uncommitted inputs, a newer `*.Build.cs`,
-  `*.Target.cs` or `.uproject`. It prints one `PREFLIGHT ok|FAIL|NOTE|UNKNOWN` line per check and a summary, also when
+  `cmake --build build --config Release` once), a stamp from a build with uncommitted inputs, a configure after the last
+  build (`CMakeCache.txt` newer than the stamp), a newer `*.Build.cs`, `*.Target.cs` or `.uproject`, and a folder under
+  `Source` newer than the DLL with no newer file in it (a file there was added, deleted or renamed, possibly and back
+  again; the line stays until the DLL is relinked). A newer file is stale. With the project's build command a
+  failed `ow-core` leaves the old stamp untouched, so the check then fails and names the changed file (checked with a
+  real build on 2026-11-12). Not tested and not covered: a build driver that keeps going after a failed project and
+  still runs dependent steps, a commit or checkout made while a build is running, and settings that live outside the
+  checkout (environment variables, the compiler or engine installed). It prints one `PREFLIGHT ok|FAIL|NOTE|UNKNOWN` line per check and a summary, also when
   git or a check fails, and exits 1 when a check failed (`UNKNOWN` is not a failure), 2 for a wrong call. `-Generators`
   compares file times with committer dates, which cuts both ways: a rebase after the generator ran makes the data look
   stale, and a checkout of a commit dated before the run makes it look fresh. Uncommitted changes to the generator
