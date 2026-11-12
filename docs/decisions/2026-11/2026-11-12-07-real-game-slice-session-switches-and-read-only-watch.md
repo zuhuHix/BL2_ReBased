@@ -1,6 +1,7 @@
 ## 2026-11-12: Real-game slice-session switches and read-only watch
 
-AI-assisted (Claude Code). The capture tools the two slice capture sessions used, published as they ran.
+AI-assisted (Claude Code). The capture tools of the two slice capture sessions. The sessions ran commit e7b5fa3 (run
+locally as a627b82, the same files). The review fixes of #245 that follow it in this change came after the sessions.
 
 - Four captures (`cash_capture`, `mission_screen_capture`, `phaselock_integrity_capture`, `audio_events_capture`) take
   `-WatchSpec` (the read-only recorder `tools/real_game/scripts/slice_watch.py` and its usability check
@@ -12,14 +13,22 @@ AI-assisted (Claude Code). The capture tools the two slice capture sessions used
   watch's first pawn read; the cause among the candidates is not proven.
 - `tools/real_game/pending.ps1` (a shared safety file) sends recorded input releases with or without a game window and clears
   an entry only after its release went out.
-- `tests/slice_watch_test.py` joins ctest as `py-slice_watch`: 55 cases, about 7 s, passing in a clean export under
+- Review fixes of #245, after the sessions: a pending record is replaced in one step and a leftover `.tmp` of one stops the
+  next run; an earlier run's record is completed, and its inputs released, only under the run lock; every reply timeout after
+  the stages latches the driver-lost condition, and nothing more is sent; each reply wait is clamped to the time left in its
+  bound, and no placement or success is taken after it; the focus helper's Alt tap is journalled; three captures wait on their
+  own game's exit; the checker counts every dropped labelled line, refuses an `edges` rule without values, and prints file
+  names, not paths.
+- `tests/slice_watch_test.py` joins ctest as `py-slice_watch`: 58 cases, about 7 s, passing in a clean export under
   `python -S`. Documentation: `docs/TOOLING.md`, "Slice-session switches"; `docs/verification/REALGAME_GROUND_TRUTH.md`,
   "Slice capture sessions (2026-11-12)".
 
-Verified: the synthetic tests (invented objects, a stand-in SDK; no game). In the game, at the same tool files, two
+Verified: the synthetic tests (invented objects, a stand-in SDK; no game). In the game, at commit e7b5fa3, two
 unattended sessions on 2026-11-12 ran 9 item runs including the smoke item with 0 game crashes, and after every item the
 saves, config, SDK settings and mods list were identical to the state before.
 `UNVERIFIED`: what the captures were meant to measure (the cash readings failed in every cash run; three watch checks said
 not usable); every hook that never fired in those sessions; the load wait's longer bounds (every load ended on its first
-read); the den-down re-placement in the game (0 re-placements were needed); Steam Cloud, which the tools neither save nor
-restore.
+read); the den-down re-placement in the game: in the first S2.1 run one re-placement ran and placed Maya, and no down followed
+within 150 s, while the runs that saw a down needed none, so whether a re-placement brings a down is not shown; Steam Cloud,
+which the tools neither save nor restore. The review fixes of #245 came after the sessions and no session has run them, so their
+behaviour in the game is `UNVERIFIED`: the smoke item runs first at the new commit.

@@ -373,7 +373,7 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
 - **2026-11-11:** two watch items of that night's session crashed the game, each about two seconds after the watch's first pawn
   read. The watch was then rewritten to call nothing on scanned objects (the commits from "slice_watch: safe by construction" on
   tell how). Which of the candidate causes it was is not proven: no crash dump was read.
-- **2026-11-12, two unattended sessions at commit a627b82** (the unpublished original of this change, same tool files), against
+- **2026-11-12, two unattended sessions at commit e7b5fa3** (published in #245; they ran it locally as a627b82, the same files), against
   the maintainer's own installed game, under the standing word of that day: session 2 ran 7 item runs (the smoke item, which
   passed, then six captures, one of them a rerun), session 1 ran 2. **0 game crashes and 0 crash files in all 9.** After every
   item the saves, the config, the SDK settings and the mods list were compared with the state before and were identical, and the
@@ -385,3 +385,6 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
 - Hooks installed but never fired in these sessions (the watch check's "exercised" line lists them) are untested in the game.
 - **Outside what the tools restore:** Steam Cloud. The runs checked beforehand that the cloud was quiet; the tools neither save
   nor restore its state.
+- **After these sessions**, the review fixes of #245 changed the tools (the pending record's replace and run lock, the latched
+  driver-lost timeouts, the clamped deadlines, the focus Alt journal, the quit wait, the checker). No session has run them: their
+  behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
