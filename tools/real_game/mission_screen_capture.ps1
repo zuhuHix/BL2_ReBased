@@ -40,7 +40,18 @@ foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.j
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+# The one driver-lost condition (slice_watch.ps1, Get-DriverLostReason; review of #251/#255): once it is set, Py sends nothing and throws, and
+# a reply that never comes sets it, so no later key, click or command goes to a lost driver. PyWait is for the boot wait, whose timeouts are
+# part of the wait. The cleanup and the restore never go through Py's refusal (the finalizer skips its stop call when the driver is lost).
+function Py([string]$Code, [int]$Timeout = 30) {
+    if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
+    try { (Invoke-GamePy $Code $Timeout).Trim() }
+    catch { if ("$_" -match 'no reply' -and !(Get-DriverLostReason)) { $script:SliceWatchDriverLost = "$_" }; throw }
+}
+function PyWait([string]$Code, [int]$Timeout = 30) {
+    if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
+    (Invoke-GamePy $Code $Timeout).Trim()
+}
 function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json.dumps($Expr, default=str))" $Timeout | ConvertFrom-Json }
 function Shot([string]$Name) { Save-Shot "mission_screen/$Name.png" | Out-Null }
 # One read and one frame after a key: what the key changed, and how it looks.
@@ -153,7 +164,7 @@ try {
     if ($SdkModsOff) { Invoke-SdkModsOffStep $log $SdkModsExpected }
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { PyWait 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'mission_screen/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
@@ -163,6 +174,7 @@ try {
     "map: $map ($($log.load_wait.after_enter_s) s after the Enter)"
     if (!$log.load_wait.ok) { Save-Shot 'mission_screen/load_failed.png' | Out-Null; throw "no player pawn: $($log.load_wait.why)" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
+    if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
     foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null }
     $log.hooks = PyJson 'ms_start()'
     if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'mission_screen' 'mission_screen' }

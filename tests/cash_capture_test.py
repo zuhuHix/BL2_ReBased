@@ -42,7 +42,7 @@ function Assert-GameForeground {
     if ($scenario -eq 'focus_lost_in_den' -and $script:foreground -ge 3) { throw 'refusing to send input: not the foreground window' }
 }
 function Send-Key { }
-function Send-Click { }
+function Send-Click { Add-Content -LiteralPath (Join-Path $work 'clicks.txt') 'click' }   # every click is counted on disk
 function Invoke-GamePyFile([string]$Path) { if ($scenario -eq 'probe_traceback' -and $Path -like '*den_probe*') { "Traceback (most recent call last):`n  NameError" } else { 'ok' } }
 function Stop-OwnGame { if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
 $script:collects = 0; $script:singles = 0
@@ -52,14 +52,14 @@ $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
-        '*cp_immune_off*' { return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
+        '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
         '*sw_start(*' { $script:watchStarted = $true; return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
-        '*sw_settled*' { return $(if ($scenario -eq 'kills_unsettled') { 'False' } else { 'True' }) }
-        '*sw_snap(*' { if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_settled*' { if ($scenario -eq 'settle_lost') { throw 'no reply to c-invented' }; return $(if ($scenario -eq 'kills_unsettled') { 'False' } else { 'True' }) }
+        '*sw_snap(*' { if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
         '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
@@ -111,7 +111,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_level*' { return '8' }
         '*cp_cash*' { return '100' }
-        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost') { 'None' } else { 'WillowPickup_1' }) }
         '*cp_collect_end*' {
             $script:collects++
             if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
@@ -120,8 +120,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
-        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled') { 'WillowAIPawn_2' } else { 'None' }) }
-        '*cp_died*' { $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
+        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost') { 'WillowAIPawn_2' } else { 'None' }) }
+        '*cp_died*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_died'; $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
         '*cp_dump*' {
             if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
             $real = @(for ($i = 0; $i -lt $script:collects; $i++) { @{ value_per_item = $(if ($i -lt $script:singles) { 3 } else { $null }) } })
@@ -864,6 +864,20 @@ class ReadingsLoopTest(unittest.TestCase):
         pri.GetCurrencyOnHand = lambda n: self.cash
         self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_2')
 
+    def test_a_skipped_pickup_that_goes_in_the_same_walk_spoils_the_reading(self):
+        # Review of #251/#255, A2: present and levels came from the pickups not skipped, so a skipped pickup taken in the same walk was not
+        # seen as gone and the cash of both was read as the target's value. They are recorded from all money pickups.
+        ns, pri = self.probe()
+        ns['CP']['skip'].append('WillowPickup_1')   # skipped earlier, still on the ground
+        self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_2')
+        everything = ns['unrealsdk'].find_all('WillowPickup')
+        ns['unrealsdk'].find_all = lambda cls: []   # the walk took both
+        self.cash = 106
+        row = ns['cp_collect_end']()
+        self.assertEqual(sorted(row['gone']), ['WillowPickup_1', 'WillowPickup_2'])
+        self.assertIsNone(row['value_per_item'])
+        self.assertEqual(len(everything), 2)
+
     def test_the_touch_counter_is_an_observer_and_a_missing_function_is_not_fatal(self):
         # Review of #251, note 6: installed in every cash run (with or without a watch), outside the watch's groups. It counts the calls
         # before them, reads nothing, never blocks or changes them; a build without the function reports it and the run goes on.
@@ -901,6 +915,41 @@ class ReadingsLoopTest(unittest.TestCase):
         self.assertTrue(ns['cp_died']('WillowAIPawn_2'))
         ns['_find_ai'] = lambda name: None   # gone
         self.assertTrue(ns['cp_died']('WillowAIPawn_2'))
+
+
+class LatchTest(unittest.TestCase):
+    """Review of #251/#255, A1: after a watch helper has latched the driver-lost condition (it does not throw), the capture's own Py sends
+    nothing more: no cp_died, no further kill and no click, no cp_immune_off. The cleanup and the restore still run."""
+    run_capture = CashCaptureTest.run_capture
+    saves = CashCaptureTest.saves
+    locks_held = CashCaptureTest.locks_held
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+        self.spec = self.work / 'spec.json'
+        self.spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+
+    def lines(self, name):
+        f = self.work / name
+        return f.read_text(encoding='utf-8').split() if f.exists() else []
+
+    def test_a_settle_read_that_times_out_sends_nothing_after_it_in_the_kill_loop(self):
+        done, session = self.run_capture('settle_lost', ['-MaxKills', '4', '-WatchSpec', str(self.spec)])
+        self.assertEqual(len(self.lines('clicks.txt')), 3)   # the one kill's three shots, then nothing
+        self.assertNotIn('cp_died', self.lines('sent.txt'))
+        self.assertIn('the driver stopped answering', session['stage_results']['readings'])
+        self.assertIn('the driver stopped answering', session['stage_results']['den_read'])   # the later stages skip themselves
+        self.assertEqual(self.saves(), 'original save')   # the cleanup and the restore still ran
+        self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
+        self.assertTrue((self.work / 'rg/cash/save_compare.json').exists())
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_a_timed_out_before_down_is_not_followed_by_removing_the_immunity(self):
+        done, session = self.run_capture('before_down_lost', ['-DenDown', '-RespawnSeconds', '8', '-WatchSpec', str(self.spec)])
+        self.assertNotIn('cp_immune_off', self.lines('sent.txt'))
+        self.assertIn('driver stopped answering', session['stage_results']['den_down'])
+        self.assertEqual(self.saves(), 'original save')
+        self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
 
 
 class LoadWaitTest(unittest.TestCase):

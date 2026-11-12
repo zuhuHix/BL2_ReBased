@@ -255,8 +255,11 @@ def cp_died(name):
 
 
 def cp_collect_start():
-    """Stand on the nearest money pickup not yet skipped. Returns the state the matching cp_collect_end compares with, or None without one."""
-    items = [i for i in _money_pickups() if i[0].Name not in CP["skip"]]
+    """Stand on the nearest money pickup not yet skipped. Returns the state the matching cp_collect_end compares with, or None without one.
+    The target is chosen from the pickups not skipped, but what was present is recorded from ALL money pickups: a skipped one that goes in
+    the same walk then shows as gone, and the try is no reading (review of #251/#255: its cash was read as the target's value)."""
+    every = _money_pickups()
+    items = [i for i in every if i[0].Name not in CP["skip"]]
     if not items:
         return None
     me = get_pc().Pawn.Location
@@ -266,8 +269,8 @@ def cp_collect_start():
     # pickup back, so the loop's "distinct pickups" stays true. A pickup that gave a reading is gone, so skipping it costs nothing.
     if pk.Name not in CP["skip"]:
         CP["skip"].append(pk.Name)
-    CP["pending"] = {"before": cp_cash(), "target": _item_row(pk, inv, balance), "present": [i[0].Name for i in items],
-                     "levels": {i[0].Name: _g(i[1], "ExpLevel") for i in items}, "touches_before": CP.get("touches", 0),
+    CP["pending"] = {"before": cp_cash(), "target": _item_row(pk, inv, balance), "present": [i[0].Name for i in every],
+                     "levels": {i[0].Name: _g(i[1], "ExpLevel") for i in every}, "touches_before": CP.get("touches", 0),
                      "where_before": _where(pk)}
     loc = pk.Location
     get_pc().Pawn.Location = unrealsdk.make_struct("Vector", X=loc.X, Y=loc.Y, Z=loc.Z + 60.0)

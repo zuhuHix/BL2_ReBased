@@ -438,6 +438,35 @@ def test_labelled_snapshots_follow_the_accept_and_the_reward():
     assert taken < text.index("if ($WatchSpec) { Save-SliceWatchSnap 'reward_taken' }") < text.index("Set-Stage 'reward_taken'")
 
 
+def test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout():
+    """Review of #251/#255, A1: the capture's Py read neither the driver-lost condition nor latched its own timeout. Run here from the
+    script's own text, with a stand-in Invoke-GamePy that counts calls (no capture script is run)."""
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r', '')
+    body = text[text.index('function Py('):text.index('function PyJson(')]
+    lines = [
+        "$script:SliceWatchDriverLost = ''",
+        "function Get-DriverLostReason { $script:SliceWatchDriverLost }",
+        "$script:calls = 0",
+        "function Invoke-GamePy($Code, $T) { $script:calls++; if ($Code -eq 'slow') { throw 'no reply to c-invented' }; 'ok' }",
+        body,
+        "$a = Py 'fast'",
+        "try { Py 'slow' | Out-Null } catch { }",
+        "$latched = $script:SliceWatchDriverLost",
+        "$before = $script:calls",
+        "try { Py 'fast' | Out-Null; $refused = 'sent' } catch { $refused = \"$_\" }",
+        "try { PyWait 'fast' | Out-Null; $refusedWait = 'sent' } catch { $refusedWait = \"$_\" }",
+        "Write-Output \"$a|$latched|$($script:calls - $before)|$refused|$refusedWait\"",
+    ]
+    script = Path(tempfile.mkdtemp(prefix='ow-py-latch-')) / 'py.ps1'
+    script.write_text('\n'.join(lines) + '\n', encoding='utf-8-sig')
+    done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=60)
+    out = done.stdout.strip().split('|')
+    assert out[0] == 'ok', done.stdout + done.stderr
+    assert 'no reply' in out[1], out           # its own timeout latched the condition
+    assert out[2] == '0', out                  # nothing more was sent
+    assert 'not sent' in out[3] and 'not sent' in out[4], out
+
+
 def test_probe_helpers():
     probe = load_probe()
     first, second = probe.MS_TEXT[0], probe.MS_TEXT[1]
@@ -457,6 +486,7 @@ def test_probe_helpers():
 
 
 if __name__ == '__main__':
+    test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout()
     test_labelled_snapshots_follow_the_accept_and_the_reward()
     test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails()
     test_probe_helpers()

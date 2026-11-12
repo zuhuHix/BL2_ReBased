@@ -72,14 +72,28 @@ $keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
 foreach ($stale in 'session', 'save_compare', 'cash', 'den') { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o'); status = 'running' }
-# The driver writes a game-side error into the reply as text, so it is never taken for an answer.
+# The driver writes a game-side error into the reply as text, so it is never taken for an answer. The one driver-lost condition (Get-DriverLost)
+# holds here as in the helpers (review of #251/#255): once it is set, Py sends nothing and throws, and a reply that never comes sets it. The
+# cleanup and the restore never go through Py's refusal: the finalizer's own stop calls are already skipped when the driver is lost.
 function Py([string]$Code, [int]$Timeout = 30) {
+    if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
+    try { $reply = (Invoke-GamePy $Code $Timeout).Trim() }
+    catch { if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }; throw }
+    if ($reply -match 'Traceback \(most recent call last\)') { throw "game python error: $reply" }
+    $reply
+}
+# The waits that expect no reply for a while (the boot, a map load holding the command channel): they refuse once the driver is lost, but
+# their own timeouts are part of the wait and set nothing.
+function PyWait([string]$Code, [int]$Timeout = 30) {
+    if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
     $reply = (Invoke-GamePy $Code $Timeout).Trim()
     if ($reply -match 'Traceback \(most recent call last\)') { throw "game python error: $reply" }
     $reply
 }
 function Use-Probe([string]$Name) {
-    $reply = "$(Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$Name") cash)"
+    if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
+    try { $reply = "$(Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$Name") cash)" }
+    catch { if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }; throw }
     if ($reply -match 'Traceback \(most recent call last\)') { throw "$Name did not load: $reply" }
 }
 
@@ -124,12 +138,13 @@ function ConvertTo-Clock([string]$Text) {
 # that value (the new map), so the old map's state is never taken for the arrival (the same map is loaded again for every den trial).
 function Enter-IceMap {
     $before = $null
-    try { $before = ConvertTo-Clock (Py 'print(get_pc().WorldInfo.TimeSeconds)  # ow_clock_before' 8) } catch { }
+    try { $before = ConvertTo-Clock (PyWait 'print(get_pc().WorldInfo.TimeSeconds)  # ow_clock_before' 8) } catch { }
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     $reached = ''
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep 3
-        try { $reply = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None, pc.WorldInfo.TimeSeconds)' 8 } catch { continue }
+        if (Get-DriverLost) { break }
+        try { $reply = PyWait 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None, pc.WorldInfo.TimeSeconds)' 8 } catch { continue }
         $parts = @("$reply".Trim() -split '\s+')
         $clock = if ($parts.Count -ge 3) { ConvertTo-Clock $parts[2] } else { $null }
         if ($null -ne $before -and ($null -eq $clock -or $clock -ge $before)) { continue }   # still the old map
@@ -190,7 +205,7 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
         if ($proc.HasExited) { break }
-        try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 }
+        try { PyWait 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 }
     }
     if (-not $ok) { Save-Shot 'cash/boot.png' | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
@@ -222,57 +237,64 @@ try {
     Write-StageMark 'readings' 'enter'
     if ($WatchSmoke) { $log.groups_stage1 = Install-SliceWatchGroups 'stage1' }
 
-    $deadline = (Get-Date).AddMinutes($MaxMinutes)
-    $dropsUnsettled = 0; $kills = 0; $deaths = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0; $failedPickups = 0
-    while ($kills -lt $MaxKills -and $single -lt $WantItems -and (Get-Date) -lt $deadline) {
-        # Money on the ground first: walk onto it.
-        $name = Py 'print(cp_collect_start())'
-        if ($name -ne 'None') {
-            Send-Key W 200; Start-Sleep 2
-            $row = Py 'import json; print(json.dumps(cp_collect_end(), default=str))'
-            $log.last_collect = $row
-            "collect: $row"
-            # A pickup that gave no reading is skipped from then on (cp_collect_end), so each failure is another pickup: stop after six in a
-            # row, all distinct (session 2 analysis, A2: the same pickup was retried until the loop gave up).
-            if ($row -match '"value_per_item": \d') { $single++; $noReading = 0 }
-            else {
-                $failedPickups++
-                if (++$noReading -ge 6) { $log.stopped = "6 distinct pickups in a row without a single-item reading (each skipped after its one try)"; break }
+    # The readings are a stage of their own: a failure in them (a driver found lost, whose next command is refused) fails this stage and lets
+    # the later stages report themselves as skipped, as the den stages do.
+    try {
+        $deadline = (Get-Date).AddMinutes($MaxMinutes)
+        $dropsUnsettled = 0; $kills = 0; $deaths = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0; $failedPickups = 0
+        while ($kills -lt $MaxKills -and $single -lt $WantItems -and (Get-Date) -lt $deadline) {
+            # Money on the ground first: walk onto it.
+            $name = Py 'print(cp_collect_start())'
+            if ($name -ne 'None') {
+                Send-Key W 200; Start-Sleep 2
+                $row = Py 'import json; print(json.dumps(cp_collect_end(), default=str))'
+                $log.last_collect = $row
+                "collect: $row"
+                # A pickup that gave no reading is skipped from then on (cp_collect_end), so each failure is another pickup: stop after six in a
+                # row, all distinct (session 2 analysis, A2: the same pickup was retried until the loop gave up).
+                if ($row -match '"value_per_item": \d') { $single++; $noReading = 0 }
+                else {
+                    $failedPickups++
+                    if (++$noReading -ge 6) { $log.stopped = "6 distinct pickups in a row without a single-item reading (each skipped after its one try)"; break }
+                }
+                continue
             }
-            continue
+            $target = Py 'print(cp_target())'
+            if ($target -eq 'None') {
+                if (++$noTarget -gt 5) { $log.stopped = 'no enemy within reach'; break }
+                Start-Sleep 5; continue
+            }
+            $noTarget = 0
+            Py "print(cp_ready_kill('$target'))" | Out-Null
+            Start-Sleep 1; Assert-GameForeground
+            for ($shot = 0; $shot -lt 3; $shot++) { Send-Click; Start-Sleep -Milliseconds 700 }
+            $kills++   # a kill attempt; whether it killed is asked next, by the enemy's fields only
+            Start-Sleep 3   # the loot lands
+            # One labelled snapshot per drop, after the wait (session 2 analysis, A3): its pickups part has each item's LifeSpan, draw scale and
+            # balance, so a drop's lifetime can be read across the recording. Reads only. Taken only when one read says the map has settled
+            # (no wait): asked earlier it would be recorded as not taken and fail the watch's check (review of #251); such a drop is counted.
+            if ($WatchSpec) { if (Test-SliceWatchSettled) { Save-SliceWatchSnap 'drop' } else { $dropsUnsettled++ } }
+            if ((Py "print(cp_died('$target'))") -eq 'True') { $deaths++ }
+            # The first money seen: the item's own value call at other levels, and its definition. Before any walk onto it.
+            if (-not $swept -and (Py 'print(len(cp_money()))') -ne '0') {
+                $log.sweep = Py 'import json; print(json.dumps(cp_sweep(), default=str))'
+                $log.definition = Py 'import json; print(json.dumps(cp_definition(), default=str))'
+                $swept = $true
+                "sweep: $($log.sweep)"
+            }
         }
-        $target = Py 'print(cp_target())'
-        if ($target -eq 'None') {
-            if (++$noTarget -gt 5) { $log.stopped = 'no enemy within reach'; break }
-            Start-Sleep 5; continue
-        }
-        $noTarget = 0
-        Py "print(cp_ready_kill('$target'))" | Out-Null
-        Start-Sleep 1; Assert-GameForeground
-        for ($shot = 0; $shot -lt 3; $shot++) { Send-Click; Start-Sleep -Milliseconds 700 }
-        $kills++   # a kill attempt; whether it killed is asked next, by the enemy's fields only
-        Start-Sleep 3   # the loot lands
-        # One labelled snapshot per drop, after the wait (session 2 analysis, A3): its pickups part has each item's LifeSpan, draw scale and
-        # balance, so a drop's lifetime can be read across the recording. Reads only. Taken only when one read says the map has settled
-        # (no wait): asked earlier it would be recorded as not taken and fail the watch's check (review of #251); such a drop is counted.
-        if ($WatchSpec) { if (Test-SliceWatchSettled) { Save-SliceWatchSnap 'drop' } else { $dropsUnsettled++ } }
-        if ((Py "print(cp_died('$target'))") -eq 'True') { $deaths++ }
-        # The first money seen: the item's own value call at other levels, and its definition. Before any walk onto it.
-        if (-not $swept -and (Py 'print(len(cp_money()))') -ne '0') {
-            $log.sweep = Py 'import json; print(json.dumps(cp_sweep(), default=str))'
-            $log.definition = Py 'import json; print(json.dumps(cp_definition(), default=str))'
-            $swept = $true
-            "sweep: $($log.sweep)"
-        }
+        $log.kills = $kills; $log.kill_attempts = $kills; $log.deaths = $deaths; $log.failed_pickups = $failedPickups; $log.drop_snapshots_unsettled = $dropsUnsettled; $log.single_item_readings = $single
+        $log.dump = Py 'import json; print(json.dumps(cp_dump(), default=str))' 60
+        "dump: $($log.dump)"
+        $dumpProblem = ''
+        try { Test-CashDump $log.dump $kills $single } catch { $dumpProblem = "$_" }
+        # Readings taken with Maya down, or with the immunity gone, are not this stage's readings.
+        if (!$dumpProblem -and (Py 'print(cp_up() and cp_immune())') -ne 'True') { $dumpProblem = 'Maya is down or the immunity is gone after the readings' }
+        Set-Stage 'readings' (($single -ge $WantItems) -and !$dumpProblem) $(if ($dumpProblem) { $dumpProblem } else { "$single of $WantItems single-item readings in $kills kills" })
+    } catch {
+        Set-Stage 'readings' $false "$_"
+        "readings: $_"
     }
-    $log.kills = $kills; $log.kill_attempts = $kills; $log.deaths = $deaths; $log.failed_pickups = $failedPickups; $log.drop_snapshots_unsettled = $dropsUnsettled; $log.single_item_readings = $single
-    $log.dump = Py 'import json; print(json.dumps(cp_dump(), default=str))' 60
-    "dump: $($log.dump)"
-    $dumpProblem = ''
-    try { Test-CashDump $log.dump $kills $single } catch { $dumpProblem = "$_" }
-    # Readings taken with Maya down, or with the immunity gone, are not this stage's readings.
-    if (!$dumpProblem -and (Py 'print(cp_up() and cp_immune())') -ne 'True') { $dumpProblem = 'Maya is down or the immunity is gone after the readings' }
-    Set-Stage 'readings' (($single -ge $WantItems) -and !$dumpProblem) $(if ($dumpProblem) { $dumpProblem } else { "$single of $WantItems single-item readings in $kills kills" })
     Write-StageMark 'readings' 'done'
     # Set before stage 2, so a stage skipped at once still leaves a smoke result and stage 3 still runs its own checks and stamps.
     $smokeHeld = $false; $smokeWhy = 'the smoke hold did not run'
