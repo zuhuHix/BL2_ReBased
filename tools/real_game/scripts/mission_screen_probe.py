@@ -383,10 +383,12 @@ def _ms_cam_tick():
 
 
 def ms_cam_counts():
-    """The camera trace's rows, how many read the camera, and the first error: a trace with no good row fails its stage."""
+    """The camera trace's rows, how many read the camera, how many are errors, and the first error. A camera that reads correctly has
+    no reason to fail, so one error row fails the stage (review of #251: good rows after the close must not hide errors while open)."""
     rows = [r for r in MS["rows"] if r.get("tag") == "cam"]
     good = [r for r in rows if "cam" in r and "error" not in r]
-    return {"rows": len(rows), "good": len(good), "first_error": next((r["error"] for r in rows if "error" in r), None)}
+    errors = [r for r in rows if "error" in r]
+    return {"rows": len(rows), "good": len(good), "errors": len(errors), "first_error": errors[0]["error"] if errors else None}
 
 
 def ms_cam_trace(seconds):

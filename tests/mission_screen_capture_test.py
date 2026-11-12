@@ -412,15 +412,19 @@ def test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace
     probe._ms_now = lambda: 1.0
     probe.ms_cam_trace(2.0)
     probe._ms_cam_tick()
-    assert probe.ms_cam_counts() == {'rows': 1, 'good': 1, 'first_error': None}
+    assert probe.ms_cam_counts() == {'rows': 1, 'good': 1, 'errors': 0, 'first_error': None}
     probe.get_pc = lambda: types.SimpleNamespace()   # a view point that cannot be read: an error row, and no good one
     fresh(probe)
     probe.ms_cam_trace(2.0)
     probe._ms_cam_tick()
     counts = probe.ms_cam_counts()
-    assert counts['rows'] == 1 and counts['good'] == 0 and counts['first_error'], counts
+    assert counts['rows'] == 1 and counts['good'] == 0 and counts['errors'] == 1 and counts['first_error'], counts
+    probe.get_pc = lambda: pc   # good rows after the errors do not hide them (review of #251): the counts carry both
+    probe._ms_cam_tick()
+    counts = probe.ms_cam_counts()
+    assert counts['good'] == 1 and counts['errors'] == 1, counts
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
-    assert "Set-Stage 'camera' ($log.camera_trace.good -gt 0)" in text
+    assert "Set-Stage 'camera' ($log.camera_trace.good -gt 0 -and $log.camera_trace.errors -eq 0)" in text
     assert "'camera'" in text[text.index('$stagesRequested = @('):].split('\n')[0]
 
 

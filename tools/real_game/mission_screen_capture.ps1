@@ -242,7 +242,7 @@ try {
     $closed = Read-After 'closed_world' 1.0
     # A camera trace that read nothing fails its stage (session 1 analysis, A1: every camera row of both runs was an error, and nothing noticed).
     $log.camera_trace = PyJson 'ms_cam_counts()'
-    Set-Stage 'camera' ($log.camera_trace.good -gt 0) "the camera trace has $($log.camera_trace.rows) rows and none read the camera: $($log.camera_trace.first_error)"
+    Set-Stage 'camera' ($log.camera_trace.good -gt 0 -and $log.camera_trace.errors -eq 0) "the camera trace has $($log.camera_trace.good) good rows and $($log.camera_trace.errors) error rows (any error fails it): $($log.camera_trace.first_error)"
     Py "print(ms_dump('screen'))" | Out-Null
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
 
