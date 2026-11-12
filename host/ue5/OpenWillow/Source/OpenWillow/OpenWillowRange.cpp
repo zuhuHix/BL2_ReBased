@@ -2195,7 +2195,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             }
             if (TestKindQueue.Num() == 0)
             {
-                TestCheck(TEXT("kind_melee"), false, TEXT("no enemy of a kind with a live melee row (bullymong_adult, bullymong_baby) on this range"));
+                TestCheck(TEXT("kind_melee"), false, TEXT("no enemy of a kind with a live melee row (bullymong_adult, bullymong_baby, bullymong, bullymong_slinger) on this range"));
                 TestStep = 37;
                 return;
             }

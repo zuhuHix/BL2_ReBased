@@ -136,7 +136,7 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
     // The kind's melee from a live read (the acceptance table), or the stand-ins: the log says which.
     KindMelee = FindKindMelee(Kind.Name);
     bStandOnContactLogged = false;
-    const FString Stand = KindMelee ? FString::Printf(TEXT("%.0f"), KindMelee->StandDistance) : FString(TEXT("stand-in"));
+    const FString Stand = (KindMelee && KindMelee->StandDistance > 0.f) ? FString::Printf(TEXT("%.0f"), KindMelee->StandDistance) : FString(TEXT("stand-in"));
     UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind_melee kind=%s swing_interval=%.3f stand=%s source=%s"), *GetName(), *Kind.Name, SwingIntervalNow(),
         *Stand, KindMelee ? TEXT("live_read") : TEXT("stand-in_no_live_read"));
     return bStock;

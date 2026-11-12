@@ -65,15 +65,32 @@ class HostRowsTest(unittest.TestCase):
                 self.assertIn(kind, rows)
                 cycle, stand = rows[kind]
                 self.assertAlmostEqual(cycle, row['cycle'], places=6)
-                self.assertAlmostEqual(stand, row['stand'], places=6)
                 self.assertTrue(row['cycle_band'][0] <= cycle <= row['cycle_band'][1])
+                if row['stand'] is None:
+                    # The cycle only: the host's 0 is "no live stand distance" (the stand-in stop), and no stand band is graded.
+                    self.assertEqual(stand, 0.0)
+                    self.assertIsNone(row['stand_band'])
+                    continue
+                self.assertAlmostEqual(stand, row['stand'], places=6)
                 self.assertTrue(row['stand_band'][0] <= stand <= row['stand_band'][1])
 
     def test_kinds_with_no_live_read_have_no_row(self):
-        # The regular bullymong (three of the four default enemies), the slinger's melee and the psycho keep the stand-ins.
-        for kind in ('bullymong', 'bullymong_slinger', 'psycho'):
-            self.assertNotIn(kind, host_rows())
+        # The psycho was never read swinging at the player: it keeps the stand-ins (1.25 s, the stop inside its swing range).
+        self.assertNotIn('psycho', host_rows())
         self.assertIn('constexpr float SwingInterval = 1.25f;', text('OpenWillowEnemyAI.h'))
+
+    def test_the_regular_and_the_slinger_have_the_live_cycle_and_no_live_stand(self):
+        # Session 2 of 2026-11-12: the regular's medians 1.2200 to 1.2227 s (96 gaps), the slinger's melee 1.2224 s (28 gaps). Neither
+        # kind's stand distance was sampled, and the regular's median call distance beyond contact is unexplained: the stand stays open.
+        rows = host_rows()
+        for kind, medians in (('bullymong', (1.2200, 1.2227)), ('bullymong_slinger', (1.2224, 1.2224))):
+            with self.subTest(kind=kind):
+                self.assertEqual(rows[kind], (1.222, 0.0))
+                band = check_range.ACCEPTANCE[kind]['cycle_band']
+                self.assertTrue(band[0] <= medians[0] and medians[1] <= band[1], band)
+                self.assertGreater(1.25, band[1])   # the old stand-in is outside it
+        enemy = text('OpenWillowEnemy.cpp')
+        self.assertIn('(KindMelee && KindMelee->StandDistance > 0.f) ? FString::Printf', enemy)
 
     def test_the_adult_cycle_is_the_third_reads_value(self):
         # Session 2 of 2026-11-12 (medians 1.220 to 1.223 s, 407 gaps) agrees with the den read of 2026-11-07 (1.216 to 1.217 s), not
@@ -172,6 +189,16 @@ class CheckerTest(unittest.TestCase):
         # The host clamps the run's last step to the stand distance, so a frame cannot carry it inside the band.
         self.assertIn('stand', check_range.kind_melee_problem(kind_line(stand=(187, 201), max_frame=0.05)))
 
+    def test_a_cycle_only_row_grades_the_cycle_and_not_the_stand(self):
+        # The regular stops at its stand-in (60 uu inside its stock range 320: 260); that is not graded, its cycle is.
+        line = lambda cycle, stand=(258, 260): kind_line('bullymong', cycle, stand, 300, 320)
+        self.assertEqual(check_range.kind_melee_problem(line((1.222, 1.239))), '')
+        self.assertEqual(check_range.kind_melee_problem(line((1.222, 1.222), (142, 400))), '')
+        self.assertIn('cycle', check_range.kind_melee_problem(line((1.25, 1.267))))
+        self.assertIn('lacks stand_min', check_range.kind_melee_problem(line((1.222, 1.222)).replace(' stand_min=258', '')))
+        self.assertIn('minimum is above its maximum', check_range.kind_melee_problem(line((1.222, 1.222), (400, 142))))
+        self.assertIn('first swing', check_range.kind_melee_problem(kind_line('bullymong', (1.222, 1.222), (260, 260), 330, 320)))
+
     def test_the_old_adult_cycle_is_outside_the_band_the_host_is_held_to(self):
         # 1.25 s, the host's adult cycle before 2026-11-12, at a 60 fps frame (max_frame 0.017). With a longer logged frame the allowance
         # can reach it (max_frame 0.04 accepts it), so this band is not what guards the value: the host row = table test above
@@ -183,7 +210,7 @@ class CheckerTest(unittest.TestCase):
         self.assertIn('first swing', check_range.kind_melee_problem(kind_line(first=420)))
 
     def test_a_kind_without_a_row_or_a_line_without_numbers_fails(self):
-        self.assertIn('no row', check_range.kind_melee_problem(kind_line('bullymong')))
+        self.assertIn('no row', check_range.kind_melee_problem(kind_line('psycho')))
         self.assertIn('lacks', check_range.kind_melee_problem('kind=bullymong_adult cycle_min=1.25'))
 
     def test_incomplete_or_impossible_evidence_fails(self):
@@ -209,6 +236,16 @@ class ResultsTiedToSpawnsTest(unittest.TestCase):
                                              'OWRANGETEST step=kind_melee result=PASS ' + kind_line())
         self.assertTrue(ok)
         self.assertEqual(verdict, 'PASS')
+
+    def test_the_default_range_needs_the_regular_and_the_adult(self):
+        # Three regulars and one adult, all spawned with a live row since 2026-11-12: one result each, the regular's from a regular.
+        spawns = [spawn('E_%d' % i, 'bullymong') for i in range(3)] + [spawn('E_3', 'bullymong_adult')]
+        regular = 'OWRANGETEST step=kind_melee result=PASS ' + kind_line('bullymong', (1.222, 1.239), (260, 260), 300, 320, enemy='E_0')
+        ok, (verdict, _) = graded_kind_melee(*spawns, regular, 'OWRANGETEST step=kind_melee result=PASS ' + kind_line())
+        self.assertTrue(ok)
+        ok, (verdict, detail) = graded_kind_melee(*spawns, 'OWRANGETEST step=kind_melee result=PASS ' + kind_line())
+        self.assertFalse(ok)
+        self.assertIn('0 passing results for spawned kind bullymong', detail)
 
     def test_a_result_for_a_kind_that_was_not_spawned_fails(self):
         ok, (verdict, detail) = graded_kind_melee(spawn('E_3', 'bullymong_adult'),

@@ -86,7 +86,8 @@ struct FOpenWillowKindMelee
 {
     const TCHAR* Kind;      // the range manifest's kind name
     float SwingInterval;    // s, one swing start to the next
-    float StandDistance;    // uu, horizontal, the enemy's origin to Maya's, where it stands to swing once it has closed
+    float StandDistance;    // uu, horizontal, the enemy's origin to Maya's, where it stands to swing once it has closed; 0 = no live
+                            // stand distance (the cycle only): the stand-in stop MeleeStopMargin inside its swing range
 };
 // The row for Kind (case-sensitive), or null when no live read covers it.
 const FOpenWillowKindMelee* FindKindMelee(const FString& Kind);

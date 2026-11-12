@@ -31,10 +31,15 @@ bool WithinMeleeVolume(const FVector& EnemyLocation, float YawDegrees, const FVe
 // of 2026-11-12 (1.220 to 1.223 s, 407 gaps over four recordings at about 120 fps), as the den read of 2026-11-07 had it (1.216 to
 // 1.217 s); AI_MELEE_TARGETING_LIVE 4's median 1.249 is the outlier. What makes the cycle this long (clip length, frames) is UNVERIFIED;
 // the stand distance is the den read's median (190 to 225 uu, 181 samples). Baby: both from the den read (its grab: 1.133 to 1.134 s over 31 gaps; 106 to
-// 118 uu, 347 samples). The default range spawns no baby.
+// 118 uu, 347 samples). The default range spawns no baby. Regular and slinger (2026-11-12): the cycle only, from the same session (the
+// regular: medians 1.220 to 1.223 s, 96 gaps over three recordings; the slinger's melee: median 1.222 s, 28 gaps, one recording). Their
+// stand distance is 0, the stand-in stop: the regular's median call distance sat beyond contact, unexplained, and nobody sampled either
+// kind's stand distance.
 const FOpenWillowKindMelee KindMeleeRows[] = {
     {TEXT("bullymong_adult"), 1.222f, 201.f},
     {TEXT("bullymong_baby"), 1.133f, 111.f},
+    {TEXT("bullymong"), 1.222f, 0.f},
+    {TEXT("bullymong_slinger"), 1.222f, 0.f},
 };
 
 void LogThreat(float Now, int32 Level, const TCHAR* Reason, const AActor* Who)
