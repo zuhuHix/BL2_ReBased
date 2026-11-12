@@ -1620,6 +1620,8 @@ AI-assisted (Claude). The 2026-11-08 showcase reads the bullymong's claws and sp
   does that arithmetic against `host_target.json` (synthetic tests only). It reads only the hit attempt `session.json` kept, refuses it unless
   that attempt lifted the target, and takes the pieces from a row in which the target is the held pawn, so a failed first cast is never compared.
   It passes a piece within 8 units (a host choice, UNVERIFIED: the bounds may trail the bone by a frame of the loop's motion).
+  Since 2026-11-12 a `host_target.json` entry without an `attachments` field is refused (exit 2, naming `-Steps attach`): the placements
+  were never written or were dropped. An empty list written by the attach step is still read as an answer.
 - **Needs (real game, zuhu):** one `tools/real_game/phaselock_integrity_capture.ps1` hit run on an Adult, then
   `python tools/phaselock_attachment_check.py --session local/realgame/phaselock_integrity --host local/phaselock/target/host_target.json`.
   What a pass shows: each piece's pivot position on its bone at one held frame. It does not check the pieces' orientation or scale, or other

@@ -94,9 +94,17 @@ def live_pieces(rows):
 
 
 def host_rows(path, pawn):
-    """The host report's attachments for pawn. Raises SessionError when the report cannot be used, or names a bone twice."""
+    """The host report's attachments for pawn. Raises SessionError when the report cannot be used, or names a bone twice.
+    A missing attachments field means the attach step never wrote the placements (or a later step dropped them), not that the pawn wears
+    nothing, so it is refused; an empty list written by that step is a valid answer (2026-11-12)."""
     try:
-        rows = json.loads(Path(path).read_text(encoding='utf-8'))[pawn].get('attachments', [])
+        entry = json.loads(Path(path).read_text(encoding='utf-8'))[pawn]
+        if 'attachments' not in entry:
+            raise SessionError(f'host report {path} has no attachments field for {pawn}: the placements were never written or were dropped. '
+                               'Re-run powershell -File tools/import_phaselock_target.ps1 -Steps attach')
+        rows = entry['attachments']
+        if not isinstance(rows, list):
+            raise ValueError(f'attachments is {type(rows).__name__}, not a list')
         bones = [row['bone'] for row in rows]
         for row in rows:
             location = row['location']

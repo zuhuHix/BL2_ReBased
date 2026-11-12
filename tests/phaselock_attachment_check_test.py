@@ -125,6 +125,29 @@ def test_a_truncated_session_row_is_refused():
         raise AssertionError('accepted a truncated row')
 
 
+def test_a_host_report_without_the_attachments_field_is_refused():
+    # 2026-11-12: host_target.json had been rewritten without its placements; read as "wears nothing", the check had nothing to say.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'host.json'
+        path.write_text(json.dumps({'Bullymong': {'mesh': '/Game/M.M'}}), encoding='utf-8')
+        try:
+            c.host_rows(path, 'Bullymong')
+        except c.SessionError as error:
+            assert 'no attachments field' in str(error) and '-Steps attach' in str(error), error
+        else:
+            raise AssertionError('accepted a report without attachments')
+        path.write_text(json.dumps({'Bullymong': {'attachments': {}}}), encoding='utf-8')
+        try:
+            c.host_rows(path, 'Bullymong')
+        except c.SessionError:
+            pass
+        else:
+            raise AssertionError('accepted attachments that are not a list')
+        # An empty list from an import that did read the pawn's worn pieces is an answer, not an error.
+        path.write_text(json.dumps({'Bullymong': {'attachments': []}}), encoding='utf-8')
+        assert c.host_rows(path, 'Bullymong') == []
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:
