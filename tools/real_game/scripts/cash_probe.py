@@ -91,17 +91,22 @@ def down_state(pawn, health, injured):
 
 
 def cp_down_state():
-    """Maya's state for the den down, reads only: the condition, the health and whether the injured field could be read. Native calls:
-    GetHealth on the player's own pawn only (one of the calls the watch lists; the state-name getter was dropped)."""
+    """Maya's state for the den down, reads only: the condition, whether the injured field could be read, and health plus shield ('pool',
+    or None when the shield cannot be read), which cash_capture.ps1 compares from poll to poll: a drop means a hit reached her. Native
+    calls: GetHealth and GetShieldStrength on the player's own pawn only (two of the calls the watch lists)."""
     pawn = get_pc().Pawn
     if pawn is None:
-        return {"state": down_state(None, None, None), "injured_field": None}
+        return {"state": down_state(None, None, None), "injured_field": None, "pool": None}
     health = pawn.GetHealth()
     try:
         injured = bool(pawn.bIsInjured)
     except Exception:
         injured = None
-    return {"state": down_state(pawn, health, injured), "injured_field": injured is not None}
+    try:
+        pool = round(float(health) + float(pawn.GetShieldStrength()), 3)
+    except Exception:
+        pool = None
+    return {"state": down_state(pawn, health, injured), "injured_field": injured is not None, "pool": pool}
 
 
 def cp_immune():

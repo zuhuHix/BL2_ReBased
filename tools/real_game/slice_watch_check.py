@@ -28,10 +28,13 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   no_missing:        true: every name resolved: the start line's, every group's 'installed' line's and the end line's missing lists
                      together are empty.
   max_auto_failures: the most automatic snapshots or pawn reads with a failed part (default: no limit).
-  require:           [{"func": "<substring of a hook path>", "tag": "pre"|"post", "min": N, "max": M}]
-  order:             [["<first>", "<then>"]]: some row matching <then> comes after the first row matching <first>, on the
+  require:           [{"func": "<substring of a hook path>", "tag": "pre"|"post", "min": N, "max": M, "after": "<snapshot label>"}]
+                     With "after", only rows at or after the first taken labelled snapshot of that label count (none, if it is absent):
+                     the game calls ResurrectPlayer at every map arrival, so a respawn check must start at before_down.
+  order:             [["<first>", "<then>"] | {"first": ..., "then": ..., "after": "<snapshot label>"}]: some row matching <then> comes
+                     after the first row matching <first> (with "after": only rows from that snapshot on), on the
                      recording's own clock (t, real seconds since the watch started; the map clock restarts at every travel).
-  gap:               [{"from": "<substring>", "to": "<substring>", "min": s, "max": s}]: seconds on that clock from the first <from> row
+  gap:               [{"from": "<substring>", "to": "<substring>", "min": s, "max": s, "after": "<label>"}]: seconds on that clock from the first <from> row
                      to the first <to> row after it lie in [min, max].
   must_fire:         ["<substring>", ...]: a hooked function whose path holds it fired at least once (the end line's per-function
                      record). Every recording also gets an 'exercised' line: how many hooked functions fired, and the ones installed
@@ -117,6 +120,16 @@ def validate_spec(spec_path):
     md = checks.get("max_dropped", {})
     if not isinstance(md, dict) or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in md.values())             or set(md) - {"row", "frame", "snap", "pawns", "labelled", "bytes", "per_func"}:
         raise ValueError("max_dropped must map row, frame, snap, pawns, labelled, bytes or per_func to a whole number")
+    for entry in checks.get("order", []):
+        if isinstance(entry, dict):
+            if set(entry) - {"first", "then", "after"} or not all(isinstance(entry.get(k), str) for k in ("first", "then")):
+                raise ValueError("an order entry is [first, then] or {first, then, after}")
+        elif not (isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry)):
+            raise ValueError("an order entry is [first, then] or {first, then, after}")
+    for key in ("require", "gap"):
+        for entry in checks.get(key, []):
+            if "after" in entry and not isinstance(entry["after"], str):
+                raise ValueError(f"{key}: after must be a snapshot label")
     snaps = checks.get("snaps", [])
     if not isinstance(snaps, list) or not all(isinstance(x, str) or (isinstance(x, list) and x and all(isinstance(y, str) for y in x)) for x in snaps):
         raise ValueError("snaps must be a list of labels or of lists of alternative labels")
@@ -128,6 +141,19 @@ def validate_spec(spec_path):
 
 def _match(rows, needle, tag=None):
     return [r for r in rows if needle in str(r.get("func", "")) and (tag is None or r.get("tag") == tag)]
+
+
+def _rows_after(dump, rows, label):
+    """The rows at or after the first taken labelled snapshot `label` on the recording's own clock; all rows when label is None; none when
+    that snapshot is absent (so a check anchored to it fails rather than passing on earlier rows)."""
+    if label is None:
+        return rows
+    times = [s.get("t") for s in dump.get("snaps", []) if s.get("label") == label and not s.get("not_taken")
+             and isinstance(s.get("t"), (int, float))]
+    if not times:
+        return []
+    start = min(times)
+    return [r for r in rows if isinstance(r.get("t"), (int, float)) and r["t"] >= start]
 
 
 def _g(row):
@@ -174,10 +200,11 @@ def check(dump, checks):
         out.append(("max_auto_failures", end is not None and n <= checks["max_auto_failures"],
                     f"{n} automatic reads with a failed part (limit {checks['max_auto_failures']})"))
     for req in checks.get("require", []):
-        n = len(_match(rows, req["func"], req.get("tag")))
+        n = len(_match(_rows_after(dump, rows, req.get("after")), req["func"], req.get("tag")))
         lo, hi = req.get("min", 1), req.get("max")
         ok = n >= lo and (hi is None or n <= hi)
-        out.append((f"require {req['func']} {req.get('tag', '')}".strip(), ok, f"{n} rows (want {lo}..{hi if hi is not None else 'any'})"))
+        where = f" after {req['after']}" if req.get("after") else ""
+        out.append((f"require {req['func']} {req.get('tag', '')}".strip() + where, ok, f"{n} rows{where} (want {lo}..{hi if hi is not None else 'any'})"))
     fn = (end or {}).get("fn") or {}
     if fn:
         fired = [p for p, r in fn.items() if (r or {}).get("n", 0) > 0]
@@ -204,14 +231,18 @@ def check(dump, checks):
     misfit = (end or {}).get("params_misfit") or dump.get("params_misfit") or {}
     if misfit:
         out.append(("params_misfit", True, f"{len(misfit)} hooked functions whose parameters were refused (listed in the recording; counted as errors)"))
-    for first, then in checks.get("order", []):
-        a = [_g(r) for r in _match(rows, first) if _g(r) is not None]
-        b = [_g(r) for r in _match(rows, then) if _g(r) is not None]
+    for entry in checks.get("order", []):
+        first, then, after = (entry["first"], entry["then"], entry.get("after")) if isinstance(entry, dict) else (entry[0], entry[1], None)
+        scope = _rows_after(dump, rows, after)
+        a = [_g(r) for r in _match(scope, first) if _g(r) is not None]
+        b = [_g(r) for r in _match(scope, then) if _g(r) is not None]
         ok = bool(a) and any(x >= min(a) for x in b)
-        out.append((f"order {first} -> {then}", ok, f"{len(a)} and {len(b)} rows"))
+        where = f" after {after}" if after else ""
+        out.append((f"order {first} -> {then}{where}", ok, f"{len(a)} and {len(b)} rows{where}"))
     for gap in checks.get("gap", []):
-        a = sorted(_g(r) for r in _match(rows, gap["from"]) if _g(r) is not None)
-        b = sorted(_g(r) for r in _match(rows, gap["to"]) if _g(r) is not None)
+        scope = _rows_after(dump, rows, gap.get("after"))
+        a = sorted(_g(r) for r in _match(scope, gap["from"]) if _g(r) is not None)
+        b = sorted(_g(r) for r in _match(scope, gap["to"]) if _g(r) is not None)
         after = [x for x in b if a and x >= a[0]]
         ok = bool(after) and gap.get("min", 0) <= after[0] - a[0] <= gap.get("max", float("inf"))
         within = "inside" if ok else "outside or missing"

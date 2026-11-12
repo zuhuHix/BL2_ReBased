@@ -41,6 +41,11 @@ param(
     [switch]$WatchSmoke,
     [int]$DownSeconds = 150,
     [int]$RespawnSeconds = 90,
+    # The den down's re-placement (S0 of 2026-11-12: each melee hit knocked Maya away, and after 9 hits the pack had let go). While she is up
+    # and her health plus shield has not dropped for -ReplaceAfterSeconds, the stage's own placement (dp_begin) puts her at the pack again,
+    # at most -MaxReplacements times inside -DownSeconds. Never once a down was seen or the driver is lost.
+    [int]$ReplaceAfterSeconds = 10,
+    [ValidateRange(0, 4)][int]$MaxReplacements = 4,
     # What to dot-source for the real-game functions. Only tests/cash_capture_test.py passes another file.
     [string]$Helpers = (Join-Path $PSScriptRoot 'realgame.ps1')
 )
@@ -344,9 +349,25 @@ try {
                 }
             }
             $downAt = $null; $t0 = Get-Date
+            $lastHit = $t0; $lastPool = $null; $log.den_down_replacements = 0; $log.den_down_replace_results = @()
             while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds) {
                 $r = & $poll
                 if ($r -and $r.state -ne 'up') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
+                # A drop of health plus shield since the last poll means a hit reached her (regeneration only raises it).
+                if ($r -and $null -ne $r.pool) {
+                    if ($null -ne $lastPool -and [double]$r.pool -lt [double]$lastPool) { $lastHit = Get-Date }
+                    $lastPool = $r.pool
+                }
+                # Up, unhit for -ReplaceAfterSeconds, under the cap, the driver answering: the same placement again. The stamp is on disk first.
+                if ($r -and $r.state -eq 'up' -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
+                    ((Get-Date) - $lastHit).TotalSeconds -ge $ReplaceAfterSeconds) {
+                    $n = $log.den_down_replacements + 1
+                    $log.den_down_replacements = $n
+                    Write-StageMark 'den_down' "replace$n"
+                    $again = Py 'print(dp_begin())'
+                    $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))
+                    $lastHit = Get-Date; $lastPool = $null
+                }
                 Start-Sleep 1
             }
             $log.den_down_after_s = $downAt
@@ -376,6 +397,7 @@ try {
         } catch {
             Set-Stage 'den_down' $false "$_"
             "den down: $_"
+            if ("$_" -match 'no reply') { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }
         }
         Write-StageMark 'den_down' 'done'
     }

@@ -52,6 +52,7 @@ $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
+        '*cp_immune_off*' { return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
         '*sw_start(*' { return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
@@ -113,7 +114,18 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             return (ConvertTo-Json @{ kills = 0; collected = $script:collects; single_item_rows = $script:singles })
         }
         '*dp_start*' { if ($scenario -eq 'den_channel') { throw 'channel lost in the den read' }; return '[]' }
-        '*dp_begin*' { return $(if ($scenario -eq 'den_no_enemy') { 'None' } else { 'WillowAIPawn_1' }) }
+        '*dp_begin*' {
+            $script:begins++
+            if ($scenario -eq 'replace_lost' -and $script:begins -gt 4) { throw 'no reply to c-invented' }   # the 3 den trials' and the den down's first placement answer
+            return $(if ($scenario -eq 'den_no_enemy') { 'None' } else { 'WillowAIPawn_1' })
+        }
+        '*cp_down_state*' {
+            # The den down's poll (invented values): up with a steady pool unless the scenario says otherwise.
+            $script:polls++
+            if ($scenario -eq 'replace_after_down' -and $script:polls -ge 2) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
+            if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
+            return '{"state": "up", "injured_field": true, "pool": 100.0}'
+        }
         '*dp_end*' { return '{"counts": true}' }
         '*dp_dump*' {
             $trials = if ($scenario -eq 'den_no_enemy') { 0 } else { 3 }
@@ -574,6 +586,48 @@ class WatchStopPolicyTest(unittest.TestCase):
         self.assertIn('the driver stopped answering', results['den_down'])
         self.assertIn('the driver stopped answering', results['watch'])
         self.assertNotIn('watch', session['cleanup'])   # the game had quit by the cleanup: no stop is sent to a gone game
+
+
+class DenDownReplacementTest(unittest.TestCase):
+    """The den down's re-placement (S0 of 2026-11-12): up and unhit for -ReplaceAfterSeconds puts Maya at the pack again with the stage's own
+    placement, at most -MaxReplacements times, never after a down or once the driver is lost; each one stamped and counted. Invented values;
+    the stub's Start-Sleep returns at once, so the poll loop runs on real time for -DownSeconds."""
+    run_capture = CashCaptureTest.run_capture
+    locks_held = CashCaptureTest.locks_held
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+
+    def run_down(self, scenario, *extra):
+        return self.run_capture(scenario, ['-DenDown', '-RespawnSeconds', '1', *extra])
+
+    def test_unhit_for_the_wait_means_one_replacement(self):
+        done, session = self.run_down('replace_one', '-DownSeconds', '3', '-ReplaceAfterSeconds', '2')
+        self.assertEqual(session['den_down_replacements'], 1)
+        self.assertEqual(len(session['den_down_replace_results']), 1)
+        self.assertIn(('den_down', 'replace1'), [(m['stage'], m['event']) for m in session['stage_marks']])
+        self.assertIn('den_down replace1', Path(session['stages_file']).read_text(encoding='utf-8'))   # stamped on disk
+        self.assertIn('failed', session['stage_results']['den_down'])   # still no down: the stage fails as before
+
+    def test_the_cap_is_four(self):
+        done, session = self.run_down('replace_cap', '-DownSeconds', '2', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(session['den_down_replacements'], 4)
+        self.assertEqual(sum(1 for m in session['stage_marks'] if m['event'].startswith('replace')), 4)
+
+    def test_none_after_a_down(self):
+        done, session = self.run_down('replace_after_down', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(session['den_down_reason'], 'injured_flag')
+        self.assertEqual(session['den_down_replacements'], 1)   # the one before the down; none after it
+
+    def test_none_while_hits_keep_coming(self):
+        done, session = self.run_down('replace_hit', '-DownSeconds', '2', '-ReplaceAfterSeconds', '1')
+        self.assertEqual(session['den_down_replacements'], 0)
+
+    def test_none_once_the_driver_is_lost(self):
+        done, session = self.run_down('replace_lost', '-DownSeconds', '3', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(session['den_down_replacements'], 1)   # the attempt whose reply never came; no other after it
+        self.assertIn('no reply', session['stage_results']['den_down'])
+        self.assertEqual(sum(1 for m in session['stage_marks'] if m['event'].startswith('replace')), 1)
 
 
 if __name__ == '__main__':

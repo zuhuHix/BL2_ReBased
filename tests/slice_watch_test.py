@@ -631,6 +631,40 @@ class CheckerTest(unittest.TestCase):
         self.assertTrue(got['gap ResurrectPlayer -> ShowRespawnDialog'])
         self.assertFalse(got['gap ResurrectPlayer -> NotifyTeleported'])
 
+    def test_a_respawn_check_counts_only_rows_after_before_down(self):
+        """The game calls ResurrectPlayer at every map arrival (S0 of 2026-11-12): a respawn check anchored to before_down must not pass
+        on an arrival before it."""
+        arrival = row('W.WillowPlayerPawn:ResurrectPlayer', 1.0, t=70.0)
+        snap = dict(GOOD_SNAP, label='before_down', t=400.0)
+        dialog = row('W.WillowPlayerPawn:ShowRespawnDialog', 5.0, t=450.0)
+        checks = {'require': [{'func': 'ResurrectPlayer', 'min': 1, 'after': 'before_down'}],
+                  'order': [{'first': 'ResurrectPlayer', 'then': 'ShowRespawnDialog', 'after': 'before_down'}],
+                  'gap': [{'from': 'ResurrectPlayer', 'to': 'ShowRespawnDialog', 'min': 3, 'max': 40, 'after': 'before_down'}]}
+        got = self.results(dump([arrival, dialog], snaps=[snap]), checks)
+        self.assertFalse(got['require ResurrectPlayer after before_down'])   # the arrival row is before the snapshot
+        self.assertFalse(got['order ResurrectPlayer -> ShowRespawnDialog after before_down'])
+        self.assertFalse(got['gap ResurrectPlayer -> ShowRespawnDialog'])
+        self.assertTrue(self.results(dump([arrival, dialog]), {'order': [['ResurrectPlayer', 'ShowRespawnDialog']]})[
+            'order ResurrectPlayer -> ShowRespawnDialog'])   # the old form would have passed it
+        respawn = row('W.WillowPlayerPawn:ResurrectPlayer', 2.0, t=440.0)
+        got = self.results(dump([arrival, respawn, dialog], snaps=[snap]), checks)
+        self.assertTrue(got['require ResurrectPlayer after before_down'])
+        self.assertTrue(got['order ResurrectPlayer -> ShowRespawnDialog after before_down'])
+        self.assertTrue(got['gap ResurrectPlayer -> ShowRespawnDialog'])
+        no_snap = self.results(dump([arrival, respawn, dialog]), checks)   # the snapshot absent: nothing counts
+        self.assertFalse(no_snap['require ResurrectPlayer after before_down'])
+
+    def test_the_after_option_is_validated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Path(tmp) / 'spec.json'
+            tool = str(ROOT / 'tools/real_game/slice_watch_check.py')
+            for bad in ({'order': [{'first': 'A', 'then': 'B', 'when': 'x'}]}, {'order': [['A']]}, {'require': [{'func': 'A', 'after': 3}]}):
+                s.write_text(json.dumps({'checks': bad}), encoding='utf-8')
+                self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 2, bad)
+            s.write_text(json.dumps({'checks': {'order': [{'first': 'A', 'then': 'B', 'after': 'before_down'}, ['C', 'D']],
+                                                'require': [{'func': 'A', 'after': 'before_down'}]}}), encoding='utf-8')
+            self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 0)
+
     def test_order_and_gap_survive_a_travel_and_arguments_must_be_there(self):
         # the map clock restarts at a travel between the two rows; the recording's own clock does not
         rows = [row('X.Pawn:ResurrectPlayer', 200.0, t=500.0), row('X.Pawn:ShowRespawnDialog', 3.0, t=511.0)]
