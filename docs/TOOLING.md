@@ -203,6 +203,32 @@ side by side; a branch older than that still uses the per-checkout file, so reba
 worktrees. CTest `ue-lock-machine-wide` fails when a script that names `UnrealEditor*.exe` does not use the helper, and
 checks the owner and staleness rules against temporary lock files.
 
+### Before a suite: engine path, preflight and the suite-map lint (2026-11-12)
+
+- **Engine path.** Every script that launches the editor and has an `-Engine` default takes it from `OPENWILLOW_UE` when it
+  is set, and `C:\Program Files\Epic Games\UE_5.8` otherwise; set the variable on a PC with Unreal elsewhere. Five scripts
+  still require `-Engine` with no default (`run_ue_level.ps1`, `run_ue_character.ps1`, `run_ue_flash_hud.ps1`,
+  `run_ue_probe.ps1`, `import_maya_combat_anims.ps1`). CTest `py-engine_default`.
+- **`tools/preflight.ps1`** looks before a run and changes nothing: it deletes no lock, stops no process and writes nothing
+  but its report. Each check is off until its parameter is passed, so a driver asks for what applies to one suite: `-Data`,
+  `-Generators <data>=<generator>` (data newer than the generator's last commit), `-CheckLinks` (no link under `local\`
+  resolves outside the worktree), `-Port`, `-NoEditor`, `-CheckLock` (the run lock above) and `-AlsoLock <file>`,
+  `-ReportHold <file>` (reported, never a failure), `-CheckBuild` (the module DLL and `build\Release\ow-core.lib` newer than
+  the last commit touching `host/ue5/OpenWillow/Source`, `src` or `CMakeLists.txt`), `-CheckEngine`. It prints one
+  `PREFLIGHT ok|FAIL|NOTE` line per check and a summary, and exits 1 when a check failed, 2 for a wrong call. Commit times
+  are committer dates, so a rebase after a build makes the build look stale. CTest `py-preflight`.
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/preflight.ps1 -NoEditor -CheckLock -Port 8795 -CheckBuild -CheckEngine
+  ```
+- **`tools/suite_map_lint.py --map <suites.txt> [--repo <checkout>] [--commit <rev>] [--smoke-only <file>] [--switch-only <file>]`**
+  checks a suite map in the hub's format with the hub helper's path matching. It reports a path that matches no tracked
+  file; a file the suite's script loads through `Join-Path $PSScriptRoot '<file>'` (helpers followed) that the suite does
+  not cover; and a tracked file under `host/ue5/OpenWillow/Source/` or `src/` that only a whole-tree suite (`.`) covers,
+  unless `--smoke-only` lists it. The lint does not read switches, so a load behind a switch the suite never passes is
+  reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. The map itself stays outside
+  the repository. CTest `py-suite_map_lint`.
+
 ### Landing PRs in a batch
 
 `tools/land_batch.sh` lands several reviewed PRs with one push to `main` (Git Bash, with `gh` logged in):
