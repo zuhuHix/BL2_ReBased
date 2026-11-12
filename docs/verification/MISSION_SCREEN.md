@@ -18,7 +18,7 @@ The first scripted playtest showed one E accepting the mission with no text, no 
 | Escape does nothing on the reward page: both handler calls return false and the page stays | Live capture, one press | Observed in game; also with the SDK mods off, two runs (2026-11-12) |
 | F on the offer does nothing: press and release return false, no callback | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game |
 | After the reward is taken the page goes back to its list and stays open until Escape (one eligible entry in that save) | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game |
-| Escape's release on that list closes the page through `OnClose`, then `EndFocus`, with no `extChoiceCancelled` | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game on that page; Escape on the offer page itself was not pressed with the mods off |
+| Escape's release on that list closes the page through `OnClose`, then `EndFocus`, with no `extChoiceCancelled` | Live capture with the SDK mods off, two runs (2026-11-12) | Observed in game on that page. This list and the "next mission's offer" of row 17 and of the 2026-11-07 notes below may be one state, not told apart; row 17's one Escape press (mods on) was in it. Escape on an offer before any accept was not pressed with the mods off |
 | The page-up and page-down keys scroll the description | Installed script (`QuestAcceptGFxMovie.HandleInputKey`), read with `research/script_disasm.py` | UNVERIFIED in game |
 | What E and WASD do on these pages | The script binds no such key. One read at the offer, with the mod below loaded: the game's handler returned false on E's press and release, and the mod's own hook then sent `Enter`, so the press as a whole accepted. WASD was not pressed | Without the mod: UNVERIFIED until a stock run. The host's rule that they do nothing comes from the script |
 | The prompts' text | The install's localization and `DefaultGame.ini`, through `tools/prepare_mission_screen.py` | The strings are the game's; where they appear is from the script |
@@ -118,7 +118,7 @@ by the capture's memory shortcut, not played.
 
 ## The camera on the giver (2026-11-08, interim, UNVERIFIED)
 
-AI-assisted (Claude). **What the real game does, as far as it was seen:** with the screen up, the view moves in on Marcus: in all three frames (offer, turn-in, reward) his head sits right of centre and above the middle, and he is drawn clearly larger than in the closed frame taken from the same stand (the measured factor is in the local file). The control rotation does not change: the earlier captures read the same pitch and yaw before, during and after the screen, and the closed frame after the screen looks as it did before. The turn-in and reward frames share one view. What moves the view: the screen's `Start` calls the pawn's `BeginFocus` on the giver and `OnClose` calls `EndFocus` (installed script, NATIVE_USE_INTERACTION.md); the controller's focus camera (`AdjustViewPointForFocusCam`, native) was **not read**, nor the giver's focus settings (`FocusRadius`, `FocusOffset`) or the blend in and out.
+AI-assisted (Claude). **What the real game does, as far as it was seen:** with the screen up, the view moves in on Marcus: in all three frames (offer, turn-in, reward) his head sits right of centre and above the middle, and he is drawn clearly larger than in the closed frame taken from the same stand (the measured factor is in the local file). The control rotation does not change: the earlier captures read the same pitch and yaw before, during and after the screen, and the closed frame after the screen looks as it did before. The turn-in and reward frames share one view. What moves the view: the screen's `Start` calls the pawn's `BeginFocus` on the giver and `OnClose` calls `EndFocus` (installed script, NATIVE_USE_INTERACTION.md); the controller's focus camera (`AdjustViewPointForFocusCam`, native) was **not read**, nor the giver's focus settings (`FocusRadius`, `FocusOffset`; read live on 2026-11-12, below) or the blend in and out.
 
 **What the host does now (a stand-in fitted to those frames):** while the page is shown, `OpenWillowFocusCam` (called from `UOpenWillowQuest::TickFocusCamera`, after the walker's tick) keeps the camera at Maya's eye, narrows the FOV by a fixed factor (the tangent of the half angle divided by the zoom), and turns the view, with no roll, so that a bone of Marcus lands on a fixed point of the screen. The control rotation is left alone, and on every close the view follows it again and the walker's FOV comes back. The bone, the screen point and the zoom are numbers measured by eye from the real frames, so they live in ignored `local/slice/mission_focus_camera.json` (`bone`, `screen` as [x, y] from -1 to 1 with y up, `zoom`, `source`). Without that file the page leaves the view alone and the log says so. The view snaps; the real blend was not read.
 
@@ -130,14 +130,14 @@ AI-assisted (Claude). **What the real game does, as far as it was seen:** with t
 
 **Every close gives the view back:** the release is part of closing the page (Enter, Escape, Maya down, a lost page, end of play), and a quest failure closes the page, since a failed quest no longer ticks the page or takes its keys. A pass says the host aimed where its numbers say; whether it looks like the real frames is a side-by-side comparison.
 
-**The focus hooks, live with the SDK mods off (2026-11-12, session 1 as above, two runs, four page closes):** the screen's `Start` and
-`BeginFocus` (User = Maya) run in the frame of the use dialog event that opens the page, and `EndFocus` runs inside `OnClose`, in the frame of the
-closing key's release. `FocusCamReturnTime` takes `EndFocus`'s world time and is back to -1 within 0.98 to 1.05 s of it (where the four brackets
+**The focus hooks, live with the SDK mods off (2026-11-12, session 1 as above, two runs, four page closes):** `BeginFocus` (User = Maya)
+runs in the frame of the use dialog event that opens the page, in both runs; the screen's `Start` was placed in that frame for the first run only,
+the one whose probe clock was mapped onto the watch's. `EndFocus` runs inside `OnClose`, in the frame of the closing key's release. `FocusCamReturnTime` takes `EndFocus`'s world time and is back to -1 within 0.98 to 1.05 s of it (where the four brackets
 from 1 s snapshots overlap). A 1.0 s blend back fits that, but it is a fit (UNVERIFIED), and that -1 marks the blend's end is UNVERIFIED too.
 `ResetFocusCam` is not part of the page: it fired only in the respawn, three times per run. The controller's `FocusObject` read Marcus's pawn while
 the page was open and None otherwise. Marcus's `FocusRadius` 65 and `FocusOffset` (-0.35, -0.1, 0) were read live and equal the data. **The camera
 itself was still not read:** the probe asked the controller's `PlayerCamera`, which is None in this game, so every camera row of both runs was an
-error, and the questions above stay open.
+error, and the questions above about the camera's move, its aim point and the blend stay open.
 
 ## The stall on the first E (2026-11-06)
 

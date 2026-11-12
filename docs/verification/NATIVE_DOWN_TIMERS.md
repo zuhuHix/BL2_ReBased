@@ -232,7 +232,7 @@ The player pawn carries a small interface (`IProtectionTimer`, three natives) im
   `GetTimerRate` of `ProtectionTimerElapsed` (expect true, a value in [1, 0.1 x max) no larger than the health at that moment, 2.0 s), repeat
   several injuries for the spread, and hit Maya during the window to see damage stop at the floor.
 - **Live observation, 2026-11-12 (one sample; the hits were the capture's):** session 2, `tools/real_game/phaselock_integrity_capture.ps1`, its
-  `down` stage, Three Horns Divide, Maya level 8, SDK mods loaded (the cheats mod's options read off). The capture hit Maya with scripted
+  `down` stage, Three Horns Divide, Maya level 8, SDK mods loaded (the cheats mod's options read off in its settings file, read outside the session, so UNVERIFIED for the session itself). The capture hit Maya with scripted
   1,000,000-damage hits. The first emptied her shield and left her health at a value inside [1, 0.1 x max); three more hits 0.51, 1.01 and 1.52 s
   later left it at that value, and the hit 2.03 s after the first put her down. That is consistent with this note: a floor drawn in [1, 0.1 x max)
   and held for 2 s. The floor and its end were the game's. Not read: the flag, the floor field and the timer rate themselves, which caller armed

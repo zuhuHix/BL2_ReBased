@@ -288,8 +288,9 @@ table's rows 1 to 6 are left as they are here; rows 7 and 8 point to this sectio
 - **Fields, read live on every pawn of those kinds:** `GroundSpeed` 500 for the regular, the adult, the slinger and the badass, 300 for the baby;
   `WalkingPct` 0.25 for all; `DrawScale` 1.0. Collision cylinder (radius / half-height): baby 64 / 48, regular 100 / 90; Maya 42 / 80.
 - **The closest swing call is contact: the attacker's radius plus Maya's 42, standing.** Adult and slinger 192.0 uu (a radius of 150 for both),
-  regular 142.0, baby 106.0. None of 189 baby calls came closer than 106.0, median 106.0 to 106.1 per recording. This answers live-read question 3 for
-  these kinds; the crouched floor was not observed.
+  regular 142.0, baby 106.0. None of 189 baby calls came closer than 106.0, median 106.0 to 106.1 per recording. This supplies the radii live-read
+  question 3 asks for and shows the closest call is contact for these kinds. Whether the stand distance is contact is not settled by it: the
+  regular's median call stands beyond contact (below; open). The crouched floor was not observed.
 - **Moving speeds** (medians of moving stretches, leaps and knockback included): slinger 500 in 4 of 4, adult 500 in 6 of 11, baby 300 in 4 of 8.
   For those kinds the field is the chase speed. **The regular read 375 in 4 of 6 medians** (the others 549 and 750), below its field of 500;
   why is unexplained (UNVERIFIED).
@@ -304,13 +305,16 @@ table's rows 1 to 6 are left as they are here; rows 7 and 8 point to this sectio
 - **Money:** at item level 5 two pickups paid 2 each, each the only pickup taken in its collect; at level 7 a pair touched in the same frame paid 4
   together. With [COMBAT_GOLDEN_TRACE.md](COMBAT_GOLDEN_TRACE.md) item 8 (three level 7 pickups paid 9 together), one value per level cannot give both
   sums, so "one value per level" is contradicted (weakly: one pair). The money items carry part definitions, a candidate cause (UNVERIFIED). The
-  range's `round(4 x 1.13^level)` stays wrong-high and stays a stand-in. All 8 money items whose balance was read were `Money_Little`, none big, which
-  at that count says nothing about the big share.
+  range's `round(4 x 1.13^level)` stays wrong-high and stays a stand-in. Of 8 money items seen, every one whose balance was read was `Money_Little`,
+  none big, which at that count says nothing about the big share.
 - **The money credit is not an `AddCurrencyOnHand` call:** five money pickups raised the cash and no such call came; the only calls in the session
   were the respawn fees. Money is taken on touch with no key: `TouchedPickupable` then `PickupSomething` (`bReadyAfterPickup` false) in the same
   frame, five touches. The item's own value calls (`GetMonetaryValue`, `MonetaryValue`) return 0 again.
 - **Some pickups took no touch** when the capture moved Maya onto them, so the cash stage ended early each time. Why (still settling, lying in
   geometry, or a location write raising no touch) is UNVERIFIED.
+- **Older statements these reads supersede** (left as written above, since another change rewrites those rows): "The first playtest's fight" says
+  the stock `GroundSpeed` is 500 for the bullymongs, where the baby's reads 300; and "How the bands were chosen" waits for a third adult read, which
+  this is (it agrees with the den read's 1.2168 s). Changing the band stays with the acceptance table's owner.
 
 ## Range spot: candidates and the textured-floor rule (PR2 follow-up)
 

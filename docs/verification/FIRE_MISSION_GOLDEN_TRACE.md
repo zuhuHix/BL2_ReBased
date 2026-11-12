@@ -365,7 +365,8 @@ and the reward waits; `confirmreward` gives exactly `reward_received`; `close` (
 
 *Added 2026-11-12:* in the real game with the SDK mods off (session 1, two runs of one path), Escape's release on the list after the reward closed the
 screen through `OnClose` with no `extChoiceCancelled`. If the VM's `close` step stands in for that Escape, the game did not do it that way on this page.
-Whether Escape on the offer page calls `extChoiceCancelled` was not observed ([MISSION_SCREEN.md](MISSION_SCREEN.md), "The keys with the SDK mods off").
+That list may be the same state as the "next mission's offer" where one Escape press with the mods on closed the screen (not told apart). Whether
+Escape on an offer before any accept calls `extChoiceCancelled` was not observed ([MISSION_SCREEN.md](MISSION_SCREEN.md), "The keys with the SDK mods off").
 
 **Why the rows are built in C++.** The movie's `DetermineQuestEntries` grows arrays of structs from empty with `DynArrayInsert`; the VM keeps no element type for an empty array, so the elements would
 be untyped. The override runs the same director calls (`GetRedeemableMissions`, `GetEligibleMissions`, `GetInProgressMissions`: the observed `CanEndMission` / `CanStartMission` rows) and builds

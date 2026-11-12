@@ -226,7 +226,8 @@ comes from the player's save, stay under ignored `local/`. Everything here was s
 - **The 12.0 s bleed-out is not a row of its own.** No dead-state hook (`Dying`, `MostlyDead`, the client states) fired for the player, so the
   20.04 s fits the sum 2.28 + 12.0 + 5.76 to a frame in all six, and its parts are consistent with it, not measured one by one. In session 1 the
   player's `StopTalking` came 14.28 s after the hit, where 2.28 + 12.0 puts the dead state's start; that it marks that start is UNVERIFIED.
-- **Health reads 0 from the injured state's first frame** (session 2, four downs). `NumSuccessiveInjuries` read 0 throughout: all six were first
+- **Health reads 0 once she is injured** (session 2): in one down a snapshot of the injured state's first frame reads 0; in the other three the first
+  snapshot after the hit, 0.4 to 0.8 s later, reads 0. `NumSuccessiveInjuries` read 0 throughout: all six were first
   injuries, so the successive-injury cut was not exercised.
 - **Hits while down did not change the timing.** The four pack downs took different numbers and sizes of hits while injured (at least three each),
   session 1's took none, and the totals agree within 0.02 s.
@@ -242,8 +243,8 @@ comes from the player's save, stay under ignored `local/`. Everything here was s
   on that destination, and the arrival registered the same station again (`Behavior_RegisterStation`, `bFromLoad` false) with no
   `ReplacePreviouslyActivatedStation`. In every sample that station was also the only active one and the nearest, so checkpoint first, first active
   and nearest capable give the same answer: the selection order is not told apart ([SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1e).
-- **The exit point turns:** the load had placed Maya on the destination's first exit point, and the first respawn after it used the next one, six of
-  six. That the load advances the same counter is UNVERIFIED (the load chain was not hooked).
+- **The exit point turns:** the first respawn after a load did not reuse the load's exit point, six of six; in Sanctuary, where the order of the
+  exit points is known, the load used the first and the respawn the next one. That the load advances the same counter is UNVERIFIED (the load chain was not hooked).
 - **Ammo** (the five refills that leave rockets out): in three of the pack downs one pool was below its cap before the down and at its cap after the
   respawn, the other pools were full both times, and the rocket pool stayed empty. In session 1 the five refilled pools were already full before the
   down, and the rocket pool was empty before and after. This fits five refills without rockets; the 32 % size is not seen, because no refill could

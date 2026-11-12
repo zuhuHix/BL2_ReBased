@@ -1459,7 +1459,7 @@ AI-assisted (Claude Code). Written in our own words from a private analysis; the
 `tools/real_game/phaselock_integrity_capture.ps1` on Three Horns Divide (Ice_P), Maya level 8, three recordings (a gate run, a full run and a
 kill-and-shield run): six casts, two hits, two misses, one lock then a down, one kill. The targets were exact Adults
 (`CharClass_PrimalBeastAdult`) at 650 uu. SDK mods loaded, the loot mods on; no enabled mod is known to touch the skill, and the cheats mod's
-Instant Cooldown read off. **What the capture did:** it protected Maya, moved every enemy but the target away, set the target's ground speed and
+Instant Cooldown read off in its settings file (read outside the session, so UNVERIFIED for the session itself). **What the capture did:** it protected Maya, moved every enemy but the target away, set the target's ground speed and
 placed Maya; in the down stage it hit her with scripted hits, and in the kill stage it killed the lifted target by a script call and spawned test
 shields. The timings are the game's response. One map, one level, one session.
 
