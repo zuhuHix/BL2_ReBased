@@ -707,6 +707,21 @@ Complete-PendingRecord $true | Out-Null""")
         self.assertEqual(out['native'], ['key 0 56 10'])   # the left Alt's release, by scan code
         self.assertFalse(record.exists())
 
+    def test_a_recovery_that_releases_a_held_input_completes_the_record(self):
+        """Review of #245, round 2: the releases went out from the record read under the lock, but the problem check used the first read,
+        which still named the released key, so a recovery whose files restored correctly kept the record."""
+        mock = r"""
+$global:native = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:native.Add("key $Scan $Flags") }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
+function Assert-GameForeground { }
+"""
+        record = self.leave(mock + "Send-KeyDown W")
+        out = self.run_ps(mock + r"""$out.lines = @(Restore-PendingRecord '__RECORD__'); $out.native = @($global:native)""".replace('__RECORD__', str(record)))
+        self.assertEqual(out['native'], ['key 17 10'])
+        self.assertFalse(record.exists(), out['lines'])
+        self.assertTrue(any('removed' in line for line in out['lines']), out['lines'])
+
     def test_a_release_that_fails_stays_recorded(self):
         mock = r"""
 $global:native = [Collections.Generic.List[string]]::new()

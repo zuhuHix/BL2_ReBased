@@ -354,6 +354,15 @@ function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
     }
     Invoke-RecoveryLocked {
         if (!(Test-Path -LiteralPath $File)) { throw "the record $File was completed by another run meanwhile. Nothing was changed." }
+        # One current object for everything from here: the record as it is now, under this lock (the releases above changed it), checked
+        # again before anything is copied or restored (review of #245).
+        $first = $record
+        $record = Get-Content -Raw -LiteralPath $File | ConvertFrom-Json
+        if ([string]$record.backup -cne [string]$first.backup -or [string]$record.pid -cne [string]$first.pid) { throw "the record $File changed while this run waited for the lock (another backup or writer). Nothing was changed." }
+        $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
+        Assert-PendingTestRoots (@([string]$record.backup, $driver) + @(if ($record.roots) { $record.roots.PSObject.Properties | ForEach-Object { [string]$_.Value.live } }))
+        $writer = Get-WriterState $record
+        if ($writer -eq 'alive' -or ($writer -ne 'gone' -and !$WriterGone)) { throw "the run that wrote $File is not shown gone any more. Nothing was changed." }
         Assert-NoGameForRecovery 'before anything is copied'
         $aside = Save-PreRestoreSnapshot ([string]$record.backup)
         "the current saves and settings were copied, verified by tree hash, to $aside (anything played since that run is there)"
