@@ -91,8 +91,8 @@ reading stays **UNVERIFIED**.
 
 `tools/weapon_card_audit.py` reads weapon cards from the existing UI trace (the game's own
 `ItemCardGFxObject` callbacks; local `local/ui/traces/`). Six distinct weapon cards were available
-(levels 43-51): a Bandit launcher, a Maliwan shock sniper rifle, a Dahl SMG, a Vladof fire pistol, a
-Bandit slag SMG and a Dahl assault rifle. The cards are the player's own items, so per-card values
+(levels 43-51): a launcher, a sniper rifle, two SMGs (called SMG 1 and SMG 2 below), a pistol and an
+assault rifle; three of them carry an element. The cards are the player's own items, so per-card values
 stay in ignored `local/weapon_audit/`. Parts are not on a card: for each card the tool takes every
 balance of the card's type and manufacturer whose title list can produce the title, enumerates every
 legal part combination (all stages; element restricted to the card's element icon), evaluates each
@@ -121,12 +121,12 @@ all. Wrong or missing pieces found:
 
 | card | main four stats | accuracy | projectiles | status chance | status dmg/s | sale value |
 |---|---|---|---|---|---|---|
-| launcher (Bandit) | reproduced (6 combos) | yes | yes | n/a | n/a | **no** (launchers still fail) |
-| sniper (Maliwan, shock) | reproduced (25) | yes | n/a | yes | yes | yes (3 of 25) |
-| SMG (Dahl, unique) | damage **1 point off**, rest yes | yes | yes | n/a | n/a | yes (somewhere) |
-| pistol (Vladof, fire) | reproduced (9) | yes | n/a | yes | yes | yes (2 of 9) |
-| SMG (Bandit, slag, legendary) | fire rate, reload yes; **damage and magazine no** | yes | yes | yes | n/a | yes (somewhere) |
-| assault rifle (Dahl) | reproduced (120) | 90 of 120 | n/a | n/a | n/a | yes (2 of 120) |
+| launcher | reproduced (6 combos) | yes | yes | n/a | n/a | **no** (launchers still fail) |
+| sniper rifle (elemental) | reproduced (25) | yes | n/a | yes | yes | yes (3 of 25) |
+| SMG 1 | damage **1 point off**, rest yes | yes | yes | n/a | n/a | yes (somewhere) |
+| pistol (elemental) | reproduced (9) | yes | n/a | yes | yes | yes (2 of 9) |
+| SMG 2 (elemental) | fire rate, reload yes; **damage and magazine no** | yes | yes | yes | n/a | yes (somewhere) |
+| assault rifle | reproduced (120) | 90 of 120 | n/a | n/a | n/a | yes (2 of 120) |
 
 4 of 6 cards are reproduced in every printed stat by one part set; 6 of 6 for accuracy and for
 the status rows they carry. Independent check: the audit picks parts only by stats, yet in all
@@ -140,8 +140,8 @@ Rules now in `weapon_stats.py`, with their status:
 - Status chance % = the status effect's `DMGSURFACE_Generic` `BaseChance` *
   `WeaponBaseStatusEffectChanceModifier` * `WeaponStatusEffectChanceModifier` (class default 1);
   status damage/s = `WeaponStatusEffectDamage` (type `StatusEffectDamage` = `Init_WeaponDamage`, plus
-  effects), only for damage-over-time effects. Reproduces three cards (fire, shock, slag; one of them
-  through the Maliwan sniper type's `PreAdd` 0.2 on status damage). Per-surface chances and duration
+  effects), only for damage-over-time effects. Reproduces the three elemental cards (one of them
+  through its weapon type's `PreAdd` 0.2 on status damage). Per-surface chances and duration
   are emitted for gameplay; how the native code uses them per shot (`GetFireIntervalChanceModifier`
   and friends are `native`) is **UNVERIFIED**.
 - Projectiles = `WeaponProjectilesPerShot` (type `ProjectilesPerShot` + part effects): reproduced on
@@ -162,9 +162,9 @@ Rules now in `weapon_stats.py`, with their status:
 
 ### Failures, enumerated
 
-- Dahl SMG (unique, `PreAdd` -0.4 on damage): one point low after rounding up. Ignoring that PreAdd,
+- SMG 1 (`PreAdd` -0.4 on damage): one point low after rounding up. Ignoring that PreAdd,
   or applying it after scaling, would match; one card cannot decide. **Open.**
-- Bandit slag SMG (legendary): no legal combination reproduces damage and magazine together with the
+- SMG 2: no legal combination reproduces damage and magazine together with the
   other stats; the barrel's cooked and dumped effects agree. **Open** (a runtime change to this item,
   or a missing term).
 - Launcher sale value (third launcher failing, after two on 2026-09-29). **Open.**

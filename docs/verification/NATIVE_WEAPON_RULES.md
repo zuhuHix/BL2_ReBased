@@ -355,10 +355,10 @@ Ablation with runtime data: without single precision 8 of 9 (the launcher's dama
 on the main four but 7 of 9 numerically (both launchers' value); adding the slot base grade to the slot value 0 of 9.
 Remaining failures on cooked data are exactly the four hotfixed legendaries.
 
-The 2026-10-01 record audited a different set of six cards (a Bandit launcher, a Maliwan shock sniper, a Dahl unique SMG,
-a Vladof fire pistol, a Bandit slag SMG, a Dahl assault rifle); those traces are not on this machine and were not
-re-run. Its open items map onto this note as follows: the launcher value is the name-part modifier (section 6); the Bandit
-slag SMG matches with runtime data; the Dahl SMG's one-point damage gap is the kind single precision or runtime data
+The 2026-10-01 record audited a different set of six cards (a launcher, a sniper rifle, two SMGs, a pistol and
+an assault rifle, the player's own items); those traces are not on this machine and were not
+re-run. Its open items map onto this note as follows: the launcher value is the name-part modifier (section 6); that record's
+SMG 2 matches with runtime data; its SMG 1's one-point damage gap is the kind single precision or runtime data
 explains, but that card was not re-checked.
 
 Parts are inferred from stats in this audit; a match is evidence for the evaluator, not for the roll.

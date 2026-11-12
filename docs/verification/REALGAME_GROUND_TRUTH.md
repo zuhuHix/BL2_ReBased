@@ -165,7 +165,7 @@ on 2026-10-03 by reading the live objects through the SDK, game at the main menu
 ## Gun skins
 
 Real inspect-view and first-person captures of the slice Maliwan fire pistol (exact parts) and the slice Jakobs
-pistol (exact parts) plus a save Jakobs revolver. An independent critic agent compared them with the host stills
+pistol (exact parts) plus a pistol from the save. An independent critic agent compared them with the host stills
 (an agent's judgement, not a measurement of parity): **Maliwan 4.5/10, Jakobs 3/10** (inspect vs host thumbnail),
 **4/10 and 4/10** first person; the earlier 6.5 and 5.0 were scored against wiki screenshots. Region medians
 (sRGB, real inspect vs host thumbnail; values in `local/gunlook/measured_colours.md`, ignored): the host read about a third to 60 percent of the real
@@ -194,8 +194,8 @@ with the health pool set to 50 %, 25 % and 30 % and the shield to 50 %, 10 % and
 pool by exactly the amount and did not level up inside the call; the level changed on the next frame (every level-up call below ran in
 that one frame, at one game time).
 
-- **Health: confirmed full refill.** Current health went from 214.5 of 429.1 to 484.8 of 484.8 (8 to 9), from 121.2 of 484.8 to
-  547.9 of 547.9 (9 to 10), from 164.4 of 547.9 to 619.1 of 619.1 (10 to 11). It is neither the same fraction nor the same absolute
+- **Health: confirmed full refill.** Current health went from half of the maximum to the full new maximum (8 to 9), from a quarter
+  to full (9 to 10), from 0.30 to full (10 to 11); the amounts are in the maintainer's private record. It is neither the same fraction nor the same absolute
   value. The refill happens inside `OnExpLevelChange`, after `RecalculateAttributeInitializedState` returned and before
   `ClientOnExpLevelChange` runs. It is the class's `OnLevelUp` behavior, whose stock skill definition adds `HealthMaxValue` to
   `HealthCurrentValue` (read from the live object, post-add modifier): current health counts as a gain (the controller's

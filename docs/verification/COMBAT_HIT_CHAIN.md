@@ -44,14 +44,14 @@ instigator as context, times the victim's resistance attribute). The result goes
 
 ## Results (all from `--combat-run` on the installed packages, level-8 Maya, no game launched in this lane)
 
-**L5 Q1, the Fire dummy (level 8, stage 8, health 778.658; `local/p2/Sb/run_seq.sh`).** The pistol shot (source `WillowDmgSource_Pistol`, damage type `DmgType_Incendiary_Impact`, arriving
-74.013847, default region) applies **111.020767** with `NotifyTakeHit` and health 667.637573: the live row is 111.02076721 and 667.63757324 (flesh modifier 1.5 of the incendiary type at
-playthrough 1; every other stage is 1). The splash (source `WillowDmgSource_Grenade`, arriving 59.2111) applies 88.8167 (x1.5) when Maya's controller has its class defaults, but the live row is
-179.04184 (x3.0238). The extra factor is exactly **Maya's own `InstigatedGrenadeDamageModifier` as her controller snapshot of lane L1 read it** (a skill-modified attribute;
-the VM has no skills; the value is in the maintainer's private record): with that attribute set as a state input (`attr:0:InstigatedGrenadeDamageModifier:<the read value>`) the splash applies 179.0419 against the live 179.0418 (relative difference
-3e-7, inside the 4-decimal rounding of the recorded arriving value). The snapshot is from another launch than the L5 shots (same character file, level 8); that the two launches carry the same skills
-is not shown. With it the whole sequence follows the live record: 778.658 -> 667.638 -> 488.596 -> 377.575 -> 198.533 -> 87.512 -> **1.0**; the hit that would pass the floor applies 86.512 and
-`NotifyTakeHit` gets 86.512 (live 86.51234); then every later hit (pistol, splash, status damage) applies exactly 0 with health 1.0. Largest health difference from the live rows 0.00013.
+**L5 Q1, the Fire dummy (level 8, stage 8, health 778.658; `local/p2/Sb/run_seq.sh`).** The pistol shot (source `WillowDmgSource_Pistol`, damage type `DmgType_Incendiary_Impact`,
+default region) applies **1.5 times what arrives** with `NotifyTakeHit`, and the applied amount and the health after it equal the live row to the VM's printed precision (flesh modifier 1.5 of the
+incendiary type at playthrough 1; every other stage is 1; the amounts are in the maintainer's private record). The splash (source `WillowDmgSource_Grenade`) applies 1.5 times what arrives
+when Maya's controller has its class defaults, but the live row is larger. The extra factor is exactly **Maya's own `InstigatedGrenadeDamageModifier` as her controller snapshot of lane L1 read it** (a skill-modified attribute;
+the VM has no skills; the value is in the maintainer's private record): with that attribute set as a state input (`attr:0:InstigatedGrenadeDamageModifier:<the read value>`) the splash applies the live row's amount to a relative difference
+of 3e-7, inside the 4-decimal rounding of the recorded arriving value. The snapshot is from another launch than the L5 shots (same character file, level 8); that the two launches carry the same skills
+is not shown. With it the whole sequence follows the live record from 778.658 to **1.0** over six hits; the sixth, which would pass the floor, applies exactly what leaves 1.0 and
+`NotifyTakeHit` gets that amount, as live; then every later hit (pistol, splash, status damage) applies exactly 0 with health 1.0. Largest health difference from the live rows 0.00013.
 
 **The floor.** `Pawn.IsDemigodMode()` is False before the first hit and True from it: the first `OnTakeDamage` runs the FireDamage sequence's `Behavior_AIHold_59` (Reason Safe, Type 3) through its
 installed script, which selects `AIComponent.HoldDemigod` for Type 3. The enum is `AIHoldType_AI, Target, Movement, Demigod, God, Dialog` (ordinals 0 to 5, read from the package and from the

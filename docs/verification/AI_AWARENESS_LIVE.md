@@ -47,7 +47,7 @@ AI definition's `TargetSearchRadius` 4,096) stays UNVERIFIED.
 - **Traps (new; all in the script's docstring):** (1) a den's members **despawn** when the player is further than the den's spawn radius (8,000) for a while and a
   new set spawns when she comes back (pawn names 44 to 91 over the session): pick a live pawn by name at the start of each run. (2) A hung player is **pushed away**
   by melee knockback (once 2.7 km in 10 s) even with physics none, so a long run must re-place her. (3) `fp_player_immune()` hooks `WillowPawn.TakeDamage` only; the
-  player pawn's class overrides it, so Maya's health fell from 429 to 166 once in the session (she was not downed and nothing was saved); a hook on
+  player pawn's class overrides it, so Maya's health fell from full to well under half once in the session (she was not downed and nothing was saved); a hook on
   `WillowPlayerPawn.TakeDamage` fixed it, and her health was set back in memory. (4) The player's `NumAICurrentlyTargeting` counts every AI that targets her, not
   one den. (5) The record's `Exposure` and `DotToTarget` are the values of the last update; reading them in the same frame as a placement shows the old place.
 

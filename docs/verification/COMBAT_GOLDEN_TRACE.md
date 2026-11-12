@@ -17,7 +17,7 @@ calls that go through script (`ProcessEvent`); native-to-native calls are invisi
 - **Travel (script, memory only):** `WillowGameInfo.InitiateTravel` with the fast-travel station `GD_FastTravelStations.Zone1.IceEast`
   (Three Horns Divide, `Ice_P`). The game's own `TravelToStation` ran; arrival is `ResurrectPlayer`/`ResurrectAtLocation` on the arrival station's
   exit point. No console `open` command was used.
-- **Real inputs:** left mouse button for every shot (the save's own shotgun: 2 rounds a clip, 7 pellets a shot), the W key for one
+- **Real inputs:** left mouse button for every shot (the save's own shotgun, 7 pellets a shot), the W key for one
   short step onto money pickups, the use key (E) on a weapon pickup, F for Phaselock. Script stand-ins: the camera was aimed with
   `ClientSetRotation` before each shot (as lane L2), the player was placed 450-900 uu from a chosen enemy to start the fight and 650 uu for the
   casts, and `InventorySlotMax_Misc` was raised from 12 to 20 in memory for the pickup that needed room.
@@ -109,7 +109,7 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
    emptied it and the **remainder 8.229 (= 31.616 - 23.387) went to health** (health fell by exactly 8.229). Melee arrived as 94.1 and took 69.73 of health
    (0.741); a leap's melee 83.28 took 60.63 (0.728). `WillowPlayerPawn.TakeDamage` and `WillowPlayerPawn.AdjustDamage` wrapped the same chain as A.
 10. **Shield recharge.** After the last hit the shield starts to rise **one frame after the pool's idle regeneration delay** (as read for this
-    shield) at **the pool's idle rate** (as read; per-frame rates within 5 % of it; both are this shield's own, and the amounts are in the maintainer's private record), reset by each new hit; health did not
+    shield) at **the pool's idle rate** (as read; per-frame rates within 5 % of it; both are this shield's and this character's own, and the amounts are in the maintainer's private record), reset by each new hit; health did not
     regenerate (idle and active rates 0).
 
 ### D. Down (fight for your life), second wind, death, respawn
@@ -198,7 +198,7 @@ NATIVE_DAMAGE_DEATH.md:
   state change come with the next frame. A level-up sets reason 2 through `SetSecondWindReason` at the start of `ExpLevelUp` (not tested while down).
 - **Successive injuries:** `NumSuccessiveInjuries` read 0 for injuries over 30 s apart and 1 for one 15.4 s after the previous (the grow rule is consistent);
   the shortened bleed-out is **UNVERIFIED** (not observed to its end).
-- Shield recharge (open in section 4 "Open"): a delay, then a constant rate, both this shield's own (read live; the amounts are in the maintainer's private record), observed per frame.
+- Shield recharge (open in section 4 "Open"): a delay, then a constant rate, both this shield's and this character's own (read live; the amounts are in the maintainer's private record), observed per frame.
 
 NATIVE_LOOT.md:
 

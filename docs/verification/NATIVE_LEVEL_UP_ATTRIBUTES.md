@@ -293,8 +293,8 @@ state):**
 The real game refills to the maximum; it does not keep the fraction. If the behaviors do not run (no pawn, `bFeedback` false, or
 inside the 1.0 second guard) the player is left at the old current value, 106.3378. The host's `RefreshHealthForLevel` (current
 health becomes the new maximum) therefore agrees with the observed outcome in the normal case.
-Confirmed in game: the refill from half and quarter health (local captures above, with a Badass Rank modifier so the numbers
-are 429/484/547 rather than 212/240/271); not confirmed: the numbers for a modifier-free pool, the guard, the cooldown reset.
+Confirmed in game: the refill from half and quarter health (local captures above, with a Badass Rank modifier so the effective
+maxima are above the base 212/240/271); not confirmed: the numbers for a modifier-free pool, the guard, the cooldown reset.
 
 ## Implementer checklist for the VM (replacing the stand-in)
 

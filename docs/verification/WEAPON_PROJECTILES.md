@@ -350,14 +350,14 @@ the run.
 
 **Limits of this session.** The probe's equip step left the save's own shotgun in hand for every
 run, so all the numbers below come from that one gun. Maya's skills were active: a skill modifier on the weapon's
-`PerShotAccuracyImpulse` lowered the type's 11 (the read value is in the maintainer's private record). The rules below are ratios and orders of events, which these
+`PerShotAccuracyImpulse` lowered the shotgun weapon type's 11 (the read value is in the maintainer's private record). The rules below are ratios and orders of events, which these
 facts do not change; per-gun values come from the data (`accuracy_pool` in the firing block) and are `UNVERIFIED` live.
 
 | Rule | Status |
 |---|---|
 | The pool rises by the shot's impulse at the shot (the same modified impulse on every one of 8 single shots and the 60 spread shots) | **confirmed live** |
-| After a shot the pool holds, then falls linearly: hold 0.176-0.200 s (the data's 0.2 s delay to within a frame), fall -8.9 to -9.1 per second, down to its floor (its value with this gun and Maya's skills is in the maintainer's private record) | **confirmed live** (rate and floor include the skill and weapon scales, not separated) |
-| The kick passed to `AddWeaponKick` = impulse x 182.0444, x `WeaponKickZoomMultiplier` when fully zoomed (x 2.0 zoomed to the read precision) | **confirmed live** |
+| After a shot the pool holds, then falls linearly: hold 0.176-0.200 s (the data's 0.2 s delay to within a frame), then a constant fall down to its floor (the rate and the floor with this gun and Maya's skills are in the maintainer's private record) | **confirmed live** (rate and floor include the skill and weapon scales, not separated) |
+| The kick passed to `AddWeaponKick` = impulse x 182.0444, x `WeaponKickZoomMultiplier` when fully zoomed (x 2.0 zoomed to the read precision; the read kicks are in the maintainer's private record) | **confirmed live** |
 | `TargetVertical/HorizontalKickAmt` fall linearly to 0 at `WeaponKickRecoveryTime` (0.35 s) after the kick | **confirmed live** |
 | `CurrentVertical/HorizontalKickAmt` chase the targets at exactly `WeaponKickSpeed` per second (first-order: d current = (target - current) x speed x dt; fitted 8.00 on every frame pair, the type's 8) | **confirmed live** |
 | The controller rotation never moves (pitch 0 throughout): the kick is a view offset that returns to the aim, not a permanent view change | **confirmed live** |

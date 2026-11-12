@@ -161,9 +161,9 @@ are **fitted to this data** (and so UNVERIFIED as the native's own formula); the
 (`_RadiusLeap`, `_RadiusBadass`, grab and charge), other victims (the vertical band's dependence on the victim's capsule could not be separated with
 one victim), line-of-sight blocking by geometry (not exercised: no blocker was placed), `bMeleeOverPeriodOfTime` definitions.
 
-## 6. Spawned guns' damage: the 0.7589 factor (OBSERVED)
+## 6. Spawned guns' damage: the constant factor (OBSERVED)
 
-L7 found the five slice guns' live `InstantHitDamage` was a constant **0.7589** of `tools/weapon_stats.py`'s card damage at level 8. The factor is
+L7 found the five slice guns' live `InstantHitDamage` was **one constant fraction** of `tools/weapon_stats.py`'s card damage at level 8 (the same for all five; the fraction and the live values are in the maintainer's private record). The factor is
 **the item level times a player-side term, and both were identified**:
 
 - **`ManufacturerGradeIndex` in the definition data is the item level.** The L7 builds passed grade index 0 (the Fire pistol, the others the same),
@@ -174,7 +174,7 @@ L7 found the five slice guns' live `InstantHitDamage` was a constant **0.7589** 
   leaves the damage unchanged (the damage is computed when the item is built).
 - **The player-side term is the Badass Rank modifier.** The equipped grade-0 pistol's `InstantHitDamage` stack held one modifier, an `MT_Scale` from
   `GD_Challenges.BadassSkill.BadassSkill` (the profile's Badass Rank, the same skill L1 found in the health maximum; its size is in the maintainer's private record): `23.936 x (1 + scale)` gives the L7 value. Backpack weapons carry no such modifier (live value equals the base).
-- So `0.7589 = (1 + scale) / 1.13^8`. **The equipped grade-8 pistol would read 63.633 x (1 + scale)**: that is arithmetic, not a read (the grade-8 gun was only read in the backpack).
+- So the fraction is `(1 + scale) / 1.13^8`. **The equipped grade-8 pistol would read 63.633 x (1 + scale)**: that is arithmetic, not a read (the grade-8 gun was only read in the backpack).
   The weapon card (the base, 63.63) does not include Badass Rank. Also seen: the base is `NormalizedInstantHitDamage` x 8 x 1.13^`ExpLevel` for both kinds of build (2.992 x 8 = 23.936;
   2.2 x 8 x 1.13^8 = 46.789); where the 8 comes from was not read.
 - Consequence for L7's recordings: stored damages there are the grade-0 values times Badass Rank; nothing else in L7's record changes (its rules are ratios and formulas).

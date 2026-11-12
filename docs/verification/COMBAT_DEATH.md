@@ -10,7 +10,8 @@ live observation it matches; "matches" means the VM's order or number equals the
 `ow-package <any.upk> --combat-run --cooked <CookedPCConsole> spawn:adult:5 player:8 sethealth:0:29.7 hit:0:40:GD_Impact.DamageType.DmgType_Normal:Shotgun` is the live L3
 killing pellet with an invented amount (the adult bullymong at 29.7 health loses 40 and reads -10.3 after `SetHealth`). The live pellet was her own
 gun's damage, which is in the maintainer's private record, and the runs of 2026-10-08 used it. A rerun on 2026-11-12 with both amounts gave the same
-output apart from the amounts and the run times (15 of 434 values differ: the pellet in the step, two rows and six events, `SetHealth`, three times). The pawn's **installed script** does everything between that and the
+output apart from the amounts and the run times (15 of 434 values differ: the pellet amount in 10 of them (two row fields, two step-result fields, six events), the step's text, the
+`SetHealth` value and three run times). The pawn's **installed script** does everything between that and the
 presentation: `TakeDamage` ... `SetHealth` -> `NotifyTakeHit` -> `TookDamageFromEnemy` -> `WillowPawn.HandleHealthDepleted` -> `MissionTracker.NotifyPawnDied` ->
 `Pawn.HandleHealthDepleted` -> `WillowAIPawn.Died` -> (the killer's) `WillowPlayerPawn.KilledEnemy` -> `WillowPawn.Died` -> `DropLootOnDeath` -> `StatusEffectsComponent.OwnerDied` ->
 `BodyClassDeathDefinition.OnKilledBy` -> `GearboxPawn.Died` -> `Pawn.Died` (`SetHealth(0)`, `DestroyHealthPool`) -> `WillowGameInfo.Killed` (kill experience, plan step S-d) ->

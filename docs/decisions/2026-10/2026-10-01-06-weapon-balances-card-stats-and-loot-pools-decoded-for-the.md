@@ -6,8 +6,8 @@ combinations). Our part-list merge equals the game's `RuntimePartListCollection`
 249 Startup balances; the 6 others differ in data the running game changed. `tools/weapon_stats.py` now
 applies the weapon type's own effects and class defaults, divides by negative Scales instead of subtracting
 them (FITTED: 4 of 6 observed cards fully reproduced, was 1), and emits projectiles, status chance/damage,
-firing mode and card rounding. Still failing: launcher sale value, one Dahl SMG (1 damage point) and the
-Bandit slag SMG (damage, magazine). `tools/loot_pools.py` reproduces 2,505 of 2,554 cooked
+firing mode and card rounding. Still failing: launcher sale value, one SMG (1 damage point) and a
+second SMG (damage, magazine). `tools/loot_pools.py` reproduces 2,505 of 2,554 cooked
 `ProbabilityDisplayString` shares; the target dummy has no loot in stock data, so the slice uses
 `StandardEnemyGunsAndGear`. Selection/roll rules, the scale rule and rounding are native and stay UNVERIFIED.
 Reader: additive `--properties-batch` CLI mode. Record: `docs/verification/WEAPON_BALANCE_DECODE.md`.

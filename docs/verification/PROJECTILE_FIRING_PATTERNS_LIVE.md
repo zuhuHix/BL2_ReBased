@@ -155,8 +155,8 @@ first hit, 1,008 uu at the wall), the shooter, the mode, `bStartParticleTracerAt
 penetration counters and the mode; read each frame:
 - Initial speed = mode `Speed` x weapon `ProjectileSpeedMultiplier`: 13 non-accelerating modes, ratio 1.0000 on every bullet (0.9999 for the Tinderbox) (e.g. 20,000 x 1.6 = 32,000;
   25,000 x 1.3 = 32,500; 45,000 x 1.3 = 58,500).
-- Stored damage = the weapon's `InstantHitDamage` per pellet, unchanged, for all 559 sampled bullet entries of 19 guns (10 pellets of 15.67; 5 to 9
-  pellets of 40 to 46); the bullet array never held a divided value.
+- Stored damage = the weapon's `InstantHitDamage` per pellet, unchanged, for all 559 sampled bullet entries of 19 guns (10 pellets of one shotgun, 5 to 9
+  pellets of others; the amounts are in the maintainer's private record); the bullet array never held a divided value.
 - A negative `AirFriction` accelerates the bullet: per frame `v = v * (1 + |AirFriction| * dt)` (648 frame pairs of the Torgue shotgun, AirFriction -6:
   mean `(v1/v0 - 1) / dt` = 6.002; a pure exponential `exp(6 dt)` would give 5.64). Speed 600 became 683 after 0.02 s, 1,505 after 0.17 s, 2,889 after
   0.29 s and 6,347 after 0.43 s. Positive friction and the 12 modes with an `Acceleration` vector were not observed (**UNVERIFIED**).
@@ -166,7 +166,7 @@ penetration counters and the mode; read each frame:
 - One bullet per pellet, one `TakeDamage` per pellet that hits, several in one frame when they land together.
 
 **R6. What the victim receives (OBSERVED, `Ice_P` bullymongs, 59 hit rows of the victim's `TakeDamage`: pellets, area hits and rockets).**
-`TakeDamage.Damage` equals the stored bullet damage to the last digit (48.29008 from a 48.29008 pistol; 15.67 per shotgun pellet, up to four pellets
+`TakeDamage.Damage` equals the stored bullet damage to the last digit (for the pistol and for each shotgun pellet, up to four pellets
 in one frame as separate calls); `Momentum` is the ray direction times
 `InstantHitMomentum x 100` (length 800 for the pistol type's 8, 700 for the shotgun's 7, 1,000 for the Torgue shotgun's 10); the damage type is the
 weapon's source class (`WillowDmgSource_Pistol`, `_Shotgun`); `HitInfo` carries the bone and the physical material (`PhysMat_Flesh`). The
@@ -195,8 +195,8 @@ above has about one frame of resolution.
    `Startup.upk`).
 4. **`ProjectilesPerShot`** and **spread** of the five slice guns equal the card's (10, 1, 1, 1, 1 and the same spread values).
 5. **Damage:** the live `InstantHitDamage` of the five slice guns, built with `AddBackpackWeaponFromDefinitionData` at game stage 8 and grade index 0,
-   was **0.7589 times** the card damage `weapon_stats` evaluates at level 8 (63.63 / 48.29, 49.13 / 37.28, 22.26 / 16.89, 36.11 / 27.41, 20.65 / 15.67: the
-   same ratio 1.3177 for all five). The same evaluator at level 6 gives 38.47 for the fire pistol, so this is not an integer level shift. The cause
+   was **one constant fraction** of the card damage `weapon_stats` evaluates at level 8 (cards 63.63, 49.13, 22.26, 36.11, 20.65: the
+   same fraction for all five; the live values and the fraction are in the maintainer's private record). The same evaluator at level 6 gives 38.47 for the fire pistol, so this is not an integer level shift. The cause
    is **UNVERIFIED** (item level from the spawn path or a player-side damage term); it does not touch any rule above, which are in ratios and formulas,
    but the absolute stored damages in the recordings should not be compared with cards.
 
@@ -235,7 +235,7 @@ only. Nothing reads the weapon's mode, speed, pellet count or spread. In order o
   pattern scale (ratio above 1); the exact density of the spread draw; positive air friction and `Acceleration`; ricochet and penetration
   behaviour (counters stayed 0; `NumRicochets` 2 and 3 modes were fired at a wall but a bounce was not followed); homing projectiles; the
   Flakker's and Splatgun's projectile speeds and children; the muzzle socket against the rocket spawn offset; `NextFiringPatternIndex` on weapon
-  swap or reload (not exercised); crit, element and distance falloff after `TakeDamage`; the 0.7589 damage factor of section 6 item 5; whether
+  swap or reload (not exercised); crit, element and distance falloff after `TakeDamage`; the damage factor of section 6 item 5; whether
   `GetMultiProjectileDamage` differs from the plain damage when the damage stack has PreAdd/PostAdd terms (the stored value equalled
   `InstantHitDamage` for every multi-pellet gun, which is what the formula gives with empty add terms).
 - The in-flight bullet per-frame update beyond velocity (gravity on bullets was not looked for: 600 to 6,000 uu/s bullets showed straight paths over

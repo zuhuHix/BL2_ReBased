@@ -240,8 +240,8 @@ than the base because the profile's Badass Rank skill modifies the pool ([REALGA
 *Update 2026-10-07 (NATIVE_LEVEL_UP_ATTRIBUTES.md, lane G23; swap 7b): "whether a level-up refills current health" is answered: the native rebase changes the base maximum and leaves current alone unless the
 pool was full (then it follows); the class's `OnLevelUp` behaviors then add the effective maximum to current and the pool clamps it. The VM runs this rule.*
 
-**Confirmed in game 2026-10-07 (lane L1):** a level-up **refills current health to the new maximum** (214.5 of 429.1 became 484.8 of 484.8, and two more level-ups
-the same way), it does not keep the fraction or the absolute value; the new maximum (base `80 x 1.13^L`, times the profile's Badass modifier) is written inside
+**Confirmed in game 2026-10-07 (lane L1):** a level-up **refills current health to the new maximum** (half of the maximum became the full new maximum, and two more level-ups
+the same way; the amounts are in the maintainer's private record), it does not keep the fraction or the absolute value; the new maximum (base `80 x 1.13^L`, times the profile's Badass modifier) is written inside
 `RecalculateAttributeInitializedState`, and the refill follows inside `OnExpLevelChange`; skill points +1 at 8 to 9, 9 to 10, 10 to 11; the shield's current and maximum
 are not set, its recharge rate is raised by half the maximum per second for 4 s; a natural level-up also adds a 30 s weapon-damage scale of +1.0; observed by hooking the
 level-up functions and reading the pools around three `ExpEarn` level-ups ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md), "lane L1").
