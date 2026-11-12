@@ -1541,14 +1541,20 @@ sessions of 2026-11-12 ran commit e7b5fa3; the review fixes of #245 (the record 
 clamped deadlines, the Alt journal, the quit wait, the checker's counts and messages) came after them. No session has run those
 fixes, so their behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
 
-**Reads added after the sessions' analyses** (reads and reporting only; none changes what a run does to the game or sends as input;
-all `UNVERIFIED` in the game until a session runs them):
+**Reads added after the sessions' analyses** (reads and reporting; all `UNVERIFIED` in the game until a session runs them).
+One exception changes what a run does in the game: the readings loop's skip list. Before, a pickup that gave no reading was walked
+onto again, up to six times in a row, and then the loop stopped. Now it is walked onto once and skipped: the next pass walks to
+another pickup or, with none left, starts another kill (the placement beside the enemy, its health set to 1, three clicks). The loop
+goes on until six failures in a row, -MaxKills, -WantItems or -MaxMinutes. The kinds of action and the limits are the same as
+before, but a run's kill count and length can differ from the sessions'.
 - `cash_capture`: a down is labelled by the injured flag before the health (`down_state`), and the time after it is logged as
   `den_down_health_back_s`, the health back in the holding cell, not standing. The readings loop skips a pickup that gave no reading
   instead of retrying it and stops after six distinct failures in a row; each try records whether
-  `WillowPlayerController:TouchedPickupable` fired (an observer hook that only counts) and the pickup's location and physics fields;
-  kill attempts and deaths are counted apart (`cp_died`, fields only). With a watch, a labelled `drop` snapshot follows each kill,
-  and the watch's pickups part names each item's balance. The cash rows hold each item's part definitions.
+  `WillowPlayerController:TouchedPickupable` fired (an observer hook that only counts, installed in every cash run, with or without a
+  watch, outside the watch's hook groups and markers) and the pickup's location and physics fields;
+  kill attempts and deaths are counted apart (`cp_died`, fields only). With a watch, a labelled `drop` snapshot follows each kill
+  when one read says the map has settled (an unsettled drop is counted, not asked for), and the watch's pickups part names each item's
+  balance. `-MaxKills` is at most 150, so the drops leave room under the watch's 200 labelled reads. The cash rows hold each item's part definitions.
 - `mission_screen_capture`: the camera is read through the player's own controller (`GetPlayerViewPoint`, `GetFOVAngle`, calls on
   that controller only), and a new `camera` stage fails when the trace read nothing. With a watch, labelled snapshots follow the
   accept (`accept_after`) and the reward (`reward_taken`).

@@ -393,4 +393,7 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
   flag first, the readings loop's skip list and per-try touch record, deaths apart from kill attempts, a `drop` snapshot per kill with
   each item's balance, the items' part definitions, the camera through the controller's view point with a stage that fails on an
   empty trace, the controller's cinematic and input-ignore fields per frame, the pawns' `Velocity`, a named NPC's clean reads, and
-  snapshots after the accept and the reward. None has run in a session: each is `UNVERIFIED` in the game.
+  snapshots after the accept and the reward. None has run in a session: each is `UNVERIFIED` in the game, and the smoke item runs
+  first at the new commit. The mission screen's two new controller calls (`GetPlayerViewPoint`, `GetFOVAngle`) are in no smoke item,
+  so their first real run is the mission item itself: the runbook's rule for a first-run read applies, and a crash in that item's
+  first minutes is treated as theirs. The readings loop's skip list is the one change to what a run does in the game (TOOLING).
