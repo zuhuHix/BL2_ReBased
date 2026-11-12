@@ -13,13 +13,15 @@ locally as a627b82, the same files). The review fixes of #245 that follow it in 
   watch's first pawn read; the cause among the candidates is not proven.
 - `tools/real_game/pending.ps1` (a shared safety file) sends recorded input releases with or without a game window and clears
   an entry only after its release went out.
-- Review fixes of #245, after the sessions: a pending record is replaced in one step and a leftover `.tmp` of one stops the
-  next run; an earlier run's record is completed, and its inputs released, only under the run lock; every reply timeout after
-  the stages latches the driver-lost condition, and nothing more is sent; each reply wait is clamped to the time left in its
-  bound, and no placement or success is taken after it; the focus helper's Alt tap is journalled; three captures wait on their
-  own game's exit; the checker counts every dropped labelled line, refuses an `edges` rule without values, and prints file
-  names, not paths.
-- `tests/slice_watch_test.py` joins ctest as `py-slice_watch`: 58 cases, about 7 s, passing in a clean export under
+- Review fixes of #245 (two rounds), after the sessions: a pending record is replaced in one step, and after a failed rewrite
+  either the old record or its `.tmp` is there, a leftover `.tmp` stopping the next run; an earlier run's record is completed,
+  and its inputs released, only under the run lock, and a recovery checks the record as it is under its lock; every reply
+  timeout, a shortened den-down poll's included, latches the driver-lost condition, after which nothing more is sent, not even
+  the quit; each reply wait and pause is clamped to the time left in its bound, no den-down poll starts in a window's last 6 s,
+  and no reply, placement or success is taken after its bound; the focus helper's Alt tap is journalled; three captures wait on
+  their own game's exit; the checker counts every dropped labelled line, refuses an `edges` rule without values, and prints
+  file names, not paths.
+- `tests/slice_watch_test.py` joins ctest as `py-slice_watch`: 59 cases, about 7 s, passing in a clean export under
   `python -S`. Documentation: `docs/TOOLING.md`, "Slice-session switches"; `docs/verification/REALGAME_GROUND_TRUTH.md`,
   "Slice capture sessions (2026-11-12)".
 

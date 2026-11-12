@@ -1518,13 +1518,14 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   the pack again, at most `-MaxReplacements` (4) times inside `-DownSeconds` (150), and never once a down was seen. The snapshot is
   labelled by what fired. `-WatchSmoke` is the smoke item: one deliberately early snapshot and one settle wait, reads only.
 - **Bounded load wait** (`Wait-PlayerPawn`, `-MenuWaitSeconds` 240, `-LoadWaitSeconds` 240): while the game is still on the menu map
-  (its online session) the capture reads every 5 s, then gives the load a bounded time. Each read waits only for the time left in
-  its bound, and a reply after the bound is not taken, so the step ends within the two bounds' sum. Reads only; a failure names
-  the wait that ran out. The den down's polls are clamped to their windows the same way, and no re-placement starts after the
-  window.
-- **Driver lost**: one condition shared by the helpers and every stage. After a reply that never came (any stage's, the watch's
-  end snapshot, dump and stop, the den trial's close), nothing more is sent to the driver, not even the finalizer's best-effort
-  stops; the remaining stages are skipped, and the run fails. Each stage is stamped to `stages-<run>.log` before its risky command.
+  (its online session) the capture reads every 5 s, then gives the load a bounded time. Each read, and each pause between reads,
+  lasts only as long as the time left in its bound, and a reply after the bound is not taken and changes nothing, so the step ends
+  within the two bounds' sum. Reads only; a failure names the wait that ran out. The den down's polls are clamped to their windows
+  the same way: none starts in a window's last 6 s, a reply after the window is not taken, and no re-placement starts after it.
+- **Driver lost**: one condition shared by the helpers and every stage. After a reply that never came (any stage's, a den-down
+  poll's even when its wait was shortened by the window, the watch's end snapshot, dump and stop, the den trial's close), nothing
+  more is sent to the driver, not the quit and not the finalizer's best-effort stops; the remaining stages are skipped, the run
+  fails, and the finalizer stops the run's own game by its PID and restores without the driver. Each stage is stamped to `stages-<run>.log` before its risky command.
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
   window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
   held input is never completed. A record is rewritten in one replace. After a failed rewrite either the old record or its

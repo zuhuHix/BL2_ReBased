@@ -385,6 +385,7 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
 - Hooks installed but never fired in these sessions (the watch check's "exercised" line lists them) are untested in the game.
 - **Outside what the tools restore:** Steam Cloud. The runs checked beforehand that the cloud was quiet; the tools neither save
   nor restore its state.
-- **After these sessions**, the review fixes of #245 changed the tools (the pending record's replace and run lock, the latched
-  driver-lost timeouts, the clamped deadlines, the focus Alt journal, the quit wait, the checker). No session has run them: their
+- **After these sessions**, two rounds of review fixes of #245 changed the tools (the pending record's replace and run lock, the
+  latched driver-lost timeouts with no quit to a lost driver, the clamped deadlines, the focus Alt journal, the quit wait, the
+  checker). No session has run them: their
   behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
