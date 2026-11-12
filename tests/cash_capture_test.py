@@ -804,6 +804,8 @@ class ReadingsLoopTest(unittest.TestCase):
         self.assertEqual(row['where_before']['Physics'], 2)
         self.assertTrue(row['skipped_from_now'])
         self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_2')   # the failed one is not retried
+        # Session 2 analysis, A4: the item's part definitions are in the row (here the stand-in struct as _p returned it).
+        self.assertIs(row['target']['parts'], money.DefinitionData)
 
 
 class LoadWaitTest(unittest.TestCase):

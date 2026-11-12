@@ -197,6 +197,11 @@ def _item_row(pk, inv, balance):
     loc = pk.Location
     row = {"name": pk.Name, "balance": balance.rsplit(".", 1)[-1], "exp_level": _g(inv, "ExpLevel"), "game_stage": _g(inv, "GameStage"),
            "dist": round(math.dist((me.X, me.Y, me.Z), (loc.X, loc.Y, loc.Z))), "values": _values(inv)}
+    # The item's part definitions (session 2 analysis, A4): its DefinitionData struct, each part by name. Fields only.
+    try:
+        row["parts"] = _p(inv.DefinitionData, 0)
+    except Exception as error:
+        row["parts"] = "unavailable: " + repr(error)[:80]
     return row
 
 
