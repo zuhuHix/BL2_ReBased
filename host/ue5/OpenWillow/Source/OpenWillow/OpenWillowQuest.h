@@ -126,6 +126,9 @@ private:
     bool bScreenPageTest = false;
     double ScreenTestAt = 0.;
     int32 ScreenTestStep = 0, ScreenTestRetries = 0, ScreenTestPassed = 0, ScreenTestFailed = 0;
+    // Steps named outside their own case: the objectives step runs by its own clock, and the last step (the view after the forced failure) is run by
+    // TickComponent after bFailed. Renumber the suite's steps here, not in a literal.
+    static constexpr int32 ScreenTestObjectivesStep = 13, ScreenTestViewAfterFailureStep = 27;
     // Key edges that reached OnScreenKey, and presses that reached TryUse. Counted in every run, read only by the suite, whose no-op rows prove delivery with them.
     int32 ScreenKeysSeen = 0, ScreenUsesSeen = 0, ScreenTestUses = 0;
     // The view just before the page opened (control rotation, FOV), for the rows that check it comes back after the close.

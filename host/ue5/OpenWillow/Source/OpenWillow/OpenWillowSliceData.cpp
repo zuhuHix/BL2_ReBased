@@ -144,7 +144,7 @@ void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile
     MarcusRotation = Pawn.Rotator();
     const auto Ai = Obj(MarcusData, TEXT("ai_class"));
     // The class's GroundSpeed x WalkingPct (294 x 1.0 in the data, and as read live) is still read and checked, but the walk does not use it: in the real
-    // game Marcus walked this path at a flat 150 uu/s with the same fields read in the same rows. Observed in the real game, session 1 of 2026-11-12 (two runs
+    // game Marcus walked this path at 150 uu/s (one short turn aside) with the same fields read in the same rows. Observed in the real game, session 1 of 2026-11-12 (two runs
     // of one walk, about 90 moving intervals each); where the 150 comes from is UNVERIFIED, so this is a stand-in for this one walk.
     MarcusClassSpeed = Num(Ai, TEXT("ground_speed")) * Num(Ai, TEXT("walking_pct"));
     MarcusSpeed = ObservedMarcusWalkSpeed;
