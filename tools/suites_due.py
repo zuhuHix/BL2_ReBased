@@ -6,7 +6,9 @@ AI-assisted (Claude Opus 5.5), 2026-11-12. A port of the hub's suites-due.sh, wi
     python tools/suites_due.py record <commit> <suite>...   these suites passed on <commit>
     python tools/suites_due.py why <commit> <suite>         covered files that changed since that suite's last recorded pass
     python tools/suites_due.py list                         the suite map as read
-    --map <file> reads another map (default: tools/suites.txt next to this script).
+    --map <file> reads that map file instead. Without it, due, record and why read tools/suites.txt as it is in <commit>
+    (git show <commit>:tools/suites.txt), whatever the working tree holds, and refuse a commit that has none; list, which
+    takes no commit, reads the working-tree tools/suites.txt next to this script and says so on stderr.
 
 A pass is kept per suite, keyed by the content of the files the suite covers plus its command, so a suite is due only
 when one of those files, or its own map line, differs from every version it passed on. A rebase, a merge, a docs fix or a
@@ -14,7 +16,8 @@ second look at the same tree makes nothing due. The key is the git blob hash of 
 entries (one per line, a newline inside a file name written as "?") followed by "#cmd <command>", exactly as suites-due.sh
 builds it, so passes it recorded stay valid.
 
-Run it inside the repository (any worktree). Passes are kept in <main checkout>/local/hub/test-ledger.txt, one
+Run it inside the repository: any worktree or clone of it, at any commit, since the map comes from <commit>.
+Passes are kept in <main checkout>/local/hub/test-ledger.txt, one
 "suite|key|commit|time" line each; set HUB_DIR to use another folder. The ledger is machine state and stays untracked.
 The map format and the path matching are tools/suite_map_lint.py's (docs/TOOLING.md, "Heavy suites: the suite map").
 Exit codes: 0 done; 1 from "due" when a suite covers no file at the commit; 2 a refused map or a wrong call.
@@ -29,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from suite_map_lint import covers, map_problems, match1, read_map  # noqa: E402
 
 DEFAULT_MAP = Path(__file__).resolve().parent / 'suites.txt'
+MAP_IN_TREE = 'tools/suites.txt'
 
 
 class Refused(Exception):
@@ -53,17 +57,27 @@ def short(rev):
     return git('rev-parse', '--short', rev).decode().strip()
 
 
-def load(map_path):
-    """The suites in map order, with *ignore* split off; refuses what suites-due.sh refuses."""
-    if not Path(map_path).is_file():
-        raise Refused(f'no suite map at {map_path}')
+def load(map_path, commit=None):
+    """(suites in map order, *ignore* paths, where the map came from); refuses what suites-due.sh refuses. Without a
+    map_path the map is tools/suites.txt as committed in commit."""
+    data = None
+    if map_path is None:
+        label = f'{MAP_IN_TREE} at {short(commit)}'
+        done = subprocess.run(['git', 'show', f'{commit}:{MAP_IN_TREE}'], capture_output=True)
+        if done.returncode:
+            raise Refused(f'commit {short(commit)} has no {MAP_IN_TREE}; pass --map <file> to judge it with another map')
+        data = done.stdout
+    else:
+        label = str(map_path)
+        if not Path(map_path).is_file():
+            raise Refused(f'no suite map at {map_path}')
     problems = []
-    suites = read_map(map_path, problems)
+    suites = read_map(map_path, problems, data)
     problems += map_problems(suites)
     if problems:
-        raise Refused(f'fix {map_path}:\n' + '\n'.join(problems))
+        raise Refused(f'fix {label}:\n' + '\n'.join(problems))
     ignore = next((s[2] for s in suites if s[0] == '*ignore*'), [])
-    return [s for s in suites if s[0] != '*ignore*'], ignore
+    return [s for s in suites if s[0] != '*ignore*'], ignore, label
 
 
 def tree(commit):
@@ -80,6 +94,11 @@ def key(entries, paths, command, ignore, name=None):
     """The ledger key of a suite at a commit, or None when it covers no file there. With a name, warns on stderr about a
     path of the suite that matches no file (before *ignore*, as the shell helper did)."""
     cov = [e for e, p in entries if covers(p, paths, ignore)]
+    for e in cov:
+        if e.startswith(b'120000 '):   # a symbolic link would be hashed as the link, not as what it points at
+            link = e.split(b'\t', 1)[1].decode('utf-8', 'replace')
+            raise Refused(f'suite {name}: {link} is a symbolic link; '
+                          'a covered path must not be one (its target could change without making the suite due)')
     if name:
         for pattern in paths:
             if not any(match1(p, pattern) for _, p in entries):
@@ -116,8 +135,8 @@ def find(suites, name, map_path):
 
 
 def cmd_due(rev, map_path):
-    suites, ignore = load(map_path)
     c = commit_of(rev)
+    suites, ignore, _ = load(map_path, c)
     entries, ledger = tree(c), ledger_path()
     n = total = 0
     bad = 0
@@ -142,11 +161,11 @@ def cmd_due(rev, map_path):
 
 
 def cmd_record(rev, names, map_path):
-    suites, ignore = load(map_path)
     c = commit_of(rev)
+    suites, ignore, label = load(map_path, c)
     entries, ledger = tree(c), ledger_path()
     for name in names:
-        _, _, paths, command = find(suites, name, map_path)
+        _, _, paths, command = find(suites, name, label)
         k = key(entries, paths, command, ignore, name)
         if k is None:
             raise Refused(f"suite '{name}' covers no file at {short(c)}: fix its paths before recording")
@@ -159,9 +178,9 @@ def cmd_record(rev, names, map_path):
 
 
 def cmd_why(rev, name, map_path):
-    suites, ignore = load(map_path)
     c = commit_of(rev)
-    _, _, paths, _ = find(suites, name, map_path)
+    suites, ignore, label = load(map_path, c)
+    _, _, paths, _ = find(suites, name, label)
     last = next((f[2] for f in reversed(ledger_lines(ledger_path())) if len(f) > 2 and f[0] == name), None)
     if not last:
         print(f'{name} has no recorded pass yet')
@@ -178,6 +197,9 @@ def cmd_why(rev, name, map_path):
 
 
 def cmd_list(map_path):
+    if map_path is None:
+        map_path = DEFAULT_MAP
+        print(f'suites-due: list reads the working-tree map {map_path}', file=sys.stderr)
     load(map_path)   # refuses a bad map first
     for name, mins, paths, _ in read_map(map_path):
         print(f"{name:<24} {mins:>5} min   {' '.join(paths)}")
@@ -189,7 +211,7 @@ def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(newline='\n', line_buffering=True)
     args = list(sys.argv[1:] if argv is None else argv)
-    map_path = DEFAULT_MAP
+    map_path = None
     if len(args) >= 2 and args[0] == '--map':
         map_path, args = Path(args[1]), args[2:]
     cmd, rest = (args[0], args[1:]) if args else ('', [])

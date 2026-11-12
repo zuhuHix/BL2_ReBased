@@ -63,15 +63,16 @@ class Repo:
         self.git('commit', '-q', '-m', 'fixture')
         return self.git('rev-parse', 'HEAD')
 
-    def run(self, *args, map_text=None):
+    def run(self, *args, map_text=None, use_map=True):
         if map_text is not None:
             self.map.write_text(map_text, encoding='utf-8', newline='\n')
-        done = subprocess.run([sys.executable, str(HELPER), '--map', str(self.map), *args], cwd=self.path,
+        chosen = ['--map', str(self.map)] if use_map else []
+        done = subprocess.run([sys.executable, str(HELPER), *chosen, *args], cwd=self.path,
                               capture_output=True, text=True, timeout=60, env=dict(os.environ, HUB_DIR=str(self.hub)))
         return done.returncode, done.stdout, done.stderr
 
-    def due(self, rev='HEAD', map_text=None):
-        rc, out, err = self.run('due', rev, map_text=map_text)
+    def due(self, rev='HEAD', map_text=None, use_map=True):
+        rc, out, err = self.run('due', rev, map_text=map_text, use_map=use_map)
         names = [l.split()[0] for l in out.splitlines() if l and not l.startswith(('-- ', 'nothing due'))]
         return rc, names, out + err
 
@@ -170,6 +171,25 @@ class DueRecordTest(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("suite 'beta' covers no file", err)
 
+    def test_paths_split_on_spaces_and_tabs_only(self):
+        name = 'tools/a' + chr(0xa0) + 'b.py'
+        self.repo.commit({name: 'x\n'})
+        rc, names, out = self.repo.due(map_text=MAP.replace('tools/beta.py |', name + '\ttools/beta.py |'))
+        self.assertEqual((rc, names), (0, ['alpha', 'beta']), out)
+        self.assertNotIn('matches no file', out)
+
+    def test_a_covered_symlink_is_refused(self):
+        blob = subprocess.run(['git', '-C', str(self.repo.path), 'hash-object', '-w', '--stdin'], input=b'core.cpp',
+                              capture_output=True, check=True).stdout.decode().strip()
+        self.repo.git('update-index', '--add', '--cacheinfo', f'120000,{blob},src/link')
+        self.repo.git('commit', '-q', '-m', 'link')
+        for args in (('due', 'HEAD'), ('record', 'HEAD', 'alpha')):
+            rc, out, err = self.repo.run(*args)
+            self.assertEqual(rc, 2, out + err)
+            self.assertIn('suite alpha: src/link is a symbolic link', err)
+        self.assertEqual(self.repo.ledger(), [])
+        self.assertEqual(self.repo.run('record', 'HEAD', 'beta')[0], 0)   # beta covers no link
+
     def test_refused_map_and_commit(self):
         rc, out, err = self.repo.run('due', 'HEAD', map_text=MAP + 'bad name | 1 | src/ | x\n')
         self.assertEqual(rc, 2)
@@ -177,6 +197,12 @@ class DueRecordTest(unittest.TestCase):
         rc, out, err = self.repo.run('due', 'HEAD', map_text=MAP + 'alpha | 1 | src/ | x\n')
         self.assertEqual(rc, 2)
         self.assertIn('"alpha" is listed twice', err)
+        rc, out, err = self.repo.run('due', 'HEAD', map_text=MAP.replace('python tools/beta.py', 'python a.py | more'))
+        self.assertEqual(rc, 2)
+        self.assertIn('suite "beta" has more than 4 fields', err)
+        rc, out, err = self.repo.run('due', 'HEAD', map_text=MAP + 'Alpha | 1 | src/ | x\n')
+        self.assertEqual(rc, 2)
+        self.assertIn('"Alpha" differs from another suite only in case', err)
         rc, out, err = self.repo.run('due', 'no-such-rev', map_text=MAP)
         self.assertEqual((rc, err.strip()), (2, 'suites-due: unknown commit: no-such-rev'))
 
@@ -196,6 +222,36 @@ class DueRecordTest(unittest.TestCase):
                               capture_output=True, text=True, env=env, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue((self.repo.path / 'local' / 'hub' / 'test-ledger.txt').is_file())
+
+
+class MapOfTheCommitTest(unittest.TestCase):
+    """Without --map the map is tools/suites.txt as committed in the commit being judged, not the working tree's."""
+
+    def setUp(self):
+        self.repo = Repo(self)
+
+    def test_no_map_in_the_commit_is_refused(self):
+        rc, out, err = self.repo.run('due', 'HEAD', use_map=False)
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn('has no tools/suites.txt; pass --map <file>', err)
+
+    def test_a_commit_that_widens_a_suite_is_judged_by_its_own_map(self):
+        a = self.repo.commit({'tools/suites.txt': MAP})
+        self.assertEqual(self.repo.run('record', a, 'alpha', 'beta', use_map=False)[0], 0)
+        self.assertEqual(self.repo.due(a, use_map=False)[1], [])
+        # B widens beta to lib/ and adds a file there; the working tree goes back to A, whose map does not know lib/.
+        b = self.repo.commit({'tools/suites.txt': MAP.replace('tools/beta.py |', 'tools/beta.py lib/ |'), 'lib/x.py': '\n'})
+        self.repo.git('checkout', '-q', '--detach', a)
+        rc, names, out = self.repo.due(b, use_map=False)
+        self.assertEqual((rc, names), (0, ['beta']), out)
+        # The working tree's map (A's) would have missed it: the bug this guards against.
+        self.repo.map.write_text((self.repo.path / 'tools' / 'suites.txt').read_text(encoding='utf-8'), encoding='utf-8')
+        self.assertEqual(self.repo.due(b)[1], [])
+        # record and why read B's map too.
+        self.assertEqual(self.repo.run('record', b, 'beta', use_map=False)[0], 0)
+        self.assertEqual(self.repo.due(b, use_map=False)[1], [])
+        rc, out, err = self.repo.run('why', b, 'beta', use_map=False)
+        self.assertEqual(rc, 0, err)
 
 
 class TrackedMapTest(unittest.TestCase):
@@ -238,6 +294,25 @@ class DriverTest(unittest.TestCase):
         self.assertEqual([l.split('|')[0] for l in self.repo.ledger()], ['alpha'])
         self.assertIn('ALPHA OK', (out / 'alpha.log').read_text(encoding='utf-8-sig'))
         self.assertEqual(self.repo.due(map_text=None)[1], ['beta'])
+
+    def test_a_suite_that_changes_the_checkout_is_not_recorded(self):
+        self.repo.map.write_text('*ignore* | - | *.md docs/ | -\n'
+                                 "alpha | 3 | src/ | Add-Content src/core.cpp 'x'; Write-Output 'ALPHA OK'; exit 0\n"
+                                 '#pass alpha | ALPHA OK |\n', encoding='utf-8', newline='\n')
+        rc, text, out = self.drive()
+        self.assertEqual(rc, 1, text)
+        self.assertIn('alpha: not recorded: the checkout changed during the run', text)
+        self.assertEqual(self.repo.ledger(), [])
+
+    def test_default_map_is_the_one_in_the_worktree(self):
+        committed = self.repo.map.read_text(encoding='utf-8').replace('exit 3', 'exit 0').replace('BETA NO', 'BETA OK')
+        self.head = self.repo.commit({'tools/suites.txt': committed})
+        out = self.repo.base / 'out'
+        done = subprocess.run([POWERSHELL, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(DRIVER), '-Worktree',
+                               str(self.repo.path), '-Commit', self.head, '-OutDir', str(out)], capture_output=True,
+                              text=True, timeout=300, env=dict(os.environ, HUB_DIR=str(self.repo.hub)))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(sorted(l.split('|')[0] for l in self.repo.ledger()), ['alpha', 'beta'])
 
     def test_refuses_an_unknown_suite_and_a_wrong_commit(self):
         rc, text, _ = self.drive('-Suites', 'gamma')

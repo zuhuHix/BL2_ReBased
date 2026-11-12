@@ -13,7 +13,7 @@ folder inside an ignored one) still covers it.
 
 Errors, each one line; the exit code is 1 when there is any, 2 when the map or the checkout cannot be read:
 0. map: what suites-due.sh refuses: a byte-order mark, a name with other than letters, digits, dot, dash and
-   underscore, a name listed twice, a suite with no paths, a * anywhere but the start of a path, a path written with ./,
+   underscore, a name listed twice (or twice in different case), a suite with no paths, a "|" inside the command, a * anywhere but the start of a path, a path written with ./,
    a leading / or a backslash, and a map with no suite. covers-nothing: a suite that covers no tracked file once *ignore*
    is applied (the helper's "covers no file at this commit").
 1. unmatched: a path of a suite that matches no tracked file at <rev> (before *ignore* is applied, as the helper warns).
@@ -84,11 +84,13 @@ def covers(path, include, ignore):
     return False
 
 
-def read_map(path, problems=None):
+def read_map(path, problems=None, data=None):
     """[(name, minutes, [paths], command)] in map order; the same trimming as the helper's suites(). What the helper
-    would refuse while reading (a byte-order mark, a suite with no paths) goes to problems, a list, when one is given."""
+    would refuse while reading (a byte-order mark, a suite with no paths, a "|" inside the command) goes to problems, a
+    list, when one is given. data: the map's bytes, when they do not come from the file (a map read from a commit)."""
     suites = []
-    data = Path(path).read_bytes()
+    if data is None:
+        data = Path(path).read_bytes()
     if problems is not None and data.startswith(b'\xef\xbb\xbf'):
         problems.append('map: the file starts with a byte-order mark; suites-due.sh reads it as part of the first line')
     for raw in data.decode('utf-8', 'replace').splitlines():
@@ -98,9 +100,12 @@ def read_map(path, problems=None):
         fields = line.split('|')
         if problems is not None and (len(fields) < 3 or fields[2] == ''):
             problems.append(f'map: suite "{fields[0]}" has no paths')
+        if problems is not None and len(fields) > 4:
+            problems.append(f'map: suite "{fields[0]}" has more than 4 fields: keep "|" out of the command')
         while len(fields) < 4:
             fields.append('')
-        suites.append((fields[0], fields[1], fields[2].split(), fields[3]))
+        # Paths split on ASCII spaces and tabs only, as the shell helper's awk did: a no-break space stays in a file name.
+        suites.append((fields[0], fields[1], [p for p in re.split('[ \t]+', fields[2]) if p], fields[3]))
     return suites
 
 
@@ -110,6 +115,8 @@ def map_problems(suites):
     for name, _, paths, _ in suites:
         if name != '*ignore*' and not NAME.fullmatch(name):
             out.append(f'map: suite name "{name}" may hold only letters, digits, dot, dash and underscore')
+        if name.lower() in {n.lower() for n in seen} and name not in seen:
+            out.append(f'map: suite "{name}" differs from another suite only in case (the driver would run one twice)')
         if name in seen:
             out.append(f'map: suite "{name}" is listed twice')
         seen.add(name)

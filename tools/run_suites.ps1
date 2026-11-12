@@ -4,8 +4,9 @@
 #   powershell -NoProfile -File tools/run_suites.ps1 -Worktree <test worktree> -Commit <40-char sha> -OutDir <log folder>
 #              [-Suites a,b,c] [-Repeat <suite>:<n>] [-Map <suites.txt>]
 #
-# Reads tools/suites.txt next to this script (or -Map) and asks tools/suites_due.py, also next to it, what is due and to
-# record passes; the ledger is the helper's (HUB_DIR, or local/hub in the main checkout). Each suite line has a
+# Reads the map in the worktree under test, <Worktree>/tools/suites.txt (or -Map): the map of -Commit, since the worktree
+# must be clean and at -Commit. Asks tools/suites_due.py next to this script what is due and to record passes; the ledger
+# is the helper's (HUB_DIR, or local/hub in the main checkout). Each suite line has a
 # "#pass <name> | <must match> | <must not match>" line; separators there need a space before the "|" (an alternation
 # such as FAIL|ERROR has none).
 # Row verdicts: PASS, FAIL-RERUN (failed, one rerun follows), FLAKY-PASS (the rerun passed), FAIL (the rerun failed too).
@@ -18,9 +19,11 @@ param(
     [Parameter(Mandatory)][string]$OutDir,
     [string[]]$Suites,
     [string[]]$Repeat,
-    [string]$Map = (Join-Path $PSScriptRoot 'suites.txt')
+    [string]$Map
 )
 $ErrorActionPreference = 'Stop'
+# Only for Get-OwUeBusyProcess (the editor names the lock waits for). The driver never takes the lock: the suite scripts do.
+. (Join-Path $PSScriptRoot 'ue_lock.ps1')
 function Refuse([string]$Why) { Write-Host "run_suites: REFUSED: $Why"; exit 100 }
 
 $dueScript = Join-Path $PSScriptRoot 'suites_due.py'
@@ -36,6 +39,7 @@ if ($head -ne $Commit) { Refuse "$Worktree is at $head, not $Commit" }
 if (git -C $Worktree status --porcelain) { Refuse "$Worktree has uncommitted changes (git status --porcelain is not empty)" }
 
 # Read suites.txt: name | minutes | paths | command, and the #pass lines.
+if (!$Map) { $Map = Join-Path $Worktree 'tools\suites.txt' }
 if (!(Test-Path -LiteralPath $Map)) { Refuse "no suite map at $Map" }
 $map = (Resolve-Path -LiteralPath $Map).Path
 $commands = [ordered]@{}; $passRules = @{}
@@ -90,7 +94,7 @@ $rows = @()
 function Wait-NoEditor {
     $needle = $Worktree.Replace('/', '\').ToLowerInvariant()
     for ($t = 0; $t -le 120; $t += 5) {
-        $left = @(Get-CimInstance Win32_Process -Filter "Name = 'UnrealEditor.exe' OR Name = 'UnrealEditor-Cmd.exe'" |
+        $left = @(Get-OwUeBusyProcess | ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" } |
             Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\').ToLowerInvariant().Contains($needle) })
         if (!$left.Count) { return }
         Start-Sleep -Seconds 5
@@ -104,9 +108,21 @@ function Wait-NoEditor {
     exit 101
 }
 
+# The checkout must stay at -Commit with no tracked file changed, or a pass would be recorded for content that did not run.
+function Get-Drift {
+    $now = (git -C $Worktree rev-parse HEAD).Trim()
+    if ($now -ne $Commit -or (git -C $Worktree status --porcelain --untracked-files=no)) { return 'the checkout changed during the run' }
+    return $null
+}
+
 # One attempt: run the command as its own powershell child from the worktree, log stdout+stderr, judge it.
 function Invoke-Attempt([string]$Name, [string]$Attempt, [string]$LogName) {
     Wait-NoEditor
+    $drift = Get-Drift
+    if ($drift) {
+        Write-Host ("  {0,-24} {1,-10} FAILED: {2}" -f $Name, $Attempt, $drift)
+        return @{ Ok = $false; Code = '-'; Seconds = 0; Log = '-' }
+    }
     $log = Join-Path $OutDir $LogName
     # -EncodedCommand instead of -Command, so quotes in the command survive; the tail passes the real exit code on
     # (powershell -Command alone turns every failure into 1).
@@ -149,7 +165,12 @@ foreach ($name in $list) {
         Add-Row $name "run$i.rerun" 'FAIL' $second
         $allPassed = $false
     }
-    if ($allPassed) {
+    $drift = Get-Drift
+    if ($drift) {
+        Write-Host "  ${name}: not recorded: $drift"
+        Add-Row $name 'record' 'FAIL' @{ Code = '-'; Seconds = 0; Log = '-' }
+        $failed++
+    } elseif ($allPassed) {
         Push-Location $Worktree
         & $python $dueScript --map $map record $Commit $name
         if ($LASTEXITCODE -ne 0) { Write-Host "run_suites: WARNING: recording $name failed (exit $LASTEXITCODE)" }

@@ -376,19 +376,23 @@ checks the owner and staleness rules against temporary lock files.
 The in-engine suites are too slow to run on every commit, so each one runs only when something it covers changed.
 `tools/suites.txt` lists them, one line per suite: `name | minutes | paths | command`, then a
 `#pass <name> | <must match> | <must not match>` line read by the driver. Paths are folders (`src/`), files, suffixes
-(`*.py`) or `.` (everything); the `*ignore*` line lists paths no suite depends on, the map itself among them. The map
-holds no machine paths: the Unreal folder comes from `OPENWILLOW_UE` and the game from `OPENWILLOW_BL2`. Its minutes
+(`*.py`) or `.` (everything), split on spaces and tabs and matched case-sensitively; the `*ignore*` line lists paths
+no suite depends on. The map and `tools/suites_switch_only.txt` are on `unit`'s line (its CTest entry reads them), so
+editing either makes `unit` due, and `slice_gate` too, since it covers `.`. A covered path must not be a symbolic link.
+The map holds no machine paths: the Unreal folder comes from `OPENWILLOW_UE` and the game from `OPENWILLOW_BL2`. Its minutes
 were measured on the main desktop.
 
-- **What is due:** `python tools/suites_due.py due <commit>`, run inside any worktree, prints each suite with no recorded
-  pass on the content it covers now (name, minutes, command), and a total. A pass is keyed by the git hash of the suite's
+- **What is due:** `python tools/suites_due.py due <commit>` prints each suite with no recorded pass on the content it covers now (name, minutes, command), and a total. A pass is keyed by the git hash of the suite's
   covered files plus its command, so a rebase, a merge or a docs change makes nothing due, and changing a suite's paths
   (so that they cover other files) or its command makes that suite due once. `why <commit> <suite>` lists the covered
-  files changed since its last pass; `list` prints the map as read. Exit 1 when a suite covers no file at that commit.
+  files changed since its last pass. `due`, `record` and `why` read the map as committed in `<commit>`, so they give the
+  same answer from any worktree or clone at any commit, and refuse a commit with no `tools/suites.txt` unless `--map
+  <file>` names one; `list` prints the working-tree map. Exit 1 when a suite covers no file at that commit.
 - **Run them:** `powershell -NoProfile -File tools/run_suites.ps1 -Worktree <test worktree> -Commit <40-char sha>
   -OutDir <log folder> [-Suites a,b] [-Repeat <suite>:<n>]`. It refuses a worktree that is not clean or not at the
-  commit, runs the due suites (or `-Suites`) one after another, gives a failed suite exactly one rerun, writes one log per
-  attempt and `results.tsv`, records each pass at once, and exits with the number of suites that ended `FAIL` (100 when it
+  commit, reads the map inside that worktree, runs the due suites (or `-Suites`) one after another, gives a failed suite exactly one rerun, writes one log per
+  attempt and `results.tsv`, records each pass at once (not when the checkout moved or a tracked file changed during
+  the run: that suite counts as failed), and exits with the number of suites that ended `FAIL` (100 when it
   refused to start). It starts no build, kills no process and deletes no lock; build first, as the map's header says.
 - **Record a pass by hand:** `python tools/suites_due.py record <commit> <suite>...`, only after a complete pass of that
   suite on that commit. Passes go to `local/hub/test-ledger.txt` in the main checkout (`HUB_DIR` overrides the folder),
@@ -442,7 +446,7 @@ history rewrites, releases, and anything public outside the repository.
 
 **What counts as passed.** A suite has passed on the tested commit when it ran green on that commit, or ran green on
 an earlier commit in which every file the suite covers is byte-identical to the tested commit's. What each suite
-covers is the path list in `tools/suites.txt`; a suite that is not listed there has no recorded
+covers is the path list in `tools/suites.txt` at the tested commit; a suite that is not listed there has no recorded
 coverage and runs on every tested commit as before. `python tools/suites_due.py due <tested-commit>` prints the
 listed suites that have no such pass, and it must print none before the batch lands. Nothing else about the checks above
 changes: the chain's tree must still be byte-identical to the tested commit's.
