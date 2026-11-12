@@ -78,6 +78,8 @@ public:
     // For the tests: the station and exit the start used, and those of the first respawn after it (false until they happen).
     bool StartUse(int32& Station, int32& Exit, FTransform& Pose) const;
     bool FirstRespawnUse(int32& Station, int32& Exit) const;
+    // The latest respawn's station and exit, and how many respawns picked a station this session.
+    bool LastRespawnUse(int32& Station, int32& Exit, int32& Picks) const;
     FString StationObject(int32 Station) const;
     // The walker calls this once its start level is set: the loaded save's "progression" block (level, experience,
     // skill grades) replaces that state. False when the save has no such block (older saves) or it was rejected.
@@ -163,6 +165,7 @@ private:
     int32 StartStationIndex = INDEX_NONE, StartExitIndex = INDEX_NONE;
     FTransform StartPose;
     int32 FirstRespawnStationIndex = INDEX_NONE, FirstRespawnExitIndex = INDEX_NONE;
+    int32 LastRespawnStationIndex = INDEX_NONE, LastRespawnExitIndex = INDEX_NONE, RespawnPicks = 0;
     bool bTestStartAtExit = false;     // the quest test's reading of the start, at its first step
     FString TestStartDetail;
     int32 Rewards = 0;

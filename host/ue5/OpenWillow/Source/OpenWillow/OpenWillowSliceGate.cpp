@@ -915,7 +915,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (!W->IsMayaActive()) { FailLink(TEXT("spawn_maya"), TEXT("Maya is not active (start with -owmaya)")); Finish(TEXT("no Maya")); return; }
         const FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeapon() : nullptr;
         // spawn_at_saved_station_exit, the start half: she stands on the saved station's first exit with its yaw (UOpenWillowQuest::StartPoint;
-        // 1.2 uu vertical: the standing pawn read 1.15 uu above the exit in the real game). The respawn half is on bleed_out_respawn.
+        // the 1.2 uu tests that she stands on the exit, centred on the exit's own height, where the host settles; it is not the game's standing height, which read 1.15 uu above the exit). The respawn half is on bleed_out_respawn.
         int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE;
         FTransform StartAt;
         const bool bStart = Quest && Quest->StartUse(StartStation, StartExit, StartAt);
@@ -1574,13 +1574,15 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (bLethalApplied) Fixture(TEXT("down state from the test's lethal damage"));
         // spawn_at_saved_station_exit, the respawn half: the first respawn after the start does not reuse the start's exit (observed;
         // the host counts the start as one use of the station's exit counter, UNVERIFIED that the game's load does).
-        int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE, FirstStation = INDEX_NONE, FirstExit = INDEX_NONE;
+        // The link judges the respawn it is about, the latest one, and the evidence is about the first respawn after the start, so it
+        // also requires that this is the run's only respawn (an earlier bleed-out in the fight FAILs this half, named in the detail).
+        int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE, LastStation = INDEX_NONE, LastExit = INDEX_NONE, Picks = 0;
         FTransform StartAt;
         const bool bStart = Quest && Quest->StartUse(StartStation, StartExit, StartAt);
-        const bool bFirst = Quest && Quest->FirstRespawnUse(FirstStation, FirstExit);
-        const bool bNextExit = bStart && bFirst && (FirstStation != StartStation || FirstExit != StartExit);
-        const FString Exits = FString::Printf(TEXT("first respawn at %s exit %d, start at %s exit %d"), bFirst ? *Quest->StationObject(FirstStation) : TEXT("none"),
-            FirstExit, bStart ? *Quest->StationObject(StartStation) : TEXT("none"), StartExit);
+        const bool bLast = Quest && Quest->LastRespawnUse(LastStation, LastExit, Picks);
+        const bool bNextExit = bStart && bLast && Picks == 1 && (LastStation != StartStation || LastExit != StartExit);
+        const FString Exits = FString::Printf(TEXT("respawn %d of the run at %s exit %d, start at %s exit %d"), Picks, bLast ? *Quest->StationObject(LastStation) : TEXT("none"),
+            LastExit, bStart ? *Quest->StationObject(StartStation) : TEXT("none"), StartExit);
         if (bRespawned && bHold && bRestored && bNextExit && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString(bUnforced && bEnemyDown && !bLethalApplied ? TEXT("how=after_enemy_down: ") : TEXT(""))
                 + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, %s, then at %s, %.0f uu from the death spot, %s, health %.0f/%.0f, mission status %d"),

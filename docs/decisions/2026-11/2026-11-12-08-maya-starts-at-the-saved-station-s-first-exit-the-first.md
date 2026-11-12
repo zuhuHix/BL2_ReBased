@@ -2,7 +2,7 @@
 
 AI-assisted (Claude Code). With `-owquest` the host used to start Maya at the level's player start (`WillowCoopPlayerStart_0`
 raised 100 uu, yaw 45), 11,930 uu and 45 deg away from where the game puts a loaded player. Observed in the real game, session 1
-of 2026-11-12 (level 8, Sanctuary, every SDK mod off as read in the game; two loads of one save, so two samples of one case): Maya
+of 2026-11-12 (level 8, Sanctuary, every SDK mod of the session's list off as read in the game (Quick Startup stayed on); two loads of one save, so two samples of one case): Maya
 stood on FastTravelStation_0's first exit point (1.15 uu above it) with that exit's yaw, the saved station was that station, and
 the first respawn afterwards used the next exit point of the same station.
 
@@ -19,7 +19,8 @@ the first respawn afterwards used the next exit point of the same station.
 - Checks whose meaning changed: the quest suite's `respawn_at_decoded_station_exit_point` now expects the exit after the start's
   (exit 1 of FastTravelStation_0) instead of exit 0, and the new `spawn_at_saved_station_exit` check covers both halves. On the
   slice gate, `spawn_maya` also FAILs unless she stands within 1 uu planar and 1.2 uu vertical of the start exit and faces its
-  yaw within 1 deg, and `bleed_out_respawn` also FAILs if the first respawn reused the start's exit. Both are stricter, not
-  looser. `tools/check_slice_gate.py` does not read these details and is unchanged.
+  yaw within 1 deg, and `bleed_out_respawn` also FAILs if the respawn it judges reused the start's exit or is not the run's
+  only respawn. The 1.2 uu tests that she stands on the exit, centred on the exit's own height, where the host settles; it is
+  not the game's standing height (1.15 uu above the exit). Both links are stricter, not looser. `tools/check_slice_gate.py` does not read these details and is unchanged.
 - Not changed: the pools at spawn (`spawn_pools_full` stays open), the full load chain, the selection rule between several
   stations, the respawn's timing (`OpenWillowRespawnTimeline.h`).

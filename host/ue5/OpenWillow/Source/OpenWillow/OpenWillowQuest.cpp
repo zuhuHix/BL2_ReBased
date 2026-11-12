@@ -1197,6 +1197,9 @@ bool UOpenWillowQuest::RespawnPoint(const FVector& DeathLocation, FTransform& Ou
     Out = Stations[Best].Exits[Exit];
     ++Counter;
     if (FirstRespawnStationIndex == INDEX_NONE) { FirstRespawnStationIndex = Best; FirstRespawnExitIndex = Exit; }
+    LastRespawnStationIndex = Best;
+    LastRespawnExitIndex = Exit;
+    ++RespawnPicks;
     UE_LOG(LogTemp, Display, TEXT("OWQUEST respawn station %s exit %d at %s"), *Stations[Best].Object, Exit, *Out.GetLocation().ToString());
     return true;
 }
@@ -1206,7 +1209,7 @@ bool UOpenWillowQuest::StartPoint(FTransform& Out)
     if (!Impl || bFailed) return false;
     if (StartStationIndex != INDEX_NONE) { Out = StartPose; return true; }
     // A loaded player stands on the saved ("last visited") station's first exit point, facing that exit's yaw. Observed in the real
-    // game, session 1 of 2026-11-12 (level 8, Sanctuary, every SDK mod off as read in the game; two loads of one save, so two samples
+    // game, session 1 of 2026-11-12 (level 8, Sanctuary, every SDK mod of the session's list off as read in the game (Quick Startup stayed on); two loads of one save, so two samples
     // of one case): 1.15 uu above StationTeleporterExitPoint_0 of FastTravelStation_0, facing 90 deg. The load chain was not hooked,
     // and that station was also the only active and the nearest one, so which rule placed her is not told apart (UNVERIFIED).
     // HOST STAND-IN: the host save carries no station, so the level's one fast-travel station stands in for the saved one (it is
@@ -1243,6 +1246,12 @@ bool UOpenWillowQuest::FirstRespawnUse(int32& Station, int32& Exit) const
 {
     Station = FirstRespawnStationIndex; Exit = FirstRespawnExitIndex;
     return FirstRespawnStationIndex != INDEX_NONE;
+}
+
+bool UOpenWillowQuest::LastRespawnUse(int32& Station, int32& Exit, int32& Picks) const
+{
+    Station = LastRespawnStationIndex; Exit = LastRespawnExitIndex; Picks = RespawnPicks;
+    return LastRespawnStationIndex != INDEX_NONE;
 }
 
 FString UOpenWillowQuest::StationObject(int32 Station) const
@@ -1452,7 +1461,7 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (TestWait < 1.5f) return;
         {
             // spawn_at_saved_station_exit, its first half (judged with the first respawn, step 20): she stands on the start's exit,
-            // the station's first, with its yaw (1.2 uu vertical: the standing pawn read 1.15 uu above the exit in the real game).
+            // the station's first, with its yaw. Vertically the 1.2 uu tests that she stands on the exit, centred on the exit's own height, where the host settles; it is not the game's standing height, which read 1.15 uu above the exit.
             int32 Station = INDEX_NONE, Exit = INDEX_NONE;
             FTransform Pose;
             const bool bStart = StartUse(Station, Exit, Pose);
