@@ -227,6 +227,7 @@ void FOpenWillowSliceData::Load(const FString& WorldFile, const FString& NpcFile
         Out.Object = Str(S, TEXT("object"));
         Out.Location = HostPose(S).GetLocation();
         Out.bCanResurrect = S->GetBoolField(TEXT("can_resurrect"));
+        Out.bFastTravel = Str(S, TEXT("class")) == TEXT("WillowGame.FastTravelStation");
         for (const auto& Exit : Arr(S, TEXT("exit_points"))) Out.Exits.Add(HostPose(Exit->AsObject()));
         Stations.Add(Out);
     }

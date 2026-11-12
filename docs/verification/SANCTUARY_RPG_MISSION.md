@@ -196,7 +196,8 @@ lies 70.6 uu from the world.json walk segment between nodes 12 and 26 (18,117.7 
 - **Health:** max(20, 80 x 1.13^L) at Maya's level (L1: 90.4). The 400 stand-in remains only without `-owquest`.
 - **Respawn:** `GetBestPlayerPlacementPoint`'s nearest `CanResurrectHere` station, then that station's exit points in round
   robin from 0. With no station activated, a death at the range picks FastTravelStation_0 exit 0 (8109.24, 2929.86, 3716.16).
-  This matches world.json's own `fresh_state_choice`.
+  This matches world.json's own `fresh_state_choice`. Since 2026-11-12 Maya starts on that exit and the start counts as one
+  use of the station's counter, so the first respawn there takes exit 1 ([SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1e).
 - **Dialog hook:** each mission dialog effect is looked up as `dialog:<event>` in audio.json, and its source id and state are
   logged. Every entry is `extracted_undecoded`, so nothing plays.
 - **Dummy world behaviors** (`boundaryCalls`: Behavior_Transform EAIT_Fire, RegisterTargetable, IntMath,
@@ -223,7 +224,8 @@ lies 70.6 uu from the world.json walk segment between nodes 12 and 26 (18,117.7 
     provider sends the target back, and the installed Kismet destroys the dummy at the reverse end.
   - Turn-in: the use key turns in, the reward is granted once and cannot be repeated.
   - Death: triggers a respawn at the decoded station exit point, restores formula health, keeps the mission state, and the
-    respawn point is standable (grounded).
+    respawn point is standable (grounded). Since 2026-11-12 the expected exit is the one after the start's
+    (`spawn_at_saved_station_exit`, one more check).
   - Dialog hook: found 6/6 lines, played 0. Save file written.
   - Resume run: status, reward and respawn count kept; Marcus at the stock pose; the mission cannot be re-accepted; health from
     the formula; no dummy.

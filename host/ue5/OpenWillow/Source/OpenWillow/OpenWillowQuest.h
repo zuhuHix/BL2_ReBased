@@ -72,6 +72,13 @@ public:
     bool PlayerMaxHealth(int32 Level, float& Out) const;
     // Respawn location by the decoded station selection (no station activation is modelled); false without data.
     bool RespawnPoint(const FVector& DeathLocation, FTransform& Out);
+    // Maya's start: the saved station's first exit point (position and yaw), counted as one use of that station's exit counter
+    // (OpenWillowQuest.cpp says what is observed and what is a stand-in). Chosen once; false without slice data or such a station.
+    bool StartPoint(FTransform& Out);
+    // For the tests: the station and exit the start used, and those of the first respawn after it (false until they happen).
+    bool StartUse(int32& Station, int32& Exit, FTransform& Pose) const;
+    bool FirstRespawnUse(int32& Station, int32& Exit) const;
+    FString StationObject(int32 Station) const;
     // The walker calls this once its start level is set: the loaded save's "progression" block (level, experience,
     // skill grades) replaces that state. False when the save has no such block (older saves) or it was rejected.
     // Then fixes Sanctuary's region stage from the resulting level unless the save already holds one.
@@ -150,6 +157,14 @@ private:
     bool bResume = false;
     bool bWeaponLent = false;
     bool bFailed = false;
+    // The start (StartPoint, placed on the first tick with a controller: TryPlaceAtStart) and the first respawn's station and exit.
+    void TryPlaceAtStart();
+    bool bStartTried = false;
+    int32 StartStationIndex = INDEX_NONE, StartExitIndex = INDEX_NONE;
+    FTransform StartPose;
+    int32 FirstRespawnStationIndex = INDEX_NONE, FirstRespawnExitIndex = INDEX_NONE;
+    bool bTestStartAtExit = false;     // the quest test's reading of the start, at its first step
+    FString TestStartDetail;
     int32 Rewards = 0;
     // The use key's press on Marcus runs his stock OnUsed chain on the VM (FireMissionSlice::useMarcus): how many times it opened the mission
     // interface (the host answers that call), the movie definition it named, and the behaviors of the last run ("name(sequence) -> output ids").

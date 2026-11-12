@@ -21,6 +21,7 @@ struct FOpenWillowSliceStation
     FString Object;
     FVector Location = FVector::ZeroVector;
     bool bCanResurrect = false;
+    bool bFastTravel = false;           // class WillowGame.FastTravelStation (the start's stand-in for the saved station)
     TArray<FTransform> Exits;           // exit points in data order
 };
 

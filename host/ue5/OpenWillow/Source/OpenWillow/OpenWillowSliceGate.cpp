@@ -914,9 +914,19 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (!bReady && StepTime < SpawnTimeout) return;
         if (!W->IsMayaActive()) { FailLink(TEXT("spawn_maya"), TEXT("Maya is not active (start with -owmaya)")); Finish(TEXT("no Maya")); return; }
         const FOpenWillowWeaponItem* Held = Inventory ? Inventory->ActiveWeapon() : nullptr;
-        const bool bGood = bReady && W->HasWeaponOut() && Held && W->GetHealth() > 0.f && W->GetHealth() == W->GetMaxHealth();
-        const FString Detail = FString::Printf(TEXT("level %d, health %.0f/%.0f, grounded %d, holding %s"), W->GetSkills()->GetLevel(),
-            W->GetHealth(), W->GetMaxHealth(), W->GetCharacterMovement()->IsMovingOnGround(), Held ? *Held->Name : TEXT("nothing"));
+        // spawn_at_saved_station_exit, the start half: she stands on the saved station's first exit with its yaw (UOpenWillowQuest::StartPoint;
+        // 1.2 uu vertical: the standing pawn read 1.15 uu above the exit in the real game). The respawn half is on bleed_out_respawn.
+        int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE;
+        FTransform StartAt;
+        const bool bStart = Quest && Quest->StartUse(StartStation, StartExit, StartAt);
+        const float StartPlanar = FVector::Dist2D(W->GetActorLocation(), StartAt.GetLocation()), StartUp = W->GetActorLocation().Z - StartAt.GetLocation().Z;
+        const float StartYaw = FMath::Abs(FMath::FindDeltaAngleDegrees(W->GetActorRotation().Yaw, StartAt.Rotator().Yaw));
+        const bool bAtExit = bStart && StartExit == 0 && StartPlanar <= 1.f && FMath::Abs(StartUp) <= 1.2f && StartYaw <= 1.f;
+        const bool bGood = bReady && bAtExit && W->HasWeaponOut() && Held && W->GetHealth() > 0.f && W->GetHealth() == W->GetMaxHealth();
+        const FString StartText = bStart ? FString::Printf(TEXT("start at %s exit %d (%.2f uu off planar, %.2f vertical, yaw off %.2f deg)"),
+            *Quest->StationObject(StartStation), StartExit, StartPlanar, StartUp, StartYaw) : FString(TEXT("no saved-station start"));
+        const FString Detail = FString::Printf(TEXT("level %d, health %.0f/%.0f, grounded %d, holding %s, %s"), W->GetSkills()->GetLevel(),
+            W->GetHealth(), W->GetMaxHealth(), W->GetCharacterMovement()->IsMovingOnGround(), Held ? *Held->Name : TEXT("nothing"), *StartText);
         if (bGood) PassLink(TEXT("spawn_maya"), Detail); else FailLink(TEXT("spawn_maya"), Detail);
         // Test fixture: Phaselock needs one point in the action skill; spend it the way the skills page does.
         if (!bUnforced && W->GetSkills()->GetActionGrade() < 1)   // unforced: bought on the skills page at the Phaselock link
@@ -1562,13 +1572,22 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         const FString Hold = FString::Printf(TEXT("held %.3fs (%d of %d frames hidden and without input, longest frame %.3fs)"), Held,
             HoldFramesHiddenLocked, HoldFrames, HoldMaxDelta);
         if (bLethalApplied) Fixture(TEXT("down state from the test's lethal damage"));
-        if (bRespawned && bHold && bRestored && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
+        // spawn_at_saved_station_exit, the respawn half: the first respawn after the start does not reuse the start's exit (observed;
+        // the host counts the start as one use of the station's exit counter, UNVERIFIED that the game's load does).
+        int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE, FirstStation = INDEX_NONE, FirstExit = INDEX_NONE;
+        FTransform StartAt;
+        const bool bStart = Quest && Quest->StartUse(StartStation, StartExit, StartAt);
+        const bool bFirst = Quest && Quest->FirstRespawnUse(FirstStation, FirstExit);
+        const bool bNextExit = bStart && bFirst && (FirstStation != StartStation || FirstExit != StartExit);
+        const FString Exits = FString::Printf(TEXT("first respawn at %s exit %d, start at %s exit %d"), bFirst ? *Quest->StationObject(FirstStation) : TEXT("none"),
+            FirstExit, bStart ? *Quest->StationObject(StartStation) : TEXT("none"), StartExit);
+        if (bRespawned && bHold && bRestored && bNextExit && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString(bUnforced && bEnemyDown && !bLethalApplied ? TEXT("how=after_enemy_down: ") : TEXT(""))
-                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, %s, then at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
+                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, %s, then at %s, %.0f uu from the death spot, %s, health %.0f/%.0f, mission status %d"),
                 W->LastRespawnAt() - W->LastDownAt(), *Hold, *Restore, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation),
-                W->GetHealth(), W->GetMaxHealth(), Quest ? Quest->Status() : -1));
-        else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, %s, %s, down %d, health %.0f/%.0f after %.0fs"),
-            bRespawned, *Hold, *Restore, W->IsDown(), W->GetHealth(), W->GetMaxHealth(), StepTime));
+                *Exits, W->GetHealth(), W->GetMaxHealth(), Quest ? Quest->Status() : -1));
+        else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, %s, %s, %s, down %d, health %.0f/%.0f after %.0fs"),
+            bRespawned, *Hold, *Restore, *Exits, W->IsDown(), W->GetHealth(), W->GetMaxHealth(), StepTime));
         Finish(FString());
         break;
     }

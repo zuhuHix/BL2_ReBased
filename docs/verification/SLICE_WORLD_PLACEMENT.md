@@ -167,6 +167,15 @@ again (`Behavior_RegisterStation`, `bFromLoad` false, then `SetStationActivatedS
 Only FastTravelStation_0 was active (the other three read inactive), and it is also the nearest, so the selection order is still not told apart.
 The load chain was not hooked, so which rule placed her at the load is not seen, and that the load advances the exit counter is UNVERIFIED.
 
+**What the host does (since 2026-11-12):** with `-owquest`, Maya starts on the saved station's first exit point, position and yaw,
+taken from the stations above (`UOpenWillowQuest::StartPoint`), no longer at the level's player start (`WillowCoopPlayerStart_0` raised
+100 uu, yaw 45: 11,930 uu away, 45 deg off). The host save carries no station, so the level's one fast-travel station stands in for the
+saved one (HOST STAND-IN; it is the station the observed save named). The start counts as one use of that station's exit counter, so
+the first respawn there takes `StationTeleporterExitPoint_1`. Observed in the real game, session 1 of 2026-11-12 (level 8, Sanctuary, every SDK mod off as read in the game; two loads of one save, so two samples of one case). That the game's load advances the same counter is an
+inference, UNVERIFIED: observed only that the first respawn did not reuse the load's exit. Not changed: the selection between several
+stations, the pools at spawn, the load chain. Checks: `spawn_at_saved_station_exit` in the quest suite, and the gate's `spawn_maya` and
+`bleed_out_respawn` links ([SLICE_GATE.md](SLICE_GATE.md)).
+
 ## 2a. XP reward — inputs recovered, amount UNVERIFIED (native)
 
 `Reward.ExperienceRewardPercentage` -> `GD_MissionRewardBalance.XP.XPReward_02_Small`: resolver chain

@@ -1190,13 +1190,87 @@ bool UOpenWillowQuest::RespawnPoint(const FVector& DeathLocation, FTransform& Ou
         if (Best != INDEX_NONE) break;
     }
     if (Best == INDEX_NONE) return false;
-    // TeleporterDestination.GetNextExitPoint: round robin from 0 (vehicle/occupied exit skipping not modelled).
+    // TeleporterDestination.GetNextExitPoint: round robin from 0 (vehicle/occupied exit skipping not modelled). The start counts as
+    // one use of its station's counter (StartPoint), so the first respawn at that station takes its next exit.
     int32& Counter = Impl->StationCounters[Best];
-    Out = Stations[Best].Exits[Counter % Stations[Best].Exits.Num()];
+    const int32 Exit = Counter % Stations[Best].Exits.Num();
+    Out = Stations[Best].Exits[Exit];
     ++Counter;
-    UE_LOG(LogTemp, Display, TEXT("OWQUEST respawn station %s exit %d at %s"), *Stations[Best].Object,
-        (Counter - 1) % Stations[Best].Exits.Num(), *Out.GetLocation().ToString());
+    if (FirstRespawnStationIndex == INDEX_NONE) { FirstRespawnStationIndex = Best; FirstRespawnExitIndex = Exit; }
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST respawn station %s exit %d at %s"), *Stations[Best].Object, Exit, *Out.GetLocation().ToString());
     return true;
+}
+
+bool UOpenWillowQuest::StartPoint(FTransform& Out)
+{
+    if (!Impl || bFailed) return false;
+    if (StartStationIndex != INDEX_NONE) { Out = StartPose; return true; }
+    // A loaded player stands on the saved ("last visited") station's first exit point, facing that exit's yaw. Observed in the real
+    // game, session 1 of 2026-11-12 (level 8, Sanctuary, every SDK mod off as read in the game; two loads of one save, so two samples
+    // of one case): 1.15 uu above StationTeleporterExitPoint_0 of FastTravelStation_0, facing 90 deg. The load chain was not hooked,
+    // and that station was also the only active and the nearest one, so which rule placed her is not told apart (UNVERIFIED).
+    // HOST STAND-IN: the host save carries no station, so the level's one fast-travel station stands in for the saved one (it is
+    // the station that save named). With none, or more than one, there is no start here and the level's player start is kept.
+    const auto& Stations = Impl->Data.Stations;
+    int32 Found = INDEX_NONE;
+    for (int32 I = 0; I < Stations.Num(); ++I) {
+        if (!Stations[I].bFastTravel || Stations[I].Exits.Num() == 0) continue;
+        if (Found != INDEX_NONE) return false;
+        Found = I;
+    }
+    if (Found == INDEX_NONE) return false;
+    // The start counts as one use of the station's exit counter, so the first respawn there takes the next exit point. Observed only
+    // that the first respawn after a load did not reuse the load's exit (session 1: the next one; session 2's four respawns on another
+    // map agree). That the game's load advances the same counter is an inference: UNVERIFIED.
+    int32& Counter = Impl->StationCounters[Found];
+    StartExitIndex = Counter % Stations[Found].Exits.Num();
+    ++Counter;
+    StartStationIndex = Found;
+    StartPose = Stations[Found].Exits[StartExitIndex];
+    Out = StartPose;
+    UE_LOG(LogTemp, Display, TEXT("OWQUEST start at station %s exit %d at %s yaw %.1f (saved-station stand-in: the level's fast-travel station)"),
+        *Stations[Found].Object, StartExitIndex, *StartPose.GetLocation().ToString(), StartPose.Rotator().Yaw);
+    return true;
+}
+
+bool UOpenWillowQuest::StartUse(int32& Station, int32& Exit, FTransform& Pose) const
+{
+    Station = StartStationIndex; Exit = StartExitIndex; Pose = StartPose;
+    return StartStationIndex != INDEX_NONE;
+}
+
+bool UOpenWillowQuest::FirstRespawnUse(int32& Station, int32& Exit) const
+{
+    Station = FirstRespawnStationIndex; Exit = FirstRespawnExitIndex;
+    return FirstRespawnStationIndex != INDEX_NONE;
+}
+
+FString UOpenWillowQuest::StationObject(int32 Station) const
+{
+    return Impl && Impl->Data.Stations.IsValidIndex(Station) ? Impl->Data.Stations[Station].Object : FString();
+}
+
+void UOpenWillowQuest::TryPlaceAtStart()
+{
+    auto* Walker = Cast<AOpenWillowWalker>(GetOwner());
+    AController* Controller = Walker ? Walker->GetController() : nullptr;
+    if (!Controller) return;   // placed on the first tick she is possessed
+    bStartTried = true;
+    FString Inspection;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owspawnx="), Inspection)) {
+        UE_LOG(LogTemp, Display, TEXT("OWQUEST start: -owspawnx= given, the inspection point is kept"));
+        return;
+    }
+    FTransform Start;
+    if (!StartPoint(Start)) {
+        UE_LOG(LogTemp, Warning, TEXT("OWQUEST start: no saved-station stand-in in the slice data, Maya keeps the level's player start"));
+        return;
+    }
+    const FRotator Facing(0.f, Start.Rotator().Yaw, 0.f);
+    Walker->SetActorLocationAndRotation(Start.GetLocation(), Facing, false, nullptr, ETeleportType::TeleportPhysics);
+    Walker->GetCharacterMovement()->StopMovementImmediately();
+    Walker->NotifyTeleported();
+    Controller->SetControlRotation(Facing);
 }
 
 bool UOpenWillowQuest::TouchesTrigger(const AActor* Actor) const
@@ -1278,6 +1352,7 @@ void UOpenWillowQuest::TickComponent(float Delta, ELevelTick Type, FActorCompone
             PC->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::E, IE_Released, 0.f));
         bReleaseUse = false;
     }
+    if (!bStartTried) TryPlaceAtStart();
     if (!bTrackBound) {
         // The target Matinee shares the door mover's sequence instance; bind it once the mover has loaded.
         bTrackBound = true;
@@ -1375,6 +1450,20 @@ void UOpenWillowQuest::RunTest(float Delta)
     switch (TestStep) {
     case 0: {
         if (TestWait < 1.5f) return;
+        {
+            // spawn_at_saved_station_exit, its first half (judged with the first respawn, step 20): she stands on the start's exit,
+            // the station's first, with its yaw (1.2 uu vertical: the standing pawn read 1.15 uu above the exit in the real game).
+            int32 Station = INDEX_NONE, Exit = INDEX_NONE;
+            FTransform Pose;
+            const bool bStart = StartUse(Station, Exit, Pose);
+            const FVector At = Walker->GetActorLocation(), Want = Pose.GetLocation();
+            const float Planar = FVector::Dist2D(At, Want), Up = At.Z - Want.Z;
+            const float Yaw = FMath::Abs(FMath::FindDeltaAngleDegrees(Walker->GetActorRotation().Yaw, Pose.Rotator().Yaw));
+            bTestStartAtExit = bStart && Exit == 0 && Planar <= 1.f && FMath::Abs(Up) <= 1.2f && Yaw <= 1.f;
+            TestStartDetail = bStart ? FString::Printf(TEXT("start at %s exit %d: %.2f uu off planar, %.2f uu vertical, yaw off %.2f deg"),
+                *StationObject(Station), Exit, Planar, Up, Yaw) : FString(TEXT("no start point"));
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST %s"), *TestStartDetail);
+        }
         if (bResume) {
             Check(Status() == 3, TEXT("resume_status_complete_from_save"));
             Check(Rewards == 1, TEXT("resume_reward_retained"));
@@ -1941,7 +2030,23 @@ void UOpenWillowQuest::RunTest(float Delta)
         if (Waiting(Respawns > RespawnsBeforeDeath, 0.5f + 25.f + FOpenWillowRespawnTimeline::HoldSeconds)) return;
         const int32 Before = RespawnsBeforeDeath;
         Check(Respawns == Before + 1, TEXT("player_death_triggers_respawn"));
-        Check(Walker->GetActorLocation().Equals(Data.OracleRespawnLocation, 1.f), TEXT("respawn_at_decoded_station_exit_point"));
+        {
+            // The decoded station, at the exit its counter gives: the start used that station's first exit, so the first respawn there
+            // takes the next one (observed: it did not reuse the load's exit; that the load advances the counter is UNVERIFIED).
+            int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE, RespawnStation = INDEX_NONE, RespawnExit = INDEX_NONE;
+            FTransform StartAt;
+            const bool bStart = StartUse(StartStation, StartExit, StartAt);
+            const bool bFirst = FirstRespawnUse(RespawnStation, RespawnExit);
+            FVector Expected = Data.OracleRespawnLocation;
+            if (bStart && Data.Stations[StartStation].Exits[0].GetLocation().Equals(Data.OracleRespawnLocation, 0.01f))
+                Expected = Data.Stations[StartStation].Exits[(StartExit + 1) % Data.Stations[StartStation].Exits.Num()].GetLocation();
+            Check(Walker->GetActorLocation().Equals(Expected, 1.f), TEXT("respawn_at_decoded_station_exit_point"));
+            UE_LOG(LogTemp, Display, TEXT("OWQUEST spawn_at_saved_station_exit: %s; first respawn at %s exit %d"), *TestStartDetail,
+                *StationObject(RespawnStation), RespawnExit);
+            Check(bTestStartAtExit && bFirst && RespawnStation == StartStation && RespawnExit != StartExit
+                && Walker->GetActorLocation().Equals(Data.Stations[RespawnStation].Exits[RespawnExit].GetLocation(), 1.f),
+                TEXT("spawn_at_saved_station_exit"));
+        }
         Check(Walker->GetHealth() == Walker->GetMaxHealth(), TEXT("respawn_restores_formula_health"));
         Check(Status() == 3, TEXT("mission_state_survives_respawn"));
         break;

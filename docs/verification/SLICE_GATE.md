@@ -55,6 +55,11 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   the fight; normal play keeps no such count. Hits from other causers, or with no causer, are reported in the detail. No
   hit from the selected enemy is a FAIL in range mode, and the checker overrules a NOT_AVAILABLE there. It is
   NOT_AVAILABLE only with the stand-in, which has no attack.
+- **The start and the first respawn's exit (since 2026-11-12, `spawn_at_saved_station_exit`).** The host starts Maya on the saved
+  station's first exit point ([SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1e). `spawn_at_saved_station_exit` is in the quest suite (`tools/test_quest.ps1`); its two halves are also on the gate: `spawn_maya` now also FAILs unless she stands within 1 uu
+  planar and 1.2 uu vertical of that exit, facing its yaw within 1 deg, and `bleed_out_respawn` also FAILs if the first respawn
+  after the start used the start's exit again. Both details name the station and the exit. Observed in the real game, session 1 of 2026-11-12 (level 8, Sanctuary, every SDK mod off as read in the game; two loads of one save, so two samples of one case). The checker
+  does not read these details; it is unchanged.
 - **Fire is held for the selected enemy's first hit (range mode).** Otherwise a quick kill could end the fight before that
   enemy attacks. The driver fires one shot every 0.5 s until the enemy has lost health (fixture `one shot at a time until
   the selected enemy was wounded`), then holds fire until the enemy has hit Maya. One shot at a time is needed because
