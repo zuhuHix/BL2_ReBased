@@ -501,11 +501,14 @@ no test driver: no `-owslicegate*`, no `ow.RangeLoot`, no granted point, no forc
 not switches: the dependency mission counts as complete (`OWQUEST FIXTURE` in the log), and Marcus walks straight lines.
 In the real game his walk ran at 150 uu/s, about half the 294 of the class's `GroundSpeed` x `WalkingPct` (live,
 2026-11-12, SDK mods off, two runs of one path: [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1b).
-His walk speed is a third stand-in since 2026-11-12: a flat 150 uu/s, with no slow-down before a node. Observed in the real game, session 1 of 2026-11-12
+His walk speed is a third stand-in since 2026-11-12: 150 uu/s, with no slow-down before nodes 12, 26 and 40 (he cut the corners at 12 and 26 inside
+the arrival radius and stopped at 40 within one 0.1 s read), and one short turn of about 0.8 s at low speeds at node 35. Observed in the real game, session 1 of 2026-11-12
 (the mission screen capture with the read-only watch, level 8, Sanctuary, every SDK mod off as read in the game; two runs of the
 same scripted steps, so two samples of one path, about 90 moving intervals each over one walk of about 1,230 uu), while his
-class's GroundSpeed read 294 and WalkingPct 1.0 in the same rows. Where the 150 comes from is UNVERIFIED, so the host sets it
-as a constant for this one walk (before, it walked him at 294 x 1.0, about twice as fast).
+class's GroundSpeed read 294 and WalkingPct 1.0 in the same rows. Where the 150 comes from is UNVERIFIED. A possible source: SANCTUARY_AMBIENT_NPCS.md
+records 150 for a citizen's patrol walk as GroundSpeed 294 x the Patrol stance's SpeedScale 0.51; Marcus's own stance was not
+read. The host sets 150 as a constant for this one walk, without the turn at node 35 (before, it walked him at 294 x 1.0, about
+twice as fast).
 It refuses to start, naming the file and the tool that makes it, when any of its local data is missing. It holds the
 machine-wide UE run lock while the window is open, saves to `local/playslice/save.json` and logs to `local/playslice/play-*.log`.
 Exit codes: 0 played or smoke passed, 1 a smoke item failed, 2 refused (missing data), 3 never launched (lock timeout, page
