@@ -321,7 +321,7 @@ are not.
   `ShouldGrantAlternateReward` (false) -> `ServerGrantMissionRewards` (currency type 0, currency 0, experience 395,
   `ExpEarn(395, source 4, type 0)`, `GetItemRewardsForPlayer` empty, `ClientSpawnMissionRewardUI`) -> changed-delegate -> weapon
   removal -> observers -> `OnPlayerTurnedInMission` on Marcus (`PlayMissionTurnedInDialog`, tag `VO_NPC_MissionTurnedIn`) ->
-  `PlayTurnIn`. Experience 26,218 -> 26,613, level 8 unchanged, no item. `MissionRewardsReceived` came later, from the reward
+  `PlayTurnIn`. Experience +395, level 8 unchanged, no item. `MissionRewardsReceived` came later, from the reward
   screen's confirmation (14.9 s here), and `AcceptOrSaveUnclaimedReward` never ran.
 - **Marcus's use chain at both uses:** the same nine checks (all false) and three behaviors as in lane L1; the on-use tag is
   `VO_NPC_OnUse_MissionsAvailable` before the accept and `VO_NPC_OnUse_MissionComplete` at ReadyToTurnIn.

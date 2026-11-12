@@ -46,8 +46,7 @@ kind and the grenade mod's name.
   `PROJECTILE_FIRING_PATTERNS_LIVE.md`, `SANCTUARY_RPG_MISSION.md`, `COMBAT_HIT_CHAIN.md`, `COMBAT_DEATH.md`,
   `AI_AWARENESS_LIVE.md`, `WEAPON_PROJECTILES.md`, `WEAPON_BALANCE_DECODE.md` (its six cards are now named by type, "SMG 1"
   and "SMG 2", and "elemental"), `NATIVE_WEAPON_RULES.md`, `SLICE_AUDIO_CHAIN.md`, `SLICE_AUDIO_LIVE.md`,
-  `REALGAME_GROUND_TRUTH.md`. In the last, the Fire mission's experience total (the first pass's item) is left for a later
-  change, because an open change adds to that file.
+  `REALGAME_GROUND_TRUTH.md` (also the Fire mission's experience total, the first pass's item, now "+395").
 - `COMBAT_DEATH.md`: the killing-pellet step takes an invented 40. Verified on 2026-11-12: the `--combat-run` with 40 and with
   the live pellet differ only in the amounts and the run times (15 of 434 output values), so the death order and post-state
   the record gives hold for the invented step.
@@ -61,6 +60,6 @@ kind and the grenade mod's name.
 
 Not changed here: the host's default shield values in `OpenWillowMayaState.h` and the records that state them or the old
 stand-in capacity (`COMBAT_DOWN_RESPAWN.md`, the recharge bullet and the capacity correction; the 2026-11-03-11 and
-2026-11-07-19 decisions), which another change rewrites; comments under `host/` and in `tools/`; and the Fire mission's
-experience total in `REALGAME_GROUND_TRUTH.md`, left for the open change on that file. With this change nothing else is
-deliberately left for a further pass.
+2026-11-07-19 decisions), which `2026-11-12-09-the-host-s-default-shield-recharge-becomes-an-invented-stand.md` rewrote
+without the save's values; and comments under `host/` and in `tools/`. With this change nothing else is deliberately left for
+a further pass.
