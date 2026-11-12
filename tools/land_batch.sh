@@ -13,7 +13,7 @@
 #    lines), and that the chain's final tree is identical to the tested commit's tree (-t). With -D instead, every
 #    changed file must be a regular, non-executable Markdown text file.
 # 3. One atomic push moves the PR branches to their commits in the chain (all or none, leased on the reviewed heads);
-#    once GitHub shows the new heads, main fast-forwards in a plain push (no force option). GitHub finds each
+#    once GitHub shows the new heads, main fast-forwards, leased on the main the chain was built on. GitHub finds each
 #    PR's head inside main and marks the PR Merged; the script waits for that, then deletes the landed remote branches.
 #    (In one combined push GitHub closes the PRs instead of merging them.)
 # It stops at the first thing it cannot prove, and nothing is pushed before every check has passed.
@@ -95,7 +95,9 @@ for item in $list; do
   git checkout -q --detach "$old" || stop "#$n: cannot check out ${old:0:7} in $wt" 10
   started=1
   rout=$(git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase -q --onto "$chain" "$base" 2>&1); rc=$?
-  # A rebase stops once per conflicting commit; carry on while rerere or the union driver resolved every file.
+  # A rebase stops once per conflicting commit; carry on while rerere or the union driver resolved every file. A
+  # --continue that fails the same way three times in a row (a refusing hook, a lock) stops with git's message.
+  last=; same=0
   for _ in $(seq 1 200); do
     if ! inrebase; then
       # A rebase that fails without stopping at a conflict (it refused to start, for example) rebased nothing.
@@ -104,9 +106,13 @@ for item in $list; do
     fi
     left=$(git diff --name-only --diff-filter=U)
     [ -z "$left" ] || stop "#$n conflict in: $left. The rebase is left open in $wt: resolve the files, git add them, run git rerere (it records the fix), then git rebase --abort and rerun this command." 4
+    if [ "$rc" != 0 ]; then
+      if [ "$rout" = "$last" ]; then same=$((same + 1)); else same=1; last=$rout; fi
+      [ "$same" -lt 3 ] || stop "#$n: the rebase failed the same way 3 times in a row; nothing pushed. git said: $rout" 10
+    fi
     rout=$(git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase --continue 2>&1); rc=$?
   done
-  inrebase && stop "#$n rebase did not finish" 10
+  inrebase && stop "#$n rebase did not finish; nothing pushed. git said: $rout" 10
   started=
   new=$(git rev-parse HEAD)
   git merge-base --is-ancestor "$chain" "$new" || stop "#$n: the rebased ${new:0:7} does not contain the chain ${chain:0:7}; nothing pushed" 10
@@ -122,7 +128,8 @@ if [ -n "$tested" ]; then
   [ "$(git rev-parse "$chain^{tree}")" = "$(git rev-parse "$tested^{tree}")" ] || stop "the chain's tree differs from the tested $tested" 6
   echo "  chain tree == tested ${tested:0:9}" | tee -a "$log"
 fi
-# main may only fast-forward: the chain must contain the main it was built on.
+# main may only fast-forward from exactly the main the chain was built on: this check that the chain contains that main,
+# and the lease on it at the push below, allow nothing else together.
 git merge-base --is-ancestor "$main" "$chain" || stop "the chain ${chain:0:9} does not contain main ${main:0:7}; nothing pushed" 10
 if [ -n "${DRY:-}" ]; then echo "DRY: every check passed, nothing pushed; chain tip ${chain:0:9}" | tee -a "$log"; exit 0; fi
 
@@ -148,9 +155,9 @@ if [ ${#refs[@]} -gt 0 ]; then
     [ "$seen" = "$new" ] || stop "#$n: GitHub still shows head $seen after the branch push; main NOT pushed. The PR branches now hold the rebased commits; rerun with the new heads after checking them." 12
   done
 fi
-# No force option: GitHub takes this push only as a fast-forward of the main it holds. A main that moved since the
-# chain was built is refused, unless the chain already contains it.
-perr=$(git push -q origin "$chain:refs/heads/main" 2>&1) || stop "main push refused, main unchanged; git said: $perr. The PR branches hold the rebased commits; rerun with the new heads." 8
+# The lease refuses a main that moved at all since the chain was built, forward or back (moved back, a plain push would
+# be a fast-forward and bring back what was taken off); the ancestor check above refuses a chain that does not extend it.
+perr=$(git push -q --force-with-lease="main:$main" origin "$chain:refs/heads/main" 2>&1) || stop "main push refused, main unchanged; git said: $perr. The PR branches hold the rebased commits; rerun with the new heads, and for a -t landing build and test a new tested commit first if main has moved." 8
 echo "  pushed: main ${main:0:7} -> ${chain:0:7}" | tee -a "$log"
 fail=
 for p in "${plan[@]}"; do

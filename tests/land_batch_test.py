@@ -36,6 +36,10 @@ if '/pulls/' in path:
     if jq.startswith('[.state'):
         print('\t'.join(['open', head, branch, 'main', 'synthetic/repo']))
     elif jq == '.head.sha':
+        # GH_STUB_MAIN_BACK=<sha>: someone force-pushes main back to that commit while the script waits for the heads.
+        back = os.environ.get('GH_STUB_MAIN_BACK')
+        if back:
+            git('update-ref', 'refs/heads/main', back)
         print(head)
     elif jq == '.merged':
         print('true' if git('merge-base', '--is-ancestor', head, 'refs/heads/main').returncode == 0 else 'false')
@@ -209,7 +213,43 @@ def check_failed_rebase_stops():
         assert world.main() == m and world.head('pr-1') == p, 'a failed rebase moved something'
 
 
-CASES = [check_two_prs_land, check_dirty_worktree_cannot_rewrite_main, check_failed_rebase_stops]
+def check_main_moved_back_is_refused():
+    """The reviewer's case: main is B then Y, the PR is based on B, and while the script waits for GitHub to show the
+    new PR head someone force-pushes main back to B. The chain still contains B, so a plain push would be a fast-forward
+    and bring Y back; the lease on Y refuses it (exit 8), and main stays at B."""
+    with tempfile.TemporaryDirectory() as tmp:
+        world = World(Path(tmp))
+        b = advance_main(world, {'docs/y.md': 'taken off again\n'}, 'Y')
+        p = world.pr(1, {'docs/p.md': 'p\n'}, base=b)
+        landing = world.landing('landing')
+        stopped = world.land(landing, [(1, p)], {'GH_STUB_MAIN_BACK': b})
+        assert stopped.returncode == 8 and 'main push refused' in stopped.stdout, (stopped.returncode, stopped.stdout)
+        assert 'new tested commit' in stopped.stdout, stopped.stdout
+        assert world.main() == b, 'main did not stay where it was moved back to'
+
+
+def check_rebase_that_leaves_head_elsewhere_stops():
+    """A rebase that reports success but leaves HEAD off the chain (here a post-rewrite hook in the landing worktree
+    puts HEAD back on the PR's own head) stops with exit 10 at the check after the rebase. The final check, that the
+    chain contains main, follows from the per-rebase checks (the chain starts at main and every step contains the one
+    before), so no setup reaches it alone; with both checks removed this case lands the PR over main's empty M through
+    the lease, which only checks what main is, not that the push is a fast-forward."""
+    with tempfile.TemporaryDirectory() as tmp:
+        world = World(Path(tmp))
+        b = advance_main(world, {}, 'empty M')
+        m = world.main()
+        p = world.pr(1, {'docs/p.md': 'p\n'}, base=b)
+        landing = world.landing('landing')
+        hook = landing / '.git' / 'hooks' / 'post-rewrite'
+        hook.write_bytes(('#!/bin/sh\ngit checkout -q --detach %s\n' % p).encode())
+        os.chmod(hook, 0o755)
+        stopped = world.land(landing, [(1, p)])
+        assert stopped.returncode == 10 and 'does not contain' in stopped.stdout, (stopped.returncode, stopped.stdout)
+        assert world.main() == m and world.head('pr-1') == p, 'a rebase off the chain moved something'
+
+
+CASES = [check_two_prs_land, check_dirty_worktree_cannot_rewrite_main, check_failed_rebase_stops,
+         check_main_moved_back_is_refused, check_rebase_that_leaves_head_elsewhere_stops]
 
 if __name__ == '__main__':
     for case in CASES:

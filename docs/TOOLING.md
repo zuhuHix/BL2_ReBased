@@ -428,8 +428,10 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 (current `main` plus exactly these PRs, in this order) that the in-engine suites have passed on, in the sense of "What
 counts as passed" below. The script rebases the
 listed PRs into one chain on top of `origin/main`. One atomic push moves the PR branches to their commits in the chain
-(all or none); once GitHub shows the new heads, `main` fast-forwards in a second, plain push (no force option, so
-GitHub refuses anything but a fast-forward). (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
+(all or none); once GitHub shows the new heads, `main` fast-forwards in a second push, leased on the `main` the chain
+was built on. With the check that the chain contains that `main`, the lease allows only a fast-forward from exactly
+that `main`: a `main` that moved since, forward or back, is refused (exit 8), and a `-t` landing then needs a new
+tested commit as well as the new heads. (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
 second push is refused, the PRs stay open on their rebased heads and the run can be repeated with those.) GitHub finds
 each PR's head inside `main` and marks the PR Merged; the script waits for that, then deletes each landed remote branch unless it moved after the push (GitHub
 retargets any open PR that was based on one). Before it pushes anything, it checks:
