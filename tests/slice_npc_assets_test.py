@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 # tools/slice_npc_assets.py imports numpy at module level. No skip without it: ctest registers this file only where numpy
-# imports (CMakeLists.txt, OW_NUMPY_PY_TESTS), so a missing numpy must fail here, not pass having run nothing.
+# imports (tests/CMakeLists.txt, OW_NUMPY_PY_TESTS), so a missing numpy must fail here, not pass having run nothing.
 import numpy  # noqa: F401
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 

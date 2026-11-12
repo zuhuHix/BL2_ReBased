@@ -66,7 +66,7 @@ entries and one message per group left out.
 
 ## Tests outside ctest
 Since 2026-11-11 every `tests/*_test.py` that passes in a clean export (no `local/`, no build, no installed game, no network) under
-a Python with no third-party packages, with none of its cases skipped, runs in ctest as `py-<name>` (the list at the end of `CMakeLists.txt`). CI also runs
+a Python with no third-party packages, with none of its cases skipped, runs in ctest as `py-<name>` (the list in `tests/CMakeLists.txt`, which `CMakeLists.txt` includes). CI also runs
 `level_test.py` and `viewer_test.py` directly. The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
 that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11.
 
