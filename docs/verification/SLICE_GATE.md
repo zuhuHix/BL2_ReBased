@@ -111,7 +111,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
 - When a gun's magazine and reserve are both empty, its reserve is refilled (fixture `ammo reserve refilled`). The stand-in target has 20,000 health, sized
   for level-30 guns, so a level-8 pistol needs about 470 shots.
 - **The lethal damage is a fixture** (`ApplyPointDamage`, 1e6). It was written before the range, when no enemy could attack
-  Maya; the range's enemies attack her now (link 4), but none has downed her in a gate run. It is named on `go_down`, and
+  Maya; the range's enemies attack her now (link 4), but in the older variants none has downed her in a gate run. It is named on `go_down`, and
   `bleed_out_respawn` names the down state it started from. The unforced variant below leaves it out.
 - **`FireOnce` ignores the gun's fire rate.** It fires whenever the driver calls it, every tick outside the wait for the
   wound, so link 3's shot counts and kill times are not what the gun would do in play. Link 3 does not grade time.
@@ -444,8 +444,9 @@ Nothing is checked against the real game.
 `bleed_out_respawn` from the lethal fallback. Links 10 to 12 may show what the live range does to the mission.
 
 **First runs (2026-11-11, main 969307f, zuhu PC, eight runs one after another with `-SkipBuild`).** AI-assisted (Claude
-Code); this lane read the eight runs' link tables and gate logs (ignored, under the hub runner's `local/`); the commit is
-from the hub's notes, as the logs do not name it. A host result, not parity, and nothing here is checked against the real
+Code); this lane read the eight runs' link tables and gate logs (ignored, under the hub runner's `local/`). The logs do not name the
+commit; the runner worktree's HEAD was 969307f for the whole series (its reflog), and with `-SkipBuild` the binary is
+only as recent as the last build there. A host result, not parity, and nothing here is checked against the real
 game. 5 of the 8 runs passed all 14 links (exit 0) and 109 of the 112 link attempts passed. The three FAILs:
 `phaselock_enemy` once (the point was bought on the skills page, then Maya went down 0.42 s later and the skill's
 health-state constraint refused the cast) and `pick_up_aimed_not_nearest` twice (the card named no drop; at the use-key press
@@ -453,6 +454,8 @@ the view line hit a living range enemy 60 and 10 uu away). In all eight, the gun
 (budget 100), the point was bought on the skills page, the mission was accepted and turned in on the mission page, and
 `go_down` and `bleed_out_respawn` passed with `how=enemies` and `how=after_enemy_down`: the range's enemies downed Maya after
 6.0 to 31.2 s and 12 to 25 hits. So the expected first result above was wrong for links 13 and 14. A run took 297 to 558 s.
+Not explained (owner: range / down): in run 1 the gate's own down bled out in 8 s with the successive-down counter at 0,
+36.8 s after an earlier down; in the other seven it bled out in 12 s.
 
 ## Gaps, with the owning lane
 
@@ -498,6 +501,7 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-11 | `-Unforced` added (feature/slice-gate-unforced) | not run | the driver was not compiled (build slot held by a batch); checker tests 55/55 |
 | 2026-11-11 | `-Unforced`, review round 1 of #218 | not run | every NOT_AVAILABLE fails an unforced run; the mission-page token needs the page to have done the work; an enemy hit is required for a down; the accept falls back to a named direct call; still not compiled; checker tests 58/58 |
 | 2026-11-11 | `-Unforced`, review round 2 of #218 | not run | the accept step can no longer wait on a page the keys do not reach; strict start record; corpses recorded from the pickup snapshot; a down needs a range-enemy hit within 0.5 s before it; still not compiled; checker tests 63/63 |
+| 2026-11-11 | `-Unforced`, main 969307f, zuhu, eight runs with `-SkipBuild` | 5 of 8 runs green; 109 pass / 3 fail of 112 link attempts | `phaselock_enemy` once (cast refused, Maya down 0.42 s after the buy); `pick_up_aimed_not_nearest` twice (a living range enemy in the view line at the use-key press); every `go_down` by the range's enemies; see "First runs" |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.

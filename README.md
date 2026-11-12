@@ -110,7 +110,7 @@ slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14
 
 Three days earlier the same suite said 10 of 14. That's the pace right now.
 
-**What that does not mean:** it's a scripted run, not a player, and it leans on named test fixtures such as teleports, a granted Phaselock point and forced loot. In those runs no enemy downed Maya: the down came from the test's own lethal damage. An unforced variant without those fixtures ran 8 times on 2026-11-11: the range's enemies downed her every time, and 5 of the 8 runs passed all 14 links. So the Phase 4 gate is not claimed as met. The full list of limits is in [SLICE_GATE.md](docs/verification/SLICE_GATE.md).
+**What that does not mean:** it's a scripted run, not a player, and it leans on named test fixtures such as teleports, a granted Phaselock point and forced loot. In those runs no enemy downed Maya: the down came from the test's own lethal damage. An unforced variant, which drops the forced loot, the granted point and the lethal damage but keeps the teleports, ran 8 times on 2026-11-11: the range's enemies downed her every time, and 5 of the 8 runs passed all 14 links. So the Phase 4 gate is not claimed as met. The full list of limits is in [SLICE_GATE.md](docs/verification/SLICE_GATE.md).
 
 <details>
 <summary><b>All 14 links, and the rest of that morning's results</b></summary>
