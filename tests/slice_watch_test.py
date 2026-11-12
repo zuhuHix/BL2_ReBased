@@ -686,6 +686,26 @@ class CheckerTest(unittest.TestCase):
             self.assertFalse(got['order ResurrectPlayer -> ShowRespawnDialog after before_down'], snaps)
             self.assertFalse(got['gap ResurrectPlayer -> ShowRespawnDialog'], snaps)
 
+    def test_a_stopped_recording_says_so_and_errors_name_the_file_only(self):
+        # Review of #245: a recording closed by a stop printed "end line present" under FAIL ended, and the refusal lines printed the full
+        # path under the user profile into output that may be pasted into a report.
+        stopped = dump()
+        stopped['end']['stopped'] = True
+        detail = {name: d for name, _, d in checker.check(stopped, {})}['ended']
+        self.assertEqual(detail, 'end line says stopped, not dumped')
+        tool = str(ROOT / 'tools/real_game/slice_watch_check.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / 'invented-spec.json'
+            bad.write_text(json.dumps({'checks': {'no_such_check': 1}}), encoding='utf-8')
+            missing = Path(tmp) / 'no-such-recording.jsonl'
+            for args in (['--validate-spec', str(Path(tmp) / 'absent-spec.json')], ['--validate-spec', str(bad)],
+                         [str(missing), '--spec', str(bad)], ['--spec', str(Path(tmp) / 'absent-spec.json'), str(missing)]):
+                done = subprocess.run([sys.executable, tool, *args], capture_output=True, text=True)
+                self.assertEqual(done.returncode, 2, args)
+                self.assertNotIn(tmp, done.stdout, args)   # no folder, only the file's name
+                self.assertNotIn(str(Path(tmp).resolve()), done.stdout, args)
+                self.assertRegex(done.stdout, r'(invented-spec|absent-spec|no-such-recording)\.json', args)
+
     def test_the_after_option_is_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             s = Path(tmp) / 'spec.json'

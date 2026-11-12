@@ -180,7 +180,9 @@ def check(dump, checks):
     """A list of (name, ok, detail) tuples. Details hold counts and pass/fail only."""
     rows = dump.get("rows", [])
     end = dump.get("end")
-    out = [("ended", end is not None and not end.get("stopped"), "end line present" if end else "no end line (crashed or never dumped)")]
+    ended = ("end line says stopped, not dumped" if end and end.get("stopped") else "end line present" if end
+             else "no end line (crashed or never dumped)")
+    out = [("ended", end is not None and not end.get("stopped"), ended)]
     if checks.get("no_missing"):
         missing = dump.get("missing", [])
         out.append(("no_missing", not missing, f"{len(missing)} names did not resolve"))
@@ -329,6 +331,14 @@ def check(dump, checks):
     return out
 
 
+def _reason(error, path):
+    """An error for the printed line, with the file's name only: this output may be pasted into a report, and a full path names the user."""
+    text = error.strerror if isinstance(error, OSError) and error.strerror else str(error)
+    for p in {str(path), str(Path(path).resolve())}:
+        text = text.replace(p, Path(path).name)
+    return f"{Path(path).name}: {text}"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("recording", nargs="?")
@@ -340,7 +350,7 @@ def main(argv=None):
         try:
             validate_spec(a.validate_spec)
         except (OSError, ValueError) as e:
-            print(f"SPEC REFUSED: {e}")
+            print(f"SPEC REFUSED: {_reason(e, a.validate_spec)}")
             return 2
         print("SPEC OK")
         return 0
@@ -348,9 +358,13 @@ def main(argv=None):
         ap.error("a recording and --spec are needed")
     try:
         checks = validate_spec(a.spec).get("checks", {})
+    except (OSError, ValueError) as e:
+        print(f"UNREADABLE: {_reason(e, a.spec)}")
+        return 2
+    try:
         dump = load_recording(a.recording)
     except (OSError, ValueError) as e:
-        print(f"UNREADABLE: {e}")
+        print(f"UNREADABLE: {_reason(e, a.recording)}")
         return 2
     results = check(dump, checks)
     if a.json:
