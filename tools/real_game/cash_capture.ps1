@@ -21,7 +21,9 @@ param(
     [string]$Lane = 'range-cash',
     [string]$Character = 'Save0008.sav',
     [ValidateRange(1, 1000)][int]$WantItems = 8,
-    [int]$MaxKills = 40,
+    # At most 150: with a watch each kill asks for one labelled 'drop' snapshot, and the watch keeps 200 labelled reads, so this leaves room
+    # for start, arrival, before_down, down, after_respawn, end and the smoke item's own labels (review of #251).
+    [ValidateRange(1, 150)][int]$MaxKills = 40,
     [int]$MaxMinutes = 12,
     [int]$DenTrials = 3,
     [int]$DenSeconds = 25,

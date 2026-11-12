@@ -780,6 +780,21 @@ class ReadingsLoopTest(unittest.TestCase):
         drops = self.work / 'drops.txt'
         self.assertEqual(len(drops.read_text(encoding='utf-8').split()) if drops.exists() else 0, session['kill_attempts'])
 
+    def test_kills_are_capped_so_drops_leave_room_for_the_other_labels(self):
+        # Review of #251, note 7: with about 190 kills the per-kill drop snapshots would fill the 200 labelled reads and drop before_down,
+        # down and after_respawn. -MaxKills is at most 150; 151 is refused before anything is touched.
+        # Always with the stub helpers and this test's own hub lock, so a missing range check runs the stubbed capture, never the real one.
+        stub = self.work / 'stub.ps1'
+        stub.write_text(STUB.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__WORK__', str(self.work)), encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(CAPTURE), '-HubLock', str(self.hub),
+                               '-Helpers', str(stub), '-MaxKills', '151'], capture_output=True, text=True, timeout=180,
+                              env=dict(os.environ, OPENWILLOW_BL2=str(self.game), OW_SCENARIO='ok'))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('MaxKills', done.stdout + done.stderr)
+        self.assertFalse((self.work / 'rg/cash/session.json').exists())   # refused before anything ran
+        watch = (ROOT / 'tools/real_game/scripts/slice_watch.py').read_text(encoding='utf-8')
+        self.assertIn('SW_LABELLED_CAP = 200', watch)   # the room this range is set against
+
     def test_no_drop_snapshot_is_asked_for_before_the_map_settles(self):
         # Review of #251, point 3: a drop snapshot asked for before the map settled is recorded as not taken and fails the watch's check.
         # One read of the settle state comes first (no wait); an unsettled drop is counted, not asked for.
