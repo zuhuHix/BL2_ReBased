@@ -158,10 +158,24 @@ def test_editor_job_names_the_attach_step_when_placements_are_missing_or_stale()
         assert 'attachments' not in hosts['Beast'] and '-Steps attach' in printed and 'none yet' in printed, printed
     with tempfile.TemporaryDirectory() as folder:   # placements of an earlier identity are not kept
         hosts, printed = run_editor_job(folder, {'Beast': {'attachments': [{'bone': 'B0'}]}})
-        assert 'attachments' not in hosts['Beast'] and '1 placements for 2 worn pieces' in printed, printed
-    with tempfile.TemporaryDirectory() as folder:   # a pawn that wears nothing needs no attach step
+        assert 'attachments' not in hosts['Beast'] and '1 placements whose bones differ from the 2 worn pieces' in printed, printed
+    with tempfile.TemporaryDirectory() as folder:   # review r1: same count, one bone swapped by an edit of the target's list: not kept
+        hosts, printed = run_editor_job(folder, {'Beast': {'attachments': [{'bone': 'B0'}, {'bone': 'Other'}]}})
+        assert 'attachments' not in hosts['Beast'] and 'bones differ' in printed and 'kept' not in printed, printed
+    with tempfile.TemporaryDirectory() as folder:   # the right bones in another order are not the attach step's output either
+        hosts, printed = run_editor_job(folder, {'Beast': {'attachments': [{'bone': 'B1'}, {'bone': 'B0'}]}})
+        assert 'attachments' not in hosts['Beast'], hosts
+
+
+def test_editor_job_writes_an_empty_list_for_a_pawn_that_wears_nothing():
+    # Neither current target is such a pawn. This guards the step from writing no field at all, which
+    # tools/phaselock_attachment_check.py refuses as "never written" (exit 2), while the right answer is an empty list.
+    with tempfile.TemporaryDirectory() as folder:
         hosts, printed = run_editor_job(folder, None, worn=0)
-        assert 'attachments' not in hosts['Beast'] and 'attach' not in printed, printed
+        assert hosts['Beast']['attachments'] == [] and 'attach' not in printed, printed
+    with tempfile.TemporaryDirectory() as folder:   # stale placements from an earlier identity are not kept on a pawn that now wears nothing
+        hosts, printed = run_editor_job(folder, {'Beast': {'attachments': [{'bone': 'B0'}]}}, worn=0)
+        assert hosts['Beast']['attachments'] == [], hosts
 
 
 if __name__ == '__main__':

@@ -10,14 +10,18 @@ citizens' steps), `docs/verification/SANCTUARY_RPG_MISSION.md` (the Fire checker
   editor-job; editor-job wrote `host_target.json` from scratch, so a prepare run after an attach run dropped the `attachments` lists the
   later attachments step had written, the likely cause of the incident. Chosen: keep what the step does not own rather than refuse,
   because the placements depend only on the identity and the attach editor report, and editor-job does not change either. They are
-  kept only when their number equals the identity's worn pieces; otherwise they are left out and the step prints
+  kept only when their bones, in order, equal the bones of the identity's worn pieces (review r1: a count alone kept an outdated list
+  of the same length after an edit that swapped one piece); otherwise they are left out and the step prints
   `powershell -File tools/import_phaselock_target.ps1 -Steps attach` to rerun (and `tools/prepare_range.py` refuses the result, as before).
+  Not compared: each piece's mesh and transform, so a changed transform on the same bones keeps the old placement (`UNVERIFIED`). A pawn
+  that wears nothing gets `attachments: []`, so the attachment check reads it as an answer and not as a missing field.
 - **`tools/phaselock_attachment_check.py` refuses a missing `attachments` field** (exit 2, naming the attach step). A missing field means
   the placements were never written or were dropped; an empty list written by the attach step stays a valid answer.
 - **`tools/prepare_ambient_world.py --compose` stops on a worn piece missing from the attach report.** Line 313 itself was not a hole: a
   donor spawn always went through `annotate_looks`, which sets `attachments`. The hole was next to it: `annotate_looks` dropped every
   captured piece whose mesh was not in `local/slice/ambient/editor_report_attach.json`. A piece on a bone the host uses whose mesh is
-  neither in the report nor in the attach job's own `missing_meshes` now stops the tool without writing, naming
+  neither in the report nor in the attach job's own `missing_meshes` now stops the tool without writing (the previous manifest stays on
+  disk, out of date, and the message says so), naming
   `tools/seed_ambient_npc_assets.ps1 -Steps attach`. Meshes the job recorded as unavailable are still left out, as before.
 - **`tools/verify_fire_event_order.py` has one whole-run rule: no `level` event in the default run.** The engine raises a level in the
   experience pool's per-frame update, so a level-up lands in a tick step after the turn-in, where no rule looked. The invented total

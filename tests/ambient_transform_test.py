@@ -99,6 +99,7 @@ class AnnotateLooksTest(unittest.TestCase):
         self.assertIn('lacks 1 worn meshes', str(stop.exception))
         self.assertIn('Pack_A', str(stop.exception))
         self.assertIn('-Steps attach', str(stop.exception))
+        self.assertIn('previous ambient_world.json is left as it was and is now out of date', str(stop.exception))
 
     def test_a_mesh_the_attach_job_recorded_as_unavailable_is_left_out(self):
         self.assertEqual([a['bone'] for a in self.run_looks(['Hat_A'], ['Pkg.Mesh.Pack_A'])], ['Head'])

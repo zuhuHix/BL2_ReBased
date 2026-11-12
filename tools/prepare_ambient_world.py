@@ -289,7 +289,7 @@ def annotate_looks(spawns, compose_file, kinds, report, known_missing=()):
         spawn['attachments'] = items
     if lost:
         sys.exit(f'the ambient attach report lacks {len(lost)} worn meshes the capture shows ({", ".join(sorted(lost)[:5])}): it is stale or '
-                 f'partial, so the citizens would lose pieces. No manifest was written. Re-run {AMBIENT_ATTACH_STEP}')
+                 f'partial, so the citizens would lose pieces. No manifest was written: the previous ambient_world.json is left as it was and is now out of date. Re-run {AMBIENT_ATTACH_STEP}')
     return missing
 
 

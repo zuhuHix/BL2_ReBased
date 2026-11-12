@@ -19,7 +19,7 @@ Steps (``all`` runs identity, extract, editor-job; ``anims`` needs the editor's 
 * ``extract``    UModel: mesh glTF + MD5, the component's material instances, the AnimSet as MD5 clips.
 * ``editor-job`` the job file for ``tools/slice_npc_editor.py`` (modes ``npcs`` then ``anims``), plus
                  ``host_target.json``: the UE asset paths and the pawn numbers the host reads. It keeps the placements an
-                 earlier ``attachments`` step wrote when they match the worn pieces, and otherwise says to rerun that step.
+                 earlier ``attachments`` step wrote when their bones match the worn pieces, and otherwise says to rerun that step.
 * ``anims``      convert the chosen MD5 clips to UE bone tracks (needs ``ref_pose_<Id>.json`` from the editor).
 * ``attachments`` add the worn static meshes to ``host_target.json`` (needs the editor's ``attach`` report).
 
@@ -330,18 +330,22 @@ def keep_placements(hosts, previous, identity):
     """Carries the attach step's placements from the previous host_target.json into the one editor-job writes, and returns one line per
     target about them. editor-job owns everything host_target() writes; the `attachments` list belongs to the attachments step, which
     runs later (-Steps attach). Rewriting the file from scratch dropped them (2026-11-12: eight suites then ran on bare enemies).
-    Placements are kept only when their number equals the worn pieces of this identity; otherwise they are left out and the line names
-    the step to rerun, so a later step can never be silently undone and stale placements are never kept."""
+    Placements are kept only when their bones, in order, equal the bones of this identity's worn pieces (the attachments step writes
+    them in identity order); otherwise they are left out and the line names the step to rerun, so a later step is never silently undone.
+    Not compared: each piece's mesh and transform, so a changed transform on the same bones keeps the old placement (UNVERIFIED that
+    this cannot happen without a change of bones). A pawn that wears nothing gets an empty list: that is the answer, not a missing one."""
     notes = []
     for name, host in hosts.items():
-        worn = len(identity['targets'][name].get('attachments') or [])
+        bones = [piece.get('bone') for piece in identity['targets'][name].get('attachments') or []]
         old = (previous or {}).get(name)
         placed = old.get('attachments') if isinstance(old, dict) else None
-        if isinstance(placed, list) and len(placed) == worn:
+        if not bones:
+            host['attachments'] = []
+        elif isinstance(placed, list) and [p.get('bone') if isinstance(p, dict) else None for p in placed] == bones:
             host['attachments'] = placed
             notes.append(f'{name}: kept {len(placed)} attachment placements of the attach step')
-        elif worn:
-            why = 'none yet' if placed is None else f'{len(placed)} placements for {worn} worn pieces, left out'
+        else:
+            why = 'none yet' if placed is None else f'{len(placed)} placements whose bones differ from the {len(bones)} worn pieces, left out'
             notes.append(f'{name}: no attachment placements ({why}): run {ATTACH_STEP} next')
     return notes
 
