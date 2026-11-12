@@ -25,6 +25,21 @@ OLD = datetime.datetime(2019, 6, 1, tzinfo=datetime.timezone.utc).timestamp()   
 COMMITTED = '2020-01-01T12:00:00+00:00'
 
 
+def long_path(path):
+    r"""The path with every 8.3 short name expanded (GetLongPathNameW), so it can be compared as text with what the script
+    prints: a temporary folder can come back with a short 8.3 name such as RUNNER~1 for a folder the script prints by its
+    long name.
+    The path must exist. Not Path.resolve(): that also follows junctions, which the link check needs left alone."""
+    if sys.platform != 'win32':
+        return str(path)
+    import ctypes
+    size = ctypes.windll.kernel32.GetLongPathNameW(str(path), None, 0)
+    buf = ctypes.create_unicode_buffer(size)
+    if not size or not ctypes.windll.kernel32.GetLongPathNameW(str(path), buf, size):
+        raise OSError(f'GetLongPathNameW failed for {path}')
+    return buf.value
+
+
 def git(repo, *args, date=None):
     env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid', GIT_COMMITTER_NAME='t',
                GIT_COMMITTER_EMAIL='t@example.invalid')
@@ -37,7 +52,8 @@ class Cases:
     POWERSHELL = None   # set per shell by the classes at the end
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        base = Path(self.tmp.name)
+        # Every path below is built from the long form, so paths the script prints compare as text with the test's.
+        self.base = base = Path(long_path(self.tmp.name))
         self.wt = base / 'work tree'
         self.outside = base / 'elsewhere'
         self.outside.mkdir()
@@ -65,7 +81,7 @@ class Cases:
         e = dict(os.environ)
         e.pop('OPENWILLOW_UE', None)
         e['OPENWILLOW_UE_LOCK'] = str(self.lock)
-        e['LOCALAPPDATA'] = self.tmp.name
+        e['LOCALAPPDATA'] = str(self.base)
         e.update(env or {})
         done = subprocess.run([self.POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
                                '-Worktree', str(self.wt), *args], capture_output=True, text=True, env=e, timeout=120)
@@ -94,9 +110,9 @@ class Cases:
 
     def test_not_a_git_checkout_still_reports(self):
         # The reviewer's reproduction: under 5.1, git's stderr used to end the run with no PREFLIGHT line and no summary.
-        bare = Path(self.tmp.name) / 'no repo'
+        bare = self.base / 'no repo'
         bare.mkdir()
-        e = dict(os.environ, OPENWILLOW_UE_LOCK=str(self.lock), LOCALAPPDATA=self.tmp.name, GIT_CEILING_DIRECTORIES=self.tmp.name)
+        e = dict(os.environ, OPENWILLOW_UE_LOCK=str(self.lock), LOCALAPPDATA=str(self.base), GIT_CEILING_DIRECTORIES=str(self.base))
         done = subprocess.run([self.POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(SCRIPT),
                                '-Worktree', str(bare), '-Generators', 'a=b.py', '-CheckBuild'],
                               capture_output=True, text=True, env=e, timeout=120)
@@ -157,7 +173,7 @@ class Cases:
         self.assertLines(lines, 'port', ['ok'])
 
     def test_editor(self):
-        procs = Path(self.tmp.name) / 'procs.txt'
+        procs = self.base / 'procs.txt'
         procs.write_text('notepad 11\nUnrealEditorHelper 12\n')
         rc, lines, out = self.run_ps('-NoEditor', '-ProcessList', str(procs))
         self.assertEqual(rc, 0, out)
@@ -223,7 +239,7 @@ class Cases:
         self.assertIn('src/new_file.cpp', out)
 
     def test_engine(self):
-        engine = Path(self.tmp.name) / 'Invented UE'
+        engine = self.base / 'Invented UE'
         rc, lines, out = self.run_ps('-CheckEngine', env={'OPENWILLOW_UE': str(engine)})
         self.assertEqual(rc, 1, out)
         self.assertLines(lines, 'engine', ['FAIL'])
@@ -259,7 +275,7 @@ class Cases:
     def test_one_failing_check_does_not_stop_the_others(self):
         # -ProcessList names a file that does not exist, so the editor check throws; the checks after it still run.
         self.put('local/a/data.json')
-        rc, lines, out = self.run_ps('-Data', 'local/a/data.json', '-NoEditor', '-ProcessList', str(Path(self.tmp.name) / 'none.txt'),
+        rc, lines, out = self.run_ps('-Data', 'local/a/data.json', '-NoEditor', '-ProcessList', str(self.base / 'none.txt'),
                                      '-ReportHold', 'local/batch.hold')
         self.assertEqual(rc, 1, out)
         self.assertLines(lines, 'data', ['ok'])
@@ -269,7 +285,7 @@ class Cases:
         self.assertIn('PREFLIGHT SUMMARY failed=1 checks=3', out)
 
     def test_report_file(self):
-        report = Path(self.tmp.name) / 'report.txt'
+        report = self.base / 'report.txt'
         rc, _, out = self.run_ps('-Data', 'local/missing.json', '-Report', str(report))
         self.assertEqual(rc, 1, out)
         text = report.read_text()
@@ -280,6 +296,22 @@ class Cases:
 for _name, _path in SHELLS.items():
     globals()[f'Preflight_{_name}'] = unittest.skipUnless(sys.platform == 'win32', 'Windows only')(
         type(f'Preflight_{_name}', (Cases, unittest.TestCase), {'POWERSHELL': _path}))
+
+
+class LongPathTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
+    def test_short_names_expand(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(long_path(tmp)) / 'a folder with a long name'
+            folder.mkdir()
+            import ctypes
+            size = ctypes.windll.kernel32.GetShortPathNameW(str(folder), None, 0)
+            buf = ctypes.create_unicode_buffer(size)
+            ctypes.windll.kernel32.GetShortPathNameW(str(folder), buf, size)
+            if buf.value == str(folder):
+                self.skipTest('this volume makes no 8.3 short names')
+            self.assertNotEqual(buf.value, str(folder))
+            self.assertEqual(long_path(buf.value), str(folder))
 
 
 class ShellsTest(unittest.TestCase):
