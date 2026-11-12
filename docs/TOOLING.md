@@ -1527,8 +1527,8 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   stops; the remaining stages are skipped, and the run fails. Each stage is stamped to `stages-<run>.log` before its risky command.
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
   window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
-  held input is never completed. A record is rewritten in one replace, so a failed rewrite keeps the old one, and a leftover
-  `<record>.json.tmp` stops the next run for a person to decide. An earlier run's record is completed, and its inputs released, only
+  held input is never completed. A record is rewritten in one replace. After a failed rewrite either the old record or its
+  `<record>.json.tmp` is there (usually both), and a leftover `.tmp` stops the next run for a person to decide. An earlier run's record is completed, and its inputs released, only
   under the run lock and after reading it again there. The focus helper's Alt tap is journalled like any held key.
 
 Tests (no game, invented objects): `tests/slice_watch_test.py` (in ctest as `py-slice_watch`) runs the recorder against a stand-in

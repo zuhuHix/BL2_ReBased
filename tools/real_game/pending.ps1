@@ -65,9 +65,11 @@ function Write-PendingFile([string]$Path, $Record) {
     New-Item -ItemType Directory -Force (Split-Path -Parent $Path) | Out-Null
     $tmp = "$Path.tmp"
     $Record | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tmp -Encoding UTF8
-    # An existing record is replaced in one step (ReplaceFile): if that fails (the new copy held open by a scanner, say), the old record stays
-    # where every later run looks, and the .tmp beside it is found as an unfinished rewrite that needs a person (Get-PendingFiles). A delete
-    # then move (Move-Item -Force) lost the old record when the move failed. [NullString]::Value: PowerShell would pass $null as "".
+    # An existing record is replaced in one step (ReplaceFile). What is guaranteed after a failed rewrite: either the old record is still
+    # there, or the .tmp is, and Get-PendingFiles finds the .tmp as an unfinished rewrite that stops the next run for a person. In most
+    # failures (the new copy held open by a scanner, say) both are; ReplaceFile without a backup name can also fail after the old record
+    # is gone (error 1176), and then the .tmp is the copy left. A delete then move (Move-Item -Force) could leave only a .tmp that no run
+    # looked for. [NullString]::Value: PowerShell would pass $null as "".
     $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     if (Test-Path -LiteralPath $Path) { [IO.File]::Replace("$full.tmp", $full, [NullString]::Value) } else { [IO.File]::Move("$full.tmp", $full) }
     $back = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json

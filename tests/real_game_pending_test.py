@@ -152,12 +152,17 @@ $out.tmp_left = Test-Path -LiteralPath "$rec.tmp"
 $out.found = @(Get-PendingFiles | ForEach-Object { $_.Name })
 $script:PendingRecord = $null   # as the next run sees the folder
 $out.next = Fail-Text { Assert-NoPendingRecords }
+# ReplaceFile without a backup name can fail after the old record is gone (error 1176): then the .tmp is the copy left, and it still stops
+# the next run (review of #245, round 2).
+Remove-Item -LiteralPath $rec
+$out.only_tmp = Fail-Text { Assert-NoPendingRecords }
 """)
         self.assertTrue(out['rewrite'])   # the rewrite reports its failure
         self.assertTrue(out['json_kept'] and out['old_content'], out)   # the old record is where every run looks
         self.assertTrue(out['tmp_left'])
         self.assertTrue(any(n.endswith('.json.tmp') for n in out['found']), out['found'])
         self.assertIn('PENDING RECORD (an unfinished rewrite)', out['next'])   # fail closed, before any other record
+        self.assertIn('the .tmp is the only copy left', out['only_tmp'])
 
     def test_a_backup_that_changed_keeps_the_record(self):
         out = self.run_ps(r"""
