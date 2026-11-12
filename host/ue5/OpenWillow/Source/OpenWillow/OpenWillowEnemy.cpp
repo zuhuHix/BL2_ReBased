@@ -497,7 +497,7 @@ void AOpenWillowEnemy::UpdateChase(const FVector& Target, bool bRun, float StepL
 void AOpenWillowEnemy::PlayMelee(float Now)
 {
     // Host stand-in (UNVERIFIED in game): the melee clip plays at the swing start, and the move clips wait out the swing
-    // interval (the kind's cycle; AI_MELEE_TARGETING_LIVE 4: the adult's action restarts every 1.25 s).
+    // interval (the kind's cycle: KindMeleeRows in OpenWillowEnemyAI.cpp, else SwingInterval).
     bMeleePlaying = true;
     MeleeEndsAt = Now + SwingIntervalNow();
     MoveClipNow = nullptr;

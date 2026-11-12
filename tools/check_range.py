@@ -42,9 +42,10 @@ SKIP_ONLY_FOR = {"crit_minds_eye": "reason=no local skill effects file", "ragdol
 # Sources and how each band was chosen are in the record. Kinds not listed have no live read and keep the host stand-ins. Every row is
 # one session's measurement, UNVERIFIED beyond it.
 ACCEPTANCE = {
-    # cycle: AI_MELEE_TARGETING_LIVE 4 (one adult, 34 gaps). The den read of 2026-11-07 disagrees (1.216 to 1.217 s, 9 gaps): open.
+    # cycle: session 2 of 2026-11-12 (medians 1.220 to 1.223 s, 407 gaps, four recordings) and the den read of 2026-11-07 (1.216 to
+    # 1.217 s, 9 gaps), widened 0.005 each way like the baby's; AI_MELEE_TARGETING_LIVE 4's median 1.249 (34 gaps) is outside it.
     # stand: the den read (one adult, 181 samples, 190 to 225).
-    "bullymong_adult": {"cycle": 1.25, "cycle_band": (1.221, 1.386), "stand": 201.0, "stand_band": (190.0, 225.0)},
+    "bullymong_adult": {"cycle": 1.222, "cycle_band": (1.211, 1.228), "stand": 201.0, "stand_band": (190.0, 225.0)},
     # both from the den read (grab cycle: two babies, 31 gaps, 1.133 to 1.134, widened 0.005 each way for the logs' millisecond rounding;
     # stand: one baby, 347 samples, 106 to 118).
     "bullymong_baby": {"cycle": 1.133, "cycle_band": (1.128, 1.139), "stand": 111.0, "stand_band": (106.0, 118.0)},

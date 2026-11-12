@@ -34,7 +34,7 @@ def host_rows():
     return {kind: (float(cycle), float(stand)) for kind, cycle, stand in ROW.findall(block)}
 
 
-def kind_line(kind='bullymong_adult', cycle=(1.25, 1.267), stand=(201, 201), first=380, start_range=394, max_frame=0.017, enemy='E_3', swings=4):
+def kind_line(kind='bullymong_adult', cycle=(1.222, 1.239), stand=(201, 201), first=380, start_range=394, max_frame=0.017, enemy='E_3', swings=4):
     return ('kind=%s enemy=%s cycle_min=%.3f cycle_max=%.3f stand_min=%.0f stand_max=%.0f first_swing=%.0f start_range=%.0f max_frame=%.3f swings=%s'
             % (kind, enemy, cycle[0], cycle[1], stand[0], stand[1], first, start_range, max_frame, swings))
 
@@ -75,11 +75,13 @@ class HostRowsTest(unittest.TestCase):
             self.assertNotIn(kind, host_rows())
         self.assertIn('constexpr float SwingInterval = 1.25f;', text('OpenWillowEnemyAI.h'))
 
-    def test_the_adult_cycle_stays_on_the_larger_read(self):
-        # Two live reads disagree on the adult (AI_MELEE_TARGETING_LIVE 4: median 1.249 s, 34 gaps; the den read: 1.216 to 1.217 s, 9 gaps).
-        # The host keeps the larger read's value until a read explains the difference.
-        self.assertEqual(check_range.ACCEPTANCE['bullymong_adult']['cycle'], 1.25)
-        self.assertGreater(check_range.ACCEPTANCE['bullymong_adult']['cycle_band'][0], 1.217)
+    def test_the_adult_cycle_is_the_third_reads_value(self):
+        # Session 2 of 2026-11-12 (medians 1.220 to 1.223 s, 407 gaps) agrees with the den read of 2026-11-07 (1.216 to 1.217 s), not
+        # with AI_MELEE_TARGETING_LIVE 4's median 1.249. The band holds both den-style reads and not the old 1.25.
+        row = check_range.ACCEPTANCE['bullymong_adult']
+        self.assertEqual(row['cycle'], 1.222)
+        self.assertTrue(row['cycle_band'][0] <= 1.216 and 1.223 <= row['cycle_band'][1])
+        self.assertLess(row['cycle_band'][1], 1.249)
 
 
 class BodyContactTest(unittest.TestCase):
@@ -161,7 +163,7 @@ class CheckerTest(unittest.TestCase):
 
     def test_a_stall_matters_only_when_the_allowance_is_needed(self):
         # Review r2: one editor hitch in the step must not fail cycles that sit inside the plain band.
-        self.assertEqual(check_range.kind_melee_problem(kind_line(cycle=(1.250, 1.267), max_frame=0.25)), '')
+        self.assertEqual(check_range.kind_melee_problem(kind_line(cycle=(1.222, 1.226), max_frame=0.25)), '')
         problem = check_range.kind_melee_problem(kind_line('bullymong_baby', (1.133, 1.170), (111, 111), 470, 480, 0.25))
         self.assertIn('stalled run, repeat it', problem)
         self.assertIn('lacks', check_range.kind_melee_problem(kind_line().replace(' max_frame=0.017', '')))
@@ -170,8 +172,10 @@ class CheckerTest(unittest.TestCase):
         # The host clamps the run's last step to the stand distance, so a frame cannot carry it inside the band.
         self.assertIn('stand', check_range.kind_melee_problem(kind_line(stand=(187, 201), max_frame=0.05)))
 
-    def test_the_den_reads_adult_cycle_is_outside_the_band_the_host_is_held_to(self):
-        self.assertIn('cycle', check_range.kind_melee_problem(kind_line(cycle=(1.217, 1.217))))
+    def test_the_old_adult_cycle_is_outside_the_band_the_host_is_held_to(self):
+        # 1.25 s, the host's adult cycle before 2026-11-12, even with a one-frame allowance.
+        self.assertIn('cycle', check_range.kind_melee_problem(kind_line(cycle=(1.25, 1.267))))
+        self.assertEqual(check_range.kind_melee_problem(kind_line(cycle=(1.217, 1.217))), '')
 
     def test_a_first_swing_outside_the_stock_range_fails(self):
         self.assertIn('first swing', check_range.kind_melee_problem(kind_line(first=420)))
@@ -192,7 +196,7 @@ class CheckerTest(unittest.TestCase):
         self.assertIn('repeats stand_min', problem(kind_line() + ' stand_min=201'))
         self.assertIn('repeats kind', problem(kind_line() + ' kind=bullymong_baby'))
         self.assertIn('not a finite number', problem(kind_line().replace('stand_max=201', 'stand_max=inf')))
-        self.assertIn('not a finite number', problem(kind_line().replace('cycle_min=1.250', 'cycle_min=nan')))
+        self.assertIn('not a finite number', problem(kind_line().replace('cycle_min=1.222', 'cycle_min=nan')))
         self.assertIn('not a number', problem(kind_line().replace('first_swing=380', 'first_swing=far')))
         self.assertIn('lacks enemy', problem(kind_line().replace(' enemy=E_3', '')))
 

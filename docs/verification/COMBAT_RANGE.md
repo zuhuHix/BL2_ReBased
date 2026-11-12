@@ -107,7 +107,7 @@ A host state machine (`FOpenWillowEnemyBrain`, `OpenWillowEnemyAI.cpp`), not the
 | Blocked chase | under 10 uu of progress in 1 s counts as blocked: side-steps (70 degrees, alternating sides); blocked for 3 s, the enemy drops the target for 5 s | host choice |
 | Melee volume (does a swing land) | horizontal 640 from a point 100 uu behind the enemy, 64 degree half angle, Maya's centre -143 to +339 uu from the enemy's location | AI_MELEE_TARGETING_LIVE 5 (fitted) |
 | Swing start (may a swing begin) | Maya inside the volume and within the kind's `melee_start_range`, the farthest range of its plain melee attack actions, read by `tools/prepare_range.py` from the stock AI definition; it stops running at the kind's live stand distance (adult 201, baby 111: the acceptance table below), else 60 uu inside its swing range | the stock attack range is data; the horizontal measure from the enemy's location and the choice of actions by animation name are UNVERIFIED. The live swings had the player within about 300 uu |
-| Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing one cycle after the previous start: 1.25 s, the baby's 1.133 s (the acceptance table below) | AI_MELEE_TARGETING_LIVE 4 (the adult's 1.25; other kinds without a row borrow it); the den read (the baby) |
+| Swing timing | damage 0.41 s after the swing start if Maya is still in the volume; next swing one cycle after the previous start: the adult's 1.222 s, the baby's 1.133 s, 1.25 s (stand-in) for kinds without a row (the acceptance table below) | session 2 of 2026-11-12 and the den read (the adult, the baby); AI_MELEE_TARGETING_LIVE 4's 1.25, borrowed by kinds without a row |
 | Melee damage | the VM's swing rows per kind and level (`arrival` x `ratio`, both from `ow-package --combat-run maya:L spawn:<kind>:L swing:<n>:melee`), x the level scale (1.0 at or below Maya, 1.1 / 1.2 one / two levels up; a straight line to 3.0 at sixteen beyond that, stand-in) | COMBAT_MELEE (the VM rows reproduce adult L5/6/7 73.6974 / 83.2781 / 94.1042, regular L6 24.9834, baby L6 12.4917, ratios 0.715 / 0.728 / 0.741) |
 | Delivery | one function, `RangeDamagePlayer`: the maya lane's `OpenWillowApplyDamageToPlayer` (PR #72), shield first, then health, then Fight For Your Life; the test's melee checks compare health plus shield | host |
 
@@ -208,7 +208,7 @@ other record against it. Each value comes from one session and is UNVERIFIED bey
 
 | # | Quantity | Live value (spread, count, source) | Host before | Host now | Check | Before | After |
 |---|---|---|---|---|---|---|---|
-| 1 | Adult swing cycle | **Two live reads disagree, open.** L-4: median 1.249 s, 33 of 34 gaps 1.221 to 1.386 (one 1.813 after another action). Den read: mean 1.2168 s, 1.216 to 1.217, 9 gaps, one adult (a second adult, swinging at something 2,850 uu from the player, gave 1.208 to 1.217 over 8 gaps; not counted) | 1.25 | 1.25 (kept: the larger read) | light: `range_kind_melee_test` (host row = table); in engine: `kind_melee` `cycle_min/max` in 1.221 to 1.386 (+ `max_frame`) | light FAIL (no per-kind row) | light PASS; engine not run |
+| 1 | Adult swing cycle | L-4: median 1.249 s, 33 of 34 gaps 1.221 to 1.386 (one 1.813 after another action). Den read: mean 1.2168 s, 1.216 to 1.217, 9 gaps, one adult (a second adult, swinging at something 2,850 uu from the player, gave 1.208 to 1.217 over 8 gaps; not counted). **Third read (2026-11-12), which settles the value:** medians 1.2200 to 1.2230 s per recording, 407 gaps between one adult's consecutive punches (228, 97, 38 and 44 in four recordings), at about 120 frames per second. Confirmed live: session 2 of 2026-11-12, den capture on Three Horns Divide, Maya level 8, 407 samples, SDK mods loaded (the three loot mods off in memory); one map, one level, one session. The frame rate was not fixed, so the rule behind the value (clip length, rounding to frames, any dependence on the frame rate) is UNVERIFIED, and so is why L-4 read longer | 1.25 | 1.222 (was 1.25 until 2026-11-12, the larger of the first two reads) | light: `range_kind_melee_test` (host row = table); in engine: `kind_melee` `cycle_min/max` in 1.211 to 1.228 (+ `max_frame`) | light FAIL (no per-kind row) | light PASS; engine not run |
 | 2 | Adult stand distance | Den read: median 201 uu, 190 to 225, 181 samples, one adult; 192.0 to 198.2 at the damage moment (9 calls). No record disagrees: L-4 has the player "within about 300 uu", AI_AWARENESS_LIVE has members within 234 uu of her, and the radii of section 5 (adult 150, player 42) make contact 192 | 334 (394 - 60) | 201 | light as row 1; in engine: `kind_melee` `stand_min/max` in 190 to 225 | FAIL (334) | light PASS; engine not run |
 | 3 | Adult first swing inside the stock range | Den read: 368 uu, stock range 394 (one swing) | the rule since PR #133 | unchanged | `kind_melee` `first_swing` <= `start_range` | PASS (by the rule; not run) | engine not run |
 | 4 | Baby swing cycle (its grab) | Den read: mean 1.1334 s, 1.133 to 1.134, 31 gaps, two babies; no other record | 1.25 | 1.133 | light as row 1; in engine: `kind_melee` in 1.128 to 1.139 (+ `max_frame`) | FAIL (1.25) | light PASS; **the default range spawns no baby, so the engine check does not run there** |
@@ -221,8 +221,9 @@ other record against it. Each value comes from one session and is UNVERIFIED bey
 
 **How the bands were chosen.** `tools/check_range.py` grades the numbers, and only there. The host's `kind_melee` verdict covers only what the bands
 don't: a row exists, four swings happened, and the first one started inside the stock range.
-- Adult cycle: L-4's spread (1.221 to 1.386). The den read's 1.217 falls outside it, so the gate follows the older, larger read, and rejects the den
-  read's value, until a third read settles which is right. A test asserts that rejection.
+- Adult cycle (2026-11-12): the den read's 1.216 to 1.217 and the third read's medians 1.220 to 1.223, widened 0.005 s each way as for the baby:
+  1.211 to 1.228. Until then the band was L-4's spread (1.221 to 1.386), which rejected the den read; the third read agreed with the den read, and
+  a test now asserts that the old 1.25 is rejected.
 - Baby cycle: the measured 1.133 to 1.134, widened 0.005 s each way because both logs round to the millisecond.
 - The one host allowance, on every cycle band: the upper edge is raised by `max_frame`, the longest frame the step saw (the host logs it). The host starts a
   swing on the first frame after it is due, so a slow frame makes it late by up to that frame. A `max_frame` above 0.2 s (one state update) is a stall, and the
@@ -261,7 +262,7 @@ to her with no swing. Nothing else happens until she moves; that was so before t
 
 ## Live-read questions from the acceptance table
 
-1. **The adult cycle conflict.** Is the cycle the swing clip's length plus a whole number of frames? It is only an observation (UNVERIFIED), but both
+1. **The adult cycle conflict** (the value settled on 2026-11-12, row 1; the rule is still open). Is the cycle the swing clip's length plus a whole number of frames? It is only an observation (UNVERIFIED), but both
    den-read cycles are whole numbers of sixtieths of a second: 1.2167 = 73/60 and 1.1333 = 68/60. L-4's 1.221 to 1.386 would fit the same clip at a lower,
    uneven frame rate. Two cheap sources answer this:
    - the clip lengths, from package data with no game needed. No record holds them yet: the clips are the ones `AnimRandom_PrimalBeastMelee` picks for the

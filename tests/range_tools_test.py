@@ -12,9 +12,9 @@ import prepare_range  # noqa: E402
 
 
 # A kind_melee PASS line must carry numbers inside the acceptance bands (tools/check_range.py); this one does (invented, adult).
-KIND_MELEE_OK = ('kind=bullymong_adult enemy=E_3 cycle_min=1.250 cycle_max=1.267 stand_min=201 stand_max=201 first_swing=380 start_range=394 '
+KIND_MELEE_OK = ('kind=bullymong_adult enemy=E_3 cycle_min=1.222 cycle_max=1.239 stand_min=201 stand_max=201 first_swing=380 start_range=394 '
                  'max_frame=0.017 swings=4')
-SPAWN_ADULT = 'OWRANGE enemy E_3 kind_melee kind=bullymong_adult swing_interval=1.250 stand=201 source=live_read'
+SPAWN_ADULT = 'OWRANGE enemy E_3 kind_melee kind=bullymong_adult swing_interval=1.222 stand=201 source=live_read'
 
 
 def passing(step):

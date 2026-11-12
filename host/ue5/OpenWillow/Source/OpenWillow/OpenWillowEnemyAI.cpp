@@ -27,12 +27,13 @@ bool WithinMeleeVolume(const FVector& EnemyLocation, float YawDegrees, const FVe
     return FVector::DotProduct(Forward, ToMaya / Distance) >= FMath::Cos(FMath::DegreesToRadians(MeleeHalfAngleDegrees));
 }
 
-// The acceptance table's values (COMBAT_RANGE.md, "Acceptance table: melee per kind"). Adult: the cycle is AI_MELEE_TARGETING_LIVE 4's
-// median of 34 gaps (the den read of 2026-11-07 measured 1.216 to 1.217 s over 9 gaps: the two reads disagree, open); the stand distance
-// is the den read's median (190 to 225 uu, 181 samples). Baby: both from the den read (its grab: 1.133 to 1.134 s over 31 gaps; 106 to
+// The acceptance table's values (COMBAT_RANGE.md, "Acceptance table: melee per kind"). Adult: the cycle is the live medians of session 2
+// of 2026-11-12 (1.220 to 1.223 s, 407 gaps over four recordings at about 120 fps), as the den read of 2026-11-07 had it (1.216 to
+// 1.217 s); AI_MELEE_TARGETING_LIVE 4's median 1.249 is the outlier. What makes the cycle this long (clip length, frames) is UNVERIFIED;
+// the stand distance is the den read's median (190 to 225 uu, 181 samples). Baby: both from the den read (its grab: 1.133 to 1.134 s over 31 gaps; 106 to
 // 118 uu, 347 samples). The default range spawns no baby.
 const FOpenWillowKindMelee KindMeleeRows[] = {
-    {TEXT("bullymong_adult"), 1.25f, 201.f},
+    {TEXT("bullymong_adult"), 1.222f, 201.f},
     {TEXT("bullymong_baby"), 1.133f, 111.f},
 };
 
