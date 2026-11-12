@@ -1,7 +1,7 @@
 """Synthetic checks for tools/land_batch.sh: throwaway git repositories, a local bare origin and a stub for gh.
 
 No network and no game data. The stub answers the few gh calls the script makes from the bare origin's refs, so the
-batch and its stops run as they would against GitHub, without GitHub.
+batch, its stops, the conflict stop and the rerere replay run as they would against GitHub, without GitHub.
 """
 import os
 from pathlib import Path
@@ -13,6 +13,9 @@ import tempfile
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / 'tools' / 'land_batch.sh'
 
+# Every subprocess here gets stdin=subprocess.DEVNULL: started by a parent with no usable standard input (a
+# hidden-desktop wrapper), an inherited invalid handle makes subprocess fail with WinError 6. The stub runs under
+# sys.executable, never the py launcher's choice.
 # The gh stub. State: GH_STUB_ORIGIN (bare repository), GH_STUB_PRS ("<n>=<branch>" lines), GH_STUB_LOG (one line per
 # call). It knows only the --jq filters tools/land_batch.sh passes.
 STUB = r'''
@@ -22,7 +25,8 @@ with open(os.environ['GH_STUB_LOG'], 'a') as log:
     log.write(' '.join(args) + '\n')
 origin = os.environ['GH_STUB_ORIGIN']
 def git(*a):
-    return subprocess.run(['git', '--git-dir', origin] + list(a), capture_output=True, text=True)
+    return subprocess.run(['git', '--git-dir', origin] + list(a), stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True)
 if args[:2] == ['repo', 'view']:
     print('synthetic/repo')
     sys.exit(0)
@@ -49,6 +53,11 @@ if '/pulls/' in path:
 sys.exit('stub: unknown path ' + path)
 '''
 
+
+
+ENTRY_ONE = '## 2026-01-02: invented entry one\n\nOne.\n'
+ENTRY_TWO = '## 2026-01-02: invented entry two\n\nTwo.\n'
+BOTH = ENTRY_ONE + '\n' + ENTRY_TWO
 
 
 def find_bash():
@@ -99,7 +108,8 @@ class World:
         self.bash = find_bash()
 
     def git(self, cwd, *args):
-        result = subprocess.run(['git'] + list(args), cwd=str(cwd), env=self.env, capture_output=True, text=True)
+        result = subprocess.run(['git'] + list(args), cwd=str(cwd), env=self.env, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True)
         assert result.returncode == 0, (args, result.stdout, result.stderr)
         return result.stdout.strip()
 
@@ -118,7 +128,8 @@ class World:
 
     def branch_exists(self, branch):
         return bool(subprocess.run(['git', '--git-dir', str(self.origin), 'rev-parse', '-q', '--verify',
-                                    'refs/heads/' + branch], env=self.env, capture_output=True).stdout.strip())
+                                    'refs/heads/' + branch], env=self.env, stdin=subprocess.DEVNULL,
+                                   capture_output=True).stdout.strip())
 
     def pr(self, number, files, base='origin/main'):
         """Push branch pr-<number> off base with one commit that writes each {path: text}; returns its head."""
@@ -144,8 +155,12 @@ class World:
     def land(self, landing, items, extra_env=None, flags=('-D',)):
         env = dict(self.env, **(extra_env or {}))
         cmd = [self.bash, (self.tmp / 'tools' / 'land_batch.sh').as_posix(), '-w', landing.as_posix()] + list(flags)
-        return subprocess.run(cmd + [' '.join('%d:%s' % item for item in items)], env=env, capture_output=True,
-                              text=True, timeout=300)
+        return subprocess.run(cmd + [' '.join('%d:%s' % item for item in items)], env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=300)
+
+
+def appended(text):
+    return '# Decisions\n\n## 2026-01-01: invented first entry\n\nBody.\n\n' + text
 
 
 def check_two_prs_land():
@@ -166,6 +181,57 @@ def check_two_prs_land():
         assert 'docs/one.md' in tree and 'docs/two.md' in tree, tree
         assert not world.branch_exists('pr-1') and not world.branch_exists('pr-2'), 'landed branches kept'
         assert done.stdout.count('OK #') == 2, done.stdout
+
+
+def check_shared_file_conflicts_without_union():
+    """Two PRs appending to one file used to merge as a union; now the second one stops (exit 4) with diff3 markers."""
+    with tempfile.TemporaryDirectory() as tmp:
+        world = World(Path(tmp))
+        one = world.pr(1, {'DECISIONS.md': appended(ENTRY_ONE)})
+        two = world.pr(2, {'DECISIONS.md': appended(ENTRY_TWO)})
+        start = world.main()
+        landing = world.landing('landing')
+        stopped = world.land(landing, [(1, one), (2, two)])
+        assert stopped.returncode == 4, (stopped.returncode, stopped.stdout, stopped.stderr)
+        assert 'conflict in: DECISIONS.md' in stopped.stdout, stopped.stdout
+        marked = (landing / 'DECISIONS.md').read_text()
+        assert '|||||||' in marked, marked
+        assert world.main() == start and world.branch_exists('pr-2'), 'a conflict pushed something'
+        world.git(landing, 'rebase', '--abort')
+
+
+def record_fix(world, landing, one, two, style):
+    """Record, under the given conflict style, how two's change rebases onto one (both entries, one first)."""
+    world.git(landing, 'config', 'rerere.enabled', 'true')
+    world.git(landing, 'checkout', '-q', '--detach', two)
+    rebase = subprocess.run(['git', '-c', 'merge.conflictStyle=' + style, 'rebase', '-q', one], cwd=str(landing),
+                            env=world.env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert rebase.returncode != 0, 'the synthetic rebase did not conflict'
+    world.write(landing / 'DECISIONS.md', appended(BOTH))
+    world.git(landing, 'add', 'DECISIONS.md')
+    world.git(landing, 'rerere')
+    world.git(landing, 'rebase', '--abort')
+
+
+def check_rerere_replay_needs_the_same_style():
+    """A fix recorded under diff3 is replayed by the script's rebase, which then finishes; the identity check stops the
+    batch (exit 5), because the second PR's diff now has the first entry as context, so two PRs that append to one file
+    cannot share a batch. A fix recorded under the default style is not replayed (exit 4): that style moves the blank
+    line both entries start with out of the conflict and diff3 keeps it in, so the two conflicts differ."""
+    for style, code, message in (('diff3', 5, 'the rebased change differs from the reviewed one'),
+                                 ('merge', 4, 'conflict in: DECISIONS.md')):
+        with tempfile.TemporaryDirectory() as tmp:
+            world = World(Path(tmp))
+            one = world.pr(1, {'DECISIONS.md': appended(ENTRY_ONE)})
+            two = world.pr(2, {'DECISIONS.md': appended(ENTRY_TWO)})
+            start = world.main()
+            landing = world.landing('landing')
+            record_fix(world, landing, one, two, style)
+            done = world.land(landing, [(1, one), (2, two)])
+            assert done.returncode == code and message in done.stdout, (style, done.returncode, done.stdout)
+            assert world.main() == start, 'a stopped batch moved main'
+            if code == 4:
+                world.git(landing, 'rebase', '--abort')
 
 
 def advance_main(world, files, message):
@@ -249,7 +315,8 @@ def check_rebase_that_leaves_head_elsewhere_stops():
 
 
 CASES = [check_two_prs_land, check_dirty_worktree_cannot_rewrite_main, check_failed_rebase_stops,
-         check_main_moved_back_is_refused, check_rebase_that_leaves_head_elsewhere_stops]
+         check_main_moved_back_is_refused, check_rebase_that_leaves_head_elsewhere_stops,
+         check_shared_file_conflicts_without_union, check_rerere_replay_needs_the_same_style]
 
 if __name__ == '__main__':
     for case in CASES:

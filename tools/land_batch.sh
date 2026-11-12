@@ -8,10 +8,10 @@
 #
 # 1. Rebases the PRs, in the order given, into one straight chain on top of origin/main. Every PR must target main;
 #    stacked PRs are not supported (land the parent first). git rerere reuses conflict fixes recorded earlier, for
-#    example while building the integration branch, and DECISIONS.md merges as a union (it is an append-only log).
-# 2. Checks that each rebased PR changes exactly the lines it changed when reviewed (DECISIONS.md: the same added
-#    lines), and that the chain's final tree is identical to the tested commit's tree (-t). With -D instead, every
-#    changed file must be a regular, non-executable Markdown text file.
+#    example while building the integration branch. The rebases use merge.conflictStyle=diff3 themselves.
+# 2. Checks that each rebased PR changes exactly the lines it changed when reviewed, and that the chain's final tree is
+#    identical to the tested commit's tree (-t). With -D instead, every changed file must be a regular, non-executable
+#    Markdown text file.
 # 3. One atomic push moves the PR branches to their commits in the chain (all or none, leased on the reviewed heads);
 #    once GitHub shows the new heads, main fast-forwards, leased on the main the chain was built on. GitHub finds each
 #    PR's head inside main and marks the PR Merged; the script waits for that, then deletes the landed remote branches.
@@ -27,7 +27,6 @@ usage="usage: bash $0 -w <landing-worktree> (-t <tested-commit> | -D) \"<pr>:<40
 [ -n "$tested" ] || [ -n "$docsonly" ] || { echo "-t <tested-commit> is required (or -D for Markdown-only PRs)" >&2; exit 64; }
 [ -n "$tested" ] && [ -n "$docsonly" ] && { echo "use -t or -D, not both" >&2; exit 64; }
 here=$(cd "$(dirname "$0")/.." && pwd)
-attr="$here/tools/merge-union.attributes"
 log="$here/local/hub/land_batch.log"
 mkdir -p "$(dirname "$log")"
 started=
@@ -48,12 +47,7 @@ git config rerere.enabled true
 
 # The PR's diff with its context lines and full binary content, minus what a rebase legitimately moves (blob ids and
 # hunk line numbers): every changed byte and its surroundings must match, wherever the hunk now sits.
-changes() { git diff --no-color --no-ext-diff --binary -U3 "$1" "$2" -- . ':!DECISIONS.md' | grep -v -E '^index ' | sed -E 's/^@@ -[0-9,]+ \+[0-9,]+ @@/@@/'; }
-# DECISIONS.md is append-only: a PR may only add lines there, and must add the same ones after the rebase. The file
-# headers come before the first hunk, so only lines after it count (a content line may itself start with ++ or --).
-decisions_lines() { git diff --no-color --no-renames -U0 "$1" "$2" -- DECISIONS.md | awk -v s="$3" '/^@@/ { h = 1; next } h && substr($0, 1, 1) == s'; }
-decisions_added() { decisions_lines "$1" "$2" + | sort; }
-decisions_removed() { decisions_lines "$1" "$2" -; }
+changes() { git diff --no-color --no-ext-diff --binary -U3 "$1" "$2" | grep -v -E '^index ' | sed -E 's/^@@ -[0-9,]+ \+[0-9,]+ @@/@@/'; }
 # -D: every path on both sides is a regular, non-executable Markdown text file.
 docs_only_problem() {
   local raw numstat
@@ -94,8 +88,10 @@ for item in $list; do
   fi
   git checkout -q --detach "$old" || stop "#$n: cannot check out ${old:0:7} in $wt" 10
   started=1
-  rout=$(git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase -q --onto "$chain" "$base" 2>&1); rc=$?
-  # A rebase stops once per conflicting commit; carry on while rerere or the union driver resolved every file. A
+  # diff3 here and wherever fixes are recorded: rerere replays a fix only for a conflict that looks the same, and the
+  # style can change that (docs/TOOLING.md).
+  rout=$(git -c merge.conflictStyle=diff3 -c rerere.autoupdate=true rebase -q --onto "$chain" "$base" 2>&1); rc=$?
+  # A rebase stops once per conflicting commit; carry on while rerere resolved every file. A
   # --continue that fails the same way three times in a row (a refusing hook, a lock) stops with git's message.
   last=; same=0
   for _ in $(seq 1 200); do
@@ -110,16 +106,13 @@ for item in $list; do
       if [ "$rout" = "$last" ]; then same=$((same + 1)); else same=1; last=$rout; fi
       [ "$same" -lt 3 ] || stop "#$n: the rebase failed the same way 3 times in a row; nothing pushed. git said: $rout" 10
     fi
-    rout=$(git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase --continue 2>&1); rc=$?
+    rout=$(git -c merge.conflictStyle=diff3 -c rerere.autoupdate=true rebase --continue 2>&1); rc=$?
   done
   inrebase && stop "#$n rebase did not finish; nothing pushed. git said: $rout" 10
   started=
   new=$(git rev-parse HEAD)
   git merge-base --is-ancestor "$chain" "$new" || stop "#$n: the rebased ${new:0:7} does not contain the chain ${chain:0:7}; nothing pushed" 10
   [ "$(changes "$base" "$old")" = "$(changes "$chain" "$new")" ] || stop "#$n: the rebased change differs from the reviewed one; check it by hand" 5
-  [ -z "$(decisions_removed "$base" "$old")" ] || stop "#$n removes or edits DECISIONS.md lines; that log is append-only, land it by hand" 5
-  [ -z "$(decisions_removed "$chain" "$new")" ] || stop "#$n: the rebase removed DECISIONS.md lines" 5
-  [ "$(decisions_added "$base" "$old")" = "$(decisions_added "$chain" "$new")" ] || stop "#$n: its DECISIONS.md entries changed in the rebase" 5
   echo "  #$n ${old:0:7} -> ${new:0:7} on ${chain:0:7}" | tee -a "$log"
   plan+=("$n:$old:$new:$branch")
   chain=$new

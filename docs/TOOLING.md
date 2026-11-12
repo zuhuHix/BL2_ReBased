@@ -440,14 +440,25 @@ retargets any open PR that was based on one). Before it pushes anything, it chec
   fork), and its head is still the reviewed commit; this is checked again right before the push;
 - each rebased PR shows the same diff as when reviewed, context lines and binary content included, ignoring only
   where the hunks now sit (an earlier PR in the batch that edits lines next to a later one's makes this stop; land them
-  separately); `DECISIONS.md`, which merges as a union of entries through `tools/merge-union.attributes`, may only gain
-  lines, the same ones;
+  separately);
 - with `-t`, the chain's final tree is byte-identical to the tested commit's tree; with `-D`, every changed path is a
   regular, non-executable Markdown text file.
 
+**Until the decisions log is one file per decision.** Since the union merge went (2026-11-12), nothing in the script
+checks `DECISIONS.md` specially until the PR that runs `main`'s `decisions_index.py --check` on every PR has landed.
+In that window a PR that edits or removes old entries would land without a stop, so read the `DECISIONS.md` part of
+each PR's diff before landing it. Two PRs that both append to `DECISIONS.md` need separate batches then: the second
+one stops with a conflict (exit 4), and resolving it, running `git rerere` and rerunning still ends in exit 5, because
+its diff now has the first PR's entry as context.
+
 `git rerere` is switched on for the repository, so a conflict resolved once, for example while building the integration
 branch, is resolved the same way when the batch lands; the tree check catches a recorded fix that differs from the
-tested one. A conflict rerere has not seen leaves the rebase open in the landing worktree with instructions. The script
+tested one. The script runs its rebases with `merge.conflictStyle=diff3` itself, so the caller does not set it.
+Record fixes under the same style (build the integration branch with `git -c merge.conflictStyle=diff3`): rerere
+replays a fix only for a conflict that looks the same, and the style can change that. When both sides add lines that
+start alike, the default style moves the shared lines out of the conflict and diff3 keeps them in it, so a fix recorded
+under one style was not replayed under the other in a synthetic test (`tests/land_batch_test.py`, git 2.54).
+A conflict rerere has not seen leaves the rebase open in the landing worktree with instructions. The script
 refuses to start while a rebase is in progress there or a tracked file there has changes, stops when a rebase or checkout fails
 without leaving a conflict open, and checks that the chain contains the `main` it was built on (before 2026-11-12 an
 ignored rebase failure in a dirty worktree could replace a commit on `main` through the leased push). CI runs on the new `main`; PR workflows may also run once per
