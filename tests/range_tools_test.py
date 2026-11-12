@@ -337,6 +337,23 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual(self.run_preflight({}, has_at=True), '')
         self.assertEqual(self.run_preflight({}, spot={'spot': {'x': 1, 'y': 2, 'z': 3}}), '')
 
+    def test_a_manifest_from_before_the_live_read_constants_stops_the_run(self):
+        # Review r1: an old manifest (run 400, walk 150, the baby on the borrowed radius 150, no source fields) passed and ran the old values.
+        old = {'bullymong_adult': {'run_speed': 400.0, 'walk_speed': 150.0},
+               'bullymong_baby': {'run_speed': 400.0, 'walk_speed': 150.0, 'collision_radius': 150.0, 'collision_height': 90.0}}
+        problem = self.run_preflight(dict(self.GOOD, kinds=old))
+        self.assertIn('predates the live-read constants', problem)
+        self.assertIn('re-run python tools/prepare_range.py', problem)
+        self.assertIn('bullymong_adult speed', problem)
+        self.assertIn('bullymong_baby collision', problem)
+        fresh = {name: prepare_range.apply_observed(name, {'run_speed': 400.0, 'walk_speed': 150.0, 'collision_radius': 150.0,
+                                                           'collision_height': 90.0}) for name in old}
+        self.assertEqual(self.run_preflight(dict(self.GOOD, kinds=fresh)), '')
+        # A source field with numbers that are not the table's is stale too; kinds outside the tables are not checked.
+        fresh['bullymong_adult']['run_speed'] = 400.0
+        self.assertIn('bullymong_adult speed', self.run_preflight(dict(self.GOOD, kinds=fresh)))
+        self.assertEqual(self.run_preflight(dict(self.GOOD, kinds={'bullymong': {'run_speed': 400.0}})), '')
+
     def test_a_spawned_kind_must_be_able_to_swing(self):
         whole = {'melee_arrival_by_level': {'1': 2.0}, 'melee_ratio_by_level': {'1': 0.5}, 'melee_start_range': 111.0}
         check = lambda kind: self.run_preflight({'spawns': [{'kind': 'made'}], 'kinds': {'made': kind, 'unused': {}}}, has_at=True)

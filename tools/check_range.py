@@ -16,6 +16,11 @@ import re
 import sys
 from collections import Counter
 
+# The live-read tables live in the prep tool only (OBSERVED_SPEED, OBSERVED_COLLISION); the preflight reads them from there. The folder is
+# added by hand because python -I does not put the script's folder on the path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import prepare_range  # noqa: E402
+
 # The steps of the driver, in order (OpenWillowRange.cpp): PR1's, then PR2's enemy AI (TickAITest, steps 16-36), then PR3's loot
 # on death (TickLootTest, steps 37-44).
 EXPECTED = ["teleport", "placement", "body_hit", "crit_hit", "popup_crit", "crit_minds_eye", "crit_trace", "shield_order", "invulnerable",
@@ -237,6 +242,26 @@ def spot_json_ok(path):
         return False
 
 
+def live_read_problem(manifest_path, kinds):
+    """Why a manifest predates the live-read constants of 2026-11-12, or "". A kind of prepare_range.OBSERVED_SPEED needs its speed_source
+    and those numbers, and one of OBSERVED_COLLISION (when the manifest has it) its collision_source and that cylinder; else the run would
+    test the old stand-ins with no warning."""
+    stale = []
+    for name, (run, walk) in sorted(prepare_range.OBSERVED_SPEED.items()):
+        kind = kinds.get(name)
+        if kind is not None and not (kind.get("speed_source") and kind.get("run_speed") == run and kind.get("walk_speed") == walk):
+            stale.append("%s speed" % name)
+    for name, (radius, height) in sorted(prepare_range.OBSERVED_COLLISION.items()):
+        kind = kinds.get(name)
+        if kind is not None and not (kind.get("collision_source") and kind.get("collision_radius") == radius
+                                     and kind.get("collision_height") == height):
+            stale.append("%s collision" % name)
+    if not stale:
+        return ""
+    return ("the manifest %s predates the live-read constants of 2026-11-12 (stale: %s): re-run python tools/prepare_range.py"
+            % (manifest_path, ", ".join(stale)))
+
+
 def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
     """Why a test run must not start on this manifest ("" when it may). A failed or old tools/prepare_range.py leaves a manifest without
     the default spot: the host would then quietly fall through to another candidate and the run could go green at the wrong place."""
@@ -257,6 +282,9 @@ def preflight(manifest_path, spot_json=None, has_at=False, survey=False):
         return ("the manifest %s lacks melee_arrival_by_level, melee_ratio_by_level or a positive melee_start_range for %s: it is old, written "
                 "with --no-vm, or tools/prepare_range.py could not read them. Re-run it without --no-vm and read its message"
                 % (manifest_path, ", ".join(stale)))
+    problem = live_read_problem(manifest_path, kinds)
+    if problem:
+        return problem
     if survey:
         return "" if candidates else "the manifest %s has no spot_candidates to survey" % manifest_path
     if has_at or spot_json_ok(spot_json):
