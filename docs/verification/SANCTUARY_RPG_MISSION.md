@@ -1529,6 +1529,8 @@ output of dialog 03b was never selected live).
 - `--slice-run` events: `sequence_change`, `turn_in_dialog` (new); `--mission-run` effects: `turn_in_dialog`. `--behavior-dump` prints `graph` per sequence (event and behavior links with id and delay).
 - `tools/verify_fire_event_order.py`: the event-order rules of the Fire mission (names and order only), run on the real data; `--from-json` checks a saved `--slice-run`; `--self-test` checks the checker on an
   invented stream (a weapon removed at the hit and a missing `AIHold_57` are caught). Needs the installed game, so it is not in CTest.
+  Since 2026-11-12 one whole-run rule also refuses any `level` event in the default run: the engine raises a level in the experience pool's per-frame
+  update, so a level-up would land in a tick after the turn-in, where no other rule looks, and the invented total keeps the player at level 8 (33 rules).
 - `tests/mission_script_test.py` (synthetic): scenario W (weapon granted inside Active, not at the second set; not removed at ReadyToTurnIn; removed inside Complete before the reward), H2 (the screen opens once, with
   one user: the toy `BeginUse` appends through the length, which also covers the VM fix), E2 additions (a switch with no matching output ends silent; a matching one with a link is an error), and the dummy toy's Idle
   sequence now runs a `Behavior_SpecialMove` whose output 0 leads to its remote event (scenario D). `tests/vm_test.py`: `Foo.Append`.

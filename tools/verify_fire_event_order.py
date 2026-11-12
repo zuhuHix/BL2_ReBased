@@ -108,6 +108,9 @@ RULES = [
     # TargetDummy and dropped, and 04 (behind it) never starts. UNVERIFIED rule (an empty context list drops the application), observed order.
     ("no line player: 03a and 04 do not run (TargetDummy is still empty when 03a is applied)", None, "absent",
      [("dialog", "VOSQ_RockPaperGeno_03a_LiveHypEng"), ("dialog", "VOSQ_RockPaperGeno_04_EchoX_Marcus")]),
+    # The engine raises a level in the experience pool's per-frame update, so a level-up lands in a tick step after the turn-in, where no rule above looks.
+    # The invented total (player:8:21000, plus the turn-in's experience) stays inside level 8; a level event anywhere means the total or the reward changed.
+    ("no level-up anywhere in the run (the invented experience keeps the player at level 8)", None, "absent", [("level", None)]),
 ]
 
 # Rules of the LINES run (labels of STEPS_LINES). Lane L4, unmodded game: 03b is spoken by Marcus, 03a (applied after 03b ends, long after the dummy spawned) by the
@@ -210,9 +213,9 @@ def run_slice(reader, cooked, steps=None):
     return json.loads(done.stdout)
 
 
-def synthetic_run(wrong_weapon_step=False, early_reward=False, late_close=False):
+def synthetic_run(wrong_weapon_step=False, early_reward=False, late_close=False, level_up=False):
     """An invented event stream that follows RULES (self-test only). With wrong_weapon_step the weapon is removed at the hit; with early_reward the reward is
-    received inside the turn-in; with late_close the accept's close comes after the status event."""
+    received inside the turn-in; with late_close the accept's close comes after the status event; with level_up the tick after the turn-in raises a level."""
     def e(kind, a="", b="", c=""): return {"kind": kind, "a": a, "b": b, "c": c, "detail": ""}
     events = {label: [] for label, _ in STEPS}
     events["use_offer"] = [e("on_use_dialog", "VO_NPC_OnUse_MissionsAvailable"), e("mission_interface", "Def"), e("dialog", "DET_NPC_OnUse_MissionsAvailable")]
@@ -235,6 +238,7 @@ def synthetic_run(wrong_weapon_step=False, early_reward=False, late_close=False)
     events["close"] = [e("dismissal_dialog", "VO_NPC_GenericDismissal"), e("dialog", "DET_NPC_GenericDismissal"), e("mission_interface_closed", "Pawn_Marcus")]
     if early_reward: events["turnin"].append(e("reward_received", "M_RockPaperGenocide_Fire"))
     if late_close: events["accept"].insert(3, events["accept"].pop(2))      # mission_interface_closed after the status event
+    if level_up: events["end1"].append(e("level", "9"))      # the pool's per-frame update, one tick after the turn-in
     return {"steps": [{"step": step, "events": events[label]} for label, step in STEPS], "errors": [],
             "dummy_trace": ["OnBehaviorSequenceEnabled -> " + name for name in DUMMY_ORDER]}
 
@@ -266,6 +270,7 @@ def self_test():
     if not any("weapon is not removed" in t for t in failed_bad): failures.append("a weapon removed at the hit was not caught: " + str(failed_bad))
     if not any("reward is not received before" in t for t, ok, _ in check(synthetic_run(early_reward=True)) if not ok): failures.append("a reward received before the confirmation was not caught")
     if not any("accept closes Marcus" in t for t, ok, _ in check(synthetic_run(late_close=True)) if not ok): failures.append("a close after the status event was not caught")
+    if not any("no level-up" in t for t, ok, _ in check(synthetic_run(level_up=True)) if not ok): failures.append("a level-up in the tick after the turn-in was not caught")
     shuffled = synthetic_run()
     shuffled["dummy_trace"] = [line for line in shuffled["dummy_trace"] if not line.endswith("Behavior_AIHold_57")]
     if all(ok for _, ok, _ in check(shuffled)): failures.append("a missing AIHold_57 was not caught")
