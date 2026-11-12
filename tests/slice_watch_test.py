@@ -855,6 +855,12 @@ class CheckerTest(unittest.TestCase):
             s = Path(tmp) / 'spec.json'
             s.write_text(json.dumps({'checks': {'pawns': {'min_reads': 1, 'name': ''}}}), encoding='utf-8')
             self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 2)
+            # Review of #251: with a name, 0 reads or 0 pawns would pass with the NPC absent.
+            for bad in ({'min_reads': 0, 'name': 'WillowAIPawn_8'}, {'min_reads': 5, 'min_pawns': 0, 'name': 'WillowAIPawn_8'}):
+                s.write_text(json.dumps({'checks': {'pawns': bad}}), encoding='utf-8')
+                self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 2, bad)
+            s.write_text(json.dumps({'checks': {'pawns': {'min_reads': 100, 'min_pawns': 1, 'name': 'WillowAIPawn_8'}}}), encoding='utf-8')
+            self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 0)
 
     def test_anything_a_cap_dropped_fails_unless_allowed(self):
         capped = dump()

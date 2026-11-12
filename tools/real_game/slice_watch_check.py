@@ -142,6 +142,12 @@ def validate_spec(spec_path):
         raise ValueError("snaps must be a list of labels or of lists of alternative labels")
     if "pawns" in checks and "name" in checks["pawns"] and not (isinstance(checks["pawns"]["name"], str) and checks["pawns"]["name"]):
         raise ValueError("pawns: name must be a non-empty substring of the NPC's path")
+    if "pawns" in checks and "name" in checks["pawns"]:
+        # A named NPC must be seen: with 0 reads or 0 pawns asked for, the rule would pass with the name absent (review of #251).
+        for key in ("min_reads", "min_pawns"):
+            value = checks["pawns"].get(key, 1)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"pawns: with a name, {key} must be a whole number of at least 1")
     for key in ("mods_must_be_off", "expect_not_taken", "allow_switched_off", "allow_not_taken", "must_fire"):
         if key in checks and not (isinstance(checks[key], list) and all(isinstance(x, str) for x in checks[key])):
             raise ValueError(f"{key} must be a list of strings")
