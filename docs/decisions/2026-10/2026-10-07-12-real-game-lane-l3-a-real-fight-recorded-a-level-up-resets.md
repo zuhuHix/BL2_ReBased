@@ -12,13 +12,13 @@ Confirmed in game:
 - **Kill experience:** awards of 112.5 and 50.0, credited to the pool as +45 and +7.
 - **Drops and pickups:** drops came from the pools the script calls (`Pool_Money_1or2`: 3 items for an adult, 1 for a baby; `Pool_GunsAndGear`).
   Money is picked up by touch and a weapon by the use key. A full backpack refuses.
-- **Being hit:** the shield takes the hit first (31.616 of a 44.22 grenade) and the overflow goes to health. The shield recharges after 1.61 s at
-  25.9 per second.
+- **Being hit:** the shield takes the hit first (31.616 of a 44.22 grenade) and the overflow goes to health. The shield recharges after its own delay at
+  its own rate (the amounts are in the maintainer's private record).
 - **Down, death, respawn:** down at health 0, the targeted state 2.28 s later, bleed-out 12.0 s, death camera 5.76 s, then
   `ResurrectPlayer(IDied)` with full health and shield. The fee is 0.07 x cash, rounded half up, charged 11.8 s after arrival.
 - **Second wind:** a kill while down restored health to 25 % of max in the kill frame and shield to 90 % on the next frame.
 - **Part B:** a level-up (`ExpLevelUp(false)`) sets the action-skill cooldown to 0 in the same call, both at its 13.0 maximum during a real
-  Phaselock hold and at 7.99 during the drain. The 4.0 s shield boost (90.29 per second) and the 30 s weapon-damage scale (41.4 to 61.9) were
+  Phaselock hold and at 7.99 during the drain. The 4.0 s shield boost (0.5 x the capacity per second) and the 30 s weapon-damage scale (+1.0 on the existing sum) were
   observed again.
 
 Contradicted: NATIVE_DAMAGE_DEATH's 2.0 s fee timing (11.8 s observed).

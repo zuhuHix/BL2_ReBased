@@ -260,7 +260,7 @@ def shield_world(ns, own_level=4, own_max=150.0):
     # As in the game: the weapons in InventoryChain, the worn shield in ItemChain.
     im = Obj(InventoryChain=gun, ItemChain=own, Backpack=[], Class=Obj(_fields=lambda: [Obj(Name='ItemChain'), Obj(Name='Backpack')]), AddInventoryToBackpack=add,
              RemoveInventoryFromBackpack=lambda i: im.Backpack.remove(i), ReadyBackpackInventory=ready)
-    pawn = Obj(GetMaxShieldStrength=lambda: world['max'], GetShieldStrength=lambda: 90.0)
+    pawn = Obj(GetMaxShieldStrength=lambda: world['max'], GetShieldStrength=lambda: 75.0)    # invented: half the invented 150
     pc = Obj(GetPawnInventoryManager=lambda: im, Pawn=pawn, PlayerReplicationInfo=Obj(ExpLevel=8), WorldInfo=Obj(TimeSeconds=1.0))
     world['pc'], world['im'] = pc, im
     ns['get_pc'] = lambda: pc

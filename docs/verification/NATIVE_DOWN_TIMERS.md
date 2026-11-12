@@ -216,7 +216,7 @@ The player pawn carries a small interface (`IProtectionTimer`, three natives) im
      `MinimumHealthMaintainedByProtectionTimer` = a uniform random value in [1, ceiling) (the C runtime `rand` divided by 32767 times (ceiling - 1), plus 1).
   5. Then caps it: if the pawn's **current** health is below that value, the floor becomes the current health.
   The earlier note describes the floor as exactly "max x ProtectionTimerMaintainedMaxHealthPct (0.1)"; the random part is new. With the data values
-  (0.1) and a maximum of 547.874 the floor is a random value between 1 and 54.8 HP, never above the health at the time of arming.
+  (0.1) and an example maximum of 500 the floor is a random value between 1 and 50 HP, never above the health at the time of arming.
 - **ProtectionTimerElapsed:** clears `bIsProtectionTimerActive`. It does not reset the floor value.
 - **Who calls EnableProtectionTimer (script facts):** the injured `Tick`, right after the second wind has run `GoFromInjuredToHealthy`, the recovered behaviors, the
   statistics and the skill event (so the 2 s protection is the tail of every second wind); and the damage pipeline's stage 15 (the existing note: when

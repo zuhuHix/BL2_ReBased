@@ -97,7 +97,7 @@ the new maximum with the old current value.
   1. Calling it on a controller with a health pool whose data is `Init_PlayerHealth` changes the pool's **base** maximum to
      `max(20, 80 x 1.13^level)` at the controller's current `ExpLevel` and nothing else in that pool except by section 3.
   2. Modifiers already on the maximum's stack survive: the effective maximum is the new base through the same stack formula
-     (observed: the ratio of effective to base maximum was 2.01747 before and after, from a Badass Rank modifier).
+     (observed: the ratio of effective to base maximum was the same before and after, from a Badass Rank modifier; the amounts are in the maintainer's private record).
   3. Current health is unchanged by the call alone unless the pool was full (section 3).
   4. With no pawn the pool rebase still happens.
   5. It sends no notification and fires no script event.
@@ -228,15 +228,16 @@ modifier value is computed once when the skill's effects are built, which is aft
 **new** effective maximum. The shield regeneration rate is a stack attribute: the boost is removed when the 4 seconds end.
 
 - **Observed (2026-10-07, local captures, lane L1; level-up by the real `ExpLevelUp(false)` with the player at 8 and then 9):**
-  - run 1: level 8 to 9, health 214.5329 of 429.0658 (exactly half) and shield 90.29 of 180.59. After the native
-    recalculation: maximum 484.8444 (pool base maximum 212.6755 to 240.3233), current still 214.5329. At the start of
-    `ClientOnExpLevelChange`: current 484.8444 = maximum. Shield maximum 180.5892 unchanged, base 0; shield current then rose
-    to full in about 1.2 s of sampled frames at roughly 90 per second, which is 0.5 x 180.59.
-  - run 2: level 9 to 10, health 121.2111 of 484.8444 (a quarter) and shield 18.06 of 180.59. After the recalculation:
-    maximum 547.8741 (base 240.3233 to 271.5654), current 121.2111. At the start of `ClientOnExpLevelChange`: 547.8741 =
-    maximum. The shield again filled at about 90 per second.
-  - the effective maximum divided by the base maximum was 2.01747 both before and after (a profile Badass Rank modifier on
-    the stack), so the rebase replaced the base and kept the stack.
+  - run 1: level 8 to 9, health exactly half of the maximum and shield about half of its capacity. After the native
+    recalculation: the maximum rose with the pool base maximum (212.6755 to 240.3233), current unchanged. At the start of
+    `ClientOnExpLevelChange`: current = maximum. Shield maximum unchanged, base 0; shield current then rose
+    to full in about 1.2 s of sampled frames at roughly 0.5 x the capacity per second.
+  - run 2: level 9 to 10, health a quarter of the maximum and shield about a tenth of its capacity. After the recalculation:
+    the maximum rose with the base (240.3233 to 271.5654), current unchanged. At the start of `ClientOnExpLevelChange`:
+    current = maximum. The shield again filled at about 0.5 x the capacity per second.
+  - the effective maximum divided by the base maximum was the same both before and after (a profile Badass Rank modifier on
+    the stack; the amounts, which carry her own shield and that modifier, are in the maintainer's private record), so the
+    rebase replaced the base and kept the stack.
   - the pool's recorded maximum became the new maximum; the player controller's last-level-up time was set; the pawn's game stage
     went from 8 to 9.
   The new base maxima equal `80 x 1.13^level` to float precision (240.3233, 271.5654), as NATIVE_PROGRESSION section 4 says.

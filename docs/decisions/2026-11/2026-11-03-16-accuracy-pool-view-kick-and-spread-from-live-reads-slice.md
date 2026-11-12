@@ -3,7 +3,7 @@
 AI-assisted (Claude). Record: `docs/verification/WEAPON_PROJECTILES.md` section 10. Behaviour change in the host and the firing
 tool; one real-game session (hub heavy slot, saves restored and hash-identical).
 
-- **Confirmed live** (one gun, the save's Jakobs shotgun, with Maya's skills on; rules only, not per-gun values): the accuracy
+- **Confirmed live** (one gun, the save's own shotgun, with Maya's skills on; rules only, not per-gun values): the accuracy
   pool rises by the impulse at each shot, holds 0.2 s, then falls linearly to its floor. The kick is impulse x 182.0444, times
   `WeaponKickZoomMultiplier` when fully zoomed. The kick targets decay linearly to 0 over `WeaponKickRecoveryTime` and the
   current amounts chase them at exactly `WeaponKickSpeed` per second. The controller rotation never moves, so the kick is a

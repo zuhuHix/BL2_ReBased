@@ -172,9 +172,9 @@ L7 found the five slice guns' live `InstantHitDamage` was a constant **0.7589** 
   damages L7 compared with** (63.63, 49.13, 22.26, 36.11, 20.65). A weapon the game rolled itself from a balance at game stage 8 had `ExpLevel` 8, and a definition-data twin built
   from its own `DefinitionData` (grade index 8) was identical (ratio 1.0000, three guns); `SetExpLevel(8)` on a grade-0 gun only sets the field and
   leaves the damage unchanged (the damage is computed when the item is built).
-- **The player-side term is the Badass Rank modifier.** The equipped grade-0 pistol's `InstantHitDamage` stack held one modifier, `MT_Scale` 1.01747 from
-  `GD_Challenges.BadassSkill.BadassSkill` (the profile's Badass Rank, the same skill L1 found in the health maximum): `23.936 x (1 + 1.01747) = 48.290`, the L7 value. Backpack weapons carry no such modifier (live value equals the base).
-- So `0.7589 = 2.01747 / 1.13^8 = 0.75889`. **The equipped grade-8 pistol would read 63.633 x 2.01747 = 128.4**: that is arithmetic, not a read (the grade-8 gun was only read in the backpack).
+- **The player-side term is the Badass Rank modifier.** The equipped grade-0 pistol's `InstantHitDamage` stack held one modifier, an `MT_Scale` from
+  `GD_Challenges.BadassSkill.BadassSkill` (the profile's Badass Rank, the same skill L1 found in the health maximum; its size is in the maintainer's private record): `23.936 x (1 + scale)` gives the L7 value. Backpack weapons carry no such modifier (live value equals the base).
+- So `0.7589 = (1 + scale) / 1.13^8`. **The equipped grade-8 pistol would read 63.633 x (1 + scale)**: that is arithmetic, not a read (the grade-8 gun was only read in the backpack).
   The weapon card (the base, 63.63) does not include Badass Rank. Also seen: the base is `NormalizedInstantHitDamage` x 8 x 1.13^`ExpLevel` for both kinds of build (2.992 x 8 = 23.936;
   2.2 x 8 x 1.13^8 = 46.789); where the 8 comes from was not read.
 - Consequence for L7's recordings: stored damages there are the grade-0 values times Badass Rank; nothing else in L7's record changes (its rules are ratios and formulas).
@@ -219,4 +219,4 @@ killed, and the lock was released. No Application Control block, no crash. The p
 - Other melee definitions' volumes (`_RadiusLeap`, `_RadiusBadass`, `_MeleeGrabBaby`, the charge), line-of-sight blocking, and `Action.Limits` values (attack range, height) of the attack actions.
 - Random-node outcome frequencies and the perch node's 10 s: a 30 s recording from first sight with the node state (`CurrentState`) read each frame.
 - The meaning of `TargetExposureToMe` -1.0 and of `Exposure_Half` (0.5) against the note's three-level table.
-- The equipped grade-8 gun's live value (128.4 predicted).
+- The equipped grade-8 gun's live value (predicted as 63.633 x (1 + the Badass Rank scale)).

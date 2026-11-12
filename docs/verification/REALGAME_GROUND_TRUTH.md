@@ -37,7 +37,7 @@ here keeps its earlier label.
 - **Skill points: confirmed** `max(0, L − 4)` as spent + unspent: 0 at level 2, 4 at level 8 (Phaselock 1, Mind's
   Eye 3), 13 at level 17 (12 + 1), 66 at level 70.
 - **Max health base: confirmed** by reading the health pool's `MaxValueBaseValue`: 102.152 (L2), 212.6755 (L8),
-  638.886 (L17), 415,509.44 (L70, UVHM) = `80 × 1.13^L` to float precision. The HUD shows more (429 at L8) because the
+  638.886 (L17), 415,509.44 (L70, UVHM) = `80 × 1.13^L` to float precision. The HUD shows more than the base because the
   profile's Badass Rank skill (`GD_Challenges.BadassSkill`) adds a modifier: the HUD number is not the base.
 - **Fire mission XP: confirmed** by calling `MissionDefinition.GetExperienceReward` on
   `M_RockPaperGenocide_Fire` for the level-8 Maya: **395** (mission game stage 8, `XPReward_02_Small`); the Shock,
@@ -199,17 +199,17 @@ that one frame, at one game time).
   value. The refill happens inside `OnExpLevelChange`, after `RecalculateAttributeInitializedState` returned and before
   `ClientOnExpLevelChange` runs. It is the class's `OnLevelUp` behavior, whose stock skill definition adds `HealthMaxValue` to
   `HealthCurrentValue` (read from the live object, post-add modifier): current health counts as a gain (the controller's
-  health-gained accumulator took the fractional part of the refill, 0.663 of 426.663) and the pool's impulse counter rose by one.
+  health-gained accumulator took the fractional part of the refill) and the pool's impulse counter rose by one.
   Whether the effect is "add the maximum, then cap" or "set to the maximum" cannot be told apart from the end state.
 - **Maximum: confirmed written by `RecalculateAttributeInitializedState`.** Before the call the pool maximum was still the old one,
   after it the new one; the call leaves current health alone. The pool's base maximum was 212.6755, 240.3233, 271.5654 (levels 8,
-  9, 10), `80 x 1.13^L` to float precision; the effective maximum is that base times 2.0176 on this character (the profile's
-  Badass Rank modifier), as before. The note's stand-in (re-evaluate the base maximum for the new level) gives the right value;
+  9, 10), `80 x 1.13^L` to float precision; the effective maximum is that base times one constant factor on this character (the profile's
+  Badass Rank modifier; its size is in the maintainer's private record), as before. The note's stand-in (re-evaluate the base maximum for the new level) gives the right value;
   that it is this native that recomputes it is now observed. What else the native does is not shown by this run.
-- **Shield: the level-up does not set current or maximum shield** (maximum 180.589 and base 0 unchanged, current unchanged through
+- **Shield: the level-up does not set current or maximum shield** (maximum and base 0 unchanged, current unchanged through
   the level-up frame). It does start the shield recharge at once: the recharge rate attribute is raised by half the maximum shield per
-  second (90.295 per second) for 4.0 s (observed 4.008 s), then back to 0. Without a level-up (control, also with a 10 XP
-  `ExpEarn`) the same shield waits 1.61 s and then recharges at 25.9 per second. The rate and the 4.0 s duration are in the stock
+  second (0.5000 of the maximum, as read) for 4.0 s (observed 4.008 s), then back to 0. Without a level-up (control, also with a 10 XP
+  `ExpEarn`) the same shield waits its own delay and then recharges at its own rate (both read live; the amounts are in the maintainer's private record). The rate and the 4.0 s duration are in the stock
   `PlayerBehavior_LevelUp` skill definition; the shield reached full in about 1.9 s.
 - **Skill points: confirmed +1 per level** at 8 to 9, 9 to 10 and 10 to 11 (unspent 0 to 1 to 2, `LevelUpCount` up by one each time).
   The point is added at the start of `ExpLevelUp`, before `OnExpLevelChange`. The "0 below level 5" half was not observed.
@@ -219,7 +219,7 @@ that one frame, at one game time).
   the pawn's game stage (8 to 9 to 10, set inside `OnExpLevelChange` after `RecalculateAttributeInitializedState`), level, skill
   points, level-up counters and timestamps, the shield recharge rate above. Outside that list: a natural level-up also applies the
   stock `PlayerBehavior_LevelUpNaturally` skill, a weapon-damage modifier of the scale kind that **raised the equipped weapon's
-  damage from 41.40 to 61.92 for 30 s** (the scale sum went from 2.017 to 3.017, i.e. +1.0 added to the existing sum) and was gone
+  damage for 30 s** (+1.0 added to the existing scale sum; the amounts are in the maintainer's private record) and was gone
   at 30.3 s. The action-skill cooldown part of `PlayerBehavior_LevelUp` was **not shown to do anything**: a cooldown pool set to
   its maximum drained at the same speed with and without a level-up (inconclusive, the set-up was artificial).
 - Incidental: `GetExperienceReward` for the Fire mission still answers 395 at level 11 (it was 395 at level 8), and Marcus's offer

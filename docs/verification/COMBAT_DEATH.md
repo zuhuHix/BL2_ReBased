@@ -7,8 +7,10 @@ live observation it matches; "matches" means the VM's order or number equals the
 
 ## What runs where
 
-`ow-package <any.upk> --combat-run --cooked <CookedPCConsole> spawn:adult:5 player:8 sethealth:0:29.7 hit:0:41.398:GD_Impact.DamageType.DmgType_Normal:Shotgun` is the live L3
-killing pellet (the adult bullymong at 29.7 health loses 41.398 and reads -11.698 after `SetHealth`). The pawn's **installed script** does everything between that and the
+`ow-package <any.upk> --combat-run --cooked <CookedPCConsole> spawn:adult:5 player:8 sethealth:0:29.7 hit:0:40:GD_Impact.DamageType.DmgType_Normal:Shotgun` is the live L3
+killing pellet with an invented amount (the adult bullymong at 29.7 health loses 40 and reads -10.3 after `SetHealth`). The live pellet was her own
+gun's damage, which is in the maintainer's private record, and the runs of 2026-10-08 used it. A rerun on 2026-11-12 with both amounts gave the same
+output apart from the amounts and the run times (15 of 434 values differ: the pellet in the step, two rows and six events, `SetHealth`, three times). The pawn's **installed script** does everything between that and the
 presentation: `TakeDamage` ... `SetHealth` -> `NotifyTakeHit` -> `TookDamageFromEnemy` -> `WillowPawn.HandleHealthDepleted` -> `MissionTracker.NotifyPawnDied` ->
 `Pawn.HandleHealthDepleted` -> `WillowAIPawn.Died` -> (the killer's) `WillowPlayerPawn.KilledEnemy` -> `WillowPawn.Died` -> `DropLootOnDeath` -> `StatusEffectsComponent.OwnerDied` ->
 `BodyClassDeathDefinition.OnKilledBy` -> `GearboxPawn.Died` -> `Pawn.Died` (`SetHealth(0)`, `DestroyHealthPool`) -> `WillowGameInfo.Killed` (kill experience, plan step S-d) ->
@@ -82,7 +84,7 @@ also runs calls the live hook set does not list, so only the order of the listed
 | `CheckInjured` | 218 |
 
 All 21 listed calls occur in the live order (`local/p2/Sc/death_order.py`, a local check, prints this table from a run). `AIDefinition.OnKilledPawn` does not run for the player's kill (the same
-as live). The pre-death part of the chain (`TakeDamage` ... `SetHealth(-11.698)` ... `NotifyTakeHit` ... `TookDamageFromEnemy`) is the Sb record. Differences from the live record that are
+as live). The pre-death part of the chain (`TakeDamage` ... `SetHealth` below 0 ... `NotifyTakeHit` ... `TookDamageFromEnemy`) is the Sb record. Differences from the live record that are
 not in the table: `OnKilledBy` ran **three** behaviors as live (`Behavior_CustomEvent_1`, `Behavior_CompareBool_0`, `Behavior_ChangeInstanceDataSwitch_0`); `OnPlayDeathPizazz` ran
 **three** here (`Behavior_CustomEvent_0` -> the broadcast `DeathBreathFX` -> `Behavior_ChangeRemoteBehaviorSequenceState_0`, and `Behavior_TriggerDialogEvent_0`) against four live, the last a
 dialog event as here; the missing one is not identified (it may sit in the AI definition's provider, whose `FrostBreth_FX` sequence the VM does not load for the death).
@@ -114,6 +116,6 @@ GUID 255, `pool_valid` false), `GetMaxHealth` falls back to `HealthMaxVar`. The 
 ```
 cooked="$OPENWILLOW_BL2/WillowGame/CookedPCConsole"
 build/Release/ow-package.exe "$cooked/Sanctuary_Dynamic.upk" --combat-run --cooked "$cooked" spawn:adult:5 player:8 sethealth:0:29.7 \
-    hit:0:41.398:GD_Impact.DamageType.DmgType_Normal:Shotgun > kill.json
+    hit:0:40:GD_Impact.DamageType.DmgType_Normal:Shotgun > kill.json
 python tests/combat_test.py build/Release/ow-package.exe     # synthetic: the toy killing pawn (call order, tracker native, post-state)
 ```

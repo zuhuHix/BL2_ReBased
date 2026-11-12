@@ -8,8 +8,8 @@ of scope and not applied.
 Rules, and what each rests on:
 - Earned points = level - 4, i.e. one per level from level 5. The real-game
   trace under ignored `local/ui/traces` (the respec run) shows a level 45
-  character (`SetPlayerLevel "Level 45"`, XP `2619964 / 2715586` in both
-  traces) with 41 unspent points and no grades, which is 45 - 4. That checks
+  character (`SetPlayerLevel "Level 45"`, XP between the level-45 and level-46
+  thresholds, next level at 2,715,586, in both traces) with 41 unspent points and no grades, which is 45 - 4. That checks
   one level only; other levels and any DLC or level-cap rules are UNVERIFIED.
 - XP threshold for level L: floor(60 * L^2.8 - 60). The formula is a
   community-known curve, not read from the install. It reproduces the traced

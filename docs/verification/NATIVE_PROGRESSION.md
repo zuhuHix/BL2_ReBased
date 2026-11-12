@@ -235,7 +235,7 @@ level 5, 212 at level 8 (displayed rounding unknown).
 
 **Confirmed in game on 2026-10-02** by reading the health pool's `MaxValueBaseValue` through the SDK: 102.152 (L2),
 212.6755 (L8), 638.886 (L17), 415,509.44 (L70, UVHM), each `80 × 1.13^L` to float precision. The HUD shows more
-(429 at L8) because the profile's Badass Rank skill modifies the pool ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
+than the base because the profile's Badass Rank skill modifies the pool ([REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)).
 
 *Update 2026-10-07 (NATIVE_LEVEL_UP_ATTRIBUTES.md, lane G23; swap 7b): "whether a level-up refills current health" is answered: the native rebase changes the base maximum and leaves current alone unless the
 pool was full (then it follows); the class's `OnLevelUp` behaviors then add the effective maximum to current and the pool clamps it. The VM runs this rule.*

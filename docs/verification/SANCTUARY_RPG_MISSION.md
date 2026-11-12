@@ -502,7 +502,7 @@ mission-screen pages from `tools/hud_overlay/serve.py`, and the start shield (th
 no test driver: no `-owslicegate*`, no `ow.RangeLoot`, no granted point, no forced damage. Two host stand-ins remain and are
 not switches: the dependency mission counts as complete (`OWQUEST FIXTURE` in the log), and Marcus walks straight lines.
 In the real game his walk ran at 150 uu/s, about half the 294 of the class's `GroundSpeed` x `WalkingPct` (live,
-2026-11-12, SDK mods off, two runs of one path: [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1b).
+2026-11-12, every SDK mod of the session's list off as read in the game (Quick Startup stayed on), two runs of one path: [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1b).
 His walk speed is a third stand-in since 2026-11-12: 150 uu/s, with no slow-down before nodes 12, 26 and 40 (he cut the corners at 12 and 26 inside
 the arrival radius and stopped at 40 within one 0.1 s read), and one short turn of about 0.8 s at low speeds at node 35. Observed in the real game, session 1 of 2026-11-12
 (the mission screen capture with the read-only watch, level 8, Sanctuary, every SDK mod off as read in the game; two runs of the
@@ -1423,7 +1423,7 @@ level's maximum, the walker holds exactly those numbers). The old MaxHealth log 
 - The real skill activation (timed skill, grade, expiry), the pool's subclass "current value changed" hooks, the per-frame pool update (regeneration, which also records the last values),
   `OnHealthPoolMaxValueModified`, the load-time fills (`ServerItemSaveGameDataCompleted`), and the pawn's `SetGameStage` (recorded only).
 - The VM pool has no modifier stack entries (the host applies no skills or Badass Rank to health), so the rebase's "keep the stack" is exercised by the formula only, not by data. The
-  profile Badass Rank modifier of the live captures (effective/base 2.01747) is not modelled by the host.
+  profile Badass Rank modifier of the live captures (a constant effective/base ratio; its size is in the maintainer's private record) is not modelled by the host.
 - `SetCurrentValue`, `GetMaxValue`, `UpdateLastValues` and `PoolIsNowFull` are bound only for the one pool the bridge builds; `RunBehaviors` outside a level-up logs a stub.
 
 ### Checks (2026-10-07, CMake Release and UE module rebuilt first)
@@ -1558,7 +1558,7 @@ output of dialog 03b was never selected live).
 
 AI-assisted (Claude), lane I7. Rules: [NATIVE_LEVEL_UP_ATTRIBUTES.md](NATIVE_LEVEL_UP_ATTRIBUTES.md) section 6 and 7, [NATIVE_ATTRIBUTES.md](NATIVE_ATTRIBUTES.md) sections 3 and 5,
 [NATIVE_SKILLS.md](NATIVE_SKILLS.md) section 4. **Observed in the running game (lane L1, [REALGAME_GROUND_TRUTH.md](REALGAME_GROUND_TRUTH.md)):** after a natural level-up the equipped weapon's
-damage went from 41.40 to 61.92 for 30 s (the weapon's damage scale sum from 2.017 to 3.017, +1.0 added to the existing sum), gone at 30.3 s. Everything else here is UNVERIFIED.
+damage rose for 30 s (the weapon's damage scale sum rose by exactly 1.0, added to the existing sum; the amounts are in the maintainer's private record), gone at 30.3 s. Everything else here is UNVERIFIED.
 
 ### What runs as script, what is data, what is a stand-in
 
@@ -1576,7 +1576,7 @@ damage went from 41.40 to 61.92 for 30 s (the weapon's damage scale sum from 2.0
   Each activation is its own modifier (two natural level-ups outside the guard give two events). `--slice-run` has a new step `cheatlevel` (one `ExpLevelUp(true)`), used only by the test.
 - **Host (`AOpenWillowWalker::AddWeaponDamageScale` / `ShotDamage`):** the walker keeps (scale, end time) entries in game time; an entry runs while `Now < start + duration`
   (dropped by Tick, logged). The shot's damage follows the stack rule, **(base + PreAdd) x (1 + up + s) / (1 + down) + PostAdd** (NATIVE_ATTRIBUTES.md section 3), so the running scale joins
-  the weapon's existing up-sum, which is the observed (S + s) / S (3.017 / 2.017 = 1.496), not a doubling. The terms come from the card: `tools/weapon_stats.py` now writes
+  the weapon's existing up-sum, which is the observed (S + s) / S with s = 1 on an existing sum S above 1 (the profile's Badass Rank term is in it), not a doubling. The terms come from the card: `tools/weapon_stats.py` now writes
   `card.damage_stack` (`base`, `pre_add`, `post_add`, `scale_up`, `scale_down`: the WeaponDamage stack that `combine()` turns into `damage`, which is unchanged) and the host parses it into
   `FOpenWillowWeaponItem` (`bHasDamageStack`, `DamageBase` ...). **Fallback (labelled host stand-in, UNVERIFIED):** a recipe without the stack (evaluated before the field) gets card damage
   x (1 + s), S taken as 1, which overstates when other Scale modifiers are on the weapon. A non-positive scale is refused (the stack puts a negative one in the divisor; not modelled).

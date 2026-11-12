@@ -1,7 +1,7 @@
 ## 2026-10-07: script swap 9, the natural level-up's timed weapon-damage scale
 
 AI-assisted (Claude), implementer lane I7 (work queue item 2). Observed in game (lanes L1 and L3): a natural level-up raised the held weapon's
-damage from 41.40 to 61.92 for 30 s (scale sum 2.017 to 3.017).
+damage for 30 s (the scale sum rose by exactly 1.0; the amounts are in the maintainer's private record).
 
 What changed:
 - **VM.** A natural level-up runs `PlayerClass.OnLevelUpNaturally` through the existing labelled `RunBehaviors` stand-in. Its WeaponDamage

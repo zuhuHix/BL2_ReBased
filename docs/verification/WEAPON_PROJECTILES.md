@@ -342,22 +342,22 @@ sampled every frame the controller's `AccuracyPool` value, its four kick fields 
 
 **Run Z47 (2026-11-09, main 913f9b7, zuhu): the status part did not run.** The recipe file above was missing on zuhu, so
 `fp_spawn` and `fp_ready` raised in the game. `PyJson` kept the traceback as text and the script went on; key `1` drew the
-save's own slot-1 gun (a Torgue pistol), and the `Maliwan` check refused it. The check was right; the missing file was the
+save's own slot-1 gun (not a Maliwan), and the `Maliwan` check refused it. The check was right; the missing file was the
 cause. Since this note the script refuses a missing status recipe before it takes a lock or makes a backup, and stops the
 status step on a `fp_spawn` / `fp_ready` traceback with the error's last line. The log line now also names the held and the
 readied weapon object. Saves were identical after that run and the pending record was removed. No status numbers exist from
 the run.
 
-**Limits of this session.** The probe's equip step left the save's own Jakobs shotgun (`WT_Jakobs_Shotgun`) in hand for every
+**Limits of this session.** The probe's equip step left the save's own shotgun in hand for every
 run, so all the numbers below come from that one gun. Maya's skills were active: a skill modifier on the weapon's
-`PerShotAccuracyImpulse` turned the type's 11 into 5.4524. The rules below are ratios and orders of events, which these
+`PerShotAccuracyImpulse` lowered the type's 11 (the read value is in the maintainer's private record). The rules below are ratios and orders of events, which these
 facts do not change; per-gun values come from the data (`accuracy_pool` in the firing block) and are `UNVERIFIED` live.
 
 | Rule | Status |
 |---|---|
-| The pool rises by the shot's impulse at the shot (5.4524, every one of 8 single shots and the 60 spread shots) | **confirmed live** |
-| After a shot the pool holds, then falls linearly: hold 0.176-0.200 s (the data's 0.2 s delay to within a frame), fall -8.9 to -9.1 per second, down to its floor (1.2434 with this gun and Maya's skills) | **confirmed live** (rate and floor include the skill and weapon scales, not separated) |
-| The kick passed to `AddWeaponKick` = impulse x 182.0444, x `WeaponKickZoomMultiplier` when fully zoomed (992.58 hip, 1985.2 = x 2.0 zoomed) | **confirmed live** |
+| The pool rises by the shot's impulse at the shot (the same modified impulse on every one of 8 single shots and the 60 spread shots) | **confirmed live** |
+| After a shot the pool holds, then falls linearly: hold 0.176-0.200 s (the data's 0.2 s delay to within a frame), fall -8.9 to -9.1 per second, down to its floor (its value with this gun and Maya's skills is in the maintainer's private record) | **confirmed live** (rate and floor include the skill and weapon scales, not separated) |
+| The kick passed to `AddWeaponKick` = impulse x 182.0444, x `WeaponKickZoomMultiplier` when fully zoomed (x 2.0 zoomed to the read precision) | **confirmed live** |
 | `TargetVertical/HorizontalKickAmt` fall linearly to 0 at `WeaponKickRecoveryTime` (0.35 s) after the kick | **confirmed live** |
 | `CurrentVertical/HorizontalKickAmt` chase the targets at exactly `WeaponKickSpeed` per second (first-order: d current = (target - current) x speed x dt; fitted 8.00 on every frame pair, the type's 8) | **confirmed live** |
 | The controller rotation never moves (pitch 0 throughout): the kick is a view offset that returns to the aim, not a permanent view change | **confirmed live** |
@@ -397,7 +397,7 @@ data's level-difference scale and the card chance; a skills-off rerun would sett
 
 *Likely explanation (UNVERIFIED).* The skill allocation of this save could not be read: the repository has no save reader,
 and the probe did not list the skill tree. The run did record the weapon's damage stack. It holds a single modifier,
-`GD_Challenges.BadassSkill.BadassSkill`, scale +1.0175, so 45.30 x 2.0175 = 91.39 (the live `InstantHitDamage`). The profile
+`GD_Challenges.BadassSkill.BadassSkill`, a scale whose size is in the maintainer's private record; the card's 45.30 times (1 + that scale) is the live `InstantHitDamage`. The profile
 carries a large Badass Rank, and Badass Rank has an elemental effect chance stat that reaches the roll as an instigated
 chance modifier. A level-8 Maya has at most 4 skill points (NATIVE_PROGRESSION.md), so a Cataclysm skill can add at most a few
 ranks. Without either, the measured factor is 42 / 23.4 = 1.79; at 18 of 43 its 95 % interval is about 1.2 to 2.5. With a
@@ -439,13 +439,13 @@ rocket trails. It is data and host code; no live session was used, and the look 
 
 AI-assisted (Claude; the data tool by a Claude Haiku sub-agent, reviewed). **The stock frag has not been thrown live yet.** One
 session (2026-11-06, `tools/real_game/projectiles_capture.ps1 -StatusOnly -NoSkills -Grenades`; saves and config restored and
-hash-compared) threw 4 grenades, but the save's equipped mod is the Sky Rocket (`Grenade_SkyRocket`), a different grenade.
+hash-compared) threw 4 grenades, but the save's equipped mod is not the frag (a different grenade, named in the maintainer's private record).
 
-- **Measured on the Sky Rocket; UNVERIFIED for the frag.** The projectile is first seen 0.52-0.53 s after `ThrowGrenade` (4 of 4);
+- **Measured on the save's mod; UNVERIFIED for the frag.** The projectile is first seen 0.52-0.53 s after `ThrowGrenade` (4 of 4);
   `GrenadeThrowComplete` comes 1.04-1.19 s after it. The launch speed was 1694-1701 uu/s, and the frag's `SpeedFormula` has the
   same 1700. First seen 84-110 uu ahead of the eye (up to a frame of flight included), about 20 uu to its left, -1 to +15 uu
   vertically. Two throws flew along the aim; two show about 16 degrees up, but the aim was tracking a moving target and the
-  probe's view read failed, so an upward bonus is not settled. The Sky Rocket's own fuse, damage, radius and children are not
+  probe's view read failed, so an upward bonus is not settled. The save's mod's own fuse, damage, radius and children are not
   recorded here because they say nothing about the frag.
 
 - **Script (read, in our own words).** `WillowPlayerController.ThrowGrenade` needs the weapon to be able to act and a
@@ -466,7 +466,7 @@ hash-compared) threw 4 grenades, but the save's equipped mod is the Sky Rocket (
 - **Host.** `AOpenWillowWalker::ThrowGrenade` (key G, `OWGrenade`) spends one grenade from the Grenade ammo pool and launches
   a falling projectile with the block's values 0.52 s later, from 80 uu ahead of the eye and 20 uu to its left, along the view;
   a 1.05 s lockout covers the throw. Its explosion uses the section 11 bands and the hit source `Grenade`. **UNVERIFIED for the
-  frag:** that release delay, lockout and offset (all from the Sky Rocket), the damage, radius and bounces (from the data, not
+  frag:** that release delay, lockout and offset (all from the save's mod), the damage, radius and bounces (from the data, not
   seen live), the data's upward velocity bonus added to the launch (the projectile's own field; the rule is read from script, not
   measured), and spending the grenade at the press. A block without positive damage does not load. **Stand-ins:** no throw
   animation; the falloff is the class
@@ -488,7 +488,7 @@ run used `CharClass_PrimalBeast`). The target also stood in environmental damage
 those rolls are not counted, and whether they affect the fire rolls is not known.
 
 **The mechanism behind the skills-on ~x2 (41 of 86, section 10) stays UNVERIFIED.** The state did change: the gun's damage stack
-held Badass Rank's +1.0175 in that run and is empty in this one. But the controller's five `Instigated*StatusChanceModifier`
+held Badass Rank's scale in that run and is empty in this one. But the controller's five `Instigated*StatusChanceModifier`
 fields read 1.0 both before and after skills were switched off, so the factor is not in those fields; `fp3_no_skills` also
 listed no active skills before it ran, so its list cannot name the cause. **The higher-level scale (x2 at 6+ levels) is
 unmeasured:** the older x2 against level-7 targets is no evidence for it, since that profile's skills were on.
@@ -497,7 +497,7 @@ unmeasured:** the older x2 against level-7 targets is no evidence for it, since 
 
 AI-assisted (Claude). One real-game session threw `Grenade_DefaultFrag` 4 times by naming it in `ThrowGrenade`
 (`tools/real_game/projectiles_capture.ps1 -StatusOnly -NoSkills -Grenades -GrenadeDefinition ...`, a runner mode on branch `feature/slice-projectiles-frag-throw` @ d96b842, not in this change; saves, config and SDK settings
-restored and hash-compared). **The Sky Rocket mod was still equipped, so this is the frag's definition without the stock mod's
+restored and hash-compared). **The save's mod was still equipped, so this is the frag's definition without the stock mod's
 parts.** Host suite evidence below is pending; a passing suite will mean "the host did this", not parity.
 
 - **The graph (read from the packages, tool: `tools/grenade_mod.py` `contact_rules`).** Hitting the world bounces at elasticity 0.4;
@@ -518,7 +518,7 @@ parts.** Host suite evidence below is pending; a passing suite will mean "the ho
 - **UNVERIFIED.** That a thrown stock mod uses level 8 and the -120 slot (the block's 148.87 and 380): naming a definition applied
   neither, and the equipped mod's attributes did not reach the frag's radius or fuse, so a throw with the stock mod equipped is
   still needed. What the first contact at 0.2 s was (the target is the suspect: about 70-100 uu from its location, no wall event).
-  The 6 s timer (no throw went without a contact). The FuseTime slot's effect on these timers. Release delay, lockout and offset stay from the Sky Rocket.
+  The 6 s timer (no throw went without a contact). The FuseTime slot's effect on these timers. Release delay, lockout and offset stay from the save's mod.
 - **Upward bonus: inferred, still UNVERIFIED.** The view read failed again, so the aim is not known. But the launch speeds of the 4
   throws differ (1650-1672 uu/s) and become steady (1705-1708 uu/s) once the data's 270 uu/s is taken off Z. That points to the
   bonus applying in world Z on top of the projectile's speed along the aim, which is what the host does.

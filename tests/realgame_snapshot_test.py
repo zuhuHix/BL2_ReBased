@@ -471,14 +471,15 @@ function Py([string]$Code, [int]$Timeout = 30) {
     if ($Code -match 'pi_shield_read') { return __READ__ }
     if ($Code -match 'pi_shield_restore') { $script:restoreCalls++; return __RESTORE__ }
     if ($Code -match 'pi_shields_check') { return __CHECK__ }
-    if ($Code -match 'pi_shields') { return '{"max_strength":181}' }
+    if ($Code -match 'pi_shields') { return '{"max_strength":150}' }
     throw "unexpected: $Code"
 }
 function Invoke-LiftCast { $log.kill = [pscustomobject]@{ frames = 10; shots = @{ 'kill-2.10' = 1; 'kill-2.50' = 1; 'kill-3.50' = 1; 'kill-5.00' = 1; 'kill-6.00' = 1 }; action = '{"killed":__KILLED__,"at":5.0,"since":1.0}' }; [pscustomobject]@{ target_lifted = $true; skill_calls = @('EndSkill') } }
 __STAGES__
 "RESULT:" + (@{ done = @($stagesDone); problems = @($stageProblems); waited = $script:waited; restores = $script:restoreCalls; levels = @($log.shield_levels | ForEach-Object { $_.level }); tried = @($log.shield_levels | ForEach-Object { $_.tried.requested_level }) } | ConvertTo-Json -Compress)
 """
-GOOD = {'__SHIELD_ONLY__': '$false', '__START__': """'{"equipped":{"name":"Own","level":8},"max_strength":181,"player_level":50}'""", '__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
+# The shield levels and capacities here are invented, not a save's (the same 150 as tests/phaselock_integrity_probe_test.py).
+GOOD = {'__SHIELD_ONLY__': '$false', '__START__': """'{"equipped":{"name":"Own","level":8},"max_strength":150,"player_level":50}'""", '__ASH__': """'{"movie":"m"}'""", '__STOP__': '$null', '__HUD__': """'{"usable":true,"before":3,"after":3}'""",
         '__READ__': """'{"counts":true,"max_strength":900}'""", '__RESTORE__': """'{"ok":true}'""", '__CHECK__': """'{"ok":true}'""", '__KILLED__': 'true'}
 
 
@@ -520,13 +521,13 @@ def test_the_two_stages_stand_alone_and_set_their_result_last():
     r = run_stages(__READ__=other)
     assert 'shield_levels' not in r['done'] and '4 of 5' in r['problems'][0]
     # Only levels at or below the player's are asked for. Her own is tried but not required, and the stage can pass.
-    r = run_stages(__START__="""'{"equipped":{"name":"Own","level":3},"max_strength":181,"player_level":8}'""")
+    r = run_stages(__START__="""'{"equipped":{"name":"Own","level":4},"max_strength":150,"player_level":8}'""")
     assert r['levels'] == [1, 5, 8] and 'shield_levels' in r['done'] and r['problems'] == []
     # No level left to measure does not pass quietly.
-    r = run_stages(__START__="""'{"equipped":{"name":"Own","level":1},"max_strength":181,"player_level":1}'""")
+    r = run_stages(__START__="""'{"equipped":{"name":"Own","level":1},"max_strength":150,"player_level":1}'""")
     assert 'shield_levels' not in r['done'] and 'no level to measure' in r['problems'][0]
     # No equipped shield found: nothing is tried or restored, and the status says nothing changed.
-    r = run_stages(__START__="""'{"equipped":null,"max_strength":181}'""")
+    r = run_stages(__START__="""'{"equipped":null,"max_strength":150}'""")
     assert 'shield_levels' not in r['done'] and r['levels'] == [] and r['restores'] == 0 and 'nothing was changed' in r['problems'][0] and 'NOT RESTORED' not in r['problems'][0]
     # Shield only: no kill stage runs, and the shield stage does.
     r = run_stages(__SHIELD_ONLY__='$true', __ASH__="$(throw 'kill stage ran')")

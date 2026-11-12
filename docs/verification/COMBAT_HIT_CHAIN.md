@@ -47,8 +47,8 @@ instigator as context, times the victim's resistance attribute). The result goes
 **L5 Q1, the Fire dummy (level 8, stage 8, health 778.658; `local/p2/Sb/run_seq.sh`).** The pistol shot (source `WillowDmgSource_Pistol`, damage type `DmgType_Incendiary_Impact`, arriving
 74.013847, default region) applies **111.020767** with `NotifyTakeHit` and health 667.637573: the live row is 111.02076721 and 667.63757324 (flesh modifier 1.5 of the incendiary type at
 playthrough 1; every other stage is 1). The splash (source `WillowDmgSource_Grenade`, arriving 59.2111) applies 88.8167 (x1.5) when Maya's controller has its class defaults, but the live row is
-179.04184 (x3.0238). The extra factor 2.0158596 is exactly **Maya's own `InstigatedGrenadeDamageModifier`, 2.015859603881836 in her controller snapshot of lane L1** (a skill-modified attribute;
-the VM has no skills): with that attribute set as a state input (`attr:0:InstigatedGrenadeDamageModifier:2.015859603881836`) the splash applies 179.0419 against the live 179.0418 (relative difference
+179.04184 (x3.0238). The extra factor is exactly **Maya's own `InstigatedGrenadeDamageModifier` as her controller snapshot of lane L1 read it** (a skill-modified attribute;
+the VM has no skills; the value is in the maintainer's private record): with that attribute set as a state input (`attr:0:InstigatedGrenadeDamageModifier:<the read value>`) the splash applies 179.0419 against the live 179.0418 (relative difference
 3e-7, inside the 4-decimal rounding of the recorded arriving value). The snapshot is from another launch than the L5 shots (same character file, level 8); that the two launches carry the same skills
 is not shown. With it the whole sequence follows the live record: 778.658 -> 667.638 -> 488.596 -> 377.575 -> 198.533 -> 87.512 -> **1.0**; the hit that would pass the floor applies 86.512 and
 `NotifyTakeHit` gets 86.512 (live 86.51234); then every later hit (pistol, splash, status damage) applies exactly 0 with health 1.0. Largest health difference from the live rows 0.00013.
@@ -59,8 +59,8 @@ script's switch), so Type 3 is **Demigod**, not the sum of Target and Movement a
 L6's open "which part of the hold sets it". UNVERIFIED: the bodies of the hold natives (release semantics, one hold per reason), and a stand-in: the script asks its context for
 `IAIInterface`, which the VM's class tables list for the mind and not for `WillowAIPawn` (live the context is the pawn), so the hold is applied to the pawn's mind (`aiInterfaceFor`).
 
-**L3 section A (shotgun pellets on an adult bullymong at level 5, Maya level 8).** Arriving 41.398 with `DmgType_Normal` and `WillowDmgSource_Shotgun` applies 41.398 (level scale 1: the higher-level
-player takes `HigherLevelAttackerDmgScale` 1.0): 360.876 -> 319.478 -> 278.080 -> 236.682, live 319.48 -> 278.08 -> 236.68. The bullymong's class provider reaches `Behavior_Conditional`, which has no
+**L3 section A (shotgun pellets on an adult bullymong at level 5, Maya level 8).** Arriving at the gun's live damage (the amount is in the maintainer's private record) with `DmgType_Normal` and `WillowDmgSource_Shotgun`, each pellet
+applies what arrives (level scale 1: the higher-level player takes `HigherLevelAttackerDmgScale` 1.0): from 360.876, three equal steps that match the live trail to 0.01. The bullymong's class provider reaches `Behavior_Conditional`, which has no
 handler in this driver (recorded as a provider error; plan step S-c).
 
 **Order of effects (VM, one hit):** `TakeDamage`, `AdjustDamage` stages, `ActorTakeDamageInner`, `RecordRecentDamage`, `SetHealth`, `NotifyTakeHit`, then the `OnTakeDamage` event and its behaviors. Health is

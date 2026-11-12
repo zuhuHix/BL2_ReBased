@@ -76,7 +76,7 @@ AI definition's `TargetSearchRadius` 4,096) stays UNVERIFIED.
 ## 3. The attack route (OBSERVED, real shot and script call)
 
 A real shot (the level-8 pistol, one click) at an adult put 1,200 uu from the player (and 6,200 from the den, outside both rules, level 1 for the whole den) hit it: `WillowAIPawn.TakeDamage`
-(damage 41.40, instigator the player's controller) ran, and inside it `WillowMind.NotifyAttackedBy(player pawn, bDamaged true)` (script-visible; the inner
+(the gun's live damage, instigator the player's controller) ran, and inside it `WillowMind.NotifyAttackedBy(player pawn, bDamaged true)` (script-visible; the inner
 `AIComponent.NotifyAttackedBy` and `SetThreatLevel` are native-to-native and were not seen). Result on the den's record: `ThreatLevel` **3** (`ETL_Provoked`), `AggroTime` = the world time of
 the frame (one frame, 0.016 s, before the `g` the hook reads), `ForgetTime` = AggroTime + **25.0** (the den definition's `MinProvokedTime`; refreshed to hit time + 25 by a second call in the
 same frame). The four members copied level 3 and acquired her 0.15 s later (their next update), each calling `SetLookAtTarget(player, zero offset)`. A script call

@@ -17,7 +17,7 @@ calls that go through script (`ProcessEvent`); native-to-native calls are invisi
 - **Travel (script, memory only):** `WillowGameInfo.InitiateTravel` with the fast-travel station `GD_FastTravelStations.Zone1.IceEast`
   (Three Horns Divide, `Ice_P`). The game's own `TravelToStation` ran; arrival is `ResurrectPlayer`/`ResurrectAtLocation` on the arrival station's
   exit point. No console `open` command was used.
-- **Real inputs:** left mouse button for every shot (Texas Scattergun, a Jakobs shotgun: 2 rounds a clip, 7 pellets a shot), the W key for one
+- **Real inputs:** left mouse button for every shot (the save's own shotgun: 2 rounds a clip, 7 pellets a shot), the W key for one
   short step onto money pickups, the use key (E) on a weapon pickup, F for Phaselock. Script stand-ins: the camera was aimed with
   `ClientSetRotation` before each shot (as lane L2), the player was placed 450-900 uu from a chosen enemy to start the fight and 650 uu for the
   casts, and `InventorySlotMax_Misc` was raised from 12 to 20 in memory for the pickup that needed room.
@@ -58,8 +58,9 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
    `Behavior_Conditional`, `Behavior_SpecialMove`) -> `WillowPawn.TookDamageFromEnemy` (with `ProcessDamageTakenSkillEvents` inside it) -> back out of
    `Pawn.TakeDamage` and `WillowPawn.TakeDamage` -> `WillowAIPawn.CheckInjured` -> back out of `WillowAIPawn.TakeDamage`. About 6.5 ms of the
    game's wall clock per pellet with hooks on. Every pellet is its own `TakeDamage` chain (7 and 2 chains for two clicks 1.14 s apart).
-2. **Numbers.** Each pellet arrived as 41.4 (the weapon's `InstantHitDamage` read 41.398) and lowered the victim's health by exactly 41.4
-   (360.876 -> 319.48 -> 278.08 -> 236.68 ...), no shield, no crit, flesh, a level-5 victim against the level-8 player. `AdjustDamage` showed its
+2. **Numbers.** Each pellet arrived as the weapon's live `InstantHitDamage` (her own gun's damage with the profile's Badass Rank; the amount
+   is in the maintainer's private record) and lowered the victim's health by exactly that amount (from 360.876 in equal steps, one
+   per pellet), no shield, no crit, flesh, a level-5 victim against the level-8 player. `AdjustDamage` showed its
    input only (its output arguments read as unset), so "damage out = damage in" is the health arithmetic, not a read of the output.
 3. **Status effect roll** (`StatusEffectsComponent.RollChanceForStatusEffect`) ran for incendiary and shock hits on pawns (88 calls in total, by psychos
    with `Status_Incendiary` and by an area with `Status_Shock`); none for the shotgun's `DmgType_Normal`, which has no status effect.
@@ -103,12 +104,12 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
 
 ### C. The player is hit
 
-9. **Shield first, then health.** Grenade hits from a ranged bullymong arrived as 44.22; each took **31.616** from the shield (180.589 -> 148.973
-   -> ...), a factor of 0.715 on the arrival value (the factor is read, its pipeline stages are not). When the shield had 23.387 left, one hit
-   emptied it and the **remainder 8.229 (= 31.616 - 23.387) went to health** (429.066 -> 420.837). Melee arrived as 94.1 and took 69.73 of health
+9. **Shield first, then health.** Grenade hits from a ranged bullymong arrived as 44.22; each took **31.616** from the shield (her own shield; its
+   capacity is in the maintainer's private record), a factor of 0.715 on the arrival value (the factor is read, its pipeline stages are not). When the shield had 23.387 left, one hit
+   emptied it and the **remainder 8.229 (= 31.616 - 23.387) went to health** (health fell by exactly 8.229). Melee arrived as 94.1 and took 69.73 of health
    (0.741); a leap's melee 83.28 took 60.63 (0.728). `WillowPlayerPawn.TakeDamage` and `WillowPlayerPawn.AdjustDamage` wrapped the same chain as A.
-10. **Shield recharge.** After the last hit the shield starts to rise **1.613-1.618 s later** (the pool's idle regeneration delay read 1.611 s plus
-    one frame) at **about 25.9 per second** (the idle rate read 25.88; per-frame rates 24.7-26.9), reset by each new hit; health did not
+10. **Shield recharge.** After the last hit the shield starts to rise **one frame after the pool's idle regeneration delay** (as read for this
+    shield) at **the pool's idle rate** (as read; per-frame rates within 5 % of it; both are this shield's own, and the amounts are in the maintainer's private record), reset by each new hit; health did not
     regenerate (idle and active rates 0).
 
 ### D. Down (fight for your life), second wind, death, respawn
@@ -127,7 +128,7 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
     `WillowPlayerPawn.ResurrectPlayer(ResurrectReason = 1)` -> `ResurrectAtLocation(holding point, exit point, 1)` ->
     `GoFromInjuredToHealthy` -> `SetInjuredState(0)` / `SetInjuredDeadState(0)` -> `ClearPlayerInjuredState` -> `ClearInjuredState` ->
     `ClearSecondWindReason` -> **five `Behavior_RefillResourcePool` of `PlayerInjuredDefinition`**. Health and shield read full already at the
-    start of `ResurrectPlayer` (429.066 / 180.589, later 484.844 / 180.589); no `SetHealth` call was visible, so the refill itself is native.
+    start of `ResurrectPlayer` (both at their maxima, and at the level-9 health maximum after the level-up); no `SetHealth` call was visible, so the refill itself is native.
     The exit point was a different `StationTeleporterExitPoint` each time (_9, _10, _11 after the arrival's _8) and the holding point a
     `TargetPoint` (1, 0, 2), all at the arrival station of `Ice_P` (within about 400 uu of one another); the nearest/active-station choice
     itself is native and not seen.
@@ -136,8 +137,8 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
     respawns**: two exact products had a fraction below a half and rounded down, one above a half and rounded up, and each fee was taken from
     the cash at the time (the second after the +9 of loot in step 8). The amounts are in the maintainer's private record.
 17. **Second wind (kill while down).** Bleed timer 7.6 s in, one shotgun shot killed the baby bullymong. Same frame as its `Died`: `injured.KilledEnemy`
-    (`WillowPlayerPawn` and `WillowPawn` copies) and health already 25 % of maximum (**136.97 = 0.25 x 547.874**); the next frame
-    (65 ms later, a long frame under the hooks) `GoFromInjuredToHealthy`: shield **162.53 = 0.9 x 180.589**, injured state 0,
+    (`WillowPlayerPawn` and `WillowPawn` copies) and health already 25 % of maximum (**0.2500 of the maximum** as read); the next frame
+    (65 ms later, a long frame under the hooks) `GoFromInjuredToHealthy`: shield **0.9000 of its capacity**, injured state 0,
     `ClearSecondWindReason`. The experience was still awarded. The refill of health in the kill frame shows no script `SetHealth`. She was down
     again 5.4 s later (the enemies were still on her); `NumSuccessiveInjuries` read 1 during that fifth injury (the previous injury was 15.4 s
     earlier, under the 30 s rule). The end of that fifth injury was **not observed** (the game was closed 7 s into it), so the shortened
@@ -157,11 +158,12 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
     and stayed 0 through the release (no later refill). **During the drain (cooldown 7.9915 at 8 s):** 0.0 in the same call. Both level-ups
     (8 -> 9, 9 -> 10) ran, in one frame: `ExpLevelUp` -> `SetSecondWindReason(2)` -> `OnExpLevelChange(true, true)` ->
     `RecalculateAttributeInitializedState` -> `Behavior_AttributeEffect` of `PlayerBehavior_LevelUp` ->
-    `ActivateSkill(SkillDefinition_0)` (health refill: 429.07 -> 484.84 and 484.84 -> 547.87, full) -> second `Behavior_AttributeEffect` ->
+    `ActivateSkill(SkillDefinition_0)` (health refill: to the new maximum at each level, full) -> second `Behavior_AttributeEffect` ->
     `ActivateSkill(SkillDefinition_2)` -> `PlayerBehavior_LevelUpNaturally` -> `ActivateSkill(SkillDefinition_1)` -> `ClientOnExpLevelChange(9)`
     -> **`WillowPlayerController.ActionSkillCooldownComplete`** (script) within 1 ms of `ClientOnExpLevelChange`.
-20. **Re-observed from L1, with times:** the shield recharge boost read **90.29 per second (0.5 x the maximum 180.589) from 0.02 s to 3.98 / 4.00 s**
-    after the call (4.0 s), and the equipped weapon's damage read **41.398 -> 61.918 from 0.02 s to 29.99 s** (30 s).
+20. **Re-observed from L1, with times:** the shield recharge boost read **0.5 x the shield's maximum per second (0.5000) from 0.02 s to 3.98 / 4.00 s**
+    after the call (4.0 s), and the equipped weapon's damage rose **by a +1.0 Scale on its existing sum from 0.02 s to 29.99 s** (30 s;
+    the amounts are in the maintainer's private record).
 
 ## Not visible to hooks
 
@@ -196,7 +198,7 @@ NATIVE_DAMAGE_DEATH.md:
   state change come with the next frame. A level-up sets reason 2 through `SetSecondWindReason` at the start of `ExpLevelUp` (not tested while down).
 - **Successive injuries:** `NumSuccessiveInjuries` read 0 for injuries over 30 s apart and 1 for one 15.4 s after the previous (the grow rule is consistent);
   the shortened bleed-out is **UNVERIFIED** (not observed to its end).
-- Shield recharge (open in section 4 "Open"): delay 1.61 s, 25.9 per second for this shield and character, observed per frame.
+- Shield recharge (open in section 4 "Open"): a delay, then a constant rate, both this shield's own (read live; the amounts are in the maintainer's private record), observed per frame.
 
 NATIVE_LOOT.md:
 
@@ -262,13 +264,13 @@ process under the run lock, level-8 Maya (`-Character=Save0008.sav`), `Install-D
 - Valid run: a real Phaselock cast locked a level-5 adult (`PhaseLockTarget` row), the cooldown pool read **13.0 (its maximum) at skill age 2.0 s**, `ExpLevelUp(True)` was called inside that frame and the pool read
   **0.0 in the same call**, stayed 0 for the rest of the lock (no refill), level 9 -> 10, health refilled to full. `ActionSkillCooldownComplete` ran right after `ClientOnExpLevelChange`, as with `False`.
   The lock itself was not cut short (`ReleaseTarget` 5.71 s and skill off 6.72 s after the key, as an uncheated cast). **The cooldown reset does not depend on the flag** (`False`: lane L3).
-- **Difference (new):** with `True` only the two `PlayerBehavior_LevelUp` skills ran (health refill, shield recharge boost 90.29/s for 3.99 s, the cooldown reset); `PlayerBehavior_LevelUpNaturally` did not: the equipped
-  weapon's damage stayed at 41.398 for the 35 s watched (a natural level-up gives 61.9 for 30 s). So `bNaturalLevelup = not bCheated`.
+- **Difference (new):** with `True` only the two `PlayerBehavior_LevelUp` skills ran (health refill, shield recharge boost 0.5 x the capacity per second for 3.99 s, the cooldown reset); `PlayerBehavior_LevelUpNaturally` did not: the equipped
+  weapon's damage stayed at its value before the level-up for the 35 s watched (a natural level-up raises it for 30 s). So `bNaturalLevelup = not bCheated`.
 - Two earlier casts fizzled (no line of sight: the player was placed behind an ice pillar): `StartActionSkill`, the cooldown draining from 13 at 1 per second, `Fizzled` after 1.01 s, `ResetSkillCooldown`, cooldown 0. The first cheat call
   landed on that already-zero pool (level 8 -> 9, same two behaviors), so it does not count as a test.
 
-**Successive injuries and bleed-out (question 6).** Maya was downed by bullymongs (not scripted); a shotgun kill while in the targeted state gave the second wind (health 136.97 = 0.25 x 547.874 in the
-kill frame, shield 162.53 = 0.9 x 180.589 the next frame, 3 of 3), then enemies downed her again.
+**Successive injuries and bleed-out (question 6).** Maya was downed by bullymongs (not scripted); a shotgun kill while in the targeted state gave the second wind (health 0.2500 of the maximum in the
+kill frame, shield 0.9000 of its capacity the next frame, 3 of 3), then enemies downed her again.
 
 | injury | `NumSuccessiveInjuries` (read after this injury's `BeginState`) | since the previous injury began | `TotalBleedoutTime` | targeted state to dead state |
 |---|---|---|---|---|

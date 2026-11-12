@@ -5,7 +5,7 @@ wrong grenade: it reported two bounces and an impact detonation. The graph says 
 damagable object), the first contact starts a 1.8 s timer once, the spawn starts a 6 s timer, a timer detonates, and the explosion has no
 falloff. The host follows that and refuses a block without these rules.
 
-Verified live (one session, 4 throws of the frag's definition with the Sky Rocket mod still equipped): no contact exploded, the explosion
+Verified live (one session, 4 throws of the frag's definition with the save's own mod still equipped): no contact exploded, the explosion
 came 1.80-1.88 s after the first contact (frame-sampled, consistent with but not separately proving the start at contact), bounces lost
 about the graph's speed, gravity read 0.8 x 1000, and pawns at several distances took the same damage. 63.28 at `InExpLevel` 1 matches the
 damage formula at level 1 only. `UNVERIFIED`: a throw with the stock mod equipped (level source, the -120 radius slot, so the block's level 8

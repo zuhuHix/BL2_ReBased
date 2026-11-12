@@ -4,7 +4,7 @@
 
 ## Results
 
-**Conditions.** One session in Ice_P, one target, the save's shotgun (`SG_Jakobs_2_Uncommon`), not the lent pistol. **This is a modded install, not stock.** Other SDK mods were enabled, among them RTSE (its stat hooks sit on weapon
+**Conditions.** One session in Ice_P, one target, the save's own shotgun, not the lent pistol. **This is a modded install, not stock.** Other SDK mods were enabled, among them RTSE (its stat hooks sit on weapon
 functions) and Dialog Skipper, with `Autoskip Dialog` on (per the mission lane's read), which blocks dialog events from friendly NPCs. So heard lines and any timing around lines are not stock. No role below comes from a dialog event, but a spoken reaction at the cast could be missing from these rows, and an absence here is weak evidence. A rule that rests on a live session should say so; this file does.
 
 **Run 2 (at 5b338ef; exit 1, `incomplete: fire_away, pickup`; saves compared identical after the restore).** Times are seconds from the window's first row. Event names only, no audio.
