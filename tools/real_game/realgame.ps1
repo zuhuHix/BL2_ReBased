@@ -247,7 +247,7 @@ function Save-VerifiedBackupRecord([string]$Backup, $Roots, $Snapshots) {
 function Restore-VerifiedBackup([string]$Backup) {
     Assert-PendingTestRoots @($Backup)
     $records = @(Get-PendingFiles)
-    if ($records.Count) { throw "a pending record exists ($($records[0].FullName)): use Restore-PendingRecord '$($records[0].FullName)' instead. Nothing was changed." }
+    if ($records.Count) { $name = $records[0].FullName -replace '\.tmp$', ''; throw "a pending record exists ($($records[0].FullName)): use Restore-PendingRecord '$name' instead. Nothing was changed." }
     Invoke-RecoveryLocked {
         Assert-NoGameForRecovery 'before anything is copied'
         $aside = Save-PreRestoreSnapshot $Backup

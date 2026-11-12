@@ -128,6 +128,37 @@ $out.bak_file_gone = !(Test-Path (Join-Path $tmp 'willow/SaveData/Save0001.sav.b
         self.assertEqual(out['save'].strip(), 'original save')
         self.assertTrue(out['bak_file_gone'])
 
+    def test_a_rewrite_whose_replace_fails_keeps_the_old_record_and_its_tmp_stops_the_next_run(self):
+        # Review of #245: a delete-then-move rewrite lost the old record when the move failed, and the .tmp left was found by no run.
+        out = self.run_ps(r"""
+$bak = Backup-Saves
+$rec = $script:PendingRecord
+$before = Read-Text $rec
+# A scanner holds the new copy open the moment it is written, so the rewrite cannot complete.
+function Set-Content {
+    param([Parameter(ValueFromPipeline = $true)]$Value, [string]$LiteralPath, $Encoding)
+    begin { $all = @() } process { $all += $Value }
+    end {
+        Microsoft.PowerShell.Management\Set-Content -LiteralPath $LiteralPath -Value $all -Encoding $Encoding
+        if ($LiteralPath -like '*.tmp') { $script:held = [IO.File]::Open($LiteralPath, 'Open', 'Read', 'Read') }
+    }
+}
+$out.rewrite = Fail-Text { Add-PendingChange 'settings rewritten' }
+$script:held.Close()
+Remove-Item Function:\Set-Content
+$out.json_kept = Test-Path -LiteralPath $rec
+$out.old_content = $out.json_kept -and ((Read-Text $rec) -eq $before)
+$out.tmp_left = Test-Path -LiteralPath "$rec.tmp"
+$out.found = @(Get-PendingFiles | ForEach-Object { $_.Name })
+$script:PendingRecord = $null   # as the next run sees the folder
+$out.next = Fail-Text { Assert-NoPendingRecords }
+""")
+        self.assertTrue(out['rewrite'])   # the rewrite reports its failure
+        self.assertTrue(out['json_kept'] and out['old_content'], out)   # the old record is where every run looks
+        self.assertTrue(out['tmp_left'])
+        self.assertTrue(any(n.endswith('.json.tmp') for n in out['found']), out['found'])
+        self.assertIn('PENDING RECORD (an unfinished rewrite)', out['next'])   # fail closed, before any other record
+
     def test_a_backup_that_changed_keeps_the_record(self):
         out = self.run_ps(r"""
 $bak = Backup-Saves

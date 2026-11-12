@@ -65,7 +65,11 @@ function Write-PendingFile([string]$Path, $Record) {
     New-Item -ItemType Directory -Force (Split-Path -Parent $Path) | Out-Null
     $tmp = "$Path.tmp"
     $Record | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tmp -Encoding UTF8
-    Move-Item -LiteralPath $tmp $Path -Force
+    # An existing record is replaced in one step (ReplaceFile): if that fails (the new copy held open by a scanner, say), the old record stays
+    # where every later run looks, and the .tmp beside it is found as an unfinished rewrite that needs a person (Get-PendingFiles). A delete
+    # then move (Move-Item -Force) lost the old record when the move failed. [NullString]::Value: PowerShell would pass $null as "".
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace("$full.tmp", $full, [NullString]::Value) } else { [IO.File]::Move("$full.tmp", $full) }
     $back = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
     if ($back.backup -cne $Record.backup -or @($back.changes).Count -ne @($Record.changes).Count) { throw "the pending record $Path did not read back: not going on" }
 }
@@ -242,7 +246,12 @@ function Get-WriterState($Record) {
     if ([math]::Abs(($started - $recorded).TotalSeconds) -le 1) { 'alive' } else { 'gone' }
 }
 
-function Get-PendingFiles { Assert-PendingTestRoots; if (Test-Path -LiteralPath $script:PendingDir) { @(Get-ChildItem -LiteralPath $script:PendingDir -Filter '*pending*.json' -File -Force) } else { @() } }
+# Every record, and every unfinished rewrite of one (<record>.json.tmp, left when a replace failed): a .tmp is never read as nothing.
+function Get-PendingFiles {
+    Assert-PendingTestRoots
+    if (!(Test-Path -LiteralPath $script:PendingDir)) { return @() }
+    @(Get-ChildItem -LiteralPath $script:PendingDir -Filter '*pending*.json.tmp' -File -Force) + @(Get-ChildItem -LiteralPath $script:PendingDir -Filter '*pending*.json' -File -Force)
+}
 
 # The exact steps for a record this run cannot complete by itself.
 function Format-PendingRecovery([string]$File, $Record, [string[]]$Problems) {
@@ -277,6 +286,11 @@ function Format-PendingRecovery([string]$File, $Record, [string[]]$Problems) {
 function Assert-NoPendingRecords {
     foreach ($f in (Get-PendingFiles)) {
         if ($script:PendingRecord -and $f.FullName -eq [IO.Path]::GetFullPath($script:PendingRecord)) { continue }
+        # An unfinished rewrite: which copy is current cannot be told here, so a person decides. Fail closed.
+        if ($f.Name -like '*.json.tmp') {
+            $record = $f.FullName.Substring(0, $f.FullName.Length - 4)
+            throw "PENDING RECORD (an unfinished rewrite): an earlier run left $($f.FullName). Its record $record $(if (Test-Path -LiteralPath $record) { 'is there too: the .tmp holds that run''s newer, unconfirmed copy' } else { 'is missing: the .tmp is the only copy left' }). Read both, keep the one that names that run's backup and changes (rename it to $record if it is the .tmp), move the other out of $script:PendingDir, then run again (Restore-PendingRecord '$record' recovers it). This run changed nothing."
+        }
         $text = Get-Content -Raw -LiteralPath $f.FullName
         $record = try { $text | ConvertFrom-Json } catch { $null }
         if (!$record -or !$record.backup) {
