@@ -18,7 +18,8 @@ NEW = (D + '2026-10/2026-10-05-01-invented-delta.md', b'## 2026-10-05: Invented 
 
 
 def run(root, *args):
-    return subprocess.run([sys.executable, '-I', str(TOOL), '--root', str(root)] + list(args), capture_output=True)
+    return subprocess.run([sys.executable, '-I', str(TOOL), '--root', str(root)] + list(args), stdin=subprocess.DEVNULL,
+                          capture_output=True)
 
 
 def write_tree(root, files):
@@ -156,7 +157,8 @@ with tempfile.TemporaryDirectory() as tmp:
     (tmp / 'none').write_text('')
 
     def g(*args):
-        result = subprocess.run([git] + list(args), cwd=str(case.root), env=env, capture_output=True)
+        result = subprocess.run([git] + list(args), cwd=str(case.root), env=env, stdin=subprocess.DEVNULL,
+                                capture_output=True)
         assert result.returncode == 0, (args, result.stderr)
 
     write_tree(case.root, old)

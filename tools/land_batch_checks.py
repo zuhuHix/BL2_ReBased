@@ -6,16 +6,19 @@ AI-assisted (Claude Code), 2026-11-12. The landing script fetches, for the chain
 saves both answers to files and asks this script, which prints one line, "<verdict><TAB><detail><TAB><link>":
 
   success  every run counted below has completed with success, and at least one of them came from the pull_request
-           event (the run GitHub attaches to the PR's head; a ruleset counts it, a run started by hand it does not)
+           event (the run GitHub attaches to the PR's head). UNVERIFIED: that a ruleset counts that run and not one
+           started by hand is a reading of GitHub's documentation, not tried; if it is wrong, demanding a
+           pull_request run is only stricter than GitHub.
   failure  a counted run completed with any other conclusion (failure, cancelled, timed_out, action_required, neutral,
            skipped, stale): main must not move, whatever the other runs say
   pending  a counted run has not completed yet (queued or in progress, with or without a start time)
   none     no run is counted yet, or only runs that do not come from the pull_request event
-  error    an answer could not be read
+  error    an answer could not be read or judged (any exception, with its message)
 
 Counted: check runs with this exact name, from the GitHub Actions app, on this exact commit, and not completed more
-than seven days ago (GitHub's limit for a required check). A run's event comes from the workflow run of its check
-suite. Older runs are left out, and the detail says how many.
+than seven days ago. UNVERIFIED: seven days as GitHub's limit for a required check is a reading of its documentation,
+not tried; if GitHub accepts older runs, leaving them out only makes the script wait where GitHub would not. A run's
+event comes from the workflow run of its check suite. Older runs are left out, and the detail says how many.
 """
 import argparse
 import datetime
@@ -76,6 +79,8 @@ def main(argv=None):
             result = verdict(json.load(one), json.load(two), args.sha, args.name, now)
     except (OSError, ValueError) as error:
         result = ('error', 'unreadable answer from GitHub: %s' % error, '')
+    except Exception as error:  # an answer of an unexpected shape: say so now rather than wait for the deadline
+        result = ('error', 'unexpected answer from GitHub (%s: %s)' % (type(error).__name__, error), '')
     sys.stdout.write('\t'.join(part.replace('\t', ' ').replace('\n', ' ') for part in result) + '\n')
     return 0
 

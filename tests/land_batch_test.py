@@ -496,14 +496,20 @@ def check_run_selection():
     # Answers that cannot be read.
     assert judge(run(), workflow={'message': 'Not Found'}) == 'error'
     assert tool.verdict({'message': 'Bad credentials'}, events, sha, 'Leak gate', now)[0] == 'error'
+    # Unreadable JSON, a null list and a list item that is not an object: each is an error verdict with its reason,
+    # printed at once (an uncaught exception left the script reading an empty verdict until its deadline).
     with tempfile.TemporaryDirectory() as tmp:
-        bad, good = Path(tmp) / 'bad.json', Path(tmp) / 'good.json'
-        bad.write_text('<html>502</html>')
+        good = Path(tmp) / 'good.json'
         good.write_text(json.dumps(events))
-        out = subprocess.run([sys.executable, '-I', str(CHECKS_TOOL), '--sha', sha, '--name', 'Leak gate',
-                              '--check-runs', str(bad), '--workflow-runs', str(good)], stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True)
-        assert out.returncode == 0 and out.stdout.startswith('error\t'), out.stdout
+        for text, reason in (('<html>502</html>', 'unreadable answer'),
+                             ('{"check_runs": null}', 'TypeError'),
+                             ('{"check_runs": [1]}', 'AttributeError')):
+            bad = Path(tmp) / 'bad.json'
+            bad.write_text(text)
+            out = subprocess.run([sys.executable, '-I', str(CHECKS_TOOL), '--sha', sha, '--name', 'Leak gate',
+                                  '--check-runs', str(bad), '--workflow-runs', str(good)], stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True)
+            assert out.returncode == 0 and out.stdout.startswith('error\t') and reason in out.stdout, (text, out.stdout)
 
 
 CASES = [check_run_selection, check_two_prs_land, check_dirty_worktree_cannot_rewrite_main, check_failed_rebase_stops,

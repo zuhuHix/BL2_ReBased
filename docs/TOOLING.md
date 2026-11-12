@@ -223,8 +223,13 @@ way out, temporary, and only the hub runs it, after the maintainer's yes on that
 2. The hub pushes with `OPENWILLOW_LEAK_GATE_BOOTSTRAP=<the full id of the commit whose gate and lists judge the
    push>`, normally the fix's own head. The hook prints that id; it judges with that commit's gate and lists.
 3. CI does the same by itself only while the trusted commit holds no gate at all (`WARN BOOTSTRAP` in the log); once
-   a gate is on `main`, CI judges with `main`'s copy, so a fix that `main`'s gate refuses shows red until it lands,
-   and the hub lands it on the maintainer's yes.
+   a gate is on `main`, CI judges with `main`'s copy, so a fix that `main`'s gate refuses shows a red `Leak gate` on
+   its PR until it lands. `tools/land_batch.sh` therefore stops on it with exit 13, and it has no override and gets
+   none. The route for this one case, on the maintainer's explicit yes to that exact change: the hub rebases the fix on
+   `main`, has it reviewed and tested, and pushes that commit by hand as a fast-forward of `main`
+   (`git merge-base --is-ancestor <main> <commit>` first, then
+   `git push --force-with-lease=main:<main> origin <commit>:refs/heads/main`, with the bootstrap variable of step 2).
+   If a ruleset is active on `main`, the maintainer sets it to Disabled for that push and back to Active after it.
 4. After the first landing of this tool, step 3 no longer happens; steps 1 and 2 stay for later gate fixes.
 
 Two files configure it. `tools/leak_gate_allow.txt` belongs to the maintainer: `<rule> <path glob> [sha256=<hex>] --
@@ -480,10 +485,15 @@ moved PR branch. Read the run on `main` before landing the next batch. The log i
 (default 10) about each check named in `REQUIRED_CHECKS` at the top of the script, today only `Leak gate` (a job of about
 10 s; the Windows jobs would add about 11 minutes per batch). It fetches the raw check runs on the tip's exact commit
 and the workflow runs of that commit, and `tools/land_batch_checks.py` decides. It counts every run of that name from
-GitHub Actions on that commit, except runs completed more than seven days ago (GitHub's own limit for a required
-check). `main` moves only when every counted run has completed with success and at least one of them came from the
-`pull_request` event, the run GitHub attaches to the PR's head (the tip is the last PR's head). So a run started by
-hand (`workflow_dispatch`) cannot stand in for the PR's run, and a failed run of any event blocks. A counted run that
+GitHub Actions on that commit, except runs completed more than seven days ago. `main` moves only when every counted
+run has completed with success and at least one of them came from the `pull_request` event, the run GitHub attaches
+to the PR's head (the tip is the last PR's head). So a run started by hand (`workflow_dispatch`) cannot stand in for
+the PR's run, and a failed run of any event blocks. Two readings of GitHub's documentation are `UNVERIFIED` here: that
+seven days is GitHub's limit for a required check, and that a ruleset counts a `pull_request` run and not one started
+by hand. If either is wrong, the script is the stricter side: it leaves out old runs GitHub might accept, and asks for
+a `pull_request` run GitHub might not need. Only the chain tip's run is waited for. The tip's PR has `main` as its
+base, so its `Leak gate` judges the whole chain's range; the runs of the other PRs in the batch, which also judge
+their own PR texts, are not waited for, so check those texts before landing (`tools/leak_gate.py --text`). A counted run that
 completes with any other conclusion (failure, cancelled, `action_required`, also neutral or skipped, which is stricter
 than a ruleset) stops with exit 13: `main` stays where it was, the PR branches keep their rebased commits, and the
 message links the run. A rerun of the script sees the same failed run until the job is rerun on GitHub
@@ -503,8 +513,8 @@ pull request before merging" off, because the script pushes `main` directly; "Re
 pushes" may stay on, since the script only fast-forwards. Then Create. The next batch is the live test: if GitHub
 refuses the push of `main` (`GH006`, printed in the exit-8 message) while the check is green, the hub stops and the
 maintainer sets the ruleset's Enforcement to Disabled. That is also the emergency switch, and it keeps the ruleset for
-later: disable it before landing while GitHub Actions is down, and before landing a gate fix that `main`'s gate
-refuses (the bootstrap under "Leak gate"), then set it back to Active.
+later: disable it before landing while GitHub Actions is down, and for the hand push of a gate fix that `main`'s gate
+refuses (the bootstrap under "Leak gate", step 3; the script does not do that push), then set it back to Active.
 
 **Standing approval (maintainer, 2026-11-08; "passed" amended 2026-11-11).** The coordinating assistant may land a PR
 without asking first when its independent review is clean and its in-engine suites have passed on the tested commit
