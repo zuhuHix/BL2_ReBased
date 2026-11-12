@@ -571,6 +571,20 @@ class FakeGameTest(unittest.TestCase):
             self.assertEqual(line['beyond_radius'], 1)   # the far one is counted, not read
             self.assertIsNone(row.get('ai_class'))   # a callable is never called, even where a field was expected
 
+    def test_labelled_reads_past_the_cap_are_counted_as_dropped(self):
+        # Review of #245: a labelled pawn read and a not-taken line past the cap were dropped without a count, so max_dropped and the
+        # not-taken checks could pass on a recording that lacked them (sw_snap already counted its own).
+        with RepoDir() as d:
+            watch.sw_start('t', {})
+            watch.SW['n']['labelled'] = watch.SW_LABELLED_CAP
+            watch.sw_pawns('later')   # settled: a labelled read past the cap
+            self.world.TimeSeconds = 2.0   # a new map: not settled
+            self.assertTrue(watch.sw_pawns('before_down')['not_taken'])   # recorded as not taken, past the cap
+            self.assertEqual(watch.SW['dropped'].get('labelled'), 2)
+            watch.sw_dump('watch')
+            results = {name: ok for name, ok, _ in checker.check(checker.load_recording(d.out / 'watch.jsonl'), {})}
+            self.assertFalse(results['max_dropped'])
+
     def test_a_second_travel_stops_the_scans_and_early_labels_are_not_taken(self):
         with RepoDir() as d:
             watch.sw_start('t', {'snap_every': 0.5, 'pawns_every': 0.1})

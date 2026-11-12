@@ -807,6 +807,8 @@ def _sw_not_taken(kind, label):
     if SW["n"]["labelled"] < SW_LABELLED_CAP:
         SW["n"]["labelled"] += 1
         SW["buf"].append(dict(line, k=kind))
+    else:   # past the cap the line is dropped, and counted, as sw_snap counts its own (review of #245)
+        SW["dropped"]["labelled"] = SW["dropped"].get("labelled", 0) + 1
     return {"label": label, "not_taken": True, "failed": [], "pawns": 0}
 
 
@@ -963,6 +965,8 @@ def sw_pawns(label, asked=None):
     elif SW["n"]["labelled"] < SW_LABELLED_CAP:
         SW["n"]["labelled"] += 1
         SW["buf"].append(dict(out, k="pawns"))
+    else:   # a labelled read past the cap: dropped and counted (review of #245)
+        SW["dropped"]["labelled"] = SW["dropped"].get("labelled", 0) + 1
     return {"label": label, "pawns": len(out["pawns"]), "failed": failed}
 
 
