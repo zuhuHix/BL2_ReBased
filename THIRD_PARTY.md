@@ -59,15 +59,16 @@ reference or personal use, forbid distributing what is copied, and forbid
 robots or other automatic copying of pages. They allow links to the home page
 and forbid deep links that would suggest endorsement by Audiokinetic, so only
 the home page is linked here. This summary comes from that one reading, was
-not re-checked (a later fetch of the terms page was refused by the site), and
-may be incomplete. The version check was made on 2026-11-12 by fetching six
-documentation and terms pages with a script, before the terms had been read;
-the copies sat in a scratch folder outside the repository and were deleted the
-same day. From then on pages of that site are read by a person in a browser
-only: no agent or tool fetches them, and nothing is saved. So this reference
-is for the maintainer's own reading, and notes from it reach the project in
-the maintainer's own words. Nothing is copied: no SDK download, no SDK headers
-or code, no text copied, and no account was created.
+not re-checked, and may be incomplete. The version check was made on
+2026-11-12 by fetching six documentation and terms pages with a script, before
+the terms had been read; the copies sat in a scratch folder outside the
+repository and were deleted the same day. After that, during review, a tool
+tried once more to fetch the terms page; the site refused it, so nothing was
+received. From this decision on, pages of that site are read by a person in a
+browser only: no agent or tool fetches them, and nothing is saved. So this
+reference is for the maintainer's own reading, and notes from it reach the
+project in the maintainer's own words. Nothing is copied: no SDK download, no
+SDK headers or code, no text copied, and no account was created.
 
 ## Oracles (run, not copied)
 
@@ -268,11 +269,13 @@ tests that need them only where configure finds them (`tests/CMakeLists.txt`; `d
 outside ctest"). They are not test-only on a developer's machine: by `git grep` on 2026-11-12, 10 tracked scripts
 under `tools/` import numpy and 8 import Pillow, all local helpers (data preparation, a cross-check against UModel
 output, visual comparisons and contact sheets, the listening report, a real-game frame helper); 5 scripts import both.
-No tracked script outside `tests/` runs Node.js; the overlay scripts in `tools/hud_overlay/` run in the UE browser,
-not in Node.js. Node.js is also what runs REA locally (see "REA (Reverse Engineer Anything) MCP server" above). The
-build, the reader and the UE5 host do not use any of the three, nothing is shipped with them, none is vendored, and no
-code or file from them is copied into the repository. No `package.json` or requirements file pins them; the pins are
-the CI steps below. Licences were read from each project's upstream licence file at that version on 2026-11-12. What a
+Other scripts need them through one of these: `tools/lootables_editor.py`, for one, imports `slice_npc_assets` in its
+`tracks` mode and needs numpy there; a full count of such indirect uses was not made. No tracked script outside
+`tests/` runs Node.js; outside the tests, the overlay scripts in `tools/hud_overlay/` run in the UE browser, not in
+Node.js. Node.js is also what runs REA locally (see "REA (Reverse Engineer Anything) MCP server" above). The build,
+the reader and the UE5 host do not use any of the three, nothing is shipped with them, none is vendored, and no code
+or file from them is copied into the repository. No `package.json` or requirements file pins them; the pins are the CI
+steps below. Licences were read from each project's upstream licence file at that version on 2026-11-12. What a
 downloaded binary or wheel bundles beyond that file was not checked.
 
 ### Node.js 26.4.0
@@ -288,8 +291,8 @@ downloaded binary or wheel bundles beyond that file was not checked.
 - How it is obtained: CI uses `actions/setup-node@v6` with `node-version: "26.4.0"` and no package-manager cache
   (`.github/workflows/ci.yml`). Locally, whatever `node` configure finds; the zuhu desktop runs 26.4.0. How it was
   installed there: not checked.
-- Used by: in CI, the 18 `tests/*_test.js` in `OW_NODE_TESTS`, registered as `js-<name>` (label `needs-node`).
-  Outside the tests, no tracked script runs it; locally it also runs REA (entry above).
+- Used by: in CI and in local ctest, the 18 `tests/*_test.js` in `OW_NODE_TESTS`, registered as `js-<name>` (label
+  `needs-node`). Outside the tests, no tracked script runs it; locally it also runs REA (entry above).
 
 ### numpy 2.5.4
 
@@ -298,8 +301,8 @@ downloaded binary or wheel bundles beyond that file was not checked.
   libraries the Windows wheel bundles, and under which licences: not checked.
 - How it is obtained: CI runs `python -m pip install numpy==2.5.4` (exact version, no hash pin). Locally, whatever
   the configuring Python imports; the zuhu desktop has 2.5.4 under Python 3.14.6.
-- Used by: in CI, the 9 tests in `OW_NUMPY_PY_TESTS`, registered as `py-<name>` (label `needs-numpy`), and the
-  whole Pillow group (below). Outside the tests, 10 local scripts under `tools/` import it.
+- Used by: in CI and in local ctest, the 9 tests in `OW_NUMPY_PY_TESTS`, registered as `py-<name>` (label
+  `needs-numpy`), and the whole Pillow group (below). Outside the tests, 10 local scripts under `tools/` import it.
 
 ### Pillow 12.2.0
 
@@ -308,6 +311,7 @@ downloaded binary or wheel bundles beyond that file was not checked.
   not checked.
 - How it is obtained: CI runs `python -m pip install pillow==12.2.0` (exact version, no hash pin). Locally, as for
   numpy; the zuhu desktop has 12.2.0.
-- Used by: in CI, the 8 tests in `OW_PILLOW_PY_TESTS`, registered as `py-<name>` (label `needs-pillow`).
+- Used by: in CI and in local ctest, the 8 tests in `OW_PILLOW_PY_TESTS`, registered as `py-<name>` (label
+  `needs-pillow`).
   Configure registers the group only where Pillow and numpy both import, so all 8 need numpy too. Outside the tests,
   8 local scripts under `tools/` import it.
