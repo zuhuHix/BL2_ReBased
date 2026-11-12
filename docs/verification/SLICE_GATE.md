@@ -454,8 +454,10 @@ the view line hit a living range enemy 60 and 10 uu away). In all eight, the gun
 (budget 100), the point was bought on the skills page, the mission was accepted and turned in on the mission page, and
 `go_down` and `bleed_out_respawn` passed with `how=enemies` and `how=after_enemy_down`: the range's enemies downed Maya after
 6.0 to 31.2 s and 12 to 25 hits. So the expected first result above was wrong for links 13 and 14. A run took 297 to 558 s.
-Not explained (owner: range / down): in run 1 the gate's own down bled out in 8 s with the successive-down counter at 0,
-36.8 s after an earlier down; in the other seven it bled out in 12 s.
+In run 1 the gate's own down bled out in 8 s, 36.8 s after an earlier down, and its log line shows the successive-down
+counter at 0; in the other seven it bled out in 12 s. That follows the record's rule ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md),
+"Bleed-out"): the cut uses the counter as it stood before this down (1, from the earlier down), and only afterwards is the
+counter reset, because more than 30 s had passed. The host logs the counter after that update, so the line reads 0.
 
 ## Gaps, with the owning lane
 
