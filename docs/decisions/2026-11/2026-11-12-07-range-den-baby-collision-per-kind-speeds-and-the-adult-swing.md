@@ -3,21 +3,24 @@
 AI-assisted (Claude Code). Record: `docs/verification/COMBAT_RANGE.md`, acceptance table rows 1, 5 and 10 and the brain rules'
 Approach and Swing timing rows. Host behaviour, prep tool and tests; no parsing change.
 
-Session 2 of 2026-11-12 recorded six den fights on Three Horns Divide with a level-8 Maya (SDK mods loaded, the three loot mods off
-in memory). Three of the range den's stand-ins disagreed with it, and this change brings them into the host.
+Session 2 of 2026-11-12 recorded six den fights on Three Horns Divide with a level-8 Maya (SDK mods loaded: the three loot mods off
+in memory for the cash runs; the cheats mod's options off as read). Three of the range den's stand-ins disagreed with it, and this change brings them into the host.
 
 - **The baby's collision.** The baby kind borrows the adult's imported asset, so it had the adult's cylinder (radius 150) and stood
   at 192 uu, outside its live band of 106 to 118. `tools/prepare_range.py` now gives it its own cylinder, radius 64 and half height
   48 (`OBSERVED_COLLISION`), as every baby pawn read in the session had it. Its 189 swing calls all came at 106.0 uu or more from
   Maya, which is 64 plus her 42. The host's contact floor is now 106 standing, so the stand 111 applies. The baby still wears the
-  adult's mesh, so its shot capsule is smaller than the body it shows.
+  adult's mesh, and its hit capsule (the smaller of radius and half height) is now a sphere of radius 48 under that adult-sized mesh
+  and the adult's head volume: body shots at the visible mesh will mostly miss (host stand-in, UNVERIFIED; no baby on the default range).
 - **Run and walk per kind.** The adult and the slinger run at 500 uu/s and walk at 125; the baby runs at 300 and walks at 75
   (`OBSERVED_SPEED`: the pawns' `GroundSpeed` and `WalkingPct` 0.25, with moving medians that agree: slinger 4 of 4 trials, adult 6
   of 11, baby 4 of 8). The regular bullymong keeps 400 and 150, and so does the psycho, which has no read. The range has no badass
   kind, so its 500 is not used.
 - **The adult swing cycle is 1.222 s** (was 1.25). The earlier decision kept 1.25 because two reads disagreed, and waited for a
   third. The third read has 407 gaps over four recordings with medians of 1.220 to 1.223 s, on the side of the den read of
-  2026-11-07 (1.216 to 1.217 s). The checker's band is now 1.211 to 1.228. Kinds without a row keep the 1.25 s stand-in.
+  2026-11-07 (1.216 to 1.217 s). The checker's band is now 1.211 to 1.228. Kinds without a row keep the 1.25 s stand-in, although
+  the same session read the regular bullymong's swing cycle (96 gaps) and the slinger's melee cycle (28 gaps) near 1.22 s as well. That
+  contradicts the stand-in; it is not brought in here, because those kinds' stand distances need their own rows first (a follow-up).
 
 Verified live (one map, one level, one session): the baby's cylinder 64 / 48 and the standing contact 106; `GroundSpeed` 500 / 300
 and `WalkingPct` 0.25 for the adult, slinger and baby; the adult's cycle value at about 120 frames per second.

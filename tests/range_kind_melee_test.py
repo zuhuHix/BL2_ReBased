@@ -173,7 +173,9 @@ class CheckerTest(unittest.TestCase):
         self.assertIn('stand', check_range.kind_melee_problem(kind_line(stand=(187, 201), max_frame=0.05)))
 
     def test_the_old_adult_cycle_is_outside_the_band_the_host_is_held_to(self):
-        # 1.25 s, the host's adult cycle before 2026-11-12, even with a one-frame allowance.
+        # 1.25 s, the host's adult cycle before 2026-11-12, at a 60 fps frame (max_frame 0.017). With a longer logged frame the allowance
+        # can reach it (max_frame 0.04 accepts it), so this band is not what guards the value: the host row = table test above
+        # (test_each_host_value_is_the_table_value_and_inside_its_band, with test_the_adult_cycle_is_the_third_reads_value) is.
         self.assertIn('cycle', check_range.kind_melee_problem(kind_line(cycle=(1.25, 1.267))))
         self.assertEqual(check_range.kind_melee_problem(kind_line(cycle=(1.217, 1.217))), '')
 
