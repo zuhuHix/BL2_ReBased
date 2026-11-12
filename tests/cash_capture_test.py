@@ -52,6 +52,16 @@ $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
+        # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
+        '*sw_start(*' { return '{"label": "cash", "resolved": 1, "missing": []}' }
+        '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
+        '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
+        '*sw_mark(*' { $script:marks++; return 'ok' }
+        '*sw_settled*' { return 'True' }
+        '*sw_snap(*' { return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
+        '*sw_dump(*' { return '{}' }
+        '*sw_stop*' { return 'stopped' }
         '*block_saves*' {
             if ($scenario -eq 'saves_open') { return 'False' }
             if ($scenario -eq 'saves_traceback') { return 'Traceback: True, block_saves' }
@@ -527,6 +537,43 @@ class StageGateTest(unittest.TestCase):
                               capture_output=True, text=True, timeout=120, env=dict(os.environ, OPENWILLOW_BL2=str(self.game)))
         self.assertNotEqual(done.returncode, 0)
         self.assertIn('-WatchSmoke needs -WatchSpec', done.stdout + done.stderr)
+
+
+class WatchStopPolicyTest(unittest.TestCase):
+    """-WatchSmoke with the game gone at the start of stage 2, and a lost reply during a stage-1 group install (review of c001181)."""
+    run_capture = CashCaptureTest.run_capture
+    locks_held = CashCaptureTest.locks_held
+
+    def setUp(self):
+        CashCaptureTest.setUp(self)
+        self.spec = self.work / 'spec.json'
+        self.spec.write_text(json.dumps({'funcs': ['Pawn.Died'], 'groups': [{'name': 'g1', 'at': 'stage1', 'funcs': ['Pawn.Hit']}]}), encoding='utf-8')
+
+    def test_the_game_gone_at_stage_2_fails_the_hold_and_keeps_stage_3_and_its_stamps(self):
+        done, session = self.run_capture('game_gone', ['-WatchSpec', str(self.spec), '-WatchSmoke', '-DenDown'])
+        results = session['stage_results']
+        self.assertIn('failed', results['smoke_hold'])   # a failed hold, not "not run" from a Set-Stage that threw
+        self.assertIn('skipped: the game has exited', results['den_read'])
+        self.assertIn('skipped: the game has exited', results['den_down'])
+        marks = [(m['stage'], m['event']) for m in session['stage_marks']]
+        self.assertIn(('den_down', 'enter'), marks)
+        self.assertIn(('den_down', 'done'), marks)
+        stamps = Path(session['stages_file']).read_text(encoding='utf-8')   # on disk, not only in session.json
+        self.assertIn('den_down done', stamps)
+        self.assertIn('watch start', stamps)   # the stamp before the watch starts
+
+    def test_the_watch_hooks_are_stopped_in_the_cleanup_while_the_game_lives(self):
+        done, session = self.run_capture('hung', ['-WatchSpec', str(self.spec)])   # the game does not quit
+        self.assertEqual(session['cleanup']['watch'], 'stopped')
+        self.assertIn('hooks', session['cleanup'])   # the den stop's slot is unchanged beside it
+
+    def test_a_lost_reply_in_a_group_install_skips_every_later_stage_and_the_check(self):
+        done, session = self.run_capture('group_lost', ['-WatchSpec', str(self.spec), '-WatchSmoke', '-DenDown'])
+        results = session['stage_results']
+        self.assertIn('the driver stopped answering', results['den_read'])
+        self.assertIn('the driver stopped answering', results['den_down'])
+        self.assertIn('the driver stopped answering', results['watch'])
+        self.assertNotIn('watch', session['cleanup'])   # the game had quit by the cleanup: no stop is sent to a gone game
 
 
 if __name__ == '__main__':

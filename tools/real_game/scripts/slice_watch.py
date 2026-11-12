@@ -269,6 +269,10 @@ def _sw_args(args, func, path=None):
             out[name] = _sw_p(getattr(args, name))
     except Exception as e:
         out["args_error"] = repr(e)[:100]
+        seen = SW.setdefault("args_error_seen", set())
+        if path not in seen:   # counted once per function, so a repeating one cannot flood the error list
+            seen.add(path)
+            _sw_err("args " + str(path), e)
     return out
 
 
@@ -353,7 +357,7 @@ def sw_add_row(path, tag, obj, args, ret, func):
         SW["dropped"][path] = SW["dropped"].get(path, 0) + 1
         return None
     row = dict(_sw_stamp(), func=path, tag=tag, obj=_sw_p(obj), args=_sw_args(args, func, path))
-    outs = SW.get("outs", {}).get(path)
+    outs = SW.get("outs", {}).get(path) if tag == "pre" else None
     if outs:
         row["out_params_at_call"] = outs   # copies of the caller's values at call time, not results
     if tag == "post":
@@ -369,6 +373,10 @@ def _sw_fired(path, tag):
     rec["n"] += 1
     if rec["first_t"] is None:
         rec["first_t"] = _sw_now()
+        # On disk before the arguments are read (one flush per hooked function): if the loader or the read then faults, the recording
+        # still says this function had started to fire.
+        SW["buf"].append(dict(_sw_stamp(), k="fired", func=path, group=rec["group"]))
+        sw_flush()
 
 
 def _sw_observer(path, tag):
@@ -565,6 +573,11 @@ def sw_install_group(name):
     return {"group": name, "resolved": len(resolved), "missing": missing}
 
 
+def sw_group_names_at(at):
+    """The names of the spec's groups for this point of the capture's run, in spec order (the capture installs them one at a time)."""
+    return [g["name"] for g in SW["spec"].get("groups", []) if g["at"] == at]
+
+
 def sw_install_groups_at(at):
     """Every group of the spec whose 'at' is this point of the capture's run, in spec order."""
     return [sw_install_group(g["name"]) for g in SW["spec"].get("groups", []) if g["at"] == at]
@@ -587,8 +600,11 @@ def sw_start(label, spec, name="watch"):
     sw_stop()
     sw_reset(label, checked)
     _sw_open(name)
+    SW["buf"].append(dict(_sw_stamp(), k="group", name="base", at="start", funcs=SW["spec"]["funcs"], event="installing"))
+    sw_flush()
     _sw_hook(SW_TICK, _SwType.POST_UNCONDITIONAL, "tick", _sw_tick)
-    _sw_install(SW["spec"]["funcs"], "base")
+    base_resolved, base_missing = _sw_install(SW["spec"]["funcs"], "base")
+    SW["buf"].append(dict(_sw_stamp(), k="group", name="base", event="installed", resolved=base_resolved, missing=base_missing))
     SW["buf"].append({"k": "meta", "label": label, "t0_qpc": SW["t0"], "spec": SW["spec"], "resolved": SW["resolved"],
                       "missing": SW["missing"], "params_misfit": dict(SW.get("params_misfit", {}))})
     SW["on"] = True
@@ -972,7 +988,7 @@ def _sw_close(stopped):
     SW["buf"].append({"k": "end", "stopped": stopped, "counts": SW.get("counts", {}), "dropped": SW.get("dropped", {}),
                       "errors": SW.get("errors", []), "auto_failures": SW.get("auto_failures", 0), "lines": SW.get("n", {}),
                       "switched_off": SW.get("switched_off", {}), "never_taken": [list(d) for d in SW.get("deferred", [])],
-                      "params_misfit": dict(SW.get("params_misfit", {})), "fn": dict(SW.get("fn", {})),
+                      "params_misfit": dict(SW.get("params_misfit", {})), "fn": dict(SW.get("fn", {})), "missing": list(SW.get("missing", [])),
                       "groups_installed": list(SW.get("groups_installed", []))})
     SW["spec"]["byte_cap"] += 1_000_000   # room for the end line, whatever the cap took
     try:

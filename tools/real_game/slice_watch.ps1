@@ -39,6 +39,10 @@ function Assert-DiskReserve([long]$RecordingBytes = 300000000, [long]$ReserveByt
 # capture's 'watch' stage fails (Complete-SliceWatch throws inside that stage's try).
 $script:SliceWatchOn = $false
 $script:SliceWatchError = 'not started'
+# One driver-lost condition for the whole run: the first reply that never came (a timeout) sets it, and from then on no helper here talks to
+# the driver again; the capture checks it before every later stage and its usability check (Get-DriverLost in cash_capture).
+$script:SliceWatchDriverLost = ''
+function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
 # Load the recorder into the capture's output folder (the same RG_OUT as the capture's own probes) and start it: it writes <OutFolder>/watch.jsonl.
 # Returns its answer (how many hooks resolved, which names did not), or an object with only 'error' when it did not start. After a failed or
 # timed-out start a stop is sent anyway (best effort): a start that ran late must not leave a recorder running unseen.
@@ -52,8 +56,9 @@ function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
         $answer
     } catch {
         $script:SliceWatchOn = $false; $script:SliceWatchError = "$_"
+        Set-SliceWatchDriverLost $_
         Write-Warning "slice watch not started: $_"
-        $stop = try { "$(Invoke-GamePy 'print(sw_stop())' 15)".Trim() } catch { "no reply: $_" }
+        $stop = if ($script:SliceWatchDriverLost) { 'not sent: the driver stopped answering' } else { try { "$(Invoke-GamePy 'print(sw_stop())' 15)".Trim() } catch { "no reply: $_" } }
         [pscustomobject]@{ error = "$_"; stop_after_error = $stop }
     }
 }
@@ -62,42 +67,51 @@ function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
 # taken, deferred (start and arrival only, until the map settles), NOT TAKEN (asked before the map settled), or the parts that failed.
 function Save-SliceWatchSnap([string]$Label) {
     Assert-WatchName $Label
-    if (!$script:SliceWatchOn) { return }
+    if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
     try {
         $r = Test-WatchReply (Invoke-GamePy "import json; r = sw_snap('$Label'); print(json.dumps({'deferred': bool(r.get('deferred')), 'not_taken': bool(r.get('not_taken')), 'failed': r.get('failed', [])}))" 30) "snap $Label" | ConvertFrom-Json
         if ($r.not_taken) { "slice watch snapshot ${Label}: NOT TAKEN (asked before the map settled)" }
         elseif ($r.deferred) { "slice watch snapshot ${Label}: deferred until the map settles" }
         elseif (@($r.failed).Count) { "slice watch snapshot ${Label}: taken, failed parts: $(@($r.failed) -join ', ')" }
         else { "slice watch snapshot ${Label}: taken" }
-    } catch { Write-Warning "slice watch snapshot ${Label}: $_" }
+    } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch snapshot ${Label}: $_" }
 }
 function Save-SliceWatchPawns([string]$Label) {
     Assert-WatchName $Label
-    if (!$script:SliceWatchOn) { return }
+    if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
     try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json }
-    catch { Write-Warning "slice watch pawns ${Label}: $_"; [pscustomobject]@{ error = "$_" } }
+    catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch pawns ${Label}: $_"; [pscustomobject]@{ error = "$_" } }
 }
-# Install the spec's hook groups for one point of the capture's run (sw_install_groups_at): each group's marker line is flushed before its
-# first hook goes in. Nothing when the watch is off; a failure is a warning, never an error that ends the capture.
-function Install-SliceWatchGroups([string]$At) {
+# Install the spec's hook groups for one point of the capture's run, one at a time: each group's marker line is flushed before its first hook
+# goes in (sw_install_group), and $PauseSeconds pass between two groups of the same point, so a group whose functions fire constantly is
+# exercised before the next goes in. Nothing when the watch is off or the driver was lost; a failure is a warning (the usability check fails
+# a group installed with names missing), and a lost reply sets the driver-lost condition.
+function Install-SliceWatchGroups([string]$At, [int]$PauseSeconds = 15) {
     if ($At -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]*$') { throw "slice watch: '$At' is not a plain group point" }
-    if (!$script:SliceWatchOn) { return }
-    try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_install_groups_at('$At'), default=str))" 120) "groups $At" | ConvertFrom-Json }
-    catch { Write-Warning "slice watch groups ${At}: $_"; [pscustomobject]@{ error = "$_" } }
+    if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
+    try {
+        $names = @(Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_group_names_at('$At')))" 30) "groups $At" | ConvertFrom-Json)
+        $done = @()
+        for ($i = 0; $i -lt $names.Count; $i++) {
+            if ($i -gt 0) { Start-Sleep -Seconds $PauseSeconds }
+            $done += Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_install_group('$($names[$i])'), default=str))" 120) "group $($names[$i])" | ConvertFrom-Json
+        }
+        $done
+    } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch groups ${At}: $_"; [pscustomobject]@{ error = "$_" } }
 }
 # A flushed marker line in the recording (sw_mark): a stage boundary, so a crash after it is attributed to that stage.
 function Save-SliceWatchMark([string]$Label) {
     if ($Label -notmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]*$') { throw "slice watch: '$Label' is not a plain mark" }
-    if (!$script:SliceWatchOn) { return }
-    try { Test-WatchReply (Invoke-GamePy "print(sw_mark('$Label'))" 15) "mark $Label" | Out-Null } catch { Write-Warning "slice watch mark ${Label}: $_" }
+    if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
+    try { Test-WatchReply (Invoke-GamePy "print(sw_mark('$Label'))" 15) "mark $Label" | Out-Null } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch mark ${Label}: $_" }
 }
 # After a map load, wait (at most $Seconds) until the recorder says the map has settled: the player has a pawn and the map's clock has passed the
 # spec's settle_seconds, so the watch's scans are allowed again. Reading only. True when settled; false on a timeout or with the watch off.
 function Wait-SliceWatchSettled([int]$Seconds = 40) {
-    if (!$script:SliceWatchOn) { return $false }
+    if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return $false }
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
-        try { if ("$(Invoke-GamePy 'print(sw_settled())' 15)".Trim() -ceq 'True') { return $true } } catch { }
+        try { if ("$(Invoke-GamePy 'print(sw_settled())' 15)".Trim() -ceq 'True') { return $true } } catch { Set-SliceWatchDriverLost $_; if ($script:SliceWatchDriverLost) { return $false } }
         Start-Sleep 1
     }
     $false
@@ -108,6 +122,7 @@ function Wait-SliceWatchSettled([int]$Seconds = 40) {
 function Complete-SliceWatch([string]$Spec, [string]$OutDir, [string]$Name = 'watch') {
     Assert-WatchName $Name
     if (!$script:SliceWatchOn) { throw "the watch did not start: $script:SliceWatchError" }
+    if ($script:SliceWatchDriverLost) { throw "skipped: the driver stopped answering ($script:SliceWatchDriverLost)" }
     $full = Resolve-WatchSpec $Spec
     $null = Save-SliceWatchSnap 'end'
     $counts = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json

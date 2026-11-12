@@ -201,18 +201,13 @@ function Assert-NoGameForRecovery([string]$When) {
     if ($games.Count) { throw "Borderlands 2 is running (pid $(@($games | ForEach-Object { $_.Id }) -join ', ')) $When; stopped here, the record is kept. Close it and run this again." }
 }
 
-# Keys and buttons a killed run recorded as held. Released only when its writer is shown gone and a game window exists (a key can only stay
-# held inside a running game); then the record's list is cleared. Returns what it did.
+# Keys and buttons a killed run recorded as held. The callers release them only once the record's writer is shown gone. Returns what it did.
 function Release-RecordedInputs([string]$File, $Record) {
     $held = @($Record.held_inputs | Where-Object { $_ })
     if (!$held.Count) { return }
-    $games = @(Get-GameProcesses)
-    if ($games.Count -and !@($games | Where-Object { $_.MainWindowHandle -and $_.MainWindowHandle -ne [IntPtr]::Zero }).Count) {
-        # A game process without a window (starting or closing): nothing to send the releases to yet, and the session may still hold them.
-        return "recorded as held and a game runs without a window: kept ($($held -join ', '))"
-    }
-    # The releases are sent whether or not a game runs: the keys and buttons were synthesised system-wide, and a game exiting does not release
-    # them (review of 2026-11-12). An entry is cleared only after its own release went out; one that fails stays recorded.
+    # The releases are sent whether or not a game runs, with or without a window: the keys and buttons were synthesised system-wide, and a
+    # game exiting or hanging does not release them (reviews of 2026-11-12). An entry is cleared only after its own release went out; one that
+    # fails stays recorded.
     $left = @()
     foreach ($item in $held) {
         try {
@@ -263,6 +258,12 @@ function Format-PendingRecovery([string]$File, $Record, [string[]]$Problems) {
         "     Restore-PendingRecord '$File'   # holds the run lock throughout and stops if a game starts",
         '     It restores every root from the verified backup (a backup that changed since is refused), removes the driver folder only if it is this',
         '     driver''s untouched copy, compares every root by tree hash and removes the record only when all match. Anything else it prints stays yours to judge.')
+    if (@($Record.held_inputs | Where-Object { $_ }).Count) {
+        $lines += @("  If an input stays recorded as held after Restore-PendingRecord ($(@($Record.held_inputs) -join ', ')), its release keeps failing (an",
+            '     unknown key or button name, from a hand-edited or other-version record). Check at the PC that no key or mouse button is held (press and',
+            '     release it once by hand), then remove that entry from the record''s "held_inputs" list in a text editor (keep the JSON valid) and run',
+            '     Restore-PendingRecord again.')
+    }
     $locks = @()
     if ($Record.hub_lock) { $locks += "'$($Record.hub_lock)' (if it names '$($Record.lane)')" }
     $locks += "'$(Get-OwUeLockPath)' (if it is that run's)"
@@ -376,6 +377,11 @@ function Complete-PendingRecord([bool]$Safe = $true) {
     if (!$Safe) { return "KEPT at $($script:PendingRecord): a game may still run" }
     try {
         if (@(Get-GameProcesses).Count) { return "KEPT at $($script:PendingRecord): Borderlands 2 is running" }
+        # This run's own held list is the truth for its record: when it is empty, the record says so before it is checked (a release whose
+        # journal write failed would otherwise keep the record). If that write fails, the record stays, with that reason.
+        if ($null -ne $script:HeldInputs -and $script:HeldInputs.Count -eq 0) {
+            try { Set-PendingField 'held_inputs' @() } catch { return "KEPT at $($script:PendingRecord): the empty held-input list could not be written ($_)" }
+        }
         $record = Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json
         $problems = @(Get-PendingProblems $record)
         if ($problems.Count) { return "KEPT at $($script:PendingRecord): $($problems -join '; ')" }

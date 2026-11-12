@@ -25,7 +25,8 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   allow_switched_off: ["<kind>", ...]: read kinds that may be switched off without failing the recording.
   max_dropped:       {"row"|"frame"|"snap"|"pawns"|"labelled"|"bytes"|"per_func": N}: how many lines a cap may drop, per kind
                      ("per_func" counts the rows dropped by per_func_cap, all functions together). Every kind not named allows 0.
-  no_missing:        true: every name in funcs resolved.
+  no_missing:        true: every name resolved: the start line's, every group's 'installed' line's and the end line's missing lists
+                     together are empty.
   max_auto_failures: the most automatic snapshots or pawn reads with a failed part (default: no limit).
   require:           [{"func": "<substring of a hook path>", "tag": "pre"|"post", "min": N, "max": M}]
   order:             [["<first>", "<then>"]]: some row matching <then> comes after the first row matching <first>, on the
@@ -35,9 +36,11 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   must_fire:         ["<substring>", ...]: a hooked function whose path holds it fired at least once (the end line's per-function
                      record). Every recording also gets an 'exercised' line: how many hooked functions fired, and the ones installed
                      but never exercised (a long item that relies on one of those makes its first real run).
-  groups:            always checked when the spec has groups: every group was installed (its marker lines are in the recording).
+  groups:            always checked when the spec has groups: every group was installed (its 'installed' line is in the recording)
+                     with nothing missing.
   args_nonempty:     [{"func": "<substring>", "tag": "pre"|"post", "min": N}]: at least N rows of that hook, and every one of them carries
-                     non-empty arguments (a function known to have parameters: an empty list there means the reader refused it).
+                     non-empty arguments and no args_error (a function known to have parameters: an empty or partial read there means
+                     the reader refused or failed it).
   edges:             [{"func": "<substring>", "arg": "<argument>", "values": [v, ...]}]: rows of that hook carry each value.
   snaps:             ["<label>" | ["<label>", "<alternative>", ...], ...]: labelled snapshots with these labels exist (for a list,
                      any one of them).
@@ -87,10 +90,13 @@ def load_recording(path):
             out["pawns"].append(rec)
         elif kind == "group":
             out["groups"].append(rec)
+            if rec.get("event") == "installed":
+                out["missing"] = list(out["missing"]) + [m for m in rec.get("missing", []) if m not in out["missing"]]
         elif kind == "mark":
             out["marks"].append(rec)
         elif kind == "end":
             out["end"] = rec
+            out["missing"] = list(out["missing"]) + [m for m in rec.get("missing", []) or [] if m not in out["missing"]]
     return out
 
 
@@ -182,15 +188,19 @@ def check(dump, checks):
         out.append((f"must_fire {need}", end is not None and bool(hit), f"{len(hit)} matching functions fired"))
     spec_groups = [g.get("name") for g in ((dump.get("spec") or {}).get("groups") or [])]
     if spec_groups:
-        installed = set((end or {}).get("groups_installed", []) or []) | {g.get("name") for g in dump.get("groups", []) if g.get("event") == "installed"}
-        not_installed = [g for g in spec_groups if g not in installed]
-        out.append(("groups", not not_installed, f"{len(spec_groups) - len(not_installed)} of {len(spec_groups)} groups installed; "
-                                                 f"not installed: {', '.join(not_installed) or 'none'}"))
+        lines = {g.get("name"): g for g in dump.get("groups", []) if g.get("event") == "installed"}
+        not_installed = [g for g in spec_groups if g not in lines]
+        partial = [g for g in spec_groups if g in lines and lines[g].get("missing")]
+        out.append(("groups", not not_installed and not partial,
+                    f"{len(spec_groups) - len(not_installed) - len(partial)} of {len(spec_groups)} groups installed whole; "
+                    f"not installed: {', '.join(not_installed) or 'none'}; installed with names missing: {', '.join(partial) or 'none'}"))
     for req in checks.get("args_nonempty", []):
         matched = _match(rows, req["func"], req.get("tag"))
         empty = [r for r in matched if not {k: v for k, v in (r.get("args") or {}).items() if k != "args_error"}]
-        ok = len(matched) >= req.get("min", 1) and not empty
-        out.append((f"args_nonempty {req['func']} {req.get('tag', '')}".strip(), ok, f"{len(matched)} rows, {len(empty)} with no arguments"))
+        broken = [r for r in matched if "args_error" in (r.get("args") or {})]
+        ok = len(matched) >= req.get("min", 1) and not empty and not broken
+        out.append((f"args_nonempty {req['func']} {req.get('tag', '')}".strip(), ok,
+                    f"{len(matched)} rows, {len(empty)} with no arguments, {len(broken)} with a failed argument read"))
     misfit = (end or {}).get("params_misfit") or dump.get("params_misfit") or {}
     if misfit:
         out.append(("params_misfit", True, f"{len(misfit)} hooked functions whose parameters were refused (listed in the recording; counted as errors)"))

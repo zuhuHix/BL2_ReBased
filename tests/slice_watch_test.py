@@ -431,6 +431,35 @@ class FakeGameTest(unittest.TestCase):
             self.assertTrue({n: ok for n, ok, _ in checker.check(data, {})}['groups'])
             watch.sw_stop()
 
+    def test_first_fired_and_base_lines_reach_the_disk_first(self):
+        with RepoDir() as d:
+            path = d.out / 'watch.jsonl'
+            def on_disk():
+                return [json.loads(x) for x in path.read_text(encoding='utf-8').splitlines() if x.strip()] if path.exists() else []
+            seen_at_tick = []
+            real_hook = watch._sw_add_hook
+            def spy(p, kind, hid, f):
+                if p == watch.SW_TICK:
+                    seen_at_tick.append([x.get('event') for x in on_disk() if x.get('k') == 'group' and x.get('name') == 'base'])
+                real_hook(p, kind, hid, f)
+            watch._sw_add_hook = spy
+            try:
+                watch.sw_start('t', {'funcs': ['InventedPawn.Hit']})
+            finally:
+                watch._sw_add_hook = real_hook
+            self.assertEqual(seen_at_tick, [['installing']])   # the base line was flushed before the tick or any base hook went in
+            seen_at_read = []
+            class Spy:
+                def __getattr__(self, name):
+                    seen_at_read.append([x.get('func') for x in on_disk() if x.get('k') == 'fired'])
+                    return 1.0
+            hook = self.hooks[('Pkg.InventedPawn:Hit', 'pre', 'ow_slice_watch_pre')]
+            hook(None, Spy(), None, Func('Amount'))
+            hook(None, Spy(), None, Func('Amount'))
+            self.assertEqual(seen_at_read[0], ['Pkg.InventedPawn:Hit'])   # the first-fired line was on disk before the first argument read
+            self.assertEqual(sum(1 for x in on_disk() if x.get('k') == 'fired'), 1)   # one per function, not one per call
+            watch.sw_stop()
+
     def test_stale_pool_references_are_flagged(self):
         real = watch._SwUObject
         watch._SwUObject = FakeObject   # stand-in objects are recorded by path name, as the SDK's are
@@ -699,12 +728,56 @@ class CheckerTest(unittest.TestCase):
         detail = {n: d for n, ok, d in checker.check(data, checks)}
         self.assertIn('installed, never exercised: W.WillowPawn:BeginState', detail['exercised'])
 
+    def write_lines(self, folder, records):
+        path = Path(folder) / 'watch.jsonl'
+        path.write_text(''.join(json.dumps(r) + '\n' for r in records), encoding='utf-8')
+        return path
+
+    def test_a_complete_recording_missing_one_station_hook_fails(self):
+        """Both reviewers of c001181 built a complete recording with one station hook left out of an installed group; it passed 26 of 26.
+        Now no_missing and groups fail on it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = {'groups': [{'name': 'stations', 'at': 'stage2', 'funcs': ['TravelStation.SetStationActivatedState', 'TravelStation.ReplacePreviouslyActivatedStation']}]}
+            records = [{'k': 'meta', 'missing': [], 'spec': spec},
+                       {'k': 'group', 'name': 'stations', 'event': 'installing'},
+                       {'k': 'group', 'name': 'stations', 'event': 'installed', 'resolved': ['X.TravelStation:SetStationActivatedState'],
+                        'missing': ['TravelStation.ReplacePreviouslyActivatedStation']},
+                       dict(GOOD_SNAP, k='snap'), dict(GOOD_SNAP, k='snap', label='end'),
+                       {'k': 'end', 'errors': [], 'auto_failures': 0, 'stopped': False, 'groups_installed': ['stations'],
+                        'missing': ['TravelStation.ReplacePreviouslyActivatedStation']}]
+            data = checker.load_recording(self.write_lines(tmp, records))
+            got = self.results(data, {'no_missing': True, 'snaps': ['start', 'end']})
+            self.assertFalse(got['no_missing'])
+            self.assertFalse(got['groups'])
+            self.assertTrue(got['snap start'] and got['snap end'])   # everything else is complete: only the missing hook fails it
+
+    def test_a_partial_argument_read_fails_and_counts_once(self):
+        rule = {'args_nonempty': [{'func': 'WillowPlayerPawn:TakeDamage', 'tag': 'pre', 'min': 1}]}
+        partial = row('W.WillowPlayerPawn:TakeDamage', 1.0, DamageAmount=3.0, args_error="RuntimeError('invented')")
+        self.assertFalse(self.results(dump([partial]), rule)['args_nonempty WillowPlayerPawn:TakeDamage pre'])
+        watch.sw_reset('t', watch.sw_load_spec({}))
+        watch.SW['on'] = True
+        class Breaks:
+            def __getattr__(self, name):
+                if name == 'Second':
+                    raise RuntimeError('invented: the read failed')
+                return 1.0
+        for _ in range(5):
+            r = watch.sw_add_row('Pkg.P:Breaks', 'pre', None, Breaks(), None, Func('First', 'Second'))
+        self.assertEqual(r['args']['First'], 1.0)
+        self.assertIn('args_error', r['args'])
+        self.assertEqual(len([e for e in watch.SW['errors'] if e.startswith('args Pkg.P:Breaks')]), 1)   # once per function
+        post = watch.sw_add_row('Pkg.P:Out', 'post', None, Args(In=1.0, Result=2.0), 3, Func('In', ('Result', 4, 1, CPF_OUT)))
+        self.assertNotIn('out_params_at_call', post)   # the label is for pre rows only
+        pre = watch.sw_add_row('Pkg.P:Out', 'pre', None, Args(In=1.0, Result=2.0), None, Func('In', ('Result', 4, 1, CPF_OUT)))
+        self.assertEqual(pre['out_params_at_call'], ['Result'])
+
     def test_groups_must_be_installed(self):
         data = dump()
         data['spec'] = {'groups': [{'name': 'states'}, {'name': 'respawn'}]}
-        data['end']['groups_installed'] = ['states']
+        data['groups'] = [{'name': 'states', 'event': 'installed', 'missing': []}]
         self.assertFalse(self.results(data, {})['groups'])
-        data['end']['groups_installed'] = ['states', 'respawn']
+        data['groups'].append({'name': 'respawn', 'event': 'installed', 'missing': []})
         self.assertTrue(self.results(data, {})['groups'])
 
     def test_stale_health_pools_do_not_count(self):
@@ -858,7 +931,7 @@ class HelperTest(unittest.TestCase):
             self.assertIn('usable=False', ps(body).stdout)
 
     def test_a_watch_that_does_not_start_never_ends_the_capture(self):
-        body = ("function Invoke-GamePy([string]$Code, [int]$T = 30) { $script:sent += @($Code); if ($Code -like '*sw_stop*') { 'stopped' } else { throw 'no reply to c1' } }\n"
+        body = ("function Invoke-GamePy([string]$Code, [int]$T = 30) { $script:sent += @($Code); if ($Code -like '*sw_stop*') { 'stopped' } else { throw 'invented: the start failed' } }\n"
                 "function Invoke-GamePyFile([string]$P, [string]$O) { 'loaded' }\n"
                 f"$spec = '{ROOT / 'tests' / 'slice_watch_test.py'}'\n"
                 "try { Save-SliceWatchSnap 'a b' } catch { 'refused name' }\n"
@@ -870,6 +943,22 @@ class HelperTest(unittest.TestCase):
         for word in ('refused name', 'not started', 'stop after error: stopped', 'a snapshot while off does nothing',
                      'complete refused: True', 'a failed snapshot is only a warning'):
             self.assertIn(word, done.stdout, done.stdout + done.stderr)
+
+    def test_a_lost_reply_stops_all_talk_to_the_driver(self):
+        """One driver-lost condition (review of c001181): the first timeout sets it; no stop, snapshot, mark, group or settle wait is sent
+        after it, and the usability check refuses."""
+        body = ("$script:sent = @(); function Invoke-GamePy([string]$Code, [int]$T = 30) { $script:sent += @($Code); throw 'no reply to c1' }\n"
+                "function Invoke-GamePyFile([string]$P, [string]$O) { 'loaded' }\n"
+                f"$spec = '{ROOT / 'tests' / 'slice_watch_test.py'}'\n"
+                "$r = Start-SliceWatch $spec 'x' 'x' 3>$null; 'stop after error: ' + $r.stop_after_error\n"
+                "$n = $script:sent.Count; 'lost: ' + [bool]$script:SliceWatchDriverLost\n"
+                "$script:SliceWatchOn = $true\n"
+                "Save-SliceWatchSnap 'ok'; Save-SliceWatchMark 'stage.enter'; Install-SliceWatchGroups 'stage2' 0 | Out-Null; $w = Wait-SliceWatchSettled 5\n"
+                "'sent after: ' + ($script:sent.Count - $n)\n"
+                "try { Complete-SliceWatch $spec 'C:\\' } catch { 'complete refused: ' + (\"$_\" -like '*stopped answering*') }")
+        out = ps(body).stdout
+        for word in ('stop after error: not sent: the driver stopped answering', 'lost: True', 'sent after: 0', 'complete refused: True'):
+            self.assertIn(word, out, out)
 
     def test_a_snapshot_says_what_happened(self):
         body = ("$script:SliceWatchOn = $true\n"
@@ -952,7 +1041,18 @@ class WiringTest(unittest.TestCase):
                             < at['start'] < at['check'] < at['finally'], name)
             self.assertLess(at['check'], text.find('ConsoleCommand("quit"', at['start']), name)
             self.assertEqual(text.count('Invoke-SdkModsOffStep'), 1, name)
-            self.assertNotIn('Watch', text[at['finally']:], name)   # the finalizer is pinned (tests/real_game_capture_safety_test.py)
+            # The finalizers are pinned (tests/real_game_capture_safety_test.py). The one exception, by the review of c001181: cash_capture's
+            # best-effort watch stop beside its den stop, exactly this block, and nothing else of the watch.
+            tail = text[at['finally']:]
+            stop = ("    if ($WatchSpec -and $proc -and !$proc.HasExited) {\n"
+                    "        try { $reply = Py 'print(sw_stop())' 5; $cleanup.watch = if ($reply -ceq 'stopped') { 'stopped' } else { \"not stopped: $reply\" } }\n"
+                    "        catch { $cleanup.watch = \"not stopped: $_\" }\n    }\n")
+            if name == 'cash_capture.ps1':
+                self.assertEqual(tail.count(stop), 1, name)
+                self.assertLess(tail.index('dp_stop()'), tail.index(stop), name)   # beside the den stop, before the game is stopped
+                self.assertLess(tail.index(stop), tail.index('$gameGone = $true'), name)
+                tail = tail.replace(stop, '')
+            self.assertNotIn('Watch', tail, name)
 
     def test_den_down_removes_only_its_own_hook_and_sends_no_new_input(self):
         text = (ROOT / 'tools/real_game/cash_capture.ps1').read_text(encoding='utf-8')

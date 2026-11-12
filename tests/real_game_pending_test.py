@@ -629,22 +629,51 @@ function Assert-GameForeground { }
         self.assertEqual(out['native'], ['mouse 16'])   # the button's release went out; the key's failed
         self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key W'])   # kept, not cleared
 
-    def test_a_game_running_without_a_window_keeps_the_held_list(self):
+    def test_a_game_running_without_a_window_still_gets_every_release(self):
+        """A hung or closing game has no window: the synthesised keys are still held system-wide, so every release is sent and each entry is
+        cleared once its own release went out (review of c001181). The record itself stays: a game runs."""
         mock = r"""
-function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:sent = $true }
+$global:native = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:native.Add("key $Scan $Flags") }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
 function Assert-GameForeground { }
 """
-        record = self.leave(mock + "Send-KeyDown W")
+        record = self.leave(mock + "Send-KeyDown W; Send-MouseEvent 0x8")
         out = self.run_ps(mock + r"""
 function Get-GameProcesses { @([pscustomobject]@{ Id = 55; MainWindowHandle = [IntPtr]::Zero }) }
-$out.refusal = Fail-Text { Assert-NoPendingRecords }
 $out.restore = Fail-Text { Restore-PendingRecord '__RECORD__' }
-$out.sent = [bool]$global:sent
+$out.native = @($global:native)
 """.replace('__RECORD__', str(record)))
-        self.assertIn('Borderlands 2 is running', out['refusal'])
+        self.assertEqual(out['native'], ['key 17 10', 'mouse 16'])
         self.assertIn('Borderlands 2 is running', out['restore'])
-        self.assertFalse(out['sent'])
-        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key W'])
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], [])
+        self.assertTrue(record.exists())
+
+    def test_a_failed_release_write_does_not_keep_a_clean_run_s_record(self):
+        """A release whose journal write failed leaves the key named in the record; the clean run's empty list is written at completion, so the
+        record goes (review of c001181)."""
+        out = self.run_ps(r"""
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { }
+function Assert-GameForeground { }
+$bak = Backup-Saves
+Send-KeyDown W
+$real = ${function:Set-PendingField}
+function Set-PendingField([string]$Name, $Value) { throw 'invented: the journal write failed' }
+Send-KeyUp W 3>$null
+$out.named = @((Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).held_inputs)
+Set-Item function:Set-PendingField $real
+$out.done = Complete-PendingRecord $true
+""")
+        self.assertEqual(out['named'], ['key W'])   # the failed write left it named
+        self.assertTrue(out['done'].startswith('removed'), out['done'])
+
+    def test_the_recovery_text_says_how_to_clear_an_entry_that_never_releases(self):
+        out = self.run_ps(r"""
+$record = [pscustomobject]@{ script = 's'; pid = 1; written = 'w'; backup = 'b'; changes = @(); held_inputs = @('key NotAKey'); game = $env:OPENWILLOW_BL2 }
+$out.text = Format-PendingRecovery 'C:\invented\record.json' $record @('inputs recorded as held were not released: key NotAKey')
+""")
+        self.assertIn('key NotAKey', out['text'])
+        self.assertIn('remove that entry from the record\'s "held_inputs" list', out['text'])
 
     def test_an_older_record_without_every_root_is_never_completed_automatically(self):
         record = self.leave()

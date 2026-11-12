@@ -128,15 +128,23 @@ function Enter-IceMap {
 }
 # The stage log: each stage's entry and end, stamped before its first risky command, in session.json, on the console and as a flushed mark
 # in the watch's recording, so a crash is attributed to a stage by time, not by line order.
+# The stamps reach the disk at once: each is appended to this run's own stages-<run>.log in the output folder before the risky command it
+# precedes (session.json is written only in the cleanup, and how fast the redirected console reaches the item's log is not something this
+# script can prove).
+$stagesFile = Join-Path $Out "stages-$keptAs.log"
 function Write-StageMark([string]$Stage, [string]$Event) {
     $mark = [ordered]@{ stage = $Stage; event = $Event; utc = (Get-Date).ToUniversalTime().ToString('o') }
     $log.stage_marks = @(@($log.stage_marks) + @($mark) | Where-Object { $_ })
+    try { Add-Content -LiteralPath $stagesFile -Value "$($mark.utc) $Stage $Event" -Encoding UTF8 } catch { Write-Warning "stage stamp not written: $_" }
     "stage $Stage $Event $($mark.utc)"
     if ($WatchSpec) { Save-SliceWatchMark "$Stage.$Event" }
 }
+# The one driver-lost condition: a reply that never came in any stage, here or in the watch's helpers (slice_watch.ps1).
+function Get-DriverLost { if ($script:driverLost) { $script:driverLost } else { $script:SliceWatchDriverLost } }
 # The game this run started is still there. Once it is gone, no later stage is attempted.
 function Test-RunGameAlive { $null -ne $proc -and !$proc.HasExited }
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $driverAttempted = $false; $launchAttempted = $false; $denLoaded = $false
+$driverLost = ''; $log.stages_file = $stagesFile
 $marker = "-owrun=$Lane-$PID"   # an argument the game ignores; Stop-OwnGame looks for it on the command line
 try {
     Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
@@ -199,7 +207,7 @@ try {
     $lootErrors = @($log.loot_mods_off | Where-Object { "$_" -match ': ' })
     if ($lootErrors.Count) { throw "a loot mod was not switched off in memory: $($lootErrors -join '; ')" }
     $log.player_level = Py 'print(cp_level())'; $log.cash_start = Py 'print(cp_cash())'
-    if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'cash' 'cash'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
+    if ($WatchSpec) { Write-StageMark 'watch' 'start'; $log.watch_start = Start-SliceWatch $WatchSpec 'cash' 'cash'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
     "player level $($log.player_level), cash $($log.cash_start)"
     Write-StageMark 'readings' 'enter'
     if ($WatchSmoke) { $log.groups_stage1 = Install-SliceWatchGroups 'stage1' }
@@ -247,14 +255,15 @@ try {
     if (!$dumpProblem -and (Py 'print(cp_up() and cp_immune())') -ne 'True') { $dumpProblem = 'Maya is down or the immunity is gone after the readings' }
     Set-Stage 'readings' (($single -ge $WantItems) -and !$dumpProblem) $(if ($dumpProblem) { $dumpProblem } else { "$single of $WantItems single-item readings in $kills kills" })
     Write-StageMark 'readings' 'done'
-    $driverLost = ''
+    # Set before stage 2, so a stage skipped at once still leaves a smoke result and stage 3 still runs its own checks and stamps.
+    $smokeHeld = $false; $smokeWhy = 'the smoke hold did not run'
     # The den read has its own result: whatever fails in here is that stage's failure, and the session still quits and restores in order.
     if (!$SkipDen) {
         Write-StageMark 'den_read' 'enter'
         try {
             if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }
+            if (Get-DriverLost) { throw "skipped: the driver stopped answering in an earlier stage ($(Get-DriverLost))" }
             if ($WatchSmoke) { $log.groups_stage2 = Install-SliceWatchGroups 'stage2' }
-            $smokeHeld = $false; $smokeWhy = 'the smoke hold did not run'
             Use-Probe 'den_probe.py'
             $denLoaded = $true
             $log.den_hooks = Py 'print(dp_start())'
@@ -291,7 +300,7 @@ try {
         } catch {
             Set-Stage 'den_read' $false "$_"
             "den read: $_"
-            if ("$_" -match 'no reply' -or !(Test-RunGameAlive)) { $driverLost = "$_" }
+            if ("$_" -match 'no reply') { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }
         }
         # S0's settled five-minute hold: the map settled and the hold ran with an enemy in reach, or the stage fails.
         if ($WatchSmoke) { Set-Stage 'smoke_hold' $smokeHeld $smokeWhy }
@@ -303,7 +312,7 @@ try {
         Write-StageMark 'den_down' 'enter'
         try {
             if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }
-            if ($driverLost) { throw "skipped: the driver stopped answering in an earlier stage ($driverLost)" }
+            if (Get-DriverLost) { throw "skipped: the driver stopped answering in an earlier stage ($(Get-DriverLost))" }
             if (!$denLoaded) { Use-Probe 'den_probe.py'; $denLoaded = $true }
             $reached = Enter-IceMap
             if ($reached -notmatch 'Ice_P True') { throw "travel for the den down failed: $reached" }
@@ -372,7 +381,7 @@ try {
     }
     # The watch's usability check, while the game still runs (not attempted once the game is gone).
     if ($WatchSpec) {
-        try { if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }; $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
+        try { if (!(Test-RunGameAlive)) { throw 'skipped: the game has exited' }; if (Get-DriverLost) { throw "skipped: the driver stopped answering ($(Get-DriverLost))" }; $log.watch = Complete-SliceWatch $WatchSpec $Out; $log.watch.check; Set-Stage 'watch' $log.watch.usable 'the watch dump is not usable (see watch.check)' }
         catch { Set-Stage 'watch' $false "$_" }
     }
     $log.shot = Save-Shot 'cash/shot.png'
@@ -391,6 +400,11 @@ try {
         # Py returns a traceback as text, so only the exact answer counts.
         try { $reply = Py 'dp_stop(); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
         catch { $cleanup.hooks = "not stopped: $_" }
+    }
+    # The watch's hooks too, best effort, the same shape: only while this run's game lives, 5 s, only the exact reply counts.
+    if ($WatchSpec -and $proc -and !$proc.HasExited) {
+        try { $reply = Py 'print(sw_stop())' 5; $cleanup.watch = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+        catch { $cleanup.watch = "not stopped: $_" }
     }
     $gameGone = $true
     if ($proc) {
