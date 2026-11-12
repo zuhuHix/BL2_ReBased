@@ -719,6 +719,22 @@ class CheckerTest(unittest.TestCase):
                                                 'require': [{'func': 'A', 'after': 'before_down'}]}}), encoding='utf-8')
             self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 0)
 
+    def test_an_edges_rule_needs_values_and_can_count_from_a_snapshot(self):
+        # Review of #245: an edges rule with no values passed on nothing, and validate_spec never looked at edges.
+        tool = str(ROOT / 'tools/real_game/slice_watch_check.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            s = Path(tmp) / 'spec.json'
+            for bad in ({'edges': [{'func': 'HandleInputKey', 'arg': 'uevent', 'values': []}]}, {'edges': [{'func': 'HandleInputKey', 'arg': 'uevent'}]},
+                        {'edges': [{'func': 'HandleInputKey', 'arg': 'uevent', 'values': [0], 'after': None}]}):
+                s.write_text(json.dumps({'checks': bad}), encoding='utf-8')
+                self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 2, bad)
+            s.write_text(json.dumps({'checks': {'edges': [{'func': 'HandleInputKey', 'arg': 'uevent', 'values': [0, 1], 'after': 'start'}]}}), encoding='utf-8')
+            self.assertEqual(subprocess.run([sys.executable, tool, '--validate-spec', str(s)], capture_output=True).returncode, 0)
+        early = [row('X.Movie:HandleInputKey', 1.0, t=1.0, uevent=0), row('X.Movie:HandleInputKey', 1.1, t=1.1, uevent=1)]
+        rule = {'edges': [{'func': 'HandleInputKey', 'arg': 'uevent', 'values': [0, 1], 'after': 'start'}]}
+        got = self.results(dump(early, snaps=[dict(GOOD_SNAP, label='start', t=50.0)]), rule)
+        self.assertFalse(got['edges HandleInputKey.uevent'])   # the rows before the snapshot do not count
+
     def test_order_and_gap_survive_a_travel_and_arguments_must_be_there(self):
         # the map clock restarts at a travel between the two rows; the recording's own clock does not
         rows = [row('X.Pawn:ResurrectPlayer', 200.0, t=500.0), row('X.Pawn:ShowRespawnDialog', 3.0, t=511.0)]

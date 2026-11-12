@@ -44,7 +44,8 @@ errors (default 0), and nothing dropped by a cap (see max_dropped). Optional che
   args_nonempty:     [{"func": "<substring>", "tag": "pre"|"post", "min": N}]: at least N rows of that hook, and every one of them carries
                      non-empty arguments and no args_error (a function known to have parameters: an empty or partial read there means
                      the reader refused or failed it).
-  edges:             [{"func": "<substring>", "arg": "<argument>", "values": [v, ...]}]: rows of that hook carry each value.
+  edges:             [{"func": "<substring>", "arg": "<argument>", "values": [v, ...], "after": "<label>"}]: rows of that hook carry
+                     each value (at least one value; with "after", only rows from that snapshot on, as in require).
   snaps:             ["<label>" | ["<label>", "<alternative>", ...], ...]: labelled snapshots with these labels exist (for a list,
                      any one of them).
   snap_content:      {"<part>": "present"|"dict"|"nonempty"|"number"}: in every labelled snapshot the part read without failing and
@@ -127,7 +128,11 @@ def validate_spec(spec_path):
         elif not (isinstance(entry, list) and len(entry) == 2 and all(isinstance(x, str) for x in entry)):
             raise ValueError("an order entry is [first, then] or {first, then, after}")
     # "after" anchors a check to a snapshot; a null or empty one would leave it unanchored without saying so, in every form that takes it.
-    for key in ("require", "order", "gap"):
+    for edge in checks.get("edges", []):
+        if not (isinstance(edge, dict) and isinstance(edge.get("func"), str) and isinstance(edge.get("arg"), str)
+                and isinstance(edge.get("values"), list) and edge["values"]) or set(edge) - {"func", "arg", "values", "after"}:
+            raise ValueError("an edges rule is {func, arg, values (at least one), after}: one with no values would pass on nothing")
+    for key in ("require", "order", "gap", "edges"):
         for entry in checks.get(key, []):
             if isinstance(entry, dict) and "after" in entry and not (isinstance(entry["after"], str) and entry["after"]):
                 raise ValueError(f"{key}: after must be a snapshot label")
@@ -251,7 +256,7 @@ def check(dump, checks):
         within = "inside" if ok else "outside or missing"
         out.append((f"gap {gap['from']} -> {gap['to']}", ok, f"{within} the band [{gap.get('min', 0)}, {gap.get('max', 'inf')}] s"))
     for edge in checks.get("edges", []):
-        seen = {r.get("args", {}).get(edge["arg"]) for r in _match(rows, edge["func"])}
+        seen = {r.get("args", {}).get(edge["arg"]) for r in _match(_rows_after(dump, rows, edge.get("after")), edge["func"])}
         lacking = [v for v in edge["values"] if v not in seen]
         out.append((f"edges {edge['func']}.{edge['arg']}", not lacking, f"{len(edge['values']) - len(lacking)} of {len(edge['values'])} values seen"))
     every_labelled = [s for s in dump.get("snaps", []) + dump.get("pawns", []) if s.get("label") != "auto"]
