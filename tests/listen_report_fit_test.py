@@ -56,10 +56,10 @@ class FitTest(unittest.TestCase):
         _, burst = self.burst('a.wav')
         for residue in range(8):
             start = 6240 + residue                     # 0.13 s after the cue at 48 kHz, plus 0..7 samples
-            wav = self.recording([(RATE + start, burst, -9.0)])
+            wav = self.recording([(RATE + start, burst, -11.5)])
             rate, recording = lr.read_channels(wav)
             db, corr, lag, clipped = lr.fit_gain(recording, rate, 1.0, RATE, burst)
-            self.assertAlmostEqual(db, -9.0, delta=0.05, msg=residue)
+            self.assertAlmostEqual(db, -11.5, delta=0.05, msg=residue)
             self.assertGreater(corr, 0.99, residue)
             self.assertEqual(round(lag * RATE), start, residue)
             self.assertFalse(clipped)
@@ -67,10 +67,10 @@ class FitTest(unittest.TestCase):
     def test_the_fit_finds_the_files_gain_under_an_overlapping_sound(self):
         _, equip = self.burst('a.wav')
         _, other = self.burst('b.wav')
-        wav = self.recording([(int(1.1306 * RATE), equip, -9.0), (int(1.10 * RATE), other, -3.0)])
+        wav = self.recording([(int(1.1306 * RATE), equip, -8.5), (int(1.10 * RATE), other, -2.5)])
         rate, recording = lr.read_channels(wav)
         db, corr, lag, _ = lr.fit_gain(recording, rate, 1.0, RATE, equip)
-        self.assertAlmostEqual(db, -9.0, delta=0.3)
+        self.assertAlmostEqual(db, -8.5, delta=0.3)
         self.assertAlmostEqual(lag, 0.1306, delta=0.0001)
         self.assertGreater(corr, lr.FIT_MIN_CORR)
 
@@ -79,13 +79,13 @@ class FitTest(unittest.TestCase):
         a_path, a = self.burst('a.wav')
         b_path, b = self.burst('b.wav')
         c_path, c = self.burst('c.wav')
-        # fire plays b at -10 (map -10), hit plays c over it, equip plays a at -5 (map -5): each 3 dB under its map gain.
-        wav = self.recording([(int(1.1306 * RATE), b, -13.0), (int(1.1353 * RATE), c, -11.0), (int(3.1311 * RATE), a, -8.0)])
-        log_text = '\n'.join([self.play('fire', 'b.wav', -10), self.cue('fire', 1.0), self.play('hit', 'c.wav', -8), self.cue('hit', 1.005),
-                              self.play('equip', 'a.wav', -5), self.cue('equip', 3.0)])
+        # fire plays b at -10.5 (map -10.5), hit plays c over it, equip plays a at -4 (map -4): each 3 dB under its map gain.
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5), (int(1.1353 * RATE), c, -9.5), (int(3.1311 * RATE), a, -7.0)])
+        log_text = '\n'.join([self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.0), self.play('hit', 'c.wav', -6.5), self.cue('hit', 1.005),
+                              self.play('equip', 'a.wav', -4), self.cue('equip', 3.0)])
         cues = lr.parse_log(log_text)['cues']
         play = {'roles': {'fire': [str(a_path), str(b_path)], 'hit': [str(c_path)], 'equip': [str(a_path)]},
-                'gains': {'fire': [-20.0, -10.0], 'hit': [-8.0], 'equip': [-5.0]}}
+                'gains': {'fire': [-20.0, -10.5], 'hit': [-6.5], 'equip': [-4.0]}}
         fits = lr.fit_cues(cues, log_text, wav, play)
         self.assertEqual(Path(fits[0]['file']).name, 'b.wav')        # the logged file, not the role's first one
         self.assertTrue(fits[0]['file_logged'])
@@ -100,21 +100,21 @@ class FitTest(unittest.TestCase):
     def test_a_play_before_the_recording_does_not_shift_the_file(self):
         a_path, a = self.burst('a.wav')
         b_path, b = self.burst('b.wav')
-        wav = self.recording([(int(1.1306 * RATE), b, -13.0)])
-        log_text = '\n'.join([self.play('fire', 'a.wav', -10), 'LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
-                              self.play('fire', 'b.wav', -10), self.cue('fire', 1.0)])
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5)])
+        log_text = '\n'.join([self.play('fire', 'a.wav', -10.5), 'LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
+                              self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.0)])
         cues = lr.parse_log(log_text)['cues']
         fits = lr.fit_cues(cues, log_text, wav, {'roles': {'fire': [str(a_path), str(b_path)]}})
         self.assertEqual(Path(fits[0]['file']).name, 'b.wav')
-        self.assertAlmostEqual(fits[0]['fit_gain_db'], -13.0, delta=0.05)
+        self.assertAlmostEqual(fits[0]['fit_gain_db'], -13.5, delta=0.05)
 
     def test_a_guessed_file_is_marked(self):
         a_path, a = self.burst('a.wav')
         b_path, b = self.burst('b.wav')
-        wav = self.recording([(int(1.1306 * RATE), b, -13.0)])
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5)])
         log_text = self.cue('fire', 1.0)                         # an older log: no play line with file=
         cues = lr.parse_log(log_text)['cues']
-        play = {'roles': {'fire': [str(a_path), str(b_path)]}, 'gains': {'fire': [-10.0, -10.0]}}
+        play = {'roles': {'fire': [str(a_path), str(b_path)]}, 'gains': {'fire': [-10.5, -10.5]}}
         fits = lr.fit_cues(cues, log_text, wav, play)
         self.assertEqual(Path(fits[0]['file']).name, 'b.wav')
         self.assertFalse(fits[0]['file_logged'])
@@ -124,17 +124,17 @@ class FitTest(unittest.TestCase):
 
     def test_two_cues_of_one_role_close_together_get_no_fit(self):
         a_path, a = self.burst('a.wav')
-        wav = self.recording([(int(1.1306 * RATE), a, -8.0), (int(1.1346 * RATE), a, -8.0)])   # two identical sounds 4 ms apart add up
-        log_text = '\n'.join([self.play('equip', 'a.wav', -5), self.cue('equip', 1.0), self.play('equip', 'a.wav', -5), self.cue('equip', 1.004)])
+        wav = self.recording([(int(1.1306 * RATE), a, -7.0), (int(1.1346 * RATE), a, -7.0)])   # two identical sounds 4 ms apart add up
+        log_text = '\n'.join([self.play('equip', 'a.wav', -4), self.cue('equip', 1.0), self.play('equip', 'a.wav', -4), self.cue('equip', 1.004)])
         cues = lr.parse_log(log_text)['cues']
         self.assertEqual(lr.fit_cues(cues, log_text, wav, {'roles': {'equip': [str(a_path)]}}), {})
 
     def test_a_role_without_a_fit_shows_no_off_by_when_others_fit(self):
         a_path, a = self.burst('a.wav')
-        wav = self.recording([(int(1.1306 * RATE), a, -13.0)])
-        log_text = '\n'.join([self.play('fire', 'a.wav', -10), self.cue('fire', 1.0), self.cue('equip', 3.0)])
+        wav = self.recording([(int(1.1306 * RATE), a, -13.5)])
+        log_text = '\n'.join([self.play('fire', 'a.wav', -10.5), self.cue('fire', 1.0), self.cue('equip', 3.0)])
         cues = lr.parse_log(log_text)['cues']
-        play = {'roles': {'fire': [str(a_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.0], 'equip': [-5.0]}}
+        play = {'roles': {'fire': [str(a_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.5], 'equip': [-4.0]}}
         fits = lr.fit_cues(cues, log_text, wav, play)
         for cue in cues:
             cue['level'] = {'rms_dbfs': -20.0}
@@ -145,13 +145,13 @@ class FitTest(unittest.TestCase):
         """Two shots inside one search window (automatic fire) leave the reference without a fit: the guide must say so."""
         a_path, a = self.burst('a.wav')
         b_path, b = self.burst('b.wav')
-        wav = self.recording([(int(1.1306 * RATE), b, -13.0), (int(1.1346 * RATE), b, -13.0), (int(3.1311 * RATE), a, -8.0)])
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5), (int(1.1346 * RATE), b, -13.5), (int(3.1311 * RATE), a, -7.0)])
         log_text = '\n'.join(['LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
                               'LogTemp: Display: OWAUDIOREC cue t=0.500 label=step Fight frame=-',
-                              self.play('fire', 'b.wav', -10), self.cue('fire', 1.0), self.play('fire', 'b.wav', -10), self.cue('fire', 1.004),
-                              self.play('equip', 'a.wav', -5), self.cue('equip', 3.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
+                              self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.0), self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.004),
+                              self.play('equip', 'a.wav', -4), self.cue('equip', 3.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
         play_map = self.tmp / 'play.json'
-        play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.0], 'equip': [-5.0]},
+        play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.5], 'equip': [-4.0]},
                                         'unresolved': {}}), encoding='utf-8')
         lr.build(log_text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
         guide = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
@@ -163,31 +163,31 @@ class FitTest(unittest.TestCase):
     def test_a_sound_that_starts_just_before_its_cue_fits(self):
         """The first equip of both listening runs started 2 and 8 ms before its cue (the clocks are not calibrated)."""
         _, burst = self.burst('a.wav')
-        wav = self.recording([(RATE - 384, burst, -9.0)])     # 8 ms before the cue at 1.0 s
+        wav = self.recording([(RATE - 384, burst, -7.5)])     # 8 ms before the cue at 1.0 s
         rate, recording = lr.read_channels(wav)
         db, corr, lag, _ = lr.fit_gain(recording, rate, 1.0, RATE, burst)
-        self.assertAlmostEqual(db, -9.0, delta=0.05)
+        self.assertAlmostEqual(db, -7.5, delta=0.05)
         self.assertAlmostEqual(lag, -0.008, delta=0.0001)
 
     def test_a_cue_in_the_first_50_ms_searches_from_the_files_start(self):
         _, burst = self.burst('a.wav')
-        wav = self.recording([(0, burst, -9.0)])                # the sound at frame 0, its cue at 0.02 s
+        wav = self.recording([(0, burst, -9.5)])                # the sound at frame 0, its cue at 0.02 s
         rate, recording = lr.read_channels(wav)
         db, corr, lag, _ = lr.fit_gain(recording, rate, 0.02, RATE, burst)
-        self.assertAlmostEqual(db, -9.0, delta=0.05)
+        self.assertAlmostEqual(db, -9.5, delta=0.05)
         self.assertGreater(corr, 0.99)
         self.assertAlmostEqual(lag, -0.020, delta=0.0001)
 
     def test_a_cue_with_a_negative_time_gets_no_fit(self):
         _, burst = self.burst('a.wav')
-        wav = self.recording([(RATE, burst, -9.0)])
+        wav = self.recording([(RATE, burst, -9.5)])
         rate, recording = lr.read_channels(wav)
         self.assertIsNone(lr.fit_gain(recording, rate, -0.5, RATE, burst))
 
     def test_the_no_off_by_line_names_a_missing_map_gain(self):
         """The shot fitted, but its file's map gain is null: the guide must say that, not that it found no fit."""
         b_path, b = self.burst('b.wav')
-        wav = self.recording([(int(1.1306 * RATE), b, -13.0)])
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5)])
         log_text = chr(10).join(['LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
                               'LogTemp: Display: OWAUDIOREC cue t=0.500 label=step Fight frame=-',
                               self.play('fire', 'b.wav', 0), self.cue('fire', 1.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
