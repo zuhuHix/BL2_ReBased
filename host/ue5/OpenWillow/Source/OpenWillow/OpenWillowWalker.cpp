@@ -217,6 +217,9 @@ float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const
 {
     if ((!bMayaActive && !bRespawnPointCaptured) || !GetWorld()) return 0.f;
     const float Now = GetWorld()->GetTimeSeconds();
+    // The respawn's hold: in the game she is in a holding cell off the map then, so nothing reaches her (an inference from the hold,
+    // UNVERIFIED: no hit was tried there). From the arrival on, hits land as usual (UNVERIFIED while she is still hidden).
+    if (RespawnTimeline.IsHeld()) return 0.f;
     TickShield(Now);   // a shield equipped or removed since the last tick applies to this hit
     // Live: damage still reaches the injured state's TakeDamage, but health does not move (COMBAT_GOLDEN_TRACE.md step 12).
     const FOpenWillowDamageResult Hit = MayaState.ApplyDamage(Amount, Now);
@@ -266,6 +269,7 @@ void AOpenWillowWalker::OnWentDown()
 
 bool AOpenWillowWalker::DownWeaponReady() const
 {
+    if (RespawnTimeline.IsGearAway()) return false;   // after a respawn the gear is back 4.5 s after the arrival (observed in game)
     return GetWorld() ? MayaState.WeaponReady(GetWorld()->GetTimeSeconds()) : !IsDown();
 }
 
@@ -358,10 +362,15 @@ void AOpenWillowWalker::TickShield(float Now)
 
 void AOpenWillowWalker::Respawn()
 {
-    // With -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host
-    // stand-in: back to where this session started. Full health and shield either way; mission state is not touched.
-    MayaState.Respawn(GetWorld()->GetTimeSeconds());
-    RespawnFee.Schedule(GetWorld()->GetTimeSeconds());
+    // The respawn start, the game's ResurrectPlayer on the station path. Observed in the real game on 2026-11-12: six respawns on two
+    // maps, the same timeline to a frame or two (COMBAT_DOWN_RESPAWN.md, "The host's fee and message"). Now: full health and shield,
+    // up again, the station exit picked, hidden and without input for the 3.0 s hold; TickRespawn applies the later moments. With
+    // -owquest the slice data picks the station exit point (decoded selection rule); otherwise the host stand-in: back to where this
+    // session started. Mission state is not touched.
+    const float Now = GetWorld()->GetTimeSeconds();
+    MayaState.Respawn(Now);
+    RespawnTimeline.Begin(Now);
+    RespawnFee.Schedule(RespawnTimeline);
     bFireHeld = false;
     Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
@@ -378,20 +387,45 @@ void AOpenWillowWalker::Respawn()
             PC->SetShowMouseCursor(false);
         }
     }
-    FVector Location = RespawnLocation;
-    FRotator Rotation = RespawnRotation;
+    // The game picks the exit point inside ResurrectPlayer, from where she died; she reaches it at the arrival.
+    RespawnDestination = FTransform(RespawnRotation, RespawnLocation);
     FTransform Station;
     if (Quest && Quest->Enabled() && Quest->RespawnPoint(GetActorLocation(), Station))
-    {
-        Location = Station.GetLocation();
-        Rotation = Station.Rotator();
-    }
-    SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
-    if (Controller) Controller->SetControlRotation(Rotation);
+        RespawnDestination = FTransform(Station.Rotator(), Station.GetLocation());
+    // The hold. The host needs no holding cell: hidden, no move or look (the pawn's input is off), hits ignored (ApplyDamageToPlayer).
+    SetActorHiddenInGame(true);
+    DisableInput(nullptr);
     GetCharacterMovement()->StopMovementImmediately();
-    NotifyTeleported();
-    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *Location.ToString());
-    if (Quest) Quest->NotifyRespawn();
+    UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya respawn started t=%.3f: held %.1f s hidden and without input, fee due at t=%.3f"), Now,
+        FOpenWillowRespawnTimeline::HoldSeconds, RespawnFee.DueTime());
+}
+
+void AOpenWillowWalker::TickRespawn(float Now)
+{
+    using EMoment = FOpenWillowRespawnTimeline::EMoment;
+    for (EMoment Moment = RespawnTimeline.Advance(Now); Moment != EMoment::Count; Moment = RespawnTimeline.Advance(Now))
+    {
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya respawn moment %s t=%.3f, %.3f s after the start"), FOpenWillowRespawnTimeline::Name(Moment), Now,
+            Now - RespawnTimeline.StartedAt());
+        switch (Moment)
+        {
+        case EMoment::Arrival:
+        {
+            const FVector Location = RespawnDestination.GetLocation();
+            const FRotator Rotation = RespawnDestination.Rotator();
+            SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+            if (Controller) Controller->SetControlRotation(Rotation);
+            GetCharacterMovement()->StopMovementImmediately();
+            NotifyTeleported();
+            UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya died and respawned at %s"), *Location.ToString());
+            if (Quest) Quest->NotifyRespawn();
+            break;
+        }
+        case EMoment::EffectStart: SetActorHiddenInGame(false); break;   // the effect itself is not drawn
+        case EMoment::InputBack: EnableInput(nullptr); break;           // UNVERIFIED to the frame (bracketed 6.4-7.4 s after the arrival)
+        default: break;   // gear back is read by DownWeaponReady; effect end and the cost display draw nothing yet; the fee charges itself
+        }
+    }
 }
 
 void AOpenWillowWalker::RefreshHealthForLevel()
@@ -830,6 +864,7 @@ void AOpenWillowWalker::Tick(float DeltaSeconds)
     }
     const float Now = GetWorld()->GetTimeSeconds();
     TickDown(Now, DeltaSeconds);
+    TickRespawn(Now);
     for (int32 I = DamageScales.Num() - 1; I >= 0; --I)
         if (Now >= DamageScales[I].EndsAt)
         {

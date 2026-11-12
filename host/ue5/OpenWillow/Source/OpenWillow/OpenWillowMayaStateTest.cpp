@@ -127,7 +127,9 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         TestEqual(TEXT("the line count is limited"), FOpenWillowRespawnFee::WrapLines(TEXT("a\nb\nc\nd"), 3, 2).Num(), 2);
         TestEqual(TEXT("a long word stops at the limit too"), FOpenWillowRespawnFee::WrapLines(TEXT("bbbbbbbbbbbbbbbbbbbb"), 3, 2).Num(), 2);
         FOpenWillowRespawnFee Fee;
-        Fee.Schedule(10.f);
+        FOpenWillowRespawnTimeline Respawn;
+        Respawn.Begin(10.f);
+        Fee.Schedule(Respawn);
         Fee.Tick(21.f, nullptr);
         TestEqual(TEXT("not due before the delay"), Fee.LastFee(), -1);
         Fee.Tick(21.9f, nullptr);
@@ -234,6 +236,93 @@ bool FOpenWillowMayaStateTest::RunTest(const FString&)
         S.Modifiers = nullptr;
         TestTrue(TEXT("no modifiers: Effective is Base"), S.Effective().MaxHealth == 120.f);
     }
+    return true;
+}
+
+// respawn_wait_split: the station respawn's parts as named moments (FOpenWillowRespawnTimeline) and the fee read from them. The
+// numbers checked are the rule's own constants (observed in the real game, COMBAT_DOWN_RESPAWN.md); the start times, the frame
+// steps and the purse are invented.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowRespawnWaitSplitTest, "OpenWillow.MayaState.RespawnWaitSplit",
+    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FOpenWillowRespawnWaitSplitTest::RunTest(const FString&)
+{
+    using FTimeline = FOpenWillowRespawnTimeline;
+    using EMoment = FTimeline::EMoment;
+    constexpr float Frame = 1.f / 60.f;   // one host frame
+    // The parts: the hold after the start, then the moments after the arrival.
+    TestTrue(TEXT("respawn_wait_split: the hold ends 3.0 s after the start"), FMath::Abs(FTimeline::Offset(EMoment::Arrival) - 3.0f) <= Frame);
+    struct FPart { EMoment Moment; float AfterArrival; };
+    const FPart Parts[] = {{EMoment::EffectStart, 1.5f}, {EMoment::GearBack, 4.5f}, {EMoment::EffectEnd, 6.5f}, {EMoment::CostDisplay, 6.79f},
+        {EMoment::Fee, 8.79f}};
+    for (const FPart& Part : Parts)
+        TestTrue(FString::Printf(TEXT("respawn_wait_split: %s about %.2f s after the arrival"), FTimeline::Name(Part.Moment), Part.AfterArrival),
+            FMath::Abs(FTimeline::Offset(Part.Moment) - FTimeline::Offset(EMoment::Arrival) - Part.AfterArrival) <= Frame);
+    TestEqual(TEXT("respawn_wait_split: input back at the cost display (UNVERIFIED to the frame)"), FTimeline::Offset(EMoment::InputBack),
+        FTimeline::Offset(EMoment::CostDisplay));
+    TestTrue(TEXT("respawn_wait_split: the fee 11.8 s after the start in all, the fee's own delay"),
+        FMath::Abs(FTimeline::FeeSeconds - 11.8f) <= Frame && FOpenWillowRespawnFee::DelaySeconds == FTimeline::FeeSeconds);
+
+    // A run at host frames from a start that falls between two frames: every moment comes once, in order, on the first frame at or
+    // after it; the hold is hidden, without input and gear; nothing is held before a start or after input is back.
+    FTimeline T;
+    TestFalse(TEXT("respawn_wait_split: nothing held before a respawn"), T.HasStarted() || T.IsHeld() || T.IsHidden() || T.IsInputLocked()
+        || T.Advance(5.f) != EMoment::Count);
+    const double Start = 41.0037;
+    T.Begin(float(Start));
+    UOpenWillowInventory* Purse = NewObject<UOpenWillowInventory>(GetTransientPackage());
+    Purse->SetMoney(1000);
+    FOpenWillowRespawnFee Fee;
+    Fee.Schedule(T);
+    TArray<EMoment> Order;
+    bool bHoldOk = true, bAfterHoldOk = true;
+    int32 HoldFrames = 0;
+    for (int32 I = 0; I <= 13 * 60; ++I)
+    {
+        const float Now = float(Start + I * double(Frame));
+        for (EMoment M = T.Advance(Now); M != EMoment::Count; M = T.Advance(Now)) Order.Add(M);
+        Fee.Tick(Now, Purse);
+        if (Now < T.At(EMoment::Arrival))
+        {
+            ++HoldFrames;
+            bHoldOk &= T.IsHeld() && T.IsHidden() && T.IsGearAway() && T.IsInputLocked();
+        }
+        else if (Now < T.At(EMoment::EffectStart)) bAfterHoldOk &= !T.IsHeld() && T.IsHidden() && T.IsInputLocked();
+        else if (Now < T.At(EMoment::GearBack)) bAfterHoldOk &= !T.IsHidden() && T.IsGearAway() && T.IsInputLocked();
+        else if (Now < T.At(EMoment::InputBack)) bAfterHoldOk &= !T.IsGearAway() && T.IsInputLocked();
+        else bAfterHoldOk &= !T.IsHeld() && !T.IsHidden() && !T.IsGearAway() && !T.IsInputLocked();
+    }
+    TestTrue(TEXT("respawn_wait_split: the 3.0 is a hold, hidden and unable to act, in every frame of it"), bHoldOk && HoldFrames >= 179);
+    TestTrue(TEXT("respawn_wait_split: hidden until the effect starts, gear until gear back, input until input back"), bAfterHoldOk);
+    const TArray<EMoment> Expected = {EMoment::Arrival, EMoment::EffectStart, EMoment::GearBack, EMoment::EffectEnd, EMoment::CostDisplay,
+        EMoment::InputBack, EMoment::Fee};
+    TestTrue(TEXT("respawn_wait_split: each moment once, in order"), Order == Expected);
+    for (EMoment M : Expected)
+    {
+        const float Late = T.ReachedAt(M) - T.At(M);
+        TestTrue(FString::Printf(TEXT("respawn_wait_split: %s on the first frame at or after it (%.4f s late)"), FTimeline::Name(M), Late),
+            Late >= -KINDA_SMALL_NUMBER && Late < Frame);
+    }
+    int32 Money = 0;
+    Purse->GetMoney(Money);
+    TestTrue(TEXT("respawn_wait_split: the fee falls due with the timeline's fee moment and its rule is unchanged"),
+        Fee.LastFee() == 70 && Money == 930 && Fee.LastChargedAt() == T.ReachedAt(EMoment::Fee));
+
+    // A second respawn before the charge starts the timeline again and replaces the fee, as before the split.
+    FTimeline Twice;
+    FOpenWillowRespawnFee Replaced;
+    Purse->SetMoney(1000);
+    Twice.Begin(100.f);
+    Replaced.Schedule(Twice);
+    Twice.Advance(103.5f);
+    Twice.Begin(105.f);
+    Replaced.Schedule(Twice);
+    TestTrue(TEXT("respawn_wait_split: a second respawn holds again from its own start"), Twice.IsHeld() && Twice.ReachedAt(EMoment::Arrival) < 0.f
+        && Twice.Advance(107.9f) == EMoment::Count && Twice.Advance(108.f) == EMoment::Arrival);
+    Replaced.Tick(112.f, Purse);
+    TestEqual(TEXT("respawn_wait_split: the first respawn's fee is not charged"), Replaced.LastFee(), -1);
+    Replaced.Tick(116.9f, Purse);
+    TestEqual(TEXT("respawn_wait_split: the second one's is, 11.8 s after its start"), Replaced.LastFee(), 70);
     return true;
 }
 #endif

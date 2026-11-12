@@ -189,7 +189,12 @@ public:
     float DownBleedTotal() const { return MayaState.BleedSeconds; }
     float LastDownAt() const { return MayaState.DownAt; }
     float LastSecondWindAt() const { return MayaState.SecondWindAt; }
+    // The respawn start (the game's ResurrectPlayer): up again, full health. She reaches the station 3.0 s later (GetRespawnTimeline).
     float LastRespawnAt() const { return MayaState.RespawnAt; }
+    // The respawn's named moments (OpenWillowRespawnTimeline.h); the suites read them.
+    const FOpenWillowRespawnTimeline& GetRespawnTimeline() const { return RespawnTimeline; }
+    // A respawn has started and input is not back yet: she is held, hidden or locked. Not down.
+    bool IsRespawning() const { return RespawnTimeline.IsInputLocked(); }
     // The fee and message after a respawn (the HUD draws the message; the suite reads the fee).
     const FOpenWillowRespawnFee& GetRespawnFee() const { return RespawnFee; }
     FOpenWillowRespawnFee& GetRespawnFee() { return RespawnFee; }
@@ -330,6 +335,10 @@ private:
     FRotator RespawnRotation = FRotator::ZeroRotator;
     bool bRespawnPointCaptured = false;
     void Respawn();
+    // Applies the respawn timeline's moments as they fall due (Tick).
+    void TickRespawn(float Now);
+    FOpenWillowRespawnTimeline RespawnTimeline;
+    FTransform RespawnDestination;   // picked at the respawn start, taken at the arrival
     FOpenWillowRespawnFee RespawnFee;
     int32 HitsTaken = 0;
     FVector LastHitFrom = FVector::ZeroVector;

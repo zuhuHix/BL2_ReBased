@@ -60,6 +60,9 @@ private:
     float FixtureReloadWait = 0.f;
     float RespawnAtBefore = 0.f;
     FVector DeathLocation = FVector::ZeroVector;
+    // The respawn's hold, sampled by the respawn link: frames seen in it, those with Maya hidden and without input, the longest frame.
+    int32 HoldFrames = 0, HoldFramesHiddenLocked = 0;
+    float HoldMaxDelta = 0.f;
     int64 ExperienceBeforeTurnIn = 0;
 
     class AOpenWillowWalker* Walker() const;

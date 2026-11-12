@@ -744,7 +744,7 @@ bool UOpenWillowSliceGate::WaitWhileDown(AOpenWillowWalker* W, float Delta)
     const TArray<const TCHAR*> Links = LinksFrom(uint8(Step), uint8(EStep::Pickup), uint8(EStep::PickupDecoy), uint8(EStep::Equip),
         uint8(EStep::Phaselock), uint8(EStep::Accept), uint8(EStep::WaitWalk), uint8(EStep::TurnIn));
     if (Links.IsEmpty()) return false;
-    if (!W->IsDown())
+    if (!W->IsDown() && !W->IsRespawning())   // a respawn waits too, until its hold and input lock are over
     {
         if (DownWaitFor > 0.f)
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note Maya Up again after %.1fs of waiting, with no revive (health %.0f/%.0f); %s starts now"), DownWaitFor,
@@ -1116,7 +1116,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 return;
             }
         }
-        if (W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead && StepTime < BleedTimeout) return;   // respawn due
+        // Respawn due, or held: the hold ends at the station and input comes back after it.
+        if ((W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead || W->IsRespawning()) && StepTime < BleedTimeout) return;
         FOpenWillowMayaState& State = W->GetMayaState();
         const bool bWasDown = W->IsDown();
         // With a shield (-owslicegateshield) only a downed Maya is restored: her health after the fight is kept. A Maya
@@ -1534,14 +1535,35 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Bleed: {
         const bool bRespawned = W->LastRespawnAt() > RespawnAtBefore;
         if (!bRespawned && StepTime < BleedTimeout) return;
+        // The respawn starts with a 3.0 s hold (observed in game): sampled every tick until she reaches the station, which is when
+        // this link is judged. Each held frame must have her hidden and her pawn's input off.
+        using EMoment = FOpenWillowRespawnTimeline::EMoment;
+        const FOpenWillowRespawnTimeline& Timeline = W->GetRespawnTimeline();
+        if (bRespawned)
+        {
+            // Every frame from the start to the judging one, which may be the arrival frame itself.
+            HoldMaxDelta = FMath::Max(HoldMaxDelta, GetWorld()->GetDeltaSeconds());
+            if (Timeline.IsHeld())
+            {
+                ++HoldFrames;
+                if (W->IsHidden() && !W->InputEnabled()) ++HoldFramesHiddenLocked;
+                if (StepTime < BleedTimeout) return;
+            }
+        }
+        // The arrival comes on the first walker tick at or after 3.0 s, so it is late by at most the longest frame seen.
+        const float Held = Timeline.ReachedAt(EMoment::Arrival) - Timeline.StartedAt();
+        const bool bHold = HoldFrames > 0 && HoldFramesHiddenLocked == HoldFrames && Timeline.ReachedAt(EMoment::Arrival) >= 0.f
+            && Held >= FOpenWillowRespawnTimeline::HoldSeconds && Held <= FOpenWillowRespawnTimeline::HoldSeconds + HoldMaxDelta + KINDA_SMALL_NUMBER;
+        const FString Hold = FString::Printf(TEXT("held %.3fs (%d of %d frames hidden and without input, longest frame %.3fs)"), Held,
+            HoldFramesHiddenLocked, HoldFrames, HoldMaxDelta);
         if (bLethalApplied) Fixture(TEXT("down state from the test's lethal damage"));
-        if (bRespawned && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
+        if (bRespawned && bHold && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString(bUnforced && bEnemyDown && !bLethalApplied ? TEXT("how=after_enemy_down: ") : TEXT(""))
-                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
-                StepTime, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation), W->GetHealth(), W->GetMaxHealth(),
-                Quest ? Quest->Status() : -1));
-        else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, down %d, health %.0f/%.0f after %.0fs"),
-            bRespawned, W->IsDown(), W->GetHealth(), W->GetMaxHealth(), StepTime));
+                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, then at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
+                W->LastRespawnAt() - W->LastDownAt(), *Hold, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation),
+                W->GetHealth(), W->GetMaxHealth(), Quest ? Quest->Status() : -1));
+        else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, %s, down %d, health %.0f/%.0f after %.0fs"),
+            bRespawned, *Hold, W->IsDown(), W->GetHealth(), W->GetMaxHealth(), StepTime));
         Finish(FString());
         break;
     }

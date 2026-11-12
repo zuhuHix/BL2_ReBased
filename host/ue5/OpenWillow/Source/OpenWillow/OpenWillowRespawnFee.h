@@ -1,16 +1,18 @@
 // AI-assisted (Claude). The fee and the message after a respawn: 11.8 s after it the fee is charged and a timed message says so, with no pause and no key.
+// The due time is the respawn timeline's fee moment (OpenWillowRespawnTimeline.h), 2.0 s after its cost display.
 // The rule and the times are from the live captures (docs/verification/COMBAT_DOWN_RESPAWN.md, "The host's fee and message"). The message's text is the game's own, read from the
 // install's localization when it is first needed; nothing of it is in this repository, and without the install a neutral text stands in.
 #pragma once
 
 #include "CoreMinimal.h"
+#include "OpenWillowRespawnTimeline.h"
 
 class UOpenWillowInventory;
 
 class FOpenWillowRespawnFee
 {
 public:
-    static constexpr float DelaySeconds = 11.8f;
+    static constexpr float DelaySeconds = FOpenWillowRespawnTimeline::FeeSeconds;   // 11.8
     static constexpr float MessageSeconds = 7.f;
 
     // 0.07 of the cash, rounded half up, at most the cash.
@@ -26,8 +28,9 @@ public:
     // The install's localization file, or empty if the install root is not usable (not set, or not an absolute path). The suite uses it to say whether the game's text should have loaded.
     static FString LocalizationFile();
 
-    // The respawn happened: the fee falls due. A second respawn before then replaces it.
-    void Schedule(float Now) { DueAt = Now + DelaySeconds; }
+    // A respawn started: the fee falls due at the timeline's fee moment. A second respawn before then replaces it.
+    void Schedule(const FOpenWillowRespawnTimeline& Timeline) { DueAt = Timeline.At(FOpenWillowRespawnTimeline::EMoment::Fee); }
+    float DueTime() const { return DueAt; }
     // Charges when due. Without a known purse there is nothing to charge and no message.
     void Tick(float Now, UOpenWillowInventory* Inventory);
 

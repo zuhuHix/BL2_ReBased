@@ -1519,7 +1519,7 @@ void AOpenWillowMayaHUD::TickHudDownShots(AOpenWillowWalker& Maya)
     case 7: if (Now < DownShotAt) return; Shot(TEXT("down_mid")); break;
     case 8: if (Maya.GetDownPhase() != AOpenWillowWalker::EDownPhase::Dead) return; DownShotAt = Now + 1.f; break;
     case 9: if (Now < DownShotAt) return; Shot(TEXT("dead")); break;
-    case 10: if (Maya.IsDown()) return; DownShotAt = Now + 1.f; break;
+    case 10: if (Maya.IsDown() || Maya.IsRespawning()) return; DownShotAt = Now + 1.f; break;   // the respawn's hold and input lock over
     case 11: if (Now < DownShotAt) return; Shot(TEXT("respawned")); DownShotAt = Now + 2.f; break;
     case 12:
         // The reload started while down finished during the bleed-out: one shot so that the magazine is short again.
