@@ -329,7 +329,7 @@ Earlier runs, on a throwaway local merge of f5d5d60 + this variant + `origin/fea
 
 ## The unforced variant (`-Unforced`, 2026-11-11)
 
-AI-assisted (Claude Opus 5.5), lane unforced-gate. **Not run yet, and the C++ was not compiled when this was written:** the
+AI-assisted (Claude Opus 5.5), lane unforced-gate. **Not run when this was written (first runs: below), and the C++ was not compiled then:** the
 build slot was held by a test batch. Everything in this section describes the driver and the checker as written. None of it
 is a result, and none of it is checked against the real game.
 
@@ -443,14 +443,25 @@ Nothing is checked against the real game.
 **Expected first result:** `go_down` FAIL or NOT_AVAILABLE (no gate run has had an enemy down her), and a FAIL on
 `bleed_out_respawn` from the lethal fallback. Links 10 to 12 may show what the live range does to the mission.
 
+**First runs (2026-11-11, main 969307f, zuhu PC, eight runs one after another with `-SkipBuild`).** AI-assisted (Claude
+Code); this lane read the eight runs' link tables and gate logs (ignored, under the hub runner's `local/`); the commit is
+from the hub's notes, as the logs do not name it. A host result, not parity, and nothing here is checked against the real
+game. 5 of the 8 runs passed all 14 links (exit 0) and 109 of the 112 link attempts passed. The three FAILs:
+`phaselock_enemy` once (the point was bought on the skills page, then Maya went down 0.42 s later and the skill's
+health-state constraint refused the cast) and `pick_up_aimed_not_nearest` twice (the card named no drop; at the use-key press
+the view line hit a living range enemy 60 and 10 uu away). In all eight, the gun came from the kill roll after 20 to 41 kills
+(budget 100), the point was bought on the skills page, the mission was accepted and turned in on the mission page, and
+`go_down` and `bleed_out_respawn` passed with `how=enemies` and `how=after_enemy_down`: the range's enemies downed Maya after
+6.0 to 31.2 s and 12 to 25 hits. So the expected first result above was wrong for links 13 and 14. A run took 297 to 558 s.
+
 ## Gaps, with the owning lane
 
 | Gap | Link(s) | Owner | What closes it |
 |---|---|---|---|
-| No enemy has downed Maya in a gate run | revive fixture, 13, 14 | range / slice-gate | Every down so far came from the test's lethal damage. The `-Unforced` variant now asks the range's enemies to do it (90 s, Maya not firing). Not run yet |
-| The gun drop is forced | 5, 6 | slice-gate | `-Unforced` kills until a gun drops (budget 100 kills). Not run yet |
-| The Phaselock point is granted | 9 | slice-gate | `-Unforced` buys it on the skills page. Not run yet |
-| The mission is taken with the use key alone, and the range is cleared first | 10 to 12 | slice-gate | `-Unforced` uses the mission page's Enter and leaves the range as it is. Not run yet; the range and the mission have never run together in the gate |
+| The older variants' down comes from the test's lethal damage | revive fixture, 13, 14 | range / slice-gate | The `-Unforced` variant asks the range's enemies to do it (90 s, Maya not firing). In its first eight runs they downed her each time ("First runs" above) |
+| The gun drop is forced | 5, 6 | slice-gate | `-Unforced` kills until a gun drops (budget 100 kills). First eight runs: 20 to 41 kills |
+| The Phaselock point is granted | 9 | slice-gate | `-Unforced` buys it on the skills page. Bought there in its first eight runs |
+| The mission is taken with the use key alone, and the range is cleared first | 10 to 12 | slice-gate | `-Unforced` uses the mission page's Enter and leaves the range as it is. Its first eight runs did so, with the range there |
 | `-Shield` needs the level override | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8 would remove the level-override fixture. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
 | The equip link does not grade the gun's firing | 8 | projectiles | Generated guns take their firing block from templates since 2026-11-06 (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates"); that firing is `UNVERIFIED` in game |
 

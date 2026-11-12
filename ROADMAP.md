@@ -749,44 +749,28 @@ gun, equip it, use Phaselock, complete one hand-picked mission, die, respawn.
 This is the vertical slice; once met, broad map and character coverage
 (Phase 5/6) becomes the priority again.
 
-Gate progress (2026-11-02; "in the host" means the UE5 build, with labelled
-stand-ins; none of it is parity):
-
-- [~] **Spawn:** Maya spawns in Sanctuary with animated first-person arms and
-  walks with collision ([arms and held guns](docs/verification/WEAPON_VISUALS.md),
-  [walking](COLLISION_WALKING_VERIFICATION.md)).
-- [~] **Fight:** in the host Maya fires from the parts; the in-engine firing
-  test runs against the host dummy on Sanctuary_P
-  ([firing](docs/verification/WEAPON_PROJECTILES.md)). Enemies do not fight back
-  in the host and no enemy AI exists. A bullymong's hit, death and kill XP run on
-  the VM only, from scripted steps, and its blow on Maya is a VM fixture that
-  always connects, not a fight in UE
-  ([hit](docs/verification/COMBAT_HIT_CHAIN.md),
-  [death](docs/verification/COMBAT_DEATH.md),
-  [melee](docs/verification/COMBAT_MELEE.md)).
-- [~] **Loot a gun:** the host can drop a gun and pick it up again (inventory
-  suite), and `ow.RollGun` generates guns; no kill, chest or mission drops one in
-  the host (the Fire mission gives XP only, by maintainer decision on
-  2026-10-07). Loot on death runs on the VM as item records
-  ([loot](docs/verification/COMBAT_LOOT.md)).
-- [~] **Equip:** the inventory movie equips, swaps and compares guns (inventory
-  suite 49/0 on the bounded item set;
-  [record](docs/verification/INVENTORY_MOVIE_PROTOTYPE.md)).
-- [~] **Phaselock:** cast, lift and release on a stock bullymong from stock data;
-  bob and cast gates confirmed in game; independent critic agent 5.4-5.9/10
-  (not parity)
-  ([record](docs/verification/PHASELOCK_STOCK_DATA.md)).
-- [~] **One mission:** the stock Fire mission plays to turn-in in the host (quest
-  suite 111/111 and resume 11/11 at a8a3dd5, DECISIONS 2026-11-02), its event order compared with a
-  live trace ([record](docs/verification/SANCTUARY_RPG_MISSION.md),
-  [golden trace](docs/verification/FIRE_MISSION_GOLDEN_TRACE.md)).
-- [~] **Die and respawn:** in the host, health 0 respawns Maya at the decoded
-  station exit point with full health (a quest-suite check; nothing in the host
-  damages her in play;
-  [host record](docs/verification/SANCTUARY_RPG_MISSION.md), its "Death" line). The down
-  state, bleed-out and second wind run on the VM only, where the station and
-  exit-point choice do not run (a bare `PlayerStart` stands in;
-  [VM record](docs/verification/COMBAT_DOWN_RESPAWN.md), verdict 4).
+Gate progress (2026-11-11; "in the host" means the UE5 build, with labelled stand-ins; none of it is parity).
+`tools/test_slice_gate.ps1` runs the whole loop in one session and has passed 14 of 14 links on main since
+2026-11-07 ([slice gate](docs/verification/SLICE_GATE.md)). Its `-Unforced` variant takes the test's help away: the
+gun drop comes from the host's own loot roll, the Phaselock point is bought on the skills page, the mission is
+accepted and turned in on the mission page, and Maya is downed by the range's enemies. In 8 unforced runs on
+2026-11-11, 5 passed all 14 links and 109 of 112 link attempts passed; the three failures were two pickups with an
+enemy standing in the view line and one Phaselock cast refused because Maya was already down.
+- Spawn: Maya spawns in Sanctuary with first-person arms, collision and a stand-in start shield (a slice choice).
+- Fight: the range's enemies notice, chase and hit Maya with a host brain. Notice radii, update rate, one kind's
+  stand distance and the swing timing come from live reads; two live reads of the swing timing disagree and the
+  record says so. The range itself is a host contrivance, and leaps and thrown rocks are not built.
+- Loot a gun: range kills roll their loot in the host at the stock chance. Unforced, a gun dropped after 20 to 41
+  kills. The pickup card and the use key take the aimed drop.
+- Equip: the gate equips through the call the inventory page uses. The page's own equip is covered by the
+  inventory suite.
+- Phaselock: bought on the skills page and cast on a range enemy; the critic's visual score is 5.1 to 5.7 of 10,
+  not parity.
+- One mission: the Fire mission runs from accept to turn-in in the gate and in the quest suite, and its event
+  order in the VM was compared with one live trace (45 events matched, 2 out of order, 4 extra).
+- Die and respawn: Maya is downed by the range's enemies, bleeds out (12 s) and respawns at the decoded station
+  with full health. Which station the game picks, the steps of the respawn wait and what is refilled are read from
+  the game's script but not yet confirmed in a live session.
 
 ---
 
