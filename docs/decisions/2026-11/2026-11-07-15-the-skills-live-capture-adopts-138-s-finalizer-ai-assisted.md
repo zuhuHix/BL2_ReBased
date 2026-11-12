@@ -1,0 +1,6 @@
+## 2026-11-07: the skills live capture adopts #138's finalizer (AI-assisted (Claude))
+
+`tools/real_game/skills_live_capture.ps1` now ends the way `phaselock_integrity_capture.ps1` does: verified snapshots and a backup record, saves that must be blocked before any gameplay, input only while the game is in front, no restore or driver removal while any game may run, recovery that keeps both locks and prints its steps, the evidence first and `summary.json` last with the final status, earlier evidence moved aside before the run, and exit 0 only for status `completed`. Its own rule stays: a step counts only when it passed, got its evidence and has no possible mix-up, and the session also needs its grades back and a compared restore. New in the probe: `sl_stop_all()`, whose exact answer `stopped` is the only one the cleanup accepts.
+
+Checked without the game only: 11 new tests run the script's real tail with the real helpers and stand-ins for the game, and each of 24 deliberate breaks made one fail. Nothing here has run against the real game: `UNVERIFIED` until the fifth run, which is not queued. Until the Sweet Release step can see a heal, a full run ends `incomplete` on that step, by design.
+

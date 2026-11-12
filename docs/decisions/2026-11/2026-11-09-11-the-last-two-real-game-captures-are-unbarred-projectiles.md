@@ -1,0 +1,10 @@
+## 2026-11-09: The last two real-game captures are unbarred (projectiles, weapon parity)
+
+AI-assisted (Claude Haiku 5.5). Docs: `docs/TOOLING.md`, "Bar lifted (2026-11-09)"; `docs/verification/WEAPON_PROJECTILES.md` section 10.
+
+- **Change:** the bar on `projectiles_capture` and `weapon_parity2_capture` is lifted, so all seven scripts in the real-game migration group are unbarred. The docs and two synthetic test wordings say so; no script code changed in this entry.
+- **Why:** PR #200 made both finalizers restore through `Restore-VerifiedRoots` with one hash table. A changed or missing backup is refused, and the record and both locks stay. Manual recovery checks the manifest against the pending record. This closes the blocker recorded in "Five barred real-game scripts are unbarred" (review r1 on PR #199). Run Z44 on zuhu (2026-11-09, PR #200 head, `hud_layout_capture.ps1 -Resolutions 1280x720`) exited 0: saves identical after three restores, three changed files restored, pending record removed after the tree-hash check, and no BACKUP CHANGED, MISSING or REFUSED rows.
+- **Not verified:** neither script has run against the real game since the fix. Z44 exercised the shared restore through `hud_layout_capture`, not the two finalizers of these scripts. Each stays `UNVERIFIED` for its own capture until it has run once against the game. `projectiles_capture` last ran (2026-11-06) before the fix.
+- **Verified (synthetic, no game):** `tests/real_game_migration_test.py`, `tests/block_saves_test.py`, `tests/real_game_finalizer_recheck_test.py` and `tests/real_game_pending_test.py` (results in the PR).
+- **Review r1 on PR #203 (Luna):** a root absent at the backup that exists at cleanup is no longer removed. Both finalizers route it through `Restore-VerifiedRoots` with snapshot `absent`, which leaves it and reports `created during the run; left for the maintainer`; the saves line reads NOT IDENTICAL and the record and locks stay, as on the shared path. Executed case: `tests/real_game_finalizer_recheck_test.py`.
+

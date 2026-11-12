@@ -1,0 +1,5 @@
+## 2026-11-06: Generated guns carry the damage stack
+
+AI-assisted (Claude). `tools/weapon_gen_parity.py` reported `gun.card.damage_stack` as its only mismatch: the Python card has had the field since 529e8bb (2026-10-07), the C++ generator never did. It looked like a Python-only field to exclude, but `AOpenWillowWalker::ShotDamage` uses those terms to add the level-up's timed Scale and skill modifiers to the real sum. Without them rolled guns took the host's stand-in, card damage x (1 + s), which the code itself says overstates. So the generator now emits the terms and `ToItem` fills them, and the parity tool compares `damage_stack` rather than excluding it. (It still excludes `fun_stats_lines`, as before.)
+
+Verified: parity over all 249 balances, 2 seeds, 0 mismatches of 319,381 compared fields, `PARITY PASSED`; synthetic test that the terms rebuild the card damage. The firing test rolls a gun whose stack and the stand-in disagree and checks `ShotDamage` with no, a running and an expired Scale (host result pending its batch). No manifest change. `UNVERIFIED`: a rolled gun's damage under a skill, and all of this in the running game.

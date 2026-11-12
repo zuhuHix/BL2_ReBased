@@ -1,0 +1,11 @@
+## 2026-11-10: One equip per gate draw; the door and Marcus's lines are positioned (slice audio lane, polish)
+
+AI-assisted (Claude Opus 5.5). Evidence: the listening run of 2026-11-10 (ignored, local `run.log`, `cues.json`): two `equip` plays and two "equipped slot 4" lines in one frame when the gate readied the lent pistol. Record: `docs/verification/SLICE_AUDIO_CHAIN.md` section 5d.
+
+- **Doubled equip (gate only).** `UOpenWillowSliceGate::EquipAndDraw` called `EquipItem`, which draws when the destination is the held slot, and then `DrawItemById`, which drew again. With all slots full the gate equipped into the held last slot. The gate now draws only when the item is not already held and out. `SelectSlot` and `EquipItem` are unchanged, so the slot keys and the inventory page play equip as before. The walker counts draws (`GetDrawCount`) and `EquipAndDraw` fails its link unless exactly one draw happened.
+- **Positioned sounds.** `OpenWillowAudio::Play` takes an optional component; with it the sound is attached there (`SpawnSoundAttached`) with the engine's default attenuation settings (one transient `USoundAttenuation`; a sound with none is not spatialized). Used for `door_open` / `door_close` (the mover's door mesh) and for `line:` roles the VM gave to Marcus's registered talker (not echo callers). Maya's fire, hit, reload, equip, pickup and Phaselock sounds stay 2D. The `OWAUDIO play` line gains ` at=<actor>` for positioned sounds only. Falloff, spread and reverb are host choices, **UNVERIFIED** against the game; no reverb is applied.
+- **Recording.** The recorder captures the mix at the listener (Maya's camera), so LISTEN.md's levels for door and line cues depend on her distance. The listening guide says so.
+- **Unchanged without sound.** Without `-owaudioplay` `Play` returns on its flag first and nothing new is logged.
+- **Verified (automated):** the UE module build through the audio-polish slot, ctest, `verify_packages.py`, `tests/prepare_slice_audio_test.py`, `tests/listen_report_test.py` (results in the PR).
+- **Not verified:** no editor or game run, nothing heard. The draw-count check, the attached sounds and the ` at=` log are UNVERIFIED in the engine until the next gate, mover and listening runs.
+

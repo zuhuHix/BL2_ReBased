@@ -1,0 +1,8 @@
+## 2026-11-08: The mission page turns the view onto Marcus, a stand-in fitted to the real frames; UNVERIFIED (mission camera lane)
+
+AI-assisted (Claude Opus 5.5). Record: `docs/verification/MISSION_SCREEN.md`, "The camera on the giver".
+
+- **Change:** while the mission page is shown, the camera stays at Maya's eye, zooms by a fixed factor and turns, with no roll, so that Marcus's head bone lands on a fixed screen point; the control rotation is left alone and every close gives the view back. New `OpenWillowFocusCam`, called from `UOpenWillowQuest::TickFocusCamera`. The numbers are measured from real frames and stay in ignored `local/slice/mission_focus_camera.json`; without it the view is unchanged.
+- **Evidence:** the real offer, turn-in and reward frames against the closed frames from the same stand, and the installed script's `BeginFocus`/`EndFocus` around the screen. The native focus camera was not read, so whether the real one zooms or moves in, and its aim point, are open. The probe now records the camera, Marcus's head and focus settings, and a per-tick trace across each open and close, for the real-game run that settles it.
+- **Suite:** the mission page suite stands 110 uu from Marcus, the stand our real-game capture used (a test setup distance, not a game value; was 150), and has six new camera rows, the last a forced quest failure with the page up (`tools/check_mission_page.py` expects 33). Every close of the page, and a quest failure, gives the view back.
+- **Checked:** synthetic tests only when written (`OpenWillow.FocusCam`, the probe's geometry, the checker). No parsing behaviour changed.

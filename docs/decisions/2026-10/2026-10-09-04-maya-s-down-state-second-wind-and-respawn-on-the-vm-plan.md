@@ -1,0 +1,8 @@
+## 2026-10-09: Maya's down state, second wind and respawn on the VM (plan step S-f)
+
+AI-assisted (Claude), lane Sf. The installed `WillowPawn.HandleHealthDepleted` -> `PlayInjured` -> `injured` state runs on the VM from a lethal swing; its state-level script is two bytes (no
+`Sleep`, no labels), so it is `BeginState`/`Tick`/`EndState` and needed no latent facility. `--combat-run` gained `cash:<amount>` and `bleed:<seconds>[:<dt>]` (frames; Maya's `Tick`, the script's own death camera each frame, and the live delays for the special move end 2.28 s, the death animation end 0.84 s and the respawn dialog 11.8 s as
+labelled stand-ins); `src/combat_down.cpp` binds the down natives (UNVERIFIED role-level stand-ins), the evaluator got a controller context resolver and a currency value resolver (UNVERIFIED), `CMakeLists.txt` got the new source. Results: the stock script gives bleed-out 12 / 12 / 8 s for injuries 1 / 2 / 3 (the counter is updated at the end of `BeginState`;
+the old note's `total / 3 x N` used the counter after the injury; no native differs), 12 / 8 / 4 / 1 for a first injury within 30 s of game time 0; second wind health 0.25 of the maximum; fee 190 / 177 / 165 on 2,715 / 2,534 / 2,357; death camera 5.75 to 5.78 s (live 5.76), `verify_combat_pawn --vm` 55 PASS / 0 FAIL / 4 MISSING. Verified only as
+"the VM reproduces the live row". Not done: timers, protection timer, shields, station choice (a bare `PlayerStart` stands in), injured behaviors, Defense Boost. Slice unchanged (`--slice-run` byte-identical). Correction to NATIVE_DAMAGE_DEATH.md 10.2 and COMBAT_GOLDEN_TRACE.md question 6 (the cut is applied to the counter before the injury).
+
