@@ -808,6 +808,77 @@ class ReadingsLoopTest(unittest.TestCase):
         self.assertIs(row['target']['parts'], money.DefinitionData)
 
 
+    def probe(self, **extra):
+        """cash_probe.py in a namespace of stand-ins: two money pickups, the nearer first."""
+        class Obj:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+        self.Obj = Obj
+        ns = {}
+        path = ROOT / 'tools/real_game/scripts/cash_probe.py'
+        exec(compile(path.read_text(encoding='utf-8'), str(path), 'exec'), ns)
+        at = lambda x: Obj(X=x, Y=0.0, Z=0.0)
+        money = Obj(DefinitionData=Obj(BalanceDefinition='GD_Invented.Currency_Money_Little'), ExpLevel=7, GameStage=7)
+        pickups = [Obj(Name=f'WillowPickup_{n}', _path_name=lambda n=n: f'Ice_P.TheWorld:PersistentLevel.WillowPickup_{n}', Location=at(x),
+                       Inventory=money, Physics=2, bCollideActors=True, bHidden=False, bDeleteMe=False) for n, x in ((1, 100.0), (2, 900.0))]
+        self.cash = 100
+        player = Obj(Location=at(0.0), GetExpLevel=lambda: 8)
+        pri = Obj(GetCurrencyOnHand=lambda n: self.cash)
+        ns.update(unrealsdk=Obj(find_all=lambda cls: list(pickups), make_struct=lambda kind, **kw: Obj(**kw)),
+                  get_pc=lambda: Obj(Pawn=player, PlayerReplicationInfo=pri), _p=lambda v, depth=0: v, _g=lambda o, n, d=None: getattr(o, n, d))
+        ns.update(extra)
+        return ns, pri
+
+    def test_a_try_that_raises_before_its_end_does_not_bring_the_pickup_back(self):
+        # Review of #251, note 8: the skip was recorded at the end of a try, so a try that raised before it retried the same pickup and
+        # "6 distinct pickups" could be untrue. It is recorded when the try starts.
+        ns, pri = self.probe()
+        self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_1')
+        pri.GetCurrencyOnHand = lambda n: (_ for _ in ()).throw(RuntimeError('invented: no cash read'))
+        with self.assertRaises(RuntimeError):
+            ns['cp_collect_end']()
+        pri.GetCurrencyOnHand = lambda n: self.cash
+        self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_2')
+
+    def test_the_touch_counter_is_an_observer_and_a_missing_function_is_not_fatal(self):
+        # Review of #251, note 6: installed in every cash run (with or without a watch), outside the watch's groups. It counts the calls
+        # before them, reads nothing, never blocks or changes them; a build without the function reports it and the run goes on.
+        added = []
+
+        class Untouchable:
+            def __getattr__(self, name):
+                raise AssertionError(f'the observer read {name}')
+        ns, _ = self.probe()
+        Obj = self.Obj
+        ns.update(Type=Obj(PRE='pre'), has_hook=lambda *a: False, add_hook=lambda *a: added.append(a), _declared_paths=lambda c, f: [],
+                  cb_mods_off=lambda: [])
+        ns['unrealsdk'].find_object = lambda kind, path: (_ for _ in ()).throw(ValueError('invented: no such function'))
+        started = ns['cp_start']()
+        self.assertIn('not installed', ns['CP']['touch_hook'])
+        self.assertEqual(added, [])
+        self.assertIn('mods_off', started)   # the start went on
+        ns['unrealsdk'].find_object = lambda kind, path: object()
+        ns['cp_start']()
+        self.assertEqual(ns['CP']['touch_hook'], 'installed')
+        self.assertEqual([(a[0], a[1], a[2]) for a in added], [(ns['CP_TOUCH'], 'pre', ns['CP_TOUCH_ID'])])
+        before = ns['CP']['touches']
+        self.assertIsNone(added[0][3](Untouchable(), Untouchable(), None, Untouchable()))   # returns None: the call goes on unchanged
+        self.assertEqual(ns['CP']['touches'], before + 1)
+
+    def test_cp_died_reads_fields_and_never_calls_one(self):
+        # Review of #251, note 6: a field that turns out to be a function is skipped, never called.
+        ns, _ = self.probe()
+        called = []
+        pawn = self.Obj(bDeleteMe=False, bPlayedDeath=lambda: called.append('bPlayedDeath') or True)
+        ns['_find_ai'] = lambda name: pawn
+        self.assertFalse(ns['cp_died']('WillowAIPawn_2'))
+        self.assertEqual(called, [])
+        pawn.bPlayedDeath = True
+        self.assertTrue(ns['cp_died']('WillowAIPawn_2'))
+        ns['_find_ai'] = lambda name: None   # gone
+        self.assertTrue(ns['cp_died']('WillowAIPawn_2'))
+
+
 class LoadWaitTest(unittest.TestCase):
     """The save's load after the menu's Enter (Wait-PlayerPawn in realgame.ps1, session 2 of 2026-11-12): the game may sit on the menu creating
     its online session; the capture waits for the pawn within named bounds, and a run that fails there stops nothing it never loaded."""

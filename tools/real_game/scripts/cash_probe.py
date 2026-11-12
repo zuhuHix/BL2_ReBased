@@ -262,6 +262,10 @@ def cp_collect_start():
     me = get_pc().Pawn.Location
     items.sort(key=lambda i: math.dist((me.X, me.Y, me.Z), (i[0].Location.X, i[0].Location.Y, i[0].Location.Z)))
     pk, inv, balance = items[0]
+    # Skipped from now on, before anything else is read or moved: a try that raises half way (its end never comes) cannot bring the same
+    # pickup back, so the loop's "distinct pickups" stays true. A pickup that gave a reading is gone, so skipping it costs nothing.
+    if pk.Name not in CP["skip"]:
+        CP["skip"].append(pk.Name)
     CP["pending"] = {"before": cp_cash(), "target": _item_row(pk, inv, balance), "present": [i[0].Name for i in items],
                      "levels": {i[0].Name: _g(i[1], "ExpLevel") for i in items}, "touches_before": CP.get("touches", 0),
                      "where_before": _where(pk)}
@@ -287,9 +291,8 @@ def cp_collect_end():
     row["where_before"] = pending.get("where_before")
     left = [i[0] for i in _money_pickups() if i[0].Name == target]
     row["where_after"] = _where(left[0]) if left else None
-    if row["value_per_item"] is None and target not in CP["skip"]:
-        CP["skip"].append(target)   # not retried: the next try takes another pickup
-        row["skipped_from_now"] = True
+    if row["value_per_item"] is None:
+        row["skipped_from_now"] = True   # not retried (recorded at the start of the try): the next try takes another pickup
     CP["real"].append(row)
     CP["pending"] = None
     return row
