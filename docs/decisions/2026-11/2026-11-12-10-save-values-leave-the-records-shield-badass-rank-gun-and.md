@@ -23,15 +23,14 @@ Edits: docs/decisions/2026-10/2026-10-09-06-real-game-lane-l9-bullymong-awarenes
 Edits: docs/decisions/2026-11/2026-11-03-16-accuracy-pool-view-kick-and-spread-from-live-reads-slice.md
 Edits: docs/decisions/2026-11/2026-11-06-19-maya-throws-the-stock-grenade-mod-on-g-slice-projectiles.md
 Edits: docs/decisions/2026-11/2026-11-06-20-the-frag-s-contact-fuse-and-falloff-come-from-its-behaviour.md
-Edits: docs/decisions/2026-11/2026-11-07-19-the-stand-in-shield-rule-takes-the-maintainer-s-numbers-maya.md
 
 In each of these only the save value changed, and nothing else: the level-45 trace's experience total (now "between the
 level-45 and level-46 thresholds"; the next-level value is the curve's and stays), her own shield's delay, rate and boost
 (now "its own delay and rate", "0.5 x the capacity per second"), the level-up damage pair and scale sums (now "+1.0 on the
 existing sum"), the grenade modifier, the pellet damage and the health trail it gives (now "three equal steps, the live trail
 to 0.01"), the killing pellet's health result, the Badass Rank scale and the prediction built on it, the respawn fees with
-the cash they were charged on (the 0.07 half-up rule and the three live respawns stay), the shotgun's kind, the grenade mod's
-name and the old stand-in shield value.
+the cash they were charged on (the 0.07 half-up rule and the three live respawns stay), the shotgun's kind and the grenade mod's
+name.
 
 - Records: `COMBAT_GOLDEN_TRACE.md`, `COMBAT_DOWN_RESPAWN.md`, `NATIVE_LEVEL_UP_ATTRIBUTES.md`, `NATIVE_DOWN_TIMERS.md` (an
   example maximum of 500 in place of the save's), `NATIVE_PROGRESSION.md`, `AI_MELEE_TARGETING_LIVE.md`,
@@ -48,9 +47,9 @@ name and the old stand-in shield value.
 - Two references to the session of 2026-11-12 now give its full condition: every SDK mod of the session's list off as read
   in the game, with Quick Startup on (`SANCTUARY_RPG_MISSION.md`, `COMBAT_DOWN_RESPAWN.md`).
 
-Not changed here: the host's default shield values in `OpenWillowMayaState.h` and the sentences that state them
-(`COMBAT_DOWN_RESPAWN.md`, the recharge bullet's stand-in sentence; the 2026-11-03-11 decision), which another change
-replaces; comments under `host/`; the checker `tools/verify_combat_pawn.py` (a comment); and values that give a save value
+Not changed here: the host's default shield values in `OpenWillowMayaState.h` and the records that state them or the old
+stand-in capacity (`COMBAT_DOWN_RESPAWN.md`, the recharge bullet and the capacity correction; the 2026-11-03-11 and
+2026-11-07-19 decisions), which another change rewrites; comments under `host/`; the checker `tools/verify_combat_pawn.py` (a comment); and values that give a save value
 back only through a ratio or a damage chain (the 0.7589 damage factor, the live damages that factor gives, the grenade splash
 amounts), and the kinds of six of the player's own weapon cards in `WEAPON_BALANCE_DECODE.md` and
 `NATIVE_WEAPON_RULES.md` (that record's results are set out by those kinds; its per-card values were already private). Those
