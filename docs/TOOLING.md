@@ -1514,9 +1514,11 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   way. With `-SdkModsExpected`, any other set of enabled settings is refused before anything is written. `cash_capture` also stops
   before its first kill if a loot mod still answers in memory.
 - **`cash_capture -DenDown`**: one more den trial with the run's own immunity hook removed (checked path by path), so the pack downs
-  Maya with no input and she bleeds out and respawns. While she stays up and unhit for `-ReplaceAfterSeconds` (10), she is placed at
-  the pack again, at most `-MaxReplacements` (4) times inside `-DownSeconds` (150), and never once a down was seen. The snapshot is
-  labelled by what fired. `-WatchSmoke` is the smoke item: one deliberately early snapshot and one settle wait, reads only.
+  Maya with no input and she bleeds out and respawns. While she stays up and her health has not fallen for `-ReplaceAfterSeconds`
+  (20), whatever the shield does, she is placed at the pack again, at most `-MaxReplacements` (4) times inside `-DownSeconds` (240),
+  and never once a down was seen. The enemy is the strongest kind in reach, from the pawn's `AIClass` field: the adult first, then the
+  regular, the slinger, any other kind and the baby last. (Before the session analyses' change B: 150 s, 10 s of health plus shield,
+  the nearest enemy.) The new rule is `UNVERIFIED` in the game until a session runs it. The snapshot is labelled by what fired. `-WatchSmoke` is the smoke item: one deliberately early snapshot and one settle wait, reads only.
 - **Bounded load wait** (`Wait-PlayerPawn`, `-MenuWaitSeconds` 240, `-LoadWaitSeconds` 240): while the game is still on the menu map
   (its online session) the capture reads every 5 s, then gives the load a bounded time. Each read, and each pause between reads,
   lasts only as long as the time left in its bound, and a reply after the bound is not taken and changes nothing, so the step ends

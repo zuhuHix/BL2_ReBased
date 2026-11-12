@@ -402,3 +402,7 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
   getters, reached by `cp_target` and `dp_begin`; `cp_ready_kill`'s `SetHealth(1.0)`; `_values` on a pickup's item). All three ran
   in the six `cash_capture` items of 2026-11-12 with 0 game crashes; that is a record, not proof against a crash
   (`docs/TOOLING.md`, "What the fields-only rule binds").
+- **The den down's rule changed after the sessions** (`docs/TOOLING.md`, "Slice-session switches"): a 240 s window, a re-placement
+  when her health (not the shield) has not fallen for 20 s, and the strongest kind in reach first, by AI class. In session 2 the one
+  re-placement that ran (150 s window, health plus shield, the nearest enemy) brought no down; whether the new rule does is
+  `UNVERIFIED` until a session runs it, and the smoke item runs first at that commit.
