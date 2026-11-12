@@ -98,7 +98,7 @@ $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mod
 $snapshots = @{}
 $roots = [ordered]@{ SaveData = (Join-Path $script:WillowDir 'SaveData'); Config = (Join-Path $script:WillowDir 'Config') }
 foreach ($d in $extraRoots.Keys) { $roots[$d] = $extraRoots[$d] }
-$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors') + $(if ($WatchSpec) { @('watch') } else { @() })
+$stagesRequested = @('hooks', 'start', 'offer', 'offer_keys', 'accept', 'ready', 'turnin', 'reward', 'reward_keys', 'reward_taken', 'closed', 'camera') + $(if ($SkipRespawn) { @() } else { @('respawn') }) + @('hook_errors') + $(if ($WatchSpec) { @('watch') } else { @() })
 $stagesDone = New-Object Collections.Generic.List[string]; $stageProblems = New-Object Collections.Generic.List[string]; $runError = ''
 $log.status = 'running'; $log.requested_stages = $stagesRequested
 function Set-Stage([string]$Stage, [bool]$Passed, [string]$Why) { if ($Passed) { $stagesDone.Add($Stage) } else { $stageProblems.Add("${Stage}: $Why") } }
@@ -237,6 +237,9 @@ try {
     if ($after.open) { $after = Test-Key 'after' 'Esc' }
     Set-Stage 'closed' ($after.open -eq $false) 'the screen is still open after Esc'
     $closed = Read-After 'closed_world' 1.0
+    # A camera trace that read nothing fails its stage (session 1 analysis, A1: every camera row of both runs was an error, and nothing noticed).
+    $log.camera_trace = PyJson 'ms_cam_counts()'
+    Set-Stage 'camera' ($log.camera_trace.good -gt 0) "the camera trace has $($log.camera_trace.rows) rows and none read the camera: $($log.camera_trace.first_error)"
     Py "print(ms_dump('screen'))" | Out-Null
     $log | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'session.json')
 

@@ -397,6 +397,33 @@ def test_the_capture_sees_what_each_stage_claims():
         assert f"'{stage}'" in requested, stage
 
 
+def test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails():
+    """Session 1 analysis, A1: the probe read PlayerCamera.CameraCache, which BL2's controller lacks, so every camera row was an error and
+    the focus geometry got no sample; nothing noticed. Now the player's own controller's view point and FOV, and a stage on the trace."""
+    probe = load_probe()
+    sys.modules['unrealsdk'].make_struct = lambda kind: kind
+    vec = types.SimpleNamespace(X=1.0, Y=2.0, Z=3.0)
+    rot = types.SimpleNamespace(Pitch=10, Yaw=20, Roll=0)
+    pc = types.SimpleNamespace(GetPlayerViewPoint=lambda a, b: (None, vec, rot), GetFOVAngle=lambda: 90.0)   # no PlayerCamera at all
+    probe.unrealsdk = sys.modules['unrealsdk']
+    assert probe._ms_pov(pc) == {'location': [1.0, 2.0, 3.0], 'rotation': [10, 20, 0], 'fov': 90.0}
+    fresh(probe)
+    probe.get_pc = lambda: pc
+    probe._ms_now = lambda: 1.0
+    probe.ms_cam_trace(2.0)
+    probe._ms_cam_tick()
+    assert probe.ms_cam_counts() == {'rows': 1, 'good': 1, 'first_error': None}
+    probe.get_pc = lambda: types.SimpleNamespace()   # a view point that cannot be read: an error row, and no good one
+    fresh(probe)
+    probe.ms_cam_trace(2.0)
+    probe._ms_cam_tick()
+    counts = probe.ms_cam_counts()
+    assert counts['rows'] == 1 and counts['good'] == 0 and counts['first_error'], counts
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
+    assert "Set-Stage 'camera' ($log.camera_trace.good -gt 0)" in text
+    assert "'camera'" in text[text.index('$stagesRequested = @('):].split('\n')[0]
+
+
 def test_probe_helpers():
     probe = load_probe()
     first, second = probe.MS_TEXT[0], probe.MS_TEXT[1]
@@ -416,6 +443,7 @@ def test_probe_helpers():
 
 
 if __name__ == '__main__':
+    test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails()
     test_probe_helpers()
     test_the_movie_is_a_path_cleared_on_both_close_paths()
     test_a_mission_status_alone_is_not_a_reward_page()

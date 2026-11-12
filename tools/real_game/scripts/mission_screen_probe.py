@@ -130,8 +130,11 @@ def _ms_vec_any(v):
 
 
 def _ms_pov(pc):
-    pov = pc.PlayerCamera.CameraCache.POV
-    return {"location": _ms_vec(pov.Location, 1), "rotation": _ms_rot(pov.Rotation), "fov": pov.FOV}
+    """The player's own view: GetPlayerViewPoint fills its two out parameters (location, rotation) and GetFOVAngle gives the field of view,
+    both on the player's own controller, as scene_owners.py reads them. BL2's controller has no PlayerCamera.CameraCache to read: in both
+    runs of session 1 (2026-11-12) every camera row was that error (session 1 analysis, A1)."""
+    _, location, rot = pc.GetPlayerViewPoint(unrealsdk.make_struct("Vector"), unrealsdk.make_struct("Rotator"))
+    return {"location": _ms_vec(location, 1), "rotation": _ms_rot(rot), "fov": round(pc.GetFOVAngle(), 3)}
 
 
 def _ms_viewport(pc):
@@ -372,11 +375,18 @@ def _ms_cam_tick():
     cam["n"] += 1
     row = {"t": _ms_now(), "tag": "cam"}
     try:
-        pov = get_pc().PlayerCamera.CameraCache.POV
-        row["cam"] = [_ms_vec(pov.Location, 1), _ms_rot(pov.Rotation), pov.FOV]
+        view = _ms_pov(get_pc())
+        row["cam"] = [view["location"], view["rotation"], view["fov"]]
     except Exception as e:
         row["error"] = repr(e)[:100]
     MS["rows"].append(row)
+
+
+def ms_cam_counts():
+    """The camera trace's rows, how many read the camera, and the first error: a trace with no good row fails its stage."""
+    rows = [r for r in MS["rows"] if r.get("tag") == "cam"]
+    good = [r for r in rows if "cam" in r and "error" not in r]
+    return {"rows": len(rows), "good": len(good), "first_error": next((r["error"] for r in rows if "error" in r), None)}
 
 
 def ms_cam_trace(seconds):
@@ -465,7 +475,7 @@ def ms_read(label):
             row[key + "_error"] = repr(e)[:100]
     # The camera, the viewport and Marcus, each field on its own, so the focus geometry can be checked against the head and the eyes.
     _ms_try(row, "camera", lambda: _ms_pov(pc))
-    _ms_try(row, "camera_fov_default", lambda: pc.PlayerCamera.DefaultFOV)
+    _ms_try(row, "camera_fov_default", lambda: pc.DefaultFOV)   # the controller's own field (there is no PlayerCamera to ask)
     _ms_try(row, "focus_object", lambda: _ms_p(pc.FocusObject))
     _ms_try(row, "viewport", lambda: _ms_viewport(pc))
     marcus_path = globals().get("MARCUS_PATH")
