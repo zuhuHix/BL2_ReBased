@@ -491,7 +491,7 @@ float AOpenWillowWalker::ShotDamage(const FOpenWillowWeaponItem& Weapon, float N
     // Skills lane hook: the trained skills' WeaponDamage modifiers join the weapon's own stack (OpenWillowSkillEffects.h).
     const FOpenWillowModifierStack Skill = OpenWillowSkillEffects::Stack(this, OpenWillowSkillEffects::Attr::WeaponDamage);
     if (Scale == 0.f && Skill.IsEmpty()) return Weapon.Damage;
-    // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: a +1.0 Scale joined the existing sum; the amounts are in the maintainer's private record): the Scale joins the up-sum.
+    // The stack rule (NATIVE_ATTRIBUTES.md section 3; observed in game: a +1.0 Scale joined the existing sum and the damage changed by the ratio of the two sums; the amounts are in the maintainer's private record): the Scale joins the up-sum.
     if (Weapon.bHasDamageStack)
         return (Weapon.DamageBase + Weapon.DamagePreAdd + Skill.PreAdd) * (1.f + Weapon.DamageScaleUp + Scale + Skill.ScaleUp)
             / (1.f + Weapon.DamageScaleDown - Skill.ScaleDown) + Weapon.DamagePostAdd + Skill.PostAdd;
