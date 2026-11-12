@@ -254,8 +254,12 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
         catch { Set-Stage 'watch' $false "$_" }
     }
     # The game may close before it answers this one.
-    try { Invoke-GamePy 'ae_remove(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
-    for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
+    # Nothing is sent to a driver that stopped answering: the finalizer stops this run's own game by its PID, and the restore never needs the driver.
+    if (Get-DriverLostReason) { "quit not sent: the driver stopped answering ($(Get-DriverLostReason))" }
+    else {
+        try { Invoke-GamePy 'ae_remove(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+        for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
+    }
 } catch {
     $runError = "$_"
     throw
@@ -268,9 +272,12 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
     $cleanup.inputs = Release-HeldInputs   # every key and button this run still holds is let go before anything else
     # A throw can leave this run's logging hooks and the player's protection on: stop them while the game can still answer.
     if ($proc -and !$proc.HasExited) {
-        # Py returns a traceback as text, so only the exact answer counts.
-        try { $reply = Py 'ae_remove(); protect_player(False); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
-        catch { $cleanup.hooks = "not stopped: $_" }
+        # Py returns a traceback as text, so only the exact answer counts. Nothing is sent to a driver that stopped answering.
+        if (Get-DriverLostReason) { $cleanup.hooks = "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
+        else {
+            try { $reply = Py 'ae_remove(); protect_player(False); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+            catch { $cleanup.hooks = "not stopped: $_" }
+        }
     }
     $gameGone = $true
     if ($proc) {

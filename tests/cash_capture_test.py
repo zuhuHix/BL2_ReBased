@@ -161,7 +161,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             $missing = if ($scenario -eq 'den_unanswered') { '["first-blow spread: no counted trial had blows from two attackers"]' } else { '[]' }
             return '{"summaries": [{"counts": true}], "missing": ' + $missing + '}'
         }
-        '*quit*' { if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
+        '*quit*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'quit'; if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
         default { return 'None' }
     }
 }
@@ -698,7 +698,9 @@ class DenDownReplacementTest(unittest.TestCase):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
         done, session = self.run_capture('end_snap_lost', ['-WatchSpec', str(spec)])
-        self.assertEqual(self.sent(), [])   # neither sw_dump nor sw_stop, not even in the finalizer
+        self.assertEqual(self.sent(), [])   # neither sw_dump nor sw_stop nor quit, not even in the finalizer
+        self.assertEqual(session['cleanup']['game'], 'stopped')   # the finalizer stopped this run's own game by its PID
+        self.assertEqual(session['cleanup']['saves'].split(' to ')[0], 'identical')   # and the restore did not need the driver
         self.assertIn('the driver stopped answering at the end snapshot', session['stage_results']['watch'])
 
     def test_a_lost_reply_to_the_trial_close_fails_the_den_down(self):

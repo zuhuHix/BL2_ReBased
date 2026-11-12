@@ -42,6 +42,8 @@ $script:SliceWatchError = 'not started'
 # One driver-lost condition for the whole run: the first reply that never came (a timeout) sets it, and from then on no helper here talks to
 # the driver again; the capture checks it before every later stage and its usability check (Get-DriverLost in cash_capture).
 $script:SliceWatchDriverLost = ''
+# The same condition for a capture's own steps and finalizer: why the driver counts as lost, or empty.
+function Get-DriverLostReason { $script:SliceWatchDriverLost }
 function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
 # Load the recorder into the capture's output folder (the same RG_OUT as the capture's own probes) and start it: it writes <OutFolder>/watch.jsonl.
 # Returns its answer (how many hooks resolved, which names did not), or an object with only 'error' when it did not start. After a failed or

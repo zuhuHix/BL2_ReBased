@@ -487,9 +487,10 @@ def test_the_tail_is_the_helper_branch_one_but_for_the_hooks_it_stops():
     comment = ("    # A throw between pi_start and pi_stop leaves the per-frame hook reading a held pawn into shutdown: stop it while the game can still answer.\n",
                "    # A throw can leave this run's logging hooks and the player's protection on: stop them while the game can still answer.\n")
     # Since session 2 of 2026-11-12 the other script stops each probe only if it was loaded ('nothing to stop' otherwise); this one is unchanged.
-    call = ("""        # Each stop only if its probe was loaded; a run that failed before the probes has nothing to stop, which is a result, not an error.
-        try { $reply = Py "fs = [globals().get(n) for n in ('pi_stop', 'unmark_lock')]; [f() for f in fs if f]; print('stopped' if any(fs) else 'nothing to stop')" 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } elseif ($reply -ceq 'nothing to stop') { 'nothing to stop: never loaded' } else { "not stopped: $reply" } }
-""", """        try { $reply = Py 'ae_remove(); protect_player(False); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
+    # Since round 2 of the review of #245 both stop blocks sit behind the same driver-lost gate, one level deeper.
+    call = ("""            # Each stop only if its probe was loaded; a run that failed before the probes has nothing to stop, which is a result, not an error.
+            try { $reply = Py "fs = [globals().get(n) for n in ('pi_stop', 'unmark_lock')]; [f() for f in fs if f]; print('stopped' if any(fs) else 'nothing to stop')" 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } elseif ($reply -ceq 'nothing to stop') { 'nothing to stop: never loaded' } else { "not stopped: $reply" } }
+""", """            try { $reply = Py 'ae_remove(); protect_player(False); print("stopped")' 5; $cleanup.hooks = if ($reply -ceq 'stopped') { 'stopped' } else { "not stopped: $reply" } }
 """)
     assert theirs.count(comment[0]) == 1 and theirs.count(call[0]) == 1
     assert ours == theirs.replace(*comment).replace(*call)

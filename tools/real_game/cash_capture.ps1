@@ -434,8 +434,12 @@ try {
         catch { Set-Stage 'watch' $false "$_" }
     }
     $log.shot = Save-Shot 'cash/shot.png'
-    try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
-    for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
+    # Nothing is sent to a driver that stopped answering: the finalizer stops this run's own game by its PID, and the restore never needs the driver.
+    if (Get-DriverLost) { "quit not sent: the driver stopped answering ($(Get-DriverLost))" }
+    else {
+        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+        for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
+    }
 } catch {
     $runError = "$_"
     "run error: $runError"

@@ -503,6 +503,15 @@ class QuitWaitTest(unittest.TestCase):
             self.assertIn('!$proc.HasExited', wait, name)
             self.assertNotIn('Get-GameProcess', wait, name)
 
+    def test_no_quit_is_sent_to_a_lost_driver(self):
+        # Review of #245, round 2: after the watch had found the driver lost, the captures still queued quit and waited on it.
+        for name, flag in (('mission_screen_capture', '(Get-DriverLostReason)'), ('audio_events_capture', '(Get-DriverLostReason)'),
+                           ('phaselock_integrity_capture', '(Get-DriverLostReason)'), ('cash_capture', '(Get-DriverLost)')):
+            lines = (ROOT / f'tools/real_game/{name}.ps1').read_text(encoding='utf-8').splitlines()
+            at = next(i for i, line in enumerate(lines) if 'ConsoleCommand("quit", False)' in line)
+            self.assertEqual(lines[at - 2].strip()[:len('if ' + flag)], 'if ' + flag, name)   # the gate, then else {, then the quit
+            self.assertEqual(lines[at - 1].strip(), 'else {', name)
+
 
 if __name__ == '__main__':
     unittest.main()

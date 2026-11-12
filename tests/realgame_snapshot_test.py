@@ -130,6 +130,7 @@ def test_helpers():
 TAIL = r"""
 $ErrorActionPreference = 'Stop'
 . '__REALGAME__'
+. (Join-Path (Split-Path -Parent '__REALGAME__') 'slice_watch.ps1')   # as each capture loads it: the finalizer reads its driver-lost condition
 $script:WillowDir = '__TMP__\willow'   # synthetic: test mode refuses pending records over the real save folders
 function Restore-VerifiedRoots {
     if (__CLEAN__) { [pscustomobject]@{ rows = @(); summary = 'identical to bak after 0 restores'; clean = $true } }
@@ -221,6 +222,9 @@ def test_a_failed_run_stops_the_hooks_while_the_game_is_alive():
     assert 'cleanup hooks: not stopped' in done.stdout and 'cleanup game:' in done.stdout, done.stdout    # the rest of the cleanup still runs
     done = run_tail("$stagesDone.Add('hit')", True, '[pscustomobject]@{ HasExited = $true; Id = 1 }', stubs=calls.replace('__FAILS__', '$true'))
     assert 'py:' not in done.stdout and 'cleanup hooks' not in done.stdout, done.stdout   # an exited game is not asked
+    # Review of #245, round 2: once the driver counts as lost, the finalizer sends it nothing; the game is stopped by its PID.
+    done = run_tail("$script:SliceWatchDriverLost = 'no reply to c-invented'; throw 'boom'", True, alive, stubs=calls.replace('__FAILS__', '$false'))
+    assert 'py:' not in done.stdout and 'cleanup hooks: not sent: the driver stopped answering' in done.stdout and 'cleanup game:' in done.stdout, done.stdout
 
 
 def test_a_game_this_run_did_not_start_stops_the_restore_and_holds_the_locks():
