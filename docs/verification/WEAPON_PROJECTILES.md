@@ -350,7 +350,7 @@ the run.
 
 **Limits of this session.** The probe's equip step left the save's own shotgun in hand for every
 run, so all the numbers below come from that one gun. Maya's skills were active: a skill modifier on the weapon's
-`PerShotAccuracyImpulse` lowered the shotgun weapon type's 11 (the read value is in the maintainer's private record). The rules below are ratios and orders of events, which these
+`PerShotAccuracyImpulse` lowered the shotgun weapon type's 11 (the type and the read value are in the maintainer's private record). The rules below are ratios and orders of events, which these
 facts do not change; per-gun values come from the data (`accuracy_pool` in the firing block) and are `UNVERIFIED` live.
 
 | Rule | Status |

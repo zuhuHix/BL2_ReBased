@@ -61,5 +61,5 @@ kind and the grenade mod's name.
 Not changed here: the host's default shield values in `OpenWillowMayaState.h` and the records that state them or the old
 stand-in capacity (`COMBAT_DOWN_RESPAWN.md`, the recharge bullet and the capacity correction; the 2026-11-03-11 and
 2026-11-07-19 decisions), which `2026-11-12-09-the-host-s-default-shield-recharge-becomes-an-invented-stand.md` rewrote
-without the save's values; and comments under `host/` and in `tools/`. With this change nothing else is deliberately left for
-a further pass.
+without the save's values. Left for one follow-up change: the save's values in comments under `host/` and `tools/`
+(comments only, checked by the hub's in-engine run). Nothing else is deliberately left for a further pass.

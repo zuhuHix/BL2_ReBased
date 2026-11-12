@@ -89,7 +89,7 @@ weapon's own part effects set (1.0 to 2.6 here). "Observed" is the first sampled
 | slice Hyperion SMG (`SMG_Barrel_Maliwan`) | `Bullet_SMG_Default` | Bullet | 1 | 20,000 x 1.6 = 32,000 | 0.714 deg | none |
 | slice Jakobs assault rifle (`AR_Barrel_Vladof`) | `Bullet_Assault_Default` | Bullet | 1 | 25,000 x 1.3 = 32,500 | 1.5 deg | none |
 | slice Bandit shotgun (`SG_Barrel_Jakobs`) | `Bullet_Shotgun_Default` | Bullet | 10 | 20,000 x 1.0 = 20,000 | 10.8 deg per pellet | 1 rectangle line, yaw -455..+455 |
-| Jakobs shotgun the save carries | same mode | Bullet | 7 | multiplier 1.5 read, bullets not sampled | 5.69 deg per pellet | same line |
+| the shotgun the save carries | same mode | Bullet | 7 | multiplier read, bullets not sampled | spread read per pellet (the type and both reads are in the maintainer's private record) | same line |
 | Hyperion shotgun (type default) | `Bullet_Shotgun_Hyperion` | Bullet | 6 | 20,000 x 1.6 = 32,000 | 6.9 deg per pellet | 1 line, **pitch** -455..+455 |
 | Torgue shotgun (type default) | `Bullets_Shotgun_Torgue_GyroJet` | Bullet | 5 to 9 | 600 start, accelerating (section 5) | 5.9 to 9.6 deg | 1 line, yaw -546..+546 |
 | Jakobs sniper (`SR_Barrel_Hyperion`) | `Bullet_Sniper_Default` | Bullet | 1 | 45,000 x 1.3 = 58,500 | 0.96 deg | none |
@@ -170,15 +170,15 @@ penetration counters and the mode; read each frame:
 in one frame as separate calls); `Momentum` is the ray direction times
 `InstantHitMomentum x 100` (length 800 for the pistol type's 8, 700 for the shotgun's 7, 1,000 for the Torgue shotgun's 10); the damage type is the
 weapon's source class (`WillowDmgSource_Pistol`, `_Shotgun`); `HitInfo` carries the bone and the physical material (`PhysMat_Flesh`). The
-shotgun's `Behavior_Explode` of the GyroJet mode added an area hit per shot (`WillowDmgSource_Grenade`, 33.998 against 39.998 per pellet, 0.85 of it;
+shotgun's `Behavior_Explode` of the GyroJet mode added an area hit per shot (`WillowDmgSource_Grenade`, 0.85 of the per-pellet damage; the amounts are in the maintainer's private record;
 the ratio is an observation on one roll, **UNVERIFIED** as a rule).
 
 **R7. Rockets (OBSERVED, 14 launcher shots, 5 designs).** `ProjectileDefinitionFire` spawns one `WillowProjectile` per rocket (the Bandit launcher
 three per shot, each with its own spread). Speed from the first sampled velocity: `ProjectileDefinition.SpeedFormula.BaseValueConstant` x the
 weapon multiplier (2,600; 5,200; 3,000 x 2.6 = 7,800; 3,000; 3,400 x 1.3 = 4,420), constant in flight (no acceleration), **not** the mode's `Speed`
 (0 on every rocket mode). Spawn point: 122 to 134 uu ahead of the eye, 17 to 31 uu to the right, 8 to 13 uu below (per gun; consistent with the
-muzzle, **UNVERIFIED** against the decoded socket). The rocket stops at the wall and explodes; direct damage at the victim was `1416.7266845703125`
-for a weapon whose `InstantHitDamage` read `1416.7266845703125` (two victims, source `WillowDmgSource_Rocket`, causer the projectile, momentum
+muzzle, **UNVERIFIED** against the decoded socket). The rocket stops at the wall and explodes; direct damage at the victim equalled the weapon's
+`InstantHitDamage` to full float precision (two victims; the amount is in the maintainer's private record; source `WillowDmgSource_Rocket`, causer the projectile, momentum
 10,000). In the data 40 of 41 referenced projectile definitions explode through `Behavior_Explode` with the attribute `D_Attributes.Projectile.ProjectileDamage`
 (the weapon's damage); 2 use `Behavior_CauseDamage` with the same attribute.
 

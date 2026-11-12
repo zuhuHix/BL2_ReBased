@@ -125,7 +125,7 @@ all. Wrong or missing pieces found:
 | sniper rifle (elemental) | reproduced (25) | yes | n/a | yes | yes | yes (3 of 25) |
 | SMG 1 | damage **1 point off**, rest yes | yes | yes | n/a | n/a | yes (somewhere) |
 | pistol (elemental) | reproduced (9) | yes | n/a | yes | yes | yes (2 of 9) |
-| SMG 2 (elemental) | fire rate, reload yes; **damage and magazine no** | yes | yes | yes | n/a | yes (somewhere) |
+| SMG 2 (elemental, legendary) | fire rate, reload yes; **damage and magazine no** | yes | yes | yes | n/a | yes (somewhere) |
 | assault rifle | reproduced (120) | 90 of 120 | n/a | n/a | n/a | yes (2 of 120) |
 
 4 of 6 cards are reproduced in every printed stat by one part set; 6 of 6 for accuracy and for
@@ -141,7 +141,7 @@ Rules now in `weapon_stats.py`, with their status:
   `WeaponBaseStatusEffectChanceModifier` * `WeaponStatusEffectChanceModifier` (class default 1);
   status damage/s = `WeaponStatusEffectDamage` (type `StatusEffectDamage` = `Init_WeaponDamage`, plus
   effects), only for damage-over-time effects. Reproduces the three elemental cards (one of them
-  through its weapon type's `PreAdd` 0.2 on status damage). Per-surface chances and duration
+  through the sniper rifle's weapon type's `PreAdd` 0.2 on status damage). Per-surface chances and duration
   are emitted for gameplay; how the native code uses them per shot (`GetFireIntervalChanceModifier`
   and friends are `native`) is **UNVERIFIED**.
 - Projectiles = `WeaponProjectilesPerShot` (type `ProjectilesPerShot` + part effects): reproduced on
@@ -164,7 +164,7 @@ Rules now in `weapon_stats.py`, with their status:
 
 - SMG 1 (`PreAdd` -0.4 on damage): one point low after rounding up. Ignoring that PreAdd,
   or applying it after scaling, would match; one card cannot decide. **Open.**
-- SMG 2: no legal combination reproduces damage and magazine together with the
+- SMG 2 (legendary): no legal combination reproduces damage and magazine together with the
   other stats; the barrel's cooked and dumped effects agree. **Open** (a runtime change to this item,
   or a missing term).
 - Launcher sale value (third launcher failing, after two on 2026-09-29). **Open.**
