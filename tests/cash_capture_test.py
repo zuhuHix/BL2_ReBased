@@ -59,7 +59,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
         '*sw_settled*' { return 'True' }
-        '*sw_snap(*' { if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
         '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
@@ -771,6 +771,14 @@ class ReadingsLoopTest(unittest.TestCase):
         done, session = self.run_capture('kills', ['-MaxKills', '4'])
         self.assertEqual(session['kill_attempts'], 4)
         self.assertEqual(session['deaths'], 2)   # every other attempt killed
+
+    def test_each_kill_attempt_is_followed_by_one_drop_snapshot(self):
+        # Session 2 analysis, A3: a labelled 'drop' snapshot after each kill's wait, so a drop's lifetime can be read from the recording.
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_capture('kills', ['-MaxKills', '3', '-WatchSpec', str(spec)])
+        drops = self.work / 'drops.txt'
+        self.assertEqual(len(drops.read_text(encoding='utf-8').split()) if drops.exists() else 0, session['kill_attempts'])
 
     def test_a_pickup_that_gave_no_reading_is_skipped_not_retried(self):
         class Obj:

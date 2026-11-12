@@ -250,6 +250,9 @@ try {
         for ($shot = 0; $shot -lt 3; $shot++) { Send-Click; Start-Sleep -Milliseconds 700 }
         $kills++   # a kill attempt; whether it killed is asked next, by the enemy's fields only
         Start-Sleep 3   # the loot lands
+        # One labelled snapshot per drop, after the wait (session 2 analysis, A3): its pickups part has each item's LifeSpan, draw scale and
+        # balance, so a drop's lifetime can be read across the recording. Reads only; the labelled cap (200) holds about 40 of these.
+        if ($WatchSpec) { Save-SliceWatchSnap 'drop' }
         if ((Py "print(cp_died('$target'))") -eq 'True') { $deaths++ }
         # The first money seen: the item's own value call at other levels, and its definition. Before any walk onto it.
         if (-not $swept -and (Py 'print(len(cp_money()))') -ne '0') {

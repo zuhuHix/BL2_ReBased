@@ -571,6 +571,28 @@ class FakeGameTest(unittest.TestCase):
             self.assertEqual(line['beyond_radius'], 1)   # the far one is counted, not read
             self.assertIsNone(row.get('ai_class'))   # a callable is never called, even where a field was expected
 
+    def test_a_drop_snapshot_reads_each_pickup_s_balance_and_forty_fit_under_the_cap(self):
+        # Session 2 analysis, A3: one labelled 'drop' snapshot after each kill; its pickups part names the item's balance (little or big
+        # money), by fields only, and about 40 of them fit under the labelled cap with the run's other labels.
+        real = watch._SwUObject
+        watch._SwUObject = FakeObject   # stand-in objects are recorded by path name, as the SDK's are
+        self.addCleanup(setattr, watch, '_SwUObject', real)
+        loc = type('V', (), {'X': 1.0, 'Y': 2.0, 'Z': 3.0})()
+        data = type('D', (), {'BalanceDefinition': FakeObject('GD_Invented.Currency_Money_Big'), 'ItemDefinition': FakeObject('GD_Invented.Money')})()
+        self.objects['WillowPickup'] = [FakeObject('Lvl.PersistentLevel.WillowPickup_4', 'WillowPickup', LifeSpan=60.0, DrawScale=1.0,
+                                                   Location=loc, Inventory=type('I', (), {'DefinitionData': data})())]
+        with RepoDir() as d:
+            watch.sw_start('t', {'pickups': True})
+            for _ in range(45):
+                snap = watch.sw_snap('drop')
+            self.assertEqual(snap['pickups'][0]['balance'], 'GD_Invented.Currency_Money_Big')
+            self.assertEqual(snap['pickups'][0]['LifeSpan'], 60.0)
+            self.assertGreaterEqual(watch.SW_LABELLED_CAP - 45, 10)   # room left for start, arrival, before_down, down, after_respawn, end
+            watch.sw_dump('watch')
+            recording = checker.load_recording(d.out / 'watch.jsonl')
+            self.assertEqual(sum(1 for x in recording['snaps'] if x.get('label') == 'drop'), 45)
+            self.assertNotIn('labelled', recording['end'].get('dropped', {}))
+
     def test_labelled_reads_past_the_cap_are_counted_as_dropped(self):
         # Review of #245: a labelled pawn read and a not-taken line past the cap were dropped without a count, so max_dropped and the
         # not-taken checks could pass on a recording that lacked them (sw_snap already counted its own).

@@ -785,6 +785,10 @@ def _sw_pickups():
                 row["item"] = _sw_p(pk.Inventory.DefinitionData.WeaponTypeDefinition)
             except Exception:
                 row["item"] = None
+        try:   # little or big money, or another item's balance: a field of the pickup's inventory (session 2 analysis, A3)
+            row["balance"] = _sw_p(pk.Inventory.DefinitionData.BalanceDefinition)
+        except Exception:
+            row["balance"] = None
         rows.append(row)
     return rows
 
