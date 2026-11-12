@@ -15,6 +15,8 @@ citizens' steps), `docs/verification/SANCTUARY_RPG_MISSION.md` (the Fire checker
   `powershell -File tools/import_phaselock_target.ps1 -Steps attach` to rerun (and `tools/prepare_range.py` refuses the result, as before).
   Not compared: each piece's mesh and transform, so a changed transform on the same bones keeps the old placement (`UNVERIFIED`). A pawn
   that wears nothing gets `attachments: []`, so the attachment check reads it as an answer and not as a missing field.
+  Only an identity entry whose `attachments` is a list is an answer: an entry without it (an `identity.json` from before 2026-11-06)
+  stops editor-job before it writes anything, naming `-Steps prepare,attach` (review r2: it had been turned into "wears nothing").
 - **`tools/phaselock_attachment_check.py` refuses a missing `attachments` field** (exit 2, naming the attach step). A missing field means
   the placements were never written or were dropped; an empty list written by the attach step stays a valid answer.
 - **`tools/prepare_ambient_world.py --compose` stops on a worn piece missing from the attach report.** Line 313 itself was not a hole: a

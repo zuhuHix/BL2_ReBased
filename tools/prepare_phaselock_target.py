@@ -324,6 +324,14 @@ def job_problems(job):
 
 
 ATTACH_STEP = 'powershell -File tools/import_phaselock_target.ps1 -Steps attach'
+IDENTITY_STEP = ('powershell -File tools/import_phaselock_target.ps1 -Steps prepare,attach (its identity step reads the worn pieces, '
+                 'then attach writes their placements)')
+
+
+def unread_worn(identity):
+    """Targets whose identity entry has no attachments list: an identity.json written before the import read worn pieces (before
+    2026-11-06) does not know what the pawn wears, which is not the same as wearing nothing. Only a list, empty or not, is an answer."""
+    return sorted(name for name, target in identity['targets'].items() if not isinstance(target.get('attachments'), list))
 
 
 def keep_placements(hosts, previous, identity):
@@ -336,7 +344,11 @@ def keep_placements(hosts, previous, identity):
     this cannot happen without a change of bones). A pawn that wears nothing gets an empty list: that is the answer, not a missing one."""
     notes = []
     for name, host in hosts.items():
-        bones = [piece.get('bone') for piece in identity['targets'][name].get('attachments') or []]
+        worn = identity['targets'][name].get('attachments')
+        if not isinstance(worn, list):   # the identity never read the worn pieces: leave the field out, never an empty answer
+            notes.append(f'{name}: no attachments list in identity.json (written before the import read worn pieces): run {IDENTITY_STEP}')
+            continue
+        bones = [piece.get('bone') for piece in worn]
         old = (previous or {}).get(name)
         placed = old.get('attachments') if isinstance(old, dict) else None
         if not bones:
@@ -352,6 +364,10 @@ def keep_placements(hosts, previous, identity):
 
 def editor_job_step(args):
     identity = npc.read_json(OUT / 'identity.json')
+    unread = unread_worn(identity)
+    if unread:
+        sys.exit(f'editor-job: no attachments list in identity.json for {", ".join(unread)} (written before the import read worn pieces), '
+                 f'so no job and no host_target.json were written. Re-run {IDENTITY_STEP}')
     job = {'tool': TOOL, 'generated': npc.now(), 'npcs': [], 'slice_dir': str(OUT)}
     hosts = {}
     for name, target in identity['targets'].items():

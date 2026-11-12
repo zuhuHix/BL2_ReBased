@@ -6,6 +6,7 @@ naming the host relies on (AOpenWillowCombatTarget::UseStockPawn finds Anim_<Id>
 Names and numbers are invented. Needs numpy (the shared slice pipeline imports it).
 Run: python tests/prepare_phaselock_target_test.py
 """
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -120,11 +121,13 @@ def run_editor_job(folder, previous, worn=2):
     out.mkdir()
     exports.mkdir()
     (exports / 'Skel_Fake.gltf').write_text('{}', encoding='utf-8')
-    pieces = [{'component': f'P.C_{i}', 'bone': f'B{i}', 'static_mesh': 'Pkg.Mesh.Spike', 'materials': []} for i in range(worn)]
+    pieces = [{'component': f'P.C_{i}', 'bone': f'B{i}', 'static_mesh': 'Pkg.Mesh.Spike', 'materials': []} for i in range(worn or 0)]
     identity = {'targets': {'Beast': {'dest': '/Game/X/Beast', 'skeletal_mesh': {'path': 'Char_Fake.Mesh.Skel_Fake'},
                                       'mesh_component_properties': {'translation': {'Z': 0}},
                                       'observed': {'collision_radius': 70.0, 'collision_height': 48.0, 'source': 'made up'},
                                       'attachments': pieces}}}
+    if worn is None:   # an identity.json from before the import read worn pieces: no key at all
+        del identity['targets']['Beast']['attachments']
     (out / 'identity.json').write_text(json.dumps(identity), encoding='utf-8')
     if previous is not None:
         (out / 'host_target.json').write_text(json.dumps(previous), encoding='utf-8')
@@ -176,6 +179,25 @@ def test_editor_job_writes_an_empty_list_for_a_pawn_that_wears_nothing():
     with tempfile.TemporaryDirectory() as folder:   # stale placements from an earlier identity are not kept on a pawn that now wears nothing
         hosts, printed = run_editor_job(folder, {'Beast': {'attachments': [{'bone': 'B0'}]}}, worn=0)
         assert hosts['Beast']['attachments'] == [], hosts
+
+
+def test_an_identity_that_never_read_the_worn_pieces_is_not_wearing_nothing():
+    # Review r2: an identity entry without the attachments key must not become attachments: [] (the attachment check and the host would
+    # take that as "wears nothing"). editor-job stops before writing and names the identity step, then attach.
+    placed = [{'mesh': '/Game/X/P0.P0', 'bone': 'B0'}]
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            run_editor_job(folder, {'Beast': {'mesh': '/Game/Old.Old', 'attachments': placed}}, worn=None)
+        except SystemExit as stop:
+            assert 'no attachments list in identity.json for Beast' in str(stop) and '-Steps prepare,attach' in str(stop), stop
+        else:
+            raise AssertionError('editor-job accepted an identity without attachments')
+        previous = json.loads((Path(folder) / 'target' / 'host_target.json').read_text(encoding='utf-8'))
+        assert previous['Beast']['attachments'] == placed   # nothing was written over the earlier file
+    # keep_placements on its own leaves the field out and says what to rerun.
+    hosts = {'Beast': {}}
+    notes = t.keep_placements(hosts, {'Beast': {'attachments': placed}}, {'targets': {'Beast': {}}})
+    assert 'attachments' not in hosts['Beast'] and '-Steps prepare,attach' in notes[0], notes
 
 
 if __name__ == '__main__':
