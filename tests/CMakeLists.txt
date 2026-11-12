@@ -81,6 +81,8 @@ foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
 endforeach()
 # preflight runs every case under Windows PowerShell 5.1 and under pwsh (about 50 s on the zuhu desktop).
 set_tests_properties(py-preflight PROPERTIES TIMEOUT 300)
+# land_batch runs the landing script in eleven throwaway repositories (about 100 s on the zuhu desktop).
+set_tests_properties(py-land_batch PROPERTIES TIMEOUT 300)
 # suites_due starts the batch driver under Windows PowerShell three times (the file takes about 40 s on the main desktop).
 set_tests_properties(py-suites_due PROPERTIES TIMEOUT 300)
 # The tracked suite map against this checkout: a PR that adds a load to a suite script without updating tools/suites.txt fails.

@@ -11,12 +11,15 @@
 #    example while building the integration branch. The rebases use merge.conflictStyle=diff3 themselves.
 # 2. Checks that each rebased PR changes exactly the lines it changed when reviewed, and that the chain's final tree is
 #    identical to the tested commit's tree (-t). With -D instead, every changed file must be a regular, non-executable
-#    Markdown text file.
-# 3. One atomic push moves the PR branches to their commits in the chain (all or none, leased on the reviewed heads);
-#    once GitHub shows the new heads, main fast-forwards, leased on the main the chain was built on. GitHub finds each
-#    PR's head inside main and marks the PR Merged; the script waits for that, then deletes the landed remote branches.
+#    Markdown text file. main's tools/decisions_index.py --check passes on each rebased commit (its committed blobs)
+#    against the commit below it.
+# 3. One atomic push moves the PR branches to their commits in the chain (all or none, leased on the reviewed heads).
+#    Once GitHub shows the new heads and every check in REQUIRED_CHECKS has passed on the chain's tip, main
+#    fast-forwards, leased on the main the chain was built on. GitHub finds each PR's head inside main and marks the PR Merged;
+#    the script waits for that, then deletes the landed remote branches.
 #    (In one combined push GitHub closes the PRs instead of merging them.)
-# It stops at the first thing it cannot prove, and nothing is pushed before every check has passed.
+# It stops at the first thing it cannot prove, and nothing is pushed before every check has passed. DRY waits for no
+# GitHub check. CHECK_WAIT (seconds, default 900) bounds the wait for all required checks together.
 set -u
 wt=; tested=; docsonly=
 while getopts "w:t:D" o; do case $o in w) wt=$OPTARG;; t) tested=$OPTARG;; D) docsonly=1;; *) exit 64;; esac; done
@@ -27,6 +30,13 @@ usage="usage: bash $0 -w <landing-worktree> (-t <tested-commit> | -D) \"<pr>:<40
 [ -n "$tested" ] || [ -n "$docsonly" ] || { echo "-t <tested-commit> is required (or -D for Markdown-only PRs)" >&2; exit 64; }
 [ -n "$tested" ] && [ -n "$docsonly" ] && { echo "use -t or -D, not both" >&2; exit 64; }
 here=$(cd "$(dirname "$0")/.." && pwd)
+# The GitHub checks that must pass on the chain's tip before main moves, by check-run name, as a ruleset on main would
+# require them. tools/land_batch_checks.py says which runs count and what passes.
+REQUIRED_CHECKS=("Leak gate")
+CHECK_WAIT=${CHECK_WAIT:-900}
+CHECK_POLL=${CHECK_POLL:-10}
+[ ${#REQUIRED_CHECKS[@]} -gt 0 ] || { echo "REQUIRED_CHECKS in $0 is empty: name at least one check, or main would move unchecked" >&2; exit 64; }
+py=${PYTHON:-$(command -v python || command -v python3)}
 log="$here/local/hub/land_batch.log"
 mkdir -p "$(dirname "$log")"
 started=
@@ -70,6 +80,11 @@ pr_ok() {
 
 git fetch -q origin main || stop "fetch main"
 main=$(git rev-parse origin/main)
+tmpd=$(mktemp -d) || stop "mktemp"
+trap 'rm -rf "$tmpd"' EXIT
+# main's copy of the decisions check judges every PR, so a PR cannot weaken the check that judges it.
+git show "$main:tools/decisions_index.py" > "$tmpd/decisions_index.py" || stop "main has no tools/decisions_index.py"
+prev=
 chain=$main
 plan=()
 echo "$(date -u +%FT%TZ) land $list on ${main:0:7}" >> "$log"
@@ -80,7 +95,10 @@ for item in $list; do
   old=$want
   git fetch -q origin "$branch" || stop "#$n fetch $branch"
   [ "$(git rev-parse "origin/$branch")" = "$old" ] || stop "#$n branch moved while landing" 3
-  base=$(git merge-base "$old" "$main")
+  # A rerun with the rebased heads of a stopped batch: this head sits on the previous PR's rebased commit, and its own
+  # change starts there, even after main moved. Otherwise it starts where the head meets main.
+  if [ -n "$prev" ] && git merge-base --is-ancestor "$prev" "$old"; then base=$prev; else base=$(git merge-base "$old" "$main"); fi
+  prev=$old
   [ -n "$(git diff --name-only "$base" "$old")" ] || stop "#$n changes nothing" 5
   if [ -n "$docsonly" ]; then
     other=$(docs_only_problem "$base" "$old")
@@ -113,6 +131,8 @@ for item in $list; do
   new=$(git rev-parse HEAD)
   git merge-base --is-ancestor "$chain" "$new" || stop "#$n: the rebased ${new:0:7} does not contain the chain ${chain:0:7}; nothing pushed" 10
   [ "$(changes "$base" "$old")" = "$(changes "$chain" "$new")" ] || stop "#$n: the rebased change differs from the reviewed one; check it by hand" 5
+  # --at reads the rebased commit's blobs, so nothing untracked in the landing worktree takes part.
+  dout=$("$py" -I "$tmpd/decisions_index.py" --root . --check --at "$new" --baseline "$chain" 2>&1) || stop "#$n fails main's decisions check against ${chain:0:7}: $dout" 5
   echo "  #$n ${old:0:7} -> ${new:0:7} on ${chain:0:7}" | tee -a "$log"
   plan+=("$n:$old:$new:$branch")
   chain=$new
@@ -148,6 +168,26 @@ if [ ${#refs[@]} -gt 0 ]; then
     [ "$seen" = "$new" ] || stop "#$n: GitHub still shows head $seen after the branch push; main NOT pushed. The PR branches now hold the rebased commits; rerun with the new heads after checking them." 12
   done
 fi
+# Wait for the required checks on the tip, under one deadline for all of them. gh fetches GitHub's raw answers and
+# tools/land_batch_checks.py decides: success, failure, pending, none (nothing counted yet) or error.
+deadline=$((SECONDS + CHECK_WAIT))
+gherr=
+for name in "${REQUIRED_CHECKS[@]}"; do
+  while :; do
+    verdict=error; detail="gh failed"; url=
+    if gh api "$R/commits/$chain/check-runs?check_name=${name// /%20}&filter=latest&per_page=100" >"$tmpd/checks.json" 2>"$tmpd/gh.err" &&
+       gh api "$R/actions/runs?head_sha=$chain&per_page=100" >"$tmpd/runs.json" 2>"$tmpd/gh.err"; then
+      IFS=$'\t' read -r verdict detail url <<<"$("$py" -I "$here/tools/land_batch_checks.py" --sha "$chain" --name "$name" --check-runs "$tmpd/checks.json" --workflow-runs "$tmpd/runs.json")"
+    else
+      gherr=$(tail -n 1 "$tmpd/gh.err")
+    fi
+    [ "$verdict" = success ] && break
+    [ "$verdict" = failure ] && stop "check '$name' failed on ${chain:0:9}: $detail ($url); main NOT pushed. The PR branches hold the rebased commits. A rerun of this script sees the same failed run until it is rerun on GitHub (gh run rerun) or the tip is pushed again, so fix the cause, rerun the job, then rerun this command with the new heads." 13
+    [ "$SECONDS" -lt "$deadline" ] || stop "no passing '$name' run on ${chain:0:9} after ${CHECK_WAIT}s (last answer: $verdict, $detail${gherr:+; last gh error: $gherr}); main NOT pushed. The PR branches hold the rebased commits. Usual causes: the tip's branch did not move in this run and its runs are older than seven days, GitHub Actions is down, the workflow lost the job, or only a run started by hand exists. Rerun the PR's run (gh run rerun) or push the tip again, then rerun this command with the new heads." 14
+    sleep "$CHECK_POLL"
+  done
+  echo "  check '$name' passed on ${chain:0:7}: $detail $url" | tee -a "$log"
+done
 # The lease refuses a main that moved at all since the chain was built, forward or back (moved back, a plain push would
 # be a fast-forward and bring back what was taken off); the ancestor check above refuses a chain that does not extend it.
 perr=$(git push -q --force-with-lease="main:$main" origin "$chain:refs/heads/main" 2>&1) || stop "main push refused, main unchanged; git said: $perr. The PR branches hold the rebased commits; rerun with the new heads, and for a -t landing build and test a new tested commit first if main has moved." 8

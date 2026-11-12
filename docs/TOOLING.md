@@ -441,11 +441,14 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 (current `main` plus exactly these PRs, in this order) that the in-engine suites have passed on, in the sense of "What
 counts as passed" below. The script rebases the
 listed PRs into one chain on top of `origin/main`. One atomic push moves the PR branches to their commits in the chain
-(all or none); once GitHub shows the new heads, `main` fast-forwards in a second push, leased on the `main` the chain
-was built on. With the check that the chain contains that `main`, the lease allows only a fast-forward from exactly
-that `main`: a `main` that moved since, forward or back, is refused (exit 8), and a `-t` landing then needs a new
-tested commit as well as the new heads. (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
-second push is refused, the PRs stay open on their rebased heads and the run can be repeated with those.) GitHub finds
+(all or none); once GitHub shows the new heads and the required checks have passed on the chain's tip (below), `main`
+fast-forwards in a second push, leased on the `main` the chain was built on. With the check that the chain contains
+that `main`, the lease allows only a fast-forward from exactly that `main`: a `main` that moved since, forward or back,
+is refused (exit 8), and a `-t` landing then needs a new tested commit as well as the new heads. (Moving the branches
+and `main` in one push makes GitHub close the PRs instead of merging them.) If the push of `main` is refused (exit 8),
+GitHub shows a PR head other than the pushed one (exit 12), or the checks fail or never pass (exits 13 and 14), the PRs
+stay open on their rebased heads and the run can be repeated with those new heads, also after `main` has moved: a head
+that sits on the previous listed head takes that head as the start of its own change. GitHub finds
 each PR's head inside `main` and marks the PR Merged; the script waits for that, then deletes each landed remote branch unless it moved after the push (GitHub
 retargets any open PR that was based on one). Before it pushes anything, it checks:
 
@@ -454,15 +457,11 @@ retargets any open PR that was based on one). Before it pushes anything, it chec
 - each rebased PR shows the same diff as when reviewed, context lines and binary content included, ignoring only
   where the hunks now sit (an earlier PR in the batch that edits lines next to a later one's makes this stop; land them
   separately);
+- each rebased commit passes `main`'s copy of `tools/decisions_index.py --check --at <commit>` against the chain commit
+  below it. `main`'s copy, so a PR cannot weaken the check that judges it; `--at`, so it reads the committed blobs and
+  nothing untracked in the landing worktree takes part. A refusal stops with exit 5;
 - with `-t`, the chain's final tree is byte-identical to the tested commit's tree; with `-D`, every changed path is a
   regular, non-executable Markdown text file.
-
-**Until the decisions log is one file per decision.** Since the union merge went (2026-11-12), nothing in the script
-checks `DECISIONS.md` specially until the PR that runs `main`'s `decisions_index.py --check` on every PR has landed.
-In that window a PR that edits or removes old entries would land without a stop, so read the `DECISIONS.md` part of
-each PR's diff before landing it. Two PRs that both append to `DECISIONS.md` need separate batches then: the second
-one stops with a conflict (exit 4), and resolving it, running `git rerere` and rerunning still ends in exit 5, because
-its diff now has the first PR's entry as context.
 
 `git rerere` is switched on for the repository, so a conflict resolved once, for example while building the integration
 branch, is resolved the same way when the batch lands; the tree check catches a recorded fix that differs from the
@@ -476,6 +475,36 @@ refuses to start while a rebase is in progress there or a tracked file there has
 without leaving a conflict open, and checks that the chain contains the `main` it was built on (before 2026-11-12 an
 ignored rebase failure in a dirty worktree could replace a commit on `main` through the leased push). CI runs on the new `main`; PR workflows may also run once per
 moved PR branch. Read the run on `main` before landing the next batch. The log is `local/hub/land_batch.log`.
+
+**Required checks before `main` moves.** After the branch push, the script asks GitHub every `CHECK_POLL` seconds
+(default 10) about each check named in `REQUIRED_CHECKS` at the top of the script, today only `Leak gate` (a job of about
+10 s; the Windows jobs would add about 11 minutes per batch). It fetches the raw check runs on the tip's exact commit
+and the workflow runs of that commit, and `tools/land_batch_checks.py` decides. It counts every run of that name from
+GitHub Actions on that commit, except runs completed more than seven days ago (GitHub's own limit for a required
+check). `main` moves only when every counted run has completed with success and at least one of them came from the
+`pull_request` event, the run GitHub attaches to the PR's head (the tip is the last PR's head). So a run started by
+hand (`workflow_dispatch`) cannot stand in for the PR's run, and a failed run of any event blocks. A counted run that
+completes with any other conclusion (failure, cancelled, `action_required`, also neutral or skipped, which is stricter
+than a ruleset) stops with exit 13: `main` stays where it was, the PR branches keep their rebased commits, and the
+message links the run. A rerun of the script sees the same failed run until the job is rerun on GitHub
+(`gh run rerun`) or the tip is pushed again. While a counted run has not completed, the script waits. No passing answer
+within `CHECK_WAIT` seconds (default 900, one deadline for all the required checks together) stops with exit 14, the
+same way, with the last answer and `gh`'s last error if it failed. The usual causes: the tip's branch did not move in
+this run and its runs are older than seven days, GitHub Actions is down, the workflow lost the job, or only a manual
+run exists; rerun the PR's run (`gh run rerun`) or push the tip again, then rerun the script. An empty
+`REQUIRED_CHECKS` is refused (exit 64). `DRY=1` waits for nothing.
+
+**A ruleset on `main` (the maintainer's clicks; not tried yet).** With the wait in place, `main` can require the check
+for everyone, the hub's pushes included. Do it after this change has landed and one batch has gone through its wait
+without a ruleset: Settings, Rules, Rulesets, New branch ruleset. Give it a name, set Enforcement to Active, leave the
+bypass list empty, and add the target "Include default branch". Tick "Require status checks to pass", add `Leak gate`
+with GitHub Actions as its source, and leave "Require branches to be up to date before merging" off. Leave "Require a
+pull request before merging" off, because the script pushes `main` directly; "Restrict deletions" and "Block force
+pushes" may stay on, since the script only fast-forwards. Then Create. The next batch is the live test: if GitHub
+refuses the push of `main` (`GH006`, printed in the exit-8 message) while the check is green, the hub stops and the
+maintainer sets the ruleset's Enforcement to Disabled. That is also the emergency switch, and it keeps the ruleset for
+later: disable it before landing while GitHub Actions is down, and before landing a gate fix that `main`'s gate
+refuses (the bootstrap under "Leak gate"), then set it back to Active.
 
 **Standing approval (maintainer, 2026-11-08; "passed" amended 2026-11-11).** The coordinating assistant may land a PR
 without asking first when its independent review is clean and its in-engine suites have passed on the tested commit
