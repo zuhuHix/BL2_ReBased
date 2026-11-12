@@ -210,23 +210,31 @@ checks the owner and staleness rules against temporary lock files.
   still require `-Engine` with no default (`run_ue_level.ps1`, `run_ue_character.ps1`, `run_ue_flash_hud.ps1`,
   `run_ue_probe.ps1`, `import_maya_combat_anims.ps1`). CTest `py-engine_default`.
 - **`tools/preflight.ps1`** looks before a run and changes nothing: it deletes no lock, stops no process and writes nothing
-  but its report. Each check is off until its parameter is passed, so a driver asks for what applies to one suite: `-Data`,
+  but its report, and it reads a lock with delete sharing so the owner's release is never delayed. Each check is off until
+  its parameter is passed, so a driver asks for what applies to one suite: `-Data` (a file, or a folder holding one),
   `-Generators <data>=<generator>` (data newer than the generator's last commit), `-CheckLinks` (no link under `local\`
-  resolves outside the worktree), `-Port`, `-NoEditor`, `-CheckLock` (the run lock above) and `-AlsoLock <file>`,
-  `-ReportHold <file>` (reported, never a failure), `-CheckBuild` (the module DLL and `build\Release\ow-core.lib` newer than
-  the last commit touching `host/ue5/OpenWillow/Source`, `src` or `CMakeLists.txt`), `-CheckEngine`. It prints one
-  `PREFLIGHT ok|FAIL|NOTE` line per check and a summary, and exits 1 when a check failed, 2 for a wrong call. Commit times
-  are committer dates, so a rebase after a build makes the build look stale. CTest `py-preflight`.
+  resolves outside the worktree), `-Port`, `-NoEditor` (the two editor names `ue_lock.ps1` always waits for, not a caller's
+  extra names), `-CheckLock` (the run lock above) and `-AlsoLock <file>`, `-ReportHold <file>` (reported, never a failure),
+  `-CheckBuild` (the module DLL and `build\Release\ow-core.lib` newer than the last commit touching
+  `host/ue5/OpenWillow/Source`, `src` or `CMakeLists.txt`), `-CheckEngine`. It prints one `PREFLIGHT ok|FAIL|NOTE` line per
+  check and a summary, also when git or a check fails, and exits 1 when a check failed, 2 for a wrong call. `-Generators`
+  and `-CheckBuild` compare file times with committer dates, which cuts both ways: a rebase after a build makes the build
+  look stale, and a checkout of a commit dated before the build (a fast-forward to older-dated work, another branch) makes
+  it look fresh although the code differs. Uncommitted changes to the generator or the code (`git status --porcelain`)
+  fail on their own line. CTest `py-preflight`, run under Windows PowerShell 5.1 and pwsh where each is present.
 
   ```powershell
   powershell -NoProfile -ExecutionPolicy Bypass -File tools/preflight.ps1 -NoEditor -CheckLock -Port 8795 -CheckBuild -CheckEngine
   ```
 - **`tools/suite_map_lint.py --map <suites.txt> [--repo <checkout>] [--commit <rev>] [--smoke-only <file>] [--switch-only <file>]`**
-  checks a suite map in the hub's format with the hub helper's path matching. It reports a path that matches no tracked
-  file; a file the suite's script loads through `Join-Path $PSScriptRoot '<file>'` (helpers followed) that the suite does
-  not cover; and a tracked file under `host/ue5/OpenWillow/Source/` or `src/` that only a whole-tree suite (`.`) covers,
-  unless `--smoke-only` lists it. The lint does not read switches, so a load behind a switch the suite never passes is
-  reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. The map itself stays outside
+  checks a suite map in the hub's format with the hub helper's path matching. It refuses what `suites-due.sh` refuses (a
+  byte-order mark, a bad or repeated name, a suite with no paths, a misplaced `*`, `./`, a leading `/` or a backslash, a
+  suite that covers no file), and reports a path that matches no tracked file; a command whose `-File` script is not
+  tracked; a file the suite's script loads that the suite does not cover, where a load is `Join-Path $PSScriptRoot '<file>'`
+  or `Join-Path $repo '<file>'` (repository root; helpers followed; case ignored as PowerShell does, and a path built from a
+  variable is not read); and a tracked file under `host/ue5/OpenWillow/Source/` or `src/` that only a whole-tree suite (`.`)
+  covers, unless `--smoke-only` lists it. The lint does not read switches, so a load behind a switch the suite never passes
+  is reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. The map itself stays outside
   the repository. CTest `py-suite_map_lint`.
 
 ### Landing PRs in a batch

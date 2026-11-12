@@ -12,10 +12,19 @@ covered unless an *ignore* path also matches it, and a suite that names an ignor
 folder inside an ignored one) still covers it.
 
 Errors, each one line; the exit code is 1 when there is any, 2 when the map or the checkout cannot be read:
+0. map: what suites-due.sh refuses: a byte-order mark, a name with other than letters, digits, dot, dash and
+   underscore, a name listed twice, a suite with no paths, a * anywhere but the start of a path, a path written with ./,
+   a leading / or a backslash, and a map with no suite. covers-nothing: a suite that covers no tracked file once *ignore*
+   is applied (the helper's "covers no file at this commit").
 1. unmatched: a path of a suite that matches no tracked file at <rev> (before *ignore* is applied, as the helper warns).
-2. not-covered: a file the suite's own script loads from its folder that the suite does not cover. The script is the
-   .ps1 after -File in the command; a load is Join-Path $PSScriptRoot '<file>' (dot-sourced, run or read). Loaded .ps1
-   files are followed in turn, so a helper's helper counts. Only tracked files count (a folder or a local/ path does not).
+   missing-script: the .ps1 after -File in a suite's command is not a tracked file.
+2. not-covered: a file the suite's own script loads that the suite does not cover. The script is the .ps1 after -File
+   in the command. A load is Join-Path $PSScriptRoot '<file>' (from the script's folder) or Join-Path $repo '<file>'
+   (from the repository root, where the script sets $repo with Split-Path -Parent $PSScriptRoot, Assert-OwCheckout
+   $PSScriptRoot, (Resolve-Path (Join-Path $PSScriptRoot '..')).Path, or two Split-Path -Parent; a dot-sourced helper
+   that does not set $repo uses its caller's), in single or double quotes without a $ inside; a path built from a
+   variable ("host/ue5/$job") is not read. Loaded .ps1 files are followed in turn, so a helper's helper counts. Only
+   tracked files count (a folder or a local/ path does not), matched without regard to case as PowerShell does.
    The lint does not read switches: a load behind a switch the suite never passes is reported too. List such a pair in
    --switch-only (one "<suite> <repo path>" per line, # comments allowed) to accept it.
 3. uncovered-core: a tracked file under host/ue5/OpenWillow/Source/ or src/ that no suite covers except a whole-tree one
@@ -31,7 +40,14 @@ from pathlib import Path
 
 CORE_PREFIXES = ('host/ue5/OpenWillow/Source/', 'src/')
 SCRIPT = re.compile(r'-File\s+["\']?([^"\'\s;]+\.ps1)', re.I)
-LOAD = re.compile(r'Join-Path\s+\$PSScriptRoot\s+["\']([^"\']+)["\']', re.I)
+LOAD = re.compile(r'''Join-Path\s+\$(PSScriptRoot|repo)\s+(?:'([^']+)'|"([^"$`]+)")''', re.I)
+NAME = re.compile(r'[A-Za-z0-9._-]+')
+# How a script sets $repo, and how many folders above the script's own that is.
+REPO_DEFS = [
+    (re.compile(r'^\s*\$repo\s*=\s*Split-Path\s+-Parent\s+\(Split-Path\s+-Parent\s+\$PSScriptRoot\)\s*$', re.I | re.M), 2),
+    (re.compile(r'^\s*\$repo\s*=\s*(Split-Path\s+-Parent\s+\$PSScriptRoot|Assert-OwCheckout\s+\$PSScriptRoot'
+                r'''|\(Resolve-Path\s+\(Join-Path\s+\$PSScriptRoot\s+['"]\.\.['"]\)\)\.Path)\s*$''', re.I | re.M), 1),
+]
 
 
 def match1(path, pattern):
@@ -65,18 +81,45 @@ def covers(path, include, ignore):
     return False
 
 
-def read_map(path):
-    """[(name, minutes, [paths], command)] in map order; the same trimming as the helper's suites()."""
+def read_map(path, problems=None):
+    """[(name, minutes, [paths], command)] in map order; the same trimming as the helper's suites(). What the helper
+    would refuse while reading (a byte-order mark, a suite with no paths) goes to problems, a list, when one is given."""
     suites = []
-    for raw in Path(path).read_text(encoding='utf-8-sig').splitlines():
+    data = Path(path).read_bytes()
+    if problems is not None and data.startswith(b'\xef\xbb\xbf'):
+        problems.append('map: the file starts with a byte-order mark; suites-due.sh reads it as part of the first line')
+    for raw in data.decode('utf-8', 'replace').splitlines():
         line = re.sub(r'\s*\|\s*', '|', raw.replace('\r', '')).strip()
         if not line or line.startswith('#'):
             continue
         fields = line.split('|')
+        if problems is not None and (len(fields) < 3 or fields[2] == ''):
+            problems.append(f'map: suite "{fields[0]}" has no paths')
         while len(fields) < 4:
             fields.append('')
         suites.append((fields[0], fields[1], fields[2].split(), fields[3]))
     return suites
+
+
+def map_problems(suites):
+    """The rest of the helper's refusals: names, duplicates, path spellings, a map with no suite."""
+    out, seen = [], set()
+    for name, _, paths, _ in suites:
+        if name != '*ignore*' and not NAME.fullmatch(name):
+            out.append(f'map: suite name "{name}" may hold only letters, digits, dot, dash and underscore')
+        if name in seen:
+            out.append(f'map: suite "{name}" is listed twice')
+        seen.add(name)
+        for s in paths:
+            if '*' in s[1:]:
+                out.append(f'map: suite "{name}": "{s}": a * is allowed only at the start (a suffix such as *.py)')
+            if s.startswith('./') or s.startswith('/'):
+                out.append(f'map: suite "{name}": "{s}": write paths from the repo root, without ./ or a leading /')
+            if '\\' in s:
+                out.append(f'map: suite "{name}": "{s}": use / in paths, not a backslash')
+    if not any(s[0] != '*ignore*' for s in suites):
+        out.append('map: lists no suite')
+    return out
 
 
 def git(repo, *args):
@@ -91,43 +134,61 @@ def tracked(repo, commit):
     return [p.decode('utf-8', 'replace').replace('\n', '?') for p in out.split(b'\0') if p]
 
 
+def up(path, n):
+    for _ in range(n):
+        path = posixpath.dirname(path)
+    return path
+
+
 def loads(repo, commit, script, files):
-    """{tracked file: the script that loads it} through Join-Path $PSScriptRoot, following loaded .ps1 files."""
-    found, todo, done = {}, [script], set()
+    """{tracked file: the script that loads it} through Join-Path $PSScriptRoot or $repo, following loaded .ps1 files.
+    files maps each tracked path in lower case to its spelling."""
+    found, todo, done = {}, [(script, None)], set()
     while todo:
-        current = todo.pop()
+        current, inherited = todo.pop()
         if current in done:
             continue
         done.add(current)
         text = git(repo, 'show', f'{commit}:{current}').decode('utf-8-sig', 'replace')
         code = '\n'.join(l for l in text.splitlines() if not l.lstrip().startswith('#'))
-        for name in LOAD.findall(code):
-            target = posixpath.normpath(posixpath.join(posixpath.dirname(current), name.replace('\\', '/')))
-            if target not in files or target == current:
+        here = posixpath.dirname(current)
+        base = next((up(here, n) for pattern, n in REPO_DEFS if pattern.search(code)), inherited)
+        for var, single, double in LOAD.findall(code):
+            if var.lower() == 'repo' and base is None:
+                continue   # $repo is not set in a way this lint reads
+            start = here if var.lower() == 'psscriptroot' else base
+            target = files.get(posixpath.normpath(posixpath.join(start, (single or double).replace('\\', '/'))).lower())
+            if target is None or target == current:
                 continue
             found.setdefault(target, current)
             if target.lower().endswith('.ps1'):
-                todo.append(target)
+                todo.append((target, base))
     return found
 
 
 def lint(map_path, repo, commit='HEAD', smoke_only=(), switch_only=()):
-    suites = read_map(map_path)
-    files = tracked(repo, commit)
-    fileset = set(files)
-    ignore = next((s[2] for s in suites if s[0] == '*ignore*'), [])
     errors = []
+    suites = read_map(map_path, errors)
+    errors += map_problems(suites)
+    files = tracked(repo, commit)
+    lower = {f.lower(): f for f in files}
+    ignore = next((s[2] for s in suites if s[0] == '*ignore*'), [])
     real = [s for s in suites if s[0] != '*ignore*']
     for name, _, include, command in real:
         for pattern in include:
             if not any(match1(f, pattern) for f in files):
                 errors.append(f'unmatched: suite {name}: "{pattern}" matches no tracked file')
+        if include and not any(covers(f, include, ignore) for f in files):
+            errors.append(f'covers-nothing: suite {name} covers no tracked file once *ignore* is applied')
         m = SCRIPT.search(command)
         if m:
-            script = posixpath.normpath(m.group(1).replace('\\', '/'))
-            if script not in fileset:
-                continue   # error 1 or the helper reports a command whose script is gone; nothing to follow
-            for f, loader in loads(repo, commit, script, fileset).items():
+            named = posixpath.normpath(m.group(1).replace('\\', '/'))
+            script = lower.get(named.lower())
+            if script is None:
+                # Nothing else checks a command before it runs: a typo or a deleted script would fail only at run time.
+                errors.append(f'missing-script: suite {name}: its command runs {named}, which is not a tracked file')
+                continue
+            for f, loader in loads(repo, commit, script, lower).items():
                 if not covers(f, include, ignore) and (name, f) not in switch_only:
                     via = '' if loader == script else f' (in {loader})'
                     errors.append(f'not-covered: suite {name}: {script} loads {f}{via}, which its paths do not cover')

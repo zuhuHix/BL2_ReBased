@@ -30,6 +30,15 @@ TREE = {
     'tools/shared.py': '',
     'tools/check_x.py': '',
     'tools/commented.ps1': '',
+    # Loads from the repository root through $repo, one helper inheriting its caller's $repo, a case-shifted load, and a path
+    # built from a variable (not read).
+    'tools/repo_suite.ps1': "$repo = Split-Path -Parent $PSScriptRoot\n& python (Join-Path $repo 'tools/check_r.py')\n"
+                            "$x = Join-Path $repo \"research\\r.py\"\n. (Join-Path $PSScriptRoot 'Sub\\Uses_Repo.ps1')\n"
+                            "$y = Join-Path $repo \"research/$name.py\"\n",
+    'tools/sub/uses_repo.ps1': "$z = Join-Path $repo 'research/inherited.py'\n",
+    'tools/check_r.py': '',
+    'research/r.py': '',
+    'research/inherited.py': '',
 }
 COVERED = 'tools/run_suite.ps1 tools/helper_a.ps1 tools/sub/ tools/shared.py tools/check_x.py'
 HEADER = '# invented map\n*ignore* | - | *.md docs/ | -\n'
@@ -50,7 +59,7 @@ class Repo:
 
     def write(self, name, text):
         p = Path(self.tmp.name) / name
-        p.write_text(text)
+        p.write_text(text, encoding='utf-8')
         return str(p)
 
 
@@ -159,6 +168,57 @@ class LintTest(unittest.TestCase):
         smoke = self.repo.write('smoke.txt', '# smoke-only\nsrc/extra.cpp\nhost/ue5/OpenWillow/Source/OpenWillow/Thing.cpp\n')
         rc, errors, out = self.run_lint(body, '--smoke-only', smoke)
         self.assertEqual((rc, errors), (0, []), out)
+
+    REPO_SUITE = ('rs | 1 | tools/repo_suite.ps1 tools/sub/uses_repo.ps1 tools/check_r.py research/r.py research/inherited.py | '
+                  'powershell -File tools/repo_suite.ps1\n')
+
+    def test_loads_through_repo(self):
+        rc, errors, out = self.run_lint(self.CLEAN + self.REPO_SUITE)
+        self.assertEqual((rc, errors), (0, []), out)
+        for gone in ('tools/check_r.py', 'research/r.py', 'research/inherited.py', 'tools/sub/uses_repo.ps1'):
+            with self.subTest(dropped=gone):
+                rc, errors, out = self.run_lint(self.CLEAN + self.REPO_SUITE.replace(' ' + gone + ' ', ' '))
+                self.assertEqual(rc, 1, out)
+                self.assertEqual(len(errors), 1, out)
+                self.assertTrue(errors[0].startswith(f'not-covered: suite rs: tools/repo_suite.ps1 loads {gone}'), out)
+
+    def test_load_case_follows_the_tracked_spelling(self):
+        # repo_suite.ps1 writes 'Sub\Uses_Repo.ps1'; the report names the tracked spelling.
+        rc, errors, out = self.run_lint(self.CLEAN + self.REPO_SUITE.replace(' tools/sub/uses_repo.ps1', ''))
+        self.assertIn('loads tools/sub/uses_repo.ps1,', out)
+
+    def test_missing_script(self):
+        rc, errors, out = self.run_lint(self.CLEAN + 'typo | 1 | src/ | powershell -File tools/run_suit.ps1; exit 1\n'
+                                        'nocmd | 1 | src/ | cmake --build build\n')
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(errors, ['missing-script: suite typo: its command runs tools/run_suit.ps1, which is not a tracked file'])
+
+    def test_what_the_helper_refuses(self):
+        cases = {
+            'name': ('bad name | 1 | src/ | x\n', 'map: suite name "bad name" may hold only'),
+            'twice': ('narrow | 1 | src/ | x\n', 'map: suite "narrow" is listed twice'),
+            'no paths': ('empty | 1 |  | x\n', 'map: suite "empty" has no paths'),
+            'star': ('st | 1 | src/*.cpp | x\n', 'a * is allowed only at the start'),
+            'dot slash': ('ds | 1 | ./src/ | x\n', 'without ./ or a leading /'),
+            'backslash': ('bs | 1 | src\\core.cpp | x\n', 'use / in paths, not a backslash'),
+            # A path matching only ignored files still covers them when the suite names them (the claim rule), so a suite
+            # covers nothing only when its paths match no file, or it has only "." and every file is ignored.
+            'covers nothing': ('only_gone | 1 | gone/ | x\n', 'covers-nothing: suite only_gone'),
+        }
+        for label, (line, expected) in cases.items():
+            with self.subTest(label):
+                rc, errors, out = self.run_lint(self.CLEAN + line)
+                self.assertEqual(rc, 1, out)
+                self.assertTrue(any(expected in e for e in errors), out)
+        m = self.repo.write('bom.txt', '﻿' + HEADER + self.CLEAN)
+        done = subprocess.run([sys.executable, str(ROOT / 'tools' / 'suite_map_lint.py'), '--map', m, '--repo', str(self.repo.path)],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertIn('byte-order mark', done.stdout)
+        m = self.repo.write('none.txt', HEADER)
+        done = subprocess.run([sys.executable, str(ROOT / 'tools' / 'suite_map_lint.py'), '--map', m, '--repo', str(self.repo.path)],
+                              capture_output=True, text=True, timeout=60)
+        self.assertIn('map: lists no suite', done.stdout)
 
     def test_unreadable_inputs(self):
         done = subprocess.run([sys.executable, str(ROOT / 'tools' / 'suite_map_lint.py'), '--map', str(self.repo.path / 'none.txt'),
