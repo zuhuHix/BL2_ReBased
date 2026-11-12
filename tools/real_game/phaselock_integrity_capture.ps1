@@ -361,7 +361,7 @@ print(json.dumps({"pick": pick["name"] if pick else None, "pick_class": pick["cl
     }
     # The game may close before it answers this one (2026-11-06: the empty reply stopped the script after all the casts).
     try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
-    for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
+    for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
 } catch {
     $runError = "$_"
     throw

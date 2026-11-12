@@ -271,7 +271,7 @@ try {
     }
     # The game may close before it answers this one.
     try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
-    for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
+    for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
 } catch {
     $runError = "$_"
     throw

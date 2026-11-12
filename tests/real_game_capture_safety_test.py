@@ -489,5 +489,20 @@ class VendorsCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertEqual(r['files'], ORIGINAL)
 
 
+class QuitWaitTest(unittest.TestCase):
+    """Review of #245: after the owned game was told to quit, these captures waited while ANY Borderlands 2 ran, so another instance
+    held the wait for its full length. They must wait on their own process only."""
+
+    def test_after_the_quit_each_session_capture_waits_on_its_own_process(self):
+        for name in ('mission_screen_capture', 'audio_events_capture', 'phaselock_integrity_capture'):
+            text = (ROOT / f'tools/real_game/{name}.ps1').read_text(encoding='utf-8')
+            lines = text.splitlines()
+            at = next(i for i, line in enumerate(lines) if 'ConsoleCommand("quit", False)' in line)
+            wait = lines[at + 1]
+            self.assertIn('for ($i = 0;', wait, name)
+            self.assertIn('!$proc.HasExited', wait, name)
+            self.assertNotIn('Get-GameProcess', wait, name)
+
+
 if __name__ == '__main__':
     unittest.main()
