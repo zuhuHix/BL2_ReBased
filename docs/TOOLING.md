@@ -428,8 +428,8 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 (current `main` plus exactly these PRs, in this order) that the in-engine suites have passed on, in the sense of "What
 counts as passed" below. The script rebases the
 listed PRs into one chain on top of `origin/main`. One atomic push moves the PR branches to their commits in the chain
-(all or none); once GitHub shows the new heads, `main` fast-forwards in a second push, leased on the `main` the chain
-was built on. (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
+(all or none); once GitHub shows the new heads, `main` fast-forwards in a second, plain push (no force option, so
+GitHub refuses anything but a fast-forward). (Moving the branches and `main` in one push makes GitHub close the PRs instead of merging them; if the
 second push is refused, the PRs stay open on their rebased heads and the run can be repeated with those.) GitHub finds
 each PR's head inside `main` and marks the PR Merged; the script waits for that, then deletes each landed remote branch unless it moved after the push (GitHub
 retargets any open PR that was based on one). Before it pushes anything, it checks:
@@ -446,7 +446,9 @@ retargets any open PR that was based on one). Before it pushes anything, it chec
 `git rerere` is switched on for the repository, so a conflict resolved once, for example while building the integration
 branch, is resolved the same way when the batch lands; the tree check catches a recorded fix that differs from the
 tested one. A conflict rerere has not seen leaves the rebase open in the landing worktree with instructions. The script
-refuses to start while a rebase is in progress there. CI runs on the new `main`; PR workflows may also run once per
+refuses to start while a rebase is in progress there or a tracked file there has changes, stops when a rebase or checkout fails
+without leaving a conflict open, and checks that the chain contains the `main` it was built on (before 2026-11-12 an
+ignored rebase failure in a dirty worktree could replace a commit on `main` through the leased push). CI runs on the new `main`; PR workflows may also run once per
 moved PR branch. Read the run on `main` before landing the next batch. The log is `local/hub/land_batch.log`.
 
 **Standing approval (maintainer, 2026-11-08; "passed" amended 2026-11-11).** The coordinating assistant may land a PR

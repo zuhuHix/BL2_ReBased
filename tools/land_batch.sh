@@ -13,7 +13,7 @@
 #    lines), and that the chain's final tree is identical to the tested commit's tree (-t). With -D instead, every
 #    changed file must be a regular, non-executable Markdown text file.
 # 3. One atomic push moves the PR branches to their commits in the chain (all or none, leased on the reviewed heads);
-#    once GitHub shows the new heads, main fast-forwards, leased on the main the chain was built on. GitHub finds each
+#    once GitHub shows the new heads, main fast-forwards in a plain push (no force option). GitHub finds each
 #    PR's head inside main and marks the PR Merged; the script waits for that, then deletes the landed remote branches.
 #    (In one combined push GitHub closes the PRs instead of merging them.)
 # It stops at the first thing it cannot prove, and nothing is pushed before every check has passed.
@@ -37,6 +37,9 @@ inrebase() { [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git re
 stop() { echo "STOP: $1" | tee -a "$log"; if [ "${2:-9}" != 4 ] && [ -n "$started" ] && inrebase; then git rebase --abort >/dev/null 2>&1; fi; exit "${2:-9}"; }
 cd "$wt" || { echo "no worktree $wt (make one with: git worktree add --detach $wt origin/main)" >&2; exit 1; }
 inrebase && { echo "a rebase is already in progress in $wt; finish or abort it first" >&2; exit 1; }
+# A change to a tracked file makes git refuse the checkouts and rebases below.
+dirty=$(git status --porcelain --untracked-files=no) || exit 1
+[ -z "$dirty" ] || { printf 'the landing worktree %s has changes to tracked files; discard them first:\n%s\n' "$wt" "$dirty" >&2; exit 1; }
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || exit 1
 R=repos/$repo
 export GIT_EDITOR=true
@@ -89,19 +92,24 @@ for item in $list; do
     other=$(docs_only_problem "$base" "$old")
     [ -z "$other" ] || stop "#$n is not Markdown-only ($other); land it with -t <tested-commit>" 5
   fi
-  git checkout -q --detach "$old"
+  git checkout -q --detach "$old" || stop "#$n: cannot check out ${old:0:7} in $wt" 10
   started=1
-  git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase -q --onto "$chain" "$base" >/dev/null 2>&1
+  rout=$(git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase -q --onto "$chain" "$base" 2>&1); rc=$?
   # A rebase stops once per conflicting commit; carry on while rerere or the union driver resolved every file.
   for _ in $(seq 1 200); do
-    inrebase || break
+    if ! inrebase; then
+      # A rebase that fails without stopping at a conflict (it refused to start, for example) rebased nothing.
+      [ "$rc" = 0 ] || stop "#$n: the rebase failed and left no conflict open; nothing pushed. git said: $rout" 10
+      break
+    fi
     left=$(git diff --name-only --diff-filter=U)
     [ -z "$left" ] || stop "#$n conflict in: $left. The rebase is left open in $wt: resolve the files, git add them, run git rerere (it records the fix), then git rebase --abort and rerun this command." 4
-    git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase --continue >/dev/null 2>&1
+    rout=$(git -c core.attributesFile="$attr" -c rerere.autoupdate=true rebase --continue 2>&1); rc=$?
   done
   inrebase && stop "#$n rebase did not finish" 10
   started=
   new=$(git rev-parse HEAD)
+  git merge-base --is-ancestor "$chain" "$new" || stop "#$n: the rebased ${new:0:7} does not contain the chain ${chain:0:7}; nothing pushed" 10
   [ "$(changes "$base" "$old")" = "$(changes "$chain" "$new")" ] || stop "#$n: the rebased change differs from the reviewed one; check it by hand" 5
   [ -z "$(decisions_removed "$base" "$old")" ] || stop "#$n removes or edits DECISIONS.md lines; that log is append-only, land it by hand" 5
   [ -z "$(decisions_removed "$chain" "$new")" ] || stop "#$n: the rebase removed DECISIONS.md lines" 5
@@ -114,6 +122,8 @@ if [ -n "$tested" ]; then
   [ "$(git rev-parse "$chain^{tree}")" = "$(git rev-parse "$tested^{tree}")" ] || stop "the chain's tree differs from the tested $tested" 6
   echo "  chain tree == tested ${tested:0:9}" | tee -a "$log"
 fi
+# main may only fast-forward: the chain must contain the main it was built on.
+git merge-base --is-ancestor "$main" "$chain" || stop "the chain ${chain:0:9} does not contain main ${main:0:7}; nothing pushed" 10
 if [ -n "${DRY:-}" ]; then echo "DRY: every check passed, nothing pushed; chain tip ${chain:0:9}" | tee -a "$log"; exit 0; fi
 
 refs=(); leases=()
@@ -138,7 +148,9 @@ if [ ${#refs[@]} -gt 0 ]; then
     [ "$seen" = "$new" ] || stop "#$n: GitHub still shows head $seen after the branch push; main NOT pushed. The PR branches now hold the rebased commits; rerun with the new heads after checking them." 12
   done
 fi
-git push -q --force-with-lease="main:$main" origin "$chain:refs/heads/main" || stop "main push refused (main moved); main unchanged. The PR branches hold the rebased commits; rerun with the new heads." 8
+# No force option: GitHub takes this push only as a fast-forward of the main it holds. A main that moved since the
+# chain was built is refused, unless the chain already contains it.
+perr=$(git push -q origin "$chain:refs/heads/main" 2>&1) || stop "main push refused, main unchanged; git said: $perr. The PR branches hold the rebased commits; rerun with the new heads." 8
 echo "  pushed: main ${main:0:7} -> ${chain:0:7}" | tee -a "$log"
 fail=
 for p in "${plan[@]}"; do
