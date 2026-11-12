@@ -23,7 +23,10 @@ Two of the host's tests had that shape, and the `ue_automation` suite did not no
   `IMPLEMENT_COMPLEX` automation test path under `host/ue5/OpenWillow/Source` and fails, naming both tests, when one path is a
   dot-prefix of another or a path is used twice. It also fails when the `ue_automation` pass line's `expected=`, the count the
   row prints and the count it checks disagree, or differ from the number of test paths the row's names match. A complex test
-  under those names is refused, since its count depends on its parameters. Against the base commit it reports both shadowed
+  under those names is refused, since its count depends on its parameters. Paths are compared ignoring case, as the engine's
+  path keys and filter do. A declaration the test cannot read (a spec, a networked test, a path that is not a string literal)
+  fails it with its file and line, so it cannot go uncounted, and a `^` or `$` anchor in the row's names is refused, since in
+  the engine a `$` name that matches a folder selects all of its children and the count does not model that. Against the base commit it reports both shadowed
   tests and `expects 11 tests but its names match 13`. Synthetic cases use invented paths.
 - **UNVERIFIED** until the hub's suite run: that the framework now finds 13 tests for these names, and every result of the two
   renamed tests. By reading the code, every check of `OpenWillow.WeaponAssembly.Core` should pass (its body and the planning code

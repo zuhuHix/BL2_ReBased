@@ -5,12 +5,17 @@ the folder of other tests (OpenWillow.WeaponAssembly, then OpenWillow.MayaState)
 framework, and the suite's pass line still matched because the count stayed the same. Read in the UE 5.8 source (not
 seen in a run): the report tree keys its nodes by full test path, so a test and a folder of the same path share one
 node, and a node with children runs only its children. Each '+' part of `Automation RunTests` is a substring match on
-the full path (a leading ^ or trailing $ anchors it).
+the full path (a leading ^ or trailing $ anchors it). The matches and the path keys ignore case, so this test compares
+lower-cased paths.
 
 This test fails when
-- one test path under host/ue5/OpenWillow/Source is a dot-prefix of another (both are named), or a path is used twice;
-- the ue_automation row of tools/suites.txt expects a different number of tests than the paths its names match, or
-  its three counts (the pass line's expected=, the row's printed expected= and its -eq) disagree.
+- one test path under host/ue5/OpenWillow/Source is a dot-prefix of another (both are named), or a path is used twice,
+  ignoring case;
+- a test declaration is one this test cannot read (a spec, a networked test, a path that is not a string literal), so
+  it would go uncounted; the file and line are named;
+- the ue_automation row of tools/suites.txt expects a different number of tests than the paths its names match, its
+  three counts (the pass line's expected=, the row's printed expected= and its -eq) disagree, or one of its names carries
+  a ^ or $ anchor (not modelled here: in the engine a $ name that matches a folder selects all of the folder's children).
 
 The synthetic cases use invented paths only (rule 9); the last class reads this checkout.
 """
@@ -28,48 +33,62 @@ SUITES = ROOT / 'tools' / 'suites.txt'
 _TOKENS = re.compile(r'R"([^(\s]{0,16})\(.*?\)\1"|"(?:\\.|[^"\\\n])*"|//[^\n]*|/\*.*?\*/', re.S)
 # IMPLEMENT_SIMPLE / IMPLEMENT_COMPLEX (and the CUSTOM_ variants, whose second argument is the base class).
 _MACRO = re.compile(r'\bIMPLEMENT_(?:CUSTOM_)?(SIMPLE|COMPLEX)_AUTOMATION_TEST\s*\(\s*\w+\s*,\s*(?:\w+\s*,\s*)?"([^"]+)"')
+# Every automation test or spec declaration, read or not: IMPLEMENT_*_AUTOMATION_TEST(, BEGIN_DEFINE_SPEC(, DEFINE_SPEC(.
+_DECLARATION = re.compile(r'\b\w*(?:AUTOMATION_TEST|DEFINE_SPEC)\s*\(')
 
 
 def strip_comments(text):
     return _TOKENS.sub(lambda m: m.group(0) if m.group(0)[0] in 'R"' else ' ', text)
 
 
-def test_paths(source_dir):
-    """[(path, kind, file)] for every automation test macro under source_dir (.cpp and .h)."""
-    found = []
+def scan(source_dir):
+    """([(path, kind, file)] for every macro read, [message] for every declaration that could not be read)."""
+    found, unread = [], []
     for f in sorted(Path(source_dir).rglob('*')):
         if f.suffix.lower() not in ('.cpp', '.h') or not f.is_file():
             continue
         text = strip_comments(f.read_text(encoding='utf-8', errors='replace'))
-        for m in _MACRO.finditer(text):
-            found.append((m.group(2), m.group(1).lower(), f))
-    return found
+        for d in _DECLARATION.finditer(text):
+            m = _MACRO.match(text, d.start())
+            if m:
+                found.append((m.group(2), m.group(1).lower(), f))
+            else:
+                line = text.count('\n', 0, d.start()) + 1
+                unread.append(f'{f}:{line}: test declaration {d.group(0).rstrip("( ")} not read (a spec, a networked test or '
+                              'a path that is not a string literal), so it would not be counted')
+    return found, unread
+
+
+def test_paths(source_dir):
+    """[(path, kind, file)] for every automation test macro under source_dir (.cpp and .h)."""
+    return scan(source_dir)[0]
 
 
 def path_problems(paths):
-    """Messages for paths used twice and for a path that is a dot-prefix of another (that test would never run)."""
+    """Messages for paths used twice and for a path that is a dot-prefix of another (that test would never run).
+    The engine's path keys ignore case, so the comparison does too."""
     problems = []
-    names = sorted(p for p, _, _ in paths)
-    seen = set()
-    for n in names:
-        if n in seen:
+    seen = {}
+    for n in sorted(p for p, _, _ in paths):
+        same = seen.get(n.lower())
+        if same is None:
+            seen[n.lower()] = n
+        elif same == n:
             problems.append(f'test path {n} is used twice')
-        seen.add(n)
-    unique = sorted(seen)
+        else:
+            problems.append(f'test paths {same} and {n} differ only in case')
+    unique = sorted(seen.values())
     for a in unique:
         for b in unique:
-            if b.startswith(a + '.'):
+            if b.lower().startswith(a.lower() + '.'):
                 problems.append(f'test {a} is never run: its path is the folder of test {b}; rename it (for example {a}.Core)')
     return problems
 
 
 def matches(name, path):
-    """One '+' part of Automation RunTests against a full test path, as the UE 5.8 filter does."""
-    start, end = name.startswith('^'), name.endswith('$') and len(name) > 1
-    core = name[1 if start else 0:len(name) - (1 if end else 0)]
-    if start or end:
-        return (not start or path.startswith(core)) and (not end or path.endswith(core))
-    return core in path
+    """One unanchored '+' part of Automation RunTests against a full test path: a substring match ignoring case, as the
+    UE 5.8 filter does. Anchored names are refused by count_problems, not matched here."""
+    return name.lower() in path.lower()
 
 
 def suite_counts(text):
@@ -92,6 +111,11 @@ def suite_counts(text):
 
 def count_problems(names, expected, printed, eq, paths):
     """Messages when the suite's counts disagree with each other or with the tests its names match."""
+    anchored = [n for n in names if '^' in n or '$' in n]
+    if anchored:
+        # In the engine a $ name that matches a folder selects all of the folder's children; the count below does not model it.
+        return [f'ue_automation names carry an anchor, which this count does not model: {", ".join(anchored)}; use plain '
+                'names (a substring match), or teach tests/automation_paths_test.py the engine\'s anchor rule first']
     problems = []
     if not expected == printed == eq:
         problems.append(f'ue_automation counts disagree: pass line expected={expected}, row prints expected={printed}, row checks -eq {eq}')
@@ -127,28 +151,54 @@ def suite_text(names, expected, printed=None, eq=None):
 
 
 class SyntheticPaths(unittest.TestCase):
-    def paths(self, files):
+    def scan(self, files):
         with tempfile.TemporaryDirectory() as tmp:
             write_tree(tmp, files)
-            return [(p, k, f.name) for p, k, f in test_paths(tmp)]
+            found, unread = scan(tmp)
+            return [(p, k, f.name) for p, k, f in found], unread
 
     def test_reads_simple_complex_and_custom(self):
-        got = self.paths({'A/One.cpp': macro('FOne', 'Fake.Alpha') + macro('FTwo', 'Fake.Beta.Two', 'COMPLEX'),
-                          'B/Two.h': 'IMPLEMENT_CUSTOM_SIMPLE_AUTOMATION_TEST(FThree, FBase, "Fake.Gamma", 0)\n',
-                          'B/notes.txt': macro('FNo', 'Fake.NotSource')})
+        got, unread = self.scan({'A/One.cpp': macro('FOne', 'Fake.Alpha') + macro('FTwo', 'Fake.Beta.Two', 'COMPLEX'),
+                                 'B/Two.h': 'IMPLEMENT_CUSTOM_SIMPLE_AUTOMATION_TEST(FThree, FBase, "Fake.Gamma", 0)\n',
+                                 'B/notes.txt': macro('FNo', 'Fake.NotSource')})
         self.assertEqual(sorted((p, k) for p, k, _ in got), [('Fake.Alpha', 'simple'), ('Fake.Beta.Two', 'complex'), ('Fake.Gamma', 'simple')])
+        self.assertEqual(unread, [])
 
     def test_comments_are_not_read_but_strings_are_kept(self):
-        got = self.paths({'C.cpp': '// ' + macro('FOld', 'Fake.Old') + '/* ' + macro('FBlock', 'Fake.Block') + ' */\n'
-                          'const TCHAR* Url = TEXT("http://x"); const TCHAR* Raw = TEXT(R"({"k": "//"})");\n'
-                          + macro('FNew', 'Fake.New')})
+        got, unread = self.scan({'C.cpp': '// ' + macro('FOld', 'Fake.Old') + '/* ' + macro('FBlock', 'Fake.Block') + ' */\n'
+                                 'const TCHAR* Url = TEXT("http://x"); const TCHAR* Raw = TEXT(R"({"k": "//"})");\n'
+                                 + macro('FNew', 'Fake.New')})
         self.assertEqual([p for p, _, _ in got], ['Fake.New'])
+        self.assertEqual(unread, [])
+
+    def test_a_spec_is_named_with_file_and_line(self):
+        got, unread = self.scan({'Spec.cpp': '#include "Fake.h"\nBEGIN_DEFINE_SPEC(FFakeSpec, "Fake.Spec", 0)\nEND_DEFINE_SPEC(FFakeSpec)\n'})
+        self.assertEqual(got, [])
+        self.assertTrue(unread and all('Spec.cpp:' in m for m in unread), unread)
+        self.assertTrue(any('Spec.cpp:2:' in m and 'BEGIN_DEFINE_SPEC' in m for m in unread), unread)
+
+    def test_a_path_that_is_not_a_literal_is_named(self):
+        got, unread = self.scan({'Built.cpp': '#define FAKE_PATH "Fake.Built"\n' + macro('FOne', 'Fake.Read')
+                                 + 'IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTwo, FAKE_PATH, 0)\n'
+                                 + 'IMPLEMENT_NETWORKED_AUTOMATION_TEST(FNet, "Fake.Net", 0)\n'})
+        self.assertEqual([p for p, _, _ in got], ['Fake.Read'])
+        self.assertEqual(len(unread), 2, unread)
+        self.assertIn('Built.cpp:4:', unread[0])
+        self.assertIn('IMPLEMENT_SIMPLE_AUTOMATION_TEST', unread[0])
+        self.assertIn('Built.cpp:5:', unread[1])
 
     def test_a_folder_path_names_both_tests(self):
         problems = path_problems([('Fake.State', 'simple', None), ('Fake.State.Split', 'simple', None), ('Fake.Other', 'simple', None)])
         self.assertEqual(len(problems), 1)
         self.assertIn('Fake.State is never run', problems[0])
         self.assertIn('Fake.State.Split', problems[0])
+
+    def test_case_is_ignored(self):
+        problems = path_problems([('Fake.State', 'simple', None), ('fake.state.Split', 'simple', None)])
+        self.assertEqual(len(problems), 1)
+        self.assertIn('Fake.State is never run', problems[0])
+        self.assertEqual(path_problems([('Fake.State.X', 'simple', None), ('Fake.state.X', 'simple', None)]),
+                         ['test paths Fake.State.X and Fake.state.X differ only in case'])
 
     def test_a_shared_prefix_without_a_dot_is_fine(self):
         self.assertEqual(path_problems([('Fake.Skill', 'simple', None), ('Fake.Skills', 'simple', None),
@@ -168,13 +218,23 @@ class SyntheticCounts(unittest.TestCase):
     PATHS = [('Fake.State.Core', 'simple', None), ('Fake.State.Split', 'simple', None), ('Fake.Gun', 'simple', None),
              ('Fake.GunTable', 'simple', None), ('Fake.Unlisted', 'simple', None)]
 
-    def test_substring_and_anchors(self):
+    def test_substring_ignoring_case(self):
         self.assertTrue(matches('Fake.State', 'Fake.State.Core'))
         self.assertTrue(matches('Fake.Gun', 'Fake.GunTable'))   # a substring, as the engine matches
         self.assertTrue(matches('State', 'Fake.State.Core'))
-        self.assertFalse(matches('^State', 'Fake.State.Core'))
-        self.assertTrue(matches('Fake.Gun$', 'Fake.Gun'))
-        self.assertFalse(matches('Fake.Gun$', 'Fake.GunTable'))
+        self.assertTrue(matches('fake.STATE', 'Fake.State.Core'))
+        self.assertFalse(matches('Fake.Other', 'Fake.State.Core'))
+
+    def test_a_name_in_another_case_still_counts(self):
+        names, expected, printed, eq = suite_counts(suite_text(['state', 'Gun'], 4))
+        self.assertEqual(count_problems(names, expected, printed, eq, self.PATHS), [])
+
+    def test_anchored_names_are_refused(self):
+        for name in ('^Fake.Gun', 'Gun$'):
+            names, expected, printed, eq = suite_counts(suite_text(['State', name], 4))
+            problems = count_problems(names, expected, printed, eq, self.PATHS)
+            self.assertEqual(len(problems), 1, problems)
+            self.assertIn('anchor', problems[0])
 
     def test_right_count_passes(self):
         names, expected, printed, eq = suite_counts(suite_text(['State', 'Gun'], 4))
@@ -205,9 +265,10 @@ class SyntheticCounts(unittest.TestCase):
 
 
 class ThisCheckout(unittest.TestCase):
-    def test_no_test_path_is_a_folder_of_another(self):
-        paths = test_paths(SOURCE)
+    def test_every_declaration_is_read_and_no_path_is_a_folder_of_another(self):
+        paths, unread = scan(SOURCE)
         self.assertTrue(paths, f'no automation tests found under {SOURCE}')
+        self.assertEqual(unread, [])
         self.assertEqual(path_problems(paths), [])
 
     def test_ue_automation_expects_what_its_names_match(self):
