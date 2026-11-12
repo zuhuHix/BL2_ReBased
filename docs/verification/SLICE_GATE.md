@@ -141,10 +141,11 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     down: `Maya revived to full health after the fight` without `lethal damage at the end of the fight` means this.
 - **The respawn's hold (since 2026-11-12, the respawn wait split).** A respawn now starts with a 3.0 s hold before Maya
   reaches the station ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "The host's fee and message"). `bleed_out_respawn`
-  is judged at the arrival, not at the respawn start, and also FAILs unless the hold was seen with Maya hidden and her
-  pawn's input off in every frame of it, and the arrival came 3.0 s after the start, late by at most the longest frame of
-  the hold. Its detail gives "respawned N s after going down" from the walker's down and respawn times (the same 20 s as
-  before), then the hold. The waits for her own respawn (the restore after the fight, and the unforced variant's wait for a
+  is judged once the respawn gives her input back (9.8 s after its start), not at the respawn start. It also FAILs unless
+  the hold was seen with Maya hidden and her pawn's input off in every frame of it, the arrival came 3.0 s after the start,
+  late by at most the longest frame, and she is then visible with her input on again (the restore). Its detail gives
+  "respawned N s after going down" from the walker's down and respawn times (the same 20 s as before), then the hold and
+  the restore. The waits for her own respawn (the restore after the fight, and the unforced variant's wait for a
   link group) last until input is back, 9.8 s after the respawn start, so no later link starts while she is held.
 
 ## Current link table

@@ -1535,8 +1535,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     case EStep::Bleed: {
         const bool bRespawned = W->LastRespawnAt() > RespawnAtBefore;
         if (!bRespawned && StepTime < BleedTimeout) return;
-        // The respawn starts with a 3.0 s hold (observed in game): sampled every tick until she reaches the station, which is when
-        // this link is judged. Each held frame must have her hidden and her pawn's input off.
+        // The respawn starts with a 3.0 s hold (observed in game): sampled every tick until she reaches the station. Each held frame
+        // must have her hidden and her pawn's input off. The link is judged once the timeline gives her input back, and she must
+        // then be visible with her input on again (the restore, which nothing else checks on the actor itself).
         using EMoment = FOpenWillowRespawnTimeline::EMoment;
         const FOpenWillowRespawnTimeline& Timeline = W->GetRespawnTimeline();
         if (bRespawned)
@@ -1550,6 +1551,10 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 if (StepTime < BleedTimeout) return;
             }
         }
+        if (bRespawned && W->IsRespawning() && StepTime < BleedTimeout) return;
+        const bool bRestored = bRespawned && !W->IsRespawning() && !W->IsHidden() && W->InputEnabled();
+        const FString Restore = FString::Printf(TEXT("%s %.2fs after the start (hidden %d, input on %d)"), bRestored ? TEXT("restored") : TEXT("NOT restored"),
+            Timeline.ReachedAt(EMoment::InputBack) - Timeline.StartedAt(), W->IsHidden(), W->InputEnabled());
         // The arrival comes on the first walker tick at or after 3.0 s, so it is late by at most the longest frame seen.
         const float Held = Timeline.ReachedAt(EMoment::Arrival) - Timeline.StartedAt();
         const bool bHold = HoldFrames > 0 && HoldFramesHiddenLocked == HoldFrames && Timeline.ReachedAt(EMoment::Arrival) >= 0.f
@@ -1557,13 +1562,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         const FString Hold = FString::Printf(TEXT("held %.3fs (%d of %d frames hidden and without input, longest frame %.3fs)"), Held,
             HoldFramesHiddenLocked, HoldFrames, HoldMaxDelta);
         if (bLethalApplied) Fixture(TEXT("down state from the test's lethal damage"));
-        if (bRespawned && bHold && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
+        if (bRespawned && bHold && bRestored && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString(bUnforced && bEnemyDown && !bLethalApplied ? TEXT("how=after_enemy_down: ") : TEXT(""))
-                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, then at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
-                W->LastRespawnAt() - W->LastDownAt(), *Hold, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation),
+                + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, %s, then at %s, %.0f uu from the death spot, health %.0f/%.0f, mission status %d"),
+                W->LastRespawnAt() - W->LastDownAt(), *Hold, *Restore, *W->GetActorLocation().ToCompactString(), FVector::Dist(W->GetActorLocation(), DeathLocation),
                 W->GetHealth(), W->GetMaxHealth(), Quest ? Quest->Status() : -1));
-        else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, %s, down %d, health %.0f/%.0f after %.0fs"),
-            bRespawned, *Hold, W->IsDown(), W->GetHealth(), W->GetMaxHealth(), StepTime));
+        else FailLink(TEXT("bleed_out_respawn"), FString::Printf(TEXT("respawned %d, %s, %s, down %d, health %.0f/%.0f after %.0fs"),
+            bRespawned, *Hold, *Restore, W->IsDown(), W->GetHealth(), W->GetMaxHealth(), StepTime));
         Finish(FString());
         break;
     }

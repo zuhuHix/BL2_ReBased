@@ -520,6 +520,8 @@ void OpenWillowControls::TickTest(AOpenWillowMayaHUD& Hud, AOpenWillowWalker& Ma
         break;
     case 43:
         // A page open when she respawns. She may have respawned already on a slow machine: send her down again, so the row always sees one.
+        // Not while that respawn still holds her: hits are ignored in its hold, so wait until her input is back.
+        if (Maya.IsRespawning()) { NextAt = Now + .1f; return; }
         if (!Maya.IsDown()) Maya.TakeDamage(Maya.GetShield() + Maya.GetHealth() + 1.f, FDamageEvent(), nullptr, nullptr);
         RespawnBefore = Maya.LastRespawnAt();
         Hud.ToggleMissions();

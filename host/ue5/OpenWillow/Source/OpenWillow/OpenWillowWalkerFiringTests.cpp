@@ -716,9 +716,15 @@ void AOpenWillowWalker::RunFiringTest(float Now)
             Phase = 2;
             break;
         }
-        if ((bReloading || Now < PullAt + 1.f) && Now < PullAt + 8.f) break;
-        UE_LOG(LogTemp, Display, TEXT("OWFIRING lifecycle id=%s case=%s first_shot=%d extra_shots=%d"), *Id,
-            bReload ? TEXT("reload") : TEXT("respawn"), ShotsAfter > ShotsBefore ? 1 : 0, OpenWillowFiring::Counts.Shots - ShotsAfter);
+        // A respawn holds Maya, keeps her gear away until 4.5 s after the arrival and her input off until the cost display
+        // (FOpenWillowRespawnTimeline). Shots the burst still owed would fire once the gear is back unless the respawn's
+        // Burst.interrupt() dropped them, so the count runs until input is back and 1 s more: the interrupt is what keeps it at 0,
+        // not the gear lock. The next gun also starts only then, with her input back.
+        const float CountUntil = bReload ? PullAt + 1.f : RespawnTimeline.At(FOpenWillowRespawnTimeline::EMoment::InputBack) + 1.f;
+        const float GiveUpAt = PullAt + 8.f + (bReload ? 0.f : FOpenWillowRespawnTimeline::Offset(FOpenWillowRespawnTimeline::EMoment::InputBack));
+        if ((bReloading || IsRespawning() || Now < CountUntil) && Now < GiveUpAt) break;
+        UE_LOG(LogTemp, Display, TEXT("OWFIRING lifecycle id=%s case=%s first_shot=%d extra_shots=%d counted_s=%.2f"), *Id,
+            bReload ? TEXT("reload") : TEXT("respawn"), ShotsAfter > ShotsBefore ? 1 : 0, OpenWillowFiring::Counts.Shots - ShotsAfter, Now - PullAt);
         Phase = 0;
         ++Segment;
         Step = 2;

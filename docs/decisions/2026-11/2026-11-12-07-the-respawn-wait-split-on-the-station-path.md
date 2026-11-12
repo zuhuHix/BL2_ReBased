@@ -21,14 +21,24 @@ within a frame or two.
   host takes the cost display, which lies inside that bracket). Also that nothing reaches her during the hold (inferred
   from the game's holding cell, not tried), and that hits land from the arrival on while she is still hidden. The path
   without a station was not observed, and nothing is said here about the visuals.
+- A known host difference, `UNVERIFIED` for what it does to a fight: in the game she spends the hold in a holding cell
+  far from the map. The host leaves her where she went down, as an invisible capsule that still collides, so enemies
+  keep aiming and shooting at that spot and their projectiles stop on her without damage. A teleport by any other
+  system during the hold is overwritten at the arrival.
+- Every held key is let go at the respawn start (fire, aim, sprint, crouch, jump), because a key released during the
+  input lock never reaches its release handler.
 - The fee rule is unchanged, and so is a second respawn before the charge (it starts the timeline again and replaces the
   fee). The charge still falls due while she is down again. One consequence of the hold: she can only be down again
   before the charge after the arrival.
-- The slice gate's `bleed_out_respawn` link is judged at the arrival now. It also FAILs unless the hold was seen with
+- The slice gate's `bleed_out_respawn` link now waits past the arrival. It also FAILs unless the hold was seen with
   Maya hidden and without input in every frame, and the arrival came 3.0 s after the start, late by at most the longest
   frame of the hold. Its "respawned N s after going down" now comes from the walker's own down and respawn times, so it
   is the same 20 s as before. The gate's waits for her own respawn last until input is back, so no later link starts
-  while she is held. The HUD down-shot run waits for the same moment before its "respawned" frame.
+  while she is held. The link is judged once input is back, and it also FAILs unless she is then visible with her
+  input on again: this is the only check on the actor's restore. The HUD down-shot run, the weapon-firing suite's burst
+  respawn case and the controls suite's second down wait for the same moment; the firing case keeps counting shots
+  until then, so a burst that still owed shots would fire them once the gear is back and fail its `extra_shots=0`. The
+  quest suite's wait for the respawn grows by the hold (`HoldSeconds`).
   `tools/check_slice_gate.py` reads only the link names and the `how=` token, so it is unchanged.
 
 Checked by this lane: the UE module build and the light suite. Written but not run by this lane (it needs the editor):

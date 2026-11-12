@@ -1927,7 +1927,8 @@ void UOpenWillowQuest::RunTest(float Delta)
             Check(Walker->IsDown() && Walker->GetHealth() == 0.f && Respawns == RespawnsBeforeDeath, TEXT("player_death_goes_down_first"));
             return;
         }
-        if (Waiting(Respawns > RespawnsBeforeDeath, 0.5f + 25.f)) return;
+        // The respawn is counted at the station, after the respawn's hold.
+        if (Waiting(Respawns > RespawnsBeforeDeath, 0.5f + 25.f + FOpenWillowRespawnTimeline::HoldSeconds)) return;
         const int32 Before = RespawnsBeforeDeath;
         Check(Respawns == Before + 1, TEXT("player_death_triggers_respawn"));
         Check(Walker->GetActorLocation().Equals(Data.OracleRespawnLocation, 1.f), TEXT("respawn_at_decoded_station_exit_point"));

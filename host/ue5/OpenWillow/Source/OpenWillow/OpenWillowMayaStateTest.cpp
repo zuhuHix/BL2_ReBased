@@ -308,6 +308,16 @@ bool FOpenWillowRespawnWaitSplitTest::RunTest(const FString&)
     TestTrue(TEXT("respawn_wait_split: the fee falls due with the timeline's fee moment and its rule is unchanged"),
         Fee.LastFee() == 70 && Money == 930 && Fee.LastChargedAt() == T.ReachedAt(EMoment::Fee));
 
+    // One long frame past the whole timeline (a hitch, a pause): every moment still comes, in order, each once, in that frame.
+    FTimeline Jump;
+    Jump.Begin(200.f);
+    TArray<EMoment> InOneFrame;
+    for (EMoment M = Jump.Advance(200.f + FTimeline::FeeSeconds + 5.f); M != EMoment::Count; M = Jump.Advance(200.f + FTimeline::FeeSeconds + 5.f))
+        InOneFrame.Add(M);
+    TestTrue(TEXT("respawn_wait_split: one frame past the end gives every moment once, in order"), InOneFrame == Expected
+        && !Jump.IsHeld() && !Jump.IsHidden() && !Jump.IsGearAway() && !Jump.IsInputLocked()
+        && Jump.Advance(300.f) == EMoment::Count);
+
     // A second respawn before the charge starts the timeline again and replaces the fee, as before the split.
     FTimeline Twice;
     FOpenWillowRespawnFee Replaced;

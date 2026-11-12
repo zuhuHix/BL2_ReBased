@@ -371,9 +371,14 @@ void AOpenWillowWalker::Respawn()
     MayaState.Respawn(Now);
     RespawnTimeline.Begin(Now);
     RespawnFee.Schedule(RespawnTimeline);
+    // Every held key is let go here: a key released during the input lock never reaches its release handler, so a flag it
+    // left set (sprint, crouch, jump, aim, fire: the pawn's IE_Released bindings) would still act once input is back.
     bFireHeld = false;
     Burst.interrupt();   // death ends the burst in progress: no shots owed after the respawn
     AimReleased();
+    SprintReleased();
+    CrouchReleased();
+    StopJumping();
     CancelReload();
     // A new body at a station: no status page stays up over it, and the page's UI-only input goes with it. Going down leaves a
     // page alone (what the game does then is UNVERIFIED: docs/verification/CONTROLS.md).
