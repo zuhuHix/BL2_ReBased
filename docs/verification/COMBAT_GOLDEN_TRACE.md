@@ -78,8 +78,8 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
    the kill ran `WillowPawn.Dying.TakeDamage` (a state function). `AIDefinition.OnKilledPawn` ran only for deaths whose killer was an AI mind (3 of the 4),
    not for the player's kill.
 6. **Kill experience.** `CalculateExperiencePointsForKill` returned **112.5** for the level-5 adult bullymong against the level-8 player and
-   `AwardCombatExperience` was called with 112.5; the player's experience went 26,218 -> 26,263 (**+45, 0.4 of the award**). A level-6 baby
-   bullymong killed by the level-10 player: award **50.0**, experience 26,263 -> 26,270 (**+7, 0.14 of the award**). No `ExpEarn` call was seen (the
+   `AwardCombatExperience` was called with 112.5; the player's experience rose by 45 (**+45, 0.4 of the award**). A level-6 baby
+   bullymong killed by the level-10 player: award **50.0**, experience rose by 7 (**+7, 0.14 of the award**). No `ExpEarn` call was seen (the
    crediting is native inside `AwardCombatExperienceToParty`). The scaling between award and pool is read from two cases only; its rule is open.
 7. **The pool rolls (what script saw, `SpawnBalancedInventoryFromPool`):** one call per pool that fired, from inside `DropLootOnDeath`, context the
    dying pawn. Adult bullymong (item game stage 7): `Pool_Money_1or2` -> **3** `Money_Little` items (balance `ItemGrade_Currency_Money_Little`,
@@ -91,7 +91,7 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
    left when read some 20-120 s later. Pools that failed their chance roll make no call, so they are invisible.
 8. **Pickup path.** Money, by touch (one W step): `TouchedPickupable` -> `PickupSomething` -> `WillowPickup.DenyPickupAttempt` (false) ->
    `WillowPickup.GiveTo` -> `HandlePickup` -> `ServerAnnounceItemPickup` -> `WillowInventoryManager.AddInventory` -> `RemoveFromInventory` (the money
-   item is consumed) -> `PickedUpBy` -> `WillowPickup.Destroyed` -> `UnTouchedPickupable`; three pickups raised the cash 2,525 -> 2,534 (3 each).
+   item is consumed) -> `PickedUpBy` -> `WillowPickup.Destroyed` -> `UnTouchedPickupable`; three pickups raised the cash by 9 (3 each).
    Weapon, by the use key with the backpack at 13 of 12: `PickupSomething` -> `DenyPickupAttempt`, nothing else ("FULL" on the prompt, no pickup).
    With the slot limit raised in memory: `PickupSomething` -> `DenyPickupAttempt` (false) -> `GiveTo` -> `HandlePickup` ->
    `ServerAnnounceWeaponPickup` -> `AddInventory` -> `AddInventoryToBackpack` -> `PickedUpBy` -> `Destroyed` -> `UnTouchedPickupable`, all in
@@ -132,9 +132,9 @@ Times are game time (`WorldInfo.TimeSeconds`) from the first call of the step un
     `TargetPoint` (1, 0, 2), all at the arrival station of `Ice_P` (within about 400 uu of one another); the nearest/active-station choice
     itself is native and not seen.
 16. **The fee.** `WillowPlayerPawn.ShowRespawnDialog` ran **11.80 s after `ResurrectPlayer`** (11.803, 11.799, 11.816), then
-    `WillowPlayerReplicationInfo.AddCurrencyOnHand(0, -N)` and `ClientShowRespawnDialog(AmountCharged = N, reason 1)`. N was **190 for 2,715 cash,
-    177 for 2,534, 165 for 2,357**: 0.07 x cash rounded half up (190.05, 177.38, 164.99), and the cash went 2,715 -> 2,525 -> (+9 loot) 2,534 -> 2,357
-    -> 2,192.
+    `WillowPlayerReplicationInfo.AddCurrencyOnHand(0, -N)` and `ClientShowRespawnDialog(AmountCharged = N, reason 1)`. N was **0.07 x cash rounded half up in 3 of 3
+    respawns**: two exact products had a fraction below a half and rounded down, one above a half and rounded up, and each fee was taken from
+    the cash at the time (the second after the +9 of loot in step 8). The amounts are in the maintainer's private record.
 17. **Second wind (kill while down).** Bleed timer 7.6 s in, one shotgun shot killed the baby bullymong. Same frame as its `Died`: `injured.KilledEnemy`
     (`WillowPlayerPawn` and `WillowPawn` copies) and health already 25 % of maximum (**136.97 = 0.25 x 547.874**); the next frame
     (65 ms later, a long frame under the hooks) `GoFromInjuredToHealthy`: shield **162.53 = 0.9 x 180.589**, injured state 0,
@@ -189,7 +189,7 @@ NATIVE_DAMAGE_DEATH.md:
   state, 0.84 s to the ragdoll state, **death camera 5.76 s** (answers the note's open "duration of the death camera before respawn").
 - **Section 10.4 respawn: confirmed**: `InjuredRespawn` -> `HandlePlayerDeathResurrection` -> `ResurrectPlayer(IDied)` -> `ResurrectAtLocation` -> `GoFromInjuredToHealthy`,
   full health and shield, five refill behaviors, exit point from the station's round-robin (_9, _10, _11 consecutively). **Fee: confirmed 0.07 x cash,
-  rounded half up, three cases** (190, 177, 165). **Contradicted:** the fee is charged **11.8 s** after arrival (the note read 2.0 s for the non-station
+  rounded half up, three cases** (step 16; the amounts are private). **Contradicted:** the fee is charged **11.8 s** after arrival (the note read 2.0 s for the non-station
   path and called the station path untraced); it is charged at `ShowRespawnDialog`, not at death or arrival. Station choice itself is not seen.
 - **Second wind: confirmed** (kill while down -> health to 25 % of maximum, shield to 90 %, states cleared by `GoFromInjuredToHealthy` on the next
   tick). Refinement: health is already raised in the kill frame (before `GoFromInjuredToHealthy`, with no `SetHealth` hook call); the shield and the

@@ -366,22 +366,23 @@ check('A shield in the backpack is sold unless it is worn', () => {
 });
 
 check('Ammo and health state objects are checked when present, and a health float is allowed', () => {
-  const good = state({ammo: {pistol: {current: 40, max: 100}}, health: {current: 136.97, max: 400}});
+  // Invented values throughout, not a save's.
+  const good = state({ammo: {pistol: {current: 40, max: 100}}, health: {current: 120.5, max: 400}});
   assert.equal(model.validateState(good).ok, true);
   assert.equal(model.validateState(state({ammo: {pistol: {current: 1.5, max: 100}}})).ok, false);
   assert.equal(model.validateState(state({ammo: 'many'})).ok, false);
   assert.equal(model.validateState(state({health: {current: -1, max: 400}})).ok, false);
   assert.equal(model.validateState(state({health: {current: 'high', max: 400}})).ok, false);
   // The shield block (vendor movie C) is optional and checked like health.
-  assert.equal(model.validateState(state({shield: {current: 12.5, max: 181}})).ok, true);
+  assert.equal(model.validateState(state({shield: {current: 12.5, max: 150}})).ok, true);
   assert.equal(model.validateState(state({shield: {current: 5}})).ok, false);
   assert.equal(model.validateState(state({shield: 'full'})).ok, false);
 });
 
 check('The pool note shows the ammo pool for an ammo row and the health for a health row only', () => {
-  const current = state({ammo: {pistol: {current: 40, max: 100}}, health: {current: 136.97, max: 400}});
+  const current = state({ammo: {pistol: {current: 40, max: 100}}, health: {current: 120.5, max: 400}});
   assert.equal(model.poolNote(current, {kind: 'ammo', ammoType: 'pistol'}), '40/100 rounds in the pool');
-  assert.equal(model.poolNote(current, {kind: 'health'}), 'Health 136/400');
+  assert.equal(model.poolNote(current, {kind: 'health'}), 'Health 120/400');
   assert.equal(model.poolNote(current, {kind: 'weapon'}), '');
   assert.equal(model.poolNote(current, {kind: 'ammo', ammoType: 'grenade'}), '');
 });

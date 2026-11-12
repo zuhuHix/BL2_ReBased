@@ -28,8 +28,10 @@ from pathlib import Path
 MISSION = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire"
 
 # (label, --slice-run step). The labels are what RULES refer to; the step list is the one lane L2 compared with the real game.
+# The experience in player:8:<total> is invented (21,000: inside level 8, which runs from 20,208 to 28,126 by the curve in NATIVE_PROGRESSION.md,
+# and still inside it after the turn-in's 395), not the traced save's.
 STEPS = [
-    ("stage", "stage:8"), ("player", "player:8:26218"),
+    ("stage", "stage:8"), ("player", "player:8:21000"),
     ("use_offer", "use"), ("accept", "accept"),
     ("kickoff", "tick:0.02"), ("t01", "tick:0.1"), ("dialog02", "tick:0.5"), ("t1", "tick:1"),
     ("range", "range"), ("set2", "tick:1"),
@@ -42,7 +44,7 @@ STEPS = [
 
 # The LINES run: the same story with lines that take time (every line 2 s, Marcus a registered pawn talker), gaps long enough for each line.
 STEPS_LINES = [
-    ("stage", "stage:8"), ("talker", "talker:GD_Dialog_NPC.Names.DialogName_Marcus"), ("lines", "lines:2"), ("player", "player:8:26218"),
+    ("stage", "stage:8"), ("talker", "talker:GD_Dialog_NPC.Names.DialogName_Marcus"), ("lines", "lines:2"), ("player", "player:8:21000"),
     ("use_offer", "use"), ("accept", "accept"), ("kickoff", "tick:0.02"), ("t01", "tick:3"), ("t02", "tick:3"),
     ("range", "range"), ("set2", "tick:1"), ("spawn", "spawn"), ("after_spawn", "tick:1.5"), ("chain", "tick:2.5"), ("chain_end", "tick:2.5"),
     ("hit", "hit:fire"), ("dialog05", "tick:0.02"),

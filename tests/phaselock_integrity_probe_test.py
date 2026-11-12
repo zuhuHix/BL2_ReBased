@@ -226,8 +226,8 @@ def test_hud_evidence_needs_samples_on_both_sides_of_the_kill():
         assert result['before'] == 1 and result['after'] == 0 and result['usable'] is False
 
 
-def shield_world(ns, own_level=3, own_max=181.0):
-    """A stub inventory, looked up fresh as the probe does. As live: equipping or unequipping makes a new object of the same shield."""
+def shield_world(ns, own_level=4, own_max=150.0):
+    """A stub inventory, looked up fresh as the probe does; its levels and capacities are invented, not a save's. As live: equipping or unequipping makes a new object of the same shield."""
     made = [0]
 
     def shield(name, level):
@@ -273,7 +273,7 @@ def test_a_shield_row_counts_only_for_its_own_level_and_a_fresh_read():
     ns = load()
     world = shield_world(ns)
     start = ns['pi_shields'](True)
-    assert start['equipped']['name'] == 'Own' and start['max_strength'] == 181.0 and start['player_level'] == 8
+    assert start['equipped']['name'] == 'Own' and start['max_strength'] == 150.0 and start['player_level'] == 8
     assert start['manager_fields'] == ['ItemChain']
     world['next'] = [world['shield']('Test30', 30)]
     tried = ns['pi_shield_try'](30)
@@ -288,7 +288,7 @@ def test_a_shield_row_counts_only_for_its_own_level_and_a_fresh_read():
     read = ns['pi_shield_read']()
     assert read['counts'] is True and read['max_strength'] == 900.0
     ns['pi_shield_restore']()
-    world['max'] = 181.0
+    world['max'] = 150.0
     assert ns['pi_shields_check']()['ok'] is True and not world['im'].Backpack
 
     # The level came back clamped: the row is kept and does not count.
@@ -299,11 +299,11 @@ def test_a_shield_row_counts_only_for_its_own_level_and_a_fresh_read():
     read = ns['pi_shield_read']()
     assert read['counts'] is False and read['reason'] == 'level 20, requested 50' and read['max_strength'] == 700.0
     ns['pi_shield_restore']()
-    world['max'] = 181.0
+    world['max'] = 150.0
 
     # Her own level is refused, and nothing is spawned.
-    world['next'] = [world['shield']('Same', 3)]
-    assert 'skipped' in ns['pi_shield_try'](3) and len(world['next']) == 1 and not world['im'].Backpack
+    world['next'] = [world['shield']('Same', 4)]
+    assert 'skipped' in ns['pi_shield_try'](4) and len(world['next']) == 1 and not world['im'].Backpack
 
     # Nothing spawned, and an equip that does not take.
     world['next'] = []
@@ -320,12 +320,12 @@ def test_a_shield_row_counts_only_for_its_own_level_and_a_fresh_read():
 def test_a_spawn_with_her_shields_identity_is_refused_and_she_keeps_it():
     ns = load()
     world = shield_world(ns)
-    world['im'].Backpack.append(world['shield']('Kept', 3))
+    world['im'].Backpack.append(world['shield']('Kept', 4))
     ns['pi_shields'](True)
     readied = world.get('readied', 0)
     # A clamped level with her shield's name, then with the backpack shield's: not added, not equipped, nothing to remove.
     for name in ('Own', 'Kept'):
-        world['next'] = [world['shield'](name, 3)]
+        world['next'] = [world['shield'](name, 4)]
         tried = ns['pi_shield_try'](15)
         assert 'skipped' in tried and 'identity' in tried['skipped'], tried
         assert world.get('readied', 0) == readied and len(world['im'].Backpack) == 1
@@ -364,13 +364,13 @@ def test_a_manager_without_an_item_chain_finds_no_shield_and_says_so():
     world = shield_world(ns)
     del world['im'].__dict__['ItemChain']
     start = ns['pi_shields'](True)
-    assert start['equipped'] is None and start['max_strength'] == 181.0
+    assert start['equipped'] is None and start['max_strength'] == 150.0
 
 
 def test_her_shield_is_found_by_level_balance_and_name():
     ns = load()
     world = shield_world(ns)
-    twin = world['shield']('Other Name', 3)      # the same level and balance, as the live save holds
+    twin = world['shield']('Other Name', 4)      # the same level and balance, as the live save holds
     world['im'].Backpack.append(twin)
     ns['pi_shields'](True)
     world['next'] = [world['shield']('Test', 15)]
@@ -389,7 +389,7 @@ def test_a_restore_that_cannot_identify_her_shield_says_so_and_does_not_guess():
         for item in list(world['im'].Backpack):
             world['im'].Backpack.remove(item)
         if extra:
-            world['im'].Backpack += [world['shield']('Own', 3), world['shield']('Own', 3)]
+            world['im'].Backpack += [world['shield']('Own', 4), world['shield']('Own', 4)]
         before = world.get('readied')
         try:
             ns['pi_shield_restore']()

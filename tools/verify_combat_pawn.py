@@ -14,7 +14,7 @@ is stored here: the live values are read from the ignored dumps under local/real
 The down rows (plan step S-f, docs/verification/COMBAT_DOWN_RESPAWN.md) are about the stock injured state running on the VM, and are only measured by --vm of the six-injury run
 whose step list is in that document: bleed-out total and its successive-injury counter per injury (12 s, 12 s, 8 s for the counter read 0, 1, 2 after the injury began, as
 lane L5b saw them), the overshoot of the script's timer past the total (a frame), the length of the death camera (5.76 s), the health share after a second wind (0.25) and after a respawn (1.0), and the respawn fee
-(0.07 of the cash, rounded half up, at most the cash; 190, 177, 165 on 2,715, 2,534, 2,357 as lane L3 saw them). --live has no source for them (MISSING).
+(0.07 of the cash, rounded half up, at most the cash, as lane L3 saw it in 3 of 3 respawns; the cash the rows expect is invented). --live has no source for them (MISSING).
 
 The loot rows (plan step S-g, docs/verification/COMBAT_LOOT.md) are about the death roll on the VM, measured by --vm of the loot run whose step list is in that document (it may be a
 second JSON: --vm takes several files and merges their rows). Loot is random, so most rows are distribution comparisons: the pool chances against the numbers in the data (the constants
@@ -156,7 +156,7 @@ ROWS = [
     Row("kill.PrimalBeastBaby.L6.p10.L3", "kill", "PrimalBeastBaby", 6, 10, source="L3"),
 ]
 
-# The six injuries of the S-f run (COMBAT_DOWN_RESPAWN.md): 1 to 3 are first injuries ending in a respawn (cash 2,715, 2,534, 2,357), 4 to 6 follow each other within the 30 s
+# The six injuries of the S-f run (COMBAT_DOWN_RESPAWN.md): 1 to 3 are first injuries ending in a respawn (invented cash 3,000, 2,410, 1,620), 4 to 6 follow each other within the 30 s
 # window with a second wind between them, so the counter read after each is 0, 1, 2 and the third bleeds out in 8 s.
 SUCCESSIVE = {1: 0, 2: 0, 3: 0, 4: 0, 5: 1, 6: 2}
 for _k, _n in SUCCESSIVE.items():
@@ -166,7 +166,7 @@ for _k in (1, 2, 3, 6):
     ROWS.append(Row(f"down.bleed_over.{_k}", "down_over"))
     ROWS.append(Row(f"down.camera.{_k}", "down_camera"))
     ROWS.append(Row(f"down.respawn_health.{_k}", "down_share", value=RESPAWN_HEALTH))
-    ROWS.append(Row(f"down.fee.{_k}", "down_fee", cash={1: 2715, 2: 2534, 3: 2357}.get(_k)))
+    ROWS.append(Row(f"down.fee.{_k}", "down_fee", cash={1: 3000, 2: 2410, 3: 1620}.get(_k)))
 for _k in (4, 5):
     ROWS.append(Row(f"down.second_wind_health.{_k}", "down_share", value=SECOND_WIND_HEALTH))
 
@@ -519,14 +519,14 @@ def self_test():
     # The down rows (invented VM values; the live numbers they stand for are in the constants above).
     row_of = {row.id: row for row in ROWS}
     expect("bleed_total N=0,1,2,3", [bleed_total(n) for n in (0, 1, 2, 3)], [12.0, 12.0, 8.0, 4.0])
-    expect("respawn_fee rounds half up", [respawn_fee(c) for c in (2715, 2534, 2357, 50, 10)], [190, 177, 165, 4, 1])
+    expect("respawn_fee rounds half up", [respawn_fee(c) for c in (3000, 2410, 1620, 50, 10)], [210, 169, 113, 4, 1])
     expect("respawn_fee never above the cash", respawn_fee(0), 0)
     expect("down rows listed", sum(1 for r in ROWS if r.kind.startswith("down")), 12 + 4 + 4 + 4 + 4 + 2)
     expect("down total 3rd (counter 2) is 8", expected(row_of["down.total.6"]), 8.0)
     down_vm = {"down.total.1": 12.0, "down.total.5": 8.0, "down.successive.5": 1, "down.successive.6": 1, "down.bleed_over.1": 0.0334,
                "down.bleed_over.2": 0.08, "down.second_wind_health.4": 0.25, "down.respawn_health.1": 0.99,
-               "down.fee.1": {"cash": 2715, "fee": 190}, "down.fee.2": {"cash": 2534, "fee": 178}, "down.fee.3": {"cash": 2000, "fee": 165},
-               "down.fee.6": {"cash": 2192, "fee": 153}}
+               "down.fee.1": {"cash": 3000, "fee": 210}, "down.fee.2": {"cash": 2410, "fee": 170}, "down.fee.3": {"cash": 2000, "fee": 113},
+               "down.fee.6": {"cash": 1507, "fee": 105}}
     down_status = {rid: check_row(row_of[rid], down_vm.get(rid))[0] for rid in row_of if rid.startswith("down.")}
     expect("down total PASS", down_status["down.total.1"], "PASS")
     expect("down total with the old 12/8/4 reading FAIL", down_status["down.total.5"], "FAIL")
@@ -543,7 +543,7 @@ def self_test():
     expect("down fee off by one FAIL", down_status["down.fee.2"], "FAIL")
     expect("down fee on the wrong cash FAIL", down_status["down.fee.3"], "FAIL")
     expect("down fee by the rule when the scenario fixes no cash PASS", down_status["down.fee.6"], "PASS")
-    expect("down fee half row MISSING", check_row(row_of["down.fee.1"], {"cash": 2715})[0], "MISSING")
+    expect("down fee half row MISSING", check_row(row_of["down.fee.1"], {"cash": 3000})[0], "MISSING")
     # The loot rows (invented VM numbers).
     expect("loot rows listed", sum(1 for r in ROWS if r.kind.startswith("loot")), 8 + 16 + 9 + 3 + 2 + 2 + 1 + 1 + 1)
     loot_vm = {"loot.batch.adult.n": 500, "loot.batch.baby.n": 500, "loot.batch.low.n": 100}

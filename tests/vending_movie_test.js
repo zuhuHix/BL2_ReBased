@@ -159,7 +159,7 @@ async function drawnCalls(state) {
 function machineState(kind, extra = {}) {
   return {serial: 1, open: true, opening: 1, machine: {id: 'm', kind, title: 'T'}, money: 100, eridium: 0, capacity: 12, used: 1,
     resetSeconds: 60, message: '', shop: [], backpack: [], buyback: [], featured: null,
-    health: {current: 200.6, max: 400}, shield: {current: 90.4, max: 181}, ...extra};
+    health: {current: 200.6, max: 400}, shield: {current: 75.4, max: 150}, ...extra};   // invented values, not a save's
 }
 
 // The guard wins the race: the page's timeout timer is cleared, not left pending.
@@ -239,7 +239,7 @@ async function setupThrows() {
 
   const shieldOf = calls => calls.filter(call => call[0].endsWith('.shieldBar'));
   const zed = await drawnCalls(machineState('health'));
-  assert.deepEqual(shieldOf(zed).find(call => call[1] === 'SetShield'), ['_level1.vendingMachine.shieldBar', 'SetShield', 90, 181]);
+  assert.deepEqual(shieldOf(zed).find(call => call[1] === 'SetShield'), ['_level1.vendingMachine.shieldBar', 'SetShield', 75, 150]);
   assert.deepEqual(shieldOf(zed).find(call => call[1] === '=_visible'), ['_level1.vendingMachine.shieldBar', '=_visible', true]);
   // Both panels get the frame label for the machine kind.
   assert.ok(zed.some(call => call[0] === '_level1.owTPI.main.storagePanel' && call[1] === 'SetBackground' && call[2] === 'medicine'));

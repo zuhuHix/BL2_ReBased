@@ -82,7 +82,7 @@ Times are offsets from the first call of the step, game time. "Same frame" means
    `ClientSpawnMissionRewardUI`; then `TriggerMissionStatusChangedDelegates`, **`RemoveMissionWeapons`, `RemoveFromInventory`,
    `ClientRemoveMissionWeapons`**, the waypoint's status reaction, `TriggerActiveMissionChangedDelegates` (the tracked mission was
    no longer the Fire mission: snapshot 13 shows the plot mission "Welcome to Sanctuary" tracked again); after `CompleteMission` returned: `OnPlayerTurnedInMission` on Marcus, `PlayMissionTurnedInDialog` (tag
-   `VO_NPC_MissionTurnedIn`), `PlayTurnIn` (`Default` link 14). Experience went 26,218 -> 26,613, level stayed 8. Credits before
+   `VO_NPC_MissionTurnedIn`), `PlayTurnIn` (`Default` link 14). Experience rose by 395, level stayed 8. Credits before
    XP before items before the reward UI, as the note says.
 10. **Reward screen (Enter again, 14.9 s later in this run).** `MissionRewardsReceived`, called by the UI on the player's
     confirmation, not inside the turn-in. `AcceptOrSaveUnclaimedReward` was never called: with Marcus's mission screen open the
@@ -104,11 +104,13 @@ player's component.
 ## The VM side
 
 The VM run used a copy of `build/Release/ow-package.exe` (made 01:47, sha256 prefix `89dd649888ef84ee`; the build tree was rebuilt by
-another lane at 02:02, so it is not the current binary) in `local/realgame/L2/`:
+another lane at 02:02, so it is not the current binary) in `local/realgame/L2/`. The experience total in `player:8:<total>` is shown here as the invented 21,000 that
+`tools/verify_fire_event_order.py` uses (level 8 runs from 20,208 to 28,126, so the +395 keeps her there); the run itself used the
+traced save's total, which stays in the maintainer's private record:
 
 ```
 ow-package-copy.exe Sanctuary_Dynamic.upk --slice-run GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire --cooked <CookedPCConsole> \
-  stage:8 player:8:26218 use accept tick:0.02 tick:0.1 tick:0.5 tick:1 range tick:1 spawn tick:1 hit:fire tick:0.02 tick:2.5 tick:1 use turnin tick:0.1 tick:1
+  stage:8 player:8:21000 use accept tick:0.02 tick:0.1 tick:0.5 tick:1 range tick:1 spawn tick:1 hit:fire tick:0.02 tick:2.5 tick:1 use turnin tick:0.1 tick:1
 ```
 
 `hit:fire` is the VM's own fire-hit step (it needs no damage-type path). Fine-tick variants (0.01 s) were run for the windows
@@ -129,7 +131,7 @@ provider trace and the script report (the CLI does not print the VM's internal s
   `ChangeRemoteBehaviorSequenceState_84`, `UpdateMissionObjective_13`); Fire objective complete; ReadyToTurnIn after it;
   `RocksPaper_FireCompleted`; `RocksPaper_SendTargetBack` (VM 2.00-2.01 s, live 2.002 s) with the dummy's `RemoteEvent_44` and
   `ChangeRemoteBehaviorSequenceState_64`; `RocksPaper_TargetBack` twice (VM 3.00-3.01 s, live 3.002 s); `ExpEarn` 395 with
-  source 4; no currency, no item reward; Complete; experience pool 26,218 -> 26,613 with the level unchanged.
+  source 4; no currency, no item reward; Complete; experience pool +395 with the level unchanged.
 - **Out of order or in the wrong place: 4.** Dialog 03b against the `FinalObj` set; dialog 05 against `RocksPaper_FireCompleted`;
   the mission weapon grant; the mission weapon removal.
 - **Missing in the VM (live only): 5.** `AIHold_57` on the dummy's spawn; the mission's `ChangeRemoteBehaviorSequenceState_171`
