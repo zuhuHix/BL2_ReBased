@@ -412,7 +412,7 @@ class GameMixTest(unittest.TestCase):
 
     def test_a_random_volume_range_is_noted_not_applied(self):
         index, buses = invented_bank()
-        index[30] = (2, sound_body(30, 77, 20, props={0: -5.25}, ranged={0: (-2.5, 0.0)}))
+        index[30] = (2, sound_body(30, 77, 20, props={0: -5.25}, ranged={0: (-2.5, 0.5)}))
         db, notes = psa.source_gain({1: {5: [psa.volume_chain(30, index, index, buses)]}}, 77, FIRST)
         self.assertEqual(db, -13.75)
         self.assertTrue(any('random volume range' in n for n in notes))
@@ -428,12 +428,12 @@ class GameMixTest(unittest.TestCase):
     def test_gains_follow_the_files_order_a_missing_level_is_null_and_a_clamp_is_noted(self):
         class FakeMix:
             def entry_gains(self, entry, role):
-                return {1: (-8.75, []), 2: (None, ['unresolved: source 2 not reached from the event']), 3: (-200.0, [])}
+                return {1: (-8.75, []), 2: (None, ['unresolved: source 2 not reached from the event']), 3: (-200.5, [])}
         man = manifest([{'source': 1}, {'source': 2}, {'source': 3}])
         gains, notes = psa.build_gains({'fire': [os.path.join('d', '3.wav'), os.path.join('d', '1.wav'), os.path.join('d', '2.wav')]}, man, FakeMix())
         self.assertEqual(gains['fire'], [psa.MIN_GAIN_DB, -8.75, None])   # clamped to the host's floor; no level is null, never 0 dB
         self.assertIn('source 2', notes['fire'])
-        self.assertIn('source 3: sum -200.0 dB clamped to -144.0 dB', notes['fire'])
+        self.assertIn('source 3: sum -200.5 dB clamped to -144.0 dB', notes['fire'])
         self.assertTrue(notes['fire'].startswith('game data'))
 
     def test_two_entries_that_disagree_on_a_source_are_noted(self):
@@ -498,7 +498,7 @@ class GameMixTest(unittest.TestCase):
             psa.volume_chain(51, index, index, buses)
 
     def test_a_volume_that_is_not_a_volume_is_refused(self):
-        for bad in (float('nan'), float('inf'), 50.0, -120.0):
+        for bad in (float('nan'), float('inf'), 50.5, -120.5):
             index, buses = invented_bank()
             index[30] = (2, sound_body(30, 77, 20, props={0: bad}))
             with self.assertRaisesRegex(psa.MixError, 'object 30'):

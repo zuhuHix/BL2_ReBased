@@ -322,28 +322,28 @@ class LevelTableTest(unittest.TestCase):
     def test_balance_against_the_shot_matches_when_the_mix_is_the_games(self):
         shot = self.source('1.wav', 0.5, 0.5)
         equip = self.source('2.wav', 0.5, 0.17)    # about 9.4 dB under the shot's file
-        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [-14.0], 'equip': [-5.0]}}
+        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [-15.75], 'equip': [-3.25]}}
         shot_file, equip_file = lr.file_level(Path(shot)), lr.file_level(Path(equip))
         self.assertAlmostEqual(shot_file - equip_file, 20 * math.log10(0.5 / 0.17), places=1)
         # Recorded as the game would mix it, plus a 3 dB offset shared by the whole mix.
-        cues = [self.cue('fire', shot_file - 14 - 3), self.cue('equip', equip_file - 5 - 3)]
+        cues = [self.cue('fire', shot_file - 15.75 - 3), self.cue('equip', equip_file - 3.25 - 3)]
         rows = {r['role']: r for r in lr.level_table(cues, '', play)}
-        self.assertAlmostEqual(rows['equip']['game_vs_shot_db'], -20 * math.log10(0.5 / 0.17) - 5 + 14, delta=0.15)   # the files are about 9.37 dB apart; levels round to 0.1
+        self.assertAlmostEqual(rows['equip']['game_vs_shot_db'], -20 * math.log10(0.5 / 0.17) - 3.25 + 15.75, delta=0.15)   # the files are about 9.37 dB apart; levels round to 0.1
         self.assertAlmostEqual(rows['equip']['off_by_db'], 0.0, delta=0.15)
         self.assertEqual(rows['fire']['off_by_db'], 0.0)
 
     def test_a_role_quieter_than_the_games_balance_shows_how_far(self):
         shot = self.source('1.wav', 0.5, 0.5)
         equip = self.source('2.wav', 0.5, 0.5)
-        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [0.0], 'equip': [0.0]}}
+        play = {'roles': {'fire': [shot], 'equip': [equip]}, 'gains': {'fire': [-1.5], 'equip': [-1.5]}}
         level = lr.file_level(Path(shot))
-        rows = {r['role']: r for r in lr.level_table([self.cue('fire', level), self.cue('equip', level - 8)], '', play)}
-        self.assertEqual(rows['equip']['off_by_db'], -8.0)
+        rows = {r['role']: r for r in lr.level_table([self.cue('fire', level), self.cue('equip', level - 8.5)], '', play)}
+        self.assertEqual(rows['equip']['off_by_db'], -8.5)
 
     def test_a_positioned_role_gets_no_prediction(self):
         line = self.source('3.wav', 0.5, 0.5)
         text = 'LogTemp: Display: OWAUDIO play role=line:x channels=1 rate=8000 bytes=8000 gain_db=-7.25 at=Marcus_0 (the host called play; not heard)'
-        rows = lr.level_table([self.cue('line:x', -30.0)], text, {'roles': {'line:x': [line]}, 'gains': {'line:x': [-7.25]}})
+        rows = lr.level_table([self.cue('line:x', -30.5)], text, {'roles': {'line:x': [line]}, 'gains': {'line:x': [-7.25]}})
         self.assertTrue(rows[0]['positioned'])
         self.assertIsNone(rows[0]['expected_rms_dbfs'])
 
@@ -352,7 +352,7 @@ class LevelTableTest(unittest.TestCase):
         shot = self.source('1.wav', 0.5, 0.5)
         text = 'LogTemp: Display: OWAUDIO play role=fire channels=2 rate=8000 bytes=8000 gain_db=0.0 upmix=mono_to_stereo (the host called play; not heard)'
         for play in ({'roles': {'fire': [shot]}}, {'roles': {'fire': [shot]}, 'gains': {'fire': [None]}, 'gain_notes': {'fire': 'no game value: no game data given'}}):
-            rows = lr.level_table([self.cue('fire', -20.0)], text, play)
+            rows = lr.level_table([self.cue('fire', -20.5)], text, play)
             self.assertIsNone(rows[0]['expected_rms_dbfs'])
             self.assertEqual(rows[0]['prediction'], 'no game prediction')
         self.assertIn('no game data', rows[0]['gain_note'])
@@ -360,23 +360,23 @@ class LevelTableTest(unittest.TestCase):
     def test_each_gain_goes_with_its_own_file_before_the_median(self):
         files = [self.source('%d.wav' % n, 0.5, amplitude) for n, amplitude in ((1, 0.9), (2, 0.285), (3, 0.09))]   # about 10 dB apart
         levels = [lr.file_level(Path(f)) for f in files]
-        play = {'roles': {'hit': files}, 'gains': {'hit': [-20.5, 0.0, 0.0]}}
-        row = lr.level_table([self.cue('hit', -30.0)], '', play)[0]
-        paired = sorted([levels[0] - 20.5, levels[1], levels[2]])[1]
-        unpaired = sorted(levels)[1] + 0.0          # the median level plus the median gain: what the table must not do
+        play = {'roles': {'hit': files}, 'gains': {'hit': [-20.5, -0.5, -0.5]}}
+        row = lr.level_table([self.cue('hit', -30.5)], '', play)[0]
+        paired = sorted([levels[0] - 20.5, levels[1] - 0.5, levels[2] - 0.5])[1]
+        unpaired = sorted(levels)[1] - 0.5          # the median level plus the median gain: what the table must not do
         self.assertAlmostEqual(row['expected_rms_dbfs'], round(paired, 1), places=1)
         self.assertGreater(abs(row['expected_rms_dbfs'] - unpaired), 5)
 
     def test_a_role_with_some_null_gains_predicts_from_the_others_and_says_so(self):
         files = [self.source('1.wav', 0.5, 0.5), self.source('2.wav', 0.5, 0.05)]
-        row = lr.level_table([self.cue('hit', -30.0)], '', {'roles': {'hit': files}, 'gains': {'hit': [-6.0, None]}})[0]
-        self.assertAlmostEqual(row['expected_rms_dbfs'], round(lr.file_level(Path(files[0])) - 6, 1), places=1)
+        row = lr.level_table([self.cue('hit', -30.5)], '', {'roles': {'hit': files}, 'gains': {'hit': [-6.75, None]}})[0]
+        self.assertAlmostEqual(row['expected_rms_dbfs'], round(lr.file_level(Path(files[0])) - 6.75, 1), places=1)
         self.assertEqual(row['prediction'], 'from 1 of 2 file(s)')
 
     def test_the_guide_shows_partial_coverage_and_counts_every_cue(self):
         files = [self.source('1.wav', 0.5, 0.5), self.source('2.wav', 0.5, 0.05)]
         play_map = self.tmp / 'play.json'
-        play_map.write_text(json.dumps({'roles': {'fire': files, 'hit': files}, 'gains': {'fire': [-8.0, None], 'hit': [-14.5, -14.5]}, 'unresolved': {}}),
+        play_map.write_text(json.dumps({'roles': {'fire': files, 'hit': files}, 'gains': {'fire': [-8.75, None], 'hit': [-13.25, -13.25]}, 'unresolved': {}}),
                             encoding='utf-8')
         wav = self.tmp / 'listen.wav'
         write_wav(wav, 9.0, ((2.5, 0.5),))
@@ -394,7 +394,7 @@ class LevelTableTest(unittest.TestCase):
     def test_the_guide_has_the_table_and_cues_json_the_rows(self):
         shot = self.source('1.wav', 0.5, 0.5)
         play_map = self.tmp / 'play.json'
-        play_map.write_text(json.dumps({'roles': {'fire': [shot], 'hit': [shot]}, 'gains': {'fire': [-8.0], 'hit': [-14.5]}, 'unresolved': {}}), encoding='utf-8')
+        play_map.write_text(json.dumps({'roles': {'fire': [shot], 'hit': [shot]}, 'gains': {'fire': [-8.75], 'hit': [-13.25]}, 'unresolved': {}}), encoding='utf-8')
         wav = self.tmp / 'listen.wav'
         write_wav(wav, 9.0, ((2.5, 0.5),))
         lr.build(log(), wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
@@ -403,16 +403,16 @@ class LevelTableTest(unittest.TestCase):
         self.assertIn('| `fire` | 1 |', text)
         levels = json.loads((self.tmp / 'out' / 'cues.json').read_text(encoding='utf-8'))['levels']
         self.assertEqual(sorted(r['role'] for r in levels), ['fire', 'hit'])
-        self.assertEqual(next(r for r in levels if r['role'] == 'hit')['game_vs_shot_db'], -6.5)
+        self.assertEqual(next(r for r in levels if r['role'] == 'hit')['game_vs_shot_db'], -4.5)
 
 
 class PlayLineTest(unittest.TestCase):
     """The play line and its pairing with cue lines: pattern matching only, no numpy."""
 
     def test_the_play_line_with_a_file_still_reads_its_role_gain_and_place(self):
-        line = 'OWAUDIO play role=door_open channels=1 rate=32000 bytes=64170 gain_db=-8.0 file=1.wav at=StaticMeshActor_1 (the host called play; not heard)'
+        line = 'OWAUDIO play role=door_open channels=1 rate=32000 bytes=64170 gain_db=-8.25 file=1.wav at=StaticMeshActor_1 (the host called play; not heard)'
         m = lr.PLAYED.search(line)
-        self.assertEqual((m.group(1), m.group(2), m.group(3), m.group(4)), ('door_open', '-8.0', '1.wav', ' at=StaticMeshActor_1'))
+        self.assertEqual((m.group(1), m.group(2), m.group(3), m.group(4)), ('door_open', '-8.25', '1.wav', ' at=StaticMeshActor_1'))
 
     def test_each_cue_takes_the_file_of_the_play_just_before_it(self):
         """A play logged before the recording started has no cue: it must not shift the later cues onto its file."""

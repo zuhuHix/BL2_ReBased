@@ -79,18 +79,18 @@ class FitTest(unittest.TestCase):
         a_path, a = self.burst('a.wav')
         b_path, b = self.burst('b.wav')
         c_path, c = self.burst('c.wav')
-        # fire plays b at -10.5 (map -10.5), hit plays c over it, equip plays a at -4 (map -4): each 3 dB under its map gain.
-        wav = self.recording([(int(1.1306 * RATE), b, -13.5), (int(1.1353 * RATE), c, -9.5), (int(3.1311 * RATE), a, -7.0)])
+        # fire plays b at -10.5 (map -10.5), hit plays c over it, equip plays a at -4.25 (map -4.25): each 3 dB under its map gain.
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5), (int(1.1353 * RATE), c, -9.5), (int(3.1311 * RATE), a, -7.25)])
         log_text = '\n'.join([self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.0), self.play('hit', 'c.wav', -6.5), self.cue('hit', 1.005),
-                              self.play('equip', 'a.wav', -4), self.cue('equip', 3.0)])
+                              self.play('equip', 'a.wav', -4.25), self.cue('equip', 3.0)])
         cues = lr.parse_log(log_text)['cues']
         play = {'roles': {'fire': [str(a_path), str(b_path)], 'hit': [str(c_path)], 'equip': [str(a_path)]},
-                'gains': {'fire': [-20.0, -10.5], 'hit': [-6.5], 'equip': [-4.0]}}
+                'gains': {'fire': [-19.75, -10.5], 'hit': [-6.5], 'equip': [-4.25]}}
         fits = lr.fit_cues(cues, log_text, wav, play)
         self.assertEqual(Path(fits[0]['file']).name, 'b.wav')        # the logged file, not the role's first one
         self.assertTrue(fits[0]['file_logged'])
         for cue in cues:
-            cue['level'] = {'rms_dbfs': -20.0}
+            cue['level'] = {'rms_dbfs': -20.5}
         rows = {r['role']: r for r in lr.level_table(cues, log_text, play, fits)}
         self.assertAlmostEqual(rows['fire']['applied_minus_map_db'], -3.0, delta=0.3)
         self.assertEqual(rows['fire']['off_by_from'], 'fit')
@@ -118,14 +118,14 @@ class FitTest(unittest.TestCase):
         fits = lr.fit_cues(cues, log_text, wav, play)
         self.assertEqual(Path(fits[0]['file']).name, 'b.wav')
         self.assertFalse(fits[0]['file_logged'])
-        cues[0]['level'] = {'rms_dbfs': -20.0}
+        cues[0]['level'] = {'rms_dbfs': -20.5}
         row = lr.level_table(cues, log_text, play, fits)[0]
         self.assertTrue(row['file_guessed'])
 
     def test_two_cues_of_one_role_close_together_get_no_fit(self):
         a_path, a = self.burst('a.wav')
-        wav = self.recording([(int(1.1306 * RATE), a, -7.0), (int(1.1346 * RATE), a, -7.0)])   # two identical sounds 4 ms apart add up
-        log_text = '\n'.join([self.play('equip', 'a.wav', -4), self.cue('equip', 1.0), self.play('equip', 'a.wav', -4), self.cue('equip', 1.004)])
+        wav = self.recording([(int(1.1306 * RATE), a, -7.25), (int(1.1346 * RATE), a, -7.25)])   # two identical sounds 4 ms apart add up
+        log_text = '\n'.join([self.play('equip', 'a.wav', -4.25), self.cue('equip', 1.0), self.play('equip', 'a.wav', -4.25), self.cue('equip', 1.004)])
         cues = lr.parse_log(log_text)['cues']
         self.assertEqual(lr.fit_cues(cues, log_text, wav, {'roles': {'equip': [str(a_path)]}}), {})
 
@@ -134,10 +134,10 @@ class FitTest(unittest.TestCase):
         wav = self.recording([(int(1.1306 * RATE), a, -13.5)])
         log_text = '\n'.join([self.play('fire', 'a.wav', -10.5), self.cue('fire', 1.0), self.cue('equip', 3.0)])
         cues = lr.parse_log(log_text)['cues']
-        play = {'roles': {'fire': [str(a_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.5], 'equip': [-4.0]}}
+        play = {'roles': {'fire': [str(a_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.5], 'equip': [-4.25]}}
         fits = lr.fit_cues(cues, log_text, wav, play)
         for cue in cues:
-            cue['level'] = {'rms_dbfs': -20.0}
+            cue['level'] = {'rms_dbfs': -20.5}
         rows = {r['role']: r for r in lr.level_table(cues, log_text, play, fits)}
         self.assertIsNone(rows['equip']['off_by_db'])     # equip's window is silent: no fit, and no RMS number in its place
 
@@ -145,13 +145,13 @@ class FitTest(unittest.TestCase):
         """Two shots inside one search window (automatic fire) leave the reference without a fit: the guide must say so."""
         a_path, a = self.burst('a.wav')
         b_path, b = self.burst('b.wav')
-        wav = self.recording([(int(1.1306 * RATE), b, -13.5), (int(1.1346 * RATE), b, -13.5), (int(3.1311 * RATE), a, -7.0)])
+        wav = self.recording([(int(1.1306 * RATE), b, -13.5), (int(1.1346 * RATE), b, -13.5), (int(3.1311 * RATE), a, -7.25)])
         log_text = '\n'.join(['LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
                               'LogTemp: Display: OWAUDIOREC cue t=0.500 label=step Fight frame=-',
                               self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.0), self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.004),
-                              self.play('equip', 'a.wav', -4), self.cue('equip', 3.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
+                              self.play('equip', 'a.wav', -4.25), self.cue('equip', 3.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
         play_map = self.tmp / 'play.json'
-        play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.5], 'equip': [-4.0]},
+        play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)], 'equip': [str(a_path)]}, 'gains': {'fire': [-10.5], 'equip': [-4.25]},
                                         'unresolved': {}}), encoding='utf-8')
         lr.build(log_text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
         guide = (self.tmp / 'out' / 'LISTEN.md').read_text(encoding='utf-8')
@@ -190,7 +190,7 @@ class FitTest(unittest.TestCase):
         wav = self.recording([(int(1.1306 * RATE), b, -13.5)])
         log_text = chr(10).join(['LogTemp: Display: OWAUDIOREC start file=C:/x/listen.wav map=Sanctuary_P (test only)',
                               'LogTemp: Display: OWAUDIOREC cue t=0.500 label=step Fight frame=-',
-                              self.play('fire', 'b.wav', 0), self.cue('fire', 1.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
+                              self.play('fire', 'b.wav', -10.5), self.cue('fire', 1.0), 'LogTemp: Display: OWAUDIOREC stop t=5.900 file=C:/x/listen.wav'])
         play_map = self.tmp / 'play.json'
         play_map.write_text(json.dumps({'roles': {'fire': [str(b_path)]}, 'gains': {'fire': [None]}, 'unresolved': {}}), encoding='utf-8')
         lr.build(log_text, wav, self.tmp / 'out', play_map=play_map, local_root=self.tmp)
@@ -199,7 +199,7 @@ class FitTest(unittest.TestCase):
 
     def test_clipping_is_flagged(self):
         _, burst = self.burst('a.wav', amplitude=0.9)
-        wav = self.recording([(int(1.1306 * RATE), burst, 6.0)])
+        wav = self.recording([(int(1.1306 * RATE), burst, 6.5)])
         rate, recording = lr.read_channels(wav)
         self.assertTrue(lr.fit_gain(recording, rate, 1.0, RATE, burst)[3])
 
