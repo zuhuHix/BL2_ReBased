@@ -221,7 +221,7 @@ try {
     if ($WatchSmoke) { $log.groups_stage1 = Install-SliceWatchGroups 'stage1' }
 
     $deadline = (Get-Date).AddMinutes($MaxMinutes)
-    $kills = 0; $deaths = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0; $failedPickups = 0
+    $dropsUnsettled = 0; $kills = 0; $deaths = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0; $failedPickups = 0
     while ($kills -lt $MaxKills -and $single -lt $WantItems -and (Get-Date) -lt $deadline) {
         # Money on the ground first: walk onto it.
         $name = Py 'print(cp_collect_start())'
@@ -251,8 +251,9 @@ try {
         $kills++   # a kill attempt; whether it killed is asked next, by the enemy's fields only
         Start-Sleep 3   # the loot lands
         # One labelled snapshot per drop, after the wait (session 2 analysis, A3): its pickups part has each item's LifeSpan, draw scale and
-        # balance, so a drop's lifetime can be read across the recording. Reads only; the labelled cap (200) holds about 40 of these.
-        if ($WatchSpec) { Save-SliceWatchSnap 'drop' }
+        # balance, so a drop's lifetime can be read across the recording. Reads only. Taken only when one read says the map has settled
+        # (no wait): asked earlier it would be recorded as not taken and fail the watch's check (review of #251); such a drop is counted.
+        if ($WatchSpec) { if (Test-SliceWatchSettled) { Save-SliceWatchSnap 'drop' } else { $dropsUnsettled++ } }
         if ((Py "print(cp_died('$target'))") -eq 'True') { $deaths++ }
         # The first money seen: the item's own value call at other levels, and its definition. Before any walk onto it.
         if (-not $swept -and (Py 'print(len(cp_money()))') -ne '0') {
@@ -262,7 +263,7 @@ try {
             "sweep: $($log.sweep)"
         }
     }
-    $log.kills = $kills; $log.kill_attempts = $kills; $log.deaths = $deaths; $log.failed_pickups = $failedPickups; $log.single_item_readings = $single
+    $log.kills = $kills; $log.kill_attempts = $kills; $log.deaths = $deaths; $log.failed_pickups = $failedPickups; $log.drop_snapshots_unsettled = $dropsUnsettled; $log.single_item_readings = $single
     $log.dump = Py 'import json; print(json.dumps(cp_dump(), default=str))' 60
     "dump: $($log.dump)"
     $dumpProblem = ''

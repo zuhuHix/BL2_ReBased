@@ -107,6 +107,12 @@ function Save-SliceWatchMark([string]$Label) {
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
     try { Test-WatchReply (Invoke-GamePy "print(sw_mark('$Label'))" 15) "mark $Label" | Out-Null } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch mark ${Label}: $_" }
 }
+# One read of the recorder's settle state, no wait: True only when the map has settled now. A reply that never came latches the
+# driver-lost condition. For a labelled read the capture takes only on a settled map (cash_capture's per-kill 'drop').
+function Test-SliceWatchSettled {
+    if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return $false }
+    try { "$(Invoke-GamePy 'print(sw_settled())' 15)".Trim() -ceq 'True' } catch { Set-SliceWatchDriverLost $_; $false }
+}
 # After a map load, wait (at most $Seconds) until the recorder says the map has settled: the player has a pawn and the map's clock has passed the
 # spec's settle_seconds, so the watch's scans are allowed again. Reading only. True when settled; false on a timeout or with the watch off.
 function Wait-SliceWatchSettled([int]$Seconds = 40) {

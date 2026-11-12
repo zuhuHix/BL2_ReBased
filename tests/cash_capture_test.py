@@ -58,7 +58,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
-        '*sw_settled*' { return 'True' }
+        '*sw_settled*' { return $(if ($scenario -eq 'kills_unsettled') { 'False' } else { 'True' }) }
         '*sw_snap(*' { if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
@@ -111,7 +111,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_level*' { return '8' }
         '*cp_cash*' { return '100' }
-        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled') { 'None' } else { 'WillowPickup_1' }) }
         '*cp_collect_end*' {
             $script:collects++
             if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
@@ -120,7 +120,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
-        '*cp_target*' { return $(if ($scenario -eq 'kills') { 'WillowAIPawn_2' } else { 'None' }) }
+        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled') { 'WillowAIPawn_2' } else { 'None' }) }
         '*cp_died*' { $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
         '*cp_dump*' {
             if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
@@ -779,6 +779,15 @@ class ReadingsLoopTest(unittest.TestCase):
         done, session = self.run_capture('kills', ['-MaxKills', '3', '-WatchSpec', str(spec)])
         drops = self.work / 'drops.txt'
         self.assertEqual(len(drops.read_text(encoding='utf-8').split()) if drops.exists() else 0, session['kill_attempts'])
+
+    def test_no_drop_snapshot_is_asked_for_before_the_map_settles(self):
+        # Review of #251, point 3: a drop snapshot asked for before the map settled is recorded as not taken and fails the watch's check.
+        # One read of the settle state comes first (no wait); an unsettled drop is counted, not asked for.
+        spec = self.work / 'spec.json'
+        spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+        done, session = self.run_capture('kills_unsettled', ['-MaxKills', '3', '-WatchSpec', str(spec)])
+        self.assertFalse((self.work / 'drops.txt').exists())
+        self.assertEqual(session['drop_snapshots_unsettled'], session['kill_attempts'])
 
     def test_a_pickup_that_gave_no_reading_is_skipped_not_retried(self):
         class Obj:
