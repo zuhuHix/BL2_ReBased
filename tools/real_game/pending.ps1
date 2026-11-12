@@ -190,6 +190,14 @@ function Test-IsOurDriverCopy([string]$Dir, [string]$Owner, [switch]$AllowPartia
 
 # Recovery holds the shared run lock (the one every capture and editor run takes) for its whole length, and checks for a running game at each
 # step: a game started in between could rewrite what is being restored.
+# The run lock WITHOUT waiting for a game: an earlier run's record is completed, and the inputs it recorded as held are released, only while this
+# process holds the machine's run lock. A run that holds it (it may have cleared that record and launched) is then never sent those releases,
+# and a record it removed is never written back (review of #245). A dead writer's hung game does not hold the lock, so its keys are still let go.
+$script:PendingLockSeconds = 120
+function Invoke-PendingLocked([scriptblock]$Body) {
+    Enter-OwUeLock -Owner 'realgame-pending' -TimeoutSeconds $script:PendingLockSeconds
+    try { & $Body } finally { Exit-OwUeLock }
+}
 function Invoke-RecoveryLocked([scriptblock]$Body) {
     Enter-OwUeLock -Owner 'realgame-recovery' -TimeoutSeconds 120 -AlsoWaitFor Borderlands2
     try { & $Body } finally { Exit-OwUeLock }
@@ -299,23 +307,32 @@ function Assert-NoPendingRecords {
         # Nothing is completed while the writer may still run: alive, or not shown gone (no start time, unreadable). Fail closed.
         $writer = Get-WriterState $record
         if ($writer -eq 'alive') { throw "Pid $($record.pid) is still the run that wrote $($f.FullName) (same start time). Wait for it to finish. This run changed nothing." }
-        if ($writer -eq 'gone') { Release-RecordedInputs $f.FullName $record }
-        if (@(Get-GameProcesses).Count) { throw "$($f.FullName) is there and Borderlands 2 is running: nothing can be verified under a live game. Close it first. This run changed nothing." }
         if ($writer -ne 'gone') {
+            if (@(Get-GameProcesses).Count) { throw "$($f.FullName) is there and Borderlands 2 is running: nothing can be verified under a live game. Close it first. This run changed nothing." }
             throw (Format-PendingRecovery $f.FullName $record @("the run that wrote it (pid $($record.pid)) cannot be shown to have ended: no recorded start time, or its process cannot be read. Nothing is completed automatically; when you are sure it has ended, use Restore-PendingRecord with -WriterGone"))
         }
-        $problems = @(Get-PendingProblems $record)
-        $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
-        $driverOnly = $problems.Count -and !@($problems | Where-Object { $_ -notlike 'the driver folder is still there*' }).Count
-        if ($driverOnly -and (Test-IsOurDriverCopy $driver ([string]$record.driver_owner) -AllowPartial)) {
-            Remove-Item -LiteralPath $driver -Recurse -Force
-            "Earlier run's record $($f.FullName): its roots match the backup; removed the driver copy it left at $driver."
-            $problems = @(Get-PendingProblems $record)
-        }
-        if ($problems.Count) { throw (Format-PendingRecovery $f.FullName $record $problems) }
-        Remove-Item -LiteralPath $f.FullName -Force
-        "Earlier run's record $($f.FullName): its backup $($record.backup) matches the live roots by tree hash. Record removed."
+        Invoke-PendingLocked { Complete-GoneWriterRecord $f.FullName }
     }
+}
+# A record whose writer is gone, completed under the run lock (Invoke-PendingLocked) and read again once the lock is held: a record another run
+# completed meanwhile is left alone, and its inputs are never released twice.
+function Complete-GoneWriterRecord([string]$File) {
+    if (!(Test-Path -LiteralPath $File)) { "Earlier run's record ${File}: completed by another run while this one waited for the run lock."; return }
+    $record = Get-Content -Raw -LiteralPath $File | ConvertFrom-Json
+    if ((Get-WriterState $record) -ne 'gone') { throw "$File changed while this run waited for the run lock: it now names a writer that is not shown gone. This run changed nothing." }
+    Release-RecordedInputs $File $record
+    if (@(Get-GameProcesses).Count) { throw "$File is there and Borderlands 2 is running: nothing can be verified under a live game. Close it first. This run changed nothing." }
+    $problems = @(Get-PendingProblems $record)
+    $driver = if ($record.driver_dir) { [string]$record.driver_dir } else { $script:DriverDir }
+    $driverOnly = $problems.Count -and !@($problems | Where-Object { $_ -notlike 'the driver folder is still there*' }).Count
+    if ($driverOnly -and (Test-IsOurDriverCopy $driver ([string]$record.driver_owner) -AllowPartial)) {
+        Remove-Item -LiteralPath $driver -Recurse -Force
+        "Earlier run's record ${File}: its roots match the backup; removed the driver copy it left at $driver."
+        $problems = @(Get-PendingProblems $record)
+    }
+    if ($problems.Count) { throw (Format-PendingRecovery $File $record $problems) }
+    Remove-Item -LiteralPath $File -Force
+    "Earlier run's record ${File}: its backup $($record.backup) matches the live roots by tree hash. Record removed."
 }
 
 # The manual way back for a record (Format-PendingRecovery prints the call): restore from the verified backup, verify, then remove the record.
@@ -330,8 +347,13 @@ function Restore-PendingRecord([string]$File, [switch]$WriterGone) {
     $writer = Get-WriterState $record
     if ($writer -eq 'alive') { throw "pid $($record.pid) is still the run that wrote $File (same start time); wait for it. Nothing was changed." }
     if ($writer -ne 'gone' -and !$WriterGone) { throw "the run that wrote $File (pid $($record.pid)) cannot be shown to have ended. If you are sure it has, run Restore-PendingRecord '$File' -WriterGone. Nothing was changed." }
-    Release-RecordedInputs $File $record
+    # Under the run lock and read again there (Invoke-PendingLocked): a run holding the lock is never sent these releases.
+    Invoke-PendingLocked {
+        if (!(Test-Path -LiteralPath $File)) { throw "the record $File was completed by another run while this one waited for the run lock. Nothing was changed." }
+        Release-RecordedInputs $File (Get-Content -Raw -LiteralPath $File | ConvertFrom-Json)
+    }
     Invoke-RecoveryLocked {
+        if (!(Test-Path -LiteralPath $File)) { throw "the record $File was completed by another run meanwhile. Nothing was changed." }
         Assert-NoGameForRecovery 'before anything is copied'
         $aside = Save-PreRestoreSnapshot ([string]$record.backup)
         "the current saves and settings were copied, verified by tree hash, to $aside (anything played since that run is there)"

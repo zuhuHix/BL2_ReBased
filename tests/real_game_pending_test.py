@@ -648,6 +648,38 @@ function Assert-GameForeground { }
         self.assertIn('released what the run that wrote', out['lines'][0])
         self.assertFalse(record.exists())
 
+    def test_an_earlier_record_is_completed_only_under_the_run_lock_and_read_again_there(self):
+        """Review of #245: two starters can read the same dead writer's record. The one that waited must not send the recorded releases into the
+        session of a run that holds the run lock, nor write back a record that run already completed."""
+        mock = r"""
+$global:native = [Collections.Generic.List[string]]::new()
+function Invoke-NativeKey([byte]$Vk, [byte]$Scan, [uint32]$Flags) { $global:native.Add("key $Scan $Flags") }
+function Invoke-NativeMouse([uint32]$Flags, [int]$Dx = 0, [int]$Dy = 0, [uint32]$Data = 0) { $global:native.Add("mouse $Flags") }
+function Assert-GameForeground { }
+"""
+        record = self.leave(mock + "Send-KeyDown W; Send-MouseEvent 0x8")
+        # Another run holds the run lock: nothing is released, the record is untouched, and this run refuses.
+        out = self.run_ps(mock + r"""
+$script:PendingLockSeconds = 2
+Enter-OwUeLock -Owner 'another capture' -TimeoutSeconds 5
+$out.refusal = Fail-Text { Assert-NoPendingRecords }
+Exit-OwUeLock
+$out.native = @($global:native)
+""")
+        self.assertEqual(out['native'], [])
+        self.assertIn('UE run lock', out['refusal'])
+        self.assertEqual(json.loads(record.read_text(encoding='utf-8-sig'))['held_inputs'], ['key W', 'button right'])
+        # The other run completed the record while this one waited for the lock: nothing is released, and the record is not written back.
+        out = self.run_ps(mock + r"""
+function Enter-OwUeLock { param($Owner, $TimeoutSeconds, $AlsoWaitFor) Remove-Item -LiteralPath '__RECORD__' }
+function Exit-OwUeLock { }
+$out.lines = @(Assert-NoPendingRecords)
+$out.native = @($global:native)
+""".replace('__RECORD__', str(record)))
+        self.assertEqual(out['native'], [])
+        self.assertFalse(record.exists())
+        self.assertIn('completed by another run', out['lines'][0])
+
     def test_a_release_that_fails_stays_recorded(self):
         mock = r"""
 $global:native = [Collections.Generic.List[string]]::new()
