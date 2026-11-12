@@ -1,0 +1,14 @@
+# Loads that tools/suite_map_lint.py reports as not covered but that sit behind a switch the suite's command never passes.
+# One "<suite> <repo path>" per line; read by the CTest entry suite-map-tracked. Checked by hand on 2026-11-12:
+# tools/movie_hud.ps1 starts tools/hud_overlay/serve.py only from Start-OwMovieHud, which test_slice_gate.ps1 calls only
+# with -Unforced, and test_range.ps1 and play_range.ps1 only with -MovieHud. run_hud_shots.ps1 runs check_hud_down.py only
+# with -Down, -Tracker or -Feedback, and check_shield_check.py only with -StandInShield.
+slice_gate_shield tools/hud_overlay/serve.py
+slice_gate_down tools/hud_overlay/serve.py
+range tools/hud_overlay/serve.py
+range_killrow tools/hud_overlay/serve.py
+hud_shots tools/check_hud_down.py
+hud_shots tools/check_shield_check.py
+hud_down tools/check_shield_check.py
+hud_feedback tools/check_shield_check.py
+hud_shield tools/check_hud_down.py

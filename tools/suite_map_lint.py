@@ -2,7 +2,7 @@
 
 AI-assisted (Claude Opus 5.5), 2026-11-12.
 
-    python tools/suite_map_lint.py --map <suites.txt> [--repo <checkout>] [--commit <rev>] [--smoke-only <file>]
+    python tools/suite_map_lint.py [--map <suites.txt>] [--repo <checkout>] [--commit <rev>] [--smoke-only <file>]
                                    [--switch-only <file>]
 
 The map: one suite per line, "name | minutes | paths | command"; lines starting with # are comments; a line named *ignore*
@@ -211,7 +211,8 @@ def list_file(path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--map', required=True, help='the suite map to check')
+    ap.add_argument('--map', default=str(Path(__file__).resolve().parent / 'suites.txt'),
+                    help='the suite map to check (default: the tracked tools/suites.txt)')
     ap.add_argument('--repo', default=str(Path(__file__).resolve().parents[1]), help='the checkout (default: this one)')
     ap.add_argument('--commit', default='HEAD', help='the revision whose tracked files count (default HEAD)')
     ap.add_argument('--smoke-only', help='file of core paths that only a whole-tree suite needs to cover')

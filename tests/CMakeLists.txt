@@ -71,7 +71,7 @@ set(OW_STANDALONE_PY_TESTS
   prepare_interactives prepare_inventory_movie prepare_vendors private_sync range_kind_melee range_tools real_game_finalizer_recheck
   real_game_loot_capture real_game_menus_paths real_game_migration real_game_minimap_paths research_corpus run_limit sanctuary_geometry
   sanctuary_host_flags sanctuary_visual_rules serve_paths skill_effects skill_stats sky_census slice_world
-  start_shield suite_map_lint terrain_geometry terrain_material terrain_probe terrain terrain_weightmap ui_trace_returns walking_routes
+  start_shield suite_map_lint suites_due terrain_geometry terrain_material terrain_probe terrain terrain_weightmap ui_trace_returns walking_routes
   weapon_assembly_oracle weapon_assembly_sample weapon_balance weapon_capture_items weapon_catalog weapon_library
   weapon_muzzle_fx weapon_parity2_probe weapon_parity_probe weapon_recipe weapon_stats weapon_view_model)
 foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
@@ -81,6 +81,12 @@ foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
 endforeach()
 # preflight runs every case under Windows PowerShell 5.1 and under pwsh (about 50 s on the zuhu desktop).
 set_tests_properties(py-preflight PROPERTIES TIMEOUT 300)
+# suites_due starts the batch driver under Windows PowerShell three times (the file takes about 40 s on the main desktop).
+set_tests_properties(py-suites_due PROPERTIES TIMEOUT 300)
+# The tracked suite map against this checkout: a PR that adds a load to a suite script without updating tools/suites.txt fails.
+add_test(NAME suite-map-tracked COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/suite_map_lint.py
+         --map ${CMAKE_SOURCE_DIR}/tools/suites.txt --switch-only ${CMAKE_SOURCE_DIR}/tools/suites_switch_only.txt
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Tests that need Node or numpy (lane ci-test-deps, 2026-11-11). CI installs both (.github/workflows/ci.yml). Elsewhere a group
 # is registered only when configure finds its tool, and configure says so when it does not, so a machine without Node or numpy

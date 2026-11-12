@@ -366,8 +366,37 @@ checks the owner and staleness rules against temporary lock files.
   or `Join-Path $repo '<file>'` (repository root; helpers followed; case ignored as PowerShell does, and a path built from a
   variable is not read); and a tracked file under `host/ue5/OpenWillow/Source/` or `src/` that only a whole-tree suite (`.`)
   covers, unless `--smoke-only` lists it. The lint does not read switches, so a load behind a switch the suite never passes
-  is reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. The map itself stays outside
-  the repository. CTest `py-suite_map_lint`.
+  is reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. `--map` defaults to the
+  tracked `tools/suites.txt`. CTest `py-suite_map_lint`, and `suite-map-tracked`, which lints the tracked map with
+  `tools/suites_switch_only.txt` (the loads that sit behind a switch the suite never passes), so a PR that adds a tool to a
+  suite script without adding it to the map fails CI.
+
+### Heavy suites: the suite map (2026-11-12)
+
+The in-engine suites are too slow to run on every commit, so each one runs only when something it covers changed.
+`tools/suites.txt` lists them, one line per suite: `name | minutes | paths | command`, then a
+`#pass <name> | <must match> | <must not match>` line read by the driver. Paths are folders (`src/`), files, suffixes
+(`*.py`) or `.` (everything); the `*ignore*` line lists paths no suite depends on, the map itself among them. The map
+holds no machine paths: the Unreal folder comes from `OPENWILLOW_UE` and the game from `OPENWILLOW_BL2`. Its minutes
+were measured on the main desktop.
+
+- **What is due:** `python tools/suites_due.py due <commit>`, run inside any worktree, prints each suite with no recorded
+  pass on the content it covers now (name, minutes, command), and a total. A pass is keyed by the git hash of the suite's
+  covered files plus its command, so a rebase, a merge or a docs change makes nothing due, and changing a suite's paths
+  (so that they cover other files) or its command makes that suite due once. `why <commit> <suite>` lists the covered
+  files changed since its last pass; `list` prints the map as read. Exit 1 when a suite covers no file at that commit.
+- **Run them:** `powershell -NoProfile -File tools/run_suites.ps1 -Worktree <test worktree> -Commit <40-char sha>
+  -OutDir <log folder> [-Suites a,b] [-Repeat <suite>:<n>]`. It refuses a worktree that is not clean or not at the
+  commit, runs the due suites (or `-Suites`) one after another, gives a failed suite exactly one rerun, writes one log per
+  attempt and `results.tsv`, records each pass at once, and exits with the number of suites that ended `FAIL` (100 when it
+  refused to start). It starts no build, kills no process and deletes no lock; build first, as the map's header says.
+- **Record a pass by hand:** `python tools/suites_due.py record <commit> <suite>...`, only after a complete pass of that
+  suite on that commit. Passes go to `local/hub/test-ledger.txt` in the main checkout (`HUB_DIR` overrides the folder),
+  one `suite|key|commit|time` line each. The ledger is machine state and stays untracked; a line means the same on any
+  machine, so lines can be copied between them. After regenerating ignored data a suite reads, delete that suite's lines.
+
+The helper is a port of the hub's earlier `suites-due.sh` and computes the same keys, so passes recorded before the move
+stay valid. CTest `py-suites_due` (synthetic repository and maps; the driver cases need Windows PowerShell).
 
 ### Landing PRs in a batch
 
@@ -413,8 +442,8 @@ history rewrites, releases, and anything public outside the repository.
 
 **What counts as passed.** A suite has passed on the tested commit when it ran green on that commit, or ran green on
 an earlier commit in which every file the suite covers is byte-identical to the tested commit's. What each suite
-covers is the path list in the ignored `local/hub/suites.txt`; a suite that is not listed there has no recorded
-coverage and runs on every tested commit as before. The hub skill's `suites-due.sh due <tested-commit>` prints the
+covers is the path list in `tools/suites.txt`; a suite that is not listed there has no recorded
+coverage and runs on every tested commit as before. `python tools/suites_due.py due <tested-commit>` prints the
 listed suites that have no such pass, and it must print none before the batch lands. Nothing else about the checks above
 changes: the chain's tree must still be byte-identical to the tested commit's.
 
