@@ -172,8 +172,8 @@ lies 70.6 uu from the world.json walk segment between nodes 12 and 26 (18,117.7 
 - **Marcus** (`OpenWillowNpc.*`): placed at the `WillowAIPawn_13` pose with the imported mesh, the pawn's mesh translation and
   the idle clip. The use key (E) within 250 cm accepts the mission or turns it in.
   - `RocksPaper_MoveMarcusToRange` reaches `WillowSeqAct_AIScripted_2` in the installed sequence, and the host now runs it:
-    Marcus walks nodes 12, 26, 35, 40 at GroundSpeed 294 with the walk clip, arriving within each node's
-    PawnArrivalRadius (128).
+    Marcus walks nodes 12, 26, 35, 40 with the walk clip, arriving within each node's PawnArrivalRadius (128). Since
+    2026-11-12 he walks at 150 uu/s, not the class's GroundSpeed 294 x WalkingPct 1.0 (see the stand-ins below).
   - Each arrival enters that node's `SeqEvent_ArrivedAtMoveNode_*` in the same sequence instance, so the **installed links**
     open (node 12) and close (node 26) the door.
   - At the last node the host fires the action's `Finished` output. That reaches `SeqAct_ApplyBehavior_6`
@@ -499,9 +499,13 @@ mission-screen pages from `tools/hud_overlay/serve.py`, and the start shield (th
 `local/slice/stand_in_shield.json` exists). Maya's level is the slice gear level (8, an UNVERIFIED slice choice). The line has
 no test driver: no `-owslicegate*`, no `ow.RangeLoot`, no granted point, no forced damage. Two host stand-ins remain and are
 not switches: the dependency mission counts as complete (`OWQUEST FIXTURE` in the log), and Marcus walks straight lines.
-In the real game his walk ran at 150 uu/s, about half the 294 of the class's `GroundSpeed` x `WalkingPct` that the host takes from the data (live,
-2026-11-12, SDK mods off, two runs of one path: [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1b; whether the current local data gives the
-host 294 was not checked).
+In the real game his walk ran at 150 uu/s, about half the 294 of the class's `GroundSpeed` x `WalkingPct` (live,
+2026-11-12, SDK mods off, two runs of one path: [SLICE_WORLD_PLACEMENT.md](SLICE_WORLD_PLACEMENT.md), 1b).
+His walk speed is a third stand-in since 2026-11-12: a flat 150 uu/s, with no slow-down before a node. Observed in the real game, session 1 of 2026-11-12
+(the mission screen capture with the read-only watch, level 8, Sanctuary, every SDK mod off as read in the game; two runs of the
+same scripted steps, so two samples of one path, about 90 moving intervals each over one walk of about 1,230 uu), while his
+class's GroundSpeed read 294 and WalkingPct 1.0 in the same rows. Where the 150 comes from is UNVERIFIED, so the host sets it
+as a constant for this one walk (before, it walked him at 294 x 1.0, about twice as fast).
 It refuses to start, naming the file and the tool that makes it, when any of its local data is missing. It holds the
 machine-wide UE run lock while the window is open, saves to `local/playslice/save.json` and logs to `local/playslice/play-*.log`.
 Exit codes: 0 played or smoke passed, 1 a smoke item failed, 2 refused (missing data), 3 never launched (lock timeout, page

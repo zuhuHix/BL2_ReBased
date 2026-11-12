@@ -39,7 +39,9 @@ struct FOpenWillowSliceData
     // Marcus: placed pawn and the WillowSeqAct_AIScripted walk to the range.
     FVector MarcusLocation = FVector::ZeroVector;
     FRotator MarcusRotation = FRotator::ZeroRotator;
-    float MarcusSpeed = 0, MarcusYawRate = 0;
+    // MarcusSpeed: the walk's speed, the observed 150 uu/s stand-in (OpenWillowSliceData.cpp); MarcusClassSpeed: the class's GroundSpeed x WalkingPct.
+    static constexpr float ObservedMarcusWalkSpeed = 150.f;
+    float MarcusSpeed = 0, MarcusClassSpeed = 0, MarcusYawRate = 0;
     FString WalkOp;
     TArray<FOpenWillowSliceNode> Walk;
     TArray<FString> LookAtPlayerOps;    // ops on the walk's Finished output that set Flag_LookAtPlayer = true

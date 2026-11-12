@@ -460,6 +460,8 @@ void UOpenWillowQuest::RouteRequests()
                 TArray<AOpenWillowNpc::FNode> Nodes;
                 for (const auto& Node : Data.Walk) Nodes.Add({Node.Location, Node.ArrivalRadius, Node.SpeedPercentage});
                 Marcus->StartWalk(Nodes, Data.MarcusSpeed, Data.MarcusYawRate);
+                UE_LOG(LogTemp, Display, TEXT("OWQUEST Marcus walks %d nodes at %.0f uu/s (observed stand-in; the class's GroundSpeed x WalkingPct is %.0f)"),
+                    Nodes.Num(), Data.MarcusSpeed, Data.MarcusClassSpeed);
                 bWalkStarted = bRun = true;
             } else if (R.Class == TEXT("Engine.SeqAct_ApplyBehavior") && Data.LookAtPlayerOps.Contains(R.Op) && Marcus) {
                 Marcus->SetLookAt(Walker);   // Behavior_SetAIFlag Flag_LookAtPlayer = true
