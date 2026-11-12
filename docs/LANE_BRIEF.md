@@ -49,17 +49,19 @@ Run the commands in `docs/verification/GATES.md` for the parts you touched, past
 compare with the baseline there. Report automated checks separately from in-game checks.
 
 ## Records
-- `DECISIONS.md` holds the current month; older months are in `docs/decisions/YYYY-MM.md`. Read recent entries with
-  `python tools/decisions_index.py --tail N` or `--grep WORD`; do not open the file whole.
+- Each decision is its own file, `docs/decisions/YYYY-MM/YYYY-MM-DD-NN-slug.md` (`DECISIONS.md` gives the rules). Read
+  recent entries with `python tools/decisions_index.py --tail N` or `--grep WORD`.
 - Look up natives with `python tools/native_index_find.py <name>`; do not open `docs/verification/NATIVE_INDEX.md` whole.
 
 ## How to finish a lane
 Right before you report a branch ready, rebase it on the latest `origin/main` and rerun your light checks, so it lands
-without conflicts (`docs/TOOLING.md`, "Landing PRs in a batch"). Unless your brief says otherwise, do not commit, push or edit `DECISIONS.md`, `README.md`, `ROADMAP.md`, `AGENTS.md` or
-`docs/TOOLING.md`. Write `local/p2/<lane>/handoff.md` with:
+without conflicts (`docs/TOOLING.md`, "Landing PRs in a batch"). Unless your brief says otherwise, do not commit, push or edit `README.md`, `ROADMAP.md`, `AGENTS.md` or
+`docs/TOOLING.md`, and do not change an existing decision file. Your decision goes in one new file under
+`docs/decisions/` (`python tools/decisions_index.py --name "<title>"` prints its name), and
+`python tools/decisions_index.py --check --baseline origin/main` is one of your light checks. Write `local/p2/<lane>/handoff.md` with:
 - the changed tracked paths, and the gate output with numbers;
 - what is verified and how, and what is `UNVERIFIED`;
-- a proposed commit message, and a `DECISIONS.md` entry draft (dated, "AI-assisted (Claude)");
+- a proposed commit message, and the path of your new decision file (dated, opening "AI-assisted (Claude)");
 - the open items.
 
 Keep diffs small and explainable: the maintainer must be able to explain the code. Prefer the simpler, obviously

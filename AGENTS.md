@@ -43,7 +43,7 @@ releases or anything published, money, or anything that moves game-derived data.
    docs, and a confirmed one says how it was confirmed. A passing host suite means "the host did this", not parity.
    Count agreement is not compatibility. Never report a result you did not see.
 8. **Provenance and disclosure.** Record the provenance and licence of anything brought in, and disclose AI assistance
-   (records and `DECISIONS.md` entries open with "AI-assisted (<tool>)").
+   (records and decision files open with "AI-assisted (<tool>)").
 9. **Synthetic fixtures only.** Tests use invented values, built with the existing `package()` / `tag()` helpers in
    `tests/`.
 10. **Process safety.** Several lanes share each machine. Never kill a process by image name (`taskkill /IM`,
@@ -143,7 +143,7 @@ C++ port of the script VM may touch the `Reader` and `CMakeLists.txt` on the sam
 
 - **Warn the maintainer in your final message:** name each of these files you touched, what changed and why, and what
   is verified versus `UNVERIFIED`.
-- Keep `ctest` and `tools/verify_packages.py` green, and add a `DECISIONS.md` entry when parsing behaviour changes.
+- Keep `ctest` and `tools/verify_packages.py` green, and add a decision file when parsing behaviour changes.
 
 Rules 4 to 6 apply here more than anywhere else.
 
@@ -175,8 +175,9 @@ None of this relaxes a rule above, and nothing counts as verified until it has b
 - Unreal: build the CMake Release libraries before the UE module. Only one editor or game runs per machine; the suite
   scripts take the machine-wide lock themselves (`tools/ue_lock.ps1`). The overlay page loads `tools/hud_overlay/*.js`
   from disk at start, so do not edit those files while a run is in progress.
-- Add a `DECISIONS.md` entry when parsing behaviour changes, saying what is verified and what is not. Keep `README.md`,
-  `ROADMAP.md` and `docs/TOOLING.md` in agreement with `DECISIONS.md` and the verification records; a `ROADMAP.md`
+- Add a decision file when parsing behaviour changes, saying what is verified and what is not: one new file under
+  `docs/decisions/`, named and checked as `DECISIONS.md` says. Keep `README.md`,
+  `ROADMAP.md` and `docs/TOOLING.md` in agreement with the decision files and the verification records; a `ROADMAP.md`
   change lands only with the maintainer's OK.
 
 ## Where things are
@@ -189,7 +190,7 @@ believed it. Look status up where it is maintained.
 | What works, what is next | `ROADMAP.md`, "How it's going" and "Now / next" |
 | Current test numbers | `docs/verification/GATES.md` |
 | Evidence and open items for one area | its record in `docs/verification/` (`HUD_*`, `COMBAT_*`, `WEAPON_*`, `SANCTUARY_*`, `SLICE_*`, and the own-words `NATIVE_*` notes); the slice gate is `docs/verification/SLICE_GATE.md` |
-| A past decision | `python tools/decisions_index.py --tail N` or `--grep WORD` (do not open `DECISIONS.md` whole) |
+| A past decision | `python tools/decisions_index.py --tail N` or `--grep WORD` (one file per decision under `docs/decisions/`) |
 | A native function | `python tools/native_index_find.py <name>` |
 | Tools, build, data preparation | `docs/TOOLING.md` |
 | Landing PRs, and the standing approval with its exceptions | `docs/TOOLING.md`, "Landing PRs in a batch" |

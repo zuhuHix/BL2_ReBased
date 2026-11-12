@@ -57,8 +57,9 @@ agreed. This matters most for anything that touches the sensitive areas below.
   not present count agreement as full compatibility.
 - **Label guesses.** Behaviour inferred rather than verified against the
   real game is marked `UNVERIFIED` in code and docs.
-- **Record decisions.** Any change to parsing behaviour gets a dated entry in
-  [DECISIONS.md](DECISIONS.md) stating what is verified and what is not.
+- **Record decisions.** Any change to parsing behaviour gets a dated decision file
+  under `docs/decisions/` (named as [DECISIONS.md](DECISIONS.md) says) stating what
+  is verified and what is not.
 - **Record provenance.** Any reference implementation consulted goes in
   [THIRD_PARTY.md](THIRD_PARTY.md) with its license, before code is written.
   Changing anything under `third_party/` means re-verifying the recorded
@@ -79,7 +80,7 @@ agreed. This matters most for anything that touches the sensitive areas below.
 
 ## Sensitive areas
 
-Changes here need explicit discussion first and a DECISIONS.md entry:
+Changes here need explicit discussion first and a decision file (see DECISIONS.md):
 
 - `src/package.cpp`: the `Reader` struct, `require()`, `limit`, size and
   terminator checks. Never loosen a bounds check to make something work.

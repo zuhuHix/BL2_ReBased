@@ -25,7 +25,7 @@ python tests/level_test.py
 
 ## Decisions and provenance
 
-- [ ] Parsing behaviour changed → dated entry added to `DECISIONS.md` stating what is verified and what is `UNVERIFIED`
+- [ ] Parsing behaviour changed → dated decision file added under `docs/decisions/` (see `DECISIONS.md`) stating what is verified and what is `UNVERIFIED`
 - [ ] Reference implementation consulted → recorded in `THIRD_PARTY.md` with its license (read, not copied)
 - [ ] Touches a sensitive area (`src/package.cpp`, `src/container.*`, struct/array/texture/mesh/material serialization, `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE*`) → discussed in an issue first
 

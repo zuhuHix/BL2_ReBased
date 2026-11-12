@@ -107,19 +107,32 @@ The external-tool acquisition and first smoke results are recorded in the
 UModel export is not independent proof that the corresponding custom decoder,
 material graph or original-game behavior is correct.
 
-## Decisions log: monthly archive
+## Decisions log: one file per decision
 
-[DECISIONS.md](../DECISIONS.md) keeps the current months; older months move verbatim to `docs/decisions/YYYY-MM.md`.
-When a month ends:
+Since 2026-11-12 every decision is its own file, `docs/decisions/YYYY-MM/YYYY-MM-DD-NN-slug.md`, and
+[DECISIONS.md](../DECISIONS.md) is a stub that holds no entry. The 393 earlier entries (September from the monthly
+archive, October and November from `DECISIONS.md`) were split into those files byte for byte by a one-off script, so
+citations such as "DECISIONS.md 2026-09-26" still lead to the right date.
 
-1. Move every `## YYYY-MM-DD:` entry of that month, byte for byte and in its original order, into
-   `docs/decisions/YYYY-MM.md` under the one-line header `# Decisions and evidence, YYYY-MM (moved verbatim from DECISIONS.md)`.
-2. Add the line `Older entries: [YYYY-MM](docs/decisions/YYYY-MM.md).` under the title of DECISIONS.md.
-3. Run `python tools/decisions_index.py --check` before committing the rotation. Its default baseline is HEAD, which
-   still holds the pre-rotation log then. The check fails if an archived month still has entries in DECISIONS.md, if an
-   archive holds another month's entry, if a link line is missing, or if a baseline entry is lost or changed.
+- **Name.** `NN` is two digits, the entry's place within its day: one more than the highest `NN` that `main` holds for
+  that date. `slug` is the title in lower case, with every run of other characters replaced by one hyphen, cut at a
+  hyphen to at most 60 characters. `python tools/decisions_index.py --name "<title>" [--date YYYY-MM-DD]` prints the
+  name. Two lanes that take the same `NN` on one day still get different names through the slug, and the tools order
+  the two by slug; the same date, `NN` and slug is an add/add conflict, and the landing script stops on it.
+- **Content.** Line 1 is `## YYYY-MM-DD: Title`, with the date of the name, then a blank line, then the body, which
+  opens with "AI-assisted (<tool>)". One decision per file, and nothing else lives under `docs/decisions/`.
+- **Changes.** A decision file is never deleted or renamed. It changes only when a file added in the same change names
+  it on a line `Edits: <path>` (the path in backticks or not) and says why. A decision that replaces an older one is a
+  new file with a line `Supersedes: <path>`; the old file stays as it is, and the listing marks it "superseded by".
+- **Check.** `python tools/decisions_index.py --check --baseline origin/main` checks the layout and, against the
+  baseline (default `HEAD`), the rules above. It also reads the old layout at a baseline, which is how the migration
+  was checked against the commit before it. A lane runs it with its light checks before handing over.
 
-Read the log with `python tools/decisions_index.py --tail N` (full text of the last N entries), `--grep WORD` (titles),
+The migration's three commits: the split script with its `--verify` (which rebuilds both old files from the new blobs
+byte for byte), the script's output alone, and the stub with the documents. To redo the split from a newer `main`,
+take the script from the commit that added it (`git log --diff-filter=A --format=%H -- tools/decisions_split.py`).
+
+Read the log with `python tools/decisions_index.py --tail N` (full text of the last N entries), `--grep WORD` (titles and dates),
 or with no argument (every title with its file and line), rather than opening the whole file. The NATIVE_INDEX rows
 for a native name or a note file: `python tools/native_index_find.py <fragment> [...] [--note NAME]`.
 The synthetic tests are `tests/decisions_index_test.py` and `tests/native_index_find_test.py`.
