@@ -41,6 +41,30 @@ were copied or translated; the C++ here is an independent implementation of
 the serialization order those files document. If UE Viewer code is ever
 copied in, its MIT notice must be added alongside lzokay's.
 
+Audiokinetic's public Wwise SDK documentation (Audiokinetic Inc., the Wwise
+documentation library reached from https://www.audiokinetic.com/) is a format
+reference for the audio work, approved by the maintainer on 2026-11-12. It is
+read to learn the sound-bank structure fields for the bank version the game
+uses (version 62, `docs/verification/SLICE_AUDIO_CHAIN.md`). Checked on
+2026-11-12: the library opens without an account, and its version list goes
+back only to Wwise 2021.1.14; the addresses tried for two older versions
+(2019.2.15, 2016.2.6) led to the current documentation. So the documentation
+for the game's bank version is not publicly readable, and the approval covers
+the public documentation only. Which Wwise release wrote bank version 62, and
+whether the public pages describe the bank's fields at all: not checked.
+Terms: Audiokinetic's site Terms of Use (last updated 2026-07-15) say the
+site's material belongs to Audiokinetic or its licensors, allow copying or
+printing a document only for internal reference or personal use, forbid
+distributing what is copied, and forbid robots or other automatic copying of
+pages. They allow links to the home page and forbid deep links that would
+suggest endorsement by Audiokinetic, so only the home page is linked here.
+That version check was made on 2026-11-12 by fetching six pages with a script,
+before the terms had been read; those copies were deleted the same day. From
+then on pages are read one at a time in a browser or a reading tool, nothing
+is saved and nothing is fetched by script. Nothing is copied: no SDK download,
+no SDK headers or code, no text copied, and no account was created. Anything
+written here from it is in our own words.
+
 ## Oracles (run, not copied)
 
 UE Viewer (umodel) is additionally *run* as a comparison oracle against the
