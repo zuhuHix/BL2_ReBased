@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow'
 sys.path.insert(0, str(REPO / 'tools'))
 import check_range  # noqa: E402
+import prepare_range  # noqa: E402
 
 ROW = re.compile(r'\{TEXT\("(\w+)"\),\s*([\d.]+)f,\s*([\d.]+)f\}')
 
@@ -79,6 +80,28 @@ class HostRowsTest(unittest.TestCase):
         # The host keeps the larger read's value until a read explains the difference.
         self.assertEqual(check_range.ACCEPTANCE['bullymong_adult']['cycle'], 1.25)
         self.assertGreater(check_range.ACCEPTANCE['bullymong_adult']['cycle_band'][0], 1.217)
+
+
+class BodyContactTest(unittest.TestCase):
+    MAYA_STANDING = 42.0   # OpenWillowMayaMovement.h, CollisionRadius (Pawn_Siren's cylinder)
+
+    def test_maya_radius_is_the_one_the_floor_assumes(self):
+        self.assertIn('constexpr float CollisionRadius = 42.f', text('OpenWillowMayaMovement.h'))
+
+    def test_the_baby_stands_inside_its_band_with_its_own_radius(self):
+        # Acceptance row 5. The brain stops at max(live stand, radius + Maya's radius). With the borrowed adult radius (150) that was 192,
+        # outside 106 to 118; with the baby's own 64 (live read 2026-11-12) the floor is 106 and the stand 111 applies.
+        radius = prepare_range.OBSERVED_COLLISION['bullymong_baby'][0]
+        contact = radius + self.MAYA_STANDING
+        self.assertEqual(contact, 106.0)
+        row = check_range.ACCEPTANCE['bullymong_baby']
+        stop = max(row['stand'], contact)
+        self.assertTrue(row['stand_band'][0] <= stop <= row['stand_band'][1], stop)
+        self.assertGreater(max(row['stand'], 150.0 + self.MAYA_STANDING), row['stand_band'][1])
+
+    def test_the_adult_floor_is_unchanged(self):
+        # The adult owns its asset's cylinder (150, live read 2026-10-03): contact 192, under its stand 201.
+        self.assertNotIn('bullymong_adult', prepare_range.OBSERVED_COLLISION)
 
 
 class HostUsesTheRowsTest(unittest.TestCase):

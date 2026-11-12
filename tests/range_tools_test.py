@@ -155,10 +155,15 @@ class PrepareRangeTest(unittest.TestCase):
             self.assertTrue(manifest['assets'].startswith('missing'))
             target = os.path.join(folder, 'target.json')
             with open(target, 'w', encoding='utf-8') as f:
-                json.dump({'Bullymong': {'mesh': '/Game/M.M', 'idle': '', 'death': ''}}, f)
+                json.dump({'Bullymong': {'mesh': '/Game/M.M', 'idle': '', 'death': '', 'collision_radius': 130.0, 'collision_height': 70.0}}, f)
             prepare_range.main(['--no-vm', '--allow-missing-spot-data', '--views', views_path, '--terrain', none, '--target', target, '--out', out])
             with open(out, encoding='utf-8') as f:
-                self.assertEqual(json.load(f)['assets'], 'imported')
+                manifest = json.load(f)
+            self.assertEqual(manifest['assets'], 'imported')
+            # The baby borrows the asset but keeps its own cylinder; the kinds that own the asset's cylinder keep the asset's.
+            baby, adult = manifest['kinds']['bullymong_baby'], manifest['kinds']['bullymong_adult']
+            self.assertEqual((baby['mesh'], baby['collision_radius'], baby['collision_height']), ('/Game/M.M', 64.0, 48.0))
+            self.assertEqual((adult['collision_radius'], adult['collision_height']), (130.0, 70.0))
 
     def test_spot_data_message_names_the_plaza_views(self):
         import json
@@ -260,6 +265,15 @@ class PrepareRangeTest(unittest.TestCase):
     def test_clip_missing_is_empty(self):
         clips = prepare_range.find_clips('/Game/X/Idle.Idle', ['Idle'])
         self.assertEqual(set(clips.values()), {''})
+
+    def test_the_baby_has_its_own_cylinder_not_the_borrowed_one(self):
+        # Live read 2026-11-12: radius 64, half height 48 (every baby pawn read). Going back to the adult's 150 breaks its stand row.
+        self.assertEqual(prepare_range.OBSERVED_COLLISION, {'bullymong_baby': (64.0, 48.0)})
+        entry = prepare_range.apply_observed('bullymong_baby', {'collision_radius': 150.0, 'collision_height': 90.0})
+        self.assertEqual((entry['collision_radius'], entry['collision_height']), (64.0, 48.0))
+        self.assertIn('live read', entry['collision_source'])
+        untouched = prepare_range.apply_observed('bullymong', {'collision_radius': 150.0, 'collision_height': 90.0})
+        self.assertEqual(untouched, {'collision_radius': 150.0, 'collision_height': 90.0})
 
     def test_kind_entry_without_assets(self):
         entry = prepare_range.kind_entry('Made Beast', None, {1: 10.0}, 'test')

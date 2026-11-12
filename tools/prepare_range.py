@@ -64,6 +64,11 @@ AI_DEFINITIONS = {"bullymong": "GD_PrimalBeast.Character.AIDef_PrimalBeast", "bu
 # engine shapes.
 KIND_ASSETS = {"bullymong": "Bullymong", "bullymong_adult": "Bullymong", "bullymong_baby": "Bullymong", "bullymong_slinger": "Bullymong",
                "psycho": "Psycho"}
+# A kind's own collision cylinder (radius, half height) where it borrows another kind's asset, so the asset's cylinder is not its own. As
+# in tools/prepare_phaselock_target.py, a live read wins over the asset. The baby: CharClass_PrimalBeastBaby's cylinder, radius 64 and
+# height 48 on every baby pawn read in session 2 of 2026-11-12 (Three Horns Divide, Maya level 8, six den recordings); its 189 swing calls
+# all came at 106.0 uu or more from Maya, which is 64 plus her radius 42 (standing). The mesh stays the borrowed adult's (host stand-in).
+OBSERVED_COLLISION = {"bullymong_baby": (64.0, 48.0)}
 # Extra spawns of kinds that join the range only once their own mesh is imported (an engine-shape psycho would prove nothing).
 SPAWNS_WITH_ASSET = [{"kind": "psycho", "count": 1}]
 # The range's default population (host choice).
@@ -149,6 +154,14 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
                 entry[key] = float(target[key])
         if entry["idle"]:
             entry.update(find_clips(entry["idle"], listing))
+    return entry
+
+
+def apply_observed(name, entry):
+    """A kind's own live-read numbers over what its (possibly borrowed) asset gave."""
+    if name in OBSERVED_COLLISION:
+        entry["collision_radius"], entry["collision_height"] = OBSERVED_COLLISION[name]
+        entry["collision_source"] = "live read 2026-11-12 (own cylinder; the asset is borrowed)"
     return entry
 
 
@@ -450,6 +463,7 @@ def main(argv=None):
         kinds[name] = kind_entry(name.replace("_", " ").title(), targets.get(KIND_ASSETS.get(name)), health, source,
                                  arrival=health_table(run, row_class, "arrival"), ratio=health_table(run, row_class, "ratio"),
                                  loot=loot.get(row_class))
+        apply_observed(name, kinds[name])
         kinds[name]["melee_status"] = melee_status(name)
         if name in ranges:
             kinds[name]["melee_start_range"] = ranges[name]
