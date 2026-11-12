@@ -203,7 +203,7 @@ variant was not read in detail and does not matter for single-player.
   - The result is the new actor, or None when the spawn was refused.
 - **Spawn routine, outcomes in order (inferred as the world's spawn):**
   1. Refusals that return None: class is None; class flags include the abstract bit or a second "not instantiable" bit
-     (0x2000000, meaning not identified); the class is not an actor class; the world has begun play and the class
+     (meaning not identified); the class is not an actor class; the world has begun play and the class
      default object is `bStatic` or `bNoDelete`; a template was passed whose class differs from the requested class
      (this last rule applies before and after play begins). A "no-fail" override (not used by `Spawn`) skips the static and
      template refusals.
@@ -346,12 +346,12 @@ argument (probably an actor to ignore; unverified).
 Walks the same level lists as `AllActors` (including index 0 of the persistent level), skipping null, destroyed and
 `bHidden` actors, applying the class filter. If `Radius` is not 0, the actor must be strictly closer to `Loc` than
 `Radius` (squared distance compared). It then needs a clear line to the actor: a trace from `Loc` toward the actor's
-location with a fixed set of trace flags (0x2286); the actor is accepted when the trace hits nothing or hits the candidate
+location with one fixed set of trace flags (not named here); the actor is accepted when the trace hits nothing or hits the candidate
 itself.
 
 ### Actor.VisibleCollidingActors
 Like `CollidingActors` for candidate selection (always overlap-style, `bCollideActors` required) and then like
-`VisibleActors` for the line test, with trace flags 0x2086, or 0x20bf when `bTraceActors` is true. `bIgnoreHidden`,
+`VisibleActors` for the line test, with a second fixed set of trace flags, or a wider third set when `bTraceActors` is true (not named here). `bIgnoreHidden`,
 `Extent`, `bSkipTraceTest` and `HitInfo` are honoured as their names say; the exact handling of `Extent` and
 `bSkipTraceTest` was not traced. Low confidence.
 
@@ -467,7 +467,7 @@ and the object has a state frame; `Enable` only sets it if the class or active s
 
 ### Actor.Sleep (latent) and the latent poll
 - `Sleep(Seconds)` stores `Seconds` into the actor's `LatentFloat` and sets the frame's latent action code to a fixed
-  value (0x180). The script statement then yields: the state code does not continue until the code is cleared.
+  value. The script statement then yields: the state code does not continue until the code is cleared.
 - Each state-code step first calls the poll for the latent action: it subtracts the step's delta from `LatentFloat` and,
   when the result is below half of that delta, clears the latent action (the sleep is over). A sleep therefore ends on
   the first step where the remaining time is under half a frame, slightly early rather than late. Then code continues in

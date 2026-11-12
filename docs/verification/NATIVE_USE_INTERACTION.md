@@ -122,12 +122,12 @@ is the one read).
   4. **Vehicle or foot.** If the pawn is in a vehicle (the pawn's vehicle query, or its driver's, answers), the candidates come from the
      vehicle (a list of usable parts); the first one whose primary use is available wins (not read in detail). Otherwise (on foot):
   5. **The ray.** One multi-hit line check with zero extent from `CalcViewLocation` to `CalcViewLocation + R(CalcViewRotation) *
-     (PlayerInteractionDistance, 0, 0)`, source actor = the controller, trace-flag word `0x0102209F` (UNVERIFIED reading with the stock
+     (PlayerInteractionDistance, 0, 0)`, source actor = the controller, one fixed trace-flag word (UNVERIFIED reading with the stock
      UE3 flag names: pawns, movers, level, volumes, others, level-geometry plus the terrain bit and two higher bits; neither stop-at-first-hit
      nor single-result is set, which fits the loop below). The engine returns the hits ordered from the camera outwards (stock UE3 behaviour,
      not read here).
   6. **Walking the hits** (each hit has an actor and a hit component):
-     - A hit actor whose actor-flag bit 0x10 (first flag byte after the actor's identity fields) is set is skipped without blocking. Reading: that
+     - A hit actor with a particular actor flag set is skipped without blocking. Reading: that
        is the "pending destroy" flag; the same bit is what the pawn predicates and the AI pawn's can-be-used answer test.
      - **Usable candidate.** The actor is asked for its `IUsable` interface. If it has one and no candidate has been picked yet, and the
        object says it is usable by this pawn (an interface predicate; always true for an AI pawn), then:
@@ -140,9 +140,9 @@ is the one read).
      - **Player-trade proxy.** A hit whose primary icon is the trade-type icon (an icon definition whose type byte is 14) and that is a
        `PawnInteractionProxy` of another player is never the usable; it is remembered in `CachedTradeProxy` (and sets the trade-icon flags
        on the controller) and the walk continues.
-     - **Blocking test** (for hits that were not accepted): a hit on a pawn whose flag word has bit 0x800 set is ignored; otherwise a hit
-       with no component blocks when the actor's collision flag 0x40000000 is set, and a hit with a component blocks when the component's
-       flag 0x10 is set. **A blocking hit ends the walk**, so a usable object behind a wall, a counter or a closed door is not selected.
+     - **Blocking test** (for hits that were not accepted): a hit on a pawn with one particular pawn flag set (the pawn exemption) is ignored; otherwise a hit
+       with no component blocks when one particular collision flag of the actor is set, and a hit with a component blocks when one particular
+       collision flag of the component is set (none of the three is identified by name; see Open). **A blocking hit ends the walk**, so a usable object behind a wall, a counter or a closed door is not selected.
   7. **Store.** `CachedUsableObject`, `UsableObjectUpdateTime` and `CachedTradeProxy` are written; the per-type cost query (`IUsable` cost
      slot, G4) fills the prompt's currency, amount and "costs" values.
   8. **Apply** (second native routine): `CurrentUsableObject` takes the result (cleared to None when nothing qualified) and
@@ -153,8 +153,8 @@ is the one read).
 - **Calls into script:** none on the common path (the apply step calls the object's icon interface; `Behavior_SetUsableIcon` is the script
   that sets an override).
 - **Calls other natives:** `UpdateInteractionIcon`, the `IUsable` slots described next, the engine's multi-line check.
-- **Constants / formulas:** 350 uu (`PlayerInteractionDistance`); 30 evaluations per second (`UsableObjectUpdateRate`); trace-flag word
-  `0x0102209F`; trade icon type byte 14; blocking flags 0x40000000 (actor), 0x10 (component), pawn exemption 0x800.
+- **Constants / formulas:** 350 uu (`PlayerInteractionDistance`); 30 evaluations per second (`UsableObjectUpdateRate`); one fixed
+  trace-flag word (read as flag names above); trade icon type byte 14; the actor and component blocking flags and the pawn exemption flag (step 6).
 - **Edge cases:** the ray is the camera centre line, so the target must sit under the crosshair and within 350 uu of the **camera**, not of
   the pawn; there is no angle cone and no radius sphere (the 30 cm sweep and 250 cm radius the host uses are not stock). Several usable
   objects on one line: the nearest wins. Items and NPCs share the same walk; pickups are not selected here (they have their own
@@ -165,7 +165,7 @@ is the one read).
   (5) invalidate the throttle after a use; (6) expose `CurrentUsableObject`, `CachedUsableHitComponent`, the two flags and the two icons
   to the script (all the use functions read them).
 - **Open:** the two unidentified pawn predicates and the `MyWillowPawn` flag; the exact meaning of the trace-flag bits; the vehicle
-  branch; the trade-proxy range rule (an id-difference window); which collision flag bits 0x10 / 0x40000000 / 0x800 are named; whether
+  branch; the trade-proxy range rule (an id-difference window); which named flags the actor, component and pawn-exemption flag tests read; whether
   the evaluation also runs on a non-authority client (it is gated on authority, a client uses the replicated `CurrentUsableObject`).
 
 ## WillowPlayerController.UpdateInteractionIcon

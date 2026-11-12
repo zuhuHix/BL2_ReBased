@@ -515,6 +515,6 @@ Per behavior in a thread, the runner (UNVERIFIED; the structure was read only co
 - `NATIVE_MISSION_DISPATCH.md` A2/Not read yet: the 60-behaviors-per-call cap, the enabled-bit check and the latent copy are
   described in section G above.
 - `docs/NATIVE_ANALYSIS.md` / `tools/ghidra/class_layout.py`: for `WillowPawn`-derived classes the executable's offsets are 4
-  higher than the computed layout from `ConsumerHandle` onward (`ConsumerHandle` computed 0xe04, used 0xe08; `AIClass`
-  computed 0x10c4, used 0x10c8), while `BodyClass` (0x92c) and `MissionTracker` fields match. Something between `BodyClass`
+  higher than the computed layout from `ConsumerHandle` onward (both `ConsumerHandle` and `AIClass` sit 4 bytes past
+  their computed place), while the `BodyClass` and `MissionTracker` fields match. Something between `BodyClass`
   and `ConsumerHandle` is 4 bytes larger than the layout script assumes. Not investigated; treat WillowPawn offsets with care.

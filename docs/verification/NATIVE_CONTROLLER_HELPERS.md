@@ -58,19 +58,19 @@ script treats type 3 as the golden-key "currency".
 ## Layout caveats
 
 Offsets are given as field names. `class_layout.py` needs a stand-in size for `MapProperty` (any value from 20 up leaves
-`WillowPlayerController.MissionPlaythroughs` at 0x1194, which agrees with the native reads; only fields declared after the
+`WillowPlayerController.MissionPlaythroughs` where the native reads find it; only fields declared after the
 map move). The computed layout of `WillowAIPawn` drifts from the native one by a few bytes in the middle (native-only
 members), so the AI pawn cost fields below are named, not numbered. Fields used in this note:
 
-- `WillowPlayerController.MissionPlaythroughs` (array of `MissionPlaythroughData`, element 0x38 bytes: `MissionList` array of
+- `WillowPlayerController.MissionPlaythroughs` (array of `MissionPlaythroughData`: `MissionList` array of
   `MissionStatusPlayerData`, `UnloadableDlcMissionList`, `UnloadableDlcPendingMissionRewards`, `FilteredMissions`,
   `ActiveMission`, `PlayThroughNumber`).
-- `IMission.MissionStatusPlayerData` (0x2c bytes): `MissionDef`, `Status` (byte), `ObjectivesProgress` (int array),
+- `IMission.MissionStatusPlayerData`: `MissionDef`, `Status` (byte), `ObjectivesProgress` (int array),
   `ActiveObjectiveSet`, `SubObjectiveSets`, `GameStage`, `bNeedsRewards`, `bHeardKickoff`.
 - `WillowGameReplicationInfo`: `CurrentPlaythrough`, `PlaythroughOverride`, `MissionTracker`. `Engine.WorldInfo.GRI` is the
   replication info.
 - `Engine.Controller.Pawn`, `.PlayerReplicationInfo`; `Engine.PlayerController.Player`, `.myHUD`, `.NetPlayerIndex`.
-- `WillowPlayerReplicationInfo.Currency[13]` (struct `CurrencyState`, 0x14 bytes each: `FormOfCurrency`, `StatName`,
+- `WillowPlayerReplicationInfo.Currency[13]` (struct `CurrencyState`: `FormOfCurrency`, `StatName`,
   `CurrentAmount`, `LastKnownAmount`).
 
 ## WillowPlayerController.GetCurrentPlaythrough
@@ -193,7 +193,7 @@ members), so the AI pawn cost fields below are named, not numbered. Fields used 
 - **AddCurrencyOnHand(type, delta):** does nothing at all when type is above 12 **or type is 3**. For `delta <= 0`:
   `CurrentAmount += delta`, clamped to a minimum of 0. For `delta > 0`: `CurrentAmount += delta`, clamped to the cap of that
   type. **Caps (table in the executable, int per type 0..12):** credits 99,999,999; Eridium 500; types 2..12 each 999.
-  After either update it sets a "needs replication" bit in the replication info's flag word (0x80000 in the actor's
+  After either update it sets a "needs replication" bit in the replication info's flag word (a bit of the actor's
   net-dirty flag word) and fires the script event `NotifyCurrencyDelegates()` on the replication info (even when the amount
   did not change).
 - **Implementer checklist:** keep amounts per type; clamp as above; fire `NotifyCurrencyDelegates` after every accepted
@@ -334,7 +334,7 @@ members), so the AI pawn cost fields below are named, not numbered. Fields used 
 ## WillowAIPawn.IsComponentUsable
 
 - **Signature:** `(ActorComponent UsableComponent, EUsabilityType UsedType)`, returns bool.
-- **Reads:** the pawn's `InstanceDataState.Data` array (instance data entries, element `InstanceDataUnion`, 0x58 bytes),
+- **Reads:** the pawn's `InstanceDataState.Data` array (instance data entries, element `InstanceDataUnion`),
   entry field `ComponentData` (`Component`, `bIsUsable`, `bIsSecondaryUsable`).
 - **Does:** false for a `None` component. Otherwise finds the **first** entry whose `ComponentData.Component` is that
   component (identity). Not found: false. `UsedType` 0 (primary): that entry's `bIsUsable`; 1 (secondary): its

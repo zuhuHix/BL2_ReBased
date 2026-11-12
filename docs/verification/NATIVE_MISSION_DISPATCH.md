@@ -8,7 +8,7 @@ read from native code and has not been confirmed by running the game. One struct
 data is reported (link-id census, below); it is consistent with the reading and proves nothing more.
 
 Field offsets in the native code were named with `tools/ghidra/class_layout.py` (offsets computed from the script
-property chains; its oracle, `Core.Object` = 0x3C bytes with `Outer` at 0x28, matches the engine, and every
+property chains; its oracle, the computed size of `Core.Object` and the place of its `Outer` field, matches the engine, and every
 offset used below matched a field of the expected type).
 
 Host code cited is the state at commit `877be8d`. Since then (DECISIONS.md, "native dispatch rules implemented") the

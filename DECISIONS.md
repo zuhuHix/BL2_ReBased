@@ -4840,3 +4840,13 @@ AI-assisted (Claude Opus 5.5). Tool: `tools/leak_gate.py`; rules and use in `doc
   ruleset on `main` requiring the `Leak gate` check, and required review for `.github/workflows/`, `.githooks/` and the gate's files
   (the workflow is part of the PR it checks). The dump sizes are fitted to today's tree, not proven against real dumps. The gate is
   partial detection of marks, types and identifiers; it does not establish provenance or licence.
+
+## 2026-11-12: Layout numbers leave six native notes; install-read audio levels leave the slice audio record (lane-records-rewrite)
+
+AI-assisted (Claude Opus 5.5). Records only: no code, no test and no parsing behaviour changes. The maintainer reviews this change himself.
+
+- **Why.** An inventory of 2026-11-11 found tracked records holding more than own-words notes, names, counts and the short constants and formulas a behaviour needs. The maintainer chose to have the lines rewritten on the existing precedents.
+- **Native notes** (`NATIVE_USE_INTERACTION`, `NATIVE_CONTROLLER_HELPERS`, `NATIVE_ENGINE_CORE`, `NATIVE_BEHAVIOR_POPULATION`, `NATIVE_MISSION_DISPATCH`, `NATIVE_WEAPON_TRIGGER_AMMO`). In-memory offsets, structure sizes, trace-flag words, class flags, a latent-action code and collision and net-dirty flag bits are rewritten in own words: each sentence keeps what the field or flag means and how the behaviour uses it, by name, and loses the number. The `docs/LANE_BRIEF.md` clean-room scan now finds no hex value, address or decompiler token in them; its remaining hits are set notation and one data entry written with braces. No project code reads these numbers from the notes: the host builds these structs by name from the packages, and the layout oracle lives in `tools/ghidra/class_layout.py`, which is unchanged.
+- **Slice audio** (`SLICE_AUDIO_CHAIN.md` section 7). The decoded files' levels, the bank bus volumes and the per-role game levels are values read from the player's install, so they follow the 2026-11-08 UI colours decision: the record keeps the rule and the make-up of each level in words, and points at the ignored `local/slice/audio_play.json` that `prepare_slice_audio.py --game` writes. Wwise's volume floor stays, as a Wwise constant the reader's bounds use.
+- **Phaselock stock data.** The four colour lines checked are measurements of the host's own frames, so they stay.
+- **Nothing lost.** Every value taken out, with its file, old line and old sentence, is in an ignored file the maintainer moves to his private store. Old commits still hold the old lines; the history is not rewritten. No statement of what is verified or `UNVERIFIED` changed.

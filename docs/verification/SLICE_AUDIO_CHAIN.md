@@ -331,7 +331,7 @@ For sounds that started in silence, the onset relative to the cue was 0.134 to 0
 
 **Why the maintainer heard only the shots.** The 2026-11-10 listening run (`local/audio_listen/2026-11-10/020023/` in the runner's worktree) measured equip about 21 to 25 dB under the shots. It has two causes, both measured:
 
-- **The decoded files differ already.** Whole-file RMS, max channel per frame: shot -16.4 dBFS, impact -12.7 to -21.0, equip -28.7, clip out -29.5, clip in -30.7, door -20.1 / -20.4, Phaselock cast -21.4, lines -18.7 to -27.3. Most files peak at or near full scale. The files are not balanced against each other: the game's mix sets the balance, and the host applied none.
+- **The decoded files differ already.** Measured as whole-file RMS (max channel per frame), the shot and the loudest impacts lead, the other impacts, the doors, the Phaselock cast and the lines sit lower, and equip and the two reload files are the quietest, well under the shot. Most files peak at or near full scale. The per-file levels are read from the player's install and stay local (`listen_report.py` lists each played file's level in LISTEN.md). The files are not balanced against each other: the game's mix sets the balance, and the host applied none.
 - **The host lost 6 dB on mono 2D sounds.** Fitting the recording against each source file by least squares: equip (mono, 2D) came out at -9.0 dB on both channels (correlation 1.000), and the Phaselock cast (stereo, 2D) at -3.0 dB on its left channel. Every play used volume 1.0, so the engine's mono-to-stereo upmix of a 2D sound halved each channel (presumably the linear upmix; the engine setting was not read). The 3 dB the stereo sound lost as well is not explained (UNVERIFIED). It cancels when roles are compared with each other.
 
 **Where the game's levels are.** Every Wwise object a sound plays through can carry a volume in dB: the sound, its containers and actor-mixers up the parent chain, then its output bus and that bus's parents. The game's static level for a sound is their sum. These layouts are this install's (bank version 62). They were fitted on the banks and checked over the whole install, not taken from a spec:
@@ -341,7 +341,7 @@ For sounds that started in silence, the onset relative to the cue was 0.134 to 0
 | sound | plugin, stream type, source, file id, (in bank or prefetch: offset, size), a bits byte, (a source plugin, plugin type 2: a u32 parameter size and that many bytes), the effect block, output bus, parent, 2 flag bytes, property bundle, random-range bundle | the parent at +27 (streamed) or +35 (in bank, prefetch) resolves to a container or actor-mixer for 143,478 of 144,568 sounds; the 276 plugin sounds (parameter size 0 in every case) resolve 4 bytes later; the others have effects or no container parent |
 | container, actor-mixer | the effect block, output bus, parent, 2 flag bytes, the two bundles | all 25,034 without effects have a resolving parent, a resolving output bus, or both (0 exceptions) |
 | effect block | override flag, effect count; with effects, one byte of bypass bits and 7 bytes per effect | fitted on all 89 objects with effects (1 to 4 effects: the bus and parent pair resolves 8, 15, 22, 29 bytes later); the 7 bytes are not read, UNVERIFIED as fields |
-| bus | parent bus, property bundle | volumes seen: -4, -5, -8, -96.3 dB |
+| bus | parent bus, property bundle | volumes seen: a few whole-dB values and Wwise's volume floor (the values stay local) |
 | property bundle | u8 count, that many u8 ids, a float per id; then u8 count, ids, a (min, max) pair per id | ids 0, 2, 3, 4, 5, 6 only (and 12 on containers) |
 | switch container | after the bundles: group, default value, a flag, the child list, then a count of values, each a value, a count and child ids | 994 of 995: every value's children are among the container's children |
 
@@ -359,18 +359,21 @@ Property id 0 is taken as the volume. Over the install it runs from -96.3 (Wwise
 **Gains on this install (2026-11-11).**
 
 | Role | Game level | Made of |
-|---|---|---|
-| `fire` | -12 dB | buses -7 and -5 (third person: -10, one bus) |
-| `hit` | -11 dB for most files, -16 / -17 for a few | switch container -4, buses -2 and -5; some random-container children add -5 or -6 |
-| `phaselock_cast` | -2 dB | a bus |
-| `equip` | -6 dB | switch container -4, a bus -2 |
-| `reload_out`, `reload_in` | -3 dB | a bus (third person: -10) |
-| `door_open` / `door_close` | -10 / -13 dB | the sound itself -8 / -11, a bus -2 |
-| `line:` echo lines (29 in the mission's group) | -3 dB | two play actions: one at -3 (a bus), one through a -96.3 dB bus (muted at its base volume); summed |
-| `line:` live lines (6) | 0 dB | nothing |
-| `line:` Marcus's barks (4) | -4 dB | a bus |
+| Role | Made of |
+|---|---|
+| `fire` | two buses (third person: one bus) |
+| `hit` | the switch container and two buses; for a few files, random-container children add their own level |
+| `phaselock_cast` | a bus |
+| `equip` | the switch container and a bus |
+| `reload_out`, `reload_in` | a bus (third person: another bus) |
+| `door_open` / `door_close` | the sound itself and a bus |
+| `line:` echo lines (29 in the mission's group) | two play actions: one through a bus, one through a bus at Wwise's volume floor (muted at its base volume); summed |
+| `line:` live lines (6) | nothing on the chain carries a volume |
+| `line:` Marcus's barks (4) | a bus |
 
-One live line (`07c_Live_HypBot`) has an effect on its chain: it is read by the fitted effect layout, and its 0 dB is UNVERIFIED. The stricter reader of review round 1 (PR #217) gives the same value for every slice file as the first version. With these gains, the game puts equip about 8.6 dB under the shot (file levels plus gains, measured like a cue window). The 11-10 run had it about 25 dB under.
+The levels themselves are values read from the player's install, so this record does not carry them (as for the game's UI colours, `DECISIONS.md` 2026-11-08). `prepare_slice_audio.py --game` writes each file's summed level to the ignored `local/slice/audio_play.json` (`gains`), and prints it per role; the breakdown by object above, with its numbers, is in the maintainer's private notes.
+
+One live line (`07c_Live_HypBot`) has an effect on its chain: it is read by the fitted effect layout, and its level is UNVERIFIED. The stricter reader of review round 1 (PR #217) gives the same value for every slice file as the first version. With these gains, the game's balance puts equip much closer to the shot (file levels plus gains, measured like a cue window) than the 11-10 run, which had it about 25 dB under.
 
 **Host.** `audio_play.json` gains two blocks: `gains` (per role, one dB value per file, in the order of `roles`) and `gain_notes` (per role, where the numbers came from). `prepare_slice_audio.py --game <install>` writes them (default: `OPENWILLOW_BL2`). Without the install every game gain is `null` and the note says so; a `--game` path (or `OPENWILLOW_BL2`) that is not a folder is an error. The synthetic tone is always 0 dB. `OpenWillowAudio` reads the gains and spawns each file at its gain. A gain that is `null`, missing, not a number, or outside -144..+12 dB plays at 0 dB with a warning in the log; a map without the block plays as before. A mono file played 2D is now sent as two equal channels, so it takes a stereo file's path through the mix; a positioned mono sound stays mono for the spatializer. The play line gains `gain_db=<dB>`, plus `upmix=mono_to_stereo` for a 2D mono file. How loud the game's own centred mono plays against its stereo is **UNVERIFIED** (an equal-power centre would be 3 dB lower than this).
 

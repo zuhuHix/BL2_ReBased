@@ -172,7 +172,7 @@ complete (`NotifyFiringPatternWhenShotComplete`: when the definition has `bReset
 pattern index is reset to 0).
 
 **Firing patterns (`GetFiringPatternAdjustments`, native).** A definition can carry a list of pattern lines (data
-`FiringPatternLines`, 0x44 bytes each; the shotgun default has `bFireRandomlyFromPattern`). The routine picks the line:
+`FiringPatternLines`; the shotgun default has `bFireRandomlyFromPattern`). The routine picks the line:
 random when `bFireRandomlyFromPattern`, else the weapon's `NextFiringPatternIndex` (wrapped to the list length); the line
 is either a fixed rotator offset or a random point in a rectangle between two offsets (a per-line flag). If the definition has
 `bScalePatternByWeaponSpread` and a positive `BasePatternSpread`, the offset is scaled by `max(WeaponSpread /
