@@ -1,9 +1,11 @@
 # Test registration for ctest. The top-level CMakeLists.txt pulls this file in with include(), so it runs in the top directory's
 # scope: ${CMAKE_SOURCE_DIR} and relative source paths resolve as they did there, and ow-weapon-firing-test is still built to
 # build/<config>/. Adding, removing or relabelling a test edits this file only, not the top CMakeLists.txt (which every in-engine
-# suite counts as covered, because the Unreal module links the core it builds). Never add it with add_subdirectory(tests): that
-# would move ow-weapon-firing-test to build/tests/<config>/, and the deferred OW_REQUIRE_TEST_TOOLS check would then run at the end
-# of the subdirectory and see only that directory's tests.
+# suite counts as covered, because the Unreal module links the core it builds). Never add it with add_subdirectory(tests): the
+# relative source path tests/weapon_firing_math_test.cpp would then resolve under tests/tests/ and stop the configure, and
+# ow-weapon-firing-test would move to build/tests/<config>/.
+# The core targets (ow-core, ow-package, ow-weapongen) and their sources and flags stay in the top CMakeLists.txt; this file holds
+# test registration only. The in-engine suites do not count it as covered, so a core change made here would not make them due.
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME package-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/package_test.py $<TARGET_FILE:ow-package>)
