@@ -467,7 +467,7 @@ Per behavior in a thread, the runner (UNVERIFIED; the structure was read only co
 
 ### G3. FilterObject
 - An event definition (`EventData2.UserData.FilterObject`, base class `BehaviorEventFilterBase`) and a per-process runtime
-  filter slot both exist. `BehaviorEventFilterBase.ShouldBeInstanced` (bit 0) says whether the definition's filter object
+  filter slot both exist. `BehaviorEventFilterBase.ShouldBeInstanced` says whether the definition's filter object
   is used directly or an instanced copy lives in the event's runtime slot.
 - Activation applies filters through a **callback supplied by the caller**: the runtime filter slot is consulted when it is
   non-null **and** a callback was supplied; the definition's filter is consulted only when it is non-null, its
@@ -514,7 +514,7 @@ Per behavior in a thread, the runner (UNVERIFIED; the structure was read only co
   Complete/Failed does not raise it.
 - `NATIVE_MISSION_DISPATCH.md` A2/Not read yet: the 60-behaviors-per-call cap, the enabled-bit check and the latent copy are
   described in section G above.
-- `docs/NATIVE_ANALYSIS.md` / `tools/ghidra/class_layout.py`: for `WillowPawn`-derived classes the executable's offsets are 4
-  higher than the computed layout from `ConsumerHandle` onward (both `ConsumerHandle` and `AIClass` sit 4 bytes past
+- `docs/NATIVE_ANALYSIS.md` / `tools/ghidra/class_layout.py`: for `WillowPawn`-derived classes the executable's offsets are a few bytes
+  higher than the computed layout from `ConsumerHandle` onward (both `ConsumerHandle` and `AIClass` sit past
   their computed place), while the `BodyClass` and `MissionTracker` fields match. Something between `BodyClass`
-  and `ConsumerHandle` is 4 bytes larger than the layout script assumes. Not investigated; treat WillowPawn offsets with care.
+  and `ConsumerHandle` is a few bytes larger than the layout script assumes. Not investigated; treat WillowPawn offsets with care.

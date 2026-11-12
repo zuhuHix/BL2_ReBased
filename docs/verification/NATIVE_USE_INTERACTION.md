@@ -86,8 +86,8 @@ event); `IMissionDirector.EMissionBranchEnding` EMBE_None 0, EMBE_PathA 1, EMBE_
 
 ## Layout caveats
 
-Offsets are given as field names. The computed `WillowAIPawn` layout is 4 bytes below the native one around `bUsable` /
-`bCostsToUse` / `CostsToUseType`, 16 bytes around `MissionDirectives` (the native code reads those fields four and sixteen bytes
+Offsets are given as field names. The computed `WillowAIPawn` layout is a few bytes below the native one around `bUsable` /
+`bCostsToUse` / `CostsToUseType`, and further below around `MissionDirectives` (the native code reads those fields a few bytes
 higher than `class_layout.py` predicts), so for the AI pawn the names below are matched by meaning (a value set from the same data,
 the same width, the neighbouring fields), not by number. For `WillowPlayerController` the computed offsets of `CurrentUsableObject`,
 `CurrentInteractionIcon[2]`, `CachedUsableObject`, `CachedUsableHitComponent`, `UsableObjectUpdateTime`, `UsableObjectUpdateRate`,
@@ -114,7 +114,7 @@ is the one read).
      pending-destroy style flag test, the other not identified), has no `ConnectedVSSTerminal`, and the `MyWillowPawn` flag word
      passes an unidentified test. Any failed gate sets the current usable to **None**.
   2. **Cinematic lock.** If any of the three "cinema disables input" flags of the controller (`bCinemaDisableInputMove`, `Look`,
-     `Button`, bits 21 to 23 of the controller flag word) is set, the result is None and nothing is evaluated.
+     `Button`, all in the controller's flag word) is set, the result is None and nothing is evaluated.
   3. **Throttle.** If the current time is earlier than `UsableObjectUpdateTime` the previous result is returned unchanged (the
      cached object, its component and the cached flags), after refreshing the per-type cost query (below). A fresh evaluation sets
      `UsableObjectUpdateTime = now + 1 / UsableObjectUpdateRate`, i.e. at most 30 evaluations per second. `ServerUseWithoutConfirmation`
@@ -245,7 +245,7 @@ stays open, see G4).
 Presentation bookkeeping for the compass and the map ("quest giver here" icons); it does not decide what the screen offers.
 
 - **RegisterMissionDirector(Director):** ignores a null director. Adds it to the tracker's list of registered directors (no duplicates). Unless a
-  tracker flag (bit 2 of a flag word, meaning not identified) is set it asks the director through one interface method (a presentation refresh, not
+  tracker flag (one tracker flag, meaning not identified) is set it asks the director through one interface method (a presentation refresh, not
   identified). On the authority it then asks `HasAnyMissionsForPlayer`; if true the director is entered in the tracker's **table of directors that
   currently have missions** (14 slots; each slot stores the director, its `GetMissionDirectorLocation` and some presentation data) and the tracker's
   replication word is marked dirty. On a client (not the authority) it walks a 10-slot local table and re-runs the matching slot's update with false.
@@ -257,7 +257,7 @@ Presentation bookkeeping for the compass and the map ("quest giver here" icons);
   valid): `Tracker.RegisterMissionDirector(Self as IMissionDirector)` once `Tracker != None && Tracker.IsDataValid()`.
 - **Slice relevance:** none for the accept path. A headless host may record the registration and skip the table; the C1 note's "directors get a
   status-changed call" refers to the same registered list.
-- **Open:** which interface method the register call makes (slot 3 of the interface), what the 14-slot and 10-slot structures store beyond the director
+- **Open:** which interface method the register call makes (one interface method), what the 14-slot and 10-slot structures store beyond the director
   and its location, the tracker flag bit.
 
 ## MissionTracker.GetCompletedBranch

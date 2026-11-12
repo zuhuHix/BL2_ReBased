@@ -57,7 +57,7 @@ script treats type 3 as the golden-key "currency".
 
 ## Layout caveats
 
-Offsets are given as field names. `class_layout.py` needs a stand-in size for `MapProperty` (any value from 20 up leaves
+Offsets are given as field names. `class_layout.py` needs a stand-in size for `MapProperty` (any large enough stand-in leaves
 `WillowPlayerController.MissionPlaythroughs` where the native reads find it; only fields declared after the
 map move). The computed layout of `WillowAIPawn` drifts from the native one by a few bytes in the middle (native-only
 members), so the AI pawn cost fields below are named, not numbered. Fields used in this note:
@@ -193,7 +193,7 @@ members), so the AI pawn cost fields below are named, not numbered. Fields used 
 - **AddCurrencyOnHand(type, delta):** does nothing at all when type is above 12 **or type is 3**. For `delta <= 0`:
   `CurrentAmount += delta`, clamped to a minimum of 0. For `delta > 0`: `CurrentAmount += delta`, clamped to the cap of that
   type. **Caps (table in the executable, int per type 0..12):** credits 99,999,999; Eridium 500; types 2..12 each 999.
-  After either update it sets a "needs replication" bit in the replication info's flag word (a bit of the actor's
+  After either update it sets a "needs replication" bit on the replication info (a bit of the actor's
   net-dirty flag word) and fires the script event `NotifyCurrencyDelegates()` on the replication info (even when the amount
   did not change).
 - **Implementer checklist:** keep amounts per type; clamp as above; fire `NotifyCurrencyDelegates` after every accepted
