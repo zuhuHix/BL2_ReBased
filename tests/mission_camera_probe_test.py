@@ -19,6 +19,7 @@ def load_probe():
     hooks.Type = types.SimpleNamespace(PRE=0, POST=1)
     hooks.add_hook = hooks.remove_hook = lambda *a: None
     sdk.find_object = lambda *a: None
+    sdk.make_struct = lambda kind: kind   # GetPlayerViewPoint's two out parameters; the stand-in controller ignores them
     sys.modules.update({'unrealsdk': sdk, 'unrealsdk.hooks': hooks})
     spec = importlib.util.spec_from_file_location('mission_screen_probe_camera', ROOT / 'tools/real_game/scripts/mission_screen_probe.py')
     probe = importlib.util.module_from_spec(spec)
@@ -105,8 +106,9 @@ def fresh(probe):
 
 
 def camera_pc(loc=(1.0, 2.0, 3.0), rotation=(1, 2, 3), fov=80.0):
-    pov = ns(Location=vec(*loc), Rotation=rot(*rotation), FOV=fov)
-    return ns(PlayerCamera=ns(CameraCache=ns(POV=pov)))
+    """The player's own controller as BL2 has it (session 1 analysis, A1): no PlayerCamera; GetPlayerViewPoint fills the location and
+    rotation, GetFOVAngle gives the field of view."""
+    return ns(GetPlayerViewPoint=lambda a, b: (None, vec(*loc), rot(*rotation)), GetFOVAngle=lambda: fov)
 
 
 def test_the_trace_samples_each_tick_until_its_time_is_up():
@@ -192,7 +194,7 @@ def marcus_pawn():
 
 def read_pc(viewport=(1280, 720)):
     pc = camera_pc(loc=(0.0, 0.0, 0.0), rotation=(0, 0, 0), fov=90.0)
-    pc.PlayerCamera.DefaultFOV = 90.0
+    pc.DefaultFOV = 90.0   # the controller's own field
     pc.FocusObject = ns(_path_name=lambda: 'Sanctuary.Marcus')
     pc.Player = ns(ViewportClient=ns(Viewport=ns(SizeX=viewport[0], SizeY=viewport[1])))
     pc.Pawn = ns(Location=vec(0.0, 0.0, 0.0))
