@@ -16,7 +16,9 @@ second look at the same tree makes nothing due. The key is the git blob hash of 
 entries (one per line, a newline inside a file name written as "?") followed by "#cmd <command>", exactly as suites-due.sh
 builds it, so passes it recorded stay valid.
 
-Run it inside the repository: any worktree or clone of it, at any commit, since the map comes from <commit>.
+Run it inside the repository, from a checkout of <commit> itself: the map comes from <commit>, and due, record and why
+refuse (exit 2) when this copy of tools/suites_due.py or tools/suite_map_lint.py differs from <commit>'s, since a newer
+matching rule judged by an older helper could build the key over fewer files. --map does not switch that check off.
 Passes are kept in <main checkout>/local/hub/test-ledger.txt, one
 "suite|key|commit|time" line each; set HUB_DIR to use another folder. The ledger is machine state and stays untracked.
 The map format and the path matching are tools/suite_map_lint.py's (docs/TOOLING.md, "Heavy suites: the suite map").
@@ -33,6 +35,7 @@ from suite_map_lint import covers, map_problems, match1, read_map  # noqa: E402
 
 DEFAULT_MAP = Path(__file__).resolve().parent / 'suites.txt'
 MAP_IN_TREE = 'tools/suites.txt'
+CODE_IN_TREE = ('tools/suites_due.py', 'tools/suite_map_lint.py')
 
 
 class Refused(Exception):
@@ -55,6 +58,18 @@ def commit_of(rev):
 
 def short(rev):
     return git('rev-parse', '--short', rev).decode().strip()
+
+
+def same_code(commit):
+    """Refuses when the running helper or lint differs from the commit's copy (git blob hashes, line ends normalized)."""
+    for rel in CODE_IN_TREE:
+        mine = (Path(__file__).resolve().parents[1] / rel).read_bytes().replace(b'\r\n', b'\n')
+        mine = git('hash-object', '--stdin', data=mine).decode().strip()
+        done = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'{commit}:{rel}'], capture_output=True, text=True)
+        if done.returncode == 0 and done.stdout.strip() == mine:
+            continue
+        what = f'has no {rel}' if done.returncode else f'has a different {rel} than this copy'
+        raise Refused(f'commit {short(commit)} {what}; run the helper from a checkout of that commit')
 
 
 def load(map_path, commit=None):
@@ -136,6 +151,7 @@ def find(suites, name, map_path):
 
 def cmd_due(rev, map_path):
     c = commit_of(rev)
+    same_code(c)
     suites, ignore, _ = load(map_path, c)
     entries, ledger = tree(c), ledger_path()
     n = total = 0
@@ -162,6 +178,7 @@ def cmd_due(rev, map_path):
 
 def cmd_record(rev, names, map_path):
     c = commit_of(rev)
+    same_code(c)
     suites, ignore, label = load(map_path, c)
     entries, ledger = tree(c), ledger_path()
     for name in names:
@@ -179,6 +196,7 @@ def cmd_record(rev, names, map_path):
 
 def cmd_why(rev, name, map_path):
     c = commit_of(rev)
+    same_code(c)
     suites, ignore, label = load(map_path, c)
     _, _, paths, _ = find(suites, name, label)
     last = next((f[2] for f in reversed(ledger_lines(ledger_path())) if len(f) > 2 and f[0] == name), None)

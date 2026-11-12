@@ -385,9 +385,10 @@ were measured on the main desktop.
 - **What is due:** `python tools/suites_due.py due <commit>` prints each suite with no recorded pass on the content it covers now (name, minutes, command), and a total. A pass is keyed by the git hash of the suite's
   covered files plus its command, so a rebase, a merge or a docs change makes nothing due, and changing a suite's paths
   (so that they cover other files) or its command makes that suite due once. `why <commit> <suite>` lists the covered
-  files changed since its last pass. `due`, `record` and `why` read the map as committed in `<commit>`, so they give the
-  same answer from any worktree or clone at any commit, and refuse a commit with no `tools/suites.txt` unless `--map
-  <file>` names one; `list` prints the working-tree map. Exit 1 when a suite covers no file at that commit.
+  files changed since its last pass. `due`, `record` and `why` read the map as committed in `<commit>` (a commit with no
+  `tools/suites.txt` is refused unless `--map <file>` names one), and refuse to run when the helper's own
+  `tools/suites_due.py` or `tools/suite_map_lint.py` differs from that commit's: run them from a checkout of the commit
+  being judged. `list` prints the working-tree map. Exit 1 when a suite covers no file at that commit.
 - **Run them:** `powershell -NoProfile -File tools/run_suites.ps1 -Worktree <test worktree> -Commit <40-char sha>
   -OutDir <log folder> [-Suites a,b] [-Repeat <suite>:<n>]`. It refuses a worktree that is not clean or not at the
   commit, reads the map inside that worktree, runs the due suites (or `-Suites`) one after another, gives a failed suite exactly one rerun, writes one log per

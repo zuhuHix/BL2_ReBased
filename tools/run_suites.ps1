@@ -173,7 +173,11 @@ foreach ($name in $list) {
     } elseif ($allPassed) {
         Push-Location $Worktree
         & $python $dueScript --map $map record $Commit $name
-        if ($LASTEXITCODE -ne 0) { Write-Host "run_suites: WARNING: recording $name failed (exit $LASTEXITCODE)" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "run_suites: recording $name failed (exit $LASTEXITCODE); it counts as a failed suite"
+            Add-Row $name 'record' 'FAIL' @{ Code = $LASTEXITCODE; Seconds = 0; Log = '-' }
+            $failed++
+        }
         Pop-Location
     } else { $failed++ }
 }

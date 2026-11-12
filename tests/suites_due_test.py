@@ -28,6 +28,9 @@ TREE = {
     'tools/run_alpha.ps1': "Write-Output 'alpha'\n",
     'tools/beta.py': 'print(1)\n',
 }
+# The helper refuses a commit whose helper and lint differ from the running copy, so the fixture commits the same two files.
+CODE = {rel: (ROOT / rel).read_text(encoding='utf-8').replace('\r\n', '\n')
+        for rel in ('tools/suites_due.py', 'tools/suite_map_lint.py')}
 MAP = ('# invented map\n'
        '*ignore* | - | *.md docs/ | -\n'
        'alpha | 3 | src/ tools/run_alpha.ps1 | powershell -File tools/run_alpha.ps1; exit $LASTEXITCODE\n'
@@ -46,7 +49,7 @@ class Repo:
         self.map = self.base / 'suites.txt'
         self.map.write_text(MAP, encoding='utf-8', newline='\n')
         self.git('init', '-q')
-        self.commit(TREE)
+        self.commit({**TREE, **CODE})
 
     def git(self, *args):
         self.path.mkdir(exist_ok=True)
@@ -235,6 +238,18 @@ class MapOfTheCommitTest(unittest.TestCase):
         self.assertEqual(rc, 2, out + err)
         self.assertIn('has no tools/suites.txt; pass --map <file>', err)
 
+    def test_other_helper_code_in_the_commit_is_refused(self):
+        for rel in CODE:
+            with self.subTest(rel=rel):
+                self.repo.commit({**CODE, rel: CODE[rel] + '# changed\n'})
+                for args in (('due', 'HEAD'), ('record', 'HEAD', 'beta'), ('why', 'HEAD', 'beta')):
+                    rc, out, err = self.repo.run(*args)
+                    self.assertEqual(rc, 2, out + err)
+                    self.assertIn(f'has a different {rel} than this copy; run the helper from a checkout of that commit', err)
+        self.assertEqual(self.repo.ledger(), [])
+        self.repo.commit(CODE)
+        self.assertEqual(self.repo.run('due', 'HEAD')[0], 0)
+
     def test_a_commit_that_widens_a_suite_is_judged_by_its_own_map(self):
         a = self.repo.commit({'tools/suites.txt': MAP})
         self.assertEqual(self.repo.run('record', a, 'alpha', 'beta', use_map=False)[0], 0)
@@ -302,6 +317,27 @@ class DriverTest(unittest.TestCase):
         rc, text, out = self.drive()
         self.assertEqual(rc, 1, text)
         self.assertIn('alpha: not recorded: the checkout changed during the run', text)
+        self.assertEqual(self.repo.ledger(), [])
+
+    def test_a_change_before_the_rerun_fails_it_without_running(self):
+        self.repo.map.write_text('*ignore* | - | *.md docs/ | -\n'
+                                 "alpha | 3 | src/ | Add-Content src/core.cpp 'x'; exit 1\n"
+                                 '#pass alpha | ALPHA OK |\n', encoding='utf-8', newline='\n')
+        rc, text, out = self.drive()
+        self.assertEqual(rc, 1, text)
+        self.assertIn('FAILED: the checkout changed during the run', text)
+        rows = [l.split('\t')[:4] for l in (out / 'results.tsv').read_text(encoding='utf-8-sig').splitlines()[1:]]
+        self.assertEqual(rows[:2], [['alpha', 'run1', 'FAIL-RERUN', '1'], ['alpha', 'run1.rerun', 'FAIL', '-']])
+        # The rerun never ran: the file holds the one line the first attempt added.
+        self.assertEqual((self.repo.path / 'src' / 'core.cpp').read_text().splitlines(), ['int a;', 'x'])
+
+    def test_a_refused_record_counts_as_a_failed_suite(self):
+        self.repo.map.write_text('*ignore* | - | *.md docs/ | -\n'
+                                 "alpha | 3 | nothing/ | Write-Output 'ALPHA OK'; exit 0\n"
+                                 '#pass alpha | ALPHA OK |\n', encoding='utf-8', newline='\n')
+        rc, text, out = self.drive('-Suites', 'alpha')
+        self.assertEqual(rc, 1, text)
+        self.assertIn('recording alpha failed (exit 2); it counts as a failed suite', text)
         self.assertEqual(self.repo.ledger(), [])
 
     def test_default_map_is_the_one_in_the_worktree(self):
