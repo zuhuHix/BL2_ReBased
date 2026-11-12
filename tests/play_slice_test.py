@@ -74,7 +74,8 @@ class PlaySlice(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         tools = self.root / 'tools'
         tools.mkdir()
-        for name in ('play_slice.ps1', 'movie_hud.ps1', 'run_limit.ps1', 'ue_lock.ps1', 'check_range.py', 'check_overlay_data.py'):
+        # check_range.py imports its live-read tables from prepare_range.py (one copy of them), so the two travel together.
+        for name in ('play_slice.ps1', 'movie_hud.ps1', 'run_limit.ps1', 'ue_lock.ps1', 'check_range.py', 'prepare_range.py', 'check_overlay_data.py'):
             shutil.copy(REPO / 'tools' / name, tools / name)
         for relative in DATA:
             path = self.root / relative
