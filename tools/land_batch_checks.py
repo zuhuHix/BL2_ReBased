@@ -79,7 +79,7 @@ def main(argv=None):
             result = verdict(json.load(one), json.load(two), args.sha, args.name, now)
     except (OSError, ValueError) as error:
         result = ('error', 'unreadable answer from GitHub: %s' % error, '')
-    except Exception as error:  # an answer of an unexpected shape: say so now rather than wait for the deadline
+    except Exception as error:  # an answer of an unexpected shape: give the script a reason for its exit 14
         result = ('error', 'unexpected answer from GitHub (%s: %s)' % (type(error).__name__, error), '')
     sys.stdout.write('\t'.join(part.replace('\t', ' ').replace('\n', ' ') for part in result) + '\n')
     return 0

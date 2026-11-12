@@ -3,8 +3,10 @@
 AI-assisted (Claude Code). Small notes from the second review of the landing-script and decisions PRs.
 
 - `tools/land_batch_checks.py` turns any exception while judging GitHub's answer (for example `"check_runs": null`, or
-  a list item that is not an object) into an `error` verdict with its message, printed at once. Before, the exception
-  left the script with an empty verdict until its deadline, and exit 14 lost the reason.
+  a list item that is not an object) into an `error` verdict with its message. `tools/land_batch.sh` still polls on
+  until its deadline, because a bad answer can clear on the next poll, and its exit 14 then names that reason. Before,
+  the exception left the script with an empty verdict, and exit 14 lost the reason (the traceback went to the terminal
+  only).
 - `docs/TOOLING.md` gives the real route for a leak-gate fix that `main`'s own gate refuses: its PR shows a red
   `Leak gate`, so the script stops with exit 13 and has no override. On the maintainer's explicit yes, the hub pushes
   the reviewed and tested commit by hand as a fast-forward of `main`, with any ruleset set to Disabled for that push.

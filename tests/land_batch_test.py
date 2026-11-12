@@ -496,8 +496,8 @@ def check_run_selection():
     # Answers that cannot be read.
     assert judge(run(), workflow={'message': 'Not Found'}) == 'error'
     assert tool.verdict({'message': 'Bad credentials'}, events, sha, 'Leak gate', now)[0] == 'error'
-    # Unreadable JSON, a null list and a list item that is not an object: each is an error verdict with its reason,
-    # printed at once (an uncaught exception left the script reading an empty verdict until its deadline).
+    # Unreadable JSON, a null list and a list item that is not an object: each is an error verdict with its reason on
+    # standard output (an uncaught exception printed none there, so the script's exit 14 could not name the reason).
     with tempfile.TemporaryDirectory() as tmp:
         good = Path(tmp) / 'good.json'
         good.write_text(json.dumps(events))
