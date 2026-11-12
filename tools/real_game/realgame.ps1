@@ -602,8 +602,9 @@ function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$Time
 # wait..."; usually a few seconds, but two launches on 2026-11-12 never left it; the timings are in the private dossier), it reads
 # again every 5 s up to $MenuSeconds after the Enter. Once the menu is left, the load gets $LoadSeconds more; and the driver may stay
 # silent (the load holds the command channel) for $LoadSeconds from the Enter or its last reply, no longer. Whichever of these bounds applies
-# ends the wait: no read waits past it (each reply wait is clamped to the time left, less 1 s), and a reply that comes after it is not
-# taken (review of #245). So the whole step ends at most $MenuSeconds + $LoadSeconds after the Enter. Returns ok, the last read (map),
+# ends the wait: no read waits past it (each reply wait is clamped to the time left, less 1 s), no pause between reads runs past it, and
+# a reply that comes after it is not taken and changes no timing state (review of #245). So the whole step ends within $MenuSeconds +
+# $LoadSeconds after the Enter. Returns ok, the last read (map),
 # why it failed (naming the bound that ran out) and the seconds from the Enter.
 function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, [int]$LoadSeconds = 240) {
     $read = 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
@@ -626,14 +627,19 @@ function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, 
             return (& $result $false "the menu was left, but no player pawn $([math]::Round(($now - $leftMenu).TotalSeconds)) s later (limit $LoadSeconds s); last read: $last")
         }
         if ($left -lt 2) { Start-Sleep -Milliseconds ([int]($left * 1000) + 50); continue }   # too little left for a read: the bound ends the wait
-        $replied = $false
-        try { $last = "$(Invoke-GamePy $read ([int][math]::Min(30, [math]::Floor($left - 1))))".Trim(); $lastReply = Get-Date; $replied = $true }
-        catch { $last = "$_" }
+        $text = $null; $err = ''
+        try { $text = "$(Invoke-GamePy $read ([int][math]::Min(30, [math]::Floor($left - 1))))".Trim() } catch { $err = "$_" }
         $now = Get-Date
-        if ($now -gt $until) { continue }   # the bound passed during the read: a reply after it is not taken, and the next turn names it
+        # The bound passed during the read: a reply after it is not taken and updates nothing (not the last reply's time either, which would
+        # reopen a silence that had run out); the next turn names the bound.
+        if ($now -gt $until) { $replied = $false; $last = if ($null -ne $text) { "a reply after the bound, not taken: $text" } else { $err }; continue }
+        $replied = $null -ne $text
+        if ($replied) { $last = $text; $lastReply = $now } else { $last = $err }
         if ($replied -and $last -match 'WillowPlayerPawn' -and $last -notmatch 'Traceback') { return (& $result $true '') }
         if ($replied -and $last -notmatch '^menumap\b' -and $null -eq $leftMenu) { $leftMenu = $now }   # another map, or a read that failed in the game: the load is under way
-        Start-Sleep 5
+        # The pause between reads never runs past the bound either: the next turn then ends the wait at the bound itself.
+        $pause = [math]::Min(5.0, ($until - (Get-Date)).TotalSeconds)
+        if ($pause -gt 0) { Start-Sleep -Milliseconds ([int]($pause * 1000)) }
     }
 }
 

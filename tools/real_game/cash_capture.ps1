@@ -340,21 +340,26 @@ try {
             # Only an exact state counts: 'up', or a named down condition. Any other reply (a traceback, an empty answer) is a failed poll, counted;
             # five in a row fail the stage. The condition that first fired is kept, so a down seen only at bleed-out is not read as the time to the down.
             $script:pollErrors = 0; $script:inARow = 0
-            # Each poll waits only for the time left in its window, less 1 s (review of #245): a reply never comes after the window, and no poll
-            # starts with under 2 s left. A clamped wait that runs out is the window ending, not a lost driver; a full 30 s one is the driver lost.
+            # Each poll waits only for the time left in its window, less 1 s, and none starts with under 6 s left, so every wait is 5 s or more
+            # (review of #245). A reply that never came within its wait, shortened or not, is the driver lost: the one condition is latched and
+            # the stage ends, as for every other command; 5 s is far above a normal reply, so a live but slow game is not taken for a lost one
+            # by a wait cut to a second. A reply that comes back after the window is not taken, and no state is updated from it.
             $poll = {
                 param([datetime]$Until)
                 $left = ($Until - (Get-Date)).TotalSeconds
-                if ($left -lt 2) { return $null }
+                if ($left -lt 6) { return $null }
                 $wait = [int][math]::Min(30, [math]::Floor($left - 1))
                 try {
-                    $r = Py 'import json; print(json.dumps(cp_down_state()))' $wait | ConvertFrom-Json
+                    $text = Py 'import json; print(json.dumps(cp_down_state()))' $wait
+                    if ((Get-Date) -gt $Until) { return $null }   # too late: not taken
+                    $r = $text | ConvertFrom-Json
                     if ($r.state -in 'up', 'no_pawn', 'no_health', 'injured_flag') { $script:inARow = 0; return $r }
                     throw "unexpected state '$($r.state)'"
                 } catch {
-                    # A reply that never came is the driver lost, not a failed poll: set the one condition and end the stage.
-                    if ("$_" -match 'no reply' -and $wait -lt 30) { return $null }
-                    if ("$_" -match 'no reply') { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_"; throw }
+                    if ("$_" -match 'no reply') {
+                        if (!(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }
+                        throw
+                    }
                     $script:pollErrors++; $script:inARow++
                     if ($script:inARow -ge 5) { throw "five den-down polls in a row failed: $_" }
                     return $null

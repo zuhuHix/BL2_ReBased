@@ -75,6 +75,10 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             if ($scenario -eq 'never_loads') { return 'menumap None' }
             if ($scenario -eq 'load_lost') { throw 'no reply to c-invented' }
             if ($scenario -eq 'load_stuck') { return 'Loader None' }   # the menu was left, the pawn never comes
+            if ($scenario -eq 'pawn_after_silence') {   # the first read answers 2 s past its wait, after the silence bound; the next at once
+                if ($script:loadReads -eq 1) { [Threading.Thread]::Sleep(($TimeoutSeconds + 2) * 1000) }
+                return 'Sanctuary_P WillowPlayerPawn'
+            }
             if ($scenario -eq 'late_pawn') {   # the menu is left at once; the pawn's reply takes 5 s, past a 4 s load bound
                 if ($script:loadReads -eq 1) { return 'Loader None' }
                 if ($TimeoutSeconds -lt 5) { [Threading.Thread]::Sleep($TimeoutSeconds * 1000); throw 'no reply to c-invented' }
@@ -140,6 +144,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost', 'close_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
             if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
             if ($scenario -eq 'poll_lost' -and $script:polls -eq 2) { throw 'no reply to c-invented' }   # one poll unanswered, the next ones answered
+            if ($scenario -eq 'short_timeout' -and $TimeoutSeconds -lt 30) { throw 'no reply to c-invented' }   # a shortened wait runs out
+            if ($scenario -eq 'late_down') { [Threading.Thread]::Sleep(($TimeoutSeconds + 2) * 1000); return '{"state": "injured_flag", "injured_field": true, "pool": 0.0}' }   # answers after its window
             if ($scenario -eq 'slow_poll') {   # each reply takes 2.5 s: a wait shorter than that gets no reply
                 if ($TimeoutSeconds -lt 3) { [Threading.Thread]::Sleep($TimeoutSeconds * 1000); throw 'no reply to c-invented' }
                 [Threading.Thread]::Sleep(2500); return '{"state": "up", "injured_field": true, "pool": 100.0}'
@@ -627,10 +633,10 @@ class DenDownReplacementTest(unittest.TestCase):
         CashCaptureTest.setUp(self)
 
     def run_down(self, scenario, *extra):
-        return self.run_capture(scenario, ['-DenDown', '-RespawnSeconds', '3', *extra])
+        return self.run_capture(scenario, ['-DenDown', '-RespawnSeconds', '8', *extra])
 
     def test_unhit_for_the_wait_means_one_replacement(self):
-        done, session = self.run_down('replace_one', '-DownSeconds', '5', '-ReplaceAfterSeconds', '2')
+        done, session = self.run_down('replace_one', '-DownSeconds', '9', '-ReplaceAfterSeconds', '2')
         self.assertEqual(session['den_down_replacements'], 1)
         self.assertEqual(len(session['den_down_replace_results']), 1)
         self.assertIn(('den_down', 'replace1'), [(m['stage'], m['event']) for m in session['stage_marks']])
@@ -638,17 +644,17 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertIn('failed', session['stage_results']['den_down'])   # still no down: the stage fails as before
 
     def test_the_cap_is_four(self):
-        done, session = self.run_down('replace_cap', '-DownSeconds', '4', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('replace_cap', '-DownSeconds', '8', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 4)
         self.assertEqual(sum(1 for m in session['stage_marks'] if m['event'].startswith('replace')), 4)
 
     def test_none_after_a_down(self):
-        done, session = self.run_down('replace_after_down', '-DownSeconds', '5', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('replace_after_down', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_reason'], 'injured_flag')
         self.assertEqual(session['den_down_replacements'], 1)   # the one before the down; none after it
 
     def test_none_while_hits_keep_coming(self):
-        done, session = self.run_down('replace_hit', '-DownSeconds', '4', '-ReplaceAfterSeconds', '1')
+        done, session = self.run_down('replace_hit', '-DownSeconds', '8', '-ReplaceAfterSeconds', '1')
         self.assertEqual(session['den_down_replacements'], 0)
 
     def replace_calls(self):
@@ -667,7 +673,7 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_lost_driver_found_by_the_stamp_sends_no_placement(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('mark_lost', '-WatchSpec', str(spec), '-DownSeconds', '5', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('mark_lost', '-WatchSpec', str(spec), '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
         self.assertEqual(self.replace_calls(), 0)   # the stamp's watch mark got no reply: dp_replace is not sent
         self.assertEqual(session['den_down_replacements'], 0)
         self.assertIn(('den_down', 'replace1'), [(m['stage'], m['event']) for m in session['stage_marks']])   # the stamp itself is on disk
@@ -677,7 +683,7 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_lost_driver_at_the_down_snapshot_sends_no_respawn_poll_and_no_trial_close(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('snap_lost', '-WatchSpec', str(spec), '-DownSeconds', '5')
+        done, session = self.run_down('snap_lost', '-WatchSpec', str(spec), '-DownSeconds', '9')
         self.assertEqual(session['den_down_reason'], 'injured_flag')
         self.assertIsNone(session['den_down_up_after_s'])   # a respawn poll would have answered 'up': none was sent
         self.assertTrue(session['den_down_trial_close'].startswith('not sent: the driver stopped answering'))
@@ -686,7 +692,7 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_lost_driver_at_after_respawn_fails_the_stage_although_she_stood_again(self):
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('after_lost', '-WatchSpec', str(spec), '-DownSeconds', '5')
+        done, session = self.run_down('after_lost', '-WatchSpec', str(spec), '-DownSeconds', '9')
         self.assertIsNotNone(session['den_down_up_after_s'])   # down and up were both seen
         self.assertNotIn('den_down', session['completed_stages'])
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
@@ -710,7 +716,7 @@ class DenDownReplacementTest(unittest.TestCase):
         # Review of #245: a timeout of dp_end was only logged, so den_down could pass after the driver was lost.
         spec = self.work / 'spec.json'
         spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
-        done, session = self.run_down('close_lost', '-WatchSpec', str(spec), '-DownSeconds', '5')
+        done, session = self.run_down('close_lost', '-WatchSpec', str(spec), '-DownSeconds', '9')
         self.assertIsNotNone(session['den_down_up_after_s'])   # down and up were both seen
         self.assertNotIn('den_down', session['completed_stages'])
         self.assertIn('the driver stopped answering during the den down', session['stage_results']['den_down'])
@@ -718,18 +724,33 @@ class DenDownReplacementTest(unittest.TestCase):
 
     def test_no_placement_after_the_window_even_when_a_poll_answers_late(self):
         # Review of #245: a poll started near the end of the 150 s window could return 'up' after it and still bring a re-placement.
-        done, session = self.run_down('slow_poll', '-DownSeconds', '6', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('slow_poll', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
         times = [float(r.split(' s:')[0]) for r in session['den_down_replace_results']]
-        self.assertTrue(times and all(t < 6 for t in times), times)
+        self.assertTrue(times and all(t < 9 for t in times), times)
+
+    def test_a_shortened_wait_that_runs_out_is_driver_loss(self):
+        # Review of #245, round 2: a poll whose wait the window had shortened, and that got no reply, left both flags empty and the stage
+        # went on as if nothing had happened. It is driver loss: latched, the stage fails, and nothing more is sent.
+        done, session = self.run_down('short_timeout', '-DownSeconds', '12', '-ReplaceAfterSeconds', '0')
+        self.assertIn('no reply', session['stage_results']['den_down'])   # the stage fails on the lost reply, not on a window that ran out
+        self.assertNotIn('no down in', session['stage_results']['den_down'])
+        self.assertNotIn('den_down_trial_close', session)   # no trial close was sent
+        self.assertNotIn('quit', self.sent())
+
+    def test_a_down_that_answers_after_the_window_is_not_taken(self):
+        # Review of #245, round 2: a reply that came back after the window was returned without a test of its deadline.
+        done, session = self.run_down('late_down', '-DownSeconds', '8')
+        self.assertNotIn('den_down_reason', session)
+        self.assertIn('no down in 8 s', session['stage_results']['den_down'])
 
     def test_an_unreadable_shield_never_reads_as_unhit(self):
-        done, session = self.run_down('pool_none', '-DownSeconds', '4', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('pool_none', '-DownSeconds', '8', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 0)
         self.assertEqual(self.replace_calls(), 0)
-        self.assertIn('no down in 4 s after 0 re-placements', session['stage_results']['den_down'])
+        self.assertIn('no down in 8 s after 0 re-placements', session['stage_results']['den_down'])
 
     def test_a_down_between_the_poll_and_the_call_is_left_to_the_next_poll(self):
-        done, session = self.run_down('down_at_replace', '-DownSeconds', '5', '-ReplaceAfterSeconds', '0')
+        done, session = self.run_down('down_at_replace', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
         self.assertEqual(self.replace_calls(), 1)
         self.assertEqual(session['den_down_replacements'], 1)
         self.assertIn('not_up', session['den_down_replace_results'][0])   # logged, no placement
@@ -777,6 +798,14 @@ class LoadWaitTest(unittest.TestCase):
         self.assertFalse(session['load_wait']['ok'], session['load_wait'])
         self.assertLess(session['load_wait']['after_enter_s'], 6)
         self.assertIn('no player pawn', session['status'])
+
+    def test_a_reply_after_the_silence_bound_does_not_reopen_it(self):
+        # Review of #245, round 2 (and the note that the late-pawn test only exercised the clamp): a read that ignores its wait and answers
+        # with the pawn after the silence bound is not taken, and it does not refresh the time of the last reply.
+        done, session = self.run_capture('pawn_after_silence', ['-MenuWaitSeconds', '30', '-LoadWaitSeconds', '4'])
+        self.assertFalse(session['load_wait']['ok'], session['load_wait'])
+        self.assertIn('the driver did not answer for', session['status'])
+        self.assertIn('a reply after the bound, not taken', session['status'])
 
     def test_a_load_that_never_brings_the_pawn_fails_on_the_load_bound(self):
         done, session = self.run_capture('load_stuck', ['-MenuWaitSeconds', '4', '-LoadWaitSeconds', '4'])
