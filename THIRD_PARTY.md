@@ -128,7 +128,7 @@ decision before implementation.
 - Datapack: https://github.com/BLCM/OpenBLCMM-Data release 2023-04-21-01,
   `blcmm_data_BL2-2023-04-20-01.jar` SHA-256
   `8bf07971904ed9d511586e11adcc4e676fbeda546994b439456860fcce2457bc`.
-- Local: `C:/Users/yorad/Tools/OpenBLCMM/`; `data.db` extracted to
+- Local: `%USERPROFILE%/Tools/OpenBLCMM/`; `data.db` extracted to
   `%LOCALAPPDATA%/OpenBLCMM/extracted-data/BL2/`.
 - Use: observed-game oracle read by `tools/blcmm_dumps.py` (see "Oracles").
   No code copied; no dump text tracked.
@@ -139,7 +139,7 @@ decision before implementation.
   (upstream `LICENSE.md`).
 - Local binary: `nightly-2026-09-26`, `ruffle-nightly-2026_09_26-windows-x86_64.zip`
   SHA-256 `a3f2a75b63a84f7a5600733f9c39ea9d6b9a4d6e703b26c5d92ead470184aa5b`,
-  unpacked to `C:/Users/yorad/Tools/Ruffle/nightly-2026-09-26/`.
+  unpacked to `%USERPROFILE%/Tools/Ruffle/nightly-2026-09-26/`.
 - On first run the desktop build downloaded Cisco's OpenH264 2.4.1 (its own
   BSD-2-Clause license and Cisco's binary terms) to
   `%LOCALAPPDATA%/ruffle/video/`; it is Ruffle's, unused by this project.
@@ -175,7 +175,7 @@ decision before implementation.
 - **Ghidra** 12.1.4 (build 2026-09-21), https://github.com/NationalSecurityAgency/ghidra, Apache License 2.0. Release
   asset `ghidra_12.1.4_PUBLIC_20260921.zip`, SHA-256
   `ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db` (matches the checksum published in the release
-  notes). Unpacked outside the repository at `C:\Users\yorad\Tools\ghidra_12.1.4_PUBLIC`. Its bundled native
+  notes). Unpacked outside the repository at `%USERPROFILE%\Tools\ghidra_12.1.4_PUBLIC`. Its bundled native
   `decompile.exe` launches on the development machine (Smart App Control on).
 - **Eclipse Temurin JDK** 21.0.12.1+1 (portable zip, `OpenJDK21U-jdk_x64_windows_hotspot_21.0.12.1_1.zip`), from
   https://github.com/adoptium/temurin21-binaries, GPL-2.0 with the Classpath Exception. SHA-256
@@ -212,7 +212,7 @@ decision before implementation.
 - **vgmstream** r2168 (published 2026-10-25, tag commit `d9875b1fff307e4759dfb85e49e3d5e6fb196f7c`), https://github.com/vgmstream/vgmstream. Release asset
   `vgmstream-win64.zip`, 4,574,355 bytes, SHA-256 `692d45070852a35c1fa42726aa3c9de528e44eec925d37d99b1074256b99a229`, matching the digest GitHub publishes for
   that asset. `vgmstream-cli.exe` SHA-256 `10fb0691538d3133f0115a071f89775fc99f32210b7e5991cfc3c2869247e4b2` (not digitally signed; Smart App Control did not block it on the
-  development machine). Unpacked outside the repository at `C:\Users\yorad\Tools\vgmstream\r2168\bin`.
+  development machine). Unpacked outside the repository at `%USERPROFILE%\Tools\vgmstream\r2168\bin`.
 - **Licence:** vgmstream itself: ISC-style permission notice, with the portions named in the bundled `COPYING`. The CLI needs the DLLs bundled with it (it does not start with only `libvorbis.dll`), and they keep
   their own licences. Compared on 2026-11-07: all nine files in `ext_libs/licenses` at that tag, the "External libraries" section of `doc/BUILD.md` at that tag, and the import tables and version strings of the nine bundled DLLs and of the CLI:
   - `libvorbis.dll`: libvorbis 1.3.7 with libogg 1.3.5 inside it, BSD-style (`libvorbis-1.3.7.COPYING`, `libogg-1.3.5.COPYING`).
