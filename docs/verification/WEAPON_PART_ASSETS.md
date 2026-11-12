@@ -161,7 +161,7 @@ Remaining, as the critic ranked them, with what was found:
 - **Part list shape.** The item now carries PR #57's shape: an ordered `TArray<FOpenWillowWeaponPart> {Slot, Part}` with
   `FindPart`, `Material` (skin MIC), `GestaltMesh`, plus `WeaponType` (object path). The assembler reads only these, so guns the
   generator makes assemble the same way as recipe guns once #57 lands (rebase pending).
-- **No partial guns.** `OpenWillowWeaponAssembly::Plan` (pure; automation test `OpenWillow.WeaponAssembly`, run in `-game` mode)
+- **No partial guns.** `OpenWillowWeaponAssembly::Plan` (pure; automation test `OpenWillow.WeaponAssembly.Core`, run in `-game` mode)
   refuses a gun with no part list, a part, skin or section material the library does not know, a fragment the library mesh
   lacks, or parts that draw nothing; `Show` then uses the pre-built mesh and logs `fallback to the pre-built mesh <path>
   (<reason>)`. The host runs below logged no fallback.

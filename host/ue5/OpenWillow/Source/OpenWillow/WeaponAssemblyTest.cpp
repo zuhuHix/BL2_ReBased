@@ -1,3 +1,6 @@
+// Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit" (runs the five
+// OpenWillow.WeaponAssembly.* tests). No test here may take the bare path OpenWillow.WeaponAssembly: a path that is also the folder
+// of other tests is never run (tests/automation_paths_test.py checks this).
 #include "Misc/AutomationTest.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "HAL/FileManager.h"
@@ -21,7 +24,7 @@
 // The library planning rules on a synthetic index (invented names, no game data): fragments in slot order, vectors with a
 // later part winning, the Material part's skin, section materials, hidden bones by weapon type, the bounds union, and every
 // case that must fall back to the pre-built mesh instead of drawing a partial or wrongly painted gun.
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowWeaponAssemblyTest, "OpenWillow.WeaponAssembly",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowWeaponAssemblyTest, "OpenWillow.WeaponAssembly.Core",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FOpenWillowWeaponAssemblyTest::RunTest(const FString&)
 {

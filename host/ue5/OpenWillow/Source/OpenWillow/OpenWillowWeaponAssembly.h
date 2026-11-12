@@ -18,7 +18,7 @@ struct FOpenWillowWeaponItem;
 // with the old material path (OpenWillowGunLook::Apply), and the reason is logged.
 namespace OpenWillowWeaponAssembly
 {
-// What the library says about one gun, before any asset is loaded (pure: tested by OpenWillow.WeaponAssembly).
+// What the library says about one gun, before any asset is loaded (pure: tested by OpenWillow.WeaponAssembly.Core).
 struct FPlan
 {
     bool bOk = false;

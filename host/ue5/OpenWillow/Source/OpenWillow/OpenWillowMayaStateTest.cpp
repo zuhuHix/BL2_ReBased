@@ -2,7 +2,9 @@
 // recharge delay and rate, going down, the bleed-out cut for successive injuries, the second wind, death and the respawn.
 // Every number below is invented for the test or is the rule's own constant; nothing is read from the game. The rules are
 // the ones of docs/verification/COMBAT_DOWN_RESPAWN.md; this test only pins the host's arithmetic.
-// Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.MayaState; Quit"
+// Run: UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.MayaState; Quit" (runs OpenWillow.MayaState.Core
+// and OpenWillow.MayaState.RespawnWaitSplit). No test here may take the bare path OpenWillow.MayaState: a path that is also the
+// folder of other tests is never run (tests/automation_paths_test.py checks this).
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -40,7 +42,7 @@ FOpenWillowMayaState::ETickEvent Run(FOpenWillowMayaState& S, float From, float 
 }
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowMayaStateTest, "OpenWillow.MayaState",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenWillowMayaStateTest, "OpenWillow.MayaState.Core",
     EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 
 bool FOpenWillowMayaStateTest::RunTest(const FString&)

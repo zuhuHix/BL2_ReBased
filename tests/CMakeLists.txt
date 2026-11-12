@@ -59,7 +59,7 @@ endif()
 #   refuses while any Unreal editor runs on the PC (exit 2, "NOT RUN"): run_ue_flash_hud
 #   tests/*_test.js: in OW_NODE_TESTS below, registered only where Node is found
 set(OW_STANDALONE_PY_TESTS
-  audio_census blcmm_dumps block_saves bsp_calibration bsp build_phaselock_fx_constants check_action_skill_hud check_hud_down
+  audio_census automation_paths blcmm_dumps block_saves bsp_calibration bsp build_phaselock_fx_constants check_action_skill_hud check_hud_down
   check_hud_shots check_interactives check_mission_page check_overlay_data check_phaselock_kill check_shield_check
   check_slice_gate check_vendors check_weapon_firing collision crosscheck_blcmm_dumps crosscheck_bsp_polys
   crosscheck_umodel_assets crosscheck_umodel den_probe editor_inputs engine_default game_colours gen_confirm gestalt_sockets

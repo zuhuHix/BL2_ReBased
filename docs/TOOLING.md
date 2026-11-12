@@ -1958,8 +1958,10 @@ pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList 
   split a larger sample into folders. Run `weapon_view_model.py` on each folder so the guns are held at their type's offset.
 - `-owweaponprebuilt` forces the old per-recipe meshes (A/B); a recipe with an explicit `MeshPath` always uses it. A gun the
   library cannot build completely falls back too, with `fallback to the pre-built mesh ... (<reason>)` in the log.
-- `OpenWillow.WeaponAssembly` is a UE automation test of the planning rules on a synthetic library; run it in `-game` mode
-  (`UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit"`).
+- `OpenWillow.WeaponAssembly.Core` is a UE automation test of the planning rules on a synthetic library; run it in `-game` mode
+  (`UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit"`, which also
+  runs the four other `OpenWillow.WeaponAssembly.*` tests). It was plain `OpenWillow.WeaponAssembly` until 2026-11-12: a test
+  path that is also the folder of other tests is never run, and `tests/automation_paths_test.py` now refuses one.
 - A meshes import re-imports the reload clips recorded in `local/weapon_library/reloads.json`.
 - `-owgunexec=<cmd>|<cmd>` (with `-owgunshots`) runs console commands before the captures, `+` for a space, e.g.
   `-owgunexec=ow.RollGun+GD_Itempools.WeaponPools.Pool_Weapons_All_06_Legendary+30+1 -owgunids=gen_Pistol_Torgue_5_Calla_30_1`
