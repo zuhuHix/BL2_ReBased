@@ -88,9 +88,9 @@ Pillow (commit 2 of that lane, landed only with the maintainer's yes): CI instal
 `sanctuary_pillar`, `weapon_paint`, `weapon_part_census`) run as `py-<name>` where Pillow and numpy both import (`sanctuary_pillar`
 needs both). `prepare_mission_log` skips one of its 4 cases where file symlinks need a privilege (this PC).
 
-| Tests | Why not in ctest | Status on 2026-11-11 |
+| Tests | Why not in ctest | Status on 2026-11-12 |
 |---|---|---|
-| `realgame_snapshot` (144 s), `real_game_pending` (74 s), `real_game_capture_safety` (70 s), `skills_live_probe` (65 s), `controls_capture` (52 s), `cash_capture` (49 s), `provision_worktree` (36 s), `check_hud_minimap` (30 s) | too slow for every PR: about 520 s together | pass |
+| `cash_capture` (about 200 s), `realgame_snapshot` (150 s), `real_game_pending` (74 s), `real_game_capture_safety` (70 s), `skills_live_probe` (65 s), `controls_capture` (52 s), `provision_worktree` (36 s), `check_hud_minimap` (30 s) | too slow for every PR: about 680 s together. `cash_capture` grew with the den-down and load-step cases of #245: its stub skips every sleep, so each case spins through its window in real time | pass |
 | `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
 
 Notes: a test that skips cases there, or skips all of them, does not count as passing. Four registered tests skip cases off Windows

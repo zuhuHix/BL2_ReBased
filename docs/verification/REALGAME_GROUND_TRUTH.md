@@ -389,3 +389,8 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
   latched driver-lost timeouts with no quit to a lost driver, the clamped deadlines, the focus Alt journal, the quit wait, the
   checker). No session has run them: their
   behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
+- **Reads added from the two sessions' analyses** (`docs/TOOLING.md`, "Slice-session switches"): the down labelled by the injured
+  flag first, the readings loop's skip list and per-try touch record, deaths apart from kill attempts, a `drop` snapshot per kill with
+  each item's balance, the items' part definitions, the camera through the controller's view point with a stage that fails on an
+  empty trace, the controller's cinematic and input-ignore fields per frame, the pawns' `Velocity`, a named NPC's clean reads, and
+  snapshots after the accept and the reward. None has run in a session: each is `UNVERIFIED` in the game.

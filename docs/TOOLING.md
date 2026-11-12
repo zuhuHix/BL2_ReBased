@@ -1541,6 +1541,21 @@ sessions of 2026-11-12 ran commit e7b5fa3; the review fixes of #245 (the record 
 clamped deadlines, the Alt journal, the quit wait, the checker's counts and messages) came after them. No session has run those
 fixes, so their behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
 
+**Reads added after the sessions' analyses** (reads and reporting only; none changes what a run does to the game or sends as input;
+all `UNVERIFIED` in the game until a session runs them):
+- `cash_capture`: a down is labelled by the injured flag before the health (`down_state`), and the time after it is logged as
+  `den_down_health_back_s`, the health back in the holding cell, not standing. The readings loop skips a pickup that gave no reading
+  instead of retrying it and stops after six distinct failures in a row; each try records whether
+  `WillowPlayerController:TouchedPickupable` fired (an observer hook that only counts) and the pickup's location and physics fields;
+  kill attempts and deaths are counted apart (`cp_died`, fields only). With a watch, a labelled `drop` snapshot follows each kill,
+  and the watch's pickups part names each item's balance. The cash rows hold each item's part definitions.
+- `mission_screen_capture`: the camera is read through the player's own controller (`GetPlayerViewPoint`, `GetFOVAngle`, calls on
+  that controller only), and a new `camera` stage fails when the trace read nothing. With a watch, labelled snapshots follow the
+  accept (`accept_after`) and the reward (`reward_taken`).
+- The watch: `frame_controller` puts the player's own controller's `bCinematicMode`, `IgnoreMoveInput` and `IgnoreLookInput`
+  (fields) in each frame row, and the AI pawn read carries `Velocity`. The checker's `pawns` rule takes a `name`, so a named NPC's
+  own clean reads are counted.
+
 ## Sanctuary ambient NPCs (host, behind a flag)
 
 Off by default. `-owambient=<manifest>` (or `OPENWILLOW_AMBIENT`) spawns the town's citizens and runs the stock perch
