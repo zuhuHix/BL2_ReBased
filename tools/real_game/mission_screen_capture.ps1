@@ -189,6 +189,8 @@ try {
     if ($row.status -eq 0) { Py 'print(ms_cam_trace(2.0))' | Out-Null }
     if ($row.status -eq 0) { $accept = Test-Key 'offer' 'Enter' }
     Read-After 'accept_after' 1.0 | Out-Null
+    # Labelled snapshots after the accept and after the reward (session 1 analysis, A6): they place the pools' state before the down. Reads only.
+    if ($WatchSpec) { Save-SliceWatchSnap 'accept_after' }
     Set-Stage 'accept' ($accept.status -eq 1 -and $log.delivered_offer_Enter.delivered -eq $true) "Enter did not accept: status $($accept.status)"
     if ($accept.status -ne 1) { throw 'the offer was not accepted' }
 
@@ -232,6 +234,7 @@ try {
         foreach ($at in '0.5', '1.0') { $after = Read-After "reward_taken_$at" 0.4 }
     }
     $log.reward_taken = PyJson 'ms_reward_taken()'
+    if ($WatchSpec) { Save-SliceWatchSnap 'reward_taken' }
     Set-Stage 'reward_taken' ($log.reward_taken.ok -eq $true) "the reward was not taken once by a marked press: $($log.reward_taken | ConvertTo-Json -Compress)"
     # What is left: a list with the next mission, or nothing. Esc only, on a screen that is still open.
     if ($after.open) { $after = Test-Key 'after' 'Esc' }

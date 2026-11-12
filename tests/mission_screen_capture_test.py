@@ -424,6 +424,16 @@ def test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace
     assert "'camera'" in text[text.index('$stagesRequested = @('):].split('\n')[0]
 
 
+def test_labelled_snapshots_follow_the_accept_and_the_reward():
+    """Session 1 analysis, A6: with a watch, a labelled snapshot right after the accept's read and after the reward's verdict."""
+    text = CAPTURE.read_text(encoding='utf-8')
+    accept = text.index("Read-After 'accept_after' 1.0 | Out-Null")
+    snap = text.index("if ($WatchSpec) { Save-SliceWatchSnap 'accept_after' }")
+    assert accept < snap < text.index("Set-Stage 'accept'")
+    taken = text.index("$log.reward_taken = PyJson 'ms_reward_taken()'")
+    assert taken < text.index("if ($WatchSpec) { Save-SliceWatchSnap 'reward_taken' }") < text.index("Set-Stage 'reward_taken'")
+
+
 def test_probe_helpers():
     probe = load_probe()
     first, second = probe.MS_TEXT[0], probe.MS_TEXT[1]
@@ -443,6 +453,7 @@ def test_probe_helpers():
 
 
 if __name__ == '__main__':
+    test_labelled_snapshots_follow_the_accept_and_the_reward()
     test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails()
     test_probe_helpers()
     test_the_movie_is_a_path_cleared_on_both_close_paths()
