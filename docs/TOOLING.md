@@ -1888,6 +1888,8 @@ $cooked = "$game\WillowGame\CookedPCConsole"
 
 # World placement: range trigger, Marcus and his walk, dummy spawn, target mover, respawn point
 python tools/prepare_slice_world.py --reader $reader --game $game      # local/slice/world.json
+# without local/sanctuary/scene.json it writes scene_bounds as checked=false with the reason, and refuses to replace a world.json
+# that holds checked bounds unless --drop-scene-bounds is passed
 python tools/slice_values.py --reader $reader --game $game             # XP reward, Maya health
 
 # Phaselock and one upgrade path (Suspension) from skill data

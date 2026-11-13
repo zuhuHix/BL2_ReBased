@@ -269,6 +269,86 @@ def test_region_stage_entry_for_playthrough_one():
         pass
 
 
+
+# scene_bounds: written as "not checked" when the scene file is missing, and a run without it never replaces checked bounds (invented
+# placements and positions; files in a temporary folder under the ignored local/, where the tool's output must live).
+def test_scene_bounds_record_says_checked_or_not_and_why():
+    checked = w.scene_bounds_check([[0, 0, 0], [100, 0, 0]], {'a': [90, 0, 5]})
+    assert checked['checked'] is True and checked['placements'] == 2
+    missing = w.scene_bounds_not_checked(Path('local/nowhere/scene.json'))
+    assert missing['checked'] is False
+    assert 'no scene file at' in missing['reason'] and 'prepare_level.py' in missing['reason']
+    assert 'placements' not in missing and 'checks' not in missing
+
+
+def _world_folder():
+    import tempfile
+    (w.ROOT / 'local').mkdir(exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=w.ROOT / 'local', prefix='slice_world_test.')
+
+
+def test_a_run_without_the_scene_never_drops_checked_bounds():
+    import json
+    with _world_folder() as folder:
+        out = Path(folder) / 'world.json'
+        assert w.bounds_drop_problem(out, False, False) == ''                      # nothing there yet: write
+        out.write_text(json.dumps({'scene_bounds': {'placements': 7, 'checks': []}}))   # before 2026-11-13: no checked key
+        problem = w.bounds_drop_problem(out, False, False)
+        assert 'holds a checked scene_bounds (7 placements)' in problem and '--drop-scene-bounds' in problem
+        assert w.bounds_drop_problem(out, True, False) == ''                       # the scene is there: the new record is checked too
+        assert w.bounds_drop_problem(out, False, True) == ''                       # the drop is asked for
+        out.write_text(json.dumps({'scene_bounds': {'checked': True, 'placements': 7, 'checks': []}}))
+        assert 'Nothing was written' in w.bounds_drop_problem(out, False, False)
+        out.write_text(json.dumps({'scene_bounds': w.scene_bounds_not_checked(None)}))
+        assert w.bounds_drop_problem(out, False, False) == ''                      # not checked before either: nothing is lost
+        out.write_text(json.dumps({'schema': 'x'}))
+        assert w.bounds_drop_problem(out, False, False) == ''                      # no bounds before
+        out.write_text('{not json')
+        assert 'cannot be read' in w.bounds_drop_problem(out, False, False)
+
+
+def test_main_refuses_before_the_reader_work_and_writes_nothing():
+    import json
+    built = []
+    real_build = w.build
+    w.build = lambda *a: built.append(a) or {}
+    try:
+        with _world_folder() as folder:
+            out = Path(folder) / 'world.json'
+            before = json.dumps({'scene_bounds': {'checked': True, 'placements': 3, 'checks': []}})
+            out.write_text(before)
+            try:
+                w.main(['--game', str(Path(folder) / 'game'), '--scene', str(Path(folder) / 'no_scene.json'), '--output', str(out),
+                        '--no-values'])
+                raise AssertionError('a run without the scene wrote over checked bounds')
+            except SystemExit as stop:
+                assert 'holds a checked scene_bounds (3 placements)' in str(stop.code)
+            assert built == [] and out.read_text() == before
+    finally:
+        w.build = real_build
+
+
+def test_main_says_not_checked_and_writes_the_field():
+    import contextlib
+    import io
+    import json
+    real_build = w.build
+    w.build = lambda reader, game, scene: {'scene_bounds': w.scene_bounds_not_checked(scene),
+                                           **{part: {'oracles': []} for part in ('marcus', 'target_dummy', 'respawn')}}
+    try:
+        with _world_folder() as folder:
+            out = Path(folder) / 'world.json'
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                code = w.main(['--game', str(Path(folder) / 'game'), '--scene', str(Path(folder) / 'no_scene.json'),
+                               '--output', str(out), '--no-values'])
+            assert code == 0
+            assert 'scene_bounds: not checked, no scene file at' in said.getvalue()
+            written = json.loads(out.read_text())['scene_bounds']
+            assert written['checked'] is False and 'prepare_level.py' in written['reason']
+    finally:
+        w.build = real_build
+
 if __name__ == '__main__':
     tests = [(name, fn) for name, fn in sorted(globals().items()) if name.startswith('test_')]
     for name, fn in tests:

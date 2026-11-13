@@ -759,7 +759,39 @@ def scene_bounds_check(locations, positions):
     for name, p in positions.items():
         nearest = min(distance(p, l, planar=True) for l in locations)
         checks.append({'name': name, 'nearest_placement_planar': round(nearest, 1)})
-    return {'placements': len(locations), 'checks': checks}
+    return {'checked': True, 'placements': len(locations), 'checks': checks}
+
+
+SCENE_STEP = 'python tools/prepare_level.py (it writes local/sanctuary/scene.json)'
+
+
+def scene_bounds_not_checked(scene):
+    """The scene_bounds record of a run without the scene file: written, not left out, so a reader of world.json can tell "not
+    checked" from "checked" (2026-11-13; before, the field was simply missing)."""
+    where = f'no scene file at {scene}' if scene else 'no --scene given'
+    return {'checked': False, 'reason': f'{where}: the positions were not compared with the map placements. Run {SCENE_STEP}, '
+                                         f'then this tool again'}
+
+
+def bounds_drop_problem(out, scene_present, drop_scene_bounds):
+    """Why this run must not write over `out` ("" when it may): keep or refuse, never degrade (the rule of
+    tools/prepare_ambient_world.py's replace_problem). A run without the scene file would replace a world.json that holds a checked
+    scene_bounds with one that does not, so it is refused unless --drop-scene-bounds says that is meant. An existing file that cannot be
+    read is not overwritten either: what it held is unknown."""
+    if scene_present or drop_scene_bounds or not out.exists():
+        return ''
+    try:
+        old = json.loads(out.read_text(encoding='utf-8'))
+        bounds = old.get('scene_bounds') if isinstance(old, dict) else None
+    except (OSError, ValueError) as error:
+        return (f'{out} exists but cannot be read ({error!r}), and this run has no scene file, so it is not overwritten. Look at it, '
+                f'then pass --drop-scene-bounds to write over it, or write elsewhere with --output')
+    # A file from before 2026-11-13 has no checked key; a scene_bounds there was always a checked one.
+    if isinstance(bounds, dict) and bounds.get('checked', True):
+        return (f'{out} holds a checked scene_bounds ({bounds.get("placements")} placements); this run has no scene file, so it '
+                f'would write one without. Nothing was written. Run {SCENE_STEP} first, or pass --drop-scene-bounds if the unchecked '
+                f'record is meant, or write elsewhere with --output')
+    return ''
 
 
 def scene_locations(scene_path):
@@ -809,21 +841,31 @@ def build(reader_exe, game, scene=None):
                          **{s['object']: s['host']['location'] for s in r['stations']}}
             result['scene_bounds'] = scene_bounds_check(scene_locations(scene), positions)
             result['scene_bounds']['scene_sha256'] = hashlib.sha256(Path(scene).read_bytes()).hexdigest()
+        else:
+            result['scene_bounds'] = scene_bounds_not_checked(scene)
         return result
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--scene', type=Path, default=ROOT / 'local/sanctuary/scene.json')
     p.add_argument('--output', type=Path, default=ROOT / 'local/slice/world.json')
     p.add_argument('--no-values', action='store_true', help='skip tools/slice_values.py')
-    args = p.parse_args()
+    p.add_argument('--drop-scene-bounds', action='store_true',
+                   help='without the scene file, write over a world.json that holds a checked scene_bounds (the unchecked record is meant)')
+    args = p.parse_args(argv)
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / 'local'):
         raise SystemExit('Game-derived output must stay under repository local/')
+    scene_present = bool(args.scene) and Path(args.scene).exists()
+    problem = bounds_drop_problem(output, scene_present, args.drop_scene_bounds)
+    if problem:   # refused before the reader work: whether the scene file is there is known now
+        raise SystemExit(problem)
     result = build(args.reader, args.game, args.scene)
+    if not result['scene_bounds']['checked']:
+        print('scene_bounds: not checked, ' + result['scene_bounds']['reason'])
     if not args.no_values:
         import slice_values
         result['values'] = slice_values.build(args.reader, args.game)
