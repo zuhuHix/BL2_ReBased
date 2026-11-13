@@ -1429,8 +1429,10 @@ live components of interactive objects, mission spawners and wiring actors with 
 Before a run changes anything the maintainer owns, it writes a **pending record** under `%LOCALAPPDATA%\OpenWillow\`
 (`tools/real_game/pending.ps1`, `realgame_run_pending-<script>-<pid>.json`): the script, its PID and process start time
 (local and UTC), the backup folder, each root's live folder and tree hash (one SHA-256 over every file's path and SHA-256,
-paths compared case-sensitively), the driver folder's owner id, the keys and buttons held right now, and one line per change, each written before that change: the driver's install and save
-block, the launch, SDK mods off (`Set-SdkModsOff`). The roots are every folder a launch can rewrite: `SaveData`, `Config`,
+paths compared case-sensitively), the game's install folder (`game`), the driver folder's owner id, the keys and buttons held right now, and one line per change, each written before that change: the driver's install and save
+block, the launch, SDK mods off (`Set-SdkModsOff`). Right after the launch, `Start-Game` adds `game_launch`: the launched game's PID, its
+start time (from the process handle) and its executable (`Save-GameLaunchRecord`, since 2026-11-13). A session's recovery stops a game only
+when it is that recorded process; a record that cannot be written is a warning, and such a game is then reported, not stopped. The roots are every folder a launch can rewrite: `SaveData`, `Config`,
 the SDK's `sdk_mods/settings` and Sanity Saver's `sdk_mods/SanitySaver` (absent ones are recorded as absent, and one that
 appears during the run keeps the record). `Backup-Saves` and `Save-VerifiedBackupRecord` write it;
 `Install-Driver`, `Start-Game` and `Set-SdkModsOff` refuse without it. The record goes only when every root is the backup

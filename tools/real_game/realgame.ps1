@@ -411,7 +411,19 @@ function Start-Game([string[]]$Arguments = @()) {
     $exe = Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'
     Add-PendingChange "game launched: $exe $($Arguments -join ' ')"   # a game can write the saves and profile; recorded before it starts
     $script:OwnGame = Start-Process -FilePath $exe -ArgumentList $Arguments -WorkingDirectory (Split-Path $exe) -PassThru
+    Save-GameLaunchRecord $script:OwnGame $exe
     $script:OwnGame
+}
+# The launcher's record of the game it started (field game_launch; the record's own 'game' is the install folder), written into this run's pending record at once, before anything else is done with the game:
+# its PID, its start time (read from the process handle) and its executable. A session's recovery stops a game only when it is this
+# recorded process; a launch marker on a command line alone never lets it (review round 5 of the session gate, I2). A record that cannot be
+# written is a warning, not an error: the game is already running and the capture's own finalizer still stops it by its PID; recovery then
+# finds no owner for it and reports it instead of stopping it.
+function Save-GameLaunchRecord($Process, [string]$Exe) {
+    try {
+        $start = $Process.StartTime.ToUniversalTime().ToString('o')
+        Set-PendingField 'game_launch' ([ordered]@{ pid = [int]$Process.Id; start_utc = $start; exe = [IO.Path]::GetFullPath($Exe); recorded_utc = (Get-Date).ToUniversalTime().ToString('o') })
+    } catch { Write-Warning "the game's launch was not recorded in the pending record: $_" }
 }
 function Get-GameProcess { Get-Process Borderlands2 -ErrorAction SilentlyContinue | Select-Object -First 1 }
 

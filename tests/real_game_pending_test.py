@@ -186,6 +186,30 @@ $out.mods = Fail-Text { Set-SdkModsOff (Join-Path $tmp 'game/sdk_mods/settings')
             self.assertIn('no pending record has been written', out[key])
         self.assertFalse(out['driver_dir'])
 
+    def test_the_launch_records_the_game_s_pid_and_start_time_and_keeps_the_install_folder(self):
+        # Review round 5 of the session gate, I2: a session's recovery stops a game only when it is the process its launcher recorded at
+        # launch. Start-Game writes game_launch (PID, start time, executable) into the pending record right after the launch; the record's
+        # own 'game' (the install folder, which the manual-recovery text names) is left as it was. A stub launch: no game is started.
+        out = self.run_ps(r"""
+$bak = Backup-Saves
+$before = (Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json).game
+function Start-Process { [pscustomobject]@{ Id = 4242; StartTime = [datetime]::new(2026, 1, 2, 3, 4, 5, [DateTimeKind]::Utc).AddTicks(6789012) } }
+$p = Start-Game @('-windowed')
+$r = Get-Content -Raw -LiteralPath $script:PendingRecord | ConvertFrom-Json
+$out.pid = $r.game_launch.pid
+$out.start = $r.game_launch.start_utc
+$out.exe = $r.game_launch.exe
+$out.expected_exe = [IO.Path]::GetFullPath((Join-Path $script:Game 'Binaries/Win32/Borderlands2.exe'))
+$out.game_before = "$before"; $out.game_after = "$($r.game)"
+$out.returned = $p.Id
+$out.text = Format-PendingRecovery $script:PendingRecord $r @()
+""")
+        self.assertEqual((out['pid'], out['returned']), (4242, 4242), out)
+        self.assertEqual(out['start'], '2026-01-02T03:04:05.6789012Z')
+        self.assertEqual(out['exe'], out['expected_exe'])
+        self.assertTrue(out['game_before'] and out['game_after'] == out['game_before'], out)   # the install folder stays
+        self.assertIn(f"$env:OPENWILLOW_BL2 = '{out['game_before']}'", '\n'.join(out['text']) if isinstance(out['text'], list) else out['text'])
+
     def test_the_driver_install_is_recorded_before_the_folder_appears(self):
         out = self.run_ps(r"""
 New-Item -ItemType Directory -Force (Join-Path $script:Game 'sdk_mods') | Out-Null
