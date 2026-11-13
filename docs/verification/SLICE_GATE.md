@@ -35,8 +35,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (73 since link 8 names the gun's firing on 2026-11-13, 67 since
-  review round 3 of the unforced variant, 39 before it; all made-up log lines, plus three that read the runner script's text).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (95 since lane U's burst and waits on 2026-11-13, 73 since link 8
+  names the gun's firing on 2026-11-13, 67 since review round 3 of the unforced variant, 39 before it; all made-up log lines, plus a
+  few that read the runner script's or the host source's text).
 
 ### How a link is graded (review round 1)
 
@@ -54,9 +55,42 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   `firing=Bullet` or `firing=Rocket` to the detail. When no block was loaded the host would fire a plain trace whatever the
   gun is, so the link FAILs with `firing=none`. The checker overrules a PASS whose detail has no loaded kind, so a log from
   before this change no longer passes link 8. This checks that the host did what its data says, nothing about the real
-  game: the firing block itself is `UNVERIFIED` in game ([WEAPON_PROJECTILES.md](WEAPON_PROJECTILES.md)). The run does not
-  fire this gun after equipping it (the mission's shots use the lent pistol), so the observed shots are not compared with
-  the block; that would need a new step in the run.
+  game: the firing block itself is `UNVERIFIED` in game ([WEAPON_PROJECTILES.md](WEAPON_PROJECTILES.md)).
+- **`equip_gun` fires the looted gun (since 2026-11-13, lane U).** After the draw the driver fires a short burst of the held
+  gun, then logs the link. What it does:
+  - **The path.** The shots go through the fire key's own handlers, `AOpenWillowWalker::TestFireInput` (the same
+    `FirePressed`/`FireReleased` the input binding calls; editor builds only, as the gate runs). The walker's trigger rules pace
+    them: the fire interval from the card's rate, the burst count and gap, the spin-up. `FireOnce`, which ignores the rate, is
+    not used. A gun that fires while the trigger is held (burst count 0) is held; any other is clicked, a release and a press
+    each tick, so a semi-automatic gun fires as soon as its interval allows. No walker change was needed.
+  - **How many.** Five shots, or as many as a full magazine holds when that is fewer. A magazine short of them is reloaded first
+    with the reload key; an empty reserve is refilled as in the fight (fixture `ammo reserve refilled`).
+  - **The target.** The range dummy (the range's static targets, not its enemies) farthest from every living enemy. Maya is
+    placed (fixture `teleport`) on the enemies' side of it, 500 uu away or half way to the nearest enemy, whichever is less, and
+    aims at it. So the shots and any splash fly away from the enemies, no enemy stands between her and the dummy, and the
+    rocket's splash skips her (the projectile ignores its shooter). When the burst ends she is put back where she stood
+    before it, looking the same way, so the Phaselock link starts from the place it had before the burst existed (the dummies
+    are Phaselock candidates too, and the older variants do not place her before the cast). The detail gives the nearest enemy's distance from the
+    dummy (`burst_clearance`) and how many living enemies lost health or died during the burst (`burst_enemies_hurt`). That
+    count is reported, not graded: in the unforced variant an enemy may run into the line.
+  - **What the detail carries:** `burst_shots=<fired>/<asked>`, `burst_kind` (the held gun's firing kind),
+    `burst_launched=<projectiles>/<pellets>`, the block's `burst_rate`, `burst_count`, `burst_gap` and `burst_spin` (the
+    spin-up's start multiplier, 1 for a gun that does not spin), `burst_skill_scale` (the skills hook's factor on the fire
+    interval), `burst_intervals` (the time between each two shots, from the ticks on which the walker's shot count rose),
+    `burst_mean` and `burst_frame_max` (the longest frame of the burst).
+  - **How the checker grades it** (`burst_problem` in `tools/check_slice_gate.py`; a PASS without every token becomes a FAIL,
+    so a log from before this change no longer passes link 8). Every shot asked for must have fired. The kind must be the
+    `firing=` kind. A trace gun launches no projectile, and a bullet or rocket gun one per pellet. Each interval must lie
+    between `due - 0.002 s` and `due x burst_spin + burst_frame_max + 0.002 s`, where `due` is `burst_skill_scale /
+    burst_rate`, and after every `burst_count`-th shot of a burst gun the burst gap. **The tolerance:** the walker fires on the
+    first tick at or after a shot is due and counts the next interval from that tick, and the driver reads the count at the same
+    point of every frame, so a measured interval is the block's plus at most one frame. The 0.002 s covers the four decimals of
+    the log and the walker's float clock (about 3e-5 s at the run's clock), far below a frame. The skills hook's factor is read
+    at 1 s, so it is exact only for a scaling modifier; Maya has none at level 8 in these runs.
+  - **What it shows:** the looted gun fired in the host at the rate its block gives, through the player's trigger path. Not
+    the real game: the block is `UNVERIFIED` in game, and so is the gun's rate in play. When a full magazine holds one shot there is no
+    interval to grade, and the link then passes on the shot and its kind alone. Lane U's fifth run met it: a shotgun whose
+    magazine held one shot fired 1/1, 13 bullets for 13 pellets, with `burst_intervals=none`.
 
   Link 8 therefore depends on local data. The plain run's gun is rolled, and a rolled gun takes its block from the firing
   templates (`local/weapons/gen/`, written by `tools/weapon_gen_firing.py`). If they are missing, older than the manifest,
@@ -112,6 +146,19 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - The two-guns fixture is named only once both test drops exist. If one could not be made, the link FAILs and its detail
     says how far the setup got.
   - A test drop with no floor within 450 uu below its point fails; it is never left in the air.
+  - **The wait for a clear view line (since 2026-11-13, lane U; a fixture).** Each link also logs
+    `view_wait=<s>s/10s view_line=clear|blocked`. Before the use-key press the driver waits until the card's own sight test
+    (`OpenWillowPickupCard::InSight`, the test the card and E use) has seen the aimed drop on every tick for 0.2 s, at most
+    10 s past the moment the press was ready. The 0.2 s is there because the card searches 10 times a second: its cached aimed
+    pickup is then one found with the line clear. When it waited, the link names the fixture `waited for a clear view line to
+    the aimed drop`. If the line is still blocked at 10 s, the press goes ahead and the host FAILs the link on the wait. The
+    checker overrules a PASS without the token, with a wait past its bound, or with `view_line` other than `clear`. On
+    `pick_up_gun` the wait also re-aims: after every 2 s of it Maya is placed on another side of the real drop, 120 degrees
+    round (`teleport`), and must be on the ground again before the press; in lane U's eleventh unforced run a bullymong
+    meleeing her stood on her eye ("blocked ... at 0 uu") for the whole 10 s, and waiting alone could not clear it. The decoy
+    pair is not moved, because its geometry depends on her side. The wait
+    tests the sight line only. The reach and the cone are still graded by the ids, so a wrong pick with a clear line is still a
+    FAIL. The 2026-11-11 FAILs it answers are in "First runs".
 - **A link never starts with Maya down.** If Maya is down when a link group is due to start, every link of that group
   is logged NOT_AVAILABLE ("Maya down from a previous link"), not a misleading FAIL.
 - **A drop in the wrong place is a FAIL.** If a new pickup appears after the kill but more than 1,500 uu from the
@@ -169,6 +216,26 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   link group) last until input is back, 9.8 s after the respawn start, so no later link starts while she is held.
 
 ## Current link table
+
+**Main 81d87f9, before lane U's burst and waits (zuhu, 2026-11-13).** Read by lane U in the hub runner's gate log
+`run-20261113-111053.log` (ignored, under its `local/slicegate/`). The log does not name the commit; the runner worktree's
+reflog had 81d87f9 checked out from 11:10:46 UTC, and the run started seconds later, so the binary is as recent as the last
+build there. The plain variant: **14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14**, no `fallback=shapes` line.
+- Link 3: three shots killed the selected adult bullymong in 3.6 s, 3.0 s of it with fire held; the hold ended by a hit.
+- Link 4: 1 hit by the selected enemy, 4 by others; health 213/213 after the fight (the start shield took the hits).
+- Link 5: the forced drop 61 uu from the corpse. Links 6 and 7: the aimed drop each time, `accepted=1`. Link 8: `firing=Bullet`,
+  from before the burst existed. Link 9: a range enemy lifted, 13.0 s lock.
+- Links 10 to 12: accepted, one shot completed the objectives, status 3 and +395 XP with the lent pistol taken back. Links 13
+  and 14: the test's lethal damage, then the respawn 20.0 s after the down, held 3.002 s with every frame hidden and without input.
+
+Lane U's plain run on its head a6c37ab (three commits on main, 2026-11-13) was also 14 / 0 / 0, with link 8's burst
+graded (5 shots at 7.98 a second) and `view_wait=0.00s/10s` on both pickup links; see "Lane U's runs".
+
+The fixtures are the plain variant's as in the tables below. The hub's runner logged 45 gate runs from 2026-11-12 01:46 to
+2026-11-13 11:10 UTC, 12 of them with a `-Shield` fixture, 11 with `-DownAfterFight`'s and none unforced, every one `SUMMARY
+pass=14 fail=0 na=0`; lane U read their SUMMARY lines and fixtures only.
+
+### Batch Z16 (2026-11-07)
 
 Batch Z16: #126 at 5a39f57 merged with #133 at 51deb95, five enemies with a Psycho, zuhu, 2026-11-07, all three variants.
 This merge is not on main. **14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14 in all three**, stock enemies (`fallback=shapes` 0). The
@@ -343,12 +410,14 @@ as fixtures, on `kill_enemy` and `enemy_attacks_maya`. If every manifest shield 
 equipped under a fixture that says the level rule was overridden (see "Why `-Shield` used the stand-in" above). The
 stock-shield path has run only under that override.
 
-**The generated card (2026-11-13, lane S; not yet run in the engine).** `tools/prepare_stock_shield.py` writes one level-8 shield
+**The generated card (2026-11-13, lane S; run in the engine 2026-11-13, see below).** `tools/prepare_stock_shield.py` writes one level-8 shield
 card to `local/slice/stock_shield_gear.json`. It is one seeded roll (seed 1, the gun slice's seed) of
 `GD_ItemGrades.Shields.ItemGrade_Gear_Shield_Standard_01_Common`, with capacity, recharge delay and recharge rate evaluated from
 the installed data (decision `docs/decisions/2026-11/2026-11-13-02-the-slice-gate-s-shield-run-equips-one-generated-stock.md`). When that file exists, `test_slice_gate.ps1 -Shield` passes it
 as `-owgear=`. The card is level 8, so `EquipGearById` should take it under the normal level rule, with the fixture reading
-`shield stock_shield_... equipped from the gear manifest` and no level override (not yet run in the engine). The card's numbers are
+`shield stock_shield_... equipped from the gear manifest` and no level override. It did in two `-Shield` runs of the hub's runner
+on 2026-11-13 (`run-20261113-044251.log` and `run-20261113-050935.log`, ignored; the runner worktree's HEAD was 25a5ce2 and then
+d771074, by its reflog): links 3 and 4 named that fixture with no level override, and both runs were 14 / 0 / 0. The card's numbers are
 **data-derived and UNVERIFIED in game**. A pass with it says the host equipped and used that card, not that the fight matches
 the game. `-owgear=` replaces the observed manifest for the run. The gate takes only shields from it; the observed class mods
 and relics only filled backpack rows, so the run starts with fewer backpack rows in use (the backpack holds 39 here). Without
@@ -427,6 +496,39 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   FAILs; link 14 then lacks its token and FAILs too. What is left: an enemy hit up to 0.5 s before a down with another cause
   would still be credited.
 - **Respawn (link 14).** The walker's own bleed-out and respawn, after the enemy down (`how=after_enemy_down`).
+  The start-exit half (`spawn_at_saved_station_exit`, since 2026-11-12) wants the run's only respawn, because its evidence is
+  about the first respawn after the start. Here the range's enemies can down Maya and she can bleed out before link 14 (lane
+  U's first run reached it at respawn 5 and FAILed only on that). Since 2026-11-13 the driver records the run's first respawn
+  (station and exit, on the tick the quest's pick count reads 1), and in this variant the half is judged on it; the detail
+  names both. The older variants keep the only-respawn rule.
+- **Downs inside a link (since 2026-11-13, lane U; fixtures).** The wait above covers a link group's start only. Four links now
+  also wait inside the link, each for at most 50 s in all, for her own second wind or respawn (and the respawn's hold), and
+  never revive her. Once she is Up the link starts its step again. Each prints `down_wait=<s>s/50s` in this variant, and the
+  checker overrules a PASS of any of them without the token or with a wait past its bound.
+  - `pick_up_gun` and `pick_up_aimed_not_nearest`, before the press: the card is hidden while she is down. Lane U's first
+    unforced run (2026-11-13) showed it: Maya, left at 42/213 by the farm, went down 0.06 s after the decoy link's two drops
+    landed, and the card named nothing at the press. After the wait she is placed by the drop again on the side chosen the
+    first time, so the decoy's geometry holds (fixture `waited for Maya's own second wind or respawn before the pickup`).
+  - `phaselock_enemy`, until the cast goes out: the injured state refuses the cast (the skill's health-state constraint), so a
+    down after the buy used to run out the 12 s cast wait. A skills page left open by the down is closed, and the buy starts
+    again once she is Up. The detail ends `down_wait=<s>s/50s`, and the fixture is `waited for Maya's own second wind or
+    respawn before the cast`. Still down after 50 s is a FAIL with that text. The checker, in this variant, overrules a PASS
+    without the token or with a wait past its bound.
+  - `equip_gun`'s burst: a down before the shots are done stops the trigger. After the wait, the target is chosen and Maya
+    placed again, and the burst starts from its first shot (fixture `waited for Maya's own second wind or respawn before the
+    burst`). Still down after 50 s is a FAIL. In the older variants a down there is a FAIL at once.
+  - These are test fixtures, not stand-ins for play, so the checker does not fail them by name.
+- **Pickups with live enemies (since 2026-11-13, lane U).** For `pick_up_gun` Maya stands on the side of the drop that faces
+  the nearest living enemy within 2,500 uu, so she faces away from the enemies at the press and one walking up to her comes up
+  behind her, not into her view line. The decoy link's two test drops do not need the range, so they are made at the saved
+  station's start exit, 150 uu ahead along its yaw, far from the range, and Maya is placed there for the press (`teleport`).
+  In lane U's fourth run, with the pair still in the range, the enemies downed her twice during that link and the 50 s wait
+  ran out. Without a start exit the drops go ahead of her away from the nearest enemy instead. The view-line wait above is the
+  backstop. The older variants are unchanged (their range is passive).
+- **Phaselock with live enemies (since 2026-11-13, lane U).** The cast goes at the nearest living enemy. In lane U's fifth
+  run the driver aimed at the fight's enemy while another one meleed Maya on that line: two casts logged "no line of sight"
+  through the near one, and the third lifted the near one, which the link (it wants the aimed target) did not accept. The host's
+  targeting did what its rules say; the driver's choice of target is what changed.
 - **Kept:** teleports between places (`teleport`), the fight's hold on fire and one shot at a time, `FireOnce` ignoring the
   fire rate, the ammo refill, and the decoy link's two test drops. These are test shortcuts of the gate, not stand-ins for
   the four links above. The checker does not fail them.
@@ -442,7 +544,8 @@ without those stand-ins. Each link then shows whether the loop got there on its 
 - Any link whose fixtures name a stand-in for play is a FAIL, whatever the host said. The list in the checker
   (`FORCING_FIXTURES`) has the forced gun, a gun the test dropped, the granted point, the passive or cleared range, the heal
   and the revive, all three lethal-damage fixtures, both use-key mission fixtures, and the `-Shield` fixtures.
-- A PASS on links 5, 9, 10, 12, 13 or 14 needs its `how=` token in the detail.
+- A PASS on links 5, 9, 10, 12, 13 or 14 needs its `how=` token in the detail, and links 6 to 9 their `down_wait=` within
+  the bound (since 2026-11-13).
 - Every NOT_AVAILABLE is a FAIL, so the run exits 0 only when all 14 links passed. A link group skipped because Maya was
   still down (for example the mission, with links 13 and 14 then passing on enemy hits) cannot leave the run green. With the
   range there, links 5 and 13 say why: its enemies can drop a gun and can down her.
@@ -489,7 +592,21 @@ only as recent as the last build there. A host result, not parity, and nothing h
 game. 5 of the 8 runs passed all 14 links (exit 0) and 109 of the 112 link attempts passed. The three FAILs:
 `phaselock_enemy` once (the point was bought on the skills page, then Maya went down 0.42 s later and the skill's
 health-state constraint refused the cast) and `pick_up_aimed_not_nearest` twice (the card named no drop; at the use-key press
-the view line hit a living range enemy 60 and 10 uu away). In all eight, the gun came from the kill roll after 20 to 41 kills
+the view line hit a living range enemy 60 and 10 uu away).
+
+**What the three were, read again (2026-11-13, lane U, the same eight logs and the host code).** All three were the driver's
+timing, not a host rule, and none was tuned:
+- The two pickup FAILs (runs 5 and 6): in the tick of the press the card's sight test logged `OWPICKUPCARD blocked by
+  OpenWillowEnemy_<n> (StockHitVolume)` at 62 and 10 uu along the sight line, and the driver's own probe hit the same enemy
+  at 60 and 10 uu. The aimed drop was in reach and in the cone (it reached the sight test, which runs only for those); the line
+  to it went through a living bullymong that had walked up to Maya. The card refusing a pickup behind a body is the card's
+  rule ("no card through walls"), and the press came at a moment the driver did not choose for the line. Answered by the
+  view-line wait and the facing above. Whether the game's pickup trace is blocked by a pawn is not known (`UNVERIFIED`; the
+  game's look-at test is native).
+- The Phaselock FAIL (run 2): `skills page bought Phaselock` at 19:15:07.880, `Maya down` at 19:15:08.301, then `no cast went
+  out: skill constraint WillowGame.HealthStateExpressionEvaluator` at 19:15:19.879, when the driver's 12 s cast wait ran out
+  with her still injured. The cast gate refused an injured Maya, as its constraint says; the driver had no wait for her to come
+  back. Answered by the in-link wait above. In all eight, the gun came from the kill roll after 20 to 41 kills
 (budget 100), the point was bought on the skills page, the mission was accepted and turned in on the mission page, and
 `go_down` and `bleed_out_respawn` passed with `how=enemies` and `how=after_enemy_down`: the range's enemies downed Maya after
 6.0 to 31.2 s and 12 to 25 hits. So the expected first result above was wrong for links 13 and 14. A run took 297 to 558 s.
@@ -497,6 +614,34 @@ In run 1 the gate's own down bled out in 8 s, 36.8 s after an earlier down, and 
 counter at 0; in the other seven it bled out in 12 s. That follows the record's rule ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md),
 "Bleed-out"): the cut uses the counter as it stood before this down (1, from the earlier down), and only afterwards is the
 counter reset, because more than 30 s had passed. The host logs the counter after that update, so the line reads 0.
+
+**Lane U's runs (2026-11-13, zuhu PC, `-SkipBuild` after a build through the hub's build slot, data aligned with the hub
+runner's worktree).** The runs were made with the three commits on main 81d87f9; they were then rebased onto main 8c08bc6, which changed
+only records, so the SHAs below are the rebased ones and the code is the same. AI-assisted (Claude Code). Logs under this worktree's ignored `local/slicegate/`; none has a
+`fallback=shapes` line. Host results, not parity. Three heads, because the runs found three more driver problems:
+- **Run 1, a build before 3604058:** 12 / 2 / 0. The decoy card hidden by a down, and link 14's only-respawn rule; both
+  answered in 3604058.
+- **3604058** (the waits, the burst, the first respawn): runs 2 to 6, 3 of 5 green. FAILs: the decoy pair downed twice in the
+  range (run 4); the Phaselock cast lifting an enemy that blocked the aimed one (run 5).
+- **6e14cd1** (decoy pair at the start exit, Phaselock at the nearest enemy): 5 unforced runs, 4 in a row green (runs 7 to 10,
+  293 to 555 s), then run 11 FAILed `pick_up_gun` on the view-line bound: an enemy stood on Maya's eye for the whole 10 s.
+- **a6c37ab** (the re-aim on link 6): 2 unforced runs, run 13 green (521 s); run 12 FAILed `equip_gun`, see the next point; and
+  the plain run, 14 / 0 / 0 in 182 s, with its burst graded.
+- **Open: a kill can drop a gun above Maya's level.** In run 12 the kill roll dropped a level-9 gun, E picked it up, and
+  `EquipItem` refused it, because an item above the player's level cannot be equipped. That is the host's level rule, and it
+  was not touched. The unforced loot link counts any gun; keeping on killing until a gun she can equip drops would answer it,
+  but it changes what link 5 accepts and no run was left to check it, so it is not done.
+- **The burst in all 12 runs that reached it:** every one passed the checker's grade. Rates 1.12 to 16.67 shots a second
+  (among them a sniper rifle, and a shotgun whose magazine held one shot), every interval at or above the block's and within
+  the checker's bound above it (the run's longest frame, 0.0061 to 0.0234 s, plus 0.002 s), every kind `Bullet` with one
+  projectile per pellet, and `burst_enemies_hurt=0` every time, with the nearest enemy 480 to 1,548 uu from the dummy.
+- **The waits that ran:** link 6 waited for Maya's own respawn in two runs (25.8 and 29.9 s) and then passed. The reported
+  view-line wait was 0.57 and 0.23 s in two runs and hit its bound in runs 4 (the decoy link, Maya still held by the respawn
+  when the down wait ran out) and 11; a wait cut by a down starts again after it, so the token gives the last attempt only.
+  The re-aim did not fire in the two runs on its head.
+
+So the series asked for, five unforced runs in a row on the final head, was not reached: the budget of 14 ran out. The hub's
+runner has to run its series on a6c37ab (or on a head that also answers the level item).
 
 ## Gaps, with the owning lane
 
@@ -506,8 +651,8 @@ counter reset, because more than 30 s had passed. The host logs the counter afte
 | The gun drop is forced | 5, 6 | slice-gate | `-Unforced` kills until a gun drops (budget 100 kills). First eight runs: 20 to 41 kills |
 | The Phaselock point is granted | 9 | slice-gate | `-Unforced` buys it on the skills page. Bought there in its first eight runs |
 | The mission is taken with the use key alone, and the range is cleared first | 10 to 12 | slice-gate | `-Unforced` uses the mission page's Enter and leaves the range as it is. Its first eight runs did so, with the range there |
-| `-Shield` needs the level override | stock-shield path | maya / skills | Since 2026-11-13 the generated level-8 card (`tools/prepare_stock_shield.py`, data-derived, UNVERIFIED in game) removes the level-override fixture where the card has been prepared; not yet run in the engine. Without it, a manifest shield at or below Maya's level 8 would. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
-| The equip link grades only that a firing block was loaded, not the shots | 8 | projectiles | Since 2026-11-13 link 8 names the held gun's firing kind and FAILs without a loaded block ("How a link is graded"). The looted gun is not fired after the equip, so its shots are not compared with its block; a short burst at the dummy after the equip would close that. The block itself is `UNVERIFIED` in game (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates") |
+| `-Shield` needs the level override | stock-shield path | maya / skills | Since 2026-11-13 the generated level-8 card (`tools/prepare_stock_shield.py`, data-derived, UNVERIFIED in game) removes the level-override fixture where the card has been prepared; it did in two `-Shield` runs on 2026-11-13 (see "Shield variant"). Without it, a manifest shield at or below Maya's level 8 would. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
+| The looted gun's shots in play | 8 | projectiles | Since 2026-11-13 link 8 names the held gun's firing kind, FAILs without a loaded block, and (lane U) fires a five-shot burst through the fire key's handlers, graded against the block's rate, burst gap and spin ("How a link is graded"). That is the host against its own data. The block, and so the gun's rate in play, is `UNVERIFIED` in game (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates"); a timed burst of a held gun in a capture session would confirm it |
 
 Links that pass now but rest on rules still `UNVERIFIED` in game are covered in their own records:
 - Phaselock: PHASELOCK_STOCK_DATA.md, NATIVE_PHASELOCK_TARGETING.md.
@@ -543,6 +688,10 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-11 | `-Unforced`, review round 1 of #218 | not run | every NOT_AVAILABLE fails an unforced run; the mission-page token needs the page to have done the work; an enemy hit is required for a down; the accept falls back to a named direct call; still not compiled; checker tests 58/58 |
 | 2026-11-11 | `-Unforced`, review round 2 of #218 | not run | the accept step can no longer wait on a page the keys do not reach; strict start record; corpses recorded from the pickup snapshot; a down needs a range-enemy hit within 0.5 s before it; still not compiled; checker tests 63/63 |
 | 2026-11-11 | `-Unforced`, main 969307f, zuhu, eight runs with `-SkipBuild` | 5 of 8 runs green; 109 pass / 3 fail of 112 link attempts | `phaselock_enemy` once (cast refused, Maya down 0.42 s after the buy); `pick_up_aimed_not_nearest` twice (a living range enemy in the view line at the use-key press); every `go_down` by the range's enemies; see "First runs" |
+| 2026-11-12 to 11-13 | hub runner batches, then main 81d87f9 | 14 / 0 / 0 in each of 45 logs | 12 with a `-Shield` fixture (two on the generated card), 11 `-DownAfterFight`, none unforced; lane U read the SUMMARY lines and fixtures |
+| 2026-11-13 | lane U, main 81d87f9 + 3604058 (run 1 on a build before it), `-Unforced`, zuhu | 3 of 6 green | the burst passed in all six; the FAILs were driver problems, answered in 3604058 or the next head ("Lane U's runs") |
+| 2026-11-13 | lane U, + 6e14cd1, `-Unforced`, zuhu | 4 of 5 green, the first four in a row | run 11: `pick_up_gun` on the view-line bound, an enemy on Maya's eye |
+| 2026-11-13 | lane U, + a6c37ab, `-Unforced` twice and plain once, zuhu | unforced 1 of 2 green; plain 14 / 0 / 0 | run 12: `equip_gun`, a level-9 drop refused by the level rule (open); checker tests 96/96 |
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.
