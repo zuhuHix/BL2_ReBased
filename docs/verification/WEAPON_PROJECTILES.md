@@ -325,12 +325,12 @@ numbers, AI reactions) read the same data the host dummy does. Host code only; n
   has no firing block, and stops if one is still missing. The checker's momentum failure names that cause. `-Extra`
   passes extra game arguments (for example `-Extra '-owaimmodel'`).
 - **A recipe without a firing block is refused, not graded as a trace gun (2026-11-13).** The host reads only a `firing`
-  object with schema 1; for anything else the item keeps no loaded block and every shot is the plain instant trace, with
+  object whose schema reads as 1 (a number, a boolean, or a numeric string, as UE's JSON reads a number); for anything else the item keeps no loaded block and every shot is the plain instant trace, with
   the card's pellets and spread. Until now `tools/check_weapon_firing.py` graded such a recipe as a trace gun, so a gun whose
   firing was never read could pass every count. The checker now fails it on its own line, naming the recipe file and
   `tools/weapon_firing_coverage.py --game <BL2 folder> --only-firing`, and grades nothing else for it. A trace gun says so in
   its block (`fire_type` `EWWFT_HitScan`). It also fails a gun for which the host logged `OWFIRING warning id=<gun> no
-  firing block`, and the host now logs `OpenWillow <id> firing: block not read` when a recipe has a block it refuses. No
+  firing block`, or `OpenWillow <id> firing: block not read`, which the host now logs when a recipe has a block it refuses. No
   switch keeps old recipes passing: the runner already regenerates missing blocks before the run. Host behaviour only; the
   blocks stay `UNVERIFIED` in game.
 - **Damage source (skills lane request).** `FOpenWillowHitEvent::Source` (`EOpenWillowHitSource`: `Unknown` default,

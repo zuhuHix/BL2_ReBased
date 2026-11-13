@@ -35,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (70 since link 8 names the gun's firing on 2026-11-13, 67 since
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (73 since link 8 names the gun's firing on 2026-11-13, 67 since
   review round 3 of the unforced variant, 39 before it; all made-up log lines, plus three that read the runner script's text).
 
 ### How a link is graded (review round 1)
@@ -57,6 +57,13 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   game: the firing block itself is `UNVERIFIED` in game ([WEAPON_PROJECTILES.md](WEAPON_PROJECTILES.md)). The run does not
   fire this gun after equipping it (the mission's shots use the lent pistol), so the observed shots are not compared with
   the block; that would need a new step in the run.
+
+  Link 8 therefore depends on local data. The plain run's gun is rolled, and a rolled gun takes its block from the firing
+  templates (`local/weapons/gen/`, written by `tools/weapon_gen_firing.py`). If they are missing, older than the manifest,
+  or have no template for the gun's type, link 8 FAILs and the run is no longer 14/0/0. `tools/test_slice_gate.ps1` does
+  not regenerate them. The FAIL detail names both steps: `python tools/weapon_gen_firing.py --game <BL2 folder>` for a
+  rolled gun (the `OWWEAPONGEN` warning earlier in the log says which case), and
+  `python tools/weapon_firing_coverage.py --game <BL2 folder> --only-firing` for a recipe gun.
 - **`enemy_attacks_maya` counts only the selected enemy's hits.** It counts only hits whose causer is the enemy the
   fight selected. The walker counts hits per causer where they land (`GetHitCountFrom`; a few lines in
   `OpenWillowWalker.h/.cpp`), because several hits can land in one tick. It counts only while the gate tracks them, during

@@ -1282,12 +1282,21 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         {
             // The held gun's firing as the host will play it (its recipe's or template's block). No block, and the host fires a
             // plain trace whatever the gun is: a FAIL, not a pass. This grades the host against its data, not the real game.
+            // A rolled gun's block comes from the firing templates (OpenWillowWeaponGen.cpp), a recipe gun's from its recipe: a
+            // missing or stale one is local data, so the FAIL names both regeneration steps.
             const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
-            const FOpenWillowFiringData& Firing = Held->Firing;
-            const TCHAR* Kind = !Firing.bLoaded ? TEXT("none") : Firing.Kind == EOpenWillowShotKind::Rocket ? TEXT("Rocket")
-                : Firing.Kind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
-            if (Firing.bLoaded) PassLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=%s"), *Why, Kind));
-            else FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=none: no firing block was loaded, so the host fires a plain trace"), *Why));
+            if (!Held) FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; but no active weapon after the equip, so its firing could not be read"), *Why));
+            else if (!Held->Firing.bLoaded)
+                FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=none: no firing block was loaded, so the host fires a plain trace. "
+                    "Regenerate it: a rolled gun's from the firing templates, python tools/weapon_gen_firing.py --game <BL2 folder> (the "
+                    "OWWEAPONGEN warning earlier in the log says which); a recipe gun's, python tools/weapon_firing_coverage.py --game "
+                    "<BL2 folder> --only-firing"), *Why));
+            else
+            {
+                const EOpenWillowShotKind ShotKind = Held->Firing.Kind;
+                const TCHAR* Kind = ShotKind == EOpenWillowShotKind::Rocket ? TEXT("Rocket") : ShotKind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
+                PassLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=%s"), *Why, Kind));
+            }
         }
         Next(EStep::Phaselock);
         break;

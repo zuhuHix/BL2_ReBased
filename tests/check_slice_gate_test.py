@@ -323,6 +323,35 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertNotIn('overruled', out)
 
+    def test_equip_not_available_and_not_reached_are_left_alone(self):
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('NOT_AVAILABLE', 'synthetic gap, no firing token')})))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('overruled', out)
+        self.assertIn('NOT_AVAILABLE', self.row(out, 8))
+        code, out = self.run_checker(self.write_log(build(stop_after=7, summary=None)))
+        self.assertEqual(code, 1, out)
+        self.assertNotIn('overruled', out)
+        self.assertIn(chk.NOT_REACHED, self.row(out, 8))
+
+    def test_unforced_run_grades_the_equip_firing_too(self):
+        fixtures = {'pick_up_gun': 'teleport', chk.DECOY_LINK: 'two guns rolled and dropped by the test; teleport',
+                    'kill_enemy': 'one shot at a time until the selected enemy was wounded; fire held until the selected enemy hit Maya',
+                    'go_down': 'teleport'}
+        for detail, code_wanted in (('item_x drawn; firing=Rocket', 0), ('item_x drawn', 1)):
+            code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, fixtures=fixtures, range_mode=True,
+                                                              unforced=True)), '--expect-unforced')
+            self.assertEqual(code, code_wanted, (detail, out))
+
+    def test_the_hosts_no_block_detail_names_both_regeneration_steps(self):
+        # The FAIL detail is the host's text (OpenWillowSliceGate.cpp, EStep::Equip); read it from the source, as the runner
+        # tests read the runner's text.
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
+        start = source.index('firing=none: no firing block was loaded')
+        detail = source[start:source.index('*Why', start)]
+        for step in ('python tools/weapon_gen_firing.py --game <BL2 folder>', 'python tools/weapon_firing_coverage.py --game',
+                     '<BL2 folder> --only-firing', 'OWWEAPONGEN', 'rolled gun', 'recipe gun'):
+            self.assertIn(step, detail)
+
     def test_enemy_attack_not_available_fails_with_the_range(self):
         results = {'enemy_attacks_maya': ('NOT_AVAILABLE', 'synthetic gap')}
         code, out = self.run_checker(self.write_log(build(results, range_mode=True)))

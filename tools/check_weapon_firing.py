@@ -10,7 +10,8 @@ docs/verification/NATIVE_WEAPON_FIRING.md and WEAPON_PROJECTILES.md when it exis
 - kind: Rocket for fire_type EWWFT_Rocket, Trace for EWWFT_HitScan, Bullet otherwise. A recipe needs a firing block the
   host can read (schema 1): without one the host fires a plain trace, so a block-less recipe is its own FAIL, naming the
   recipe and the step that regenerates it, and is not graded as a trace gun. A trace gun says so in its block
-  (fire_type EWWFT_HitScan). The host's own "OWFIRING warning id=<gun> no firing block" line fails the gun as well.
+  (fire_type EWWFT_HitScan). The host's own "OWFIRING warning id=<gun> no firing block" and "OpenWillow <gun> firing:
+  block not read" lines fail the gun as well.
 - pulls per gun: 5 at the dummy, 3 at a wall, plus 20 at the dummy when the firing block has a status block; a gun
   with burst_count N > 1 fires N shots per pull.
 - a gun whose shots explode (a splash block on a bullet, or a rocket that detonates on impact) must splash the dummy.
@@ -67,6 +68,7 @@ ROLLED = re.compile(r'OWFIRING rolled (.*)$')
 RESPAWN_REST = re.compile(r'OWFIRING respawn_rest (.*)$')
 MANIFEST_HINT = 'rerun python tools/weapon_gen_manifest.py --game <BL2 folder>'
 HOST_NO_BLOCK = re.compile(r'OWFIRING warning id=(\S+) no firing block')
+HOST_NOT_READ = re.compile(r'OpenWillow (\S+) firing: block not read')   # UOpenWillowInventory::ReadRecipe
 FIRING_HINT = 'regenerate it with python tools/weapon_firing_coverage.py --game <BL2 folder> --only-firing'
 TEMPLATE_HINT = 'run python tools/weapon_gen_firing.py --game <BL2 folder>'
 
@@ -90,10 +92,14 @@ def read_log(text, extra=None):
     extra.setdefault('rolled', [])
     extra.setdefault('respawn_rest', None)
     extra.setdefault('no_block', set())
+    extra.setdefault('not_read', set())
     pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
         if match := HOST_NO_BLOCK.search(line):
             extra['no_block'].add(match.group(1))
+            continue
+        if match := HOST_NOT_READ.search(line):
+            extra['not_read'].add(match.group(1))
             continue
         if match := ROLLED_DAMAGE.search(line):
             extra['rolled_damage'] = fields(match.group(1))
@@ -157,16 +163,38 @@ def find_recipe(item_dirs, gun):
     return None, None
 
 
+NUMERIC_STRING = re.compile(r'[+-]?[0-9]*\.?[0-9]*')
+
+
+def host_number(value):
+    """A JSON value as the host's NumberOr reads it (FJsonObject::TryGetNumberField, UE 5.8 Json module), or None when it
+    reads none: a number as is, a boolean as 1 or 0, a non-empty string of ASCII digits with an optional sign and at most
+    one dot (FString::IsNumeric, then Atod), and nothing else; a value that is not finite falls back too."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str) and value and NUMERIC_STRING.fullmatch(value):
+        try:
+            number = float(value)
+        except ValueError:
+            number = 0.0   # "+", "-" or ".": IsNumeric passes them, Atod reads 0
+    else:
+        return None
+    return number if math.isfinite(number) else None
+
+
 def firing_problem(recipe):
     """Why the host cannot read this recipe's firing block, or None. The host (FOpenWillowFiringData::Parse) reads only a
-    `firing` object with schema 1 and fires anything else as a plain trace, so neither may pass as a trace gun."""
-    firing = recipe.get('firing')
-    if not firing:
+    `firing` object whose schema reads as 1 and fires anything else as a plain trace, so neither may pass as a trace gun.
+    The two messages follow the host: no `firing` field at all, or one it logs as "block not read"."""
+    if 'firing' not in recipe:
         return 'no firing block'
+    firing = recipe['firing']
     if not isinstance(firing, dict):
-        return 'the firing field is not an object'
-    if firing.get('schema') != 1:
-        return f"firing block schema {firing.get('schema')!r}, the host reads only 1"
+        return f'firing block not read: a {type(firing).__name__}, not an object'
+    if host_number(firing.get('schema')) != 1:
+        return f"firing block not read: schema {firing.get('schema')!r}, the host reads only 1"
     return None
 
 
@@ -754,6 +782,9 @@ def main(argv=None):
         if gun in extra['no_block']:
             fails.insert(0, 'the host logged "no firing block" for it and fired a plain trace, although its recipe has one '
                             '(the host loaded another recipe, or rejected this block)')
+        if gun in extra['not_read']:
+            fails.insert(0, 'the host logged "firing: block not read" for a recipe with this id: it refused a block this '
+                            'checker reads (the checker and the host disagree on the block, or they read different files)')
         verdict = 'FAIL' if fails else 'PASS'
         failed += bool(fails)
         if values:

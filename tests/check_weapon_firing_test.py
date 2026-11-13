@@ -65,15 +65,26 @@ class Expectations(unittest.TestCase):
         self.assertEqual(check.expectations(recipe(10, firing={'fire_type': 'EWWFT_HitScan'}))['kind'], 'Trace')
 
     def test_a_recipe_without_a_firing_block_is_not_a_trace_gun(self):
-        for rec in (recipe(10), recipe(10, firing={}), recipe(10, firing='EWWFT_HitScan')):
+        for rec in (recipe(10), recipe(10, firing={}), recipe(10, firing='EWWFT_HitScan'), recipe(10, firing=[])):
             out = check.expectations(rec)
             self.assertIsNotNone(out['firing_problem'], rec)
             self.assertIsNone(out['kind'], rec)
-        self.assertIn('no firing block', check.expectations(recipe(10))['firing_problem'])
+        # The message says which case it saw: no field, or a field the host logs as "block not read".
+        self.assertEqual(check.expectations(recipe(10))['firing_problem'], 'no firing block')
+        self.assertIn('block not read: schema None', check.expectations(recipe(10, firing={}))['firing_problem'])
+        self.assertIn('block not read: a str', check.expectations(recipe(10, firing='x'))['firing_problem'])
+        self.assertIn('block not read: a list', check.expectations(recipe(10, firing=[]))['firing_problem'])
 
     def test_a_block_the_host_does_not_read_is_a_problem(self):
-        for schema in (None, 0, 2, '1'):
-            self.assertIn('schema', check.expectations(recipe(10, firing={'fire_type': None}, schema=schema))['firing_problem'])
+        for schema in (None, 0, 2, '2', 'one', ' 1', '1e0', '1.0.0', '', [1], float('nan')):
+            problem = check.expectations(recipe(10, firing={'fire_type': None}, schema=schema))['firing_problem']
+            self.assertIn('block not read: schema', problem or '', schema)
+
+    def test_schema_reads_as_the_host_reads_a_number(self):
+        # TryGetNumberField: a number, a boolean as 1 or 0, a numeric string (IsNumeric, then Atod).
+        for schema in (1, 1.0, True, '1', '+1', '1.', '01', '1.000'):
+            self.assertIsNone(check.expectations(recipe(10, firing={'fire_type': None}, schema=schema))['firing_problem'], schema)
+        self.assertEqual([check.host_number(v) for v in ('+', '.', '-0', False, None, {})], [0.0, 0.0, 0.0, 0.0, None, None])
 
     def test_an_explicit_trace_block_is_a_trace_gun(self):
         out = check.expectations(recipe(10, firing={'fire_type': 'EWWFT_HitScan'}))
@@ -335,12 +346,22 @@ class Cli(unittest.TestCase):
         write_recipes(self.folder.name, {'made_trace': recipe(10.0, firing=TRACE, schema=2)})
         code, out = self.main(self.passing_log())
         self.assertEqual(code, 1, out)
-        self.assertIn('made_trace: FAIL firing block schema 2, the host reads only 1', out)
+        self.assertIn('made_trace: FAIL firing block not read: schema 2, the host reads only 1', out)
+        for block, seen in (('x', 'a str'), ([], 'a list'), ({}, 'schema None')):
+            write_recipes(self.folder.name, {'made_trace': dict(recipe(10.0), firing=block)})
+            code, out = self.main(self.passing_log())
+            self.assertEqual(code, 1, out)
+            self.assertIn(f'made_trace: FAIL firing block not read: {seen}', out)
+            self.assertIn('0 PASS, 1 FAIL of 1 guns', out)
 
     def test_the_hosts_no_block_warning_fails_the_gun(self):
         code, out = self.main(self.passing_log('[x]LogTemp: Warning: OWFIRING warning id=made_trace no firing block: fired as a trace'))
         self.assertEqual(code, 1, out)
         self.assertIn('made_trace: FAIL the host logged "no firing block"', out)
+        code, out = self.main(self.passing_log('[x]LogTemp: Warning: OpenWillow made_trace firing: block not read (not a schema 1 '
+                                               'object): the host fires a plain trace'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('made_trace: FAIL the host logged "firing: block not read"', out)
         # Another gun's warning does not touch this one.
         code, out = self.main(self.passing_log('[x]LogTemp: Warning: OWFIRING warning id=other_gun no firing block: fired as a trace'))
         self.assertEqual(code, 0, out)

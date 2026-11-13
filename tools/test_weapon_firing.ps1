@@ -31,13 +31,14 @@ $itemDirs = @((Join-Path $repo 'local/items'), (Join-Path $repo 'local/items/sli
 foreach ($dir in $itemDirs) { if (!(Test-Path -LiteralPath $dir)) { throw "Missing recipe folder $dir (tools/weapon_stats.py, weapon_slice_gear.py, weapon_firing.py)" } }
 # Stale local data: a listed gun whose recipe has no firing block (made before tools/weapon_firing.py ran on it, or kept from
 # an older checkout) is fired as a plain trace and fails on momentum. Regenerate the firing blocks first (light: Python
-# only, no rerolls), then require every listed recipe that exists to have one. ar_dahl_burst3 is the fixture made below.
+# only, no rerolls), then require every listed recipe that exists to have one the host reads: the checker's own rule
+# (check_weapon_firing.firing_problem: an object whose schema reads as 1). ar_dahl_burst3 is the fixture made below.
 function Get-RecipesWithoutFiring {
     $missing = @()
     foreach ($id in $Guns) {
         $file = $itemDirs | ForEach-Object { Join-Path $_ "$id.json" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
         if (!$file) { continue }
-        $hasFiring = & python -c "import json,sys; print(1 if json.load(open(sys.argv[1], encoding='utf-8')).get('firing') else 0)" $file
+        $hasFiring = & python -c "import json,sys; sys.path.insert(0, sys.argv[2]); import check_weapon_firing as c; print(0 if c.firing_problem(json.load(open(sys.argv[1], encoding='utf-8'))) else 1)" $file $PSScriptRoot
         if ($hasFiring -ne '1') { $missing += $id }
     }
     return $missing
