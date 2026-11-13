@@ -5,7 +5,8 @@ detail=<text>` for each link it reaches, in run order, and `OWSLICEGATE SUMMARY 
 finishes. `fixtures=[...]` names the test fixtures the link relied on (empty or absent: none). This checker lists the
 links in order, marks every link the host never logged as FAIL ("not reached"), and checks the run's structure: one
 start line, then each link at most once and in the expected order, then one SUMMARY line that agrees with the link lines.
-Every link line must carry the fixtures field.
+Every link line must carry the fixtures field. A stock pawn that logged no attachments list at all (MISSING_ATTACHMENTS: old or
+broken prep data, so it ran bare) fails the run as well, whatever the links say.
 
 Exit codes: 0 when no link is FAIL, the structure holds and the SUMMARY is there and agrees; 1 otherwise; 2 when the log
 has no `OWSLICEGATE start` line. NOT_AVAILABLE means a missing capability or precondition and does not fail the run, so
@@ -58,6 +59,21 @@ LINK = re.compile(r'OWSLICEGATE link=(?P<name>\S+) result=(?P<result>PASS|FAIL|N
                   r'(?: fixtures=\[(?P<fixtures>[^\]]*)\])? detail=(?P<detail>.*)$')
 LINK_ANY = re.compile(r'OWSLICEGATE link=')
 SUMMARY = re.compile(r'OWSLICEGATE SUMMARY pass=(?P<pass>\d+) fail=(?P<fail>\d+) na=(?P<na>\d+)')
+
+
+# The host's line for a stock pawn entry with no attachments list (AOpenWillowCombatTarget::AttachWornMeshes). The same text as
+# tools/check_range.py's MISSING_ATTACHMENTS (tests/check_slice_gate_test.py holds the two and the host source together). An empty
+# list is a valid answer and logs "0 of 0 attachments" instead.
+MISSING_ATTACHMENTS = 'OpenWillow target: no attachments list on the stock pawn entry'
+ATTACH_STEP = ('powershell -File tools/import_phaselock_target.ps1 -Steps attach, then python tools/prepare_range.py')
+
+
+def bare_pawn_errors(lines):
+    """One error when any stock pawn of the run logged MISSING_ATTACHMENTS, else none."""
+    bare = sum(1 for line in lines if MISSING_ATTACHMENTS in line)
+    if not bare:
+        return []
+    return [f'{bare} stock pawn(s) logged no attachments list (old or broken prep data, the pawn ran bare): re-run {ATTACH_STEP}']
 
 
 def read_log(path):
@@ -376,6 +392,7 @@ def main(argv=None):
     rows = build_rows(logged)
     range_mode, unforced = start_modes(lines, errors)
     cross_check(rows, errors, range_mode)
+    errors.extend(bare_pawn_errors(lines))
     if args.expect_unforced and not unforced:
         errors.append('the unforced variant was asked for, but the start line has no unforced=1 (a build without -owslicegateunforced?)')
     if unforced:

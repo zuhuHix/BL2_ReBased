@@ -170,7 +170,15 @@ void AOpenWillowCombatTarget::AttachWornMeshes(const FJsonObject& Pawn)
     // rule reads. Each sits on its bone with the stock component's own transform. The live Adult's bone matrices fit the imported frames
     // with no flip (one cast, approximate pose). UNVERIFIED: that composition, and the glTF axes through the import.
     const TArray<TSharedPtr<FJsonValue>>* Pieces = nullptr;
-    if (!Pawn.TryGetArrayField(TEXT("attachments"), Pieces) || !Pieces) return;
+    // An empty list is a valid answer (a pawn that wears nothing) and logs "0 of 0" below. No list at all means data written before the
+    // field existed, or by a broken prep step: say so instead of leaving a bare pawn in silence. tools/check_range.py and
+    // tools/check_slice_gate.py fail a run on this line (MISSING_ATTACHMENTS there; keep the text in step).
+    if (!Pawn.TryGetArrayField(TEXT("attachments"), Pieces) || !Pieces)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow target: no attachments list on the stock pawn entry (old or broken prep data), so it "
+            "wears nothing. Re-run powershell -File tools/import_phaselock_target.ps1 -Steps attach, then python tools/prepare_range.py"));
+        return;
+    }
     int32 Attached = 0;
     for (const TSharedPtr<FJsonValue>& Value : *Pieces)
     {

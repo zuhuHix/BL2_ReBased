@@ -714,5 +714,25 @@ class RunnerSourceTest(unittest.TestCase):
         self.assertIn("if ($Unforced -and ($Shield -or $DownAfterFight)) { throw", self.source)
 
 
+class BarePawnTest(unittest.TestCase):
+    """A stock pawn that logged no attachments list fails the gate run (invented log lines around the checker's marker)."""
+    setUp, write_log, run_checker = SliceGateTest.setUp, SliceGateTest.write_log, SliceGateTest.run_checker
+    BARE = '[2026.11.13-10.00.00:000][  1]LogTemp: Warning: ' + chk.MISSING_ATTACHMENTS + ' (old or broken prep data), so it wears nothing.'
+
+    def test_a_bare_pawn_fails_an_all_pass_run(self):
+        code, out = self.run_checker(self.write_log(build(extra=[self.BARE])))
+        self.assertEqual(code, 1)
+        self.assertIn('slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14', out)
+        self.assertIn('error: 1 stock pawn(s) logged no attachments list', out)
+        self.assertIn('prepare_range.py', out)
+
+    def test_worn_and_empty_lists_pass(self):
+        extra = [PREFIX + 'OpenWillow target: 2 of 2 attachments on the stock pawn',
+                 PREFIX + 'OpenWillow target: 0 of 0 attachments on the stock pawn']
+        code, out = self.run_checker(self.write_log(build(extra=extra)))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('error', out)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -156,8 +156,17 @@ def kind_melee_graded(results, spawns):
 
 
 class ParsedSteps(dict):
-    """Step name -> [(verdict, detail)], plus .spawns: enemy name -> (kind, melee source) from the spawn lines of the same log."""
+    """Step name -> [(verdict, detail)], plus .spawns: enemy name -> (kind, melee source) from the spawn lines of the same log, and
+    .bare: how many stock pawns logged MISSING_ATTACHMENTS."""
     spawns = None
+    bare = 0
+
+
+# The host's line for a stock pawn entry with no attachments list at all (AOpenWillowCombatTarget::AttachWornMeshes): old or broken
+# prep data, so the pawn runs bare. Any such line fails the run, whatever the steps say. An empty list is a valid answer and logs
+# "0 of 0 attachments" instead, which passes. tools/check_slice_gate.py reads the same text.
+MISSING_ATTACHMENTS = "OpenWillow target: no attachments list on the stock pawn entry"
+MISSING_ATTACHMENTS_WHY = ("%d stock pawn(s) logged no attachments list (old or broken prep data): re-run " + prepare_range.ATTACH_STEP)
 
 
 # The status ends at whitespace or the end of the line: result=SKIP_typo is no status, so its step counts as missing.
@@ -190,6 +199,9 @@ def parse(text):
     steps, summary = ParsedSteps(), None
     steps.spawns = {}
     for line in text.splitlines():
+        if MISSING_ATTACHMENTS in line:
+            steps.bare += 1
+            continue
         m = SPAWN_LINE.search(line)
         if m:
             steps.spawns[m.group(1)] = (m.group(2), m.group(3))
@@ -230,6 +242,9 @@ def grade(steps, summary, expected=EXPECTED):
         rows.append((step, "FAIL" if "FAIL" in verdicts else verdicts[0], "(not an expected step)"))
         if "FAIL" in verdicts:
             ok = False
+    if getattr(steps, "bare", 0):
+        rows.append(("attachments", "FAIL", MISSING_ATTACHMENTS_WHY % steps.bare))
+        ok = False
     if summary is None:
         rows.append(("SUMMARY", "MISSING", "the host never wrote its summary (crash or timeout?)"))
         ok = False
@@ -354,11 +369,17 @@ def main(argv=None):
         parser.error("a log to grade, or --preflight MANIFEST")
     with open(args.log, encoding="utf-8", errors="replace") as f:
         text = f.read()
+    bare = text.count(MISSING_ATTACHMENTS)
     if args.survey_log:
+        if bare:
+            print("range survey: FAIL, " + MISSING_ATTACHMENTS_WHY % bare)
+            return 2
         print("range survey: %s" % ("PASS" if survey_ok(text) else "FAIL, no candidate was accepted (or it did not finish)"))
         return 0 if survey_ok(text) else 2
     if args.kill_log:
         ok, why = kills_ok(text)
+        if bare:
+            ok, why = False, MISSING_ATTACHMENTS_WHY % bare
         print("kill row: %s" % ("PASS" if ok else "FAIL, " + why))
         return 0 if ok else 1
     expected = args.steps.split(",") if args.steps else EXPECTED

@@ -605,5 +605,59 @@ class CheckRangeTest(unittest.TestCase):
         self.assertEqual(rows[0][:2], ('teleport', 'FAIL'))
 
 
+    # The host's line for a stock pawn with no attachments list (invented log lines around the checker's own marker text).
+    BARE = '[2026.11.13-10.00.00:000][  1]LogTemp: Warning: ' + check_range.MISSING_ATTACHMENTS + ' (old or broken prep data), so it wears nothing.'
+    WORN = '[2026.11.13-10.00.00:000][  1]LogTemp: Display: OpenWillow target: 2 of 2 attachments on the stock pawn'
+    NONE_WORN = '[2026.11.13-10.00.00:000][  1]LogTemp: Display: OpenWillow target: 0 of 0 attachments on the stock pawn'
+
+    def with_lines(self, *extra):
+        lines = [passing(s) for s in check_range.EXPECTED] + list(extra) + ['OWRANGETEST SUMMARY result=PASS pass=1 fail=0 skip=0']
+        return check_range.grade(*check_range.parse(log(*lines)))
+
+    def test_a_pawn_without_its_attachments_list_fails_a_green_run(self):
+        ok, rows = self.with_lines(self.WORN, self.BARE, self.BARE)
+        self.assertFalse(ok)
+        row = [r for r in rows if r[0] == 'attachments']
+        self.assertEqual(len(row), 1)
+        self.assertEqual(row[0][1], 'FAIL')
+        self.assertIn('2 stock pawn(s)', row[0][2])
+        self.assertIn('prepare_range.py', row[0][2])
+
+    def test_worn_and_empty_attachment_lines_pass(self):
+        ok, rows = self.with_lines(self.WORN, self.NONE_WORN)
+        self.assertTrue(ok)
+        self.assertNotIn('attachments', [r[0] for r in rows])
+
+    def test_survey_and_kill_logs_fail_on_a_bare_pawn(self):
+        import contextlib
+        import io
+        import os
+        import tempfile
+        good = 'OWRANGEKILL gun=%d result=PASS "Made" (pistol, level 1): 3 shots'
+        cases = [('--survey-log', ['OWRANGESURVEY done candidates=8 accepted=1'], 2),
+                 ('--kill-log', [good % 0, good % 1, 'OWRANGEKILL done guns=2 fail=0'], 1)]
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'run.log')
+            for flag, lines, code in cases:
+                for extra, want in (([], 0), ([self.BARE], code)):
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(log(*(lines + extra)))
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        got = check_range.main([path, flag])
+                    self.assertEqual(got, want, (flag, extra, out.getvalue()))
+                    if extra:
+                        self.assertIn('no attachments list', out.getvalue())
+
+    def test_the_marker_is_the_host_line_and_the_gate_checker_text(self):
+        import check_slice_gate
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowCombatTarget.cpp').read_text(encoding='utf-8')
+        self.assertIn('TEXT("' + check_range.MISSING_ATTACHMENTS, source)
+        self.assertEqual(check_range.MISSING_ATTACHMENTS, check_slice_gate.MISSING_ATTACHMENTS)
+        # The worn line the host logs for a list (also an empty one) must not contain the marker.
+        self.assertIn('OpenWillow target: %d of %d attachments on the stock pawn', source)
+        self.assertNotIn(check_range.MISSING_ATTACHMENTS, self.NONE_WORN)
+
+
 if __name__ == '__main__':
     unittest.main()
