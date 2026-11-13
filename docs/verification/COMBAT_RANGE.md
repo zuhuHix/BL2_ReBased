@@ -304,7 +304,7 @@ the baby's and the slinger's rows are covered by the light tests only. The check
   from its aim point, for 29.97 with the 500 uu/s push. The log's free fights: 4 leaps started (2 ended by a step's reset), 2 rocks, picks
   regular leap 3 / melee 4, adult leap 1 / throw 2.
 - `tools/test_slice_gate.ps1`: plain 14 / 0 / 0 (one leap that hit, one rock that missed); `-Shield` 14 / 0 / 0 (the observed gear manifest: this
-  worktree had no generated card); `-Unforced` 13 / 1 / 0, `bleed_out_respawn` FAIL because its respawn was the run's sixth, not its only one.
+  worktree had no generated card); `-DownAfterFight` 14 / 0 / 0 (on main 8c08bc6 after a rebase that changed only ROADMAP.md); `-Unforced` 13 / 1 / 0, `bleed_out_respawn` FAIL because its respawn was the run's sixth, not its only one.
   That run needed 64 kills (426 s) before a gun dropped, and Maya went down 26 times; every one of those downs followed a plain swing (335 swing
   hits, 9 leap hits, 1 rock hit in the run), so the extra respawns come from the long loot fight, not from the new attacks. The rule that the
   graded respawn is the run's only one dates from 2026-11-12, after the eight recorded unforced runs, and making the unforced variant reliable is
