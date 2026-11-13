@@ -105,5 +105,80 @@ class AnnotateLooksTest(unittest.TestCase):
         self.assertEqual([a['bone'] for a in self.run_looks(['Hat_A'], ['Pkg.Mesh.Pack_A'])], ['Head'])
 
 
+class ManifestGuardTest(unittest.TestCase):
+    """Keep or refuse, never degrade: invented manifests (made-up counts), no game data. 2026-11-12: the bare call replaced a
+    capture-based manifest (observed, worn pieces) with a census-only one without a word."""
+
+    CAPTURED = {'observed': True, 'spawns': [{'id': 'a', 'attachments': [{}, {}]}, {'id': 'b', 'attachments': [{}]}]}
+    CENSUS = {'observed': False, 'spawns': [{'id': 'c'}, {'id': 'd'}, {'id': 'e'}]}
+
+    def folder(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    def existing(self, value):
+        import json
+        out = self.folder() / 'ambient_world.json'
+        out.write_text(value if isinstance(value, str) else json.dumps(value), encoding='utf-8')
+        return out
+
+    def test_an_observed_manifest_is_not_replaced_by_a_census_one(self):
+        problem = P.replace_problem(self.existing(self.CAPTURED), self.CENSUS, False)
+        self.assertIn('observed=true spawns=2 worn=3', problem)
+        self.assertIn('observed=false spawns=3 worn=0', problem)
+        self.assertIn('--observed', problem)
+        self.assertIn('--replace-observed', problem)
+        self.assertIn('ambient_npcs.py', problem)
+
+    def test_fewer_worn_pieces_from_a_capture_are_refused_too(self):
+        fewer = {'observed': True, 'spawns': [{'id': 'a', 'attachments': [{}]}]}
+        self.assertIn('worn=1', P.replace_problem(self.existing(self.CAPTURED), fewer, False))
+        self.assertEqual(P.replace_problem(self.existing(self.CAPTURED), self.CAPTURED, False), '')   # the same capture again
+
+    def test_worn_pieces_alone_make_a_manifest_capture_based(self):
+        worn_only = {'spawns': [{'id': 'a', 'attachments': [{}]}]}
+        self.assertIn('worn=1', P.replace_problem(self.existing(worn_only), self.CENSUS, False))
+
+    def test_the_flag_writes_over_it(self):
+        self.assertEqual(P.replace_problem(self.existing(self.CAPTURED), self.CENSUS, True), '')
+
+    def test_no_file_or_a_census_file_is_written(self):
+        self.assertEqual(P.replace_problem(self.folder() / 'ambient_world.json', self.CENSUS, False), '')
+        self.assertEqual(P.replace_problem(self.existing(self.CENSUS), self.CENSUS, False), '')
+
+    def test_an_unreadable_file_is_not_overwritten(self):
+        for text in ('{"spawns": [', '[1, 2]', '{"observed": true}'):
+            problem = P.replace_problem(self.existing(text), self.CENSUS, False)
+            self.assertIn('cannot be read as an ambient manifest', problem, text)
+            self.assertEqual(P.replace_problem(self.existing(text), self.CENSUS, True), '')
+
+    def test_compose_without_observed_is_refused_before_any_work(self):
+        with self.assertRaises(SystemExit) as stop:
+            P.main(['--game', str(self.folder()), '--compose', 'x.json', '--output', str(P.ROOT / 'local' / 'unused.json')])
+        self.assertIn('pass --observed and --samples', str(stop.exception))
+
+    def check(self, value, census_ok=False):
+        import contextlib
+        import io
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = P.check_manifest(self.existing(value), census_ok)
+        return code, printed.getvalue()
+
+    def test_the_suite_preflight_names_the_look_and_fails_a_census_world(self):
+        code, line = self.check(self.CAPTURED)
+        self.assertEqual((code, line.strip()), (0, 'manifest observed=true spawns=2 worn=3'))
+        code, line = self.check(self.CENSUS)
+        self.assertEqual(code, 1)
+        self.assertIn('observed=false spawns=3 worn=0: not capture-based', line)
+        self.assertIn('-CensusWorld', line)
+        code, line = self.check(self.CENSUS, census_ok=True)
+        self.assertEqual(code, 0)
+        self.assertIn('census-only world, intended', line)
+        self.assertEqual(self.check('{')[0], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1551,13 +1551,24 @@ python tools/census_ambient_npcs.py                      # dens, points, node gr
 powershell -File tools/seed_ambient_npc_assets.ps1       # UModel extraction, clip conversion, import (needs OPENWILLOW_UMODEL)
 powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <amb_compose json>   # hair, hats, gear, head textures
 powershell -File tools/seed_ambient_npc_assets.ps1 -Steps outline   # rebuild only the ink-line material
-python tools/prepare_ambient_world.py                    # host manifest local/slice/ambient_world.json (--observed copies a capture)
+python tools/prepare_ambient_world.py                    # census-only manifest local/slice/ambient_world.json (no worn pieces)
+python tools/prepare_ambient_world.py --observed <amb_dump> --samples <amb_sample> --compose <amb_compose> --stops-from <amb_dump>   # the shipped look
 powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
 ```
 
 With `--compose`, `prepare_ambient_world.py` stops (since 2026-11-12) when a worn piece the capture shows on a used bone is missing from
 `local/slice/ambient/editor_report_attach.json` and the attach job did not record its mesh as unavailable: rerun the attach step above
 with the same capture.
+
+The bare call writes a census-only world: the seeded realisation of the dens, citizens without their hair, hats and gear. The
+citizens' shipped look needs the real-game ambient capture (`tools/real_game/scripts/ambient_npcs.py`: `amb_dump`, `amb_sample`,
+`amb_compose`). The capture is game-derived and stays under ignored `local/`; `tools/private_sync.ps1` moves it between the
+maintainer's machines. Since 2026-11-12 the tool keeps or refuses, never degrades: it does not write over an existing capture-based
+manifest (`observed`, or any worn pieces) with one that has no capture or fewer worn pieces, nor over a file it cannot read, unless
+`--replace-observed` is given (another `--output` path is not affected), and `--compose` or `--stops-from` without `--observed`
+stops. `tools/test_ambient.ps1` checks the manifest first (`--check-manifest`): its result line ends with
+`manifest observed=... spawns=... worn=...`, and a manifest that is not capture-based fails before launch unless the run passes
+`-CensusWorld`.
 
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 

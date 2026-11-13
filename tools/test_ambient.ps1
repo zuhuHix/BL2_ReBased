@@ -8,7 +8,10 @@ param(
     [switch]$Shots,
     [string]$Tag = 'run',
     [int]$TimeoutSeconds = 300,
-    [int]$WaitForEditorSeconds = 1800
+    [int]$WaitForEditorSeconds = 1800,
+    [string]$Python = 'python',
+    # The run is meant for a census-only manifest (no capture, no worn pieces); without it such a manifest fails before launch.
+    [switch]$CensusWorld
 )
 # Sanctuary ambient NPCs in the host (docs/verification/SANCTUARY_AMBIENT_NPCS.md). One editor launch of the walking
 # map with -owambient=<manifest>; waits for the machine-wide UE run lock (tools/ue_lock.ps1) like tools/test_quest.ps1 and never touches an
@@ -18,6 +21,15 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (!$Ambient) { $Ambient = Join-Path $repo 'local/slice/ambient_world.json' }
 if (!(Test-Path -LiteralPath $Ambient)) { throw "Missing $Ambient (tools/prepare_ambient_world.py)" }
+# The host's PASS counts movement only, so a census-only manifest whose citizens wear nothing would pass: the manifest's look is checked
+# first and named in the result line (tools/prepare_ambient_world.py --check-manifest, 2026-11-12).
+$checkArgs = @((Join-Path $PSScriptRoot 'prepare_ambient_world.py'), '--check-manifest', $Ambient)
+if ($CensusWorld) { $checkArgs += '--census-ok' }
+$manifestLine = (& $Python @checkArgs | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "OWAMBIENT SUMMARY result=FAIL $manifestLine"
+    exit 1
+}
 $editor = Join-Path $Engine 'Engine/Binaries/Win64/UnrealEditor.exe'
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
 . (Join-Path $PSScriptRoot 'ue_lock.ps1')
@@ -61,7 +73,7 @@ try {
         }
     }
     if ($summary -match '^result=PASS ') { $code = 0 } elseif ($summary) { $code = 1 }
-    Write-Output "OWAMBIENT SUMMARY $summary"
+    Write-Output "OWAMBIENT SUMMARY $summary $manifestLine"
 } finally {
     Exit-OwUeLock
 }

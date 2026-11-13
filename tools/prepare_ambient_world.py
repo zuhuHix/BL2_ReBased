@@ -510,7 +510,65 @@ def views_for(spawns, nodes):
     return views
 
 
-def main():
+CAPTURE_HELP = ('the capture is the real-game ambient capture (tools/real_game/scripts/ambient_npcs.py: amb_dump, amb_sample, amb_compose); it is '
+                'game-derived, stays under ignored local/, and tools/private_sync.ps1 moves it between machines')
+
+
+def look(manifest):
+    """(capture-based, spawns, worn pieces in total) of an ambient manifest. Capture-based: written from a real-game capture (observed),
+    or carrying worn pieces, which only the capture's amb_compose gives."""
+    spawns = manifest.get('spawns') if isinstance(manifest, dict) else None
+    if not isinstance(spawns, list):
+        raise ValueError('no spawns list')
+    worn = sum(len(s.get('attachments') or []) for s in spawns if isinstance(s, dict))
+    return (manifest.get('observed') is True or worn > 0), len(spawns), worn
+
+
+def describe(manifest):
+    capture, spawns, worn = look(manifest)
+    return f'observed={"true" if manifest.get("observed") is True else "false"} spawns={spawns} worn={worn}', capture
+
+
+def replace_problem(out, result, replace_observed):
+    """Why this run must not write over `out` ("" when it may): keep or refuse, never degrade (2026-11-12, lane R3). An existing
+    capture-based manifest is not replaced by one without the capture, or with fewer worn pieces in total, unless --replace-observed says
+    the census-only world is wanted. An existing file that cannot be read is not overwritten either: what it held is unknown."""
+    if replace_observed or not out.exists():
+        return ''
+    try:
+        old = json.loads(out.read_text(encoding='utf-8'))
+        old_line, old_capture = describe(old)
+    except (OSError, ValueError) as error:
+        return (f'{out} exists but cannot be read as an ambient manifest ({error}), so it is not overwritten. Look at it, then pass '
+                f'--replace-observed to write over it, or write elsewhere with --output')
+    new_line, _ = describe(result)
+    old_worn, new_worn = look(old)[2], look(result)[2]
+    if old_capture and (result.get('observed') is not True or new_worn < old_worn):
+        return (f'{out} holds a capture-based manifest ({old_line}); this run would write {new_line}, which loses the captured citizens or '
+                f'their worn pieces. Nothing was written. Either pass the capture (--observed <amb_dump> --samples <amb_sample> '
+                f'[--compose <amb_compose> --stops-from <amb_dump>]; {CAPTURE_HELP}), or pass --replace-observed if the census-only world is '
+                f'wanted, or write elsewhere with --output')
+    return ''
+
+
+def check_manifest(path, census_ok):
+    """The ambient suite's preflight (tools/test_ambient.ps1): one line with the manifest's look, and 0 when it may run. The host's PASS
+    rule only counts movement, so a census-only manifest without worn pieces would pass; it fails here unless the run says it is intended."""
+    try:
+        line, capture = describe(json.loads(Path(path).read_text(encoding='utf-8')))
+    except (OSError, ValueError) as error:
+        print(f'manifest {path}: unreadable ({error})')
+        return 1
+    if capture or census_ok:
+        print(f'manifest {line}' + ('' if capture else ' (census-only world, intended: -CensusWorld)'))
+        return 0
+    print(f'manifest {line}: not capture-based, so the citizens have no captured look; rebuild it with the capture '
+          f'(python tools/prepare_ambient_world.py --observed ... --samples ... --compose ...; {CAPTURE_HELP}), or run with -CensusWorld if the '
+          f'census-only world is intended')
+    return 1
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'))
     ap.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
@@ -519,7 +577,14 @@ def main():
     ap.add_argument('--compose', help='real-game amb_compose output (hair, hats, heads of the observed pawns); needs the attach step')
     ap.add_argument('--stops-from', help='an earlier real-game dump: pose of pawns added at the round-1 review perches')
     ap.add_argument('--output', default=str(OUT))
-    args = ap.parse_args()
+    ap.add_argument('--replace-observed', action='store_true',
+                    help='write over an existing capture-based (or unreadable) manifest although this run has no capture or fewer worn pieces')
+    ap.add_argument('--check-manifest', metavar='PATH', help='only report the look of this manifest (observed, spawns, worn pieces) and exit 1 '
+                    'unless it is capture-based or --census-ok is given (the preflight of the ambient suite)')
+    ap.add_argument('--census-ok', action='store_true', help='with --check-manifest: a census-only manifest is intended')
+    args = ap.parse_args(argv)
+    if args.check_manifest:
+        return check_manifest(args.check_manifest, args.census_ok)
     if not args.game:
         sys.exit('Pass --game or set OPENWILLOW_BL2')
     out = Path(args.output).resolve()
@@ -527,15 +592,21 @@ def main():
         sys.exit('Output must stay under the repository local/')
     if bool(args.observed) != bool(args.samples):
         sys.exit('--observed and --samples go together')
+    if (args.compose or args.stops_from) and not args.observed:
+        sys.exit('--compose and --stops-from apply to the observed citizens only: pass --observed and --samples as well')
     result = build(args)
+    problem = replace_problem(out, result, args.replace_observed)
+    if problem:
+        sys.exit(problem)
     out.write_text(json.dumps(result, indent=1), encoding='utf-8')
     kinds = {}
     for s in result['spawns']:
         kinds[s['kind']] = kinds.get(s['kind'], 0) + 1
     print('wrote', out, '| spawns', len(result['spawns']), kinds, '| wanderers', sum(1 for s in result['spawns'] if s['wander']),
           '| nodes', len(result['nodes']), '| perches', len(result['perches']), '| dropped perch defs', len(result['perch_definitions_dropped']),
-          '| views', len(result['views']), '|', result['counts'])
+          '| views', len(result['views']), '|', result['counts'], '|', describe(result)[0])
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
