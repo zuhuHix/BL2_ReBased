@@ -370,14 +370,17 @@ try {
             # (review of #245). A reply that never came within its wait, shortened or not, is the driver lost: the one condition is latched and
             # the stage ends, as for every other command; 5 s is far above a normal reply, so a live but slow game is not taken for a lost one
             # by a wait cut to a second. A reply that comes back after the window is not taken, and no state is updated from it.
+            # Every window here is on the command clock (Get-QpcSeconds, the performance counter): its end is taken once, when it starts, and
+            # the loop, each poll's wait, the re-placement's 'until' and the pauses all count down to that one end, so a wall-clock step
+            # cannot lengthen or shorten a window (review round 3, item 1).
             $poll = {
-                param([datetime]$Until)
-                $left = ($Until - (Get-Date)).TotalSeconds
+                param([double]$Until)
+                $left = $Until - (Get-QpcSeconds)
                 if ($left -lt 6) { return $null }
                 $wait = [int][math]::Min(30, [math]::Floor($left - 1))
                 try {
                     $text = Py 'import json; print(json.dumps(cp_down_state()))' $wait
-                    if ((Get-Date) -gt $Until) { return $null }   # too late: not taken
+                    if ((Get-QpcSeconds) -gt $Until) { return $null }   # too late: not taken
                     $r = $text | ConvertFrom-Json
                     if ($r.state -in 'up', 'no_pawn', 'no_health', 'injured_flag') { $script:inARow = 0; return $r }
                     throw "unexpected state '$($r.state)'"
@@ -388,39 +391,39 @@ try {
                     return $null
                 }
             }
-            $downAt = $null; $t0 = Get-Date; $downUntil = $t0.AddSeconds($DownSeconds)
+            $downAt = $null; $t0 = Get-QpcSeconds; $downUntil = $t0 + $DownSeconds
             $lastHit = $t0; $lastHealth = $null; $log.den_down_replacements = 0; $log.den_down_replace_results = @()
-            while (((Get-Date) - $t0).TotalSeconds -lt $DownSeconds -and !(Get-DriverLost)) {
+            while ((Get-QpcSeconds) -lt $downUntil -and !(Get-DriverLost)) {
                 $r = & $poll $downUntil
-                if ($r -and $r.state -ne 'up') { $downAt = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
+                if ($r -and $r.state -ne 'up') { $downAt = [math]::Round((Get-QpcSeconds) - $t0, 1); $log.den_down_reason = $r.state; $log.den_down_injured_field = $r.injured_field; break }
                 # A fall of her health since the last poll means a hit reached her body. The shield is not counted: it refills between
                 # engagements and absorbs the first hits, so a fall of health plus shield said little about whether the pack still fought her.
                 if ($r -and $null -ne $r.health) {
-                    if ($null -ne $lastHealth -and [double]$r.health -lt [double]$lastHealth) { $lastHit = Get-Date }
+                    if ($null -ne $lastHealth -and [double]$r.health -lt [double]$lastHealth) { $lastHit = Get-QpcSeconds }
                     $lastHealth = $r.health
                 }
                 # Up, her health read since the last placement (an unreadable health never reads as unhit), unhit for -ReplaceAfterSeconds,
                 # under the cap, the driver answering: placed again. The stamp is on disk first; a stamp whose mark finds the driver lost ends it.
                 if ($r -and $r.state -eq 'up' -and $null -ne $lastHealth -and !(Get-DriverLost) -and $log.den_down_replacements -lt $MaxReplacements -and
-                    ((Get-Date) - $lastHit).TotalSeconds -ge $ReplaceAfterSeconds -and (Get-Date) -lt $downUntil) {
+                    ((Get-QpcSeconds) - $lastHit) -ge $ReplaceAfterSeconds -and (Get-QpcSeconds) -lt $downUntil) {
                     $n = $log.den_down_replacements + 1
                     Write-StageMark 'den_down' "replace$n"
                     if (Get-DriverLost) { break }
-                    if ((Get-Date) -ge $downUntil) { break }   # the window ended during the stamp: no placement after it
+                    if ((Get-QpcSeconds) -ge $downUntil) { break }   # the window ended during the stamp: no placement after it
                     $log.den_down_replacements = $n
                     # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace). It gets
                     # the window's end (seconds of the command clock, the performance counter both sides read, which a wall-clock step does
-                    # not move: the time left in the window, put on that clock as the call is made) and moves nothing once that
+                    # not move: the same end the loop counts down to) and moves nothing once that
                     # has passed ('late'); its reply wait is clamped to the time left, like the polls' (review of #255). None is sent with less
                     # than 6 s left, the polls' own minimum, so a healthy reply is not cut short into a lost driver; no poll starts then either.
-                    $left = ($downUntil - (Get-Date)).TotalSeconds
+                    $left = $downUntil - (Get-QpcSeconds)
                     if ($left -lt 6) { break }
-                    $untilClock = ((Get-QpcSeconds) + ($downUntil - (Get-Date)).TotalSeconds).ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
+                    $untilClock = $downUntil.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
                     $again = Py "import json; print(json.dumps(dp_replace(until=$untilClock)))" ([int][math]::Min(30, [math]::Floor($left - 1)))
-                    $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))
-                    $lastHit = Get-Date; $lastHealth = $null
+                    $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round((Get-QpcSeconds) - $t0, 1)) s: $again"))
+                    $lastHit = Get-QpcSeconds; $lastHealth = $null
                 }
-                $pause = [math]::Min(1000, ($downUntil - (Get-Date)).TotalMilliseconds)   # the loop's pause never runs past the window
+                $pause = [math]::Min(1000, ($downUntil - (Get-QpcSeconds)) * 1000)   # the loop's pause never runs past the window
                 if ($pause -gt 0) { Start-Sleep -Milliseconds ([int]$pause) }
             }
             $log.den_down_after_s = $downAt
@@ -433,12 +436,12 @@ try {
             }
             $upAt = $null
             if ($null -ne $downAt -and !(Get-DriverLost)) {
-                $t1 = Get-Date
-                while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds -and !(Get-DriverLost)) {
-                    $pause = [math]::Min(2000, ($t1.AddSeconds($RespawnSeconds) - (Get-Date)).TotalMilliseconds)   # never past the window
+                $t1 = Get-QpcSeconds; $upUntil = $t1 + $RespawnSeconds   # one end for the respawn window, on the command clock
+                while ((Get-QpcSeconds) -lt $upUntil -and !(Get-DriverLost)) {
+                    $pause = [math]::Min(2000, ($upUntil - (Get-QpcSeconds)) * 1000)   # never past the window
                     if ($pause -gt 0) { Start-Sleep -Milliseconds ([int]$pause) }
-                    $r = & $poll $t1.AddSeconds($RespawnSeconds)
-                    if ($r -and $r.state -eq 'up') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
+                    $r = & $poll $upUntil
+                    if ($r -and $r.state -eq 'up') { $upAt = [math]::Round((Get-QpcSeconds) - $t1, 1); break }
                 }
                 # The respawn dialog and the fee come a few seconds after she stands: leave them time before the last snapshot.
                 Start-Sleep 15

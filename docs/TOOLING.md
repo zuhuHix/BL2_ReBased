@@ -1571,14 +1571,18 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   run: <why>`, which the sender, should it still be waiting, turns into "no reply to <name> (the driver refused it: ...)". When a call
   gives up after its command went out (its deadline, or any transport error while waiting), it withdraws the command, renaming it
   `<name>.py.withdrawn`, which the driver never lists; a withdrawal that lands between the driver's listing and its own rename leaves the
-  driver no file, and it skips the command. So a command is never run after its deadline, and one its caller gave up on runs only if the
-  driver had already taken it. The raw transport (`Invoke-GamePy`, `Invoke-GamePyFile`) refuses unless the wrapper entered it, and a
-  second dot-source of `realgame.ps1` keeps a condition already set. **What stays unbounded**, named here once: a command the driver
-  took before its deadline runs to its end, even past the deadline (the driver cannot stop Python code on the game thread); and a file
-  operation already under way when the deadline passes finishes, so a call can end later than its timeout by that one operation plus at
-  most one pause, and a rename that began just before the last check can still land (the driver then refuses that command, or the
-  withdrawal removes it first). In a session both are contained by the session wrapper's watchdog, which stops the capture by its
-  recorded PID at the item's limit, and by the recovery. A reply that comes late is never taken for
+  driver no file, and it skips the command. **What the tools bound, exactly:** the driver never starts a command it takes at or after its
+  deadline (taking means the check just before it would run), so no command starts after its deadline on the command clock; a call ends
+  within its timeout, plus the one file operation under way when the deadline passes and at most one pause; and a withdrawn command that
+  the driver had not yet taken never runs. The raw transport (`Invoke-GamePy`, `Invoke-GamePyFile`) refuses unless the wrapper entered
+  it, and a second dot-source of `realgame.ps1` keeps a condition already set. **What they do not bound**, named here once: a command the
+  driver took before its deadline runs to its end, even long past the deadline (the driver cannot stop Python code on the game thread);
+  a withdrawal can lose the race with the driver (when the driver's rename to `.py.done` lands first, the command runs, within its
+  deadline, although its caller has stopped waiting); a withdrawal that fails for any other reason (a file scanner holding the file, an
+  I/O error) cancels nothing, is not reported, and leaves the command queued, to run if the driver takes it before its deadline; and a
+  rename that began just before the sender's last check can still publish a command (the driver then refuses it at its deadline, or a
+  withdrawal removes it first). The tracked tools do nothing else about a command already running in the game: what stops a capture
+  that outlives its item, and what restores after it, is the session runner's, outside the tree. A reply that comes late is never taken for
   another command's: it goes to its own command's name (a GUID, made with plain .NET so no module has to load), each call reads only
   its own name's file, and any file under that name was removed before the command went out; nothing is taken from a failed read.
   The driver publishes each reply whole (written as `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once

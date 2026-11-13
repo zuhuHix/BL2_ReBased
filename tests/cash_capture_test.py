@@ -32,6 +32,12 @@ New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 # this process creates and holds open with no sharing for the rest of the run, so every read of it fails as a sharing violation would (not
 # a timeout), however slow the machine. It touches no file the transport wrote (CI, 2026-11-13: removing the command file raced a file
 # scanner on the runner), and nothing in it waits on time.
+# The wall clock a scenario can step back (review round 3, item 1): from the second den-down poll of 'wall_step_back' on, it reads 60 s
+# earlier than it is. Only that scenario sets the flag; every other run reads the real clock.
+function Get-Date {
+    $d = Microsoft.PowerShell.Utility\Get-Date @args
+    if ($script:wallBack -and $d -is [datetime]) { $d.AddSeconds(-60) } else { $d }
+}
 function Start-Sleep {
     if ($script:fakeDriver) {
         $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')
@@ -175,6 +181,10 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*cp_down_state*' {
             # The den down's poll (invented values): up with a steady pool unless the scenario says otherwise.
             $script:polls++
+            if ($scenario -eq 'wall_step_back') {
+                Add-Content -LiteralPath (Join-Path $work 'poll_clock.txt') (Get-QpcSeconds).ToString([Globalization.CultureInfo]::InvariantCulture)
+                if ($script:polls -eq 2) { $script:wallBack = $true }
+            }
             if ($script:downNow -or ($scenario -in @('snap_lost', 'after_lost', 'close_lost') -and $script:polls -eq 1) -or ($scenario -eq 'replace_after_down' -and $script:polls -ge 2)) { return '{"state": "injured_flag", "injured_field": true, "pool": 50.0}' }
             if ($scenario -eq 'replace_hit') { return ('{"state": "up", "injured_field": true, "health": ' + (1000 - $script:polls) + ', "pool": ' + (1000 - $script:polls) + '}') }   # a hit every poll
             if ($scenario -eq 'shield_only') { return ('{"state": "up", "injured_field": true, "health": 100.0, "pool": ' + (1000 - $script:polls) + '}') }   # only the shield falls
@@ -683,6 +693,17 @@ class DenDownReplacementTest(unittest.TestCase):
         done, session = self.run_down('replace_cap', '-DownSeconds', '8', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 4)
         self.assertEqual(sum(1 for m in session['stage_marks'] if m['event'].startswith('replace')), 4)
+
+    def test_a_wall_clock_stepped_back_mid_window_does_not_lengthen_it(self):
+        # Review round 3, item 1: each re-placement put its end on the performance counter from the WALL-clock time left, and the loop, the
+        # polls and the pauses counted wall-clock time, so a clock stepped back mid-window lengthened it. The window's end is now taken
+        # once on the command clock. The stub's wall clock reads 60 s earlier from the second poll on; the polls must still stop at the
+        # window's 8 s (none starts in its last 6 s), measured on the performance counter.
+        done, session = self.run_down('wall_step_back', '-DownSeconds', '8', '-ReplaceAfterSeconds', '999')
+        clocks = [float(v) for v in (self.work / 'poll_clock.txt').read_text(encoding='utf-8').split()]
+        self.assertGreater(len(clocks), 2, done.stdout)   # the step happened inside the window
+        self.assertLess(clocks[-1] - clocks[0], 8.0, done.stdout)   # 60 s more on the old code
+        self.assertIn('no down in 8 s', session['stage_results']['den_down'])
 
     def test_none_after_a_down(self):
         done, session = self.run_down('replace_after_down', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')

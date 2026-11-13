@@ -22,7 +22,10 @@ what holds after this change is below.
   The counter is monotonic and shared by every process on the PC. The first round used the wall clock on both sides, and a clock
   stepped back after the sender gave up put the queued command inside its deadline again (the second review reproduced it with the
   synthetic driver). A tick-count fallback, which that review offered, is not used: the sender would have to read the same tick count,
-  and the counter is there on both sides. The den down's re-placement window (`dp_replace`'s `until`) moved to the same clock.
+  and the counter is there on both sides. The den down's re-placement window (`dp_replace`'s `until`) moved to the same clock. Since the third
+  review round, both den-down windows (the down's and the respawn's) take their end once, on that clock, when they start, and the loop,
+  each poll's wait, the re-placement's `until` and the pauses all count down to it; before, each re-placement converted the wall-clock
+  time left, and the loop counted wall-clock time, so a clock stepped back lengthened the window.
 - Every command the sender publishes (`Invoke-GamePy`) starts with the line `# ow-deadline-qpc-us: <us>`, the call's deadline on the
   command clock.
 - The driver (`tools/real_game/openwillow_realgame/__init__.py`, `run_pending`) checks that line once, when it takes a command and
@@ -32,17 +35,19 @@ what holds after this change is below.
   "no reply to <name> (the driver refused it: ...)", which the lost-driver latch takes.
 - A call that gives up after its command went out (its deadline, or any transport error while waiting) withdraws the command by
   renaming it `<name>.py.withdrawn`, which the driver never lists; if the withdrawal lands between the driver's listing and its own
-  rename, the driver finds no file and skips it. So a command is never run after its deadline, and one its caller gave up on runs only
-  if the driver had already taken it.
+  rename, the driver finds no file and skips it. So no command starts after its deadline, and a withdrawn command the driver had not
+  yet taken never runs.
 - The sender checks the deadline again after the command's file is written, immediately before the rename that publishes it; a write
   that ends after it is removed and not renamed. `Invoke-GamePyFile` starts the call's deadline before it reads the probe's source and
   hands that same deadline to `Invoke-GamePy`, so a slow read counts against the timeout.
-- Not bounded, named here and in `docs/TOOLING.md` ("Driver lost") only: a command the driver took before its deadline runs to its
-  end, even past the deadline (the driver cannot stop Python code on the game thread); and a file operation under way when the deadline
-  passes finishes, so a call can end later than its timeout by that one operation plus at most one pause, and a rename that began just
-  before the last check can still land (the driver then refuses that command, or the withdrawal removes it first). The second review
-  accepts both once the session wrapper stops a capture by its PID at the item's limit whatever its monitoring does, and recovery
-  refuses a clean report while a child's end is unconfirmed; both are in the private session glue, outside the tree.
+- Not bounded by these tools, named here and in `docs/TOOLING.md` ("Driver lost") only: a command the driver took before its deadline
+  runs to its end, even long past the deadline (the driver cannot stop Python code on the game thread); a withdrawal can lose the race
+  with the driver (its rename to `.py.done` lands first, and the command runs within its deadline although its caller stopped waiting);
+  a withdrawal that fails for any other reason cancels nothing and is not reported, so the command stays queued and runs if the driver
+  takes it before its deadline; a file operation under way when the deadline passes finishes, so a call can end later than its timeout
+  by that operation plus at most one pause; and a rename that began just before the sender's last check can still publish a command
+  (the driver then refuses it at its deadline, or a withdrawal removes it first). Nothing tracked here stops a command already running
+  in the game; that, and stopping a capture that outlives its item, is the session runner's, which is not in the tree.
 - A late reply is never taken for another command's: each command's name holds its own GUID, each call reads only its own name's
   reply, and a file under that name is removed before the command goes out. A test keeps this true.
 
