@@ -328,6 +328,17 @@ as fixtures, on `kill_enemy` and `enemy_attacks_maya`. If every manifest shield 
 equipped under a fixture that says the level rule was overridden (see "Why `-Shield` used the stand-in" above). The
 stock-shield path has run only under that override.
 
+**The generated card (2026-11-13, lane S; not yet run in the engine).** `tools/prepare_stock_shield.py` writes one level-8 shield
+card to `local/slice/stock_shield_gear.json`. It is one seeded roll (seed 1, the gun slice's seed) of
+`GD_ItemGrades.Shields.ItemGrade_Gear_Shield_Standard_01_Common`, with capacity, recharge delay and recharge rate evaluated from
+the installed data (decision `docs/decisions/2026-11/2026-11-13-02-the-slice-gate-s-shield-run-equips-one-generated-stock.md`). When that file exists, `test_slice_gate.ps1 -Shield` passes it
+as `-owgear=`. The card is level 8, so `EquipGearById` takes it under the normal level rule and the fixture reads
+`shield stock_shield_... equipped from the gear manifest`; the level override is not reached. The card's numbers are
+**data-derived and UNVERIFIED in game**. A pass with it says the host equipped and used that card, not that the fight matches
+the game. `-owgear=` replaces the observed manifest for the run. The gate takes only shields from it; the observed class mods
+and relics only filled backpack rows, so the run starts with fewer backpack rows in use (the backpack holds 39 here). Without
+the file the run behaves as before. The launcher prints `Shield source used:` after the run.
+
 **The two machines' `-Shield` runs do not exercise the same path.** Which one runs depends on the machine's gear
 manifest. On the zuhu PC, the run used a manifest shield under the level override. On pc-hummer, it used the host
 stand-in, which is not stock data. A PASS on one says nothing about the other's path.
@@ -480,7 +491,7 @@ counter reset, because more than 30 s had passed. The host logs the counter afte
 | The gun drop is forced | 5, 6 | slice-gate | `-Unforced` kills until a gun drops (budget 100 kills). First eight runs: 20 to 41 kills |
 | The Phaselock point is granted | 9 | slice-gate | `-Unforced` buys it on the skills page. Bought there in its first eight runs |
 | The mission is taken with the use key alone, and the range is cleared first | 10 to 12 | slice-gate | `-Unforced` uses the mission page's Enter and leaves the range as it is. Its first eight runs did so, with the range there |
-| `-Shield` needs the level override | stock-shield path | maya / skills | A manifest shield at or below Maya's level 8 would remove the level-override fixture. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
+| `-Shield` needs the level override | stock-shield path | maya / skills | Since 2026-11-13 the generated level-8 card (`tools/prepare_stock_shield.py`, data-derived, UNVERIFIED in game) removes the level-override fixture where the card has been prepared; not yet run in the engine. Without it, a manifest shield at or below Maya's level 8 would. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
 | The equip link does not grade the gun's firing | 8 | projectiles | Generated guns take their firing block from templates since 2026-11-06 (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates"); that firing is `UNVERIFIED` in game |
 
 Links that pass now but rest on rules still `UNVERIFIED` in game are covered in their own records:

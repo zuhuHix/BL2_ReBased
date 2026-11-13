@@ -52,6 +52,13 @@ entries and one message per group left out.
 - `python tools/verify_fire_event_order.py --self-test` and `python tools/verify_fire_event_order.py --reader build/Release/ow-package.exe`
 - Compare `--slice-run` output before and after against a copy of the previous build, and explain every difference.
 
+- The slice gate's `-Shield` run (`slice_gate_shield`, desktop only): since 2026-11-13, when
+  `local/slice/stock_shield_gear.json` exists (`python tools/prepare_stock_shield.py --reader <abs reader> --game <install>`),
+  the launcher passes it as `-owgear=`, so the run equips that one generated level-8 card under the normal level rule, in place of
+  the observed manifest. Its numbers are data-derived and UNVERIFIED in game. The launcher prints `Shield source offered:` and,
+  after the run, `Shield source used:` (generated card, observed manifest, observed manifest under the level override, or the
+  health-sized pool). A pass with the generated card says the host equipped and used that card; it says nothing about parity.
+
 ## When combat changes
 - `python tools/verify_combat_pawn.py --self-test`, and `--vm <json>` on a fresh `--combat-run`.
 - `python tools/verify_combat_pawn.py --live` checks the formulas against ignored live dumps when they exist.

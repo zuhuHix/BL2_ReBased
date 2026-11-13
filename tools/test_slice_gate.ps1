@@ -44,6 +44,7 @@ foreach ($key in @($manifests.Keys)) {
 # The fight uses ow.Range: a failed or old prepare_range.py stops here, as in tools/test_range.ps1, before any build or editor.
 & python (Join-Path $repo 'tools/check_range.py') --preflight (Join-Path $repo 'local/range/range_manifest.json') --spot-json (Join-Path $repo 'local/range/range.json')
 if ($LASTEXITCODE -ne 0) { throw 'Range manifest not usable (see the line above; docs/verification/COMBAT_RANGE.md says how to prepare it).' }
+$stockShield = Join-Path $repo 'local/slice/stock_shield_gear.json'
 $itemDir = Split-Path -Parent $manifests.gear
 $gearLevel = [int](Get-Content -LiteralPath $manifests.gear -Raw | ConvertFrom-Json).level
 $project = Join-Path $repo 'host/ue5/OpenWillow/OpenWillow.uproject'
@@ -80,7 +81,17 @@ try {
         "-owaudio=`"$($manifests.audio)`"", '-owquest', "-owquestsave=`"$save`"", "-owitems=`"$itemDir`"",
         "-owactionskill=`"$($manifests.actionskill)`"", "-owlevel=$gearLevel", '-owslicegate')
     if ($Gun) { $arguments += "-owslicegategun=$Gun" }
-    if ($Shield) { $arguments += '-owslicegateshield' }
+    if ($Shield) {
+        $arguments += '-owslicegateshield'
+        # The generated card (tools/prepare_stock_shield.py) replaces the observed gear manifest for this run: the gate takes only
+        # shields from it. Without the card the run uses the observed manifest as before, else the health-sized pool.
+        if (Test-Path -LiteralPath $stockShield) {
+            $arguments += "-owgear=`"$stockShield`""
+            Write-Host "Shield source offered: the generated card $stockShield (data-derived, UNVERIFIED in game)"
+        } else {
+            Write-Host "Shield source offered: the observed gear manifest (no generated card at $stockShield), else the health-sized pool"
+        }
+    }
     if ($DownAfterFight) { $arguments += '-owslicegatedownafterfight' }
     # The two variants keep the no-start-shield baseline their fixtures were written against (SLICE_GATE.md). The plain run starts as normal play does.
     if ($Shield -or $DownAfterFight) { $arguments += '-ownostartshield' }
@@ -102,6 +113,17 @@ try {
     $shown = if ($Unforced) { 'OWSLICEGATE|ow\.RollGun|ow\.Range|OpenWillow Skills spend|OWQUEST mission page' } else { 'OWSLICEGATE|ow\.RollGun|ow\.Range' }
     Select-String -LiteralPath $log -Pattern $shown |
         ForEach-Object { Write-Host ($_.Line -replace '^.*LogTemp: (Display: |Warning: |Error: )?', '') }
+    if ($Shield) {
+        # Which shield the fixture equipped, from its own line (OpenWillowSliceGate.cpp, -owslicegateshield).
+        $fixture = Select-String -LiteralPath $log -Pattern 'OWSLICEGATE note test fixture: (.*shield.*)' | Select-Object -Last 1
+        $used = if (!$fixture) { 'not named in the log' }
+            elseif ($fixture.Matches[0].Groups[1].Value -match '^shield stock_shield_\S+ equipped from the gear manifest') { 'the generated card (data-derived, UNVERIFIED in game)' }
+            elseif ($fixture.Matches[0].Groups[1].Value -match '^shield \S+ equipped from the gear manifest') { 'the observed gear manifest' }
+            elseif ($fixture.Matches[0].Groups[1].Value -match '^level rule overridden') { 'the observed gear manifest, under the level override' }
+            elseif ($fixture.Matches[0].Groups[1].Value -match '^host stand-in shield') { 'the health-sized pool (not stock data)' }
+            else { 'not recognised: ' + $fixture.Matches[0].Groups[1].Value }
+        Write-Host "Shield source used: $used"
+    }
     $checkArgs = @($log, '--json', (Join-Path $outDir "links-$stamp.json"), '--markdown', (Join-Path $outDir "links-$stamp.md"))
     if ($Unforced) { $checkArgs += '--expect-unforced' }
     & python (Join-Path $repo 'tools/check_slice_gate.py') @checkArgs

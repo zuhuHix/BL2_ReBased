@@ -157,6 +157,9 @@ the walker passes game time in and does the presentation (weapon put-away, Phase
   carries no base delay or rate. That the shield's parts supply them is a reading of that data, UNVERIFIED in the running game, and no
   prep tool resolves the parts' delay or rate (`tools/prepare_vendors.py` resolves shield parts only for the
   price). A prep step that evaluates the stock parts' delay and rate at the item's level would replace both. UNVERIFIED against the game.
+  Since 2026-11-13 one such step exists for one card: `tools/prepare_stock_shield.py` evaluates capacity, delay and rate of one
+  seeded level-8 roll of the common standard shield balance, for the slice gate's `-Shield` run only ([SLICE_GATE.md](SLICE_GATE.md),
+  "The generated card"). Data-derived, UNVERIFIED in game. The start shield, vendor and loot shields keep the stand-ins above.
 - **Host rules, UNVERIFIED:** no recharge while down; the session's first shield starts full; a swapped shield starts empty and waits its
   delay; the second wind raises the shield to 90 % of its capacity (live: section D) and the respawn fills it.
 - **`OpenWillowApplyDamageToPlayer(WorldContext, Amount, Causer, SourceLocation)`** (in `OpenWillowMayaState.h`) is the entry point for

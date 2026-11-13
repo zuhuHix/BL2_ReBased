@@ -1046,7 +1046,7 @@ section in this file has its options. Run the non-UE steps in any order their in
    `tools/refresh_collision.py`; the door mover (`tools/prepare_mover.py`).
 3. Slice data: `tools/prepare_slice_world.py` (21 oracles; it also runs `slice_values.py`), `tools/prepare_action_skill.py`,
    `tools/audio_census.py census` then `tools/audio_slice_chain.py`, the gestalt tables and UModel gestalt glTF,
-   `tools/seed_inventory_demo.py`, `tools/weapon_slice_gear.py`, the export index and `tools/slice_npc_assets.py all`,
+   `tools/seed_inventory_demo.py`, `tools/weapon_slice_gear.py`, `tools/prepare_stock_shield.py`, the export index and `tools/slice_npc_assets.py all`,
    `tools/weapon_view_model.py`.
 4. UModel exports for Maya (glTF body, head and hands, PNG textures; MD5 hands and first-person AnimSets).
 5. UI: the font library first, then the movies, the harnesses, `tools/prepare_inventory_movie.py` on
@@ -1896,6 +1896,7 @@ python tools/prepare_action_skill.py --reader $reader --game $game     # local/c
 # Weapons: legal parts of a balance, card stats, the slice guns, drop tables
 python tools/weapon_balance.py --reader $reader --package "$cooked\Startup.upk" parts --help
 python tools/weapon_slice_gear.py --reader $reader --game $game --level 8 --seed 1   # local/items/slice
+python tools/prepare_stock_shield.py --reader $reader --game $game  # local/slice/stock_shield_gear.json (-Shield; UNVERIFIED)
 python tools/loot_pools.py --reader $reader --package "$cooked\Startup.upk" table --help
 python tools/weapon_card_audit.py --reader $reader --package "$cooked\Startup.upk" --trace <ui trace .jsonl>
 
