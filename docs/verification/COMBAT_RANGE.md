@@ -297,6 +297,20 @@ the melee numbers, and the push was 1,000 uu/s (leap) or 500 (rock). Every kind 
 enemy's logged row (`OWRANGE enemy ... attacks ...`) must be the note's. On the default range that is the regular's and the adult's leap and the adult's throw;
 the baby's and the slinger's rows are covered by the light tests only. The checker now expects 39 steps (37 before). It also prints, ungraded, how many leaps and rocks the log's free fights had.
 
+**First runs (2026-11-13, zuhu desktop, lane N's branch on main ccc6fa5, `-SkipBuild` after a build through the slot; host behaviour only).**
+- `tools/test_range.ps1`: `range check: PASS (pass 39, fail 0, skip 0, missing 0)`. The regular's leap started 1,461 uu out, launch clip 0.834 s,
+  flight 0.8803 s against 0.8789 solved, came down on its aim point, hit for 8.99 with the 1,000 uu/s push; the adult's leap from 1,449 uu flew
+  0.7348 s against 0.7337; the adult's rock left 1.068 s into the clip (due 1.064) and touched Maya after 0.7453 s against 0.7823 solved, 57.8 uu
+  from its aim point, for 29.97 with the 500 uu/s push. The log's free fights: 4 leaps started (2 ended by a step's reset), 2 rocks, picks
+  regular leap 3 / melee 4, adult leap 1 / throw 2.
+- `tools/test_slice_gate.ps1`: plain 14 / 0 / 0 (one leap that hit, one rock that missed); `-Shield` 14 / 0 / 0 (the observed gear manifest: this
+  worktree had no generated card); `-Unforced` 13 / 1 / 0, `bleed_out_respawn` FAIL because its respawn was the run's sixth, not its only one.
+  That run needed 64 kills (426 s) before a gun dropped, and Maya went down 26 times; every one of those downs followed a plain swing (335 swing
+  hits, 9 leap hits, 1 rock hit in the run), so the extra respawns come from the long loot fight, not from the new attacks. The rule that the
+  graded respawn is the run's only one dates from 2026-11-12, after the eight recorded unforced runs, and making the unforced variant reliable is
+  another lane's work; nothing was loosened here.
+- `tools/play_range.ps1 -KillRow`: `kill row: PASS` (passive mode: no attacks there).
+
 A future read should capture, for each kind:
 - what triggers the attack: the distance at take-off or throw, and the time since the target was taken;
 - timing: take-off to landing (L-4 already has `Attack` to `Landed` 1.08 to 3.48 s, mean 1.68, n 157, kinds not separated), throw to impact, and the cycle between leaps or throws;

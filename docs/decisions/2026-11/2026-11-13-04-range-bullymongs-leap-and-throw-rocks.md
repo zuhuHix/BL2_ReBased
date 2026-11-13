@@ -37,5 +37,8 @@ come from leaps and rocks.
   the arc against its own copy of the solver, the landing on the aim point, the hit, the damage and the knock-back, one result per
   spawned kind, and checks each enemy's logged row against the note's. A new automation test brings `ue_automation` to 14 tests; the
   suite's pass line in `tools/suites.txt` moves with the launcher's count, which `tests/automation_paths_test.py` requires.
-- **Verified:** the host's arithmetic against the note's own table and the checker's synthetic cases. Nothing here was compared with
-  the running game; every rule above stays UNVERIFIED in game.
+- **Verified:** the host's arithmetic against the note's own table and the checker's synthetic cases; in the host (zuhu desktop,
+  2026-11-13), the range suite 39 / 0 with the leap and throw rows inside the rule, `ue_automation` 14 / 14, the slice gate plain and
+  `-Shield` 14 / 0 / 0, the kill row PASS. `-Unforced` failed `bleed_out_respawn` once on the run's respawn count, with every down in
+  that run following a plain swing (`COMBAT_RANGE.md`, "First runs"). Nothing here was compared with the running game; every rule above
+  stays UNVERIFIED in game.
