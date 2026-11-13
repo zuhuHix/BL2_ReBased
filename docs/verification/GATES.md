@@ -41,7 +41,7 @@ New entries `py-controls_capture`, `py-real_game_capture_safety` and `py-real_ga
 under 1.5 s) and the guard `py-realgame_registration`. All six real-game test files that were outside ctest also passed in a shell with
 no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working directory outside the checkout. See "Tests outside ctest".
 
-**On main 81d87f9 (2026-11-13, CI job "Windows / MSVC / LZO=ON" on PR #264's merge ref):** `100% tests passed out of 174`. The desktop runner kept that job's log (`local/z58/cand33/ci_job.log` in its worktree).
+**On main 81d87f9 (2026-11-13, CI job "Windows / MSVC / LZO=ON" on PR #264's merge ref):** `100% tests passed out of 174`. The desktop runner kept that job's log (`local/z58/cand33/ci_job.log` in its worktree). On the zuhu desktop the same tree registers 174 entries and passes 174 of 174 (LZO on, 361 s); a configure with `-DOPENWILLOW_LZO=OFF` registers 172 (`ctest -N`).
 
 **Fire checker level rule (2026-11-12, zuhu, lane R3):** `verify_fire_event_order.py` self-test passes and 33 of 33 rules hold on the real packages (32 before; the new one: no `level` event in the default run).
 
