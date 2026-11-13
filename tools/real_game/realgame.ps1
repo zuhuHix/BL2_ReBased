@@ -744,7 +744,7 @@ function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, 
     $leftMenu = $null; $last = ''; $lastReply = $EnterAt; $replied = $false
     $result = { param($Ok, $Why) [pscustomobject]@{ ok = $Ok; map = $last; why = $Why; after_enter_s = [math]::Round(((Get-Date) - $EnterAt).TotalSeconds, 1) } }
     while ($true) {
-        # A silence wait: it never sets the driver-lost condition (slice_watch.ps1), but it sends nothing once that is set (review of #263).
+        # A silence wait: it never sets the driver-lost condition (above, Get-DriverLostReason), but it sends nothing once that is set (review of #263).
         if ($script:SliceWatchDriverLost) { return (& $result $false "not sent: the driver stopped answering ($script:SliceWatchDriverLost)") }
         if ($Process -and $Process.HasExited) { return (& $result $false "the game exited before a player pawn (last read: $last)") }
         # The bound that applies now: the earlier of the driver's silence and the menu's or the load's. When it runs out, the message names the
