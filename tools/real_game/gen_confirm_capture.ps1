@@ -31,7 +31,7 @@ $Out = Join-Path $script:RG 'gen_confirm'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 $log.notes = @()
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 
 $sample = Get-Content (Join-Path $Out 'sample.json') -Raw | ConvertFrom-Json
 # Frequency subjects: the first common pistol and the first common SMG of the sample (the balance and its type).

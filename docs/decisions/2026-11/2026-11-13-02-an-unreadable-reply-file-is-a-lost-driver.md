@@ -52,6 +52,16 @@ swallows its errors (`Save-SliceWatchSnap 'smoke_unsettled'`, for example) did n
   module path). Both test files built the child's environment the same way, from the runner's; the cash tests are not in ctest, so
   CI never ran them. Every PowerShell child of the tests now starts without an inherited `PSModulePath`, and the test folders are
   removed with bounded retries for a file still held.
+- The last review round (round 5) and CI on 3ecb9f9. What holds now: the boundary is the body of both transport functions, the file
+  function's delegation included; only the parameter binding is outside (before, the deadline's first clock read sat before the one,
+  and the delegation after the other's catch). The deadline is checked before each publication attempt, while waiting, before each
+  read and before a reply is returned: no command is published after it, and a reply read after it is not taken (before, a slow
+  stale-reply check could still publish, and a slow read could still return, after the deadline). An empty reply is the empty
+  string, and each capture's own wrapper decides whether that is acceptable: every `Py` wrapper that refused an empty reply before
+  (two tested for `$null`; sixteen, in fourteen scripts, called `.Trim()` on it, which threw) refuses it again through one helper,
+  `ConvertTo-ReplyText`. The tests' PowerShell children get no `OPENWILLOW_*` variable from the machine; `OPENWILLOW_BL2` is a
+  stand-in folder unless a test sets its own (CI's third failure: a fragment test leaned on the maintainer's `OPENWILLOW_BL2`). A test
+  folder's cleanup reports an error other than a sharing failure without hiding the test's own error.
 
 Docs: `docs/TOOLING.md`, the driver-lost paragraph; and two sentences put right without code changes: recorded inputs are cleared
 entry by entry once each release went out (`Release-RecordedInputs`), and only `cash_capture` stamps its stages

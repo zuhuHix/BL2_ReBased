@@ -46,7 +46,7 @@ $runError = ''
 $log = [ordered]@{ started = (Get-Date).ToString('o'); lane = $Lane; character = $Character; status = 'running'; requested_steps = $stepsRequested }
 $summary = [ordered]@{ steps = @() }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 # The driver prints a Python traceback as its reply; that text goes into the error instead of a JSON parse message.
 function PyJson([string]$Code, [int]$Timeout = 30) {
     $raw = Py $Code $Timeout

@@ -29,12 +29,9 @@ $Out = Join-Path $script:RG 'wp2'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
-# An empty reply file reads as $null: say so instead of failing on .Trim() (run Z47: the parity2 quit wrote one as the game exited).
-function Py([string]$Code, [int]$Timeout = 30) {
-    $r = Invoke-GamePy $Code $Timeout
-    if ($null -eq $r) { throw "empty reply from the game (it may have exited) to: $($Code.Substring(0, [Math]::Min(80, $Code.Length)))" }
-    $r.Trim()
-}
+# An empty reply is refused, never taken (run Z47: the parity2 quit wrote one as the game exited). The transport returns '' for it, so the
+# test is null OR empty (ConvertTo-ReplyText, realgame.ps1; review of #263, R3).
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }
 function PyJson([string]$Expr, [int]$Timeout = 30) {
     $r = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
     try { $r | ConvertFrom-Json } catch { $r }

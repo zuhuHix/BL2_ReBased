@@ -45,12 +45,12 @@ $log = [ordered]@{ started = (Get-Date).ToString('o') }
 # part of the wait. The cleanup and the restore never go through Py's refusal (the finalizer skips its stop call when the driver is lost).
 function Py([string]$Code, [int]$Timeout = 30) {
     if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
-    try { (Invoke-GamePy $Code $Timeout).Trim() }
+    try { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused, as before the transport returned '' (R3)
     catch { if ("$_" -match 'no reply' -and !(Get-DriverLostReason)) { $script:SliceWatchDriverLost = "$_" }; throw }
 }
 function PyWait([string]$Code, [int]$Timeout = 30) {
     if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
-    (Invoke-GamePy $Code $Timeout).Trim()
+    ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code
 }
 function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json.dumps($Expr, default=str))" $Timeout | ConvertFrom-Json }
 function Shot([string]$Name) { Save-Shot "mission_screen/$Name.png" | Out-Null }

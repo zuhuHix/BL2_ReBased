@@ -14,7 +14,7 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 $Out = Join-Path $script:RG 'hud_layout'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); runs = [ordered]@{} }
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 
 # p1's direct children: the first p1 section of the HUD tree listing (local/ui/hud_tree.txt), plus a few grandchildren.
 $tree = Join-Path $script:Repo 'local/ui/hud_tree.txt'

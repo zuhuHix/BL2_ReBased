@@ -41,7 +41,7 @@ if ($oldFrames.Count) { $keptFrames = New-Item -ItemType Directory (Join-Path $O
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 # Py returns a traceback as text; here it cannot pass as an answer, and the error says what it was.
 function PyJson([string]$Expr, [int]$Timeout = 30) {
     $reply = Py "import json; print(json.dumps($Expr, default=str))" $Timeout

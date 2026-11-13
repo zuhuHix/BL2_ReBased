@@ -50,7 +50,7 @@ foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.j
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 
 # Frames every $IntervalMs from $Before s before the F press to $After s after it, full size, JPEG in memory; $Shots maps a
 # name to seconds after the press (the first frame at or after it is also written as PNG). $Action runs once at $ActionAt s.

@@ -21,7 +21,7 @@ $Out = Join-Path $script:RG 'hud_integrity'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); steps = @() }
 $census = @()
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 # One labelled read of the player and every watched HUD value, with a screenshot.
 function Census([string]$Label) {
     $c = Py "print(hi_out({'pawn': hi_pawn(), 'hud': hi_census()}))" 30 | ConvertFrom-Json -AsHashtable

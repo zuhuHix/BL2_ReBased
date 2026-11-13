@@ -553,7 +553,10 @@ def test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout():
     script's own text, with a stand-in Invoke-GamePy that counts calls (no capture script is run)."""
     text = CAPTURE.read_text(encoding='utf-8').replace('\r', '')
     body = text[text.index('function Py('):text.index('function PyJson(')]
+    shared = (ROOT / 'tools/real_game/realgame.ps1').read_text(encoding='utf-8').replace('\r', '')
+    reply_text = shared[shared.index('function ConvertTo-ReplyText('):shared.index('\n}\n', shared.index('function ConvertTo-ReplyText(')) + 3]
     lines = [
+        reply_text,   # the wrapper's empty-reply refusal (realgame.ps1)
         "$script:SliceWatchDriverLost = ''",
         "function Get-DriverLostReason { $script:SliceWatchDriverLost }",
         "$script:calls = 0",

@@ -7,6 +7,10 @@ The child also gets no inherited PSModulePath, so each PowerShell builds its own
 it was started from (CI on #263: a CI runner's pwsh step passed PowerShell 7's module path to Windows PowerShell children, which then
 could not load New-Guid). A test that sets the module path on purpose passes OW_TEST_KEEP_PSMODULEPATH.
 
+No OPENWILLOW_* variable reaches the child from the machine (CI on #263: a fragment test leaned on the maintainer's OPENWILLOW_BL2, which
+the runner does not have): one the test did not set itself (its value is the machine's) is dropped, and OPENWILLOW_BL2 is then a fresh,
+empty stand-in game folder under Temp. A test that needs no game folder at all passes OW_TEST_NO_GAME_FOLDER.
+
 remove_tree(): a test folder's removal, retried for a moment when a file in it is still held (a file scanner on Windows)."""
 import atexit
 import os
@@ -22,6 +26,11 @@ _run = subprocess.run
 def _run_with_pending_dir(args, *rest, **kwargs):
     if isinstance(args, (list, tuple)) and args and str(args[0]).lower().startswith(('powershell', 'pwsh')):
         env = dict(kwargs.get('env') or os.environ)
+        machine = {k.upper(): v for k, v in os.environ.items()}
+        env = {k: v for k, v in env.items() if not (k.upper().startswith('OPENWILLOW_') and machine.get(k.upper()) == v)}
+        if 'OPENWILLOW_BL2' not in {k.upper() for k in env} and not env.get('OW_TEST_NO_GAME_FOLDER'):
+            env['OPENWILLOW_BL2'] = game = tempfile.mkdtemp(prefix='ow-game-')   # a stand-in game folder, empty
+            atexit.register(shutil.rmtree, game, True)
         if 'OW_TEST_PENDING_DIR' not in env:
             env['OW_TEST_PENDING_DIR'] = folder = tempfile.mkdtemp(prefix='ow-pending-')
             atexit.register(shutil.rmtree, folder, True)
@@ -45,13 +54,18 @@ def remove_tree(path, tries=25, pause=0.2, raising=True):
             return
         except FileNotFoundError:
             return
-        except PermissionError as error:
+        except PermissionError as error:   # a sharing violation: retried, a bounded number of times
             if attempt == tries - 1:
                 if raising:
                     raise
                 print(f'test cleanup: {path} not removed: {error}', file=sys.stderr)
                 return
             time.sleep(pause)
+        except OSError as error:   # any other failure: not retried; raised, or reported without hiding the test's own error (#263, R4)
+            if raising:
+                raise
+            print(f'test cleanup: {path} not removed: {error}', file=sys.stderr)
+            return
 
 
 if subprocess.run is _run:

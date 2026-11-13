@@ -580,30 +580,35 @@ function Send-Click([switch]$Right) {
 # module path (a CI runner's pwsh step) cannot load it (CI on #263, 2026-11-13).
 function New-CommandName { 'c' + (Get-Date -Format 'HHmmssfff') + '-' + [guid]::NewGuid().ToString('N') }
 
-# Run Python inside the game through the openwillow_realgame mod and return its printed output ('' when it printed nothing).
-# One deadline covers the whole call, publishing, waiting and reading: every retry and pause is clamped to what is left of it, and a call
-# whose deadline has passed fails in the no-reply form. Every failure inside, whatever its text, leaves in that form too ("no reply to
-# <name> (transport error: ...)"), so no failure of the transport gets past a driver-lost latch (review of #263, S1 and S2).
+# Run Python inside the game through the openwillow_realgame mod and return its printed output ('' when it printed nothing; each capture's
+# own wrapper decides whether that is acceptable, see ConvertTo-ReplyText).
+# The boundary is the whole body: every failure inside it, whatever its text, leaves in the no-reply form ("no reply to <name>
+# (transport error: ...)"), so no failure of the transport gets past a driver-lost latch. Only the parameter binding, which runs before
+# the body, is outside it. One deadline covers the whole call: it is checked before each publication attempt, while waiting, before
+# each read and before a reply is returned, and every retry and pause is clamped to what is left of it. A call whose deadline has
+# passed fails as "no reply to <name>", and a reply read after it is not taken. (review of #263, S1, S2, R1 and R2)
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $left = { ($deadline - (Get-Date)).TotalMilliseconds }
-    $name = 'a command not yet named'
     try {
+        $name = 'a command not yet named'
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $left = { ($deadline - (Get-Date)).TotalMilliseconds }
         # Any reply already under this call's name is removed before the command is published, so an old reply can't answer this one.
         $name = New-CommandName
         $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
         if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force -ErrorAction Stop }
         # Published by a rename, tried at most 5 times 200 ms apart: a file scanner can hold the new file for a moment, and the rename then
         # fails. The driver runs only <name>.py, and once the rename went through the source is gone, so the command goes out at most once.
+        # No attempt starts after the deadline.
         for ($try = 1; ; $try++) {
-            try { [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py; break }   # the call as before; errors stop ($ErrorActionPreference)
-            catch {
-                if ($try -ge 5 -or (& $left) -le 200) {
-                    Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue   # best effort: the driver never runs a .py.tmp
-                    throw "no reply to $name (the command could not be sent: $($_.Exception.Message))"
-                }
-                Start-Sleep -Milliseconds 200
+            if ((& $left) -le 0) { Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue; throw "no reply to $name" }
+            $sent = $false
+            try { [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py; $sent = $true } catch { $err = $_ }   # the call as before
+            if ($sent) { break }
+            if ($try -ge 5 -or (& $left) -le 200) {
+                Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue   # best effort: the driver never runs a .py.tmp
+                throw "no reply to $name (the command could not be sent: $($err.Exception.Message))"
             }
+            Start-Sleep -Milliseconds 200
         }
         while (!(Test-Path $out)) {
             $ms = & $left
@@ -614,30 +619,45 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         # there. A reply file that cannot be read all the same (an access or I/O error; unexpected) is no usable reply: it is read again at
         # most 4 more times, 200 ms apart, within the deadline, as a second line of defence. Nothing is taken from a failed read.
         for ($try = 1; ; $try++) {
-            try {
-                $text = Get-Content -Raw -LiteralPath $out -ErrorAction Stop
+            if ((& $left) -le 0) { throw "no reply to $name" }   # no read starts after the deadline
+            $read = $false
+            try { $text = Get-Content -Raw -LiteralPath $out -ErrorAction Stop; $read = $true } catch { $err = $_ }
+            if ($read) {
+                if ((& $left) -le 0) { throw "no reply to $name" }   # a reply read after the deadline is not taken
                 if ($null -eq $text) { $text = '' }   # a complete empty reply: the command printed nothing (S3)
                 return $text
-            } catch {
-                if ($try -ge 5 -or (& $left) -le 200) { throw "no reply to $name (its reply file could not be read: $($_.Exception.Message))" }
-                Start-Sleep -Milliseconds 200
             }
+            if ($try -ge 5 -or (& $left) -le 200) { throw "no reply to $name (its reply file could not be read: $($err.Exception.Message))" }
+            Start-Sleep -Milliseconds 200
         }
     } catch {
         if ("$_" -like 'no reply to *') { throw }
-        throw "no reply to $name (transport error: $($_.Exception.Message))"
+        throw "no reply to $(if ($name) { $name } else { 'a command not yet named' }) (transport error: $($_.Exception.Message))"
     }
 }
 
 # Run a command script file (e.g. tools/real_game/scripts/*.py) after a short prelude; RG_OUT is set
-# to local/realgame/<OutFolder> so the script's helpers know where to write. A probe source that cannot be read (a locked or missing file)
-# fails in the no-reply form too: nothing was sent, and the run treats it as the transport's failure (review of #263, S1).
+# to local/realgame/<OutFolder> so the script's helpers know where to write. The boundary is the whole body, the delegation to
+# Invoke-GamePy included (only the parameter binding is outside): a probe source that cannot be read, or any other failure here, leaves
+# in the no-reply form too. Nothing was sent then, and the run treats it as the transport's failure (review of #263, S1 and R2).
 function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$TimeoutSeconds = 30) {
     try {
         $out = (Join-Path $script:RG $OutFolder) -replace '\\', '/'
-        $source = [IO.File]::ReadAllText((Resolve-Path $Path))
-    } catch { throw "no reply to probe file $Path (transport error: its source could not be read: $($_.Exception.Message))" }
-    Invoke-GamePy ("RG_OUT = r'$out'`n" + $source) $TimeoutSeconds
+        try { $source = [IO.File]::ReadAllText((Resolve-Path $Path)) }
+        catch { throw "no reply to probe file $Path (transport error: its source could not be read: $($_.Exception.Message))" }
+        Invoke-GamePy ("RG_OUT = r'$out'`n" + $source) $TimeoutSeconds
+    } catch {
+        if ("$_" -like 'no reply to *') { throw }
+        throw "no reply to probe file $Path (transport error: $($_.Exception.Message))"
+    }
+}
+
+# A capture's Py wrapper: the reply's text, trimmed. An empty reply (the command printed nothing, or a reply cut off by a game that
+# exited) is refused, as these wrappers refused it before the transport returned '' for it: the older .Trim() on $null threw, and
+# two wrappers tested for $null (review of #263, R3). Not a lost driver: the caller's own handling decides what follows.
+function ConvertTo-ReplyText($Reply, [string]$Code) {
+    if ([string]::IsNullOrEmpty($Reply)) { throw "empty reply from the game (it may have exited) to: $($Code.Substring(0, [Math]::Min(80, $Code.Length)))" }
+    "$Reply".Trim()
 }
 
 # After the Enter on the main menu that continues the save: wait for the player pawn, reads only (the map name and whether a pawn is

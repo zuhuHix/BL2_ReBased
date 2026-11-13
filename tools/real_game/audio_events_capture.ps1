@@ -49,7 +49,7 @@ if ($staleEvents.Count) {
 # End of stale event files.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 
 # One labelled window: $Act runs with the hooks counting. What it adds beyond the $Baselines windows lands in $log.window_<label>, with `tied`:
 # the new events that followed at least $Need of the action's moments within $Within seconds. Stages accept only `tied`, so an ambient

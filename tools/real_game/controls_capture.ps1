@@ -34,7 +34,7 @@ $keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
 foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o'); status = 'running' }
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 # Evidence for the stages: a status menu that is really up, and the melee calls the game has made so far.
 function Get-Page { Py 'print(json.dumps(cp_page(), default=str))' 15 }
 function Test-PageOpen([string]$Json) { try { (ConvertFrom-Json $Json).open -eq $true } catch { $false } }

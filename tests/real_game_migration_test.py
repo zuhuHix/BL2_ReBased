@@ -149,6 +149,11 @@ $old = Join-Path $script:CmdDir 'cT-00000000000000000000000000000001.out'
 
 
 
+def one_line_of(script, name):
+    """A one-line function's text from a capture script."""
+    return next(line for line in text(script).split('\n') if line.startswith(f'function {name}('))
+
+
 def script_fn(script, name):
     """One function's text from a capture script (a multi-line function ending in a closing brace on its own line)."""
     body = text(script)
@@ -158,14 +163,26 @@ def script_fn(script, name):
 
 def test_an_empty_reply_fails_with_a_clear_message_in_both_finalizers():
     # Run Z47: the parity2 quit's reply file was empty as the game exited, Get-Content -Raw gave $null, and .Trim() threw a null-method error.
+    # Review of #263, R3: the transport now returns '' for an empty reply; both wrappers still refuse it (null OR empty), and an empty
+    # fp_ready answer does not reach the slot key that follows it.
     for name in ('projectiles_capture', 'weapon_parity2_capture'):
         out = run_stubbed("""$ErrorActionPreference = 'Stop'
-function Invoke-GamePy($Code, $Timeout) {{ if ($Code -eq 'empty') {{ $null }} else {{ "  answer`n" }} }}
+$script:keys = @()
+function Send-Key {{ $script:keys += "$args" }}
+function Assert-GameForeground {{ }}
+function Invoke-GamePy($Code, $Timeout) {{ if ($Code -eq 'empty') {{ '' }} elseif ($Code -eq 'null') {{ $null }} elseif ($Code -like '*fp_ready*') {{ '' }} else {{ "  answer`n" }} }}
+{}
+{}
 {}
 "ok: [$(Py 'full')]"
 try {{ Py 'empty' | Out-Null; 'no throw' }} catch {{ "threw: $_" }}
-""".format(script_fn(name, 'Py')))
+try {{ Py 'null' | Out-Null; 'no throw' }} catch {{ "threw null: $_" }}
+try {{ $ready = PyJson 'fp_ready("g", 1)' 60; Assert-GameForeground; Send-Key '1' }} catch {{ "ready: $_" }}
+"keys: [$($script:keys -join ',')]"
+""".format(helper('ConvertTo-ReplyText'), one_line_of(name, 'Py'), script_fn(name, 'PyJson')))
         assert 'ok: [answer]' in out and 'threw: empty reply from the game (it may have exited) to: empty' in out, name + out
+        assert 'threw null: empty reply from the game (it may have exited) to: null' in out, name + out
+        assert 'ready: empty reply' in out and 'keys: []' in out, name + out   # no input after an empty fp_ready
 
 
 def test_the_parity2_quit_expects_no_reply_and_fp_cleanup_is_not_overwritten():
@@ -216,7 +233,7 @@ def one_line(name):
 
 
 TRANSPORT_STUBS = r"""$ErrorActionPreference = 'Stop'
-$script:CmdDir = '@TMP@'
+$script:CmdDir = '@TMP@'; $script:RG = '@TMP@'
 $script:SliceWatchDriverLost = ''
 function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
 function Sent { @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py').Count }
@@ -315,6 +332,90 @@ def test_the_command_name_needs_no_module_auto_loading():
         env = dict(os.environ, PSModulePath=ps7, OW_TEST_KEEP_PSMODULEPATH='1')   # this test sets the runner's module path on purpose
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path)], capture_output=True, text=True, env=env, timeout=60)
     assert re.search(r'name: c\d{9}-[0-9a-f]{32}', done.stdout), done.stdout + done.stderr
+
+
+def test_no_publication_and_no_reply_taken_after_the_deadline_when_operations_are_slow():
+    # Review of #263, R1: the deadline was checked only on a failure or while the reply was absent. A virtual clock where the stale-reply
+    # check, the existence test and the read each take time (they succeed): nothing is published after the deadline, a reply read after
+    # it is not taken, and no call returns later than the operation under way when the deadline passed, plus one pause (200 ms).
+    def run(stale, exists, read):
+        out = run_stubbed(TRANSPORT_STUBS + r"""
+$script:t0 = [datetime]'2026-01-01T00:00:00'; $script:now = $script:t0
+function Get-Date { param($Format) if ($Format) { 'T' } else { $script:now } }
+function Start-Sleep { param($Milliseconds) $script:now = $script:now.AddMilliseconds($Milliseconds) }
+function Test-Path {
+    if ($args[0] -eq '-LiteralPath') { $script:now = $script:now.AddSeconds(STALE) } else { $script:now = $script:now.AddSeconds(EXISTS) }
+    Microsoft.PowerShell.Management\Test-Path -LiteralPath "$($args[-1])" }
+function Get-Content { $script:now = $script:now.AddSeconds(READ); [IO.File]::ReadAllText("$($args[$args.IndexOf('-LiteralPath') + 1])") }
+function Move-Item($From, $To) { [IO.File]::Move($From, $To); $script:published = ($script:now - $script:t0).TotalSeconds; [IO.File]::WriteAllText(($To -replace '[.]py$', '.out'), 'answer') }
+""".replace('STALE', str(stale)).replace('EXISTS', str(exists)).replace('READ', str(read)) + transport() + r"""
+try { $r = Invoke-GamePy 'print(1)' 3; $e = "returned $r" } catch { $e = "$_" }
+"result: $e"
+"published: $(if ($null -ne $script:published) { $script:published.ToString([Globalization.CultureInfo]::InvariantCulture) } else { 'never' })"
+"ended: $((($script:now - $script:t0).TotalSeconds).ToString([Globalization.CultureInfo]::InvariantCulture))"
+""")
+        result = re.search(r'result: (.*)', out).group(1)
+        published = re.search(r'published: (\S+)', out).group(1)
+        ended = float(re.search(r'ended: ([\d.]+)', out).group(1))
+        return result, published, ended, out
+    result, published, ended, out = run(0, 0, 0)
+    assert result == 'returned answer' and published == '0', out   # in time: taken
+    result, published, ended, out = run(4, 0, 0)   # the stale-reply check alone outlasts the 3 s
+    assert result.startswith('no reply to ') and published == 'never' and ended <= 4.2, out
+    result, published, ended, out = run(0, 1.5, 2)   # found at 1.5 s, read until 3.5 s: after the deadline, so not taken
+    assert result.startswith('no reply to ') and published == '0' and ended <= 3.5 + 0.2, out
+    result, published, ended, out = run(0, 0, 4)   # a read that ends at 4 s
+    assert result.startswith('no reply to ') and ended <= 4.2, out
+
+
+def test_a_fault_at_the_first_statement_of_either_transport_function_is_no_reply():
+    # Review of #263, R2: the deadline's first clock read sat before Invoke-GamePy's boundary, and Invoke-GamePyFile's delegation after its
+    # own. Every statement of both bodies is now inside; only the parameter binding is outside.
+    cases = {
+        'Invoke-GamePy, its first clock read': ("function Get-Date { throw 'invented: the clock failed' }", "Invoke-GamePy 'print(1)' 3"),
+        'Invoke-GamePyFile, its first statement': ("function Join-Path { throw 'invented: no path' }", "Invoke-GamePyFile 'x.py' 'out' 3"),
+        'Invoke-GamePyFile, its delegation': ("function Invoke-GamePy { throw 'invented: the delegation failed' }",
+                                              "Invoke-GamePyFile (Join-Path $script:CmdDir 'p.py') 'out' 3"),
+    }
+    for site, (stub, call) in cases.items():
+        out = run_stubbed(TRANSPORT_STUBS + r"[IO.File]::WriteAllText((Join-Path '@TMP@' 'p.py'), 'print(1)')" + '\n' + transport() + stub + '\n' + f"""
+try {{ {call} | Out-Null; $e = 'returned' }} catch {{ $e = "$_"; Set-SliceWatchDriverLost $_ }}
+"error: $e"
+"latched: $script:SliceWatchDriverLost"
+""")
+        error = re.search(r'error: (.*)', out).group(1)
+        assert error.startswith('no reply to ') and 'invented' in error, (site, out)
+        assert f'latched: {error}' in out, (site, out)
+
+
+def test_a_failed_test_cleanup_never_hides_the_tests_own_error():
+    # Review of #263, R4: with raising=False an OSError other than a permission error escaped and replaced the test's own exception.
+    import io
+    import shutil
+    import sys as _sys
+    calls = []
+
+    def failing(error):
+        def rmtree(path):
+            calls.append(path)
+            raise error
+        return rmtree
+    keep, keep_err = shutil.rmtree, _sys.stderr
+    try:
+        for error in (OSError(22, 'invented: not a sharing failure'), PermissionError(13, 'invented: still held')):
+            shutil.rmtree, _sys.stderr = failing(error), io.StringIO()
+            calls.clear()
+            realgame_test_env.remove_tree('x', tries=3, pause=0, raising=False)   # reported, not raised
+            assert 'not removed' in _sys.stderr.getvalue(), error
+            assert len(calls) == (3 if isinstance(error, PermissionError) else 1), (error, calls)   # only a sharing failure is retried
+            try:
+                realgame_test_env.remove_tree('x', tries=3, pause=0)
+                raised = False
+            except OSError:
+                raised = True
+            assert raised, error   # with raising, a cleanup that keeps failing is reported as an error
+    finally:
+        shutil.rmtree, _sys.stderr = keep, keep_err
 
 
 if __name__ == '__main__':

@@ -18,7 +18,7 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 $Out = Join-Path $script:RG 'hud_parity'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 function Snap([string]$Label) { Py "print(hp_out(hp_snapshot('$Label')))" 90 | ConvertFrom-Json -AsHashtable }
 function Quick([string]$Label) { Py "print(hp_out(hp_quick('$Label')))" 20 | ConvertFrom-Json -AsHashtable }
 

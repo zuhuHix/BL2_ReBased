@@ -18,7 +18,7 @@ $Out = Join-Path $script:RG 'action_skill_hud'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-function Py([string]$Code, [int]$Timeout = 30) { (Invoke-GamePy $Code $Timeout).Trim() }
+function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
 
 # The last complete line the in-game sampler wrote (read while the game keeps the file open).
 function Get-LastSample([string]$Path) {

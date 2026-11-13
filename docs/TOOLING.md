@@ -1531,19 +1531,23 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   at or after it moves nothing and answers `late`, checked again right before the placement, and its reply wait is clamped to the
   time left, so no placement runs after the window. None is sent with less than 6 s of the window left (the polls' own minimum), so
   a slower healthy reply is not cut short into a lost driver.
-- **Driver lost**: one condition shared by the helpers and every stage. Every failure of the transport leaves `Invoke-GamePy` and
-  `Invoke-GamePyFile` (`realgame.ps1`) in one form, "no reply to <name> (...)", and each latch site below sets the condition on that
-  form. The failures are: a reply that never came; a command that could not be published (its rename onto `<name>.py`, which a file
-  scanner holding the new file can refuse, is tried at most 5 times, 200 ms apart, and goes out at most once: "the command could
-  not be sent"); a reply file that is there but cannot be read (read at most 5 times, 200 ms apart: "its reply file could not be
-  read"); and any other error inside the two functions, whatever its text, a probe source that cannot be read included ("transport
-  error"). One deadline per call, its timeout, covers publishing, waiting and reading: every retry and pause is clamped to what is
-  left of it, so a call ends within its timeout plus the one file operation under way when it runs out. Only this call's own reply
+- **Driver lost**: one condition shared by the helpers and every stage. The transport's boundary is the body of `Invoke-GamePy` and
+  of `Invoke-GamePyFile` (`realgame.ps1`), the latter's delegation to the former included; only the parameter binding, which runs
+  before a body, is outside it. Every failure inside it leaves in one form, "no reply to <name> (...)", and each latch site below
+  sets the condition on that form. The failures are: a reply that never came; a command that could not be published (its rename
+  onto `<name>.py`, which a file scanner holding the new file can refuse, is tried at most 5 times, 200 ms apart, and goes out at
+  most once: "the command could not be sent"); a reply file that is there but cannot be read (read at most 5 times, 200 ms apart:
+  "its reply file could not be read"); and any other error inside the boundary, whatever its text, a probe source that cannot be
+  read included ("transport error"). One deadline per call, its timeout, is checked before each publication attempt, while waiting,
+  before each read and before a reply is returned, and every retry and pause is clamped to what is left of it: no command is
+  published after it, a reply read after it is not taken, and a call ends within its timeout plus the one file operation under way
+  when it runs out, plus at most one pause. Only this call's own reply
   file is read (the name holds the call's GUID, made with plain .NET so no module has to load, and a file under it was removed before
   the command went out), and nothing is taken from a failed read. The driver publishes each reply whole (`openwillow_realgame`,
   `run_pending`: written as `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once it exists: an
   unreadable one is unexpected, the retry is a second line of defence, and an empty reply is the empty string (the command printed
-  nothing), never null. If the driver's write or rename fails, it leaves no reply and tries to remove the `.tmp` (best effort), and
+  nothing), never null; each capture's own wrapper decides whether that is acceptable (the `Py` wrappers refuse it through
+  `ConvertTo-ReplyText`, as they refused it before, with "empty reply from the game (it may have exited) to: ..."). If the driver's write or rename fails, it leaves no reply and tries to remove the `.tmp` (best effort), and
   the wait runs out, as for a lost driver; the script was renamed to `<name>.py.done` before it ran, so it never runs twice. A
   `.out.tmp` left behind (a failed removal, or a game that died mid-write) is harmless: no reader looks for that name, and each call
   has its own. The latch sites: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the

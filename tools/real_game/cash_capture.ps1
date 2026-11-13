@@ -78,7 +78,8 @@ $log = [ordered]@{ started = (Get-Date).ToString('o'); status = 'running' }
 # cleanup and the restore never go through Py's refusal: the finalizer's own stop calls are already skipped when the driver is lost.
 function Py([string]$Code, [int]$Timeout = 30) {
     if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
-    try { $reply = (Invoke-GamePy $Code $Timeout).Trim() }
+    # An empty reply is refused (ConvertTo-ReplyText), as the .Trim() on $null refused it before the transport returned '' (review of #263, R3).
+    try { $reply = ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }
     catch { if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }; throw }
     if ($reply -match 'Traceback \(most recent call last\)') { throw "game python error: $reply" }
     $reply
@@ -87,7 +88,7 @@ function Py([string]$Code, [int]$Timeout = 30) {
 # their own timeouts are part of the wait and set nothing.
 function PyWait([string]$Code, [int]$Timeout = 30) {
     if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
-    $reply = (Invoke-GamePy $Code $Timeout).Trim()
+    $reply = ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code
     if ($reply -match 'Traceback \(most recent call last\)') { throw "game python error: $reply" }
     $reply
 }
