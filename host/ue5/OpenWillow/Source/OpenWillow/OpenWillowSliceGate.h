@@ -133,6 +133,14 @@ private:
     float FarmLookFor = 0.f;
     float LastFarmPlaceAt = -100.f;
     void TickFarmLoot(class AOpenWillowWalker* W, float Delta);
+    // The farm's outcome: the loot link's line, or (bFarmForEquip) kept for the equip link's re-loot.
+    void FarmResult(bool bPass, const FString& Detail);
+    // Unforced, the equip link: a gun above Maya's level refused by the host's equip (the level rule) is kept, and the link loots on
+    // with the farm (EquipPhase 2) and picks the new gun up (EquipPhase 3) within the loot link's bound. Counted and named in the detail.
+    bool bFarmForEquip = false, bRelootOk = false;
+    FString RelootNote, RefusedNote;
+    int32 EquipRefused = 0;
+    FString EquipLevelNote() const;
     // Every range enemy's last living spot, and the spots of the deaths seen from the pickup snapshot before the fight (Arena)
     // to the end of the loot link: a gun that a death the gate did not aim at (a stray shot) dropped counts at its own corpse.
     // TrackRangeDeaths runs at the top of every tick while bTrackCorpses is set and the step is not past Loot.
@@ -214,7 +222,7 @@ private:
     // range dummy farthest from the living enemies, Maya standing on the enemies' side of it so the shots fly away from them.
     // The shot times, the gun's firing block and the longest frame go in the detail for the checker. Returns true when done.
     bool TickBurst(class AOpenWillowWalker* W, float Delta);
-    int32 EquipPhase = 0;           // 0 equip and draw, 1 the burst
+    int32 EquipPhase = 0;           // 0 equip and draw, 1 the burst, 2 loot again, 3 pick the new gun up
     FString EquipDetail;            // the equip's detail, "...; firing=<kind>"
     int32 BurstPhase = 0;           // 0 choose and place, 1 settle and fill the magazine, 2 fire, 3 wait for Maya's own recovery
     float BurstClock = 0.f, BurstFrameMax = 0.f, BurstClearance = 0.f, BurstDownWait = 0.f;

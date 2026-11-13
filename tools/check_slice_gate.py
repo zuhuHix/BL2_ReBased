@@ -27,7 +27,8 @@ the use-key press (a test fixture) stayed within its bound and ended with the li
 The unforced variant (`tools/test_slice_gate.ps1 -Unforced`, `-owslicegateunforced`) marks its start line `unforced=1`. There,
 and only there, every link that names a fixture standing in for play (FORCING_FIXTURES) is a FAIL whatever the host said,
 a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail, a PASS on a
-link that waits for Maya's own recovery inside it (DOWN_WAIT_LINKS) needs `down_wait=<s>s/<bound>s` within its bound, and every
+link that waits for Maya's own recovery inside it (DOWN_WAIT_LINKS) needs `down_wait=<s>s/<bound>s` within its bound, a PASS on
+`equip_gun` needs `equip_refused=<n>` (and, after a gun refused under the level rule, the loot bound it used, within it), and every
 NOT_AVAILABLE is a FAIL, so the run exits 0 only with all 14 links passed. The other variants are graded as before. These are host grading rules, UNVERIFIED against the real game.
 """
 import argparse
@@ -250,6 +251,29 @@ DOWN_WAIT_LINKS = ('pick_up_gun', 'pick_up_aimed_not_nearest', 'equip_gun', 'pha
 DOWN_WAIT = re.compile(r'(?<!\S)down_wait=(?P<wait>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
 
 
+# Unforced, link 8: guns the host's equip refused under the level rule, and after one the loot link's bound the re-loot used
+# (`loot_kills=<k>/<budget> loot_time=<s>s/<bound>s`, counted on from the loot link).
+EQUIP_REFUSED = re.compile(r'(?<!\S)equip_refused=(?P<n>\d+)(?=[\s:;,]|$)')
+LOOT_KILLS = re.compile(r'(?<!\S)loot_kills=(?P<kills>\d+)/(?P<budget>\d+)(?=[\s:;,]|$)')
+LOOT_TIME = re.compile(r'(?<!\S)loot_time=(?P<time>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
+
+
+def equip_level_problem(detail):
+    """Why an unforced equip PASS cannot stand on its re-loot after a gun above Maya's level, or None."""
+    refused = EQUIP_REFUSED.search(detail)
+    if not refused:
+        return 'no equip_refused=<n> in the detail (the equip level rule was not reported)'
+    if int(refused['n']) == 0:
+        return None
+    kills, time = LOOT_KILLS.search(detail), LOOT_TIME.search(detail)
+    if not kills or not time:
+        return 'a gun was refused under the level rule, but the detail has no loot_kills= and loot_time= for the re-loot'
+    if int(kills['kills']) > int(kills['budget']) or float(time['time']) > float(time['bound']):
+        return (f"the re-loot for an equippable gun ran past the loot bound ({kills['kills']} of {kills['budget']} kills, "
+                f"{time['time']} s of {time['bound']} s)")
+    return None
+
+
 def down_wait_problem(detail):
     """Why an unforced PASS of a DOWN_WAIT_LINKS link cannot stand on its wait for Maya's own recovery, or None."""
     match = DOWN_WAIT.search(detail)
@@ -413,6 +437,8 @@ def cross_check_unforced(rows, errors, range_mode):
             why = f'no sign that it got there unforced (no {token} in the detail)'
         elif row['result'] == 'PASS' and row['name'] in DOWN_WAIT_LINKS and down_wait_problem(row['detail']):
             why = down_wait_problem(row['detail'])
+        elif row['result'] == 'PASS' and row['name'] == EQUIP_LINK and equip_level_problem(row['detail']):
+            why = equip_level_problem(row['detail'])
         elif row['result'] == 'NOT_AVAILABLE' and range_mode and row['name'] in ('loot_drop_on_kill', 'go_down'):
             why = 'the range was there, so its enemies can ' + ('drop a gun' if row['name'] == 'loot_drop_on_kill' else 'down her')
         elif row['result'] == 'NOT_AVAILABLE':

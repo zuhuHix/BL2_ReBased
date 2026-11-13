@@ -390,6 +390,22 @@ AOpenWillowInventoryPickup* UOpenWillowSliceGate::NewGunPickup(AOpenWillowInvent
 // FarmKillBudget kills and FarmTimeout seconds; the fight's kill is the first. Maya fires as in the fight (FireOnce) and is neither healed
 // nor revived: a kill while she is down gives her a second wind, a bleed-out ends in the walker's own respawn. The detail of a FAIL gives
 // the chance that a working drop would have missed in that many kills.
+// The farm's outcome. For the loot link, its line (and on to the pickups); for the equip link's re-loot (bFarmForEquip), the outcome is
+// kept for the equip step, and no link is logged here.
+void UOpenWillowSliceGate::FarmResult(bool bPass, const FString& Detail)
+{
+    if (bFarmForEquip)
+    {
+        bFarmForEquip = false;
+        bRelootOk = bPass;
+        RelootNote = Detail;
+        return;
+    }
+    if (bPass) PassLink(TEXT("loot_drop_on_kill"), Detail);
+    else FailLink(TEXT("loot_drop_on_kill"), Detail);
+    Next(EStep::Pickup);
+}
+
 void UOpenWillowSliceGate::TickFarmLoot(AOpenWillowWalker* W, float Delta)
 {
     if (FarmLookFor <= 0.f) { FarmLookFor = LootWait; FarmPhase = 0; FarmClock = 0.f; }   // the fight's kill: looked for as long as the other variants do
@@ -405,25 +421,22 @@ void UOpenWillowSliceGate::TickFarmLoot(AOpenWillowWalker* W, float Delta)
         if (!Drop) Drop = NewGunPickup(Far, FromCorpse);
         if (Drop)
         {
-            PassLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("how=kill_roll %s: pickup \"%s\" %.0f uu from a corpse (the last kill was number %d; the stock roll, no gun forced)"),
+            FarmResult(true, FString::Printf(TEXT("how=kill_roll %s: pickup \"%s\" %.0f uu from a corpse (the last kill was number %d; the stock roll, no gun forced)"),
                 *Tally, *Drop->DisplayName(), FromCorpse, LootKills));
-            Next(EStep::Pickup);
             return;
         }
         if (FarmClock < FarmLookFor) return;
         // Only once the drop wait is over, so that a death the tracker above has not seen yet cannot fail the link.
         if (Far)
         {
-            FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("%s: a gun \"%s\" appeared after kill %d, but at %s, more than %.0f uu from every corpse seen (the last at %s)"), *Tally,
+            FarmResult(false, FString::Printf(TEXT("%s: a gun \"%s\" appeared after kill %d, but at %s, more than %.0f uu from every corpse seen (the last at %s)"), *Tally,
                 *Far->DisplayName(), LootKills, *Far->GetActorLocation().ToCompactString(), LootRadius, *KillLocation.ToCompactString()));
-            Next(EStep::Pickup);
             return;
         }
         if (LootKills >= FarmKillBudget || FarmTime >= FarmTimeout)
         {
-            FailLink(TEXT("loot_drop_on_kill"), FString::Printf(TEXT("no gun dropped in %d kill(s) (%s); at the estimated %.3f gun chance per kill a working drop gives no gun in that many kills %.1f%% of the time"),
+            FarmResult(false, FString::Printf(TEXT("no gun dropped in %d kill(s) (%s); at the estimated %.3f gun chance per kill a working drop gives no gun in that many kills %.1f%% of the time"),
                 LootKills, *Tally, FarmGunChance, 100.f * FMath::Pow(1.f - FarmGunChance, float(LootKills))));
-            Next(EStep::Pickup);
             return;
         }
         FarmPhase = 1;
@@ -882,6 +895,16 @@ FString UOpenWillowSliceGate::RollSetupGap() const
     return FString();
 }
 
+// Unforced: " equip_refused=<n>", and after a refusal the loot bound used so far and the guns refused (tools/check_slice_gate.py).
+FString UOpenWillowSliceGate::EquipLevelNote() const
+{
+    if (!bUnforced) return FString();
+    FString Note = FString::Printf(TEXT(" equip_refused=%d"), EquipRefused);
+    if (EquipRefused > 0)
+        Note += FString::Printf(TEXT(" loot_kills=%d/%d loot_time=%.0fs/%.0fs (refused under the level rule: %s)"), LootKills, FarmKillBudget, FarmTime, FarmTimeout, *RefusedNote);
+    return Note;
+}
+
 FString UOpenWillowSliceGate::PickupDownNote() const
 {
     return bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), PickupDownWait, DownRecoverWait) : FString();
@@ -1156,7 +1179,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
     RunTime += Delta;
     // Unforced only (both flags stay false otherwise), every tick, a paused one included: the corpses from the pickup snapshot to the
     // end of the loot link, and the time of the last range-enemy hit from the end of Recover through the down link.
-    if (bTrackCorpses && uint8(Step) <= uint8(EStep::Loot)) TrackRangeDeaths();
+    if (bTrackCorpses && (uint8(Step) <= uint8(EStep::Loot) || bFarmForEquip)) TrackRangeDeaths();
     if (bWatchEnemyHits)
     {
         const int32 SeenNow = EnemyHitsTracked();   // drops back when the down wait restarts the walker's count
@@ -1609,8 +1632,32 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (bUnforced && bTestDrop && !GunId.IsEmpty()) Fixture(TEXT("gun from the test's drop, not a kill"));
             const bool bEquipped = !GunId.IsEmpty() && EquipAndDraw(GunId, Why);
             const FOpenWillowWeaponItem* Held = bEquipped ? Inventory->ActiveWeapon() : nullptr;
+            const int32 GunIndex = GunId.IsEmpty() ? INDEX_NONE : Inventory->FindItemIndexById(GunId);
+            const int32 GunLevel = GunIndex != INDEX_NONE ? Inventory->Items()[GunIndex].Level : 0;
+            const int32 MayaLevel = W->GetSkills()->GetLevel();
+            // Unforced: a kill can drop a gun above Maya's level (the item stage carries an offset, COMBAT_RANGE.md "Item stage"), and the
+            // host's equip refuses it under the level rule. The player keeps it and loots on: so does this link, within the loot link's
+            // own bound (FarmKillBudget kills, FarmTimeout s, counted on from where the loot link left them), then picks up the new gun
+            // and tries again. The level rule is the host's and is not touched.
+            if (!bEquipped && bUnforced && bRangeMode && GunIndex != INDEX_NONE && GunLevel > MayaLevel)
+            {
+                ++EquipRefused;
+                RefusedNote += FString::Printf(TEXT("%s%s level %d"), RefusedNote.IsEmpty() ? TEXT("") : TEXT(", "), *GunId, GunLevel);
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: equip refused %s: the gun is level %d, Maya level %d (the level rule); it stays in the backpack and the link loots on (%s)"),
+                    *GunId, GunLevel, MayaLevel, *Why);
+                Fixture(TEXT("kept looting for a gun Maya can equip"));
+                for (TActorIterator<AOpenWillowInventoryPickup> It(GetWorld()); It; ++It) PickupsBeforeKill.Add(*It);
+                FreshCorpses.Reset();
+                KillLocation = W->GetActorLocation();
+                Drop = nullptr;
+                bFarmForEquip = true;
+                FarmPhase = 1;
+                FarmClock = 0.f;
+                EquipPhase = 2;
+                return;
+            }
             if (GunId.IsEmpty()) FailLink(TEXT("equip_gun"), TEXT("blocked: no looted or rolled gun in the backpack"));
-            else if (!bEquipped) FailLink(TEXT("equip_gun"), Why);
+            else if (!bEquipped) FailLink(TEXT("equip_gun"), Why + EquipLevelNote());
             // The held gun's firing as the host will play it (its recipe's or template's block). No block, and the host fires a
             // plain trace whatever the gun is: a FAIL, not a pass. This grades the host against its data, not the real game.
             // A rolled gun's block comes from the firing templates (OpenWillowWeaponGen.cpp), a recipe gun's from its recipe: a
@@ -1625,11 +1672,45 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             {
                 const EOpenWillowShotKind ShotKind = Held->Firing.Kind;
                 const TCHAR* Kind = ShotKind == EOpenWillowShotKind::Rocket ? TEXT("Rocket") : ShotKind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
-                EquipDetail = FString::Printf(TEXT("%s; firing=%s"), *Why, Kind);
+                EquipDetail = FString::Printf(TEXT("%s; firing=%s"), *Why, Kind) + EquipLevelNote();
                 EquipPhase = 1;   // the burst, then the link
                 return;
             }
             Next(EStep::Phaselock);
+            return;
+        }
+        if (EquipPhase == 2)
+        {
+            // The re-loot: the loot link's farm, until a new gun lies near a corpse or the bound runs out.
+            if (bFarmForEquip) { TickFarmLoot(W, Delta); return; }
+            if (!bRelootOk)
+            {
+                FailLink(TEXT("equip_gun"), FString::Printf(TEXT("no equippable gun within the loot bound (%d kills, %.0fs): %s"), FarmKillBudget, FarmTimeout, *RelootNote)
+                    + EquipLevelNote());
+                Next(EStep::Phaselock);
+                return;
+            }
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note loot again for the equip: %s"), *RelootNote);
+            float EnemyDistance = 0.f;
+            if (const AOpenWillowEnemy* Near = NearestLiveEnemyTo(Drop->GetActorLocation(), EnemyDistance); Near && EnemyDistance < PickupEnemyNear)
+                PickupAway = (Near->GetActorLocation() - Drop->GetActorLocation()).GetSafeNormal2D();
+            PickupPhase = 0;
+            EquipPhase = 3;
+            return;
+        }
+        if (EquipPhase == 3)
+        {
+            // Picked up the way link 6 picks up (the card, the use key), then the equip is tried again.
+            if (!RunAimedPickup(Drop)) return;
+            if (PickedId == TEXT("none") || PickedId != DropId)
+            {
+                FailLink(TEXT("equip_gun"), FString::Printf(TEXT("the re-loot's gun was not picked up (aimed_drop=%s card_id=%s picked_id=%s)"), *DropId, *CardId, *PickedId)
+                    + EquipLevelNote());
+                Next(EStep::Phaselock);
+                return;
+            }
+            GunId = PickedId;
+            EquipPhase = 0;
             return;
         }
         if (!TickBurst(W, Delta)) return;

@@ -73,6 +73,8 @@ def build(results=None, stop_after=None, summary='auto', start=True, extra=(), f
             default = f'{chk.UNFORCED_EVIDENCE[name]} synthetic detail'
         if unforced and name in chk.DOWN_WAIT_LINKS:
             default += ' down_wait=0.0s/50s'
+        if unforced and name == chk.EQUIP_LINK:
+            default += ' equip_refused=0'
         result, detail = results.get(name, ('PASS', default))
         effective[name] = result
         lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} fixtures=[{fixtures.get(name, "")}] detail={detail}')
@@ -352,7 +354,7 @@ class SliceGateTest(unittest.TestCase):
         fixtures = {'pick_up_gun': 'teleport', chk.DECOY_LINK: 'two guns rolled and dropped by the test; teleport',
                     'kill_enemy': 'one shot at a time until the selected enemy was wounded; fire held until the selected enemy hit Maya',
                     'go_down': 'teleport'}
-        for detail, code_wanted in (('item_x drawn; firing=Rocket' + burst('Rocket') + ' down_wait=0.0s/50s', 0), ('item_x drawn', 1),
+        for detail, code_wanted in (('item_x drawn; firing=Rocket' + burst('Rocket') + ' down_wait=0.0s/50s equip_refused=0', 0), ('item_x drawn', 1),
                                     ('item_x drawn; firing=Rocket', 1), ('item_x drawn; firing=Rocket' + burst('Rocket'), 1)):
             code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, fixtures=fixtures, range_mode=True,
                                                               unforced=True)), '--expect-unforced')
@@ -496,7 +498,7 @@ class SliceGateTest(unittest.TestCase):
 
     def test_unforced_links_that_wait_need_their_down_wait(self):
         self.assertEqual(chk.DOWN_WAIT_LINKS, ('pick_up_gun', 'pick_up_aimed_not_nearest', 'equip_gun', 'phaselock_enemy'))
-        for name, detail in (('pick_up_gun', CARD_DETAIL), (chk.DECOY_LINK, DECOY_DETAIL), ('equip_gun', 'item_x drawn; firing=Bullet' + burst())):
+        for name, detail in (('pick_up_gun', CARD_DETAIL), (chk.DECOY_LINK, DECOY_DETAIL), ('equip_gun', 'item_x drawn; firing=Bullet' + burst() + ' equip_refused=0')):
             with self.subTest(link=name):
                 index = chk.NAMES.index(name) + 1
                 code, out = self.run_checker(self.write_log(build({name: ('PASS', detail)}, range_mode=True, unforced=True)))
@@ -507,6 +509,52 @@ class SliceGateTest(unittest.TestCase):
                 self.assertIn("ran past its bound (50.5 s of 50 s)", self.row(out, index))
                 code, out = self.run_checker(self.write_log(build({name: ('PASS', detail + ' down_wait=21.3s/50s')}, range_mode=True, unforced=True)))
                 self.assertEqual(code, 0, out)
+
+    # Unforced link 8: a gun above Maya's level refused by the host's equip, and the re-loot (lane U, 2026-11-13, review round).
+    def test_unforced_equip_after_a_refusal_passes_within_the_loot_bound(self):
+        detail = ('item_y drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s equip_refused=1 loot_kills=41/100 loot_time=263s/720s'
+                  ' (refused under the level rule: item_x level 9)')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, range_mode=True, unforced=True,
+                                                          fixtures={'equip_gun': 'kept looting for a gun Maya can equip; teleport'})))
+        self.assertEqual(code, 0, out)
+
+    def test_unforced_equip_without_the_refusal_token_fails(self):
+        detail = 'item_x drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s'
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1, out)
+        self.assertIn('no equip_refused=<n> in the detail', self.row(out, 8))
+
+    def test_unforced_equip_reloot_past_the_bound_fails(self):
+        for loot, why in ((' loot_kills=101/100 loot_time=500s/720s', 'ran past the loot bound (101 of 100 kills'),
+                          (' loot_kills=60/100 loot_time=721s/720s', 'ran past the loot bound (60 of 100 kills, 721 s of 720 s)'),
+                          ('', 'no loot_kills= and loot_time=')):
+            with self.subTest(loot=loot):
+                detail = 'item_y drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s equip_refused=2' + loot
+                code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 1, out)
+                self.assertIn(why, self.row(out, 8))
+
+    def test_unforced_equip_no_equippable_gun_stays_a_fail(self):
+        detail = ('no equippable gun within the loot bound (100 kills, 720s): no gun dropped in 100 kill(s) equip_refused=1 '
+                  'loot_kills=100/100 loot_time=700s/720s (refused under the level rule: item_x level 9)')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('FAIL', detail)}, range_mode=True, unforced=True)))
+        self.assertEqual(code, 1, out)
+        self.assertIn('no equippable gun within the loot bound', self.row(out, 8))
+        self.assertNotIn('overruled', out)
+
+    def test_older_variants_grade_the_equip_as_before(self):
+        # No equip_refused= outside the unforced variant: the plain, -Shield and -DownAfterFight logs grade as they did.
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + burst())})))
+        self.assertEqual(code, 0, out)
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('FAIL', 'EquipItem(5, slot 3) refused item_x')})))
+        self.assertEqual(code, 1, out)
+        self.assertNotIn('overruled', out)
+
+    def test_host_prints_the_equip_level_tokens(self):
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
+        self.assertIn('" equip_refused=%d"', source)
+        self.assertIn('" loot_kills=%d/%d loot_time=%.0fs/%.0fs', source)
+        self.assertIn('no equippable gun within the loot bound', source)
 
     def test_older_variants_do_not_need_the_down_wait(self):
         code, out = self.run_checker(self.write_log(build({'phaselock_enemy': ('PASS', 'synthetic lift')})))
