@@ -41,9 +41,11 @@ New entries `py-controls_capture`, `py-real_game_capture_safety` and `py-real_ga
 under 1.5 s) and the guard `py-realgame_registration`. All six real-game test files that were outside ctest also passed in a shell with
 no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working directory outside the checkout. See "Tests outside ctest".
 
+**On main 81d87f9 (2026-11-13, CI job "Windows / MSVC / LZO=ON" on PR #264's merge ref):** `100% tests passed out of 174`. The desktop runner kept that job's log (`local/z58/cand33/ci_job.log` in its worktree).
+
 **Fire checker level rule (2026-11-12, zuhu, lane R3):** `verify_fire_event_order.py` self-test passes and 33 of 33 rules hold on the real packages (32 before; the new one: no `level` event in the default run).
 
-**Ambient gate (2026-11-12, zuhu, lane R3):** the `ambient` suite's PASS now also needs a capture-based manifest (`observed`, or worn pieces): `tools/test_ambient.ps1` names the manifest's look in its result line and fails a census-only one before launch unless `-CensusWorld` is passed. Not yet run in the engine.
+**Ambient gate (2026-11-12, zuhu, lane R3):** the `ambient` suite's PASS now also needs a capture-based manifest (`observed`, or worn pieces): `tools/test_ambient.ps1` names the manifest's look in its result line and fails a census-only one before launch unless `-CensusWorld` is passed. First run in the engine on main a3daacf (2026-11-13, zuhu desktop, hub candidate 26), with the capture-based file: `OWAMBIENT SUMMARY result=PASS pawns=35 reached_a_node=35 walked_50cm=3 at_perch=24 seconds=60 manifest observed=true spawns=35 worn=89` (log: the desktop runner's `local/z58/cand26/suites/ambient.log`; the same line again on candidate 30, tree of main 0d2405e). The citizens' movement is a host stand-in, UNVERIFIED.
 
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):
@@ -60,7 +62,9 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
 - The slice gate's `-Shield` run (`slice_gate_shield`, desktop only): since 2026-11-13, when
   `local/slice/stock_shield_gear.json` exists (`python tools/prepare_stock_shield.py --reader <abs reader> --game <install>`),
   the launcher passes it as `-owgear=`, so the run should equip that one generated level-8 card under the normal level rule, in
-  place of the observed manifest (not yet run in the engine). Its numbers are data-derived and UNVERIFIED in game. The launcher prints `Shield source offered:` and,
+  place of the observed manifest. First run in the engine on main 25a5ce2 (2026-11-13, zuhu desktop, hub candidate 29):
+  `OWSLICEGATE SUMMARY pass=14 fail=0 na=0`, then `Shield source used: the generated card (data-derived, UNVERIFIED in game)`
+  (log: the desktop runner's `local/z58/cand29/suites/slice_gate_shield.log`; the same two lines on candidate 30, tree of main 0d2405e). Its numbers are data-derived and UNVERIFIED in game. The launcher prints `Shield source offered:` and,
   after the run, `Shield source used:` (generated card, generated card or observed manifest under the level override, observed
   manifest, or the health-sized pool). A pass with the generated card says the host equipped and used that card; it says nothing about parity.
 
@@ -75,7 +79,8 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
   because local data is missing. Run the inventory suite with `-Items local/inventory-actions/bounded-recipes` (the six-weapon set the
   baseline uses): a larger local set can fill the backpack, and the suite then refuses to start (fewer than 2 free rows after its fixture).
   Since 2026-11-04 (inventory round 24) the suite has 50 steps (number keys no longer pick a transfer slot; `locked_slot_transfer_cancel`
-  added); baseline 50 pass / 0 fail.
+  added); baseline 50 pass / 0 fail. On main the suite has 53 steps: `OWINVTEST SUMMARY result=PASS steps=53 passed=53 failed=0 not_run=0
+  known_divergence=0` on 2026-11-13, zuhu desktop, hub candidate 30 (tree of main 0d2405e; log: the desktop runner's `local/z58/cand30/suites/inventory.log`).
 - UE automation tests: `tools/test_automation.ps1` (the `ue_automation` suite; `-DryRun` shows the command without starting
   anything). Its `#pass` line wants `AUTOMATION SUMMARY success=13 failed=0 expected=13 timed_out=0`; `tests/automation_paths_test.py` (ctest)
   holds the launcher's names and count to the declared test paths.
