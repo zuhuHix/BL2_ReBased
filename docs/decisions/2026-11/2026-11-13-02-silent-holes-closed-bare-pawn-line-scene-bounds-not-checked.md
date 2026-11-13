@@ -23,3 +23,7 @@ and a result line names what it ran on).
   cases and its run on this checkout (8 names, 13 tests), and the launcher's `-DryRun` under Windows PowerShell and pwsh. The
   in-engine run (`success=13 failed=0 expected=13`) is `UNVERIFIED` here until the hub's suite run.
 - The unit row's comment in `tools/suites.txt` no longer asks for a fixed `#pass` count; the pass line takes any count.
+- `python tools/suite_map_lint.py` with no arguments now reads the tracked `tools/suites_switch_only.txt` with the tracked map,
+  as CTest `suite-map-tracked` did by its arguments; before, the plain command reported the list's nine pairs (loads behind
+  switches the suites never pass, read again in the launchers) and exited 1. No suite row is widened. `suite-map-tracked`
+  runs the plain command, and `py-suite_map_lint` checks that every pair in the list is still reported without it.
