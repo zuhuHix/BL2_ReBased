@@ -575,42 +575,69 @@ function Send-Click([switch]$Right) {
     try { Start-Sleep -Milliseconds 50 } finally { Send-MouseEvent $up }   # a press is always released
 }
 
-# Run Python inside the game through the openwillow_realgame mod and return its printed output.
+# A command's name: the time first (the driver runs pending commands in name order), then a GUID that makes the name this call's own.
+# The GUID is plain .NET: New-Guid is a script function of Windows PowerShell's Utility module, and a child started with PowerShell 7's
+# module path (a CI runner's pwsh step) cannot load it (CI on #263, 2026-11-13).
+function New-CommandName { 'c' + (Get-Date -Format 'HHmmssfff') + '-' + [guid]::NewGuid().ToString('N') }
+
+# Run Python inside the game through the openwillow_realgame mod and return its printed output ('' when it printed nothing).
+# One deadline covers the whole call, publishing, waiting and reading: every retry and pause is clamped to what is left of it, and a call
+# whose deadline has passed fails in the no-reply form. Every failure inside, whatever its text, leaves in that form too ("no reply to
+# <name> (transport error: ...)"), so no failure of the transport gets past a driver-lost latch (review of #263, S1 and S2).
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
-    # The time first: the driver runs pending commands in name order. The GUID makes the name this call's own, and any reply already under it is removed before
-    # the command is published, so an old reply can't pass as the answer to this one.
-    $name = 'c' + (Get-Date -Format 'HHmmssfff') + '-' + (New-Guid).ToString('N')
-    $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
-    if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force -ErrorAction Stop }
-    # Published by a rename, tried at most 5 times 200 ms apart: a file scanner can hold the new file for a moment, and the rename then
-    # fails. The driver runs only <name>.py, and once the rename went through the source is gone, so the command goes out at most once.
-    # A command that could not be sent gets no reply either: it fails in the no-reply form, which every driver-lost latch takes.
-    for ($try = 1; ; $try++) {
-        try { [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py; break }   # the call as before; errors stop ($ErrorActionPreference)
-        catch {
-            if ($try -ge 5) { Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue; throw "no reply to $name (the command could not be sent: $($_.Exception.Message))" }
-            Start-Sleep -Milliseconds 200
-        }
-    }
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    while (!(Test-Path $out)) { if ((Get-Date) -gt $deadline) { throw "no reply to $name" }; Start-Sleep -Milliseconds 100 }
-    Start-Sleep -Milliseconds 50
-    # The driver publishes a reply whole (written as <name>.out.tmp, then renamed onto <name>.out), so the file is complete once it is
-    # there, and an empty reply means the command printed nothing. A reply file that cannot be read all the same (an access or I/O
-    # error; unexpected) is no usable reply: it is read again at most 4 more times, 200 ms apart, as a second line of defence, then it
-    # fails in the same form as a timeout ("no reply to <name>"), so every driver-lost latch takes it as one. Only this call's own file is read: its name holds this call's GUID, and a
-    # file under it was removed before the command went out. Nothing is taken from a failed read. (review of #251/#255, T1)
-    for ($try = 1; ; $try++) {
-        try { return (Get-Content -Raw -LiteralPath $out -ErrorAction Stop) }
-        catch { if ($try -ge 5) { throw "no reply to $name (its reply file could not be read: $($_.Exception.Message))" }; Start-Sleep -Milliseconds 200 }
+    $left = { ($deadline - (Get-Date)).TotalMilliseconds }
+    $name = 'a command not yet named'
+    try {
+        # Any reply already under this call's name is removed before the command is published, so an old reply can't answer this one.
+        $name = New-CommandName
+        $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
+        if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force -ErrorAction Stop }
+        # Published by a rename, tried at most 5 times 200 ms apart: a file scanner can hold the new file for a moment, and the rename then
+        # fails. The driver runs only <name>.py, and once the rename went through the source is gone, so the command goes out at most once.
+        for ($try = 1; ; $try++) {
+            try { [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py; break }   # the call as before; errors stop ($ErrorActionPreference)
+            catch {
+                if ($try -ge 5 -or (& $left) -le 200) {
+                    Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue   # best effort: the driver never runs a .py.tmp
+                    throw "no reply to $name (the command could not be sent: $($_.Exception.Message))"
+                }
+                Start-Sleep -Milliseconds 200
+            }
+        }
+        while (!(Test-Path $out)) {
+            $ms = & $left
+            if ($ms -le 0) { throw "no reply to $name" }
+            Start-Sleep -Milliseconds ([int][math]::Min(100, [math]::Ceiling($ms)))
+        }
+        # The driver publishes a reply whole (written as <name>.out.tmp, then renamed onto <name>.out), so the file is complete once it is
+        # there. A reply file that cannot be read all the same (an access or I/O error; unexpected) is no usable reply: it is read again at
+        # most 4 more times, 200 ms apart, within the deadline, as a second line of defence. Nothing is taken from a failed read.
+        for ($try = 1; ; $try++) {
+            try {
+                $text = Get-Content -Raw -LiteralPath $out -ErrorAction Stop
+                if ($null -eq $text) { $text = '' }   # a complete empty reply: the command printed nothing (S3)
+                return $text
+            } catch {
+                if ($try -ge 5 -or (& $left) -le 200) { throw "no reply to $name (its reply file could not be read: $($_.Exception.Message))" }
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    } catch {
+        if ("$_" -like 'no reply to *') { throw }
+        throw "no reply to $name (transport error: $($_.Exception.Message))"
     }
 }
 
 # Run a command script file (e.g. tools/real_game/scripts/*.py) after a short prelude; RG_OUT is set
-# to local/realgame/<OutFolder> so the script's helpers know where to write.
+# to local/realgame/<OutFolder> so the script's helpers know where to write. A probe source that cannot be read (a locked or missing file)
+# fails in the no-reply form too: nothing was sent, and the run treats it as the transport's failure (review of #263, S1).
 function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$TimeoutSeconds = 30) {
-    $out = (Join-Path $script:RG $OutFolder) -replace '\\', '/'
-    Invoke-GamePy ("RG_OUT = r'$out'`n" + [IO.File]::ReadAllText((Resolve-Path $Path))) $TimeoutSeconds
+    try {
+        $out = (Join-Path $script:RG $OutFolder) -replace '\\', '/'
+        $source = [IO.File]::ReadAllText((Resolve-Path $Path))
+    } catch { throw "no reply to probe file $Path (transport error: its source could not be read: $($_.Exception.Message))" }
+    Invoke-GamePy ("RG_OUT = r'$out'`n" + $source) $TimeoutSeconds
 }
 
 # After the Enter on the main menu that continues the save: wait for the player pawn, reads only (the map name and whether a pawn is
@@ -630,6 +657,8 @@ function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, 
     $leftMenu = $null; $last = ''; $lastReply = $EnterAt; $replied = $false
     $result = { param($Ok, $Why) [pscustomobject]@{ ok = $Ok; map = $last; why = $Why; after_enter_s = [math]::Round(((Get-Date) - $EnterAt).TotalSeconds, 1) } }
     while ($true) {
+        # A silence wait: it never sets the driver-lost condition (slice_watch.ps1), but it sends nothing once that is set (review of #263).
+        if ($script:SliceWatchDriverLost) { return (& $result $false "not sent: the driver stopped answering ($script:SliceWatchDriverLost)") }
         if ($Process -and $Process.HasExited) { return (& $result $false "the game exited before a player pawn (last read: $last)") }
         # The bound that applies now: the earlier of the driver's silence and the menu's or the load's. When it runs out, the message names the
         # driver's silence if that bound was the earlier one or the last read got no reply, else the phase's.

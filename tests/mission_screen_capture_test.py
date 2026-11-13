@@ -24,7 +24,10 @@ def run_tail(body, clean=True, proc='$null', stubs='function Remove-Driver { }',
     """The capture's own end (its catch and finally), after a stubbed body; 'hit' is the one requested stage in the harness."""
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
-    with tempfile.TemporaryDirectory() as tmp:
+    # The folder is removed with bounded retries for a file still held (review of #263, S4): a removal that keeps failing is raised, and
+    # one that fails while this run's own error is on its way is printed, so it cannot hide that error.
+    tmp = tempfile.mkdtemp()
+    try:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
                           .replace('__OUT__', tmp).replace('__SETUP__', '').replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true').replace('__STUBS__', stubs.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
@@ -34,7 +37,11 @@ def run_tail(body, clean=True, proc='$null', stubs='function Remove-Driver { }',
         done.hub_lock_kept = (Path(tmp) / 'hub.lock').exists()
         if after:
             after(tmp, done)
-        return done
+    except BaseException:
+        realgame_test_env.remove_tree(tmp, raising=False)
+        raise
+    realgame_test_env.remove_tree(tmp)
+    return done
 
 
 def test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss():

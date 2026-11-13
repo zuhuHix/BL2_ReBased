@@ -131,8 +131,7 @@ $script:line = $null; "unreadable: $(Stop-OwnGame $me $script:start '-owrun=x')"
 def test_an_old_reply_cannot_answer_a_new_command():
     out = run_stubbed("""$ErrorActionPreference = 'Stop'
 $script:CmdDir = '@TMP@'
-function New-Guid {{ [guid]'00000000-0000-0000-0000-000000000001' }}
-function Get-Date {{ param($Format) if ($Format) {{ 'T' }} else {{ Microsoft.PowerShell.Utility\\Get-Date }} }}
+function New-CommandName {{ 'cT-00000000000000000000000000000001' }}   # the name fixed, so an old reply under it can be planted
 # Stands for the driver: at the moment the command is published, says whether an old reply is there, then answers.
 function Move-Item($From, $To) {{
     Microsoft.PowerShell.Management\\Move-Item -LiteralPath $From -Destination $To
@@ -145,8 +144,8 @@ $old = Join-Path $script:CmdDir 'cT-00000000000000000000000000000001.out'
 "reply: $(Invoke-GamePy 'print(1)' 5)"
 """.format(helper('Invoke-GamePy')))
     assert 'old reply at publish: False' in out and 'fresh' in out and 'stale' not in out, out
-    # Two real GUID names in a row differ even inside one millisecond.
-    assert '(New-Guid)' in helper('Invoke-GamePy')
+    # Two real GUID names in a row differ even inside one millisecond; plain .NET, so no module has to load (CI on #263).
+    assert '[guid]::NewGuid()' in one_line('New-CommandName') and 'New-CommandName' in helper('Invoke-GamePy')
 
 
 
@@ -209,6 +208,113 @@ $obj = [pscustomobject]@{{ weapon = 'W' }}
 "kept: $((Assert-PyResult $obj 'fp_ready').weapon)"
 """.format(script_fn('projectiles_capture', 'Assert-PyResult')))
     assert 'threw: fp_spawn failed: FileNotFoundError: no local recipe for g' in out and 'kept: W' in out, out
+
+
+def one_line(name):
+    """A one-line function's text from the shared realgame.ps1."""
+    return next(line for line in text('realgame').split('\n') if line.startswith(f'function {name} '))
+
+
+TRANSPORT_STUBS = r"""$ErrorActionPreference = 'Stop'
+$script:CmdDir = '@TMP@'
+$script:SliceWatchDriverLost = ''
+function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
+function Sent { @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py').Count }
+"""
+
+
+def transport():
+    return one_line('New-CommandName') + '\n' + helper('Invoke-GamePy') + helper('Invoke-GamePyFile')
+
+
+def test_any_failure_inside_the_transport_leaves_in_the_no_reply_form():
+    # Review of #263, S1: filesystem errors outside the transport's own catches left with their own text, which no latch matched: the
+    # removal of a stale reply, the reply-existence check of the wait, a probe source that cannot be read, and anything else.
+    sites = {
+        'stale reply removal': "function Test-Path { $true }; function Remove-Item { throw 'invented: the stale reply stays' }",
+        'reply check': "$script:tp = 0; function Test-Path { $script:tp++; if ($script:tp -ge 2) { throw 'invented: the check failed' }; $false }",
+        'arbitrary': "function Join-Path { throw 'invented: anything at all, with no keyword' }",
+    }
+    for site, stub in sites.items():
+        out = run_stubbed(TRANSPORT_STUBS + stub + '\n' + transport() + """
+try { Invoke-GamePy 'print(1)' 5 | Out-Null; $e = 'returned' } catch { $e = "$_"; Set-SliceWatchDriverLost $_ }
+"error: $e"
+"latched: $script:SliceWatchDriverLost"
+""")
+        error = re.search(r'error: (.*)', out).group(1)
+        assert error.startswith('no reply to ') and 'invented' in error, (site, out)
+        assert f'latched: {error}' in out, (site, out)
+    # A probe source that cannot be read (held open with no sharing): nothing is sent, and the latch takes it.
+    out = run_stubbed(TRANSPORT_STUBS + transport() + r"""
+$probe = Join-Path $script:CmdDir 'probe.txt'; [IO.File]::WriteAllText($probe, 'print(1)')
+$held = [IO.File]::Open($probe, 'Open', 'Read', 'None')
+try { Invoke-GamePyFile $probe 'x' 5 | Out-Null; $e = 'returned' } catch { $e = "$_"; Set-SliceWatchDriverLost $_ }
+$held.Dispose()
+"error: $e"
+"latched: $script:SliceWatchDriverLost"
+"sent: $(Sent)"
+""")
+    error = re.search(r'error: (.*)', out).group(1)
+    assert error.startswith('no reply to probe file') and 'its source could not be read' in error, out
+    assert f'latched: {error}' in out and 'sent: 0' in out, out
+
+
+def test_one_deadline_covers_publishing_waiting_and_reading():
+    # Review of #263, S2: the reply wait started after the publish retries, so publish retries, the wait and the read retries together could
+    # run past a caller's window. A virtual clock: Get-Date reads it, Start-Sleep moves it; no real time passes. The worst case together:
+    # the publish refused four times, then a reply that comes late, then a reply file that cannot be read.
+    out = run_stubbed(TRANSPORT_STUBS + r"""
+$script:t0 = [datetime]'2026-01-01T00:00:00'; $script:now = $script:t0
+function Get-Date { param($Format) if ($Format) { 'T' } else { $script:now } }
+function Start-Sleep { param($Milliseconds)
+    $script:now = $script:now.AddMilliseconds($Milliseconds)
+    $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')
+    if ($py.Count -and !$script:held -and ($script:now - $script:t0).TotalSeconds -ge 2.5) {   # the late reply, held unreadable
+        $script:held = [IO.File]::Open([IO.Path]::ChangeExtension($py[0].FullName, '.out'), 'Create', 'ReadWrite', 'None') } }
+$script:moves = 0
+function Move-Item($From, $To) { $script:moves++; if ($script:moves -le 4) { throw 'invented: being used by another process' }; [IO.File]::Move($From, $To) }
+""" + transport() + r"""
+try { Invoke-GamePy 'print(1)' 3 | Out-Null; $e = 'returned' } catch { $e = "$_" }
+"error: $e"
+"elapsed: $((($script:now - $script:t0).TotalSeconds).ToString([Globalization.CultureInfo]::InvariantCulture))"
+"moves: $script:moves"
+""")
+    error = re.search(r'error: (.*)', out).group(1)
+    elapsed = float(re.search(r'elapsed: ([\d.]+)', out).group(1))
+    assert error.startswith('no reply to ') and 'could not be read' in error, out
+    assert 'moves: 5' in out, out
+    assert elapsed <= 3.0, out   # the caller's 3 s bound holds for the whole call
+
+
+def test_a_complete_empty_reply_is_the_empty_string():
+    # Review of #263, S3: an empty reply read as null, and a caller's .Trim() then threw an error no latch matched.
+    out = run_stubbed(TRANSPORT_STUBS + r"""
+function Start-Sleep { foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) { Rename-Item -LiteralPath $py.FullName ($py.Name + '.done'); [IO.File]::WriteAllText([IO.Path]::ChangeExtension($py.FullName, '.out'), '') } }
+""" + transport() + r"""
+$r = Invoke-GamePy 'pass' 5
+"null: $($null -eq $r)"
+"trimmed: [$($r.Trim())]"
+""")
+    assert 'null: False' in out and 'trimmed: []' in out, out
+
+
+def test_the_command_name_needs_no_module_auto_loading():
+    # CI on #263: a Windows PowerShell child started with PowerShell 7's module path cannot load New-Guid (a script function of its
+    # Utility module), and the name failed before anything was sent. The name is plain .NET; checked under pwsh's module path when there is one.
+    assert 'New-Guid' not in transport() and '[guid]::NewGuid()' in one_line('New-CommandName')
+    try:
+        ps7 = subprocess.run(['pwsh', '-NoProfile', '-Command', '$env:PSModulePath'], capture_output=True, text=True, timeout=60).stdout.strip()
+    except OSError:
+        ps7 = ''
+    if not ps7:
+        print('  (no pwsh here: the module-path case is checked where PowerShell 7 is installed)')
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'name.ps1'
+        path.write_text("$ErrorActionPreference = 'Stop'\n" + one_line('New-CommandName') + "\n\"name: $(New-CommandName)\"\n", encoding='utf-8-sig')
+        env = dict(os.environ, PSModulePath=ps7, OW_TEST_KEEP_PSMODULEPATH='1')   # this test sets the runner's module path on purpose
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path)], capture_output=True, text=True, env=env, timeout=60)
+    assert re.search(r'name: c\d{9}-[0-9a-f]{32}', done.stdout), done.stdout + done.stderr
 
 
 if __name__ == '__main__':

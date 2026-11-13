@@ -1531,22 +1531,26 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   at or after it moves nothing and answers `late`, checked again right before the placement, and its reply wait is clamped to the
   time left, so no placement runs after the window. None is sent with less than 6 s of the window left (the polls' own minimum), so
   a slower healthy reply is not cut short into a lost driver.
-- **Driver lost**: one condition shared by the helpers and every stage. A command that gets no usable reply sets it wherever a
-  command is sent. No usable reply is a reply that never came, a command that could not be published (its rename onto `<name>.py`,
-  which a file scanner holding the new file can refuse, is tried at most 5 times 200 ms apart; it goes out at most once, and then it
-  fails as "no reply to <name> (the command could not be sent: ...)"), or a reply file that is there but cannot be read (a sharing,
-  access or I/O error): `Invoke-GamePy` (`realgame.ps1`) reads such a file at most four more times, 200 ms apart, then fails in the
-  timeout's own form, "no reply to <name> (its reply file could not be read: ...)", so every latch takes it as a timeout. It reads
-  only this call's own file (the name holds the call's GUID, and a file under it was removed before the command went out) and takes
-  nothing from a failed read. The driver publishes each reply whole (`openwillow_realgame`, `run_pending`: written as
-  `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once it exists: an unreadable one is unexpected, the
-  retry is a second line of defence, and an empty reply means the command printed nothing. If the rename fails, no reply is left
-  and the wait runs out, as for a lost driver; the script was renamed to `<name>.py.done` before it ran, so it never runs twice. A
-  `.out.tmp` left by a game that died mid-write is harmless: no reader looks for that name, and each call has its own. The latch sites: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
+- **Driver lost**: one condition shared by the helpers and every stage. Every failure of the transport leaves `Invoke-GamePy` and
+  `Invoke-GamePyFile` (`realgame.ps1`) in one form, "no reply to <name> (...)", and each latch site below sets the condition on that
+  form. The failures are: a reply that never came; a command that could not be published (its rename onto `<name>.py`, which a file
+  scanner holding the new file can refuse, is tried at most 5 times, 200 ms apart, and goes out at most once: "the command could
+  not be sent"); a reply file that is there but cannot be read (read at most 5 times, 200 ms apart: "its reply file could not be
+  read"); and any other error inside the two functions, whatever its text, a probe source that cannot be read included ("transport
+  error"). One deadline per call, its timeout, covers publishing, waiting and reading: every retry and pause is clamped to what is
+  left of it, so a call ends within its timeout plus the one file operation under way when it runs out. Only this call's own reply
+  file is read (the name holds the call's GUID, made with plain .NET so no module has to load, and a file under it was removed before
+  the command went out), and nothing is taken from a failed read. The driver publishes each reply whole (`openwillow_realgame`,
+  `run_pending`: written as `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once it exists: an
+  unreadable one is unexpected, the retry is a second line of defence, and an empty reply is the empty string (the command printed
+  nothing), never null. If the driver's write or rename fails, it leaves no reply and tries to remove the `.tmp` (best effort), and
+  the wait runs out, as for a lost driver; the script was renamed to `<name>.py.done` before it ran, so it never runs twice. A
+  `.out.tmp` left behind (a failed removal, or a game that died mid-write) is harmless: no reader looks for that name, and each call
+  has its own. The latch sites: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
   window shortened its wait, the watch's start and its recovery stop after a failed start, its settle read, snapshots, pawn reads,
   marks, end snapshot, dump and stop, the den trial's close, and the quit. The one exception is the waits that expect silence for a
-  while (the boot wait, a travel's map polls, the load step): they refuse once it is set but do not set it, on a timeout or on an
-  unreadable reply alike, since each is one missed read there and the next read asks again under its own bound. From then on the
+  while (the boot wait, a travel's map polls, the load step `Wait-PlayerPawn`): they refuse once it is set but do not set it, on a
+  timeout or any other transport failure alike, since each is one missed read there and the next read asks again under its own bound. From then on the
   capture's `Py` refuses every command, and every key, click, mouse move and focus check is preceded by `Assert-DriverAnswers`
   (`slice_watch.ps1`), so no input goes out after the latch, also when a watch helper set it without throwing; no placement or
   probe call follows either. The later stages report themselves as skipped (a readings failure for any other reason, such as a

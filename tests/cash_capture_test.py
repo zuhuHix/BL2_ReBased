@@ -41,6 +41,13 @@ function Start-Sleep {
         }
     }
 }
+# An arbitrary fault inside the real transport (review of #263, S1): the command folder's path holds characters no path may hold, so the
+# transport's first file call fails with the file system's own text, before anything is sent.
+function Read-Faulty([string]$Code, [int]$TimeoutSeconds) {
+    Add-Content -LiteralPath (Join-Path $work 'events.txt') 'lost'
+    $keep = $script:CmdDir; $script:CmdDir = "$work\no<such|folder"
+    try { & $script:RealGamePy $Code $TimeoutSeconds } finally { $script:CmdDir = $keep }
+}
 function Read-Unreadable([string]$Code, [int]$TimeoutSeconds) {
     Add-Content -LiteralPath (Join-Path $work 'events.txt') 'lost'
     $script:fakeDriver = $true
@@ -82,7 +89,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; if ($scenario -eq 'kill_traceback_mark_lost' -and $Code -like '*readings.done*') { Write-Lost }; return 'ok' }
         '*sw_settled*' { if ($scenario -eq 'settle_lost') { throw 'no reply to c-invented' }; return $(if ($scenario -eq 'kills_unsettled') { 'False' } else { 'True' }) }
-        '*sw_snap(*' { if ($scenario -eq 'smoke_unsettled_lost' -and $Code -like "*sw_snap('smoke_unsettled')*") { Write-Lost }; if ($scenario -eq 'smoke_unsettled_unreadable' -and $Code -like "*sw_snap('smoke_unsettled')*") { return (Read-Unreadable $Code $TimeoutSeconds) }; if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if ($scenario -eq 'smoke_unsettled_lost' -and $Code -like "*sw_snap('smoke_unsettled')*") { Write-Lost }; if ($scenario -eq 'smoke_unsettled_unreadable' -and $Code -like "*sw_snap('smoke_unsettled')*") { return (Read-Unreadable $Code $TimeoutSeconds) }; if ($scenario -eq 'smoke_unsettled_fault' -and $Code -like "*sw_snap('smoke_unsettled')*") { return (Read-Faulty $Code $TimeoutSeconds) }; if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
         '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; if ($scenario -eq 'watch_start_stop_lost') { Write-Lost }; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
@@ -221,9 +228,9 @@ if ($scenario -eq 'restore_throws') { function Restore-Tree { throw 'disk full' 
 
 class CashCaptureTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.work = Path(self.tmp.name)
+        # Removed with bounded retries for a file still held (review of #263, S4); a removal that keeps failing is reported as an error.
+        self.work = Path(tempfile.mkdtemp())
+        self.addCleanup(realgame_test_env.remove_tree, self.work)
         self.game = self.work / 'game'
         for name, text in (('sdk_mods/settings/python-sdk.json', 'original settings'), ('sdk_mods/SanitySaver/store.txt', 'original store')):
             path = self.game / name
@@ -1103,7 +1110,7 @@ class LatchTest(unittest.TestCase):
         self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
         self.assertEqual(self.locks_held(), (False, False))
 
-    def same_as_a_timeout(self, unreadable, lost, extra):
+    def same_as_a_timeout(self, unreadable, lost, extra, reason='could not be read'):
         """Review of #251/#255, T1: a reply file that cannot be read sets the condition exactly as a reply that never came. Run both;
         after the loss nothing goes to the game, the game is stopped by this run's own PID, and the cleanup, the restore, the saves
         compare and the pending record come out as on the timeout."""
@@ -1125,7 +1132,7 @@ class LatchTest(unittest.TestCase):
             seen[scenario] = (norm(session['cleanup']), norm(session['stage_results']), norm(session['status']), norm(pending))
             for name in ('events.txt', 'stopped_pid.txt', 'keys.txt', 'clicks.txt', 'den.txt', 'sent.txt'):
                 (self.work / name).unlink(missing_ok=True)
-        self.assertIn('could not be read', json.dumps(session['stage_results']))   # the transport's own reason is kept
+        self.assertIn(reason, json.dumps(session['stage_results']))   # the transport's own reason is kept
         self.assertEqual(seen[unreadable], seen[lost])
         return session
 
@@ -1134,6 +1141,12 @@ class LatchTest(unittest.TestCase):
         session = self.same_as_a_timeout('smoke_unsettled_unreadable', 'smoke_unsettled_lost', ['-WatchSpec', str(self.spec), '-WatchSmoke', '-DenDown'])
         self.assertIn('the driver stopped answering', session['stage_results']['den_down'])
         self.assertIn('not sent: the driver stopped answering', session['cleanup']['watch'])
+
+    def test_an_arbitrary_transport_fault_at_the_smoke_snapshot_is_a_lost_driver(self):
+        # Review of #263, S1: any failure inside the transport, whatever its text, leaves in the no-reply form; at a helper that swallows
+        # its errors it sets the condition and nothing follows, exactly as a timeout there.
+        self.same_as_a_timeout('smoke_unsettled_fault', 'smoke_unsettled_lost', ['-WatchSpec', str(self.spec), '-WatchSmoke', '-DenDown'],
+                               reason='transport error')
 
     def test_an_unreadable_reply_to_a_kill_loop_command_is_a_lost_driver(self):
         # T2 (b): a plain Py in the kill loop; before, the read error ended the run but the finalizer still sent its stops.

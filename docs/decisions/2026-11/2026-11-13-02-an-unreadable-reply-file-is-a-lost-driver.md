@@ -25,21 +25,33 @@ swallows its errors (`Save-SliceWatchSnap 'smoke_unsettled'`, for example) did n
   `<name>.out.tmp`, a name no reader looks for, then renames it onto `<name>.out` (atomic on one volume). Before, it wrote
   `<name>.out` in place, so a reader that saw the file appear could read it empty or cut off, which no retry can detect. Now a reply
   file is complete once it exists, an unreadable one is unexpected (the retry stays as a second line of defence), and an empty reply
-  means the command printed nothing. If the write or the rename fails, the `.tmp` is removed and no reply is left: the reader's wait
-  runs out and the run counts the driver as lost. The script was already renamed to `<name>.py.done` before it ran, so it never runs
+  means the command printed nothing. If the write or the rename fails, no reply is left and the driver tries to remove the `.tmp`
+  (best effort): the reader's wait runs out and the run counts the driver as lost. The script was already renamed to `<name>.py.done` before it ran, so it never runs
   twice. A `.out.tmp` left by a game that died mid-write is harmless: nothing globs or counts it (the readers wait on `<name>.out`
   by name, the captures' clean-up and the driver remove only `*.py`, and the driver-folder check of `pending.ps1` looks at the
   driver's own folder, not the command folder), and every call has a new name. The events file is append-only and no reader waits
   on it, so it is left as it is.
 - The waits that expect silence (the boot wait, a travel's map polls, `Wait-PlayerPawn`) still refuse once the condition is set and
-  still do not set it, on a timeout or an unreadable reply alike: each is one missed read, and the next read asks again under its own
-  bound. The retry adds at most 0.8 s to a failed read, and `Wait-PlayerPawn` clamps each read to 1 s less than its bound, so its
-  bound still holds.
+  still do not set it, on a timeout or any other transport failure alike: each is one missed read, and the next read asks again under
+  its own bound. `Wait-PlayerPawn` had no refusal of its own (no caller reaches it after a latch); it has one now.
 - Every tool that sources `realgame.ps1` gets the same change: an unreadable reply now fails after the retries with the "no reply"
   text, where it failed at once with the file system's text. What latches on "no reply" now latches on it too: `cash_capture` and
   `mission_screen_capture` (their `Py`, probe loads and quit), and the watch helpers (`slice_watch.ps1`), which `audio_events_capture`
   and `phaselock_integrity_capture` also call with a watch. Every other capture and `weapon_part_session.ps1` only sees a different
-  error text after up to 0.8 s more; their quit handlers print it as before.
+  error text, within its timeout; their quit handlers print it as before. An empty reply now reaches them as the empty string, not
+  null: `loot_capture`'s `Py` refuses it as before ("empty reply"), and a caller's `.Trim()` no longer throws.
+
+- After the second model's round 4 and CI on e1bb684 (review of #263): the CLASS is closed rather than its cases. One catch around
+  each transport function turns every failure inside, whatever its text, into `no reply to <name> (transport error: ...)`; the sites
+  it found outside the earlier catches (the stale reply's removal, the reply-existence check, a locked probe source) and an arbitrary
+  one are each injected in a test. One deadline per call covers publishing, waiting and reading, each retry and pause clamped to it
+  (before, the wait started after the publish retries, and all three together could pass a caller's window; a test on a virtual
+  clock checks the worst case). An empty reply is the empty string, never null. The command name's GUID is plain .NET:
+  `New-Guid` is a script function of Windows PowerShell's Utility module, and on the CI runner the test's Windows PowerShell child
+  inherited PowerShell 7's module path from the pwsh step and could not load it (reproduced here by starting a child with pwsh's
+  module path). Both test files built the child's environment the same way, from the runner's; the cash tests are not in ctest, so
+  CI never ran them. Every PowerShell child of the tests now starts without an inherited `PSModulePath`, and the test folders are
+  removed with bounded retries for a file still held.
 
 Docs: `docs/TOOLING.md`, the driver-lost paragraph; and two sentences put right without code changes: recorded inputs are cleared
 entry by entry once each release went out (`Release-RecordedInputs`), and only `cash_capture` stamps its stages
