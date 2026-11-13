@@ -78,8 +78,8 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
   `tools/hud_overlay/inventory.js` or the HUD page report. Report pass and fail counts honestly, including steps that fail only
   because local data is missing. Run the inventory suite with `-Items local/inventory-actions/bounded-recipes` (the six-weapon set the
   baseline uses): a larger local set can fill the backpack, and the suite then refuses to start (fewer than 2 free rows after its fixture).
-  Since 2026-11-04 (inventory round 24) the suite has 50 steps (number keys no longer pick a transfer slot; `locked_slot_transfer_cancel`
-  added); baseline 50 pass / 0 fail. On main the suite has 53 steps: `OWINVTEST SUMMARY result=PASS steps=53 passed=53 failed=0 not_run=0
+  Since 2026-11-04 (inventory round 24) the suite had 50 steps (number keys no longer pick a transfer slot; `locked_slot_transfer_cancel`
+  added); baseline then 50 pass / 0 fail. On main the suite has 53 steps: `OWINVTEST SUMMARY result=PASS steps=53 passed=53 failed=0 not_run=0
   known_divergence=0` on 2026-11-13, zuhu desktop, hub candidate 30 (tree of main 0d2405e; log: the desktop runner's `local/z58/cand30/suites/inventory.log`).
 - UE automation tests: `tools/test_automation.ps1` (the `ue_automation` suite; `-DryRun` shows the command without starting
   anything). Its `#pass` line wants `AUTOMATION SUMMARY success=13 failed=0 expected=13 timed_out=0`; `tests/automation_paths_test.py` (ctest)
