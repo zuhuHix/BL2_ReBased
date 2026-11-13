@@ -1524,12 +1524,25 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 Next(EStep::Equip);
                 return;
             }
-            const FVector From = W->GetActorLocation();
+            FVector From = W->GetActorLocation();
             float Yaw = W->GetControlRotation().Yaw;
-            // Unforced: the drops go ahead of Maya away from the nearest living enemy, so she will face away from it at the press.
+            // Unforced: the range's enemies are live and Maya stands among them after the real pickup; they downed her during this link
+            // (lane U's runs of 2026-11-13). The two test drops do not need the range, so they are made at the saved station's start
+            // exit, ahead of it along its yaw, far from the range, and Maya is placed there by the pickup below (the teleport fixture).
+            // Without a start exit, the drops go ahead of her away from the nearest living enemy, so she faces away from it at the press.
+            int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE;
+            FTransform StartAt;
             float EnemyDistance = 0.f;
-            if (const AOpenWillowEnemy* Near = bUnforced ? NearestLiveEnemyTo(From, EnemyDistance) : nullptr; Near && EnemyDistance < PickupEnemyNear)
+            if (bUnforced && Quest && Quest->StartUse(StartStation, StartExit, StartAt))
+            {
+                From = StartAt.GetLocation();
+                Yaw = StartAt.Rotator().Yaw;
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note decoy test drops at the start exit %s exit %d, away from the range"), *Quest->StationObject(StartStation), StartExit);
+            }
+            else if (const AOpenWillowEnemy* Near = bUnforced ? NearestLiveEnemyTo(From, EnemyDistance) : nullptr; Near && EnemyDistance < PickupEnemyNear)
+            {
                 if (const FVector Off = (From - Near->GetActorLocation()).GetSafeNormal2D(); !Off.IsNearlyZero()) Yaw = Off.Rotation().Yaw;
+            }
             const FVector Forward = FRotator(0, Yaw, 0).Vector();
             FString Why;
             DecoyAimed = DropRolledGun(2, From + Forward * 150.f, Why);
@@ -1537,6 +1550,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             // right there: nearer than the aimed drop, and about 90 degrees off her aim.
             const FVector Stand = DecoyAimed ? DecoyAimed->GetActorLocation() + (From - DecoyAimed->GetActorLocation()).GetSafeNormal2D() * 80.f : From;
             DecoyNear = DecoyAimed ? DropRolledGun(3, Stand + FRotator(0, Yaw + 90.f, 0).Vector() * 45.f, Why) : nullptr;
+            if (DecoyAimed) PickupAway = (From - DecoyAimed->GetActorLocation()).GetSafeNormal2D();   // the stand the decoy was placed for
             if (!DecoyAimed || !DecoyNear)
             {
                 // Not the two-guns fixture: the pair was never complete. The detail says how far the setup got.
@@ -1645,8 +1659,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (bUnforced && BuyPhase < 2) { if (TickBuyPhaselock(W, Delta)) StepTime = 0.f; return; }
         // Before any result, so that a failing path names it too.
         if (bPhaselockPointGranted) Fixture(TEXT("phaselock point granted"));
-        // The killed enemy respawns (stand-in 3 s, range 8 s); any other live target near Maya serves too.
-        AOpenWillowCombatTarget* Target = Enemy && Enemy->CanPhaseLockTarget() ? Enemy.Get() : NearestLiveTarget(true);
+        // The killed enemy respawns (stand-in 3 s, range 8 s); any other live target near Maya serves too. Unforced, the enemies are
+        // live and one may be meleeing her: aimed past it, the cast finds no line of sight (lane U's run of 2026-11-13), so the cast
+        // goes at the nearest living enemy, the one in front of her when there is one.
+        AOpenWillowCombatTarget* Target = bUnforced && bRangeMode && NearestLiveEnemy() ? NearestLiveEnemy()
+            : Enemy && Enemy->CanPhaseLockTarget() ? Enemy.Get() : NearestLiveTarget(true);
         if (StepTime < 1.f || (!W->LastPhaselockTarget() && !Target && StepTime < PhaselockTargetWait)) return;
         if (!W->LastPhaselockTarget() || W->LastPhaselockCastAt() < RunTime - StepTime)
         {
