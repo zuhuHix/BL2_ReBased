@@ -13,6 +13,7 @@ add_test(NAME properties-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_
 add_test(NAME runtime-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/runtime_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME global-resolve-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/global_resolve_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME item-registry-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_registry_test.py $<TARGET_FILE:ow-package>)
+add_test(NAME item-roll-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_roll_test.py)
 add_test(NAME natives-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/natives_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME vm-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/vm_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME script-disasm-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/script_disasm_test.py)
