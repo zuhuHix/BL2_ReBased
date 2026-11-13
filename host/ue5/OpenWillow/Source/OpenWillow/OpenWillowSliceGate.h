@@ -135,11 +135,11 @@ private:
     float LastFarmPlaceAt = -100.f;
     void TickFarmLoot(class AOpenWillowWalker* W, float Delta);
     // The farm's outcome: the loot link's line, or (bFarmForEquip) kept for the equip link's re-loot.
-    void FarmResult(bool bPass, const FString& Detail);
+    void FarmResult(bool bPass, const FString& Detail, bool bBudget = false);   // bBudget: it failed on the kill or time bound
     // Unforced, the equip link: a gun above Maya's level refused by the host's equip (the level rule) is kept, and the link loots on
     // with the farm (EquipPhase 2) and picks the new gun up (EquipPhase 3) within the loot link's bound. Counted and named in the detail.
-    bool bFarmForEquip = false, bRelootOk = false;
-    FString RelootNote, RefusedNote;
+    bool bFarmForEquip = false, bRelootOk = false, bRelootBudget = false;
+    FString RelootNote, RefusedNote, RelootPickupNote;   // RelootPickupNote: the last re-loot pickup's reloot_ tokens
     int32 EquipRefused = 0;
     FString EquipLevelNote() const;
     // Every range enemy's last living spot, and the spots of the deaths seen from the pickup snapshot before the fight (Arena)

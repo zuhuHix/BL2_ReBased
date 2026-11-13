@@ -185,9 +185,12 @@ def equip_link_problem(row):
 # after every burst_count-th shot of a burst gun the burst gap (burst_gap). slow is 1 for a gun that does not spin up; for one that
 # does it is what the spin-up allows at shot i (burst_spin at the start, falling linearly to 1 over burst_spin_up seconds, counted
 # from the first shot, which is no earlier than the spin started), so a gun that never reaches its full rate fails. What this cannot
-# resolve: up to one frame per interval (about 10 % at 16.67 shots a second and 60 frames a second). BURST_TOLERANCE covers the
-# four decimals of the log and the walker's float clock (about 3e-5 s at the run's clock). burst_enemies_hurt must be 0: the burst
-# must not hurt an enemy a later link needs.
+# resolve: up to one frame plus BURST_TOLERANCE per interval. For a 0.06 s interval (16.67 shots a second) that is 28 % at 60
+# frames a second (31 % with the tolerance) and 14 % at 120 (17 %): at 60 frames a second intervals of 0.0786 s pass, a rate about
+# 24 % low. Separately, at a fixed frame rate every shot lands on a frame, so even a correct gun's mean interval is its own rounded
+# up to whole frames (0.06 s becomes 0.0667 s at 60 frames a second, 11 % slow). BURST_TOLERANCE covers the four decimals of the log
+# and the walker's float clock (about 3e-5 s at the run's clock). burst_enemies_hurt must be 0: the burst must not hurt an enemy a
+# later link needs (the burst's own target is not counted).
 BURST_TOKEN = re.compile(r'(?<!\S)burst_(?P<key>[a-z_]+)=(?P<value>\S+)')
 BURST_KEYS = ('shots', 'kind', 'launched', 'rate', 'count', 'gap', 'spin', 'spin_up', 'skill_scale', 'intervals', 'frames',
               'enemies_hurt')
@@ -287,9 +290,36 @@ def equip_level_problem(detail):
     kills, time = LOOT_KILLS.search(detail), LOOT_TIME.search(detail)
     if not kills or not time:
         return 'a gun was refused under the level rule, but the detail has no loot_kills= and loot_time= for the re-loot'
-    if int(kills['kills']) > int(kills['budget']) or float(time['time']) > float(time['bound']):
+    if int(kills['kills']) > int(kills['budget']) or float(time['time']) >= float(time['bound']):
         return (f"the re-loot for an equippable gun ran past the loot bound ({kills['kills']} of {kills['budget']} kills, "
                 f"{time['time']} s of {time['bound']} s)")
+    return reloot_pickup_problem(detail)
+
+
+# The re-loot's pickup, held to link 6's conditions: `reloot_pickup=<aimed>/<card>/<picked>/<accepted>`, and its view-line and
+# down waits under the reloot_ prefix (the same rules as view_wait_problem and down_wait_problem).
+RELOOT_PICKUP = re.compile(r'(?<!\S)reloot_pickup=(?P<aimed>[^/\s]+)/(?P<card>[^/\s]+)/(?P<picked>[^/\s]+)/(?P<accepted>[01])(?=[\s:;,]|$)')
+RELOOT_VIEW_WAIT = re.compile(r'(?<!\S)reloot_view_wait=(?P<wait>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
+RELOOT_VIEW_LINE = re.compile(r'(?<!\S)reloot_view_line=(?P<line>[a-z]+)')
+RELOOT_VIEW_BLOCKER = re.compile(r'(?<!\S)reloot_view_blocker=(?P<kind>[^\s:;,]+(?::[^\s:;,]+)?)')
+RELOOT_DOWN_WAIT = re.compile(r'(?<!\S)reloot_down_wait=(?P<wait>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
+
+
+def reloot_pickup_problem(detail):
+    """Why the re-loot's pickup does not meet link 6's conditions, or None."""
+    pick = RELOOT_PICKUP.search(detail)
+    view, line = RELOOT_VIEW_WAIT.search(detail), RELOOT_VIEW_LINE.search(detail)
+    blocker, down = RELOOT_VIEW_BLOCKER.search(detail), RELOOT_DOWN_WAIT.search(detail)
+    if not (pick and view and line and blocker and down):
+        return 'a gun was refused, but the re-loot pickup\'s reloot_ tokens are missing'
+    if pick['aimed'] in ('none', '') or not pick['aimed'] == pick['card'] == pick['picked'] or pick['accepted'] != '1':
+        return f"the re-loot pickup did not meet link 6's conditions (aimed {pick['aimed']}, card {pick['card']}, picked {pick['picked']}, accepted {pick['accepted']})"
+    if float(view['wait']) > float(view['bound']) or line['line'] != 'clear':
+        return f"the re-loot pickup's view line was not clear within its wait ({view['wait']} s of {view['bound']} s, {line['line']})"
+    if blocker['kind'] not in ('none', 'enemy'):
+        return f"the re-loot pickup's view line was blocked by {blocker['kind']}, not an enemy"
+    if float(down['wait']) >= float(down['bound']):
+        return f"the re-loot pickup's wait for Maya's own recovery reached its bound ({down['wait']} s of {down['bound']} s)"
     return None
 
 

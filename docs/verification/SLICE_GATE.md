@@ -72,8 +72,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     before it, looking the same way, so the Phaselock link starts from the place it had before the burst existed (the dummies
     are Phaselock candidates too, and the older variants do not place her before the cast). The detail gives the nearest enemy's distance from the
     dummy (`burst_clearance`) and how many enemies a later link needs lost health or died during the burst
-    (`burst_enemies_hurt`: the range's enemies, or without the range the fight's stand-in, the Phaselock target). Since review
-    round 1 the checker fails link 8 when it is not 0. In lane U's 12 runs that reached the burst it was 0 every time.
+    (`burst_enemies_hurt`: the range's enemies, or without the range the fight's stand-in, the Phaselock target; never the
+    burst's own target, which it shoots on purpose, so without the range the stand-in is not counted, review round 2). Since
+    review round 1 the checker fails link 8 when it is not 0. In lane U's runs that reached the burst it was 0 every time.
   - **What the detail carries:** `burst_shots=<fired>/<asked>`, `burst_kind` (the held gun's firing kind),
     `burst_launched=<projectiles>/<pellets>`, the block's `burst_rate`, `burst_count`, `burst_gap` and `burst_spin` (the
     spin-up's start multiplier, 1 for a gun that does not spin), `burst_skill_scale` (the skills hook's factor on the fire
@@ -91,9 +92,13 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     prerequisite; UE 5.8 sets none between an actor and its components by itself), so it sees each shot in the frame the walker
     fired it. A measured interval is then the block's plus less than that shot's frame. The 0.002 s covers the four decimals of
     the log and the walker's float clock (about 3e-5 s at the run's clock). The skills hook's factor is read at 1 s, so it is
-    exact only for a scaling modifier; Maya has none at level 8 in these runs. **What the check cannot resolve:** up to one frame
-    per interval, about 10 % of the interval at 16.67 shots a second and 60 frames a second, less for slower guns. It shows that
-    no shot came early and none later than the frame it was due in; it is not a rate measurement finer than that. Before
+    exact only for a scaling modifier; Maya has none at level 8 in these runs. **What the check cannot resolve** (corrected in
+    review round 2): up to one frame plus 0.002 s per interval. For the fastest gun seen, 16.67 shots a second (0.06 s), one
+    frame is 28 % of the interval at 60 frames a second (31 % with the 0.002 s) and 14 % at 120 (17 %); for slower guns it is
+    less. At 60 frames a second, intervals of 0.0786 s against 0.06 s pass, a rate about 24 % low. Separately, at a fixed frame
+    rate every shot lands on a frame, so even a correct gun's mean interval is its own rounded up to whole frames (0.06 s becomes
+    0.0667 s at 60 frames a second, 11 % slow); the earlier "about 10 %" was only that case. The check shows that no shot came
+    early and none later than the frame it was due in; it is not a rate measurement finer than one frame. Before
     review round 1 the bound used the run's longest frame for every interval, which let a 16.67-a-second gun pass at up to
     about 40 % slow with the 0.0234 s frame one run logged.
   - **What it shows:** the looted gun fired in the host at the rate its block gives, through the player's trigger path. Not
@@ -164,7 +169,9 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     review round 1 only an enemy on the line is waited for or walked round: the driver names what the line hits with the card's
     own trace parameters (`view_blocker=none`, `enemy`, a range enemy's body, or `other:<actor>`), and any other blocker (a wall,
     the drop's own collision, Maya) FAILs the link at once with its name, since that would be a fault in the sight test or the
-    placement. A range enemy's corpse counts as an enemy for the seconds it stays. The checker fails a PASS without
+    placement. A range enemy's corpse counts as an enemy: the range keeps the same actor and sets it up again at its respawn,
+    8 s after the death (`respawn_in=8.0` on the log's `OWRANGE death` line), so a body on the line is gone by then at the
+    latest. The checker fails a PASS without
     `view_blocker=` or with any value but `none` and `enemy`. The
     checker overrules a PASS without the token, with a wait past its bound, or with `view_line` other than `clear`. On
     `pick_up_gun` the wait also re-aims: after every 2 s of it Maya is placed on another side of the real drop, 120 degrees
@@ -674,12 +681,22 @@ What the unforced equip link does now (`OpenWillowSliceGate.cpp`, `EStep::Equip`
 the gun's level is above Maya's, it logs the refusal with both levels, keeps the gun in the backpack and loots on, as a player
 would. It runs the loot link's own farm (no line for link 5 is logged again), within that link's own bound: the 100 kills and
 the 720 s count on from where the loot link left them. It picks the first new gun near a corpse up the way link 6 does (the
-card, the use key, the view-line wait and the down wait), then tries the equip again; a second refused gun repeats this. The
-fixture is `kept looting for a gun Maya can equip`. The detail carries `equip_refused=<n>`, and after a refusal
-`loot_kills=<k>/100 loot_time=<s>s/720s` and the guns refused with their levels. Past the bound the link FAILs with "no
-equippable gun within the loot bound". The checker (unforced only) overrules a PASS without `equip_refused=`, or with a
-refusal and no loot tokens, or with the loot past its bound. The plain, `-Shield` and `-DownAfterFight` variants are graded as
-before: there a refused gun is still a FAIL with the host's reason.
+card, the use key, the view-line wait and the down wait), held to link 6's conditions (card and E both the aimed drop, the
+attempt accepted, the line clear of anything but an enemy, Maya not down at the bound), then tries the equip again; a second
+refused gun repeats this. It starts only on the level rule's own refusal: `AOpenWillowWalker::EquipItem` refuses an item above
+the player's level before anything else, so the link requires both that refusal (`EquipItem(` in the reason) and a gun above
+Maya's level; a draw or held-weapon fault is a FAIL as before (review round 2). The fixture is `kept looting for a gun Maya can
+equip`. The detail carries `equip_refused=<n>`, and after a refusal `loot_kills=<k>/100 loot_time=<s>s/720s` (cut to 0.1 s),
+the guns refused with their levels, and the last re-loot pickup's tokens with a `reloot_` prefix (`reloot_pickup=<aimed>/<card>/
+<picked>/<accepted>`, `reloot_view_wait`, `reloot_view_line`, `reloot_view_blocker`, `reloot_down_wait`). Past the bound (the
+time reaching 720 s, the kills above 100, on the host and in the checker alike) the link FAILs with "no equippable gun within
+the loot bound"; a gun that dropped far from every corpse FAILs with that reason instead. The checker (unforced only) overrules
+a PASS without `equip_refused=`, with a refusal and no loot or `reloot_` tokens, with the loot at or past its bound, or with a
+re-loot pickup that misses link 6's conditions. The plain, `-Shield` and `-DownAfterFight` variants are graded as before: there
+a refused gun is still a FAIL with the host's reason.
+
+**The re-loot has not run in the engine.** No gun above Maya's level dropped in the runs after it was added, so it rests on its
+synthetic checker cases alone (`UNVERIFIED` in the host).
 
 ## Gaps, with the owning lane
 

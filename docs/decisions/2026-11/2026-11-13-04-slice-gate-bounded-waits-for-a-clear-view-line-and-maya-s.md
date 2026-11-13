@@ -55,8 +55,10 @@ the driver's 12 s ran out. No host rule was changed. The aimed pickup's reach an
 - **Review round 1 (same day).** The pickups FAIL when Maya is still down at the 50 s bound, and the checker treats reaching a
   bound as past it. The burst logs each shot's own frame and the block's spin-up time, and each interval is bounded by that
   frame and by the spin-up the block allows at that shot. The gate ticks after its walker (a tick prerequisite), so the shot is
-  seen in the frame it was fired. What the check still cannot resolve is about one frame per interval (roughly 10 % at 16.67
-  shots a second and 60 frames a second). Link 8 FAILs when the burst hurt an enemy a later link needs, the stand-in included.
+  seen in the frame it was fired. What the check still cannot resolve is up to one frame plus 0.002 s per interval
+  (corrected in review round 2: for a 0.06 s interval 28 % at 60 frames a second, 31 % with the 0.002 s, and 14 % at 120;
+  intervals of 0.0786 s pass at 60, a rate about 24 % low; the "about 10 %" first written was only the rounding of a correct
+  gun's interval up to whole frames). Link 8 FAILs when the burst hurt an enemy a later link needs, the stand-in included.
   The view-line wait and the re-aim run only for an enemy on the line (`view_blocker=`); any other blocker fails the pickup at
   once with its name. Runs on that head: two unforced and one plain, each 14 / 0 / 0; checker tests 107 of 107. The `-Shield`
   and `-DownAfterFight` variants were not run by the lane.
@@ -64,3 +66,8 @@ the driver's 12 s ran out. No host rule was changed. The aimed pickup's reach an
   rocks will change every fight. The unforced variant is not reliable yet.
 - **UNVERIFIED:** the block, and so the gun's rate in play, against the real game; whether the game's pickup trace is blocked by a
   pawn; the pickup's reach and cone. The burst's grading compares the host with its own data.
+- **Review round 2 (same day).** The burst's own target is never counted as hurt (without the range the only target is the
+  stand-in). The re-loot pickup is held to link 6's conditions and its tokens go in the detail with a `reloot_` prefix, graded.
+  The re-loot starts only on `EquipItem`'s level-rule refusal, not on a draw fault. `loot_time` prints cut to 0.1 s, and host
+  and checker both fail it on reaching 720 s. A re-loot gun far from every corpse is named as that, not as the bound. Checker
+  tests 109 of 109.

@@ -36,6 +36,7 @@ def burst(kind='Bullet', **tokens):
 
 
 EQUIP_DETAIL = 'item_x equipped in slot 1 and drawn; firing=Bullet' + burst()
+RELOOT = ' reloot_pickup=item_y/item_y/item_y/1 reloot_view_wait=0.00s/10s reloot_view_line=clear reloot_view_blocker=none reloot_down_wait=0.0s/50s'
 
 
 # The fixtures each link of the three older variants names in a real run (SLICE_GATE.md's tables), in one synthetic log.
@@ -519,8 +520,8 @@ class SliceGateTest(unittest.TestCase):
 
     # Unforced link 8: a gun above Maya's level refused by the host's equip, and the re-loot (lane U, 2026-11-13, review round).
     def test_unforced_equip_after_a_refusal_passes_within_the_loot_bound(self):
-        detail = ('item_y drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s equip_refused=1 loot_kills=41/100 loot_time=263s/720s'
-                  ' (refused under the level rule: item_x level 9)')
+        detail = ('item_y drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s equip_refused=1 loot_kills=41/100 loot_time=263.4s/720s'
+                  ' (refused under the level rule: item_x level 9)' + RELOOT)
         code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, range_mode=True, unforced=True,
                                                           fixtures={'equip_gun': 'kept looting for a gun Maya can equip; teleport'})))
         self.assertEqual(code, 0, out)
@@ -532,8 +533,10 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('no equip_refused=<n> in the detail', self.row(out, 8))
 
     def test_unforced_equip_reloot_past_the_bound_fails(self):
-        for loot, why in ((' loot_kills=101/100 loot_time=500s/720s', 'ran past the loot bound (101 of 100 kills'),
-                          (' loot_kills=60/100 loot_time=721s/720s', 'ran past the loot bound (60 of 100 kills, 721 s of 720 s)'),
+        for loot, why in ((' loot_kills=101/100 loot_time=500.0s/720s', 'ran past the loot bound (101 of 100 kills'),
+                          (' loot_kills=60/100 loot_time=721.0s/720s', 'ran past the loot bound (60 of 100 kills, 721.0 s of 720 s)'),
+                          (' loot_kills=60/100 loot_time=720.0s/720s', 'ran past the loot bound (60 of 100 kills, 720.0 s of 720 s)'),
+                          (' loot_kills=100/100 loot_time=719.9s/720s', "the re-loot pickup's reloot_ tokens are missing"),
                           ('', 'no loot_kills= and loot_time=')):
             with self.subTest(loot=loot):
                 detail = 'item_y drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s equip_refused=2' + loot
@@ -560,7 +563,7 @@ class SliceGateTest(unittest.TestCase):
     def test_host_prints_the_equip_level_tokens(self):
         source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
         self.assertIn('" equip_refused=%d"', source)
-        self.assertIn('" loot_kills=%d/%d loot_time=%.0fs/%.0fs', source)
+        self.assertIn('" loot_kills=%d/%d loot_time=%.1fs/%.0fs', source)
         self.assertIn('no equippable gun within the loot bound', source)
 
     def test_older_variants_do_not_need_the_down_wait(self):
@@ -610,6 +613,31 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('burst_frames=%s burst_spin_up=%.3f', source)
         self.assertIn('Maya still down after the %.0fs wait for her own recovery', source)
         self.assertIn('AddTickPrerequisiteActor(Owner)', source)
+
+    # Review r2 of #270.
+    def test_unforced_reloot_pickup_is_held_to_link_6s_conditions(self):
+        base = ('item_y drawn; firing=Bullet' + burst() + ' down_wait=0.0s/50s equip_refused=1 loot_kills=41/100 loot_time=263.4s/720s')
+        for reloot, why in ((RELOOT, None),
+                            (RELOOT.replace('item_y/item_y/item_y/1', 'item_y/none/item_y/1'), "did not meet link 6's conditions"),
+                            (RELOOT.replace('item_y/item_y/item_y/1', 'item_y/item_y/item_y/0'), "did not meet link 6's conditions"),
+                            (RELOOT.replace('item_y/item_y/item_y/1', 'item_y/item_y/item_z/1'), "did not meet link 6's conditions"),
+                            (RELOOT.replace('reloot_view_line=clear', 'reloot_view_line=blocked'), 'was not clear within its wait'),
+                            (RELOOT.replace('reloot_view_wait=0.00s/10s', 'reloot_view_wait=10.02s/10s'), 'was not clear within its wait'),
+                            (RELOOT.replace('reloot_view_blocker=none', 'reloot_view_blocker=other:Wall_3'), 'blocked by other:Wall_3, not an enemy'),
+                            (RELOOT.replace('reloot_down_wait=0.0s/50s', 'reloot_down_wait=50.0s/50s'), 'reached its bound (50.0 s of 50 s)')):
+            with self.subTest(reloot=reloot):
+                code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', base + reloot)}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 0 if why is None else 1, out)
+                if why:
+                    self.assertIn(why, self.row(out, 8))
+
+    def test_host_round_2_texts(self):
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
+        self.assertIn('BurstEnemyHealth.Remove(BurstTarget.Get())', source, "the burst's own target is not counted as hurt")
+        self.assertIn('Why.StartsWith(TEXT("EquipItem("))', source, 'the re-loot starts only on the level rule refusal')
+        self.assertIn("the re-loot's gun dropped far from every corpse", source)
+        self.assertIn('loot_time=%.1fs/%.0fs', source)
+        self.assertIn(' reloot_pickup=%s/%s/%s/%d reloot_view_wait=%.2fs/%.0fs reloot_view_line=%s reloot_view_blocker=%s reloot_down_wait=%.1fs/%.0fs', source)
 
     def test_the_hosts_no_block_detail_names_both_regeneration_steps(self):
         # The FAIL detail is the host's text (OpenWillowSliceGate.cpp, EStep::Equip); read it from the source, as the runner
