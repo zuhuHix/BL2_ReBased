@@ -1487,7 +1487,7 @@ sends the recorded releases (only when the writer is shown gone). The releases a
 is cleared from the record once its own release went out; one whose release fails stays recorded (`Release-RecordedInputs`,
 `pending.ps1`). Presses held across steps sit in their own
 `try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
-them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import
+them. Tests (no game): `python tests/real_game_pending_test.py` (in ctest as `py-real_game_pending` since 2026-11-13). Tests that run these scripts import
 `tests/realgame_test_env.py`, which gives every PowerShell run its own pending folder under the temp folder. The harness
 honours that folder only in the explicit test mode (`OW_TEST_PENDING_DIR` under Temp together with
 `OW_TEST_MODE=synthetic-real-game`), and in that mode only on save, game and driver folders under Temp. Either variable
@@ -1570,7 +1570,7 @@ switches for the slice capture sessions. Each is off by default, so a run withou
 
 Tests (no game, invented objects): `tests/slice_watch_test.py` (in ctest as `py-slice_watch`) runs the recorder against a stand-in
 SDK and pins that nothing is called on a scanned template, dying pawn or pool, that locals are never read, that stop removes every
-hook, and the checker's rules. `tests/cash_capture_test.py` pins the settings rollback (failed install, failed launch after mods off,
+hook, and the checker's rules. `tests/cash_capture_test.py` (not in ctest: about 240 s; run it by hand when you touch the capture) pins the settings rollback (failed install, failed launch after mods off,
 partial write, unexpected mod set), the den-down re-placement limits and the driver-lost rule. `tests/real_game_pending_test.py`
 pins the input releases. Runs against the game: `docs/verification/REALGAME_GROUND_TRUTH.md`, "Slice capture sessions". The
 sessions of 2026-11-12 ran commit e7b5fa3; the review fixes of #245 (the record replace, the run lock, the latched timeouts, the

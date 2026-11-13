@@ -54,13 +54,12 @@ endif()
 # ones left out and why:
 #   numpy: in OW_NUMPY_PY_TESTS below, registered only where numpy imports
 #   Pillow: in OW_PILLOW_PY_TESTS below, registered only where Pillow and numpy import
-#   too slow for every PR (30-145 s each on the zuhu desktop): cash_capture, check_hud_minimap, controls_capture,
-#     provision_worktree, real_game_capture_safety, real_game_pending, realgame_snapshot, skills_live_probe
-#   refuses while any Unreal editor runs on the PC (exit 2, "NOT RUN"): run_ue_flash_hud
+#   too slow for every PR, or refuses on a shared PC: in OW_OUTSIDE_CTEST below, each with its reason
 #   tests/*_test.js: in OW_NODE_TESTS below, registered only where Node is found
 set(OW_STANDALONE_PY_TESTS
   audio_census automation_paths blcmm_dumps block_saves bsp_calibration bsp build_phaselock_fx_constants check_action_skill_hud check_hud_down
   check_hud_shots check_interactives check_mission_page check_overlay_data check_phaselock_kill check_shield_check
+  controls_capture
   check_slice_gate check_vendors check_weapon_firing collision crosscheck_blcmm_dumps crosscheck_bsp_polys
   crosscheck_umodel_assets crosscheck_umodel den_probe editor_inputs engine_default game_colours gen_confirm gestalt_sockets
   golden_card_compare gun_ads_capture import_phaselock_fx_source inspection_views inventory_gear land_batch
@@ -68,8 +67,9 @@ set(OW_STANDALONE_PY_TESTS
   lootables_editor
   material_assignment material_audit material_resource mission_camera_probe mission_screen_capture particle_system
   phaselock_attachment_check phaselock_fx_inputs phaselock_integrity_probe preflight prepare_action_skill prepare_hud_strings
-  prepare_interactives prepare_inventory_movie prepare_stock_shield prepare_vendors private_sync range_kind_melee range_tools real_game_finalizer_recheck
-  real_game_loot_capture real_game_menus_paths real_game_migration real_game_minimap_paths research_corpus run_limit sanctuary_geometry
+  prepare_interactives prepare_inventory_movie prepare_stock_shield prepare_vendors private_sync range_kind_melee range_tools real_game_capture_safety real_game_finalizer_recheck
+  real_game_loot_capture real_game_menus_paths real_game_migration real_game_minimap_paths real_game_pending realgame_registration
+  research_corpus run_limit sanctuary_geometry
   sanctuary_host_flags sanctuary_visual_rules serve_paths skill_effects skill_stats sky_census slice_watch slice_world
   start_shield suite_map_lint suites_due terrain_geometry terrain_material terrain_probe terrain terrain_weightmap ui_trace_returns walking_routes
   weapon_assembly_oracle weapon_assembly_sample weapon_balance weapon_capture_items weapon_catalog weapon_library
@@ -83,6 +83,22 @@ endforeach()
 set_tests_properties(py-preflight PROPERTIES TIMEOUT 300)
 # land_batch runs the landing script in eleven throwaway repositories (about 100 s on the zuhu desktop).
 set_tests_properties(py-land_batch PROPERTIES TIMEOUT 300)
+# Three tests of the real-game tools (lane C, 2026-11-13): each starts Windows PowerShell for nearly every case, 43-72 s on the zuhu
+# desktop (three runs each, 171 s together); the timeout leaves room for a slower runner.
+set_tests_properties(py-controls_capture py-real_game_capture_safety py-real_game_pending PROPERTIES TIMEOUT 300)
+# Tests left out of ctest, each with its reason on its line (seconds: serial, zuhu desktop, 2026-11-13 unless dated otherwise).
+# Run them by hand when you touch what they cover. tests/realgame_registration_test.py fails when a test of the real-game tools
+# (one that imports realgame_test_env or names a tools/real_game/ path) is neither registered above nor named here with a reason.
+# A test added to a list above is taken out of this one; GATES.md "Tests outside ctest" mirrors it. Not a *_TESTS list on purpose:
+# ow_require_test_groups reads every OW_*_TESTS list as one that must be registered.
+set(OW_OUTSIDE_CTEST
+  cash_capture        # too slow: 236-237 s, 100 cases; DenDownReplacementTest (128 s) and LoadWaitTest (27 s) spin through real time windows
+  realgame_snapshot   # too slow: 147-148 s; its slowest functions (55, 33, 15, 12, 12, 11 s) are its main restore and hook-stop cases
+  skills_live_probe   # too slow for the budget beside the three above: 60-61 s (two functions take 51 s of it)
+  check_hud_minimap   # left out 2026-11-11 as too slow (about 30 s then); not re-measured by lane C
+  provision_worktree  # left out 2026-11-11 as too slow (about 36 s then); not re-measured by lane C
+  run_ue_flash_hud    # refuses (exit 2, "NOT RUN") while any Unreal editor runs on the PC, so a shared PC fails it
+  )
 # suites_due starts the batch driver under Windows PowerShell three times (the file takes about 40 s on the main desktop).
 set_tests_properties(py-suites_due PROPERTIES TIMEOUT 300)
 # The tracked suite map against this checkout: a PR that adds a load to a suite script without updating tools/suites.txt fails.

@@ -36,6 +36,11 @@ entries and one message per group left out.
 **With PR #221 (2026-11-11, zuhu, feature/ci-test-deps + feature/audio-mix-2d-level, numpy 2.5.4):** ctest 154/154 (`needs-numpy` 9 entries in 5.7 s,
 `listen_report_fit` among them, 10 cases, none skipped; `needs-node` 18, `needs-pillow` 8).
 
+**Real-game tool tests registered (2026-11-13, zuhu, lane C, main 8ee59bb + test/register-realgame-tests):** ctest 174/174 (170 before).
+New entries `py-controls_capture`, `py-real_game_capture_safety` and `py-real_game_pending` (43, 58 and 70 s; three runs each, spread
+under 1.5 s) and the guard `py-realgame_registration`. All six real-game test files that were outside ctest also passed in a shell with
+no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working directory outside the checkout. See "Tests outside ctest".
+
 **Fire checker level rule (2026-11-12, zuhu, lane R3):** `verify_fire_event_order.py` self-test passes and 33 of 33 rules hold on the real packages (32 before; the new one: no `level` event in the default run).
 
 **Ambient gate (2026-11-12, zuhu, lane R3):** the `ambient` suite's PASS now also needs a capture-based manifest (`observed`, or worn pieces): `tools/test_ambient.ps1` names the manifest's look in its result line and fails a census-only one before launch unless `-CensusWorld` is passed. Not yet run in the engine.
@@ -83,7 +88,9 @@ entries and one message per group left out.
 Since 2026-11-11 every `tests/*_test.py` that passes in a clean export (no `local/`, no build, no installed game, no network) under
 a Python with no third-party packages, with none of its cases skipped, runs in ctest as `py-<name>` (the list in `tests/CMakeLists.txt`, which `CMakeLists.txt` includes). CI also runs
 `level_test.py` and `viewer_test.py` directly. The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
-that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11.
+that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11. The list of what stays out, each with its reason, is `OW_OUTSIDE_CTEST` in `tests/CMakeLists.txt`;
+`tests/realgame_registration_test.py` (ctest `py-realgame_registration`, since 2026-11-13) fails when a test of the real-game tools (one
+that imports `tests/realgame_test_env.py` or names a `tools/real_game/` path) is neither registered nor in that list with a reason.
 
 Since 2026-11-11 (lane ci-test-deps) CI also installs Node 26.4.0 and numpy 2.5.4 for tests only. The 18 `tests/*_test.js` run in
 ctest as `js-<name>` (`OW_NODE_TESTS`) and the 9 Python tests that need numpy as `py-<name>` (`OW_NUMPY_PY_TESTS`: `ambient_transform`,
@@ -100,7 +107,8 @@ needs both). `prepare_mission_log` skips one of its 4 cases where file symlinks 
 
 | Tests | Why not in ctest | Status on 2026-11-12 |
 |---|---|---|
-| `cash_capture` (about 200 s), `realgame_snapshot` (150 s), `real_game_pending` (74 s), `real_game_capture_safety` (70 s), `skills_live_probe` (65 s), `controls_capture` (52 s), `provision_worktree` (36 s), `check_hud_minimap` (30 s) | too slow for every PR: about 680 s together. `cash_capture` grew with the den-down and load-step cases of #245: its stub skips every sleep, so each case spins through its window in real time | pass |
+| `cash_capture` (236-237 s), `realgame_snapshot` (147-148 s), `skills_live_probe` (60-61 s) | over the budget: a file may add about 90 s and all additions together about 3 minutes (lane C, 2026-11-13). The three registered real-game files take that 3 minutes. `cash_capture` could be split (its 74 cases outside `DenDownReplacementTest` and `LoadWaitTest` take about 85 s), but that subset would not fit beside them, and a subset named by class would leave out any class added later | pass, also in the sanitised shell (2026-11-13) |
+| `check_hud_minimap` (30 s), `provision_worktree` (36 s) | too slow for every PR (2026-11-11 times, not re-measured) | pass |
 | `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
 
 Notes: a test that skips cases there, or skips all of them, does not count as passing. Four registered tests skip cases off Windows
