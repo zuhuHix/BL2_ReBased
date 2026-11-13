@@ -9,7 +9,7 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-11-02
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-11-13
 
 ---
 
@@ -35,10 +35,32 @@ deferred until that gate is met; they move to Phase 5/6.
 
 The project is worked on actively. There are no completion dates, no time
 estimates and no completion percentages here; this section only records what
-the repository shows as of 2026-11-02 (`origin/main` at 683a083), and each line names the record that
+the repository shows as of 2026-11-13 (`origin/main` at ccc6fa5; the elapsed counts and dated milestones below
+stop at 2026-11-02), and each line names the record that
 backs it ([DECISIONS.md](DECISIONS.md) entry date or verification file). Where
 a number is an automated check it says so; "passes" is never parity with the
 original game.
+
+**As of 2026-11-13** ("in the host" means the UE5 build with labelled stand-ins; a passing suite says the host did this, not parity)
+
+- The slice loop runs in the host in one session (`tools/test_slice_gate.ps1`): the forced variants passed 14 of 14 links in every
+  desktop candidate log of 2026-11-12 and 13; the `-Shield` run equips one generated level-8 card from game data (14 of 14 on main
+  25a5ce2; the card is UNVERIFIED in game) ([slice gate](docs/verification/SLICE_GATE.md), [gates](docs/verification/GATES.md)).
+- The unforced variant is not reliable yet (3 of 8 runs on 2026-11-11 failed a link) and is being worked on. The Phase 4 gate is not
+  claimed as met.
+- Fight: range enemies with a host brain; the adult's and the regular's swing cycles and the adult's stand distance are graded in the
+  engine against live reads ([range](docs/verification/COMBAT_RANGE.md)). Leaps and thrown rocks, the biggest gap, are described in an own-words
+  note, UNVERIFIED in game, and not built ([note](docs/verification/NATIVE_AI_LEAP_THROW.md)).
+- Down and respawn: the host's respawn timeline follows six live samples on the station path; the ammo refill on respawn is not in the
+  host yet ([down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md)).
+- Loot, equip, Phaselock and the Fire mission run end to end in the gate; a critic agent scored Phaselock's captures 5.1 to 5.7 of 10,
+  not parity.
+- Sanctuary's ambient citizens wear their captured pieces (ambient suite PASS on main a3daacf, 35 pawns, 89 worn pieces); their
+  movement is a host stand-in, UNVERIFIED.
+- Tests: ctest has 174 entries on main (all passed on CI, LZO on); three stubbed real-game tool tests run in it.
+- Evidence: two capture sessions on 2026-11-12 (a pack down on Three Horns Divide, a scripted down in Sanctuary), recorded in own words
+  ([real-game reads](docs/verification/REALGAME_GROUND_TRUTH.md)).
+- Not started, by plan: the other 79 maps and the other Vault Hunters (after the Phase 4 gate).
 
 **Elapsed.** First commit 2026-09-10, so 53 calendar days. 401 commits on
 `origin/main` (`git rev-list --count`, which includes the commits of merged
@@ -277,18 +299,24 @@ prototypes, so the repository's clock started a little after the work did.
 - Captures of the original game now exist for the Fire mission's event order
   (lane L2), a bullymong fight on another map (lanes L3-L9), Phaselock frames and
   the menus and HUD; none covers the whole slice loop in Sanctuary yet.
-- The UE host has no attack on Maya, no down state (health 0 is an immediate
-  respawn) and no loot drop from a kill. The VM (`--combat-run`) runs the hit,
-  death, kill-XP, down and loot steps; its melee blow is a guaranteed-hit fixture
-  ([record](docs/verification/COMBAT_MELEE.md)). Enemy AI and target choice
-  (plan step S-h) are not implemented anywhere, neither in the host nor on the VM.
+- In the UE host the range's enemies notice, chase and hit Maya with a host brain (a stand-in, with live-read
+  notice radii, swing cycles and stand distances), Maya goes down, bleeds out and respawns at a station, and a
+  range kill rolls its loot at the stock chance ([range](docs/verification/COMBAT_RANGE.md),
+  [down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), [slice gate](docs/verification/SLICE_GATE.md)). The VM
+  (`--combat-run`) runs the hit, death, kill-XP, down and loot steps; its melee blow is a guaranteed-hit fixture
+  ([record](docs/verification/COMBAT_MELEE.md)). The host's enemy brain is not the game's AI: leaps and thrown
+  rocks are described in a note ([note](docs/verification/NATIVE_AI_LEAP_THROW.md), UNVERIFIED) and not built.
 - Runtime flight timing of projectiles has no in-engine check since the #59 merge
   (DECISIONS 2026-11-02), and the spread distribution and status proc rate are
   not measured ([record](docs/verification/WEAPON_PROJECTILES.md)).
 - Sanctuary visual parity, the stripped sky graph, native material graphs and
   the 79 untouched maps (see Now / next and Phase 1).
-- Audio is looked up and logged, never played; choosing a decoder is a
-  maintainer decision.
+- Slice audio plays in the host from the player's own install: decoded with vgmstream (outside the
+  repository; maintainer decision of 2026-11-07) into ignored `local/`, then played through UE's procedural
+  sound wave, for fire, hit, the Phaselock cast, equip, reload, doors and the mission's dialog lines; the
+  pickup has no sound yet. A recording of a host run (2026-11-11) holds the played files; nobody has confirmed
+  by ear that a sound is right (UNVERIFIED), and this is not parity
+  ([record](docs/verification/SLICE_AUDIO_CHAIN.md), sections 3, 5 and 7a).
 - Two quest-suite first runs on 2026-10-02 ended silently after check 67; the
   cause is unproven (a mixed build state is likely: a clean rebuild passed and
   exited cleanly)
@@ -717,8 +745,12 @@ Priority order:
       on the VM. Other item kinds and the general attribute system are not done.
 - [ ] `WillowPawn` (246), `WillowPlayerPawn` (65): health/shield, FFYL, damage
       *Progress:* health, the hit and death chains and FFYL (down, bleed-out,
-      second wind, respawn) run on the VM against recorded live rows; shields and
-      the host's down state are not done.
+      second wind, respawn) run on the VM against recorded live rows. The UE host
+      has Maya's shield (shield first, then health; recharge after a delay) and the
+      down state with a station respawn timed to the live reads; the start shield is
+      a slice choice and its numbers are stand-ins (UNVERIFIED). Not done: the death
+      camera and tunnel effects, the respawn without a station
+      ([record](docs/verification/COMBAT_DOWN_RESPAWN.md)).
 - [ ] `WillowPlayerController` (298): input, aiming, skills, interaction
 - [ ] `WillowWeapon` (121), `WillowProjectile` (95): fire, reload, spread,
       recoil, elemental procs
@@ -761,9 +793,13 @@ drops) stay. In 8 unforced runs on
 2026-11-11, 5 passed all 14 links and 109 of 112 link attempts passed; the three failures were two pickups with an
 enemy standing in the view line and one Phaselock cast refused because Maya was already down.
 - Spawn: Maya spawns in Sanctuary with first-person arms, collision and a stand-in start shield (a slice choice).
-- Fight: the range's enemies notice, chase and hit Maya with a host brain. Notice radii, update rate, one kind's
-  stand distance and two kinds' swing timing come from live reads; two live reads of the swing timing disagree and
-  the record says so. The range itself is a host contrivance, and leaps and thrown rocks are not built.
+- Fight: the range's enemies notice, chase and hit Maya with a host brain. Notice radii, update rate, the adult's and
+  the baby's stand distances, the swing cycles of four kinds (adult, baby, regular, slinger) and the chase speeds come
+  from live reads; a third read of the adult's cycle (2026-11-12, 407 gaps) settled the earlier disagreement. The range
+  suite grades the adult's and the regular's cycles and the adult's stand distance in the engine; the default range
+  spawns no baby or slinger, so theirs are checked in the light tier only. The psycho has no live read and the
+  regular's stand distance is open. The range itself is a host contrivance, and leaps and thrown rocks are described
+  in a note ([note](docs/verification/NATIVE_AI_LEAP_THROW.md), UNVERIFIED) and not built.
 - Loot a gun: range kills roll their loot in the host at the stock chance. Unforced, a gun dropped after 20 to 41
   kills. The pickup card and the use key take the aimed drop.
 - Equip: the gate equips through the call the inventory page uses. The page's own equip is covered by the
@@ -775,8 +811,11 @@ enemy standing in the view line and one Phaselock cast refused because Maya was 
   order in the VM was compared with one live trace (45 events matched, 2 out of order, 4 extra). It gives XP only,
   as the stock data does (a host loot stand-in was removed by maintainer decision, 2026-10-07).
 - Die and respawn: Maya is downed by the range's enemies, bleeds out (12 s for a first down) and respawns at the
-  decoded station with full health. Which station the game picks, the steps of the respawn wait and what is
-  refilled are read from the game's script but not yet confirmed in a live session.
+  decoded station with full health. The steps of the respawn wait on the station path were confirmed
+  in two live sessions (six samples, two maps, one player level), and the host follows them. Which station the game
+  picks was seen only where one station was both the active and the nearest, so the selection order is not told
+  apart; the first respawn after a load took the next exit point in all six. The ammo refill fits five pools without
+  rockets but its size was not seen, and the host does not refill yet.
 
 Records: [arms and held guns](docs/verification/WEAPON_VISUALS.md), [walking](COLLISION_WALKING_VERIFICATION.md),
 [firing](docs/verification/WEAPON_PROJECTILES.md), [hit](docs/verification/COMBAT_HIT_CHAIN.md),
