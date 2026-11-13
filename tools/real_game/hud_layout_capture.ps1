@@ -59,7 +59,10 @@ try {
         $run.dump = Py "import json; print(json.dumps(hl_dump('layout_$res', $clipsPy), default=str))" 60
         $run.shot = Save-Shot "hud_layout/shot_$res.png"
         "dump ${res}: $($run.dump); client $($rect.Width)x$($rect.Height)"
-        try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { "quit: no reply, or not sent to a lost driver ($_)" }
+        # The game exits on this quit, often before it answers, and every resolution gets a game of its own, stopped by its PID below
+        # before the next starts: a quit with no reply is expected here and is not counted as a lost driver (-SilenceAllowed), so the
+        # next resolution's guarded run can talk to its own game. A driver already lost still refuses the quit.
+        try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty -SilenceAllowed | Out-Null } catch { "quit: no reply, or not sent to a lost driver ($_)" }
         for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
         $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
         if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }

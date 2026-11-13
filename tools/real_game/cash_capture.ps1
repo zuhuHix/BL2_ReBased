@@ -409,13 +409,14 @@ try {
                     if ((Get-Date) -ge $downUntil) { break }   # the window ended during the stamp: no placement after it
                     $log.den_down_replacements = $n
                     # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace). It gets
-                    # the window's end (wall-clock seconds since 1970, the clock both sides read on this machine) and moves nothing once that
+                    # the window's end (seconds of the command clock, the performance counter both sides read, which a wall-clock step does
+                    # not move: the time left in the window, put on that clock as the call is made) and moves nothing once that
                     # has passed ('late'); its reply wait is clamped to the time left, like the polls' (review of #255). None is sent with less
                     # than 6 s left, the polls' own minimum, so a healthy reply is not cut short into a lost driver; no poll starts then either.
                     $left = ($downUntil - (Get-Date)).TotalSeconds
                     if ($left -lt 6) { break }
-                    $untilEpoch = (([DateTimeOffset]$downUntil).ToUnixTimeMilliseconds() / 1000.0).ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
-                    $again = Py "import json; print(json.dumps(dp_replace(until=$untilEpoch)))" ([int][math]::Min(30, [math]::Floor($left - 1)))
+                    $untilClock = ((Get-QpcSeconds) + ($downUntil - (Get-Date)).TotalSeconds).ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
+                    $again = Py "import json; print(json.dumps(dp_replace(until=$untilClock)))" ([int][math]::Min(30, [math]::Floor($left - 1)))
                     $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))
                     $lastHit = Get-Date; $lastHealth = $null
                 }

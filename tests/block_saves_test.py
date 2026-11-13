@@ -107,28 +107,38 @@ def test_the_scan_reaches_the_captures():
     assert sum('Assert-SavesBlocked (' in text for text in texts) >= 3
 
 
-def load_channel(path_class, now=None):
-    """The driver's command loop alone (cmd_dir, refusal, run_pending and the two prefixes), over a stand-in command folder. path_class
-    stands in for Path, so a test can watch or break the reply's write and rename; now, when given, is the driver's clock (Unix seconds)."""
+def load_channel(path_class, now=None, wall=None):
+    """The driver's command loop alone (cmd_dir, refusal, run_pending and the prefixes), over a stand-in command folder. path_class
+    stands in for Path, so a test can watch or break the reply's write and rename. now, when given, is the driver's command clock (the
+    performance counter, microseconds); wall, when given, is what time.time() answers there (a wall clock a test can step)."""
     tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
     wanted = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name in ('cmd_dir', 'refusal', 'run_pending'))
-              or (isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') in ('DEADLINE_PREFIX', 'REFUSED_PREFIX'))]
+              or (isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') in ('DEADLINE_PREFIX', 'WALL_CLOCK_PREFIX', 'REFUSED_PREFIX'))]
     tmp = Path(tempfile.mkdtemp(prefix='ow-driver-'))
     folder = tmp / 'cmd'
     folder.mkdir()
     (tmp / 'cmd_dir.txt').write_text(str(folder), encoding='utf-8')
-    clock = types.SimpleNamespace(time=(lambda: now) if now is not None else time.time)
+    wall_clock = types.SimpleNamespace(time=(lambda: wall) if wall is not None else time.time, perf_counter=time.perf_counter)
     namespace = {'Path': path_class, '__file__': str(tmp / '__init__.py'), 'io': io, 'contextlib': contextlib, 'traceback': traceback,
-                 'time': clock, 'scope': {'runs': []}}
+                 'time': wall_clock, 'command_clock_us': (lambda: now) if now is not None else qpc_us, 'scope': {'runs': []}}
     exec(compile(ast.Module(wanted, []), str(SOURCE), 'exec'), namespace)
     return namespace, folder
 
 
-def command(code, deadline_ms=None):
-    """A command as the sender publishes it: its deadline line first (an hour ahead unless given), then the code."""
-    if deadline_ms is None:
-        deadline_ms = int(time.time() * 1000) + 3600 * 1000
-    return f'# ow-deadline-unix-ms: {deadline_ms}\n{code}'
+def qpc_us():
+    """The command clock as this test reads it: the performance counter through the Windows API, in microseconds."""
+    import ctypes
+    frequency, count = ctypes.c_int64(), ctypes.c_int64()
+    ctypes.windll.kernel32.QueryPerformanceFrequency(ctypes.byref(frequency))
+    ctypes.windll.kernel32.QueryPerformanceCounter(ctypes.byref(count))
+    return count.value * 1_000_000 // frequency.value
+
+
+def command(code, deadline_us=None):
+    """A command as the sender publishes it: its deadline line first (an hour ahead on the command clock unless given), then the code."""
+    if deadline_us is None:
+        deadline_us = qpc_us() + 3600 * 1_000_000
+    return f'# ow-deadline-qpc-us: {deadline_us}\n{code}'
 
 
 def test_a_reply_appears_only_complete_and_the_script_is_done_before_it_runs():
@@ -165,57 +175,104 @@ def test_a_failed_rename_leaves_no_reply_and_the_script_does_not_run_again():
     assert sorted(p.name for p in folder.iterdir()) == ['c2-invented.py.done', 'c3-invented.py.done']   # no reply, no .tmp left
 
 
-# ---------------------------------------------------------------- the deadline the receiver enforces (session gate's review, B1)
-def test_a_command_taken_after_its_deadline_is_refused_and_never_run():
+# ---------------------------------------------------------------- the deadline the receiver enforces (session gate's review, B1, and round 2)
+def test_a_command_taken_at_or_after_its_deadline_is_refused_and_never_run():
     """B1: the driver ran whatever was queued, so a command its caller gave up on could run later (a slow acceptance, a hitch in the
-    game). It now refuses a command whose deadline has passed when it takes it: not run, renamed .py.expired, and a reply that starts
-    'OW-REFUSED: ' (the sender's no-reply form). One taken in time still runs; the clock is the driver's, here a fixed invented one."""
-    now = 1_900_000_000.0
+    game). It refuses a command taken at or after its deadline (round 2: equality too; it compared floored milliseconds with '>'): not run,
+    renamed .py.expired, and a reply that starts 'OW-REFUSED: ' (the sender's no-reply form). One taken in time still runs. The clock is
+    the driver's command clock, here a fixed invented reading."""
+    now = 1_900_000_000_000
     ns, folder = load_channel(type(Path()), now=now)
-    (folder / 'c1-late.py').write_text(command("runs.append('late')\nprint('ran')", int(now * 1000) - 1), encoding='utf-8')
-    (folder / 'c2-in-time.py').write_text(command("runs.append('in time')\nprint('ran')", int(now * 1000) + 1), encoding='utf-8')
+    (folder / 'c1-late.py').write_text(command("runs.append('late')\nprint('ran')", now - 1), encoding='utf-8')
+    (folder / 'c2-equal.py').write_text(command("runs.append('equal')\nprint('ran')", now), encoding='utf-8')
+    (folder / 'c3-in-time.py').write_text(command("runs.append('in time')\nprint('ran')", now + 1), encoding='utf-8')
     ns['run_pending']()
     ns['run_pending']()
-    assert ns['scope']['runs'] == ['in time'], ns['scope']['runs']   # the late one never ran, not even on the next pass
-    assert sorted(p.name for p in folder.iterdir()) == ['c1-late.out', 'c1-late.py.expired', 'c2-in-time.out', 'c2-in-time.py.done']
-    assert (folder / 'c1-late.out').read_text(encoding='utf-8') == 'OW-REFUSED: not run: its deadline passed 1 ms before the driver took it\n'
-    assert (folder / 'c2-in-time.out').read_text(encoding='utf-8') == 'ran\n'
+    assert ns['scope']['runs'] == ['in time'], ns['scope']['runs']   # the late and the equal one never ran, not even on the next pass
+    assert sorted(p.name for p in folder.iterdir()) == ['c1-late.out', 'c1-late.py.expired', 'c2-equal.out', 'c2-equal.py.expired',
+                                                         'c3-in-time.out', 'c3-in-time.py.done']
+    assert (folder / 'c1-late.out').read_text(encoding='utf-8') == 'OW-REFUSED: not run: its deadline was reached 1 us before the driver took it\n'
+    assert (folder / 'c2-equal.out').read_text(encoding='utf-8') == 'OW-REFUSED: not run: its deadline was reached 0 us before the driver took it\n'
+    assert (folder / 'c3-in-time.out').read_text(encoding='utf-8') == 'ran\n'
 
 
-def test_a_command_with_no_deadline_or_an_unreadable_one_is_refused():
+def test_a_command_with_no_deadline_an_unreadable_one_or_one_on_the_wall_clock_is_refused():
     ns, folder = load_channel(type(Path()))
     (folder / 'c1-bare.py').write_text("runs.append('bare')", encoding='utf-8')
-    (folder / 'c2-bad.py').write_text("# ow-deadline-unix-ms: soon\nruns.append('bad')", encoding='utf-8')
+    (folder / 'c2-bad.py').write_text("# ow-deadline-qpc-us: soon\nruns.append('bad')", encoding='utf-8')
+    # The form before round 2, with a deadline far ahead on the wall clock: still refused, as a wall clock can be stepped back.
+    (folder / 'c3-wall.py').write_text(f"# ow-deadline-unix-ms: {int(time.time() * 1000) + 3600_000}\nruns.append('wall')", encoding='utf-8')
     ns['run_pending']()
     assert ns['scope']['runs'] == []
     assert (folder / 'c1-bare.out').read_text(encoding='utf-8') == 'OW-REFUSED: not run: the command names no deadline\n'
     assert (folder / 'c2-bad.out').read_text(encoding='utf-8') == "OW-REFUSED: not run: the command's deadline line is unreadable\n"
+    assert (folder / 'c3-wall.out').read_text(encoding='utf-8').startswith('OW-REFUSED: not run: its deadline is on the wall clock')
 
 
-def test_the_sender_and_the_driver_agree_on_the_deadline_line_and_the_refusal():
-    """The real Invoke-GamePy writes a command (its driver stand-in only reads the published file, then the call times out); the driver's
-    own parser reads that file's deadline as the call's timeout from now, refuses it a millisecond after and runs it a second before.
-    The refusal prefix the sender checks is the driver's."""
+def test_a_command_withdrawn_between_the_listing_and_the_rename_is_skipped_and_the_next_still_runs():
+    """Item 6: the sender withdraws a command it gave up on by renaming it away. If that lands after the driver listed the folder, the
+    driver's own rename finds no file: the command is not run, and the next command in the same pass still is."""
+    class Withdrawn(type(Path())):
+        def read_text(self, *args, **kwargs):
+            text = super().read_text(*args, **kwargs)
+            if self.name == 'c1-gave-up.py':
+                super().replace(self.with_name(self.name + '.withdrawn'))   # the sender's rename, between the driver's read and its own
+            return text
+    ns, folder = load_channel(Withdrawn)
+    (folder / 'c1-gave-up.py').write_text(command("runs.append('gave up')"), encoding='utf-8')
+    (folder / 'c2-next.py').write_text(command("runs.append('next')\nprint('ran')"), encoding='utf-8')
+    ns['run_pending']()
+    assert ns['scope']['runs'] == ['next'], ns['scope']['runs']
+    assert sorted(p.name for p in folder.iterdir()) == ['c1-gave-up.py.withdrawn', 'c2-next.out', 'c2-next.py.done']
+
+
+def publish_with_the_sender(timeout):
+    """The real sender (Invoke-GameReply, realgame.ps1) publishes one command; its driver stand-in only copies the published file, then
+    the call fails. Returns the file's text and the sender's command clock and wall clock just before the call."""
     realgame = ROOT / 'tools' / 'real_game' / 'realgame.ps1'
-    assert "StartsWith('OW-REFUSED: '" in realgame.read_text(encoding='utf-8')
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'send.ps1'
         script.write_text(f""". '{realgame}'
 $script:CmdDir = '{tmp}'
 function Start-Sleep {{ foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) {{ Copy-Item -LiteralPath $py.FullName (Join-Path '{tmp}' 'published.txt') }}; throw 'invented: stop waiting' }}
-"before: $([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
-try {{ Invoke-GamePy 'print(1)' 7 | Out-Null }} catch {{ "error: $_" }}
+$clock = if (Get-Command Get-CommandClockUs -ErrorAction SilentlyContinue) {{ Get-CommandClockUs }} else {{ 0 }}
+"before: $clock $([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+try {{ Invoke-GameReply 'print(1)' {timeout} | Out-Null }} catch {{ "error: $_" }}
 """, encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True,
                               timeout=120, cwd=tmp, env=dict(os.environ))
         published = (Path(tmp) / 'published.txt').read_text(encoding='utf-8')
-    before = int(re.search(r'before: (\d+)', done.stdout).group(1))
+    clock, wall = re.search(r'before: (\d+) (\d+)', done.stdout).groups()
+    return published, int(clock), int(wall), done.stdout + done.stderr
+
+
+def test_the_sender_and_the_driver_agree_on_the_deadline_line_and_the_refusal():
+    """The real sender writes a command; the driver's own parser reads that file's deadline as the call's timeout from the sender's
+    reading of the command clock, refuses it at the deadline and runs it a second before. The prefixes the sender writes and checks are
+    the driver's."""
+    realgame = (ROOT / 'tools' / 'real_game' / 'realgame.ps1').read_text(encoding='utf-8')
+    assert "StartsWith('OW-REFUSED: '" in realgame and '"# ow-deadline-qpc-us: $deadline`n"' in realgame
+    published, before, _, out = publish_with_the_sender(7)
     ns, _ = load_channel(type(Path()))
-    deadline = int(published.split('\n', 1)[0].split(':', 1)[1])
-    assert published.split('\n', 1)[1] == 'print(1)', published
-    assert 6000 <= deadline - before <= 8000, (deadline - before, done.stdout + done.stderr)
-    assert ns['refusal'](published, deadline + 1) is not None and ns['refusal'](published, deadline - 1000) is None
-    assert ns['REFUSED_PREFIX'] == 'OW-REFUSED: ' and ns['DEADLINE_PREFIX'] == '# ow-deadline-unix-ms: '
+    first, code = published.split('\n', 1)
+    deadline = int(first.split(':', 1)[1])
+    assert first.startswith(ns['DEADLINE_PREFIX']) and code == 'print(1)', published
+    # The call's own 7 s from the sender's reading; up to 10 s more for a runner that stalls between the reading and the call (item 9).
+    assert 7_000_000 <= deadline - before <= 17_000_000, (deadline - before, out)
+    assert ns['refusal'](published, deadline) is not None and ns['refusal'](published, deadline - 1_000_000) is None
+    assert ns['REFUSED_PREFIX'] == 'OW-REFUSED: ' and ns['WALL_CLOCK_PREFIX'] == '# ow-deadline-unix-ms:'
+
+
+def test_a_wall_clock_stepped_back_does_not_revive_a_command_its_caller_gave_up_on():
+    """Round 2, blocker 1: both sides read the wall clock, so after the sender gave up a clock stepped back put the queued command inside
+    its deadline again, and the driver ran it. The real sender publishes a command with a 1 s timeout; the driver takes it 10 s later on
+    the command clock while its wall clock reads an hour earlier than the sender's did. It is refused and never runs."""
+    published, before, wall_ms, _ = publish_with_the_sender(1)
+    ns, folder = load_channel(type(Path()), now=qpc_us() + 10_000_000, wall=wall_ms / 1000.0 - 3600.0)
+    (folder / 'c1-gave-up.py').write_text(published.replace('print(1)', "runs.append('revived')"), encoding='utf-8')
+    ns['run_pending']()
+    assert ns['scope']['runs'] == [], 'a command its caller gave up on ran after the wall clock stepped back'
+    assert (folder / 'c1-gave-up.out').read_text(encoding='utf-8').startswith('OW-REFUSED: not run: ')
 
 
 if __name__ == '__main__':

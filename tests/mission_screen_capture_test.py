@@ -129,6 +129,7 @@ def test_a_command_that_cannot_be_published_is_retried_then_is_no_reply():
         f"$script:RG = '{tmp}'; $script:CmdDir = '{tmp}\\cmd'; New-Item -ItemType Directory -Force $script:CmdDir | Out-Null",
         "function Move-Item($From, $To) { $script:moves++; if ($script:moves -le $script:fails) { throw 'invented: being used by another process' }; [IO.File]::Move($From, $To) }",
         "function Start-Sleep { foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) { $script:runs++; Rename-Item -LiteralPath $py.FullName ($py.Name + '.done'); [IO.File]::WriteAllText([IO.Path]::ChangeExtension($py.FullName, '.out'), 'ok') } }",
+        "$script:OwTransportEntry = $true   # the raw transport itself, entered as the wrapper enters it",
         "$script:moves = 0; $script:fails = 2; $script:runs = 0",
         "$a = Invoke-GamePy 'print(1)' 5; $r1 = $script:runs; $m1 = $script:moves",
         "$script:moves = 0; $script:fails = 99; $script:runs = 0",

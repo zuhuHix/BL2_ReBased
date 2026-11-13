@@ -62,7 +62,9 @@ try {
         $rect = Get-GameRect
         if ($rect.Width -ne 1280 -or $rect.Height -ne 720) { throw "client area is $($rect.Width)x$($rect.Height), not 1280x720" }
         $list = ($Recipes | ForEach-Object { "r'" + ((Resolve-Path $_).Path -replace '\\', '/') + "'" }) -join ', '
-        Invoke-GameReply ("RG_OUT = r'$(($Out) -replace '\\', '/')'`nWPC_RECIPES = [$list]`n" + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'scripts/weapon_part_capture.py'))) 120 -AllowEmpty | Out-Null
+        # Through the file call, so the source's read counts against the call's deadline and sits inside the transport's boundary; RG_OUT
+        # is local/realgame/wpa ($Out), as before.
+        Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/weapon_part_capture.py') wpa 120 -AllowEmpty -Prelude "WPC_RECIPES = [$list]" | Out-Null
         # A one-time "Unlocked!" notice appears the first time the inventory opens and swallows keys: dismiss it first.
         Send-Key I; Start-Sleep 3
         Save-Shot 'wpa/notice_before.png' | Out-Null

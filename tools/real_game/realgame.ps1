@@ -445,8 +445,11 @@ function Get-RunGameProcess {
 # load): why the driver counts as lost, or empty. The first reply that never came sets it (a timeout, or any other transport failure,
 # which all leave as "no reply to ..."), and from then on nothing more is sent: Invoke-GameReply and Invoke-GameReplyFile refuse every
 # command, and every key press, mouse press or move, wheel turn and focus attempt below refuses too (Assert-InputAllowed). Releases are
-# never refused. The variable keeps its old name: the watch helpers and Wait-PlayerPawn read it.
-$script:SliceWatchDriverLost = ''
+# never refused. The variable keeps its old name: the watch helpers and Wait-PlayerPawn read it. A second dot-source of this file keeps a
+# condition already set (it is cleared nowhere), so loading the helpers again cannot revive a lost driver (review round 2, item 7).
+if (!(Get-Variable -Name SliceWatchDriverLost -Scope Script -ErrorAction SilentlyContinue) -or $null -eq $script:SliceWatchDriverLost) { $script:SliceWatchDriverLost = '' }
+# Set only for the length of a wrapper's call: the raw transport refuses without it (see Invoke-GamePy).
+$script:OwTransportEntry = $false
 function Get-DriverLostReason { $script:SliceWatchDriverLost }
 function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
 # For a capture's own steps: throws once the condition is set.
@@ -599,27 +602,37 @@ function Send-Click([switch]$Right) {
 # module path (a CI runner's pwsh step) cannot load it (CI on #263, 2026-11-13).
 function New-CommandName { 'c' + (Get-Date -Format 'HHmmssfff') + '-' + [guid]::NewGuid().ToString('N') }
 
+# The command clock, the one clock of a command's deadline on both sides: the performance counter (QueryPerformanceCounter; read here
+# through .NET's Stopwatch, in the driver through the Windows API), in microseconds. It is monotonic and the same in every process on this
+# PC, so a wall-clock step, backwards or forwards, moves neither the deadline nor the driver's comparison (review of the session gate,
+# round 2, blocker 1). The wall clock is kept for log time stamps only.
+function Get-CommandClockUs {
+    if (![Diagnostics.Stopwatch]::IsHighResolution) { throw 'no performance counter: Stopwatch would read the wall clock' }
+    [long]([double][Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency * 1000000.0)
+}
+
 # Run Python inside the game through the openwillow_realgame mod and return its printed output ('' when it printed nothing). The raw
-# transport: captures call it only through Invoke-GameReply / Invoke-GameReplyFile below, which hold the driver-lost rule
-# (tests/realgame_reply_guard_test.py).
+# transport: it refuses unless it is entered through Invoke-GameReply or Invoke-GameReplyFile below (they set $script:OwTransportEntry for
+# the call), which hold the driver-lost rule; tests/realgame_reply_guard_test.py checks the scripts' text as well.
 # The boundary is the whole body: every failure inside it, whatever its text, leaves in the no-reply form ("no reply to <name>
 # (transport error: ...)"), so no failure of the transport gets past a driver-lost latch. Only the parameter binding, which runs before
-# the body, is outside it. One deadline covers the whole call: it is checked before each publication attempt, after the command's
-# file is written and immediately before the rename that publishes it, while waiting, before each read and before a reply is returned,
-# and every retry and pause is clamped to what is left of it. A call whose deadline has passed fails as "no reply to <name>", and a reply
-# read after it is not taken. (review of #263, S1, S2, R1 and R2)
-# The deadline also travels with the command: its first line is '# ow-deadline-unix-ms: <ms>' (this machine's wall clock, which the
-# driver reads too), and the driver refuses, without running it, a command it takes after that moment, answering 'OW-REFUSED: ...'.
-# So a command whose caller gave up never runs later, however slow the rename or the driver's next look. Not bounded: a command the
-# driver took before its deadline runs to its end, and a file operation under way when the deadline passes finishes (a rename that
-# began before the last check can still land; the driver then refuses the command). -Deadline: the caller's own, already running
-# (Invoke-GamePyFile).
+# the body, is outside it. One deadline covers the whole call, on the command clock: it is checked before each publication attempt,
+# after the command's file is written and immediately before the rename that publishes it, while waiting, before each read and before a
+# reply is returned, and every retry and pause is clamped to what is left of it. A call whose deadline has passed fails as "no reply to
+# <name>", and a reply read after it is not taken. (review of #263, S1, S2, R1 and R2)
+# The deadline also travels with the command: its first line is '# ow-deadline-qpc-us: <us>' (the command clock), and the driver refuses,
+# without running it, a command it takes at or after that moment, answering 'OW-REFUSED: ...'. And when a call gives up after its command
+# went out (its deadline, or any transport error), it withdraws the command (renames it <name>.py.withdrawn) before it throws, so a command
+# the driver has not taken yet never runs. What stays unbounded is named in docs/TOOLING.md, "Driver lost". -Deadline: the caller's own,
+# already running, on the command clock (Invoke-GamePyFile).
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30, $Deadline = $null) {
+    $published = $false
     try {
         $name = 'a command not yet named'
-        $deadline = if ($null -ne $Deadline) { [datetime]$Deadline } else { (Get-Date).AddSeconds($TimeoutSeconds) }
-        $left = { ($deadline - (Get-Date)).TotalMilliseconds }
-        $command = '# ow-deadline-unix-ms: ' + [DateTimeOffset]::new($deadline.ToUniversalTime()).ToUnixTimeMilliseconds() + "`n" + $Code
+        if (!$script:OwTransportEntry) { throw 'the raw transport is entered only through Invoke-GameReply or Invoke-GameReplyFile (realgame.ps1); nothing was sent' }
+        $deadline = if ($null -ne $Deadline) { [long]$Deadline } else { (Get-CommandClockUs) + [long]$TimeoutSeconds * 1000000 }
+        $left = { ($deadline - (Get-CommandClockUs)) / 1000.0 }
+        $command = "# ow-deadline-qpc-us: $deadline`n" + $Code
         # Any reply already under this call's name is removed before the command is published, so an old reply can't answer this one.
         $name = New-CommandName
         $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
@@ -629,14 +642,14 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30, $Deadline = $nu
         # No attempt starts after the deadline, and a write that ends after it is not renamed (review of the session gate, B1).
         for ($try = 1; ; $try++) {
             if ((& $left) -le 0) { Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue; throw "no reply to $name" }
-            $sent = $false; $written = $false
+            $written = $false
             try { [IO.File]::WriteAllText("$py.tmp", $command); $written = $true } catch { $err = $_ }
             if ($written -and (& $left) -le 0) {
                 Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue
                 throw "no reply to $name (not sent: the deadline passed while its file was written)"
             }
-            if ($written) { try { Move-Item "$py.tmp" $py; $sent = $true } catch { $err = $_ } }
-            if ($sent) { break }
+            if ($written) { try { Move-Item "$py.tmp" $py; $published = $true } catch { $err = $_ } }
+            if ($published) { break }
             if ($try -ge 5 -or (& $left) -le 200) {
                 Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue   # best effort: the driver never runs a .py.tmp
                 throw "no reply to $name (the command could not be sent: $($err.Exception.Message))"
@@ -658,7 +671,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30, $Deadline = $nu
             if ($read) {
                 if ((& $left) -le 0) { throw "no reply to $name" }   # a reply read after the deadline is not taken
                 if ($null -eq $text) { $text = '' }   # a complete empty reply: the command printed nothing (S3)
-                # The driver did not run it (its deadline had passed when the driver took it, or it named none): no answer either.
+                # The driver did not run it (its deadline had been reached when the driver took it, or it named none): no answer either.
                 if ($text.StartsWith('OW-REFUSED: ', [StringComparison]::Ordinal)) { throw "no reply to $name (the driver refused it: $($text.Substring(12).Trim()))" }
                 return $text
             }
@@ -666,24 +679,29 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30, $Deadline = $nu
             Start-Sleep -Milliseconds 200
         }
     } catch {
+        # The caller stops waiting: a command the driver has not taken yet is withdrawn, so it never runs (one it took is gone from <name>.py
+        # already, and the rename then fails, which changes nothing). Best effort: this never throws.
+        if ($published) { try { [IO.File]::Move($py, "$py.withdrawn") } catch { } }
         if ("$_" -like 'no reply to *') { throw }
         throw "no reply to $(if ($name) { $name } else { 'a command not yet named' }) (transport error: $($_.Exception.Message))"
     }
 }
 
-# Run a command script file (e.g. tools/real_game/scripts/*.py) after a short prelude; RG_OUT is set
-# to local/realgame/<OutFolder> so the script's helpers know where to write. The boundary is the whole body, the delegation to
+# Run a command script file (e.g. tools/real_game/scripts/*.py) after a short prelude; RG_OUT is set to local/realgame/<OutFolder> so the
+# script's helpers know where to write, and -Prelude (more lines of Python) follows it. The boundary is the whole body, the delegation to
 # Invoke-GamePy included (only the parameter binding is outside): a probe source that cannot be read, or any other failure here, leaves
 # in the no-reply form too. Nothing was sent then, and the run treats it as the transport's failure (review of #263, S1 and R2).
 # The call's one deadline starts before the source is read, so the read counts against the timeout (review of the session gate, B1).
-function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$TimeoutSeconds = 30) {
+function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$TimeoutSeconds = 30, [string]$Prelude = '') {
     try {
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        if (!$script:OwTransportEntry) { throw 'the raw transport is entered only through Invoke-GameReply or Invoke-GameReplyFile (realgame.ps1); nothing was sent' }
+        $deadline = (Get-CommandClockUs) + [long]$TimeoutSeconds * 1000000
         $out = (Join-Path $script:RG $OutFolder) -replace '\\', '/'
         try { $source = [IO.File]::ReadAllText((Resolve-Path $Path)) }
         catch { throw "no reply to probe file $Path (transport error: its source could not be read: $($_.Exception.Message))" }
-        if ((Get-Date) -ge $deadline) { throw "no reply to probe file $Path (not sent: the deadline passed while its source was read)" }
-        Invoke-GamePy ("RG_OUT = r'$out'`n" + $source) $TimeoutSeconds $deadline
+        if ((Get-CommandClockUs) -ge $deadline) { throw "no reply to probe file $Path (not sent: the deadline passed while its source was read)" }
+        $head = "RG_OUT = r'$out'`n" + $(if ($Prelude) { "$Prelude`n" } else { '' })
+        Invoke-GamePy ($head + $source) $TimeoutSeconds $deadline
     } catch {
         if ("$_" -like 'no reply to *') { throw }
         throw "no reply to probe file $Path (transport error: $($_.Exception.Message))"
@@ -711,19 +729,24 @@ function ConvertTo-ReplyText($Reply, [string]$Code, [switch]$AllowEmpty, [switch
 # is thrown on. The reply goes through ConvertTo-ReplyText: an empty or white-space reply is refused unless -AllowEmpty.
 # -SilenceAllowed: only for the waits that expect the driver to be silent for a while (the boot wait before the driver loads, a map
 # travel's or a load's polls, which the load holds up): their timeouts are part of the wait and do not set the condition. They still
-# refuse once it is set.
+# refuse once it is set. Only these two enter the raw transport: they set $script:OwTransportEntry for the call, and the transport refuses
+# without it, so a raw call written any other way (a name built at run time, a wrapper of a capture's own) sends nothing.
 function Invoke-GameReply([string]$Code, [int]$Timeout = 30, [switch]$AllowEmpty, [switch]$SilenceAllowed, [switch]$NoTraceback) {
     Assert-DriverAnswers
+    $script:OwTransportEntry = $true
     try { $reply = Invoke-GamePy $Code $Timeout }
     catch { if (!$SilenceAllowed) { Set-SliceWatchDriverLost $_ }; throw }
+    finally { $script:OwTransportEntry = $false }
     ConvertTo-ReplyText $reply $Code -AllowEmpty:$AllowEmpty -NoTraceback:$NoTraceback
 }
-# The same for a command script file (Invoke-GamePyFile: RG_OUT set to local/realgame/<OutFolder>). A probe that only defines functions
-# prints nothing, so its load passes -AllowEmpty.
-function Invoke-GameReplyFile([string]$Path, [string]$OutFolder = 'out', [int]$Timeout = 30, [switch]$AllowEmpty, [switch]$NoTraceback) {
+# The same for a command script file (Invoke-GamePyFile: RG_OUT set to local/realgame/<OutFolder>, then -Prelude). A probe that only
+# defines functions prints nothing, so its load passes -AllowEmpty.
+function Invoke-GameReplyFile([string]$Path, [string]$OutFolder = 'out', [int]$Timeout = 30, [switch]$AllowEmpty, [switch]$NoTraceback, [string]$Prelude = '') {
     Assert-DriverAnswers
-    try { $reply = Invoke-GamePyFile $Path $OutFolder $Timeout }
+    $script:OwTransportEntry = $true
+    try { $reply = Invoke-GamePyFile $Path $OutFolder $Timeout $Prelude }
     catch { Set-SliceWatchDriverLost $_; throw }
+    finally { $script:OwTransportEntry = $false }
     ConvertTo-ReplyText $reply "probe file $Path" -AllowEmpty:$AllowEmpty -NoTraceback:$NoTraceback
 }
 
@@ -761,7 +784,7 @@ function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, 
         }
         if ($left -lt 2) { Start-Sleep -Milliseconds ([int]($left * 1000) + 50); continue }   # too little left for a read: the bound ends the wait
         $text = $null; $err = ''
-        try { $text = "$(Invoke-GamePy $read ([int][math]::Min(30, [math]::Floor($left - 1))))".Trim() } catch { $err = "$_" }
+        try { $text = Invoke-GameReply $read ([int][math]::Min(30, [math]::Floor($left - 1))) -SilenceAllowed -AllowEmpty } catch { $err = "$_" }
         $now = Get-Date
         # The bound passed during the read: a reply after it is not taken and updates nothing (not the last reply's time either, which would
         # reopen a silence that had run out); the next turn names the bound.

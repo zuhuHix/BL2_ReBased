@@ -131,6 +131,7 @@ $script:line = $null; "unreadable: $(Stop-OwnGame $me $script:start '-owrun=x')"
 def test_an_old_reply_cannot_answer_a_new_command():
     out = run_stubbed("""$ErrorActionPreference = 'Stop'
 $script:CmdDir = '@TMP@'
+$script:OwTransportEntry = $true   # the raw transport itself, entered as the wrapper enters it
 function New-CommandName {{ 'cT-00000000000000000000000000000001' }}   # the name fixed, so an old reply under it can be planted
 # Stands for the driver: at the moment the command is published, says whether an old reply is there, then answers.
 function Move-Item($From, $To) {{
@@ -142,7 +143,7 @@ function Move-Item($From, $To) {{
 $old = Join-Path $script:CmdDir 'cT-00000000000000000000000000000001.out'
 [IO.File]::WriteAllText($old, 'stale')
 "reply: $(Invoke-GamePy 'print(1)' 5)"
-""".format(helper('Invoke-GamePy')))
+""".format(block('Get-CommandClockUs') + helper('Invoke-GamePy')))
     assert 'old reply at publish: False' in out and 'fresh' in out and 'stale' not in out, out
     # Two real GUID names in a row differ even inside one millisecond; plain .NET, so no module has to load (CI on #263).
     assert '[guid]::NewGuid()' in one_line('New-CommandName') and 'New-CommandName' in helper('Invoke-GamePy')
@@ -245,12 +246,21 @@ def one_line_fn(name):
     return next(line for line in text('realgame').split('\n') if line.startswith(f'function {name}('))
 
 
+def block(name):
+    """A function's text from the shared realgame.ps1, with or without a parameter list."""
+    body = text('realgame')
+    start = re.search(rf'(?m)^function {re.escape(name)}[ (]', body).start()
+    return body[start:body.index('\n}\n', start) + 3]
+
+
+# The real command clock comes first, so a case's virtual clock, defined after it, replaces it.
 TRANSPORT_STUBS = r"""$ErrorActionPreference = 'Stop'
 $script:CmdDir = '@TMP@'; $script:RG = '@TMP@'
 $script:SliceWatchDriverLost = ''
+$script:OwTransportEntry = $true   # these cases test the raw transport itself: entered as the wrapper enters it
 function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
 function Sent { @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py').Count }
-"""
+""" + block('Get-CommandClockUs')
 
 
 def transport():
@@ -296,6 +306,7 @@ def test_one_deadline_covers_publishing_waiting_and_reading():
     out = run_stubbed(TRANSPORT_STUBS + r"""
 $script:t0 = [datetime]'2026-01-01T00:00:00'; $script:now = $script:t0
 function Get-Date { param($Format) if ($Format) { 'T' } else { $script:now } }
+function Get-CommandClockUs { [long](((Get-Date) - [datetime]'2000-01-01').TotalMilliseconds * 1000) }   # the command clock, on the virtual one
 function Start-Sleep { param($Milliseconds)
     $script:now = $script:now.AddMilliseconds($Milliseconds)
     $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')
@@ -355,6 +366,7 @@ def test_no_publication_and_no_reply_taken_after_the_deadline_when_operations_ar
         out = run_stubbed(TRANSPORT_STUBS + r"""
 $script:t0 = [datetime]'2026-01-01T00:00:00'; $script:now = $script:t0
 function Get-Date { param($Format) if ($Format) { 'T' } else { $script:now } }
+function Get-CommandClockUs { [long](((Get-Date) - [datetime]'2000-01-01').TotalMilliseconds * 1000) }   # the command clock, on the virtual one
 function Start-Sleep { param($Milliseconds) $script:now = $script:now.AddMilliseconds($Milliseconds) }
 function Test-Path {
     if ($args[0] -eq '-LiteralPath') { $script:now = $script:now.AddSeconds(STALE) } else { $script:now = $script:now.AddSeconds(EXISTS) }
@@ -385,7 +397,7 @@ def test_a_fault_at_the_first_statement_of_either_transport_function_is_no_reply
     # Review of #263, R2: the deadline's first clock read sat before Invoke-GamePy's boundary, and Invoke-GamePyFile's delegation after its
     # own. Every statement of both bodies is now inside; only the parameter binding is outside.
     cases = {
-        'Invoke-GamePy, its first clock read': ("function Get-Date { throw 'invented: the clock failed' }", "Invoke-GamePy 'print(1)' 3"),
+        'Invoke-GamePy, its first clock read': ("function Get-CommandClockUs { throw 'invented: the clock failed' }", "Invoke-GamePy 'print(1)' 3"),
         'Invoke-GamePyFile, its first statement': ("function Join-Path { throw 'invented: no path' }", "Invoke-GamePyFile 'x.py' 'out' 3"),
         'Invoke-GamePyFile, its delegation': ("function Invoke-GamePy { throw 'invented: the delegation failed' }",
                                               "Invoke-GamePyFile (Join-Path $script:CmdDir 'p.py') 'out' 3"),
@@ -435,6 +447,7 @@ def test_a_failed_test_cleanup_never_hides_the_tests_own_error():
 VIRTUAL_CLOCK = r"""
 $script:t0 = [datetime]'2026-01-01T00:00:00'; $script:now = $script:t0
 function Get-Date { param($Format) if ($Format) { 'T' } else { $script:now } }
+function Get-CommandClockUs { [long](((Get-Date) - [datetime]'2000-01-01').TotalMilliseconds * 1000) }   # the command clock, on the virtual one
 function Start-Sleep { param($Milliseconds) $script:now = $script:now.AddMilliseconds($Milliseconds) }
 """
 
@@ -448,6 +461,7 @@ function Get-Date { param($Format)
     if ($Format) { return 'T' }
     if (!$script:jumped -and @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py.tmp').Count) { $script:jumped = $true; $script:now = $script:now.AddSeconds(5) }
     $script:now }
+function Get-CommandClockUs { [long](((Get-Date) - [datetime]'2000-01-01').TotalMilliseconds * 1000) }   # the command clock, on the virtual one
 $script:moves = 0
 function Move-Item($From, $To) { $script:moves++; [IO.File]::Move($From, $To) }
 """ + transport() + r"""
@@ -461,26 +475,28 @@ try { Invoke-GamePy 'print(1)' 3 | Out-Null; $e = 'returned' } catch { $e = "$_"
 
 
 def test_every_published_command_carries_its_deadline_and_a_refusal_is_no_reply():
-    """B1: the receiver enforces the deadline, so the sender puts it in the command: the first line names the call's deadline in Unix
-    milliseconds of this machine's clock. A stand-in driver that refuses the command (as openwillow_realgame does with an expired one)
-    answers 'OW-REFUSED: ...'; the transport fails in the no-reply form, which the shared wrapper latches."""
+    """B1: the receiver enforces the deadline, so the sender puts it in the command: the first line names the call's deadline on the
+    command clock (the performance counter, in microseconds; round 2, blocker 1). A stand-in driver that refuses the command (as
+    openwillow_realgame does with an expired one) answers 'OW-REFUSED: ...'; the transport fails in the no-reply form, which the shared
+    wrapper latches."""
     out = run_stubbed(TRANSPORT_STUBS + r"""
 function Start-Sleep { foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) {
     $script:first = @(Get-Content -LiteralPath $py.FullName)[0]
     Rename-Item -LiteralPath $py.FullName ($py.Name + '.expired')
     [IO.File]::WriteAllText([IO.Path]::ChangeExtension($py.FullName, '.out'), "OW-REFUSED: not run: its deadline passed 7 ms before the driver took it`n") } }
 """ + transport() + wrapper() + r"""
-$before = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$before = Get-CommandClockUs
 try { Invoke-GameReply 'print(1)' 5 | Out-Null; $e = 'returned' } catch { $e = "$_" }
 "first: $script:first"
 "window: $before"
 "error: $e"
 "latched: $(Get-DriverLostReason)"
 """)
-    first = re.search(r'first: # ow-deadline-unix-ms: (\d+)', out)
+    first = re.search(r'first: # ow-deadline-qpc-us: (\d+)$', out, flags=re.M)
     assert first, out
     ahead = int(first.group(1)) - int(re.search(r'window: (\d+)', out).group(1))
-    assert 4000 <= ahead <= 6000, (ahead, out)   # the call's own 5 s from now
+    # The call's own 5 s from when it began, which is after the window's reading; up to 10 s more for a runner that stalls (item 9).
+    assert 5_000_000 <= ahead <= 15_000_000, (ahead, out)
     assert re.search(r'error: no reply to c\S+ \(the driver refused it: not run: its deadline passed 7 ms', out), out
     assert re.search(r'latched: no reply to c\S+ \(the driver refused it', out), out
 
@@ -580,6 +596,70 @@ foreach ($call in { Send-KeyDown E }, { Send-Key F }, { Send-MouseEvent 0x2 }, {
     assert out.count('refused: not sent: the driver stopped answering (no reply to c-invented)') == 3 and '\nsent\n' not in out, out
     assert out.count('input refused: refusing to send input: the driver stopped answering') == 7 and 'input sent' not in out, out
     assert 'inputs after: 0' in out and 'release: released key W' in out and 'sent after: 0' in out, out
+
+
+
+# ---------------------------------------------------------------- the session gate's second review (2026-11-13)
+def test_the_raw_transport_refuses_unless_the_wrapper_entered_it():
+    """Item 7: a raw call written past the text guard (a name built at run time, a wrapper of a script's own) must send nothing. The real
+    realgame.ps1: a direct call of either raw function, by a name built at run time, is refused before anything is written, and leaves
+    in the no-reply form; through the wrapper the same command goes out."""
+    out = run_stubbed(r"""$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+$script:CmdDir = '@TMP@'
+function Start-Sleep { foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) { Rename-Item -LiteralPath $py.FullName ($py.Name + '.done'); [IO.File]::WriteAllText([IO.Path]::ChangeExtension($py.FullName, '.out'), 'answer') } }
+[IO.File]::WriteAllText((Join-Path $script:CmdDir 'p.txt'), 'print(1)')
+foreach ($call in { & ('Invoke-' + 'GamePy') 'print(1)' 5 }, { & ('Invoke-' + 'GamePyFile') (Join-Path $script:CmdDir 'p.txt') 'x' 5 }) {
+    try { & $call | Out-Null; 'raw sent' } catch { "raw refused: $_" } }
+"files: $(@(Get-ChildItem -LiteralPath $script:CmdDir -Filter 'c*').Count)"
+"wrapped: $(Invoke-GameReply 'print(1)' 5)"
+"token after: $script:OwTransportEntry"
+""".replace('__REALGAME__', str(R / 'realgame.ps1')))
+    assert out.count('raw refused: no reply to ') == 2 and 'the raw transport is entered only through Invoke-GameReply' in out, out
+    assert 'raw sent' not in out and 'files: 0' in out, out   # nothing written, nothing published
+    assert 'wrapped: answer' in out and 'token after: False' in out, out
+
+
+def test_a_second_dot_source_keeps_a_lost_driver():
+    """Item 7: loading realgame.ps1 again reset the condition, so a lost driver could be talked to again."""
+    out = run_stubbed(r"""$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+function Invoke-GamePy($Code, $T) { throw 'no reply to c-invented' }
+try { Invoke-GameReply 'print(1)' | Out-Null } catch { }
+. '__REALGAME__'
+function Invoke-GamePy($Code, $T) { 'answer' }
+try { Invoke-GameReply 'print(1)' | Out-Null; 'sent' } catch { "refused: $_" }
+""".replace('__REALGAME__', str(R / 'realgame.ps1')))
+    assert 'refused: not sent: the driver stopped answering (no reply to c-invented)' in out and '\nsent' not in out, out
+
+
+def test_a_command_its_caller_gave_up_on_is_withdrawn_before_the_driver_takes_it():
+    """Item 6: when a call gives up after its command went out (here an early transport error while waiting; its deadline the same way),
+    the command was left queued and could still run within its deadline. The call now renames it <name>.py.withdrawn, which the driver
+    never lists. A command the driver already took is left as the driver left it."""
+    out = run_stubbed(TRANSPORT_STUBS + r"""
+$script:waits = 0
+function Test-Path { $script:waits++; if ($script:waits -ge 3) { throw 'invented: the wait failed early' }; $false }
+""" + transport() + r"""
+try { Invoke-GamePy 'print(1)' 30 | Out-Null; $e = 'returned' } catch { $e = "$_" }
+"error: $e"
+"queued: $(@(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py').Count)"
+"withdrawn: $(@(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py.withdrawn').Count)"
+""")
+    assert re.search(r'error: no reply to c\S+ \(transport error: invented: the wait failed early\)', out), out
+    assert 'queued: 0' in out and 'withdrawn: 1' in out, out
+    # Taken already (the stand-in driver renamed it .py.done) and then the deadline: nothing is renamed again.
+    out = run_stubbed(TRANSPORT_STUBS + VIRTUAL_CLOCK + r"""
+function Get-CommandClockUs { [long](((Get-Date) - [datetime]'2000-01-01').TotalMilliseconds * 1000) }
+$script:taken = $false
+function Start-Sleep { param($Milliseconds) $script:now = $script:now.AddMilliseconds($Milliseconds)
+    foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) { Rename-Item -LiteralPath $py.FullName ($py.Name + '.done') } }
+""" + transport() + r"""
+try { Invoke-GamePy 'print(1)' 2 | Out-Null; $e = 'returned' } catch { $e = "$_" }
+"error: $e"
+"done: $(@(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py.done').Count) withdrawn: $(@(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.withdrawn').Count)"
+""")
+    assert re.search(r'error: no reply to c\S+$', out, flags=re.M) and 'done: 1 withdrawn: 0' in out, out
 
 
 if __name__ == '__main__':

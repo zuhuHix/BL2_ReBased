@@ -82,7 +82,7 @@ function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     Add-Content -LiteralPath (Join-Path $work 'events.txt') 'cmd'   # every driver command, in order with the keys, clicks and losses
     switch -Wildcard ($Code) {
-        '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; Set-Content -LiteralPath (Join-Path $work 'immune_off_at.txt') ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0); return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
+        '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; Set-Content -LiteralPath (Join-Path $work 'immune_off_at.txt') ([Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency).ToString([Globalization.CultureInfo]::InvariantCulture); return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
         '*sw_start(*' { if ($scenario -eq 'watch_start_stop_lost') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; $script:watchStarted = $true; return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
@@ -167,7 +167,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*dp_replace*' {
             # The den down's re-placement; every call is counted on disk, so a test sees one that was sent when it should not have been.
             Add-Content -LiteralPath (Join-Path $work 'replace_calls.txt') 'sent'
-            $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+            $now = ([Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency).ToString([Globalization.CultureInfo]::InvariantCulture)   # the command clock
             Add-Content -LiteralPath (Join-Path $work 'replace_waits.txt') ("$TimeoutSeconds " + $(if ($Code -match 'until=([\d.]+)') { $Matches[1] } else { 'no-until' }) + " $now")
             if ($scenario -eq 'down_at_replace') { $script:downNow = $true; return '{"result": "not_up", "state": "injured_flag"}' }   # down since the poll
             return '{"result": "placed", "enemy": "WillowAIPawn_1", "dist": 900.0}'
@@ -795,7 +795,8 @@ class DenDownReplacementTest(unittest.TestCase):
         # Review of #255, B1: the window limited when a re-placement was sent, not when it ran; its command waited the default 30 s.
         done, session = self.run_down('replace_one', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
         wait, until, now = self.placement_waits()[0]
-        # Review of #255, B8: the VALUE of until is the window's end as epoch seconds: the window starts right after the immunity goes.
+        # Review of #255, B8: the VALUE of until is the window's end, on the command clock (the performance counter in seconds) since the
+        # session gate's second review: the window starts right after the immunity goes.
         off = float((self.work / 'immune_off_at.txt').read_text(encoding='utf-8'))
         self.assertAlmostEqual(until, off + 9, delta=1.5)
         self.assertLess(wait, until - now)   # and its reply wait fits in what is left of the window
@@ -1324,10 +1325,14 @@ class DpReplaceTest(unittest.TestCase):
 
     def test_a_late_call_moves_nothing(self):
         # Review of #255, B1: a call at or after the window's end answers 'late' and moves nothing, also when the end passes during it.
-        self.ns['time'] = self.Obj(time=lambda: 2000.0)
+        # The probe reads the command clock (qpc_seconds, from the driver's scope), never the wall clock.
+        self.ns['qpc_seconds'] = lambda: 2000.0
+        self.ns['time'] = self.Obj(time=lambda: 0.0)   # a wall clock stepped far back must not matter
+        self.assertEqual(self.ns['dp_replace'](until=1000.0), {'result': 'late'})
+        self.ns['qpc_seconds'] = lambda: 1000.0   # at the end exactly: late as well
         self.assertEqual(self.ns['dp_replace'](until=1000.0), {'result': 'late'})
         ticks = iter([999.0, 1001.0])   # in time at the start, past the end right before the placement
-        self.ns['time'] = self.Obj(time=lambda: next(ticks))
+        self.ns['qpc_seconds'] = lambda: next(ticks)
         self.assertEqual(self.ns['dp_replace'](until=1000.0), {'result': 'late'})
         self.assertEqual(self.placed, [])
 

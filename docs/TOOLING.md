@@ -1554,20 +1554,31 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   file that is there but cannot be read (read at most 5 times, 200 ms apart: "its reply file could not be read"); a command the driver
   refused ("the driver refused it", below); and any other error inside the boundary, whatever its text, a probe source that cannot be
   read included ("transport error").
-  **The deadline, and what it bounds (since 2026-11-13).** One deadline per call, its timeout, starts before anything else the call
-  does: for `Invoke-GamePyFile`, before the probe's source is read, so a slow read counts against it. It is checked before each
-  publication attempt, after the command's file is written and immediately before the rename that publishes it, while waiting,
-  before each read and before a reply is returned, and every retry and pause is clamped to what is left of it. A write that ends
-  after it is not renamed ("not sent: the deadline passed while its file was written"), and a reply read after it is not taken. The
-  deadline also travels with the command: its first line is `# ow-deadline-unix-ms: <ms>` (this machine's wall clock, which the
-  sender and the driver both read). The driver (`openwillow_realgame`, `run_pending`) checks it once, when it takes the command and
-  before running it: a command whose deadline has passed, or that names none or an unreadable one, is not run, is renamed
-  `<name>.py.expired`, and gets the one-line reply `OW-REFUSED: not run: <why>`, which the sender, should it still be waiting, turns
-  into "no reply to <name> (the driver refused it: ...)". So a command whose caller gave up is never run later, however slow the
-  rename or the driver's next look. What stays unbounded, named plainly: a command the driver took before its deadline runs to its
-  end, even past the deadline (the driver cannot stop Python code on the game thread); and a file operation already under way when the
-  deadline passes finishes, so a call can end later than its timeout by that one operation plus at most one pause, and a rename that
-  began just before the last check can still land (the driver then refuses that command). A reply that comes late is never taken for
+  **The deadline, and what it bounds (since 2026-11-13).** Every deadline here is on the command clock: the performance counter
+  (`QueryPerformanceCounter`), in microseconds, read by the sender through .NET's `Stopwatch` (`Get-CommandClockUs`) and by the driver
+  through the Windows API with `ctypes`, which the SDK's Python ships (should it be missing, `time.perf_counter`, which CPython reads from
+  the same counter). Its resolution is the counter's frequency (10 MHz on the zuhu desktop, so 0.1 us; the deadline is kept in whole
+  microseconds). It is monotonic and the same in every process on this PC, so a wall-clock step, backwards or forwards, moves neither a
+  deadline nor the driver's comparison; the wall clock is used for log time stamps only. The den down's re-placement window
+  (`dp_replace`'s `until`) is on the same clock. One deadline per call, its timeout, starts before anything else the call does: for
+  `Invoke-GamePyFile`, before the probe's source is read, so a slow read counts against it. It is checked before each publication
+  attempt, after the command's file is written and immediately before the rename that publishes it, while waiting, before each read and
+  before a reply is returned, and every retry and pause is clamped to what is left of it. A write that ends after it is not renamed ("not
+  sent: the deadline passed while its file was written"), and a reply read after it is not taken. The deadline also travels with the
+  command: its first line is `# ow-deadline-qpc-us: <us>`. The driver (`openwillow_realgame`, `run_pending`) checks it once, when it
+  takes the command and before running it: a command taken at or after its deadline, or that names none, an unreadable one or one in the
+  old wall-clock form (`# ow-deadline-unix-ms:`), is not run, is renamed `<name>.py.expired`, and gets the one-line reply `OW-REFUSED: not
+  run: <why>`, which the sender, should it still be waiting, turns into "no reply to <name> (the driver refused it: ...)". When a call
+  gives up after its command went out (its deadline, or any transport error while waiting), it withdraws the command, renaming it
+  `<name>.py.withdrawn`, which the driver never lists; a withdrawal that lands between the driver's listing and its own rename leaves the
+  driver no file, and it skips the command. So a command is never run after its deadline, and one its caller gave up on runs only if the
+  driver had already taken it. The raw transport (`Invoke-GamePy`, `Invoke-GamePyFile`) refuses unless the wrapper entered it, and a
+  second dot-source of `realgame.ps1` keeps a condition already set. **What stays unbounded**, named here once: a command the driver
+  took before its deadline runs to its end, even past the deadline (the driver cannot stop Python code on the game thread); and a file
+  operation already under way when the deadline passes finishes, so a call can end later than its timeout by that one operation plus at
+  most one pause, and a rename that began just before the last check can still land (the driver then refuses that command, or the
+  withdrawal removes it first). In a session both are contained by the session wrapper's watchdog, which stops the capture by its
+  recorded PID at the item's limit, and by the recovery. A reply that comes late is never taken for
   another command's: it goes to its own command's name (a GUID, made with plain .NET so no module has to load), each call reads only
   its own name's file, and any file under that name was removed before the command went out; nothing is taken from a failed read.
   The driver publishes each reply whole (written as `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once

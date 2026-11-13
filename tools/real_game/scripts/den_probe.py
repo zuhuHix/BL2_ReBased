@@ -224,14 +224,15 @@ def dp_replace(distance=1600.0, radius=6000.0, near=3500.0, until=None):
     Where: the first placement's enemy at dp_begin's bearing 180, the one side proven open ground (result 'first'); any other on the
     side she is on now, the bearing from the two Location fields (result 'kind_my_side'). A candidate on her own spot (under 1 uu apart
     horizontally) has no side and is passed over for the next.
-    When: `until` is the den-down window's end as wall-clock seconds since 1970 (time.time() here, the same clock as the capture's). A
-    call that comes at or after it moves nothing and answers 'late', checked again right before the placement (review of #255).
+    When: `until` is the den-down window's end in seconds of the command clock (qpc_seconds(), from the driver's scope: the performance
+    counter, which the capture reads too and which a wall-clock step does not move). A call that comes at or after it moves nothing and
+    answers 'late', checked again right before the placement (review of #255; the clock since the session gate's second review).
     Called on what: cp_down_state's GetHealth and GetShieldStrength on the player's own pawn; on each scanned pawn, field reads only;
     cb_place sets the player's own pawn's Location and SetPhysics on it and turns the player's own controller (ClientSetRotation).
     The open den trial is left as dp_begin opened it. Never raises: the reply is always a result word for the log, and 'not_up' leaves
     the down to the next poll."""
     try:
-        if until is not None and time.time() >= until:
+        if until is not None and qpc_seconds() >= until:
             return {"result": "late"}
         state = cp_down_state().get("state")   # GetHealth and GetShieldStrength on the player's own pawn only
         if state != "up":
@@ -265,7 +266,7 @@ def dp_replace(distance=1600.0, radius=6000.0, near=3500.0, until=None):
         for (rank, not_first, dist), name, t, kind in ranked:
             if not_first and math.hypot(here.X - t.X, here.Y - t.Y) < 1.0:
                 continue   # she stands on its spot: no side to keep
-            if until is not None and time.time() >= until:
+            if until is not None and qpc_seconds() >= until:
                 return {"result": "late"}
             if not not_first:
                 cb_place(name, distance, 180.0)

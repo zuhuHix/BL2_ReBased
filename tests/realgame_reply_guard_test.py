@@ -3,11 +3,14 @@ reply wrapper of tools/real_game/realgame.ps1 (Invoke-GameReply, Invoke-GameRepl
 came, nothing more is sent, and a transport failure sets the condition. Before the session gate's review of 2026-11-13 each capture had its
 own wrapper, and one of them (phaselock_integrity_capture's Py) ignored the condition (B2).
 
-The rule, per capture script (every tools/real_game/*.ps1 but realgame.ps1, which holds the transport and the wrapper, and pending.ps1,
-which sends nothing to the driver):
+The rule, per script (every .ps1 and .psm1 anywhere under tools/real_game/ but realgame.ps1, which holds the transport and the wrapper,
+and pending.ps1, which sends nothing to the driver), in any letter case:
 - no call of the raw transport, Invoke-GamePy or Invoke-GamePyFile, not even for a command whose answer it drops: a probe load or a quit
   that times out must set the condition too;
-- no reply wrapper of its own: no call of ConvertTo-ReplyText, no definition of the wrapper's pieces, and no write to the condition.
+- no reply wrapper of its own: no call of ConvertTo-ReplyText, no definition of the wrapper's pieces, and no write to the condition or to
+  the transport's entry token, by assignment or by a *-Variable cmdlet.
+The text check cannot see a name built at run time; the run time closes that: the raw transport refuses unless the wrapper entered it
+(tests/real_game_migration_test.py), and a second dot-source of realgame.ps1 keeps a condition already set.
 A capture may keep a short helper (Py, PyJson) for readability; with no raw transport call it can reach the game only through the shared
 wrapper, so the refusal and the latching cannot be left out. A script that cannot follow the rule yet goes into EXCEPTIONS with its reason
 (as OW_OUTSIDE_CTEST does in tests/CMakeLists.txt); an entry that no longer breaks the rule fails the test, so the list cannot go stale.
@@ -24,11 +27,14 @@ NOT_CAPTURES = {'realgame.ps1', 'pending.ps1'}
 # script file name -> why it may break the rule for now. Empty since every capture was converted (2026-11-13).
 EXCEPTIONS = {}
 
-RAW = re.compile(r'\bInvoke-GamePy(File)?\b')
+RAW = re.compile(r'\bInvoke-GamePy(File)?\b', re.IGNORECASE)
+STATE = r'(SliceWatchDriverLost|OwTransportEntry)'
 OWN_WRAPPER = re.compile(r'\bConvertTo-ReplyText\b'
-                         r'|^\s*function\s+(Invoke-GameReply|Invoke-GameReplyFile|ConvertTo-ReplyText|Set-SliceWatchDriverLost|Get-DriverLostReason'
-                         r'|Assert-DriverAnswers|Assert-InputAllowed)\b'
-                         r'|\$(script:)?SliceWatchDriverLost\s*=(?!=)', re.IGNORECASE)
+                         r'|^\s*function\s+(\w+:)?(Invoke-GameReply|Invoke-GameReplyFile|ConvertTo-ReplyText|Set-SliceWatchDriverLost|Get-DriverLostReason'
+                         r'|Assert-DriverAnswers|Assert-InputAllowed|Get-CommandClockUs)\b'
+                         r'|\$(\w+:)?' + STATE + r'\s*([-+*/]?=)(?!=)'
+                         r'|\b(Set|New|Clear|Remove)-Variable\b[^\n]*\b' + STATE + r'\b'
+                         r'|\bvariable:(\w+:)?' + STATE + r'\b', re.IGNORECASE)
 
 
 def code_lines(text):
@@ -50,7 +56,7 @@ def breaches(text):
 
 
 def captures():
-    return sorted(p for p in TOOLS.glob('*.ps1') if p.name not in NOT_CAPTURES)
+    return sorted(p for p in TOOLS.rglob('*') if p.suffix.lower() in ('.ps1', '.psm1') and p.relative_to(TOOLS).as_posix() not in NOT_CAPTURES)
 
 
 class ReplyGuardTest(unittest.TestCase):
@@ -88,13 +94,23 @@ class ReplyGuardTest(unittest.TestCase):
                      "try { Invoke-GamePy 'quit' 10 | Out-Null } catch { }",
                      "catch { $script:SliceWatchDriverLost = \"$_\"; throw }",
                      "function Set-SliceWatchDriverLost($Err) { }",
-                     "$reply = ConvertTo-ReplyText $raw $Code"):
+                     "$reply = ConvertTo-ReplyText $raw $Code",
+                     "invoke-gamepy 'print(1)' 5",
+                     "& (Get-Command INVOKE-GAMEPYFILE) x.py",
+                     "Set-Variable -Name SliceWatchDriverLost -Value '' -Scope Script",
+                     "Clear-Variable SliceWatchDriverLost",
+                     "$global:SliceWatchDriverLost = ''",
+                     "$script:OwTransportEntry = $true",
+                     "${variable:script:SliceWatchDriverLost}",
+                     "function global:Invoke-GameReply { }"):
             self.assertTrue(breaches(line), line)
         for line in ("function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }",
                      "Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/x.py') x -AllowEmpty | Out-Null",
                      "if ($script:SliceWatchDriverLost) { return }",
                      "if ($script:SliceWatchDriverLost -eq '') { }",
-                     "    # Invoke-GamePy is the raw transport (a whole-line comment)"):
+                     "    # Invoke-GamePy is the raw transport (a whole-line comment)",
+                     "if ($script:OwTransportEntry) { }",
+                     "Get-Variable SliceWatchDriverLost"):
             self.assertFalse(breaches(line), line)
 
 

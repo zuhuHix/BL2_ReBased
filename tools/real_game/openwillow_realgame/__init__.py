@@ -12,10 +12,12 @@ appends `{"t": time.perf_counter(), ...}` to `events.jsonl` in the command folde
 `time.perf_counter()` is QueryPerformanceCounter, the same clock as .NET Stopwatch.GetTimestamp,
 so in-game marks can be lined up with screenshots taken by tools/real_game/realgame.ps1.
 
-Each command's first line names its deadline (`# ow-deadline-unix-ms: <ms>`, this machine's wall clock, which the sender
-reads too). A command whose deadline has passed when the driver takes it, or that names none, is not run: it is renamed to
-`<name>.py.expired` and its reply is one line starting `OW-REFUSED: `, so the sender, the folder and a test can all see it.
-A command that started before its deadline runs to its end; that part is not bounded.
+Each command's first line names its deadline (`# ow-deadline-qpc-us: <us>`) on the command clock: the performance counter
+(QueryPerformanceCounter, read here through ctypes), in microseconds, monotonic and the same in every process on this PC, so a
+wall-clock step moves nothing. A command taken at or after its deadline, or that names none (or one in the old wall-clock form),
+is not run: it is renamed to `<name>.py.expired` and its reply is one line starting `OW-REFUSED: `, so the sender, the folder
+and a test can all see it. A command the sender withdrew (`<name>.py.withdrawn`) is never seen. A command that started before
+its deadline runs to its end (docs/TOOLING.md, "Driver lost", names what is not bounded).
 
 Scripts run inside a frame: keep them short (no sleeps). Local developer use only; whatever the
 scripts write is game data and stays under local/.
@@ -103,32 +105,61 @@ def _add_save_hooks():
     return len(SAVE_FUNCTIONS)
 
 
+def _command_clock():
+    """The command clock in microseconds, and what reads it. The performance counter through the Windows API (ctypes ships with the
+    SDK's Python); the sender reads the same counter through .NET's Stopwatch (Get-CommandClockUs in realgame.ps1). Should ctypes be
+    missing, time.perf_counter, which CPython on Windows reads from the same QueryPerformanceCounter without an offset."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        frequency = ctypes.c_int64()
+        if not kernel32.QueryPerformanceFrequency(ctypes.byref(frequency)) or frequency.value <= 0:
+            raise OSError("no performance counter")
+
+        def read_us():
+            count = ctypes.c_int64()
+            kernel32.QueryPerformanceCounter(ctypes.byref(count))
+            return count.value * 1_000_000 // frequency.value
+        return read_us, f"QueryPerformanceCounter through ctypes, {frequency.value} Hz"
+    except Exception:
+        return (lambda: int(time.perf_counter() * 1_000_000)), "time.perf_counter (QueryPerformanceCounter in CPython on Windows)"
+
+
+command_clock_us, COMMAND_CLOCK = _command_clock()
+
+
 # Command scripts must look objects up again in every command: a reference kept from an earlier
 # command can point at an object the game has since moved or destroyed (an inventory slot swap
-# through such a reference crashed the game on 2026-10-02).
+# through such a reference crashed the game on 2026-10-02). qpc_seconds is the command clock in seconds, for a probe that compares a
+# time the capture sent (den_probe.dp_replace's window end).
 scope = {"unrealsdk": unrealsdk, "find": unrealsdk.find_object, "find_all": unrealsdk.find_all,
          "get_pc": get_pc, "plain": plain, "mark": mark, "Type": Type, "add_hook": add_hook,
-         "block_saves": block_saves}
+         "block_saves": block_saves, "qpc_seconds": lambda: command_clock_us() / 1_000_000}
 
 
-# The deadline line the sender (Invoke-GamePy in tools/real_game/realgame.ps1) puts first in every command, and the start of the
-# reply that says a command was refused. Both spellings are also written out in realgame.ps1; tests/block_saves_test.py holds them equal.
-DEADLINE_PREFIX = "# ow-deadline-unix-ms: "
+# The deadline line the sender (Invoke-GamePy in tools/real_game/realgame.ps1) puts first in every command, the wall-clock form it
+# used before the session gate's second review, and the start of the reply that says a command was refused. The spellings are also
+# written out in realgame.ps1; tests/block_saves_test.py holds them equal.
+DEADLINE_PREFIX = "# ow-deadline-qpc-us: "
+WALL_CLOCK_PREFIX = "# ow-deadline-unix-ms:"
 REFUSED_PREFIX = "OW-REFUSED: "
 
 
-def refusal(code, now_ms):
-    """Why the command must not run, or None when it may: its deadline has passed, or it names none (a command written by
-    anything other than the sender, or cut off, is never run without a bound)."""
+def refusal(code, now_us):
+    """Why the command must not run, or None when it may: its deadline has been reached (equality included), or it names none, or
+    only one on the wall clock, which a clock step could revive (a command written by anything other than the sender, or cut off, is
+    never run without a bound)."""
     first = code.split("\n", 1)[0].strip()
+    if first.startswith(WALL_CLOCK_PREFIX):
+        return "its deadline is on the wall clock (the old form), which the driver no longer trusts"
     if not first.startswith(DEADLINE_PREFIX.strip()):
         return "the command names no deadline"
     try:
         deadline = int(first[len(DEADLINE_PREFIX.strip()):].strip())
     except ValueError:
         return "the command's deadline line is unreadable"
-    if now_ms > deadline:
-        return f"its deadline passed {now_ms - deadline} ms before the driver took it"
+    if now_us >= deadline:
+        return f"its deadline was reached {now_us - deadline} us before the driver took it"
     return None
 
 
@@ -137,10 +168,15 @@ def run_pending():
     if not folder.is_dir():
         return
     for script in sorted(folder.glob("*.py")):
-        code = script.read_text(encoding="utf-8")
-        # Checked once, when the driver takes the command and before it runs: what has started is not stopped at its deadline.
-        refused = refusal(code, int(time.time() * 1000))
-        script.replace(script.with_suffix(".py.expired" if refused else ".py.done"))
+        # Checked once, when the driver takes the command and before it runs: what has started is not stopped at its deadline. A command
+        # its sender withdrew between the listing and the rename (it gave up waiting) is gone from <name>.py: it is skipped, not run, and
+        # the next one is still taken.
+        try:
+            code = script.read_text(encoding="utf-8")
+            refused = refusal(code, command_clock_us())
+            script.replace(script.with_suffix(".py.expired" if refused else ".py.done"))
+        except FileNotFoundError:
+            continue
         out = io.StringIO()
         if refused:
             out.write(f"{REFUSED_PREFIX}not run: {refused}\n")

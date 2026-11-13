@@ -3,7 +3,8 @@
 AI-assisted (Claude Code). Before the approved capture session, a second-model review of the capture tools on main said NO-GO with two
 blockers. Both were found again after six review rounds of the same transport, each finding one more case of two classes: a command
 acting after its caller gave up, and one capture script not following the lost-driver rule the others follow. This change closes the
-two classes where they start, not only the cases listed.
+two classes where they start, not only the cases listed. A second review round of the same day (three blockers, one in the tools and
+two in the private session wrapper, plus smaller items) is folded into this file, which is not on main yet.
 
 Edits: docs/decisions/2026-11/2026-11-13-02-an-unreadable-reply-file-is-a-lost-driver.md
 
@@ -13,20 +14,35 @@ driver ran whatever was queued with no expiry, so a command its caller had given
 what holds after this change is below.
 
 **B1, the deadline is the receiver's to enforce.**
-- Every command the sender publishes (`Invoke-GamePy`, `tools/real_game/realgame.ps1`) starts with the line
-  `# ow-deadline-unix-ms: <ms>`: the call's own deadline in Unix milliseconds of this machine's wall clock, which the game's driver reads
-  too (both run on the same PC).
+- One clock for every deadline, on both sides: the command clock, the performance counter (`QueryPerformanceCounter`) in
+  microseconds. The sender reads it through .NET's `Stopwatch` (`Get-CommandClockUs`, `realgame.ps1`), the driver through the Windows
+  API with `ctypes`, which the SDK's Python 3.14 ships (`_ctypes.pyd` and `ctypes` in the installed SDK, listed read-only); without
+  `ctypes` it would read `time.perf_counter`, which CPython takes from the same counter (here the two readings differed by 0.9 us, the
+  gap between them). The resolution is the counter's frequency, 10 MHz on the zuhu desktop; the deadline is kept in whole microseconds.
+  The counter is monotonic and shared by every process on the PC. The first round used the wall clock on both sides, and a clock
+  stepped back after the sender gave up put the queued command inside its deadline again (the second review reproduced it with the
+  synthetic driver). A tick-count fallback, which that review offered, is not used: the sender would have to read the same tick count,
+  and the counter is there on both sides. The den down's re-placement window (`dp_replace`'s `until`) moved to the same clock.
+- Every command the sender publishes (`Invoke-GamePy`) starts with the line `# ow-deadline-qpc-us: <us>`, the call's deadline on the
+  command clock.
 - The driver (`tools/real_game/openwillow_realgame/__init__.py`, `run_pending`) checks that line once, when it takes a command and
-  before it runs it. A command whose deadline has passed, or that names none or an unreadable one, is not run: it is renamed
-  `<name>.py.expired` and its reply is the one line `OW-REFUSED: not run: <why>`. The folder shows it, a test can read it, and a
-  sender still waiting turns it into "no reply to <name> (the driver refused it: ...)", which the lost-driver latch takes.
+  before it runs it. A command taken at or after its deadline (equality included; the first round compared floored milliseconds with
+  `>`), or that names none, an unreadable one or one in the old wall-clock form, is not run: it is renamed `<name>.py.expired` and its
+  reply is the one line `OW-REFUSED: not run: <why>`. The folder shows it, a test can read it, and a sender still waiting turns it into
+  "no reply to <name> (the driver refused it: ...)", which the lost-driver latch takes.
+- A call that gives up after its command went out (its deadline, or any transport error while waiting) withdraws the command by
+  renaming it `<name>.py.withdrawn`, which the driver never lists; if the withdrawal lands between the driver's listing and its own
+  rename, the driver finds no file and skips it. So a command is never run after its deadline, and one its caller gave up on runs only
+  if the driver had already taken it.
 - The sender checks the deadline again after the command's file is written, immediately before the rename that publishes it; a write
   that ends after it is removed and not renamed. `Invoke-GamePyFile` starts the call's deadline before it reads the probe's source and
   hands that same deadline to `Invoke-GamePy`, so a slow read counts against the timeout.
-- Not bounded, named plainly: a command the driver took before its deadline runs to its end, even past the deadline (the driver
-  cannot stop Python code on the game thread); and a file operation under way when the deadline passes finishes, so a call can end
-  later than its timeout by that one operation plus at most one pause, and a rename that began just before the last check can still
-  land (the driver then refuses that command).
+- Not bounded, named here and in `docs/TOOLING.md` ("Driver lost") only: a command the driver took before its deadline runs to its
+  end, even past the deadline (the driver cannot stop Python code on the game thread); and a file operation under way when the deadline
+  passes finishes, so a call can end later than its timeout by that one operation plus at most one pause, and a rename that began just
+  before the last check can still land (the driver then refuses that command, or the withdrawal removes it first). The second review
+  accepts both once the session wrapper stops a capture by its PID at the item's limit whatever its monitoring does, and recovery
+  refuses a clean report while a child's end is unconfirmed; both are in the private session glue, outside the tree.
 - A late reply is never taken for another command's: each command's name holds its own GUID, each call reads only its own name's
   reply, and a file under that name is removed before the command goes out. A test keeps this true.
 
@@ -46,22 +62,34 @@ what holds after this change is below.
 - The input helpers of `realgame.ps1` refuse after the latch as well (`Assert-InputAllowed`): every key press, mouse press or move,
   wheel turn and focus attempt; releases always go out. So a capture that forgets its own `Assert-DriverAnswers` before an input, as
   `phaselock_integrity_capture` had none, still sends nothing.
-- `tests/realgame_reply_guard_test.py` (ctest `py-realgame_reply_guard`) fails a capture script that calls `Invoke-GamePy` or
-  `Invoke-GamePyFile`, calls `ConvertTo-ReplyText`, defines a piece of the wrapper or writes the condition. Its exception list, kept in
-  the style of `OW_OUTSIDE_CTEST`, is empty; an entry that no longer breaks the rule fails it.
+- `tests/realgame_reply_guard_test.py` (ctest `py-realgame_reply_guard`) fails a script (every `.ps1` and `.psm1` under
+  `tools/real_game/` but `realgame.ps1` and `pending.ps1`, in any letter case) that calls `Invoke-GamePy` or `Invoke-GamePyFile`, calls
+  `ConvertTo-ReplyText`, defines a piece of the wrapper, or writes the condition or the transport's entry token, by assignment or a
+  `*-Variable` cmdlet. Its exception list, kept in the style of `OW_OUTSIDE_CTEST`, is empty; an entry that no longer breaks the rule
+  fails it. A text check cannot see a name built at run time, so the run time closes the class: the raw transport refuses (nothing
+  written) unless the wrapper entered it, through a script-scope token the wrapper sets for its call, and a second dot-source of
+  `realgame.ps1` keeps a condition already set. `Wait-PlayerPawn` goes through the wrapper too, as a silence wait that takes an empty
+  reply, as before.
 
 **Smaller items of the same review.** The watch's start (`Start-SliceWatch`) refuses an empty, white-space or nothing-parsing answer and
 leaves the watch off, so its step fails; loading the recorder, which prints nothing, passes `-AllowEmpty` explicitly. `ConvertTo-ReplyText`
 refuses a reply of only white space like an empty one. `walking_capture` no longer takes an empty boot reply for success or an empty
-route status for the route's end.
+route status for the route's end. From the second round: `hud_layout_capture`'s quit at the end of each resolution allows silence
+(every resolution has a game of its own, stopped by its PID before the next starts), so a quit the game did not answer no longer keeps
+the next resolution from talking to its game; `weapon_part_session` loads its probe through the file call (with a `-Prelude` for its
+recipe list), so the source's read is inside the deadline and the boundary.
 
-Verified on stand-ins only (no game was started): the driver refuses a command taken a millisecond after its deadline, and one with no
-or an unreadable deadline, and runs neither then or later, while one in time runs (`tests/block_saves_test.py`); the sender's deadline
-line is the one the driver reads, and its refusal prefix the driver's; no rename after a write that outlasts the deadline (a virtual
-clock); the probe source's read inside the deadline; a late reply not taken for the next command; white-space replies refused; the
-wrapper and the input helpers refusing after a latch (`tests/real_game_migration_test.py`); the Phaselock capture, run whole on a
-stand-in game whose watch start times out and which answers every later command, sends no further command and no key, and still
-restores everything (`tests/real_game_capture_safety_test.py`); an empty or white-space watch start leaves the watch off and fails its
-step (`tests/slice_watch_test.py`). Each of these fails on main 8c08bc6 except the late-reply test, which main already passed. The
-existing real-game test files pass with the change. `UNVERIFIED`: none of this has run in the game; whether the game's wall clock and
-the PowerShell side ever disagree on this PC is not known (both read the same system clock).
+Verified on stand-ins only (no game was started). `tests/block_saves_test.py`: the driver refuses a command taken a microsecond after
+its deadline and one taken at it, and one with no, an unreadable or a wall-clock deadline, and runs none of them then or later, while one
+in time runs; a command the real sender published with a 1 s timeout, taken 10 s later on the command clock while the driver's wall
+clock reads an hour earlier, is refused (this case fails on the first round's head 0b78a6f, where it ran); a command withdrawn between
+the listing and the rename is skipped and the next one runs; the sender's deadline line is the one the driver reads.
+`tests/real_game_migration_test.py`: no rename after a write that outlasts the deadline (a virtual clock); the probe source's read inside
+the deadline; a late reply not taken for the next command; white-space replies refused; the wrapper and the input helpers refusing after
+a latch; a raw call by a name built at run time refused with nothing written; a second dot-source keeping the condition; a command
+withdrawn after an early transport error, and one the driver took left alone. `tests/real_game_capture_safety_test.py`: the Phaselock
+capture, run whole on a stand-in game whose watch start times out and which answers every later command, sends no further command and no
+key, and still restores everything. `tests/slice_watch_test.py`: an empty or white-space watch start leaves the watch off and fails its
+step. The first round's cases fail on main 8c08bc6 except the late-reply test, which main already passed. The existing real-game test
+files pass with the change. `UNVERIFIED`: none of this has run in the game, and the counter's agreement between the game's process and
+PowerShell is shown on this PC with a test Python, not with the game's own.
