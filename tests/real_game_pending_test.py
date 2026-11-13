@@ -14,7 +14,7 @@ import sys
 import tempfile
 import unittest
 
-import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run that does not set its own)
+import realgame_test_env  # a fresh pending-record folder for every PowerShell run that does not set its own; long_path()
 from real_game_capture_safety_test import STUB
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,8 +60,10 @@ def make_tree(tmp):
 
 class PendingBase(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix='ow-pending-test-'))
-        self.pending = Path(tempfile.mkdtemp(prefix='ow-pending-dir-'))
+        # Long form: the tool prints a record's path as Get-ChildItem's FullName gives it, in the long form, and TEMP may hold the 8.3
+        # short form (CI on #264), so a path built from the short folder would name the same file in a different spelling.
+        self.tmp = Path(realgame_test_env.long_path(tempfile.mkdtemp(prefix='ow-pending-test-')))
+        self.pending = Path(realgame_test_env.long_path(tempfile.mkdtemp(prefix='ow-pending-dir-')))
         make_tree(self.tmp)
 
     def tearDown(self):

@@ -44,6 +44,19 @@ def _run_with_pending_dir(args, *rest, **kwargs):
     return _run(args, *rest, **kwargs)
 
 
+def long_path(path):
+    """The long form of an existing path on Windows (GetLongPathNameW: each 8.3 short part, such as RUNNER~1, written out in full);
+    elsewhere, or if the call fails, the path unchanged. Junctions and links are not resolved. A test that builds an expected path from a
+    temp folder needs this where the tool prints a path PowerShell enumerated: Get-ChildItem's FullName comes in the long form, while
+    TEMP can hold the short form (GitHub's Windows runner: its user folder as RUNNER~1, PR #264)."""
+    if os.name != 'nt':
+        return str(path)
+    import ctypes
+    buffer = ctypes.create_unicode_buffer(32768)
+    size = ctypes.windll.kernel32.GetLongPathNameW(str(path), buffer, len(buffer))
+    return buffer.value if 0 < size < len(buffer) else str(path)
+
+
 def remove_tree(path, tries=25, pause=0.2, raising=True):
     """Remove a test folder. A sharing violation (a file scanner still holding a file) is retried, at most `tries` times `pause` s apart;
     one that keeps failing is raised, so it is reported. With raising=False (a cleanup while the test's own error is already on its way)
