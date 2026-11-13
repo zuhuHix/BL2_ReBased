@@ -58,6 +58,7 @@ constexpr float DownHitMargin = 0.5f;     // a range-enemy hit this close before
 
 // The pickup links' wait for a clear view line (a fixture; tools/check_slice_gate.py's VIEW_WAIT reads the bound from the detail).
 constexpr float ViewLineWait = 10.f;      // at most this long past the moment the press was ready
+constexpr float ViewLineReplace = 2.f;    // link 6: blocked this long, Maya is placed on another side of the drop
 constexpr float ViewLineSettle = 0.2f;    // the line clear on every tick this long: the card searches 10 times a second, so its
                                           // cached aimed pickup is then one found with the line clear
 // Unforced: a living enemy within this distance of a drop decides which side of it Maya stands on (pick_up_gun) and which way the
@@ -919,7 +920,7 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
         Place(Target->GetActorLocation() + Away * 80.f + FVector(0, 0, 100.f), Target->GetActorLocation());
         PickupPhase = 1;
         PickupWait = 0.f;
-        ViewWait = ViewClearFor = 0.f;
+        ViewWait = ViewClearFor = ViewReplacedAt = 0.f;
         bViewBlocked = false;
         return false;
     }
@@ -943,16 +944,28 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
         // The press was ready. A fixture: wait for the line to stay clear ViewLineSettle seconds (so the card's 10 Hz search has
         // seen it clear), at most ViewLineWait; something on the line (an enemy walking up to Maya) is not what this link tests.
         // Past the bound the press goes ahead and the link FAILs on the wait, whatever the card says.
-        if (ViewClearFor < ViewLineSettle && ViewWait < ViewLineWait)
+        // The real drop (link 6) is also re-aimed: an enemy meleeing Maya can stand on her eye and stay (lane U's eleventh run), so
+        // after every ViewLineReplace seconds of waiting she is placed on another side of the drop, 120 degrees round (the teleport
+        // fixture), and must be on the ground again before the press. The decoy pair is not moved: its geometry depends on her side.
+        const bool bGrounded = W->GetCharacterMovement()->IsMovingOnGround();
+        if ((ViewClearFor < ViewLineSettle || !bGrounded) && ViewWait < ViewLineWait)
         {
             if (ViewWait == 0.f)
                 UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: waiting up to %.0fs for a clear view line to the aimed drop %s (the OWPICKUPCARD lines name what blocks it)"),
                     ViewLineWait, *PickupId(Target));
             ViewWait += Delta;
             Fixture(TEXT("waited for a clear view line to the aimed drop"));
+            if (Target == Drop && ViewWait >= ViewReplacedAt + ViewLineReplace)
+            {
+                ViewReplacedAt = ViewWait;
+                PickupLastAway = PickupLastAway.RotateAngleAxis(120.f, FVector::UpVector);
+                Place(Target->GetActorLocation() + PickupLastAway * 80.f + FVector(0, 0, 100.f), Target->GetActorLocation());
+                ViewClearFor = 0.f;
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: view line still blocked after %.1fs; Maya placed on another side of the aimed drop"), ViewWait);
+            }
             return false;
         }
-        bViewBlocked = ViewClearFor < ViewLineSettle;
+        bViewBlocked = ViewClearFor < ViewLineSettle || !bGrounded;   // out of time with the line blocked, or in the air
         if (ViewWait > 0.f)
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: view line to the aimed drop %s after %.2fs of waiting"), bViewBlocked ? TEXT("still blocked") : TEXT("clear"), ViewWait);
         // The card the player would see at the moment of the press.

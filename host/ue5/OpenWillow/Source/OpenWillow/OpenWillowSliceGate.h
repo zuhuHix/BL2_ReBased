@@ -191,7 +191,7 @@ private:
     // press the card's own sight test (OpenWillowPickupCard::InSight) must see the aimed drop on ViewLineSettle seconds of
     // ticks in a row, waited for at most ViewLineWait. The time waited past the press-ready point goes in the link's detail
     // (view_wait=, view_line=), and tools/check_slice_gate.py fails a link whose wait ran past its bound.
-    float ViewWait = 0.f, ViewClearFor = 0.f;
+    float ViewWait = 0.f, ViewClearFor = 0.f, ViewReplacedAt = 0.f;   // ViewReplacedAt: the wait's time at the last re-aim
     bool bViewBlocked = false;      // the wait ended at its bound with the line still blocked
     // Unforced, pick_up_gun only: the side of the drop Maya stands on (toward the nearest living enemy, so it comes up behind
     // her); zero keeps the side she comes from, as before.
