@@ -20,19 +20,54 @@ import realgame_snapshot_test as base  # noqa: E402
 CAPTURE = ROOT / 'tools/real_game/mission_screen_capture.ps1'
 
 
-def run_tail(body, clean=True, proc='$null'):
+def run_tail(body, clean=True, proc='$null', stubs='function Remove-Driver { }', after=None):
     """The capture's own end (its catch and finally), after a stubbed body; 'hit' is the one requested stage in the harness."""
     text = CAPTURE.read_text(encoding='utf-8').replace('\r\n', '\n')
     tail = text[text.index('\n} catch {\n    $runError') + 1:]
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / 'driver.ps1'
         script.write_text(base.TAIL.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', tmp)
-                          .replace('__OUT__', tmp).replace('__SETUP__', '').replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true').replace('__STUBS__', 'function Remove-Driver { }').replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
+                          .replace('__OUT__', tmp).replace('__SETUP__', '').replace('__LAUNCHED__', '$true').replace('__OWNED__', '$true').replace('__ATTEMPTED__', '$true').replace('__STUBS__', stubs.replace('__TMP__', tmp)).replace('__BODY__', body).replace('__CAPTURE_TAIL__', tail).replace('__PROC__', proc)
                           .replace('__CLEAN__', '$true' if clean else '$false'), encoding='utf-8-sig')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True,
                               text=True, env=dict(os.environ, OPENWILLOW_BL2=tmp), timeout=180)
         done.hub_lock_kept = (Path(tmp) / 'hub.lock').exists()
+        if after:
+            after(tmp, done)
         return done
+
+
+def test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss():
+    """Review of #251, A6 (b, c): the two probe files were loaded with a raw Invoke-GamePyFile, and the quit's catch only printed "no reply",
+    so the finalizer's hook stop still went to the driver. Run from the script's own text with stand-ins (no capture script is run)."""
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r', '')
+    load = [line for line in text.split('\n') if "foreach ($f in 'fire_mission_probe.py'" in line]
+    assert len(load) == 1, load
+    lines = [
+        ". '" + str(ROOT / 'tools/real_game/slice_watch.ps1') + "'",
+        "$script:files = 0",
+        "function Invoke-GamePyFile($Path, $Folder) { $script:files++; throw 'no reply to c-invented' }",
+        "try {", load[0], "    $thrown = 'no'", "} catch { $thrown = \"$_\" }",
+        "Write-Output \"$($script:files)|$thrown|$(Get-DriverLostReason)\"",
+    ]
+    script = Path(tempfile.mkdtemp(prefix='ow-probe-latch-')) / 'load.ps1'
+    script.write_text('\n'.join(lines) + '\n', encoding='utf-8-sig')
+    done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=60)
+    out = done.stdout.strip().split('|')
+    assert out[0] == '1', done.stdout + done.stderr   # the second file was not sent
+    assert 'no reply' in out[1] and 'no reply' in out[2], out   # the error went on, and it latched the condition
+    # The quit: its lost reply latches the condition, and the finalizer sends the driver nothing more (the game is stopped by its PID).
+    quit_block = text[text.index('    # The game may close before it answers this one.'):text.index('\n} catch {\n    $runError')]
+    stubs = ("function Remove-Driver { }; function Start-Sleep { }; function Stop-OwnGame { 'stopped' }; "
+             "function Invoke-GamePy($Code, $T) { Add-Content -LiteralPath '__TMP__\\sent.txt' 'raw'; throw 'no reply to c-invented' }; "
+             "function Py($Code, $T) { Add-Content -LiteralPath '__TMP__\\sent.txt' 'py'; 'stopped' }")
+    seen = {}
+
+    def after(tmp, done):
+        seen['sent'] = (Path(tmp) / 'sent.txt').read_text(encoding='utf-8').split()
+    done = run_tail("$stagesDone.Add('hit')\n" + quit_block, proc='[pscustomobject]@{ HasExited = $false; Id = 1 }', stubs=stubs, after=after)
+    assert 'quit: no reply' in done.stdout, done.stdout + done.stderr
+    assert seen['sent'] == ['raw'], seen   # the quit only: no hook stop after it
 
 
 def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
@@ -487,6 +522,7 @@ def test_probe_helpers():
 
 if __name__ == '__main__':
     test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout()
+    test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss()
     test_labelled_snapshots_follow_the_accept_and_the_reward()
     test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails()
     test_probe_helpers()

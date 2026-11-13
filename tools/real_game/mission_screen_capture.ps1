@@ -64,7 +64,7 @@ function Read-After([string]$Label, [double]$Wait = 0.6) {
 function Test-Key([string]$Stage, [string]$Key) {
     $mark = "key_${Stage}_$Key"
     Py "print(ms_mark('$mark'))" | Out-Null
-    Assert-GameForeground
+    Assert-DriverAnswers; Assert-GameForeground
     $null = switch ($Key) {
         'W' { Send-Key W 1000 }   # released in Send-Key's finally
         'Mouse' { 1..10 | ForEach-Object { Send-Mouse 30 0; Start-Sleep -Milliseconds 30 } }
@@ -94,7 +94,7 @@ function Open-Screen([string]$Label) {
     $row = $null
     for ($try = 1; $try -le 4; $try++) {
         $log["stand_$Label"] = PyJson 'fm_stand_in_front()'
-        Start-Sleep -Milliseconds 800; Assert-GameForeground
+        Start-Sleep -Milliseconds 800; Assert-DriverAnswers; Assert-GameForeground
         # The camera's trace across the open (offer and turn-in only): sampled every tick for 2 s from here.
         if ($Label -in 'offer', 'turnin') { Py 'print(ms_cam_trace(2.0))' | Out-Null }
         $null = Send-Key E
@@ -167,15 +167,16 @@ try {
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { PyWait 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'mission_screen/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
-    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
+    Assert-DriverAnswers; Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
     # The save loads: reads only, bounded (Wait-PlayerPawn, realgame.ps1), with the menu's online-session wait named when it runs out.
     $log.load_wait = Wait-PlayerPawn $enterAt $proc $MenuWaitSeconds $LoadWaitSeconds
     $map = $log.load_wait.map
     "map: $map ($($log.load_wait.after_enter_s) s after the Enter)"
     if (!$log.load_wait.ok) { Save-Shot 'mission_screen/load_failed.png' | Out-Null; throw "no player pawn: $($log.load_wait.why)" }
-    Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
-    if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
-    foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null }
+    Assert-DriverAnswers; Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
+    Assert-DriverAnswers
+    # A probe file that gets no reply latches the condition and ends the run (review of #251, A6).
+    foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { try { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null } catch { Set-SliceWatchDriverLost $_; throw } }
     $log.hooks = PyJson 'ms_start()'
     if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'mission_screen' 'mission_screen' }
     Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0) "functions not found, so their rows can never come: $(@($log.hooks.missing) -join '; ')"
@@ -289,9 +290,10 @@ try {
     }
     # The game may close before it answers this one.
     # Nothing is sent to a driver that stopped answering: the finalizer stops this run's own game by its PID, and the restore never needs the driver.
+    # A quit that gets no reply latches the condition, so the finalizer sends the driver nothing more (review of #251, A6).
     if (Get-DriverLostReason) { "quit not sent: the driver stopped answering ($(Get-DriverLostReason))" }
     else {
-        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { Set-SliceWatchDriverLost $_; "quit: no reply ($_); waiting for the exit" }
         for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
     }
 } catch {

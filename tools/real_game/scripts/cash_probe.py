@@ -9,7 +9,7 @@ each, at item level 7); this probe records more, with their levels, so the host 
 
 The two kinds of row are kept apart on purpose:
 - cp_collect_*: a REAL pickup. The cash before and after, and which pickups went. A value per item is reported only when exactly one
-  pickup went, because neighbours can be collected by the same touch.
+  pickup went, because neighbours can be collected by the same touch, and not when more than one touch event fired during the walk.
 - cp_sweep: the item's own value call at other levels (ExpLevel set in memory on a pickup lying on the ground, restored at once). That is
   an evaluation, not a payment: compare it with the real rows at their level before trusting it.
 """
@@ -49,10 +49,23 @@ def immune_paths(declared):
     return [path for name in CP_IMMUNE_CLASSES for path in paths[name]]
 
 
-def value_per_item(delta, gone, target):
+def value_per_item(delta, gone, target, touches=None):
     """The value of one pickup, or None when the row cannot say: exactly the pickup stood on went, and the cash rose. A neighbour going
-    instead, or nothing paid, is not a reading."""
+    instead, or nothing paid, is not a reading. `touches`: the touch events counted during the walk, or None when the counter cannot say
+    (not installed, or it counted none). More than one is not a reading: a pickup that spawned AND was collected between the two
+    censuses never shows in `gone`, and its payment would be added to the target's (review of #251, A7)."""
+    if touches is not None and touches > 1:
+        return None
     return delta if gone == [target] and delta > 0 else None
+
+
+def touch_rule(hook, touches):
+    """What the touch count could say about a try: the count for value_per_item, or None, and the rule applied, for the row."""
+    if hook != "installed":
+        return None, "touch counter unavailable: the census alone"
+    if touches == 0:
+        return None, "no touch counted: the census alone"
+    return touches, "one touch" if touches == 1 else "more than one touch: not a reading"
 
 
 def cp_start():
@@ -290,10 +303,11 @@ def cp_collect_end():
     after = cp_cash()
     row = {"cash_before": pending["before"], "cash_after": after, "delta": after - pending["before"], "gone": gone,
            "gone_levels": [pending["levels"].get(n) for n in gone], "target": pending["target"], "player_level": cp_level()}
-    row["value_per_item"] = value_per_item(row["delta"], gone, pending["target"]["name"])
     # Why a try gave no reading: whether the touch event fired, and where the pickup was before and is now (fields only).
     target = pending["target"]["name"]
     row["touches"] = CP.get("touches", 0) - pending.get("touches_before", 0)
+    counted, row["touch_rule"] = touch_rule(CP.get("touch_hook"), row["touches"])
+    row["value_per_item"] = value_per_item(row["delta"], gone, target, counted)
     row["where_before"] = pending.get("where_before")
     left = [i[0] for i in _money_pickups() if i[0].Name == target]
     row["where_after"] = _where(left[0]) if left else None

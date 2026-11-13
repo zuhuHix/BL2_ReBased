@@ -209,7 +209,7 @@ try {
     }
     if (-not $ok) { Save-Shot 'cash/boot.png' | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
-    Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
+    Assert-DriverAnswers; Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
     # The save loads: reads only, bounded (Wait-PlayerPawn, realgame.ps1), with the menu's online-session wait named when it runs out.
     $log.load_wait = Wait-PlayerPawn $enterAt $proc $MenuWaitSeconds $LoadWaitSeconds
     "load: $(if ($log.load_wait.ok) { 'player pawn' } else { 'failed' }) $($log.load_wait.after_enter_s) s after the Enter"
@@ -218,7 +218,7 @@ try {
     "map: $map"; $log.map = $map
     Set-Stage 'travel' ($map -match 'Ice_P True') "travel to Ice_P failed: $map"
     if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
-    Start-Sleep 8; Assert-GameForeground; Send-Key Enter; Start-Sleep 1
+    Assert-DriverAnswers; Start-Sleep 8; Assert-GameForeground; Send-Key Enter; Start-Sleep 1
     Use-Probe 'combat_probe.py'
     Use-Probe 'cash_probe.py'
     # The immunity is what keeps Maya alive and the measured cash clean: without it, no enemy is touched.
@@ -247,7 +247,7 @@ try {
             # Money on the ground first: walk onto it.
             $name = Py 'print(cp_collect_start())'
             if ($name -ne 'None') {
-                Send-Key W 200; Start-Sleep 2
+                Assert-DriverAnswers; Send-Key W 200; Start-Sleep 2
                 $row = Py 'import json; print(json.dumps(cp_collect_end(), default=str))'
                 $log.last_collect = $row
                 "collect: $row"
@@ -267,7 +267,7 @@ try {
             }
             $noTarget = 0
             Py "print(cp_ready_kill('$target'))" | Out-Null
-            Start-Sleep 1; Assert-GameForeground
+            Start-Sleep 1; Assert-DriverAnswers; Assert-GameForeground
             for ($shot = 0; $shot -lt 3; $shot++) { Send-Click; Start-Sleep -Milliseconds 700 }
             $kills++   # a kill attempt; whether it killed is asked next, by the enemy's fields only
             Start-Sleep 3   # the loot lands
@@ -315,7 +315,8 @@ try {
                 $reached = Enter-IceMap   # a fresh population: the cash read killed what was near
                 if ($reached -notmatch 'Ice_P True') { throw "travel for trial $trial failed: $reached" }
                 if ($WatchSmoke -and $WatchSpec) { $log["smoke_unsettled_$trial"] = Save-SliceWatchSnap 'smoke_unsettled'; $log["smoke_unsettled_$trial"] }
-                Start-Sleep 8; Assert-GameForeground; Send-Key Enter; Start-Sleep 1
+                # The snapshot latches a lost driver without throwing: nothing is pressed after it (review of #251, A5).
+                Assert-DriverAnswers; Start-Sleep 8; Assert-GameForeground; Send-Key Enter; Start-Sleep 1
                 if ($WatchSmoke -and $WatchSpec) {
                     $log["smoke_settled_$trial"] = Wait-SliceWatchSettled 40
                     if (!$log["smoke_settled_$trial"]) { $smokeWhy = "trial ${trial}: the map did not settle within 40 s" }
@@ -359,7 +360,7 @@ try {
             if (!$denLoaded) { Use-Probe 'den_probe.py'; $denLoaded = $true }
             $reached = Enter-IceMap
             if ($reached -notmatch 'Ice_P True') { throw "travel for the den down failed: $reached" }
-            Start-Sleep 8; Send-Key Enter; Start-Sleep 1   # Send-Key asserts the game's focus itself
+            Assert-DriverAnswers; Start-Sleep 8; Send-Key Enter; Start-Sleep 1   # Send-Key asserts the game's focus itself
             # The watch scans nothing until the new map has settled; its before_down snapshot must be taken before the immunity goes.
             if ($WatchSpec) {
                 $log.den_down_settled = Wait-SliceWatchSettled 40
@@ -479,9 +480,10 @@ try {
     }
     $log.shot = Save-Shot 'cash/shot.png'
     # Nothing is sent to a driver that stopped answering: the finalizer stops this run's own game by its PID, and the restore never needs the driver.
+    # A quit that gets no reply latches the condition, so the finalizer sends the driver nothing more (review of #251, A6).
     if (Get-DriverLost) { "quit not sent: the driver stopped answering ($(Get-DriverLost))" }
     else {
-        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { Set-SliceWatchDriverLost $_; "quit: no reply ($_); waiting for the exit" }
         for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
     }
 } catch {

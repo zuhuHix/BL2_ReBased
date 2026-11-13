@@ -12,7 +12,9 @@ the limits are the same as before, but a run's kill count and length can differ 
   logged as `den_down_health_back_s`, the health back in the holding cell, not standing. The readings loop skips a pickup that gave
   no reading (recorded when the try starts) and stops after six distinct failures in a row; each try records whether
   `TouchedPickupable` fired (an observer hook that counts calls and reads nothing, installed in every cash run, with or without a
-  watch, outside the watch's hook groups and markers) and the pickup's location and physics fields; deaths are counted apart from kill attempts (fields
+  watch, outside the watch's hook groups and markers) and the pickup's location and physics fields; a try in which more than one
+  touch was counted gives no single-item reading (a pickup that spawned and went in the same walk is in neither census), and with
+  the counter not installed or none counted the census alone decides; deaths are counted apart from kill attempts (fields
   only). A labelled `drop` snapshot follows each kill; the watch's pickups part names each item's balance; the cash rows hold the
   items' part definitions. A `drop` snapshot is asked for only when one read says the map has settled (an unsettled drop is
   counted), and `-MaxKills` is at most 150 so the drops leave room under the 200 labelled reads.
@@ -30,7 +32,8 @@ found by a scan or by name: `cb_enemies` (`_pawn_state`'s four health and shield
 radius, reached by `cp_target` and `dp_begin`), `cp_ready_kill` (`SetHealth(1.0)` on the kill target) and `_values` (the value
 functions of a money pickup's inventory item). They ran in each of the six `cash_capture` items of 2026-11-12 with 0 game crashes,
 which is a record of runs, not proof against a crash. The driver-lost condition now also binds the capture's own commands: once it
-is set, `Py` refuses every command, and a reply that never comes sets it. The calls added are on the
+is set, `Py` refuses every command and every input is preceded by a check of it, and a reply that never comes sets it at every
+call site except the boot and load waits. The calls added are on the
 player's own controller only (`GetPlayerViewPoint`, `GetFOVAngle`) and in the cash probe's existing scans (`cp_died` reads fields of
 the pawn it finds by name).
 

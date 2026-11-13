@@ -1522,13 +1522,17 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   lasts only as long as the time left in its bound, and a reply after the bound is not taken and changes nothing, so the step ends
   within the two bounds' sum. Reads only; a failure names the wait that ran out. The den down's polls are clamped to their windows
   the same way: none starts in a window's last 6 s, a reply after the window is not taken, and no re-placement starts after it.
-- **Driver lost**: one condition shared by the helpers and every stage. A reply that never came sets it: to any of the capture's
-  own commands (its `Py`, a probe load), to a den-down poll even when the window shortened its wait, to the watch's settle read,
-  snapshots, pawn reads, end snapshot, dump and stop, or to the den trial's close. From then on the capture's `Py` refuses every
-  command, so no key, click, placement or probe call follows in that stage; the later stages report themselves as skipped (a
-  readings failure for any other reason, such as a lost foreground or a game-side traceback, still ends the run at once); no quit
-  and no finalizer stop is sent; and the finalizer stops the run's own game by its PID and restores without the driver. The waits
-  that expect silence for a while (the boot wait, a travel's map polls, the load step) refuse once it is set but do not set it. Each stage is stamped to `stages-<run>.log` before its risky command.
+- **Driver lost**: one condition shared by the helpers and every stage. A reply that never came sets it wherever a command is
+  sent: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
+  window shortened its wait, the watch's start and its recovery stop after a failed start, its settle read, snapshots, pawn reads,
+  marks, end snapshot, dump and stop, the den trial's close, and the quit. The one exception is the waits that expect silence for a
+  while (the boot wait, a travel's map polls, the load step): they refuse once it is set but do not set it. From then on the
+  capture's `Py` refuses every command, and every key, click, mouse move and focus check is preceded by `Assert-DriverAnswers`
+  (`slice_watch.ps1`), so no input goes out after the latch, also when a watch helper set it without throwing; no placement or
+  probe call follows either. The later stages report themselves as skipped (a readings failure for any other reason, such as a
+  lost foreground or a game-side traceback, still ends the run at once); no quit and no finalizer stop is sent (after a quit that
+  got no reply the finalizer's stops are skipped too); and the finalizer stops the run's own game by its PID and restores without
+  the driver. Each stage is stamped to `stages-<run>.log` before its risky command.
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
   window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
   held input is never completed. A record is rewritten in one replace. After a failed rewrite either the old record or its
@@ -1554,7 +1558,10 @@ before, but a run's kill count and length can differ from the sessions'.
   `den_down_health_back_s`, the health back in the holding cell, not standing. The readings loop skips a pickup that gave no reading
   instead of retrying it and stops after six distinct failures in a row; each try records whether
   `WillowPlayerController:TouchedPickupable` fired (an observer hook that only counts, installed in every cash run, with or without a
-  watch, outside the watch's hook groups and markers) and the pickup's location and physics fields;
+  watch, outside the watch's hook groups and markers) and the pickup's location and physics fields. A try in which more than one
+  touch was counted gives no single-item reading, since a pickup that spawned and was collected in the same walk is in neither
+  census; with the counter not installed, or none counted, the census alone decides, and the row's `touch_rule` says which
+  (whether the event fires once per money pickup is `UNVERIFIED`);
   kill attempts and deaths are counted apart (`cp_died`, fields only). With a watch, a labelled `drop` snapshot follows each kill
   when one read says the map has settled (an unsettled drop is counted, not asked for), and the watch's pickups part names each item's
   balance. `-MaxKills` is at most 150, so the drops leave room under the watch's 200 labelled reads. The cash rows hold each item's part definitions.

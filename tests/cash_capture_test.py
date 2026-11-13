@@ -42,8 +42,10 @@ function Assert-GameForeground {
     if ($scenario -eq 'focus_lost_in_den' -and $script:foreground -ge 3) { throw 'refusing to send input: not the foreground window' }
     if ($scenario -eq 'focus_lost_in_kills' -and $script:foreground -ge 3) { throw 'refusing to send input: not the foreground window' }   # the first kill's check
 }
-function Send-Key { }
-function Send-Click { Add-Content -LiteralPath (Join-Path $work 'clicks.txt') 'click' }   # every click is counted on disk
+# Every key and click is recorded on disk (review of #251, A8: keys were not); events.txt holds them in order with each stand-in reply lost.
+function Send-Key([string]$Key, [int]$HoldMs = 60) { Add-Content -LiteralPath (Join-Path $work 'keys.txt') $Key; Add-Content -LiteralPath (Join-Path $work 'events.txt') "key $Key" }
+function Send-Click { Add-Content -LiteralPath (Join-Path $work 'clicks.txt') 'click'; Add-Content -LiteralPath (Join-Path $work 'events.txt') 'click' }
+function Write-Lost { Add-Content -LiteralPath (Join-Path $work 'events.txt') 'lost'; throw 'no reply to c-invented' }
 function Invoke-GamePyFile([string]$Path) { if ($scenario -eq 'probe_traceback' -and $Path -like '*den_probe*') { "Traceback (most recent call last):`n  NameError" } else { 'ok' } }
 function Stop-OwnGame { if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
 $script:collects = 0; $script:singles = 0
@@ -55,15 +57,15 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
         '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
-        '*sw_start(*' { $script:watchStarted = $true; return '{"label": "cash", "resolved": 1, "missing": []}' }
+        '*sw_start(*' { if ($scenario -eq 'watch_start_stop_lost') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; $script:watchStarted = $true; return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
-        '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; return 'ok' }
+        '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; if ($scenario -eq 'kill_traceback_mark_lost' -and $Code -like '*readings.done*') { Write-Lost }; return 'ok' }
         '*sw_settled*' { if ($scenario -eq 'settle_lost') { throw 'no reply to c-invented' }; return $(if ($scenario -eq 'kills_unsettled') { 'False' } else { 'True' }) }
-        '*sw_snap(*' { if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if ($scenario -eq 'smoke_unsettled_lost' -and $Code -like "*sw_snap('smoke_unsettled')*") { Write-Lost }; if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
-        '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
+        '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; if ($scenario -eq 'watch_start_stop_lost') { Write-Lost }; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
         '*block_saves*' {
             if ($scenario -eq 'saves_open') { return 'False' }
             if ($scenario -eq 'saves_traceback') { return 'Traceback: True, block_saves' }
@@ -112,8 +114,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_level*' { return '8' }
         '*cp_cash*' { return '100' }
-        '*cp_ready_kill*' { if ($scenario -eq 'kill_traceback') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; return 'WillowAIPawn_2' }
-        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_ready_kill*' { if ($scenario -in 'kill_traceback', 'kill_traceback_mark_lost') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; return 'WillowAIPawn_2' }
+        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback', 'kill_traceback_mark_lost') { 'None' } else { 'WillowPickup_1' }) }
         '*cp_collect_end*' {
             $script:collects++
             if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
@@ -122,7 +124,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
-        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback') { 'WillowAIPawn_2' } else { 'None' }) }
+        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback', 'kill_traceback_mark_lost') { 'WillowAIPawn_2' } else { 'None' }) }
         '*cp_died*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_died'; $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
         '*cp_dump*' {
             if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
@@ -170,7 +172,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             $missing = if ($scenario -eq 'den_unanswered') { '["first-blow spread: no counted trial had blows from two attackers"]' } else { '[]' }
             return '{"summaries": [{"counts": true}], "missing": ' + $missing + '}'
         }
-        '*quit*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'quit'; if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
+        '*quit*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'quit'; if ($scenario -eq 'quit_lost') { Write-Lost }; if ($scenario -ne 'hung') { $script:Fake.HasExited = $true }; return '' }
         default { return 'None' }
     }
 }
@@ -880,6 +882,24 @@ class ReadingsLoopTest(unittest.TestCase):
         self.assertIsNone(row['value_per_item'])
         self.assertEqual(len(everything), 2)
 
+    def test_a_walk_with_more_than_one_touch_gives_no_reading(self):
+        # Review of #251, A7: a pickup that spawns AND is collected between the two censuses never shows in `gone`; its payment was read as
+        # the target's. With the counter installed, more than one touch in the walk is no reading; without it, the census alone, recorded.
+        for hook, touches, cash, value, rule in (('installed', 2, 106, None, 'more than one touch: not a reading'),
+                                                 ('installed', 1, 103, 3, 'one touch'),
+                                                 ('installed', 0, 103, 3, 'no touch counted: the census alone'),
+                                                 ('not installed: invented', 2, 106, 6, 'touch counter unavailable: the census alone')):
+            ns, pri = self.probe()
+            ns['CP']['touch_hook'] = hook
+            self.assertEqual(ns['cp_collect_start'](), 'WillowPickup_1')
+            for _ in range(touches):
+                ns['_count_touch'](None, None, None, None)
+            left = [p for p in ns['unrealsdk'].find_all('WillowPickup') if p.Name != 'WillowPickup_1']
+            ns['unrealsdk'].find_all = lambda cls: list(left)   # the target went; the one that spawned and went is in neither census
+            self.cash = cash
+            row = ns['cp_collect_end']()
+            self.assertEqual((row['gone'], row['touches'], row['value_per_item'], row['touch_rule']), (['WillowPickup_1'], touches, value, rule))
+
     def test_the_touch_counter_is_an_observer_and_a_missing_function_is_not_fatal(self):
         # Review of #251, note 6: installed in every cash run (with or without a watch), outside the watch's groups. It counts the calls
         # before them, reads nothing, never blocks or changes them; a build without the function reports it and the run goes on.
@@ -946,7 +966,14 @@ class LatchTest(unittest.TestCase):
         self.assertTrue((self.work / 'rg/cash/save_compare.json').exists())
         self.assertEqual(self.locks_held(), (False, False))
 
+    def nothing_pressed_after_the_loss(self):
+        events = self.lines('events.txt')
+        self.assertIn('lost', events)
+        after = events[events.index('lost') + 1:]
+        self.assertEqual([e for e in after if e in ('key', 'click')], [], events)
+
     def ended_without_den_or_input(self, session):
+        self.assertEqual(self.lines('keys.txt'), ['Enter', 'Enter'])   # the boot's and the travel's, and no key after the failure
         self.assertEqual(self.lines('den.txt'), [])   # no den command
         self.assertNotIn('den_read', session.get('completed_stages', []))
         self.assertEqual(self.saves(), 'original save')   # the outer cleanup and the restore ran
@@ -969,6 +996,48 @@ class LatchTest(unittest.TestCase):
         self.assertEqual(self.lines('clicks.txt'), [])
         self.assertIn('game python error', session['stage_results']['readings'])
         self.ended_without_den_or_input(session)
+
+    def test_a_failed_closing_mark_still_ends_the_run_through_the_outer_handler(self):
+        # Review of #251, A8: the readings' closing mark itself fails (its reply never comes, which latches the condition); the rethrow
+        # that follows it still ends the run with the readings' own error, through the cleanup and the restore.
+        done, session = self.run_capture('kill_traceback_mark_lost', ['-MaxKills', '4', '-DenDown', '-WatchSpec', str(self.spec)])
+        self.assertIn('game python error', session['status'])   # the readings' error, not the mark's
+        self.assertIn('the driver stopped answering', session['cleanup']['watch'])   # the mark's loss: nothing more sent
+        self.nothing_pressed_after_the_loss()
+        self.ended_without_den_or_input(session)
+
+    def test_a_timed_out_smoke_snapshot_is_followed_by_no_key(self):
+        # Review of #251, A5: Save-SliceWatchSnap 'smoke_unsettled' latched the loss without throwing, and the Enter after it still went out.
+        done, session = self.run_capture('smoke_unsettled_lost', ['-WatchSpec', str(self.spec), '-WatchSmoke', '-DenDown'])
+        self.nothing_pressed_after_the_loss()
+        self.assertIn('the driver stopped answering', session['stage_results']['den_read'])
+        self.assertIn('the driver stopped answering', session['stage_results']['den_down'])
+        self.assertEqual(self.saves(), 'original save')
+        self.assertEqual(self.locks_held(), (False, False))
+
+    def test_a_watch_start_whose_recovery_stop_times_out_latches_the_loss(self):
+        # Review of #251, A6 (a): the start failed for another reason, and the recovery sw_stop's timeout was only written into the result.
+        done, session = self.run_capture('watch_start_stop_lost', ['-WatchSpec', str(self.spec), '-DenDown'])
+        self.assertTrue(session['watch_start']['stop_after_error'].startswith('no reply'), session['watch_start'])
+        self.nothing_pressed_after_the_loss()
+        self.assertEqual(self.lines('keys.txt'), ['Enter', 'Enter'])   # the boot's and the travel's, both before the watch started
+        self.assertIn('the driver stopped answering', session['stage_results']['readings'])
+        self.assertIn('the driver stopped answering', session['stage_results']['den_read'])
+        self.assertEqual(self.lines('sent.txt').count('sw_stop'), 1)   # the finalizer sent no second stop
+        self.assertIn('not sent: the driver stopped answering', session['cleanup']['watch'])
+        self.assertEqual(self.saves(), 'original save')
+
+    def test_a_quit_that_gets_no_reply_is_followed_by_no_driver_command(self):
+        # Review of #251, A6 (c): the quit's catch printed "no reply" and the finalizer's stops still went to the driver.
+        done, session = self.run_capture('quit_lost', ['-WatchSpec', str(self.spec)])
+        sent = self.lines('sent.txt')
+        self.assertEqual(sent[sent.index('quit') + 1:], [], sent)
+        self.assertIn('not sent: the driver stopped answering', session['cleanup']['hooks'])
+        self.assertIn('not sent: the driver stopped answering', session['cleanup']['watch'])
+        self.assertEqual(session['cleanup']['game'], 'stopped')   # stopped by its PID
+        self.assertEqual(self.saves(), 'original save')
+        self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
+        self.assertEqual(self.locks_held(), (False, False))
 
     def test_a_timed_out_before_down_is_not_followed_by_removing_the_immunity(self):
         done, session = self.run_capture('before_down_lost', ['-DenDown', '-RespawnSeconds', '8', '-WatchSpec', str(self.spec)])

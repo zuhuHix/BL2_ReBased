@@ -45,6 +45,9 @@ $script:SliceWatchDriverLost = ''
 # The same condition for a capture's own steps and finalizer: why the driver counts as lost, or empty.
 function Get-DriverLostReason { $script:SliceWatchDriverLost }
 function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
+# Called by the captures before every key, click, mouse move and focus check: the helpers here latch a lost driver without throwing, so an
+# input that follows one of them with no Py in between would otherwise still go out (review of #251, A5). Throws once the condition is set.
+function Assert-DriverAnswers { if ($script:SliceWatchDriverLost) { throw "not sent: the driver stopped answering ($script:SliceWatchDriverLost)" } }
 # Load the recorder into the capture's output folder (the same RG_OUT as the capture's own probes) and start it: it writes <OutFolder>/watch.jsonl.
 # Returns its answer (how many hooks resolved, which names did not), or an object with only 'error' when it did not start. After a failed or
 # timed-out start a stop is sent anyway (best effort): a start that ran late must not leave a recorder running unseen.
@@ -60,7 +63,8 @@ function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
         $script:SliceWatchOn = $false; $script:SliceWatchError = "$_"
         Set-SliceWatchDriverLost $_
         Write-Warning "slice watch not started: $_"
-        $stop = if ($script:SliceWatchDriverLost) { 'not sent: the driver stopped answering' } else { try { "$(Invoke-GamePy 'print(sw_stop())' 15)".Trim() } catch { "no reply: $_" } }
+        # The recovery stop's own "no reply" latches the condition too (review of #251, A6).
+        $stop = if ($script:SliceWatchDriverLost) { 'not sent: the driver stopped answering' } else { try { "$(Invoke-GamePy 'print(sw_stop())' 15)".Trim() } catch { Set-SliceWatchDriverLost $_; "no reply: $_" } }
         [pscustomobject]@{ error = "$_"; stop_after_error = $stop }
     }
 }

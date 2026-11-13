@@ -78,6 +78,8 @@ class CashReadingTest(unittest.TestCase):
         self.assertIsNone(cash_probe.value_per_item(6, ['Target', 'Neighbour'], 'Target'))
         self.assertIsNone(cash_probe.value_per_item(0, ['Target'], 'Target'))
         self.assertIsNone(cash_probe.value_per_item(3, [], 'Target'))
+        self.assertIsNone(cash_probe.value_per_item(6, ['Target'], 'Target', 2))   # two touches in the walk (review of #251, A7)
+        self.assertEqual(cash_probe.value_per_item(3, ['Target'], 'Target', 1), 3)
 
 
 class SummariseTest(unittest.TestCase):
