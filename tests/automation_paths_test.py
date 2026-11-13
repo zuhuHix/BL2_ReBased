@@ -13,14 +13,22 @@ This test fails when
   ignoring case;
 - a test declaration is one this test cannot read (a spec, a networked test, a path that is not a string literal), so
   it would go uncounted; the file and line are named;
-- the ue_automation row of tools/suites.txt expects a different number of tests than the paths its names match, its
-  three counts (the pass line's expected=, the row's printed expected= and its -eq) disagree, or one of its names carries
-  a ^ or $ anchor (not modelled here: in the engine a $ name that matches a folder selects all of the folder's children).
+- the ue_automation suite expects a different number of tests than the paths its names match, its three counts (the
+  pass line's expected= in tools/suites.txt, the expected= the launcher prints and the count its -eq checks) disagree, or
+  one of its names carries a ^ or $ anchor (not modelled here: in the engine a $ name that matches a folder selects all
+  of the folder's children);
+- the ue_automation row does not run tools/test_automation.ps1, or overrides its -Tests or -Expected. Since 2026-11-13
+  the names and the count live in one place, the launcher's -Tests and -Expected defaults; the printed count and the
+  -eq count are read from the launcher's own lines (a literal there is read as it stands, so it cannot hide). The
+  launcher's -DryRun runs under each PowerShell present and must show the names it would pass, with no lock taken.
 
 The synthetic cases use invented paths only (rule 9); the last class reads this checkout.
 """
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,6 +36,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'host' / 'ue5' / 'OpenWillow' / 'Source'
 SUITES = ROOT / 'tools' / 'suites.txt'
+LAUNCHER = ROOT / 'tools' / 'test_automation.ps1'
+# Both shells, each when present (the suites run under Windows PowerShell 5.1).
+SHELLS = {n: p for n, p in (('powershell', shutil.which('powershell')), ('pwsh', shutil.which('pwsh'))) if p}
 
 # Raw strings, plain strings, then comments; strings are kept and comments blanked, so a commented-out macro is not read.
 _TOKENS = re.compile(r'R"([^(\s]{0,16})\(.*?\)\1"|"(?:\\.|[^"\\\n])*"|//[^\n]*|/\*.*?\*/', re.S)
@@ -91,22 +102,48 @@ def matches(name, path):
     return name.lower() in path.lower()
 
 
-def suite_counts(text):
-    """(names, expected on the pass line, printed expected, -eq count) of the ue_automation row of a suite map."""
+def _count(value, expected, what):
+    """A count written in the launcher: the -Expected variable stands for its default, a literal for itself."""
+    if value.lower() == '$expected':
+        return expected
+    if value.isdigit():
+        return int(value)
+    raise ValueError(f"the launcher's {what} is neither $Expected nor a number: {value}")
+
+
+def launcher_counts(launcher):
+    """(names, -Expected default, printed expected, -eq count) read from the launcher's text."""
+    names_m = re.search(r"\[string\[\]\]\$Tests\s*=\s*@\(((?:\s*'[^']+'\s*,?)+)\)", launcher)
+    if not names_m:
+        raise ValueError('the launcher has no [string[]]$Tests = @(...) default list of test names')
+    names = re.findall(r"'([^']+)'", names_m.group(1))
+    expected_m = re.search(r'\[int\]\$Expected\s*=\s*(\d+)', launcher)
+    printed = re.findall(r"' expected='\s*\+\s*(\$\w+|\d+)", launcher)
+    eq = re.findall(r'\$ok\.Count\s+-eq\s+(\$\w+|\d+)', launcher)
+    if not expected_m or len(printed) != 1 or len(eq) != 1:
+        raise ValueError("the launcher lost its -Expected default, its printed expected= or its $ok.Count -eq check "
+                         f'(found {bool(expected_m)}, {len(printed)}, {len(eq)})')
+    expected = int(expected_m.group(1))
+    return names, expected, _count(printed[0], expected, 'printed expected='), _count(eq[0], expected, '-eq count')
+
+
+def suite_counts(text, launcher):
+    """(names, expected on the pass line, printed expected, -eq count) of the ue_automation suite: the row and its pass line
+    from a suite map, the names and the other two counts from its launcher's text."""
     row = [l for l in text.splitlines() if l.startswith('ue_automation |')]
     passes = [l for l in text.splitlines() if l.startswith('#pass ue_automation |')]
     if len(row) != 1 or len(passes) != 1:
         raise ValueError(f'expected one ue_automation row and one pass line, found {len(row)} and {len(passes)}')
-    names_m = re.search(r"foreach \(\$n in ((?:'[^']+',?\s*)+)\)\s*\{\s*\$names \+= '([^']*)' \+ \$n", row[0])
-    if not names_m:
-        raise ValueError('the ue_automation row has no foreach list of test names')
-    names = [names_m.group(2) + n for n in re.findall(r"'([^']+)'", names_m.group(1))]
+    command = row[0].split('|', 3)[3]
+    if not re.search(r'-File\s+tools/test_automation\.ps1(\s|;|$)', command):
+        raise ValueError('the ue_automation row does not run tools/test_automation.ps1')
+    if re.search(r'(?i)\s-(Tests|Expected)\b', command):
+        raise ValueError("the ue_automation row overrides the launcher's -Tests or -Expected: change the defaults there instead")
     expected = re.search(r'expected=(\d+)', passes[0].split('|')[1])
-    printed = re.search(r"' expected=(\d+)'", row[0])
-    eq = re.search(r'\$ok\.Count -eq (\d+)', row[0])
-    if not (expected and printed and eq):
-        raise ValueError('the ue_automation row or pass line lost one of its three counts')
-    return names, int(expected.group(1)), int(printed.group(1)), int(eq.group(1))
+    if not expected:
+        raise ValueError('the ue_automation pass line lost its expected= count')
+    names, _, printed, eq = launcher_counts(launcher)
+    return names, int(expected.group(1)), printed, eq
 
 
 def count_problems(names, expected, printed, eq, paths):
@@ -118,7 +155,7 @@ def count_problems(names, expected, printed, eq, paths):
                 'names (a substring match), or teach tests/automation_paths_test.py the engine\'s anchor rule first']
     problems = []
     if not expected == printed == eq:
-        problems.append(f'ue_automation counts disagree: pass line expected={expected}, row prints expected={printed}, row checks -eq {eq}')
+        problems.append(f'ue_automation counts disagree: pass line expected={expected}, launcher prints expected={printed}, launcher checks -eq {eq}')
     hit = sorted({p for p, kind, _ in paths if any(matches(n, p) for n in names)})
     complex_hit = sorted({p for p, kind, _ in paths if kind == 'complex' and p in hit})
     if complex_hit:
@@ -140,14 +177,26 @@ def macro(cls, path, kind='SIMPLE'):
     return f'IMPLEMENT_{kind}_AUTOMATION_TEST({cls}, "{path}",\n    EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)\n'
 
 
-def suite_text(names, expected, printed=None, eq=None):
-    printed = expected if printed is None else printed
-    eq = expected if eq is None else eq
-    listed = ','.join(f"'{n}'" for n in names)
+def launcher_text(names, expected, printed='$Expected', eq='$Expected'):
+    """An invented launcher in the shape of tools/test_automation.ps1 (only the lines the guard reads)."""
+    listed = ', '.join(f"'Fake.{n}'" for n in names)
+    return ('param(\n'
+            f'    [string[]]$Tests = @({listed}),\n'
+            f'    [int]$Expected = {expected}\n'
+            ')\n'
+            f"Write-Output ('AUTOMATION SUMMARY success=' + $ok.Count + ' failed=' + $bad.Count + ' expected=' + {printed})\n"
+            f'if ($ok.Count -eq {eq} -and $bad.Count -eq 0) {{ $code = 0 }} else {{ $code = 1 }}\n')
+
+
+def suite_text(expected, command='powershell -NoProfile -File tools/test_automation.ps1; exit $LASTEXITCODE'):
     return ('# invented map\n'
-            f"ue_automation | 1 | src/ | $names = @(); foreach ($n in {listed}) {{ $names += 'Fake.' + $n }}; "
-            f"Write-Output ('SUMMARY success=' + $ok.Count + ' expected={printed}'); if ($ok.Count -eq {eq} -and $bad.Count -eq 0) {{ $code = 0 }}\n"
+            f'ue_automation | 1 | src/ tools/test_automation.ps1 | {command}\n'
             f'#pass ue_automation | SUMMARY success={expected} failed=0 expected={expected} | SUMMARY failed=[1-9]\n')
+
+
+def counts(names, expected, printed='$Expected', eq='$Expected', passline=None):
+    """suite_counts of an invented map and launcher; passline, when given, replaces the pass line's count."""
+    return suite_counts(suite_text(expected if passline is None else passline), launcher_text(names, expected, printed, eq))
 
 
 class SyntheticPaths(unittest.TestCase):
@@ -226,42 +275,66 @@ class SyntheticCounts(unittest.TestCase):
         self.assertFalse(matches('Fake.Other', 'Fake.State.Core'))
 
     def test_a_name_in_another_case_still_counts(self):
-        names, expected, printed, eq = suite_counts(suite_text(['state', 'Gun'], 4))
+        names, expected, printed, eq = counts(['state', 'Gun'], 4)
         self.assertEqual(count_problems(names, expected, printed, eq, self.PATHS), [])
 
     def test_anchored_names_are_refused(self):
-        for name in ('^Fake.Gun', 'Gun$'):
-            names, expected, printed, eq = suite_counts(suite_text(['State', name], 4))
+        for name in ('^Gun', 'Gun$'):
+            names, expected, printed, eq = counts(['State', name], 4)
             problems = count_problems(names, expected, printed, eq, self.PATHS)
             self.assertEqual(len(problems), 1, problems)
             self.assertIn('anchor', problems[0])
 
     def test_right_count_passes(self):
-        names, expected, printed, eq = suite_counts(suite_text(['State', 'Gun'], 4))
+        names, expected, printed, eq = counts(['State', 'Gun'], 4)
         self.assertEqual(names, ['Fake.State', 'Fake.Gun'])
         self.assertEqual(count_problems(names, expected, printed, eq, self.PATHS), [])
 
     def test_wrong_count_fails_and_lists_the_matches(self):
-        names, expected, printed, eq = suite_counts(suite_text(['State', 'Gun'], 3))
+        names, expected, printed, eq = counts(['State', 'Gun'], 3)
         problems = count_problems(names, expected, printed, eq, self.PATHS)
         self.assertEqual(len(problems), 1)
         self.assertIn('expects 3 tests but its names match 4', problems[0])
         self.assertIn('Fake.GunTable', problems[0])
 
     def test_counts_that_disagree_fail(self):
-        for printed, eq in ((3, 4), (4, 3)):
-            names, expected, p, e = suite_counts(suite_text(['State', 'Gun'], 4, printed, eq))
+        # A literal in the launcher's print or -eq is read as it stands; the pass line's count is read from the map.
+        for printed, eq, passline in (('3', '$Expected', None), ('$Expected', '3', None), ('$Expected', '$Expected', 3)):
+            names, expected, p, e = counts(['State', 'Gun'], 4, printed, eq, passline)
             problems = count_problems(names, expected, p, e, self.PATHS)
-            self.assertTrue(any('counts disagree' in m for m in problems), problems)
+            self.assertTrue(any('counts disagree' in m for m in problems), (printed, eq, passline, problems))
+
+    def test_literal_counts_that_agree_pass(self):
+        names, expected, printed, eq = counts(['State', 'Gun'], 4, '4', '4')
+        self.assertEqual(count_problems(names, expected, printed, eq, self.PATHS), [])
 
     def test_a_complex_test_is_flagged(self):
         paths = self.PATHS + [('Fake.State.Many', 'complex', None)]
-        names, expected, printed, eq = suite_counts(suite_text(['State', 'Gun'], 5))
+        names, expected, printed, eq = counts(['State', 'Gun'], 5)
         self.assertTrue(any('complex test' in m for m in count_problems(names, expected, printed, eq, paths)))
 
     def test_a_map_without_the_row_is_refused(self):
         with self.assertRaises(ValueError):
-            suite_counts('# invented map\nother | 1 | src/ | x\n')
+            suite_counts('# invented map\nother | 1 | src/ | x\n', launcher_text(['State'], 2))
+
+    def test_a_launcher_that_lost_a_line_is_refused(self):
+        whole = launcher_text(['State'], 2)
+        for lost in ('[int]$Expected = 2', "' expected=' + $Expected", '$ok.Count -eq $Expected', "[string[]]$Tests = @('Fake.State')"):
+            self.assertIn(lost, whole)
+            with self.assertRaises(ValueError, msg=lost):
+                suite_counts(suite_text(2), whole.replace(lost, 'x'))
+        with self.assertRaises(ValueError):
+            suite_counts(suite_text(2), launcher_text(['State'], 2, eq='$Other'))
+
+    def test_the_row_must_run_the_launcher_without_overrides(self):
+        launcher = launcher_text(['State'], 2)
+        for command in ("$names = @(); foreach ($n in 'State') { $names += 'Fake.' + $n }; exit 0",
+                        'powershell -File tools/test_automation.ps1 -Tests Fake.Gun -Expected 1; exit $LASTEXITCODE',
+                        'powershell -File tools/test_automation.ps1 -expected 2; exit $LASTEXITCODE',
+                        'powershell -File tools/test_automation_old.ps1; exit $LASTEXITCODE'):
+            with self.assertRaises(ValueError, msg=command):
+                suite_counts(suite_text(2, command), launcher)
+        self.assertEqual(suite_counts(suite_text(2), launcher)[:2], (['Fake.State'], 2))
 
 
 class ThisCheckout(unittest.TestCase):
@@ -272,11 +345,46 @@ class ThisCheckout(unittest.TestCase):
         self.assertEqual(path_problems(paths), [])
 
     def test_ue_automation_expects_what_its_names_match(self):
-        names, expected, printed, eq = suite_counts(SUITES.read_text(encoding='utf-8'))
+        names, expected, printed, eq = suite_counts(SUITES.read_text(encoding='utf-8'), LAUNCHER.read_text(encoding='utf-8-sig'))
         problems = count_problems(names, expected, printed, eq, test_paths(SOURCE))
         self.assertEqual(problems, [])
         print(f'ue_automation: {len(names)} names, expected={expected}', file=sys.stderr)
 
+
+class DryRunCases:
+    """The launcher's -DryRun under one PowerShell: it shows the command with the default names and count and starts nothing
+    (an invented engine folder, and a lock path in a temporary folder that must stay absent)."""
+    POWERSHELL = None   # set per shell by the loop below
+
+    def run_launcher(self, *args, env=None):
+        return subprocess.run([self.POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(LAUNCHER),
+                               *args], capture_output=True, text=True, env=env, timeout=120)
+
+    def test_dry_run_shows_the_command_and_starts_nothing(self):
+        names, expected, _, _ = launcher_counts(LAUNCHER.read_text(encoding='utf-8-sig'))
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / 'ue_run.lock'
+            done = self.run_launcher('-DryRun', '-Engine', str(Path(tmp) / 'Invented UE'),
+                                     env=dict(os.environ, OPENWILLOW_UE_LOCK=str(lock)))
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertFalse(lock.exists())
+        out = done.stdout
+        self.assertIn('DRY RUN (nothing started):', out)
+        self.assertIn('Automation RunTests ' + '+'.join(names) + '; Quit', out)
+        for flag in ('-game', '-windowed', '-ResX=1280', '-ResY=720', '-d3d11', '-unattended', '-nosplash', '-abslog='):
+            self.assertIn(' ' + flag, out)
+        self.assertRegex(out, r'local[\\/]automation[\\/]run-\d{8}-\d{6}\.log')
+        self.assertIn(f'expected={expected} ', out)
+        self.assertIn('editor_found=False', out)
+
+    def test_tests_without_expected_is_refused(self):
+        done = self.run_launcher('-DryRun', '-Tests', 'Fake.Invented')
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('-Expected', done.stdout + done.stderr)
+
+
+for _name, _path in SHELLS.items():
+    globals()[f'DryRun_{_name}'] = type(f'DryRun_{_name}', (DryRunCases, unittest.TestCase), {'POWERSHELL': _path})
 
 if __name__ == '__main__':
     unittest.main()

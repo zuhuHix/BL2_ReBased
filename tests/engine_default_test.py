@@ -20,9 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SHELLS = {n: p for n, p in (('powershell', shutil.which('powershell')), ('pwsh', shutil.which('pwsh'))) if p}
 DEFAULT = r'C:\Program Files\Epic Games\UE_5.8'
 INVENTED = r'X:\nowhere\Invented UE'
-# The ten scripts that used a fixed path or a mandatory -Engine until 2026-11-12, and the gate script whose expression they copy.
+# The ten scripts that used a fixed path or a mandatory -Engine until 2026-11-12, the gate script whose expression they copy, and
+# the automation launcher (2026-11-13), which copies it too.
 SCRIPTS = ['test_quest', 'test_mover', 'test_audio', 'test_action_skill_hud', 'test_hud_minimap', 'run_hud_shots', 'test_ambient',
-           'run_quest', 'capture_firing_frames', 'test_ue_viewer', 'test_slice_gate']
+           'run_quest', 'capture_firing_frames', 'test_ue_viewer', 'test_slice_gate', 'test_automation']
 
 EVAL = r'''
 $out = [ordered]@{}

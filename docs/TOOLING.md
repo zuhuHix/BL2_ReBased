@@ -2025,6 +2025,10 @@ pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList 
   (`UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit"`, which also
   runs the four other `OpenWillow.WeaponAssembly.*` tests). It was plain `OpenWillow.WeaponAssembly` until 2026-11-12: a test
   path that is also the folder of other tests is never run, and `tests/automation_paths_test.py` now refuses one.
+- The `ue_automation` suite (these five tests and eight others) runs through `tools/test_automation.ps1` since 2026-11-13. Its
+  `-Tests` and `-Expected` defaults are the one place the names and the count live; `tests/automation_paths_test.py` reads
+  them and the suite's `#pass` line. `-DryRun` prints the command line without taking the lock or starting the editor. The
+  run prints `AUTOMATION PATHS n: ...` (the `Path=` of every completed test) before `AUTOMATION SUMMARY success=N failed=M expected=K`.
 - A meshes import re-imports the reload clips recorded in `local/weapon_library/reloads.json`.
 - `-owgunexec=<cmd>|<cmd>` (with `-owgunshots`) runs console commands before the captures, `+` for a space, e.g.
   `-owgunexec=ow.RollGun+GD_Itempools.WeaponPools.Pool_Weapons_All_06_Legendary+30+1 -owgunids=gen_Pistol_Torgue_5_Calla_30_1`
