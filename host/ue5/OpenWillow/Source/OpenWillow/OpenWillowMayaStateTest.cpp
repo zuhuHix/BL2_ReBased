@@ -390,8 +390,8 @@ bool FOpenWillowRespawnWaitSplitTest::RunTest(const FString&)
         for (int32 Current : {0, 1, Max / 3, Max / 2})
         {
             volatile int32 RuntimeCurrent = Current;
-            const int32 Expected = FMath::Min(Current + 32 * Max / 100, Max);
-            bExactAt25 &= FRefill::Refilled(RuntimeCurrent, Max) == Expected;
+            const int32 ExactAfter = FMath::Min(Current + 32 * Max / 100, Max);
+            bExactAt25 &= FRefill::Refilled(RuntimeCurrent, Max) == ExactAfter;
         }
     }
     TestTrue(TEXT("respawn_refills_ammo: exact at maxima that are multiples of 25 (25 to 2000), values known only at run time"), bExactAt25);
