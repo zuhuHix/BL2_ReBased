@@ -4,6 +4,7 @@
 #include "OpenWillowMover.h"
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
+#include "OpenWillowRespawnAmmoRefill.h"
 #include "OpenWillowVendor.h"
 #include "OpenWillowInteractive.h"
 #include "OpenWillowCurrency.h"
@@ -371,6 +372,21 @@ void AOpenWillowWalker::Respawn()
     MayaState.Respawn(Now);
     RespawnTimeline.Begin(Now);
     RespawnFee.Schedule(RespawnTimeline);
+    // The injured definition's ResurrectedBehaviors run in the respawn frame (COMBAT_GOLDEN_TRACE.md step 15): five ammo pools get
+    // 32 % of their maximum back, rockets and grenades none (OpenWillowRespawnAmmoRefill.h; the size and rounding are UNVERIFIED).
+    if (Inventory)
+    {
+        int32 Raised = 0;
+        for (int32 Index = 0; Index < UOpenWillowInventory::AmmoTypeCount; ++Index)
+        {
+            const EOpenWillowAmmoType Type = EOpenWillowAmmoType(Index);
+            const FOpenWillowAmmoPool& Pool = Inventory->AmmoPool(Type);
+            const int32 After = FOpenWillowRespawnAmmoRefill::Apply(Type, Pool.Current, Pool.Max);
+            if (After != Pool.Current && Inventory->SetAmmoCurrent(Type, After)) ++Raised;
+        }
+        UE_LOG(LogTemp, Display, TEXT("OpenWillow Maya respawn ammo refill: %d of 5 pools raised (share %.2f of max, rockets and grenades left out)"),
+            Raised, FOpenWillowRespawnAmmoRefill::Percentage);
+    }
     // Every held key is let go here: a key released during the input lock never reaches its release handler, so a flag it
     // left set (sprint, crouch, jump, aim, fire: the pawn's IE_Released bindings) would still act once input is back.
     bFireHeld = false;

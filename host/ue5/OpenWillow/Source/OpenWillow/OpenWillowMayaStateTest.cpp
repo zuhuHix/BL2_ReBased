@@ -16,6 +16,7 @@
 #include "OpenWillowInventory.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowRespawnFee.h"
+#include "OpenWillowRespawnAmmoRefill.h"
 #include <limits>
 
 namespace
@@ -350,6 +351,35 @@ bool FOpenWillowRespawnWaitSplitTest::RunTest(const FString&)
     TestEqual(TEXT("respawn_wait_split: the first respawn's fee is not charged"), Replaced.LastFee(), -1);
     Replaced.Tick(116.9f, Purse);
     TestEqual(TEXT("respawn_wait_split: the second one's is, 11.8 s after its start"), Replaced.LastFee(), 70);
+    // respawn_refills_ammo: the injured definition's five refills (OpenWillowRespawnAmmoRefill.h). Pool sizes and amounts are invented.
+    using FRefill = FOpenWillowRespawnAmmoRefill;
+    const EOpenWillowAmmoType Five[] = {EOpenWillowAmmoType::AssaultRifle, EOpenWillowAmmoType::Shotgun, EOpenWillowAmmoType::SMG,
+        EOpenWillowAmmoType::Pistol, EOpenWillowAmmoType::Sniper};
+    for (EOpenWillowAmmoType Type : Five)
+    {
+        TestTrue(FString::Printf(TEXT("respawn_refills_ammo: %s is one of the five"), UOpenWillowInventory::AmmoTypeKey(Type)), FRefill::Refills(Type));
+        TestEqual(FString::Printf(TEXT("respawn_refills_ammo: %s 10 of 50 gets 32 %% of the maximum back"), UOpenWillowInventory::AmmoTypeKey(Type)),
+            FRefill::Apply(Type, 10, 50), 26);
+    }
+    for (EOpenWillowAmmoType Type : {EOpenWillowAmmoType::Launcher, EOpenWillowAmmoType::Grenade})
+        TestTrue(FString::Printf(TEXT("respawn_refills_ammo: %s is left out and unchanged"), UOpenWillowInventory::AmmoTypeKey(Type)),
+            !FRefill::Refills(Type) && FRefill::Apply(Type, 0, 12) == 0 && FRefill::Apply(Type, 1, 3) == 1);
+    TestEqual(TEXT("respawn_refills_ammo: an empty pool gets the share, truncated (0 of 10: 3.2 -> 3)"), FRefill::Refilled(0, 10), 3);
+    TestEqual(TEXT("respawn_refills_ammo: truncated, not rounded (0 of 30: 9.6 -> 9)"), FRefill::Refilled(0, 30), 9);
+    TestEqual(TEXT("respawn_refills_ammo: a pool above 1 - share stops at its maximum"), FRefill::Refilled(90, 100), 100);
+    TestEqual(TEXT("respawn_refills_ammo: one short of the maximum fills it"), FRefill::Refilled(47, 48), 48);
+    TestEqual(TEXT("respawn_refills_ammo: a full pool stays full"), FRefill::Refilled(48, 48), 48);
+    TestEqual(TEXT("respawn_refills_ammo: a pool at or above MaxPercentage is left alone (invented 0.5)"), FRefill::Refilled(80, 100, 0.32f, 0.5f), 80);
+    TestEqual(TEXT("respawn_refills_ammo: below MaxPercentage it stops at that share (invented 0.5)"), FRefill::Refilled(40, 100, 0.32f, 0.5f), 50);
+    TestEqual(TEXT("respawn_refills_ammo: a pool of size 0 is unchanged"), FRefill::Refilled(0, 0), 0);
+    bool bNeverLowers = true;
+    for (int32 Max = 1; Max <= 300; ++Max)
+        for (int32 Current = 0; Current <= Max; ++Current)
+        {
+            const int32 After = FRefill::Refilled(Current, Max);
+            bNeverLowers &= After >= Current && After <= Max && After <= Current + FMath::CeilToInt(0.32f * Max);
+        }
+    TestTrue(TEXT("respawn_refills_ammo: never lowers a pool, never past its maximum or the share"), bNeverLowers);
     return true;
 }
 #endif

@@ -116,7 +116,7 @@ have and the slice never asks for; the `DigistructCoordinatedEffect` objects of 
 5. `WillowPlayerPawn.EnableProtectionTimer`, `IsProtectionTimerActive`, `GetMinimumHealthMaintainedByProtectionTimer`, `CheckLowHealthState`: armed at the end of a second wind (a stub in the VM, so the protection stage of `AdjustDamage` stays not implemented).
 6. The respawn's station choice: `TeleporterDestination.GetNextExitPoint`, `TravelStation.CanResurrectHere`, the holding cell, `WillowGameInfo.ResetAI`, `Pawn.SetAnchor`, `Actor.SetLocation` (the effects of a teleport). The caller that schedules `ShowRespawnDialog` 11.8 s after the respawn.
 7. `CurrencyAttributeValueResolver` and `ControllerAttributeContextResolver` (above), `WillowGlobals.GetEffectCoordinator` (the digistruct effect of the respawn; a stub, so the effect is absent).
-8. `BehaviorBase.RunBehaviors` for the injured definition's lists (`InjuredBehaviors`, `TargetedBehaviors`, `RecoveredBehaviors`, `ResurrectedBehaviors`, the five pool refills): the VM logs them as not implemented; the health after a respawn is the script's own `SetHealth`.
+8. `BehaviorBase.RunBehaviors` for the injured definition's lists (`InjuredBehaviors`, `TargetedBehaviors`, `RecoveredBehaviors`, `ResurrectedBehaviors`, the five pool refills): the VM logs them as not implemented; the health after a respawn is the script's own `SetHealth`. The UE host applies the five refills itself, from its own rule and not through the VM ("Ammo on respawn" below).
 
 ## Not done
 
@@ -200,6 +200,38 @@ AI-assisted (Claude). Slice choice by the maintainer (2026-11-08): Maya may star
 - **UNVERIFIED:** that the real game starts Maya in a shield at all. This is a slice choice by the maintainer, not game behaviour, and the stand-in rule above stays UNVERIFIED.
 - **Checked:** `tests/start_shield_test.py` (source text only) and the UE module build. Not run in the editor: the in-engine suites named in the PR are for the integration run.
 
+## Ammo on respawn (2026-11-13)
+
+AI-assisted (Claude Code). What the game does, read from installed script and package data (no executable read):
+
+- **Which pools.** `GD_PlayerShared.injured.PlayerInjuredDefinition.ResurrectedBehaviors` holds five `Behavior_RefillResourcePool`,
+  for `D_Resources.AmmoResources.Ammo_Combat_Rifle`, `Ammo_Combat_Shotgun`, `Ammo_Patrol_SMG`, `Ammo_Repeater_Pistol` and
+  `Ammo_Sniper_Rifle`. Rocket launcher ammo and grenades are not in the list.
+- **The share.** Each behaviour's `Percentage` is the attribute `GD_PlayerShared.Misc.Att_PercentAmmoRestoredOnDeath` (base constant 0,
+  scale 1), whose value resolver is a constant 0.32. `MaxPercentage` is not set on the five, so it is the class default, 1.0.
+- **The apply step is script.** `Behavior_RefillResourcePool.ApplyBehaviorToContext` finds the pool through the context's
+  `IResourcePoolProvider`, evaluates the two shares and calls `ResourcePool.RefillPercentage` (Engine, script). That function takes
+  range = maximum - minimum; when current / range is below `MaxPercentage`, it sets the pool to the smaller of current + share x range
+  and minimum + `MaxPercentage` x range, otherwise it does nothing. So the share is of the pool's **maximum**, not of the missing
+  part, and a refill only raises a pool. The set goes through `SetCurrentValue`, whose rule is in NATIVE_LEVEL_UP_ATTRIBUTES.md
+  section 4: the ammo resources carry `bIntegerOnlyUpdates`, so the value is truncated toward zero, then clamped to the range.
+- **The moment.** In the real game the five refills run in the respawn frame, right after `ClearSecondWindReason` inside
+  `ResurrectPlayer` (COMBAT_GOLDEN_TRACE.md, step 15). Which native runs the list is not read and not needed for the host.
+
+The host (`OpenWillowRespawnAmmoRefill.h`, called from `AOpenWillowWalker::Respawn`, the respawn start) raises the five pools by that
+rule and leaves the launcher and grenade pools alone. It logs one line, `OpenWillow Maya respawn ammo refill: N of 5 pools raised`,
+with no amounts. The synthetic cases are in `OpenWillow.MayaState.RespawnWaitSplit` (`respawn_refills_ammo`).
+
+**UNVERIFIED:** the 0.32 size and the truncation in the running game (every live down so far had the refilled pools at or near
+their caps, so no sample shows a part refill); the pools' minimum of 0 (taken, not read); the `AmmoResourcePool` "current value
+changed" hook and the remainder the integer truncation keeps (not read, not modelled); that nothing in the slice modifies
+`Att_PercentAmmoRestoredOnDeath`. The host's pools carry the base maximum, without ammo upgrades. A down with the five pools well
+below their caps would settle the size.
+
+The slice gate's `ammo reserve refilled` fixture is unchanged: it fills the held gun's reserve to its maximum only when both the
+magazine and the reserve are empty. After a respawn the refill may leave less for the fixture to do in the links that follow;
+`tools/check_slice_gate.py` grades no ammo amount.
+
 ## A down and a respawn in the real game (2026-11-12, sessions 2 and 1)
 
 AI-assisted (Claude Code). Written in our own words from two private analyses of the day's capture sessions. The recordings, and every value that
@@ -258,5 +290,6 @@ comes from the player's save, stay under ignored `local/`. Everything here was s
   respawn, the other pools were full both times, and the rocket pool stayed empty. In session 1 the five refilled pools were already full before the
   down, and the rocket pool was empty before and after. This fits five refills without rockets; the 32 % size is not seen, because no refill could
   show below a cap.
+  The host applies the rule since 2026-11-13 ("Ammo on respawn" below); these samples do not tell the host's 32 % and truncation from a full refill.
 - **For anyone reading these recordings:** `ResurrectPlayer` with reason 0 and the holding cell skipped also fires at every map arrival; only
   reason 1 is a respawn.
