@@ -270,6 +270,7 @@ throws, so its enemies only hit once they are close. A future read should captur
 - timing: take-off to landing (L-4 already has `Attack` to `Landed` 1.08 to 3.48 s, mean 1.68, n 157, kinds not separated), throw to impact, and the cycle between leaps or throws;
 - damage per blow, with momentum, and the definition or projectile behind each;
 - how often each kind leaps or throws compared with a plain swing.
+- Which kinds leap or throw, what chooses it and how each plays out, from data, script and native analysis (UNVERIFIED in the running game): [NATIVE_AI_LEAP_THROW.md](NATIVE_AI_LEAP_THROW.md).
 
 **Also open (host, 2026-11-12): the baby's shot capsule.** The hit capsule is made from the smaller of the kind's radius and half height
 (`OpenWillowEnemy.cpp`, `SetupKind`), so with the baby's own 64 / 48 its body volume is a sphere of radius 48, under the adult-sized mesh it
