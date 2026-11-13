@@ -20,10 +20,11 @@ come from leaps and rocks.
   for leaps and rocks; `OpenWillow.LeapThrow` reproduces the note's worked table. (6) The leap's landing volume and the rock's touch
   hit with the note's damage rule and knock-back. The momentum becomes an added horizontal velocity of momentum / 100 through the
   character's launch (a mass of 100 is a stand-in); that adds 1,000 uu/s for a leap and 500 for a rock, and Maya's own braking then
-  stops her within about 60 and 30 uu, well short of the den-down's "about 500 uu" (one run). Not added to the plain swing. (7) The
+  stops her within about 60 and 30 uu (worked out from her ground braking, not measured), well short of the den-down's "about 500 uu" (one run). Not added to the plain swing. (7) The
   clip times of note 3.1 and 4.1; the host's Attack moment is the start of the launch clip, so its Attack-to-landed is the launch clip
   plus the flight (1.34 to 2.10 s), inside L-4's 1.08 to 3.48 s.
-- **Other stand-ins (UNVERIFIED):** the back-up throws never run (the host's melee child can always walk in); the slinger's high-ground
+- **Other stand-ins (UNVERIFIED):** the injured gate is not modelled: range enemies have no injured state (the note's injured adult
+  neither roars nor leaps); the back-up throws never run (the host's melee child can always walk in); the slinger's high-ground
   throw is not modelled (no raised spots); the baby leaps whenever it is outside its grab band and inside its leap band; the slinger and
   the baby walk in for the swing when they can run nothing else; a rock leads (the row's cap) or not on an even draw per throw (what picks
   one is not decoded); the landing's vertical test reads DamageHeight 192 as either way of the leaper's centre; a leaper that comes down
@@ -32,7 +33,9 @@ come from leaps and rocks.
   mesh has it, else a point in front of the chest; a leap or throw is atomic once started (a hold, death, AI off or the target lost
   before take-off or a release ends it).
 - **Tests.** `kind_melee` measures the plain swing, so it now turns its enemy's leaps and throws off (a test fixture): at 600 uu Maya
-  lies inside the adult's throw band. Two new range steps, `leap` and `throw`, ask each kind's first enemy for its attack with Maya
+  lies inside the adult's throw band. After review r1 the shared reset of the other AI steps does the same for enemy 0, because
+  `approach` (Maya 2,000 uu ahead, inside the regular's leap band) had graded a leaper in the air as a chase; COMBAT_RANGE.md lists
+  why each other step is not changed by it. Two new range steps, `leap` and `throw`, ask each kind's first enemy for its attack with Maya
   inside the band and ahead, and `tools/check_range.py` grades the band, the launch clip and the release moment (up to one frame late),
   the arc against its own copy of the solver, the landing on the aim point, the hit, the damage and the knock-back, one result per
   spawned kind, and checks each enemy's logged row against the note's. A new automation test brings `ue_automation` to 14 tests; the

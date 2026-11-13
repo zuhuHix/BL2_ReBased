@@ -195,7 +195,10 @@ public:
     const FOpenWillowLeapRecord& GetLeap() const { return Leap; }
     FOpenWillowRockRecord& GetRock() { return Rock; }
     const FOpenWillowRockRecord& GetRock() const { return Rock; }
-    int32 LeapCount = 0, LeapHits = 0, ThrowCount = 0, RocksReleased = 0;
+    int32 LeapCount = 0;
+    int32 LeapHits = 0;
+    int32 ThrowCount = 0;
+    int32 RocksReleased = 0;
 
     // Counters and the last swing, read by the logs and the range test.
     int32 SwingCount = 0;
@@ -233,8 +236,9 @@ private:
     float GiveUpUntil = -10.f;
     bool bSwingPending = false;
     float SwingStartAt = -10.f;
-    // The attack the random node runs (None: draw at the next state update) and its timeline. A leap or throw is atomic once started
-    // (NATIVE_AI_LEAP_THROW 5): the close melee does not replace it; death, a hold, passive and a lost target before take-off or a release end it.
+    // The attack the random node runs (None: draw at the next state update) and its timeline. A leap or throw is atomic once started: the
+    // note (NATIVE_AI_LEAP_THROW 5) says so for the throw and leaves it open for the leap, so for the leap it is a host stand-in. The close
+    // melee does not replace either; death, a hold, passive and a lost target before take-off or a release end it.
     EOpenWillowAttack Pick = EOpenWillowAttack::None;
     EOpenWillowAttack Forced = EOpenWillowAttack::None;
     FRandomStream AttackDraw;
@@ -249,7 +253,8 @@ private:
     const AActor* RunningSelf = nullptr;       // for the log line of an attack that Stop() ends
     FOpenWillowThreatDen* HeldDen = nullptr;   // the den whose resource this enemy holds (given back by EndAttack, which Stop calls)
     bool bHoldsLeap = false;
-    bool bHoldsThrow = false;    float LastNow = 0.f;          // the last tick's time (Stop's log line)
+    bool bHoldsThrow = false;
+    float LastNow = 0.f;          // the last tick's time (Stop's log line)
 };
 
 // The den's fall-back: when the level is 2 or more and now is past ForgetTime, the level drops to 1 (every DenUpdateInterval).

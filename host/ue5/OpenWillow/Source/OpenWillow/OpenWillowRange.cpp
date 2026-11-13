@@ -1719,6 +1719,11 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         UE_LOG(LogTemp, Display, TEXT("OWRANGE threat reset (test, %s) level=1"), Why);
         // E0 back home, facing the spot as built, its patrol held 3 s: every step lays its scene out from the same place.
         E0->ResetForAITest(Now, (SpotNow - E0->GetHome()).Rotation().Yaw, 3.f);
+        // Test fixture (review r1 of the leap lane): E0's leaps and throws are off for the steps laid out here. They grade notice, the chase
+        // (approach: at 2000 uu Maya is inside the regular's leap band, and a leap's arc would pass for a chase), the plain swing and the
+        // fall-back, none of which a leap or a rock may stand in for. The steps that want a leap or a throw (96-97) turn it back on for their
+        // enemy (its ResetForAITest), and the end of those steps turns every enemy's back on.
+        E0->SetRangedAttacks(false);
         // Test fixture: Maya back to full health before each step, so the earlier steps' blows cannot put her down
         // (ApplyScriptHealth sets the maximum and current health; it does not raise a downed Maya, which the steps report).
         if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(Pawn); Maya && !Maya->IsDown())

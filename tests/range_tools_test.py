@@ -802,6 +802,22 @@ class LeapThrowCheckerTest(unittest.TestCase):
         self.assertIn('knock', check_range.throw_problem(self.throw(knock='1000')))
         self.assertIn('outside its band', check_range.throw_problem(self.throw(start_distance='400')))
 
+    def test_a_leap_outside_l4s_live_window_fails(self):
+        # No leap of a valid row reaches this check with L-4's 1.08 to 3.48 s (LeapThrowRowsTest), so the window is narrowed here to reach it.
+        from unittest import mock
+        with mock.patch.object(check_range, 'LIVE_ATTACK_TO_LANDED', (1.08, 1.5)):
+            self.assertIn("outside L-4's", check_range.leap_problem(self.leap()))
+        self.assertEqual(check_range.leap_problem(self.leap()), '')
+
+    def test_a_rock_lead_over_its_cap_fails(self):
+        self.assertIn('over the cap', check_range.throw_problem(self.throw(lead='600.0')))
+        self.assertEqual(check_range.throw_problem(self.throw(lead='400.0')), '')
+
+    def test_a_rock_that_delivered_other_numbers_fails(self):
+        self.assertIn('melee numbers', check_range.throw_problem(self.throw(applied='12.00', pools_lost='12.00')))
+        self.assertIn('melee numbers', check_range.throw_problem(self.throw(pools_lost='0.00')))
+        self.assertIn('melee numbers', check_range.throw_problem(self.throw(expected='0.00', applied='0.00', pools_lost='0.00')))
+
     def test_incomplete_or_impossible_lines_fail(self):
         self.assertIn('lacks windup', check_range.leap_problem(self.leap().replace(' windup=0.840', '')))
         self.assertIn('lacks what', check_range.throw_problem(self.throw(what=None)))
@@ -879,6 +895,24 @@ class LeapThrowHostTest(unittest.TestCase):
         step = rng[rng.index('case 94: // kind_melee'):rng.index('case 95:')]
         self.assertIn('Enemy->SetRangedAttacks(false);', step)
         self.assertEqual(check_range.EXPECTED.index('leap'), check_range.EXPECTED.index('kind_melee') + 1)
+
+    def test_the_notice_chase_and_swing_steps_run_without_leaps_or_rocks(self):
+        # Review r1: approach put Maya inside the regular's leap band and passed on a point of a leap's arc. The shared reset of steps 16-36
+        # turns E0's leaps and throws off; the leap and throw steps turn their enemy's back on, and the end of those steps every enemy's.
+        rng = source('OpenWillowRange.cpp')
+        reset = rng[rng.index('auto Reset = [this, Pawn, E0, Now](const TCHAR* Why)'):rng.index('auto OnlyActive')]
+        self.assertIn('E0->SetRangedAttacks(false);', reset)
+        self.assertLess(reset.index('E0->ResetForAITest('), reset.index('E0->SetRangedAttacks(false);'))
+        ranged = rng[rng.index('case 96: // leap and throw'):rng.index('case 97:')]
+        self.assertLess(ranged.index('Reset(StepName);'), ranged.index('Enemy->ResetForAITest('))
+        self.assertIn('Each->SetRangedAttacks(true);', ranged)
+        self.assertIn('bRangedAttacks = true;', source('OpenWillowEnemy.cpp'))   # ResetForAITest turns them back on
+
+    def test_the_rock_traces_the_world_before_it_tests_maya(self):
+        # Review r1: a wall between Maya and the rock inside one tick's step must stop it.
+        enemy = source('OpenWillowEnemy.cpp')
+        tick = enemy[enemy.index('void AOpenWillowRangeRock::Tick'):enemy.index('void AOpenWillowRangeRock::Finish')]
+        self.assertLess(tick.index('LineTraceSingleByObjectType'), tick.index('SegmentDistToSegmentSafe(From, End,'))
 
     def test_the_brain_draws_once_per_finished_attack_and_gives_resources_back(self):
         brain = source('OpenWillowEnemyAI.cpp')

@@ -97,8 +97,8 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     const bool bAware = bTargeting && In.bHasMaya && Den.Level >= SeenInThreatRadius
         && Now >= Den.AggroTime + MinAggroTimeToConsiderAwareOfTarget;
 
-    // A leap or throw in progress runs its own timeline, and nothing else this tick: it is atomic once started (NATIVE_AI_LEAP_THROW 5), so
-    // the close melee does not replace it, there is no chase beside it and no swing.
+    // A leap or throw in progress runs its own timeline, and nothing else this tick: it is atomic once started (the throw by NATIVE_AI_LEAP_THROW
+    // 5; the leap a host stand-in, the note leaves it open), so the close melee does not replace it, there is no chase beside it and no swing.
     if (IsLeaping() || IsThrowing())
     {
         AdvanceAttack(Now, In, Orders);
@@ -204,7 +204,8 @@ void FOpenWillowEnemyBrain::ChooseAttack(float Now, const FOpenWillowBrainInput&
     // While a drawn child runs, the random node re-evaluates only that child (NATIVE_AI_LEAP_THROW 2.2).
     if (Pick != EOpenWillowAttack::None) return;
     // What can run now: the band (horizontal, the enemy's origin to Maya's; no target-size allowance, the hub's decision 2), the line of
-    // sight, Maya in front for the throws that ask for it, and a free resource (one leaper and three throwers in the den, decision 3).
+    // sight, Maya in front for the throws that ask for it, and a free resource (one leaper and three throwers in the den, decision 3). The
+    // note's "not injured" gate on the adult's leap (2.1, 2.2) is not modelled: range enemies have no injured state (host stand-in).
     const FVector ToMaya = In.MayaLocation - In.Location;
     const bool bFront = FVector::DotProduct(FRotator(0.f, In.YawDegrees, 0.f).Vector(), FVector(ToMaya.X, ToMaya.Y, 0.f)) > 0.f;
     const bool bLeapOk = Row.LeapMax > 0.f && FlatDistance >= Row.LeapMin && FlatDistance <= Row.LeapMax && In.bLineOfSight

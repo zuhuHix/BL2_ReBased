@@ -279,15 +279,23 @@ pair; every rule UNVERIFIED in game; decision `docs/decisions/2026-11/2026-11-13
 | Bands | leap 1024 to 2048 (baby 480 to 2048), adult throw 512 to 3072, slinger 1536 to 3072; horizontal, the enemy's origin to Maya's, no target-size allowance | note 2.1, 2.3; decision 2 | the throws' move limit is not modelled (no combat areas) |
 | Resources | one leaper (the adult's leap) and three throwers at a time in the range's one den | note 2.4; decision 3 | the scope is UNVERIFIED |
 | The adult's roar | skipped, logged `roar=skipped_stand_in` | note, "Where the den captures agree"; decision 4 | stand-in |
+| The injured gate | not modelled: range enemies have no injured state (the note's injured adult neither roars nor leaps) | note 2.1, 2.2 | stand-in |
 | Leap timeline | the launch clip (0.833 s; turns toward Maya over its first half), the flight, the landing clip (adult 1.233 s, regular and baby 0.8 s) with the hit at its start | note 3.1; decision 7 | the host's Attack moment is the launch clip's start, so Attack to landed is 1.34 to 2.10 s, inside L-4's 1.08 to 3.48 |
 | Arcs | one solver for leaps and rocks: fixed speed, launch angle = elevation + fraction x (90 - elevation), lead capped, flight = distance / horizontal speed, gravity solved to land on the aim point; leaps aim centre to centre with the half-height lift | note 3.2, 4.2; decision 5 | `OpenWillow.LeapThrow` reproduces the note's worked table; the body follows the arc kinematically |
 | Leap hit | at touch-down, a circle of 320 around the point 200 ahead of the leaper; Maya's centre within 192 of its centre vertically (stand-in reading of DamageHeight) | note 3.3; decision 6 | a leaper that came down inside Maya steps back to body contact (host: the enemies do not collide with her) |
 | Rocks | released at the clip's moments (one-rock clip 1.064 s of 1.733 s; the slinger's two-rock clip 0.68 and 1.66 s of 2.453 s), speed 2000, fraction 0.3, a lead (the row's cap) or none on an even draw; a touch of Maya's capsule (rock radius 20) hits, static geometry stops it, 20 s at most | note 4.1, 4.2 | the lead draw, the touch radius and the look (an engine sphere) are stand-ins; other enemies are not hit |
-| Damage and push | the plain melee's arrival x ratio x level scale; momentum 100,000 (leap) and 50,000 (rock) as an added horizontal velocity of momentum / 100 | note 3.3, 4.3; COMBAT_MELEE; decision 6 | the mass of 100 is a stand-in: Maya slides about 60 uu (leap) and 30 uu (rock) where the den-down run saw about 500 (one run). The plain swing does not push |
+| Damage and push | the plain melee's arrival x ratio x level scale; momentum 100,000 (leap) and 50,000 (rock) as an added horizontal velocity of momentum / 100 | note 3.3, 4.3; COMBAT_MELEE; decision 6 | the mass of 100 is a stand-in. Worked out from her ground braking (friction 8 x factor 2, no input), not measured in a run: she slides about 60 uu (leap) and 30 uu (rock), where the den-down run saw about 500 (one run). The plain swing does not push |
 | Clips | the manifest's `leap_start`, `leap_idle`, `leap_end` and `throw` roles (`tools/prepare_range.py`) | | the current import has none: the body holds its idle |
 
 **The test steps.** `kind_melee` now turns its enemy's leaps and throws off (a test fixture): at 600 uu Maya lies inside the adult's throw band, and a rock or a
-leap between the swings would change what its cycle and stand numbers measure. Its bands and grading are unchanged. The new steps `leap` and `throw` (part of
+leap between the swings would change what its cycle and stand numbers measure. Its bands and grading are unchanged. **The same fixture on the other AI
+steps (review r1):** the shared reset of steps 16 to 36 and `swing_range` turns enemy 0's leaps and throws off, logged as `OWRANGE enemy ... ranged_attacks=0`.
+`approach` needed it: Maya stands 2,000 uu ahead, inside the regular's leap band, and the first run graded a leaper still in the air as a chase. The others
+get it from the same reset and would not have been changed by a leap or a rock in their windows: `notice_proximity` (500 uu, outside every band),
+`notice_sight` (graded at 0.5 s, before a leap could take off), `no_notice_far`, `provoked` and `forget`'s check (Maya outside the den's radius, no
+target), `melee_hit`, `melee_interval` and `melee_miss` (250 uu, inside the close band, so nothing is drawn), `passive_no_melee` (passive) and
+`swing_range` (480 uu, below every band of the regular). `psycho_melee` runs a kind with no row. Steps 1 to 15, the corpse steps and the loot steps run
+with the AI off. The leap and throw steps turn their enemy's attacks back on, and every enemy's are on again after them. The new steps `leap` and `throw` (part of
 `tools/test_range.ps1`, after `kind_melee`) take the first enemy of each kind with that attack, put Maya inside its band ahead of it with a clear sight line,
 and ask it for the attack (a test fixture that passes through the same checks a drawn attack must pass; a refusal is logged as `attack_forced_refused`). The
 checker grades each result: the row is the note's, it started inside its band, the launch clip and a rock's release came at their moments (up to one frame
@@ -310,6 +318,9 @@ the baby's and the slinger's rows are covered by the light tests only. The check
   graded respawn is the run's only one dates from 2026-11-12, after the eight recorded unforced runs, and making the unforced variant reliable is
   another lane's work; nothing was loosened here.
 - `tools/play_range.ps1 -KillRow`: `kill row: PASS` (passive mode: no attacks there).
+- After review r1 (the fixture on the shared reset, the rock tracing the world first): `range check: PASS (pass 39, fail 0, skip 0, missing 0)`,
+  `approach` now a chase ("closed 677 uu in 2 s"), the leap and throw rows again inside the rule; `ue_automation` 14 / 14; the plain slice gate
+  14 / 0 / 0.
 
 A future read should capture, for each kind:
 - what triggers the attack: the distance at take-off or throw, and the time since the target was taken;

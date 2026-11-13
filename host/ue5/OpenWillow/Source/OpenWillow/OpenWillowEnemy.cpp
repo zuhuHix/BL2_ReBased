@@ -848,7 +848,14 @@ void AOpenWillowRangeRock::Tick(float DeltaSeconds)
     const FVector From = GetActorLocation();
     Age += DeltaSeconds;
     const FVector To = Arc.At(Age);
-    // Maya: this tick's path meets her capsule (its axis, her radius plus the rock's). Not while she is down (no target to hit, as the swing).
+    // The world first: static geometry only (the thrower and other enemies are not hit, host stand-in). Maya is tested only on the part of
+    // this tick's path before that, so a wall between her and the rock inside one tick's step stops it (review r1).
+    FHitResult Hit;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeRock), false);
+    Query.AddIgnoredActor(this);
+    const bool bWorld = GetWorld()->LineTraceSingleByObjectType(Hit, From, To, FCollisionObjectQueryParams(ECC_WorldStatic), Query);
+    const FVector End = bWorld ? FVector(Hit.Location) : To;
+    // Maya: the path up to End meets her capsule (its axis, her radius plus the rock's). Not while she is down (no target to hit, as the swing).
     if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(this, 0)); Maya && Maya->GetCapsuleComponent())
     {
         const UCapsuleComponent* Capsule = Maya->GetCapsuleComponent();
@@ -856,7 +863,7 @@ void AOpenWillowRangeRock::Tick(float DeltaSeconds)
         const float Half = FMath::Max(0.f, Capsule->GetScaledCapsuleHalfHeight() - Radius);
         const FVector Centre = Capsule->GetComponentLocation();
         FVector OnPath, OnAxis;
-        FMath::SegmentDistToSegmentSafe(From, To, Centre - FVector(0.f, 0.f, Half), Centre + FVector(0.f, 0.f, Half), OnPath, OnAxis);
+        FMath::SegmentDistToSegmentSafe(From, End, Centre - FVector(0.f, 0.f, Half), Centre + FVector(0.f, 0.f, Half), OnPath, OnAxis);
         if (FVector::Dist(OnPath, OnAxis) <= Radius + OpenWillowLeapThrow::RockRadius)
         {
             const bool bHit = !Maya->IsDown();
@@ -872,13 +879,9 @@ void AOpenWillowRangeRock::Tick(float DeltaSeconds)
             return;
         }
     }
-    // The world: static geometry only (the thrower and other enemies are not hit, host stand-in).
-    FHitResult Hit;
-    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeRock), false);
-    Query.AddIgnoredActor(this);
-    if (GetWorld()->LineTraceSingleByObjectType(Hit, From, To, FCollisionObjectQueryParams(ECC_WorldStatic), Query))
+    if (bWorld)
     {
-        Finish(TEXT("world"), Hit.Location, false, 0.f, 0.f);
+        Finish(TEXT("world"), End, false, 0.f, 0.f);
         return;
     }
     SetActorLocation(To);
