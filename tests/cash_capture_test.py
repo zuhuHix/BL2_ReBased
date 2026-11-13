@@ -140,6 +140,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*dp_replace*' {
             # The den down's re-placement; every call is counted on disk, so a test sees one that was sent when it should not have been.
             Add-Content -LiteralPath (Join-Path $work 'replace_calls.txt') 'sent'
+            Add-Content -LiteralPath (Join-Path $work 'replace_waits.txt') ("$TimeoutSeconds " + $(if ($Code -match 'until=\d') { 'until' } else { 'no-until' }))
             if ($scenario -eq 'down_at_replace') { $script:downNow = $true; return '{"result": "not_up", "state": "injured_flag"}' }   # down since the poll
             return '{"result": "placed", "enemy": "WillowAIPawn_1", "dist": 900.0}'
         }
@@ -156,6 +157,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
                 if ($TimeoutSeconds -lt 3) { [Threading.Thread]::Sleep($TimeoutSeconds * 1000); throw 'no reply to c-invented' }
                 [Threading.Thread]::Sleep(2500); return '{"state": "up", "injured_field": true, "health": 100.0, "pool": 100.0}'
             }
+            if ($scenario -eq 'health_then_null') { return $(if ($script:polls -eq 1) { '{"state": "up", "injured_field": true, "health": 100.0, "pool": 100.0}' } else { '{"state": "up", "injured_field": true, "health": null, "pool": null}' }) }
             if ($scenario -eq 'pool_none') { return '{"state": "up", "injured_field": true, "health": null, "pool": null}' }   # the health cannot be read
             return '{"state": "up", "injured_field": true, "health": 100.0, "pool": 100.0}'
         }
@@ -761,6 +763,19 @@ class DenDownReplacementTest(unittest.TestCase):
         self.assertIn('[int]$DownSeconds = 240,', text)
         self.assertIn('[int]$ReplaceAfterSeconds = 20,', text)
 
+    def test_a_placement_gets_the_window_s_end_and_a_wait_clamped_to_it(self):
+        # Review of #255, B1: the window limited when a re-placement was sent, not when it ran; its command waited the default 30 s.
+        done, session = self.run_down('replace_one', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
+        waits = (self.work / 'replace_waits.txt').read_text(encoding='utf-8').split('\n')
+        first = waits[0].split()
+        self.assertEqual(first[1], 'until')   # the window's end goes with the call
+        self.assertLess(int(first[0]), 9)      # and its reply wait fits in the window
+
+    def test_health_read_once_then_unreadable_gives_no_second_placement(self):
+        # Review of #255, B4: after a placement the health must be read again before another; here it never is.
+        done, session = self.run_down('health_then_null', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
+        self.assertEqual(session['den_down_replacements'], 1)
+
     def test_an_unreadable_health_never_reads_as_unhit(self):
         done, session = self.run_down('pool_none', '-DownSeconds', '8', '-ReplaceAfterSeconds', '0')
         self.assertEqual(session['den_down_replacements'], 0)
@@ -1175,7 +1190,8 @@ class DpReplaceTest(unittest.TestCase):
             cp_down_state=lambda: {'state': self.state},
             get_pc=lambda: self.Obj(Pawn=self.Obj(Location=here)),
             unrealsdk=self.Obj(find_all=lambda cls: list(self.pawns)),
-            sw_live_pawn=lambda p: p.live, _sw_dist=lambda p, h: p.dist, _sw_pool_refs=lambda p: {'health_pool': p.health},
+            sw_live_pawn=lambda p: p.live, _sw_pool_refs=lambda p: {'health_pool': p.health},
+            _sw_dist=lambda p, h: round(((p.Location.X - h.X) ** 2 + (p.Location.Y - h.Y) ** 2 + (p.Location.Z - h.Z) ** 2) ** 0.5, 1),
             _sw_fields=lambda p, names: {'Controller': p.controller, 'AIClass': p.kind},
             cb_place=lambda name, distance, bearing: self.placed.append((name, distance, round(bearing, 1))))
 
@@ -1217,6 +1233,35 @@ class DpReplaceTest(unittest.TestCase):
                           'CharClass_PrimalBeast_Ranged', 'CharClass_Invented', 'CharClass_PrimalBeastBaby')], [0, 1, 2, 3, 4])
         self.assertEqual(self.ns['dp_kind_rank'](None), 3)
 
+    def test_a_late_call_moves_nothing(self):
+        # Review of #255, B1: a call at or after the window's end answers 'late' and moves nothing, also when the end passes during it.
+        self.ns['time'] = self.Obj(time=lambda: 2000.0)
+        self.assertEqual(self.ns['dp_replace'](until=1000.0), {'result': 'late'})
+        ticks = iter([999.0, 1001.0])   # in time at the start, past the end right before the placement
+        self.ns['time'] = self.Obj(time=lambda: next(ticks))
+        self.assertEqual(self.ns['dp_replace'](until=1000.0), {'result': 'late'})
+        self.assertEqual(self.placed, [])
+
+    def test_only_the_pack_she_fought_is_ranked(self):
+        # Review of #255, B2: an adult of another group, beyond 3500 of her and of the first placement's enemy, does not outrank the pack.
+        fresh = {'stale': None, 'CurrentValue': 50.0}
+        gd = 'GD_Invented.Character.'
+        self.pawns = [self.pawn(12, 500.0, fresh, kind=gd + 'CharClass_PrimalBeast'),
+                      self.pawn(14, 5000.0, fresh, kind=gd + 'CharClass_PrimalBeastAdult', at=(0.0, 5000.0))]
+        self.ns['DP']['trial'] = {'first': 'WillowAIPawn_12'}
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['rule'], got['enemy']), ('first', 'WillowAIPawn_12'))
+
+    def test_a_candidate_on_her_own_spot_is_passed_over(self):
+        # Review of #255, B3: with her horizontal position equal to the candidate's there is no side to keep; the next one is taken.
+        fresh = {'stale': None, 'CurrentValue': 50.0}
+        gd = 'GD_Invented.Character.'
+        above = self.pawn(15, 300.0, fresh, kind=gd + 'CharClass_PrimalBeastAdult')
+        above.Location = self.Obj(X=0.0, Y=0.0, Z=300.0)
+        self.pawns = [above, self.pawn(16, 1000.0, fresh, kind=gd + 'CharClass_PrimalBeast')]
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['rule'], got['enemy']), ('kind_my_side', 'WillowAIPawn_16'))
+
     def test_not_up_places_nothing(self):
         for state in ('injured_flag', 'no_health', 'no_pawn'):
             self.state = state
@@ -1241,13 +1286,13 @@ class DpReplaceWatchHelpersTest(unittest.TestCase):
         def __init__(self, **kw):
             self.__dict__.update(kw)
 
-    def pawn(self, n, x, value=50.0, guid=7, slot_guid=7, controller=True):
+    def pawn(self, n, x, value=50.0, guid=7, slot_guid=7, controller=True, kind=None):
         pool = self.Obj(CurrentValue=value, MaxValue=100.0, MinValue=0.0, MaxValueBaseValue=100.0, PoolGUID=slot_guid,
                         Definition=self.Obj(), AssociatedProvider=self.Obj())
         ref = self.Obj(PoolIndexInManager=0, PoolGUID=guid, PoolManager=self.Obj(ResourcePools=[pool]), Data=pool)
         path = f'Ice_P.TheWorld:PersistentLevel.WillowAIPawn_{n}'
         return self.Obj(Name=f'WillowAIPawn_{n}', _path_name=lambda: path, bDeleteMe=False, Location=self.Obj(X=x, Y=0.0, Z=0.0),
-                        Controller=self.Obj() if controller else None, HealthPool=ref, ShieldArmor=None)
+                        Controller=self.Obj() if controller else None, HealthPool=ref, ShieldArmor=None, AIClass=kind)
 
     def setUp(self):
         self.ns = {}
@@ -1273,6 +1318,24 @@ class DpReplaceWatchHelpersTest(unittest.TestCase):
         self.assertEqual(self.placed, [('WillowAIPawn_4', 180.0)])   # she is at -X of it: her own side is bearing 180
         self.pawns = self.pawns[:3]
         self.assertEqual(self.ns['dp_replace'](), {'result': 'no_enemy'})
+
+    def test_the_kind_is_read_as_the_path_name_and_without_the_object_type_every_kind_is_other(self):
+        # Review of #255, B4: AIClass reaches dp_kind_rank as the path name _sw_fields makes of an object.
+        class Kind:
+            def __init__(self, path):
+                self.path = path
+
+            def _path_name(self):
+                return self.path
+        gd = 'GD_Invented.Character.'
+        self.ns['_SwUObject'] = Kind   # the SDK's object type, as the watch's _sw_p tests for it
+        self.pawns = [self.pawn(21, 500.0, kind=Kind(gd + 'CharClass_PrimalBeast')), self.pawn(22, 900.0, kind=Kind(gd + 'CharClass_PrimalBeastAdult'))]
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['enemy'], got['kind']), ('WillowAIPawn_22', gd + 'CharClass_PrimalBeastAdult'))   # the adult, by its path name
+        self.ns['_SwUObject'] = ()   # the object type unavailable: every kind ranks "other", and the reply shows what was read
+        got = self.ns['dp_replace']()
+        self.assertEqual(got['enemy'], 'WillowAIPawn_21')   # the nearest
+        self.assertTrue(str(got['kind']).startswith('<'), got)
 
 
 if __name__ == '__main__':

@@ -422,12 +422,18 @@ try {
                     if (Get-DriverLost) { break }
                     if ((Get-Date) -ge $downUntil) { break }   # the window ended during the stamp: no placement after it
                     $log.den_down_replacements = $n
-                    # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace).
-                    $again = Py 'import json; print(json.dumps(dp_replace()))'
+                    # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace). It gets
+                    # the window's end (wall-clock seconds since 1970, the clock both sides read on this machine) and moves nothing once that
+                    # has passed ('late'); its reply wait is clamped to the time left, like the polls' (review of #255).
+                    $left = ($downUntil - (Get-Date)).TotalSeconds
+                    if ($left -lt 2) { break }
+                    $untilEpoch = (([DateTimeOffset]$downUntil).ToUnixTimeMilliseconds() / 1000.0).ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
+                    $again = Py "import json; print(json.dumps(dp_replace(until=$untilEpoch)))" ([int][math]::Min(30, [math]::Floor($left - 1)))
                     $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))
                     $lastHit = Get-Date; $lastHealth = $null
                 }
-                Start-Sleep 1
+                $pause = [math]::Min(1000, ($downUntil - (Get-Date)).TotalMilliseconds)   # the loop's pause never runs past the window
+                if ($pause -gt 0) { Start-Sleep -Milliseconds ([int]$pause) }
             }
             $log.den_down_after_s = $downAt
             if (Get-DriverLost) { throw "the driver stopped answering during the den down ($(Get-DriverLost))" }
@@ -441,7 +447,8 @@ try {
             if ($null -ne $downAt -and !(Get-DriverLost)) {
                 $t1 = Get-Date
                 while (((Get-Date) - $t1).TotalSeconds -lt $RespawnSeconds -and !(Get-DriverLost)) {
-                    Start-Sleep 2
+                    $pause = [math]::Min(2000, ($t1.AddSeconds($RespawnSeconds) - (Get-Date)).TotalMilliseconds)   # never past the window
+                    if ($pause -gt 0) { Start-Sleep -Milliseconds ([int]$pause) }
                     $r = & $poll $t1.AddSeconds($RespawnSeconds)
                     if ($r -and $r.state -eq 'up') { $upAt = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1); break }
                 }

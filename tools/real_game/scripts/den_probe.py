@@ -16,6 +16,7 @@ recorded. The rules a trial's numbers can speak for are this map's dens and this
 import json
 import math
 import statistics
+import time
 
 try:
     import unrealsdk
@@ -208,22 +209,30 @@ def dp_kind_rank(ai_class):
     return len(DP_KIND_ORDER) + 1 if name in DP_KIND_LAST else len(DP_KIND_ORDER)
 
 
-def dp_replace(distance=1600.0, radius=6000.0):
+def dp_replace(distance=1600.0, radius=6000.0, near=3500.0, until=None):
     """The den down's re-placement (cash_capture.ps1), as ONE call, so nothing runs in the game between the check and the move: only while
     Maya is still up, she is put `distance` from a living enemy within `radius` of where she stands. The enemy is picked by the watch's
     fields-only pawn read (slice_watch.py: sw_live_pawn, _sw_dist, _sw_pool_refs, _sw_fields, which ran in S0 of 2026-11-12), so nothing
-    is called on a scanned pawn, unlike dp_begin's pick through cb_enemies, which calls the health and shield getters on each. Living means
-    a Controller field set and a health pool resolved through its manager (not stale) above 0.
-    Which enemy: the strongest kind in reach first (dp_kind_rank of its AIClass field: an adult before a regular, a slinger, any other
-    kind and a baby); within that kind the first placement's enemy (dp_begin's trial 'first') while it lives, then the nearest.
+    is called on a scanned pawn. The fields-only rule binds this pick and the watch; dp_begin's first pick still goes through cb_enemies,
+    which calls the four health and shield getters on each pawn (inherited, docs/TOOLING.md, "What the fields-only rule binds"). Living
+    means a Controller field set and a health pool resolved through its manager (not stale) above 0.
+    Which enemy: only pawns within `near` (dp_begin's pack radius, 3500) of her or of the first placement's enemy are ranked, so an adult
+    of another group or across a ledge does not outrank the pack she fought (review of #255). Among them the strongest kind first
+    (dp_kind_rank of the AIClass field, read as its path name: an adult before a regular, a slinger, any other kind and a baby); within that
+    kind the first placement's enemy while it lives, then the nearest. When the AIClass value cannot be read as a path name (the SDK's
+    object type unavailable), every kind ranks "other" and the reply's `kind` shows what was read, so the log shows the case.
     Where: the first placement's enemy at dp_begin's bearing 180, the one side proven open ground (result 'first'); any other on the
-    side she is on now, the bearing from the two Location fields (result 'kind_my_side'), since another pawn's bearing 180 may be rock,
-    a ledge or the far side of the pack.
+    side she is on now, the bearing from the two Location fields (result 'kind_my_side'). A candidate on her own spot (under 1 uu apart
+    horizontally) has no side and is passed over for the next.
+    When: `until` is the den-down window's end as wall-clock seconds since 1970 (time.time() here, the same clock as the capture's). A
+    call that comes at or after it moves nothing and answers 'late', checked again right before the placement (review of #255).
     Called on what: cp_down_state's GetHealth and GetShieldStrength on the player's own pawn; on each scanned pawn, field reads only;
     cb_place sets the player's own pawn's Location and SetPhysics on it and turns the player's own controller (ClientSetRotation).
     The open den trial is left as dp_begin opened it. Never raises: the reply is always a result word for the log, and 'not_up' leaves
     the down to the next poll."""
     try:
+        if until is not None and time.time() >= until:
+            return {"result": "late"}
         state = cp_down_state().get("state")   # GetHealth and GetShieldStrength on the player's own pawn only
         if state != "up":
             return {"result": "not_up", "state": state}
@@ -231,7 +240,7 @@ def dp_replace(distance=1600.0, radius=6000.0):
             return {"result": "no_watch"}
         here = get_pc().Pawn.Location
         first = (DP.get("trial") or {}).get("first")
-        best = None
+        found = []
         for pawn in unrealsdk.find_all("WillowAIPawn"):
             if not sw_live_pawn(pawn):
                 continue
@@ -242,19 +251,27 @@ def dp_replace(distance=1600.0, radius=6000.0):
             value = health.get("CurrentValue")
             if health.get("stale") is not None or not isinstance(value, (int, float)) or value <= 0:
                 continue
+            found.append((pawn, dist))
+        first_at = next((p.Location for p, _ in found if p.Name == first), None)
+        ranked = []
+        for pawn, dist in found:
+            if dist > near and (first_at is None or (_sw_dist(pawn, first_at) or near + 1) > near):
+                continue   # not with the pack she fought
             kind = _sw_fields(pawn, ("AIClass",)).get("AIClass")
-            key = (dp_kind_rank(kind), pawn.Name != first, dist)
-            if best is None or key < best[0]:
-                best = (key, pawn.Name, pawn.Location, kind)
-        if best is None:
-            return {"result": "no_enemy"}
-        (rank, not_first, dist), name, t, kind = best
-        if not not_first:
-            cb_place(name, distance, 180.0)
-            return {"result": "placed", "rule": "first", "enemy": name, "kind": kind, "dist": dist}
-        bearing = math.degrees(math.atan2(here.Y - t.Y, here.X - t.X))
-        cb_place(name, distance, bearing)
-        return {"result": "placed", "rule": "kind_my_side", "enemy": name, "kind": kind, "dist": dist, "bearing": round(bearing, 1)}
+            ranked.append(((dp_kind_rank(kind), pawn.Name != first, dist), pawn.Name, pawn.Location, kind))
+        ranked.sort(key=lambda r: r[0])
+        for (rank, not_first, dist), name, t, kind in ranked:
+            if not_first and math.hypot(here.X - t.X, here.Y - t.Y) < 1.0:
+                continue   # she stands on its spot: no side to keep
+            if until is not None and time.time() >= until:
+                return {"result": "late"}
+            if not not_first:
+                cb_place(name, distance, 180.0)
+                return {"result": "placed", "rule": "first", "enemy": name, "kind": kind, "dist": dist}
+            bearing = math.degrees(math.atan2(here.Y - t.Y, here.X - t.X))
+            cb_place(name, distance, bearing)
+            return {"result": "placed", "rule": "kind_my_side", "enemy": name, "kind": kind, "dist": dist, "bearing": round(bearing, 1)}
+        return {"result": "no_enemy"}
     except Exception as error:
         return {"result": "error", "why": repr(error)[:160]}
 
