@@ -380,6 +380,21 @@ bool FOpenWillowRespawnWaitSplitTest::RunTest(const FString&)
             bNeverLowers &= After >= Current && After <= Max && After <= Current + FMath::CeilToInt(0.32f * Max);
         }
     TestTrue(TEXT("respawn_refills_ammo: never lowers a pool, never past its maximum or the share"), bNeverLowers);
+    // Maxima that are multiples of 25, where 32 x max / 100 is a whole number and higher precision would lose one. The values pass
+    // through a volatile so the compiler cannot fold the call at build time.
+    bool bExactAt25 = true;
+    for (int32 Step = 1; Step <= 80; ++Step)
+    {
+        volatile int32 RuntimeMax = 25 * Step;
+        const int32 Max = RuntimeMax;
+        for (int32 Current : {0, 1, Max / 3, Max / 2})
+        {
+            volatile int32 RuntimeCurrent = Current;
+            const int32 Expected = FMath::Min(Current + 32 * Max / 100, Max);
+            bExactAt25 &= FRefill::Refilled(RuntimeCurrent, Max) == Expected;
+        }
+    }
+    TestTrue(TEXT("respawn_refills_ammo: exact at maxima that are multiples of 25 (25 to 2000), values known only at run time"), bExactAt25);
     return true;
 }
 #endif

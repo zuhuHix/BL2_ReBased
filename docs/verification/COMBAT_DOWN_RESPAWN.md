@@ -208,9 +208,13 @@ AI-assisted (Claude Code). What the game does, read from installed script and pa
   for `D_Resources.AmmoResources.Ammo_Combat_Rifle`, `Ammo_Combat_Shotgun`, `Ammo_Patrol_SMG`, `Ammo_Repeater_Pistol` and
   `Ammo_Sniper_Rifle`. Rocket launcher ammo and grenades are not in the list.
 - **The share.** Each behaviour's `Percentage` is the attribute `GD_PlayerShared.Misc.Att_PercentAmmoRestoredOnDeath` (base constant 0,
-  scale 1), whose value resolver is a constant 0.32. `MaxPercentage` is not set on the five, so it is the class default, 1.0.
-- **The apply step is script.** `Behavior_RefillResourcePool.ApplyBehaviorToContext` finds the pool through the context's
-  `IResourcePoolProvider`, evaluates the two shares and calls `ResourcePool.RefillPercentage` (Engine, script). That function takes
+  scale 1), whose value resolver is a constant 0.32. `MaxPercentage` is not set on the five, so it is the class default, 1.0: read with
+  `ow-package --properties` (property offset 4) on `Default__Behavior_RefillResourcePool` in `WillowGame.upk`, whose `MaxPercentage`
+  holds base constant 1 and scale 1 (`--object-dump` refuses that default object; the properties read decodes it).
+- **The apply step is script around two natives that have own-words notes.** `Behavior_RefillResourcePool.ApplyBehaviorToContext`
+  finds the pool through the context's `IResourcePoolProvider`, evaluates the two shares with the native
+  `AttributeInitializationDefinition.EvaluateInitializationData` (NATIVE_ATTRIBUTES.md, the section on that function: the base value
+  times the scale, with rounding only when a definition is set, and none is set here) and calls `ResourcePool.RefillPercentage` (Engine, script). That function takes
   range = maximum - minimum; when current / range is below `MaxPercentage`, it sets the pool to the smaller of current + share x range
   and minimum + `MaxPercentage` x range, otherwise it does nothing. So the share is of the pool's **maximum**, not of the missing
   part, and a refill only raises a pool. The set goes through `SetCurrentValue`, whose rule is in NATIVE_LEVEL_UP_ATTRIBUTES.md
@@ -221,6 +225,13 @@ AI-assisted (Claude Code). What the game does, read from installed script and pa
 The host (`OpenWillowRespawnAmmoRefill.h`, called from `AOpenWillowWalker::Respawn`, the respawn start) raises the five pools by that
 rule and leaves the launcher and grenade pools alone. It logs one line, `OpenWillow Maya respawn ammo refill: N of 5 pools raised`,
 with no amounts. The synthetic cases are in `OpenWillow.MayaState.RespawnWaitSplit` (`respawn_refills_ammo`).
+
+What is tested: the helper's arithmetic alone, in that automation test, including maxima that are multiples of 25, where keeping the
+sum in more than single precision would give one round less (each script float operation rounds to single precision; the helper
+stores the product and the sum as floats). What is not tested: no test checks that `AOpenWillowWalker::Respawn` calls the helper. The
+one in-engine run so far (`tools/test_slice_gate.ps1 -DownAfterFight`, 2026-11-13) logged the refill line in the respawn frame with
+`0 of 5 pools raised`, because the pools were full when Maya went down, so a partial refill through the walker has not been seen in
+a run.
 
 **UNVERIFIED:** the 0.32 size and the truncation in the running game (every live down so far had the refilled pools at or near
 their caps, so no sample shows a part refill); the pools' minimum of 0 (taken, not read); the `AmmoResourcePool` "current value
@@ -290,6 +301,6 @@ comes from the player's save, stay under ignored `local/`. Everything here was s
   respawn, the other pools were full both times, and the rocket pool stayed empty. In session 1 the five refilled pools were already full before the
   down, and the rocket pool was empty before and after. This fits five refills without rockets; the 32 % size is not seen, because no refill could
   show below a cap.
-  The host applies the rule since 2026-11-13 ("Ammo on respawn" below); these samples do not tell the host's 32 % and truncation from a full refill.
+  The host applies the rule since 2026-11-13 ("Ammo on respawn" above); these samples do not tell the host's 32 % and truncation from a full refill.
 - **For anyone reading these recordings:** `ResurrectPlayer` with reason 0 and the holding cell skipped also fires at every map arrival; only
   reason 1 is a respawn.

@@ -50,7 +50,11 @@ struct FOpenWillowRespawnAmmoRefill
         if (Range > 0.f) Fraction = float(Current) / Range;
         else Range = 1.f;
         if (!(Fraction < MaxShare)) return Current;
-        const float Value = FMath::Min(float(Current) + Share * Range, MaxShare * Range);
+        // Each script float operation rounds to single precision. Kept in higher precision, the sum is one short at every maximum that
+        // is a multiple of 25 (0.32f is just under 0.32), so the product and the sum each get their own float.
+        const float Product = Share * Range;
+        const float Sum = float(Current) + Product;
+        const float Value = FMath::Min(Sum, MaxShare * Range);
         // Integer-only resource: truncated toward zero, then clamped to min..max (min wins).
         return FMath::Max(0, FMath::Min(int32(Value), Max));
     }
