@@ -90,7 +90,36 @@ UOpenWillowSliceGate::UOpenWillowSliceGate()
     PrimaryComponentTick.bStartWithTickEnabled = true;
 }
 
+// The driver ticks after its walker (review r1 of #270): UE 5.8 orders an actor's tick and its components' ticks only by explicit
+// prerequisites, and the burst reads the walker's shot count, so each shot is seen in the frame the walker fired it.
+void UOpenWillowSliceGate::BeginPlay()
+{
+    Super::BeginPlay();
+    if (AActor* Owner = GetOwner()) AddTickPrerequisiteActor(Owner);
+}
+
 AOpenWillowWalker* UOpenWillowSliceGate::Walker() const { return Cast<AOpenWillowWalker>(GetOwner()); }
+
+// What the view line to a pickup hits, by the card's own trace parameters (OpenWillowPickupCard.cpp, SightBlocked): "enemy" for a
+// range enemy's body (living, or its corpse for the seconds it stays), else "other:<actor>". Names the blocker only; whether the line
+// is blocked is the card's own InSight.
+FString UOpenWillowSliceGate::ViewBlockerKind(const APlayerController& PC, const AOpenWillowInventoryPickup& Target) const
+{
+    FVector ViewLocation;
+    FRotator ViewRotation;
+    PC.GetPlayerViewPoint(ViewLocation, ViewRotation);
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OWSliceGateViewBlocker), false, Walker());
+    Query.AddIgnoredActor(&Target);
+    if (const AActor* Holder = Target.GetContainer()) Query.AddIgnoredActor(Holder);
+    FHitResult Hit;
+    if (!GetWorld()->LineTraceSingleByChannel(Hit, ViewLocation, Target.GetActorLocation(), ECC_Visibility, Query)) return TEXT("other:unknown");
+    const AActor* Actor = Hit.GetActor();
+    if (Actor && Actor->IsA<AOpenWillowEnemy>()) return TEXT("enemy");
+    return FString::Printf(TEXT("other:%s"), Actor ? *Actor->GetName() : TEXT("none"));
+}
+
+// A wait's seconds as printed for the checker: cut, not rounded, to 0.1 s, so a wait just under its bound never prints as the bound.
+static float WaitShown(float Seconds) { return FMath::FloorToFloat(Seconds * 10.f) / 10.f; }
 
 void UOpenWillowSliceGate::Link(const TCHAR* Name, const TCHAR* Result, const FString& Detail)
 {
@@ -569,8 +598,11 @@ bool UOpenWillowSliceGate::TickBurst(AOpenWillowWalker* W, float Delta)
         }
         Place(BurstTarget->GetActorLocation() + Side * Standoff + FVector(0, 0, 100.f), BurstTarget->AimPoint());
         BurstEnemyHealth.Reset();
+        // The enemies a later link needs: the range's (Phaselock and, unforced, the down link), or without the range the fight's
+        // stand-in (the Phaselock target). tools/check_slice_gate.py fails link 8 when the burst hurt any of them.
         for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
             if (It->IsAutoAimTarget()) BurstEnemyHealth.Add(*It, It->HealthFraction());
+        if (!bRangeMode && Enemy && Enemy->IsAutoAimTarget()) BurstEnemyHealth.Add(Enemy.Get(), Enemy->HealthFraction());
         BurstPhase = 1;
         BurstClock = 0.f;
         return false;
@@ -613,6 +645,7 @@ bool UOpenWillowSliceGate::TickBurst(AOpenWillowWalker* W, float Delta)
         BurstPelletsBefore = OpenWillowFiring::Counts.Pellets;
         BurstLaunchesBefore = OpenWillowFiring::Counts.Launches;
         BurstShotTimes.Reset();
+        BurstShotFrames.Reset();
         BurstFrameMax = 0.f;
         BurstPhase = 2;
         BurstClock = 0.f;
@@ -623,7 +656,7 @@ bool UOpenWillowSliceGate::TickBurst(AOpenWillowWalker* W, float Delta)
     // tick, so two at one time would be a zero interval, and the checker would fail it).
     const float Now = GetWorld()->GetTimeSeconds();
     if (BurstClock > 0.f) BurstFrameMax = FMath::Max(BurstFrameMax, Delta);   // every frame after the first press
-    for (int32 Seen = OpenWillowFiring::Counts.Shots - BurstShotsBefore; BurstShotTimes.Num() < Seen;) BurstShotTimes.Add(Now);
+    for (int32 Seen = OpenWillowFiring::Counts.Shots - BurstShotsBefore; BurstShotTimes.Num() < Seen;) { BurstShotTimes.Add(Now); BurstShotFrames.Add(Delta); }
     const FOpenWillowFiringData& Firing = Held->Firing;
     if (BurstShotTimes.Num() < BurstWant && BurstClock < BurstTimeout)
     {
@@ -636,7 +669,8 @@ bool UOpenWillowSliceGate::TickBurst(AOpenWillowWalker* W, float Delta)
         return false;
     }
     // Done (or out of time): the report. Intervals between consecutive shots, in seconds.
-    TArray<FString> Intervals;
+    TArray<FString> Intervals, Frames;
+    for (int32 Index = 1; Index < BurstShotFrames.Num(); ++Index) Frames.Add(FString::Printf(TEXT("%.4f"), BurstShotFrames[Index]));
     float Sum = 0.f;
     for (int32 Index = 1; Index < BurstShotTimes.Num(); ++Index)
     {
@@ -646,18 +680,19 @@ bool UOpenWillowSliceGate::TickBurst(AOpenWillowWalker* W, float Delta)
     }
     int32 Hurt = 0;
     for (const auto& Before : BurstEnemyHealth)
-        if (const AOpenWillowEnemy* E = Cast<AOpenWillowEnemy>(Before.Key.ResolveObjectPtr()); !E || !E->IsAutoAimTarget() || E->HealthFraction() < Before.Value) ++Hurt;
+        if (const AOpenWillowCombatTarget* E = Cast<AOpenWillowCombatTarget>(Before.Key.ResolveObjectPtr()); !E || !E->IsAutoAimTarget() || E->HealthFraction() < Before.Value) ++Hurt;
     const TCHAR* Kind = Firing.Kind == EOpenWillowShotKind::Rocket ? TEXT("Rocket") : Firing.Kind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
     const float SkillScale = OpenWillowSkillEffects::Apply(W, OpenWillowSkillEffects::Attr::WeaponFireInterval, 1.f);
     const FString Clearance = BurstClearance > 1.0e8f ? FString(TEXT("none")) : FString::Printf(TEXT("%.0f"), BurstClearance);
     const bool bAll = BurstShotTimes.Num() >= BurstWant;
     const FString Note = FString::Printf(TEXT("; burst: burst_shots=%d/%d burst_kind=%s burst_launched=%d/%d burst_rate=%.4f burst_count=%d burst_gap=%.4f burst_spin=%.3f "
-        "burst_skill_scale=%.4f burst_intervals=%s burst_mean=%.4f burst_frame_max=%.4f burst_target=%s burst_clearance=%s burst_enemies_hurt=%d%s%s"),
+        "burst_skill_scale=%.4f burst_intervals=%s burst_frames=%s burst_spin_up=%.3f burst_mean=%.4f burst_frame_max=%.4f burst_target=%s burst_clearance=%s burst_enemies_hurt=%d%s%s"),
         BurstShotTimes.Num(), BurstWant, Kind, OpenWillowFiring::Counts.Launches - BurstLaunchesBefore, OpenWillowFiring::Counts.Pellets - BurstPelletsBefore,
         Held->FireRate, Firing.BurstCount, Firing.BurstInterval, Firing.bSpinsToFullRate ? FMath::Max(1.f, Firing.SpinStartMultiplier) : 1.f, SkillScale,
-        Intervals.IsEmpty() ? TEXT("none") : *FString::Join(Intervals, TEXT(",")), Intervals.IsEmpty() ? 0.f : Sum / Intervals.Num(), BurstFrameMax,
+        Intervals.IsEmpty() ? TEXT("none") : *FString::Join(Intervals, TEXT(",")), Frames.IsEmpty() ? TEXT("none") : *FString::Join(Frames, TEXT(",")),
+        Firing.bSpinsToFullRate ? Firing.SpinUpDuration : 0.f, Intervals.IsEmpty() ? 0.f : Sum / Intervals.Num(), BurstFrameMax,
         *BurstTarget->GetName(), *Clearance, Hurt, bAll ? TEXT("") : *FString::Printf(TEXT(" (only %d shot(s) in %.0fs)"), BurstShotTimes.Num(), BurstTimeout),
-        bUnforced ? *FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), BurstDownWait, DownRecoverWait) : TEXT(""));
+        bUnforced ? *FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), WaitShown(BurstDownWait), DownRecoverWait) : TEXT(""));
     UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note burst done%s"), *Note);
     EndBurst(W, bAll, Note);
     return true;
@@ -907,7 +942,7 @@ FString UOpenWillowSliceGate::EquipLevelNote() const
 
 FString UOpenWillowSliceGate::PickupDownNote() const
 {
-    return bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), PickupDownWait, DownRecoverWait) : FString();
+    return bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), WaitShown(PickupDownWait), DownRecoverWait) : FString();
 }
 
 bool UOpenWillowSliceGate::PickupAccepted() const
@@ -936,6 +971,8 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
         {
             PickupLastAway = !PickupAway.IsNearlyZero() ? PickupAway : (W->GetActorLocation() - Target->GetActorLocation()).GetSafeNormal2D();
             PickupDownWait = 0.f;
+            bPickupDownFailed = false;
+            ViewBlocker = TEXT("none");
         }
         bPickupRestart = false;
         PickupAway = FVector::ZeroVector;
@@ -957,6 +994,14 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
             const int32 Recovery = WaitOwnRecovery(W, Delta, PickupDownWait, bPickupDownWaiting, TEXT("the pickup"));
             if (Recovery == 1) { Fixture(TEXT("waited for Maya's own second wind or respawn before the pickup")); return false; }
             if (Recovery == 2) { PickupPhase = 0; bPickupRestart = true; return false; }
+            if (Recovery == 3)
+            {
+                // Still down at the bound: no press; the link FAILs on the wait (review r1 of #270).
+                bPickupDownFailed = true;
+                CardId = PickedId = TEXT("none");
+                PickupPhase = 0;
+                return true;
+            }
         }
         PickupWait += Delta;
         AimAt(Target->GetActorLocation());
@@ -971,7 +1016,12 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
         // after every ViewLineReplace seconds of waiting she is placed on another side of the drop, 120 degrees round (the teleport
         // fixture), and must be on the ground again before the press. The decoy pair is not moved: its geometry depends on her side.
         const bool bGrounded = W->GetCharacterMovement()->IsMovingOnGround();
-        if ((ViewClearFor < ViewLineSettle || !bGrounded) && ViewWait < ViewLineWait)
+        // Only an enemy on the line is waited for or walked round (review r1 of #270): anything else (a wall, the drop's own collision,
+        // Maya) would be a fault in the sight test or the placement, and the link FAILs at once with its name.
+        if (!bClear && bGrounded && !ViewBlocker.StartsWith(TEXT("other")))
+            ViewBlocker = ViewBlockerKind(*PC, *Target);
+        const bool bOtherBlocker = ViewBlocker.StartsWith(TEXT("other"));
+        if (!bOtherBlocker && (ViewClearFor < ViewLineSettle || !bGrounded) && ViewWait < ViewLineWait)
         {
             if (ViewWait == 0.f)
                 UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: waiting up to %.0fs for a clear view line to the aimed drop %s (the OWPICKUPCARD lines name what blocks it)"),
@@ -988,7 +1038,7 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
             }
             return false;
         }
-        bViewBlocked = ViewClearFor < ViewLineSettle || !bGrounded;   // out of time with the line blocked, or in the air
+        bViewBlocked = bOtherBlocker || ViewClearFor < ViewLineSettle || !bGrounded;   // not an enemy, out of time with the line blocked, or in the air
         if (ViewWait > 0.f)
             UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: view line to the aimed drop %s after %.2fs of waiting"), bViewBlocked ? TEXT("still blocked") : TEXT("clear"), ViewWait);
         // The card the player would see at the moment of the press.
@@ -1539,9 +1589,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         GunId = PickedId == TEXT("none") ? FString() : PickedId;
         // PASS only when the card named the aimed drop and E picked up that same item.
         const bool bAccepted = PickupAccepted();
-        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s accepted=%d view_wait=%.2fs/%.0fs view_line=%s%s"), *DropId, *CardId, *PickedId,
-            bAccepted, ViewWait, ViewLineWait, bViewBlocked ? TEXT("blocked") : TEXT("clear"), *PickupDownNote());
-        if (bViewBlocked) FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the view line to the aimed drop was still blocked after the %.0fs wait (the fixture's bound)"), *Ids, ViewLineWait));
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s accepted=%d view_wait=%.2fs/%.0fs view_line=%s view_blocker=%s%s"), *DropId, *CardId, *PickedId,
+            bAccepted, ViewWait, ViewLineWait, bViewBlocked ? TEXT("blocked") : TEXT("clear"), *ViewBlocker, *PickupDownNote());
+        if (bPickupDownFailed) FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: Maya still down after the %.0fs wait for her own recovery"), *Ids, DownRecoverWait));
+        else if (ViewBlocker.StartsWith(TEXT("other"))) FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the view line to the aimed drop was blocked by %s, not an enemy, so it was not waited for"), *Ids, *ViewBlocker.Mid(6)));
+        else if (bViewBlocked) FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the view line to the aimed drop was still blocked after the %.0fs wait (the fixture's bound)"), *Ids, ViewLineWait));
         else if (CardId == DropId && PickedId == DropId && bAccepted)
             PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the pickup card named the aimed drop at the use-key press and E picked it up (card state only; HUD drawing not checked)"), *Ids));
         else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the card and the picked-up item must both be the aimed drop"), *Ids));
@@ -1612,9 +1664,11 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         if (!RunAimedPickup(DecoyAimed)) return;
         const bool bAccepted = PickupAccepted();
-        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s accepted=%d view_wait=%.2fs/%.0fs view_line=%s%s"), *DropId, *NearId,
-            *CardId, *PickedId, bAccepted, ViewWait, ViewLineWait, bViewBlocked ? TEXT("blocked") : TEXT("clear"), *PickupDownNote());
-        if (bViewBlocked) FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("%s: the view line to the aimed drop was still blocked after the %.0fs wait (the fixture's bound)"), *Ids, ViewLineWait));
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s accepted=%d view_wait=%.2fs/%.0fs view_line=%s view_blocker=%s%s"), *DropId, *NearId,
+            *CardId, *PickedId, bAccepted, ViewWait, ViewLineWait, bViewBlocked ? TEXT("blocked") : TEXT("clear"), *ViewBlocker, *PickupDownNote());
+        if (bPickupDownFailed) FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("%s: Maya still down after the %.0fs wait for her own recovery"), *Ids, DownRecoverWait));
+        else if (ViewBlocker.StartsWith(TEXT("other"))) FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("%s: the view line to the aimed drop was blocked by %s, not an enemy, so it was not waited for"), *Ids, *ViewBlocker.Mid(6)));
+        else if (bViewBlocked) FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("%s: the view line to the aimed drop was still blocked after the %.0fs wait (the fixture's bound)"), *Ids, ViewLineWait));
         else if (CardId != DropId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": the card did not name the aimed drop"));
         else if (PickedId == DropId && NearId != DropId && bAccepted) PassLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up the aimed drop, not the nearer decoy"));
         else if (PickedId == NearId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E took the nearer decoy, not the aimed drop"));
@@ -1704,7 +1758,8 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             if (!RunAimedPickup(Drop)) return;
             if (PickedId == TEXT("none") || PickedId != DropId)
             {
-                FailLink(TEXT("equip_gun"), FString::Printf(TEXT("the re-loot's gun was not picked up (aimed_drop=%s card_id=%s picked_id=%s)"), *DropId, *CardId, *PickedId)
+                FailLink(TEXT("equip_gun"), FString::Printf(TEXT("the re-loot's gun was not picked up (aimed_drop=%s card_id=%s picked_id=%s view_blocker=%s down_wait=%.1fs/%.0fs)"),
+                    *DropId, *CardId, *PickedId, *ViewBlocker, WaitShown(PickupDownWait), DownRecoverWait)
                     + EquipLevelNote());
                 Next(EStep::Phaselock);
                 return;
@@ -1748,7 +1803,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 return;
             }
         }
-        const FString DownNote = bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), PhaselockDownWait, DownRecoverWait) : FString();
+        const FString DownNote = bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), WaitShown(PhaselockDownWait), DownRecoverWait) : FString();
         // Unforced: the point is bought on the skills page first; the step's clock then starts again.
         if (bUnforced && BuyPhase < 2) { if (TickBuyPhaselock(W, Delta)) StepTime = 0.f; return; }
         // Before any result, so that a failing path names it too.

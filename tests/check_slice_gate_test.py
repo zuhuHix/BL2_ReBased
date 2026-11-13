@@ -19,7 +19,7 @@ PREFIX = '[2026.11.04-10.00.00:000][123]LogTemp: Display: '
 TOTAL = len(chk.LINKS)
 
 
-VIEW = 'view_wait=0.00s/10s view_line=clear'
+VIEW = 'view_wait=0.00s/10s view_line=clear view_blocker=none'
 CARD_DETAIL = f'aimed_drop=item_x card_id=item_x picked_id=item_x accepted=1 {VIEW} synthetic detail'
 DECOY_DETAIL = f'aimed_drop=item_x nearer_decoy=item_y card_id=item_x picked_id=item_x accepted=1 {VIEW} synthetic detail'
 
@@ -28,8 +28,9 @@ def burst(kind='Bullet', **tokens):
     """Link 8's burst tokens as the host prints them (invented numbers): five shots at 4 per second, one frame of 0.017 s. A
     keyword replaces one burst_<key> value."""
     values = {'shots': '5/5', 'kind': kind, 'launched': '0/5' if kind == 'Trace' else '5/5', 'rate': '4.0000', 'count': '0',
-              'gap': '0.0000', 'spin': '1.000', 'skill_scale': '1.0000', 'intervals': '0.2500,0.2600,0.2550,0.2500',
-              'mean': '0.2538', 'frame_max': '0.0170', 'target': 'dummy_a', 'clearance': '900', 'enemies_hurt': '0'}
+              'gap': '0.0000', 'spin': '1.000', 'spin_up': '0.000', 'skill_scale': '1.0000', 'intervals': '0.2500,0.2600,0.2550,0.2500',
+              'frames': '0.0170,0.0170,0.0170,0.0170', 'mean': '0.2538', 'frame_max': '0.0170', 'target': 'dummy_a', 'clearance': '900',
+              'enemies_hurt': '0'}
     values.update(tokens)
     return '; burst: ' + ' '.join(f'burst_{key}={value}' for key, value in values.items())
 
@@ -367,10 +368,10 @@ class SliceGateTest(unittest.TestCase):
         self.assertIn('link equip_gun: PASS overruled, no burst after the draw (missing burst_shots', out)
 
     def test_equip_pass_missing_one_burst_token_is_overruled(self):
-        detail = 'item_x drawn; firing=Bullet' + burst().replace(' burst_frame_max=0.0170', '')
+        detail = 'item_x drawn; firing=Bullet' + burst().replace(' burst_frames=0.0170,0.0170,0.0170,0.0170', '')
         code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
         self.assertEqual(code, 1, out)
-        self.assertIn('no burst after the draw (missing burst_frame_max)', out)
+        self.assertIn('no burst after the draw (missing burst_frames)', out)
 
     def test_equip_burst_short_of_shots_is_overruled(self):
         detail = 'item_x drawn; firing=Bullet' + burst(shots='3/5', launched='3/3', intervals='0.2500,0.2500')
@@ -398,12 +399,12 @@ class SliceGateTest(unittest.TestCase):
                 self.assertEqual(code, 0 if ok else 1, out)
                 if not ok:
                     self.assertIn('of the burst was', out)
-                    self.assertIn("the block's fire interval plus at most one frame", out)
+                    self.assertIn("the block's fire interval plus the frame of that shot", out)
 
     def test_equip_burst_counts_intervals(self):
         code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + burst(intervals='0.2500,0.2500'))})))
         self.assertEqual(code, 1, out)
-        self.assertIn('2 interval(s) for 5 shot(s)', out)
+        self.assertIn('2 interval(s) and 4 frame(s) for 5 shot(s)', out)
 
     def test_equip_burst_gun_uses_its_gap_after_each_burst(self):
         # Burst count 3 at 10 shots a second (0.1 s), a 0.4 s gap: the third interval is the gap.
@@ -414,10 +415,11 @@ class SliceGateTest(unittest.TestCase):
         code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + bad)})))
         self.assertEqual(code, 1, out)
         self.assertIn("interval 3 of the burst was 0.1000 s", out)
-        self.assertIn("the block's burst gap plus at most one frame", out)
+        self.assertIn("the block's burst gap plus the frame of that shot", out)
 
     def test_equip_burst_spin_and_skill_scale_widen_the_interval(self):
-        spun = burst(spin='2.000', intervals='0.5000,0.4000,0.3000,0.2500')
+        # Spin-up from twice the interval to the full rate over 1 s: at shot 2 (0.5 s in) the bound is 1.5 x 0.25 s.
+        spun = burst(spin='2.000', spin_up='1.000', intervals='0.5000,0.3600,0.2700,0.2500')
         code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + spun)})))
         self.assertEqual(code, 0, out)
         scaled = burst(skill_scale='0.8000', intervals='0.2000,0.2000,0.2100,0.2000')
@@ -425,7 +427,7 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_equip_one_shot_magazine_has_no_interval_to_grade(self):
-        detail = 'item_x drawn; firing=Rocket' + burst('Rocket', shots='1/1', launched='1/1', intervals='none')
+        detail = 'item_x drawn; firing=Rocket' + burst('Rocket', shots='1/1', launched='1/1', intervals='none', frames='none')
         code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
         self.assertEqual(code, 0, out)
 
@@ -466,7 +468,7 @@ class SliceGateTest(unittest.TestCase):
                 self.assertIn('checker: the view line to the aimed drop was not clear at the press', self.row(out, 7))
 
     def test_card_link_wait_within_its_bound_passes(self):
-        detail = 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1 view_wait=3.45s/10s view_line=clear: synthetic'
+        detail = 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1 view_wait=3.45s/10s view_line=clear view_blocker=enemy: synthetic'
         code, out = self.run_checker(self.write_log(build({'pick_up_gun': ('PASS', detail)}, fixtures={'pick_up_gun': 'teleport; waited for a clear view line to the aimed drop'})))
         self.assertEqual(code, 0, out)
 
@@ -488,7 +490,9 @@ class SliceGateTest(unittest.TestCase):
     # The unforced Phaselock link's wait for Maya's own recovery (lane U, 2026-11-13).
     def test_unforced_phaselock_wait_is_graded(self):
         for detail, ok, why in (('how=skills_page synthetic down_wait=12.5s/50s', True, None),
-                                ('how=skills_page synthetic down_wait=50.1s/50s', False, "the wait for Maya's own recovery ran past its bound (50.1 s of 50 s)"),
+                                ('how=skills_page synthetic down_wait=50.1s/50s', False, "the wait for Maya's own recovery reached its bound (50.1 s of 50 s)"),
+                                ('how=skills_page synthetic down_wait=50.0s/50s', False, "the wait for Maya's own recovery reached its bound (50.0 s of 50 s)"),
+                                ('how=skills_page synthetic down_wait=49.9s/50s', True, None),
                                 ('how=skills_page synthetic', False, "no down_wait=<s>s/<bound>s in the detail")):
             with self.subTest(detail=detail):
                 code, out = self.run_checker(self.write_log(build({'phaselock_enemy': ('PASS', detail)}, range_mode=True, unforced=True)))
@@ -506,7 +510,10 @@ class SliceGateTest(unittest.TestCase):
                 self.assertIn("no down_wait=<s>s/<bound>s in the detail", self.row(out, index))
                 code, out = self.run_checker(self.write_log(build({name: ('PASS', detail + ' down_wait=50.5s/50s')}, range_mode=True, unforced=True)))
                 self.assertEqual(code, 1, out)
-                self.assertIn("ran past its bound (50.5 s of 50 s)", self.row(out, index))
+                self.assertIn("reached its bound (50.5 s of 50 s)", self.row(out, index))
+                code, out = self.run_checker(self.write_log(build({name: ('PASS', detail + ' down_wait=50.0s/50s')}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 1, out)
+                self.assertIn("reached its bound (50.0 s of 50 s)", self.row(out, index))
                 code, out = self.run_checker(self.write_log(build({name: ('PASS', detail + ' down_wait=21.3s/50s')}, range_mode=True, unforced=True)))
                 self.assertEqual(code, 0, out)
 
@@ -564,6 +571,45 @@ class SliceGateTest(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
         self.assertEqual(source.count('view_wait=%.2fs/%.0fs view_line=%s'), 2, 'both pickup links print the view-line wait')
         self.assertEqual(source.count('" down_wait=%.1fs/%.0fs"'), 3, 'the pickups (one helper), the burst and the Phaselock print the down wait')
+
+    # Review r1 of #270.
+    def test_equip_burst_interval_is_bounded_by_its_own_shots_frame(self):
+        # 0.2650 s at 4 shots a second is inside 0.25 + a 0.017 s frame, but not inside 0.25 + that shot's 0.0080 s frame.
+        ok = burst(intervals='0.2500,0.2600,0.2550,0.2500', frames='0.0170,0.0170,0.0170,0.0170')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + ok)})))
+        self.assertEqual(code, 0, out)
+        slow = burst(intervals='0.2500,0.2650,0.2550,0.2500', frames='0.0170,0.0080,0.0170,0.0170', frame_max='0.0170')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + slow)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('interval 2 of the burst was 0.2650 s, outside 0.2480 to 0.2600 s', out)
+
+    def test_equip_burst_spinning_gun_must_reach_its_full_rate(self):
+        stuck = burst(spin='2.000', spin_up='0.500', intervals='0.5000,0.5000,0.5000,0.5000')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + stuck)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('interval 2 of the burst was 0.5000 s', out)
+
+    def test_equip_burst_that_hurt_an_enemy_fails(self):
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + burst(enemies_hurt='1'))})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('the burst hurt 1 enemy(ies) a later link needs', out)
+
+    def test_card_link_blocked_by_something_else_fails(self):
+        for blocker, why in (('other:StaticMeshActor_12', 'blocked by other:StaticMeshActor_12, not an enemy'),
+                             ('', 'no view_blocker= in the detail')):
+            with self.subTest(blocker=blocker):
+                view = 'view_wait=0.00s/10s view_line=clear' + (f' view_blocker={blocker}' if blocker else '')
+                detail = f'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1 {view}: synthetic'
+                code, out = self.run_checker(self.write_log(build({'pick_up_gun': ('PASS', detail)})))
+                self.assertEqual(code, 1, out)
+                self.assertIn(why, self.row(out, 6))
+
+    def test_host_prints_the_review_tokens(self):
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
+        self.assertEqual(source.count('view_line=%s view_blocker=%s'), 2)
+        self.assertIn('burst_frames=%s burst_spin_up=%.3f', source)
+        self.assertIn('Maya still down after the %.0fs wait for her own recovery', source)
+        self.assertIn('AddTickPrerequisiteActor(Owner)', source)
 
     def test_the_hosts_no_block_detail_names_both_regeneration_steps(self):
         # The FAIL detail is the host's text (OpenWillowSliceGate.cpp, EStep::Equip); read it from the source, as the runner

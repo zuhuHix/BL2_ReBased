@@ -179,13 +179,18 @@ def equip_link_problem(row):
 
 # Link 8's burst (OpenWillowSliceGate.cpp, TickBurst): `burst_<key>=<value>` tokens. The shots go through the fire key's handlers,
 # so the walker's trigger paces them: it fires on the first tick at or after a shot is due and counts the next interval from that
-# tick, and the driver reads the shot count at the same point of every frame. Each measured interval is therefore the block's
-# interval plus at most one frame: within [due - BURST_TOLERANCE, due x spin + burst_frame_max + BURST_TOLERANCE], where due is
-# burst_skill_scale / burst_rate, spin is burst_spin (1 for a gun that does not spin up; a spinning gun starts that many times
-# slower), and after every burst_count-th shot of a burst gun due is the burst gap (burst_gap). BURST_TOLERANCE covers the four
-# decimals of the log and the float clock the walker keeps (about 3e-5 s at the run's clock); it is far below one frame.
+# tick, and the driver (which ticks after the walker) reads the shot count in the frame the walker fired. So interval i, from shot
+# i to shot i+1, is at least the block's and less than the block's plus the frame of shot i+1's own tick (burst_frames, one per
+# interval): within [due - BURST_TOLERANCE, due x slow + frame_i + BURST_TOLERANCE]. due is burst_skill_scale / burst_rate, and
+# after every burst_count-th shot of a burst gun the burst gap (burst_gap). slow is 1 for a gun that does not spin up; for one that
+# does it is what the spin-up allows at shot i (burst_spin at the start, falling linearly to 1 over burst_spin_up seconds, counted
+# from the first shot, which is no earlier than the spin started), so a gun that never reaches its full rate fails. What this cannot
+# resolve: up to one frame per interval (about 10 % at 16.67 shots a second and 60 frames a second). BURST_TOLERANCE covers the
+# four decimals of the log and the walker's float clock (about 3e-5 s at the run's clock). burst_enemies_hurt must be 0: the burst
+# must not hurt an enemy a later link needs.
 BURST_TOKEN = re.compile(r'(?<!\S)burst_(?P<key>[a-z_]+)=(?P<value>\S+)')
-BURST_KEYS = ('shots', 'kind', 'launched', 'rate', 'count', 'gap', 'spin', 'skill_scale', 'intervals', 'frame_max')
+BURST_KEYS = ('shots', 'kind', 'launched', 'rate', 'count', 'gap', 'spin', 'spin_up', 'skill_scale', 'intervals', 'frames',
+              'enemies_hurt')
 BURST_TOLERANCE = 0.002
 
 
@@ -199,8 +204,10 @@ def burst_problem(detail, kind):
         shots, want = (int(part) for part in tokens['shots'].split('/'))
         launches, pellets = (int(part) for part in tokens['launched'].split('/'))
         rate, gap, spin = float(tokens['rate']), float(tokens['gap']), max(1.0, float(tokens['spin']))
-        count, scale, frame = int(tokens['count']), float(tokens['skill_scale']), float(tokens['frame_max'])
+        count, scale, spin_up = int(tokens['count']), float(tokens['skill_scale']), float(tokens['spin_up'])
         intervals = [] if tokens['intervals'] == 'none' else [float(step) for step in tokens['intervals'].split(',')]
+        frames = [] if tokens['frames'] == 'none' else [float(step) for step in tokens['frames'].split(',')]
+        hurt = int(tokens['enemies_hurt'])
     except ValueError:
         return 'an unreadable burst token'
     if want < 1 or shots != want:
@@ -215,21 +222,28 @@ def burst_problem(detail, kind):
         return f'a {kind} gun launched {launches} projectile(s) for {pellets} pellet(s)'
     if rate <= 0:
         return f"burst_rate={tokens['rate']}: no fire rate to grade against"
-    if len(intervals) != shots - 1:
-        return f'{len(intervals)} interval(s) for {shots} shot(s)'
-    for index, step in enumerate(intervals, 1):
+    if len(intervals) != shots - 1 or len(frames) != len(intervals):
+        return f'{len(intervals)} interval(s) and {len(frames)} frame(s) for {shots} shot(s)'
+    elapsed = 0.0
+    for index, (step, frame) in enumerate(zip(intervals, frames), 1):
         at_gap = count > 1 and index % count == 0
         due = gap if at_gap else scale / rate
-        low, high = due - BURST_TOLERANCE, due * spin + frame + BURST_TOLERANCE
+        slow = 1.0 if spin_up <= 0 else spin - (spin - 1.0) * min(1.0, elapsed / spin_up)
+        low, high = due - BURST_TOLERANCE, due * slow + frame + BURST_TOLERANCE
         if not low <= step <= high:
             return (f"interval {index} of the burst was {step:.4f} s, outside {low:.4f} to {high:.4f} s (the block's "
-                    f"{'burst gap' if at_gap else 'fire interval'} plus at most one frame)")
+                    f"{'burst gap' if at_gap else 'fire interval'}{' at the spin-up' if slow > 1.0 else ''} plus the frame of that shot)")
+        elapsed += step
+    if hurt:
+        return f'the burst hurt {hurt} enemy(ies) a later link needs (burst_enemies_hurt={hurt})'
     return None
 
 
 # The pickup links' wait for a clear view line before the use-key press (a test fixture, OpenWillowSliceGate.cpp RunAimedPickup).
 VIEW_WAIT = re.compile(r'(?<!\S)view_wait=(?P<wait>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
 VIEW_LINE = re.compile(r'(?<!\S)view_line=(?P<line>[a-z]+)')
+# What blocked the line during the wait: none, enemy (a range enemy's body), or other:<actor>, which the host fails at once.
+VIEW_BLOCKER = re.compile(r'(?<!\S)view_blocker=(?P<kind>[^\s:;,]+(?::[^\s:;,]+)?)')
 
 
 def view_wait_problem(detail):
@@ -242,6 +256,11 @@ def view_wait_problem(detail):
     line = VIEW_LINE.search(detail)
     if not line or line['line'] != 'clear':
         return 'the view line to the aimed drop was not clear at the press' + (f" (view_line={line['line']})" if line else ' (no view_line=)')
+    blocker = VIEW_BLOCKER.search(detail)
+    if not blocker:
+        return 'no view_blocker= in the detail (what blocked the view line was not reported)'
+    if blocker['kind'] not in ('none', 'enemy'):
+        return f"the view line was blocked by {blocker['kind']}, not an enemy: only an enemy may be waited for"
     return None
 
 
@@ -279,8 +298,8 @@ def down_wait_problem(detail):
     match = DOWN_WAIT.search(detail)
     if not match:
         return "no down_wait=<s>s/<bound>s in the detail (the wait for Maya's own recovery was not reported)"
-    if float(match['wait']) > float(match['bound']):
-        return f"the wait for Maya's own recovery ran past its bound ({match['wait']} s of {match['bound']} s)"
+    if float(match['wait']) >= float(match['bound']):
+        return f"the wait for Maya's own recovery reached its bound ({match['wait']} s of {match['bound']} s)"
     return None
 
 
