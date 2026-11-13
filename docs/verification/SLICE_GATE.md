@@ -35,7 +35,7 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (95 since lane U's burst and waits on 2026-11-13, 73 since link 8
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (107 since review round 1 of lane U's burst and waits, 96 at lane U's first head, 73 since link 8
   names the gun's firing on 2026-11-13, 67 since review round 3 of the unforced variant, 39 before it; all made-up log lines, plus a
   few that read the runner script's or the host source's text).
 
@@ -71,22 +71,31 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     rocket's splash skips her (the projectile ignores its shooter). When the burst ends she is put back where she stood
     before it, looking the same way, so the Phaselock link starts from the place it had before the burst existed (the dummies
     are Phaselock candidates too, and the older variants do not place her before the cast). The detail gives the nearest enemy's distance from the
-    dummy (`burst_clearance`) and how many living enemies lost health or died during the burst (`burst_enemies_hurt`). That
-    count is reported, not graded: in the unforced variant an enemy may run into the line.
+    dummy (`burst_clearance`) and how many enemies a later link needs lost health or died during the burst
+    (`burst_enemies_hurt`: the range's enemies, or without the range the fight's stand-in, the Phaselock target). Since review
+    round 1 the checker fails link 8 when it is not 0. In lane U's 12 runs that reached the burst it was 0 every time.
   - **What the detail carries:** `burst_shots=<fired>/<asked>`, `burst_kind` (the held gun's firing kind),
     `burst_launched=<projectiles>/<pellets>`, the block's `burst_rate`, `burst_count`, `burst_gap` and `burst_spin` (the
     spin-up's start multiplier, 1 for a gun that does not spin), `burst_skill_scale` (the skills hook's factor on the fire
     interval), `burst_intervals` (the time between each two shots, from the ticks on which the walker's shot count rose),
-    `burst_mean` and `burst_frame_max` (the longest frame of the burst).
+    `burst_frames` (the frame length of the later shot's own tick, one per interval; review round 1), `burst_spin_up` (the
+    block's spin-up time, 0 for a gun that does not spin), `burst_mean` and `burst_frame_max` (the longest frame, reported only).
   - **How the checker grades it** (`burst_problem` in `tools/check_slice_gate.py`; a PASS without every token becomes a FAIL,
     so a log from before this change no longer passes link 8). Every shot asked for must have fired. The kind must be the
-    `firing=` kind. A trace gun launches no projectile, and a bullet or rocket gun one per pellet. Each interval must lie
-    between `due - 0.002 s` and `due x burst_spin + burst_frame_max + 0.002 s`, where `due` is `burst_skill_scale /
-    burst_rate`, and after every `burst_count`-th shot of a burst gun the burst gap. **The tolerance:** the walker fires on the
-    first tick at or after a shot is due and counts the next interval from that tick, and the driver reads the count at the same
-    point of every frame, so a measured interval is the block's plus at most one frame. The 0.002 s covers the four decimals of
-    the log and the walker's float clock (about 3e-5 s at the run's clock), far below a frame. The skills hook's factor is read
-    at 1 s, so it is exact only for a scaling modifier; Maya has none at level 8 in these runs.
+    `firing=` kind. A trace gun launches no projectile, and a bullet or rocket gun one per pellet. Interval i (shot i to shot
+    i+1) must lie between `due - 0.002 s` and `due x slow + frame_i + 0.002 s`. `due` is `burst_skill_scale / burst_rate`, and
+    after every `burst_count`-th shot of a burst gun the burst gap. `frame_i` is the frame of shot i+1's own tick. `slow` is 1,
+    except for a gun that spins up: then it falls from `burst_spin` at the first shot to 1 at `burst_spin_up` seconds after it,
+    so a spinning gun that never reaches its full rate fails. **The tolerance:** the walker fires on the first tick at or after
+    a shot is due and counts the next interval from that tick, and since review round 1 the driver ticks after its walker (a tick
+    prerequisite; UE 5.8 sets none between an actor and its components by itself), so it sees each shot in the frame the walker
+    fired it. A measured interval is then the block's plus less than that shot's frame. The 0.002 s covers the four decimals of
+    the log and the walker's float clock (about 3e-5 s at the run's clock). The skills hook's factor is read at 1 s, so it is
+    exact only for a scaling modifier; Maya has none at level 8 in these runs. **What the check cannot resolve:** up to one frame
+    per interval, about 10 % of the interval at 16.67 shots a second and 60 frames a second, less for slower guns. It shows that
+    no shot came early and none later than the frame it was due in; it is not a rate measurement finer than that. Before
+    review round 1 the bound used the run's longest frame for every interval, which let a 16.67-a-second gun pass at up to
+    about 40 % slow with the 0.0234 s frame one run logged.
   - **What it shows:** the looted gun fired in the host at the rate its block gives, through the player's trigger path. Not
     the real game: the block is `UNVERIFIED` in game, and so is the gun's rate in play. When a full magazine holds one shot there is no
     interval to grade, and the link then passes on the shot and its kind alone. Lane U's fifth run met it: a shotgun whose
@@ -151,7 +160,12 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
     (`OpenWillowPickupCard::InSight`, the test the card and E use) has seen the aimed drop on every tick for 0.2 s, at most
     10 s past the moment the press was ready. The 0.2 s is there because the card searches 10 times a second: its cached aimed
     pickup is then one found with the line clear. When it waited, the link names the fixture `waited for a clear view line to
-    the aimed drop`. If the line is still blocked at 10 s, the press goes ahead and the host FAILs the link on the wait. The
+    the aimed drop`. If the line is still blocked at 10 s, the press goes ahead and the host FAILs the link on the wait. Since
+    review round 1 only an enemy on the line is waited for or walked round: the driver names what the line hits with the card's
+    own trace parameters (`view_blocker=none`, `enemy`, a range enemy's body, or `other:<actor>`), and any other blocker (a wall,
+    the drop's own collision, Maya) FAILs the link at once with its name, since that would be a fault in the sight test or the
+    placement. A range enemy's corpse counts as an enemy for the seconds it stays. The checker fails a PASS without
+    `view_blocker=` or with any value but `none` and `enemy`. The
     checker overrules a PASS without the token, with a wait past its bound, or with `view_line` other than `clear`. On
     `pick_up_gun` the wait also re-aims: after every 2 s of it Maya is placed on another side of the real drop, 120 degrees
     round (`teleport`), and must be on the ground again before the press; in lane U's eleventh unforced run a bullymong
@@ -501,10 +515,14 @@ without those stand-ins. Each link then shows whether the loop got there on its 
   U's first run reached it at respawn 5 and FAILed only on that). Since 2026-11-13 the driver records the run's first respawn
   (station and exit, on the tick the quest's pick count reads 1), and in this variant the half is judged on it; the detail
   names both. The older variants keep the only-respawn rule.
+- **A gun Maya cannot equip yet (since 2026-11-13, lane U; fixture `kept looting for a gun Maya can equip`).** When the host's
+  equip refuses the looted gun because its level is above hers, link 8 keeps it, loots on within the loot link's bound, picks
+  up the next gun and tries again; `equip_refused=` and the loot tokens go in the detail ("A gun above Maya's level", below).
 - **Downs inside a link (since 2026-11-13, lane U; fixtures).** The wait above covers a link group's start only. Four links now
   also wait inside the link, each for at most 50 s in all, for her own second wind or respawn (and the respawn's hold), and
   never revive her. Once she is Up the link starts its step again. Each prints `down_wait=<s>s/50s` in this variant, and the
-  checker overrules a PASS of any of them without the token or with a wait past its bound.
+  checker overrules a PASS of any of them without the token or with a wait that reached its bound. Since review round 1 the
+  pickups FAIL when Maya is still down at the bound, as the burst and the Phaselock did, and the waits print cut to 0.1 s.
   - `pick_up_gun` and `pick_up_aimed_not_nearest`, before the press: the card is hidden while she is down. Lane U's first
     unforced run (2026-11-13) showed it: Maya, left at 42/213 by the farm, went down 0.06 s after the decoy link's two drops
     landed, and the card named nothing at the press. After the wait she is placed by the drop again on the side chosen the
@@ -627,10 +645,9 @@ only records, so the SHAs below are the rebased ones and the code is the same. A
   293 to 555 s), then run 11 FAILed `pick_up_gun` on the view-line bound: an enemy stood on Maya's eye for the whole 10 s.
 - **a6c37ab** (the re-aim on link 6): 2 unforced runs, run 13 green (521 s); run 12 FAILed `equip_gun`, see the next point; and
   the plain run, 14 / 0 / 0 in 182 s, with its burst graded.
-- **Open: a kill can drop a gun above Maya's level.** In run 12 the kill roll dropped a level-9 gun, E picked it up, and
-  `EquipItem` refused it, because an item above the player's level cannot be equipped. That is the host's level rule, and it
-  was not touched. The unforced loot link counts any gun; keeping on killing until a gun she can equip drops would answer it,
-  but it changes what link 5 accepts and no run was left to check it, so it is not done.
+- **A kill can drop a gun above Maya's level (run 12; answered in 5f31319, see "A gun above Maya's level").** The kill roll
+  dropped a level-9 gun, E picked it up, and `EquipItem` refused it, because an item above the player's level cannot be
+  equipped. That is the host's level rule, and it was not touched.
 - **The burst in all 12 runs that reached it:** every one passed the checker's grade. Rates 1.12 to 16.67 shots a second
   (among them a sniper rifle, and a shotgun whose magazine held one shot), every interval at or above the block's and within
   the checker's bound above it (the run's longest frame, 0.0061 to 0.0234 s, plus 0.002 s), every kind `Bullet` with one
@@ -640,8 +657,29 @@ only records, so the SHAs below are the rebased ones and the code is the same. A
   when the down wait ran out) and 11; a wait cut by a down starts again after it, so the token gives the last attempt only.
   The re-aim did not fire in the two runs on its head.
 
-So the series asked for, five unforced runs in a row on the final head, was not reached: the budget of 14 ran out. The hub's
-runner has to run its series on a6c37ab (or on a head that also answers the level item).
+So the series asked for, five unforced runs in a row on the final head, was not reached: the budget of 14 ran out. The hub
+then set the target aside (2026-11-13): another lane is adding the bullymongs' leaps and thrown rocks, which changes every
+fight, so a series tuned now would be redone. **The unforced variant is not reliable yet.**
+
+**A gun above Maya's level (since 2026-11-13, lane U, review round; a fixture).** Why the level-9 gun of run 12 dropped, read
+from that run's log and the range's data: the enemy was a level-8 psycho (`OWRANGE enemy ... kind=psycho level=8`), and its
+loot rolled at `item_stage=9` (`OWRANGE loot weapon_try 0 pool=Pool_GunsAndGear stage=9`). The item stage is the pawn's level
+or game stage plus the evaluated `ItemGameStageOffset` (NATIVE_LOOT.md, the item game stage), the range samples that offset
+per kind and level and draws one stage per death from the band (COMBAT_RANGE.md, "Item stage"), and a drop's level is its stage
+below the cap. The local range data gives the level-8 psycho the band 6 to 9 (and the adult and the slinger the same). So the
+host's roll did what the records say the game does; whether a level-8 psycho really drops a level-9 gun in the game is
+`UNVERIFIED` (the live reads of COMBAT_LOOT.md cover the adult and the baby). It is not a loot-code fault.
+
+What the unforced equip link does now (`OpenWillowSliceGate.cpp`, `EStep::Equip`): when the host's equip refuses the gun and
+the gun's level is above Maya's, it logs the refusal with both levels, keeps the gun in the backpack and loots on, as a player
+would. It runs the loot link's own farm (no line for link 5 is logged again), within that link's own bound: the 100 kills and
+the 720 s count on from where the loot link left them. It picks the first new gun near a corpse up the way link 6 does (the
+card, the use key, the view-line wait and the down wait), then tries the equip again; a second refused gun repeats this. The
+fixture is `kept looting for a gun Maya can equip`. The detail carries `equip_refused=<n>`, and after a refusal
+`loot_kills=<k>/100 loot_time=<s>s/720s` and the guns refused with their levels. Past the bound the link FAILs with "no
+equippable gun within the loot bound". The checker (unforced only) overrules a PASS without `equip_refused=`, or with a
+refusal and no loot tokens, or with the loot past its bound. The plain, `-Shield` and `-DownAfterFight` variants are graded as
+before: there a refused gun is still a FAIL with the host's reason.
 
 ## Gaps, with the owning lane
 
@@ -691,7 +729,12 @@ Links that pass now but rest on rules still `UNVERIFIED` in game are covered in 
 | 2026-11-12 to 11-13 | hub runner batches, then main 81d87f9 | 14 / 0 / 0 in each of 45 logs | 12 with a `-Shield` fixture (two on the generated card), 11 `-DownAfterFight`, none unforced; lane U read the SUMMARY lines and fixtures |
 | 2026-11-13 | lane U, main 81d87f9 + 3604058 (run 1 on a build before it), `-Unforced`, zuhu | 3 of 6 green | the burst passed in all six; the FAILs were driver problems, answered in 3604058 or the next head ("Lane U's runs") |
 | 2026-11-13 | lane U, + 6e14cd1, `-Unforced`, zuhu | 4 of 5 green, the first four in a row | run 11: `pick_up_gun` on the view-line bound, an enemy on Maya's eye |
-| 2026-11-13 | lane U, + a6c37ab, `-Unforced` twice and plain once, zuhu | unforced 1 of 2 green; plain 14 / 0 / 0 | run 12: `equip_gun`, a level-9 drop refused by the level rule (open); checker tests 96/96 |
+| 2026-11-13 | lane U, + a6c37ab, `-Unforced` twice and plain once, zuhu | unforced 1 of 2 green; plain 14 / 0 / 0 | run 12: `equip_gun`, a level-9 drop refused by the level rule (answered in 5f31319); checker tests 96/96 |
+| 2026-11-13 | lane U, + 5f31319 (the re-loot), `-Unforced` once, zuhu | 14 / 0 / 0 by that commit's checker | no gun above Maya's level dropped, so the re-loot did not run (`equip_refused=0`); the checker of the next commit, already in the worktree, failed its three links only for tokens that build did not print |
+| 2026-11-13 | lane U, + 4184846 (review round 1), `-Unforced` twice and plain once, zuhu | 14 / 0 / 0 each (465, 421 and 422 s) | every new token printed; one unforced run waited for an enemy on the view line (`view_blocker=enemy`) and passed; the re-loot did not run; checker tests 107/107 |
+
+The `-Shield` and `-DownAfterFight` variants were not run by lane U on any of its heads. The burst, the view-line wait and their
+grading apply to them too, so the hub's runner runs both on the candidate.
 
 The first four runs found bugs in this lane's own driver, not in the host:
 1. The kill timeout was 90 s; the level-8 pistol needs about 136 s against 20,000 health.

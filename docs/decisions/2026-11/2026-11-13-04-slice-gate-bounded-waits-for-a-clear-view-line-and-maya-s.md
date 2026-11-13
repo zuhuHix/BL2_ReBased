@@ -42,5 +42,25 @@ the driver's 12 s ran out. No host rule was changed. The aimed pickup's reach an
   Maya's level and `EquipItem` refused it under the level rule, which was not touched. The burst passed the checker in all 12
   runs that reached it (1.12 to 16.67 shots a second, no enemy hurt). Five unforced runs in a row on the final head were not
   reached; the run budget ran out. Checker tests 96 of 96; ctest 174 of 174.
+- **A gun above Maya's level, unforced link 8 (review round, same day).** Run 12's level-9 gun came from a level-8 psycho whose
+  loot rolled at item stage 9: the item stage carries the data's offset, and the range's sampled band for that kind and level
+  is 6 to 9 (NATIVE_LOOT.md, the item game stage; COMBAT_RANGE.md, "Item stage"). The roll did what the records say the game
+  does (`UNVERIFIED` live for the psycho), so the loot code was left alone. When the host's equip refuses a gun above Maya's
+  level, the unforced equip link now keeps it and loots on with the loot link's farm, within that link's own bound (100 kills,
+  720 s, counted on), picks the next gun up as link 6 does and tries again (fixture `kept looting for a gun Maya can equip`).
+  Past the bound it FAILs with "no equippable gun within the loot bound". The detail carries `equip_refused=<n>` and, after a
+  refusal, `loot_kills=` and `loot_time=`; the checker fails an unforced PASS without them or past the bound. The level rule is
+  untouched, and the other variants grade as before. Not seen in the engine: in the four runs after it no gun above Maya's
+  level dropped, so the re-loot rests on its synthetic checker cases (`UNVERIFIED` in the host).
+- **Review round 1 (same day).** The pickups FAIL when Maya is still down at the 50 s bound, and the checker treats reaching a
+  bound as past it. The burst logs each shot's own frame and the block's spin-up time, and each interval is bounded by that
+  frame and by the spin-up the block allows at that shot. The gate ticks after its walker (a tick prerequisite), so the shot is
+  seen in the frame it was fired. What the check still cannot resolve is about one frame per interval (roughly 10 % at 16.67
+  shots a second and 60 frames a second). Link 8 FAILs when the burst hurt an enemy a later link needs, the stand-in included.
+  The view-line wait and the re-aim run only for an enemy on the line (`view_blocker=`); any other blocker fails the pickup at
+  once with its name. Runs on that head: two unforced and one plain, each 14 / 0 / 0; checker tests 107 of 107. The `-Shield`
+  and `-DownAfterFight` variants were not run by the lane.
+- **Target set aside (the hub, 2026-11-13).** Five unforced runs in a row are not chased now: another lane's leaps and thrown
+  rocks will change every fight. The unforced variant is not reliable yet.
 - **UNVERIFIED:** the block, and so the gun's rate in play, against the real game; whether the game's pickup trace is blocked by a
   pawn; the pickup's reach and cone. The burst's grading compares the host with its own data.
