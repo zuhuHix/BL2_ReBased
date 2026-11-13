@@ -35,31 +35,34 @@ deferred until that gate is met; they move to Phase 5/6.
 
 The project is worked on actively. There are no completion dates, no time
 estimates and no completion percentages here; this section only records what
-the repository shows as of 2026-11-13 (`origin/main` at ccc6fa5; the elapsed counts and dated milestones below
-stop at 2026-11-02), and each line names the record that
+the repository shows as of 2026-11-13 (`origin/main` at ccc6fa5; the elapsed counts, dated milestones and measured numbers
+below stop at 2026-11-02), and each line names the record that
 backs it ([DECISIONS.md](DECISIONS.md) entry date or verification file). Where
 a number is an automated check it says so; "passes" is never parity with the
 original game.
 
 **As of 2026-11-13** ("in the host" means the UE5 build with labelled stand-ins; a passing suite says the host did this, not parity)
 
-- The slice loop runs in the host in one session (`tools/test_slice_gate.ps1`): the forced variants passed 14 of 14 links in every
-  desktop candidate log of 2026-11-12 and 13; the `-Shield` run equips one generated level-8 card from game data (14 of 14 on main
-  25a5ce2; the card is UNVERIFIED in game) ([slice gate](docs/verification/SLICE_GATE.md), [gates](docs/verification/GATES.md)).
-- The unforced variant is not reliable yet (3 of 8 runs on 2026-11-11 failed a link) and is being worked on. The Phase 4 gate is not
-  claimed as met.
+- The slice loop runs in the host in one session (`tools/test_slice_gate.ps1`): the forced variants have passed 14 of 14 links in
+  every recorded run since 7eee9ee (2026-11-07), the later runs as the hub's log reported them ([slice gate](docs/verification/SLICE_GATE.md));
+  the `-Shield` run equipped one generated level-8 card from game data, 14 of 14 on main 25a5ce2 (the card is UNVERIFIED in game)
+  ([gates](docs/verification/GATES.md)).
+- The unforced variant is not reliable yet: 3 of its first 8 runs (2026-11-11) failed a link ([slice gate](docs/verification/SLICE_GATE.md),
+  "The unforced variant"). The Phase 4 gate is not claimed as met.
 - Fight: range enemies with a host brain; the adult's and the regular's swing cycles and the adult's stand distance are graded in the
   engine against live reads ([range](docs/verification/COMBAT_RANGE.md)). Leaps and thrown rocks, the biggest gap, are described in an own-words
   note, UNVERIFIED in game, and not built ([note](docs/verification/NATIVE_AI_LEAP_THROW.md)).
-- Down and respawn: the host's respawn timeline follows six live samples on the station path; the ammo refill on respawn is not in the
-  host yet ([down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md)).
-- Loot, equip, Phaselock and the Fire mission run end to end in the gate; a critic agent scored Phaselock's captures 5.1 to 5.7 of 10,
-  not parity.
+- Down and respawn: the host's respawn wait on the station path is split into the moments seen in six live respawns (2026-11-12, two
+  maps, one player level) ([down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), "What the host does").
+- Loot, equip, Phaselock and the Fire mission run end to end in the gate ([slice gate](docs/verification/SLICE_GATE.md)); a critic agent scored
+  Phaselock's captures 5.1 to 5.7 of 10, not parity ([Phaselock](docs/verification/PHASELOCK_STOCK_DATA.md)).
 - Sanctuary's ambient citizens wear their captured pieces (ambient suite PASS on main a3daacf, 35 pawns, 89 worn pieces); their
-  movement is a host stand-in, UNVERIFIED.
-- Tests: ctest has 174 entries on main (all passed on CI, LZO on); three stubbed real-game tool tests run in it.
-- Evidence: two capture sessions on 2026-11-12 (a pack down on Three Horns Divide, a scripted down in Sanctuary), recorded in own words
-  ([real-game reads](docs/verification/REALGAME_GROUND_TRUTH.md)).
+  movement is a host stand-in, UNVERIFIED ([gates](docs/verification/GATES.md), "Ambient gate").
+- Tests: ctest has 174 entries since three real-game tool tests and a registration guard joined it (2026-11-13); CI passed 174 of
+  174 on main 81d87f9, LZO on ([gates](docs/verification/GATES.md)).
+- Evidence: two unattended capture sessions on 2026-11-12 (9 item runs, 0 game crashes; [real-game reads](docs/verification/REALGAME_GROUND_TRUTH.md)),
+  among them downs on Three Horns Divide and in Sanctuary and a den capture, recorded in own words
+  ([down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), [range](docs/verification/COMBAT_RANGE.md)).
 - Not started, by plan: the other 79 maps and the other Vault Hunters (after the Phase 4 gate).
 
 **Elapsed.** First commit 2026-09-10, so 53 calendar days. 401 commits on
@@ -279,8 +282,10 @@ prototypes, so the repository's clock started a little after the work did.
   2026-10-22); the targeting rules themselves are still not compared with the
   game.
 - The VM combat steps S-a to S-g reproduce recorded live rows; the bodies of the
-  natives they bind are role-level readings, and the respawn station, timers,
-  shields and the live 3-item money drop are stand-ins or `OPEN`
+  natives they bind are role-level readings. The respawn timers on the station
+  path are confirmed live (2026-11-12, six samples); the station choice, the
+  path without a station and the live 3-item money drop stay `OPEN`, and the
+  shield numbers are stand-ins
   ([down/respawn](docs/verification/COMBAT_DOWN_RESPAWN.md),
   [loot](docs/verification/COMBAT_LOOT.md)).
 - Sanctuary's host lighting calibrations (sun, sky light, exposure, white
@@ -300,7 +305,7 @@ prototypes, so the repository's clock started a little after the work did.
   (lane L2), a bullymong fight on another map (lanes L3-L9), Phaselock frames and
   the menus and HUD; none covers the whole slice loop in Sanctuary yet.
 - In the UE host the range's enemies notice, chase and hit Maya with a host brain (a stand-in, with live-read
-  notice radii, swing cycles and stand distances), Maya goes down, bleeds out and respawns at a station, and a
+  notice radii, the swing cycles of the adult, baby, regular and slinger, and the adult's and baby's stand distances), Maya goes down, bleeds out and respawns at a station, and a
   range kill rolls its loot at the stock chance ([range](docs/verification/COMBAT_RANGE.md),
   [down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), [slice gate](docs/verification/SLICE_GATE.md)). The VM
   (`--combat-run`) runs the hit, death, kill-XP, down and loot steps; its melee blow is a guaranteed-hit fixture
@@ -722,7 +727,7 @@ rule down in our own words, implement from that note, then confirm it with the
 golden-file loop: hook the native in the real game, log every call's inputs
 and outputs during play, implement until our engine reproduces the log, extend
 the log on mismatch. Decompiler output never enters the repository.
-Status (2026-11-02): over thirty native notes exist
+Status (2026-11-02; later live confirmations are in the records the Gate progress below names): over thirty native notes exist
 ([index](docs/verification/NATIVE_INDEX.md)); every rule in them is `UNVERIFIED` unless a line says how it was
 confirmed. Since 2026-10-02 some rules have been confirmed in the running game through bl-sdk hooks and reads, each
 named in its record: the progression rules and the Phaselock bob and cast gates (2026-10-02,
@@ -781,7 +786,7 @@ gun, equip it, use Phaselock, complete one hand-picked mission, die, respawn.
 This is the vertical slice; once met, broad map and character coverage
 (Phase 5/6) becomes the priority again.
 
-Gate progress (2026-11-11; "in the host" means the UE5 build, with labelled stand-ins; none of it is parity).
+Gate progress (2026-11-11, the fight and respawn lines updated 2026-11-13; "in the host" means the UE5 build, with labelled stand-ins; none of it is parity).
 The Phase 4 gate is not claimed as met. `tools/test_slice_gate.ps1` runs the whole loop in one session; its forced
 variants have passed 14 of 14 links in every recorded run since their first run on main (7eee9ee, 2026-11-07), on
 main or on a batch's candidate; the later runs are as the hub's log reported them
@@ -794,8 +799,9 @@ drops) stay. In 8 unforced runs on
 enemy standing in the view line and one Phaselock cast refused because Maya was already down.
 - Spawn: Maya spawns in Sanctuary with first-person arms, collision and a stand-in start shield (a slice choice).
 - Fight: the range's enemies notice, chase and hit Maya with a host brain. Notice radii, update rate, the adult's and
-  the baby's stand distances, the swing cycles of four kinds (adult, baby, regular, slinger) and the chase speeds come
-  from live reads; a third read of the adult's cycle (2026-11-12, 407 gaps) settled the earlier disagreement. The range
+  the baby's stand distances, the swing cycles of four kinds (adult, baby, regular, slinger) and the chase speeds of the
+  adult, slinger and baby come from live reads (the regular's and the psycho's speeds are stand-ins); a third read of the
+  adult's cycle (2026-11-12, 407 gaps) settled its value, while the rule behind it stays UNVERIFIED. The range
   suite grades the adult's and the regular's cycles and the adult's stand distance in the engine; the default range
   spawns no baby or slinger, so theirs are checked in the light tier only. The psycho has no live read and the
   regular's stand distance is open. The range itself is a host contrivance, and leaps and thrown rocks are described
@@ -814,7 +820,8 @@ enemy standing in the view line and one Phaselock cast refused because Maya was 
   decoded station with full health. The steps of the respawn wait on the station path were confirmed
   in two live sessions (six samples, two maps, one player level), and the host follows them. Which station the game
   picks was seen only where one station was both the active and the nearest, so the selection order is not told
-  apart; the first respawn after a load took the next exit point in all six. The ammo refill fits five pools without
+  apart; the first respawn after a load did not reuse the load's exit point in all six (in Sanctuary, where the
+  order is known, it took the next one). The ammo refill fits five pools without
   rockets but its size was not seen, and the host does not refill yet.
 
 Records: [arms and held guns](docs/verification/WEAPON_VISUALS.md), [walking](COLLISION_WALKING_VERIFICATION.md),
