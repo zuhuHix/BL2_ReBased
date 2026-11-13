@@ -237,8 +237,9 @@ try {
     Write-StageMark 'readings' 'enter'
     if ($WatchSmoke) { $log.groups_stage1 = Install-SliceWatchGroups 'stage1' }
 
-    # The readings are a stage of their own: a failure in them (a driver found lost, whose next command is refused) fails this stage and lets
-    # the later stages report themselves as skipped, as the den stages do.
+    # The readings record their own failure. Only a lost driver lets the run go on, so that the later stages report themselves as skipped
+    # (each refuses at once); any other failure (the game lost the foreground, a game-side traceback, a script error) is thrown on and ends
+    # the run through the outer handler and its cleanup, as it did at e7b5fa3: nothing unexpected is followed by a den placement.
     try {
         $deadline = (Get-Date).AddMinutes($MaxMinutes)
         $dropsUnsettled = 0; $kills = 0; $deaths = 0; $single = 0; $swept = $false; $noTarget = 0; $noReading = 0; $failedPickups = 0
@@ -294,6 +295,7 @@ try {
     } catch {
         Set-Stage 'readings' $false "$_"
         "readings: $_"
+        if (!(Get-DriverLost)) { Write-StageMark 'readings' 'done'; throw }
     }
     Write-StageMark 'readings' 'done'
     # Set before stage 2, so a stage skipped at once still leaves a smoke result and stage 3 still runs its own checks and stamps.

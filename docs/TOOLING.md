@@ -1525,7 +1525,8 @@ switches for the slice capture sessions. Each is off by default, so a run withou
 - **Driver lost**: one condition shared by the helpers and every stage. A reply that never came sets it: to any of the capture's
   own commands (its `Py`, a probe load), to a den-down poll even when the window shortened its wait, to the watch's settle read,
   snapshots, pawn reads, end snapshot, dump and stop, or to the den trial's close. From then on the capture's `Py` refuses every
-  command, so no key, click, placement or probe call follows in that stage; the later stages report themselves as skipped; no quit
+  command, so no key, click, placement or probe call follows in that stage; the later stages report themselves as skipped (a
+  readings failure for any other reason, such as a lost foreground or a game-side traceback, still ends the run at once); no quit
   and no finalizer stop is sent; and the finalizer stops the run's own game by its PID and restores without the driver. The waits
   that expect silence for a while (the boot wait, a travel's map polls, the load step) refuse once it is set but do not set it. Each stage is stamped to `stages-<run>.log` before its risky command.
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game

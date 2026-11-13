@@ -40,6 +40,7 @@ function Assert-GameForeground {
     $script:foreground++
     if ($scenario -eq 'no_focus') { throw 'refusing to send input: not the foreground window' }
     if ($scenario -eq 'focus_lost_in_den' -and $script:foreground -ge 3) { throw 'refusing to send input: not the foreground window' }
+    if ($scenario -eq 'focus_lost_in_kills' -and $script:foreground -ge 3) { throw 'refusing to send input: not the foreground window' }   # the first kill's check
 }
 function Send-Key { }
 function Send-Click { Add-Content -LiteralPath (Join-Path $work 'clicks.txt') 'click' }   # every click is counted on disk
@@ -111,7 +112,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_level*' { return '8' }
         '*cp_cash*' { return '100' }
-        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_ready_kill*' { if ($scenario -eq 'kill_traceback') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; return 'WillowAIPawn_2' }
+        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback') { 'None' } else { 'WillowPickup_1' }) }
         '*cp_collect_end*' {
             $script:collects++
             if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
@@ -120,7 +122,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
-        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost') { 'WillowAIPawn_2' } else { 'None' }) }
+        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback') { 'WillowAIPawn_2' } else { 'None' }) }
         '*cp_died*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_died'; $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
         '*cp_dump*' {
             if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
@@ -131,7 +133,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             }
             return (ConvertTo-Json @{ kills = 0; collected = $script:collects; single_item_rows = $script:singles })
         }
-        '*dp_start*' { if ($scenario -eq 'den_channel') { throw 'channel lost in the den read' }; return '[]' }
+        '*dp_start*' { Add-Content -LiteralPath (Join-Path $work 'den.txt') 'dp_start'; if ($scenario -eq 'den_channel') { throw 'channel lost in the den read' }; return '[]' }
         '*dp_begin*' { return $(if ($scenario -eq 'den_no_enemy') { 'None' } else { 'WillowAIPawn_1' }) }
         '*dp_replace*' {
             # The den down's re-placement; every call is counted on disk, so a test sees one that was sent when it should not have been.
@@ -943,6 +945,30 @@ class LatchTest(unittest.TestCase):
         self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
         self.assertTrue((self.work / 'rg/cash/save_compare.json').exists())
         self.assertEqual(self.locks_held(), (False, False))
+
+    def ended_without_den_or_input(self, session):
+        self.assertEqual(self.lines('den.txt'), [])   # no den command
+        self.assertNotIn('den_read', session.get('completed_stages', []))
+        self.assertEqual(self.saves(), 'original save')   # the outer cleanup and the restore ran
+        self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
+        self.assertTrue((self.work / 'rg/cash/save_compare.json').exists())
+        self.assertEqual(self.locks_held(), (False, False))
+        marks = [(m['stage'], m['event']) for m in session['stage_marks']]
+        self.assertEqual(marks[-2:], [('readings', 'enter'), ('readings', 'done')])   # the stage closed on its own stamp, nothing after it
+
+    def test_lost_focus_in_the_kill_loop_ends_the_run(self):
+        # Hub, 2026-11-13: a readings failure other than a lost driver ends the run, as at e7b5fa3; no den placement follows.
+        done, session = self.run_capture('focus_lost_in_kills', ['-MaxKills', '4', '-DenDown'])
+        self.assertEqual(self.lines('clicks.txt'), [])   # the focus check came before the shots
+        self.assertIn('not the foreground window', session['stage_results']['readings'])
+        self.assertIn('not the foreground window', session['status'])
+        self.ended_without_den_or_input(session)
+
+    def test_a_game_side_traceback_in_the_readings_ends_the_run(self):
+        done, session = self.run_capture('kill_traceback', ['-MaxKills', '4', '-DenDown'])
+        self.assertEqual(self.lines('clicks.txt'), [])
+        self.assertIn('game python error', session['stage_results']['readings'])
+        self.ended_without_den_or_input(session)
 
     def test_a_timed_out_before_down_is_not_followed_by_removing_the_immunity(self):
         done, session = self.run_capture('before_down_lost', ['-DenDown', '-RespawnSeconds', '8', '-WatchSpec', str(self.spec)])
