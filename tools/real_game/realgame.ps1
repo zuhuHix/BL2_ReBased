@@ -586,7 +586,14 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (!(Test-Path $out)) { if ((Get-Date) -gt $deadline) { throw "no reply to $name" }; Start-Sleep -Milliseconds 100 }
     Start-Sleep -Milliseconds 50
-    Get-Content -Raw $out
+    # A reply file that is there but cannot be read (a sharing violation while the driver still writes it, an access or I/O error) is no
+    # usable reply either. It is read again at most 4 more times, 200 ms apart; then it fails in the same form as a timeout ("no reply to
+    # <name>"), so every driver-lost latch takes it as one. Only this call's own file is read: its name holds this call's GUID, and a
+    # file under it was removed before the command went out. Nothing is taken from a failed read. (review of #251/#255, T1)
+    for ($try = 1; ; $try++) {
+        try { return (Get-Content -Raw -LiteralPath $out -ErrorAction Stop) }
+        catch { if ($try -ge 5) { throw "no reply to $name (its reply file could not be read: $($_.Exception.Message))" }; Start-Sleep -Milliseconds 200 }
+    }
 }
 
 # Run a command script file (e.g. tools/real_game/scripts/*.py) after a short prelude; RG_OUT is set

@@ -5,6 +5,7 @@ Run: python tests/cash_capture_test.py
 """
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import realgame_test_env  # noqa: F401  (a fresh pending-record folder for every PowerShell run)
@@ -17,6 +18,7 @@ CAPTURE = ROOT / 'tools/real_game/cash_capture.ps1'
 # Dot-sourced by the capture in place of realgame.ps1: the real helpers, then the game's side replaced. $env:OW_SCENARIO picks a fault.
 STUB = r"""
 . '__REALGAME__'
+$script:RealGamePy = ${function:Invoke-GamePy}   # the real transport, for the reply-file faults (review of #251/#255, T1)
 $work = '__WORK__'
 $scenario = $env:OW_SCENARIO
 $script:RG = Join-Path $work 'rg'
@@ -26,7 +28,23 @@ $script:Game = $env:OPENWILLOW_BL2
 $script:DriverDir = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
 $script:Lock = Join-Path $work 'run.lock'
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
-function Start-Sleep { }
+# The stand-in driver of the reply-file faults: when a command is armed, the first wait of the real transport answers it with a reply file
+# this process holds open with no sharing, so every read of it fails as a sharing violation would (not a timeout).
+function Start-Sleep {
+    if ($script:fakeDriver) {
+        $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')
+        if ($py.Count) {
+            $script:fakeDriver = $false
+            Remove-Item -LiteralPath $py[0].FullName
+            $script:heldReply = [IO.File]::Open([IO.Path]::ChangeExtension($py[0].FullName, '.out'), 'Create', 'ReadWrite', 'None')
+        }
+    }
+}
+function Read-Unreadable([string]$Code, [int]$TimeoutSeconds) {
+    Add-Content -LiteralPath (Join-Path $work 'events.txt') 'lost'
+    $script:fakeDriver = $true
+    & $script:RealGamePy $Code $TimeoutSeconds
+}
 function Get-GameProcess { $null }
 function Get-UntrackedGames($Own) { if ($scenario -eq 'foreign' -and $Own) { [pscustomobject]@{ Id = 777 } } }
 function Enter-RunLock { Set-Content -LiteralPath $script:Lock 'held' }
@@ -47,13 +65,14 @@ function Send-Key([string]$Key, [int]$HoldMs = 60) { Add-Content -LiteralPath (J
 function Send-Click { Add-Content -LiteralPath (Join-Path $work 'clicks.txt') 'click'; Add-Content -LiteralPath (Join-Path $work 'events.txt') 'click' }
 function Write-Lost { Add-Content -LiteralPath (Join-Path $work 'events.txt') 'lost'; throw 'no reply to c-invented' }
 function Invoke-GamePyFile([string]$Path) { if ($scenario -eq 'probe_traceback' -and $Path -like '*den_probe*') { "Traceback (most recent call last):`n  NameError" } else { 'ok' } }
-function Stop-OwnGame { if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
+function Stop-OwnGame($Process) { Add-Content -LiteralPath (Join-Path $work 'stopped_pid.txt') $Process.Id; if ($scenario -eq 'hung') { 'refused: stub' } else { $script:Fake.HasExited = $true; 'stopped' } }
 $script:collects = 0; $script:singles = 0
 $script:Fake = [pscustomobject]@{ Id = 4242; StartTime = (Get-Date); HasExited = $false }
 $script:Fake | Add-Member ScriptMethod WaitForExit { param($ms) $this.HasExited } | Out-Null
 $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
+    Add-Content -LiteralPath (Join-Path $work 'events.txt') 'cmd'   # every driver command, in order with the keys, clicks and losses
     switch -Wildcard ($Code) {
         '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; Set-Content -LiteralPath (Join-Path $work 'immune_off_at.txt') ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0); return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
@@ -62,7 +81,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*sw_install_group(*' { if ($scenario -eq 'group_lost') { throw 'no reply to c-invented' }; return '{"group": "g1", "resolved": 1, "missing": []}' }
         '*sw_mark(*' { $script:marks++; if ($scenario -eq 'mark_lost' -and $Code -like '*replace1*') { throw 'no reply to c-invented' }; if ($scenario -eq 'kill_traceback_mark_lost' -and $Code -like '*readings.done*') { Write-Lost }; return 'ok' }
         '*sw_settled*' { if ($scenario -eq 'settle_lost') { throw 'no reply to c-invented' }; return $(if ($scenario -eq 'kills_unsettled') { 'False' } else { 'True' }) }
-        '*sw_snap(*' { if ($scenario -eq 'smoke_unsettled_lost' -and $Code -like "*sw_snap('smoke_unsettled')*") { Write-Lost }; if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
+        '*sw_snap(*' { if ($scenario -eq 'smoke_unsettled_lost' -and $Code -like "*sw_snap('smoke_unsettled')*") { Write-Lost }; if ($scenario -eq 'smoke_unsettled_unreadable' -and $Code -like "*sw_snap('smoke_unsettled')*") { return (Read-Unreadable $Code $TimeoutSeconds) }; if ($Code -like "*sw_snap('drop')*") { Add-Content -LiteralPath (Join-Path $work 'drops.txt') 'drop' }; if ($scenario -eq 'before_down_lost' -and $Code -like "*sw_snap('before_down')*") { throw 'no reply to c-invented' }; if (($scenario -eq 'snap_lost' -and $Code -like "*sw_snap('down')*") -or ($scenario -eq 'after_lost' -and $Code -like "*sw_snap('after_respawn')*") -or ($scenario -eq 'end_snap_lost' -and $Code -like "*sw_snap('end')*")) { throw 'no reply to c-invented' }; return '{"deferred": false, "not_taken": false, "failed": []}' }
         '*sw_pawns(*' { return '{"label": "x", "pawns": 0, "failed": []}' }
         '*sw_dump(*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_dump'; return '{}' }   # every command after the end snapshot is counted on disk
         '*sw_stop*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'sw_stop'; if ($scenario -eq 'watch_start_stop_lost') { Write-Lost }; return $(if ($script:watchStarted) { 'stopped' } else { 'nothing to stop' }) }   # as the game answers: nothing loaded, nothing to stop
@@ -114,8 +133,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_level*' { return '8' }
         '*cp_cash*' { return '100' }
-        '*cp_ready_kill*' { if ($scenario -in 'kill_traceback', 'kill_traceback_mark_lost') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; return 'WillowAIPawn_2' }
-        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback', 'kill_traceback_mark_lost') { 'None' } else { 'WillowPickup_1' }) }
+        '*cp_ready_kill*' { if ($scenario -eq 'kill_lost') { Write-Lost }; if ($scenario -eq 'kill_unreadable') { return (Read-Unreadable $Code $TimeoutSeconds) }; if ($scenario -in 'kill_traceback', 'kill_traceback_mark_lost') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; return 'WillowAIPawn_2' }
+        '*cp_collect_start*' { return $(if ($scenario -in 'no_money', 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback', 'kill_traceback_mark_lost', 'kill_lost', 'kill_unreadable') { 'None' } else { 'WillowPickup_1' }) }
         '*cp_collect_end*' {
             $script:collects++
             if ($scenario -eq 'never_single') { return '{"value_per_item": null}' }
@@ -124,7 +143,7 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         }
         '*cp_up()*' { return $(if ($scenario -eq 'downed') { 'False' } else { 'True' }) }
         '*cp_immune*' { return $(if ($scenario -eq 'immunity_lost') { 'False' } else { 'True' }) }
-        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback', 'kill_traceback_mark_lost') { 'WillowAIPawn_2' } else { 'None' }) }
+        '*cp_target*' { return $(if ($scenario -in 'kills', 'kills_unsettled', 'settle_lost', 'focus_lost_in_kills', 'kill_traceback', 'kill_traceback_mark_lost', 'kill_lost', 'kill_unreadable') { 'WillowAIPawn_2' } else { 'None' }) }
         '*cp_died*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_died'; $script:attempts++; return $(if ($script:attempts % 2) { 'True' } else { 'False' }) }   # every other attempt kills
         '*cp_dump*' {
             if ($scenario -eq 'game_gone') { $script:Fake.HasExited = $true }   # the game is gone right after the readings
@@ -1082,6 +1101,45 @@ class LatchTest(unittest.TestCase):
         self.assertEqual(self.saves(), 'original save')
         self.assertTrue(session['cleanup']['saves'].startswith('identical'), session['cleanup'])
         self.assertEqual(self.locks_held(), (False, False))
+
+    def same_as_a_timeout(self, unreadable, lost, extra):
+        """Review of #251/#255, T1: a reply file that cannot be read sets the condition exactly as a reply that never came. Run both;
+        after the loss nothing goes to the game, the game is stopped by this run's own PID, and the cleanup, the restore, the saves
+        compare and the pending record come out as on the timeout."""
+        seen = {}
+        for scenario in (lost, unreadable):
+            done, session = self.run_capture(scenario, extra)
+            events = self.lines('events.txt')
+            self.assertIn('lost', events, scenario)
+            after = events[events.index('lost') + 1:]
+            self.assertEqual([e for e in after if e in ('key', 'click', 'cmd')], [], (scenario, events))   # no input, no driver command
+            self.assertEqual(self.lines('stopped_pid.txt'), ['4242'], scenario)   # this run's own game, by its PID
+            self.assertEqual(self.saves(), 'original save', scenario)
+            self.assertTrue((self.work / 'rg/cash/save_compare.json').exists(), scenario)
+            self.assertEqual(self.locks_held(), (False, False), scenario)
+            pending = session['cleanup'].get('pending')
+            self.assertTrue(str(pending).startswith('removed'), (scenario, pending))   # the pending record is completed as on any clean restore
+            norm = lambda v: re.sub(r'save-backup-[\d-]+', 'BACKUP', re.sub(r'ow-pending-[^"]*?\.json', 'PENDING',
+                                    re.sub(r'no reply to .*', 'no reply', json.dumps(v, sort_keys=True))))
+            seen[scenario] = (norm(session['cleanup']), norm(session['stage_results']), norm(session['status']), norm(pending))
+            for name in ('events.txt', 'stopped_pid.txt', 'keys.txt', 'clicks.txt', 'den.txt', 'sent.txt'):
+                (self.work / name).unlink(missing_ok=True)
+        self.assertIn('could not be read', json.dumps(session['stage_results']))   # the transport's own reason is kept
+        self.assertEqual(seen[unreadable], seen[lost])
+        return session
+
+    def test_an_unreadable_reply_at_the_smoke_snapshot_is_a_lost_driver(self):
+        # T2 (a): the snapshot swallows its error; before, a read failure there did not latch, and the Enter after it still went out.
+        session = self.same_as_a_timeout('smoke_unsettled_unreadable', 'smoke_unsettled_lost', ['-WatchSpec', str(self.spec), '-WatchSmoke', '-DenDown'])
+        self.assertIn('the driver stopped answering', session['stage_results']['den_down'])
+        self.assertIn('not sent: the driver stopped answering', session['cleanup']['watch'])
+
+    def test_an_unreadable_reply_to_a_kill_loop_command_is_a_lost_driver(self):
+        # T2 (b): a plain Py in the kill loop; before, the read error ended the run but the finalizer still sent its stops.
+        session = self.same_as_a_timeout('kill_unreadable', 'kill_lost', ['-MaxKills', '4', '-WatchSpec', str(self.spec), '-DenDown'])
+        self.assertEqual(self.lines('clicks.txt'), [])
+        self.assertIn('the driver stopped answering', session['stage_results']['den_read'])
+        self.assertIn('not sent: the driver stopped answering', session['cleanup']['watch'])
 
     def test_a_timed_out_before_down_is_not_followed_by_removing_the_immunity(self):
         done, session = self.run_capture('before_down_lost', ['-DenDown', '-RespawnSeconds', '8', '-WatchSpec', str(self.spec)])

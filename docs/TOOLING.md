@@ -1483,8 +1483,9 @@ Input is guarded: every key and button press is remembered until its release, an
 `Release-HeldInputs`, so an error, a timeout or Ctrl+C leaves nothing held. The held set is also written into the pending record
 before each press (no record, no press). A run killed outright (Task Manager, a power cut) skips its `finally`: if the game
 window is still open, a key it held can stay held in the game until the next run's start check or `Restore-PendingRecord`
-sends the recorded releases (only when the writer is shown gone). The list is cleared only when no Borderlands 2 process runs at
-all; a game process without a window keeps it, and the run refuses. Presses held across steps sit in their own
+sends the recorded releases (only when the writer is shown gone). The releases are sent whether or not a game runs, and each entry
+is cleared from the record once its own release went out; one whose release fails stays recorded (`Release-RecordedInputs`,
+`pending.ps1`). Presses held across steps sit in their own
 `try`/`finally` too. The native calls go through `Invoke-NativeKey` / `Invoke-NativeMouse` only, so the tests can replace
 them. Tests (no game): `python tests/real_game_pending_test.py`. Tests that run these scripts import
 `tests/realgame_test_env.py`, which gives every PowerShell run its own pending folder under the temp folder. The harness
@@ -1530,17 +1531,24 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   at or after it moves nothing and answers `late`, checked again right before the placement, and its reply wait is clamped to the
   time left, so no placement runs after the window. None is sent with less than 6 s of the window left (the polls' own minimum), so
   a slower healthy reply is not cut short into a lost driver.
-- **Driver lost**: one condition shared by the helpers and every stage. A reply that never came sets it wherever a command is
-  sent: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
+- **Driver lost**: one condition shared by the helpers and every stage. A command that gets no usable reply sets it wherever a
+  command is sent. No usable reply is a reply that never came, or a reply file that is there but cannot be read (a sharing, access
+  or I/O error): `Invoke-GamePy` (`realgame.ps1`) reads such a file at most four more times, 200 ms apart, then fails in the
+  timeout's own form, "no reply to <name> (its reply file could not be read: ...)", so every latch takes it as a timeout. It reads
+  only this call's own file (the name holds the call's GUID, and a file under it was removed before the command went out) and takes
+  nothing from a failed read. An empty or cut-off reply cannot be told from a complete one: the driver writes the file in place with
+  no length or end mark, so such a reply is taken as read. The latch sites: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
   window shortened its wait, the watch's start and its recovery stop after a failed start, its settle read, snapshots, pawn reads,
   marks, end snapshot, dump and stop, the den trial's close, and the quit. The one exception is the waits that expect silence for a
-  while (the boot wait, a travel's map polls, the load step): they refuse once it is set but do not set it. From then on the
+  while (the boot wait, a travel's map polls, the load step): they refuse once it is set but do not set it, on a timeout or on an
+  unreadable reply alike, since each is one missed read there and the next read asks again under its own bound. From then on the
   capture's `Py` refuses every command, and every key, click, mouse move and focus check is preceded by `Assert-DriverAnswers`
   (`slice_watch.ps1`), so no input goes out after the latch, also when a watch helper set it without throwing; no placement or
   probe call follows either. The later stages report themselves as skipped (a readings failure for any other reason, such as a
   lost foreground or a game-side traceback, still ends the run at once); no quit and no finalizer stop is sent (after a quit that
   got no reply the finalizer's stops are skipped too); and the finalizer stops the run's own game by its PID and restores without
-  the driver. Each stage is stamped to `stages-<run>.log` before its risky command.
+  the driver. In `cash_capture` each stage is stamped to `stages-<run>.log` before its risky command (`Write-StageMark`); the
+  mission screen capture writes no stage stamps (its `Set-Stage` only records each stage's result in its lists).
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
   window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
   held input is never completed. A record is rewritten in one replace. After a failed rewrite either the old record or its

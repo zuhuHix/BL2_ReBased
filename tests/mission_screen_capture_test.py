@@ -70,6 +70,46 @@ def test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss():
     assert seen['sent'] == ['raw'], seen   # the quit only: no hook stop after it
 
 
+def test_an_unreadable_reply_to_a_probe_file_is_a_lost_driver():
+    """Review of #251/#255, T1 and T2 (c): the reply file of a probe-file load is there but cannot be read (held with no sharing, as a
+    sharing violation would). Through the real transport that sets the condition as a timeout does: nothing more is sent, the game is
+    stopped by this run's own PID, and the finalizer's output (cleanup, restore, saves compare, pending record) is the timeout's. Run
+    from the script's own text with stand-ins (no capture script is run)."""
+    text = CAPTURE.read_text(encoding='utf-8').replace('\r', '')
+    start = text.index('    # A probe file that gets no reply latches the condition')
+    body = text[start:text.index("    $log.hooks = PyJson 'ms_start()'", start)] + "    $log.hooks = PyJson 'ms_start()'\n    Send-Key Enter\n"
+    body = body.replace('$PSScriptRoot', "'" + str(ROOT / 'tools/real_game') + "'")   # the extracted lines run from a temporary script
+    common = ("$script:RG = '__TMP__\\rg'; $script:CmdDir = '__TMP__\\rg\\cmd'; New-Item -ItemType Directory -Force $script:CmdDir | Out-Null; "
+              "function Remove-Driver { }; function Stop-OwnGame($Process) { Add-Content -LiteralPath '__TMP__\\events.txt' \"stop $($Process.Id)\"; $Process.HasExited = $true; 'stopped' }; "
+              "function Send-Key { Add-Content -LiteralPath '__TMP__\\events.txt' 'key' }; function Assert-GameForeground { }; "
+              "function Py($Code, $T) { Add-Content -LiteralPath '__TMP__\\events.txt' 'cmd'; 'stopped' }; ")
+    unreadable = common + ("function Start-Sleep { if ($script:armed) { $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py'); "
+                           "if ($py.Count) { $script:armed = $false; Remove-Item -LiteralPath $py[0].FullName; "
+                           "$script:held = [IO.File]::Open([IO.Path]::ChangeExtension($py[0].FullName, '.out'), 'Create', 'ReadWrite', 'None') } } }; "
+                           "$script:armed = $true; Add-Content -LiteralPath '__TMP__\\events.txt' 'lost'")
+    timeout = common + ("function Start-Sleep { }; function Invoke-GamePy($Code, $T) { Add-Content -LiteralPath '__TMP__\\events.txt' 'lost'; "
+                        "throw 'no reply to c-invented' }")
+    seen = {}
+    for kind, stubs in (('timeout', timeout), ('unreadable', unreadable)):
+        got = {}
+
+        def after(tmp, done):
+            got['events'] = (Path(tmp) / 'events.txt').read_text(encoding='utf-8').splitlines()
+            out = done.stdout.replace(tmp, 'TMP')
+            got['out'] = re.sub(r'no reply to [^\n]*', 'no reply', out)
+            got['reason'] = done.stdout
+        fake = ("$(& { $p = [pscustomobject]@{ HasExited = $false; Id = 4343; StartTime = (Get-Date) }; "
+                "$p | Add-Member ScriptMethod WaitForExit { param($ms) $this.HasExited }; $p | Add-Member ScriptMethod Refresh { }; $p })")
+        done = run_tail(body, proc=fake, stubs=stubs, after=after)
+        events = got['events']
+        assert 'lost' in events, (kind, events, done.stdout, done.stderr)
+        after_loss = events[events.index('lost') + 1:]
+        assert after_loss == ['stop 4343'], (kind, events)   # no key, no driver command; the game stopped by its own PID
+        seen[kind] = got['out']
+    assert 'could not be read' in got['reason'], got['reason']   # the transport's own reason
+    assert seen['unreadable'] == seen['timeout'], (seen['unreadable'], seen['timeout'])
+
+
 def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
     finish = "$stagesDone.Add('hit')"
     never_exits = '[pscustomobject]@{ HasExited = $false; Id = 1 }'
@@ -523,6 +563,7 @@ def test_probe_helpers():
 if __name__ == '__main__':
     test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout()
     test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss()
+    test_an_unreadable_reply_to_a_probe_file_is_a_lost_driver()
     test_labelled_snapshots_follow_the_accept_and_the_reward()
     test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails()
     test_probe_helpers()
