@@ -33,9 +33,9 @@ $Out = Join-Path $script:RG 'pj'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
-# An empty reply is refused, never taken (run Z47: the parity2 quit wrote one as the game exited). The transport returns '' for it, so the
-# test is null OR empty (ConvertTo-ReplyText, realgame.ps1; review of #263, R3).
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }
+# An empty reply is refused, never taken (run Z47: the parity2 quit wrote one as the game exited): the shared wrapper (Invoke-GameReply,
+# realgame.ps1) refuses an empty or white-space reply, refuses every command once the driver is lost, and latches a reply that never came.
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }
 function PyJson([string]$Expr, [int]$Timeout = 30) {
     $r = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
     try { $r | ConvertFrom-Json } catch { $r }
@@ -129,7 +129,7 @@ try {
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'pj/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -137,7 +137,7 @@ try {
     "map: $map"; if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'pj/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
     foreach ($f in 'weapon_firing_probe.py', 'phaselock.py', 'phaselock_matched.py', 'weapon_parity2_probe.py', 'projectiles_probe.py') {
-        Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") pj | Out-Null
+        Invoke-GameReplyFile (Join-Path $PSScriptRoot "scripts/$f") pj -AllowEmpty | Out-Null
     }
     $log.protect = Py 'print(len(protect_player(True)))'
     function Wait-Auto([double]$Seconds) {
@@ -188,7 +188,7 @@ try {
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep 3
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 } catch { continue }
+        try { $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 -SilenceAllowed } catch { continue }
         if ($map -match 'Ice_P True') { break }
     }
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
@@ -264,7 +264,7 @@ print(json.dumps({"pick": ok[0]["name"] if ok else None, "rows": rows[:30]}))
     }
     $log.fp_cleanup = PyJson 'fp_cleanup()' 60   # not 'cleanup': the finalizer writes its own record under that key
     # The quit ends the game before it can reply: no reply is the expected result here, not an error (Py would .Trim() it).
-    try { Invoke-GamePy 'pj_stop(write=False); wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 30 | Out-Null } catch { "quit sent; no reply: $_" }
+    try { Invoke-GameReply 'pj_stop(write=False); wp2_remove_hooks(); fp3_remove_hooks(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 30 -AllowEmpty | Out-Null } catch { "quit: no reply, or not sent to a lost driver: $_" }
     for ($i = 0; $i -lt 20 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
 } finally {
     # Order: stop our game; only once it has exited, remove our driver and restore and verify the saves, config and SDK stores

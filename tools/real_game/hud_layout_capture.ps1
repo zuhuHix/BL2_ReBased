@@ -14,7 +14,7 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 $Out = Join-Path $script:RG 'hud_layout'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); runs = [ordered]@{} }
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 
 # p1's direct children: the first p1 section of the HUD tree listing (local/ui/hud_tree.txt), plus a few grandchildren.
 $tree = Join-Path $script:Repo 'local/ui/hud_tree.txt'
@@ -45,7 +45,7 @@ try {
         Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
         $proc = Start-Game @('-windowed', "-ResX=$w", "-ResY=$h", '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
         $ok = $false
-        for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+        for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
         if (-not $ok) { Save-Shot "hud_layout/boot_$res.png" | Out-Null; throw "driver did not answer at $res" }
         $run.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
         Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -55,11 +55,11 @@ try {
         Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 3
         Assert-GameForeground; Start-Sleep 2
         $rect = Get-GameRect; $run.client = @{ x = $rect.X; y = $rect.Y; width = $rect.Width; height = $rect.Height }
-        Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/hud_layout.py') hud_layout | Out-Null
+        Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/hud_layout.py') hud_layout -AllowEmpty | Out-Null
         $run.dump = Py "import json; print(json.dumps(hl_dump('layout_$res', $clipsPy), default=str))" 60
         $run.shot = Save-Shot "hud_layout/shot_$res.png"
         "dump ${res}: $($run.dump); client $($rect.Width)x$($rect.Height)"
-        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
+        try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { "quit: no reply, or not sent to a lost driver ($_)" }
         for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
         $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
         if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }

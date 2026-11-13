@@ -179,7 +179,7 @@ try {{ Py 'empty' | Out-Null; 'no throw' }} catch {{ "threw: $_" }}
 try {{ Py 'null' | Out-Null; 'no throw' }} catch {{ "threw null: $_" }}
 try {{ $ready = PyJson 'fp_ready("g", 1)' 60; Assert-GameForeground; Send-Key '1' }} catch {{ "ready: $_" }}
 "keys: [$($script:keys -join ',')]"
-""".format(helper('ConvertTo-ReplyText'), one_line_of(name, 'Py'), script_fn(name, 'PyJson')))
+""".format(wrapper(), one_line_of(name, 'Py'), script_fn(name, 'PyJson')))
         assert 'ok: [answer]' in out and 'threw: empty reply from the game (it may have exited) to: empty' in out, name + out
         assert 'threw null: empty reply from the game (it may have exited) to: null' in out, name + out
         assert 'ready: empty reply' in out and 'keys: []' in out, name + out   # no input after an empty fp_ready
@@ -189,7 +189,9 @@ def test_the_parity2_quit_expects_no_reply_and_fp_cleanup_is_not_overwritten():
     for name in ('projectiles_capture', 'weapon_parity2_capture'):
         s = text(name)
         quit_line = next(l for l in s.splitlines() if 'ConsoleCommand("quit"' in l)
-        assert quit_line.lstrip().startswith('try { Invoke-GamePy ') and 'catch { "quit sent; no reply: $_" }' in quit_line, name
+        # Through the shared wrapper (session gate, B2): an empty reply is taken, and nothing is sent to a lost driver.
+        assert quit_line.lstrip().startswith('try { Invoke-GameReply ') and ' -AllowEmpty | Out-Null }' in quit_line, name
+        assert 'catch { "quit: no reply, or not sent to a lost driver: $_" }' in quit_line, name
         # The finalizer writes $log.cleanup; the probe's own cleanup result goes under another key so it survives.
         assert "$log.fp_cleanup = PyJson 'fp_cleanup()' 60" in s and "$log.cleanup = PyJson" not in s, name
 
@@ -230,6 +232,17 @@ $obj = [pscustomobject]@{{ weapon = 'W' }}
 def one_line(name):
     """A one-line function's text from the shared realgame.ps1."""
     return next(line for line in text('realgame').split('\n') if line.startswith(f'function {name} '))
+
+
+def wrapper():
+    """The shared reply wrapper with the driver-lost condition it holds (realgame.ps1), as text."""
+    return '\n'.join(["$script:SliceWatchDriverLost = ''"] + [one_line(n) for n in ('Get-DriverLostReason', 'Assert-DriverAnswers')]
+                     + [one_line_fn('Set-SliceWatchDriverLost')] + [helper(n) for n in ('ConvertTo-ReplyText', 'Invoke-GameReply', 'Invoke-GameReplyFile')])
+
+
+def one_line_fn(name):
+    """A one-line function with a parameter list from the shared realgame.ps1."""
+    return next(line for line in text('realgame').split('\n') if line.startswith(f'function {name}('))
 
 
 TRANSPORT_STUBS = r"""$ErrorActionPreference = 'Stop'
@@ -416,6 +429,157 @@ def test_a_failed_test_cleanup_never_hides_the_tests_own_error():
             assert raised, error   # with raising, a cleanup that keeps failing is reported as an error
     finally:
         shutil.rmtree, _sys.stderr = keep, keep_err
+
+
+# ---------------------------------------------------------------- the session gate's review (B1, B2, item 2), 2026-11-13
+VIRTUAL_CLOCK = r"""
+$script:t0 = [datetime]'2026-01-01T00:00:00'; $script:now = $script:t0
+function Get-Date { param($Format) if ($Format) { 'T' } else { $script:now } }
+function Start-Sleep { param($Milliseconds) $script:now = $script:now.AddMilliseconds($Milliseconds) }
+"""
+
+
+def test_a_command_whose_file_is_written_after_the_deadline_is_not_published():
+    """B1: the rename that publishes a command ran even when writing its file outlasted the deadline. A virtual clock that jumps 5 s while
+    the command's temporary file is there (a slow write); the caller's timeout is 3 s. Nothing is renamed, the temporary file is removed, and
+    the call fails in the no-reply form."""
+    out = run_stubbed(TRANSPORT_STUBS + VIRTUAL_CLOCK + r"""
+function Get-Date { param($Format)
+    if ($Format) { return 'T' }
+    if (!$script:jumped -and @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py.tmp').Count) { $script:jumped = $true; $script:now = $script:now.AddSeconds(5) }
+    $script:now }
+$script:moves = 0
+function Move-Item($From, $To) { $script:moves++; [IO.File]::Move($From, $To) }
+""" + transport() + r"""
+try { Invoke-GamePy 'print(1)' 3 | Out-Null; $e = 'returned' } catch { $e = "$_" }
+"error: $e"
+"moves: $script:moves"
+"files: $(@(Get-ChildItem -LiteralPath $script:CmdDir -Filter 'c*').Count)"
+""")
+    assert re.search(r'error: no reply to c\S+ \(not sent: the deadline passed while its file was written\)', out), out
+    assert 'moves: 0' in out and 'files: 0' in out, out   # never renamed onto <name>.py, and no .tmp left
+
+
+def test_every_published_command_carries_its_deadline_and_a_refusal_is_no_reply():
+    """B1: the receiver enforces the deadline, so the sender puts it in the command: the first line names the call's deadline in Unix
+    milliseconds of this machine's clock. A stand-in driver that refuses the command (as openwillow_realgame does with an expired one)
+    answers 'OW-REFUSED: ...'; the transport fails in the no-reply form, which the shared wrapper latches."""
+    out = run_stubbed(TRANSPORT_STUBS + r"""
+function Start-Sleep { foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) {
+    $script:first = @(Get-Content -LiteralPath $py.FullName)[0]
+    Rename-Item -LiteralPath $py.FullName ($py.Name + '.expired')
+    [IO.File]::WriteAllText([IO.Path]::ChangeExtension($py.FullName, '.out'), "OW-REFUSED: not run: its deadline passed 7 ms before the driver took it`n") } }
+""" + transport() + wrapper() + r"""
+$before = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+try { Invoke-GameReply 'print(1)' 5 | Out-Null; $e = 'returned' } catch { $e = "$_" }
+"first: $script:first"
+"window: $before"
+"error: $e"
+"latched: $(Get-DriverLostReason)"
+""")
+    first = re.search(r'first: # ow-deadline-unix-ms: (\d+)', out)
+    assert first, out
+    ahead = int(first.group(1)) - int(re.search(r'window: (\d+)', out).group(1))
+    assert 4000 <= ahead <= 6000, (ahead, out)   # the call's own 5 s from now
+    assert re.search(r'error: no reply to c\S+ \(the driver refused it: not run: its deadline passed 7 ms', out), out
+    assert re.search(r'latched: no reply to c\S+ \(the driver refused it', out), out
+
+
+def test_the_file_call_counts_the_read_of_its_source():
+    """B1: Invoke-GamePyFile read its source before the call's deadline existed, so a slow read lengthened the call past its timeout. A
+    virtual clock where resolving the source's path takes 5 s; the timeout is 3 s. Nothing is published."""
+    out = run_stubbed(TRANSPORT_STUBS + VIRTUAL_CLOCK + r"""
+function Resolve-Path { $script:now = $script:now.AddSeconds(5); Microsoft.PowerShell.Management\Resolve-Path @args }
+$script:moves = 0
+function Move-Item($From, $To) { $script:moves++; [IO.File]::Move($From, $To); [IO.File]::WriteAllText(($To -replace '[.]py$', '.out'), 'answer') }
+[IO.File]::WriteAllText((Join-Path $script:CmdDir 'probe.txt'), 'print(1)')
+""" + transport() + r"""
+try { $r = Invoke-GamePyFile (Join-Path $script:CmdDir 'probe.txt') 'x' 3; $e = "returned $r" } catch { $e = "$_" }
+"error: $e"
+"moves: $script:moves"
+""")
+    assert 'error: no reply to probe file' in out and 'the deadline passed while its source was read' in out, out
+    assert 'moves: 0' in out, out
+
+
+def test_a_late_reply_is_never_taken_for_the_next_commands():
+    """B1: a command that timed out may still get its reply later (a driver that took it before its deadline). That reply goes to that
+    command's own name and is not read by the next call, whose name is its own. A stand-in driver that answers the first command only
+    while the second is waiting, then the second."""
+    out = run_stubbed(TRANSPORT_STUBS + r"""
+$script:names = @()
+function Start-Sleep {
+    $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py' | Sort-Object Name)
+    foreach ($p in $py) { if ($script:names -notcontains $p.Name) { $script:names += $p.Name } }
+    if ($script:phase -eq 'second' -and $py.Count) {
+        foreach ($p in $py) {
+            $answer = if ($p.Name -eq $script:names[0]) { 'the first command''s late answer' } else { 'the second command''s answer' }
+            Rename-Item -LiteralPath $p.FullName ($p.Name + '.done'); [IO.File]::WriteAllText([IO.Path]::ChangeExtension($p.FullName, '.out'), $answer)
+        }
+    } }
+""" + transport() + r"""
+$script:phase = 'first'
+try { Invoke-GamePy 'print(1)' 1 | Out-Null; $e = 'returned' } catch { $e = "$_" }
+$script:phase = 'second'
+$r = Invoke-GamePy 'print(2)' 5
+"first: $e"
+"second: $r"
+"sent: $($script:names.Count)"
+""")
+    assert re.search(r'first: no reply to c\S+$', out, flags=re.M), out
+    assert 'second: the second command\'s answer' in out and 'sent: 2' in out, out
+
+
+def test_an_empty_or_white_space_reply_is_refused_unless_the_call_allows_it():
+    """Item 2: ConvertTo-ReplyText took a reply of only white space and returned '' after trimming. It is refused like an empty one; a call
+    that says printing nothing is its answer (-AllowEmpty) gets ''. Neither is a lost driver."""
+    out = run_stubbed(TRANSPORT_STUBS + r"""
+function Invoke-GamePy($Code, $T) { switch ($Code) { 'empty' { '' } 'null' { $null } 'space' { "  `r`n `t" } default { ' answer ' } } }
+""" + wrapper() + r"""
+foreach ($c in 'empty', 'null', 'space') {
+    try { Invoke-GameReply $c | Out-Null; "$c taken" } catch { "$c refused: $_" }
+    "$c allowed: [$(Invoke-GameReply $c -AllowEmpty)]"
+}
+"full: [$(Invoke-GameReply 'full')]"
+"latched: [$(Get-DriverLostReason)]"
+""")
+    for c in ('empty', 'null', 'space'):
+        assert f'{c} refused: empty reply from the game (it may have exited) to: {c}' in out and f'{c} allowed: []' in out, (c, out)
+    assert 'full: [answer]' in out and 'latched: []' in out, out
+
+
+def test_the_shared_wrapper_refuses_after_a_lost_reply_and_its_input_helpers_refuse_too():
+    """B2: the rule lives in one place. After a reply that never came, Invoke-GameReply and Invoke-GameReplyFile send nothing, a
+    silence-allowed wait refuses but never sets the condition itself, and every key press, mouse press or move, wheel turn and focus
+    attempt of realgame.ps1 refuses; releases still go out."""
+    out = run_stubbed(r"""$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+$script:sent = 0; $script:native = @()
+function Invoke-GamePy($Code, $T) { $script:sent++; if ($Code -eq 'slow') { throw 'no reply to c-invented' }; 'ok' }
+function Invoke-GamePyFile($Path, $Folder, $T) { $script:sent++; 'ok' }
+function Invoke-NativeKey($Vk, $Scan, $Flags) { $script:native += "key $Scan $Flags" }
+function Invoke-NativeMouse($Flags) { $script:native += "mouse $Flags" }
+function Get-RunGameProcess { [pscustomobject]@{ MainWindowHandle = 1 } }
+function Get-ForegroundWindowHandle { 1 }
+function Save-HeldInputs { }
+try { Invoke-GameReply 'slow' 5 -SilenceAllowed | Out-Null } catch { }
+"silence latched: [$(Get-DriverLostReason)]"
+Send-KeyDown W
+try { Invoke-GameReply 'slow' | Out-Null } catch { }
+$n = $script:sent
+foreach ($call in { Invoke-GameReply 'fast' }, { Invoke-GameReplyFile 'p.py' }, { Invoke-GameReply 'fast' 8 -SilenceAllowed }) {
+    try { & $call | Out-Null; 'sent' } catch { "refused: $_" } }
+$keys = $script:native.Count
+foreach ($call in { Send-KeyDown E }, { Send-Key F }, { Send-MouseEvent 0x2 }, { Send-Mouse 1 1 }, { Send-Wheel 1 }, { Focus-Game }, { Assert-GameForeground }) {
+    try { & $call | Out-Null; 'input sent' } catch { "input refused: $_" } }
+"inputs after: $($script:native.Count - $keys)"
+"release: $(Release-HeldInputs)"
+"sent after: $($script:sent - $n)"
+""".replace('__REALGAME__', str(R / 'realgame.ps1')))
+    assert 'silence latched: []' in out, out
+    assert out.count('refused: not sent: the driver stopped answering (no reply to c-invented)') == 3 and '\nsent\n' not in out, out
+    assert out.count('input refused: refusing to send input: the driver stopped answering') == 7 and 'input sent' not in out, out
+    assert 'inputs after: 0' in out and 'release: released key W' in out and 'sent after: 0' in out, out
 
 
 if __name__ == '__main__':

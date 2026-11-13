@@ -1086,7 +1086,10 @@ class NamespaceTest(unittest.TestCase):
 # ---------------------------------------------------------------- the helpers and the captures
 def ps(body, env=None):
     shell = 'pwsh' if subprocess.run(['where', 'pwsh'], capture_output=True, shell=True).returncode == 0 else 'powershell'
-    script = "$ErrorActionPreference = 'Stop'\n. '" + str(ROOT / 'tools/real_game/slice_watch.ps1') + "'\n" + body
+    # The helpers need realgame.ps1 first, as every capture loads them: the driver-lost condition and Invoke-GameReply live there since the
+    # session gate's review (B2).
+    script = ("$ErrorActionPreference = 'Stop'\n. '" + str(ROOT / 'tools/real_game/realgame.ps1') + "'\n. '"
+              + str(ROOT / 'tools/real_game/slice_watch.ps1') + "'\n" + body)
     return subprocess.run([shell, '-NoProfile', '-NonInteractive', '-Command', script], capture_output=True, text=True, timeout=120, env=env)
 
 
@@ -1121,6 +1124,22 @@ class HelperTest(unittest.TestCase):
         for word in ('refused name', 'not started', 'stop after error: stopped', 'a snapshot while off does nothing',
                      'complete refused: True', 'a failed snapshot is only a warning'):
             self.assertIn(word, done.stdout, done.stdout + done.stderr)
+
+    def test_an_empty_or_white_space_start_reply_leaves_the_watch_off_and_fails_its_step(self):
+        """The session gate's review, item 1: an empty start reply parsed to nothing and still set the watch on. Now the start must answer:
+        an empty or white-space reply (and one that parses to nothing) leaves the watch off, its stop goes out after the failed start, and
+        the watch step (Complete-SliceWatch) fails. An empty reply is no lost driver. Loading the recorder, which prints nothing, is fine."""
+        for reply in ("''", "\"  `r`n \"", "'null'"):
+            body = ("$script:sent = @(); function Invoke-GamePy([string]$Code, [int]$T = 30) { $script:sent += @($Code); if ($Code -like '*sw_stop*') { 'stopped' } else { " + reply + " } }\n"
+                    "function Invoke-GamePyFile([string]$P, [string]$O) { '' }\n"
+                    f"$spec = '{ROOT / 'tests' / 'slice_watch_test.py'}'\n"
+                    "$r = Start-SliceWatch $spec 'x' 'x' 3>$null\n"
+                    "'on: ' + $script:SliceWatchOn; 'error: ' + $r.error; 'stop: ' + $r.stop_after_error; 'lost: [' + (Get-DriverLostReason) + ']'\n"
+                    "try { Complete-SliceWatch $spec 'C:\\' | Out-Null; 'step passed' } catch { 'step failed: ' + $_ }")
+            out = ps(body).stdout
+            for word in ('on: False', 'stop: stopped', 'lost: []', 'step failed: the watch did not start'):
+                self.assertIn(word, out, (reply, out))
+            self.assertRegex(out, r'error: (slice watch start: (empty reply|the answer parsed to nothing)|empty reply from the game)', (reply, out))
 
     def test_a_lost_reply_stops_all_talk_to_the_driver(self):
         """One driver-lost condition (review of c001181): the first timeout sets it; no stop, snapshot, mark, group or settle wait is sent

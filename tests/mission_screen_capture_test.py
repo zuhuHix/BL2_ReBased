@@ -51,6 +51,7 @@ def test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss():
     load = [line for line in text.split('\n') if "foreach ($f in 'fire_mission_probe.py'" in line]
     assert len(load) == 1, load
     lines = [
+        ". '" + str(ROOT / 'tools/real_game/realgame.ps1') + "'",   # the shared wrapper and the condition (session gate, B2)
         ". '" + str(ROOT / 'tools/real_game/slice_watch.ps1') + "'",
         "$script:files = 0",
         "function Invoke-GamePyFile($Path, $Folder) { $script:files++; throw 'no reply to c-invented' }",
@@ -549,16 +550,15 @@ def test_labelled_snapshots_follow_the_accept_and_the_reward():
 
 
 def test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout():
-    """Review of #251/#255, A1: the capture's Py read neither the driver-lost condition nor latched its own timeout. Run here from the
-    script's own text, with a stand-in Invoke-GamePy that counts calls (no capture script is run)."""
+    """Review of #251/#255, A1: the capture's Py read neither the driver-lost condition nor latched its own timeout. Since the session
+    gate's review (B2) its Py is one line that hands the command to the shared wrapper (Invoke-GameReply, realgame.ps1), where the rule
+    lives. Run here from the script's own Py line and the real realgame.ps1, with a stand-in Invoke-GamePy that counts calls (no capture
+    script is run); the boot wait's silence-allowed call refuses too."""
     text = CAPTURE.read_text(encoding='utf-8').replace('\r', '')
-    body = text[text.index('function Py('):text.index('function PyJson(')]
-    shared = (ROOT / 'tools/real_game/realgame.ps1').read_text(encoding='utf-8').replace('\r', '')
-    reply_text = shared[shared.index('function ConvertTo-ReplyText('):shared.index('\n}\n', shared.index('function ConvertTo-ReplyText(')) + 3]
+    body = next(line for line in text.split('\n') if line.startswith('function Py('))
+    assert 'Invoke-GameReply $Code $Timeout' in body and 'Invoke-GamePy' not in body, body
     lines = [
-        reply_text,   # the wrapper's empty-reply refusal (realgame.ps1)
-        "$script:SliceWatchDriverLost = ''",
-        "function Get-DriverLostReason { $script:SliceWatchDriverLost }",
+        ". '" + str(ROOT / 'tools/real_game/realgame.ps1') + "'",
         "$script:calls = 0",
         "function Invoke-GamePy($Code, $T) { $script:calls++; if ($Code -eq 'slow') { throw 'no reply to c-invented' }; 'ok' }",
         body,
@@ -567,7 +567,7 @@ def test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout():
         "$latched = $script:SliceWatchDriverLost",
         "$before = $script:calls",
         "try { Py 'fast' | Out-Null; $refused = 'sent' } catch { $refused = \"$_\" }",
-        "try { PyWait 'fast' | Out-Null; $refusedWait = 'sent' } catch { $refusedWait = \"$_\" }",
+        "try { Invoke-GameReply 'fast' 8 -SilenceAllowed | Out-Null; $refusedWait = 'sent' } catch { $refusedWait = \"$_\" }",
         "Write-Output \"$a|$latched|$($script:calls - $before)|$refused|$refusedWait\"",
     ]
     script = Path(tempfile.mkdtemp(prefix='ow-py-latch-')) / 'py.ps1'

@@ -46,7 +46,7 @@ $runError = ''
 $log = [ordered]@{ started = (Get-Date).ToString('o'); lane = $Lane; character = $Character; status = 'running'; requested_steps = $stepsRequested }
 $summary = [ordered]@{ steps = @() }
 
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 # The driver prints a Python traceback as its reply; that text goes into the error instead of a JSON parse message.
 function PyJson([string]$Code, [int]$Timeout = 30) {
     $raw = Py $Code $Timeout
@@ -340,7 +340,7 @@ try {
     $launchAttempted = $true
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'skills_live/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -351,13 +351,13 @@ try {
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep 3
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 } catch { continue }
+        try { $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 -SilenceAllowed } catch { continue }
         if ($map -match 'Ice_P True') { break }
     }
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
     foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'skills_live.py') {
-        $reply = Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") skills_live
+        $reply = Invoke-GameReplyFile (Join-Path $PSScriptRoot "scripts/$f") skills_live -AllowEmpty
         if ("$reply" -match 'Traceback') { throw "loading $f failed: $reply" }
     }
     # Immunity for the whole run, once: it refuses damage to Maya; nothing else about her changes.
@@ -432,7 +432,7 @@ try {
     Invoke-DamageCast 'ruin' @{ Ruin = 1 }
     # Normal end: the game quits itself (the finally block still stops it if it has not).
     # The game may be gone before it answers: no reply, or an empty one, is the expected end here.
-    try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+    try { Invoke-GameReply 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } catch {
     $runError = "$_"

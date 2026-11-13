@@ -18,7 +18,7 @@ $Out = Join-Path $script:RG 'action_skill_hud'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 
 # The last complete line the in-game sampler wrote (read while the game keeps the file open).
 function Get-LastSample([string]$Path) {
@@ -113,7 +113,7 @@ try {
     if ($Character) { $gameArgs += "-Character=$Character" }   # the quick_startup mod puts this slot on the menu's Continue
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'action_skill_hud/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -123,12 +123,12 @@ try {
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep 3
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 } catch { continue }
+        try { $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 -SilenceAllowed } catch { continue }
         if ($map -match 'Ice_P True') { break }
     }
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
-    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'action_skill_hud.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") action_skill_hud | Out-Null }
+    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'action_skill_hud.py') { Invoke-GameReplyFile (Join-Path $PSScriptRoot "scripts/$f") action_skill_hud -AllowEmpty | Out-Null }
     $log.probe = Py 'import json; print(json.dumps(ash_probe(), default=str))' | ConvertFrom-Json
     $log.probe | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out 'probe.json')
     "probe: movie=$($log.probe.movie) pool=$($log.probe.pool)"

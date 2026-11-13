@@ -40,18 +40,10 @@ foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.j
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-# The one driver-lost condition (slice_watch.ps1, Get-DriverLostReason; review of #251/#255): once it is set, Py sends nothing and throws, and
-# a reply that never comes sets it, so no later key, click or command goes to a lost driver. PyWait is for the boot wait, whose timeouts are
-# part of the wait. The cleanup and the restore never go through Py's refusal (the finalizer skips its stop call when the driver is lost).
-function Py([string]$Code, [int]$Timeout = 30) {
-    if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
-    try { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused, as before the transport returned '' (R3)
-    catch { if ("$_" -match 'no reply' -and !(Get-DriverLostReason)) { $script:SliceWatchDriverLost = "$_" }; throw }
-}
-function PyWait([string]$Code, [int]$Timeout = 30) {
-    if (Get-DriverLostReason) { throw "not sent: the driver stopped answering ($(Get-DriverLostReason))" }
-    ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code
-}
+# The one driver-lost condition (realgame.ps1, Get-DriverLostReason; review of #251/#255) lives in the shared wrapper Invoke-GameReply: once it
+# is set, Py sends nothing and throws, and a reply that never comes sets it, so no later key, click or command goes to a lost driver. An empty
+# reply is refused. The cleanup and the restore never go through Py's refusal (the finalizer skips its stop call when the driver is lost).
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }
 function PyJson([string]$Expr, [int]$Timeout = 30) { Py "import json; print(json.dumps($Expr, default=str))" $Timeout | ConvertFrom-Json }
 function Shot([string]$Name) { Save-Shot "mission_screen/$Name.png" | Out-Null }
 # One read and one frame after a key: what the key changed, and how it looks.
@@ -164,7 +156,7 @@ try {
     if ($SdkModsOff) { Invoke-SdkModsOffStep $log $SdkModsExpected }
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { PyWait 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'mission_screen/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Assert-DriverAnswers; Start-Sleep 5; Assert-GameForeground; Send-Key Enter; $enterAt = Get-Date
@@ -176,7 +168,7 @@ try {
     Assert-DriverAnswers; Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
     Assert-DriverAnswers
     # A probe file that gets no reply latches the condition and ends the run (review of #251, A6).
-    foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { try { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen | Out-Null } catch { Set-SliceWatchDriverLost $_; throw } }
+    foreach ($f in 'fire_mission_probe.py', 'mission_screen_probe.py') { Invoke-GameReplyFile (Join-Path $PSScriptRoot "scripts/$f") mission_screen -AllowEmpty | Out-Null }
     $log.hooks = PyJson 'ms_start()'
     if ($WatchSpec) { $log.watch_start = Start-SliceWatch $WatchSpec 'mission_screen' 'mission_screen' }
     Set-Stage 'hooks' (@($log.hooks.missing).Count -eq 0) "functions not found, so their rows can never come: $(@($log.hooks.missing) -join '; ')"
@@ -293,7 +285,7 @@ try {
     # A quit that gets no reply latches the condition, so the finalizer sends the driver nothing more (review of #251, A6).
     if (Get-DriverLostReason) { "quit not sent: the driver stopped answering ($(Get-DriverLostReason))" }
     else {
-        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { Set-SliceWatchDriverLost $_; "quit: no reply ($_); waiting for the exit" }
+        try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 15 -AllowEmpty | Out-Null } catch { Set-SliceWatchDriverLost $_; "quit: no reply ($_); waiting for the exit" }
         for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
     }
 } catch {

@@ -49,7 +49,7 @@ if ($staleEvents.Count) {
 # End of stale event files.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 
 # One labelled window: $Act runs with the hooks counting. What it adds beyond the $Baselines windows lands in $log.window_<label>, with `tied`:
 # the new events that followed at least $Need of the action's moments within $Within seconds. Stages accept only `tied`, so an ambient
@@ -145,7 +145,7 @@ try {
     if ($SdkModsOff) { Invoke-SdkModsOffStep $log $SdkModsExpected }
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'audio_events/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -155,12 +155,12 @@ try {
     Py 'get_pc().ConsoleCommand("open Ice_P", False); print("sent")' | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep 3
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 } catch { continue }
+        try { $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn is not None)' 8 -SilenceAllowed } catch { continue }
         if ($map -match 'Ice_P True') { break }
     }
     "map: $map"; if ($map -notmatch 'Ice_P True') { throw "travel to Ice_P failed: $map" }
     Start-Sleep 8
-    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py', 'audio_events.py') { Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$f") audio_events | Out-Null }
+    foreach ($f in 'phaselock.py', 'phaselock_matched.py', 'phaselock_integrity.py', 'audio_events.py') { Invoke-GameReplyFile (Join-Path $PSScriptRoot "scripts/$f") audio_events -AllowEmpty | Out-Null }
     if ($WatchSpec -and !$ProbeOnly) { $log.watch_start = Start-SliceWatch $WatchSpec 'audio_events' 'audio_events'; $log.watch_arrival = Save-SliceWatchPawns 'arrival' }
     $log.hooks = Py 'import json; print(json.dumps(ae_install()))' | ConvertFrom-Json
     "hooked $(@($log.hooks.hooked).Count), missing: $($log.hooks.missing -join ' ')"
@@ -257,7 +257,7 @@ print(json.dumps({"pick": pick["name"] if pick else None}))
     # Nothing is sent to a driver that stopped answering: the finalizer stops this run's own game by its PID, and the restore never needs the driver.
     if (Get-DriverLostReason) { "quit not sent: the driver stopped answering ($(Get-DriverLostReason))" }
     else {
-        try { Invoke-GamePy 'ae_remove(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+        try { Invoke-GameReply 'ae_remove(); protect_player(False); get_pc().ConsoleCommand("quit", False)' 15 -AllowEmpty | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
         for ($i = 0; $i -lt 20 -and $proc -and !$proc.HasExited; $i++) { Start-Sleep 2 }   # this run's own game: another instance does not hold the wait
     }
 } catch {

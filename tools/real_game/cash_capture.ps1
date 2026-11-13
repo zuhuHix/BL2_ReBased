@@ -73,29 +73,17 @@ $keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
 foreach ($stale in 'session', 'save_compare', 'cash', 'den') { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o'); status = 'running' }
-# The driver writes a game-side error into the reply as text, so it is never taken for an answer. The one driver-lost condition (Get-DriverLost)
-# holds here as in the helpers (review of #251/#255): once it is set, Py sends nothing and throws, and a reply that never comes sets it. The
-# cleanup and the restore never go through Py's refusal: the finalizer's own stop calls are already skipped when the driver is lost.
-function Py([string]$Code, [int]$Timeout = 30) {
-    if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
-    # An empty reply is refused (ConvertTo-ReplyText), as the .Trim() on $null refused it before the transport returned '' (review of #263, R3).
-    try { $reply = ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }
-    catch { if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }; throw }
-    if ($reply -match 'Traceback \(most recent call last\)') { throw "game python error: $reply" }
-    $reply
-}
+# The driver writes a game-side error into the reply as text, so it is never taken for an answer (-NoTraceback). The one driver-lost condition
+# (Get-DriverLost) is the shared wrapper's (Invoke-GameReply, realgame.ps1): once it is set, Py sends nothing and throws, and a reply that never
+# comes sets it; an empty reply is refused. The cleanup and the restore never go through Py's refusal: the finalizer's own stop calls are already
+# skipped when the driver is lost.
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout -NoTraceback }
 # The waits that expect no reply for a while (the boot, a map load holding the command channel): they refuse once the driver is lost, but
 # their own timeouts are part of the wait and set nothing.
-function PyWait([string]$Code, [int]$Timeout = 30) {
-    if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
-    $reply = ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code
-    if ($reply -match 'Traceback \(most recent call last\)') { throw "game python error: $reply" }
-    $reply
-}
+function PyWait([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout -NoTraceback -SilenceAllowed }
+# A probe prints nothing when it loads: an empty reply is its answer, a traceback is not.
 function Use-Probe([string]$Name) {
-    if (Get-DriverLost) { throw "not sent: the driver stopped answering ($(Get-DriverLost))" }
-    try { $reply = "$(Invoke-GamePyFile (Join-Path $PSScriptRoot "scripts/$Name") cash)" }
-    catch { if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }; throw }
+    $reply = Invoke-GameReplyFile (Join-Path $PSScriptRoot "scripts/$Name") cash -AllowEmpty
     if ($reply -match 'Traceback \(most recent call last\)') { throw "$Name did not load: $reply" }
 }
 
@@ -169,11 +157,11 @@ function Write-StageMark([string]$Stage, [string]$Event) {
     if ($WatchSpec) { Save-SliceWatchMark "$Stage.$Event" }
 }
 # The one driver-lost condition: a reply that never came in any stage, here or in the watch's helpers (slice_watch.ps1).
-function Get-DriverLost { if ($script:driverLost) { $script:driverLost } else { $script:SliceWatchDriverLost } }
+function Get-DriverLost { Get-DriverLostReason }
 # The game this run started is still there. Once it is gone, no later stage is attempted.
 function Test-RunGameAlive { $null -ne $proc -and !$proc.HasExited }
 $hub = $null; $bak = $null; $proc = $null; $procStart = $null; $runLock = $false; $driverOwned = $false; $driverAttempted = $false; $launchAttempted = $false; $denLoaded = $false
-$driverLost = ''; $log.stages_file = $stagesFile
+$log.stages_file = $stagesFile
 $marker = "-owrun=$Lane-$PID"   # an argument the game ignores; Stop-OwnGame looks for it on the command line
 try {
     Assert-NoPendingRecords   # an earlier run's pending record stops this one before it takes a lock or changes anything (pending.ps1)
@@ -346,7 +334,7 @@ try {
         } catch {
             Set-Stage 'den_read' $false "$_"
             "den read: $_"
-            if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }   # the first reason is kept
+            Set-SliceWatchDriverLost $_   # the first reason is kept
         }
         # S0's settled five-minute hold: the map settled and the hold ran with an enemy in reach, or the stage fails.
         if ($WatchSmoke) { Set-Stage 'smoke_hold' $smokeHeld $smokeWhy }
@@ -394,10 +382,7 @@ try {
                     if ($r.state -in 'up', 'no_pawn', 'no_health', 'injured_flag') { $script:inARow = 0; return $r }
                     throw "unexpected state '$($r.state)'"
                 } catch {
-                    if ("$_" -match 'no reply') {
-                        if (!(Get-DriverLost)) { $script:driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }
-                        throw
-                    }
+                    if ("$_" -match 'no reply') { Set-SliceWatchDriverLost $_; throw }
                     $script:pollErrors++; $script:inARow++
                     if ($script:inARow -ge 5) { throw "five den-down polls in a row failed: $_" }
                     return $null
@@ -469,7 +454,7 @@ try {
             else {
                 # Its rows are not evidence, but a reply that never came is the driver lost: latched, so the stage fails and nothing more is sent.
                 try { Py 'import json; print(json.dumps(dp_end(), default=str))' 60 | Out-Null }
-                catch { $log.den_down_trial_close = "$_"; if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" } }
+                catch { $log.den_down_trial_close = "$_"; Set-SliceWatchDriverLost $_ }
             }
             # A driver lost anywhere in the stage fails it, even after the down and the respawn were seen (the after_respawn snapshot then is not).
             $why = if (Get-DriverLost) { "the driver stopped answering during the den down ($(Get-DriverLost))" }
@@ -480,7 +465,7 @@ try {
         } catch {
             Set-Stage 'den_down' $false "$_"
             "den down: $_"
-            if ("$_" -match 'no reply' -and !(Get-DriverLost)) { $driverLost = "$_"; $script:SliceWatchDriverLost = "$_" }   # the first reason is kept
+            Set-SliceWatchDriverLost $_   # the first reason is kept
         }
         Write-StageMark 'den_down' 'done'
     }
@@ -494,7 +479,7 @@ try {
     # A quit that gets no reply latches the condition, so the finalizer sends the driver nothing more (review of #251, A6).
     if (Get-DriverLost) { "quit not sent: the driver stopped answering ($(Get-DriverLost))" }
     else {
-        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { Set-SliceWatchDriverLost $_; "quit: no reply ($_); waiting for the exit" }
+        try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { Set-SliceWatchDriverLost $_; "quit: no reply ($_); waiting for the exit" }
         for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
     }
 } catch {

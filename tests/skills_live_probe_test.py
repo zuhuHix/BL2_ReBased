@@ -487,7 +487,8 @@ def test_step_runner_keeps_the_traceback_and_stops():
 
 def test_capture_tolerates_the_quit_reply():
     text = CAPTURE.read_text(encoding='utf-8')
-    assert """try { Invoke-GamePy 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null }""" in text
+    # Through the shared wrapper since the session gate's review: an empty reply is taken (-AllowEmpty), a lost driver is not sent to.
+    assert """try { Invoke-GameReply 'protect_player(False); get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null }""" in text
     assert """    Py 'protect_player(False); get_pc().ConsoleCommand("quit", False)'""" not in text, 'the bare call has no reply to trim'
 
 

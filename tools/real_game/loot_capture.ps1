@@ -36,9 +36,8 @@ $log = [ordered]@{ started = (Get-Date).ToString('o'); types = [ordered]@{}; pic
 # The command channel prints a script's exception as its reply, so a failed step must be turned back into a stop here: a
 # failed lc_stand must not be followed by a use key press.
 function Py([string]$Code, [int]$Timeout = 30) {
-    # An empty reply file reads as null: a clear failure, never a null-method error.
-    $reply = "$(Invoke-GamePy $Code $Timeout)".Trim()
-    if (!$reply) { throw "empty reply from the game to: $Code" }
+    # The shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, and refuses an empty reply ("empty reply ...").
+    $reply = Invoke-GameReply $Code $Timeout
     if ($reply -match 'Traceback \(most recent call last\)') { throw "game script failed: $reply" }
     $reply
 }
@@ -214,21 +213,21 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
         if ($proc.HasExited) { break }
-        try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 }
+        try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 }
     }
     if (-not $ok) { $log.boot = 'driver did not answer'; Save-Shot "$Folder/boot.png" | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = ''
     for ($i = 0; $i -lt 6 -and $map -notmatch 'WillowPlayerPawn'; $i++) {   # the level load can hold the command channel
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)' 30 }
+        try { $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)' 30 -SilenceAllowed }
         catch { Start-Sleep 10 }
     }
     "map: $map"; $log.map = $map
     if ($map -notmatch 'WillowPlayerPawn') { Save-Shot "$Folder/load_failed.png" | Out-Null; throw "no player pawn: $map" }
     if ($map -notmatch '(?i)sanctuary') { Save-Shot "$Folder/wrong_map.png" | Out-Null; throw "not in Sanctuary: $map" }
     Assert-GameForeground; Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 10   # let the streamed levels and their objects spawn
-    Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/loot_capture.py') $Folder | Out-Null
+    Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/loot_capture.py') $Folder -AllowEmpty | Out-Null
     $counts = Py "print(json.dumps(lc_discover('objects_start')))" 60 | ConvertFrom-Json
     "counts: $($counts | ConvertTo-Json -Compress)"; $log.counts_start = $counts
 
@@ -291,7 +290,7 @@ try {
     }
     $log.end_shot = Save-Shot "$Folder/end.png"
     # The game may close before it answers this one.
-    try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+    try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 15 -AllowEmpty | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } catch {
     $runError = "$_"

@@ -5,8 +5,10 @@
 
 # A label or recording name the recorder accepts: a plain file name.
 function Assert-WatchName([string]$Name) { if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]*$') { throw "slice watch: '$Name' is not a plain name" } }
-# The driver answers a game-side error as text: never take it for a reply.
+# The driver answers a game-side error as text: never take it for a reply. Nor an empty one (Invoke-GameReply already refuses it; this
+# keeps the parsing and the decisions after it from ever seeing one).
 function Test-WatchReply([string]$Reply, [string]$What) {
+    if ([string]::IsNullOrWhiteSpace($Reply)) { throw "slice watch ${What}: empty reply" }
     if ($Reply -match 'Traceback \(most recent call last\)') { throw "slice watch ${What}: $Reply" }
     "$Reply".Trim()
 }
@@ -39,15 +41,10 @@ function Assert-DiskReserve([long]$RecordingBytes = 300000000, [long]$ReserveByt
 # capture's 'watch' stage fails (Complete-SliceWatch throws inside that stage's try).
 $script:SliceWatchOn = $false
 $script:SliceWatchError = 'not started'
-# One driver-lost condition for the whole run: the first reply that never came (a timeout) sets it, and from then on no helper here talks to
-# the driver again; the capture checks it before every later stage and its usability check (Get-DriverLost in cash_capture).
-$script:SliceWatchDriverLost = ''
-# The same condition for a capture's own steps and finalizer: why the driver counts as lost, or empty.
-function Get-DriverLostReason { $script:SliceWatchDriverLost }
-function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
-# Called by the captures before every key, click, mouse move and focus check: the helpers here latch a lost driver without throwing, so an
-# input that follows one of them with no Py in between would otherwise still go out (review of #251, A5). Throws once the condition is set.
-function Assert-DriverAnswers { if ($script:SliceWatchDriverLost) { throw "not sent: the driver stopped answering ($script:SliceWatchDriverLost)" } }
+# One driver-lost condition for the whole run ($script:SliceWatchDriverLost, Get-DriverLostReason, Set-SliceWatchDriverLost and
+# Assert-DriverAnswers, all in realgame.ps1 since the session gate's review): the first reply that never came sets it, inside
+# Invoke-GameReply, and from then on no helper here talks to the driver again, and no input goes out. The helpers here swallow their errors
+# (the watch never stops a capture), so they still latch in their catches as well; the input helpers refuse on their own (review of #251, A5).
 # Load the recorder into the capture's output folder (the same RG_OUT as the capture's own probes) and start it: it writes <OutFolder>/watch.jsonl.
 # Returns its answer (how many hooks resolved, which names did not), or an object with only 'error' when it did not start. After a failed or
 # timed-out start a stop is sent anyway (best effort): a start that ran late must not leave a recorder running unseen.
@@ -55,8 +52,12 @@ function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
     Assert-WatchName $Label
     try {
         $full = Resolve-WatchSpec $Spec
-        Test-WatchReply "$(Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/slice_watch.py') $OutFolder)" 'load' | Out-Null
-        $answer = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_start('$Label', r'$full', 'watch'), default=str))" 120) 'start' | ConvertFrom-Json
+        # Loading the recorder prints nothing when it works: an empty reply is its legitimate answer here, and only a traceback refuses it.
+        $loaded = Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/slice_watch.py') $OutFolder -AllowEmpty
+        if ($loaded -match 'Traceback \(most recent call last\)') { throw "slice watch load: $loaded" }
+        # The start must answer: an empty or white-space reply, or one that parses to nothing, leaves the watch off (session gate, item 1).
+        $answer = Test-WatchReply (Invoke-GameReply "import json; print(json.dumps(sw_start('$Label', r'$full', 'watch'), default=str))" 120) 'start' | ConvertFrom-Json
+        if ($null -eq $answer) { throw 'slice watch start: the answer parsed to nothing' }
         $script:SliceWatchOn = $true; $script:SliceWatchError = ''
         $answer
     } catch {
@@ -64,7 +65,7 @@ function Start-SliceWatch([string]$Spec, [string]$OutFolder, [string]$Label) {
         Set-SliceWatchDriverLost $_
         Write-Warning "slice watch not started: $_"
         # The recovery stop's own "no reply" latches the condition too (review of #251, A6).
-        $stop = if ($script:SliceWatchDriverLost) { 'not sent: the driver stopped answering' } else { try { "$(Invoke-GamePy 'print(sw_stop())' 15)".Trim() } catch { Set-SliceWatchDriverLost $_; "no reply: $_" } }
+        $stop = if ($script:SliceWatchDriverLost) { 'not sent: the driver stopped answering' } else { try { Invoke-GameReply 'print(sw_stop())' 15 } catch { Set-SliceWatchDriverLost $_; "no reply: $_" } }
         [pscustomobject]@{ error = "$_"; stop_after_error = $stop }
     }
 }
@@ -75,7 +76,7 @@ function Save-SliceWatchSnap([string]$Label) {
     Assert-WatchName $Label
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
     try {
-        $r = Test-WatchReply (Invoke-GamePy "import json; r = sw_snap('$Label'); print(json.dumps({'deferred': bool(r.get('deferred')), 'not_taken': bool(r.get('not_taken')), 'failed': r.get('failed', [])}))" 30) "snap $Label" | ConvertFrom-Json
+        $r = Test-WatchReply (Invoke-GameReply "import json; r = sw_snap('$Label'); print(json.dumps({'deferred': bool(r.get('deferred')), 'not_taken': bool(r.get('not_taken')), 'failed': r.get('failed', [])}))" 30) "snap $Label" | ConvertFrom-Json
         if ($r.not_taken) { "slice watch snapshot ${Label}: NOT TAKEN (asked before the map settled)" }
         elseif ($r.deferred) { "slice watch snapshot ${Label}: deferred until the map settles" }
         elseif (@($r.failed).Count) { "slice watch snapshot ${Label}: taken, failed parts: $(@($r.failed) -join ', ')" }
@@ -85,7 +86,7 @@ function Save-SliceWatchSnap([string]$Label) {
 function Save-SliceWatchPawns([string]$Label) {
     Assert-WatchName $Label
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
-    try { Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json }
+    try { Test-WatchReply (Invoke-GameReply "import json; print(json.dumps(sw_pawns('$Label')))" 30) "pawns $Label" | ConvertFrom-Json }
     catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch pawns ${Label}: $_"; [pscustomobject]@{ error = "$_" } }
 }
 # Install the spec's hook groups for one point of the capture's run, one at a time: each group's marker line is flushed before its first hook
@@ -96,11 +97,11 @@ function Install-SliceWatchGroups([string]$At, [int]$PauseSeconds = 15) {
     if ($At -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]*$') { throw "slice watch: '$At' is not a plain group point" }
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
     try {
-        $names = @(Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_group_names_at('$At')))" 30) "groups $At" | ConvertFrom-Json)
+        $names = @(Test-WatchReply (Invoke-GameReply "import json; print(json.dumps(sw_group_names_at('$At')))" 30) "groups $At" | ConvertFrom-Json)
         $done = @()
         for ($i = 0; $i -lt $names.Count; $i++) {
             if ($i -gt 0) { Start-Sleep -Seconds $PauseSeconds }
-            $done += Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_install_group('$($names[$i])'), default=str))" 120) "group $($names[$i])" | ConvertFrom-Json
+            $done += Test-WatchReply (Invoke-GameReply "import json; print(json.dumps(sw_install_group('$($names[$i])'), default=str))" 120) "group $($names[$i])" | ConvertFrom-Json
         }
         $done
     } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch groups ${At}: $_"; [pscustomobject]@{ error = "$_" } }
@@ -109,13 +110,13 @@ function Install-SliceWatchGroups([string]$At, [int]$PauseSeconds = 15) {
 function Save-SliceWatchMark([string]$Label) {
     if ($Label -notmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]*$') { throw "slice watch: '$Label' is not a plain mark" }
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return }
-    try { Test-WatchReply (Invoke-GamePy "print(sw_mark('$Label'))" 15) "mark $Label" | Out-Null } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch mark ${Label}: $_" }
+    try { Test-WatchReply (Invoke-GameReply "print(sw_mark('$Label'))" 15) "mark $Label" | Out-Null } catch { Set-SliceWatchDriverLost $_; Write-Warning "slice watch mark ${Label}: $_" }
 }
 # One read of the recorder's settle state, no wait: True only when the map has settled now. A reply that never came latches the
 # driver-lost condition. For a labelled read the capture takes only on a settled map (cash_capture's per-kill 'drop').
 function Test-SliceWatchSettled {
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return $false }
-    try { "$(Invoke-GamePy 'print(sw_settled())' 15)".Trim() -ceq 'True' } catch { Set-SliceWatchDriverLost $_; $false }
+    try { (Invoke-GameReply 'print(sw_settled())' 15) -ceq 'True' } catch { Set-SliceWatchDriverLost $_; $false }
 }
 # After a map load, wait (at most $Seconds) until the recorder says the map has settled: the player has a pawn and the map's clock has passed the
 # spec's settle_seconds, so the watch's scans are allowed again. Reading only. True when settled; false on a timeout or with the watch off.
@@ -123,7 +124,7 @@ function Wait-SliceWatchSettled([int]$Seconds = 40) {
     if (!$script:SliceWatchOn -or $script:SliceWatchDriverLost) { return $false }
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
-        try { if ("$(Invoke-GamePy 'print(sw_settled())' 15)".Trim() -ceq 'True') { return $true } } catch { Set-SliceWatchDriverLost $_; if ($script:SliceWatchDriverLost) { return $false } }
+        try { if ((Invoke-GameReply 'print(sw_settled())' 15) -ceq 'True') { return $true } } catch { Set-SliceWatchDriverLost $_; if ($script:SliceWatchDriverLost) { return $false } }
         Start-Sleep 1
     }
     $false
@@ -139,9 +140,9 @@ function Complete-SliceWatch([string]$Spec, [string]$OutDir, [string]$Name = 'wa
     $null = Save-SliceWatchSnap 'end'
     # One driver-lost condition: a reply that never came, here or before, latches it, and nothing more is sent to the game.
     if ($script:SliceWatchDriverLost) { throw "the driver stopped answering at the end snapshot ($script:SliceWatchDriverLost): no dump or stop was sent" }
-    try { $counts = Test-WatchReply (Invoke-GamePy "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json }
+    try { $counts = Test-WatchReply (Invoke-GameReply "import json; print(json.dumps(sw_dump('$Name')))" 120) 'dump' | ConvertFrom-Json }
     catch { Set-SliceWatchDriverLost $_; throw }
-    try { Test-WatchReply (Invoke-GamePy 'print(sw_stop())' 30) 'stop' | Out-Null } catch { Set-SliceWatchDriverLost $_; throw }
+    try { Test-WatchReply (Invoke-GameReply 'print(sw_stop())' 30) 'stop' | Out-Null } catch { Set-SliceWatchDriverLost $_; throw }
     $script:SliceWatchOn = $false
     $file = Join-Path $OutDir "$Name.jsonl"
     if (!(Test-Path -LiteralPath $file)) { throw "slice watch: $file was not written" }

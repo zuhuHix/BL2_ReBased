@@ -28,21 +28,23 @@ try {
     # Keep the process this run started: only it may be stopped below (never a game the user started).
     $game = Start-Game $gameArgs
     $gameStart = $game.StartTime
+    # Every command goes through the shared wrapper (realgame.ps1): an empty boot reply or route status is refused, not taken for success or
+    # for the route's end, a reply that never came stops the run and every later command and key, and the boot wait alone allows silence.
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GamePy 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { throw 'driver did not answer' }
-    Assert-SavesBlocked (Invoke-GamePy 'print(block_saves())') | Out-Null
+    Assert-SavesBlocked (Invoke-GameReply 'print(block_saves())') | Out-Null
     Focus-Game | Out-Null
     if ($Character) { Start-Sleep 5; Focus-Game | Out-Null; Send-Key Enter; Start-Sleep 45 }
     else { Send-Key C; Start-Sleep 2; Send-Key Enter; Start-Sleep 3; Send-Key Enter; Start-Sleep 40 }
-    $map = Invoke-GamePy 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name)' 20
+    $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name)' 20
     "map: $map"
     if ($map -notmatch 'Sanctuary') { throw "not in Sanctuary: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
     # Start from an empty trace folder so no probe can reuse a trace from an earlier capture.
     Get-ChildItem (Join-Path $script:RG 'walking') -Filter *.jsonl -ErrorAction SilentlyContinue | Remove-Item
-    Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/walking.py') walking 60 | Out-Null
-    "dump: " + (Invoke-GamePy "print(walk_dump('walk_info'))" 60)
+    Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/walking.py') walking 60 -AllowEmpty | Out-Null
+    "dump: " + (Invoke-GameReply "print(walk_dump('walk_info'))" 60)
     Save-Shot 'walking/loaded.png' | Out-Null
     foreach ($probe in $probeList) {
         $pts = @($probe.points)
@@ -50,28 +52,28 @@ try {
         $yaw = [math]::Atan2($b[1] - $a[1], $b[0] - $a[0]) * 180 / [math]::PI
         $length = 0; for ($k = 1; $k -lt $pts.Count; $k++) { $length += [math]::Sqrt([math]::Pow($pts[$k][0] - $pts[$k-1][0], 2) + [math]::Pow($pts[$k][1] - $pts[$k-1][1], 2)) }
         $limit = [math]::Round($length / $Speed + 6, 1)
-        Invoke-GamePy ("walk_goto({0}, {1}, {2}, {3})" -f $a[0], $a[1], $a[2], $yaw) 20 | Out-Null
+        Invoke-GameReply ("walk_goto({0}, {1}, {2}, {3})" -f $a[0], $a[1], $a[2], $yaw) 20 -AllowEmpty | Out-Null   # prints nothing
         Start-Sleep -Milliseconds 2500
         Focus-Game | Out-Null
         $json = ($pts | ForEach-Object { '[{0},{1},{2}]' -f $_[0], $_[1], $_[2] }) -join ','
         Send-KeyDown W
         try {
-            Invoke-GamePy ("print(walk_route('{0}', [{1}], {2}))" -f $probe.name, $json, $limit) 20 | Out-Null
+            Invoke-GameReply ("print(walk_route('{0}', [{1}], {2}))" -f $probe.name, $json, $limit) 20 | Out-Null
             $deadline = (Get-Date).AddSeconds($limit + 5)
-            do { Start-Sleep -Milliseconds 500; $status = Invoke-GamePy 'print(walk_status())' 10 } while ($status -match "'running': True" -and (Get-Date) -lt $deadline)
+            do { Start-Sleep -Milliseconds 500; $status = Invoke-GameReply 'print(walk_status())' 10 } while ($status -match "'running': True" -and (Get-Date) -lt $deadline)
         } finally { Send-KeyUp W }
-        Invoke-GamePy 'walk_stop()' 10 | Out-Null
+        Invoke-GameReply 'walk_stop()' 10 -AllowEmpty | Out-Null   # prints nothing
         "$($probe.name): $status"
         Save-Shot "walking/$($probe.name)_end.png" | Out-Null
     }
     # One standing jump on flat ground at the first probe's start, recorded every tick.
     $a = @($probeList[0].points)[0]
-    Invoke-GamePy ("walk_goto({0}, {1}, {2}, 0)" -f $a[0], $a[1], $a[2]) 20 | Out-Null
+    Invoke-GameReply ("walk_goto({0}, {1}, {2}, 0)" -f $a[0], $a[1], $a[2]) 20 -AllowEmpty | Out-Null   # prints nothing
     Start-Sleep -Milliseconds 2500; Focus-Game | Out-Null
-    Invoke-GamePy "print(walk_record('jump', 3.0))" 20 | Out-Null
+    Invoke-GameReply "print(walk_record('jump', 3.0))" 20 | Out-Null
     Start-Sleep -Milliseconds 300; Send-Key Space 80; Start-Sleep 3.5
-    "jump: " + (Invoke-GamePy 'print(walk_status())' 10)
-    Invoke-GamePy 'walk_stop(); get_pc().ConsoleCommand("quit", False)' 10 | Out-Null
+    "jump: " + (Invoke-GameReply 'print(walk_status())' 10)
+    Invoke-GameReply 'walk_stop(); get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null
     for ($i = 0; $i -lt 20 -and -not $game.HasExited; $i++) { Start-Sleep 2 }
 } finally {
     "cleanup inputs: $(Release-HeldInputs)"   # every key and button this run still holds is let go before anything else

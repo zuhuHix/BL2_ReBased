@@ -441,7 +441,21 @@ function Get-RunGameProcess {
     $script:OwnGame
 }
 # Its Alt tap can activate the foreground app's menu when it is retried; Assert-GameForeground's three bounded tries accept that.
+# The one driver-lost condition of a run (here since the session gate's review, B2; it was in slice_watch.ps1, which only some captures
+# load): why the driver counts as lost, or empty. The first reply that never came sets it (a timeout, or any other transport failure,
+# which all leave as "no reply to ..."), and from then on nothing more is sent: Invoke-GameReply and Invoke-GameReplyFile refuse every
+# command, and every key press, mouse press or move, wheel turn and focus attempt below refuses too (Assert-InputAllowed). Releases are
+# never refused. The variable keeps its old name: the watch helpers and Wait-PlayerPawn read it.
+$script:SliceWatchDriverLost = ''
+function Get-DriverLostReason { $script:SliceWatchDriverLost }
+function Set-SliceWatchDriverLost($Err) { if (!$script:SliceWatchDriverLost -and "$Err" -match 'no reply') { $script:SliceWatchDriverLost = "$Err" } }
+# For a capture's own steps: throws once the condition is set.
+function Assert-DriverAnswers { if ($script:SliceWatchDriverLost) { throw "not sent: the driver stopped answering ($script:SliceWatchDriverLost)" } }
+# For the input helpers: the same refusal, worded as an input refusal so the captures that stop on 'refusing to send input' stop on it.
+function Assert-InputAllowed { if ($script:SliceWatchDriverLost) { throw "refusing to send input: the driver stopped answering ($script:SliceWatchDriverLost)" } }
+
 function Focus-Game {
+    Assert-InputAllowed
     $p = Get-RunGameProcess; if (!$p) { throw 'game not running' }
     $h = $p.MainWindowHandle
     # A harmless Alt tap lets SetForegroundWindow succeed from a background process. It is journalled like any held key before it is sent
@@ -460,6 +474,7 @@ function Get-ForegroundWindowHandle { [OWRG.Native]::GetForegroundWindow() }
 # Input goes to whatever has focus, on a PC someone may be using, so every key press and mouse action asks this first: the game must be the
 # foreground window, after up to three focus attempts, or the step fails.
 function Assert-GameForeground {
+    Assert-InputAllowed
     for ($attempt = 0; $attempt -le 3; $attempt++) {
         $p = Get-RunGameProcess
         if (!$p) { throw 'refusing to send input: the game is not running' }
@@ -507,6 +522,7 @@ function Save-HeldInputs([switch]$Release) {
 }
 function Send-KeyDown([string]$Key) {
     Assert-Key $Key
+    Assert-InputAllowed
     Assert-GameForeground
     if (!$script:HeldInputs.Contains("key $Key")) { $script:HeldInputs.Add("key $Key") }   # before the send: releasing a key never pressed is harmless
     try { Save-HeldInputs } catch { [void]$script:HeldInputs.Remove("key $Key"); throw "refusing to press ${Key}: $_" }
@@ -526,6 +542,8 @@ function Send-Key([string]$Key, [int]$HoldMs = 60) {
     try { Start-Sleep -Milliseconds $HoldMs } finally { Send-KeyUp $Key }   # a press is always released
 }
 function Send-MouseEvent([int]$Flags, [int]$Dx = 0, [int]$Dy = 0) {
+    # A press or a move is refused once the driver is lost; a release alone (only up flags) never is.
+    if ($Flags -band (-bnot 0x54)) { Assert-InputAllowed }
     $added = @()
     foreach ($b in $script:MouseButtons) { if (($Flags -band $b[0]) -and !$script:HeldInputs.Contains("button $($b[2])")) { $script:HeldInputs.Add("button $($b[2])"); $added += "button $($b[2])" } }
     if ($added.Count) { try { Save-HeldInputs } catch { foreach ($a in $added) { [void]$script:HeldInputs.Remove($a) }; throw "refusing to press a mouse button: $_" } }
@@ -554,6 +572,7 @@ function Send-ClickAt([int]$X, [int]$Y) {
     $r = Get-GameRect; [OWRG.Native]::SetCursorPos($r.X + $X, $r.Y + $Y) | Out-Null; Start-Sleep -Milliseconds 150; Send-Click
 }
 function Send-Wheel([int]$Notches) {
+    Assert-InputAllowed
     Assert-GameForeground
     $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32](120 * $Notches)), 0)  # negative = toward the user
     Invoke-NativeMouse 0x800 0 0 $data
@@ -567,7 +586,7 @@ function Send-Drag([int]$Dx, [int]$Dy, [int]$Steps = 20) {
         for ($i = 0; $i -lt $Steps; $i++) { Assert-GameForeground; Send-MouseEvent 0x1 ([int]($Dx / $Steps)) ([int]($Dy / $Steps)); Start-Sleep -Milliseconds 15 }
     } finally { Send-MouseEvent 0x4 }   # the button is always let go
 }
-function Send-Mouse([int]$Dx, [int]$Dy) { Assert-GameForeground; Invoke-NativeMouse 0x1 $Dx $Dy }
+function Send-Mouse([int]$Dx, [int]$Dy) { Assert-InputAllowed; Assert-GameForeground; Invoke-NativeMouse 0x1 $Dx $Dy }
 function Send-Click([switch]$Right) {
     Assert-GameForeground
     $down, $up = if ($Right) { 0x8, 0x10 } else { 0x2, 0x4 }
@@ -580,29 +599,43 @@ function Send-Click([switch]$Right) {
 # module path (a CI runner's pwsh step) cannot load it (CI on #263, 2026-11-13).
 function New-CommandName { 'c' + (Get-Date -Format 'HHmmssfff') + '-' + [guid]::NewGuid().ToString('N') }
 
-# Run Python inside the game through the openwillow_realgame mod and return its printed output ('' when it printed nothing; each capture's
-# own wrapper decides whether that is acceptable, see ConvertTo-ReplyText).
+# Run Python inside the game through the openwillow_realgame mod and return its printed output ('' when it printed nothing). The raw
+# transport: captures call it only through Invoke-GameReply / Invoke-GameReplyFile below, which hold the driver-lost rule
+# (tests/realgame_reply_guard_test.py).
 # The boundary is the whole body: every failure inside it, whatever its text, leaves in the no-reply form ("no reply to <name>
 # (transport error: ...)"), so no failure of the transport gets past a driver-lost latch. Only the parameter binding, which runs before
-# the body, is outside it. One deadline covers the whole call: it is checked before each publication attempt, while waiting, before
-# each read and before a reply is returned, and every retry and pause is clamped to what is left of it. A call whose deadline has
-# passed fails as "no reply to <name>", and a reply read after it is not taken. (review of #263, S1, S2, R1 and R2)
-function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
+# the body, is outside it. One deadline covers the whole call: it is checked before each publication attempt, after the command's
+# file is written and immediately before the rename that publishes it, while waiting, before each read and before a reply is returned,
+# and every retry and pause is clamped to what is left of it. A call whose deadline has passed fails as "no reply to <name>", and a reply
+# read after it is not taken. (review of #263, S1, S2, R1 and R2)
+# The deadline also travels with the command: its first line is '# ow-deadline-unix-ms: <ms>' (this machine's wall clock, which the
+# driver reads too), and the driver refuses, without running it, a command it takes after that moment, answering 'OW-REFUSED: ...'.
+# So a command whose caller gave up never runs later, however slow the rename or the driver's next look. Not bounded: a command the
+# driver took before its deadline runs to its end, and a file operation under way when the deadline passes finishes (a rename that
+# began before the last check can still land; the driver then refuses the command). -Deadline: the caller's own, already running
+# (Invoke-GamePyFile).
+function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30, $Deadline = $null) {
     try {
         $name = 'a command not yet named'
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $deadline = if ($null -ne $Deadline) { [datetime]$Deadline } else { (Get-Date).AddSeconds($TimeoutSeconds) }
         $left = { ($deadline - (Get-Date)).TotalMilliseconds }
+        $command = '# ow-deadline-unix-ms: ' + [DateTimeOffset]::new($deadline.ToUniversalTime()).ToUnixTimeMilliseconds() + "`n" + $Code
         # Any reply already under this call's name is removed before the command is published, so an old reply can't answer this one.
         $name = New-CommandName
         $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
         if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force -ErrorAction Stop }
         # Published by a rename, tried at most 5 times 200 ms apart: a file scanner can hold the new file for a moment, and the rename then
         # fails. The driver runs only <name>.py, and once the rename went through the source is gone, so the command goes out at most once.
-        # No attempt starts after the deadline.
+        # No attempt starts after the deadline, and a write that ends after it is not renamed (review of the session gate, B1).
         for ($try = 1; ; $try++) {
             if ((& $left) -le 0) { Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue; throw "no reply to $name" }
-            $sent = $false
-            try { [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py; $sent = $true } catch { $err = $_ }   # the call as before
+            $sent = $false; $written = $false
+            try { [IO.File]::WriteAllText("$py.tmp", $command); $written = $true } catch { $err = $_ }
+            if ($written -and (& $left) -le 0) {
+                Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue
+                throw "no reply to $name (not sent: the deadline passed while its file was written)"
+            }
+            if ($written) { try { Move-Item "$py.tmp" $py; $sent = $true } catch { $err = $_ } }
             if ($sent) { break }
             if ($try -ge 5 -or (& $left) -le 200) {
                 Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue   # best effort: the driver never runs a .py.tmp
@@ -625,6 +658,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
             if ($read) {
                 if ((& $left) -le 0) { throw "no reply to $name" }   # a reply read after the deadline is not taken
                 if ($null -eq $text) { $text = '' }   # a complete empty reply: the command printed nothing (S3)
+                # The driver did not run it (its deadline had passed when the driver took it, or it named none): no answer either.
+                if ($text.StartsWith('OW-REFUSED: ', [StringComparison]::Ordinal)) { throw "no reply to $name (the driver refused it: $($text.Substring(12).Trim()))" }
                 return $text
             }
             if ($try -ge 5 -or (& $left) -le 200) { throw "no reply to $name (its reply file could not be read: $($err.Exception.Message))" }
@@ -640,24 +675,56 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
 # to local/realgame/<OutFolder> so the script's helpers know where to write. The boundary is the whole body, the delegation to
 # Invoke-GamePy included (only the parameter binding is outside): a probe source that cannot be read, or any other failure here, leaves
 # in the no-reply form too. Nothing was sent then, and the run treats it as the transport's failure (review of #263, S1 and R2).
+# The call's one deadline starts before the source is read, so the read counts against the timeout (review of the session gate, B1).
 function Invoke-GamePyFile([string]$Path, [string]$OutFolder = 'out', [int]$TimeoutSeconds = 30) {
     try {
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         $out = (Join-Path $script:RG $OutFolder) -replace '\\', '/'
         try { $source = [IO.File]::ReadAllText((Resolve-Path $Path)) }
         catch { throw "no reply to probe file $Path (transport error: its source could not be read: $($_.Exception.Message))" }
-        Invoke-GamePy ("RG_OUT = r'$out'`n" + $source) $TimeoutSeconds
+        if ((Get-Date) -ge $deadline) { throw "no reply to probe file $Path (not sent: the deadline passed while its source was read)" }
+        Invoke-GamePy ("RG_OUT = r'$out'`n" + $source) $TimeoutSeconds $deadline
     } catch {
         if ("$_" -like 'no reply to *') { throw }
         throw "no reply to probe file $Path (transport error: $($_.Exception.Message))"
     }
 }
 
-# A capture's Py wrapper: the reply's text, trimmed. An empty reply (the command printed nothing, or a reply cut off by a game that
-# exited) is refused, as these wrappers refused it before the transport returned '' for it: the older .Trim() on $null threw, and
-# two wrappers tested for $null (review of #263, R3). Not a lost driver: the caller's own handling decides what follows.
-function ConvertTo-ReplyText($Reply, [string]$Code) {
-    if ([string]::IsNullOrEmpty($Reply)) { throw "empty reply from the game (it may have exited) to: $($Code.Substring(0, [Math]::Min(80, $Code.Length)))" }
-    "$Reply".Trim()
+# A reply's text, trimmed. An empty reply, or one that is only white space (the command printed nothing, or a reply cut off by a game
+# that exited), is refused, as the capture wrappers refused it before the transport returned '' for it (review of #263, R3; white space
+# since the session gate's review). Not a lost driver: the caller's own handling decides what follows. -AllowEmpty: the call says that
+# printing nothing is a legitimate answer (a probe load, a command that prints nothing), and gets ''. -NoTraceback: a game-side error,
+# which the driver answers as text, is refused as "game python error: ..." instead of being returned.
+function ConvertTo-ReplyText($Reply, [string]$Code, [switch]$AllowEmpty, [switch]$NoTraceback) {
+    if ([string]::IsNullOrWhiteSpace("$Reply")) {
+        if ($AllowEmpty) { return '' }
+        throw "empty reply from the game (it may have exited) to: $($Code.Substring(0, [Math]::Min(80, $Code.Length)))"
+    }
+    $text = "$Reply".Trim()
+    if ($NoTraceback -and $text -match 'Traceback \(most recent call last\)') { throw "game python error: $text" }
+    $text
+}
+
+# The one way a capture sends a command (tests/realgame_reply_guard_test.py fails a capture that calls Invoke-GamePy or Invoke-GamePyFile
+# itself): the driver-lost rule lives here, so no capture can leave it out (review of the session gate, B2). Once the condition is set,
+# nothing is sent and the call throws "not sent: ...". A transport failure (every one leaves as "no reply to ...") sets the condition and
+# is thrown on. The reply goes through ConvertTo-ReplyText: an empty or white-space reply is refused unless -AllowEmpty.
+# -SilenceAllowed: only for the waits that expect the driver to be silent for a while (the boot wait before the driver loads, a map
+# travel's or a load's polls, which the load holds up): their timeouts are part of the wait and do not set the condition. They still
+# refuse once it is set.
+function Invoke-GameReply([string]$Code, [int]$Timeout = 30, [switch]$AllowEmpty, [switch]$SilenceAllowed, [switch]$NoTraceback) {
+    Assert-DriverAnswers
+    try { $reply = Invoke-GamePy $Code $Timeout }
+    catch { if (!$SilenceAllowed) { Set-SliceWatchDriverLost $_ }; throw }
+    ConvertTo-ReplyText $reply $Code -AllowEmpty:$AllowEmpty -NoTraceback:$NoTraceback
+}
+# The same for a command script file (Invoke-GamePyFile: RG_OUT set to local/realgame/<OutFolder>). A probe that only defines functions
+# prints nothing, so its load passes -AllowEmpty.
+function Invoke-GameReplyFile([string]$Path, [string]$OutFolder = 'out', [int]$Timeout = 30, [switch]$AllowEmpty, [switch]$NoTraceback) {
+    Assert-DriverAnswers
+    try { $reply = Invoke-GamePyFile $Path $OutFolder $Timeout }
+    catch { Set-SliceWatchDriverLost $_; throw }
+    ConvertTo-ReplyText $reply "probe file $Path" -AllowEmpty:$AllowEmpty -NoTraceback:$NoTraceback
 }
 
 # After the Enter on the main menu that continues the save: wait for the player pawn, reads only (the map name and whether a pawn is

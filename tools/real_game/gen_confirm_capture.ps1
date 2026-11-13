@@ -31,7 +31,7 @@ $Out = Join-Path $script:RG 'gen_confirm'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
 $log.notes = @()
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 
 $sample = Get-Content (Join-Path $Out 'sample.json') -Raw | ConvertFrom-Json
 # Frequency subjects: the first common pistol and the first common SMG of the sample (the balance and its type).
@@ -68,7 +68,7 @@ try {
     $proc = Start-Game $gameArgs
     $log.game_pid = $proc.Id
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'gen_confirm/boot.png' | Out-Null; throw 'driver did not answer' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     # The title menu opens with Continue highlighted; a dialog may be up first (its OK takes the first Enter). Press
@@ -90,8 +90,8 @@ try {
     if ($rect.Width -ne 1280 -or $rect.Height -ne 720) { throw "client area is $($rect.Width)x$($rect.Height), not 1280x720" }
 
     # 3. Helpers into the shared namespace, then spawn the sample with exact parts.
-    Invoke-GamePyFile (Join-Path $script:Repo 'tools/real_game/scripts/weapon_cards.py') gen_confirm | Out-Null
-    Invoke-GamePyFile (Join-Path $script:Repo 'tools/real_game/scripts/gen_confirm_live.py') gen_confirm | Out-Null
+    Invoke-GameReplyFile (Join-Path $script:Repo 'tools/real_game/scripts/weapon_cards.py') gen_confirm -AllowEmpty | Out-Null
+    Invoke-GameReplyFile (Join-Path $script:Repo 'tools/real_game/scripts/gen_confirm_live.py') gen_confirm -AllowEmpty | Out-Null
     $spawned = Py 'print(gc_spawn_sample())' 180
     $log.spawned = $spawned
     "spawned sample guns: $spawned"
@@ -149,7 +149,7 @@ finally {
     # Only what this run started: the quit command, the driver and the game are touched only when we started them
     # (another lane's game and its installed driver are never reached from here).
     if ($proc) {
-        try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
+        try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { "quit: no reply, or not sent to a lost driver ($_)" }
         for ($i = 0; $i -lt 30 -and -not $proc.HasExited; $i++) { Start-Sleep 2 }
         # Stop only the process this script started, after checking its command line.
         $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue).CommandLine

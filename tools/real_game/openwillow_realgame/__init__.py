@@ -12,6 +12,11 @@ appends `{"t": time.perf_counter(), ...}` to `events.jsonl` in the command folde
 `time.perf_counter()` is QueryPerformanceCounter, the same clock as .NET Stopwatch.GetTimestamp,
 so in-game marks can be lined up with screenshots taken by tools/real_game/realgame.ps1.
 
+Each command's first line names its deadline (`# ow-deadline-unix-ms: <ms>`, this machine's wall clock, which the sender
+reads too). A command whose deadline has passed when the driver takes it, or that names none, is not run: it is renamed to
+`<name>.py.expired` and its reply is one line starting `OW-REFUSED: `, so the sender, the folder and a test can all see it.
+A command that started before its deadline runs to its end; that part is not bounded.
+
 Scripts run inside a frame: keep them short (no sleeps). Local developer use only; whatever the
 scripts write is game data and stays under local/.
 """
@@ -106,22 +111,48 @@ scope = {"unrealsdk": unrealsdk, "find": unrealsdk.find_object, "find_all": unre
          "block_saves": block_saves}
 
 
+# The deadline line the sender (Invoke-GamePy in tools/real_game/realgame.ps1) puts first in every command, and the start of the
+# reply that says a command was refused. Both spellings are also written out in realgame.ps1; tests/block_saves_test.py holds them equal.
+DEADLINE_PREFIX = "# ow-deadline-unix-ms: "
+REFUSED_PREFIX = "OW-REFUSED: "
+
+
+def refusal(code, now_ms):
+    """Why the command must not run, or None when it may: its deadline has passed, or it names none (a command written by
+    anything other than the sender, or cut off, is never run without a bound)."""
+    first = code.split("\n", 1)[0].strip()
+    if not first.startswith(DEADLINE_PREFIX.strip()):
+        return "the command names no deadline"
+    try:
+        deadline = int(first[len(DEADLINE_PREFIX.strip()):].strip())
+    except ValueError:
+        return "the command's deadline line is unreadable"
+    if now_ms > deadline:
+        return f"its deadline passed {now_ms - deadline} ms before the driver took it"
+    return None
+
+
 def run_pending():
     folder = cmd_dir()
     if not folder.is_dir():
         return
     for script in sorted(folder.glob("*.py")):
         code = script.read_text(encoding="utf-8")
-        script.replace(script.with_suffix(".py.done"))
+        # Checked once, when the driver takes the command and before it runs: what has started is not stopped at its deadline.
+        refused = refusal(code, int(time.time() * 1000))
+        script.replace(script.with_suffix(".py.expired" if refused else ".py.done"))
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            try:
-                exec(compile(code, str(script), "exec"), scope)
-            except Exception:
-                print(traceback.format_exc()[-3000:])
+        if refused:
+            out.write(f"{REFUSED_PREFIX}not run: {refused}\n")
+        else:
+            with contextlib.redirect_stdout(out):
+                try:
+                    exec(compile(code, str(script), "exec"), scope)
+                except Exception:
+                    print(traceback.format_exc()[-3000:])
         # Published whole: written under a name no reader waits for, then renamed onto <name>.out (atomic on one volume), so a reader
         # never sees a reply part-written. If that fails, no reply is left (the reader's wait runs out and counts the driver as lost);
-        # the script, already <name>.py.done, never runs again.
+        # the script, already <name>.py.done (or .py.expired), never runs again. A refusal is published the same way.
         part = script.with_name(script.stem + ".out.tmp")
         try:
             part.write_text(out.getvalue(), encoding="utf-8")

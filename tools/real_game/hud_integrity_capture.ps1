@@ -21,7 +21,7 @@ $Out = Join-Path $script:RG 'hud_integrity'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); steps = @() }
 $census = @()
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 # One labelled read of the player and every watched HUD value, with a screenshot.
 function Census([string]$Label) {
     $c = Py "print(hi_out({'pawn': hi_pawn(), 'hud': hi_census()}))" 30 | ConvertFrom-Json -AsHashtable
@@ -48,7 +48,7 @@ try {
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'hud_integrity/boot.png' | Out-Null; throw 'driver did not answer' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -59,7 +59,7 @@ try {
     Assert-GameForeground; Start-Sleep 2
     $rect = Get-GameRect; $log.client = @{ x = $rect.X; y = $rect.Y; width = $rect.Width; height = $rect.Height }
     if ($rect.Width -ne 1280 -or $rect.Height -ne 720) { throw "client area is $($rect.Width)x$($rect.Height), not 1280x720" }
-    Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/hud_integrity.py') hud_integrity | Out-Null
+    Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/hud_integrity.py') hud_integrity -AllowEmpty | Out-Null
     Step 'watcher' (Py 'print(hi_start())')
     Start-Sleep 3
     Census 'rest'
@@ -90,7 +90,7 @@ try {
     Step 'dump' (Py "print(hi_dump(r'$rowsFile'))" 60)
     @{ census = $census; steps = $log.steps } | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $Out 'census.json')
 
-    try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
+    try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { "quit: no reply, or not sent to a lost driver ($_)" }
     for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
     $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
     if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }

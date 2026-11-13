@@ -18,7 +18,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = ROOT / 'tools/real_game/phaselock_integrity_capture.ps1'
-SCRIPTS = {'loot_capture': 'loot_capture', 'vendors_capture': 'vendors'}
+SCRIPTS = {'loot_capture': 'loot_capture', 'vendors_capture': 'vendors', 'phaselock_integrity_capture': 'phaselock_integrity'}
 
 # Stands in for realgame.ps1 beside a copy of the capture script. Scenario: $env:OW_TEST_SCENARIO.
 STUB = r"""
@@ -153,14 +153,18 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
 """
 
 
-def run_script(script, scenario, earlier_session=None):
-    """Runs one copy of the script. Returns what a test needs, with the temporary tree still readable through a copy of its state."""
+def run_script(script, scenario, earlier_session=None, stub=STUB, extra_args=(), helpers=()):
+    """Runs one copy of the script. Returns what a test needs, with the temporary tree still readable through a copy of its state.
+    stub: what stands in for realgame.ps1; helpers: other files of tools/real_game the copy loads from beside it (the real ones)."""
     with tempfile.TemporaryDirectory() as folder:
         tmp = Path(folder)
         tools = tmp / 'tools/real_game'
         tools.mkdir(parents=True)
         shutil.copy(ROOT / f'tools/real_game/{script}.ps1', tools)
-        (tools / 'realgame.ps1').write_text(STUB.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', folder), encoding='utf-8-sig')
+        for name in helpers:
+            (tools / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / f'tools/real_game/{name}', tools / name)
+        (tools / 'realgame.ps1').write_text(stub.replace('__REALGAME__', str(ROOT / 'tools/real_game/realgame.ps1')).replace('__TMP__', folder), encoding='utf-8-sig')
         game = tmp / 'game'
         files = {tmp / 'willow/SaveData/slot.sav': 'original save', tmp / 'willow/Config/game.ini': 'original config',
                  game / 'sdk_mods/settings/python-sdk.json': 'original settings', game / 'sdk_mods/SanitySaver/store.sav': 'original store'}
@@ -172,7 +176,7 @@ def run_script(script, scenario, earlier_session=None):
             (tmp / 'realgame' / SCRIPTS[script]).mkdir(parents=True)
             (tmp / 'realgame' / SCRIPTS[script] / 'session.json').write_text(earlier_session, encoding='utf-8')
         done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(tools / f'{script}.ps1'), '-HubLock', str(hub),
-                               '-Character', 'test'], capture_output=True, text=True, timeout=180,
+                               '-Character', 'test', *[a.replace('__TMP__', folder) for a in extra_args]], capture_output=True, text=True, timeout=180,
                               env=dict(os.environ, OPENWILLOW_BL2=str(game), OW_TEST_SCENARIO=scenario))
         session_path = tmp / 'realgame' / SCRIPTS[script] / 'session.json'
         session = json.loads(session_path.read_text(encoding='utf-8-sig')) if session_path.is_file() else {}
@@ -183,7 +187,7 @@ def run_script(script, scenario, earlier_session=None):
             path = tmp / name
             return path.read_text(encoding='utf-8').split() if path.exists() else []
         return {'code': done.returncode, 'out': done.stdout + done.stderr, 'session': session, 'files': contents, 'hub': hub.exists(),
-                'keys': logged('keys.log'), 'bursts': logged('bursts.log'), 'views': logged('views.log'),
+                'keys': logged('keys.log'), 'bursts': logged('bursts.log'), 'views': logged('views.log'), 'calls': logged('calls.log'),
                 'run_lock': (tmp / 'run.lock').exists(), 'driver': (game / 'sdk_mods/openwillow_realgame').exists(), 'backups': backups,
                 'kept': kept, 'kept_text': [(tmp / 'realgame' / SCRIPTS[script] / name).read_text(encoding='utf-8') for name in kept]}
 
@@ -392,7 +396,7 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         dumpster = r['session']['types']['Skel_Dumpster']
         self.assertIsInstance(dumpster, dict, r['out'])   # not "failed: You cannot call a method on a null-valued expression."
         self.assertEqual([t['side'] for t in dumpster['tries']], [0, 4], r['out'])
-        self.assertIn('empty reply from the game to: print(json.dumps(lc_opened', dumpster['tries'][0]['error'], r['out'])
+        self.assertIn('empty reply from the game (it may have exited) to: print(json.dumps(lc_opened', dumpster['tries'][0]['error'], r['out'])
         self.assertTrue(dumpster['opened'], r['out'])   # the next side was pressed and opened
         self.assertEqual(r['session']['status'], 'completed', r['out'])
         self.assertNotIn('null-valued', r['out'])
@@ -405,7 +409,7 @@ class LootCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertEqual(len(box['tries']), 12, r['out'])   # every side of every box still tried: 4 sides, 3 boxes
         read = json.loads(box['tries'][0]['ready'][4])
         self.assertEqual((read['usable'], read['reads']), (False, 2), r['out'])
-        self.assertIn('empty reply from the game to: print(json.dumps(lc_ready', read['error'], r['out'])
+        self.assertIn('empty reply from the game (it may have exited) to: print(json.dumps(lc_ready', read['error'], r['out'])
         self.assertEqual(json.loads(box['tries'][1]['ready'][4]).get('error'), None, r['out'])   # the next side reads on
         self.assertEqual([b for b in r['bursts'] if 'Skel_StrongBox' in b], [], r['out'])   # never usable, so never pressed
         self.assertTrue(any(p.startswith('Skel_StrongBox: never the usable object: 12 side(s)') for p in r['session']['stage_problems']), r['out'])
@@ -487,6 +491,54 @@ class VendorsCaptureSafetyTest(CaptureSafetyBase, unittest.TestCase):
         self.assertEqual(r['code'], 1, r['out'])
         self.assertTrue(r['session']['status'].startswith('incomplete: dump ('), r['out'])
         self.assertEqual(r['files'], ORIGINAL)
+
+
+# The Phaselock capture's game, for the driver-lost rule (session gate's review, B2): every command it gets is logged to calls.log (its
+# first word, or 'LATCH' for the one that times out), every key to keys.log. The watch's start gets no reply; every later command would be
+# answered as a healthy driver would, so a capture that did not hold the rule would go on to its casts and their F key.
+PHASELOCK_STUB = STUB.split('function Invoke-GamePy(')[0].replace(
+    "function Send-Key { $global:OwUseKeySent = $true; Add-Content -LiteralPath '__TMP__/keys.log' \"$args\" }\nfunction Send-KeyDown { }",
+    "function Send-Key { Add-Content -LiteralPath '__TMP__/keys.log' \"$args\" }\nfunction Send-KeyDown { Add-Content -LiteralPath '__TMP__/keys.log' \"$args\" }") + r"""
+function Get-GameRect { [Drawing.Rectangle]::new(0, 0, 2, 2) }
+function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
+    $word = if ($Code -match 'sw_start') { 'LATCH' } else { ($Code -split '\s+')[0] }
+    Add-Content -LiteralPath '__TMP__/calls.log' $word
+    if ($Code -match 'sw_start') { throw 'no reply to c-invented-start' }
+    if ($Code -match 'print\(get_pc\(\)\)') { return 'pc' }
+    if ($Code -match 'block_saves') { return '4' }
+    if ($Code -match 'Pawn\.Class\.Name') { return 'Sanctuary_P WillowPlayerPawn' }
+    if ($Code -match 'Pawn is not None') { return 'Ice_P True' }
+    if ($Code -match 'open Ice_P') { return 'sent' }
+    if ($Code -match 'pi_pick_target') { return '{"pick": "Pawn_1", "pick_class": "CharClass_PrimalBeastAdult", "rows": []}' }
+    if ($Code -match 'AIClass') { return 'CharClass_PrimalBeastAdult' }
+    if ($Code -match 'quit') { $global:OwGameGone = $true; return '' }
+    if ($Code -match 'stopped') { return 'stopped' }
+    return '{"ok": true, "lifted": [], "target_lifted": true, "state": "0", "pool": 0}'
+}
+"""
+
+
+class PhaselockDriverLostTest(unittest.TestCase):
+    """B2 of the session gate's review: a watch timeout was swallowed and latched, but the Phaselock capture's own Py ignored the latch,
+    so when the driver answered again the setup and the cast's F key went on. Its commands now go through the shared wrapper."""
+
+    def test_no_command_and_no_key_after_a_latched_timeout_even_when_the_driver_answers_again(self):
+        spec_dir = tempfile.mkdtemp(prefix='ow-spec-')
+        try:
+            spec = Path(spec_dir) / 'spec.json'
+            spec.write_text(json.dumps({'funcs': ['Pawn.Died']}), encoding='utf-8')
+            r = run_script('phaselock_integrity_capture', 'phaselock_latch', stub=PHASELOCK_STUB, extra_args=('-WatchSpec', str(spec)),
+                           helpers=('slice_watch.ps1', 'slice_watch_check.py', 'scripts/slice_watch.py'))
+        finally:
+            realgame_test_env.remove_tree(spec_dir, raising=False)
+        calls = r['calls']
+        self.assertIn('LATCH', calls, r['out'])
+        self.assertEqual(calls[calls.index('LATCH') + 1:], [], r['out'])   # nothing more was sent, though every later call would be answered
+        self.assertEqual(r['keys'], ['Enter', 'Enter', 'Enter'], r['out'])   # the load's keys only, all before the latch; no F
+        self.assertIn('not sent: the driver stopped answering (no reply to c-invented-start)', r['session']['run_error'], r['out'])
+        self.assertEqual(r['session']['cleanup']['hooks'], 'not sent: the driver stopped answering (no reply to c-invented-start)', r['out'])
+        self.assertEqual(r['files'], ORIGINAL, r['out'])   # the run still restored everything
+        self.assertNotEqual(r['code'], 0)
 
 
 class QuitWaitTest(unittest.TestCase):

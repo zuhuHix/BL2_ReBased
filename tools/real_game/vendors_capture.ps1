@@ -26,7 +26,7 @@ $keptAs = "$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
 foreach ($stale in 'session', 'save_compare') { $file = Join-Path $Out "$stale.json"; if (Test-Path -LiteralPath $file) { Move-Item -LiteralPath $file (Join-Path $Out "$stale.$keptAs.json") } }
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o') }
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 $stagesRequested = @('dump')
 
 $extraRoots = [ordered]@{ sdk_settings = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/settings'); SanitySaver = (Join-Path $env:OPENWILLOW_BL2 'sdk_mods/SanitySaver') }
@@ -77,27 +77,27 @@ try {
     $ok = $false
     for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
         if ($proc.HasExited) { break }
-        try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 }
+        try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 }
     }
     if (-not $ok) { $log.boot = 'driver did not answer'; Save-Shot 'vendors/boot.png' | Out-Null; throw 'driver did not answer (check Steam console_log for AppError_5)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
     $map = ''
     for ($i = 0; $i -lt 6 -and $map -notmatch 'WillowPlayerPawn'; $i++) {   # the level load can hold the command channel
-        try { $map = Py 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)' 30 }
+        try { $map = Invoke-GameReply 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)' 30 -SilenceAllowed }
         catch { Start-Sleep 10 }
     }
     "map: $map"; $log.map = $map
     if ($map -notmatch 'WillowPlayerPawn') { Save-Shot 'vendors/load_failed.png' | Out-Null; throw "no player pawn: $map" }
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 10   # let the streamed levels and their vending machines spawn
-    Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/vendors_probe.py') vendors | Out-Null
+    Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/vendors_probe.py') vendors -AllowEmpty | Out-Null
     $log.dump = Py "d = vp_dump('$Name'); print(len(d['machines']), [len(m['stock']) if isinstance(m['stock'], list) else m['stock'] for m in d['machines']])" 120
     "dump: $($log.dump)"
     # The command channel prints a script's exception as its reply: only a count of machines is a dump.
     Set-Stage 'dump' ($log.dump -match '^[1-9]\d* \[') "no machines in the dump: $($log.dump)"
     $log.shot = Save-Shot 'vendors/shot.png'
     # The game may close before it answers this one.
-    try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+    try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 15 -AllowEmpty | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } catch {
     $runError = "$_"

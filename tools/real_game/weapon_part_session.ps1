@@ -24,7 +24,7 @@ if (-not $env:OPENWILLOW_BL2) { $env:OPENWILLOW_BL2 = 'C:\Program Files (x86)\St
 $Out = Join-Path $script:RG 'wpa'
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = [ordered]@{ started = (Get-Date).ToString('o'); mode = $Mode; character = $Character }
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 
 $marker = "-owrun=$Lane-$PID"   # with the image path and start time, what Stop-OwnGame checks before stopping a PID
 $procStart = $null
@@ -44,13 +44,13 @@ try {
     Get-ChildItem $script:CmdDir -Filter *.py -ErrorAction SilentlyContinue | Remove-Item
     $proc = Start-Game @('-windowed', '-ResX=1280', '-ResY=720', '-nostartupmovies', "-Character=$Character", $marker); $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'wpa/boot.png' | Out-Null; throw 'driver did not answer' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     if ($Mode -eq 'Census') {
         # The definitions are loaded with Startup at the title screen; no need to enter the world.
         Start-Sleep 10
-        $log.census = Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/weapon_visual_census.py') wpa 300
+        $log.census = Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/weapon_visual_census.py') wpa 300 -AllowEmpty
         "census: $($log.census)"
     } else {
         Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -62,7 +62,7 @@ try {
         $rect = Get-GameRect
         if ($rect.Width -ne 1280 -or $rect.Height -ne 720) { throw "client area is $($rect.Width)x$($rect.Height), not 1280x720" }
         $list = ($Recipes | ForEach-Object { "r'" + ((Resolve-Path $_).Path -replace '\\', '/') + "'" }) -join ', '
-        Invoke-GamePy ("RG_OUT = r'$(($Out) -replace '\\', '/')'`nWPC_RECIPES = [$list]`n" + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'scripts/weapon_part_capture.py'))) 120 | Out-Null
+        Invoke-GameReply ("RG_OUT = r'$(($Out) -replace '\\', '/')'`nWPC_RECIPES = [$list]`n" + [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'scripts/weapon_part_capture.py'))) 120 -AllowEmpty | Out-Null
         # A one-time "Unlocked!" notice appears the first time the inventory opens and swallows keys: dismiss it first.
         Send-Key I; Start-Sleep 3
         Save-Shot 'wpa/notice_before.png' | Out-Null
@@ -118,7 +118,7 @@ try {
         $log.cleanup = Py 'print(wpc_cleanup())' 60
         "cleanup: $($log.cleanup)"
     }
-    try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 10 | Out-Null } catch { "quit sent (no reply)" }
+    try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 10 -AllowEmpty | Out-Null } catch { "quit: no reply, or not sent to a lost driver ($_)" }
     for ($i = 0; $i -lt 30 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
     $stopped = Stop-OwnGame $proc $procStart $marker; "game: $stopped"
     if ($stopped -like 'refused*') { throw "the game was not stopped: $stopped" }

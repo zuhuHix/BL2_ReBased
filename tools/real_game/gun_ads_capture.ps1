@@ -41,7 +41,7 @@ if ($oldFrames.Count) { $keptFrames = New-Item -ItemType Directory (Join-Path $O
 # End of stale evidence.
 $log = [ordered]@{ started = (Get-Date).ToString('o'); guns = [ordered]@{} }
 
-function Py([string]$Code, [int]$Timeout = 30) { ConvertTo-ReplyText (Invoke-GamePy $Code $Timeout) $Code }   # an empty reply is refused (realgame.ps1)
+function Py([string]$Code, [int]$Timeout = 30) { Invoke-GameReply $Code $Timeout }   # the shared wrapper (realgame.ps1): refuses once the driver is lost, latches a lost reply, refuses an empty one
 # Py returns a traceback as text; here it cannot pass as an answer, and the error says what it was.
 function PyJson([string]$Expr, [int]$Timeout = 30) {
     $reply = Py "import json; print(json.dumps($Expr, default=str))" $Timeout
@@ -167,7 +167,7 @@ try {
     $launchAttempted = $true
     $proc = Start-Game $gameArgs; $procStart = $proc.StartTime
     $ok = $false
-    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Py 'print(get_pc())' 8 | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
+    for ($i = 0; $i -lt 60 -and -not $ok; $i++) { try { Invoke-GameReply 'print(get_pc())' 8 -SilenceAllowed | Out-Null; $ok = $true } catch { Start-Sleep 5 } }
     if (-not $ok) { Save-Shot 'gun_ads/boot.png' | Out-Null; throw 'driver did not answer (see boot.png)' }
     $log.block_saves = Assert-SavesBlocked (Py 'print(block_saves())')
     Start-Sleep 5; Assert-GameForeground; Send-Key Enter; Start-Sleep 45
@@ -176,9 +176,9 @@ try {
     Send-Key Enter; Start-Sleep 1; Send-Key Enter; Start-Sleep 1
 
     # The probe seeds its own four slice guns as it loads, as in lane E. They are not used here, and its cleanup removes them.
-    $seed = Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/weapon_parity_probe.py') gun_ads 60
+    $seed = Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/weapon_parity_probe.py') gun_ads 60 -AllowEmpty
     if ($seed -match 'Traceback') { throw "probe seed failed: $seed" }
-    Invoke-GamePyFile (Join-Path $PSScriptRoot 'scripts/gun_ads_probe.py') gun_ads | Out-Null
+    Invoke-GameReplyFile (Join-Path $PSScriptRoot 'scripts/gun_ads_probe.py') gun_ads -AllowEmpty | Out-Null
     # The record says Maya at this level, so it must be so before any frame.
     $log.character = PyJson 'ads_character()'
     if (!$log.character.is_maya -or $log.character.level -ne $Level) { throw "not Maya at level $Level`: $($log.character | ConvertTo-Json -Compress)" }
@@ -238,7 +238,7 @@ try {
         Set-Stage 'gun_cleanup' ($null -ne $log.gun_cleanup.remaining -and $left.Count -eq 0) "spawned guns left: $($left -join ', ')"
     } catch { $log.gun_cleanup = "not finished: $_"; Set-Stage 'gun_cleanup' $false "$_" }
     # The game may close before it answers this one.
-    try { Invoke-GamePy 'get_pc().ConsoleCommand("quit", False)' 15 | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
+    try { Invoke-GameReply 'get_pc().ConsoleCommand("quit", False)' 15 -AllowEmpty | Out-Null } catch { "quit: no reply ($_); waiting for the exit" }
     for ($i = 0; $i -lt 20 -and (Get-GameProcess); $i++) { Start-Sleep 2 }
 } catch {
     $runError = "$_"

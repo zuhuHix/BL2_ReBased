@@ -6,10 +6,15 @@ Run: python tests/block_saves_test.py
 import ast
 import contextlib
 import io
+import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
+import time
 import traceback
 import types
+import realgame_test_env  # noqa: F401  (the PowerShell child of the format test gets the sanitised environment)
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'tools' / 'real_game' / 'openwillow_realgame' / '__init__.py'
@@ -102,19 +107,28 @@ def test_the_scan_reaches_the_captures():
     assert sum('Assert-SavesBlocked (' in text for text in texts) >= 3
 
 
-def load_channel(path_class):
-    """The driver's command loop alone (cmd_dir and run_pending), over a stand-in command folder. path_class stands in for Path, so a
-    test can watch or break the reply's write and rename."""
+def load_channel(path_class, now=None):
+    """The driver's command loop alone (cmd_dir, refusal, run_pending and the two prefixes), over a stand-in command folder. path_class
+    stands in for Path, so a test can watch or break the reply's write and rename; now, when given, is the driver's clock (Unix seconds)."""
     tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
-    wanted = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('cmd_dir', 'run_pending')]
+    wanted = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name in ('cmd_dir', 'refusal', 'run_pending'))
+              or (isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') in ('DEADLINE_PREFIX', 'REFUSED_PREFIX'))]
     tmp = Path(tempfile.mkdtemp(prefix='ow-driver-'))
     folder = tmp / 'cmd'
     folder.mkdir()
     (tmp / 'cmd_dir.txt').write_text(str(folder), encoding='utf-8')
+    clock = types.SimpleNamespace(time=(lambda: now) if now is not None else time.time)
     namespace = {'Path': path_class, '__file__': str(tmp / '__init__.py'), 'io': io, 'contextlib': contextlib, 'traceback': traceback,
-                 'scope': {'runs': []}}
+                 'time': clock, 'scope': {'runs': []}}
     exec(compile(ast.Module(wanted, []), str(SOURCE), 'exec'), namespace)
     return namespace, folder
+
+
+def command(code, deadline_ms=None):
+    """A command as the sender publishes it: its deadline line first (an hour ahead unless given), then the code."""
+    if deadline_ms is None:
+        deadline_ms = int(time.time() * 1000) + 3600 * 1000
+    return f'# ow-deadline-unix-ms: {deadline_ms}\n{code}'
 
 
 def test_a_reply_appears_only_complete_and_the_script_is_done_before_it_runs():
@@ -128,7 +142,7 @@ def test_a_reply_appears_only_complete_and_the_script_is_done_before_it_runs():
             return super().write_text(*args, **kwargs)
     ns, folder = load_channel(Watched)
     script = folder / 'c1-invented.py'
-    script.write_text("import os\nruns.append(os.path.exists(r'%s'))\nprint('invented reply ' * 50)" % script, encoding='utf-8')
+    script.write_text(command("import os\nruns.append(os.path.exists(r'%s'))\nprint('invented reply ' * 50)" % script), encoding='utf-8')
     ns['run_pending']()
     assert ns['scope']['runs'] == [False]                       # already .py.done when it ran
     assert seen == [('c1-invented.out.tmp', False)], seen       # written under the other name, with no .out yet
@@ -143,12 +157,65 @@ def test_a_failed_rename_leaves_no_reply_and_the_script_does_not_run_again():
                 raise PermissionError('invented: the rename was refused')
             return super().replace(target)
     ns, folder = load_channel(Unrenamable)
-    (folder / 'c2-invented.py').write_text("runs.append(1)\nprint('ok')", encoding='utf-8')
-    (folder / 'c3-invented.py').write_text("runs.append(2)\nprint('ok')", encoding='utf-8')
+    (folder / 'c2-invented.py').write_text(command("runs.append(1)\nprint('ok')"), encoding='utf-8')
+    (folder / 'c3-invented.py').write_text(command("runs.append(2)\nprint('ok')"), encoding='utf-8')
     ns['run_pending']()
     ns['run_pending']()
     assert ns['scope']['runs'] == [1, 2]                        # each ran once; the failure did not stop the next one
     assert sorted(p.name for p in folder.iterdir()) == ['c2-invented.py.done', 'c3-invented.py.done']   # no reply, no .tmp left
+
+
+# ---------------------------------------------------------------- the deadline the receiver enforces (session gate's review, B1)
+def test_a_command_taken_after_its_deadline_is_refused_and_never_run():
+    """B1: the driver ran whatever was queued, so a command its caller gave up on could run later (a slow acceptance, a hitch in the
+    game). It now refuses a command whose deadline has passed when it takes it: not run, renamed .py.expired, and a reply that starts
+    'OW-REFUSED: ' (the sender's no-reply form). One taken in time still runs; the clock is the driver's, here a fixed invented one."""
+    now = 1_900_000_000.0
+    ns, folder = load_channel(type(Path()), now=now)
+    (folder / 'c1-late.py').write_text(command("runs.append('late')\nprint('ran')", int(now * 1000) - 1), encoding='utf-8')
+    (folder / 'c2-in-time.py').write_text(command("runs.append('in time')\nprint('ran')", int(now * 1000) + 1), encoding='utf-8')
+    ns['run_pending']()
+    ns['run_pending']()
+    assert ns['scope']['runs'] == ['in time'], ns['scope']['runs']   # the late one never ran, not even on the next pass
+    assert sorted(p.name for p in folder.iterdir()) == ['c1-late.out', 'c1-late.py.expired', 'c2-in-time.out', 'c2-in-time.py.done']
+    assert (folder / 'c1-late.out').read_text(encoding='utf-8') == 'OW-REFUSED: not run: its deadline passed 1 ms before the driver took it\n'
+    assert (folder / 'c2-in-time.out').read_text(encoding='utf-8') == 'ran\n'
+
+
+def test_a_command_with_no_deadline_or_an_unreadable_one_is_refused():
+    ns, folder = load_channel(type(Path()))
+    (folder / 'c1-bare.py').write_text("runs.append('bare')", encoding='utf-8')
+    (folder / 'c2-bad.py').write_text("# ow-deadline-unix-ms: soon\nruns.append('bad')", encoding='utf-8')
+    ns['run_pending']()
+    assert ns['scope']['runs'] == []
+    assert (folder / 'c1-bare.out').read_text(encoding='utf-8') == 'OW-REFUSED: not run: the command names no deadline\n'
+    assert (folder / 'c2-bad.out').read_text(encoding='utf-8') == "OW-REFUSED: not run: the command's deadline line is unreadable\n"
+
+
+def test_the_sender_and_the_driver_agree_on_the_deadline_line_and_the_refusal():
+    """The real Invoke-GamePy writes a command (its driver stand-in only reads the published file, then the call times out); the driver's
+    own parser reads that file's deadline as the call's timeout from now, refuses it a millisecond after and runs it a second before.
+    The refusal prefix the sender checks is the driver's."""
+    realgame = ROOT / 'tools' / 'real_game' / 'realgame.ps1'
+    assert "StartsWith('OW-REFUSED: '" in realgame.read_text(encoding='utf-8')
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / 'send.ps1'
+        script.write_text(f""". '{realgame}'
+$script:CmdDir = '{tmp}'
+function Start-Sleep {{ foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) {{ Copy-Item -LiteralPath $py.FullName (Join-Path '{tmp}' 'published.txt') }}; throw 'invented: stop waiting' }}
+"before: $([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+try {{ Invoke-GamePy 'print(1)' 7 | Out-Null }} catch {{ "error: $_" }}
+""", encoding='utf-8-sig')
+        done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True,
+                              timeout=120, cwd=tmp, env=dict(os.environ))
+        published = (Path(tmp) / 'published.txt').read_text(encoding='utf-8')
+    before = int(re.search(r'before: (\d+)', done.stdout).group(1))
+    ns, _ = load_channel(type(Path()))
+    deadline = int(published.split('\n', 1)[0].split(':', 1)[1])
+    assert published.split('\n', 1)[1] == 'print(1)', published
+    assert 6000 <= deadline - before <= 8000, (deadline - before, done.stdout + done.stderr)
+    assert ns['refusal'](published, deadline + 1) is not None and ns['refusal'](published, deadline - 1000) is None
+    assert ns['REFUSED_PREFIX'] == 'OW-REFUSED: ' and ns['DEADLINE_PREFIX'] == '# ow-deadline-unix-ms: '
 
 
 if __name__ == '__main__':
