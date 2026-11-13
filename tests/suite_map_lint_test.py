@@ -5,6 +5,7 @@ names and contents, and invented maps in the hub's format. The binary package() 
 not apply here (no package is read). Needs git.
 """
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -229,6 +230,34 @@ class LintTest(unittest.TestCase):
                                '--repo', str(Path(self.repo.tmp.name) / 'not-a-repo')], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 2, done.stderr)
 
+
+
+class TrackedMapTest(unittest.TestCase):
+    """The plain command (no arguments) checks the tracked map with the tracked switch-only list, as CTest suite-map-tracked
+    runs it. Reads tracked files only (git objects at HEAD and the two tracked lists), no local/ data."""
+    def run_plain(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / 'tools' / 'suite_map_lint.py'), *args], capture_output=True, text=True,
+                              timeout=120, cwd=str(ROOT))
+
+    def test_the_plain_command_passes_on_the_tracked_map(self):
+        done = self.run_plain()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertRegex(done.stdout, r'suite_map_lint: \d+ suites, 0 error\(s\)')
+
+    def test_every_switch_only_pair_is_still_needed(self):
+        # Without the list the lint reports exactly its pairs: an entry it no longer reports is stale and fails here.
+        pairs = {tuple(line.split()) for line in lint.list_file(lint.SWITCH_ONLY)}
+        self.assertTrue(pairs)
+        done = self.run_plain('--switch-only', '')
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        reported = set()
+        for line in done.stdout.splitlines():
+            if line.startswith('suite_map_lint:'):
+                continue
+            m = re.match(r'not-covered: suite (\S+): \S+ loads ([^\s,]+)', line)
+            self.assertIsNotNone(m, line)
+            reported.add((m.group(1), m.group(2)))
+        self.assertEqual(reported, pairs)
 
 if __name__ == '__main__':
     unittest.main()

@@ -395,9 +395,10 @@ checks the owner and staleness rules against temporary lock files.
   variable is not read); and a tracked file under `host/ue5/OpenWillow/Source/` or `src/` that only a whole-tree suite (`.`)
   covers, unless `--smoke-only` lists it. The lint does not read switches, so a load behind a switch the suite never passes
   is reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. `--map` defaults to the
-  tracked `tools/suites.txt`. CTest `py-suite_map_lint`, and `suite-map-tracked`, which lints the tracked map with
-  `tools/suites_switch_only.txt` (the loads that sit behind a switch the suite never passes), so a PR that adds a tool to a
-  suite script without adding it to the map fails CI.
+  tracked `tools/suites.txt`, and without `--map` and `--switch-only` the tracked `tools/suites_switch_only.txt` (the loads
+  that sit behind a switch the suite never passes) is read with it (since 2026-11-13; `--switch-only ''` reads none). CTest
+  `py-suite_map_lint` (which also checks that every pair in that list is still reported without it), and `suite-map-tracked`,
+  which runs the plain command, so a PR that adds a tool to a suite script without adding it to the map fails CI.
 
 ### Heavy suites: the suite map (2026-11-12)
 

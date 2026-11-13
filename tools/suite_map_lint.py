@@ -29,7 +29,9 @@ Errors, each one line; the exit code is 1 when there is any, 2 when the map or t
    the root (the real value would be the folder above); a helper that sets $repo in a spelling the lint does not know
    keeps its caller's base instead.
    The lint does not read switches: a load behind a switch the suite never passes is reported too. List such a pair in
-   --switch-only (one "<suite> <repo path>" per line, # comments allowed) to accept it.
+   --switch-only (one "<suite> <repo path>" per line, # comments allowed) to accept it. Without --map and --switch-only
+   the lint checks the tracked tools/suites.txt with the tracked tools/suites_switch_only.txt (2026-11-13: before, the
+   plain command left the list out and reported its pairs, so it disagreed with the CTest entry). --switch-only '' reads none.
 3. uncovered-core: a tracked file under host/ue5/OpenWillow/Source/ or src/ that no suite covers except a whole-tree one
    (a suite whose paths include "."), unless --smoke-only lists it (one repo path per line, # comments allowed).
 Reads only git objects at <rev> (default HEAD), not the working tree.
@@ -216,6 +218,10 @@ def list_file(path):
     return [l.strip() for l in Path(path).read_text(encoding='utf-8-sig').splitlines() if l.strip() and not l.strip().startswith('#')]
 
 
+# The pairs of the tracked map, read by default with it.
+SWITCH_ONLY = Path(__file__).resolve().parent / 'suites_switch_only.txt'
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--map', default=str(Path(__file__).resolve().parent / 'suites.txt'),
@@ -223,8 +229,11 @@ def main(argv=None):
     ap.add_argument('--repo', default=str(Path(__file__).resolve().parents[1]), help='the checkout (default: this one)')
     ap.add_argument('--commit', default='HEAD', help='the revision whose tracked files count (default HEAD)')
     ap.add_argument('--smoke-only', help='file of core paths that only a whole-tree suite needs to cover')
-    ap.add_argument('--switch-only', help='file of "<suite> <path>" loads that sit behind a switch the suite never passes')
+    ap.add_argument('--switch-only', help='file of "<suite> <path>" loads that sit behind a switch the suite never passes (default '
+                    'with the default map: the tracked tools/suites_switch_only.txt; '' for none)')
     a = ap.parse_args(argv)
+    if a.switch_only is None and '--map' not in (argv if argv is not None else sys.argv[1:]):
+        a.switch_only = str(SWITCH_ONLY)
     try:
         smoke = list_file(a.smoke_only)
         pairs = set()

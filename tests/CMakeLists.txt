@@ -86,8 +86,9 @@ set_tests_properties(py-land_batch PROPERTIES TIMEOUT 300)
 # suites_due starts the batch driver under Windows PowerShell three times (the file takes about 40 s on the main desktop).
 set_tests_properties(py-suites_due PROPERTIES TIMEOUT 300)
 # The tracked suite map against this checkout: a PR that adds a load to a suite script without updating tools/suites.txt fails.
+# Run as the plain command (no arguments: the tracked map with the tracked tools/suites_switch_only.txt, since 2026-11-13), so
+# the command people run and this entry give the same answer.
 add_test(NAME suite-map-tracked COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/suite_map_lint.py
-         --map ${CMAKE_SOURCE_DIR}/tools/suites.txt --switch-only ${CMAKE_SOURCE_DIR}/tools/suites_switch_only.txt
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Tests that need Node or numpy (lane ci-test-deps, 2026-11-11). CI installs both (.github/workflows/ci.yml). Elsewhere a group
