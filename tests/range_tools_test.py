@@ -163,6 +163,17 @@ class PrepareRangeTest(unittest.TestCase):
             with open(out, encoding='utf-8') as f:
                 manifest = json.load(f)
             self.assertEqual(manifest['assets'], 'imported')
+            # The target names no attachments list, so no kind carries one (the host warns about such an entry).
+            self.assertNotIn('attachments', manifest['kinds']['bullymong_adult'])
+            # A target whose pawn wears nothing writes an empty list; the manifest keeps it, so the host attaches nothing and does not warn.
+            with open(target, 'w', encoding='utf-8') as f:
+                json.dump({'Bullymong': {'mesh': '/Game/M.M', 'idle': '', 'death': '', 'collision_radius': 130.0, 'collision_height': 70.0,
+                                         'attachments': []}}, f)
+            prepare_range.main(['--no-vm', '--allow-missing-spot-data', '--views', views_path, '--terrain', none, '--target', target, '--out', out])
+            with open(out, encoding='utf-8') as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest['kinds']['bullymong_adult']['attachments'], [])
+            self.assertEqual(manifest['kinds']['bullymong_adult']['attachments_expected'], 0)
             # The baby borrows the asset but keeps its own cylinder; the kinds that own the asset's cylinder keep the asset's.
             baby, adult = manifest['kinds']['bullymong_baby'], manifest['kinds']['bullymong_adult']
             self.assertEqual((baby['mesh'], baby['collision_radius'], baby['collision_height']), ('/Game/M.M', 64.0, 48.0))

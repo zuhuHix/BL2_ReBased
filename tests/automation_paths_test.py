@@ -135,13 +135,17 @@ def suite_counts(text, launcher):
     if len(row) != 1 or len(passes) != 1:
         raise ValueError(f'expected one ue_automation row and one pass line, found {len(row)} and {len(passes)}')
     command = row[0].split('|', 3)[3]
-    if not re.search(r'-File\s+tools/test_automation\.ps1(\s|;|$)', command):
+    if not re.search(r'-File\s+tools/test_automation\.ps1', command):
         raise ValueError('the ue_automation row does not run tools/test_automation.ps1')
-    if re.search(r'(?i)\s-(Tests|Expected)\b', command):
-        raise ValueError("the ue_automation row overrides the launcher's -Tests or -Expected: change the defaults there instead")
-    expected = re.search(r'expected=(\d+)', passes[0].split('|')[1])
+    # Nothing may follow the script path but the exit: PowerShell binds a parameter by a unique prefix (-Te, -Exp), so any
+    # argument could override the defaults the count is read from.
+    if not re.search(r'-File\s+tools/test_automation\.ps1;\s*exit \$LASTEXITCODE\s*$', command):
+        raise ValueError("the ue_automation row passes the launcher an argument, which could override -Tests or -Expected: "
+                         "change the defaults there instead")
+    # The pass line must also want timed_out=0: a run stopped at the timeout fails even with every test completed.
+    expected = re.search(r'expected=(\d+) timed_out=0\b', passes[0].split('|')[1])
     if not expected:
-        raise ValueError('the ue_automation pass line lost its expected= count')
+        raise ValueError('the ue_automation pass line lost its expected= count or its timed_out=0')
     names, _, printed, eq = launcher_counts(launcher)
     return names, int(expected.group(1)), printed, eq
 
@@ -184,14 +188,14 @@ def launcher_text(names, expected, printed='$Expected', eq='$Expected'):
             f'    [string[]]$Tests = @({listed}),\n'
             f'    [int]$Expected = {expected}\n'
             ')\n'
-            f"Write-Output ('AUTOMATION SUMMARY success=' + $ok.Count + ' failed=' + $bad.Count + ' expected=' + {printed})\n"
+            f"Write-Output ('AUTOMATION SUMMARY success=' + $ok.Count + ' failed=' + $bad.Count + ' expected=' + {printed} + ' timed_out=' + $timedOut)\n"
             f'if ($ok.Count -eq {eq} -and $bad.Count -eq 0) {{ $code = 0 }} else {{ $code = 1 }}\n')
 
 
 def suite_text(expected, command='powershell -NoProfile -File tools/test_automation.ps1; exit $LASTEXITCODE'):
     return ('# invented map\n'
             f'ue_automation | 1 | src/ tools/test_automation.ps1 | {command}\n'
-            f'#pass ue_automation | SUMMARY success={expected} failed=0 expected={expected} | SUMMARY failed=[1-9]\n')
+            f'#pass ue_automation | SUMMARY success={expected} failed=0 expected={expected} timed_out=0 | SUMMARY failed=[1-9]\n')
 
 
 def counts(names, expected, printed='$Expected', eq='$Expected', passline=None):
@@ -331,6 +335,9 @@ class SyntheticCounts(unittest.TestCase):
         for command in ("$names = @(); foreach ($n in 'State') { $names += 'Fake.' + $n }; exit 0",
                         'powershell -File tools/test_automation.ps1 -Tests Fake.Gun -Expected 1; exit $LASTEXITCODE',
                         'powershell -File tools/test_automation.ps1 -expected 2; exit $LASTEXITCODE',
+                        'powershell -File tools/test_automation.ps1 -Te Fake.Gun -Exp 1; exit $LASTEXITCODE',   # unique prefixes
+                        'powershell -File tools/test_automation.ps1 Fake.Gun; exit $LASTEXITCODE',             # a positional value
+                        'powershell -File tools/test_automation.ps1 -DryRun; exit $LASTEXITCODE',
                         'powershell -File tools/test_automation_old.ps1; exit $LASTEXITCODE'):
             with self.assertRaises(ValueError, msg=command):
                 suite_counts(suite_text(2, command), launcher)
@@ -349,6 +356,16 @@ class ThisCheckout(unittest.TestCase):
         problems = count_problems(names, expected, printed, eq, test_paths(SOURCE))
         self.assertEqual(problems, [])
         print(f'ue_automation: {len(names)} names, expected={expected}', file=sys.stderr)
+
+    def test_the_pass_line_refuses_a_timed_out_run(self):
+        line = [l for l in SUITES.read_text(encoding='utf-8').splitlines() if l.startswith('#pass ue_automation |')][0]
+        must = re.compile(line.split('|')[1].strip())
+        names, expected, _, _ = suite_counts(SUITES.read_text(encoding='utf-8'), LAUNCHER.read_text(encoding='utf-8-sig'))
+        good = f'AUTOMATION SUMMARY success={expected} failed=0 expected={expected} timed_out=0'
+        self.assertTrue(must.search(good))
+        self.assertFalse(must.search(good.replace('timed_out=0', 'timed_out=1')))
+        with self.assertRaises(ValueError):   # a pass line that drops timed_out=0 is refused
+            suite_counts(suite_text(2).replace(' timed_out=0', ''), launcher_text(['State'], 2))
 
 
 class DryRunCases:
@@ -381,6 +398,24 @@ class DryRunCases:
         done = self.run_launcher('-DryRun', '-Tests', 'Fake.Invented')
         self.assertNotEqual(done.returncode, 0)
         self.assertIn('-Expected', done.stdout + done.stderr)
+
+
+    def test_a_positional_or_prefix_override_is_refused_by_the_launcher(self):
+        # Positional binding is off, so a bare value is an error; a prefix still binds, and -Tests without -Expected is refused.
+        done = self.run_launcher('-DryRun', 'Fake.Invented')
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        done = self.run_launcher('-DryRun', '-Te', 'Fake.Invented')
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertIn('-Expected', done.stdout + done.stderr)
+
+
+if not SHELLS:
+    # The dry-run cases tie the -ExecCmds line to the -Tests defaults. Without any PowerShell they are not made; this skip says so
+    # in the run (it exists only on such a host, so a run with a shell shows no skip).
+    class NoShellTest(unittest.TestCase):
+        @unittest.skip('no powershell or pwsh on this host: the launcher dry-run cases (DryRunCases) did not run')
+        def test_dry_run_cases_need_a_powershell(self):
+            pass
 
 
 for _name, _path in SHELLS.items():

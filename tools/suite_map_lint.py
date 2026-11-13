@@ -224,16 +224,18 @@ SWITCH_ONLY = Path(__file__).resolve().parent / 'suites_switch_only.txt'
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('--map', default=str(Path(__file__).resolve().parent / 'suites.txt'),
-                    help='the suite map to check (default: the tracked tools/suites.txt)')
+    ap.add_argument('--map', help='the suite map to check (default: the tracked tools/suites.txt)')
     ap.add_argument('--repo', default=str(Path(__file__).resolve().parents[1]), help='the checkout (default: this one)')
     ap.add_argument('--commit', default='HEAD', help='the revision whose tracked files count (default HEAD)')
     ap.add_argument('--smoke-only', help='file of core paths that only a whole-tree suite needs to cover')
     ap.add_argument('--switch-only', help='file of "<suite> <path>" loads that sit behind a switch the suite never passes (default '
-                    'with the default map: the tracked tools/suites_switch_only.txt; '' for none)')
+                    'with the default map: the tracked tools/suites_switch_only.txt; an empty value for none)')
     a = ap.parse_args(argv)
-    if a.switch_only is None and '--map' not in (argv if argv is not None else sys.argv[1:]):
-        a.switch_only = str(SWITCH_ONLY)
+    # Decided from the parsed value, so --map FILE and --map=FILE both leave the tracked list out.
+    if a.map is None:
+        a.map = str(Path(__file__).resolve().parent / 'suites.txt')
+        if a.switch_only is None:
+            a.switch_only = str(SWITCH_ONLY)
     try:
         smoke = list_file(a.smoke_only)
         pairs = set()

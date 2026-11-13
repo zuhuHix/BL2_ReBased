@@ -244,6 +244,13 @@ class TrackedMapTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertRegex(done.stdout, r'suite_map_lint: \d+ suites, 0 error\(s\)')
 
+    def test_a_given_map_does_not_load_the_tracked_list_in_either_spelling(self):
+        tracked = str(ROOT / 'tools' / 'suites.txt')
+        for args in (('--map', tracked), (f'--map={tracked}',)):
+            done = self.run_plain(*args)
+            self.assertEqual(done.returncode, 1, (args, done.stdout + done.stderr))
+            self.assertIn('not-covered:', done.stdout)
+
     def test_every_switch_only_pair_is_still_needed(self):
         # Without the list the lint reports exactly its pairs: an entry it no longer reports is stale and fails here.
         pairs = {tuple(line.split()) for line in lint.list_file(lint.SWITCH_ONLY)}

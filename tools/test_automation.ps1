@@ -1,3 +1,6 @@
+# No positional binding: a value can reach a parameter only by name (tests/automation_paths_test.py also refuses any argument
+# on the suite row).
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Engine = $(if ($env:OPENWILLOW_UE) { $env:OPENWILLOW_UE } else { 'C:\Program Files\Epic Games\UE_5.8' }),
     # The ue_automation suite's test names and how many tests they select. This is the one place both live:
@@ -13,7 +16,8 @@ param(
 )
 # AI-assisted (Claude Code), 2026-11-13. The ue_automation suite (tools/suites.txt) as a tracked launcher; it replaces the inline
 # command the row held until then. One windowed game process (FocusCam writes frames) runs "Automation RunTests" on the names above
-# and quits. The summary counts the framework's "Test Completed" lines; exit 0 only when success equals -Expected and none failed.
+# and quits. The summary counts the framework's "Test Completed" lines; exit 0 only when success equals -Expected, none failed and
+# the run quit before the timeout (timed_out=0).
 # A list of the completed test paths follows, so a lost or shadowed test shows in the suite log. Host tests only: nothing here is
 # compared with the running game.
 $ErrorActionPreference = 'Stop'
@@ -38,6 +42,7 @@ if (!(Test-Path -LiteralPath $editor)) { throw "UnrealEditor.exe not found under
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $process = $null
 $code = 2
+$timedOut = 0
 Enter-OwUeLock -Owner 'test_automation' -TimeoutSeconds $LockWaitSeconds
 try {
     $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
@@ -46,6 +51,7 @@ try {
         # Only the process this run started is stopped, by its own id.
         Write-Output "Automation run timed out after $TimeoutSeconds s; stopping pid $($process.Id)"
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $timedOut = 1   # a run that did not quit by itself fails, whatever the log holds
     }
     Start-Sleep -Seconds 3
     $ok = @(); $bad = @()
@@ -58,8 +64,8 @@ try {
     foreach ($m in $ok + $bad) { $m.Line }
     $paths = @(foreach ($m in $ok + $bad) { if ($m.Line -match 'Path=\{([^}]*)\}') { $Matches[1] } })
     Write-Output ('AUTOMATION PATHS ' + $paths.Count + ': ' + ($paths -join ', '))
-    Write-Output ('AUTOMATION SUMMARY success=' + $ok.Count + ' failed=' + $bad.Count + ' expected=' + $Expected)
-    if ($ok.Count -eq $Expected -and $bad.Count -eq 0) { $code = 0 } else { $code = 1 }
+    Write-Output ('AUTOMATION SUMMARY success=' + $ok.Count + ' failed=' + $bad.Count + ' expected=' + $Expected + ' timed_out=' + $timedOut)
+    if ($ok.Count -eq $Expected -and $bad.Count -eq 0 -and !$timedOut) { $code = 0 } else { $code = 1 }
     Write-Output "Log: $log"
 } finally {
     if ($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

@@ -156,8 +156,8 @@ def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=
         for key in ("mesh", "idle", "death"):
             entry[key] = target.get(key, "")
         # What the pawn wears on its bones (the import writes them once the pieces are imported; the host attaches them as it does for a
-        # test pawn).
-        if target.get("attachments"):
+        # test pawn). An empty list is kept: it says the pawn wears nothing, and the host warns only when the field is missing.
+        if isinstance(target.get("attachments"), list):
             entry["attachments"] = target["attachments"]
         for key in ("mesh_offset_z", "mesh_scale", "collision_radius", "collision_height"):
             if key in target:

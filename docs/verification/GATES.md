@@ -72,7 +72,7 @@ entries and one message per group left out.
   Since 2026-11-04 (inventory round 24) the suite has 50 steps (number keys no longer pick a transfer slot; `locked_slot_transfer_cancel`
   added); baseline 50 pass / 0 fail.
 - UE automation tests: `tools/test_automation.ps1` (the `ue_automation` suite; `-DryRun` shows the command without starting
-  anything). Its `#pass` line wants `AUTOMATION SUMMARY success=13 failed=0 expected=13`; `tests/automation_paths_test.py` (ctest)
+  anything). Its `#pass` line wants `AUTOMATION SUMMARY success=13 failed=0 expected=13 timed_out=0`; `tests/automation_paths_test.py` (ctest)
   holds the launcher's names and count to the declared test paths.
 
 ## Records

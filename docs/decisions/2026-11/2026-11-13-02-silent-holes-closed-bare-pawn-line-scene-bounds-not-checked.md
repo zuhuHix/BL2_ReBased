@@ -27,3 +27,7 @@ and a result line names what it ran on).
   as CTest `suite-map-tracked` did by its arguments; before, the plain command reported the list's nine pairs (loads behind
   switches the suites never pass, read again in the launchers) and exited 1. No suite row is widened. `suite-map-tracked`
   runs the plain command, and `py-suite_map_lint` checks that every pair in the list is still reported without it.
+- Review r1: `tools/prepare_range.py` keeps an empty `attachments` list in the range manifest (before, an empty list was left
+  out, so a pawn that wears nothing would have drawn the new host warning). The launcher binds no parameter by position, the
+  guard refuses any argument after the script path on the suite row, a run stopped at the timeout prints `timed_out=1` and
+  exits 1 (the pass line wants `timed_out=0`), and `--map=FILE` no longer loads the tracked switch-only list.
