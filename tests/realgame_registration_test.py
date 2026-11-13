@@ -12,6 +12,7 @@ them and a change could break them unseen. This test fails when
 The synthetic cases use invented file names and invented CMake text (rule 9); the last class reads this checkout.
 """
 from pathlib import Path
+import ast
 import re
 import unittest
 
@@ -19,12 +20,31 @@ ROOT = Path(__file__).resolve().parents[1]
 CMAKE = ROOT / 'tests' / 'CMakeLists.txt'
 OUTSIDE = 'OW_OUTSIDE_CTEST'
 
-_REALGAME = re.compile(r'^\s*import\s+realgame_test_env\b|\breal_game[/\\\'"]', re.M)
+ENV_MODULE = 'realgame_test_env'
+_TOOL_PATH = re.compile(r'\breal_game[/\\\'"]')
+
+
+def imports_env(source):
+    """True when the source imports realgame_test_env in any form: `import realgame_test_env`, `import os, realgame_test_env`, an
+    aliased import, `from realgame_test_env import ...`, `from <package> import realgame_test_env`, also inside a block. Read with ast,
+    so the name in a string or a comment does not count. A file ast cannot parse counts when it names the module at all (it fails on
+    its own anyway, and the guard should not let it slip through)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ENV_MODULE in source
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(alias.name.split('.')[-1] == ENV_MODULE for alias in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom):
+            if (node.module or '').split('.')[-1] == ENV_MODULE or any(alias.name == ENV_MODULE for alias in node.names):
+                return True
+    return False
 
 
 def is_realgame_test(source):
-    """True for a test that uses the real-game test environment or names a tools/real_game/ path."""
-    return bool(_REALGAME.search(source))
+    """True for a test that imports the real-game test environment or names a tools/real_game/ path."""
+    return imports_env(source) or bool(_TOOL_PATH.search(source))
 
 
 def _set_blocks(cmake):
@@ -48,7 +68,8 @@ def registration(cmake):
     """(listed, named, outside): names in OW_*_TESTS lists, names an add_test starts by path, and {name: reason} of OW_OUTSIDE_CTEST."""
     blocks = _set_blocks(cmake)
     listed = {word for var, rows in blocks.items() if var.endswith('_TESTS') for word, _ in rows}
-    named = set(re.findall(r'add_test\([^)]*?tests/(\w+)_test\.py', cmake, re.S))
+    code = '\n'.join(line.partition('#')[0] for line in cmake.splitlines())   # a commented-out add_test registers nothing
+    named = set(re.findall(r'add_test\([^)]*?tests/(\w+)_test\.py', code, re.S))
     outside = {word: reason for word, reason in blocks.get(OUTSIDE, [])}
     return listed, named, outside
 
@@ -99,6 +120,25 @@ class GuardRulesTest(unittest.TestCase):
             found = problems(CMAKE_FIXTURE, sources)
             self.assertEqual(len(found), 1, found)
             self.assertIn('omega_test.py', found[0])
+
+    def test_every_import_form_of_the_environment_counts(self):
+        for text in ('from realgame_test_env import remove_tree\n', 'import os, realgame_test_env\n',
+                     'import realgame_test_env as rg_env\n', 'from tests import realgame_test_env\n',
+                     'from tests.realgame_test_env import remove_tree\n', 'if True:\n    import realgame_test_env\n'):
+            sources = {'alpha': ENV, 'beta': ENV, 'epsilon': ENV, 'omega': text}
+            found = problems(CMAKE_FIXTURE, sources)
+            self.assertEqual(len(found), 1, (text, found))
+            self.assertIn('omega_test.py', found[0])
+
+    def test_the_module_name_in_a_string_or_a_comment_is_not_an_import(self):
+        for text in ("NOTE = 'import realgame_test_env'\n", '# import realgame_test_env\n'):
+            self.assertFalse(is_realgame_test(text), text)
+
+    def test_a_commented_out_add_test_registers_nothing(self):
+        cmake = CMAKE_FIXTURE + '# add_test(NAME omega-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/omega_test.py)\n'
+        found = problems(cmake, {'alpha': ENV, 'beta': ENV, 'epsilon': ENV, 'omega': ENV})
+        self.assertEqual(len(found), 1, found)
+        self.assertIn('omega_test.py', found[0])
 
     def test_an_unrelated_unregistered_test_is_not_this_guards_business(self):
         sources = {'alpha': ENV, 'beta': ENV, 'epsilon': ENV, 'omega': 'import json\nrealgame = 1\n'}
