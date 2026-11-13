@@ -94,6 +94,8 @@ private:
     EOpenWillowRangeLootMode LootMode = EOpenWillowRangeLootMode::Normal;
     FRandomStream LootStream;
     int32 LootSeed = 20261009;
+    // The seed of the enemies' attack draws (-owrangeaiseed=N; enemy i draws from N + i, so a run repeats its draws).
+    int32 AISeed = 20261113;
     TMap<const AOpenWillowEnemy*, FString> EnemyKinds;
     FOpenWillowRangeLootResult LastLoot;
     TArray<TWeakObjectPtr<AActor>> LootActors;   // every drop of the range (ClearRange destroys them)
@@ -165,6 +167,12 @@ private:
     TArray<float> TestKindDistances;
     float TestKindLastTick = 0.f;
     float TestKindMaxFrame = 0.f;
+    // The leap and throw steps: one (enemy, attack) per kind with a leap or a throw, the one under test, and its count before the request.
+    bool bTestRangedQueued = false;
+    TArray<TPair<TWeakObjectPtr<AOpenWillowEnemy>, EOpenWillowAttack>> TestRangedQueue;
+    TWeakObjectPtr<AOpenWillowEnemy> TestRangedEnemy;
+    EOpenWillowAttack TestRangedAttack = EOpenWillowAttack::None;
+    int32 TestRangedBase = 0;
     FString TestWhere;                  // where PlaceInSight put Maya (for the step's log line)
     float TestDistance = 0.f;
     float TestMovedAt = -1.f;

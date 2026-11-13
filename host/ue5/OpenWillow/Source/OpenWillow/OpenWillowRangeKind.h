@@ -47,6 +47,7 @@ struct FOpenWillowRangeKind
     FString Label;
     FString Mesh, Idle, Death;           // UE object paths; the stock pawn needs all three
     FString Walk, Run, Hit, Melee;       // optional clips (Walk and Hit are used in PR1)
+    FString LeapStart, LeapIdle, LeapEnd, Throw;   // optional leap and throw clips (tools/prepare_range.py; empty: the idle is held)
     float MeshOffsetZ = 0.f;
     float MeshScale = 1.f;
     float CollisionRadius = 0.f;         // the pawn's cylinder (0 = the bounds capsule stays)

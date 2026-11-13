@@ -244,6 +244,15 @@ float AOpenWillowWalker::ApplyDamageToPlayer(float Amount, AActor* Causer, const
     return Applied;
 }
 
+FVector AOpenWillowWalker::ApplyKnockback(const FVector& Velocity)
+{
+    if (IsDown() || RespawnTimeline.IsHeld() || Velocity.IsNearlyZero()) return FVector::ZeroVector;
+    // Added to her velocity, as the engine's pawn adds a momentum (host stand-in, UNVERIFIED for BL2; the caller turns the momentum into
+    // this velocity). The launch puts her in the falling mode for a moment, so ground friction does not eat it within the frame.
+    LaunchCharacter(Velocity, false, false);
+    return Velocity;
+}
+
 // ---- Fight For Your Life (host down state) ----
 // The rules and numbers are in FOpenWillowMayaState (the live ones of COMBAT_GOLDEN_TRACE.md section D and
 // COMBAT_DOWN_RESPAWN.md). The walker adds what the down state does to the weapon, the Phaselock and the position.

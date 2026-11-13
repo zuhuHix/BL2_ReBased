@@ -6,9 +6,9 @@ param(
     # The ue_automation suite's test names and how many tests they select. This is the one place both live:
     # tests/automation_paths_test.py reads these two defaults and checks them against the test paths declared under
     # host/ue5/OpenWillow/Source and against the suite's #pass line in tools/suites.txt. Change them together when a test is added.
-    [string[]]$Tests = @('OpenWillow.CombatTarget', 'OpenWillow.FocusCam', 'OpenWillow.MayaMovement', 'OpenWillow.MayaState',
+    [string[]]$Tests = @('OpenWillow.CombatTarget', 'OpenWillow.FocusCam', 'OpenWillow.LeapThrow', 'OpenWillow.MayaMovement', 'OpenWillow.MayaState',
         'OpenWillow.Phaselock', 'OpenWillow.Skills', 'OpenWillow.SkillEffects', 'OpenWillow.WeaponAssembly'),
-    [int]$Expected = 13,
+    [int]$Expected = 14,
     [int]$TimeoutSeconds = 1200,
     [int]$LockWaitSeconds = 3600,
     # Print the command line this run would start and exit 0: no lock, no editor, no folder or log is created.

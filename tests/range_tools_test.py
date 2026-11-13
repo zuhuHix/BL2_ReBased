@@ -9,6 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import check_range  # noqa: E402
 import prepare_range  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import range_fixtures  # noqa: E402
 
 
 # A kind_melee PASS line must carry numbers inside the acceptance bands (tools/check_range.py); this one does (invented, adult).
@@ -21,6 +23,9 @@ def passing(step):
     # kind_melee's result is tied to a spawn record of the same log, so its line comes with one (invented names).
     if step == 'kind_melee':
         return SPAWN_ADULT + '\nOWRANGETEST step=kind_melee result=PASS ' + KIND_MELEE_OK
+    # The leap and throw results too (since 2026-11-13): lines that follow the note's rule, with their spawn records.
+    if step in ('leap', 'throw'):
+        return range_fixtures.ranged_passing(step)
     return 'OWRANGETEST step=%s result=PASS x=1' % step
 
 
@@ -668,6 +673,244 @@ class CheckRangeTest(unittest.TestCase):
         # The worn line the host logs for a list (also an empty one) must not contain the marker.
         self.assertIn('OpenWillow target: %d of %d attachments on the stock pawn', source)
         self.assertNotIn(check_range.MISSING_ATTACHMENTS, self.NONE_WORN)
+
+
+# ---- Leaps and thrown rocks (2026-11-13, NATIVE_AI_LEAP_THROW.md) -------------------------------------------------------------------------
+SOURCE = Path(__file__).resolve().parents[1] / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow'
+
+
+def source(name):
+    return (SOURCE / name).read_text(encoding='utf-8')
+
+
+def flat_row(kind):
+    """The checker's ATTACKS row for kind, flattened in the order of the host's initializer (OpenWillowLeapThrow.h)."""
+    import itertools
+    row = check_range.ATTACKS[kind]
+    leap = row['leap'] or (0.0, 0.0, 0.0, 0.0, 0.0, False, 0.0, 0.0)
+    throw = row['throw'] or (0.0, 0.0, 0.0, 0.0, 0.0, False, False, ())
+    clips = list(itertools.chain.from_iterable([seconds, len(moments)] + list(moments) + [0.0] * (2 - len(moments)) for seconds, moments in throw[7]))
+    return [row['close']] + list(row['weights']) + [float(v) for v in leap] + [float(v) for v in throw[:7]] + [float(len(throw[7]))] + [float(v) for v in clips]
+
+
+def host_rows():
+    """{kind: [numbers]} from the one-line rows of OpenWillowFindKindAttacks: every number, true / false as 1 / 0, in order."""
+    import re
+    text = source('OpenWillowLeapThrow.h')
+    block = text[text.index('static const FOpenWillowKindAttacks Rows[] = {'):]
+    block = block[:block.index('};')]
+    rows = {}
+    for line in block.splitlines():
+        m = re.match(r'\s*\{TEXT\("(\w+)"\),(.*)\},\s*$', line)
+        if m:
+            tokens = re.findall(r'true|false|-?\d+(?:\.\d+)?', m.group(2))
+            rows[m.group(1)] = [1.0 if t == 'true' else 0.0 if t == 'false' else float(t) for t in tokens]
+    return rows
+
+
+class LeapThrowRowsTest(unittest.TestCase):
+    def test_the_host_rows_are_the_checkers_number_by_number(self):
+        rows = host_rows()
+        self.assertEqual(set(rows), set(check_range.ATTACKS))
+        for kind in check_range.ATTACKS:
+            with self.subTest(kind=kind):
+                self.assertEqual(rows[kind], flat_row(kind))
+
+    def test_the_rows_are_the_notes(self):
+        # A few values straight from the note's section 2.1, 3.2 and 4 (the full rows are in the checker, held to the host above).
+        a = check_range.ATTACKS
+        self.assertEqual(a['bullymong_adult']['weights'], (1.0, 0.25, 0.25))
+        self.assertEqual(a['bullymong']['weights'][:2], (1.0, 0.5))
+        self.assertEqual(a['bullymong']['leap'][:5], (1024.0, 2048.0, 2000.0, 0.4, 0.0))
+        self.assertIsNone(a['bullymong']['throw'])
+        self.assertEqual(a['bullymong_adult']['throw'][:5], (512.0, 3072.0, 2000.0, 0.3, 480.0))
+        self.assertIsNone(a['bullymong_slinger']['leap'])
+        self.assertEqual(a['bullymong_baby']['leap'][:5], (480.0, 2048.0, 2500.0, 0.45, 128.0))
+
+    def test_the_solver_reproduces_the_notes_worked_table(self):
+        # Note 3.2 and 4.2, flat ground, no lead: seconds to 0.01 and peaks (d tan(a) / 4) to 1 uu, as the note prints them.
+        import math
+        table = [(2500, 0.4, [(1024, 0.51, 186), (1600, 0.79, 291), (2048, 1.01, 372)]),
+                 (2000, 0.4, [(1024, 0.63, 186), (1600, 0.99, 291), (2048, 1.27, 372)]),
+                 (2500, 0.45, [(1024, 0.54, 219), (1600, 0.84, 342), (2048, 1.08, 437)]),
+                 (2000, 0.3, [(1024, 0.57, 130), (1600, 0.90, 204), (2048, 1.15, 261), (3000, 1.68, 382)])]
+        for speed, angle_pct, rows in table:
+            for distance, flight, peak in rows:
+                angle, _, solved = check_range.solve_arc(distance, 0.0, distance, speed, angle_pct)
+                self.assertAlmostEqual(angle, angle_pct * 90.0, places=6)
+                self.assertLessEqual(abs(solved - flight), 0.005, (speed, angle_pct, distance))
+                self.assertLessEqual(abs(distance * math.tan(math.radians(angle)) / 4.0 - peak), 0.5, (speed, angle_pct, distance))
+
+    def test_every_valid_leap_falls_inside_l4s_attack_to_landed(self):
+        # The launch clip plus the flight over the band: the shortest (the adult at 1024) and the longest (the regular or the baby at 2048).
+        launch = 0.833
+        shortest = launch + check_range.solve_arc(1024, 0, 1024, 2500, 0.4)[2]
+        longest = launch + max(check_range.solve_arc(2048, 0, 2048, 2000, 0.4)[2], check_range.solve_arc(2048, 0, 2048, 2500, 0.45)[2])
+        low, high = check_range.LIVE_ATTACK_TO_LANDED
+        self.assertTrue(low <= shortest and longest <= high, (shortest, longest))
+
+
+class LeapThrowCheckerTest(unittest.TestCase):
+    leap = staticmethod(range_fixtures.leap_detail)
+    throw = staticmethod(range_fixtures.throw_detail)
+
+    def test_good_lines_pass(self):
+        self.assertEqual(check_range.leap_problem(self.leap()), '')
+        self.assertEqual(check_range.leap_problem(self.leap('bullymong_adult', 'E_3', lead=60.0)), '')
+        self.assertEqual(check_range.leap_problem(self.leap('bullymong_baby', 'E_9', distance=600.0)), '')
+        self.assertEqual(check_range.throw_problem(self.throw()), '')
+        self.assertEqual(check_range.throw_problem(self.throw('bullymong_slinger', 'E_8', distance=2000.0, release=1.665, release_due=1.660)), '')
+
+    def test_a_leap_outside_its_band_fails(self):
+        self.assertIn('outside its band', check_range.leap_problem(self.leap(start_distance='900')))
+        self.assertIn('outside its band', check_range.leap_problem(self.leap(start_distance='2100')))
+
+    def test_the_launch_clip_and_the_flight_must_last_what_the_rule_says(self):
+        self.assertIn('launch clip lasted', check_range.leap_problem(self.leap(windup=0.70)))
+        self.assertIn('launch clip lasted', check_range.leap_problem(self.leap(windup=0.90)))   # more than a frame late
+        self.assertIn('the flight lasted', check_range.leap_problem(self.leap(late=0.05)))
+        self.assertIn('the flight lasted', check_range.leap_problem(self.leap(late=-0.01)))
+        self.assertIn('attack_to_landed', check_range.leap_problem(self.leap(attack_to_landed='1.000')))
+
+    def test_an_arc_that_is_not_the_notes_solver_fails(self):
+        self.assertIn("not the note's solver", check_range.leap_problem(self.leap(flight_predicted='0.5000')))
+        self.assertIn("not the note's solver", check_range.throw_problem(self.throw(flight_predicted='0.5000')))
+        self.assertIn('over the cap', check_range.leap_problem(self.leap(lead=40.0)))                         # the regular has no lead
+        self.assertIn('over the cap', check_range.leap_problem(self.leap('bullymong_adult', 'E_3', lead=120.0)))
+
+    def test_a_row_that_is_not_the_notes_fails(self):
+        self.assertIn("not the note's", check_range.leap_problem(self.leap(speed='2500')))
+        self.assertIn("not the note's", check_range.leap_problem(self.leap(band_min='900')))
+        self.assertIn('no leap', check_range.leap_problem(self.leap().replace('kind=bullymong ', 'kind=bullymong_slinger ')))
+        self.assertIn('no throw', check_range.throw_problem(self.throw().replace('kind=bullymong_adult ', 'kind=bullymong ')))
+
+    def test_the_landing_and_the_knock_back(self):
+        self.assertIn('did not hit', check_range.leap_problem(self.leap(hit='0')))
+        self.assertIn('came down', check_range.leap_problem(self.leap(land_error='5.0')))
+        self.assertIn('melee numbers', check_range.leap_problem(self.leap(applied='12.00', pools_lost='12.00')))
+        self.assertIn('melee numbers', check_range.leap_problem(self.leap(pools_lost='0.00')))
+        self.assertIn('knock', check_range.leap_problem(self.leap(knock='62')))
+        self.assertIn('forced', check_range.leap_problem(self.leap(forced='0')))
+
+    def test_a_rock_must_leave_at_a_release_moment_and_touch_maya(self):
+        self.assertIn('release moment', check_range.throw_problem(self.throw(release=1.20, release_due=1.20)))
+        self.assertIn('the rock left', check_range.throw_problem(self.throw(release=1.030)))
+        self.assertIn('came down on world', check_range.throw_problem(self.throw(what='world', hit='0')))
+        self.assertIn('the rock flew', check_range.throw_problem(self.throw(early=0.2)))
+        self.assertIn('the rock flew', check_range.throw_problem(self.throw(early=-0.05)))
+        self.assertIn('touched', check_range.throw_problem(self.throw(miss='80.0')))
+        self.assertIn('knock', check_range.throw_problem(self.throw(knock='1000')))
+        self.assertIn('outside its band', check_range.throw_problem(self.throw(start_distance='400')))
+
+    def test_incomplete_or_impossible_lines_fail(self):
+        self.assertIn('lacks windup', check_range.leap_problem(self.leap().replace(' windup=0.840', '')))
+        self.assertIn('lacks what', check_range.throw_problem(self.throw(what=None)))
+        self.assertIn('repeats', check_range.leap_problem(self.leap() + ' hit=1'))
+        self.assertIn('not a finite number', check_range.leap_problem(self.leap(d0='nan')))
+        self.assertIn('not a number', check_range.throw_problem(self.throw(miss='far')))
+        self.assertIn('stalled run', check_range.leap_problem(self.leap(max_frame=0.25)))
+        self.assertIn('max_frame', check_range.leap_problem(self.leap(max_frame=0.0)))
+
+
+class LeapThrowTiedToSpawnsTest(unittest.TestCase):
+    def graded(self, step, *lines):
+        steps, _ = check_range.parse('\n'.join(lines))
+        return check_range.ranged_graded(step, steps.get(step, []), steps.spawns, steps.attacks)
+
+    def verdicts(self, step, *lines):
+        return [v for v, _ in self.graded(step, *lines)]
+
+    def test_the_default_range_needs_both_leapers_and_the_thrower(self):
+        self.assertEqual(self.verdicts('leap', range_fixtures.ranged_passing('leap')), ['PASS', 'PASS'])
+        self.assertEqual(self.verdicts('throw', range_fixtures.ranged_passing('throw')), ['PASS'])
+        only_regular = '\n'.join(range_fixtures.DEFAULT_SPAWNS + ['OWRANGETEST step=leap result=PASS ' + range_fixtures.leap_detail()])
+        details = ' '.join(d for _, d in self.graded('leap', only_regular))
+        self.assertIn('0 passing results for spawned kind bullymong_adult', details)
+
+    def test_a_result_from_an_enemy_of_another_kind_fails(self):
+        line = 'OWRANGETEST step=throw result=PASS ' + range_fixtures.throw_detail(enemy='E_0')
+        details = ' '.join(d for _, d in self.graded('throw', *range_fixtures.DEFAULT_SPAWNS, line))
+        self.assertIn('enemy E_0 was not spawned as bullymong_adult', details)
+
+    def test_a_duplicated_result_fails(self):
+        line = 'OWRANGETEST step=throw result=PASS ' + range_fixtures.throw_detail()
+        details = ' '.join(d for _, d in self.graded('throw', *range_fixtures.DEFAULT_SPAWNS, line, line))
+        self.assertIn('2 passing results for spawned kind bullymong_adult', details)
+
+    def test_a_logged_row_that_is_not_the_notes_fails(self):
+        spawns = [s.replace('leap_speed=2000', 'leap_speed=2200') for s in range_fixtures.DEFAULT_SPAWNS]
+        details = ' '.join(d for _, d in self.graded('leap', *spawns, *range_fixtures.ranged_passing('leap').splitlines()[4:]))
+        self.assertIn('leap_speed=2200 (note 2000)', details)
+
+    def test_no_spawn_record_fails(self):
+        details = ' '.join(d for _, d in self.graded('leap', 'OWRANGETEST step=leap result=PASS ' + range_fixtures.leap_detail()))
+        self.assertIn('no enemy was spawned with a leap', details)
+
+    def test_a_kind_with_no_row_is_plain_melee_only(self):
+        steps, _ = check_range.parse('OWRANGE enemy E_4 attacks kind=psycho source=none (plain melee only)')
+        self.assertEqual(steps.attacks, {'E_4': ('psycho', '', 'none')})
+
+    def test_the_fight_counts_read_the_hosts_lines(self):
+        text = '\n'.join(['OWRANGE attack_pick enemy=E_0 kind=bullymong pick=leap distance=1500 leap_ok=1 throw_ok=0 forced=0 t=3.00',
+                          'OWRANGE leap_start enemy=E_0 kind=bullymong t=3.000 distance=1500',
+                          'OWRANGE leap_land enemy=E_0 kind=bullymong t=4.900 flight=1.0 predicted=1.0 attack_to_landed=1.9 land_error=0.0 hit=1 expected=1 applied=1 knock=1000',
+                          'OWRANGE rock_release enemy=E_3 kind=bullymong_adult t=5.000 release=1.064 due=1.064',
+                          'OWRANGE rock_impact enemy=E_3 kind=bullymong_adult t=5.800 what=maya flight=0.8 predicted=0.8 miss=50.0 hit=1 damage=1'])
+        counts = check_range.fight_counts(text)
+        self.assertEqual((counts['leap_starts'], counts['leap_lands'], counts['leap_hits'], counts['rocks'], counts['rock_hits']), (1, 1, 1, 1, 1))
+        self.assertEqual(counts['picks'], {('bullymong', 'leap'): 1})
+
+
+class LeapThrowHostTest(unittest.TestCase):
+    def test_the_host_logs_what_the_checker_reads(self):
+        rng = source('OpenWillowRange.cpp')
+        step = rng[rng.index('case 96: // leap and throw'):rng.index('// ---------------------------------------------------------------------------------------------- loot driver')]
+        for key in check_range.LEAP_FIELDS + check_range.THROW_FIELDS:
+            self.assertIn(' %s=' % key if key != 'kind' else 'kind=%s', step, key)
+        enemy = source('OpenWillowEnemy.cpp')
+        self.assertIn('OWRANGE enemy %s attacks kind=%s close=%.0f weights=%.2f:%.2f:%.2f leap=%.0f-%.0f', enemy)
+        for key in ('leap_speed', 'leap_angle_pct', 'leap_lead_cap', 'leap_resource', 'leap_clips', 'throw_speed', 'throw_angle_pct', 'throw_lead_cap',
+                    'throw_front', 'throw_resource', 'throw_clips'):
+            self.assertIn(' %s=' % key, enemy)
+        self.assertIn('source=none (plain melee only)', enemy)
+
+    def test_kind_melee_measures_the_plain_swing_alone(self):
+        rng = source('OpenWillowRange.cpp')
+        step = rng[rng.index('case 94: // kind_melee'):rng.index('case 95:')]
+        self.assertIn('Enemy->SetRangedAttacks(false);', step)
+        self.assertEqual(check_range.EXPECTED.index('leap'), check_range.EXPECTED.index('kind_melee') + 1)
+
+    def test_the_brain_draws_once_per_finished_attack_and_gives_resources_back(self):
+        brain = source('OpenWillowEnemyAI.cpp')
+        self.assertIn('if (bStateUpdate && bAware && In.Attacks && !bSwingPending)', brain)
+        self.assertIn('if (Pick != EOpenWillowAttack::None) return;', brain)
+        self.assertIn('if (Pick == EOpenWillowAttack::Melee) Pick = EOpenWillowAttack::None;', brain)
+        self.assertIn('HeldDen->LeapUsers = FMath::Max(0, HeldDen->LeapUsers - 1);', brain)
+        self.assertIn('EndAttack(TEXT("stopped"));', brain)
+        self.assertIn('constexpr int32 LeapUsersMax = 1;', source('OpenWillowLeapThrow.h'))
+        self.assertIn('constexpr int32 ThrowUsersMax = 3;', source('OpenWillowLeapThrow.h'))
+
+    def test_no_brace_less_if_with_a_ue_log_before_an_else(self):
+        # C2181 (project memory): a brace-less if holding a UE_LOG and followed by else does not compile.
+        import re
+        for name in ('OpenWillowEnemyAI.cpp', 'OpenWillowEnemy.cpp', 'OpenWillowRange.cpp'):
+            self.assertNotRegex(source(name), r'\bif \([^\n]*\)\s*\n\s*UE_LOG\([^;]*\);\s*\n\s*else', name)
+
+
+class LeapThrowClipRolesTest(unittest.TestCase):
+    def test_leap_and_throw_clips_get_their_roles_and_are_not_the_melee(self):
+        names = ['Idle', 'Attack_Leap_Start', 'Attack_Leap_Idle', 'Attack_Leap_End', 'Attack_ThrowRock_var1', 'Attack_Swipe']
+        clips = prepare_range.find_clips('/Game/X/Idle.Idle', names)
+        self.assertEqual(clips['leap_start'], '/Game/X/Attack_Leap_Start.Attack_Leap_Start')
+        self.assertEqual(clips['leap_idle'], '/Game/X/Attack_Leap_Idle.Attack_Leap_Idle')
+        self.assertEqual(clips['leap_end'], '/Game/X/Attack_Leap_End.Attack_Leap_End')
+        self.assertEqual(clips['throw'], '/Game/X/Attack_ThrowRock_var1.Attack_ThrowRock_var1')
+        self.assertEqual(clips['melee'], '/Game/X/Attack_Swipe.Attack_Swipe')
+
+    def test_an_import_without_them_leaves_the_roles_empty(self):
+        clips = prepare_range.find_clips('/Game/X/Idle.Idle', ['Idle', 'Walk_F'])
+        self.assertEqual((clips['leap_start'], clips['leap_idle'], clips['leap_end'], clips['throw']), ('', '', '', ''))
+        self.assertEqual(prepare_range.kind_entry('B', None, {}, 't')['throw'], '')
 
 
 if __name__ == '__main__':

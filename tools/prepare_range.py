@@ -83,12 +83,19 @@ ATTACH_STEP = ("powershell -File tools/import_phaselock_target.ps1 -Steps attach
 SPAWNS_WITH_ASSET = [{"kind": "psycho", "count": 1}]
 # The range's default population (host choice).
 SPAWNS = [{"kind": "bullymong", "count": 3}, {"kind": "bullymong_adult", "count": 1}]
-# Clip roles -> name patterns tried in order against the imported AnimSequence file names (host choice, UNVERIFIED).
+# Clip roles -> name patterns tried in order against the imported AnimSequence file names (host choice, UNVERIFIED). The leap and throw
+# roles (2026-11-13) name the clips of docs/verification/NATIVE_AI_LEAP_THROW.md 3.1 and 4.1 (Attack_Leap_Start / _Idle / _End,
+# Attack_ThrowRock_*); an "attack" clip of those is not the plain swing. The current import brings none of them: the roles stay empty and the
+# host holds the idle through a leap or a throw (stand-in).
 CLIP_PATTERNS = {
     "walk": [r"walk_?f(wd)?\b", r"walk"],
     "run": [r"run_?f(wd)?\b", r"run"],
     "hit": [r"flinch", r"hit_?react", r"hit"],
-    "melee": [r"melee", r"attack", r"swipe"],
+    "melee": [r"melee", r"attack(?!_?(leap|throw))", r"swipe"],
+    "leap_start": [r"leap_?start"],
+    "leap_idle": [r"leap_?idle"],
+    "leap_end": [r"leap_?end", r"leap_?land"],
+    "throw": [r"throw_?rock", r"throw"],
 }
 
 
@@ -144,6 +151,7 @@ def find_clips(idle_path, listing=None):
 
 def kind_entry(label, target, health, source, listing=None, arrival=None, ratio=None, loot=None):
     entry = {"label": label, "mesh": "", "idle": "", "death": "", "walk": "", "run": "", "hit": "", "melee": "",
+             "leap_start": "", "leap_idle": "", "leap_end": "", "throw": "",
              "mesh_offset_z": 0.0, "mesh_scale": 1.0, "collision_radius": 0.0, "collision_height": 0.0,
              "head_bone": "", "head_radius": 18.0, "walk_speed": 150.0, "patrol_radius": 500.0,
              "shield": 0.0, "shield_delay": 0.0, "shield_rate": 0.0,
@@ -559,8 +567,8 @@ def main(argv=None):
         json.dump(manifest, f, indent=1)
     for name, kind in kinds.items():
         levels = kind["health_by_level"]
-        print("%s: %d health levels, %d melee levels, %d loot levels, assets %s, walk %s, hit %s, melee %s, worn %d of %d" % (name, len(levels), len(kind["melee_arrival_by_level"]), len(kind["loot_by_level"]), "yes" if kind["mesh"] else "no",
-              kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-", len(kind.get("attachments") or []), kind["attachments_expected"]))
+        print("%s: %d health levels, %d melee levels, %d loot levels, assets %s, walk %s, hit %s, melee %s, leap %s, throw %s, worn %d of %d" % (name, len(levels), len(kind["melee_arrival_by_level"]), len(kind["loot_by_level"]), "yes" if kind["mesh"] else "no",
+              kind["walk"] or "-", kind["hit"] or "-", kind["melee"] or "-", kind["leap_start"] or "-", kind["throw"] or "-", len(kind.get("attachments") or []), kind["attachments_expected"]))
     print("spot candidates: %d (%d on the gate terrain), default candidate index %d" % (len(candidates),
           sum(c["gate_terrain"] for c in candidates), args.spot_candidate if candidates else -1))
     print("wrote " + args.out)

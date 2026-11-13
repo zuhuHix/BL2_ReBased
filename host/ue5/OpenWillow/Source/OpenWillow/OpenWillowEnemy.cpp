@@ -79,6 +79,15 @@ void AOpenWillowEnemy::BeginPlay()
     TintBar(BarShield, FLinearColor(0.2f, 0.5f, 1.f));
 }
 
+void AOpenWillowEnemy::EndPlay(const EEndPlayReason::Type Reason)
+{
+    // Its rocks go with it (ow.RangeClear, a rebuild), so none lands on Maya after the range that threw it is gone.
+    for (const TWeakObjectPtr<AActor>& Rock : Rocks)
+        if (Rock.IsValid()) Rock->Destroy();
+    Rocks.Reset();
+    Super::EndPlay(Reason);
+}
+
 bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLevel, float RespawnSeconds)
 {
     Kind = InKind;
@@ -103,6 +112,12 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
         RunClip = Kind.Run.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Run);
         MeleeClip = Kind.Melee.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Melee);
         HitClip = Kind.Hit.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Hit);
+        LeapStartClip = Kind.LeapStart.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.LeapStart);
+        LeapIdleClip = Kind.LeapIdle.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.LeapIdle);
+        LeapEndClip = Kind.LeapEnd.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.LeapEnd);
+        ThrowClip = Kind.Throw.IsEmpty() ? nullptr : LoadObject<UAnimSequence>(nullptr, *Kind.Throw);
+        // The rock leaves the rear right hand (note 4.1: R_Hand_Rear, or L_Hand_Rear on the mirrored clips; the host always uses the right).
+        HandBone = StockMesh->GetBoneIndex(TEXT("R_Hand_Rear")) != INDEX_NONE ? FName(TEXT("R_Hand_Rear")) : NAME_None;
     }
     else
     {
@@ -139,6 +154,21 @@ bool AOpenWillowEnemy::SetupKind(const FOpenWillowRangeKind& InKind, int32 InLev
     const FString Stand = (KindMelee && KindMelee->StandDistance > 0.f) ? FString::Printf(TEXT("%.0f"), KindMelee->StandDistance) : FString(TEXT("stand-in"));
     UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s kind_melee kind=%s swing_interval=%.3f stand=%s source=%s"), *GetName(), *Kind.Name, SwingIntervalNow(),
         *Stand, KindMelee ? TEXT("live_read") : TEXT("stand-in_no_live_read"));
+    // The kind's leap and throw (NATIVE_AI_LEAP_THROW.md, UNVERIFIED in game): the row it runs, which tools/check_range.py compares with the note.
+    KindAttacks = OpenWillowFindKindAttacks(Kind.Name);
+    if (KindAttacks)
+    {
+        const FOpenWillowKindAttacks& Row = *KindAttacks;
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s attacks kind=%s close=%.0f weights=%.2f:%.2f:%.2f leap=%.0f-%.0f leap_speed=%.0f leap_angle_pct=%.2f leap_lead_cap=%.0f leap_resource=%d leap_clips=%.3f:%.3f throw=%.0f-%.0f throw_speed=%.0f throw_angle_pct=%.2f throw_lead_cap=%.0f throw_front=%d throw_resource=%d throw_clips=%d anim=%s hand=%s source=note"),
+            *GetName(), *Kind.Name, Row.CloseBand, Row.WeightMelee, Row.WeightLeap, Row.WeightThrow, Row.LeapMin, Row.LeapMax, Row.LeapSpeed, Row.LeapAnglePct,
+            Row.LeapLeadCap, Row.bLeapResource ? 1 : 0, Row.LeapStartSeconds, Row.LeapEndSeconds, Row.ThrowMin, Row.ThrowMax, Row.ThrowSpeed, Row.ThrowAnglePct,
+            Row.ThrowLeadCap, Row.bThrowNeedsFront ? 1 : 0, Row.bThrowResource ? 1 : 0, Row.ThrowClips,
+            (LeapStartClip || ThrowClip) ? TEXT("imported") : TEXT("idle_stand-in"), HandBone.IsNone() ? TEXT("stand-in") : *HandBone.ToString());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s attacks kind=%s source=none (plain melee only)"), *GetName(), *Kind.Name);
+    }
     return bStock;
 }
 
@@ -294,6 +324,8 @@ void AOpenWillowEnemy::OnDied(AActor* DamageCauser)
     bMeleePlaying = false;
     bDamagedByMaya = false;
     Brain.Stop();
+    bAttackPlaying = false;   // a leaper killed in the air falls as a ragdoll from where it is; its rocks in flight keep flying
+    bWasAirborne = false;
     UE_LOG(LogTemp, Display, TEXT("OWRANGE death enemy=%s kind=%s respawn_in=%.1f"), *GetName(), *Kind.Name, GetRespawnDelay());
     OnEnemyDied.Broadcast(this, DamageCauser);
 }
@@ -317,6 +349,13 @@ void AOpenWillowEnemy::ResetForAITest(float Now, float Yaw, float HoldSeconds)
     ResetForTest();
     SetActorRotation(FRotator(0.f, Yaw, 0.f));
     Brain.ResetForTest();
+    // A leap or throw of the step before ends, and its rocks go, so nothing of it lands inside this step.
+    bAttackPlaying = false;
+    bWasAirborne = false;
+    bRangedAttacks = true;
+    for (const TWeakObjectPtr<AActor>& Rock : Rocks)
+        if (Rock.IsValid()) Rock->Destroy();
+    Rocks.Reset();
     bLineOfSightSample = false;
     bDamagedByMaya = false;
     bHasTarget = false;
@@ -335,6 +374,8 @@ void AOpenWillowEnemy::OnRespawned()
     bMeleePlaying = false;
     bDamagedByMaya = false;
     Brain.Stop();
+    bAttackPlaying = false;
+    bWasAirborne = false;
     MoveClipNow = nullptr;
     PauseUntil = GetWorld()->GetTimeSeconds() + Rand.FRandRange(1.f, 3.f);
     ShieldCurrent = ShieldMax;
@@ -370,6 +411,7 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     if (!Den || !bAIEnabled)
     {
         Brain.Stop();
+        EndAttackMotion();
         UpdatePatrol(Now, DeltaSeconds);
         return;
     }
@@ -408,8 +450,26 @@ void AOpenWillowEnemy::UpdateBrain(float Now, float DeltaSeconds)
     In.SwingStartRange = Kind.MeleeStartRange;
     In.SwingInterval = SwingIntervalNow();
     In.StandDistance = KindMelee ? KindMelee->StandDistance : 0.f;
+    // Leaps and throws: the kind's row (none: the plain melee only), the bodies' half heights (the leap's aim lifts by the difference),
+    // Maya's velocity (the lead) and the release point of a rock.
+    In.Attacks = bRangedAttacks ? KindAttacks : nullptr;
+    {
+        FVector Centre;
+        float Half = 0.f;
+        CollisionCentre(Centre, Half);
+        In.HalfHeight = Kind.CollisionHeight > 0.f ? Kind.CollisionHeight : Half;
+    }
+    if (In.bHasMaya)
+    {
+        In.MayaHalfHeight = Walker->GetCapsuleComponent() ? Walker->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 0.f;
+        In.MayaVelocity = Walker->GetVelocity();
+    }
+    if (Brain.IsThrowing()) In.HandLocation = HandLocation(In.HalfHeight);
 
     const FOpenWillowBrainOrders Orders = Brain.Tick(Now, In, *Den, bDamagedByMaya);
+    // A leap or throw owns the body while it runs: no chase, no patrol.
+    UpdateAttack(Now, DeltaSeconds, In, Orders);
+    if (Brain.IsLeaping() || Brain.IsThrowing()) return;
     if (Orders.bSwingStarted) PlayMelee(Now);
     if (Orders.bStandOnContact && !bStandOnContactLogged)
     {
@@ -504,6 +564,142 @@ void AOpenWillowEnemy::PlayMelee(float Now)
     if (StockMesh && MeleeClip) PlayStock(MeleeClip, false);
 }
 
+void AOpenWillowEnemy::SetRangedAttacks(bool bOn)
+{
+    if (bRangedAttacks == bOn) return;
+    bRangedAttacks = bOn;
+    if (!bOn && (Brain.IsLeaping() || Brain.IsThrowing()))
+    {
+        Brain.Stop();
+        EndAttackMotion();
+    }
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE enemy %s ranged_attacks=%d"), *GetName(), bOn ? 1 : 0);
+}
+
+FVector AOpenWillowEnemy::HandLocation(float HalfHeight) const
+{
+    // The hand socket when the stock mesh has it; else a stand-in point in front of the chest (UNVERIFIED).
+    if (StockMesh && !HandBone.IsNone()) return StockMesh->GetBoneLocation(HandBone);
+    const FVector Forward = FRotator(0.f, GetActorRotation().Yaw, 0.f).Vector();
+    return GetActorLocation() + FVector(0.f, 0.f, 1.6f * HalfHeight) + Forward * 60.f;
+}
+
+void AOpenWillowEnemy::TurnWithin(const FVector& Dir, float SecondsLeft, float DeltaSeconds)
+{
+    // Turns so as to face Dir when SecondsLeft run out (the leap turns over half a clip, or half the flight: note 3.1).
+    if (Dir.IsNearlyZero()) return;
+    FRotator Rotation = GetActorRotation();
+    const float Delta = FRotator::NormalizeAxis(Dir.Rotation().Yaw - Rotation.Yaw);
+    Rotation.Yaw += Delta * FMath::Min(1.f, DeltaSeconds / FMath::Max(SecondsLeft, DeltaSeconds));
+    SetActorRotation(Rotation);
+}
+
+void AOpenWillowEnemy::EndAttackMotion()
+{
+    // A leap that ended in the air (a hold, AI off, the test's reset) comes down where it is, on the floor below.
+    if (bWasAirborne)
+    {
+        FVector Floor;
+        const FVector Here = GetActorLocation();
+        if (TraceFloor(GetWorld(), FVector2D(Here.X, Here.Y), Here.Z + 100.f, Here.Z - 5000.f, this, Floor)) SetActorLocation(Floor);
+        bWasAirborne = false;
+    }
+    if (bAttackPlaying)
+    {
+        bAttackPlaying = false;
+        MoveClipNow = nullptr;   // the move clips start again
+    }
+}
+
+void AOpenWillowEnemy::UpdateAttack(float Now, float DeltaSeconds, const FOpenWillowBrainInput& In, const FOpenWillowBrainOrders& Orders)
+{
+    // Host stand-ins (UNVERIFIED): the clips are the manifest's when the import has them, else the idle is held; the body follows the
+    // solved arc kinematically (it does not collide on the way).
+    const FOpenWillowKindAttacks* Row = KindAttacks;
+    if (Orders.bLeapLaunch || Orders.bThrowStarted)
+    {
+        bAttackPlaying = true;
+        MoveClipNow = nullptr;
+        bMeleePlaying = false;
+        UAnimSequence* Clip = Orders.bLeapLaunch ? LeapStartClip.Get() : ThrowClip.Get();
+        if (StockMesh && (Clip || StockIdle)) PlayStock(Clip ? Clip : StockIdle.Get(), Clip == nullptr, 1.f, MoveBlendIn);
+    }
+    if (Orders.bLeapTakeoff && StockMesh && LeapIdleClip) PlayStock(LeapIdleClip, true, 1.f, MoveBlendIn);
+    const FOpenWillowLeapRecord& Leap = Brain.GetLeap();
+    if (Orders.bLeapLanded)
+    {
+        // Down on the floor under the arc's end. The enemy does not collide with Maya, so a leaper that came down inside her steps back
+        // along its facing to body contact (its radius plus hers), where the game's collision would have stopped it (host stand-in).
+        const FVector Centre = Leap.Arc.At(Leap.Arc.FlightTime);
+        FVector At = Centre - FVector(0.f, 0.f, In.HalfHeight);
+        if (In.bHasMaya)
+        {
+            const float Contact = In.CollisionRadius + In.MayaRadius;
+            if (FVector::Dist2D(At, In.MayaLocation) < Contact)
+            {
+                At.X = In.MayaLocation.X - Leap.Facing.X * Contact;
+                At.Y = In.MayaLocation.Y - Leap.Facing.Y * Contact;
+            }
+        }
+        FVector Floor;
+        if (TraceFloor(GetWorld(), FVector2D(At.X, At.Y), Centre.Z + 200.f, Centre.Z - In.HalfHeight - 1000.f, this, Floor)) At = Floor;
+        SetActorLocation(At);
+        SetActorRotation(FRotator(0.f, Leap.Facing.Rotation().Yaw, 0.f));
+        bWasAirborne = false;
+        if (StockMesh && LeapEndClip) PlayStock(LeapEndClip, false, 1.f, MoveBlendIn);
+        else if (StockMesh && StockIdle) PlayStock(StockIdle, true, 1.f, MoveBlendIn);
+    }
+    if (Orders.bRockReleased)
+    {
+        FActorSpawnParameters Params;
+        Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        if (AOpenWillowRangeRock* Rock = GetWorld()->SpawnActor<AOpenWillowRangeRock>(Orders.RockArc.Start, FRotator::ZeroRotator, Params))
+        {
+            Rock->Launch(this, Orders.RockArc, Orders.RockDamage, Now, Kind.Name);
+            Rocks.RemoveAll([](const TWeakObjectPtr<AActor>& Weak) { return !Weak.IsValid(); });
+            Rocks.Add(Rock);
+        }
+    }
+    if (Orders.bAttackEnded) EndAttackMotion();
+    if (!Row) return;
+
+    // The turns of note 3.1: toward Maya over the first half of the launch clip; in the air, toward the launch direction over the first half
+    // of the flight. A thrower keeps turning toward her at its usual rate (host stand-in: the stock throw faces the target first).
+    if (Brain.IsLeapWindUp())
+    {
+        const float Half = 0.5f * Row->LeapStartSeconds;
+        const float Into = Brain.AttackSeconds(Now);
+        if (In.bHasMaya && Into < Half) TurnWithin(In.MayaLocation - In.Location, Half - Into, DeltaSeconds);
+    }
+    else if (Brain.IsAirborne())
+    {
+        const float Flight = Leap.Arc.FlightTime;
+        const float Into = FMath::Clamp(Brain.FlightSeconds(Now), 0.f, Flight);
+        SetActorLocation(Leap.Arc.At(Into) - FVector(0.f, 0.f, In.HalfHeight));
+        bWasAirborne = true;
+        if (Into < 0.5f * Flight) TurnWithin(Leap.Facing, 0.5f * Flight - Into, DeltaSeconds);
+    }
+    else if (Brain.IsThrowing() && In.bHasMaya)
+    {
+        FVector ToMaya = In.MayaLocation - In.Location;
+        ToMaya.Z = 0.f;
+        if (!ToMaya.IsNearlyZero()) TurnToward(ToMaya.GetSafeNormal(), DeltaSeconds);
+    }
+}
+
+void AOpenWillowEnemy::RecordRockImpact(float ReleaseAt, const TCHAR* What, float ImpactAt, float MissDistance, bool bHit, float Applied, float KnockSpeed)
+{
+    FOpenWillowRockRecord& Rock = Brain.GetRock();
+    if (!FMath::IsNearlyEqual(Rock.ReleaseAt, ReleaseAt)) return;   // an older rock of this enemy: its record was replaced
+    Rock.bImpact = true;
+    Rock.What = What;
+    Rock.ImpactAt = ImpactAt;
+    Rock.MissDistance = MissDistance;
+    Rock.bHit = bHit;
+    Rock.Applied = Applied;
+    Rock.Knock = KnockSpeed;
+}
+
 void AOpenWillowEnemy::TurnToward(const FVector& Dir, float DeltaSeconds)
 {
     // Turns toward the direction at 360 deg/s (the walk does not wait for the turn).
@@ -572,8 +768,8 @@ void AOpenWillowEnemy::UpdatePatrol(float Now, float DeltaSeconds)
 
 void AOpenWillowEnemy::SetMoveAnim(bool bMoving, bool bRun)
 {
-    // The base owns the clips while the target is lifted or dropping (AnimStage), and a hit reaction or a swing plays out first.
-    if (!StockMesh || IsDead() || IsPhaselocked() || AnimStage != 0 || bHitPlaying || bMeleePlaying)
+    // The base owns the clips while the target is lifted or dropping (AnimStage), and a hit reaction, a swing, a leap or a throw plays out first.
+    if (!StockMesh || IsDead() || IsPhaselocked() || AnimStage != 0 || bHitPlaying || bMeleePlaying || bAttackPlaying)
     {
         MoveClipNow = nullptr;   // when the base hands the clips back, the move state starts its clip again
         return;
@@ -617,4 +813,85 @@ void AOpenWillowEnemy::UpdateHealthBars()
         PlaceBar(BarShield, At + FVector(0, 0, BarShieldGap), Right, Toward, Facing, ShieldCurrent / ShieldMax, BarFront);
     else
         BarShield->SetHiddenInGame(true);
+}
+
+AOpenWillowRangeRock::AOpenWillowRangeRock()
+{
+    PrimaryActorTick.bCanEverTick = true;
+    Visual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Rock"));
+    SetRootComponent(Visual);
+    Visual->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")));
+    Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Visual->SetCastShadow(true);
+    // The engine sphere is 100 uu across: scaled to the touch radius (host stand-in for Projectile_IceRock's look).
+    Visual->SetRelativeScale3D(FVector(2.f * OpenWillowLeapThrow::RockRadius / 100.f));
+}
+
+void AOpenWillowRangeRock::Launch(AOpenWillowEnemy* InThrower, const FOpenWillowArc& InArc, float InDamage, float InReleaseAt, const FString& InKind)
+{
+    Thrower = InThrower;
+    ThrowerName = InThrower ? InThrower->GetName() : FString(TEXT("?"));
+    Kind = InKind;
+    Arc = InArc;
+    Damage = InDamage;
+    ReleaseAt = InReleaseAt;
+    Age = 0.f;
+    bDone = false;
+    SetActorLocation(Arc.Start);
+    TintBar(Visual, FLinearColor(0.55f, 0.62f, 0.7f));
+}
+
+void AOpenWillowRangeRock::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+    if (bDone) return;
+    const FVector From = GetActorLocation();
+    Age += DeltaSeconds;
+    const FVector To = Arc.At(Age);
+    // Maya: this tick's path meets her capsule (its axis, her radius plus the rock's). Not while she is down (no target to hit, as the swing).
+    if (AOpenWillowWalker* Maya = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(this, 0)); Maya && Maya->GetCapsuleComponent())
+    {
+        const UCapsuleComponent* Capsule = Maya->GetCapsuleComponent();
+        const float Radius = Capsule->GetScaledCapsuleRadius();
+        const float Half = FMath::Max(0.f, Capsule->GetScaledCapsuleHalfHeight() - Radius);
+        const FVector Centre = Capsule->GetComponentLocation();
+        FVector OnPath, OnAxis;
+        FMath::SegmentDistToSegmentSafe(From, To, Centre - FVector(0.f, 0.f, Half), Centre + FVector(0.f, 0.f, Half), OnPath, OnAxis);
+        if (FVector::Dist(OnPath, OnAxis) <= Radius + OpenWillowLeapThrow::RockRadius)
+        {
+            const bool bHit = !Maya->IsDown();
+            float Applied = 0.f, Knock = 0.f;
+            if (bHit)
+            {
+                SetActorLocation(OnPath);
+                Applied = Damage > 0.f ? RangeDamagePlayer(this, Damage) : 0.f;
+                const FVector Along = FVector(To.X - From.X, To.Y - From.Y, 0.f).GetSafeNormal();
+                Knock = RangeKnockPlayer(this, Along * OpenWillowLeapThrow::RockMomentum, TEXT("rock"));
+            }
+            Finish(TEXT("maya"), OnPath, bHit, Applied, Knock);
+            return;
+        }
+    }
+    // The world: static geometry only (the thrower and other enemies are not hit, host stand-in).
+    FHitResult Hit;
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(OpenWillowRangeRock), false);
+    Query.AddIgnoredActor(this);
+    if (GetWorld()->LineTraceSingleByObjectType(Hit, From, To, FCollisionObjectQueryParams(ECC_WorldStatic), Query))
+    {
+        Finish(TEXT("world"), Hit.Location, false, 0.f, 0.f);
+        return;
+    }
+    SetActorLocation(To);
+    if (Age >= OpenWillowLeapThrow::RockLifetime) Finish(TEXT("expired"), To, false, 0.f, 0.f);
+}
+
+void AOpenWillowRangeRock::Finish(const TCHAR* What, const FVector& At, bool bHit, float Applied, float Knock)
+{
+    bDone = true;
+    const float Now = GetWorld()->GetTimeSeconds();
+    const float Miss = float(FVector::Dist2D(At, Arc.Aim));
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE rock_impact enemy=%s kind=%s t=%.3f what=%s flight=%.4f predicted=%.4f miss=%.1f hit=%d damage=%.2f applied=%.2f knock=%.0f at=%s"),
+        *ThrowerName, *Kind, Now, What, Now - ReleaseAt, Arc.FlightTime, Miss, bHit ? 1 : 0, Damage, Applied, Knock, *At.ToString());
+    if (AOpenWillowEnemy* By = Thrower.Get()) By->RecordRockImpact(ReleaseAt, What, Now, Miss, bHit, Applied, Knock);
+    Destroy();
 }

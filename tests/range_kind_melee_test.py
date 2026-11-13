@@ -16,6 +16,8 @@ SOURCE = REPO / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow'
 sys.path.insert(0, str(REPO / 'tools'))
 import check_range  # noqa: E402
 import prepare_range  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import range_fixtures  # noqa: E402
 
 ROW = re.compile(r'\{TEXT\("(\w+)"\),\s*([\d.]+)f,\s*([\d.]+)f\}')
 
@@ -45,7 +47,9 @@ def spawn(enemy, kind, source='live_read'):
 
 def graded_kind_melee(*lines):
     """The checker's kind_melee row for a log of these lines (spawn records and results), every other step passing."""
-    others = ['OWRANGETEST step=%s result=PASS x=1' % s for s in check_range.EXPECTED if s != 'kind_melee']
+    # The leap and throw steps (2026-11-13) pass with lines that follow the note's rule and their own spawn records.
+    others = [range_fixtures.ranged_passing(s) if s in ('leap', 'throw') else 'OWRANGETEST step=%s result=PASS x=1' % s
+              for s in check_range.EXPECTED if s != 'kind_melee']
     text = '\n'.join(others + list(lines) + ['OWRANGETEST SUMMARY result=PASS pass=1 fail=0 skip=0']) + '\n'
     ok, rows = check_range.grade(*check_range.parse(text))
     return ok, dict((s, (v, d)) for s, v, d in rows)['kind_melee']

@@ -157,6 +157,9 @@ public:
     // Damage from the world (OpenWillowApplyDamageToPlayer, and TakeDamage for UE's ApplyDamage): shield first, then health,
     // then the down state. SourceLocation is where the hit came from (ZeroVector: unknown). Returns what the pools took.
     float ApplyDamageToPlayer(float Amount, AActor* Causer, const FVector& SourceLocation);
+    // A knock-back from the range's leaps and rocks (OpenWillowEnemyAI.cpp, RangeKnockPlayer): adds Velocity through the character
+    // movement's launch. Not while down or in the respawn's hold. Returns what was added (zero when refused).
+    FVector ApplyKnockback(const FVector& Velocity);
     // Health, shield and Fight For Your Life live in FOpenWillowMayaState (OpenWillowMayaState.h); the walker forwards.
     const FOpenWillowMayaState& GetMayaState() const { return MayaState; }
     FOpenWillowMayaState& GetMayaState() { return MayaState; }

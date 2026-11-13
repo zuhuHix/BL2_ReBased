@@ -55,14 +55,18 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     FOpenWillowBrainOrders Orders;
     if (In.bPaused || In.bPassive)
     {
-        // Dead or phaselocked: the brain is paused. Passive: no notice and no melee. Either way the target and swing end.
+        // Dead or phaselocked: the brain is paused. Passive: no notice and no melee. Either way the target and swing end, and so does a
+        // leap or throw in progress (a held rock is dropped; a leaper in the air comes down where it is, the enemy's job).
+        Orders.bAttackEnded = IsLeaping() || IsThrowing();
         Stop();
         bDamagedByMaya = false;
         return Orders;
     }
+    LastNow = Now;
 
     // The state update (every UpdateInterval): the threat rules. The sight rule reads the line of sight of the previous update.
-    if (Now >= NextUpdateAt)
+    const bool bStateUpdate = Now >= NextUpdateAt;
+    if (bStateUpdate)
     {
         NextUpdateAt = Now + UpdateInterval;
         const bool bDamaged = bDamagedByMaya;
@@ -92,6 +96,16 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     // Aware for attack decisions only after AggroTime + MinAggroTimeToConsiderAwareOfTarget (AI_AWARENESS_LIVE 2).
     const bool bAware = bTargeting && In.bHasMaya && Den.Level >= SeenInThreatRadius
         && Now >= Den.AggroTime + MinAggroTimeToConsiderAwareOfTarget;
+
+    // A leap or throw in progress runs its own timeline, and nothing else this tick: it is atomic once started (NATIVE_AI_LEAP_THROW 5), so
+    // the close melee does not replace it, there is no chase beside it and no swing.
+    if (IsLeaping() || IsThrowing())
+    {
+        AdvanceAttack(Now, In, Orders);
+        return Orders;
+    }
+    // Without a target nothing runs: the random node's melee child ends, and the next target starts with a fresh draw.
+    if (!bAware && Pick == EOpenWillowAttack::Melee) Pick = EOpenWillowAttack::None;
     const bool bInVolume = In.bHasMaya && WithinMeleeVolume(In.Location, In.YawDegrees, In.MayaLocation, 0.f);
     // Starting a swing and landing it are separate questions. The volume above decides whether a swing lands (the forced swings of
     // AI_MELEE_TARGETING_LIVE 5). A swing starts only inside the stock attack action's range (its AttackLocation range, read by
@@ -116,6 +130,14 @@ FOpenWillowBrainOrders FOpenWillowEnemyBrain::Tick(float Now, const FOpenWillowB
     {
         bSwingPending = false;
         ResolveSwing(Now, In, bInVolume);
+    }
+
+    // Leaps and thrown rocks (host stand-in for the stock tree, the hub's decision 1): at a state update, with Maya inside the kind's close
+    // band the plain swing runs; otherwise one weighted draw per finished attack. A drawn leap or throw starts at once.
+    if (bStateUpdate && bAware && In.Attacks && !bSwingPending)
+    {
+        ChooseAttack(Now, In, Den, FlatDistance, Orders);
+        if (IsLeaping() || IsThrowing()) return Orders;
     }
 
     // A swing cycle starts when Maya is inside the start range, one kind's SwingInterval after the previous start. No melee without the
@@ -163,6 +185,251 @@ void FOpenWillowEnemyBrain::Stop()
     bHasTargetLocation = false;
     bSwingPending = false;
     bExposedBefore = false;   // the sight rule reads a sample of this scene, not one from before the stop
+    EndAttack(TEXT("stopped"));
+    Pick = EOpenWillowAttack::None;
+    Forced = EOpenWillowAttack::None;
+}
+
+void FOpenWillowEnemyBrain::ChooseAttack(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, float FlatDistance,
+    FOpenWillowBrainOrders& Orders)
+{
+    using namespace OpenWillowLeapThrow;
+    const FOpenWillowKindAttacks& Row = *In.Attacks;
+    // The close melee (the baby's grab) sits above the random node: inside its band it runs, and it replaces the node's melee child.
+    if (FlatDistance < Row.CloseBand)
+    {
+        Pick = EOpenWillowAttack::Melee;
+        return;
+    }
+    // While a drawn child runs, the random node re-evaluates only that child (NATIVE_AI_LEAP_THROW 2.2).
+    if (Pick != EOpenWillowAttack::None) return;
+    // What can run now: the band (horizontal, the enemy's origin to Maya's; no target-size allowance, the hub's decision 2), the line of
+    // sight, Maya in front for the throws that ask for it, and a free resource (one leaper and three throwers in the den, decision 3).
+    const FVector ToMaya = In.MayaLocation - In.Location;
+    const bool bFront = FVector::DotProduct(FRotator(0.f, In.YawDegrees, 0.f).Vector(), FVector(ToMaya.X, ToMaya.Y, 0.f)) > 0.f;
+    const bool bLeapOk = Row.LeapMax > 0.f && FlatDistance >= Row.LeapMin && FlatDistance <= Row.LeapMax && In.bLineOfSight
+        && (!Row.bLeapResource || Den.LeapUsers < LeapUsersMax);
+    const bool bThrowOk = Row.ThrowMax > 0.f && FlatDistance >= Row.ThrowMin && FlatDistance <= Row.ThrowMax && In.bLineOfSight
+        && (!Row.bThrowNeedsFront || bFront) && (!Row.bThrowResource || Den.ThrowUsers < ThrowUsersMax);
+    // The host's melee child can always walk in (no pathing failure is modelled), so the back-up throws below the random node never run.
+    const bool bMeleeOk = Row.WeightMelee > 0.f;
+    EOpenWillowAttack Chosen = EOpenWillowAttack::None;
+    bool bForcedNow = false;
+    if (Forced != EOpenWillowAttack::None)
+    {
+        const bool bOk = Forced == EOpenWillowAttack::Leap ? bLeapOk : Forced == EOpenWillowAttack::Throw ? bThrowOk : bMeleeOk;
+        if (bOk)
+        {
+            Chosen = Forced;
+            bForcedNow = true;
+        }
+        else
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE attack_forced_refused enemy=%s kind=%s attack=%s distance=%.0f los=%d front=%d leap_users=%d throw_users=%d t=%.2f"),
+                *In.Self->GetName(), Row.Kind, OpenWillowAttackName(Forced), FlatDistance, In.bLineOfSight ? 1 : 0, bFront ? 1 : 0, Den.LeapUsers,
+                Den.ThrowUsers, Now);
+        }
+        Forced = EOpenWillowAttack::None;
+    }
+    if (!bForcedNow) Chosen = OpenWillowDrawAttack(Row, bMeleeOk, bLeapOk, bThrowOk, AttackDraw);
+    // Nothing can run (the baby outside its leap band, the slinger outside its throw band): it walks in for the plain swing (stand-in).
+    if (Chosen == EOpenWillowAttack::None) Chosen = EOpenWillowAttack::Melee;
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE attack_pick enemy=%s kind=%s pick=%s distance=%.0f leap_ok=%d throw_ok=%d forced=%d t=%.2f"),
+        *In.Self->GetName(), Row.Kind, OpenWillowAttackName(Chosen), FlatDistance, bLeapOk ? 1 : 0, bThrowOk ? 1 : 0, bForcedNow ? 1 : 0, Now);
+    Pick = Chosen;
+    if (Chosen == EOpenWillowAttack::Melee) return;
+
+    RunningRow = &Row;
+    RunningSelf = In.Self;
+    AttackStartAt = Now;
+    if (Chosen == EOpenWillowAttack::Leap)
+    {
+        // The adult's roar before its leap is skipped (the hub's decision 4: two observations contradict a mandatory roar).
+        if (Row.bLeapResource)
+        {
+            ++Den.LeapUsers;
+            bHoldsLeap = true;
+            HeldDen = &Den;
+        }
+        LeapPhase = 1;
+        Leap = FOpenWillowLeapRecord();
+        Leap.StartAt = Now;
+        Leap.StartDistance = FlatDistance;
+        Leap.bForced = bForcedNow;
+        ++LeapCount;
+        Orders.bLeapLaunch = true;
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE leap_start enemy=%s kind=%s t=%.3f distance=%.0f band_min=%.0f band_max=%.0f launch_clip=%.3f roar=skipped_stand_in resource=%d forced=%d"),
+            *In.Self->GetName(), Row.Kind, Now, FlatDistance, Row.LeapMin, Row.LeapMax, Row.LeapStartSeconds, Row.bLeapResource ? 1 : 0, bForcedNow ? 1 : 0);
+        return;
+    }
+    if (Row.bThrowResource)
+    {
+        ++Den.ThrowUsers;
+        bHoldsThrow = true;
+        HeldDen = &Den;
+    }
+    // One clip of the kind's set, equal weights (note 4.1), and the lead: the note's two throw behaviours lead (the row's cap) or do not
+    // (cap 0), and what picks one is not decoded (4.2). Host stand-in: an even draw per throw.
+    ThrowClip = &Row.Clip[Row.ThrowClips > 1 ? AttackDraw.RandRange(0, Row.ThrowClips - 1) : 0];
+    ThrowLeadCap = AttackDraw.FRand() < 0.5f ? Row.ThrowLeadCap : 0.f;
+    ReleasesDone = 0;
+    Rock = FOpenWillowRockRecord();
+    Rock.StartAt = Now;
+    Rock.StartDistance = FlatDistance;
+    Rock.bForced = bForcedNow;
+    ++ThrowCount;
+    Orders.bThrowStarted = true;
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE throw_start enemy=%s kind=%s t=%.3f distance=%.0f band_min=%.0f band_max=%.0f front=%d clip=%.3f releases=%d lead_cap=%.0f resource=%d forced=%d"),
+        *In.Self->GetName(), Row.Kind, Now, FlatDistance, Row.ThrowMin, Row.ThrowMax, bFront ? 1 : 0, ThrowClip->ClipSeconds, ThrowClip->Releases,
+        ThrowLeadCap, Row.bThrowResource ? 1 : 0, bForcedNow ? 1 : 0);
+}
+
+void FOpenWillowEnemyBrain::AdvanceAttack(float Now, const FOpenWillowBrainInput& In, FOpenWillowBrainOrders& Orders)
+{
+    using namespace OpenWillowLeapThrow;
+    const FOpenWillowKindAttacks& Row = *RunningRow;
+    if (IsLeaping())
+    {
+        // Take-off when the launch clip ends (note 3.1). With no target then, there is no flight.
+        if (LeapPhase == 1 && Now >= AttackStartAt + Row.LeapStartSeconds)
+        {
+            if (!In.bHasMaya)
+            {
+                EndAttack(TEXT("target_gone_before_takeoff"));
+                Orders.bAttackEnded = true;
+                return;
+            }
+            // Centre to centre, the aim raised by the leaper's half height minus Maya's so the bodies' bottoms meet (note 3.1); the lead
+            // uses her velocity at take-off (note, decision 5).
+            const FVector Start = In.Location + FVector(0.f, 0.f, In.HalfHeight);
+            const FVector Aim = In.MayaLocation + FVector(0.f, 0.f, In.HalfHeight - In.MayaHalfHeight);
+            Leap.Arc = OpenWillowSolveArc(Start, Aim, In.MayaVelocity, Row.LeapSpeed, Row.LeapAnglePct, Row.LeapLeadCap);
+            if (!Leap.Arc.bValid)
+            {
+                EndAttack(TEXT("no_arc"));
+                Orders.bAttackEnded = true;
+                return;
+            }
+            LeapPhase = 2;
+            Leap.TakeoffAt = Now;
+            Leap.Facing = FVector(Leap.Arc.Velocity.X, Leap.Arc.Velocity.Y, 0.f).GetSafeNormal();
+            Orders.bLeapTakeoff = true;
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE leap_takeoff enemy=%s kind=%s t=%.3f windup=%.3f d0=%.1f dz=%.1f d1=%.1f lead=%.1f speed=%.0f angle_pct=%.3f lead_cap=%.0f angle=%.2f flight=%.4f gravity=%.1f gravity_scale=%.4f peak=%.1f"),
+                *In.Self->GetName(), Row.Kind, Now, Now - AttackStartAt, Leap.Arc.D0, Leap.Arc.Dz, Leap.Arc.D1, Leap.Arc.Lead, Row.LeapSpeed,
+                Row.LeapAnglePct, Row.LeapLeadCap, Leap.Arc.AngleDegrees, Leap.Arc.FlightTime, Leap.Arc.Gravity, Leap.Arc.GravityScale(), Leap.Arc.Peak());
+            return;
+        }
+        // Touch-down at the end of the flight time: the landing hit at the start of the landing clip (note 3.3).
+        if (LeapPhase == 2 && Now >= Leap.TakeoffAt + Leap.Arc.FlightTime)
+        {
+            LeapPhase = 3;
+            Leap.LandAt = Now;
+            Leap.bLanded = true;
+            const FVector Centre = Leap.Arc.At(Leap.Arc.FlightTime);
+            Leap.LandError = float(FVector::Dist2D(Centre, Leap.Arc.Aim));
+            Leap.Expected = HitAmount(In);
+            Leap.bHit = In.bHasMaya && OpenWillowLeapLandingHits(Centre, Leap.Facing, In.MayaLocation);
+            if (Leap.bHit)
+            {
+                ++LeapHits;
+                Leap.Applied = Leap.Expected > 0.f ? RangeDamagePlayer(In.Self, Leap.Expected) : 0.f;
+                // Knockback 1.0: a horizontal momentum of 100,000 away from the leaper (along its facing when it came down on her).
+                FVector Away = In.MayaLocation - Centre;
+                Away.Z = 0.f;
+                if (Away.Size() < 1.f) Away = Leap.Facing;
+                Leap.Knock = RangeKnockPlayer(In.Self, Away.GetSafeNormal() * LeapMomentum, TEXT("leap"));
+            }
+            Orders.bLeapLanded = true;
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE leap_land enemy=%s kind=%s t=%.3f flight=%.4f predicted=%.4f attack_to_landed=%.3f land_error=%.1f hit=%d expected=%.2f applied=%.2f knock=%.0f landing_clip=%.3f"),
+                *In.Self->GetName(), Row.Kind, Now, Now - Leap.TakeoffAt, Leap.Arc.FlightTime, Now - Leap.StartAt, Leap.LandError, Leap.bHit ? 1 : 0,
+                Leap.Expected, Leap.Applied, Leap.Knock, Row.LeapEndSeconds);
+            return;
+        }
+        // The action ends with the landing clip.
+        if (LeapPhase == 3 && Now >= Leap.LandAt + Row.LeapEndSeconds)
+        {
+            EndAttack(TEXT("finished"));
+            Orders.bAttackEnded = true;
+        }
+        return;
+    }
+    if (!IsThrowing() || !ThrowClip) return;
+    // A rock leaves the hand at each release moment of the clip (note 4.1), solved toward Maya now (note 4.2: speed 2000, angle fraction
+    // 0.3, no offset, this throw's lead cap). With no target at a release, the throw stops and the held rock is dropped.
+    if (ReleasesDone < ThrowClip->Releases && Now >= AttackStartAt + ThrowClip->Release[ReleasesDone])
+    {
+        if (!In.bHasMaya)
+        {
+            EndAttack(TEXT("target_gone_before_release"));
+            Orders.bAttackEnded = true;
+            return;
+        }
+        const FOpenWillowArc Arc = OpenWillowSolveArc(In.HandLocation, In.MayaLocation, In.MayaVelocity, Row.ThrowSpeed, Row.ThrowAnglePct,
+            ThrowLeadCap);
+        const float Due = ThrowClip->Release[ReleasesDone];
+        ++ReleasesDone;
+        if (Arc.bValid)
+        {
+            Orders.bRockReleased = true;
+            Orders.RockArc = Arc;
+            Orders.RockDamage = HitAmount(In);
+            const float StartDistance = Rock.StartDistance;
+            const bool bForced = Rock.bForced;
+            Rock = FOpenWillowRockRecord();
+            Rock.StartAt = AttackStartAt;
+            Rock.ReleaseAt = Now;
+            Rock.ReleaseDue = Due;
+            Rock.StartDistance = StartDistance;
+            Rock.bForced = bForced;
+            Rock.Arc = Arc;
+            Rock.Damage = Orders.RockDamage;
+            ++RocksReleased;
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE rock_release enemy=%s kind=%s t=%.3f release=%.3f due=%.3f d0=%.1f dz=%.1f d1=%.1f lead=%.1f speed=%.0f angle_pct=%.3f lead_cap=%.0f angle=%.2f flight=%.4f gravity=%.1f gravity_scale=%.4f peak=%.1f damage=%.2f"),
+                *In.Self->GetName(), Row.Kind, Now, Now - AttackStartAt, Due, Arc.D0, Arc.Dz, Arc.D1, Arc.Lead, Row.ThrowSpeed, Row.ThrowAnglePct, ThrowLeadCap,
+                Arc.AngleDegrees, Arc.FlightTime, Arc.Gravity, Arc.GravityScale(), Arc.Peak(), Orders.RockDamage);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Display, TEXT("OWRANGE rock_release enemy=%s kind=%s t=%.3f no_arc (Maya straight above or below the hand)"), *In.Self->GetName(), Row.Kind, Now);
+        }
+        return;
+    }
+    if (Now >= AttackStartAt + ThrowClip->ClipSeconds)
+    {
+        EndAttack(TEXT("finished"));
+        Orders.bAttackEnded = true;
+    }
+}
+
+void FOpenWillowEnemyBrain::EndAttack(const TCHAR* Why)
+{
+    // The resource goes back on every way out (finished, stopped, the target gone).
+    if (HeldDen)
+    {
+        if (bHoldsLeap) HeldDen->LeapUsers = FMath::Max(0, HeldDen->LeapUsers - 1);
+        if (bHoldsThrow) HeldDen->ThrowUsers = FMath::Max(0, HeldDen->ThrowUsers - 1);
+    }
+    HeldDen = nullptr;
+    bHoldsLeap = false;
+    bHoldsThrow = false;
+    if (IsLeaping() || IsThrowing())
+    {
+        UE_LOG(LogTemp, Display, TEXT("OWRANGE attack_end enemy=%s kind=%s attack=%s why=%s t=%.3f"), RunningSelf ? *RunningSelf->GetName() : TEXT("?"),
+            RunningRow ? RunningRow->Kind : TEXT("?"), OpenWillowAttackName(Pick), Why, LastNow);
+        // One draw per finished attack: the next state update draws again.
+        Pick = EOpenWillowAttack::None;
+    }
+    LeapPhase = 0;
+    ThrowClip = nullptr;
+    RunningRow = nullptr;
+}
+
+float FOpenWillowEnemyBrain::HitAmount(const FOpenWillowBrainInput& In) const
+{
+    // The plain melee's numbers (COMBAT_MELEE: the leap's delivery gives the same arrival and ratio as the swing; the rock's damage is the
+    // same Init_EnemyNonWeaponDamage at scale 1, note 4.3), times the level scale. 0 without the manifest's numbers for this level.
+    if (In.ArrivalDamage <= 0.f || In.Ratio <= 0.f) return 0.f;
+    return In.ArrivalDamage * In.Ratio * MeleeLevelScale(In.EnemyLevel, In.MayaLevel);
 }
 
 void FOpenWillowEnemyBrain::UpdateThreat(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool bDamaged,
@@ -223,6 +490,8 @@ void FOpenWillowEnemyBrain::ResolveSwing(float Now, const FOpenWillowBrainInput&
     LastAt = Now;
     LastApplied = bHit ? RangeDamagePlayer(In.Self, In.ArrivalDamage * In.Ratio * LastScale) : 0.f;
     ++MeleeResolved;
+    // The swing is the random node's finished attack: the next state update draws again (outside the close band).
+    if (Pick == EOpenWillowAttack::Melee) Pick = EOpenWillowAttack::None;
     UE_LOG(LogTemp, Display, TEXT("OWRANGE melee enemy=%s hit=%d arrival=%.3f ratio=%.4f level_scale=%.2f applied=%.2f t=%.2f"),
         *In.Self->GetName(), bHit ? 1 : 0, LastArrival, LastRatio, LastScale, LastApplied, Now);
 }
@@ -261,4 +530,16 @@ float RangeDamagePlayer(AActor* Causer, float Amount)
     UE_LOG(LogTemp, Display, TEXT("OWRANGE melee_delivery amount=%.2f applied=%.2f maya_pools_before=%.2f after=%.2f"), Amount, Applied,
         Before, After);
     return Applied;
+}
+
+float RangeKnockPlayer(const UObject* WorldContext, const FVector& Momentum, const TCHAR* Source)
+{
+    AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(UGameplayStatics::GetPlayerPawn(WorldContext, 0));
+    if (!Walker) return 0.f;
+    // Host stand-in (UNVERIFIED): the momentum over a mass of KnockbackMass, horizontal, added to her velocity.
+    const FVector Added(Momentum.X / OpenWillowLeapThrow::KnockbackMass, Momentum.Y / OpenWillowLeapThrow::KnockbackMass, 0.f);
+    const FVector Applied = Walker->ApplyKnockback(Added);
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE knockback source=%s momentum=%.0f added_speed=%.0f applied=%d"), Source, Momentum.Size2D(), Applied.Size2D(),
+        Applied.IsNearlyZero() ? 0 : 1);
+    return float(Applied.Size2D());
 }

@@ -24,6 +24,7 @@ class OPENWILLOW_API AOpenWillowEnemy : public AOpenWillowCombatTarget
 public:
     AOpenWillowEnemy();
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void Tick(float DeltaSeconds) override;
 
     // Sets the kind up: the stock pawn when its assets load (else the engine shapes, logged as fallback=shapes), the level,
@@ -42,6 +43,17 @@ public:
     float SwingIntervalNow() const { return KindMelee ? KindMelee->SwingInterval : OpenWillowThreat::SwingInterval; }
     // The kind's live row (cycle and stand distance), or null when no live read covers the kind.
     const FOpenWillowKindMelee* GetKindMelee() const { return KindMelee; }
+    // The kind's leap and throw (OpenWillowLeapThrow.h), or null for a kind with neither (the psycho, the stand-in kind).
+    const FOpenWillowKindAttacks* GetKindAttacks() const { return KindAttacks; }
+    // Leaps and throws on or off for this enemy (on by default). Off is a test fixture: the range test's kind_melee step measures the plain
+    // swing alone. Turning them off ends one in progress.
+    void SetRangedAttacks(bool bOn);
+    bool AreRangedAttacksOn() const { return bRangedAttacks; }
+    // The brain's draw stream (the range seeds it per enemy, -owrangeaiseed=N) and the test's request for the next attack.
+    void SeedAttackDraw(int32 Seed) { Brain.SeedAttackDraw(Seed); }
+    void ForceAttackForTest(EOpenWillowAttack Attack) { Brain.ForceAttackForTest(Attack); }
+    // A rock of this enemy came down (AOpenWillowRangeRock): written into the brain's last-rock record when it is that rock.
+    void RecordRockImpact(float ReleaseAt, const TCHAR* What, float ImpactAt, float MissDistance, bool bHit, float Applied, float KnockSpeed);
     // Test fixture (the range test's AI steps): the enemy back at home at full health, facing Yaw, with no target, no swing and
     // no chase, and its patrol held for HoldSeconds, so each step's scene is laid out from the same place.
     void ResetForAITest(float Now, float Yaw, float HoldSeconds);
@@ -82,6 +94,11 @@ private:
     void UpdateBrain(float Now, float DeltaSeconds);
     void UpdateChase(const FVector& Target, bool bRun, float StepLimit, float Now, float DeltaSeconds);
     void PlayMelee(float Now);
+    // Leaps and throws: what the brain's orders ask of the body (clips, the flight along the arc, the landing, the rocks).
+    void UpdateAttack(float Now, float DeltaSeconds, const FOpenWillowBrainInput& In, const FOpenWillowBrainOrders& Orders);
+    void EndAttackMotion();
+    void TurnWithin(const FVector& Dir, float SecondsLeft, float DeltaSeconds);
+    FVector HandLocation(float HalfHeight) const;
     void SetMoveAnim(bool bMoving, bool bRun = false);
     void UpdateHealthBars();
 
@@ -93,6 +110,11 @@ private:
     UPROPERTY() TObjectPtr<class UAnimSequence> RunClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> MeleeClip;
     UPROPERTY() TObjectPtr<class UAnimSequence> HitClip;
+    // Leap and throw clips from the manifest (null: the import has none; the body then holds its idle, a host stand-in).
+    UPROPERTY() TObjectPtr<class UAnimSequence> LeapStartClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> LeapIdleClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> LeapEndClip;
+    UPROPERTY() TObjectPtr<class UAnimSequence> ThrowClip;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarBack;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarFill;
     UPROPERTY() TObjectPtr<class UStaticMeshComponent> BarShield;
@@ -107,6 +129,13 @@ private:
     bool bDamagedByMaya = false;
     bool bMeleePlaying = false;
     float MeleeEndsAt = 0.f;
+    // Leaps and throws.
+    const FOpenWillowKindAttacks* KindAttacks = nullptr;   // a row of the static table in OpenWillowLeapThrow.h (set by SetupKind)
+    bool bRangedAttacks = true;
+    bool bAttackPlaying = false;        // a leap or throw owns the clips (the move clips wait)
+    bool bWasAirborne = false;          // last tick it was in the air: if the leap ends otherwise than by landing, it is put on the floor
+    FName HandBone;                     // where rocks leave (None: a stand-in point in front of the chest)
+    TArray<TWeakObjectPtr<AActor>> Rocks;   // its rocks in flight (removed with the enemy, and by the test's reset)
     FVector PatrolTarget = FVector::ZeroVector;
     float PauseUntil = 0.f;
     UAnimSequence* MoveClipNow = nullptr;   // the clip the move state last started (avoids restarts)
@@ -129,4 +158,29 @@ private:
     FVector ChaseCheckFrom = FVector::ZeroVector;
     float ChaseBlockedSince = -1.f;
     float ChaseSideSign = 1.f;
+};
+
+// One thrown rock (NATIVE_AI_LEAP_THROW 4.2 and 4.3): it follows its solved arc, damages Maya on a touch of her capsule (the plain melee's
+// numbers, Behavior_CauseDamage), pushes her with the momentum 50,000, and ends on static world geometry or after 20 s. Host stand-ins
+// (UNVERIFIED): an engine sphere for the look, a touch radius of 20 uu, other enemies not hit, no radius damage (none was found in the data).
+UCLASS()
+class OPENWILLOW_API AOpenWillowRangeRock : public AActor
+{
+    GENERATED_BODY()
+public:
+    AOpenWillowRangeRock();
+    virtual void Tick(float DeltaSeconds) override;
+    void Launch(AOpenWillowEnemy* InThrower, const FOpenWillowArc& InArc, float InDamage, float InReleaseAt, const FString& InKind);
+
+private:
+    void Finish(const TCHAR* What, const FVector& At, bool bHit, float Applied, float Knock);
+    UPROPERTY() TObjectPtr<class UStaticMeshComponent> Visual;
+    TWeakObjectPtr<AOpenWillowEnemy> Thrower;
+    FString ThrowerName;
+    FString Kind;
+    FOpenWillowArc Arc;
+    float Damage = 0.f;
+    float ReleaseAt = 0.f;
+    float Age = 0.f;
+    bool bDone = true;
 };

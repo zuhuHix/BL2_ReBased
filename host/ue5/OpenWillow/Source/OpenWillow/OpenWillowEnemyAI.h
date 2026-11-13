@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "OpenWillowLeapThrow.h"
 
 class AActor;
 
@@ -47,6 +48,10 @@ struct FOpenWillowThreatDen
     float AggroTime = 0.f;        // when the level was last raised by a notice or a hit (0 at level 1)
     float ForgetTime = 0.f;       // when the level falls back (the den's update checks it)
     float NextCheckAt = 0.f;      // the den's fall-back check runs every DenUpdateInterval
+    // The leap and throw resources (NATIVE_AI_LEAP_THROW 2.4): how many of the den's enemies run a leap or a throw that holds one now. The
+    // note leaves the scope open; the hub chose the range's one den (UNVERIFIED). Not part of the threat record: ResetRecord leaves them.
+    int32 LeapUsers = 0;
+    int32 ThrowUsers = 0;
 
     // Test-only and build-time: a fresh record (level 1, no times).
     void ResetRecord()
@@ -77,6 +82,12 @@ struct FOpenWillowBrainInput
     float SwingInterval = OpenWillowThreat::SwingInterval;   // the kind's swing cycle (FindKindMelee), else the stand-in
     float StandDistance = 0.f;                 // the kind's live stand distance (FindKindMelee); 0 = the stand-in stop inside the swing range
     float MayaRadius = 0.f;                    // Maya's capsule radius: with CollisionRadius, the body contact a live stand distance never goes inside
+    // Leaps and thrown rocks (NATIVE_AI_LEAP_THROW.md). Null: the plain melee only, as before (a kind with no row, or the test fixture).
+    const FOpenWillowKindAttacks* Attacks = nullptr;
+    float HalfHeight = 0.f;                    // the enemy's collision half height: its centre stands this far above its origin
+    float MayaHalfHeight = 0.f;                // Maya's capsule half height (her origin is her centre)
+    FVector MayaVelocity = FVector::ZeroVector;   // the lead of a leap or a rock
+    FVector HandLocation = FVector::ZeroVector;   // where a rock leaves the hand (the enemy fills it during a throw)
 };
 
 // Melee per range kind from live reads: the acceptance table of docs/verification/COMBAT_RANGE.md, held to tools/check_range.py's
@@ -102,6 +113,52 @@ struct FOpenWillowBrainOrders
     float StepLimit = -1.f;       // with bRun, for a kind with a live stand distance: the most it may move this tick, the flat gap to
                                   // Maya's current position minus the stop distance (never below 0); -1 = no limit
     bool bStandOnContact = false; // the live stand distance was inside body contact, so the stop is at contact
+    // Leaps and throws (the enemy moves, animates and spawns; the brain times and resolves them).
+    bool bLeapLaunch = false;     // the launch clip starts this tick
+    bool bLeapTakeoff = false;    // it leaves the ground this tick (the arc is GetLeap().Arc)
+    bool bLeapLanded = false;     // it touches down this tick: the landing clip
+    bool bThrowStarted = false;   // the throw clip starts this tick
+    bool bRockReleased = false;   // a rock leaves the hand this tick
+    FOpenWillowArc RockArc;       // with bRockReleased
+    float RockDamage = 0.f;       // with bRockReleased: what the rock delivers on a touch (0 = no melee numbers: it does no damage)
+    bool bAttackEnded = false;    // a leap or throw ended (or was stopped) this tick: the move clips start again
+};
+
+// The last leap of an enemy, for its log lines and the range test.
+struct FOpenWillowLeapRecord
+{
+    float StartAt = -10.f;        // the launch clip's start: the host's Attack moment (the hub's decision 7)
+    float TakeoffAt = -10.f;
+    float LandAt = -10.f;         // touch-down (the landing hit)
+    float StartDistance = 0.f;    // horizontal, the enemy's origin to Maya's, when the leap was chosen
+    FOpenWillowArc Arc;
+    FVector Facing = FVector::ForwardVector;   // the launch direction (horizontal): the landing volume lies ahead along it
+    bool bLanded = false;
+    bool bHit = false;
+    float Expected = 0.f;         // arrival x ratio x level scale
+    float Applied = 0.f;
+    float Knock = 0.f;            // the horizontal speed added to Maya (0: none)
+    float LandError = 0.f;        // horizontal, where it came down to the arc's aim point
+    bool bForced = false;         // the range test asked for it
+};
+
+// The last rock of an enemy: its release here, its impact written by the rock (AOpenWillowRangeRock).
+struct FOpenWillowRockRecord
+{
+    float StartAt = -10.f;        // the throw clip's start
+    float ReleaseAt = -10.f;
+    float ReleaseDue = 0.f;       // the clip's release moment, seconds after StartAt
+    float StartDistance = 0.f;
+    FOpenWillowArc Arc;
+    float Damage = 0.f;
+    bool bImpact = false;
+    FString What;                 // maya, world or expired
+    float ImpactAt = -10.f;
+    float MissDistance = 0.f;     // horizontal, the impact point to the arc's aim point
+    bool bHit = false;
+    float Applied = 0.f;
+    float Knock = 0.f;
+    bool bForced = false;
 };
 
 // The range enemy's brain: the threat rules (on the state update) and the melee timing (every tick). A plain class: the
@@ -111,7 +168,8 @@ class FOpenWillowEnemyBrain
 public:
     // Runs the brain for one tick. bDamagedByMaya is the enemy's "hit by Maya" flag: read and cleared at each state update.
     FOpenWillowBrainOrders Tick(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool& bDamagedByMaya);
-    // Drops the target and any swing in progress (death, respawn, passive, paused).
+    // Drops the target and any swing in progress (death, respawn, passive, paused). A leap or throw in progress ends and gives its
+    // resource back.
     void Stop();
     // Test fixture: Stop, and the next tick runs a state update.
     void ResetForTest() { Stop(); NextUpdateAt = 0.f; }
@@ -122,6 +180,22 @@ public:
     bool IsUpdateDue(float Now) const { return Now >= NextUpdateAt; }
     bool IsTargeting() const { return bTargeting; }
     bool IsSwingPending() const { return bSwingPending; }
+    // Leaps and throws. The draw's stream is seeded per enemy by the range (-owrangeaiseed=N), so a run can repeat its draws.
+    void SeedAttackDraw(int32 Seed) { AttackDraw.Initialize(Seed); }
+    // Test fixture: the next draw takes this attack when it can run (else it logs the refusal and draws as usual).
+    void ForceAttackForTest(EOpenWillowAttack Attack) { Forced = Attack; }
+    EOpenWillowAttack GetAttack() const { return Pick; }
+    bool IsLeaping() const { return Pick == EOpenWillowAttack::Leap; }
+    bool IsThrowing() const { return Pick == EOpenWillowAttack::Throw; }
+    bool IsAirborne() const { return Pick == EOpenWillowAttack::Leap && LeapPhase == 2; }
+    bool IsLeapWindUp() const { return Pick == EOpenWillowAttack::Leap && LeapPhase == 1; }
+    // Seconds into the current attack (from the launch clip's or the throw clip's start), and into the flight.
+    float AttackSeconds(float Now) const { return Now - AttackStartAt; }
+    float FlightSeconds(float Now) const { return Now - Leap.TakeoffAt; }
+    const FOpenWillowLeapRecord& GetLeap() const { return Leap; }
+    FOpenWillowRockRecord& GetRock() { return Rock; }
+    const FOpenWillowRockRecord& GetRock() const { return Rock; }
+    int32 LeapCount = 0, LeapHits = 0, ThrowCount = 0, RocksReleased = 0;
 
     // Counters and the last swing, read by the logs and the range test.
     int32 SwingCount = 0;
@@ -141,6 +215,11 @@ private:
     void UpdateThreat(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, bool bDamaged, bool bSightBefore);
     void StartSwing(float Now, const FOpenWillowBrainInput& In);
     void ResolveSwing(float Now, const FOpenWillowBrainInput& In, bool bHit);
+    // Leaps and throws: the draw at a state update, then the running attack's timeline every tick.
+    void ChooseAttack(float Now, const FOpenWillowBrainInput& In, FOpenWillowThreatDen& Den, float FlatDistance, FOpenWillowBrainOrders& Orders);
+    void AdvanceAttack(float Now, const FOpenWillowBrainInput& In, FOpenWillowBrainOrders& Orders);
+    void EndAttack(const TCHAR* Why);
+    float HitAmount(const FOpenWillowBrainInput& In) const;
 
     float NextUpdateAt = 0.f;
     bool bExposedBefore = false;    // the line of sight at the previous state update (the sight rule reads it)
@@ -154,6 +233,23 @@ private:
     float GiveUpUntil = -10.f;
     bool bSwingPending = false;
     float SwingStartAt = -10.f;
+    // The attack the random node runs (None: draw at the next state update) and its timeline. A leap or throw is atomic once started
+    // (NATIVE_AI_LEAP_THROW 5): the close melee does not replace it; death, a hold, passive and a lost target before take-off or a release end it.
+    EOpenWillowAttack Pick = EOpenWillowAttack::None;
+    EOpenWillowAttack Forced = EOpenWillowAttack::None;
+    FRandomStream AttackDraw;
+    float AttackStartAt = -10.f;
+    int32 LeapPhase = 0;          // 1 launch clip, 2 in the air, 3 landing clip
+    const FOpenWillowThrowClip* ThrowClip = nullptr;
+    float ThrowLeadCap = 0.f;     // this throw's lead cap: the row's or 0 (note 4.2: which of the two behaviours runs is not decoded)
+    int32 ReleasesDone = 0;
+    FOpenWillowLeapRecord Leap;
+    FOpenWillowRockRecord Rock;
+    const FOpenWillowKindAttacks* RunningRow = nullptr;
+    const AActor* RunningSelf = nullptr;       // for the log line of an attack that Stop() ends
+    FOpenWillowThreatDen* HeldDen = nullptr;   // the den whose resource this enemy holds (given back by EndAttack, which Stop calls)
+    bool bHoldsLeap = false;
+    bool bHoldsThrow = false;    float LastNow = 0.f;          // the last tick's time (Stop's log line)
 };
 
 // The den's fall-back: when the level is 2 or more and now is past ForgetTime, the level drops to 1 (every DenUpdateInterval).
@@ -166,3 +262,6 @@ float MeleeLevelScale(int32 EnemyLevel, int32 MayaLevel);
 // The ONE delivery of range melee to Maya: OpenWillowApplyDamageToPlayer (OpenWillowMayaState.h, the maya lane's PR #72), shield
 // first, then health, then the down state. Returns the damage the pools took.
 float RangeDamagePlayer(AActor* Causer, float Amount);
+// The knock-back of a leap or a rock on Maya (AOpenWillowWalker::ApplyKnockback): the game's momentum (a horizontal vector) becomes an added
+// velocity of momentum / OpenWillowLeapThrow::KnockbackMass (host stand-in, UNVERIFIED). Returns the speed added (0: none, she is down).
+float RangeKnockPlayer(const UObject* WorldContext, const FVector& Momentum, const TCHAR* Source);

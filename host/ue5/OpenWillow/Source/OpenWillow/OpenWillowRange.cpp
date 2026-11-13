@@ -18,6 +18,7 @@
 #include "Engine/DamageEvents.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/DamageType.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
@@ -204,6 +205,9 @@ void TeleportMaya(UWorld* World, const FVector& Spot, float Yaw)
     if (const ACharacter* Character = Cast<ACharacter>(Pawn))
         HalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
     Pawn->SetActorLocation(Spot + FVector(0.f, 0.f, HalfHeight), false, nullptr, ETeleportType::TeleportPhysics);
+    // A knock-back of a leap or a rock (since 2026-11-13) can still be carrying her: she arrives standing still.
+    if (ACharacter* Character = Cast<ACharacter>(Pawn); Character && Character->GetCharacterMovement())
+        Character->GetCharacterMovement()->StopMovementImmediately();
     // The walker resets its fall tracking, so the teleport is never taken as a landing (PR #77, NotifyTeleported).
     if (AOpenWillowWalker* Walker = Cast<AOpenWillowWalker>(Pawn)) Walker->NotifyTeleported();
     if (APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0)) PC->SetControlRotation(FRotator(0.f, Yaw, 0.f));
@@ -384,6 +388,10 @@ FOpenWillowRangeManifest FOpenWillowRangeManifest::Load(const FString& Path, FSt
                 Obj->TryGetStringField(TEXT("run"), Kind.Run);
                 Obj->TryGetStringField(TEXT("hit"), Kind.Hit);
                 Obj->TryGetStringField(TEXT("melee"), Kind.Melee);
+                Obj->TryGetStringField(TEXT("leap_start"), Kind.LeapStart);
+                Obj->TryGetStringField(TEXT("leap_idle"), Kind.LeapIdle);
+                Obj->TryGetStringField(TEXT("leap_end"), Kind.LeapEnd);
+                Obj->TryGetStringField(TEXT("throw"), Kind.Throw);
                 Obj->TryGetStringField(TEXT("head_bone"), Kind.HeadBone);
                 auto Read = [&Obj](const TCHAR* Field, float& Target)
                 {
@@ -508,6 +516,9 @@ void UOpenWillowRangeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     FString SeedText;
     if (FParse::Value(FCommandLine::Get(), TEXT("owrangeseed="), SeedText)) LootSeed = FCString::Atoi(*SeedText);
     ResetLootStream();
+    // The attack draws of the enemies (leap, throw or melee): -owrangeaiseed=N; each enemy's stream starts at N plus its slot.
+    FString AISeedText;
+    if (FParse::Value(FCommandLine::Get(), TEXT("owrangeaiseed="), AISeedText)) AISeed = FCString::Atoi(*AISeedText);
 }
 
 bool UOpenWillowRangeSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
@@ -633,6 +644,9 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
     // PR2: the range is one den, centred on the spot; its record starts fresh.
     Den.Centre = FVector2D(Spot.X, Spot.Y);
     Den.ResetRecord();
+    // The leap and throw resources start free (the enemies that held them are gone with the old range).
+    Den.LeapUsers = 0;
+    Den.ThrowUsers = 0;
     // Three static dummies in a row, facing the spot. The Fire mission's stock dummy when its data loads, else engine shapes.
     const bool bStockDummy = LoadSliceData();
     for (int32 Index = 0; Index < DummySlots.Num(); ++Index)
@@ -672,6 +686,7 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
             AOpenWillowEnemy* Enemy = World->SpawnActor<AOpenWillowEnemy>(At, FRotator(0.f, (At - Spot).Rotation().Yaw, 0.f), Params);
             if (!Enemy) continue;
             Enemy->SetupKind(*Kind, Level, Manifest.RespawnSeconds);
+            Enemy->SeedAttackDraw(AISeed + Index);
             Enemy->SetInvulnerable(bModeInvulnerable);
             Enemy->SetPassive(bModePassive);
             Enemy->SetAIEnabled(bModeAI);
@@ -690,8 +705,8 @@ bool UOpenWillowRangeSubsystem::BuildRange(const FVector& Spot, float Yaw)
         return false;
     }
     bBuilt = true;
-    UE_LOG(LogTemp, Display, TEXT("OWRANGE built spot=%s yaw=%.0f dummies=%d enemies=%d level=%d invulnerable=%d passive=%d"),
-        *Spot.ToString(), Yaw, Dummies.Num(), Enemies.Num(), Level, bModeInvulnerable ? 1 : 0, bModePassive ? 1 : 0);
+    UE_LOG(LogTemp, Display, TEXT("OWRANGE built spot=%s yaw=%.0f dummies=%d enemies=%d level=%d invulnerable=%d passive=%d ai_seed=%d"),
+        *Spot.ToString(), Yaw, Dummies.Num(), Enemies.Num(), Level, bModeInvulnerable ? 1 : 0, bModePassive ? 1 : 0, AISeed);
     return true;
 }
 
@@ -721,6 +736,8 @@ void UOpenWillowRangeSubsystem::ClearRange()
     Dummies.Reset();
     Enemies.Reset();
     EnemyKinds.Reset();
+    Den.LeapUsers = 0;
+    Den.ThrowUsers = 0;
     bBuilt = false;
     if (Count > 0) UE_LOG(LogTemp, Display, TEXT("OWRANGE cleared %d range actor(s)"), Count);
 }
@@ -1156,7 +1173,7 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
 {
     // Steps: 0 wait for Maya, build and move her; 1 teleport; 2 placement; 3 body hit; 4 crit hit; 5 crit trace; 6 shield order;
     // 7 invulnerable; 8 passive; 9 passive held; 10 patrol; 11 death; 12 ragdoll; 13 respawn; 14-15 dummy respawn;
-    // 16-36 enemy AI (TickAITest); 37-44 loot on death (TickLootTest, PR3); 99 summary.
+    // 16-36 and 90-97 enemy AI (TickAITest; 96-97 the leaps and throws); 37-44 loot on death (TickLootTest, PR3); 99 summary.
     UWorld* World = GetWorld();
     APawn* Pawn = UGameplayStatics::GetPlayerPawn(World, 0);
     APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
@@ -1164,7 +1181,7 @@ void UOpenWillowRangeSubsystem::TickTest(float Now)
     AOpenWillowEnemy* Enemy1 = Enemies.Num() > 1 ? Enemies[1].Get() : nullptr;
     AOpenWillowCombatTarget* Dummy0 = Dummies.Num() > 0 ? Dummies[0].Get() : nullptr;
 
-    if ((TestStep >= 16 && TestStep < 37) || (TestStep >= 90 && TestStep <= 95))
+    if ((TestStep >= 16 && TestStep < 37) || (TestStep >= 90 && TestStep <= 97))
     {
         // The AI steps need the AI; the target steps before them ran with it off (an alerted range swarmed Maya and put her
         // down before the AI steps began, batch 2).
@@ -1633,7 +1650,7 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
     {
         const TCHAR* Names[] = {TEXT("notice_proximity"), TEXT("notice_sight"), TEXT("no_notice_far"), TEXT("provoked"),
             TEXT("approach"), TEXT("melee_hit"), TEXT("melee_interval"), TEXT("melee_miss"), TEXT("forget"), TEXT("passive_no_melee"),
-            TEXT("swing_range"), TEXT("kind_melee")};
+            TEXT("swing_range"), TEXT("kind_melee"), TEXT("leap"), TEXT("throw")};
         for (const TCHAR* Name : Names) TestSkip(Name, TEXT("no enemy"));
         TestStep = 37;
         return;
@@ -2196,13 +2213,13 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             if (TestKindQueue.Num() == 0)
             {
                 TestCheck(TEXT("kind_melee"), false, TEXT("no enemy of a kind with a live melee row (bullymong_adult, bullymong_baby, bullymong, bullymong_slinger) on this range"));
-                TestStep = 37;
+                TestStep = 96;
                 return;
             }
         }
         if (TestKindQueue.Num() == 0)
         {
-            TestStep = 37;
+            TestStep = 96;
             return;
         }
         AOpenWillowEnemy* Enemy = TestKindQueue[0].Get();
@@ -2215,6 +2232,10 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
         Reset(TEXT("kind melee"));
         Enemy->ResetForAITest(Now, (SpotNow - Enemy->GetHome()).Rotation().Yaw, 3.f);
         OnlyActive(Enemy);
+        // Test fixture (2026-11-13): the step measures the plain swing (its cycle and where it stands), so this enemy's leaps and throws
+        // are off for it. Maya at 600 uu lies inside the adult's throw band (512 to 3072), and a rock or a leap between the swings would
+        // change what the cycle and stand numbers mean. The leap and throw steps (96-97) cover those attacks.
+        Enemy->SetRangedAttacks(false);
         const FVector At = Enemy->GetActorLocation() + Forward(Enemy) * 600.f;
         if (!PlaceMaya(FVector2D(At.X, At.Y), YawToward(At, Enemy->GetActorLocation())))
         {
@@ -2296,6 +2317,169 @@ void UOpenWillowRangeSubsystem::TickAITest(float Now)
             *KindName, *Enemy->GetName(), CycleMin, CycleMax, StandMin, StandMax, TestKindDistances[0], StartRange, TestKindMaxFrame, TestKindStarts.Num(),
             Row ? Row->SwingInterval : 0.f, Row ? Row->StandDistance : 0.f, KindBrain.LastStopAt));
         TestStep = 94;
+        return;
+    }
+    case 96: // leap and throw: for each kind on the range with one, its first enemy is asked for it with Maya in its band, ahead, in sight.
+    {
+        // The draw itself is random (seeded); the step asks for the attack (a test fixture) so each one runs once, through the same checks a
+        // drawn one must pass (band, sight, front, resource): a request the rules refuse is logged and the step fails on its timeout.
+        if (!bTestRangedQueued)
+        {
+            bTestRangedQueued = true;
+            TestRangedQueue.Reset();
+            TSet<FString> KindsSeen;
+            bool bAnyLeap = false, bAnyThrow = false;
+            for (const auto& Weak : Enemies)
+            {
+                AOpenWillowEnemy* Enemy = Weak.Get();
+                const FOpenWillowKindAttacks* Row = Enemy ? Enemy->GetKindAttacks() : nullptr;
+                if (!Row) continue;
+                const FString Kind = EnemyKinds.FindRef(Enemy);
+                if (KindsSeen.Contains(Kind)) continue;
+                KindsSeen.Add(Kind);
+                if (Row->LeapMax > 0.f)
+                {
+                    TestRangedQueue.Add(TPair<TWeakObjectPtr<AOpenWillowEnemy>, EOpenWillowAttack>(Enemy, EOpenWillowAttack::Leap));
+                    bAnyLeap = true;
+                }
+                if (Row->ThrowMax > 0.f)
+                {
+                    TestRangedQueue.Add(TPair<TWeakObjectPtr<AOpenWillowEnemy>, EOpenWillowAttack>(Enemy, EOpenWillowAttack::Throw));
+                    bAnyThrow = true;
+                }
+            }
+            if (!bAnyLeap) TestCheck(TEXT("leap"), false, TEXT("no enemy of a kind with a leap on this range"));
+            if (!bAnyThrow) TestCheck(TEXT("throw"), false, TEXT("no enemy of a kind with a throw on this range"));
+        }
+        if (TestRangedQueue.Num() == 0)
+        {
+            bTestRangedQueued = false;
+            for (const auto& Weak : Enemies)
+                if (AOpenWillowEnemy* Each = Weak.Get()) Each->SetRangedAttacks(true);
+            TestStep = 37;
+            return;
+        }
+        AOpenWillowEnemy* Enemy = TestRangedQueue[0].Key.Get();
+        const EOpenWillowAttack Attack = TestRangedQueue[0].Value;
+        const TCHAR* StepName = Attack == EOpenWillowAttack::Leap ? TEXT("leap") : TEXT("throw");
+        TestRangedQueue.RemoveAt(0);
+        if (!Enemy || !Enemy->GetKindAttacks())
+        {
+            TestCheck(StepName, false, TEXT("the enemy is gone"));
+            return;
+        }
+        const FOpenWillowKindAttacks& Row = *Enemy->GetKindAttacks();
+        const FString KindName = EnemyKinds.FindRef(Enemy);
+        Reset(StepName);
+        Enemy->ResetForAITest(Now, (SpotNow - Enemy->GetHome()).Rotation().Yaw, 3.f);
+        OnlyActive(Enemy);
+        // Maya inside the band (away from its edges), ahead of the enemy (the throw needs her in front), with its sight line clear.
+        const float Low = Attack == EOpenWillowAttack::Leap ? Row.LeapMin : Row.ThrowMin;
+        const float High = Attack == EOpenWillowAttack::Leap ? Row.LeapMax : Row.ThrowMax;
+        const float HalfHeight = Walker->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        bool bPlaced = false;
+        for (const float Distance : {1500.f, 1300.f, 1700.f, 1100.f, 1900.f, 900.f, 2400.f})
+        {
+            if (Distance < Low + 50.f || Distance > High - 50.f) continue;
+            for (const float Angle : {0.f, 15.f, -15.f, 30.f, -30.f})
+            {
+                const FVector Dir = FRotator(0.f, Enemy->GetActorRotation().Yaw + Angle, 0.f).Vector();
+                const FVector At = Enemy->GetActorLocation() + Dir * Distance;
+                FVector Floor;
+                if (!AOpenWillowEnemy::TraceFloor(World, FVector2D(At.X, At.Y), SpotNow.Z + PlaceReach, SpotNow.Z - PlaceReach, Pawn, Floor)) continue;
+                if (FVector2D::Distance(FVector2D(Floor.X, Floor.Y), Den.Centre) >= Den.ThreatRadius) continue;
+                if (!Enemy->HasLineOfSightTo(Floor + FVector(0.f, 0.f, HalfHeight), Walker)) continue;
+                TeleportMaya(World, Floor, YawToward(Floor, Enemy->GetActorLocation()));
+                TestWhere = FString::Printf(TEXT("%.0f uu at %.0f degrees"), Distance, Angle);
+                bPlaced = true;
+                break;
+            }
+            if (bPlaced) break;
+        }
+        if (!bPlaced)
+        {
+            TestCheck(StepName, false, FString::Printf(TEXT("kind=%s no place %.0f to %.0f uu ahead of the enemy with a clear sight line"), *KindName, Low, High));
+            return;
+        }
+        Enemy->ForceAttackForTest(Attack);
+        TestRangedEnemy = Enemy;
+        TestRangedAttack = Attack;
+        TestRangedBase = Attack == EOpenWillowAttack::Leap ? Enemy->GetBrain().LeapCount : Enemy->GetBrain().RocksReleased;
+        TestHealthBefore = Pools();
+        StepStart = Now;
+        TestKindLastTick = Now;
+        TestKindMaxFrame = 0.f;
+        TestStep = 97;
+        return;
+    }
+    case 97:
+    {
+        AOpenWillowEnemy* Enemy = TestRangedEnemy.Get();
+        const bool bLeap = TestRangedAttack == EOpenWillowAttack::Leap;
+        const TCHAR* StepName = bLeap ? TEXT("leap") : TEXT("throw");
+        if (!Enemy)
+        {
+            TestCheck(StepName, false, TEXT("the enemy is gone"));
+            TestStep = 96;
+            return;
+        }
+        const FString KindName = EnemyKinds.FindRef(Enemy);
+        const FOpenWillowEnemyBrain& RangedBrain = Enemy->GetBrain();
+        TestKindMaxFrame = FMath::Max(TestKindMaxFrame, Now - TestKindLastTick);
+        TestKindLastTick = Now;
+        if (Walker->IsDown())
+        {
+            TestCheck(StepName, false, FString::Printf(TEXT("kind=%s Maya is down (not restored)"), *KindName));
+            TestStep = 96;
+            return;
+        }
+        const FOpenWillowKindAttacks* Row = Enemy->GetKindAttacks();
+        if (bLeap)
+        {
+            const FOpenWillowLeapRecord& L = RangedBrain.GetLeap();
+            const bool bDone = RangedBrain.LeapCount > TestRangedBase && L.bLanded && !RangedBrain.IsLeaping();
+            if (!bDone)
+            {
+                if (Now - StepStart > 8.f)
+                {
+                    TestCheck(StepName, false, FString::Printf(TEXT("kind=%s no finished leap in 8 s (leaps %d, landed %d, Maya %s ahead; a refused request logs attack_forced_refused)"),
+                        *KindName, RangedBrain.LeapCount - TestRangedBase, L.bLanded ? 1 : 0, *TestWhere));
+                    TestStep = 96;
+                }
+                return;
+            }
+            // The host reports; tools/check_range.py grades the numbers against the note's rule (band, timeline, arc, landing, hit).
+            const float Lost = TestHealthBefore - Pools();
+            const bool bOk = L.bForced && L.bHit && L.Applied > 0.f && FMath::IsNearlyEqual(L.Applied, L.Expected, 0.01f)
+                && FMath::IsNearlyEqual(Lost, L.Applied, 0.01f) && L.Knock > 0.f;
+            TestCheck(StepName, bOk, FString::Printf(TEXT("kind=%s enemy=%s forced=%d start_distance=%.0f band_min=%.0f band_max=%.0f windup=%.3f launch_clip=%.3f d0=%.1f dz=%.1f d1=%.1f lead=%.1f speed=%.0f angle_pct=%.3f lead_cap=%.0f flight_predicted=%.4f flight_measured=%.4f attack_to_landed=%.3f land_error=%.1f hit=%d expected=%.2f applied=%.2f pools_lost=%.2f knock=%.0f max_frame=%.3f"),
+                *KindName, *Enemy->GetName(), L.bForced ? 1 : 0, L.StartDistance, Row ? Row->LeapMin : 0.f, Row ? Row->LeapMax : 0.f, L.TakeoffAt - L.StartAt,
+                Row ? Row->LeapStartSeconds : 0.f, L.Arc.D0, L.Arc.Dz, L.Arc.D1, L.Arc.Lead, Row ? Row->LeapSpeed : 0.f, Row ? Row->LeapAnglePct : 0.f,
+                Row ? Row->LeapLeadCap : 0.f, L.Arc.FlightTime, L.LandAt - L.TakeoffAt, L.LandAt - L.StartAt, L.LandError, L.bHit ? 1 : 0, L.Expected, L.Applied,
+                Lost, L.Knock, TestKindMaxFrame));
+            TestStep = 96;
+            return;
+        }
+        const FOpenWillowRockRecord& R = RangedBrain.GetRock();
+        const bool bDone = RangedBrain.RocksReleased > TestRangedBase && R.bImpact && !RangedBrain.IsThrowing();
+        if (!bDone)
+        {
+            if (Now - StepStart > 8.f)
+            {
+                TestCheck(StepName, false, FString::Printf(TEXT("kind=%s no rock came down in 8 s (rocks %d, impact %d, Maya %s ahead; a refused request logs attack_forced_refused)"),
+                    *KindName, RangedBrain.RocksReleased - TestRangedBase, R.bImpact ? 1 : 0, *TestWhere));
+                TestStep = 96;
+            }
+            return;
+        }
+        const float Lost = TestHealthBefore - Pools();
+        const bool bOk = R.bForced && R.What == TEXT("maya") && R.bHit && R.Applied > 0.f && FMath::IsNearlyEqual(R.Applied, R.Damage, 0.01f)
+            && FMath::IsNearlyEqual(Lost, R.Applied, 0.01f) && R.Knock > 0.f;
+        TestCheck(StepName, bOk, FString::Printf(TEXT("kind=%s enemy=%s forced=%d start_distance=%.0f band_min=%.0f band_max=%.0f release=%.3f release_due=%.3f d0=%.1f dz=%.1f d1=%.1f lead=%.1f speed=%.0f angle_pct=%.3f flight_predicted=%.4f flight_measured=%.4f what=%s miss=%.1f hit=%d expected=%.2f applied=%.2f pools_lost=%.2f knock=%.0f max_frame=%.3f"),
+            *KindName, *Enemy->GetName(), R.bForced ? 1 : 0, R.StartDistance, Row ? Row->ThrowMin : 0.f, Row ? Row->ThrowMax : 0.f, R.ReleaseAt - R.StartAt, R.ReleaseDue,
+            R.Arc.D0, R.Arc.Dz, R.Arc.D1, R.Arc.Lead, Row ? Row->ThrowSpeed : 0.f, Row ? Row->ThrowAnglePct : 0.f, R.Arc.FlightTime, R.ImpactAt - R.ReleaseAt, *R.What,
+            R.MissDistance, R.bHit ? 1 : 0, R.Damage, R.Applied, Lost, R.Knock, TestKindMaxFrame));
+        TestStep = 96;
         return;
     }
     default:
