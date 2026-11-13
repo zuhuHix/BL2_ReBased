@@ -14,10 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import check_weapon_firing as check  # noqa: E402
 
 
-def recipe(card_damage, projectiles=1, firing=None):
+# An explicit trace gun (schema 1, fire_type EWWFT_HitScan). Its invented pattern keeps it out of the wide-bullet check, so
+# the fixture logs below keep their eight shots.
+TRACE = {'fire_type': 'EWWFT_HitScan', 'pattern_lines': [{}]}
+
+
+def recipe(card_damage, projectiles=1, firing=None, schema=1):
+    """An invented recipe. A firing block gets schema 1 (what the host reads) unless `schema` says otherwise."""
     data = {'name': 'Made-up gun', 'stats': {'card': {'damage': card_damage, 'projectiles': projectiles}}}
     if firing is not None:
-        data['firing'] = firing
+        data['firing'] = dict(firing, schema=schema) if isinstance(firing, dict) and firing else firing
     return data
 
 
@@ -53,11 +59,26 @@ def log(*lines):
 
 
 class Expectations(unittest.TestCase):
-    def test_kind_follows_fire_type_then_firing_block(self):
-        self.assertEqual(check.expectations(recipe(10))['kind'], 'Trace')
+    def test_kind_follows_fire_type(self):
         self.assertEqual(check.expectations(recipe(10, firing={'fire_type': None}))['kind'], 'Bullet')
         self.assertEqual(check.expectations(recipe(10, firing={'fire_type': 'EWWFT_Rocket'}))['kind'], 'Rocket')
         self.assertEqual(check.expectations(recipe(10, firing={'fire_type': 'EWWFT_HitScan'}))['kind'], 'Trace')
+
+    def test_a_recipe_without_a_firing_block_is_not_a_trace_gun(self):
+        for rec in (recipe(10), recipe(10, firing={}), recipe(10, firing='EWWFT_HitScan')):
+            out = check.expectations(rec)
+            self.assertIsNotNone(out['firing_problem'], rec)
+            self.assertIsNone(out['kind'], rec)
+        self.assertIn('no firing block', check.expectations(recipe(10))['firing_problem'])
+
+    def test_a_block_the_host_does_not_read_is_a_problem(self):
+        for schema in (None, 0, 2, '1'):
+            self.assertIn('schema', check.expectations(recipe(10, firing={'fire_type': None}, schema=schema))['firing_problem'])
+
+    def test_an_explicit_trace_block_is_a_trace_gun(self):
+        out = check.expectations(recipe(10, firing={'fire_type': 'EWWFT_HitScan'}))
+        self.assertIsNone(out['firing_problem'])
+        self.assertEqual(out['kind'], 'Trace')
 
     def test_splash_falls_back_to_card_damage_when_null(self):
         firing = {'projectile': {'splash': {'damage': None, 'damage_scale': 0.5}}}
@@ -76,7 +97,7 @@ class Gun(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.dirs = [self.folder.name]
         write_recipes(self.folder.name, {
-            'made_trace': recipe(10.0),
+            'made_trace': recipe(10.0, firing=TRACE),
             'made_rocket': recipe(50.0, firing={'fire_type': 'EWWFT_Rocket',
                                                  'projectile': {'splash': {'damage': 30.0, 'radius': 200}},
                                                  'status': {'duration': 2.0, 'dps': 5.0}}),
@@ -280,7 +301,7 @@ class Gun(unittest.TestCase):
 class Cli(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        write_recipes(self.folder.name, {'made_trace': recipe(10.0)})
+        write_recipes(self.folder.name, {'made_trace': recipe(10.0, firing=TRACE)})
         self.log = Path(self.folder.name) / 'run.log'
 
     def tearDown(self):
@@ -292,6 +313,37 @@ class Cli(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             code = check.main([str(self.log), '--items', self.folder.name, *extra])
         return code, out.getvalue()
+
+    PASSING_TAIL = ('OWFIRING grenade thrown=1 ammo_before=3 ammo_after=2 refused_empty=1 damage=9.00 splash_hits=1 splash=9.00 grenade_hits=1 '
+                    'unknown_sources=0 contact_age=0.20 fuse_age=2.00 contact_fuse=1.80 dummy=Dummy_0 health_before=500.00 health_after=491.00 dummy_died=0 aimed=1 after=0.50',)
+
+    def passing_log(self, *more):
+        return log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace', segment('made_trace', 0, 0, 5),
+                   push('made_trace'), result('made_trace'), *more, *self.PASSING_TAIL, *ROLLED_LINES, ROLLED_DAMAGE_LINE,
+                   RESPAWN_REST_LINE)
+
+    def test_a_recipe_without_a_firing_block_fails_the_run_and_names_the_fix(self):
+        # The same log passes with the explicit trace block (test_exit_codes); without a block the host would fire a plain
+        # trace for any gun, so the checker refuses to grade it as one.
+        write_recipes(self.folder.name, {'made_trace': recipe(10.0)})
+        code, out = self.main(self.passing_log())
+        self.assertEqual(code, 1, out)
+        self.assertIn('made_trace: FAIL no firing block in ', out)
+        self.assertIn('made_trace.json', out)
+        self.assertIn('tools/weapon_firing_coverage.py --game <BL2 folder> --only-firing', out)
+        self.assertIn('0 PASS, 1 FAIL of 1 guns', out)
+        write_recipes(self.folder.name, {'made_trace': recipe(10.0, firing=TRACE, schema=2)})
+        code, out = self.main(self.passing_log())
+        self.assertEqual(code, 1, out)
+        self.assertIn('made_trace: FAIL firing block schema 2, the host reads only 1', out)
+
+    def test_the_hosts_no_block_warning_fails_the_gun(self):
+        code, out = self.main(self.passing_log('[x]LogTemp: Warning: OWFIRING warning id=made_trace no firing block: fired as a trace'))
+        self.assertEqual(code, 1, out)
+        self.assertIn('made_trace: FAIL the host logged "no firing block"', out)
+        # Another gun's warning does not touch this one.
+        code, out = self.main(self.passing_log('[x]LogTemp: Warning: OWFIRING warning id=other_gun no firing block: fired as a trace'))
+        self.assertEqual(code, 0, out)
 
     def test_exit_codes(self):
         code, out = self.main(log('LogTemp: Display: OpenWillow firing test parsed 1 recipe IDs: made_trace',
@@ -665,10 +717,10 @@ class Momentum(unittest.TestCase):
     def test_late_bullets_fail(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        write_recipes(folder.name, {'made_trace': recipe(10.0)})
+        write_recipes(folder.name, {'made_trace': recipe(10.0, firing=TRACE)})
         results, segments, *_ = check.read_log(log(segment('made_trace', 0, 0, 5), result('made_trace', timed=8, on_time=7)))
         fails, _, _ = check.check_gun('made_trace', results['made_trace'], segments['made_trace'],
-                                      check.expectations(recipe(10.0)), None, set())
+                                      check.expectations(recipe(10.0, firing=TRACE)), None, set())
         self.assertTrue(any('distance / speed' in reason for reason in fails), fails)
 
     def test_old_logs_without_push_lines_are_graded_without_momentum(self):
@@ -774,7 +826,7 @@ class SplashCountsAndFinite(unittest.TestCase):
 class RequiredMarkers(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        write_recipes(self.folder.name, {'made_trace': recipe(10.0)})
+        write_recipes(self.folder.name, {'made_trace': recipe(10.0, firing=TRACE)})
         self.log = Path(self.folder.name) / 'run.log'
         self.log.write_text(log(segment('made_trace', 0, 0, 5), result('made_trace')), encoding='utf-8')
 

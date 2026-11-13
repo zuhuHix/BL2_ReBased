@@ -205,6 +205,11 @@ bool UOpenWillowInventory::ReadRecipe(const FString& File, FOpenWillowWeaponItem
         for (const FString& Gap : Item.Firing.Unsupported)
             UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s firing: not supported by the host: %s"), *Item.Id, *Gap);
     }
+    else if (Recipe->HasField(TEXT("firing")))
+    {
+        // A block is there but Parse refused it (not an object, or schema not 1): the gun fires the plain trace. Say so.
+        UE_LOG(LogTemp, Warning, TEXT("OpenWillow %s firing: block not read (not a schema 1 object): the host fires a plain trace"), *Item.Id);
+    }
     const TSharedPtr<FJsonObject>* Provenance = nullptr;
     if (OutProvenanceKind)
         *OutProvenanceKind = Recipe->TryGetObjectField(TEXT("provenance"), Provenance) ? (*Provenance)->GetStringField(TEXT("kind")) : FString();

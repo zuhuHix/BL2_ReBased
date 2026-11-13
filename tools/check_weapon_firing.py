@@ -7,7 +7,10 @@ against the recipe. Output: a table and an exit code (0 every gun PASS, 1 any FA
 
 Expected values, mirrored from the host's FOpenWillowFiringData::Parse (rules UNVERIFIED in game; see
 docs/verification/NATIVE_WEAPON_FIRING.md and WEAPON_PROJECTILES.md when it exists):
-- kind: Rocket for fire_type EWWFT_Rocket, Trace for EWWFT_HitScan, Bullet otherwise; Trace without a firing block.
+- kind: Rocket for fire_type EWWFT_Rocket, Trace for EWWFT_HitScan, Bullet otherwise. A recipe needs a firing block the
+  host can read (schema 1): without one the host fires a plain trace, so a block-less recipe is its own FAIL, naming the
+  recipe and the step that regenerates it, and is not graded as a trace gun. A trace gun says so in its block
+  (fire_type EWWFT_HitScan). The host's own "OWFIRING warning id=<gun> no firing block" line fails the gun as well.
 - pulls per gun: 5 at the dummy, 3 at a wall, plus 20 at the dummy when the firing block has a status block; a gun
   with burst_count N > 1 fires N shots per pull.
 - a gun whose shots explode (a splash block on a bullet, or a rocket that detonates on impact) must splash the dummy.
@@ -63,6 +66,8 @@ ROLLED_DAMAGE = re.compile(r'OWFIRING rolled_damage (.*)$')
 ROLLED = re.compile(r'OWFIRING rolled (.*)$')
 RESPAWN_REST = re.compile(r'OWFIRING respawn_rest (.*)$')
 MANIFEST_HINT = 'rerun python tools/weapon_gen_manifest.py --game <BL2 folder>'
+HOST_NO_BLOCK = re.compile(r'OWFIRING warning id=(\S+) no firing block')
+FIRING_HINT = 'regenerate it with python tools/weapon_firing_coverage.py --game <BL2 folder> --only-firing'
 TEMPLATE_HINT = 'run python tools/weapon_gen_firing.py --game <BL2 folder>'
 
 
@@ -84,8 +89,12 @@ def read_log(text, extra=None):
     extra.setdefault('rolled_damage', None)
     extra.setdefault('rolled', [])
     extra.setdefault('respawn_rest', None)
+    extra.setdefault('no_block', set())
     pending_splash = []   # splash lines since the last result line: they belong to the next gun's result
     for line in text.splitlines():
+        if match := HOST_NO_BLOCK.search(line):
+            extra['no_block'].add(match.group(1))
+            continue
         if match := ROLLED_DAMAGE.search(line):
             extra['rolled_damage'] = fields(match.group(1))
             continue
@@ -148,15 +157,27 @@ def find_recipe(item_dirs, gun):
     return None, None
 
 
-def expectations(recipe):
-    """What the host should do with this recipe (see the module docstring)."""
-    card = recipe['stats']['card']
-    firing = recipe.get('firing') or {}
-    fire_type = firing.get('fire_type')
+def firing_problem(recipe):
+    """Why the host cannot read this recipe's firing block, or None. The host (FOpenWillowFiringData::Parse) reads only a
+    `firing` object with schema 1 and fires anything else as a plain trace, so neither may pass as a trace gun."""
+    firing = recipe.get('firing')
     if not firing:
-        kind = 'Trace'
-    else:
-        kind = {'EWWFT_Rocket': 'Rocket', 'EWWFT_HitScan': 'Trace'}.get(fire_type, 'Bullet')
+        return 'no firing block'
+    if not isinstance(firing, dict):
+        return 'the firing field is not an object'
+    if firing.get('schema') != 1:
+        return f"firing block schema {firing.get('schema')!r}, the host reads only 1"
+    return None
+
+
+def expectations(recipe):
+    """What the host should do with this recipe (see the module docstring). `firing_problem` is not None when the block
+    is missing or unreadable; the other values then describe nothing the host does and must not be graded."""
+    card = recipe['stats']['card']
+    problem = firing_problem(recipe)
+    firing = {} if problem else recipe['firing']
+    fire_type = firing.get('fire_type')
+    kind = None if problem else {'EWWFT_Rocket': 'Rocket', 'EWWFT_HitScan': 'Trace'}.get(fire_type, 'Bullet')
     # A projectile's own splash, else a trace or light-bullet firing mode's impact explosion (its Behavior_Explode on
     # every impact; tools/weapon_firing.py impact_explosion). The host plays either as the gun's splash.
     splash = (firing.get('projectile') or {}).get('splash') or firing.get('impact_explosion')
@@ -175,6 +196,7 @@ def expectations(recipe):
     burst = max(1, int(firing.get('burst_count') or 0))
     return {
         'has_firing': bool(firing),
+        'firing_problem': problem,
         'momentum': 100.0 * float(10 if momentum is None else momentum),
         'wide': bool(firing) and kind != 'Rocket' and projectiles <= 1 and not firing.get('pattern_lines')
                 and not projectile.get('air_friction') and not accelerates and splash is None and burst == 1,
@@ -557,6 +579,8 @@ def check_gun(gun, log, seg, expected, skipped_reason, wall_skipped, throw=None,
     """(list of failure reasons, notes, values for the table) for one gun. With `momentum`, the push and wide lines are
     checked too (check_momentum)."""
     fails, notes = [], []
+    if expected.get('firing_problem'):
+        return [f"{expected['firing_problem']}: the host fires it as a plain trace; {FIRING_HINT}"], notes, {}
     if skipped_reason is not None:
         return [f'skipped by the host: {skipped_reason}'], notes, {}
     if log is None:
@@ -717,10 +741,19 @@ def main(argv=None):
             print(f'{gun}: FAIL no recipe in {[str(p) for p in item_dirs]}')
             continue
         expected = expectations(recipe)
+        if expected['firing_problem']:
+            # Not graded as any kind: the host would fire a plain trace whatever the gun is.
+            failed += 1
+            rows.append([gun, 'none', '-', '-', '-', '-', '-', '-', '-', '-', '-', 'FAIL'])
+            print(f"{gun}: FAIL {expected['firing_problem']} in {path}: the host fires it as a plain trace; {FIRING_HINT}")
+            continue
         fails, notes, values = check_gun(gun, results.get(gun), segments.get(gun), expected, skipped.get(gun), no_wall,
                                          throws.get(gun), lifecycles.get(gun), extra['push'].get(gun),
                                          extra['wide'].get(gun), momentum, extra['splash'].get(gun), hit_events,
                                          extra['swap'].get(gun))
+        if gun in extra['no_block']:
+            fails.insert(0, 'the host logged "no firing block" for it and fired a plain trace, although its recipe has one '
+                            '(the host loaded another recipe, or rejected this block)')
         verdict = 'FAIL' if fails else 'PASS'
         failed += bool(fails)
         if values:
