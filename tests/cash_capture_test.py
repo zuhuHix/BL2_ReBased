@@ -29,13 +29,14 @@ $script:DriverDir = Join-Path $script:Game 'sdk_mods/openwillow_realgame'
 $script:Lock = Join-Path $work 'run.lock'
 New-Item -ItemType Directory -Force $script:CmdDir | Out-Null
 # The stand-in driver of the reply-file faults: when a command is armed, the first wait of the real transport answers it with a reply file
-# this process holds open with no sharing, so every read of it fails as a sharing violation would (not a timeout).
+# this process creates and holds open with no sharing for the rest of the run, so every read of it fails as a sharing violation would (not
+# a timeout), however slow the machine. It touches no file the transport wrote (CI, 2026-11-13: removing the command file raced a file
+# scanner on the runner), and nothing in it waits on time.
 function Start-Sleep {
     if ($script:fakeDriver) {
         $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')
         if ($py.Count) {
             $script:fakeDriver = $false
-            Remove-Item -LiteralPath $py[0].FullName
             $script:heldReply = [IO.File]::Open([IO.Path]::ChangeExtension($py[0].FullName, '.out'), 'Create', 'ReadWrite', 'None')
         }
     }

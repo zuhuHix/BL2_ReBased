@@ -84,7 +84,7 @@ def test_an_unreadable_reply_to_a_probe_file_is_a_lost_driver():
               "function Send-Key { Add-Content -LiteralPath '__TMP__\\events.txt' 'key' }; function Assert-GameForeground { }; "
               "function Py($Code, $T) { Add-Content -LiteralPath '__TMP__\\events.txt' 'cmd'; 'stopped' }; ")
     unreadable = common + ("function Start-Sleep { if ($script:armed) { $py = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py'); "
-                           "if ($py.Count) { $script:armed = $false; Remove-Item -LiteralPath $py[0].FullName; "
+                           "if ($py.Count) { $script:armed = $false; "   # touches no file the transport wrote (CI, 2026-11-13)
                            "$script:held = [IO.File]::Open([IO.Path]::ChangeExtension($py[0].FullName, '.out'), 'Create', 'ReadWrite', 'None') } } }; "
                            "$script:armed = $true; Add-Content -LiteralPath '__TMP__\\events.txt' 'lost'")
     timeout = common + ("function Start-Sleep { }; function Invoke-GamePy($Code, $T) { Add-Content -LiteralPath '__TMP__\\events.txt' 'lost'; "
@@ -104,10 +104,38 @@ def test_an_unreadable_reply_to_a_probe_file_is_a_lost_driver():
         events = got['events']
         assert 'lost' in events, (kind, events, done.stdout, done.stderr)
         after_loss = events[events.index('lost') + 1:]
-        assert after_loss == ['stop 4343'], (kind, events)   # no key, no driver command; the game stopped by its own PID
+        assert after_loss == ['stop 4343'], (kind, events, done.stdout, done.stderr)   # no key, no driver command; stopped by its own PID
         seen[kind] = got['out']
     assert 'could not be read' in got['reason'], got['reason']   # the transport's own reason
     assert seen['unreadable'] == seen['timeout'], (seen['unreadable'], seen['timeout'])
+
+
+def test_a_command_that_cannot_be_published_is_retried_then_is_no_reply():
+    """CI, 2026-11-13: under a file scanner the transport's own publish (the rename of <name>.py.tmp) failed with the file system's text,
+    which no latch matched. It is tried at most 5 times; it goes out at most once; then it fails in the no-reply form, which latches. The
+    real transport with a stand-in Move-Item and a stand-in driver (no capture script is run)."""
+    tmp = Path(tempfile.mkdtemp(prefix='ow-publish-'))
+    lines = [
+        ". '" + str(ROOT / 'tools/real_game/realgame.ps1') + "'",
+        ". '" + str(ROOT / 'tools/real_game/slice_watch.ps1') + "'",
+        f"$script:RG = '{tmp}'; $script:CmdDir = '{tmp}\\cmd'; New-Item -ItemType Directory -Force $script:CmdDir | Out-Null",
+        "function Move-Item($From, $To) { $script:moves++; if ($script:moves -le $script:fails) { throw 'invented: being used by another process' }; [IO.File]::Move($From, $To) }",
+        "function Start-Sleep { foreach ($py in @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.py')) { $script:runs++; Rename-Item -LiteralPath $py.FullName ($py.Name + '.done'); [IO.File]::WriteAllText([IO.Path]::ChangeExtension($py.FullName, '.out'), 'ok') } }",
+        "$script:moves = 0; $script:fails = 2; $script:runs = 0",
+        "$a = Invoke-GamePy 'print(1)' 5; $r1 = $script:runs; $m1 = $script:moves",
+        "$script:moves = 0; $script:fails = 99; $script:runs = 0",
+        "try { Invoke-GamePy 'print(2)' 5 | Out-Null; $b = 'sent' } catch { $b = \"$_\"; Set-SliceWatchDriverLost $_ }",
+        "$left = @(Get-ChildItem -LiteralPath $script:CmdDir -Filter '*.tmp').Count",
+        "Write-Output \"$($a.Trim())|$m1|$r1|$($script:moves)|$($script:runs)|$left|$b|$(Get-DriverLostReason)\"",
+    ]
+    script = tmp / 'publish.ps1'
+    script.write_text('\n'.join(lines) + '\n', encoding='utf-8-sig')
+    done = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], capture_output=True, text=True, timeout=60)
+    out = done.stdout.strip().split('|')
+    assert out[:3] == ['ok', '3', '1'], (out, done.stderr)    # two refusals, then sent once and answered
+    assert out[3:6] == ['5', '0', '0'], out                   # refused every time: tried 5 times, never sent, no .tmp left behind
+    assert out[6].startswith('no reply to c') and 'could not be sent: invented' in out[6], out
+    assert out[7] == out[6], out                              # and the latch takes it
 
 
 def test_exit_0_only_for_a_completed_run_with_nothing_to_recover():
@@ -564,6 +592,7 @@ if __name__ == '__main__':
     test_py_sends_nothing_to_a_lost_driver_and_latches_its_own_timeout()
     test_a_probe_file_or_a_quit_without_a_reply_latches_the_loss()
     test_an_unreadable_reply_to_a_probe_file_is_a_lost_driver()
+    test_a_command_that_cannot_be_published_is_retried_then_is_no_reply()
     test_labelled_snapshots_follow_the_accept_and_the_reward()
     test_the_camera_is_read_through_the_controller_view_point_and_an_empty_trace_fails()
     test_probe_helpers()

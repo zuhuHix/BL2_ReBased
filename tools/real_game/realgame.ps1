@@ -582,13 +582,23 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     $name = 'c' + (Get-Date -Format 'HHmmssfff') + '-' + (New-Guid).ToString('N')
     $py = Join-Path $script:CmdDir "$name.py"; $out = Join-Path $script:CmdDir "$name.out"
     if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force -ErrorAction Stop }
-    [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py
+    # Published by a rename, tried at most 5 times 200 ms apart: a file scanner can hold the new file for a moment, and the rename then
+    # fails. The driver runs only <name>.py, and once the rename went through the source is gone, so the command goes out at most once.
+    # A command that could not be sent gets no reply either: it fails in the no-reply form, which every driver-lost latch takes.
+    for ($try = 1; ; $try++) {
+        try { [IO.File]::WriteAllText("$py.tmp", $Code); Move-Item "$py.tmp" $py; break }   # the call as before; errors stop ($ErrorActionPreference)
+        catch {
+            if ($try -ge 5) { Remove-Item -LiteralPath "$py.tmp" -Force -ErrorAction SilentlyContinue; throw "no reply to $name (the command could not be sent: $($_.Exception.Message))" }
+            Start-Sleep -Milliseconds 200
+        }
+    }
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (!(Test-Path $out)) { if ((Get-Date) -gt $deadline) { throw "no reply to $name" }; Start-Sleep -Milliseconds 100 }
     Start-Sleep -Milliseconds 50
-    # A reply file that is there but cannot be read (a sharing violation while the driver still writes it, an access or I/O error) is no
-    # usable reply either. It is read again at most 4 more times, 200 ms apart; then it fails in the same form as a timeout ("no reply to
-    # <name>"), so every driver-lost latch takes it as one. Only this call's own file is read: its name holds this call's GUID, and a
+    # The driver publishes a reply whole (written as <name>.out.tmp, then renamed onto <name>.out), so the file is complete once it is
+    # there, and an empty reply means the command printed nothing. A reply file that cannot be read all the same (an access or I/O
+    # error; unexpected) is no usable reply: it is read again at most 4 more times, 200 ms apart, as a second line of defence, then it
+    # fails in the same form as a timeout ("no reply to <name>"), so every driver-lost latch takes it as one. Only this call's own file is read: its name holds this call's GUID, and a
     # file under it was removed before the command went out. Nothing is taken from a failed read. (review of #251/#255, T1)
     for ($try = 1; ; $try++) {
         try { return (Get-Content -Raw -LiteralPath $out -ErrorAction Stop) }

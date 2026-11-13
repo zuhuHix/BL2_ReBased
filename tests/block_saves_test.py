@@ -1,9 +1,14 @@
-"""Synthetic tests for block_saves() in tools/real_game/openwillow_realgame/__init__.py (no game: the SDK calls are stubs).
+"""Synthetic tests for block_saves() and the reply publishing of run_pending() in tools/real_game/openwillow_realgame/__init__.py
+(no game: the SDK calls are stubs).
 
 Run: python tests/block_saves_test.py
 """
 import ast
+import contextlib
+import io
 from pathlib import Path
+import tempfile
+import traceback
 import types
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +100,55 @@ def test_the_scan_tells_a_checked_call_from_an_unchecked_one():
 def test_the_scan_reaches_the_captures():
     texts = [script.read_text(encoding='utf-8') for script in (ROOT / 'tools').rglob('*.ps1')]
     assert sum('Assert-SavesBlocked (' in text for text in texts) >= 3
+
+
+def load_channel(path_class):
+    """The driver's command loop alone (cmd_dir and run_pending), over a stand-in command folder. path_class stands in for Path, so a
+    test can watch or break the reply's write and rename."""
+    tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
+    wanted = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('cmd_dir', 'run_pending')]
+    tmp = Path(tempfile.mkdtemp(prefix='ow-driver-'))
+    folder = tmp / 'cmd'
+    folder.mkdir()
+    (tmp / 'cmd_dir.txt').write_text(str(folder), encoding='utf-8')
+    namespace = {'Path': path_class, '__file__': str(tmp / '__init__.py'), 'io': io, 'contextlib': contextlib, 'traceback': traceback,
+                 'scope': {'runs': []}}
+    exec(compile(ast.Module(wanted, []), str(SOURCE), 'exec'), namespace)
+    return namespace, folder
+
+
+def test_a_reply_appears_only_complete_and_the_script_is_done_before_it_runs():
+    # Review of #263: the reply was written in place, so a reader could see it empty or cut off. It is written under <name>.out.tmp and
+    # renamed onto <name>.out; the script is renamed to .py.done before it runs, so it never runs twice.
+    seen = []
+
+    class Watched(type(Path())):
+        def write_text(self, *args, **kwargs):
+            seen.append((self.name, self.with_name(self.name.replace('.out.tmp', '.out')).exists()))
+            return super().write_text(*args, **kwargs)
+    ns, folder = load_channel(Watched)
+    script = folder / 'c1-invented.py'
+    script.write_text("import os\nruns.append(os.path.exists(r'%s'))\nprint('invented reply ' * 50)" % script, encoding='utf-8')
+    ns['run_pending']()
+    assert ns['scope']['runs'] == [False]                       # already .py.done when it ran
+    assert seen == [('c1-invented.out.tmp', False)], seen       # written under the other name, with no .out yet
+    assert (folder / 'c1-invented.out').read_text(encoding='utf-8') == 'invented reply ' * 50 + '\n'
+    assert sorted(p.name for p in folder.iterdir()) == ['c1-invented.out', 'c1-invented.py.done']
+
+
+def test_a_failed_rename_leaves_no_reply_and_the_script_does_not_run_again():
+    class Unrenamable(type(Path())):
+        def replace(self, target):
+            if self.name.endswith('.out.tmp'):   # the reply's rename only; the script's own .py.done rename goes through
+                raise PermissionError('invented: the rename was refused')
+            return super().replace(target)
+    ns, folder = load_channel(Unrenamable)
+    (folder / 'c2-invented.py').write_text("runs.append(1)\nprint('ok')", encoding='utf-8')
+    (folder / 'c3-invented.py').write_text("runs.append(2)\nprint('ok')", encoding='utf-8')
+    ns['run_pending']()
+    ns['run_pending']()
+    assert ns['scope']['runs'] == [1, 2]                        # each ran once; the failure did not stop the next one
+    assert sorted(p.name for p in folder.iterdir()) == ['c2-invented.py.done', 'c3-invented.py.done']   # no reply, no .tmp left
 
 
 if __name__ == '__main__':

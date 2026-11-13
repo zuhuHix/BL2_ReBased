@@ -119,7 +119,18 @@ def run_pending():
                 exec(compile(code, str(script), "exec"), scope)
             except Exception:
                 print(traceback.format_exc()[-3000:])
-        script.with_suffix(".out").write_text(out.getvalue(), encoding="utf-8")
+        # Published whole: written under a name no reader waits for, then renamed onto <name>.out (atomic on one volume), so a reader
+        # never sees a reply part-written. If that fails, no reply is left (the reader's wait runs out and counts the driver as lost);
+        # the script, already <name>.py.done, never runs again.
+        part = script.with_name(script.stem + ".out.tmp")
+        try:
+            part.write_text(out.getvalue(), encoding="utf-8")
+            part.replace(script.with_suffix(".out"))
+        except Exception:
+            try:
+                part.unlink()
+            except Exception:
+                pass
 
 
 def on_tick(*_args):
