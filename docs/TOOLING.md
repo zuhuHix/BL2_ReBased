@@ -1531,37 +1531,62 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   at or after it moves nothing and answers `late`, checked again right before the placement, and its reply wait is clamped to the
   time left, so no placement runs after the window. None is sent with less than 6 s of the window left (the polls' own minimum), so
   a slower healthy reply is not cut short into a lost driver.
-- **Driver lost**: one condition shared by the helpers and every stage. The transport's boundary is the body of `Invoke-GamePy` and
-  of `Invoke-GamePyFile` (`realgame.ps1`), the latter's delegation to the former included; only the parameter binding, which runs
-  before a body, is outside it. Every failure inside it leaves in one form, "no reply to <name> (...)", and each latch site below
-  sets the condition on that form. The failures are: a reply that never came; a command that could not be published (its rename
-  onto `<name>.py`, which a file scanner holding the new file can refuse, is tried at most 5 times, 200 ms apart, and goes out at
-  most once: "the command could not be sent"); a reply file that is there but cannot be read (read at most 5 times, 200 ms apart:
-  "its reply file could not be read"); and any other error inside the boundary, whatever its text, a probe source that cannot be
-  read included ("transport error"). One deadline per call, its timeout, is checked before each publication attempt, while waiting,
-  before each read and before a reply is returned, and every retry and pause is clamped to what is left of it: no command is
-  published after it, a reply read after it is not taken, and a call ends within its timeout plus the one file operation under way
-  when it runs out, plus at most one pause. Only this call's own reply
-  file is read (the name holds the call's GUID, made with plain .NET so no module has to load, and a file under it was removed before
-  the command went out), and nothing is taken from a failed read. The driver publishes each reply whole (`openwillow_realgame`,
-  `run_pending`: written as `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once it exists: an
-  unreadable one is unexpected, the retry is a second line of defence, and an empty reply is the empty string (the command printed
-  nothing), never null; each capture's own wrapper decides whether that is acceptable (the `Py` wrappers refuse it through
-  `ConvertTo-ReplyText`, as they refused it before, with "empty reply from the game (it may have exited) to: ..."). If the driver's write or rename fails, it leaves no reply and tries to remove the `.tmp` (best effort), and
-  the wait runs out, as for a lost driver; the script was renamed to `<name>.py.done` before it ran, so it never runs twice. A
-  `.out.tmp` left behind (a failed removal, or a game that died mid-write) is harmless: no reader looks for that name, and each call
-  has its own. The latch sites: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
-  window shortened its wait, the watch's start and its recovery stop after a failed start, its settle read, snapshots, pawn reads,
-  marks, end snapshot, dump and stop, the den trial's close, and the quit. The one exception is the waits that expect silence for a
-  while (the boot wait, a travel's map polls, the load step `Wait-PlayerPawn`): they refuse once it is set but do not set it, on a
-  timeout or any other transport failure alike, since each is one missed read there and the next read asks again under its own bound. From then on the
-  capture's `Py` refuses every command, and every key, click, mouse move and focus check is preceded by `Assert-DriverAnswers`
-  (`slice_watch.ps1`), so no input goes out after the latch, also when a watch helper set it without throwing; no placement or
-  probe call follows either. The later stages report themselves as skipped (a readings failure for any other reason, such as a
-  lost foreground or a game-side traceback, still ends the run at once); no quit and no finalizer stop is sent (after a quit that
-  got no reply the finalizer's stops are skipped too); and the finalizer stops the run's own game by its PID and restores without
-  the driver. In `cash_capture` each stage is stamped to `stages-<run>.log` before its risky command (`Write-StageMark`); the
-  mission screen capture writes no stage stamps (its `Set-Stage` only records each stage's result in its lists).
+- **Driver lost**: one condition for the whole run, kept in `realgame.ps1` (`Get-DriverLostReason`, `Set-SliceWatchDriverLost`,
+  `Assert-DriverAnswers`; it was in `slice_watch.ps1` until 2026-11-13). Every capture script reaches the driver only through the
+  shared wrapper `Invoke-GameReply` / `Invoke-GameReplyFile` (`realgame.ps1`), which holds the rule: once the condition is set it sends
+  nothing and throws "not sent: the driver stopped answering (...)", and a transport failure sets it. A capture's short helpers (`Py`,
+  `PyJson`) only hand their command to it. `tests/realgame_reply_guard_test.py` fails a capture script (every `tools/real_game/*.ps1`
+  but `realgame.ps1` and `pending.ps1`, `slice_watch.ps1` included) that calls the raw transport (`Invoke-GamePy`,
+  `Invoke-GamePyFile`), calls `ConvertTo-ReplyText`, defines a piece of the wrapper or writes the condition; its exception list is
+  empty. The wrapper refuses an empty reply, or one of only white space, as "empty reply from the game (it may have exited) to: ..."
+  (not a lost driver); a call where printing nothing is the answer says so with `-AllowEmpty` (a probe load, a quit, a command that
+  prints nothing), and `-NoTraceback` refuses a game-side traceback as "game python error: ...". The waits that expect the driver to
+  be silent for a while (the boot wait before the driver loads, a travel's map polls, the load polls after the Enter, and the load step
+  `Wait-PlayerPawn`, which reads the transport itself) pass `-SilenceAllowed`: they refuse once the condition is set but do not set
+  it, on a timeout or any other transport failure alike, since each is one missed read there and the next read asks again under its
+  own bound. Every other call sets it: the captures' own commands, probe loads and quits, a den-down poll even when the window
+  shortened its wait, the den trial's close, and every watch helper (start, recovery stop, settle read, snapshots, pawn reads, marks,
+  end snapshot, dump, stop).
+  The transport's boundary is the body of `Invoke-GamePy` and of `Invoke-GamePyFile`, the latter's delegation to the former included;
+  only the parameter binding, which runs before a body, is outside it. Every failure inside it leaves in one form, "no reply to <name>
+  (...)": a reply that never came; a command that could not be published (its rename onto `<name>.py`, which a file scanner holding
+  the new file can refuse, is tried at most 5 times, 200 ms apart, and goes out at most once: "the command could not be sent"); a reply
+  file that is there but cannot be read (read at most 5 times, 200 ms apart: "its reply file could not be read"); a command the driver
+  refused ("the driver refused it", below); and any other error inside the boundary, whatever its text, a probe source that cannot be
+  read included ("transport error").
+  **The deadline, and what it bounds (since 2026-11-13).** One deadline per call, its timeout, starts before anything else the call
+  does: for `Invoke-GamePyFile`, before the probe's source is read, so a slow read counts against it. It is checked before each
+  publication attempt, after the command's file is written and immediately before the rename that publishes it, while waiting,
+  before each read and before a reply is returned, and every retry and pause is clamped to what is left of it. A write that ends
+  after it is not renamed ("not sent: the deadline passed while its file was written"), and a reply read after it is not taken. The
+  deadline also travels with the command: its first line is `# ow-deadline-unix-ms: <ms>` (this machine's wall clock, which the
+  sender and the driver both read). The driver (`openwillow_realgame`, `run_pending`) checks it once, when it takes the command and
+  before running it: a command whose deadline has passed, or that names none or an unreadable one, is not run, is renamed
+  `<name>.py.expired`, and gets the one-line reply `OW-REFUSED: not run: <why>`, which the sender, should it still be waiting, turns
+  into "no reply to <name> (the driver refused it: ...)". So a command whose caller gave up is never run later, however slow the
+  rename or the driver's next look. What stays unbounded, named plainly: a command the driver took before its deadline runs to its
+  end, even past the deadline (the driver cannot stop Python code on the game thread); and a file operation already under way when the
+  deadline passes finishes, so a call can end later than its timeout by that one operation plus at most one pause, and a rename that
+  began just before the last check can still land (the driver then refuses that command). A reply that comes late is never taken for
+  another command's: it goes to its own command's name (a GUID, made with plain .NET so no module has to load), each call reads only
+  its own name's file, and any file under that name was removed before the command went out; nothing is taken from a failed read.
+  The driver publishes each reply whole (written as `<name>.out.tmp`, then renamed onto `<name>.out`), so a reply file is complete once
+  it exists: an unreadable one is unexpected, the retry is a second line of defence, and an empty reply is the empty string (the
+  command printed nothing), never null. If the driver's write or rename fails, it leaves no reply and tries to remove the `.tmp`
+  (best effort), and the wait runs out, as for a lost driver; the script was renamed to `<name>.py.done` (or `.py.expired`) before it
+  ran, so it never runs twice. A `.out.tmp` left behind (a failed removal, or a game that died mid-write) is harmless: no reader looks
+  for that name, and each call has its own.
+  From the latch on, no command goes out, and no input either: every key press, mouse press or move, wheel turn and focus attempt of
+  `realgame.ps1` (`Send-KeyDown`, `Send-Key`, `Send-MouseEvent` with a press or a move, `Send-Mouse`, `Send-Wheel`, `Send-ClickAt`,
+  `Send-Click`, `Send-Drag`, `Focus-Game`, `Assert-GameForeground`) refuses with "refusing to send input: the driver stopped answering
+  (...)", also when a watch helper set the condition without throwing, so no capture can forget the check; releases always go out. The
+  captures' own `Assert-DriverAnswers` before their inputs stays as a second check. No placement or probe call follows either. The
+  later stages report themselves as skipped (a readings failure for any other reason, such as a lost foreground or a game-side
+  traceback, still ends the run at once); no quit and no finalizer stop is sent (after a quit that got no reply the finalizer's stops
+  are skipped too); and the finalizer stops the run's own game by its PID and restores without the driver. In `cash_capture` each
+  stage is stamped to `stages-<run>.log` before its risky command (`Write-StageMark`); the mission screen capture writes no stage
+  stamps (its `Set-Stage` only records each stage's result in its lists). Verified on stand-ins only (decision
+  `2026-11-13-04`); nothing of this has run in the game, so its behaviour there is `UNVERIFIED`.
 - **Pending record and recovery** are the shared ones above. `pending.ps1` now sends every recorded release whether or not a game
   window exists (synthesised input is system-wide) and clears an entry only after its release went out; a record that still names a
   held input is never completed. A record is rewritten in one replace. After a failed rewrite either the old record or its
@@ -1572,10 +1597,16 @@ Tests (no game, invented objects): `tests/slice_watch_test.py` (in ctest as `py-
 SDK and pins that nothing is called on a scanned template, dying pawn or pool, that locals are never read, that stop removes every
 hook, and the checker's rules. `tests/cash_capture_test.py` (not in ctest: about 240 s; run it by hand when you touch the capture) pins the settings rollback (failed install, failed launch after mods off,
 partial write, unexpected mod set), the den-down re-placement limits and the driver-lost rule. `tests/real_game_pending_test.py`
-pins the input releases. Runs against the game: `docs/verification/REALGAME_GROUND_TRUTH.md`, "Slice capture sessions". The
-sessions of 2026-11-12 ran commit e7b5fa3; the review fixes of #245 (the record replace, the run lock, the latched timeouts, the
-clamped deadlines, the Alt journal, the quit wait, the checker's counts and messages) came after them. No session has run those
-fixes, so their behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
+pins the input releases. The deadline and the shared wrapper (2026-11-13): `tests/block_saves_test.py` (the driver refuses a command
+taken after its deadline, or with none, and never runs it; the sender's deadline line is the one the driver reads),
+`tests/real_game_migration_test.py` (no rename after a write that outlasts the deadline, the probe source's read inside the deadline, a
+late reply never taken for the next command, white-space replies, the wrapper's and the input helpers' refusals), the Phaselock case in
+`tests/real_game_capture_safety_test.py` (no command and no key after a latched watch timeout, though the stand-in driver answers again)
+and the guard `tests/realgame_reply_guard_test.py`. Runs against the game: `docs/verification/REALGAME_GROUND_TRUTH.md`, "Slice capture
+sessions". The sessions of 2026-11-12 ran commit e7b5fa3; the review fixes of #245 (the record replace, the run lock, the latched
+timeouts, the clamped deadlines, the Alt journal, the quit wait, the checker's counts and messages) and the deadline and wrapper of
+2026-11-13 came after them. No session has run those fixes, so their behaviour in the game is `UNVERIFIED`, and the smoke item runs
+first at the new commit.
 
 **Reads added after the sessions' analyses** (reads and reporting; all `UNVERIFIED` in the game until a session runs them).
 One exception changes what a run does in the game: the readings loop's skip list. Before, a pickup that gave no reading was walked

@@ -389,6 +389,11 @@ AI-assisted (Claude Code). What these runs show about the tools, not about the g
   latched driver-lost timeouts with no quit to a lost driver, the clamped deadlines, the focus Alt journal, the quit wait, the
   checker). No session has run them: their
   behaviour in the game is `UNVERIFIED`, and the smoke item runs first at the new commit.
+- **After the session gate's review (2026-11-13)**, the driver refuses a command it takes after the deadline its sender wrote into
+  it (not run; answered `OW-REFUSED: ...`), the sender does not publish a command whose file was written after its deadline and
+  counts a probe file's read inside it, and every capture talks to the driver only through one shared wrapper that holds the
+  driver-lost rule, with the input helpers refusing after it too (`docs/TOOLING.md`, "Driver lost"). Still unbounded: a command the
+  driver took in time runs to its end. Shown on stand-ins only; in the game it is `UNVERIFIED` until a session runs it.
 - **Reads added from the two sessions' analyses** (`docs/TOOLING.md`, "Slice-session switches"): the down labelled by the injured
   flag first, the readings loop's skip list and per-try touch record, deaths apart from kill attempts, a `drop` snapshot per kill with
   each item's balance, the items' part definitions, the camera through the controller's view point with a stage that fails on an
