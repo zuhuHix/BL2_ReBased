@@ -662,6 +662,28 @@ try { Invoke-GamePy 'print(1)' 2 | Out-Null; $e = 'returned' } catch { $e = "$_"
     assert re.search(r'error: no reply to c\S+$', out, flags=re.M) and 'done: 1 withdrawn: 0' in out, out
 
 
+
+def test_the_pawn_wait_is_not_lengthened_by_a_wall_clock_stepped_back():
+    """Review round 3, item 8: Wait-PlayerPawn's bounds decide when a run gives up, and they counted the wall clock. From its second read on,
+    the stub's wall clock reads 60 s earlier; the menu bound (5 s after the first read here) must still end the wait on the performance
+    counter, not 60 s later."""
+    import time as _time
+    started = _time.monotonic()
+    out = run_stubbed(r"""$ErrorActionPreference = 'Stop'
+. '__REALGAME__'
+function Start-Sleep { }
+$script:reads = 0
+function Invoke-GamePy($Code, $T) { $script:reads++; 'menumap None' }
+function Get-Date { $d = Microsoft.PowerShell.Utility\Get-Date @args; if ($script:reads -ge 1 -and $d -is [datetime]) { $d.AddSeconds(-60) } else { $d } }
+$enter = (Microsoft.PowerShell.Utility\Get-Date).AddSeconds(-45)
+$r = Wait-PlayerPawn $enter $null 50 240
+"ok: $($r.ok)"
+"why: $($r.why)"
+""".replace('__REALGAME__', str(R / 'realgame.ps1')))
+    assert 'ok: False' in out and 'still on the main menu' in out and 'ran out at 50 s' in out, out
+    assert _time.monotonic() - started < 40, out   # about 5 s of waiting; 60 s more on 78c8d1a
+
+
 if __name__ == '__main__':
     for name, test in list(globals().items()):
         if name.startswith('test_'):

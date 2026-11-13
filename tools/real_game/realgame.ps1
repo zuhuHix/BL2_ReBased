@@ -760,32 +760,35 @@ function Invoke-GameReplyFile([string]$Path, [string]$OutFolder = 'out', [int]$T
 # a reply that comes after it is not taken and changes no timing state (review of #245). So the whole step ends within $MenuSeconds +
 # $LoadSeconds after the Enter. Returns ok, the last read (map),
 # why it failed (naming the bound that ran out) and the seconds from the Enter.
+# Its bounds decide when a run gives up, so they are counted on the performance counter (Get-QpcSeconds), not the wall clock (review round
+# 3, item 8): the one wall-clock read is at the start, to place the caller's Enter, taken just before the call, on that counter.
 function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, [int]$LoadSeconds = 240) {
     $read = 'pc=get_pc(); print(pc.WorldInfo.GetStreamingPersistentMapName(), pc.Pawn.Class.Name if pc.Pawn else None)'
-    $first = 45 - ((Get-Date) - $EnterAt).TotalSeconds
+    $enter = (Get-QpcSeconds) - [math]::Max(0.0, ((Get-Date) - $EnterAt).TotalSeconds)
+    $first = 45 - ((Get-QpcSeconds) - $enter)
     if ($first -gt 0) { Start-Sleep -Milliseconds ([int]($first * 1000)) }
-    $leftMenu = $null; $last = ''; $lastReply = $EnterAt; $replied = $false
-    $result = { param($Ok, $Why) [pscustomobject]@{ ok = $Ok; map = $last; why = $Why; after_enter_s = [math]::Round(((Get-Date) - $EnterAt).TotalSeconds, 1) } }
+    $leftMenu = $null; $last = ''; $lastReply = $enter; $replied = $false
+    $result = { param($Ok, $Why) [pscustomobject]@{ ok = $Ok; map = $last; why = $Why; after_enter_s = [math]::Round((Get-QpcSeconds) - $enter, 1) } }
     while ($true) {
         # A silence wait: it never sets the driver-lost condition (above, Get-DriverLostReason), but it sends nothing once that is set (review of #263).
         if ($script:SliceWatchDriverLost) { return (& $result $false "not sent: the driver stopped answering ($script:SliceWatchDriverLost)") }
         if ($Process -and $Process.HasExited) { return (& $result $false "the game exited before a player pawn (last read: $last)") }
         # The bound that applies now: the earlier of the driver's silence and the menu's or the load's. When it runs out, the message names the
         # driver's silence if that bound was the earlier one or the last read got no reply, else the phase's.
-        $silentUntil = $lastReply.AddSeconds($LoadSeconds)
-        $phaseUntil = if ($leftMenu) { $leftMenu.AddSeconds($LoadSeconds) } else { $EnterAt.AddSeconds($MenuSeconds) }
+        $silentUntil = $lastReply + $LoadSeconds
+        $phaseUntil = if ($null -ne $leftMenu) { $leftMenu + $LoadSeconds } else { $enter + $MenuSeconds }
         $until = if ($silentUntil -le $phaseUntil) { $silentUntil } else { $phaseUntil }
-        $now = Get-Date; $left = ($until - $now).TotalSeconds
+        $now = Get-QpcSeconds; $left = $until - $now
         if ($left -le 0) {
-            $since = [math]::Round(($now - $EnterAt).TotalSeconds)
-            if (!$replied -or $silentUntil -lt $phaseUntil) { return (& $result $false "the driver did not answer for $([math]::Round(($now - $lastReply).TotalSeconds)) s while the save loaded (limit $LoadSeconds s): $last") }
-            if (!$leftMenu) { return (& $result $false "still on the main menu $since s after the Enter: the wait for the game's online session (shown on the menu as 'Creating online session') ran out at $MenuSeconds s; last read: $last") }
-            return (& $result $false "the menu was left, but no player pawn $([math]::Round(($now - $leftMenu).TotalSeconds)) s later (limit $LoadSeconds s); last read: $last")
+            $since = [math]::Round($now - $enter)
+            if (!$replied -or $silentUntil -lt $phaseUntil) { return (& $result $false "the driver did not answer for $([math]::Round($now - $lastReply)) s while the save loaded (limit $LoadSeconds s): $last") }
+            if ($null -eq $leftMenu) { return (& $result $false "still on the main menu $since s after the Enter: the wait for the game's online session (shown on the menu as 'Creating online session') ran out at $MenuSeconds s; last read: $last") }
+            return (& $result $false "the menu was left, but no player pawn $([math]::Round($now - $leftMenu)) s later (limit $LoadSeconds s); last read: $last")
         }
         if ($left -lt 2) { Start-Sleep -Milliseconds ([int]($left * 1000) + 50); continue }   # too little left for a read: the bound ends the wait
         $text = $null; $err = ''
         try { $text = Invoke-GameReply $read ([int][math]::Min(30, [math]::Floor($left - 1))) -SilenceAllowed -AllowEmpty } catch { $err = "$_" }
-        $now = Get-Date
+        $now = Get-QpcSeconds
         # The bound passed during the read: a reply after it is not taken and updates nothing (not the last reply's time either, which would
         # reopen a silence that had run out); the next turn names the bound.
         if ($now -gt $until) { $replied = $false; $last = if ($null -ne $text) { "a reply after the bound, not taken: $text" } else { $err }; continue }
@@ -794,7 +797,7 @@ function Wait-PlayerPawn([datetime]$EnterAt, $Process, [int]$MenuSeconds = 240, 
         if ($replied -and $last -match 'WillowPlayerPawn' -and $last -notmatch 'Traceback') { return (& $result $true '') }
         if ($replied -and $last -notmatch '^menumap\b' -and $null -eq $leftMenu) { $leftMenu = $now }   # another map, or a read that failed in the game: the load is under way
         # The pause between reads never runs past the bound either: the next turn then ends the wait at the bound itself.
-        $pause = [math]::Min(5.0, ($until - (Get-Date)).TotalSeconds)
+        $pause = [math]::Min(5.0, $until - (Get-QpcSeconds))
         if ($pause -gt 0) { Start-Sleep -Milliseconds ([int]($pause * 1000)) }
     }
 }

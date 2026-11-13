@@ -25,7 +25,8 @@ what holds after this change is below.
   and the counter is there on both sides. The den down's re-placement window (`dp_replace`'s `until`) moved to the same clock. Since the third
   review round, both den-down windows (the down's and the respawn's) take their end once, on that clock, when they start, and the loop,
   each poll's wait, the re-placement's `until` and the pauses all count down to it; before, each re-placement converted the wall-clock
-  time left, and the loop counted wall-clock time, so a clock stepped back lengthened the window.
+  time left, and the loop counted wall-clock time, so a clock stepped back lengthened the window. The load step `Wait-PlayerPawn` counts its
+  menu, load and silence bounds on the same clock (its one wall-clock read places the caller's Enter, taken just before the call).
 - Every command the sender publishes (`Invoke-GamePy`) starts with the line `# ow-deadline-qpc-us: <us>`, the call's deadline on the
   command clock.
 - The driver (`tools/real_game/openwillow_realgame/__init__.py`, `run_pending`) checks that line once, when it takes a command and

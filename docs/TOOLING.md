@@ -1525,7 +1525,8 @@ switches for the slice capture sessions. Each is off by default, so a run withou
 - **Bounded load wait** (`Wait-PlayerPawn`, `-MenuWaitSeconds` 240, `-LoadWaitSeconds` 240): while the game is still on the menu map
   (its online session) the capture reads every 5 s, then gives the load a bounded time. Each read, and each pause between reads,
   lasts only as long as the time left in its bound, and a reply after the bound is not taken and changes nothing, so the step ends
-  within the two bounds' sum. Reads only; a failure names the wait that ran out. The den down's polls are clamped to their windows
+  within the two bounds' sum, counted on the performance counter (since 2026-11-13), so a wall-clock step does not move it. Reads only;
+  a failure names the wait that ran out. The den down's polls are clamped to their windows
   the same way: none starts in a window's last 6 s, a reply after the window is not taken, and the loops' pauses stop at the window's
   end. A re-placement gets the window's end with it (wall-clock seconds, the clock both sides read on this machine): a call that comes
   at or after it moves nothing and answers `late`, checked again right before the placement, and its reply wait is clamped to the
