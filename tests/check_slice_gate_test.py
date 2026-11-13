@@ -19,9 +19,22 @@ PREFIX = '[2026.11.04-10.00.00:000][123]LogTemp: Display: '
 TOTAL = len(chk.LINKS)
 
 
-CARD_DETAIL = 'aimed_drop=item_x card_id=item_x picked_id=item_x accepted=1 synthetic detail'
-DECOY_DETAIL = 'aimed_drop=item_x nearer_decoy=item_y card_id=item_x picked_id=item_x accepted=1 synthetic detail'
-EQUIP_DETAIL = 'item_x equipped in slot 1 and drawn; firing=Bullet'
+VIEW = 'view_wait=0.00s/10s view_line=clear'
+CARD_DETAIL = f'aimed_drop=item_x card_id=item_x picked_id=item_x accepted=1 {VIEW} synthetic detail'
+DECOY_DETAIL = f'aimed_drop=item_x nearer_decoy=item_y card_id=item_x picked_id=item_x accepted=1 {VIEW} synthetic detail'
+
+
+def burst(kind='Bullet', **tokens):
+    """Link 8's burst tokens as the host prints them (invented numbers): five shots at 4 per second, one frame of 0.017 s. A
+    keyword replaces one burst_<key> value."""
+    values = {'shots': '5/5', 'kind': kind, 'launched': '0/5' if kind == 'Trace' else '5/5', 'rate': '4.0000', 'count': '0',
+              'gap': '0.0000', 'spin': '1.000', 'skill_scale': '1.0000', 'intervals': '0.2500,0.2600,0.2550,0.2500',
+              'mean': '0.2538', 'frame_max': '0.0170', 'target': 'dummy_a', 'clearance': '900', 'enemies_hurt': '0'}
+    values.update(tokens)
+    return '; burst: ' + ' '.join(f'burst_{key}={value}' for key, value in values.items())
+
+
+EQUIP_DETAIL = 'item_x equipped in slot 1 and drawn; firing=Bullet' + burst()
 
 
 # The fixtures each link of the three older variants names in a real run (SLICE_GATE.md's tables), in one synthetic log.
@@ -58,6 +71,8 @@ def build(results=None, stop_after=None, summary='auto', start=True, extra=(), f
         default = {'pick_up_gun': CARD_DETAIL, chk.DECOY_LINK: DECOY_DETAIL, chk.EQUIP_LINK: EQUIP_DETAIL}.get(name, 'synthetic detail')
         if unforced and name in chk.UNFORCED_EVIDENCE:
             default = f'{chk.UNFORCED_EVIDENCE[name]} synthetic detail'
+        if unforced and name in chk.DOWN_WAIT_LINKS:
+            default += ' down_wait=0.0s/50s'
         result, detail = results.get(name, ('PASS', default))
         effective[name] = result
         lines.append(PREFIX + f'OWSLICEGATE link={name} result={result} fixtures=[{fixtures.get(name, "")}] detail={detail}')
@@ -304,7 +319,7 @@ class SliceGateTest(unittest.TestCase):
 
     def test_equip_pass_names_each_loaded_firing_kind(self):
         for kind in ('Trace', 'Bullet', 'Rocket'):
-            code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', f'item_x drawn; firing={kind}')})))
+            code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', f'item_x drawn; firing={kind}' + burst(kind))})))
             self.assertEqual(code, 0, out)
 
     def test_equip_pass_without_a_firing_kind_is_overruled(self):
@@ -337,10 +352,170 @@ class SliceGateTest(unittest.TestCase):
         fixtures = {'pick_up_gun': 'teleport', chk.DECOY_LINK: 'two guns rolled and dropped by the test; teleport',
                     'kill_enemy': 'one shot at a time until the selected enemy was wounded; fire held until the selected enemy hit Maya',
                     'go_down': 'teleport'}
-        for detail, code_wanted in (('item_x drawn; firing=Rocket', 0), ('item_x drawn', 1)):
+        for detail, code_wanted in (('item_x drawn; firing=Rocket' + burst('Rocket') + ' down_wait=0.0s/50s', 0), ('item_x drawn', 1),
+                                    ('item_x drawn; firing=Rocket', 1), ('item_x drawn; firing=Rocket' + burst('Rocket'), 1)):
             code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)}, fixtures=fixtures, range_mode=True,
                                                               unforced=True)), '--expect-unforced')
             self.assertEqual(code, code_wanted, (detail, out))
+
+    # Link 8's burst after the draw (lane U, 2026-11-13).
+    def test_equip_pass_without_the_burst_is_overruled(self):
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet')})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('link equip_gun: PASS overruled, no burst after the draw (missing burst_shots', out)
+
+    def test_equip_pass_missing_one_burst_token_is_overruled(self):
+        detail = 'item_x drawn; firing=Bullet' + burst().replace(' burst_frame_max=0.0170', '')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('no burst after the draw (missing burst_frame_max)', out)
+
+    def test_equip_burst_short_of_shots_is_overruled(self):
+        detail = 'item_x drawn; firing=Bullet' + burst(shots='3/5', launched='3/3', intervals='0.2500,0.2500')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('the burst fired 3 of the 5 shot(s) it asked for', out)
+
+    def test_equip_burst_of_another_kind_is_overruled(self):
+        for detail, why in (('item_x drawn; firing=Bullet' + burst('Rocket'), "burst_kind=Rocket is not the gun's firing=Bullet"),
+                            ('item_x drawn; firing=Trace' + burst('Trace', launched='5/5'), 'a Trace gun launched 5 projectile(s)'),
+                            ('item_x drawn; firing=Rocket' + burst('Rocket', launched='0/5'), 'a Rocket gun launched 0 projectile(s) for 5 pellet(s)'),
+                            ('item_x drawn; firing=Bullet' + burst(launched='3/3'), '3 pellet(s) for 5 shot(s)')):
+            with self.subTest(detail=detail):
+                code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
+                self.assertEqual(code, 1, out)
+                self.assertIn(why, out)
+
+    def test_equip_burst_interval_off_the_block_is_overruled(self):
+        # 4 shots a second is 0.25 s; one frame of 0.017 s and the 0.002 s tolerance allow 0.248 to 0.269 s.
+        for intervals, ok in (('0.2480,0.2500,0.2690,0.2500', True), ('0.2470,0.2500,0.2500,0.2500', False),
+                              ('0.2500,0.2500,0.2700,0.2500', False), ('0.1250,0.1250,0.1250,0.1250', False),
+                              ('0.0000,0.2500,0.2500,0.2500', False)):
+            with self.subTest(intervals=intervals):
+                code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + burst(intervals=intervals))})))
+                self.assertEqual(code, 0 if ok else 1, out)
+                if not ok:
+                    self.assertIn('of the burst was', out)
+                    self.assertIn("the block's fire interval plus at most one frame", out)
+
+    def test_equip_burst_counts_intervals(self):
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + burst(intervals='0.2500,0.2500'))})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('2 interval(s) for 5 shot(s)', out)
+
+    def test_equip_burst_gun_uses_its_gap_after_each_burst(self):
+        # Burst count 3 at 10 shots a second (0.1 s), a 0.4 s gap: the third interval is the gap.
+        good = burst(rate='10.0000', count='3', gap='0.4000', intervals='0.1000,0.1100,0.4100,0.1000')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + good)})))
+        self.assertEqual(code, 0, out)
+        bad = burst(rate='10.0000', count='3', gap='0.4000', intervals='0.1000,0.1000,0.1000,0.1000')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + bad)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn("interval 3 of the burst was 0.1000 s", out)
+        self.assertIn("the block's burst gap plus at most one frame", out)
+
+    def test_equip_burst_spin_and_skill_scale_widen_the_interval(self):
+        spun = burst(spin='2.000', intervals='0.5000,0.4000,0.3000,0.2500')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + spun)})))
+        self.assertEqual(code, 0, out)
+        scaled = burst(skill_scale='0.8000', intervals='0.2000,0.2000,0.2100,0.2000')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + scaled)})))
+        self.assertEqual(code, 0, out)
+
+    def test_equip_one_shot_magazine_has_no_interval_to_grade(self):
+        detail = 'item_x drawn; firing=Rocket' + burst('Rocket', shots='1/1', launched='1/1', intervals='none')
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
+        self.assertEqual(code, 0, out)
+
+    def test_equip_unreadable_burst_token_is_overruled(self):
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', 'item_x drawn; firing=Bullet' + burst(rate='fast'))})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('an unreadable burst token', out)
+
+    def test_host_burst_line_has_every_token_the_checker_reads(self):
+        # The host's format string (OpenWillowSliceGate.cpp, TickBurst) names every key the checker needs.
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
+        start = source.index('"; burst: burst_shots=')
+        text = source[start:source.index('"),', start)]
+        for key in chk.BURST_KEYS:
+            self.assertIn(f'burst_{key}=', text)
+
+    # The pickup links' wait for a clear view line (lane U, 2026-11-13).
+    def test_card_link_pass_without_the_view_wait_is_overruled(self):
+        for name, index, detail in (('pick_up_gun', 6, 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1: synthetic'),
+                                    (chk.DECOY_LINK, 7, 'aimed_drop=item_a nearer_decoy=item_b card_id=item_a picked_id=item_a accepted=1: synthetic')):
+            with self.subTest(link=name):
+                code, out = self.run_checker(self.write_log(build({name: ('PASS', detail)})))
+                self.assertEqual(code, 1, out)
+                self.assertIn('checker: no view_wait=<s>s/<bound>s in the detail', self.row(out, index))
+
+    def test_card_link_wait_past_its_bound_is_overruled(self):
+        detail = 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1 view_wait=10.02s/10s view_line=clear: synthetic'
+        code, out = self.run_checker(self.write_log(build({'pick_up_gun': ('PASS', detail)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('checker: the wait for a clear view line ran past its bound (10.02 s of 10 s)', self.row(out, 6))
+
+    def test_card_link_with_the_line_still_blocked_is_overruled(self):
+        for view in ('view_wait=9.90s/10s view_line=blocked', 'view_wait=1.00s/10s'):
+            with self.subTest(view=view):
+                detail = f'aimed_drop=item_a nearer_decoy=item_b card_id=item_a picked_id=item_a accepted=1 {view}: synthetic'
+                code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
+                self.assertEqual(code, 1, out)
+                self.assertIn('checker: the view line to the aimed drop was not clear at the press', self.row(out, 7))
+
+    def test_card_link_wait_within_its_bound_passes(self):
+        detail = 'aimed_drop=item_a card_id=item_a picked_id=item_a accepted=1 view_wait=3.45s/10s view_line=clear: synthetic'
+        code, out = self.run_checker(self.write_log(build({'pick_up_gun': ('PASS', detail)}, fixtures={'pick_up_gun': 'teleport; waited for a clear view line to the aimed drop'})))
+        self.assertEqual(code, 0, out)
+
+    def test_card_link_fail_after_a_clear_line_stays_a_fail(self):
+        # The wait does not hide a host fault: a clear line and the wrong pick is the host's FAIL, kept.
+        detail = 'aimed_drop=item_a nearer_decoy=item_b card_id=item_a picked_id=item_b accepted=1 view_wait=0.00s/10s view_line=clear: E took the nearer decoy'
+        code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('FAIL', detail)})))
+        self.assertEqual(code, 1, out)
+        self.assertIn('FAIL', self.row(out, 7))
+
+    def test_view_wait_fixture_does_not_fail_an_unforced_run(self):
+        fixtures = {'pick_up_gun': 'teleport; waited for a clear view line to the aimed drop',
+                    chk.DECOY_LINK: 'two guns rolled and dropped by the test; teleport; waited for a clear view line to the aimed drop',
+                    'phaselock_enemy': "waited for Maya's own second wind or respawn before the cast",
+                    'equip_gun': "waited for Maya's own second wind or respawn before the burst; teleport"}
+        code, out = self.run_checker(self.write_log(build(fixtures=fixtures, range_mode=True, unforced=True)), '--expect-unforced')
+        self.assertEqual(code, 0, out)
+
+    # The unforced Phaselock link's wait for Maya's own recovery (lane U, 2026-11-13).
+    def test_unforced_phaselock_wait_is_graded(self):
+        for detail, ok, why in (('how=skills_page synthetic down_wait=12.5s/50s', True, None),
+                                ('how=skills_page synthetic down_wait=50.1s/50s', False, "the wait for Maya's own recovery ran past its bound (50.1 s of 50 s)"),
+                                ('how=skills_page synthetic', False, "no down_wait=<s>s/<bound>s in the detail")):
+            with self.subTest(detail=detail):
+                code, out = self.run_checker(self.write_log(build({'phaselock_enemy': ('PASS', detail)}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 0 if ok else 1, out)
+                if why:
+                    self.assertIn(why, self.row(out, 9))
+
+    def test_unforced_links_that_wait_need_their_down_wait(self):
+        self.assertEqual(chk.DOWN_WAIT_LINKS, ('pick_up_gun', 'pick_up_aimed_not_nearest', 'equip_gun', 'phaselock_enemy'))
+        for name, detail in (('pick_up_gun', CARD_DETAIL), (chk.DECOY_LINK, DECOY_DETAIL), ('equip_gun', 'item_x drawn; firing=Bullet' + burst())):
+            with self.subTest(link=name):
+                index = chk.NAMES.index(name) + 1
+                code, out = self.run_checker(self.write_log(build({name: ('PASS', detail)}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 1, out)
+                self.assertIn("no down_wait=<s>s/<bound>s in the detail", self.row(out, index))
+                code, out = self.run_checker(self.write_log(build({name: ('PASS', detail + ' down_wait=50.5s/50s')}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 1, out)
+                self.assertIn("ran past its bound (50.5 s of 50 s)", self.row(out, index))
+                code, out = self.run_checker(self.write_log(build({name: ('PASS', detail + ' down_wait=21.3s/50s')}, range_mode=True, unforced=True)))
+                self.assertEqual(code, 0, out)
+
+    def test_older_variants_do_not_need_the_down_wait(self):
+        code, out = self.run_checker(self.write_log(build({'phaselock_enemy': ('PASS', 'synthetic lift')})))
+        self.assertEqual(code, 0, out)
+
+    def test_host_prints_the_wait_tokens_the_checker_reads(self):
+        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
+        self.assertEqual(source.count('view_wait=%.2fs/%.0fs view_line=%s'), 2, 'both pickup links print the view-line wait')
+        self.assertEqual(source.count('" down_wait=%.1fs/%.0fs"'), 3, 'the pickups (one helper), the burst and the Phaselock print the down wait')
 
     def test_the_hosts_no_block_detail_names_both_regeneration_steps(self):
         # The FAIL detail is the host's text (OpenWillowSliceGate.cpp, EStep::Equip); read it from the source, as the runner

@@ -2,6 +2,7 @@
 #include "OpenWillowAudio.h"
 #include "OpenWillowCombatTarget.h"
 #include "OpenWillowEnemy.h"
+#include "OpenWillowFiring.h"
 #include "OpenWillowInventory.h"
 #include "OpenWillowInventoryPickup.h"
 #include "OpenWillowMayaHUD.h"
@@ -9,6 +10,7 @@
 #include "OpenWillowPickupCard.h"
 #include "OpenWillowQuest.h"
 #include "OpenWillowRange.h"
+#include "OpenWillowSkillEffects.h"
 #include "OpenWillowSkills.h"
 #include "OpenWillowWalker.h"
 #include "OpenWillowWeaponGen.h"
@@ -53,6 +55,21 @@ constexpr float PhaselockReach = 1500.f;  // a target farther than this: Maya is
 constexpr float EnemyDownLimit = 90.f;    // Maya stands by the enemies without firing at most this long
 constexpr float DownRecoverWait = 50.f;   // a link group due while Maya is down waits this long (12 s bleed-out, then the respawn)
 constexpr float DownHitMargin = 0.5f;     // a range-enemy hit this close before a down (or a tick late) counts as its cause
+
+// The pickup links' wait for a clear view line (a fixture; tools/check_slice_gate.py's VIEW_WAIT reads the bound from the detail).
+constexpr float ViewLineWait = 10.f;      // at most this long past the moment the press was ready
+constexpr float ViewLineSettle = 0.2f;    // the line clear on every tick this long: the card searches 10 times a second, so its
+                                          // cached aimed pickup is then one found with the line clear
+// Unforced: a living enemy within this distance of a drop decides which side of it Maya stands on (pick_up_gun) and which way the
+// decoy link's test drops go: her back to the enemy, so one that walks up to her stands behind her, not in her view line.
+constexpr float PickupEnemyNear = 2500.f;
+
+// Link 8's burst (host choices). Five shots, or what the magazine holds when it holds fewer.
+constexpr int32 BurstShots = 5;
+constexpr float BurstStandoff = 500.f;    // Maya stands this far from the dummy, on the enemies' side of it
+constexpr float BurstTargetWait = 10.f;   // a dummy to shoot at must be there within this time (they respawn)
+constexpr float BurstSettleTimeout = 12.f; // placed, grounded and the magazine filled (a reload) within this time
+constexpr float BurstTimeout = 10.f;      // the shots must come within this time of the first press
 
 // A key press and release through Slate, as the keyboard sends them (the mission page suite presses its keys the same way): the mission
 // page's input processor gets it. Code is the Windows key code; Enter also carries its character, Escape none.
@@ -285,6 +302,37 @@ AOpenWillowCombatTarget* UOpenWillowSliceGate::NearestLiveEnemy() const
     return Best;
 }
 
+AOpenWillowEnemy* UOpenWillowSliceGate::NearestLiveEnemyTo(const FVector& From, float& OutDistance) const
+{
+    AOpenWillowEnemy* Best = nullptr;
+    OutDistance = TNumericLimits<float>::Max();
+    for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
+        if (It->IsAutoAimTarget())
+            if (const float D = FVector::Dist(From, It->GetActorLocation()); D < OutDistance) { OutDistance = D; Best = *It; }
+    return Best;
+}
+
+// Unforced: a link that finds Maya down (or held by the respawn) waits for what the walker does by itself, as WaitWhileDown does at
+// the start of a link group: a second wind or the respawn, at most DownRecoverWait in total. Nothing revives her.
+int32 UOpenWillowSliceGate::WaitOwnRecovery(AOpenWillowWalker* W, float Delta, float& Waited, bool& bWaiting, const TCHAR* What)
+{
+    if (!W->IsDown() && !W->IsRespawning())
+    {
+        if (!bWaiting) return 0;
+        bWaiting = false;
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: Maya Up again after waiting %.1fs in %s, with no revive (health %.0f/%.0f)"), Waited, What,
+            W->GetHealth(), W->GetMaxHealth());
+        return 2;
+    }
+    if (Waited >= DownRecoverWait) return 3;
+    if (!bWaiting)
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: Maya down (%s) during %s; waiting up to %.0fs in all for her own second wind or respawn"),
+            W->GetDownPhase() == AOpenWillowWalker::EDownPhase::Dead ? TEXT("dead") : W->IsDown() ? TEXT("injured") : TEXT("held by the respawn"), What, DownRecoverWait);
+    bWaiting = true;
+    Waited += Delta;
+    return 1;
+}
+
 // Range enemies keep their actor through a death and respawn (the range sets them up again), so their per-causer counts cover the whole span.
 int32 UOpenWillowSliceGate::EnemyHitsTracked() const
 {
@@ -413,6 +461,193 @@ void UOpenWillowSliceGate::TickFarmLoot(AOpenWillowWalker* W, float Delta)
     FarmLookFor = FarmDropWait;
     FarmPhase = 0;
     FarmClock = 0.f;
+}
+
+void UOpenWillowSliceGate::EndBurst(AOpenWillowWalker* W, bool bOk, const FString& Note)
+{
+#if WITH_EDITOR
+    if (bBurstHeld) W->TestFireInput(false);
+#endif
+    bBurstHeld = false;
+    bBurstOk = bOk;
+    BurstNote = Note;
+    // Back where she stood before the burst (the teleport fixture), looking the same way, unless she is down there now.
+    if (bBurstMoved && !W->IsDown() && !W->IsRespawning())
+    {
+        W->SetActorLocation(BurstReturnAt, false, nullptr, ETeleportType::TeleportPhysics);
+        W->GetCharacterMovement()->StopMovementImmediately();
+        if (W->GetController()) W->GetController()->SetControlRotation(BurstReturnView);
+    }
+    bBurstMoved = false;
+}
+
+// Link 8's burst (SLICE_GATE.md, "How a link is graded", equip_gun). The looted gun fires BurstWant shots through the fire key's own
+// handlers (AOpenWillowWalker::TestFireInput: FirePressed and FireReleased), so the walker's trigger rules pace them: the fire interval,
+// the burst count and gap, the spin-up. A gun that fires while the trigger is held (burst count 0) is held; any other is clicked, a
+// release and a press each tick, as fast as a player can click, so a semi-automatic gun fires as soon as its interval allows. Each
+// shot's time is the world time of the tick on which the walker's shot count rose. The target is the range dummy farthest from every
+// living enemy, and Maya stands on the enemies' side of it, so the shots and any splash go away from the enemies the Phaselock and the
+// later links need; the detail says how far the nearest enemy was and whether the burst hurt one.
+bool UOpenWillowSliceGate::TickBurst(AOpenWillowWalker* W, float Delta)
+{
+#if !WITH_EDITOR
+    EndBurst(W, false, TEXT("; burst not fired: this build has no fire-key hook for the driver (TestFireInput is WITH_EDITOR only)"));
+    return true;
+#else
+    UOpenWillowInventory* Inventory = W->GetInventory();
+    BurstClock += Delta;
+    // Maya down (or held by the respawn) before the shots are done: unforced, she is waited for (her own second wind or respawn) and
+    // the burst starts again from the choice of target; in the other variants nothing downs her here, so it is a FAIL.
+    if (BurstPhase != 3 && (W->IsDown() || W->IsRespawning()))
+    {
+        if (bBurstHeld) { W->TestFireInput(false); bBurstHeld = false; }
+        if (!bUnforced)
+        {
+            EndBurst(W, false, FString::Printf(TEXT("; burst not done: Maya went down after %d shot(s)"), BurstShotTimes.Num()));
+            return true;
+        }
+        BurstPhase = 3;
+    }
+    if (BurstPhase == 3)
+    {
+        const int32 Recovery = WaitOwnRecovery(W, Delta, BurstDownWait, bBurstDownWaiting, TEXT("the equip link's burst"));
+        if (Recovery == 1) { Fixture(TEXT("waited for Maya's own second wind or respawn before the burst")); return false; }
+        if (Recovery == 3)
+        {
+            EndBurst(W, false, FString::Printf(TEXT("; burst not done: Maya still down after %.0fs of waiting for her own recovery"), DownRecoverWait));
+            return true;
+        }
+        BurstPhase = 0;
+        BurstClock = 0.f;
+        BurstShotTimes.Reset();
+        return false;
+    }
+    if (BurstPhase == 0)
+    {
+        BurstTarget = nullptr;
+        float Best = -1.f;
+        for (TActorIterator<AOpenWillowCombatTarget> It(GetWorld()); It; ++It)
+        {
+            // The range's static dummies (its enemies are AOpenWillowEnemy); without the range, the stand-in the fight used.
+            if (!It->IsAutoAimTarget() || It->IsA<AOpenWillowEnemy>() || *It == MissionDummy || (!bRangeMode && *It != Enemy)) continue;
+            float Clear = 0.f;
+            NearestLiveEnemyTo(It->GetActorLocation(), Clear);
+            if (Clear > Best) { Best = Clear; BurstTarget = *It; }
+        }
+        if (!BurstTarget)
+        {
+            if (BurstClock < BurstTargetWait) return false;
+            EndBurst(W, false, FString::Printf(TEXT("; burst not fired: no range dummy to shoot at within %.0fs"), BurstTargetWait));
+            return true;
+        }
+        BurstClearance = Best;
+        // Maya on the side of the dummy facing the nearest enemy, half way to it at most, so no enemy stands between her and the dummy.
+        float EnemyDistance = 0.f;
+        const AOpenWillowEnemy* Near = NearestLiveEnemyTo(BurstTarget->GetActorLocation(), EnemyDistance);
+        FVector Side = ((Near ? Near->GetActorLocation() : W->GetActorLocation()) - BurstTarget->GetActorLocation()).GetSafeNormal2D();
+        if (Side.IsNearlyZero()) Side = FVector::ForwardVector;
+        const float Standoff = Near ? FMath::Min(BurstStandoff, 0.5f * EnemyDistance) : BurstStandoff;
+        if (!bBurstMoved)
+        {
+            bBurstMoved = true;
+            BurstReturnAt = W->GetActorLocation();
+            BurstReturnView = W->GetControlRotation();
+        }
+        Place(BurstTarget->GetActorLocation() + Side * Standoff + FVector(0, 0, 100.f), BurstTarget->AimPoint());
+        BurstEnemyHealth.Reset();
+        for (TActorIterator<AOpenWillowEnemy> It(GetWorld()); It; ++It)
+            if (It->IsAutoAimTarget()) BurstEnemyHealth.Add(*It, It->HealthFraction());
+        BurstPhase = 1;
+        BurstClock = 0.f;
+        return false;
+    }
+    FOpenWillowWeaponItem* Held = Inventory->ActiveWeaponMutable();
+    if (!Held || UOpenWillowInventory::StableId(*Held) != GunId || !W->HasWeaponOut())
+    {
+        // A respawn may have drawn another slot: the looted gun is drawn again, as the inventory page's draw does.
+        if (BurstClock < BurstSettleTimeout && W->DrawItemById(GunId)) return false;
+        EndBurst(W, false, FString::Printf(TEXT("; burst not fired: %s is no longer the drawn gun"), *GunId));
+        return true;
+    }
+    if (BurstPhase == 1)
+    {
+        AimAt(BurstTarget->AimPoint());
+        if (BurstClock >= BurstSettleTimeout)
+        {
+            EndBurst(W, false, FString::Printf(TEXT("; burst not fired: not ready within %.0fs (grounded %d, reloading %d, magazine %d)"), BurstSettleTimeout,
+                W->GetCharacterMovement()->IsMovingOnGround(), W->IsReloading(), UOpenWillowInventory::MagazineLeft(*Held)));
+            return true;
+        }
+        if (!W->GetCharacterMovement()->IsMovingOnGround() || BurstClock < 0.5f || W->IsReloading()) return false;
+        // Five shots, or as many as a full magazine holds when that is fewer; a magazine short of them is reloaded first with the
+        // reload key (an empty reserve refilled as in the fight, the fixture named).
+        const int32 Cost = FMath::Max(1, UOpenWillowInventory::ShotCostRounds(*Held));
+        BurstWant = FMath::Clamp(UOpenWillowInventory::MagazineSize(*Held) / Cost, 1, BurstShots);
+        if (UOpenWillowInventory::MagazineLeft(*Held) < BurstWant * Cost)
+        {
+            EOpenWillowAmmoType Ammo;
+            if (!Inventory->CanReload(*Held) && UOpenWillowInventory::ResolveAmmoType(*Held, Ammo))
+            {
+                Inventory->SetAmmoCurrent(Ammo, Inventory->AmmoPool(Ammo).Max);
+                Fixture(TEXT("ammo reserve refilled"));
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: %s reserve refilled to %d"), UOpenWillowInventory::AmmoTypeKey(Ammo), Inventory->AmmoPool(Ammo).Max);
+            }
+            W->TestReloadInput();
+            return false;
+        }
+        BurstShotsBefore = OpenWillowFiring::Counts.Shots;
+        BurstPelletsBefore = OpenWillowFiring::Counts.Pellets;
+        BurstLaunchesBefore = OpenWillowFiring::Counts.Launches;
+        BurstShotTimes.Reset();
+        BurstFrameMax = 0.f;
+        BurstPhase = 2;
+        BurstClock = 0.f;
+        UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note burst: %d shot(s) of %s at %s, the nearest living enemy %.0f uu from it"), BurstWant, *GunId,
+            *BurstTarget->GetName(), BurstClearance);
+    }
+    // BurstPhase 2: fire. The shots the walker made since the last tick, at this tick's time (one per tick at most: it fires once per
+    // tick, so two at one time would be a zero interval, and the checker would fail it).
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (BurstClock > 0.f) BurstFrameMax = FMath::Max(BurstFrameMax, Delta);   // every frame after the first press
+    for (int32 Seen = OpenWillowFiring::Counts.Shots - BurstShotsBefore; BurstShotTimes.Num() < Seen;) BurstShotTimes.Add(Now);
+    const FOpenWillowFiringData& Firing = Held->Firing;
+    if (BurstShotTimes.Num() < BurstWant && BurstClock < BurstTimeout)
+    {
+        AimAt(BurstTarget->AimPoint());
+        // Burst count 0 fires while held: the press is sent again each tick and never released (a press the walker refused on one
+        // tick, say while the weapon came up, is not lost). Any other count needs a new press per burst: a release and a press each tick.
+        if (Firing.BurstCount > 0) W->TestFireInput(false);
+        W->TestFireInput(true);
+        bBurstHeld = true;
+        return false;
+    }
+    // Done (or out of time): the report. Intervals between consecutive shots, in seconds.
+    TArray<FString> Intervals;
+    float Sum = 0.f;
+    for (int32 Index = 1; Index < BurstShotTimes.Num(); ++Index)
+    {
+        const float Gap = BurstShotTimes[Index] - BurstShotTimes[Index - 1];
+        Sum += Gap;
+        Intervals.Add(FString::Printf(TEXT("%.4f"), Gap));
+    }
+    int32 Hurt = 0;
+    for (const auto& Before : BurstEnemyHealth)
+        if (const AOpenWillowEnemy* E = Cast<AOpenWillowEnemy>(Before.Key.ResolveObjectPtr()); !E || !E->IsAutoAimTarget() || E->HealthFraction() < Before.Value) ++Hurt;
+    const TCHAR* Kind = Firing.Kind == EOpenWillowShotKind::Rocket ? TEXT("Rocket") : Firing.Kind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
+    const float SkillScale = OpenWillowSkillEffects::Apply(W, OpenWillowSkillEffects::Attr::WeaponFireInterval, 1.f);
+    const FString Clearance = BurstClearance > 1.0e8f ? FString(TEXT("none")) : FString::Printf(TEXT("%.0f"), BurstClearance);
+    const bool bAll = BurstShotTimes.Num() >= BurstWant;
+    const FString Note = FString::Printf(TEXT("; burst: burst_shots=%d/%d burst_kind=%s burst_launched=%d/%d burst_rate=%.4f burst_count=%d burst_gap=%.4f burst_spin=%.3f "
+        "burst_skill_scale=%.4f burst_intervals=%s burst_mean=%.4f burst_frame_max=%.4f burst_target=%s burst_clearance=%s burst_enemies_hurt=%d%s%s"),
+        BurstShotTimes.Num(), BurstWant, Kind, OpenWillowFiring::Counts.Launches - BurstLaunchesBefore, OpenWillowFiring::Counts.Pellets - BurstPelletsBefore,
+        Held->FireRate, Firing.BurstCount, Firing.BurstInterval, Firing.bSpinsToFullRate ? FMath::Max(1.f, Firing.SpinStartMultiplier) : 1.f, SkillScale,
+        Intervals.IsEmpty() ? TEXT("none") : *FString::Join(Intervals, TEXT(",")), Intervals.IsEmpty() ? 0.f : Sum / Intervals.Num(), BurstFrameMax,
+        *BurstTarget->GetName(), *Clearance, Hurt, bAll ? TEXT("") : *FString::Printf(TEXT(" (only %d shot(s) in %.0fs)"), BurstShotTimes.Num(), BurstTimeout),
+        bUnforced ? *FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), BurstDownWait, DownRecoverWait) : TEXT(""));
+    UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note burst done%s"), *Note);
+    EndBurst(W, bAll, Note);
+    return true;
+#endif
 }
 
 // Unforced: the Phaselock point bought the way a player buys it. The skills page (tools/hud_overlay/skills.js) opens on the action skill, and
@@ -646,6 +881,11 @@ FString UOpenWillowSliceGate::RollSetupGap() const
     return FString();
 }
 
+FString UOpenWillowSliceGate::PickupDownNote() const
+{
+    return bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), PickupDownWait, DownRecoverWait) : FString();
+}
+
 bool UOpenWillowSliceGate::PickupAccepted() const
 {
     const AOpenWillowWalker* W = Walker();
@@ -666,16 +906,55 @@ bool UOpenWillowSliceGate::RunAimedPickup(AOpenWillowInventoryPickup* Target)
         CardId = PickedId = TEXT("none");
         SnapshotBackpack();
         PickupAttemptsBefore = W->PickupAttemptCount();
-        const FVector Away = (W->GetActorLocation() - Target->GetActorLocation()).GetSafeNormal2D();
+        // After a wait for Maya's own recovery she may stand anywhere (a station): the side chosen the first time is kept, so the
+        // decoy's geometry holds.
+        if (!bPickupRestart)
+        {
+            PickupLastAway = !PickupAway.IsNearlyZero() ? PickupAway : (W->GetActorLocation() - Target->GetActorLocation()).GetSafeNormal2D();
+            PickupDownWait = 0.f;
+        }
+        bPickupRestart = false;
+        PickupAway = FVector::ZeroVector;
+        const FVector Away = PickupLastAway;
         Place(Target->GetActorLocation() + Away * 80.f + FVector(0, 0, 100.f), Target->GetActorLocation());
         PickupPhase = 1;
         PickupWait = 0.f;
+        ViewWait = ViewClearFor = 0.f;
+        bViewBlocked = false;
         return false;
     }
     case 1: {
-        PickupWait += GetWorld()->GetDeltaSeconds();
+        const float Delta = GetWorld()->GetDeltaSeconds();
+        // Unforced: Maya down (or held by the respawn) before the press: the card is hidden while she is down, so the link waits for
+        // her own second wind or respawn (at most DownRecoverWait) and then places her by the drop again. Past the bound it goes on,
+        // and the press shows what the card did.
+        if (bUnforced)
+        {
+            const int32 Recovery = WaitOwnRecovery(W, Delta, PickupDownWait, bPickupDownWaiting, TEXT("the pickup"));
+            if (Recovery == 1) { Fixture(TEXT("waited for Maya's own second wind or respawn before the pickup")); return false; }
+            if (Recovery == 2) { PickupPhase = 0; bPickupRestart = true; return false; }
+        }
+        PickupWait += Delta;
         AimAt(Target->GetActorLocation());
+        // The view line as the card's own sight test sees it, on every tick from the placement on.
+        const bool bClear = PC && OpenWillowPickupCard::InSight(*W, *PC, *Target);
+        ViewClearFor = bClear ? ViewClearFor + Delta : 0.f;
         if (!PC || ((!W->GetCharacterMovement()->IsMovingOnGround() || PickupWait < 0.5f) && PickupWait < 3.f)) return false;
+        // The press was ready. A fixture: wait for the line to stay clear ViewLineSettle seconds (so the card's 10 Hz search has
+        // seen it clear), at most ViewLineWait; something on the line (an enemy walking up to Maya) is not what this link tests.
+        // Past the bound the press goes ahead and the link FAILs on the wait, whatever the card says.
+        if (ViewClearFor < ViewLineSettle && ViewWait < ViewLineWait)
+        {
+            if (ViewWait == 0.f)
+                UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: waiting up to %.0fs for a clear view line to the aimed drop %s (the OWPICKUPCARD lines name what blocks it)"),
+                    ViewLineWait, *PickupId(Target));
+            ViewWait += Delta;
+            Fixture(TEXT("waited for a clear view line to the aimed drop"));
+            return false;
+        }
+        bViewBlocked = ViewClearFor < ViewLineSettle;
+        if (ViewWait > 0.f)
+            UE_LOG(LogTemp, Display, TEXT("OWSLICEGATE note test fixture: view line to the aimed drop %s after %.2fs of waiting"), bViewBlocked ? TEXT("still blocked") : TEXT("clear"), ViewWait);
         // The card the player would see at the moment of the press.
         const FString State = OpenWillowPickupCard::StateField(*W, *PC);
         const int32 At = State.Find(TEXT("\"id\":\""));
@@ -872,6 +1151,13 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (SeenNow > SeenEnemyHits && (!W->IsDown() || W->GetMayaState().DownAt >= Now - DownHitMargin)) LastEnemyHitAt = Now;
         SeenEnemyHits = SeenNow;
     }
+    // The run's first respawn (its station and exit), for the respawn link's start-exit half in the unforced variant.
+    if (FirstRespawnStation == INDEX_NONE)
+        if (const UOpenWillowQuest* RespawnQuest = W->GetQuest())
+        {
+            int32 Station = INDEX_NONE, Exit = INDEX_NONE, Picks = 0;
+            if (RespawnQuest->LastRespawnUse(Station, Exit, Picks) && Picks == 1) { FirstRespawnStation = Station; FirstRespawnExit = Exit; }
+        }
     UseHeldFor += Delta;
     if (bUseHeld && UseHeldFor >= 0.1f)
     {
@@ -1205,13 +1491,22 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             bTestDrop = true;
             return;
         }
+        // Unforced: the enemies are live, so Maya stands on the drop's enemy side and faces away from them (PickupEnemyNear).
+        if (bUnforced && PickupPhase == 0)
+        {
+            float EnemyDistance = 0.f;
+            if (const AOpenWillowEnemy* Near = NearestLiveEnemyTo(Drop->GetActorLocation(), EnemyDistance); Near && EnemyDistance < PickupEnemyNear)
+                PickupAway = (Near->GetActorLocation() - Drop->GetActorLocation()).GetSafeNormal2D();
+        }
         if (!RunAimedPickup(Drop)) return;
         if (bTestDrop) Fixture(TEXT("gun rolled and dropped by the test"));
         GunId = PickedId == TEXT("none") ? FString() : PickedId;
         // PASS only when the card named the aimed drop and E picked up that same item.
         const bool bAccepted = PickupAccepted();
-        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s accepted=%d"), *DropId, *CardId, *PickedId, bAccepted);
-        if (CardId == DropId && PickedId == DropId && bAccepted)
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s card_id=%s picked_id=%s accepted=%d view_wait=%.2fs/%.0fs view_line=%s%s"), *DropId, *CardId, *PickedId,
+            bAccepted, ViewWait, ViewLineWait, bViewBlocked ? TEXT("blocked") : TEXT("clear"), *PickupDownNote());
+        if (bViewBlocked) FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the view line to the aimed drop was still blocked after the %.0fs wait (the fixture's bound)"), *Ids, ViewLineWait));
+        else if (CardId == DropId && PickedId == DropId && bAccepted)
             PassLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the pickup card named the aimed drop at the use-key press and E picked it up (card state only; HUD drawing not checked)"), *Ids));
         else FailLink(TEXT("pick_up_gun"), FString::Printf(TEXT("%s: the card and the picked-up item must both be the aimed drop"), *Ids));
         Next(EStep::PickupDecoy);
@@ -1230,13 +1525,18 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 return;
             }
             const FVector From = W->GetActorLocation();
-            const FVector Forward = FRotator(0, W->GetControlRotation().Yaw, 0).Vector();
+            float Yaw = W->GetControlRotation().Yaw;
+            // Unforced: the drops go ahead of Maya away from the nearest living enemy, so she will face away from it at the press.
+            float EnemyDistance = 0.f;
+            if (const AOpenWillowEnemy* Near = bUnforced ? NearestLiveEnemyTo(From, EnemyDistance) : nullptr; Near && EnemyDistance < PickupEnemyNear)
+                if (const FVector Off = (From - Near->GetActorLocation()).GetSafeNormal2D(); !Off.IsNearlyZero()) Yaw = Off.Rotation().Yaw;
+            const FVector Forward = FRotator(0, Yaw, 0).Vector();
             FString Why;
             DecoyAimed = DropRolledGun(2, From + Forward * 150.f, Why);
             // RunAimedPickup stands Maya 80 uu from the aimed drop on the side she comes from; the decoy goes 45 uu to her
             // right there: nearer than the aimed drop, and about 90 degrees off her aim.
             const FVector Stand = DecoyAimed ? DecoyAimed->GetActorLocation() + (From - DecoyAimed->GetActorLocation()).GetSafeNormal2D() * 80.f : From;
-            DecoyNear = DecoyAimed ? DropRolledGun(3, Stand + FRotator(0, W->GetControlRotation().Yaw + 90.f, 0).Vector() * 45.f, Why) : nullptr;
+            DecoyNear = DecoyAimed ? DropRolledGun(3, Stand + FRotator(0, Yaw + 90.f, 0).Vector() * 45.f, Why) : nullptr;
             if (!DecoyAimed || !DecoyNear)
             {
                 // Not the two-guns fixture: the pair was never complete. The detail says how far the setup got.
@@ -1262,8 +1562,10 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         if (!RunAimedPickup(DecoyAimed)) return;
         const bool bAccepted = PickupAccepted();
-        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s accepted=%d"), *DropId, *NearId, *CardId, *PickedId, bAccepted);
-        if (CardId != DropId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": the card did not name the aimed drop"));
+        const FString Ids = FString::Printf(TEXT("aimed_drop=%s nearer_decoy=%s card_id=%s picked_id=%s accepted=%d view_wait=%.2fs/%.0fs view_line=%s%s"), *DropId, *NearId,
+            *CardId, *PickedId, bAccepted, ViewWait, ViewLineWait, bViewBlocked ? TEXT("blocked") : TEXT("clear"), *PickupDownNote());
+        if (bViewBlocked) FailLink(TEXT("pick_up_aimed_not_nearest"), FString::Printf(TEXT("%s: the view line to the aimed drop was still blocked after the %.0fs wait (the fixture's bound)"), *Ids, ViewLineWait));
+        else if (CardId != DropId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": the card did not name the aimed drop"));
         else if (PickedId == DropId && NearId != DropId && bAccepted) PassLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E picked up the aimed drop, not the nearer decoy"));
         else if (PickedId == NearId) FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E took the nearer decoy, not the aimed drop"));
         else FailLink(TEXT("pick_up_aimed_not_nearest"), Ids + TEXT(": E did not pick up the aimed drop"));
@@ -1274,18 +1576,19 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
 
     case EStep::Equip: {
         if (StepTime < 0.3f) return;
-        FString Why;
-        if (bUnforced && bTestDrop && !GunId.IsEmpty()) Fixture(TEXT("gun from the test's drop, not a kill"));
-        if (GunId.IsEmpty()) FailLink(TEXT("equip_gun"), TEXT("blocked: no looted or rolled gun in the backpack"));
-        else if (!EquipAndDraw(GunId, Why)) FailLink(TEXT("equip_gun"), Why);
-        else
+        if (EquipPhase == 0)
         {
+            FString Why;
+            if (bUnforced && bTestDrop && !GunId.IsEmpty()) Fixture(TEXT("gun from the test's drop, not a kill"));
+            const bool bEquipped = !GunId.IsEmpty() && EquipAndDraw(GunId, Why);
+            const FOpenWillowWeaponItem* Held = bEquipped ? Inventory->ActiveWeapon() : nullptr;
+            if (GunId.IsEmpty()) FailLink(TEXT("equip_gun"), TEXT("blocked: no looted or rolled gun in the backpack"));
+            else if (!bEquipped) FailLink(TEXT("equip_gun"), Why);
             // The held gun's firing as the host will play it (its recipe's or template's block). No block, and the host fires a
             // plain trace whatever the gun is: a FAIL, not a pass. This grades the host against its data, not the real game.
             // A rolled gun's block comes from the firing templates (OpenWillowWeaponGen.cpp), a recipe gun's from its recipe: a
             // missing or stale one is local data, so the FAIL names both regeneration steps.
-            const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
-            if (!Held) FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; but no active weapon after the equip, so its firing could not be read"), *Why));
+            else if (!Held) FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; but no active weapon after the equip, so its firing could not be read"), *Why));
             else if (!Held->Firing.bLoaded)
                 FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=none: no firing block was loaded, so the host fires a plain trace. "
                     "Regenerate it: a rolled gun's from the firing templates, python tools/weapon_gen_firing.py --game <BL2 folder> (the "
@@ -1295,14 +1598,49 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
             {
                 const EOpenWillowShotKind ShotKind = Held->Firing.Kind;
                 const TCHAR* Kind = ShotKind == EOpenWillowShotKind::Rocket ? TEXT("Rocket") : ShotKind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
-                PassLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=%s"), *Why, Kind));
+                EquipDetail = FString::Printf(TEXT("%s; firing=%s"), *Why, Kind);
+                EquipPhase = 1;   // the burst, then the link
+                return;
             }
+            Next(EStep::Phaselock);
+            return;
         }
+        if (!TickBurst(W, Delta)) return;
+        if (bBurstOk) PassLink(TEXT("equip_gun"), EquipDetail + BurstNote);
+        else FailLink(TEXT("equip_gun"), EquipDetail + BurstNote);
         Next(EStep::Phaselock);
         break;
     }
 
     case EStep::Phaselock: {
+        // Unforced: Maya down (or held by the respawn) before the cast went out: the injured state refuses the cast (the skill's
+        // health-state constraint), so the link waits for her own second wind or respawn, at most DownRecoverWait in all, and
+        // then buys and casts. A fixture, named, with the seconds in the detail (down_wait=); nothing revives her.
+        if (bUnforced && PhaselockCasts == 0)
+        {
+            const int32 Recovery = WaitOwnRecovery(W, Delta, PhaselockDownWait, bPhaselockDownWaiting, TEXT("phaselock_enemy"));
+            if (Recovery == 1)
+            {
+                Fixture(TEXT("waited for Maya's own second wind or respawn before the cast"));
+                // A skills page left open would take no keys after the down: closed, and the buy starts again once she is Up.
+                APlayerController* PC = Cast<APlayerController>(W->GetController());
+                if (BuyPhase == 1 && W->GetSkills()->GetActionGrade() < 1)
+                {
+                    if (AOpenWillowMayaHUD* Hud = PC ? Cast<AOpenWillowMayaHUD>(PC->GetHUD()) : nullptr) Hud->CloseSkills();
+                    BuyPhase = 0;
+                }
+                return;
+            }
+            if (Recovery == 2) { StepTime = 0.f; bPhaselockPlaced = false; return; }   // she may stand at a station now: placed again below
+            if (Recovery == 3)
+            {
+                FailLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("Maya still down after %.0fs of waiting for her own second wind or respawn; no cast went out down_wait=%.1fs/%.0fs"),
+                    DownRecoverWait, PhaselockDownWait, DownRecoverWait) + BuyNote);
+                Next(EStep::Accept);
+                return;
+            }
+        }
+        const FString DownNote = bUnforced ? FString::Printf(TEXT(" down_wait=%.1fs/%.0fs"), PhaselockDownWait, DownRecoverWait) : FString();
         // Unforced: the point is bought on the skills page first; the step's clock then starts again.
         if (bUnforced && BuyPhase < 2) { if (TickBuyPhaselock(W, Delta)) StepTime = 0.f; return; }
         // Before any result, so that a failing path names it too.
@@ -1312,7 +1650,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         if (StepTime < 1.f || (!W->LastPhaselockTarget() && !Target && StepTime < PhaselockTargetWait)) return;
         if (!W->LastPhaselockTarget() || W->LastPhaselockCastAt() < RunTime - StepTime)
         {
-            if (!Target) { FailLink(TEXT("phaselock_enemy"), FString(TEXT("no live target to cast at")) + BuyNote); Next(EStep::Accept); return; }
+            if (!Target) { FailLink(TEXT("phaselock_enemy"), FString(TEXT("no live target to cast at")) + BuyNote + DownNote); Next(EStep::Accept); return; }
             // Unforced: Maya may have respawned far away; she is placed near the target first (the teleport fixture).
             if (bUnforced && !bPhaselockPlaced && FVector::Dist(W->GetActorLocation(), Target->GetActorLocation()) > PhaselockReach)
             {
@@ -1329,7 +1667,7 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
                 // are the result, not the refusal; a cast that never went out reports its reason.
                 FailLink(TEXT("phaselock_enemy"), (PhaselockCasts > 0
                     ? FString::Printf(TEXT("%d cast(s) went out and all missed: no preferred target (the log's \"Phaselock targeting\" line says why)"), PhaselockCasts)
-                    : FString::Printf(TEXT("no cast went out: %s"), *Reason)) + BuyNote);
+                    : FString::Printf(TEXT("no cast went out: %s"), *Reason)) + BuyNote + DownNote);
                 Next(EStep::Accept);
                 return;
             }
@@ -1340,9 +1678,9 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         }
         // The cast went out on an earlier tick.
         if (W->LastPhaselockHit() && W->LastPhaselockTarget() == Enemy && Enemy->IsPhaselocked())
-            PassLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("%s lifted, lock %.1fs left"), *Enemy->GetName(), W->PhaselockRemaining()) + BuyNote);
+            PassLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("%s lifted, lock %.1fs left"), *Enemy->GetName(), W->PhaselockRemaining()) + BuyNote + DownNote);
         else FailLink(TEXT("phaselock_enemy"), FString::Printf(TEXT("cast hit=%d blocked=%d target=%s"), W->LastPhaselockHit(), W->LastPhaselockBlocked(),
-            W->LastPhaselockTarget() ? *W->LastPhaselockTarget()->GetName() : TEXT("none")) + BuyNote);
+            W->LastPhaselockTarget() ? *W->LastPhaselockTarget()->GetName() : TEXT("none")) + BuyNote + DownNote);
         Next(EStep::Accept);
         break;
     }
@@ -1595,13 +1933,18 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         // the host counts the start as one use of the station's exit counter, UNVERIFIED that the game's load does).
         // The link judges the respawn it is about, the latest one, and the evidence is about the first respawn after the start, so it
         // also requires that this is the run's only respawn (an earlier bleed-out in the fight FAILs this half, named in the detail).
+        // Unforced, the range's enemies can down Maya and she can bleed out before this link (in the farm, say): the half is then
+        // judged on the run's first respawn, recorded when it happened (TickComponent, FirstRespawnExit), and the detail names both.
         int32 StartStation = INDEX_NONE, StartExit = INDEX_NONE, LastStation = INDEX_NONE, LastExit = INDEX_NONE, Picks = 0;
         FTransform StartAt;
         const bool bStart = Quest && Quest->StartUse(StartStation, StartExit, StartAt);
         const bool bLast = Quest && Quest->LastRespawnUse(LastStation, LastExit, Picks);
-        const bool bNextExit = bStart && bLast && Picks == 1 && (LastStation != StartStation || LastExit != StartExit);
-        const FString Exits = FString::Printf(TEXT("respawn %d of the run at %s exit %d, start at %s exit %d"), Picks, bLast ? *Quest->StationObject(LastStation) : TEXT("none"),
+        const bool bFirstKnown = bUnforced && Picks > 1 && FirstRespawnStation != INDEX_NONE;
+        const bool bNextExit = bStart && bLast && (Picks == 1 ? (LastStation != StartStation || LastExit != StartExit)
+            : bFirstKnown && (FirstRespawnStation != StartStation || FirstRespawnExit != StartExit));
+        FString Exits = FString::Printf(TEXT("respawn %d of the run at %s exit %d, start at %s exit %d"), Picks, bLast ? *Quest->StationObject(LastStation) : TEXT("none"),
             LastExit, bStart ? *Quest->StationObject(StartStation) : TEXT("none"), StartExit);
+        if (bFirstKnown) Exits += FString::Printf(TEXT(", the run's first respawn at %s exit %d"), *Quest->StationObject(FirstRespawnStation), FirstRespawnExit);
         if (bRespawned && bHold && bRestored && bNextExit && !W->IsDown() && W->GetHealth() == W->GetMaxHealth())
             PassLink(TEXT("bleed_out_respawn"), FString(bUnforced && bEnemyDown && !bLethalApplied ? TEXT("how=after_enemy_down: ") : TEXT(""))
                 + FString::Printf(TEXT("bled out with no kill and respawned %.1fs after going down, %s, %s, then at %s, %.0f uu from the death spot, %s, health %.0f/%.0f, mission status %d"),

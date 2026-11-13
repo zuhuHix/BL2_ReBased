@@ -184,4 +184,50 @@ private:
     bool EnemyCausedDown() const;
     // Places Maya Distance uu from Target on her side of it, looking at it (the teleport fixture).
     void PlaceNear(const class AOpenWillowCombatTarget* Target, float Distance);
+    // The nearest living range enemy to a point, and its distance (null and a huge distance when none).
+    class AOpenWillowEnemy* NearestLiveEnemyTo(const FVector& From, float& OutDistance) const;
+
+    // The pickup links' wait for a clear view line (a fixture, SLICE_GATE.md "Test shortcuts and fixtures"): before the use-key
+    // press the card's own sight test (OpenWillowPickupCard::InSight) must see the aimed drop on ViewLineSettle seconds of
+    // ticks in a row, waited for at most ViewLineWait. The time waited past the press-ready point goes in the link's detail
+    // (view_wait=, view_line=), and tools/check_slice_gate.py fails a link whose wait ran past its bound.
+    float ViewWait = 0.f, ViewClearFor = 0.f;
+    bool bViewBlocked = false;      // the wait ended at its bound with the line still blocked
+    // Unforced, pick_up_gun only: the side of the drop Maya stands on (toward the nearest living enemy, so it comes up behind
+    // her); zero keeps the side she comes from, as before.
+    FVector PickupAway = FVector::ZeroVector;
+
+    // A wait for Maya's own second wind or respawn inside a link (unforced): 0 she is Up, 1 waiting, 2 Up again after a wait
+    // (this tick), 3 still down after DownRecoverWait. Waited adds the seconds; What names the link in the log.
+    int32 WaitOwnRecovery(class AOpenWillowWalker* W, float Delta, float& Waited, bool& bWaiting, const TCHAR* What);
+    float PhaselockDownWait = 0.f;  // unforced: seconds the Phaselock link waited for Maya's own recovery (down_wait=)
+    // Unforced, the pickup links: the same wait before the press, then Maya placed by the drop again on the side chosen first.
+    float PickupDownWait = 0.f;
+    bool bPickupDownWaiting = false, bPickupRestart = false;
+    FVector PickupLastAway = FVector::ZeroVector;
+    FString PickupDownNote() const;   // " down_wait=<s>s/<bound>s" in the unforced variant, else ""
+    // The run's first respawn (station and exit index), recorded on the tick its pick count reads 1.
+    int32 FirstRespawnStation = INDEX_NONE, FirstRespawnExit = INDEX_NONE;
+    bool bPhaselockDownWaiting = false;
+
+    // Link 8's burst: after the draw, BurstShots shots of the looted gun through the fire key's handlers (TestFireInput) at the
+    // range dummy farthest from the living enemies, Maya standing on the enemies' side of it so the shots fly away from them.
+    // The shot times, the gun's firing block and the longest frame go in the detail for the checker. Returns true when done.
+    bool TickBurst(class AOpenWillowWalker* W, float Delta);
+    int32 EquipPhase = 0;           // 0 equip and draw, 1 the burst
+    FString EquipDetail;            // the equip's detail, "...; firing=<kind>"
+    int32 BurstPhase = 0;           // 0 choose and place, 1 settle and fill the magazine, 2 fire, 3 wait for Maya's own recovery
+    float BurstClock = 0.f, BurstFrameMax = 0.f, BurstClearance = 0.f, BurstDownWait = 0.f;
+    bool bBurstDownWaiting = false, bBurstHeld = false, bBurstOk = false;
+    int32 BurstWant = 0, BurstShotsBefore = 0, BurstPelletsBefore = 0, BurstLaunchesBefore = 0;
+    TArray<float> BurstShotTimes;
+    TMap<TObjectKey<AActor>, float> BurstEnemyHealth;   // living enemies' health fraction before the burst
+    FString BurstNote;              // what the equip link's detail adds
+    UPROPERTY() TObjectPtr<class AOpenWillowCombatTarget> BurstTarget;
+    // Where Maya stood and looked before the burst moved her: she is put back there when it ends, so the Phaselock link starts
+    // from the place and view it had before the burst existed.
+    FVector BurstReturnAt = FVector::ZeroVector;
+    FRotator BurstReturnView = FRotator::ZeroRotator;
+    bool bBurstMoved = false;
+    void EndBurst(class AOpenWillowWalker* W, bool bOk, const FString& Note);
 };

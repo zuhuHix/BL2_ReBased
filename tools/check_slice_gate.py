@@ -18,10 +18,16 @@ something the host lacks: it is owned by slice-gate and counted on its own line.
 A PASS on `equip_gun` needs `firing=Trace`, `firing=Bullet` or `firing=Rocket` in its detail: the kind of shot the host will
 play for the held gun, read from its firing block. Without the token (a log from before 2026-11-13, or `firing=none`) the
 PASS becomes a FAIL. This says the host loaded a firing block for the gun, not that the block matches the real game.
+Since 2026-11-13 (lane U) the same PASS also needs the burst the driver fires after the draw (`burst_*` tokens): every shot it
+asked for, of the named kind, each interval between two shots within the one its firing block gives (burst_problem says how).
+
+A PASS on either pickup link needs `view_wait=<s>s/<bound>s view_line=clear`: the driver's wait for a clear view line before
+the use-key press (a test fixture) stayed within its bound and ended with the line clear.
 
 The unforced variant (`tools/test_slice_gate.ps1 -Unforced`, `-owslicegateunforced`) marks its start line `unforced=1`. There,
 and only there, every link that names a fixture standing in for play (FORCING_FIXTURES) is a FAIL whatever the host said,
-a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail, and every
+a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail, a PASS on a
+link that waits for Maya's own recovery inside it (DOWN_WAIT_LINKS) needs `down_wait=<s>s/<bound>s` within its bound, and every
 NOT_AVAILABLE is a FAIL, so the run exits 0 only with all 14 links passed. The other variants are graded as before. These are host grading rules, UNVERIFIED against the real game.
 """
 import argparse
@@ -159,13 +165,98 @@ FIRING_KINDS = ('Trace', 'Bullet', 'Rocket')
 
 
 def equip_link_problem(row):
-    """Why a PASS on the equip link cannot stand, or None: the held gun's firing kind must be named and loaded."""
+    """Why a PASS on the equip link cannot stand, or None: the held gun's firing kind must be named and loaded, and the burst
+    after the draw must have fired as its firing block says."""
     match = FIRING_KIND.search(row['detail'])
     if not match:
         return 'no firing=<kind> in the detail (the firing of the held gun was not graded)'
     kind = match['kind'].rstrip(';,.:')
     if kind not in FIRING_KINDS:
         return f'firing={kind}: the held gun has no firing block the host loaded, so it fires a plain trace'
+    return burst_problem(row['detail'], kind)
+
+
+# Link 8's burst (OpenWillowSliceGate.cpp, TickBurst): `burst_<key>=<value>` tokens. The shots go through the fire key's handlers,
+# so the walker's trigger paces them: it fires on the first tick at or after a shot is due and counts the next interval from that
+# tick, and the driver reads the shot count at the same point of every frame. Each measured interval is therefore the block's
+# interval plus at most one frame: within [due - BURST_TOLERANCE, due x spin + burst_frame_max + BURST_TOLERANCE], where due is
+# burst_skill_scale / burst_rate, spin is burst_spin (1 for a gun that does not spin up; a spinning gun starts that many times
+# slower), and after every burst_count-th shot of a burst gun due is the burst gap (burst_gap). BURST_TOLERANCE covers the four
+# decimals of the log and the float clock the walker keeps (about 3e-5 s at the run's clock); it is far below one frame.
+BURST_TOKEN = re.compile(r'(?<!\S)burst_(?P<key>[a-z_]+)=(?P<value>\S+)')
+BURST_KEYS = ('shots', 'kind', 'launched', 'rate', 'count', 'gap', 'spin', 'skill_scale', 'intervals', 'frame_max')
+BURST_TOLERANCE = 0.002
+
+
+def burst_problem(detail, kind):
+    """Why the burst after the draw does not show the held gun firing as its block says, or None."""
+    tokens = {m['key']: m['value'].rstrip(';,') for m in BURST_TOKEN.finditer(detail)}
+    missing = [key for key in BURST_KEYS if key not in tokens]
+    if missing:
+        return 'no burst after the draw (missing ' + ', '.join(f'burst_{key}' for key in missing) + ')'
+    try:
+        shots, want = (int(part) for part in tokens['shots'].split('/'))
+        launches, pellets = (int(part) for part in tokens['launched'].split('/'))
+        rate, gap, spin = float(tokens['rate']), float(tokens['gap']), max(1.0, float(tokens['spin']))
+        count, scale, frame = int(tokens['count']), float(tokens['skill_scale']), float(tokens['frame_max'])
+        intervals = [] if tokens['intervals'] == 'none' else [float(step) for step in tokens['intervals'].split(',')]
+    except ValueError:
+        return 'an unreadable burst token'
+    if want < 1 or shots != want:
+        return f'the burst fired {shots} of the {want} shot(s) it asked for'
+    if tokens['kind'] != kind:
+        return f"burst_kind={tokens['kind']} is not the gun's firing={kind}"
+    if pellets < shots:
+        return f'{pellets} pellet(s) for {shots} shot(s)'
+    if kind == 'Trace' and launches:
+        return f'a Trace gun launched {launches} projectile(s)'
+    if kind != 'Trace' and launches != pellets:
+        return f'a {kind} gun launched {launches} projectile(s) for {pellets} pellet(s)'
+    if rate <= 0:
+        return f"burst_rate={tokens['rate']}: no fire rate to grade against"
+    if len(intervals) != shots - 1:
+        return f'{len(intervals)} interval(s) for {shots} shot(s)'
+    for index, step in enumerate(intervals, 1):
+        at_gap = count > 1 and index % count == 0
+        due = gap if at_gap else scale / rate
+        low, high = due - BURST_TOLERANCE, due * spin + frame + BURST_TOLERANCE
+        if not low <= step <= high:
+            return (f"interval {index} of the burst was {step:.4f} s, outside {low:.4f} to {high:.4f} s (the block's "
+                    f"{'burst gap' if at_gap else 'fire interval'} plus at most one frame)")
+    return None
+
+
+# The pickup links' wait for a clear view line before the use-key press (a test fixture, OpenWillowSliceGate.cpp RunAimedPickup).
+VIEW_WAIT = re.compile(r'(?<!\S)view_wait=(?P<wait>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
+VIEW_LINE = re.compile(r'(?<!\S)view_line=(?P<line>[a-z]+)')
+
+
+def view_wait_problem(detail):
+    """Why a pickup PASS cannot stand on its wait for a clear view line, or None."""
+    match = VIEW_WAIT.search(detail)
+    if not match:
+        return 'no view_wait=<s>s/<bound>s in the detail (the wait for a clear view line was not reported)'
+    if float(match['wait']) > float(match['bound']):
+        return f"the wait for a clear view line ran past its bound ({match['wait']} s of {match['bound']} s)"
+    line = VIEW_LINE.search(detail)
+    if not line or line['line'] != 'clear':
+        return 'the view line to the aimed drop was not clear at the press' + (f" (view_line={line['line']})" if line else ' (no view_line=)')
+    return None
+
+
+# Unforced: the links that wait inside the link for Maya's own second wind or respawn (the pickups before the press, the burst,
+# the Phaselock before the cast), each within its bound.
+DOWN_WAIT_LINKS = ('pick_up_gun', 'pick_up_aimed_not_nearest', 'equip_gun', 'phaselock_enemy')
+DOWN_WAIT = re.compile(r'(?<!\S)down_wait=(?P<wait>\d+(?:\.\d+)?)s/(?P<bound>\d+(?:\.\d+)?)s(?=[\s:;,]|$)')
+
+
+def down_wait_problem(detail):
+    """Why an unforced PASS of a DOWN_WAIT_LINKS link cannot stand on its wait for Maya's own recovery, or None."""
+    match = DOWN_WAIT.search(detail)
+    if not match:
+        return "no down_wait=<s>s/<bound>s in the detail (the wait for Maya's own recovery was not reported)"
+    if float(match['wait']) > float(match['bound']):
+        return f"the wait for Maya's own recovery ran past its bound ({match['wait']} s of {match['bound']} s)"
     return None
 
 
@@ -208,7 +299,7 @@ def cross_check(rows, errors, range_mode):
     capability was there."""
     for row in rows:
         if row['name'] in CARD_LINKS and row['result'] == 'PASS':
-            why = card_link_problem(row)
+            why = card_link_problem(row) or view_wait_problem(row['detail'])
             if why:
                 errors.append(f'link {row["name"]}: PASS overruled, {why}')
                 row['result'] = 'FAIL'
@@ -320,6 +411,8 @@ def cross_check_unforced(rows, errors, range_mode):
             why = f'forced in an unforced run ({"; ".join(row["forced"])})'
         elif row['result'] == 'PASS' and token and not re.search(rf'(?<!\S){re.escape(token)}\b', row['detail']):
             why = f'no sign that it got there unforced (no {token} in the detail)'
+        elif row['result'] == 'PASS' and row['name'] in DOWN_WAIT_LINKS and down_wait_problem(row['detail']):
+            why = down_wait_problem(row['detail'])
         elif row['result'] == 'NOT_AVAILABLE' and range_mode and row['name'] in ('loot_drop_on_kill', 'go_down'):
             why = 'the range was there, so its enemies can ' + ('drop a gun' if row['name'] == 'loot_drop_on_kill' else 'down her')
         elif row['result'] == 'NOT_AVAILABLE':
