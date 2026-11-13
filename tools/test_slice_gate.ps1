@@ -119,6 +119,7 @@ try {
         $used = if (!$fixture) { 'not named in the log' }
             elseif ($fixture.Matches[0].Groups[1].Value -match '^shield stock_shield_\S+ equipped from the gear manifest') { 'the generated card (data-derived, UNVERIFIED in game)' }
             elseif ($fixture.Matches[0].Groups[1].Value -match '^shield \S+ equipped from the gear manifest') { 'the observed gear manifest' }
+            elseif ($fixture.Matches[0].Groups[1].Value -match '^level rule overridden by the test: shield stock_shield_') { 'the generated card, under the level override (Maya below the card''s level)' }
             elseif ($fixture.Matches[0].Groups[1].Value -match '^level rule overridden') { 'the observed gear manifest, under the level override' }
             elseif ($fixture.Matches[0].Groups[1].Value -match '^host stand-in shield') { 'the health-sized pool (not stock data)' }
             else { 'not recognised: ' + $fixture.Matches[0].Groups[1].Value }

@@ -332,8 +332,8 @@ stock-shield path has run only under that override.
 card to `local/slice/stock_shield_gear.json`. It is one seeded roll (seed 1, the gun slice's seed) of
 `GD_ItemGrades.Shields.ItemGrade_Gear_Shield_Standard_01_Common`, with capacity, recharge delay and recharge rate evaluated from
 the installed data (decision `docs/decisions/2026-11/2026-11-13-02-the-slice-gate-s-shield-run-equips-one-generated-stock.md`). When that file exists, `test_slice_gate.ps1 -Shield` passes it
-as `-owgear=`. The card is level 8, so `EquipGearById` takes it under the normal level rule and the fixture reads
-`shield stock_shield_... equipped from the gear manifest`; the level override is not reached. The card's numbers are
+as `-owgear=`. The card is level 8, so `EquipGearById` should take it under the normal level rule, with the fixture reading
+`shield stock_shield_... equipped from the gear manifest` and no level override (not yet run in the engine). The card's numbers are
 **data-derived and UNVERIFIED in game**. A pass with it says the host equipped and used that card, not that the fight matches
 the game. `-owgear=` replaces the observed manifest for the run. The gate takes only shields from it; the observed class mods
 and relics only filled backpack rows, so the run starts with fewer backpack rows in use (the backpack holds 39 here). Without

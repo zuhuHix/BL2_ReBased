@@ -54,10 +54,10 @@ entries and one message per group left out.
 
 - The slice gate's `-Shield` run (`slice_gate_shield`, desktop only): since 2026-11-13, when
   `local/slice/stock_shield_gear.json` exists (`python tools/prepare_stock_shield.py --reader <abs reader> --game <install>`),
-  the launcher passes it as `-owgear=`, so the run equips that one generated level-8 card under the normal level rule, in place of
-  the observed manifest. Its numbers are data-derived and UNVERIFIED in game. The launcher prints `Shield source offered:` and,
-  after the run, `Shield source used:` (generated card, observed manifest, observed manifest under the level override, or the
-  health-sized pool). A pass with the generated card says the host equipped and used that card; it says nothing about parity.
+  the launcher passes it as `-owgear=`, so the run should equip that one generated level-8 card under the normal level rule, in
+  place of the observed manifest (not yet run in the engine). Its numbers are data-derived and UNVERIFIED in game. The launcher prints `Shield source offered:` and,
+  after the run, `Shield source used:` (generated card, generated card or observed manifest under the level override, observed
+  manifest, or the health-sized pool). A pass with the generated card says the host equipped and used that card; it says nothing about parity.
 
 ## When combat changes
 - `python tools/verify_combat_pawn.py --self-test`, and `--vm <json>` on a fresh `--combat-run`.

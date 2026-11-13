@@ -6,28 +6,36 @@ balance under rules read from script and from the native notes. Its numbers are 
 "the shield Maya would have": the game rolls its own parts, with its own random sequence.
 
 What is read (tagged properties only; no offsets):
-- The balance's BaseDefinition chain, its InventoryDefinition (a ShieldDefinition) and Manufacturers.
+- The balance's BaseDefinition chain, its InventoryDefinition (a ShieldDefinition) and Manufacturers. The manufacturer is the
+  first Manufacturers entry; the game's pick among several entries is not modelled (UNVERIFIED).
 - Part lists: the definition's <Slot>Parts (ItemPartListDefinition) and then each balance's PartListCollection
   (<Slot>PartData), merged as weapons merge (weapon_recipe.merge_slots; UNVERIFIED for items). Part weights are read with
-  weapon_recipe.entry_weight and the game-stage window from each list's ConsolidatedAttributeInitData (UNVERIFIED rules).
+  weapon_recipe.entry_weight; the game-stage window from each list's ConsolidatedAttributeInitData is applied with the item
+  level as the game stage (UNVERIFIED).
 - The roll: weapon_recipe.pick per slot in slot order (Alpha .. Material), drawing from weapon_recipe.CrtRand(seed).
 - Names: the definition's then each chosen part's PrefixList / TitleList through weapon_recipe.best_name_part.
 
 How the three numbers are formed (script WillowItem.InitializeInternal and ApplyAllExternalAttributeEffects, read with
 research/script_disasm.py; the slot natives are the ones the weapon rules use, docs/verification/NATIVE_ATTRIBUTES.md):
 - Each pool attribute (D_Attributes.ShieldResourcePool.ShieldMaxValue, ...OnIdleRegenerationDelay, ...OnIdleRegenerationRate)
-  starts at the shield pool's base, 0 (D_Resourcepools.PlayerPools.ShieldPool has no base maximum, delay or rate).
+  starts at the shield pool's base, taken as 0: D_Resourcepools.PlayerPools.ShieldPool names no base maximum, delay or rate
+  (read from data; UNVERIFIED in game).
 - The definition's ExternalAttributeEffects, then every part's (name parts included), each evaluated at the item level
   (ShieldItemLevel reads ExpLevel) with weapon_recipe.attribute_value.
-- Attribute slots: the definition's AttributeSlotUpgrades, then each part's in slot order, then the name parts'. An entry adds
-  its GradeIncrease; the first activating entry also adds the base grade (the definition's AttributeSlotBaseGrade, class
-  default 1, rounded half up); max then min clamp (weapon_stats.slot_grade). Value = weapon_stats.slot_value. Only activated,
-  external slots that are not bRunEffectsAsSkill reach the owner's pool (ApplyExternalSlotEffectModifiers).
+- Attribute slots: the definition's AttributeSlotUpgrades, then each part's in slot order, then the name parts' (the script
+  runs a second slot pass for the name parts, InitializeAttributeSlotsForNameParts; weapon_stats does not count them). An
+  entry adds its GradeIncrease; the first activating entry also adds the base grade (the definition's AttributeSlotBaseGrade,
+  class default 1, rounded half up); max then min clamp (weapon_stats.slot_grade). At most AttributeSlotMaxActivated slots
+  activate (class default 19; the script passes GetAttributeSlotMaxActivated to the slot natives). Every AttributeSlotEffects
+  entry of an activated slot applies, as in weapon_stats. Value = weapon_stats.slot_value. Only external slots that are not
+  bRunEffectsAsSkill reach the owner's pool (ApplyExternalSlotEffectModifiers).
 - The stack: weapon_stats.combine, (base + PreAdd) * (1 + up) / (1 + down) + PostAdd in single precision.
 
-Every rule above is UNVERIFIED in game for shields. The card's values are not rounded the way the game's card prints them (the
-shield card presentation was not read). Keep or refuse, never degrade: an existing output that differs is not written over
-unless --replace says so.
+Refusals (nothing is written): an object that did not decode, any object the tool looked up that no package holds (every
+lookup feeds the roll or the range over all combinations, so none is unrelated), a stat of 0 or less or not finite, more than
+MAX_COMBINATIONS combinations. The range check is a consistency check, not an oracle: the roll is one of the combinations it
+enumerates. Values are written to three decimals, not as the game's card rounds them (the shield card presentation was not
+read). Keep or refuse, never degrade: an existing output that differs is not written over unless --replace says so.
 """
 import argparse
 import itertools
@@ -57,20 +65,26 @@ ITEM_SLOTS = pv.ITEM_SLOTS
 POOL = 'D_Attributes.ShieldResourcePool.'
 STATS = [('Capacity', POOL + 'ShieldMaxValue'), ('Recharge Rate', POOL + 'ShieldOnIdleRegenerationRate'),
          ('Recharge Delay', POOL + 'ShieldOnIdleRegenerationDelay')]
-POOL_BASE = 0.0  # the shield pool's base for all three
+POOL_BASE = 0.0  # the shield pool's base for all three (ShieldPool names none; UNVERIFIED in game)
 MAX_SLOTS_DEFAULT = 19  # AttributeSlotMaxActivated class default (NATIVE_WEAPON_RULES.md section 1)
 MAX_COMBINATIONS = 200000
 STATUS = 'DATA-DERIVED, UNVERIFIED IN GAME'
 RULES = [
     'part lists merged as weapons merge (UNVERIFIED for items)',
     'part weights and pick as read for weapons from native code (UNVERIFIED)',
+    'the part lists\' game-stage windows use the item level as the game stage (UNVERIFIED)',
+    'the manufacturer is the balance\'s first Manufacturers entry; no weighted pick (UNVERIFIED)',
     'the game random sequence is not reproduced; seeded CrtRand',
     'slot grade and value as read for weapons (WillowInventory slot natives; UNVERIFIED in game)',
+    'name parts\' slot upgrades count (script InitializeAttributeSlotsForNameParts; UNVERIFIED in game)',
+    'at most AttributeSlotMaxActivated slots activate, class default 19 (UNVERIFIED in game)',
+    'every slot effect entry of an activated slot applies, as in weapon_stats (UNVERIFIED in game)',
     'external effects and external slots reach the shield pool (script WillowItem.ApplyAllExternalAttributeEffects)',
+    'the shield pool\'s base is 0 for capacity, delay and rate (read from data; UNVERIFIED in game)',
     'modifier stack as read for weapons (UNVERIFIED in game)',
     'name choice as read for weapons (UNVERIFIED for items)',
     'item level = the requested level; how the game picks a level is not modelled',
-    'values not rounded as the game card prints them (presentation not read)',
+    'values written to three decimals, not as the game card rounds them (presentation not read)',
 ]
 
 
@@ -85,6 +99,8 @@ def short(path):
 def weighted_list(chain, source, stage, manufacturer):
     """({slot: [(part, weight)]}, mode) of one part list; weights by weapon_recipe.entry_weight, stage window applied.
 
+    A copy of prepare_vendors.item_slot_parts that keeps each part's weight (that function keeps only the part, for the price)
+    and weighs for one manufacturer. tests/prepare_stock_shield_test.py requires both to give the same parts in the same order.
     `source` is a definition's ItemPartListDefinition (WeightedParts; the caller names the slot, returned under None) or a
     balance's ItemPartListCollectionDefinition (<Slot>PartData). A weight that needs runtime state is None.
     """
@@ -115,7 +131,10 @@ def weighted_list(chain, source, stage, manufacturer):
 
 
 def candidates(chain, balance, stage):
-    """{steps, definition, manufacturer, slots: {slot: {part: weight}}} for one shield balance."""
+    """{steps, definition, manufacturer, slots: {slot: {part: weight}}} for one shield balance.
+
+    A copy of prepare_vendors.item_parts that keeps the weights (see weighted_list); the drift test pins the two together.
+    """
     steps = pv.base_chain(chain, balance)
     definition = next((chain.props(b).get('InventoryDefinition') for b in steps[::-1]
                        if chain.props(b).get('InventoryDefinition')), None)
@@ -159,7 +178,11 @@ def roll(cands, seed):
 
 
 def name_parts(chain, definition, parts, manufacturer, level):
-    """(prefix, title): the definition's lists first, then each part's in slot order; a later list wins on >= priority."""
+    """(prefix, title): the definition's lists first, then each part's in slot order; a later list wins on >= priority.
+
+    A copy of weapon_recipe.choose_name_parts over the item slots (that function walks the weapon slots and resolves a weapon
+    damage type, which a shield has none of). The drift test pins the two together.
+    """
     chosen = []
     for key in ('PrefixList', 'TitleList'):
         current = weapon_recipe.best_name_part(chain, chain.props(definition).get(key), level, manufacturer)
@@ -224,9 +247,6 @@ def stats(chain, definition, parts, names, level):
         for effect in chain.props(holder).get('ExternalAttributeEffects') or []:
             add(effect.get('AttributeToModify'), effect.get('ModifierType') or 'MT_Scale', ev.value(effect.get('BaseModifierValue')))
     dprops = chain.props(definition)
-    effects = {}
-    for effect in dprops.get('AttributeSlotEffects') or []:
-        effects.setdefault(effect.get('SlotName'), effect)
     base_grade = ev.value(dprops['AttributeSlotBaseGrade']) if dprops.get('AttributeSlotBaseGrade') else 1.0
     limit = dprops.get('AttributeSlotMaxActivated')
     limit = MAX_SLOTS_DEFAULT if not isinstance(limit, int) or not 1 <= limit <= 19 else limit
@@ -238,9 +258,9 @@ def stats(chain, definition, parts, names, level):
             if upgrade.get('bActivateSlot') and name not in active and len(active) < limit:
                 active.append(name)
     reached = []
-    for name in active:
-        effect = effects.get(name)
-        if not effect or not effect.get('AttributeToModify'):
+    for effect in dprops.get('AttributeSlotEffects') or []:  # every entry of an activated slot, as weapon_stats applies them
+        name = effect.get('SlotName')
+        if name not in active or not effect.get('AttributeToModify'):
             continue
         if not effect.get('bExternalSlot') or effect.get('bRunEffectsAsSkill'):
             continue  # internal slots land on the item itself; skill-run slots go through the skill machinery
@@ -250,6 +270,11 @@ def stats(chain, definition, parts, names, level):
         add(effect['AttributeToModify'], effect.get('ModifierType') or 'MT_Scale', value)
         reached.append({'slot': name, 'grade': grade})
     out = {label: weapon_stats.combine(POOL_BASE, mods.get(attribute, {})) for label, attribute in STATS}
+    for label, value in out.items():
+        if value is None or not math.isfinite(value) or value <= 0.0:
+            # A capacity of 0 equips as no shield; a rate or delay of 0 or less is ignored by the host's ReadShieldStats,
+            # which would then use its invented stand-ins while the card is reported as the source.
+            raise RefusedError(f'{label} evaluates to {value} for parts {sorted(parts.values())}; it must be above 0')
     return out, reached
 
 
@@ -280,16 +305,29 @@ def position(value, span):
     return 0.0 if high == low else (value - low) / (high - low)
 
 
+def check_lookups(chain):
+    """Refuse when an object did not decode or a looked-up object is in no package (pv.Chain reads both as {})."""
+    failed = sorted(chain.failed)
+    missing = sorted(p for p in chain.missing if p)
+    if failed or missing:
+        raise RefusedError(f'objects that did not decode: {failed}; objects in no package: {missing}')
+
+
 def card(chain, balance, level, seed):
-    """The gear-manifest document with one shield item, and a summary for the console."""
-    cands = candidates(chain, balance, level)
-    parts = roll(cands, seed)
-    prefix, title = name_parts(chain, cands['definition'], parts, cands['manufacturer'], level)
-    values, reached = stats(chain, cands['definition'], parts, (prefix, title), level)
-    span, count = stat_range(chain, cands, level)
-    for label, value in values.items():
+    """The gear-manifest document with one shield item."""
+    try:
+        cands = candidates(chain, balance, level)
+        parts = roll(cands, seed)
+        prefix, title = name_parts(chain, cands['definition'], parts, cands['manufacturer'], level)
+        values, reached = stats(chain, cands['definition'], parts, (prefix, title), level)
+        span, count = stat_range(chain, cands, level)
+    except RefusedError:
+        check_lookups(chain)  # an object read as {} is the likelier cause; name it first
+        raise
+    check_lookups(chain)
+    for label, value in values.items():  # a consistency check: the roll is one of the enumerated combinations
         if not span[label][0] <= value <= span[label][1]:
-            raise RefusedError(f'{label} {value} lies outside its own range {span[label]}')
+            raise RefusedError(f'{label} {value} lies outside its own range {span[label]} (the tool disagrees with itself)')
     words = [chain.props(n).get('PartName') for n in (prefix, title) if n]
     name = ' '.join(w for w in words if w) or chain.props(cands['definition']).get('ItemName')
     if not name:
@@ -316,7 +354,9 @@ def card(chain, balance, level, seed):
             'slots_reaching_the_pool': reached,
             'combinations': count,
             'range': span,
+            'range_check': 'consistency only: the roll is one of the enumerated combinations',
             'position_in_range': {label: round(position(values[label], span[label]), 4) for label, _ in STATS},
+            'values': 'written to three decimals, not as the game card rounds them',
             'rules': RULES,
         },
     }
@@ -338,9 +378,22 @@ def replace_problem(out, document, replace):
 
 
 def write(out, document):
+    """Through a temporary file next to `out`; a failure part-way leaves `out` as it was and removes the temporary file."""
     temporary = out.with_name(out.name + '.tmp')
-    temporary.write_text(json.dumps(document, indent=1) + '\n', encoding='utf-8')
-    temporary.replace(out)
+    try:
+        temporary.write_text(json.dumps(document, indent=1) + '\n', encoding='utf-8')
+        temporary.replace(out)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def open_chain(reader, game):
+    """The package lookups over Startup.upk (tests replace this)."""
+    from prepare_slice_world import Reader
+    SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SCHEMA_PATH.write_text('\n'.join(pv.SCHEMA_EXTRA + SCHEMA_LINES + SCHEMA_EXTRA) + '\n', encoding='utf-8')
+    return pv.Chain(Reader(reader, game, str(SCHEMA_PATH)), ['Startup'])
 
 
 def main(argv=None):
@@ -361,10 +414,7 @@ def main(argv=None):
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
-    from prepare_slice_world import Reader
-    SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SCHEMA_PATH.write_text('\n'.join(pv.SCHEMA_EXTRA + SCHEMA_LINES + SCHEMA_EXTRA) + '\n', encoding='utf-8')
-    chain = pv.Chain(Reader(args.reader, args.game, str(SCHEMA_PATH)), ['Startup'])
+    chain = open_chain(args.reader, args.game)
     try:
         document = card(chain, args.balance, args.level, args.seed)
     except RefusedError as error:
@@ -380,7 +430,7 @@ def main(argv=None):
     where = ', '.join(f'{k} {v:.2f}' for k, v in item['provenance']['position_in_range'].items())
     print(f'wrote {out}: shield {item["id"]} (level {args.level}, seed {args.seed}), {STATUS}')
     print(f'  {item["provenance"]["combinations"]} drawable part combinations; the roll sits at these fractions of each '
-          f'range: {where}')
+          f'range (a consistency check, not an oracle): {where}')
     return 0
 
 
