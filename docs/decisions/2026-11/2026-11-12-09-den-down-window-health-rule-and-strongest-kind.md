@@ -11,10 +11,18 @@ followed within 150 s.
   re-placement until a health value has been read since the last one.
 - `dp_replace` takes the strongest kind in reach first, from the pawn's `AIClass` field (`CharClass_PrimalBeastAdult`, then
   `CharClass_PrimalBeast`, `CharClass_PrimalBeast_Ranged`, any other kind, and `CharClass_PrimalBeastBaby` last); within that kind,
-  the first placement's enemy, then the nearest. The first placement's enemy is placed at bearing 180, any other on her side.
+  the first placement's enemy, then the nearest. Only pawns within 3500 (`dp_begin`'s pack radius) of her or of the first placement's
+  enemy are ranked, so an adult of another group or across a ledge does not outrank the pack she fought. The first placement's enemy
+  is placed at bearing 180, any other on her side; a candidate on her own spot (under 1 uu apart horizontally) is passed over.
+- A re-placement gets the window's end (wall-clock seconds since 1970, the clock both sides read on this machine). A call at or after
+  it moves nothing and answers `late`, checked again right before the placement; its reply wait and the loops' pauses are clamped to
+  the time left, so `-DownSeconds` bounds when a placement runs, not only when it is sent.
+- The first placement still goes to the nearest enemy (`dp_begin`, through `cb_enemies`, whose getters are called on each pawn: the
+  inherited path named in `docs/TOOLING.md`, "What the fields-only rule binds").
 
-Unchanged: at most four re-placements, none after a down, and every bound and driver-lost rule of #245. What is called on what:
-`GetHealth` and `GetShieldStrength` on the player's own pawn; field reads only on each scanned pawn; `cb_place` sets the player's own
+Unchanged: at most four re-placements, none after a down, and every bound and driver-lost rule of #245. What is called on what in a
+re-placement: `GetHealth` and `GetShieldStrength` on the player's own pawn; field reads only on each scanned pawn (the fields-only rule
+binds `dp_replace` and the watch, not the older probe paths); `cb_place` sets the player's own
 pawn's `Location`, calls `SetPhysics` on it and turns the player's own controller (`ClientSetRotation`).
 
 Verified: the synthetic tests (stand-ins, no game), each new one failing on the old code. `UNVERIFIED`: whether the new rule brings a
