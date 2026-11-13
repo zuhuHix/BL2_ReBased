@@ -145,7 +145,7 @@ hud_shield | 1 | CMakeLists.txt src/ third_party/ host/ue5/OpenWillow/ tools/ue_
 #pass hud_shield | shield check passed | The game exited with
 
 
-# data: local/slice/ambient_world.json (prepare_ambient_world.py) and the seeded ambient NPC assets; no build step
+# data: a capture-based local/slice/ambient_world.json (prepare_ambient_world.py with the real-game capture; a census-only one fails unless -CensusWorld) and the seeded ambient NPC assets; no build step
 ambient | 2 | CMakeLists.txt src/ third_party/ host/ue5/OpenWillow/ tools/ue_lock.ps1 tools/test_ambient.ps1 tools/prepare_ambient_world.py tools/seed_ambient_npc_assets.ps1 tools/ambient_npc_assets.py tools/ambient_npc_attach_editor.py tools/slice_npc_editor.py tools/collision_geometry.py tools/installed_content.py tools/prepare_character_anims.py tools/prepare_character_pose.py tools/prepare_level.py tools/prepare_sanctuary_pillar.py tools/slice_npc_assets.py tools/repo_paths.py tools/filter_gestalt_gltf.py tools/weapon_recipe.py tools/editor_inputs.py tools/checkout_guard.ps1 tools/gestalt-arrays.schema tools/level-arrays.schema | powershell -NoProfile -ExecutionPolicy Bypass -File tools/test_ambient.ps1; exit $LASTEXITCODE
 #pass ambient | OWAMBIENT SUMMARY result=PASS  | OWAMBIENT SUMMARY result=FAIL
 

@@ -512,6 +512,9 @@ def views_for(spawns, nodes):
 
 CAPTURE_HELP = ('the capture is the real-game ambient capture (tools/real_game/scripts/ambient_npcs.py: amb_dump, amb_sample, amb_compose); it is '
                 'game-derived, stays under ignored local/, and tools/private_sync.ps1 moves it between machines')
+# The whole capture: leaving out --compose drops the worn pieces, and --stops-from the citizens added at the round-1 perches.
+CAPTURE_CALL = ('python tools/prepare_ambient_world.py --observed <amb_dump> --samples <amb_sample> --compose <amb_compose> '
+                '--stops-from <earlier amb_dump>')
 
 
 def look(manifest):
@@ -532,23 +535,39 @@ def describe(manifest):
 def replace_problem(out, result, replace_observed):
     """Why this run must not write over `out` ("" when it may): keep or refuse, never degrade (2026-11-12, lane R3). An existing
     capture-based manifest is not replaced by one without the capture, or with fewer worn pieces in total, unless --replace-observed says
-    the census-only world is wanted. An existing file that cannot be read is not overwritten either: what it held is unknown."""
+    the smaller world is meant. An existing file that cannot be read is not overwritten either: what it held is unknown. result None:
+    a run without --observed, checked before it builds anything (its manifest is census-only whatever it holds)."""
     if replace_observed or not out.exists():
         return ''
     try:
         old = json.loads(out.read_text(encoding='utf-8'))
         old_line, old_capture = describe(old)
-    except (OSError, ValueError) as error:
-        return (f'{out} exists but cannot be read as an ambient manifest ({error}), so it is not overwritten. Look at it, then pass '
+    except (OSError, ValueError, TypeError) as error:
+        return (f'{out} exists but cannot be read as an ambient manifest ({error!r}), so it is not overwritten. Look at it, then pass '
                 f'--replace-observed to write over it, or write elsewhere with --output')
-    new_line, _ = describe(result)
-    old_worn, new_worn = look(old)[2], look(result)[2]
-    if old_capture and (result.get('observed') is not True or new_worn < old_worn):
+    if result is None:
+        new_line, new_observed, new_worn = 'a census-only world (no --observed)', False, 0
+    else:
+        new_line, new_observed, new_worn = describe(result)[0], result.get('observed') is True, look(result)[2]
+    if old_capture and (not new_observed or new_worn < look(old)[2]):
         return (f'{out} holds a capture-based manifest ({old_line}); this run would write {new_line}, which loses the captured citizens or '
-                f'their worn pieces. Nothing was written. Either pass the capture (--observed <amb_dump> --samples <amb_sample> '
-                f'[--compose <amb_compose> --stops-from <amb_dump>]; {CAPTURE_HELP}), or pass --replace-observed if the census-only world is '
-                f'wanted, or write elsewhere with --output')
+                f'their worn pieces. Nothing was written. Either pass the whole capture ({CAPTURE_CALL}; {CAPTURE_HELP}), or pass '
+                f'--replace-observed if the census-only world or the smaller capture is meant, or write elsewhere with --output')
     return ''
+
+
+def write_manifest(out, result):
+    """Writes through a temporary file next to `out` and replaces `out` only once the new text is complete, so a failure part-way leaves
+    the old manifest as it was. The temporary name is unique per run and removed on failure; a leftover one is never read."""
+    import tempfile
+    handle, temporary = tempfile.mkstemp(dir=out.parent, prefix=out.name + '.', suffix='.tmp')
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(result, indent=1))
+        os.replace(temporary, out)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
 
 
 def check_manifest(path, census_ok):
@@ -556,15 +575,14 @@ def check_manifest(path, census_ok):
     rule only counts movement, so a census-only manifest without worn pieces would pass; it fails here unless the run says it is intended."""
     try:
         line, capture = describe(json.loads(Path(path).read_text(encoding='utf-8')))
-    except (OSError, ValueError) as error:
-        print(f'manifest {path}: unreadable ({error})')
+    except (OSError, ValueError, TypeError) as error:
+        print(f'manifest {path}: unreadable ({error!r})')
         return 1
     if capture or census_ok:
         print(f'manifest {line}' + ('' if capture else ' (census-only world, intended: -CensusWorld)'))
         return 0
     print(f'manifest {line}: not capture-based, so the citizens have no captured look; rebuild it with the capture '
-          f'(python tools/prepare_ambient_world.py --observed ... --samples ... --compose ...; {CAPTURE_HELP}), or run with -CensusWorld if the '
-          f'census-only world is intended')
+          f'({CAPTURE_CALL}; {CAPTURE_HELP}), or run with -CensusWorld if the census-only world is intended')
     return 1
 
 
@@ -578,7 +596,8 @@ def main(argv=None):
     ap.add_argument('--stops-from', help='an earlier real-game dump: pose of pawns added at the round-1 review perches')
     ap.add_argument('--output', default=str(OUT))
     ap.add_argument('--replace-observed', action='store_true',
-                    help='write over an existing capture-based (or unreadable) manifest although this run has no capture or fewer worn pieces')
+                    help='write over an existing capture-based (or unreadable) manifest although this run has no capture or fewer worn pieces: '
+                         'the census-only world or a smaller capture is meant')
     ap.add_argument('--check-manifest', metavar='PATH', help='only report the look of this manifest (observed, spawns, worn pieces) and exit 1 '
                     'unless it is capture-based or --census-ok is given (the preflight of the ambient suite)')
     ap.add_argument('--census-ok', action='store_true', help='with --check-manifest: a census-only manifest is intended')
@@ -594,11 +613,15 @@ def main(argv=None):
         sys.exit('--observed and --samples go together')
     if (args.compose or args.stops_from) and not args.observed:
         sys.exit('--compose and --stops-from apply to the observed citizens only: pass --observed and --samples as well')
+    if not args.observed:   # refused before the reader work: without the capture the result is census-only whatever it holds
+        problem = replace_problem(out, None, args.replace_observed)
+        if problem:
+            sys.exit(problem)
     result = build(args)
     problem = replace_problem(out, result, args.replace_observed)
     if problem:
         sys.exit(problem)
-    out.write_text(json.dumps(result, indent=1), encoding='utf-8')
+    write_manifest(out, result)
     kinds = {}
     for s in result['spawns']:
         kinds[s['kind']] = kinds.get(s['kind'], 0) + 1

@@ -25,7 +25,12 @@ if (!(Test-Path -LiteralPath $Ambient)) { throw "Missing $Ambient (tools/prepare
 # first and named in the result line (tools/prepare_ambient_world.py --check-manifest, 2026-11-12).
 $checkArgs = @((Join-Path $PSScriptRoot 'prepare_ambient_world.py'), '--check-manifest', $Ambient)
 if ($CensusWorld) { $checkArgs += '--census-ok' }
-$manifestLine = (& $Python @checkArgs | Out-String).Trim()
+try {
+    $manifestLine = (& $Python @checkArgs | Out-String).Trim()
+} catch [System.Management.Automation.CommandNotFoundException] {
+    Write-Output "OWAMBIENT SUMMARY result=FAIL manifest check: python not found ($Python)"
+    exit 1
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Output "OWAMBIENT SUMMARY result=FAIL $manifestLine"
     exit 1

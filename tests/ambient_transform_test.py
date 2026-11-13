@@ -5,6 +5,7 @@ static meshes keep UE3 coordinates), so the (location, quaternion, scale) it ret
 Z scale when the result is a reflection. Needs numpy.
 """
 from pathlib import Path
+import os
 import sys
 import unittest
 
@@ -178,6 +179,106 @@ class ManifestGuardTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('census-only world, intended', line)
         self.assertEqual(self.check('{')[0], 1)
+
+
+class ManifestGuardMainTest(unittest.TestCase):
+    """Review r1 of the guard: main() with a stubbed build, odd shapes, and the safe write. Invented manifests only."""
+
+    CAPTURED = ManifestGuardTest.CAPTURED
+
+    def output(self, value=None):
+        import json
+        import tempfile
+        tmp = tempfile.TemporaryDirectory(dir=P.ROOT / 'local')
+        self.addCleanup(tmp.cleanup)
+        out = Path(tmp.name) / 'ambient_world.json'
+        if value is not None:
+            out.write_text(value if isinstance(value, str) else json.dumps(value), encoding='utf-8')
+        return out
+
+    def run_main(self, out, result, *extra):
+        """main() with build() stubbed to return `result` (counted), and the output text afterwards."""
+        calls = []
+        saved = P.build
+        P.build = lambda args: calls.append(args) or result
+        self.addCleanup(setattr, P, 'build', saved)
+        argv = ['--game', str(out.parent), '--output', str(out)] + list(extra)
+        try:
+            code = P.main(argv)
+        except SystemExit as stop:
+            code = stop
+        return code, calls, out.read_text(encoding='utf-8') if out.exists() else None
+
+    def observed(self, pieces):
+        return {'observed': True, 'spawns': [{'id': 'a', 'kind': 'K', 'wander': False, 'attachments': [{}] * pieces}],
+                'nodes': [], 'perches': [], 'perch_definitions_dropped': [], 'views': [], 'counts': {}}
+
+    def test_main_refuses_a_census_run_over_a_capture_before_building(self):
+        import json
+        out = self.output(self.CAPTURED)
+        before = out.read_text(encoding='utf-8')
+        code, calls, after = self.run_main(out, self.observed(0) | {'observed': False})
+        self.assertIsInstance(code, SystemExit)
+        self.assertIn('a census-only world (no --observed)', str(code))
+        self.assertIn('--compose <amb_compose> --stops-from', str(code))
+        self.assertEqual((calls, after), ([], before))   # no reader work, file untouched
+        self.assertEqual(json.loads(after), self.CAPTURED)
+
+    def test_main_refuses_a_smaller_capture_after_building_and_writes_a_larger_one(self):
+        import json
+        out = self.output(self.CAPTURED)   # 3 pieces
+        capture = ['--observed', 'dump.json', '--samples', 'samples.jsonl']
+        code, calls, after = self.run_main(out, self.observed(2), *capture)
+        self.assertIsInstance(code, SystemExit)
+        self.assertIn('the smaller capture is meant', str(code))
+        self.assertEqual((len(calls), json.loads(after)), (1, self.CAPTURED))
+        code, calls, after = self.run_main(out, self.observed(5), *capture)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(after)['spawns'][0]['attachments'], [{}] * 5)
+        self.assertEqual([p.name for p in out.parent.iterdir()], ['ambient_world.json'])   # no temporary file left
+
+    def test_stops_from_without_observed_is_refused(self):
+        code, calls, _ = self.run_main(self.output(), {}, '--stops-from', 'dump.json')
+        self.assertIn('pass --observed and --samples', str(code))
+        self.assertEqual(calls, [])
+
+    def test_check_manifest_needs_no_game(self):
+        import contextlib
+        import io
+        out = self.output(self.CAPTURED)
+        saved = os.environ.pop('OPENWILLOW_BL2', None)
+        if saved is not None:
+            self.addCleanup(os.environ.__setitem__, 'OPENWILLOW_BL2', saved)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertEqual(P.main(['--check-manifest', str(out)]), 0)
+        self.assertIn('observed=true spawns=2 worn=3', printed.getvalue())
+
+    def test_odd_shapes_and_an_empty_file_are_unreadable(self):
+        import contextlib
+        import io
+        for text in ('', '{"observed": true, "spawns": [{"attachments": 5}]}'):
+            out = self.output(text)
+            self.assertIn('cannot be read as an ambient manifest', P.replace_problem(out, ManifestGuardTest.CENSUS, False), repr(text))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(P.check_manifest(out, True), 1, repr(text))
+
+    def test_a_failed_write_leaves_the_old_manifest(self):
+        import json
+        out = self.output(self.CAPTURED)
+        saved = os.replace
+        def broken(source, target):
+            raise OSError('invented failure before the replace')
+        os.replace = broken
+        try:
+            with self.assertRaises(OSError):
+                P.write_manifest(out, self.observed(9))
+        finally:
+            os.replace = saved
+        self.assertEqual(json.loads(out.read_text(encoding='utf-8')), self.CAPTURED)
+        self.assertEqual([p.name for p in out.parent.iterdir()], ['ambient_world.json'])
+        P.write_manifest(out, self.observed(9))   # the next run is not confused by the failed one
+        self.assertEqual(len(json.loads(out.read_text(encoding='utf-8'))['spawns'][0]['attachments']), 9)
 
 
 if __name__ == '__main__':
