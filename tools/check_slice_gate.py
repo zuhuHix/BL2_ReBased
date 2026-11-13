@@ -14,6 +14,10 @@ it is overruled to FAIL where the capability is there: `enemy_attacks_maya` in a
 pickup attempt was made. A NOT_AVAILABLE whose detail starts "test setup gap" is this test's own setup or local data, not
 something the host lacks: it is owned by slice-gate and counted on its own line.
 
+A PASS on `equip_gun` needs `firing=Trace`, `firing=Bullet` or `firing=Rocket` in its detail: the kind of shot the host will
+play for the held gun, read from its firing block. Without the token (a log from before 2026-11-13, or `firing=none`) the
+PASS becomes a FAIL. This says the host loaded a firing block for the gun, not that the block matches the real game.
+
 The unforced variant (`tools/test_slice_gate.ps1 -Unforced`, `-owslicegateunforced`) marks its start line `unforced=1`. There,
 and only there, every link that names a fixture standing in for play (FORCING_FIXTURES) is a FAIL whatever the host said,
 a PASS on a link the variant takes the player's way (UNFORCED_EVIDENCE) needs its `how=` token in the detail, and every
@@ -132,6 +136,21 @@ SETUP_GAP_OWNER = 'slice-gate'
 HOLD_ENDED_BY_DOWN = 'fire held, ended by Maya down'
 # The fixture on link 4 when the selected enemy died with no hit on her: a PASS would contradict it.
 HOLD_ENDED_BY_DEATH = 'fire held, ended by enemy died'
+# Link 8's detail names the held gun's firing kind (OpenWillowSliceGate.cpp, EStep::Equip); "none" is no firing block.
+EQUIP_LINK = 'equip_gun'
+FIRING_KIND = re.compile(r'(?<!\S)firing=(?P<kind>\S+)')
+FIRING_KINDS = ('Trace', 'Bullet', 'Rocket')
+
+
+def equip_link_problem(row):
+    """Why a PASS on the equip link cannot stand, or None: the held gun's firing kind must be named and loaded."""
+    match = FIRING_KIND.search(row['detail'])
+    if not match:
+        return 'no firing=<kind> in the detail (the firing of the held gun was not graded)'
+    kind = match['kind'].rstrip(';,.:')
+    if kind not in FIRING_KINDS:
+        return f'firing={kind}: the held gun has no firing block the host loaded, so it fires a plain trace'
+    return None
 
 
 def card_link_problem(row):
@@ -178,6 +197,11 @@ def cross_check(rows, errors, range_mode):
                 errors.append(f'link {row["name"]}: PASS overruled, {why}')
                 row['result'] = 'FAIL'
                 row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
+        elif row['name'] == EQUIP_LINK and row['result'] == 'PASS' and equip_link_problem(row):
+            why = equip_link_problem(row)
+            errors.append(f'link {row["name"]}: PASS overruled, {why}')
+            row['result'] = 'FAIL'
+            row['detail'] = f'checker: {why}; host said PASS: {row["detail"]}'
         elif row['name'] == 'enemy_attacks_maya' and row['result'] == 'PASS' and (HOLD_ENDED_BY_DOWN in row['fixtures'] or HOLD_ENDED_BY_DEATH in row['fixtures']):
             why = ('the hold on fire ended with Maya down before the selected enemy had hit her' if HOLD_ENDED_BY_DOWN in row['fixtures']
                    else 'the hold on fire ended with the selected enemy dead and no hit from it')

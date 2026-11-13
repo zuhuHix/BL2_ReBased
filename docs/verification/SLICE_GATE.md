@@ -35,8 +35,8 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - the `ow.RollGun` and `ow.Range` console commands.
 
   It implements no gameplay.
-- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (67 since review round 3 of the unforced variant, 39 before it; all
-  made-up log lines, plus three that read the runner script's text).
+- `tests/check_slice_gate_test.py` holds the checker's synthetic tests (70 since link 8 names the gun's firing on 2026-11-13, 67 since
+  review round 3 of the unforced variant, 39 before it; all made-up log lines, plus three that read the runner script's text).
 
 ### How a link is graded (review round 1)
 
@@ -49,6 +49,14 @@ reports each link as PASS, FAIL or NOT_AVAILABLE:
   - then exactly one SUMMARY line that agrees with the link lines.
 
   A shuffled, repeated or unknown link fails the run, and so does a link line before the start or after the SUMMARY.
+- **`equip_gun` names the held gun's firing (since 2026-11-13).** After the equip and draw, the link reads the held gun's
+  firing data as the host will play it (the recipe's block, or a generated gun's template) and adds `firing=Trace`,
+  `firing=Bullet` or `firing=Rocket` to the detail. When no block was loaded the host would fire a plain trace whatever the
+  gun is, so the link FAILs with `firing=none`. The checker overrules a PASS whose detail has no loaded kind, so a log from
+  before this change no longer passes link 8. This checks that the host did what its data says, nothing about the real
+  game: the firing block itself is `UNVERIFIED` in game ([WEAPON_PROJECTILES.md](WEAPON_PROJECTILES.md)). The run does not
+  fire this gun after equipping it (the mission's shots use the lent pistol), so the observed shots are not compared with
+  the block; that would need a new step in the run.
 - **`enemy_attacks_maya` counts only the selected enemy's hits.** It counts only hits whose causer is the enemy the
   fight selected. The walker counts hits per causer where they land (`GetHitCountFrom`; a few lines in
   `OpenWillowWalker.h/.cpp`), because several hits can land in one tick. It counts only while the gate tracks them, during
@@ -492,7 +500,7 @@ counter reset, because more than 30 s had passed. The host logs the counter afte
 | The Phaselock point is granted | 9 | slice-gate | `-Unforced` buys it on the skills page. Bought there in its first eight runs |
 | The mission is taken with the use key alone, and the range is cleared first | 10 to 12 | slice-gate | `-Unforced` uses the mission page's Enter and leaves the range as it is. Its first eight runs did so, with the range there |
 | `-Shield` needs the level override | stock-shield path | maya / skills | Since 2026-11-13 the generated level-8 card (`tools/prepare_stock_shield.py`, data-derived, UNVERIFIED in game) removes the level-override fixture where the card has been prepared; not yet run in the engine. Without it, a manifest shield at or below Maya's level 8 would. Since 2026-11-08 the plain run starts with the stand-in start shield ([COMBAT_DOWN_RESPAWN.md](COMBAT_DOWN_RESPAWN.md), "Start shield"); the older variants keep the restore fixture |
-| The equip link does not grade the gun's firing | 8 | projectiles | Generated guns take their firing block from templates since 2026-11-06 (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates"); that firing is `UNVERIFIED` in game |
+| The equip link grades only that a firing block was loaded, not the shots | 8 | projectiles | Since 2026-11-13 link 8 names the held gun's firing kind and FAILs without a loaded block ("How a link is graded"). The looted gun is not fired after the equip, so its shots are not compared with its block; a short burst at the dummy after the equip would close that. The block itself is `UNVERIFIED` in game (WEAPON_PROJECTILES.md, "Generated guns take their firing block from templates") |
 
 Links that pass now but rest on rules still `UNVERIFIED` in game are covered in their own records:
 - Phaselock: PHASELOCK_STOCK_DATA.md, NATIVE_PHASELOCK_TARGETING.md.

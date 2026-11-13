@@ -1277,8 +1277,18 @@ void UOpenWillowSliceGate::TickComponent(float Delta, ELevelTick Type, FActorCom
         FString Why;
         if (bUnforced && bTestDrop && !GunId.IsEmpty()) Fixture(TEXT("gun from the test's drop, not a kill"));
         if (GunId.IsEmpty()) FailLink(TEXT("equip_gun"), TEXT("blocked: no looted or rolled gun in the backpack"));
-        else if (EquipAndDraw(GunId, Why)) PassLink(TEXT("equip_gun"), Why);
-        else FailLink(TEXT("equip_gun"), Why);
+        else if (!EquipAndDraw(GunId, Why)) FailLink(TEXT("equip_gun"), Why);
+        else
+        {
+            // The held gun's firing as the host will play it (its recipe's or template's block). No block, and the host fires a
+            // plain trace whatever the gun is: a FAIL, not a pass. This grades the host against its data, not the real game.
+            const FOpenWillowWeaponItem* Held = Inventory->ActiveWeapon();
+            const FOpenWillowFiringData& Firing = Held->Firing;
+            const TCHAR* Kind = !Firing.bLoaded ? TEXT("none") : Firing.Kind == EOpenWillowShotKind::Rocket ? TEXT("Rocket")
+                : Firing.Kind == EOpenWillowShotKind::Bullet ? TEXT("Bullet") : TEXT("Trace");
+            if (Firing.bLoaded) PassLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=%s"), *Why, Kind));
+            else FailLink(TEXT("equip_gun"), FString::Printf(TEXT("%s; firing=none: no firing block was loaded, so the host fires a plain trace"), *Why));
+        }
         Next(EStep::Phaselock);
         break;
     }

@@ -21,6 +21,7 @@ TOTAL = len(chk.LINKS)
 
 CARD_DETAIL = 'aimed_drop=item_x card_id=item_x picked_id=item_x accepted=1 synthetic detail'
 DECOY_DETAIL = 'aimed_drop=item_x nearer_decoy=item_y card_id=item_x picked_id=item_x accepted=1 synthetic detail'
+EQUIP_DETAIL = 'item_x equipped in slot 1 and drawn; firing=Bullet'
 
 
 # The fixtures each link of the three older variants names in a real run (SLICE_GATE.md's tables), in one synthetic log.
@@ -54,7 +55,7 @@ def build(results=None, stop_after=None, summary='auto', start=True, extra=(), f
     for index, name in enumerate(order or chk.NAMES, 1):
         if stop_after is not None and index > stop_after:
             break
-        default = {'pick_up_gun': CARD_DETAIL, chk.DECOY_LINK: DECOY_DETAIL}.get(name, 'synthetic detail')
+        default = {'pick_up_gun': CARD_DETAIL, chk.DECOY_LINK: DECOY_DETAIL, chk.EQUIP_LINK: EQUIP_DETAIL}.get(name, 'synthetic detail')
         if unforced and name in chk.UNFORCED_EVIDENCE:
             default = f'{chk.UNFORCED_EVIDENCE[name]} synthetic detail'
         result, detail = results.get(name, ('PASS', default))
@@ -300,6 +301,27 @@ class SliceGateTest(unittest.TestCase):
         code, out = self.run_checker(self.write_log(build({chk.DECOY_LINK: ('PASS', detail)})))
         self.assertEqual(code, 1)
         self.assertIn('checker: no nearer_decoy id in the detail', self.row(out, 7))
+
+    def test_equip_pass_names_each_loaded_firing_kind(self):
+        for kind in ('Trace', 'Bullet', 'Rocket'):
+            code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', f'item_x drawn; firing={kind}')})))
+            self.assertEqual(code, 0, out)
+
+    def test_equip_pass_without_a_firing_kind_is_overruled(self):
+        # A log from before link 8 graded the firing, a host that fell back to the plain trace, and a kind it cannot name.
+        for detail, why in (('item_x equipped in slot 1 and drawn', 'no firing=<kind>'),
+                            ('item_x drawn; firing=none: no block', 'firing=none'),
+                            ('item_x drawn; refiring=Bullet', 'no firing=<kind>'),
+                            ('item_x drawn; firing=Beam', 'firing=Beam')):
+            code, out = self.run_checker(self.write_log(build({'equip_gun': ('PASS', detail)})))
+            self.assertEqual(code, 1, (detail, out))
+            self.assertIn(f'link equip_gun: PASS overruled, {why}', out)
+            self.assertIn('checker: ', self.row(out, 8))
+
+    def test_equip_fail_keeps_the_hosts_reason(self):
+        code, out = self.run_checker(self.write_log(build({'equip_gun': ('FAIL', 'item_x drawn; firing=none: no firing block')})))
+        self.assertEqual(code, 1, out)
+        self.assertNotIn('overruled', out)
 
     def test_enemy_attack_not_available_fails_with_the_range(self):
         results = {'enemy_attacks_maya': ('NOT_AVAILABLE', 'synthetic gap')}
