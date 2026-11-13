@@ -30,11 +30,27 @@ A roll, in order, drawing from one `CrtRand(seed)` stream:
    the band is the rating of the first `GlobalsDefinition.RarityLevelColors` entry holding the level, by name only (no colours,
    decision 2026-11-08-02). A level in no entry has no band.
 
-The checker recomputes the legal set independently of the draws: the manufacturer has a covering grade of positive weight and the
-grade is the first covering one; the definition is one the balance yields; the level follows the rule; every chosen part is a
-candidate of its slot at that stage for that manufacturer with a weight above 0 after the hook; a slot is empty only where it has no
-candidate; each name part is in the definition's or a chosen part's list, qualifies at the level and is the one the name rule picks;
-the rarity level and band equal the rule's.
+The checker tests: the manufacturer has a covering grade of positive weight and the grade is the first covering one; the definition
+is one the balance yields; the level follows the rule; every chosen part is a candidate of its slot at that stage for that
+manufacturer with a weight above 0 after the hook; a slot is empty only where it has no candidate; each name part is in the
+definition's or a chosen part's list, qualifies at the level and is the one the name rule picks; the rarity level and band equal
+the rule's.
+
+**What the checker shares with the roll.** It does not call the roll's rule helpers. It restates the grade window and spawn
+weight, the level, the definition choice, each candidate's stage window and entry weight, the relic hook and the rarity sum and
+band in its own code, from the registry's raw entries and the raw `BaseRarity`, `Rarity`, `AttributeSlotUpgrades` and
+`AttributeSlotEffects` properties. It shares on purpose, and so the census does not test: the attribute evaluator
+(`weapon_recipe.attribute_value`, with the constant-resolver step for rarity values), the name-part rule (`best_name_part` in slot
+order) and the registry's merge of the part lists, which both read as given. So the census proves that the draws keep to the rules,
+and that two separate writings of the rules agree on every roll. It does not prove the rules are the game's. A rule mistaken in
+the same way in both writings would pass; the synthetic cases pin the rules' intended meaning.
+
+Not implemented: the note's mission-item exception (a `MissionItemDefinition` takes `MissionItemRarityLevel`, 500, instead of the
+sum). No definition of the four kinds is a mission item.
+
+A slot name that is empty or literally `None` names no slot, for the roll's hook and the checker's. On this install no row has
+one: 0 of the 1,110 `AttributeSlotUpgrades` rows of the candidate parts and 0 of the 1,624 `AttributeSlotEffects` rows of the
+definitions (the census counts them).
 
 ## 2. Stand-ins (each UNVERIFIED, each where `NATIVE_ITEM_RULES.md` leaves the question open)
 
@@ -64,7 +80,10 @@ would all draw near 0 first and favour each list's first candidate (the syntheti
 | class mod | 56 | 6,600 | 120 (the one balance naming no `ClassModDefinitions`) | 0 |
 | relic | 71 | 8,380 | 140 (no grade at the stage) | 0 |
 
-**35,660 rolls, 0 checker failures.** Slots filled (rolls with a part in the slot):
+**35,660 rolls, 0 checker failures** (64 s with the independent checker). To show the census tests the rules and not only the
+draws, the same census was run with two wrong rules put into the roll alone. A hook that also drops parts with no slot upgrades
+failed the checker on 8,380 of 8,380 relic rolls. A rarity that ignores the parts failed it on 35,180 of 35,660 rolls; the other
+480 are the enemy shields with no part slot, whose sum is 0 either way. Slots filled (rolls with a part in the slot):
 
 | kind | Alpha | Beta | Gamma | Delta | Epsilon | Zeta | Eta | Theta | Material |
 |---|---|---|---|---|---|---|---|---|---|
@@ -96,16 +115,21 @@ roll and as the card it wrote (`local/slice/stock_shield_gear.json`, regenerated
 
 ## 5. Tests
 
-`tests/item_roll_test.py` (ctest `item-roll-synthetic`, 12 cases, no package reader needed) builds invented registries and a
+`tests/item_roll_test.py` (ctest `item-roll-synthetic`, 15 cases, no package reader needed) builds invented registries and a
 dictionary lookup: a shield (reproducible rolls, a slot empty below its window, rarity from parts and a name part, a level in no band),
 a grenade mod (two manufacturers with grade windows and a grade weighing 0, a part weighted for one manufacturer only, base rarity 5,
 a non-interpolating balance taking the grade's level and definition), a class mod with three definitions, the relic hook (kept, removed,
 and off for a shield class and for a relic that clears the flag), and refusals. The checker must reject a part from another slot, a part
-out of its window, an emptied slot, a wrong level, rarity, manufacturer, name part or definition, and a part of another manufacturer.
+out of its window, an emptied slot, a wrong level, rarity, manufacturer, name part or definition, a stage outside the grade window, and a part of
+another manufacturer. Two cases build rolls with a wrong rule in the roll alone (a hook too strict and one too lax; a rarity that
+ignores the parts), and the checker must reject them. One case gives an upgrade row the slot name `None`: the part keeps its
+weight and the counter counts the row.
 
 ## 6. UNVERIFIED and open
 
-- Every rule above, in the running game. The census proves internal consistency only.
+- Every rule above, in the running game. The census proves internal consistency only: the draws keep to the rules, and the
+  checker's separate writing of the rules agrees with the roll's. The evaluator, the name rule and the registry merge are shared.
+- The mission-item rarity exception (500) is not implemented; it does not arise for these four kinds.
 - The four stand-ins of section 2.
 - A live check: spawned drops of one shield, one class mod and one relic balance, compared with these rolls' slot frequencies and
   rarity levels (`NATIVE_ITEM_RULES.md`, "What a session should read", items 1 and 2), and the `GrenadeMod_FlameSpurt` rarity 6.

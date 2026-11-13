@@ -145,9 +145,23 @@ class ShieldRolls(unittest.TestCase):
         self.assertTrue(any('empty although' in p for p in broken(parts=emptied)))
         self.assertTrue(any('level' in p for p in broken(level=9)))
         self.assertTrue(any('rarity level' in p for p in broken(rarity={**good['rarity'], 'level': 42})))
-        self.assertTrue(any('no grade' in p for p in broken(manufacturer='T.MakerZ')))
+        self.assertTrue(any('no drawable grade' in p for p in broken(manufacturer='T.MakerZ')))
+        # The legal roll moved to a stage outside its manufacturer's only grade window (0..100).
+        self.assertTrue(any('no drawable grade at stage 101' in p for p in broken(stage=101)))
         self.assertTrue(any('name' in p for p in broken(name_parts={'prefix': 'T.PrefixRare', 'title': None})))
         self.assertTrue(any('not one this balance yields' in p for p in broken(definition='T.OtherDef')))
+
+    def test_checker_catches_a_roll_with_a_wrong_rarity_rule(self):
+        """A roll built with a rarity that ignores the parts fails check(), which sums the raw properties itself."""
+        reg, look = shield_case()
+        original = ir.rarity_terms
+        try:
+            ir.rarity_terms = lambda lookup, definition, parts, names, level: [(definition, 0)]
+            item = ir.roll(reg, 'T.ShieldBal', 8, SEEDS[0], look)
+        finally:
+            ir.rarity_terms = original
+        self.assertEqual(item['rarity']['level'], 0)
+        self.assertTrue(any('rarity level 0 is not the sum' in p for p in ir.check(reg, item, look)))
 
 
 class GrenadeRolls(unittest.TestCase):
@@ -252,6 +266,41 @@ class RelicHook(unittest.TestCase):
         self.assertEqual(drawn, {'T.Enable1', 'T.Plain'})
         item['parts']['Beta'] = 'T.Enable3'
         self.assertTrue(any('not a candidate' in p for p in ir.check(reg, item, look)))
+
+    def test_checker_catches_a_roll_with_a_wrong_hook(self):
+        """Rolls built with a mutated hook fail check(), which restates the hook from the raw slot properties."""
+        reg, look = self.case()
+        original = ir.hook_keeps
+        try:
+            # Too strict: a part with no slot upgrades is dropped too. With T.Plain alone in a slot, the slot goes empty.
+            ir.hook_keeps = lambda lookup, defined, part: bool(ir.slot_names(
+                ir.props_of(lookup, part).get('AttributeSlotUpgrades')) & defined)
+            reg['balances']['T.RelicBal']['variants'][0]['slots']['Alpha'] = [flat('T.Plain')]
+            strict = ir.roll(reg, 'T.RelicBal', 8, SEEDS[0], look)
+            # Too lax: every part keeps its weight, so T.Enable3 can be drawn.
+            ir.hook_keeps = lambda lookup, defined, part: True
+            lax = [ir.roll(reg, 'T.RelicBal', 8, seed, look) for seed in SEEDS]
+        finally:
+            ir.hook_keeps = original
+        self.assertNotIn('Alpha', strict['parts'])
+        self.assertTrue(any('Alpha: empty although' in p for p in ir.check(reg, strict, look)))
+        drew_enable3 = [item for item in lax if item['parts']['Beta'] == 'T.Enable3']
+        self.assertTrue(drew_enable3)
+        for item in drew_enable3:
+            self.assertTrue(any('T.Enable3 is not a candidate' in p for p in ir.check(reg, item, look)))
+
+    def test_a_slot_named_none_names_no_slot(self):
+        """An upgrade row whose slot name is literally None counts as no upgrade, in the roll and in the checker."""
+        reg, look = self.case()
+        look.objects['T.Enable3'] = {'AttributeSlotUpgrades': [{'SlotName': 'None'}]}
+        drawn = set()
+        for seed in SEEDS:
+            item = ir.roll(reg, 'T.RelicBal', 8, seed, look)
+            self.assertEqual(ir.check(reg, item, look), [])
+            drawn.add(item['parts']['Beta'])
+        self.assertIn('T.Enable3', drawn)
+        counts = ir.none_slot_names(reg, look, ['T.RelicBal'])
+        self.assertEqual(counts['AttributeSlotUpgrades rows naming no slot'], 1)
 
     def test_hook_only_where_the_flag_is_set(self):
         for cls, flag in (('ShieldDefinition', None), ('ArtifactDefinition', False)):

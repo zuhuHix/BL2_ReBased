@@ -46,7 +46,12 @@ The roll, in order (one CrtRand(seed) stream, as prepare_stock_shield and weapon
 6. Rarity (NATIVE_ITEM_RULES.md section 2): level = trunc(definition BaseRarity) + trunc(Rarity) of each chosen part and,
    STAND-IN (the reading the note says the data supports), of the two name parts. The band is the RarityRating of the first
    GlobalsDefinition.RarityLevelColors entry whose [MinLevel, MaxLevel] holds the level, by name only (no colours: decision
-   2026-11-08-02). A level in no entry has no band.
+   2026-11-08-02). A level in no entry has no band. Not implemented: the note's mission-item exception (a
+   MissionItemDefinition takes GlobalsDefinition.MissionItemRarityLevel, 500, instead of the sum); no definition of the four
+   kinds rolled here is a mission item.
+
+check() restates every rule above from the registry's raw entries and the raw properties, without the roll's rule helpers;
+what it shares with roll() is listed in the comment above it.
 """
 import argparse
 import json
@@ -177,7 +182,8 @@ def hook_applies(registry, lookup, definition):
 
 
 def slot_names(rows):
-    return {row.get('SlotName') for row in rows or [] if row.get('SlotName')}
+    """Slot names of the rows; an empty name or the name None names no slot."""
+    return {row.get('SlotName') for row in rows or []} - {None, '', 'None'}
 
 
 def hook_keeps(lookup, defined, part):
@@ -322,43 +328,138 @@ def roll(registry, balance, stage, seed, lookup, manufacturer=None):
     }
 
 
-def check(registry, item, lookup):
-    """Every reason `item` is not a legal roll of its balance at its stage ([] when it is legal)."""
-    problems = []
+# ---- the checker ---------------------------------------------------------------------------------------------------------
+# check() does not call the roll's rule helpers (manufacturer_options, grade_weight, interpolates, definition_options,
+# legal_candidates, item_registry.candidates_at, hook_applies / hook_keeps / slot_names, rarity_terms / rarity / rarity_band):
+# it restates each rule from the registry's raw entries and the raw BaseRarity, Rarity, AttributeSlotUpgrades and
+# AttributeSlotEffects properties, so a census of check() over roll() tests the rules as written twice, not only the draws.
+# Shared on purpose, so not tested by the census: the attribute evaluator (weapon_recipe.attribute_value, and number() for
+# rarity values), the name-part rule (name_parts over weapon_recipe.best_name_part), and the registry's own merge of the part
+# lists (item_registry), which both sides read as given.
+def _named_slots(rows):
+    """Slot names of AttributeSlotUpgrades / AttributeSlotEffects rows; an empty name or the name None is no slot."""
+    return {row.get('SlotName') for row in rows or []} - {None, '', 'None'}
+
+
+def _check_value(lookup, value, stage):
+    """A registry value as the roll's stand-in reads it: a number, an init evaluated without runtime state, else None."""
+    if value is None or isinstance(value, (int, float)):
+        return value
     try:
-        record = balance_record(registry, item['balance'])
-    except NotRollable as error:
-        return [str(error)]
-    stage = item['stage']
-    options = manufacturer_options(record, stage)
+        return weapon_recipe.attribute_value(lookup, value['init'], stage)
+    except (KeyError, RuntimeError, ValueError):
+        return None
+
+
+def _check_grade(record, maker, stage):
+    """(grade index, grade) of `maker`'s first grade whose window holds the stage, if its spawn weight is above 0; else None."""
+    for entry in record['manufacturers']:
+        if entry['manufacturer'] != maker:
+            continue
+        for index, grade in enumerate(entry['grades']):
+            low, high = grade['min_stage'] or 0, grade['max_stage'] or 0
+            if not low <= stage <= high:
+                continue
+            spawn = grade.get('spawn_probability') or {}
+            first = spawn.get('min') if isinstance(spawn.get('min'), (int, float)) else 1.0
+            last = spawn.get('max') if isinstance(spawn.get('max'), (int, float)) else first
+            weight = first + (stage - low) / (high - low) * (last - first) if high > low else first
+            return (index, grade) if weight > weapon_recipe.MIN_WEIGHT else None
+        return None
+    return None
+
+
+def _check_hook_drops(registry, lookup, definition, part):
+    """True when the relic hook gives `part` weight 0 (NATIVE_ITEM_RULES.md section 1), restated."""
+    raw = props_of(lookup, definition)
+    if 'bAllowInventoryDefToModifyPartWeight' in raw:
+        enabled = bool(raw['bAllowInventoryDefToModifyPartWeight'])
+    else:
+        enabled = (registry['definitions'].get(definition) or {}).get('class') == 'ArtifactDefinition'
+    if not enabled:
+        return False
+    upgrades = _named_slots(props_of(lookup, part).get('AttributeSlotUpgrades'))
+    return bool(upgrades) and not upgrades & _named_slots(raw.get('AttributeSlotEffects'))
+
+
+def _check_drawable(registry, lookup, definition, entries, stage, maker):
+    """The parts of one slot's raw candidate entries that are in their stage window, weigh above 0 and survive the hook."""
+    drawable = set()
+    for entry in entries:
+        low, high = _check_value(lookup, entry['min_stage'], stage), _check_value(lookup, entry['max_stage'], stage)
+        if (low is not None and stage < int(low)) or (high is not None and stage > int(high)):
+            continue
+        weight = entry['weight']
+        if weight['source'] == 'flat' or maker is None:
+            amount = weapon_recipe.FLAT_WEIGHT
+        else:
+            amount = _check_value(lookup, weight['by_manufacturer'].get(maker, weight['default']), stage)
+        if amount is not None and amount <= weapon_recipe.MIN_WEIGHT:
+            continue
+        if not _check_hook_drops(registry, lookup, definition, entry['part']):
+            drawable.add(entry['part'])
+    return drawable
+
+
+def _check_rarity(lookup, definition, parts, names, level):
+    """(level, band): trunc(BaseRarity) + trunc(Rarity) of every chosen part and name part; the first band entry holding it."""
+    total = 0
+    sources = [(definition, 'BaseRarity')] + [(p, 'Rarity') for p in parts.values() if p]
+    if NAME_PARTS_IN_RARITY:
+        sources += [(n, 'Rarity') for n in names if n]
+    for path, key in sources:
+        value = props_of(lookup, path).get(key)
+        amount = None if value is None else number(lookup, value, level)
+        total += math.trunc(amount) if amount is not None else 0
+    band = None
+    for row in props_of(lookup, GLOBALS).get('RarityLevelColors') or []:
+        if (row.get('MinLevel') or 0) <= total <= (row.get('MaxLevel') or 0):
+            band = (row.get('RarityRating') or '').replace('RARITY_', '', 1) or None
+            break
+    return total, band
+
+
+def check(registry, item, lookup):
+    """Every reason `item` is not a legal roll of its balance at its stage ([] when it is legal). Independent of the roll's
+    rule helpers except where the block comment above says."""
+    record = registry['balances'].get(item['balance'])
+    if record is None or record['kind'] not in KINDS:
+        return [f'{item["balance"]} is not a balance of the four kinds']
+    problems, stage, maker = [], item['stage'], item['manufacturer']
     grade = None
     if record['manufacturers']:
-        match = [o for o in options if o[0] == item['manufacturer']]
-        if not match:
-            return [f'manufacturer {item["manufacturer"]} has no grade at stage {stage}']
-        if match[0][1] != item['grade']:
-            problems.append(f'grade {item["grade"]} is not the first grade holding stage {stage} ({match[0][1]})')
-        grade = next(e for e in record['manufacturers'] if e['manufacturer'] == item['manufacturer'])['grades'][match[0][1]]
-    elif item['manufacturer'] is not None:
-        problems.append(f'manufacturer {item["manufacturer"]} on a balance that lists none')
-    interpolating = interpolates(lookup, item['balance'])
-    if item['definition'] not in definition_options(record, grade, interpolating):
+        found = _check_grade(record, maker, stage)
+        if found is None:
+            return [f'manufacturer {maker} has no drawable grade at stage {stage}']
+        if found[0] != item['grade']:
+            problems.append(f'grade {item["grade"]} is not the first grade holding stage {stage} ({found[0]})')
+        grade = found[1]
+    elif maker is not None:
+        problems.append(f'manufacturer {maker} on a balance that lists none')
+    flag = props_of(lookup, item['balance']).get('bInterpolateExpLevel')
+    interpolating = flag is None or bool(flag)
+    if record['kind'] == 'class_mod':
+        allowed = set(record['class_mod_definitions'])
+    elif grade is not None and not interpolating and grade.get('definition'):
+        allowed = {grade['definition']}
+    else:
+        allowed = {record['inventory_definition']} - {None}
+    if item['definition'] not in allowed:
         return problems + [f'definition {item["definition"]} is not one this balance yields']
     expected_level = stage if interpolating or grade is None else (grade.get('exp_level') or 1)
     if item['level'] != expected_level:
         problems.append(f'level {item["level"]} is not {expected_level}')
-    variant = variant_of(record, item['definition'])
-    candidates, _ = legal_candidates(registry, lookup, item['definition'], variant, stage, item['manufacturer'])
+    variant = next((v for v in record['variants'] if v['definition'] == item['definition']), {'slots': {}})
+    drawable = {slot: _check_drawable(registry, lookup, item['definition'], entries, stage, maker)
+                for slot, entries in variant['slots'].items()}
     for slot, part in item['parts'].items():
         if slot not in SLOTS:
             problems.append(f'{slot}: not an item slot')
-        elif part not in candidates.get(slot, {}):
+        elif part not in drawable.get(slot, set()):
             problems.append(f'{slot}: {part} is not a candidate at stage {stage}')
-        elif candidates[slot][part] is not None and not candidates[slot][part] > 0:
-            problems.append(f'{slot}: {part} weighs {candidates[slot][part]}')
-    for slot in candidates:
-        if not item['parts'].get(slot):
-            problems.append(f'{slot}: empty although {len(candidates[slot])} candidates exist')
+    for slot, parts in drawable.items():
+        if parts and not item['parts'].get(slot):
+            problems.append(f'{slot}: empty although {len(parts)} candidates exist')
     names = item['name_parts']
     for key in ('prefix', 'title'):
         name = names.get(key)
@@ -368,17 +469,39 @@ def check(registry, item, lookup):
         lists += [(registry['parts'].get(p) or {}).get(key) or [] for p in item['parts'].values()]
         if not any(name in names_list for names_list in lists):
             problems.append(f'{key} {name} is in no list of the definition or a chosen part')
-        elif not weapon_recipe.name_part_qualifies(lookup, name, item['level'], item['manufacturer']):
+        elif not weapon_recipe.name_part_qualifies(lookup, name, item['level'], maker):
             problems.append(f'{key} {name} does not qualify at level {item["level"]}')
-    expected_names = name_parts(registry, lookup, item['definition'], item['parts'], item['manufacturer'], item['level'])
-    if (names.get('prefix'), names.get('title')) != expected_names:
+    chosen = name_parts(registry, lookup, item['definition'], item['parts'], maker, item['level'])
+    if (names.get('prefix'), names.get('title')) != chosen:
         problems.append('name parts are not the ones the name rule chooses')
-    expected = rarity(lookup, item['definition'], item['parts'], (names.get('prefix'), names.get('title')), item['level'])
-    if item['rarity']['level'] != expected['level']:
-        problems.append(f'rarity level {item["rarity"]["level"]} is not the sum {expected["level"]}')
-    if item['rarity']['band'] != expected['band']:
-        problems.append(f'band {item["rarity"]["band"]} is not {expected["band"]}')
+    level, band = _check_rarity(lookup, item['definition'], item['parts'], (names.get('prefix'), names.get('title')),
+                                item['level'])
+    if item['rarity']['level'] != level:
+        problems.append(f'rarity level {item["rarity"]["level"]} is not the sum {level}')
+    if item['rarity']['band'] != band:
+        problems.append(f'band {item["rarity"]["band"]} is not {band}')
     return problems
+
+
+def none_slot_names(registry, lookup, balances):
+    """Rows of AttributeSlotUpgrades (candidate parts) and AttributeSlotEffects (definitions), and how many name no slot
+    (an empty name or literally None): the roll and the checker both read such a row as naming no slot."""
+    parts, definitions = set(), set()
+    for balance in balances:
+        record = registry['balances'][balance]
+        for variant in record['variants']:
+            if variant['definition']:
+                definitions.add(variant['definition'])
+            for entries in variant['slots'].values():
+                parts.update(c['part'] for c in entries)
+    out = Counter()
+    for key, paths in (('AttributeSlotUpgrades', parts), ('AttributeSlotEffects', definitions)):
+        for path in paths:
+            for row in props_of(lookup, path).get(key) or []:
+                out[f'{key} rows'] += 1
+                if row.get('SlotName') in (None, '', 'None'):
+                    out[f'{key} rows naming no slot'] += 1
+    return dict(out)
 
 
 # ---- census over the install --------------------------------------------------------------------------------------------
@@ -515,6 +638,7 @@ def summary_lines(report):
     lines.append('bands: ' + json.dumps(report['census']['bands']))
     lines.append('notes: ' + json.dumps(report['census']['notes']))
     lines.append('stock shield: ' + json.dumps(report['stock_shield']))
+    lines.append('slot name rows: ' + json.dumps(report['slot_name_rows']))
     return lines
 
 
@@ -556,7 +680,8 @@ def main(argv=None):
     warm(census, registry, balances)
     report = {'rolls_per_stage': args.rolls, 'stages': list(CENSUS_STAGES), 'scan_errors': len(errors),
               'census': run_census(registry, census, args.rolls),
-              'stock_shield': stock_shield(registry, census)}
+              'stock_shield': stock_shield(registry, census),
+              'slot_name_rows': none_slot_names(registry, census, balances)}
     report['open_seconds'] = round(opened, 1)
     report['seconds'] = round(time.perf_counter() - started, 1)
     item_registry.write_json(out_dir / 'census.json', report)
