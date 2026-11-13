@@ -23,7 +23,8 @@ come from leaps and rocks.
   stops her within about 60 and 30 uu (worked out from her ground braking, not measured), well short of the den-down's "about 500 uu" (one run). Not added to the plain swing. (7) The
   clip times of note 3.1 and 4.1; the host's Attack moment is the start of the launch clip, so its Attack-to-landed is the launch clip
   plus the flight (1.34 to 2.10 s), inside L-4's 1.08 to 3.48 s.
-- **Other stand-ins (UNVERIFIED):** the injured gate is not modelled: range enemies have no injured state (the note's injured adult
+- **Other stand-ins (UNVERIFIED):** a leaper that comes down over another enemy is set on top of that enemy's hit capsule (the landing's
+  floor trace is a Visibility trace that ignores only the leaper; the note says nothing about it; not fixed); the injured gate is not modelled: range enemies have no injured state (the note's injured adult
   neither roars nor leaps); the back-up throws never run (the host's melee child can always walk in); the slinger's high-ground
   throw is not modelled (no raised spots); the baby leaps whenever it is outside its grab band and inside its leap band; the slinger and
   the baby walk in for the swing when they can run nothing else; a rock leads (the row's cap) or not on an even draw per throw (what picks
