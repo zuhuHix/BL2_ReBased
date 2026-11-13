@@ -424,9 +424,10 @@ try {
                     $log.den_down_replacements = $n
                     # One call in the game: it reads the down state first and places her only while she is up (den_probe.dp_replace). It gets
                     # the window's end (wall-clock seconds since 1970, the clock both sides read on this machine) and moves nothing once that
-                    # has passed ('late'); its reply wait is clamped to the time left, like the polls' (review of #255).
+                    # has passed ('late'); its reply wait is clamped to the time left, like the polls' (review of #255). None is sent with less
+                    # than 6 s left, the polls' own minimum, so a healthy reply is not cut short into a lost driver; no poll starts then either.
                     $left = ($downUntil - (Get-Date)).TotalSeconds
-                    if ($left -lt 2) { break }
+                    if ($left -lt 6) { break }
                     $untilEpoch = (([DateTimeOffset]$downUntil).ToUnixTimeMilliseconds() / 1000.0).ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)
                     $again = Py "import json; print(json.dumps(dp_replace(until=$untilEpoch)))" ([int][math]::Min(30, [math]::Floor($left - 1)))
                     $log.den_down_replace_results = @(@($log.den_down_replace_results) + @("$([math]::Round(((Get-Date) - $t0).TotalSeconds, 1)) s: $again"))

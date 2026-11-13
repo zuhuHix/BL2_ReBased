@@ -16,7 +16,9 @@ followed within 150 s.
   is placed at bearing 180, any other on her side; a candidate on her own spot (under 1 uu apart horizontally) is passed over.
 - A re-placement gets the window's end (wall-clock seconds since 1970, the clock both sides read on this machine). A call at or after
   it moves nothing and answers `late`, checked again right before the placement; its reply wait and the loops' pauses are clamped to
-  the time left, so `-DownSeconds` bounds when a placement runs, not only when it is sent.
+  the time left, so `-DownSeconds` bounds when a placement runs, not only when it is sent. None is sent with less than 6 s of the
+  window left (the polls' own minimum), so a slower healthy reply is not cut short into a lost driver. The first placement's enemy
+  is always in the pack test: its distance of 0 from its own location counts as a distance, not as unknown.
 - The first placement still goes to the nearest enemy (`dp_begin`, through `cb_enemies`, whose getters are called on each pawn: the
   inherited path named in `docs/TOOLING.md`, "What the fields-only rule binds").
 

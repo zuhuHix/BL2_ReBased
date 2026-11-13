@@ -255,7 +255,9 @@ def dp_replace(distance=1600.0, radius=6000.0, near=3500.0, until=None):
         first_at = next((p.Location for p, _ in found if p.Name == first), None)
         ranked = []
         for pawn, dist in found:
-            if dist > near and (first_at is None or (_sw_dist(pawn, first_at) or near + 1) > near):
+            # A distance of 0 is a distance (the first placement's enemy from its own location), only None is unknown (review of #255, B6).
+            from_first = None if first_at is None else _sw_dist(pawn, first_at)
+            if dist > near and (from_first is None or from_first > near):
                 continue   # not with the pack she fought
             kind = _sw_fields(pawn, ("AIClass",)).get("AIClass")
             ranked.append(((dp_kind_rank(kind), pawn.Name != first, dist), pawn.Name, pawn.Location, kind))

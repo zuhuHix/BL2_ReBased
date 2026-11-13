@@ -55,7 +55,7 @@ $script:Fake | Add-Member ScriptMethod Refresh { } | Out-Null
 function Start-Game { $script:Fake }
 function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
     switch -Wildcard ($Code) {
-        '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
+        '*cp_immune_off*' { Add-Content -LiteralPath (Join-Path $work 'sent.txt') 'cp_immune_off'; Set-Content -LiteralPath (Join-Path $work 'immune_off_at.txt') ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0); return '{"remaining": []}' }   # before '*cp_immune*', which would match it too
         # The watch's calls (slice_watch.ps1), for the runs that pass -WatchSpec.
         '*sw_start(*' { if ($scenario -eq 'watch_start_stop_lost') { return "Traceback (most recent call last):`n  RuntimeError: invented" }; $script:watchStarted = $true; return '{"label": "cash", "resolved": 1, "missing": []}' }
         '*sw_group_names_at*' { return $(if ($scenario -eq 'group_lost') { '["g1"]' } else { '[]' }) }
@@ -140,7 +140,8 @@ function Invoke-GamePy([string]$Code, [int]$TimeoutSeconds = 30) {
         '*dp_replace*' {
             # The den down's re-placement; every call is counted on disk, so a test sees one that was sent when it should not have been.
             Add-Content -LiteralPath (Join-Path $work 'replace_calls.txt') 'sent'
-            Add-Content -LiteralPath (Join-Path $work 'replace_waits.txt') ("$TimeoutSeconds " + $(if ($Code -match 'until=\d') { 'until' } else { 'no-until' }))
+            $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+            Add-Content -LiteralPath (Join-Path $work 'replace_waits.txt') ("$TimeoutSeconds " + $(if ($Code -match 'until=([\d.]+)') { $Matches[1] } else { 'no-until' }) + " $now")
             if ($scenario -eq 'down_at_replace') { $script:downNow = $true; return '{"result": "not_up", "state": "injured_flag"}' }   # down since the poll
             return '{"result": "placed", "enemy": "WillowAIPawn_1", "dist": 900.0}'
         }
@@ -766,10 +767,26 @@ class DenDownReplacementTest(unittest.TestCase):
     def test_a_placement_gets_the_window_s_end_and_a_wait_clamped_to_it(self):
         # Review of #255, B1: the window limited when a re-placement was sent, not when it ran; its command waited the default 30 s.
         done, session = self.run_down('replace_one', '-DownSeconds', '9', '-ReplaceAfterSeconds', '0')
-        waits = (self.work / 'replace_waits.txt').read_text(encoding='utf-8').split('\n')
-        first = waits[0].split()
-        self.assertEqual(first[1], 'until')   # the window's end goes with the call
-        self.assertLess(int(first[0]), 9)      # and its reply wait fits in the window
+        wait, until, now = self.placement_waits()[0]
+        # Review of #255, B8: the VALUE of until is the window's end as epoch seconds: the window starts right after the immunity goes.
+        off = float((self.work / 'immune_off_at.txt').read_text(encoding='utf-8'))
+        self.assertAlmostEqual(until, off + 9, delta=1.5)
+        self.assertLess(wait, until - now)   # and its reply wait fits in what is left of the window
+
+    def placement_waits(self):
+        rows = [line.split() for line in (self.work / 'replace_waits.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
+        return [(int(w), float(u), float(n)) for w, u, n in rows]
+
+    def test_no_re_placement_with_less_than_6_s_of_the_window_left(self):
+        # Review of #255, B7: a re-placement could go out with a 1 s reply wait, and a healthy slower reply then read as a lost driver.
+        # Each poll takes 2.5 s here, so the window's later re-placements would come with under 6 s left.
+        done, session = self.run_down('slow_poll', '-DownSeconds', '14', '-ReplaceAfterSeconds', '0')
+        calls = self.placement_waits()
+        self.assertTrue(calls, session)
+        for wait, until, now in calls:
+            self.assertGreaterEqual(until - now, 5.9, calls)
+            self.assertGreaterEqual(wait, 4, calls)
+        self.assertNotIn('stopped answering', session['stage_results']['den_down'])
 
     def test_health_read_once_then_unreadable_gives_no_second_placement(self):
         # Review of #255, B4: after a placement the health must be read again before another; here it never is.
@@ -1241,6 +1258,17 @@ class DpReplaceTest(unittest.TestCase):
         self.ns['time'] = self.Obj(time=lambda: next(ticks))
         self.assertEqual(self.ns['dp_replace'](until=1000.0), {'result': 'late'})
         self.assertEqual(self.placed, [])
+
+    def test_the_first_enemy_far_from_her_is_still_with_its_pack(self):
+        # Review of #255, B6: its distance of 0 from its own location was read as unknown, so with her more than 3500 from it, it fell out.
+        fresh = {'stale': None, 'CurrentValue': 50.0}
+        gd = 'GD_Invented.Character.'
+        self.pawns = [self.pawn(12, 500.0, fresh, kind=gd + 'CharClass_PrimalBeast'),
+                      self.pawn(14, 4000.0, fresh, kind=gd + 'CharClass_PrimalBeastAdult', at=(0.0, 4000.0))]
+        self.ns['DP']['trial'] = {'first': 'WillowAIPawn_14'}   # the first placement's enemy, the only adult, 4000 from her
+        got = self.ns['dp_replace']()
+        self.assertEqual((got['result'], got['rule'], got['enemy']), ('placed', 'first', 'WillowAIPawn_14'))
+        self.assertEqual(self.placed, [('WillowAIPawn_14', 1600.0, 180.0)])
 
     def test_only_the_pack_she_fought_is_ranked(self):
         # Review of #255, B2: an adult of another group, beyond 3500 of her and of the first placement's enemy, does not outrank the pack.

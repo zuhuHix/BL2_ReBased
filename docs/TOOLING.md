@@ -1527,7 +1527,8 @@ switches for the slice capture sessions. Each is off by default, so a run withou
   the same way: none starts in a window's last 6 s, a reply after the window is not taken, and the loops' pauses stop at the window's
   end. A re-placement gets the window's end with it (wall-clock seconds, the clock both sides read on this machine): a call that comes
   at or after it moves nothing and answers `late`, checked again right before the placement, and its reply wait is clamped to the
-  time left, so no placement runs after the window.
+  time left, so no placement runs after the window. None is sent with less than 6 s of the window left (the polls' own minimum), so
+  a slower healthy reply is not cut short into a lost driver.
 - **Driver lost**: one condition shared by the helpers and every stage. A reply that never came sets it wherever a command is
   sent: the capture's own commands (its `Py`, a probe load, the mission screen's two probe files), a den-down poll even when the
   window shortened its wait, the watch's start and its recovery stop after a failed start, its settle read, snapshots, pawn reads,
