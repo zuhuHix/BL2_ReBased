@@ -170,7 +170,8 @@ def base_package():
     # package exports), a selective collection on the leaf that replaces Alpha.
     for name in ('Body_A', 'Body_B', 'Cap_A', 'Cap_B'):
         p.add(f'GD_Syn.Shield.{name}', W + 'ShieldPartDefinition',
-              [('TitleList', Array([Ref('GD_Syn.Names.Title_Shield')]))] if name == 'Body_A' else [])
+              [('TitleList', Array([Ref('GD_Syn.Names.Title_Shield')]))] if name == 'Body_A' else
+              [('TitleList', Array([Ref(None)]))] if name == 'Cap_A' else [])  # an empty name entry: counted, left out
     p.add('GD_Syn.Shield.List_Alpha', W + 'ItemPartListDefinition', [
         ('WeightedParts', Array([weighted('GD_Syn.Shield.Body_A'),
                                  weighted('GD_Syn.Shield.Body_B', low=2, high=3, weight=0, makers=[(ALPHA, 4)])])),
@@ -181,6 +182,7 @@ def base_package():
         ('AlphaPartData', part_data([weighted('GD_Syn.Shield.Cap_A')])),
         ('BetaPartData', part_data([weighted('GD_Syn.Shield.Cap_B'), weighted('GD_Syn.Shield.Ghost')])),
         ('GammaPartData', part_data([weighted('GD_Syn.Shield.Cap_A')], enabled=False)),
+        ('IotaPartData', part_data([weighted('GD_Syn.Shield.Cap_A')])),  # a slot outside the nine: unlisted_classes
         ('PartReplacementMode', Enum('EPartReplacementMode', 'EPRM_Additive')), CONSOLIDATED])
     p.add('GD_Syn.Shield.Coll_Sel', W + 'ItemPartListCollectionDefinition', [
         ('AlphaPartData', part_data([weighted('GD_Syn.Shield.Body_B', low=2, high=3, weight=0, makers=[(ALPHA, 4)])])),
@@ -193,11 +195,15 @@ def base_package():
         ('BaseDefinition', Ref('GD_Syn.Grades.Shield_Base')), ('PartListCollection', Ref('GD_Syn.Shield.Coll_Sel'))])
     # One balance of every other item kind.
     p.add('GD_Syn.Grenade.Part', W + 'GrenadeModPartDefinition')
-    p.add('GD_Syn.Grenade.List', W + 'ItemPartListDefinition', [('WeightedParts', Array([weighted('GD_Syn.Grenade.Part')])),
-                                                               CONSOLIDATED])
+    p.add('GD_Syn.Grenade.Part2', W + 'GrenadeModPartDefinition')
+    p.add('GD_Syn.Grenade.List', W + 'ItemPartListDefinition', [
+        ('WeightedParts', Array([weighted('GD_Syn.Grenade.Part'), weighted(None)])), CONSOLIDATED])  # a row naming no part
+    p.add('GD_Syn.Grenade.Coll', W + 'ItemPartListCollectionDefinition', [  # no PartReplacementMode: additive
+        ('DeltaPartData', part_data([weighted('GD_Syn.Grenade.Part2')])), CONSOLIDATED])
     p.add('GD_Syn.Grenade.Def', W + 'GrenadeModDefinition', [('DeltaParts', Ref('GD_Syn.Grenade.List'))])
     p.add('GD_Syn.Grades.Grenade', W + 'InventoryBalanceDefinition', [
-        ('InventoryDefinition', Ref('GD_Syn.Grenade.Def')), ('Manufacturers', makers((BETA, [grade(1, 100)])))])
+        ('InventoryDefinition', Ref('GD_Syn.Grenade.Def')), ('Manufacturers', makers((BETA, [grade(1, 100)]))),
+        ('PartListCollection', Ref('GD_Syn.Grenade.Coll'))])
     p.add('GD_Syn.ClassMod.Part', W + 'ClassModPartDefinition')
     p.add('GD_Syn.ClassMod.Def_A', W + 'ClassModDefinition')
     p.add('GD_Syn.ClassMod.Def_B', W + 'ClassModDefinition')
@@ -229,6 +235,19 @@ def base_package():
         ('BarrelPartData', part_data([weighted('GD_Syn.Gun.Barrel_A'),
                                       weighted('GD_Syn.Gun.Barrel_B', weight=0, makers=[(BETA, 4)])])),
         ('PartReplacementMode', Enum('EPartReplacementMode', 'EPRM_Selective')), CONSOLIDATED])
+    p.add('GD_Syn.Gun.Grip_A', W + 'WeaponPartDefinition')
+    p.add('GD_Syn.Gun.Coll_Complete', W + 'WeaponPartListCollectionDefinition', [
+        ('GripPartData', part_data([weighted('GD_Syn.Gun.Grip_A')])),
+        ('PartReplacementMode', Enum('EPartReplacementMode', 'EPRM_Complete')), CONSOLIDATED])
+    p.add('GD_Syn.Gun.Complete', W + 'WeaponBalanceDefinition', [
+        ('BaseDefinition', Ref('GD_Syn.Gun.Balance')), ('WeaponPartListCollection', Ref('GD_Syn.Gun.Coll_Complete'))])
+    p.add('GD_Syn.Odd.Balance', W + 'SynthOddBalanceDefinition')
+    p.add('GD_Syn.Gun.Sight_A', W + 'WeaponPartDefinition')
+    p.add('GD_Syn.Gun.Coll_Turret', W + 'WeaponPartListCollectionDefinition', [
+        ('SightPartData', part_data([weighted('GD_Syn.Gun.Sight_A')])),
+        ('PartReplacementMode', Enum('EPartReplacementMode', 'EPRM_Selective')), CONSOLIDATED])
+    p.add('GD_Syn.Grades.Turret', W + 'InventoryBalanceDefinition', [  # an inventory balance naming a weapon type
+        ('InventoryDefinition', Ref('GD_Syn.Gun.Type')), ('PartListCollection', Ref('GD_Syn.Gun.Coll_Turret'))])  # a balance class the registry does not read
     p.add('GD_Syn.Gun.Balance', W + 'WeaponBalanceDefinition', [
         ('InventoryDefinition', Ref('GD_Syn.Gun.Type')), ('WeaponPartListCollection', Ref('GD_Syn.Gun.Coll')),
         ('Manufacturers', makers((BETA, [grade(1, 100)])))])
@@ -258,6 +277,7 @@ class RegistryTest(unittest.TestCase):
         dlc_package().save(game / 'DLC' / 'SynDLC' / 'Content' / 'SynDLC_Startup.upk')
         schema = Path(cls.folder.name) / 'registry.schema'
         schema.write_text('\n'.join(ir.SCHEMA_LINES) + '\n', encoding='utf-8')
+        cls.game, cls.schema = game, schema
         cls.census, dlc_by_file, cls.errors = ir.open_census(READER, game, str(schema), jobs=2)
         cls.registry, cls.report = ir.build(cls.census, dlc_by_file)
 
@@ -342,14 +362,48 @@ class RegistryTest(unittest.TestCase):
 
     def test_agrees_with_the_existing_tools(self):
         weapons = ir.check_weapons(self.census, self.registry)
-        self.assertEqual(weapons['counts'], {'equal': 3})
+        self.assertEqual(weapons['counts'], {'equal': 6})
         items = ir.check_items(self.census, self.registry)
         self.assertEqual(items['different'], [])
+        # Something with parts was compared, and the part-less balances are counted apart.
+        self.assertGreater(items['counts'].get('equal', 0), 0)
+        self.assertGreater(items['counts'].get('equal_both_empty', 0), 0)
         shield = ir.check_stock_shield(self.census, self.registry, balance='GD_Syn.Grades.Shield_Base', level=10)
         self.assertTrue(shield['equal'])
         # Alpha: Body_A, Body_B (stage 10 is inside 5..30), Cap_A; Beta: Cap_B (Ghost weighs 100 but is unresolved, kept).
         self.assertEqual(shield['parts_per_slot'], {'Alpha': 3, 'Beta': 2})
         self.assertEqual(shield['combinations'], 6)
+
+    def test_modes_and_skipped_rows(self):
+        balances = self.registry['balances']
+        grenade = balances['GD_Syn.Grades.Grenade']['variants'][0]
+        self.assertEqual([c['part'] for c in grenade['slots']['Delta']], ['GD_Syn.Grenade.Part', 'GD_Syn.Grenade.Part2'])
+        self.assertEqual([m['mode'] for m in grenade['merge']], ['definition', 'EPRM_Additive'])
+        complete = balances['GD_Syn.Gun.Complete']['variants'][0]
+        self.assertEqual({s: [c['part'] for c in e] for s, e in complete['slots'].items()}, {'Grip': ['GD_Syn.Gun.Grip_A']})
+        self.assertEqual(self.report['part_list_rows_naming_no_part']['rows'], 1)
+        self.assertEqual(self.report['name_list_entries_empty']['entries'], 1)
+        self.assertEqual(self.registry['parts']['GD_Syn.Shield.Cap_A']['title'], [])
+
+    def test_weapon_list_under_an_inventory_balance(self):
+        turret = self.registry['balances']['GD_Syn.Grades.Turret']
+        self.assertEqual(turret['kind'], 'weapon_by_inventory_balance')
+        self.assertEqual({s: [c['part'] for c in e] for s, e in turret['variants'][0]['slots'].items()},
+                         {'Sight': ['GD_Syn.Gun.Sight_A']})
+
+    def test_unlisted_classes(self):
+        self.assertEqual(self.report['unlisted_classes'], {'export_classes': {'SynthOddBalanceDefinition': 1},
+                                                           'part_data_properties': {'IotaPartData': 1}})
+        self.assertNotIn('GD_Syn.Odd.Balance', self.registry['balances'])
+
+    def test_same_bytes_twice(self):
+        self.assertNotIn('generated', self.registry)
+        census, dlc_by_file, _ = ir.open_census(READER, self.game, str(self.schema), jobs=2)
+        again, _ = ir.build(census, dlc_by_file)
+        first, second = Path(self.folder.name) / 'first.json', Path(self.folder.name) / 'second.json'
+        ir.write_json(first, self.registry)
+        ir.write_json(second, again)
+        self.assertEqual(first.read_bytes(), second.read_bytes())
 
     def test_output_stays_in_local(self):
         outside = Path(self.folder.name) / 'out'

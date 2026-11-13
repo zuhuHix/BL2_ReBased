@@ -18,17 +18,22 @@ hand-made card per item is not a base to build on. Weapons already had a census 
   `attribute_value` and the weight constants, `prepare_vendors.item_parts`' order (definition lists first, then each balance's
   collection, root first). The existing tools are compared with the registry on the same data: weapons against
   `weapon_recipe.merge` at three stages, 1,104 equal and 3 equal once the 4 rows that name no part are left out. Items
-  against `prepare_vendors.item_parts`: 4,719 equal, 0 different. The stock shield against `prepare_stock_shield.candidates`
+  against `prepare_vendors.item_parts`: 0 different; 891 comparisons (297 balances with part slots, three stages) test the
+  merge and all are equal, and 3,675 more are empty against empty (part-less balances) and test nothing about it. The stock shield against `prepare_stock_shield.candidates`
   at level 8: equal, 891 combinations.
 - **A class mod balance with several `ClassModDefinitions` gets one variant per definition** instead of one merged slot set: how the
   game picks among them is not read.
+- **A collection is read with the slots of its own class** (7 inventory balances naming a weapon type hold a weapon part list
+  collection). The census also counts every balance or part list class, and every `<X>PartData` slot, that the registry does not
+  read (`unlisted_classes`): on the install, four non-inventory balance classes and no slot.
+- **Output:** sorted keys and no timestamp in `registry.json`, so two runs over one install give the same bytes.
 - **Manufacturer and definition:** the leaf-most step that sets them, as the item tools read them. `weapon_recipe.merge` takes
-  the root-most; where they differ (20 balances) the registry writes both.
+  the root-most; they differ for 20 balances, all item balances (no weapon balance differs), and the registry writes both.
 
 **Verified:** the census on the zuhu desktop's install (counts in `ITEM_REGISTRY.md`). Every chain ends at a root. Every part,
 part list, definition, manufacturer, gestalt and name part named resolves to an export of the expected class, except one
 definition reference whose path is an item pool in its first package (one of 4 paths with two classes, all in DLC mission
-packages). Weapon counts equal `WEAPON_PARTS_CATALOG.md` section 1, in total and per DLC folder. The synthetic test
+packages): there the first-owner rule picks the wrong class, and that balance's kind (`no_definition`) is not settled. Weapon counts equal `WEAPON_PARTS_CATALOG.md` section 1, in total and per DLC folder. The synthetic test
 `tests/item_registry_test.py` (ctest `item-registry-synthetic`) builds invented packages and reads them with the real
 `ow-package`.
 

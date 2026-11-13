@@ -31,7 +31,9 @@ Rules (assumptions about the data; the ones that are game rules are UNVERIFIED f
   prepare_stock_shield do.
 
 Registry shape, schema "openwillow-item-registry/1" (field names are this tool's own):
-  schema, schema_line, generated, game, tool, rules[], slots {weapon: [...], item: [...]}
+  schema, schema_line, game, tool, rules[], slots {weapon: [...], item: [...]}
+  (keys are written sorted and the registry holds no timestamp, so two runs over one install give the same bytes; slot
+  order is the `slots` list, candidate order is the list order)
   balances {path: {class, kind, package, dlc, packages_holding, chain[leaf..root], chain_end, chain_missing,
       manufacturers [{manufacturer, grades [{min_stage, max_stage, exp_level, definition, spawn_probability {min, max}}]}],
       manufacturers_from, inventory_definition, class_mod_definitions[], definitions[], gestalt,
@@ -44,7 +46,9 @@ Registry shape, schema "openwillow-item-registry/1" (field names are this tool's
   parts {path: {class, kind, package, dlc, part_type, manufacturer_scope, prefix[], title[], gestalt_fragments[], material,
       balances[]}}
   part_lists, name_parts, manufacturers, gestalts {path: {class, package, dlc}}
-The census (census.json) holds counts, the skipped objects with their reason and the references that did not resolve.
+The census (census.json, with the run's timestamp) holds counts, the skipped objects with their reason, the references that
+did not resolve, and unlisted_classes: export classes ending in BalanceDefinition, PartListCollectionDefinition or
+PartListDefinition that the registry does not read, and <X>PartData properties outside the slots it reads (each with a count).
 """
 import argparse
 import concurrent.futures
@@ -87,6 +91,9 @@ PART_KINDS = {
 LIST_CLASSES = {'ItemPartListDefinition', 'ItemPartListCollectionDefinition', 'WeaponPartListDefinition',
                 'WeaponPartListCollectionDefinition'}
 NAME_PART_CLASSES = {'ItemNamePartDefinition', 'WeaponNamePartDefinition'}
+# Export classes with these endings that the tables above do not list are counted in the census (unlisted_classes), so a
+# balance or part list of a class this tool does not know is never dropped without a line.
+UNLISTED_SUFFIXES = ('BalanceDefinition', 'PartListCollectionDefinition', 'PartListDefinition')
 WEAPON_SLOTS = list(weapon_recipe.SLOTS)
 ITEM_SLOTS = list(pv.ITEM_SLOTS)
 # Stages the census evaluates the candidates at to compare them with the existing tools (any three will do: low, mid, cap).
@@ -138,6 +145,8 @@ class RegistryCensus(weapon_catalog.Census):
         self.failed = {}  # path -> decode error
         self.null_part_entries = Counter()  # part list -> WeightedParts rows that name no part (skipped, counted)
         self.null_name_entries = Counter()  # definition or part -> PrefixList / TitleList entries that are empty
+        self.unlisted_classes = Counter()  # export classes that look like balances or part lists but are not registry classes
+        self.unlisted_part_data = defaultdict(set)  # <X>PartData property outside the slots read -> collections naming it
 
     def add(self, path, cls, file):
         name = short(cls)
@@ -145,6 +154,8 @@ class RegistryCensus(weapon_catalog.Census):
             if relevant(name):
                 self.class_defaults[name] += 1
             return
+        if relevant(name) and path in self.classes and path not in self.holders:
+            self.holders[path].append(self.owner[path])  # the first holder had a class the registry does not list
         if relevant(name) or path in self.holders:
             self.holders[path].append(file)
         if path in self.classes:
@@ -155,6 +166,8 @@ class RegistryCensus(weapon_catalog.Census):
             return
         self.classes[path] = cls
         self.owner[path] = file
+        if not relevant(name) and name.endswith(UNLISTED_SUFFIXES):
+            self.unlisted_classes[name] += 1
 
     def get(self, path):
         """Decoded properties, or None (no package holds the path, or it does not decode; the reason is kept)."""
@@ -235,6 +248,9 @@ def list_slots(census, path, slots):
     if props is None:
         return None, None
     consolidated = props.get('ConsolidatedAttributeInitData') or []
+    for key in props:
+        if key.endswith('PartData') and key[:-len('PartData')] not in slots:
+            census.unlisted_part_data[key].add(path)
     found = {}
     for slot in slots:
         data = props.get(f'{slot}PartData')
@@ -342,13 +358,17 @@ def variant_slots(census, steps_root_first, definition, weapon):
             props.get('PartListCollection') or props.get('ItemPartListCollection'))
         if not collection:
             continue
-        found, mode = list_slots(census, collection, slots)
+        # The collection's own class names its slots: a few inventory balances naming a weapon type hold a weapon part
+        # list collection under PartListCollection, and reading it with the item slots would drop its rows.
+        is_weapon_list = short(census.classes.get(collection, '')) == 'WeaponPartListCollectionDefinition'
+        found, mode = list_slots(census, collection, WEAPON_SLOTS if is_weapon_list else slots)
         if found is None:
             problems.append(('part list', collection))
             continue
         history.append({'source': step, 'list': collection, 'mode': mode, 'slots': sorted(found)})
         merged = weapon_recipe.merge_slots(merged, found, mode)
-    return {slot: merged[slot] for slot in slots if slot in merged}, history, problems
+    order = list(dict.fromkeys(slots + WEAPON_SLOTS))  # the balance's own slots first, then weapon slots a list added
+    return {slot: merged[slot] for slot in order if slot in merged}, history, problems
 
 
 def balance_record(census, path, dlc_of):
@@ -518,7 +538,7 @@ def build(census, dlc_by_file):
 
     registry = {
         'schema': SCHEMA_TAG, 'schema_line': SCHEMA_LINE,
-        'generated': datetime.datetime.now().isoformat(timespec='seconds'), 'game': str(census.game),
+        'game': str(census.game),
         'tool': 'tools/item_registry.py', 'rules': RULES,
         'slots': {'weapon': WEAPON_SLOTS, 'item': ITEM_SLOTS},
         'balances': balances, 'definitions': definitions, 'parts': parts,
@@ -647,14 +667,14 @@ def census_report(census, registry, by_class, skipped, skipped_examples, problem
     for name, count in census.class_defaults.items():
         skipped_all[f'{name}: class default object (Default__), not a game object'] = count
     return {
-        'schema': SCHEMA_TAG + '/census', 'generated': registry['generated'],
+        'schema': SCHEMA_TAG + '/census', 'generated': datetime.datetime.now().isoformat(timespec='seconds'),
         'objects_by_class': {name: len(paths) for name, paths in sorted(by_class.items())},
         'balances_by_kind': {k: dict(sorted(v.items())) for k, v in sorted(per_kind.items())},
         'definitions_by_kind': dict(sorted(definitions_by_kind.items())),
         'definitions_without_balance_by_kind': dict(sorted(definitions_unused.items())),
         'parts_by_kind': dict(sorted(parts_by_kind.items())),
         'parts_no_balance_lists_by_kind': dict(sorted(parts_unlisted.items())),
-        'parts_per_slot': {k: {s: len(v[s]) for s in (WEAPON_SLOTS if k == 'weapon' else ITEM_SLOTS) if s in v}
+        'parts_per_slot': {k: {s: len(v[s]) for s in dict.fromkeys((WEAPON_SLOTS + ITEM_SLOTS) if k.startswith('weapon') else (ITEM_SLOTS + WEAPON_SLOTS)) if s in v}
                            for k, v in sorted(slot_cover.items())},
         'enabled_slots_left_empty': {k: dict(v) for k, v in sorted(slot_empty.items())},
         'candidate_values_needing_runtime_state': dict(unresolved_values),
@@ -662,6 +682,8 @@ def census_report(census, registry, by_class, skipped, skipped_examples, problem
         'by_dlc': {d: dict(sorted(c.items())) for d, c in sorted(per_dlc.items())},
         'paths_in_several_packages_by_class': dict(sorted(holders_many.items())),
         'paths_with_two_classes': census.conflicts,
+        'unlisted_classes': {'export_classes': dict(sorted(census.unlisted_classes.items())),
+                             'part_data_properties': {k: len(v) for k, v in sorted(census.unlisted_part_data.items())}},
         'skipped': dict(sorted(skipped_all.items())), 'skipped_examples': dict(skipped_examples),
         'decode_failures': census.failed,
         'part_list_rows_naming_no_part': {'rows': sum(census.null_part_entries.values()),
@@ -719,6 +741,9 @@ def check_items(census, registry, stages=CHECK_STAGES):
     for path, record in registry['balances'].items():
         if record['kind'] == 'weapon' or record['chain_end'] != 'root':
             continue
+        if record['kind'] == 'weapon_by_inventory_balance':  # weapon slots; prepare_vendors reads item slots only
+            result['not_compared_weapon_type'] += 1
+            continue
         if not record['inventory_definition']:
             result['not_compared_no_definition'] += 1
             continue
@@ -741,7 +766,8 @@ def check_items(census, registry, stages=CHECK_STAGES):
                 if keep:
                     ordered[slot] = list(dict.fromkeys(keep))
             if ordered == expected:
-                result['equal'] += 1
+                # Empty against empty (no part slot on either side) tests nothing about the merge; counted apart.
+                result['equal_both_empty' if not ordered else 'equal'] += 1
             else:
                 result['different'] += 1
                 differ.append({'balance': path, 'stage': stage})
@@ -806,7 +832,8 @@ def run(reader, game, out_dir, jobs=8, checks=True):
 
 def write_json(path, data):
     temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    # Sorted keys: two runs over the same install give the same bytes (slot order is in the registry's `slots` list).
+    temporary.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':'), sort_keys=True), encoding='utf-8')
     temporary.replace(path)
 
 
@@ -829,6 +856,7 @@ def summary_lines(report):
     lines.append('objects by class: ' + json.dumps(report['objects_by_class']))
     lines.append('paths held by several packages, by class: ' + json.dumps(report['paths_in_several_packages_by_class']))
     lines.append(f"paths with two classes: {len(report['paths_with_two_classes'])}")
+    lines.append('unlisted classes: ' + json.dumps(report['unlisted_classes']))
     lines.append('skipped: ' + json.dumps(report['skipped']))
     lines.append(f"decode failures: {len(report['decode_failures'])}")
     lines.append(f"part list rows naming no part: {report['part_list_rows_naming_no_part']['rows']} in "
