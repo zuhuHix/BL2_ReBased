@@ -7,6 +7,7 @@ import json
 import math
 import re
 import subprocess
+import realgame_test_env  # noqa: F401  (PowerShell children: a stand-in OPENWILLOW_BL2, which realgame.ps1 needs, and a fresh pending folder)
 import sys
 import tempfile
 import unittest
