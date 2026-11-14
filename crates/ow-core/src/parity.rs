@@ -10,8 +10,8 @@
 //! [`init_parity_mode`] first thing in `main`, report a bad value and exit, and pass the resulting [`ParityMode`] value
 //! down. Library crates never read it: they take a `ParityMode` argument (`GameRng::from_world_seed(seed, mode)`,
 //! `Vm::new(.., mode)`), so one test process can build both modes with [`mode_from_value`].
-//! `tests/crate_edges_test.py` refuses `parity_mode(`, `init_parity_mode`, `mode_from_env`, `ENV_VAR` and the string
-//! `"OW_PARITY"` anywhere else.
+//! `tests/crate_edges_test.py` refuses the names `parity_mode`, `init_parity_mode`, `mode_from_env` and `ENV_VAR`
+//! anywhere else, and the string `"OW_PARITY"` outside the binaries and their `tests/`.
 //!
 //! It lives in `ow-core` because `ow-core` and `ow-vm` need the type and may not depend on `ow-cli`.
 

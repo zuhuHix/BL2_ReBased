@@ -1,6 +1,7 @@
 //! The scaffold's promise: every command exits 3 with a "not ported" message until its lane ports it.
 //!
-//! This file drives the binary, so it may name the parity variable (tests/crate_edges_test.py allows it here only).
+//! This file drives the binary, so it may name the parity variable for the child process (tests/crate_edges_test.py
+//! allows the string in `crates/*/tests/`); it never reads the mode itself.
 
 use std::process::Command;
 

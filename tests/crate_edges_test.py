@@ -16,6 +16,7 @@ What it checks:
 Each check also has a case proving it fails on a deliberately bad input.
 """
 
+import fnmatch
 import pathlib
 import re
 import shutil
@@ -55,27 +56,39 @@ EDGES['ow-host'] = list(_LIBRARIES)  # everything except ow-cli
 CRATES = set(EDGES)
 
 # The float functions every rule reaches only through ow_core::num (5.1 N3): powers, exponentials, logarithms, roots,
-# trigonometry. Both the method form (`x.sqrt()`) and the path form (`f64::sqrt(x)`) are refused.
-_N3_FUNCTIONS = ('powf|powi|exp|exp2|exp_m1|ln|ln_1p|log|log2|log10|sqrt|cbrt|hypot|sin|cos|tan|sin_cos|asin|acos|atan|'
-                 'atan2|sinh|cosh|tanh')
-_PARITY_READERS = {'crates/ow-core/src/parity.rs', 'crates/ow-cli/src/main.rs', 'crates/ow-host/src/main.rs',
-                   # drives the binary with OW_PARITY set and unset; it reads nothing itself
-                   'crates/ow-cli/tests/not_ported.rs'}
+# trigonometry. The method form (`x.sqrt()`) and the path forms (`f64::sqrt(x)`, `<f64>::sqrt(x)`) are refused.
+# The method form matches any method of these names, so rule code must not name its own methods after them (a
+# `tracer.log(line)` would fail here): call it `record`, `trace` or similar instead.
+_N3_FUNCTIONS = ('powf|powi|exp|exp2|exp_m1|ln|ln_1p|ln_gamma|log|log2|log10|sqrt|cbrt|hypot|sin|cos|tan|sin_cos|asin|'
+                 'acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh')
+# Where the parity mode may be read (architecture rule R3): the mode's own module and the binaries' main.rs.
+_PARITY_READERS = {'crates/ow-core/src/parity.rs', 'crates/ow-cli/src/main.rs', 'crates/ow-host/src/main.rs'}
+# Tests that drive a binary may also name the variable, to set it for the child process (fnmatch patterns).
+_PARITY_VAR_NAMERS = _PARITY_READERS | {'crates/*/tests/*.rs'}
 
-# Sections 5.1 and 15. Each entry: name, regex, files (relative to the root, '/' separators) where it is allowed.
+# Sections 5.1 and 15. Each entry: name, regex, files (relative to the root, '/' separators, fnmatch patterns allowed)
+# where it is allowed.
 BANNED = [
     ('N2 fused multiply-add', re.compile(r'\bmul_add\b'), set()),
     ('N3 float function outside ow_core::num',
-     re.compile(rf'\.(?:{_N3_FUNCTIONS})\s*\(|\b(?:f32|f64)\s*::\s*(?:{_N3_FUNCTIONS})\b'),
+     re.compile(rf'\.(?:{_N3_FUNCTIONS})\s*\(|(?:\b(?:f32|f64)|<\s*(?:f32|f64)\s*>)\s*::\s*(?:{_N3_FUNCTIONS})\b'),
      {'crates/ow-core/src/num.rs'}),
     # HashMap/HashSet by name at all: ::new, ::default, ::with_capacity, ::from, collect() into one, all hidden behind
     # one identifier. The fixed-hasher aliases live in detmap.rs (FixedHashMap, FixedHashSet).
     ('N7 std HashMap/HashSet outside ow_core::detmap', re.compile(r'\b(?:HashMap|HashSet)\b'),
      {'crates/ow-core/src/detmap.rs'}),
+    # The identifier parity_mode at all, not only a call: it also catches `let f = parity::parity_mode;`,
+    # `use ow_core::parity::parity_mode as pm;` (the later `pm()` cannot be read without it) and
+    # `.get_or_init(parity_mode)`. A library names the mode by its type, `ParityMode`, which this does not match.
     ('R3 parity mode read outside a binary',
-     re.compile(r'\b(?:parity_mode\s*\(|init_parity_mode\b|mode_from_env\b|ENV_VAR\b)|"OW_PARITY"'),
+     re.compile(r'\b(?:parity_mode|init_parity_mode|mode_from_env|ENV_VAR)\b'),
      _PARITY_READERS),
+    ('R3 parity variable named outside a binary or its test', re.compile(r'"OW_PARITY"'), _PARITY_VAR_NAMERS),
 ]
+
+
+def _allowed(rel, allowed):
+    return any(fnmatch.fnmatchcase(rel, pattern) for pattern in allowed)
 
 
 def closure(crate, edges=EDGES):
@@ -147,7 +160,7 @@ def check_banned(root):
             continue
         code = _strip_comments(path.read_text(encoding='utf-8'))
         for name, pattern, allowed in BANNED:
-            if rel in allowed:
+            if _allowed(rel, allowed):
                 continue
             for number, line in enumerate(code.splitlines(), 1):
                 if pattern.search(line):
@@ -277,12 +290,15 @@ class FailsOnBadInput(unittest.TestCase):
             'fn p() { let s: HashSet<u8> = [1].into_iter().collect(); }\n'
             'fn q() { let m = Vec::<HashMap<u8, Vec<u8>>>::with_capacity(1); }\n'
             'fn r() { let m: ow_core::FixedHashMap<u8, u8> = Default::default(); }\n'
-            'fn s(v: &[u8]) -> Option<u8> { v.iter().max().copied() }\n', encoding='utf-8')
+            'fn s(v: &[u8]) -> Option<u8> { v.iter().max().copied() }\n'
+            'fn t(x: f64) -> f64 { <f64>::sqrt(x) }\n'
+            'fn u(x: f64) -> f64 { x.asinh() + < f32 >::atanh(0.5) as f64 }\n', encoding='utf-8')
         found = check_banned(self.tmp)
         names = [p.split(': ')[1] for p in found]
         self.assertEqual(names.count('N2 fused multiply-add'), 1)
-        # powf/exp on one line, sqrt, sin (with a space before the bracket), the f64::atan2 path form
-        self.assertEqual(names.count('N3 float function outside ow_core::num'), 4, found)
+        # powf/exp on one line, sqrt, sin (with a space before the bracket), the f64::atan2 path form, the <f64>::
+        # path form (line 14), asinh and < f32 >::atanh (line 15)
+        self.assertEqual(names.count('N3 float function outside ow_core::num'), 6, found)
         # h, k, o, p, q: every way of naming the std containers; r (the fixed-hasher alias) passes
         self.assertEqual(names.count('N7 std HashMap/HashSet outside ow_core::detmap'), 5, found)
         self.assertFalse(any('bad.rs:12:' in p or 'bad.rs:13:' in p for p in found), found)
@@ -303,14 +319,28 @@ class FailsOnBadInput(unittest.TestCase):
             'fn d() { let _ = std::env::var("OW_PARITY"); }\n'
             'fn e() { let _ = ow_core::parity::mode_from_env(); }\n'
             'fn f(m: ow_core::ParityMode) -> bool { m == ow_core::ParityMode::Reference }\n'
-            'fn g() { let _ = ow_core::mode_from_value(Some("reference")); }\n', encoding='utf-8')
+            'fn g() { let _ = ow_core::mode_from_value(Some("reference")); }\n'
+            'fn h() { let f = ow_core::parity::parity_mode; let _ = f(); }\n'
+            'use ow_core::parity::parity_mode as pm;\n'
+            'use ow_core::parity::{\n    parity_mode,\n};\n'
+            'fn k(c: &std::sync::OnceLock<ow_core::ParityMode>) { c.get_or_init(parity_mode); }\n', encoding='utf-8')
+        lines = lambda found: sorted(int(p.split(':')[1]) for p in found)
         found = [p for p in check_banned(self.tmp) if 'R3 parity' in p]
-        self.assertEqual([p.split(':')[1] for p in found], ['2', '3', '4', '5', '6'], found)
+        # lines 7 and 8 (the type and mode_from_value) pass; 9-14 are the indirect reads
+        self.assertEqual(lines(found), [2, 3, 4, 5, 6, 9, 10, 12, 14], found)
+        # A test that drives the binary may name the variable, but still may not read the mode in-process.
+        tests = self.tmp / 'crates' / 'ow-cli' / 'tests'
+        tests.mkdir(parents=True)
+        (tests / 'drive.rs').write_text(
+            'const VAR: &str = "OW_PARITY";\n'
+            'fn t() { let _ = ow_core::parity::parity_mode(); }\n', encoding='utf-8')
+        found = [p for p in check_banned(self.tmp) if 'drive.rs' in p]
+        self.assertEqual(lines(found), [2], found)
         main = self.tmp / 'crates' / 'ow-cli' / 'src'
         main.mkdir(parents=True)
         (main / 'main.rs').write_text('fn main() { let _ = ow_core::parity::init_parity_mode(); }\n',
                                       encoding='utf-8')
-        self.assertFalse(any('ow-cli' in p for p in check_banned(self.tmp)))
+        self.assertFalse(any('ow-cli/src/main.rs' in p for p in check_banned(self.tmp)))
 
     def test_a_cxx_flag_without_a_rust_entry_fails(self):
         (self.tmp / 'src').mkdir()

@@ -79,7 +79,8 @@ pub struct Command {
     pub flag: &'static str,
     pub position: Position,
     pub family: Family,
-    /// The options this command takes after its flag, as in the C++ usage text. Read by the owner lane's parser.
+    /// The options this command takes after its flag, as in the C++ usage text (the Rust-only ones as architecture
+    /// section 15 lists them). The usage record only: each `cmd/` module parses its own trailing arguments.
     #[allow(dead_code)]
     pub options: &'static [&'static str],
 }
