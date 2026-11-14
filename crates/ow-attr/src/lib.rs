@@ -20,3 +20,4 @@ pub mod storage;
 pub mod value_resolvers;
 
 pub use registry::AttributeSystem;
+pub use stack::ModifierId;

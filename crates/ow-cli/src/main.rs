@@ -12,8 +12,12 @@ mod json;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    // The parity mode is read once, at start-up (architecture rule R3); a bad OW_PARITY value stops the run here.
-    let _ = ow_core::parity_mode();
+    // The parity mode is read once, at start-up (architecture rule R3). A bad OW_PARITY value is an error like any
+    // other bad command line: message on stderr, exit 1. Command families get the mode from parity::parity_mode().
+    if let Err(e) = ow_core::parity::init_parity_mode() {
+        eprintln!("ow-package: {e}");
+        return ExitCode::from(1);
+    }
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())

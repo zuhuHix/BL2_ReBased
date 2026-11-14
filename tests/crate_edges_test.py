@@ -1,4 +1,4 @@
-"""AI-assisted (Claude Code). Checks the Rust workspace's shape (architecture of the Rust port, revision 2, sections 2.2 and 5.1).
+"""AI-assisted (Claude Code). Checks the Rust workspace's shape (Rust port architecture, sections 2.2, 5.1 and 15).
 
 Stdlib only (tomllib). Run: python tests/crate_edges_test.py
 
@@ -7,8 +7,12 @@ What it checks:
     the edge table below (an edge outside it fails);
   - no dependency is anything but a workspace crate by path (no third-party crate; AGENTS.md rule 6), and Cargo.lock
     holds no package with a `source`;
-  - the banned numeric and determinism patterns (N2, N3, N7) appear in no Rust file outside the places allowed;
-  - every flag of src/cli.cpp's usage text has an entry in the Rust CLI's dispatch table (crates/ow-cli/src/args.rs).
+  - the banned patterns appear in no Rust file outside the places allowed: N2 `mul_add`; N3 the float functions
+    (powers, exponentials, logarithms, roots, trigonometry) outside ow-core/src/num.rs; N7 the std HashMap/HashSet
+    outside ow-core/src/detmap.rs (which holds the fixed-hasher aliases); R3 reading the parity mode outside the
+    binaries' main.rs;
+  - every flag of src/cli.cpp's usage text has an entry or option in the Rust CLI's dispatch table
+    (crates/ow-cli/src/args.rs), and every flag src/cli.cpp's main() dispatches on has a cmd("--flag" entry.
 Each check also has a case proving it fails on a deliberately bad input.
 """
 
@@ -50,12 +54,27 @@ EDGES['ow-cli'] = list(_LIBRARIES)   # everything except ow-host
 EDGES['ow-host'] = list(_LIBRARIES)  # everything except ow-cli
 CRATES = set(EDGES)
 
-# Section 5.1. Each entry: name, regex, files (relative to the root, '/' separators) where the pattern is allowed.
+# The float functions every rule reaches only through ow_core::num (5.1 N3): powers, exponentials, logarithms, roots,
+# trigonometry. Both the method form (`x.sqrt()`) and the path form (`f64::sqrt(x)`) are refused.
+_N3_FUNCTIONS = ('powf|powi|exp|exp2|exp_m1|ln|ln_1p|log|log2|log10|sqrt|cbrt|hypot|sin|cos|tan|sin_cos|asin|acos|atan|'
+                 'atan2|sinh|cosh|tanh')
+_PARITY_READERS = {'crates/ow-core/src/parity.rs', 'crates/ow-cli/src/main.rs', 'crates/ow-host/src/main.rs',
+                   # drives the binary with OW_PARITY set and unset; it reads nothing itself
+                   'crates/ow-cli/tests/not_ported.rs'}
+
+# Sections 5.1 and 15. Each entry: name, regex, files (relative to the root, '/' separators) where it is allowed.
 BANNED = [
     ('N2 fused multiply-add', re.compile(r'\bmul_add\b'), set()),
-    ('N3 power or exponential outside ow_core::num',
-     re.compile(r'\bpowf\b|\bpowi\b|\.exp\(|\.ln\(|::exp\b|::ln\b'), {'crates/ow-core/src/num.rs'}),
-    ('N7 HashMap/HashSet with the random hasher', re.compile(r'\b(?:HashMap|HashSet)\s*(?:::\s*<[^>]*>\s*)?::\s*new\b'), set()),
+    ('N3 float function outside ow_core::num',
+     re.compile(rf'\.(?:{_N3_FUNCTIONS})\s*\(|\b(?:f32|f64)\s*::\s*(?:{_N3_FUNCTIONS})\b'),
+     {'crates/ow-core/src/num.rs'}),
+    # HashMap/HashSet by name at all: ::new, ::default, ::with_capacity, ::from, collect() into one, all hidden behind
+    # one identifier. The fixed-hasher aliases live in detmap.rs (FixedHashMap, FixedHashSet).
+    ('N7 std HashMap/HashSet outside ow_core::detmap', re.compile(r'\b(?:HashMap|HashSet)\b'),
+     {'crates/ow-core/src/detmap.rs'}),
+    ('R3 parity mode read outside a binary',
+     re.compile(r'\b(?:parity_mode\s*\(|init_parity_mode\b|mode_from_env\b|ENV_VAR\b)|"OW_PARITY"'),
+     _PARITY_READERS),
 ]
 
 
@@ -145,11 +164,21 @@ def cxx_usage_flags(root):
     return set(re.findall(r'--[a-z][a-z-]*', text))
 
 
+def cxx_dispatch_flags(root):
+    """The command flags src/cli.cpp's main() dispatches on, whether or not the usage text names them."""
+    source = (root / 'src' / 'cli.cpp').read_text(encoding='utf-8')
+    return set(re.findall(r'(?:\bmode|std::string\(argv\[1\]\))\s*==\s*"(--[a-z][a-z-]*)"', source))
+
+
 def check_cli_flags(root):
-    table = (root / 'crates' / 'ow-cli' / 'src' / 'args.rs').read_text(encoding='utf-8')
-    known = set(re.findall(r'"(--[a-z][a-z-]*)"', _strip_comments(table)))
-    return [f'crates/ow-cli/src/args.rs: no dispatch entry or option for {flag} (src/cli.cpp usage)'
-            for flag in sorted(cxx_usage_flags(root) - known)]
+    table = _strip_comments((root / 'crates' / 'ow-cli' / 'src' / 'args.rs').read_text(encoding='utf-8'))
+    known = set(re.findall(r'"(--[a-z][a-z-]*)"', table))
+    commands = set(re.findall(r'\bcmd\(\s*"(--[a-z][a-z-]*)"', table))
+    problems = [f'crates/ow-cli/src/args.rs: no dispatch entry or option for {flag} (src/cli.cpp usage)'
+                for flag in sorted(cxx_usage_flags(root) - known)]
+    problems += [f'crates/ow-cli/src/args.rs: no cmd("{flag}" dispatch entry (src/cli.cpp main)'
+                 for flag in sorted(cxx_dispatch_flags(root) - commands)]
+    return problems
 
 
 class WorkspaceShape(unittest.TestCase):
@@ -161,6 +190,10 @@ class WorkspaceShape(unittest.TestCase):
 
     def test_every_cxx_flag_has_a_rust_entry(self):
         self.assertGreater(len(cxx_usage_flags(ROOT)), 40)
+        dispatched = cxx_dispatch_flags(ROOT)
+        self.assertGreaterEqual(len(dispatched), 36)
+        self.assertIn('--mover-event', dispatched)   # dispatched, though the usage text does not name it
+        self.assertIn('--native-selftest', dispatched)
         self.assertEqual(check_cli_flags(ROOT), [])
 
     def test_the_table_itself(self):
@@ -236,15 +269,48 @@ class FailsOnBadInput(unittest.TestCase):
             'fn f(a: f32) -> f32 { a.mul_add(2.0, 1.0) }\n'
             'fn g(a: f64) -> f64 { a.powf(2.0) + a.exp() }\n'
             'fn h() { let m: std::collections::HashMap<u8, u8> = std::collections::HashMap::new(); }\n'
-            'fn k() { let s = HashSet::<u8>::new(); }\n', encoding='utf-8')
-        names = [p.split(': ')[1] for p in check_banned(self.tmp)]
+            'fn k() { let s = HashSet::<u8>::new(); }\n'
+            'fn l() -> f64 { 2.0f64.sqrt() }\n'
+            'fn m(a: f32) -> f32 { a.sin () }\n'
+            'fn n(y: f64, x: f64) -> f64 { f64::atan2(y, x) }\n'
+            'fn o() { let m: HashMap<u8, u8> = HashMap::default(); }\n'
+            'fn p() { let s: HashSet<u8> = [1].into_iter().collect(); }\n'
+            'fn q() { let m = Vec::<HashMap<u8, Vec<u8>>>::with_capacity(1); }\n'
+            'fn r() { let m: ow_core::FixedHashMap<u8, u8> = Default::default(); }\n'
+            'fn s(v: &[u8]) -> Option<u8> { v.iter().max().copied() }\n', encoding='utf-8')
+        found = check_banned(self.tmp)
+        names = [p.split(': ')[1] for p in found]
         self.assertEqual(names.count('N2 fused multiply-add'), 1)
-        self.assertEqual(names.count('N3 power or exponential outside ow_core::num'), 1)
-        self.assertEqual(names.count('N7 HashMap/HashSet with the random hasher'), 2)
+        # powf/exp on one line, sqrt, sin (with a space before the bracket), the f64::atan2 path form
+        self.assertEqual(names.count('N3 float function outside ow_core::num'), 4, found)
+        # h, k, o, p, q: every way of naming the std containers; r (the fixed-hasher alias) passes
+        self.assertEqual(names.count('N7 std HashMap/HashSet outside ow_core::detmap'), 5, found)
+        self.assertFalse(any('bad.rs:12:' in p or 'bad.rs:13:' in p for p in found), found)
         num = self.tmp / 'crates' / 'ow-core' / 'src'
         num.mkdir(parents=True)
-        (num / 'num.rs').write_text('pub fn p(a: f64) -> f64 { a.powf(2.0) }\n', encoding='utf-8')
-        self.assertFalse(any('num.rs' in p for p in check_banned(self.tmp)))
+        (num / 'num.rs').write_text('pub fn p(a: f64) -> f64 { a.powf(2.0) + f64::sqrt(a) }\n', encoding='utf-8')
+        (num / 'detmap.rs').write_text('pub type M<K, V> = std::collections::HashMap<K, V>;\n', encoding='utf-8')
+        self.assertEqual([p for p in check_banned(self.tmp) if 'ow-core' in p], [])
+
+    def test_reading_the_parity_mode_in_a_library_fails(self):
+        src = self.tmp / 'crates' / 'ow-vm' / 'src'
+        src.mkdir(parents=True)
+        (src / 'bad.rs').write_text(
+            '//! parity_mode() in a doc line is fine\n'
+            'fn a() -> ow_core::ParityMode { ow_core::parity::parity_mode() }\n'
+            'fn b() { let _ = ow_core::parity::init_parity_mode(); }\n'
+            'fn c() { let _ = std::env::var(ow_core::parity::ENV_VAR); }\n'
+            'fn d() { let _ = std::env::var("OW_PARITY"); }\n'
+            'fn e() { let _ = ow_core::parity::mode_from_env(); }\n'
+            'fn f(m: ow_core::ParityMode) -> bool { m == ow_core::ParityMode::Reference }\n'
+            'fn g() { let _ = ow_core::mode_from_value(Some("reference")); }\n', encoding='utf-8')
+        found = [p for p in check_banned(self.tmp) if 'R3 parity' in p]
+        self.assertEqual([p.split(':')[1] for p in found], ['2', '3', '4', '5', '6'], found)
+        main = self.tmp / 'crates' / 'ow-cli' / 'src'
+        main.mkdir(parents=True)
+        (main / 'main.rs').write_text('fn main() { let _ = ow_core::parity::init_parity_mode(); }\n',
+                                      encoding='utf-8')
+        self.assertFalse(any('ow-cli' in p for p in check_banned(self.tmp)))
 
     def test_a_cxx_flag_without_a_rust_entry_fails(self):
         (self.tmp / 'src').mkdir()
@@ -257,6 +323,20 @@ class FailsOnBadInput(unittest.TestCase):
                                       encoding='utf-8')
         self.assertEqual(check_cli_flags(self.tmp),
                          ['crates/ow-cli/src/args.rs: no dispatch entry or option for --brand-new (src/cli.cpp usage)'])
+
+    def test_a_dispatched_cxx_flag_without_a_cmd_entry_fails(self):
+        # Like --mover-event: dispatched by main() but absent from the usage text; an option string is not enough.
+        (self.tmp / 'src').mkdir()
+        (self.tmp / 'src' / 'cli.cpp').write_text(
+            'void usage() {\n    throw std::runtime_error("usage: ow-package <package> [--names]");\n}\n'
+            'int main(int argc, char** argv) {\n    if (std::string(argv[1]) == "--first") return 0;\n'
+            '    if (mode == "--names") return 0;\n    if (mode == "--hidden") return 0;\n}\n', encoding='utf-8')
+        args = self.tmp / 'crates' / 'ow-cli' / 'src'
+        args.mkdir(parents=True)
+        (args / 'args.rs').write_text('const C: &[Command] = &[cmd(\n    "--names", P, F::Tables, &["--hidden"]),\n'
+                                      '    cmd("--first", First, F::Vm, &[])];\n', encoding='utf-8')
+        self.assertEqual(check_cli_flags(self.tmp),
+                         ['crates/ow-cli/src/args.rs: no cmd("--hidden" dispatch entry (src/cli.cpp main)'])
 
 
 if __name__ == '__main__':

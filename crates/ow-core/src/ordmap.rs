@@ -8,7 +8,10 @@
 //!
 //! It is a plain vector of pairs with a linear key search. That is deliberate: it is easy to check, and the maps rule
 //! code builds here (part candidates, pool entries) are small. A caller with a large map that is only looked up, never
-//! iterated, can keep a separate index.
+//! iterated, can keep a separate index. Lookups and [`OrderedMap::shift_remove`] take any borrowed form of the key
+//! (`&str` for a `String` key), as the std maps do.
+
+use std::borrow::Borrow;
 
 /// A map that iterates in insertion order. See the module documentation for the insert rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +37,14 @@ impl<K: Eq, V> OrderedMap<K, V> {
         Self::default()
     }
 
-    fn position(&self, key: &K) -> Option<usize> {
-        self.entries.iter().position(|(k, _)| k == key)
+    // Lookups take any borrowed form of the key, as the std maps do (`map.get("name")` on `OrderedMap<String, _>`).
+    // As there, the borrowed form must compare equal exactly when the keys do.
+    fn position<Q>(&self, key: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
+        self.entries.iter().position(|(k, _)| k.borrow() == key)
     }
 
     /// Inserts `value` under `key`. A new key goes to the end. An existing key keeps its position, takes `value` and
@@ -50,21 +59,47 @@ impl<K: Eq, V> OrderedMap<K, V> {
         }
     }
 
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
         self.position(key).map(|i| &self.entries[i].1)
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
         self.position(key).map(|i| &mut self.entries[i].1)
     }
 
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
         self.position(key).is_some()
     }
 
     /// The position of `key` in insertion order.
-    pub fn index_of(&self, key: &K) -> Option<usize> {
+    pub fn index_of<Q>(&self, key: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
         self.position(key)
+    }
+
+    /// Removes `key` and returns its value; the entries after it move up one place and keep their order (Python
+    /// `del d[key]`; a later insert of the same key goes to the end).
+    pub fn shift_remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
+        self.position(key).map(|i| self.entries.remove(i).1)
     }
 }
 
@@ -93,6 +128,15 @@ impl<K, V> OrderedMap<K, V> {
 
     pub fn values(&self) -> impl ExactSizeIterator<Item = &V> {
         self.entries.iter().map(|(_, v)| v)
+    }
+
+    /// The entries in insertion order, values mutable (keys stay fixed: changing one could break uniqueness).
+    pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = (&K, &mut V)> {
+        self.entries.iter_mut().map(|(k, v)| (&*k, v))
+    }
+
+    pub fn values_mut(&mut self) -> impl ExactSizeIterator<Item = &mut V> {
+        self.entries.iter_mut().map(|(_, v)| v)
     }
 }
 
@@ -165,5 +209,43 @@ mod tests {
         assert_eq!(m.get(&"k".to_string()), Some(&2));
         assert_eq!(m.get(&"missing".to_string()), None);
         assert_eq!(m.get_index(5), None);
+    }
+
+    #[test]
+    fn lookups_by_a_borrowed_key() {
+        let mut m: OrderedMap<String, i32> = OrderedMap::new();
+        m.insert("k".to_string(), 1);
+        assert_eq!(m.get("k"), Some(&1));
+        assert!(m.contains_key("k"));
+        assert!(!m.contains_key("K"));
+        *m.get_mut("k").unwrap() = 5;
+        assert_eq!(m.index_of("k"), Some(0));
+        assert_eq!(m.get("k"), Some(&5));
+    }
+
+    #[test]
+    fn mutable_iteration_keeps_the_order() {
+        let mut m: OrderedMap<&str, i32> = [("b", 1), ("a", 2)].into_iter().collect();
+        for (_, v) in m.iter_mut() {
+            *v *= 10;
+        }
+        for v in m.values_mut() {
+            *v += 1;
+        }
+        assert_eq!(m.into_iter().collect::<Vec<_>>(), [("b", 11), ("a", 21)]);
+    }
+
+    #[test]
+    fn shift_remove_keeps_the_rest_in_order() {
+        // Python: d = {'a': 1, 'b': 2, 'c': 3}; del d['a']; d['a'] = 4 -> [('b', 2), ('c', 3), ('a', 4)]
+        let mut m: OrderedMap<String, i32> = [("a", 1), ("b", 2), ("c", 3)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        assert_eq!(m.shift_remove("a"), Some(1));
+        assert_eq!(m.shift_remove("missing"), None);
+        m.insert("a".to_string(), 4);
+        let order: Vec<(&str, i32)> = m.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(order, [("b", 2), ("c", 3), ("a", 4)]);
     }
 }
