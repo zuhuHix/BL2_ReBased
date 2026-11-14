@@ -7,6 +7,8 @@ reading, all `UNVERIFIED` by themselves). This record says which of them the run
 host does. Every live dump, log and frame is game-derived and stays under ignored `local/realgame/firing/` (rounds 1-3)
 and `local/firing/` (host runs); nothing here is copied from them except the numbers needed to state a rule.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## 1. Pieces
 
 | Piece | What it does |

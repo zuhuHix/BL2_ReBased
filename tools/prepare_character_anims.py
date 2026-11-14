@@ -1,7 +1,7 @@
 """Convert UModel MD5 animations of Maya's arms into UE bone tracks (JSON).
 
 Inputs: the MD5 mesh/animations and the reference pose of the UE skeleton that
-the same mesh's glTF export produced (dumped by host/ue5/import_character.py).
+the same mesh's glTF export produced (dumped by the retired UE5 host's import_character.py, git show 08bcf3e).
 Each UE bone transform is taken as T_i(t) = C W_i(t) D_i: W is the MD5 world
 transform, C maps MD5 space to UE space (fitted from bind positions; observed
 as a Y mirror) and D_i = W_i(bind)^-1 C^-1 T_i(bind) absorbs each imported

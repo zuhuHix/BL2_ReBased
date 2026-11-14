@@ -9,6 +9,8 @@
 ```text
 ctest --test-dir build -C Release --output-on-failure
 python tests/level_test.py
+cargo build --workspace
+cargo test --workspace
 ```
 
 ## Checks against an installed game
@@ -27,7 +29,7 @@ python tests/level_test.py
 
 - [ ] Parsing behaviour changed → dated decision file added under `docs/decisions/` (see `DECISIONS.md`) stating what is verified and what is `UNVERIFIED`
 - [ ] Reference implementation consulted → recorded in `THIRD_PARTY.md` with its license (read, not copied)
-- [ ] Touches a sensitive area (`src/package.cpp`, `src/container.*`, struct/array/texture/mesh/material serialization, `CMakeLists.txt`, `THIRD_PARTY.md`, `LICENSE*`) → discussed in an issue first
+- [ ] Touches a sensitive area (`src/package.cpp`, `src/container.*`, `crates/ow-package/`, `crates/ow-container/`, struct/array/texture/mesh/material serialization, `CMakeLists.txt`, `Cargo.toml`, `rust-toolchain.toml`, `THIRD_PARTY.md`, `LICENSE*`) → discussed in an issue first
 
 ## Certification
 

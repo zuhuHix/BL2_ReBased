@@ -2,7 +2,7 @@
 
 Run after `import_weapon_items.py` has written target reference poses under
 `local/laneE/weapon-refs`. The conversion output stays in ignored local/ and is
-then consumed by `host/ue5/import_weapon_reload_anims.py`.
+was consumed by the retired UE5 host's `import_weapon_reload_anims.py` (git show 08bcf3e).
 """
 import argparse
 import json

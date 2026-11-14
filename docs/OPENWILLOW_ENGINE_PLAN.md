@@ -27,7 +27,7 @@ All measured directly from the installed game (see analysis §4).
 | Code packages | Core, Engine, GameFramework, GearboxFramework, WillowGame, GFxUI, IpDrv, OnlineSubsystemSteamworks, AkAudio, fully LZO-compressed |
 | Total functions | **20,119** |
 | Inherited (UnrealScript bytecode) | **12,978 (64.5%)**, executed by our VM as-is |
-| Rebuilt (native C++) | **7,141 (35.5%)** |
+| Rebuilt (native, our own code: C++ until 2026-11-14, Rust from then) | **7,141 (35.5%)** |
 | …of which trivial builtins | 286 |
 | …of which online/save/DLC (replace, don't replicate) | 609 |
 | …of which Scaleform UI bridge | 512 |
@@ -78,7 +78,7 @@ This list isn't original. It's how OpenMW, OpenRCT2, Daggerfall Unity, OpenGothi
                  └───────────────▲──────────────────────▲───────────────┘
                                  │                      │
    ┌─────────────────────────────┴───┐    ┌─────────────┴──────────────────┐
-   │  NATIVE LAYER (C++)             │    │  ASSET PIPELINE                │
+   │  NATIVE LAYER (Rust)            │    │  ASSET PIPELINE                │
    │  the 7,141 rebuilt functions:   │    │  package loader (UPK/TFC)      │
    │  Actor/Pawn/Controller, traces, │    │  textures (DXT → GPU)          │
    │  movement, anim player, particles│   │  static/skeletal meshes        │
@@ -97,34 +97,78 @@ This list isn't original. It's how OpenMW, OpenRCT2, Daggerfall Unity, OpenGothi
         runs the 12,978 inherited functions unchanged
 ```
 
-Three layers. The VM and asset pipeline are engine-agnostic C++. The native layer is where the host engine shows up.
+Three layers. The VM and asset pipeline are engine-agnostic Rust crates (`crates/` in the Cargo workspace). The
+native layer is where the host engine shows up. Until each crate matches it (section 2.2), the C++ core in `src/` is
+the reference implementation of the same layers.
 
-### 2.1 Host engine decision: decide by end of Phase 0, never after
+### 2.1 Host engine decision
 
-**Recommendation: Unreal Engine 5.** Reasons, in order of weight:
-1. **The conceptual mapping is nearly 1:1.** UE3 material node graphs → UE5 material graphs. AnimTree → AnimBP.
-   Matinee → Sequencer. Cascade → Niagara. Kismet → Blueprint. UObject/FName/reflection still exist. Every UE3
-   system you must rebuild has a modern sibling to translate *into* rather than invent.
-2. **AI knows UE5 better than any other engine**: the deepest public corpus. Your engineer is strongest here.
-3. **The editor is free.** New maps, the original dream, arrive the day levels load.
-4. Chaos physics, navmesh, networking, and a production renderer are already there.
+**The original choice was Unreal Engine 5, and it has been reversed.** Phase 0 picked UE5 (gated 2026-09-10), and the
+UE5 host carried the slice work from Phase 1 to the Phase 4 gate runs. On 2026-11-14 the maintainer reversed that
+choice after a hand-play of the slice on main 08bcf3e
+([decision](decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). The UE5 host
+left the tree in that change; `git show 08bcf3e:<path>` recovers any of it, and its code and evidence stay useful as
+a behaviour reference.
 
-**Costs, honestly:** heavy toolchain, slow C++ compile loops for a beginner, big install, source-available (not
-open), Epic EULA (fine for a free project). If Phase 0 shows the weight is crushing your iteration speed, **Godot**
-(MIT, tiny, fast compiles, C++ via GDExtension) is the alternative. Switching engines after Phase 1 is fatal, 
-decide once.
+**The route now: Rust, with the engine picked by benchmark (Phase 0R).** New runtime code is Rust: the engine-agnostic
+core and the host. No Rust engine is chosen yet. A timeboxed benchmark builds the same small scene in each candidate,
+and the maintainer picks from the measurements:
+
+- Candidates: **Bevy** (MIT or Apache-2.0) and **an own engine on wgpu + winit** (MIT or Apache-2.0) are required;
+  **Fyrox** (MIT) is optional. Licences as stated in the decision; each is confirmed in `THIRD_PARTY.md` before any
+  of it lands.
+- The scene: Sanctuary's static meshes from the existing local exports, Maya's skeletal mesh playing one animation, a
+  capsule that walks on the collision, and one BL2 movie shown through Ruffle.
+- Measured: clean and incremental build time, frame time at 1280x720 and 1920x1080 on each project PC, memory, binary
+  size, lines of our own code, and what was missing and had to be written.
+
+Prototypes live under ignored `local/bench/`; the record is
+[ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md). Nothing about the Rust route is verified yet.
+
+**What UE5 gave, and what the Rust host must therefore build or pick a crate for.** The old argument for UE5 was that
+the conceptual mapping is nearly 1:1: UE3 material node graphs to UE5 material graphs, AnimTree to AnimBP, Matinee to
+Sequencer, Cascade to Niagara, Kismet to Blueprint, physics on Chaos, a navmesh, networking, a production renderer
+and a free editor. Every one of those is now a cost for the Rust host, stated honestly:
+
+- **Materials:** no material graph to translate into. UE3 graphs become our own shaders (WGSL or the engine's
+  material system), cel-shade edge and ink lines included.
+- **Animation:** no AnimBP. The ~30 `AnimNode*` types, blending, root motion and physics assets become our own
+  animation player, which Phase 3 needed in any case.
+- **Particles:** no Niagara. Cascade modules need a host particle system, ours or a crate's.
+- **Physics:** no Chaos. Collision, traces, character movement and ragdoll need a physics crate or our own code.
+- **Navigation:** no navmesh. AI pathing needs a navmesh crate or our own.
+- **Cutscenes:** no Sequencer. Matinee needs a host cutscene player.
+- **Lighting:** no Lumen. Modern GI in the host is a project of its own; SM3 lightmaps from `Lighting.tfc` become
+  the cheaper first path.
+- **Editor:** none. New maps, the original dream, need an editor of our own or an external one, much later.
+- **Audio, input, windowing, UI:** each needs a crate or our own code, and each crate is a `THIRD_PARTY.md` entry.
+
+What Rust buys in return, which is what the benchmark is there to check: fast iteration without a heavy toolchain,
+one language from package reader to host, the whole engine in our own readable code, and Ruffle (itself written in
+Rust) as a candidate to embed natively for the Scaleform movies.
 
 ### 2.2 Language
-C++ for the VM, native layer and asset pipeline; non-negotiable for performance (thousands of actors running
-interpreted script). Python for tooling and analysis (like `native_count.py`).
+
+Rust for the VM, the native layer, the asset pipeline and the host; performance still matters (thousands of actors
+running interpreted script). Python stays the language of tooling and analysis (`tools/`, `research/`, like
+`native_count.py`). The overlay pages (`tools/hud_overlay/*.js`, Ruffle in a web page) stay until the host has its own
+way to show BL2's movies.
+
+**The C++ core is ported crate by crate, not wrapped.** `src/` keeps building with CMake and keeps its ctest suite
+until each Rust crate matches it. Matching means: the same synthetic fixtures give the same results, and
+`tools/verify_packages.py --reader <the Rust reader>` gives the same counts and the same exact class bodies on the real
+packages as the C++ reader. A part of `src/` is retired only when its crate passes both. Until then the C++ reader is
+the reference, and nothing about the 832/46 format is re-derived: the port reuses the offsets the C++ code already
+recovered and checked (rule 4 of `AGENTS.md`).
 
 ### 2.3 External extraction accelerator
 
 The asset pipeline may use mature community exporters, with UModel / UE Viewer
 as the first candidate, to shorten local visual-asset preparation for the
 Sanctuary/Maya vertical slice. This is an implementation tactic, not a change
-to the runtime architecture. External exports remain untrusted payloads that
-need object-path, reference, material, LOD, animation and UE5 import checks.
+to the runtime architecture. UModel's exports feed the Rust host (they are the
+benchmark scene's meshes too), and they remain untrusted payloads that need
+object-path, reference, material, LOD, animation and host import checks.
 The OpenWillow reader remains responsible for package identity, metadata,
 cross-package resolution, scene manifests and verification, and it remains the
 fallback for exporter gaps.
@@ -173,8 +217,8 @@ Rule: a native without a golden file is a guess. Guesses are labelled `// UNVERI
 8. **Performance.** UE3 ran thousands of scripted actors fine because its VM was tight C++. A sloppy VM will not.
 9. **Scope and burnout.** The actual cause of death for 90% of these projects. Mitigated only by the phase gates
    below and by shipping M1 publicly.
-10. **Fidelity vs modernisation tension.** Every system has a choice: replicate SM3 lightmaps or use Lumen?
-    Replicate Cascade or approximate with Niagara? Rule: **fidelity first where it defines feel (guns, movement,
+10. **Fidelity vs modernisation tension.** Every system has a choice: replicate SM3 lightmaps or use modern GI
+    in the host? Replicate Cascade or approximate it with the host's particle system? Rule: **fidelity first where it defines feel (guns, movement,
     skills); modernisation first where it defines look (lighting, resolution).** 
 
 ---
@@ -225,6 +269,30 @@ Goal: a repo, a build, a package loader, and a decided host engine.
 
 **Gate:** the census exists, one mesh and one texture from BL2 render inside the host engine.
 
+*Passed 2026-09-10 with Unreal Engine 5 as the host. The host choice was reversed on 2026-11-14 (section 2.1); the
+engine decision is now Phase 0R's.*
+
+### Phase 0R: Rust core and engine benchmark
+
+Goal: the engine-agnostic core in Rust, matching the C++ core, and a host engine route picked from measurements.
+Added 2026-11-14 with the switch to Rust (section 2.1).
+
+**Steps**
+1. **Port the core crate by crate**, in dependency order: `ow-container` (LZO and the chunk container), then
+   `ow-package` (header, names, imports, exports, tagged properties), then the script VM and the game rules. Each
+   crate is checked against the C++ code on the same synthetic fixtures before the next one starts.
+2. **Parity on the real packages:** `tools/verify_packages.py --reader <the Rust reader>` gives the same counts and
+   the same exact class bodies as the C++ reader. Only then is the matching part of `src/` retired.
+3. **Benchmark the engine candidates** (Bevy and an own engine on wgpu + winit; Fyrox optional) on the scene in
+   section 2.1, with prototypes under ignored `local/bench/<candidate>/`, one machine at a time, on each project PC.
+4. **Record the measurements** in `docs/verification/ENGINE_BENCHMARK.md`: build times, frame times, memory, binary
+   size, lines of our own code, and what was missing.
+5. **The maintainer picks the route**, recorded as a new decision file. The chosen engine's `THIRD_PARTY.md` entry
+   comes before any of it lands in the tree.
+
+**Gate:** the Rust reader matches `verify_packages.py`, the benchmark is recorded, and the maintainer has picked the
+route.
+
 ### Phase 1: World viewer (M1)
 
 Goal: walk around any BL2 map in a modern 64-bit renderer. **Ship this publicly.** It's the proof, the recruiting
@@ -238,7 +306,7 @@ poster, and the thing that tells you whether the loop holds.
 4. **Level loader**: parse `_P` and its sublevels; instantiate every `StaticMeshActor` with transform; skybox;
    terrain if present; `_Dynamic` props as static for now.
 5. **Lighting: two options, do both eventually:**
-   - *Modern first (recommended):* Lumen/dynamic GI. Zero lightmap parsing, immediate wow, but not BL2's look.
+   - *Modern first (recommended):* modern dynamic GI in the host. Zero lightmap parsing, immediate wow, but not BL2's look.
    - *Fidelity:* parse SM3 directional lightmaps from `Lighting.tfc` and apply via a custom material.
 6. Free-fly camera → then a placeholder character controller with collision.
 7. Map selector for all 82 levels; loading times; memory profile.
@@ -249,7 +317,7 @@ Your eye is the test.
 **Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually verified against the real game →
 move on to Phase 2 for the vertical slice. Full 82/82 map coverage remains this phase's eventual completion target
 but is deferred until the Phase 4 vertical-slice gate is met (§5.0); see Phase 5. If no map can be loaded, stop and
-reassess honestly; the loop isn't holding (passed: three maps load).
+reassess honestly; the loop isn't holding (three maps loaded in the retired UE5 host; none in the Rust host yet).
 
 ### Phase 2: UnrealScript VM (M2)
 
@@ -285,12 +353,12 @@ Goal: the UE3 natives the vertical slice needs (movement, collision, animation p
 **Order, by dependency:**
 1. `Actor` (166): spawn/destroy, transforms, timers, `Trace`/`FastTrace`, `SetLocation`/`Move`, attachment,
    tick, `bStatic`/`bHidden` semantics, `Touch`/`Bump` events (the 2,453 script events are *called by* these).
-2. `PrimitiveComponent` / collision (47) → host physics (Chaos).
+2. `PrimitiveComponent` / collision (47) → host physics (a physics crate or our own code, picked after Phase 0R).
 3. `Pawn` (126) + `Controller` (45) + `PlayerController` (73): movement physics (walking, falling, jumping,
    slopes, UE3's `physWalking` semantics matter to gunplay feel), input, camera, possession.
 4. `SkeletalMeshComponent` (127) + the ~30 `AnimNode*` types + `PhysicsAssetInstance` (19): the animation player.
    Verify against UDK's own AnimTree behaviour.
-5. `ParticleSystemComponent` (46) + Cascade modules → Niagara translation.
+5. `ParticleSystemComponent` (46) + Cascade modules → the host's particle system.
 6. `WorldInfo` (56), `NavigationHandle` (44), `Settings`, `Camera`, `Light`, `Sound` stubs.
 
 **Verification:** each native gets a UDK-derived golden test. A "generic UE3 pawn" walks, jumps and falls in your
@@ -340,7 +408,7 @@ coverage (Phase 5) becomes the priority again.
    Phases 1 and 4 by the 2026-09-18 vertical-slice rescoping (§5.0).
 1. **Kismet interpreter**: sequences are data in the map packages; implement the node types they use
    (`MissionTracker` 81 natives sits here).
-2. **Matinee → Sequencer** for cutscenes/scripted moments.
+2. **Matinee → a host cutscene player** for cutscenes/scripted moments.
 3. Mission system, objectives, fast travel, vending, dialogue/echo system, Bink cutscene playback.
 4. **Saves**: Gibbed's save format is open source; read/write real BL2 saves (huge win: players keep characters).
 5. Full Scaleform UI. Menus, inventory, skill trees, map.
@@ -364,6 +432,7 @@ coverage (Phase 5) becomes the priority again.
 | Milestone | What you can show |
 |---|---|
 | Phase 0 | A mesh and a texture from BL2 inside the host engine |
+| Phase 0R | The Rust package reader matching the C++ one; the engine benchmark recorded and a route picked |
 | **M1** | Sanctuary walkable and verified, modern renderer, 64-bit (rescoped 2026-09-18; all 82 maps moves to M4) |
 | M2 | Gearbox's script running in your VM, scoped to Sanctuary + one Vault Hunter |
 | M3a | A UE3 pawn moves/animates correctly on Sanctuary |
@@ -418,16 +487,27 @@ No durations are given. Status and dates so far: ROADMAP.md.
 
 - I'll never give up, you really thought huh hahahha
 
-## 10. This week: the first ten tasks
+## 10. This week: the first ten tasks of the Rust route
 
-1. Create the repo, README with §1's rules, choose the license.
-2. Install Visual Studio + CMake + Git. Build a C++ hello-world.
-3. Install UE5 (or Godot, if choosing early). Open an empty project. Press play.
-4. Port `lzo1x_decompress` from `research/native_count.py` to C++. Test: decompress `Core.upk`; size = 234,397.
-5. Port the container unwrapper and header/name/import/export reader. Test: 1,621 exports in `Core.upk`;
-   11,945 functions counted in `WillowGame.upk`, same numbers as the Python tool.
-6. Write the tagged-property reader. Test: dump one `WeaponPartDefinition` and check a field against BLCMM.
-7. Run the census over all packages in `CookedPCConsole` and `DLC/`. Save the JSON.
-8. Decode one `Texture2D` to PNG. Look at it.
-9. Export one `StaticMesh` to OBJ. Open it in Blender.
-10. Load both into the host engine. Screenshot it. That screenshot is Phase 0's gate and the first thing you post.
+The first list (repo, C++ toolchain, UE5 hello-world, the C++ reader, the census, the first texture and mesh) was
+done in Phase 0; `git show 08bcf3e:docs/OPENWILLOW_ENGINE_PLAN.md` has it. The Rust route starts here:
+
+1. Install the pinned toolchain (`rust-toolchain.toml`, Rust 1.96.0). `cargo build` and `cargo test` on the
+   workspace, both green.
+2. Port `ow-container`: LZO1X and the chunk container. Test: the same synthetic fixtures the C++ tests use give the
+   same bytes.
+3. Run the Rust container over every package and compare decompressed sizes with the C++ reader. Same numbers, or the
+   difference is understood before step 4.
+4. Port `ow-package`: header, name, import and export tables. Test: the same synthetic fixtures, same results.
+5. Point `tools/verify_packages.py --reader` at the Rust reader. Same counts and the same exact class bodies as the
+   C++ reader, or nothing in `src/` is retired.
+6. Port the tagged-property reader, reusing the offsets the C++ code already recovered and checked. Dump the same
+   `WeaponPartDefinition` and diff it against the C++ dump.
+7. Write the benchmark scene list in `docs/verification/ENGINE_BENCHMARK.md` down to the object paths, from the
+   existing local exports.
+8. Build the Bevy prototype under `local/bench/bevy/`: Sanctuary's static meshes, Maya playing one animation, a
+   walking capsule, one movie through Ruffle. Measure it.
+9. Build the same scene on wgpu + winit under `local/bench/wgpu/` (and Fyrox, if there is time). Measure it the same
+   way on each project PC.
+10. Fill in the benchmark record with what was measured, and only that. The maintainer picks the route. That pick is
+    Phase 0R's gate and the first thing you post.

@@ -1,0 +1,3 @@
+# The Rust toolchain every machine and CI use (decision 2026-11-14-01). Change it in its own commit.
+[toolchain]
+channel = "1.96.0"

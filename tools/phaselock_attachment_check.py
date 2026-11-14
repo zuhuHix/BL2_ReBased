@@ -101,7 +101,8 @@ def host_rows(path, pawn):
         entry = json.loads(Path(path).read_text(encoding='utf-8'))[pawn]
         if 'attachments' not in entry:
             raise SessionError(f'host report {path} has no attachments field for {pawn}: the placements were never written or were dropped. '
-                               'Re-run powershell -File tools/import_phaselock_target.ps1 -Steps attach')
+                               'Re-run powershell -File tools/import_phaselock_target.ps1 -Steps attach'
+                               ' [that script left with the UE5 host on 2026-11-14 (git show 08bcf3e:tools/import_phaselock_target.ps1); the Rust host has no replacement yet]')
         rows = entry['attachments']
         if not isinstance(rows, list):
             raise ValueError(f'attachments is {type(rows).__name__}, not a list')

@@ -1,5 +1,10 @@
 # Collision and walking slice (2026-09-14)
 
+**History (2026-11-14):** the in-engine runs in this record were the UE5 host's, which left the tree on 2026-11-14
+(decision 2026-11-14-01). They say what that host did and no longer count toward a gate. The host-independent parts
+(`tools/refresh_collision.py`, `tools/walking_routes.py`, the synthetic collision tests and the real-game captures)
+keep their status. The UE scripts named below are recovered with `git show 08bcf3e:<path>`.
+
 Checkout: t3code-9935cb53. This is an opt-in placeholder walking mode for the
 frozen map viewer. It is not UE3 movement parity or completed M1.
 
@@ -62,7 +67,9 @@ $project = (Resolve-Path host/ue5/OpenWillow/OpenWillow.uproject).Path
 ./tools/run_ue_level.ps1 -Engine $engine -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -Walk
 ```
 
-Build this checkout's UE module before running these commands. Close its editor
+The UE5 steps here (`UnrealEditor-Cmd.exe`, `test_ue_viewer.ps1`, `run_ue_level.ps1`) are retired with the host;
+the reader, `collision_test.py` and `refresh_collision.py` steps still run. Build this checkout's UE module before
+running these commands. Close its editor
 before modifying its generated assets. `-SkipBuild` requires the current binary.
 Walking controls: WASD/mouse and Space to jump. Omit `-Walk` for free flight.
 
@@ -189,7 +196,7 @@ python tools/walking_routes.py routes --probes local/collision/probes.json --tra
     --capture local/realgame/walking/walk_info.json --output local/sanctuary/walk-routes.json
 python tools/refresh_collision.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary `
     --live-volumes local/realgame/walking/walk_info.json
-# then apply_collision.py / verify_collision.py as above, and
+# then (retired UE5 host steps) apply_collision.py / verify_collision.py as above, and
 ./tools/test_ue_viewer.ps1 -Engine $engine -Game $game -Scene local/sanctuary -Route
 ```
 

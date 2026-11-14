@@ -60,7 +60,7 @@ class ProvisionTest(unittest.TestCase):
         self.worktree = self.make_worktree(self.base / 'worktree')
         self.seed = self.base / 'seed'
         # The seed: one file per folder the default list names, plus output that must never be copied.
-        write(self.seed / 'Content' / 'Maps' / 'a.umap', 'map')
+        write(self.seed / 'items' / 'Maps' / 'a.umap', 'map')
         write(self.seed / 'slice' / 'manifest.json', 'seed')
         write(self.seed / 'doors' / 'mover.json', 'door')
         write(self.seed / 'ui' / 'run' / 'previews' / 'p.png', 'preview')
@@ -73,7 +73,7 @@ class ProvisionTest(unittest.TestCase):
         write(self.worktree / 'local' / 'slice' / 'manifest.json', 'own')
 
     def make_worktree(self, path):
-        write(path / 'host' / 'ue5' / 'OpenWillow' / 'OpenWillow.uproject', '{}')
+        write(path / 'tools' / 'provision_worktree_assets.ps1', '# a checkout of this repository holds this file')
         subprocess.run(['git', 'init', '-q', str(path)], check=True)
         return path
 
@@ -95,7 +95,7 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(self.local('slice', 'manifest.json').read_text(encoding='utf-8'), 'own')   # never overwritten
         self.assertEqual(self.local('doors', 'mover.json').read_text(encoding='utf-8'), 'door')
         self.assertTrue(self.local('ui', 'run', 'previews', 'p.png').is_file())                      # per-folder subpaths kept
-        self.assertTrue((self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').is_file())
+        self.assertTrue(self.local('items', 'Maps', 'a.umap').is_file())
 
     def test_default_allowlist_keeps_the_gates_folders(self):
         """A fixed list, not a scan: it pins the folders the GATES.md suites read (test_inventory_actions, test_quest,
@@ -140,8 +140,8 @@ class ProvisionTest(unittest.TestCase):
     def test_refresh_stale_is_opt_in_and_lists_each_replaced_file(self):
         """A worktree's stale seeded copy (an M_OW_NPC_Zone that predates new parameters, 2026-11-10): kept by default, replaced with
         -RefreshStale only when the seed's copy is newer and differs, and named in the output. A newer worktree copy is never touched."""
-        content = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content'
-        seed_zone = self.seed / 'Content' / 'Zone.uasset'
+        content = self.local('items')
+        seed_zone = self.seed / 'items' / 'Zone.uasset'
         write(seed_zone, 'new zone material')
         write(content / 'Zone.uasset', 'old')
         os.utime(content / 'Zone.uasset', (1_000_000_000, 1_000_000_000))       # older than the seed's copy
@@ -158,13 +158,13 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((content / 'Zone.uasset').read_text(encoding='utf-8'), 'new zone material')
         self.assertIn(f"replaced (the source's copy is newer): {content / 'Zone.uasset'}", result.stdout)
-        self.assertIn('Content: 0 missing files added, 1 stale files replaced', result.stdout)
+        self.assertIn('local/items: 0 missing files added, 1 stale files replaced', result.stdout)
         self.assertIn('local/slice: 0 missing files added, 0 stale files replaced', result.stdout)
         self.assertEqual(self.local('slice', 'manifest.json').read_text(encoding='utf-8'), 'own')
         self.assertEqual(os.path.getmtime(self.local('slice', 'same.json')), 1_000_000_000)
         # The replaced file is kept, under <git dir>/ow-refresh/<time-pid>/<its path>, and the move is printed.
         self.assertFalse(self.local('worktree-refresh-backup').exists())
-        backups = list((self.worktree / '.git' / 'ow-refresh').glob('*/host/ue5/OpenWillow/Content/Zone.uasset'))
+        backups = list((self.worktree / '.git' / 'ow-refresh').glob('*/local/items/Zone.uasset'))
         self.assertEqual(len(backups), 1, result.stdout)
         self.assertEqual(backups[0].read_text(encoding='utf-8'), 'old')
         self.assertIn(f"backed up: {content / 'Zone.uasset'} -> {backups[0]}", result.stdout)
@@ -173,8 +173,8 @@ class ProvisionTest(unittest.TestCase):
         outside = self.base / 'outside.uasset'
         write(outside, 'outside the worktree')
         os.utime(outside, (1_000_000_000, 1_000_000_000))
-        write(self.seed / 'Content' / 'Linked.uasset', 'new')
-        link = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Linked.uasset'
+        write(self.seed / 'items' / 'Linked.uasset', 'new')
+        link = self.local('items', 'Linked.uasset')
         link.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.symlink(outside, link)
@@ -186,7 +186,7 @@ class ProvisionTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f'Refusing to replace a junction or symlink: {link}', result.stdout + result.stderr)
         self.assertEqual(outside.read_text(encoding='utf-8'), 'outside the worktree')
-        self.assertFalse((self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').exists())   # preflight
+        self.assertFalse(self.local('items', 'Maps', 'a.umap').exists())   # preflight
 
     def test_backups_are_never_copied_from_a_source_worktree(self):
         source = self.make_worktree(self.base / 'source')
@@ -219,7 +219,7 @@ class ProvisionTest(unittest.TestCase):
 
     def test_top_level_excluded_folder_in_a_source_worktree_is_skipped(self):
         source = self.base / 'source'
-        write(source / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'a.umap', 'map')
+        write(source / 'local' / 'items' / 'a.umap', 'map')
         write(source / 'local' / 'logs' / 'run.log', 'log')
         write(source / 'local' / 'slice' / 'x.json', 'kept')
         write(source / 'local' / 'range' / 'shots' / 'frame.png', 'shot')
@@ -239,7 +239,7 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(list(elsewhere.iterdir()), [])     # nothing was written through the junction
 
     def test_refusal_leaves_earlier_destinations_untouched(self):
-        # The list order is Content, items, character, ui, slice, doors: slice and Content are planned and checked before doors refuses.
+        # The list order is items, character, ui, slice, doors: items and slice are planned and checked before doors refuses.
         write(self.seed / 'slice' / 'extra.json', 'extra')
         elsewhere = self.base / 'elsewhere'
         elsewhere.mkdir()
@@ -247,7 +247,7 @@ class ProvisionTest(unittest.TestCase):
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.local('slice', 'extra.json').exists())
-        self.assertFalse((self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').exists())
+        self.assertFalse(self.local('items', 'Maps', 'a.umap').exists())
 
     def test_junctioned_local_is_skipped_with_one_line(self):
         hummer = self.make_worktree(self.base / 'hummer')
@@ -258,42 +258,24 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.count(HUMMER_MESSAGE), 1)
         self.assertNotIn('local/slice', result.stdout)                 # the local pairs are not planned at all
-        self.assertTrue((hummer / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').is_file())
         self.assertFalse((shared / 'doors').exists())                  # nothing written into the shared root
         self.assertEqual(sorted(p.name for p in shared.iterdir()), ['slice'])
 
-    def test_refresh_works_with_a_junctioned_local(self):
-        """A worktree whose local\\ is a shared data root can still refresh stale Content: the backup goes to the worktree's own git
-        directory, never into the shared root."""
-        hummer = self.make_worktree(self.base / 'hummer')
-        shared = self.base / 'shared-data'
-        write(shared / 'slice' / 'shared.json', 'shared')
-        make_junction(hummer / 'local', shared)
-        stale = hummer / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap'
-        write(stale, 'old map')
-        os.utime(stale, (1_000_000_000, 1_000_000_000))
-        result = self.run_script('-RefreshStale', worktree=hummer)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(stale.read_text(encoding='utf-8'), 'map')
-        backups = list((hummer / '.git' / 'ow-refresh').glob('*/host/ue5/OpenWillow/Content/Maps/a.umap'))
-        self.assertEqual(len(backups), 1, result.stdout)
-        self.assertEqual(backups[0].read_text(encoding='utf-8'), 'old map')
-        self.assertEqual(sorted(p.name for p in shared.iterdir()), ['slice'])   # nothing written into the shared root
 
     def test_refresh_refuses_a_backup_path_too_long_for_windows(self):
-        content = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content'
+        content = self.local('items')
         room = 250 - len(str(content)) - len('\\x.uasset')          # the target fits under 260, its backup (about 40 longer) does not
         deep = content.joinpath(*(['d' * 40] * (room // 41)), 'x' * max(1, room % 41)) / 'x.uasset'
         write(deep, 'old')
         os.utime(deep, (1_000_000_000, 1_000_000_000))
-        write(self.seed.joinpath(deep.relative_to(self.worktree / 'host' / 'ue5' / 'OpenWillow')), 'new')
+        write(self.seed.joinpath('items', deep.relative_to(content)), 'new')
         result = self.run_script('-RefreshStale')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('would be too long for Windows', result.stdout + result.stderr)
         self.assertEqual(deep.read_text(encoding='utf-8'), 'old')
 
     def test_two_refreshes_in_a_row_do_not_collide(self):
-        content = self.worktree / 'host' / 'ue5' / 'OpenWillow' / 'Content'
+        content = self.local('items')
         for text in ('first', 'second'):
             write(content / 'Maps' / 'a.umap', text)
             os.utime(content / 'Maps' / 'a.umap', (1_000_000_000, 1_000_000_000))
@@ -301,12 +283,12 @@ class ProvisionTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         runs = sorted((self.worktree / '.git' / 'ow-refresh').iterdir())
         self.assertEqual(len(runs), 2)
-        self.assertEqual(sorted(p.joinpath('host/ue5/OpenWillow/Content/Maps/a.umap').read_text(encoding='utf-8') for p in runs),
+        self.assertEqual(sorted(p.joinpath('local/items/Maps/a.umap').read_text(encoding='utf-8') for p in runs),
                          ['first', 'second'])
 
     def test_junction_in_the_seed_is_refused(self):
         seed = self.base / 'seed-junction'
-        write(seed / 'Content' / 'a.umap', 'map')
+        write(seed / 'items' / 'a.umap', 'map')
         write(seed / 'slice' / 'manifest.json', 'seed')
         real = self.base / 'real-doors'
         write(real / 'mover.json', 'door')
@@ -330,17 +312,17 @@ class InstallerTest(unittest.TestCase):
         for name in ('install_worktree_assets_hook.ps1', 'provision_worktree_assets.ps1', 'worktree_seed_folders.txt'):
             write(self.repo / 'tools' / name, (TOOLS / name).read_text(encoding='utf-8'))
         write(self.repo / '.githooks' / 'post-checkout', (ROOT / '.githooks' / 'post-checkout').read_text(encoding='utf-8'))
-        write(self.repo / 'host' / 'ue5' / 'OpenWillow' / 'OpenWillow.uproject', '{}')
-        write(self.repo / '.gitignore', 'local/\nhost/ue5/OpenWillow/Content/\n')
-        write(self.repo / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap', 'map')   # ignored, so the seed supplies it
+        # The installer also installs the leak gate's pre-push hook (its step 3b), so the synthetic repository needs that file too.
+        write(self.repo / '.githooks' / 'pre-push', (ROOT / '.githooks' / 'pre-push').read_text(encoding='utf-8'))
+        write(self.repo / '.gitignore', 'local/\n')
+        write(self.repo / 'local' / 'items' / 'Maps' / 'a.umap', 'map')   # ignored, so the seed supplies it
         write(self.repo / 'local' / 'slice' / 'x.json', 'slice')
         write(self.repo / 'local' / 'doors' / 'mover.json', 'door')
         write(self.repo / 'local' / 'ui' / 'run' / 'previews' / 'p.png', 'preview')
         write(self.repo / 'local' / 'range' / 'shots' / 'frame.png', 'shot')
         write(self.repo / 'local' / 'sanctuary' / 'big.bin', 'big')
         subprocess.run(['git', 'init', '-q', str(self.repo)], check=True)
-        subprocess.run(['git', *GIT_IDENTITY, '-C', str(self.repo), 'add', 'tools', '.githooks', '.gitignore',
-                        'host/ue5/OpenWillow/OpenWillow.uproject'], check=True)
+        subprocess.run(['git', *GIT_IDENTITY, '-C', str(self.repo), 'add', 'tools', '.githooks', '.gitignore'], check=True)
         subprocess.run(['git', *GIT_IDENTITY, '-C', str(self.repo), 'commit', '-q', '-m', 'synthetic'], check=True)
 
     def install(self):
@@ -357,7 +339,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual((seed / 'slice' / 'x.json').read_text(encoding='utf-8'), 'slice')
         self.assertTrue((seed / 'doors' / 'mover.json').is_file())
         self.assertTrue((seed / 'ui' / 'run' / 'previews' / 'p.png').is_file())
-        self.assertTrue((seed / 'Content' / 'Maps' / 'a.umap').is_file())
+        self.assertTrue((seed / 'items' / 'Maps' / 'a.umap').is_file())
         self.assertTrue((seed / 'worktree_seed_folders.txt').is_file())
         self.assertTrue((seed / 'provision_worktree_assets.ps1').is_file())
         self.assertFalse((seed / 'range' / 'shots').exists())     # per-run output is never seeded
@@ -368,7 +350,7 @@ class InstallerTest(unittest.TestCase):
         new = self.base / 'w1'
         self.assertEqual((new / 'local' / 'slice' / 'x.json').read_text(encoding='utf-8'), 'slice')
         self.assertTrue((new / 'local' / 'doors' / 'mover.json').is_file())
-        self.assertTrue((new / 'host' / 'ue5' / 'OpenWillow' / 'Content' / 'Maps' / 'a.umap').is_file())
+        self.assertTrue((new / 'local' / 'items' / 'Maps' / 'a.umap').is_file())
         self.assertFalse((new / 'local' / 'range' / 'shots').exists())
         self.assertFalse((new / 'local' / 'sanctuary').exists())
 
@@ -377,7 +359,7 @@ class InstallerTest(unittest.TestCase):
         (self.repo / 'local' / 'worktree-seed' / 'worktree_seed_folders.txt').unlink()   # an old or broken seed
         added = self.add_worktree('w2')
         self.assertNotEqual(added.returncode, 0)            # git reports the hook's failure...
-        self.assertTrue((self.base / 'w2' / 'host').is_dir())   # ...after the checkout already happened
+        self.assertTrue((self.base / 'w2' / 'tools').is_dir())   # ...after the checkout already happened
 
     def test_reinstall_refreshes_the_cached_provisioner(self):
         self.assertEqual(self.install().returncode, 0)
@@ -410,7 +392,7 @@ class InstallerTest(unittest.TestCase):
         new = self.base / 'w4'
         slice_file = new / 'local' / 'slice' / 'x.json'
         slice_file.unlink()
-        restored = self.git_in(new, 'checkout', '--', 'host/ue5/OpenWillow/OpenWillow.uproject')
+        restored = self.git_in(new, 'checkout', '--', 'tools/worktree_seed_folders.txt')
         self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
         self.assertFalse(slice_file.exists())
 

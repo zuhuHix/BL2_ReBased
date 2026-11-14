@@ -1,39 +1,21 @@
 """The range's melee per kind against the acceptance table (docs/verification/COMBAT_RANGE.md, "Acceptance table: melee per kind").
 
-Two halves, no editor: the host's per-kind rows (OpenWillowEnemyAI.cpp, KindMeleeRows) must equal tools/check_range.py's ACCEPTANCE, and
-the brain must use them; and the checker's re-check of a kind_melee line must accept a host inside the bands and refuse the old stand-ins.
-Source-text and synthetic checks only: nothing here runs the host. Each row is one session's live read, UNVERIFIED beyond it.
+Synthetic checks only: tools/check_range.py's ACCEPTANCE rows, and the checker's re-check of a kind_melee line, which must accept a host
+inside the bands and refuse the old stand-ins. The tests that held the retired UE5 host's rows and brain to this table left with that host
+(git show 08bcf3e:tests/range_kind_melee_test.py). Each row is one session's live read, UNVERIFIED beyond it.
 
 Run: python tests/range_kind_melee_test.py
 """
-import re
 import sys
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-SOURCE = REPO / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow'
 sys.path.insert(0, str(REPO / 'tools'))
 import check_range  # noqa: E402
 import prepare_range  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import range_fixtures  # noqa: E402
-
-ROW = re.compile(r'\{TEXT\("(\w+)"\),\s*([\d.]+)f,\s*([\d.]+)f\}')
-
-
-def text(name):
-    return (SOURCE / name).read_text(encoding='utf-8')
-
-
-def host_rows():
-    """{kind: (cycle, stand)} from the KindMeleeRows table; {} when the table is not there (the code before the acceptance table)."""
-    source = text('OpenWillowEnemyAI.cpp')
-    if 'KindMeleeRows[] = {' not in source:
-        return {}
-    block = source[source.index('KindMeleeRows[] = {'):]
-    block = block[:block.index('};')]
-    return {kind: (float(cycle), float(stand)) for kind, cycle, stand in ROW.findall(block)}
 
 
 def kind_line(kind='bullymong_adult', cycle=(1.222, 1.239), stand=(201, 201), first=380, start_range=394, max_frame=0.017, enemy='E_3', swings=4):
@@ -55,46 +37,7 @@ def graded_kind_melee(*lines):
     return ok, dict((s, (v, d)) for s, v, d in rows)['kind_melee']
 
 
-class HostRowsTest(unittest.TestCase):
-    def test_the_host_has_a_row_for_every_kind_in_the_table_and_no_other(self):
-        rows = host_rows()
-        self.assertTrue(rows, 'OpenWillowEnemyAI.cpp has no KindMeleeRows table: every kind runs on the stand-ins (1.25 s, a stop 60 uu '
-                              'inside its swing range: 334 uu for the adult and 420 for the baby with the manifest of 2026-11-07)')
-        self.assertEqual(set(rows), set(check_range.ACCEPTANCE))
-
-    def test_each_host_value_is_the_table_value_and_inside_its_band(self):
-        rows = host_rows()
-        for kind, row in check_range.ACCEPTANCE.items():
-            with self.subTest(kind=kind):
-                self.assertIn(kind, rows)
-                cycle, stand = rows[kind]
-                self.assertAlmostEqual(cycle, row['cycle'], places=6)
-                self.assertTrue(row['cycle_band'][0] <= cycle <= row['cycle_band'][1])
-                if row['stand'] is None:
-                    # The cycle only: the host's 0 is "no live stand distance" (the stand-in stop), and no stand band is graded.
-                    self.assertEqual(stand, 0.0)
-                    self.assertIsNone(row['stand_band'])
-                    continue
-                self.assertAlmostEqual(stand, row['stand'], places=6)
-                self.assertTrue(row['stand_band'][0] <= stand <= row['stand_band'][1])
-
-    def test_kinds_with_no_live_read_have_no_row(self):
-        # The psycho was never read swinging at the player: it keeps the stand-ins (1.25 s, the stop inside its swing range).
-        self.assertNotIn('psycho', host_rows())
-        self.assertIn('constexpr float SwingInterval = 1.25f;', text('OpenWillowEnemyAI.h'))
-
-    def test_the_regular_and_the_slinger_have_the_live_cycle_and_no_live_stand(self):
-        # Session 2 of 2026-11-12: the regular's medians 1.2200 to 1.2227 s (96 gaps), the slinger's melee 1.2224 s (28 gaps). Neither
-        # kind's stand distance was sampled, and the regular's median call distance beyond contact is unexplained: the stand stays open.
-        rows = host_rows()
-        for kind, medians in (('bullymong', (1.2200, 1.2227)), ('bullymong_slinger', (1.2224, 1.2224))):
-            with self.subTest(kind=kind):
-                self.assertEqual(rows[kind], (1.222, 0.0))
-                band = check_range.ACCEPTANCE[kind]['cycle_band']
-                self.assertTrue(band[0] <= medians[0] and medians[1] <= band[1], band)
-                self.assertGreater(1.25, band[1])   # the old stand-in is outside it
-        enemy = text('OpenWillowEnemy.cpp')
-        self.assertIn('(KindMelee && KindMelee->StandDistance > 0.f) ? FString::Printf', enemy)
+class AcceptanceRowsTest(unittest.TestCase):
 
     def test_the_adult_cycle_is_the_third_reads_value(self):
         # Session 2 of 2026-11-12 (medians 1.220 to 1.223 s, 407 gaps) agrees with the den read of 2026-11-07 (1.216 to 1.217 s), not
@@ -106,10 +49,7 @@ class HostRowsTest(unittest.TestCase):
 
 
 class BodyContactTest(unittest.TestCase):
-    MAYA_STANDING = 42.0   # OpenWillowMayaMovement.h, CollisionRadius (Pawn_Siren's cylinder)
-
-    def test_maya_radius_is_the_one_the_floor_assumes(self):
-        self.assertIn('constexpr float CollisionRadius = 42.f', text('OpenWillowMayaMovement.h'))
+    MAYA_STANDING = 42.0   # Maya's collision radius (Pawn_Siren's cylinder), as the retired UE5 host's OpenWillowMayaMovement.h had it
 
     def test_the_baby_stands_inside_its_band_with_its_own_radius(self):
         # Acceptance row 5. The brain stops at max(live stand, radius + Maya's radius). With the borrowed adult radius (150) that was 192,
@@ -125,44 +65,6 @@ class BodyContactTest(unittest.TestCase):
     def test_the_adult_floor_is_unchanged(self):
         # The adult owns its asset's cylinder (150, live read 2026-10-03): contact 192, under its stand 201.
         self.assertNotIn('bullymong_adult', prepare_range.OBSERVED_COLLISION)
-
-
-class HostUsesTheRowsTest(unittest.TestCase):
-    def test_the_brain_reads_cycle_and_stand_from_its_input(self):
-        brain = text('OpenWillowEnemyAI.cpp')
-        self.assertIn('Now >= LastSwingStart + In.SwingInterval', brain)
-        self.assertIn('const bool bLiveStand = In.StandDistance > 0.f;', brain)
-        self.assertNotIn('LastSwingStart + SwingInterval', brain)
-
-    def test_a_live_stand_distance_never_goes_inside_body_contact_and_the_run_stops_on_it(self):
-        brain = text('OpenWillowEnemyAI.cpp')
-        self.assertIn('const float Contact = In.CollisionRadius + In.MayaRadius;', brain)
-        self.assertIn('FMath::Max(In.StandDistance, Contact)', brain)
-        # Review r2: the limit is the gap to where Maya is now (FlatDistance), not to ChaseTo, which lags by up to one state update.
-        self.assertIn('Orders.StepLimit = (bAware && bLiveStand) ? FMath::Max(0.f, FlatDistance - StopAt) : -1.f;', brain)
-        enemy = text('OpenWillowEnemy.cpp')
-        self.assertIn('if (StepLimit > 0.f) Step = FMath::Min(Step, StepLimit);', enemy)
-        self.assertIn('if (!bRun || StepLimit == 0.f)', enemy)
-        self.assertNotIn('Left - StopShort', enemy)
-        self.assertIn('is inside body contact', enemy)
-
-    def test_the_enemy_fills_them_from_its_kind_and_says_where_they_came_from(self):
-        enemy = text('OpenWillowEnemy.cpp')
-        self.assertIn('KindMelee = FindKindMelee(Kind.Name);', enemy)
-        self.assertIn('In.SwingInterval = SwingIntervalNow();', enemy)
-        self.assertIn('In.StandDistance = KindMelee ? KindMelee->StandDistance : 0.f;', enemy)
-        self.assertIn('stand-in_no_live_read', enemy)
-        self.assertIn('MeleeEndsAt = Now + SwingIntervalNow();', enemy)
-
-    def test_the_range_test_logs_what_the_checker_reads(self):
-        source = text('OpenWillowRange.cpp')
-        step = source[source.index('case 94: // kind_melee'):source.index('// ---------------------------------------------------------------------------------------------- loot driver')]
-        for field in ('kind=%s', 'cycle_min=%.3f', 'cycle_max=%.3f', 'stand_min=%.0f', 'stand_max=%.0f', 'first_swing=%.0f', 'start_range=%.0f',
-                      'max_frame=%.3f'):
-            self.assertIn(field, step)
-        self.assertIn('kind_melee', check_range.EXPECTED)
-        # C2181 (project memory): no brace-less if holding a UE_LOG before an else.
-        self.assertNotRegex(step, r'UE_LOG\([^;]*\);\s*\n\s*else')
 
 
 class CheckerTest(unittest.TestCase):
@@ -284,12 +186,6 @@ class ResultsTiedToSpawnsTest(unittest.TestCase):
         self.assertIn('no enemy was spawned with a live melee row', details)
         # Steps built by hand, not read from a log, carry no spawns: they fail too.
         self.assertFalse(check_range.grade({'kind_melee': [('PASS', kind_line())]}, ('PASS', ''), expected=['kind_melee'])[0])
-
-    def test_the_host_logs_the_spawn_record_the_checker_reads(self):
-        enemy = text('OpenWillowEnemy.cpp')
-        self.assertIn('OWRANGE enemy %s kind_melee kind=%s swing_interval=%.3f stand=%s source=%s', enemy)
-        self.assertIn('TEXT("live_read")', enemy)
-        self.assertIn('kind=%s enemy=%s cycle_min=%.3f', text('OpenWillowRange.cpp'))
 
     def test_a_host_pass_with_numbers_outside_the_bands_is_graded_fail(self):
         ok, (verdict, detail) = graded_kind_melee(spawn('E_3', 'bullymong_adult'), 'OWRANGETEST step=kind_melee result=PASS ' + kind_line(stand=(328, 334)))

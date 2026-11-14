@@ -4,6 +4,8 @@ Lane C, 2026-10-22. AI-assisted (Claude Opus 5.5; capture by an Opus 5.5 sub-age
 could not start the game). The host drives BL2's own HUD movie (converted to SWF, run in Ruffle over UE5,
 `-owflashhud`); nothing here is redrawn natively. All frames, samples and converted movies stay under ignored `local/`.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## What the game shows
 
 Two clips of the HUD movie (`UI_HUD.HUD`) make up the indicator. The script functions that drive them

@@ -1,7 +1,8 @@
 """Reload clips and arms clip sets for the weapon types in local/weapon_library/view_types.json (types in DLC packages are not in it).
 
-One data step for a machine: exports with UModel, converts onto the library skeletons and Maya's arms, and prints the two imports to
-run (both start the editor). Everything it writes stays under ignored local/; --out elsewhere is refused. Its export and result folders
+One data step for a machine: exports with UModel, converts onto the library skeletons and Maya's arms, and prints the two converted
+clip lists. The retired UE5 host imported them (its character-anim importer and tools/import_weapon_library.ps1, git show 08bcf3e);
+no host imports them now. Everything it writes stays under ignored local/; --out elsewhere is refused. Its export and result folders
 are emptied first, so a file from an older run cannot count as this run's. Each type's default reload clip is taken: the fast variants
 depend on a live threshold no table holds.
 
@@ -18,7 +19,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import prepare_character_anims as converter  # noqa: E402
-from lootables_editor import local_output  # noqa: E402
 
 # Library folder of each game clip set, where the names differ.
 KINDS = {'RocketLauncher': 'Launcher'}
@@ -79,15 +79,29 @@ def export(umodel, game, out, package, name, kind):
                    check=True, capture_output=True)
 
 
+def local_output(value, repo=ROOT):
+    """value as an absolute path, refused unless it lies inside the repository's ignored local/ (links followed):
+    everything this tool writes holds package-derived data (docs/LEGAL.md). Moved here from the retired tools/lootables_editor.py."""
+    local = (Path(repo) / 'local').resolve()
+    # local/ itself must be the repository's own folder: a junction there could lead into a tracked one.
+    if local != Path(repo).resolve() / 'local':
+        raise ValueError(f'{Path(repo) / "local"} is a link to {local}; refused')
+    path = Path(value)
+    path = (path if path.is_absolute() else Path(repo) / path).resolve()
+    if path == local or local not in path.parents:
+        raise ValueError(f'{value}: output must be inside {local}; game data stays in local/')
+    return path
+
+
 def powershell_quoted(text):
     return "'" + str(text).replace("'", "''") + "'"
 
 
 def import_lines(arms_pairs, weapon_pairs):
-    """The two imports, quoted for PowerShell. The lists themselves split on ; and , so main refuses a path holding those."""
-    return ['Import the arms: $env:OPENWILLOW_CHARACTER_ANIMS = ' + powershell_quoted(';'.join(arms_pairs))
-            + ' then run host/ue5/import_character_anims.py',
-            'Import the weapon clips: tools/import_weapon_library.ps1 -Only none -Reloads ' + powershell_quoted(','.join(weapon_pairs))]
+    """The two converted clip lists, quoted for PowerShell, in the form the retired UE5 host's imports took them
+    (OPENWILLOW_CHARACTER_ANIMS and -Reloads). The lists split on ; and , so main refuses a path holding those."""
+    return ['Arms clips: ' + powershell_quoted(';'.join(arms_pairs)),
+            'Weapon clips: ' + powershell_quoted(','.join(weapon_pairs))]
 
 
 def main(argv=None, repo=ROOT):

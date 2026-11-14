@@ -1,4 +1,8 @@
-"""Select an installed map and prepare, import or open its UE5 scene."""
+"""Select an installed map and prepare its scene manifest (local/<map>/scene.json).
+
+The import and view actions started the retired UE5 host (tools/run_ue_level.ps1, recoverable with
+``git show 08bcf3e:tools/run_ue_level.ps1``); only prepare remains.
+"""
 import argparse
 import json
 from pathlib import Path
@@ -99,10 +103,8 @@ def main():
     parser.add_argument('--map', help='Installed package name, e.g. Ash_P')
     parser.add_argument('--list', action='store_true', help='List installed maps and exit')
     parser.add_argument('--json', action='store_true', help='Machine-readable map catalog (with --list)')
-    parser.add_argument('--action', choices=('prepare', 'import', 'view'), default='view')
+    parser.add_argument('--action', choices=('prepare',), default='prepare')
     parser.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
-    parser.add_argument('--engine', type=Path)
-    parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--include-dlc', action='store_true', help='Include installed DLC maps and texture caches')
     parser.add_argument('--sanctuary-geometry', action='store_true',
                         help='Also prepare Sanctuary terrain and BSP with triangle collision')
@@ -143,23 +145,8 @@ def main():
         name = select(records, name)
         validate_options(args, name)
         scene = ROOT / 'local' / name[:-2].lower()
-        if args.action == 'prepare':
-            reject_plain_sanctuary_rebuild(scene, name, args.sanctuary_geometry)
-            for command in preparation_commands(args, name, scene):
-                subprocess.run(command, check=True, cwd=ROOT)
-        else:
-            if not args.engine:
-                raise ValueError('--engine is required for import and view')
-            manifest = scene / 'scene.json'
-            if not manifest.is_file():
-                raise ValueError(f'Prepare {name} first with --action prepare')
-            if json.loads(manifest.read_text(encoding='utf-8')).get('map') != name:
-                raise ValueError('Prepared manifest does not match the selected map')
-            command = ['powershell.exe', '-NoProfile', '-File', str(ROOT / 'tools/run_ue_level.ps1'),
-                       '-Engine', str(args.engine.resolve()), '-Game', str(args.game.resolve()),
-                       '-Scene', str(scene), '-ImportOnly' if args.action == 'import' else '-ViewOnly']
-            if args.skip_build:
-                command.append('-SkipBuild')
+        reject_plain_sanctuary_rebuild(scene, name, args.sanctuary_geometry)
+        for command in preparation_commands(args, name, scene):
             subprocess.run(command, check=True, cwd=ROOT)
     except (ValueError, OSError, subprocess.CalledProcessError, EOFError) as error:
         parser.exit(1, f'viewer: {error}\n')

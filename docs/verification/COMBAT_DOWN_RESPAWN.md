@@ -7,6 +7,8 @@ rule below is `UNVERIFIED` as a statement about the native code unless a row nam
 native does exactly this". It builds on the hit chain ([COMBAT_HIT_CHAIN.md](COMBAT_HIT_CHAIN.md)), the death chain ([COMBAT_DEATH.md](COMBAT_DEATH.md)), the kill experience ([COMBAT_KILL_XP.md](COMBAT_KILL_XP.md))
 and the melee fixture ([COMBAT_MELEE.md](COMBAT_MELEE.md)).
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## The verdicts
 
 1. **The injured state does not use latent code.** The state-level script of `WillowPawn.injured` and `WillowPlayerPawn.injured` (and of every other player-pawn state: `InjuredClient`, `MostlyDead`,

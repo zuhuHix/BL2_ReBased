@@ -1,0 +1,26 @@
+# BL2_ReBased Rust workspace (decision 2026-11-14-01: Rust replaces the UE5 host).
+#
+# The crates port the C++ core in src/ one at a time; src/ stays the reference until a crate matches it on the same
+# synthetic fixtures and on tools/verify_packages.py. No third-party crates: each one added later needs its
+# THIRD_PARTY.md entry first (AGENTS.md rule 6). The host's engine route is not chosen yet (Phase 0R benchmark,
+# docs/verification/ENGINE_BENCHMARK.md).
+[workspace]
+resolver = "3"
+members = [
+    "crates/ow-container",
+    "crates/ow-package",
+    "crates/ow-vm",
+    "crates/ow-game",
+    "crates/ow-cli",
+    "crates/ow-host",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

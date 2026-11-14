@@ -50,7 +50,7 @@ public:
     void setLinePlayer(std::function<bool(const Line&)> start) { player_ = std::move(start); timedPlayer_ = nullptr; testLength_ = -1; }
     // A player that knows each line's length: it returns the length in seconds (negative: the line is not played). The dialog's own clock then
     // ends the audio at its exact time, so the finish time is that end plus the act's OutputDelay however long the update that reaches it is.
-    // For a host that plays a file of known length (the UE host's slice audio, SLICE_AUDIO_CHAIN.md section 5c).
+    // For a host that plays a file of known length (the retired UE5 host's slice audio, SLICE_AUDIO_CHAIN.md section 5c).
     void setTimedLinePlayer(std::function<double(const Line&)> start) { timedPlayer_ = std::move(start); player_ = nullptr; testLength_ = -1; }
     void setTestLineLength(double seconds);
     void lineEnded(int lineId);

@@ -79,12 +79,6 @@ class CheckAudioTest(unittest.TestCase):
                    "$null = $p.Handle; if (!$p.WaitForExit(60000)) { exit 99 }; exit $p.ExitCode")
         self.assertEqual(subprocess.run(['powershell', '-NoProfile', '-Command', command], timeout=120).returncode, 7)
 
-    def test_the_suite_reads_the_exit_code_and_passes_it_on(self):
-        text = (Path(__file__).resolve().parent.parent / 'tools/test_audio.ps1').read_text(encoding='utf-8')
-        for needed in ('$null = $process.Handle', '$process.WaitForExit(', '$process.ExitCode', "check_audio.py') $log $editorEnd", '$process.Kill()'):
-            self.assertIn(needed, text)
-        self.assertNotIn('Stop-Process', text)     # it would look the PID up again
-
     def test_a_mixer_pass_needs_its_numbers(self):
         self.assert_problem(log(drained='queued=0 left=0'), 'mixer row')
         self.assert_problem(log(drained='queued=96000 left=512'), 'mixer row')

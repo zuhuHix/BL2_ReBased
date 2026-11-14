@@ -8,26 +8,37 @@
 
 ### Same game. New machine.
 
-**Borderlands 2's own files, read from your copy of the game and rebuilt on Unreal Engine 5.**<br>
+**Borderlands 2's own files, read from your copy of the game, with a new engine underneath being written in Rust.**<br>
 One developer, a lot of AI, and a written record of every check.
 
 [![Status: prototype](https://img.shields.io/badge/status-prototype-orange)](#where-things-stand)
 [![Playable: not yet](https://img.shields.io/badge/playable-not%20yet-lightgrey)](#where-things-stand)
-[![Engine: UE 5.8](https://img.shields.io/badge/engine-Unreal%20Engine%205.8-black)](docs/OPENWILLOW_ENGINE_PLAN.md)
-[![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C)](CMakeLists.txt)
+[![Rust 1.96](https://img.shields.io/badge/Rust-1.96-black)](rust-toolchain.toml)
+[![Engine route: benchmark](https://img.shields.io/badge/engine%20route-benchmark%20pending-lightgrey)](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)
+[![C++20 core](https://img.shields.io/badge/C%2B%2B-20%20core-00599C)](CMakeLists.txt)
 [![CI](https://github.com/zuhuHix/BL2_ReBased/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReBased/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/zuhuHix/BL2_ReBased)](https://github.com/zuhuHix/BL2_ReBased/commits/main)
 [![Discussions](https://img.shields.io/badge/chat-discussions-8250df)](https://github.com/zuhuHix/BL2_ReBased/discussions)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow)](https://buymeacoffee.com/zuhu)
 
-[See it](#see-it-running) · [The numbers](#the-numbers) · [What is this?](#what-is-this) · [The loop](#the-loop-already-runs) · [Pictures](#progress-in-pictures) · [How close?](#how-close-is-it) · [Status](#where-things-stand) · [Roadmap](#roadmap) · [Legal](#is-this-legal) · [Support](#help-me-keep-going) · [Developers](#for-developers)
+[See it](#see-it-running) · [The numbers](#the-numbers) · [What is this?](#what-is-this) · [The loop](#the-loop-ran-in-the-ue5-host) · [Pictures](#progress-in-pictures) · [How close?](#how-close-is-it) · [Status](#where-things-stand) · [Roadmap](#roadmap) · [Legal](#is-this-legal) · [Support](#help-me-keep-going) · [Developers](#for-developers)
 
 </div>
 
 ---
 
+> [!NOTE]
+> **2026-11-14: the project moved from Unreal Engine 5 to Rust.** The UE5 host has been removed from the repository ([the decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). What that means:
+>
+> - The pictures on this page, "See it running" included, were made with the retired UE5 host. They show what that host did, not a build you can get today.
+> - The Rust host is not running yet. Which engine it builds on (Bevy, an own engine on wgpu, maybe Fyrox) will be chosen from a benchmark, and that benchmark hasn't been run.
+> - The part that reads the game carries over: the package reader, the script VM and the combat, mission and item rules. It's being ported from C++ to Rust crate by crate, and the C++ version stays the reference until each Rust crate matches it.
+> - The last commit with the UE5 host is `08bcf3e`, if you want to look at it.
+
 ## See it running
+
+*These frames are from the retired UE5 host (see the note above). The Rust host doesn't render anything yet.*
 
 <p align="center">
   <img src="https://github.com/zuhuHix/BL2_ReBased/releases/download/progress-gallery/phaselock-cast-host-2026-11-07.jpg" width="100%" alt="Maya casts Phaselock on a Sanctuary street, running in Unreal Engine 5">
@@ -40,7 +51,7 @@ One developer, a lot of AI, and a written record of every check.
 <p align="center"><sub>Frames captured from this project's UE 5.8 build on <code>main</code> (7eee9ee), 2026-11-07: Phaselock's cast, the Fire mission's reward screen, Fight For Your Life and a shotgun shot. The models, textures and UI movies were imported on my PC from my own copy of the game. This is not concept art and not a mod of the old .exe. It does not match the original yet: <a href="#how-close-is-it">here's the scoreboard</a>.</sub></p>
 
 > [!IMPORTANT]
-> **There is no game to play yet, and no download.** This is a developer prototype: one map, one Vault Hunter and one mission, with labelled stand-ins, and most of its rules are not yet confirmed against the original game. I put it up early so people can watch it grow.
+> **There is no game to play yet, and no download.** The retired UE5 host was a developer prototype: one map, one Vault Hunter and one mission, with labelled stand-ins, and most of its rules not yet confirmed against the original game. The Rust host that replaces it doesn't run yet. I put it up early so people can watch it grow.
 >
 > This is a fan project, not affiliated with Gearbox, 2K or Take-Two. No game files and no Gearbox code live in this repo. It only works against **your own purchased copy** of Borderlands 2, and it never touches your install.
 
@@ -50,7 +61,7 @@ One developer, a lot of AI, and a written record of every check.
   <tr>
     <td align="center" width="33%"><h3>2,008 / 2,008</h3>game packages read with zero errors, base game plus every DLC</td>
     <td align="center" width="33%"><h3>12,968 / 12,978</h3>of BL2's script functions decode structurally</td>
-    <td align="center" width="33%"><h3>14 / 14</h3>links of the spawn-to-respawn loop pass, in four runs on <code>main</code></td>
+    <td align="center" width="33%"><h3>14 / 14</h3>links of the spawn-to-respawn loop passed in the retired UE5 host, in four runs on <code>main</code></td>
   </tr>
   <tr>
     <td align="center"><h3>69 / 69</h3>weapon cards match the real game's four main stats, with live values (every printed stat on 68)</td>
@@ -59,7 +70,7 @@ One developer, a lot of AI, and a written record of every check.
   </tr>
 </table>
 
-<sub>Automated checks on my own PCs, as of 2026-11-07. These numbers prove the pieces run. They do not prove parity: a PASS means this engine did the thing, not that it matches Borderlands 2. The closeness is scored separately, in <a href="#how-close-is-it">How close is it?</a></sub>
+<sub>Automated checks on my own PCs, as of 2026-11-07. These numbers prove the pieces ran. They do not prove parity: a PASS means this engine did the thing, not that it matches Borderlands 2. The loop count comes from the retired UE5 host and does not count toward the Rust host's gates. The closeness is scored separately, in <a href="#how-close-is-it">How close is it?</a></sub>
 
 ## What is this?
 
@@ -71,15 +82,15 @@ Hey, I'm zuhu. Borderlands 2 is basically two separate things.
 
 Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawide, no level editor) lives in the machine, not the stuff. Mods can change the stuff, and SDK mods can even hook the running game, but nobody outside Gearbox can recompile the machine.
 
-**So this project builds a new machine.** I decode BL2's own files and bring them into Unreal Engine 5. I'm not modelling copies of anything and I'm not remaking assets from scratch: I'm reading the originals and rebuilding the engine underneath them. Imagine what that opens up: new NPCs, new maps, new characters, new UI, reworked anything. This game deserves a third life.
+**So this project builds a new machine.** I decode BL2's own files and build a new engine to run them, written in Rust. I'm not modelling copies of anything and I'm not remaking assets from scratch: I'm reading the originals and rebuilding the engine underneath them. Imagine what that opens up: new NPCs, new maps, new characters, new UI, reworked anything. This game deserves a third life.
 
 Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those work. As far as I know, nobody's done it for BL2 yet. That's the challenge.
 
 <p align="center">
-  <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed Unreal Engine 5.">
+  <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed the Rust host, whose engine route is chosen by benchmark.">
 </p>
 
-<sub>The target design. Today only parts of the slice run on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run). The rest is C++ in the UE5 project (the "host" in the docs), with labelled stand-ins.</sub>
+<sub>The target design. The game-reading core (package reader, script VM, combat, mission and item rules) is C++ today and is being ported to Rust. The host (the "host" in the docs) is not started in Rust: its engine route is still to be picked by a benchmark. Until 2026-11-14 the host was a UE5 project, now retired; in it, only parts of the slice ran on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run).</sub>
 
 <details>
 <summary><b>Why can't mods just fix this?</b></summary>
@@ -96,19 +107,21 @@ Full research: [docs/BL2_REMASTER_ANALYSIS.md](docs/BL2_REMASTER_ANALYSIS.md).
 
 </details>
 
-## The loop already runs
+## The loop ran in the UE5 host
+
+*This section is about the retired UE5 host. The Rust host has not run the loop, and its slice gate starts again from not started.*
 
 The next big milestone is one complete loop on Sanctuary, as Maya:
 
 <p align="center"><b>spawn → fight → loot → equip → Phaselock → finish a mission → go down → respawn</b></p>
 
-There's a test that chains all of it in a single session, and on 2026-11-07 it ran four times on `main` (twice plain, once with a test-fixture shield, once with a forced revive):
+The UE5 host had a test that chained all of it in a single session, and on 2026-11-07 it ran four times on `main` (twice plain, once with a test-fixture shield, once with a forced revive):
 
 ```text
 slice gate: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14
 ```
 
-Three days earlier the same suite said 10 of 14. That's the pace right now.
+Three days earlier the same suite said 10 of 14. That was the pace then.
 
 **What that does not mean:** it's a scripted run, not a player, and it leans on named test fixtures such as teleports, a granted Phaselock point and forced loot. In those runs no enemy downed Maya: the down came from the test's own lethal damage. An unforced variant, which drops the forced loot, the granted point and the lethal damage but keeps the teleports, ran 8 times on 2026-11-11: the range's enemies downed her every time, and 5 of the 8 runs passed all 14 links. So the Phase 4 gate is not claimed as met. The full list of limits is in [SLICE_GATE.md](docs/verification/SLICE_GATE.md).
 
@@ -135,6 +148,9 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 </details>
 
 ## Progress in pictures
+
+> [!NOTE]
+> **Everything in this section shows the retired UE5 host** (removed on 2026-11-14, last held by commit `08bcf3e`). "Ours" below means that host. The "State" lines describe what it did; the Rust host has none of it on screen yet. I'm keeping the pictures as a record and as the target the Rust host has to meet again.
 
 *Where a real-game frame exists it sits next to ours, and each card says in its own text what still looks wrong. The newest cards (uploaded 2026-11-08) show our build 40ae631, captured 2026-11-07; their real-game frames come from my own sessions, and each card's footer says whether mods were on. Full-size frames are in the [`progress-gallery`](https://github.com/zuhuHix/BL2_ReBased/releases/tag/progress-gallery) release, not in the repository: they show game content, and the rules for that are in [docs/LEGAL.md](docs/LEGAL.md).*
 
@@ -292,7 +308,7 @@ All on `main` at 7eee9ee, on one PC, 2026-11-07. These are checks of this engine
 
 ## How close is it?
 
-An independent AI critic, one that didn't build the thing, gets our frames and matched frames from the real game and scores them out of 10. **The target is 8.** The first rule is that a score isn't parity: it's a judgement, it moves by a few tenths between rounds, and each row only covers what its record says.
+An independent AI critic, one that didn't build the thing, gets our frames and matched frames from the real game and scores them out of 10. **The target is 8.** Every score below was given to frames from the retired UE5 host, so it says how close that host got. The Rust host has no scores yet and starts from zero on this table. The first rule is that a score isn't parity: it's a judgement, it moves by a few tenths between rounds, and each row only covers what its record says.
 
 | Part | Score | What it covers |
 |:--|:-:|:--|
@@ -303,21 +319,27 @@ An independent AI critic, one that didn't build the thing, gets our frames and m
 | Sanctuary | ![5.0](https://img.shields.io/badge/5.0-orange) | Eight matched cameras ([record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md)) |
 | Aiming down sights | ![4.0 to 6.0](https://img.shields.io/badge/4.0%20to%206.0-orange) | Pose and framing of four guns ([record](docs/verification/WEAPON_VISUALS.md)) |
 
-<sub>Green means the target is reached. Only the hip pose gets there, and only for pose and framing.</sub>
+<sub>Green means the target is reached. Only the hip pose got there, in the UE5 host, and only for pose and framing.</sub>
 
 **Measured in the real game itself.** I drive the installed game through the community mod SDK and record what it actually does, the same kind of live read my mod [BL2_RTSE](https://github.com/zuhuHix/Bl2_RTSE) uses. That's how these became fact instead of guesses: the level curve, maximum health, skill points, the Fire mission's XP, Phaselock's lift bob and some of its cast conditions, and 69 weapon cards with their exact parts ([record](docs/verification/REALGAME_GROUND_TRUTH.md)). Phaselock's target scoring, and casting while injured or down, are not confirmed. Anything not confirmed like this stays labelled `UNVERIFIED` in the code and docs.
 
 ## Where things stand
 
-*Updated 2026-11-07.*
+*Updated 2026-11-14.*
 
-**Short version:** there's no game to play yet. The Sanctuary slice is a developer prototype that now covers the whole loop in a scripted run, on labelled stand-ins and with most rules still unconfirmed against the game.
+**Short version:** there's no game to play yet. On 2026-11-14 the UE5 host was removed and the project switched to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). Right now:
+
+- **The host is back to not started.** No Rust engine is chosen. A benchmark (Bevy and an own engine on wgpu + winit, Fyrox optional) builds the same small Sanctuary-and-Maya scene in each, and I pick from the measurements. It hasn't run yet.
+- **The core carries over.** The package reader, the census, the VM prototype and the combat, mission and item rules keep their status. They're C++ today and get ported to Rust crate by crate. The Rust workspace exists, but its crates are skeletons: no Rust code reads a package yet.
+- **The evidence stays.** Real-game captures, the own-words native notes and the script disassembly don't depend on the host. What the UE5 host showed stays on record as history and as a target, but doesn't count toward the Rust host's gates.
+
+Before the switch, the Sanctuary slice in the UE5 host was a developer prototype that covered the whole loop in a scripted run, on labelled stand-ins and with most rules still unconfirmed against the game.
 
 <details>
-<summary><b>What works today, part by part (merged to <code>main</code>)</b></summary>
+<summary><b>What the retired UE5 host did, part by part (as merged to <code>main</code> up to <code>08bcf3e</code>)</b></summary>
 <br>
 
-Each item names its PR. Anything not checked against the running game is `UNVERIFIED` in its record.
+Each item names its PR. Anything not checked against the running game is `UNVERIFIED` in its record. Rules that live in the core (the VM's down and respawn rules, item and combat rules) carry over; the host parts (rendering, input, HUD wiring, movement) have to be built again in Rust.
 
 - **Maya.** Movement numbers from the stock data (#77). Shield, health and Fight For Your Life in one host state (#72), a stand-in capacity for shields without a capacity stat (#124). Melee on V (#129). Stock frag grenades on G (#115, #123). A respawn charges the fee and shows a message (#151).
 - **Down and respawn.** The down, bleed-out, second-wind and respawn rules run on the VM (#59, [COMBAT_DOWN_RESPAWN.md](docs/verification/COMBAT_DOWN_RESPAWN.md)).
@@ -338,15 +360,16 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 
 **Not yet:**
 
+- **A Rust host.** No engine route is chosen, and nothing renders, moves or plays in Rust yet.
 - **Parity with the original game.** Nothing here should be read as "it works like the real thing" unless its record says so.
-- **An enemy that actually downs Maya in the gate run.** Enemies hit her on the range, but the gate's down still comes from the test.
+- **An enemy that actually downs Maya in the gate run.** In the UE5 host, enemies hit her on the range, but the gate's down still came from the test.
 - **The rest of the game.** The other ~79 maps, the other Vault Hunters, the full campaign, co-op, your saves.
 
-**Next up:** whatever is in the open PRs, a proper side-by-side of the whole loop with the original game, and closing the gaps on the scoreboard. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
+**Next up:** the engine benchmark, porting the C++ core to Rust crate by crate until each crate matches it, then Sanctuary and Maya again in the Rust host. The order is the same as before: Sanctuary and Maya first, then the Phase 4 gate, then breadth. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
 
 ## What you'd get (eventually)
 
-**The first milestone is the goal:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in UE5. Today only parts of it do. Everything below comes after that. It's not a remaster and it's not a remake; here's what a new machine is meant to buy you. These are goals, and none of them exist yet:
+**The first milestone is the goal:** walk around Sanctuary as Maya, grab a gun, Phaselock something and finish a mission, all running on BL2's own game code in the new engine. The retired UE5 host got parts of it running; the Rust host has none of it yet. Everything below comes after that. It's not a remaster and it's not a remake; here's what a new machine is meant to buy you. These are goals, and none of them exist yet:
 
 <table>
   <tr>
@@ -355,7 +378,7 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
   </tr>
   <tr>
     <td><img src=".github/assets/icons/display.svg" width="20" align="absmiddle" alt=""> <b>Modern graphics.</b> Real ultrawide, any resolution, unlocked framerate, optional modern lighting.</td>
-    <td><img src=".github/assets/icons/map.svg" width="20" align="absmiddle" alt=""> <b>New maps.</b> BL2 never got a level editor. UE5 comes with one built in.</td>
+    <td><img src=".github/assets/icons/map.svg" width="20" align="absmiddle" alt=""> <b>New maps.</b> BL2 never got a level editor. A new engine can have one; with the UE5 host gone, that editor has to be built or brought in.</td>
   </tr>
   <tr>
     <td><img src=".github/assets/icons/puzzle.svg" width="20" align="absmiddle" alt=""> <b>Your mods carry over.</b> BLCMM text mods edit the same data we load, so they should come along. Not tested yet.</td>
@@ -373,20 +396,23 @@ Six phases. Each one ends with a gate, a thing you can actually see or do, so it
 
 **Current priority: a vertical slice, not breadth.** Porting all 82 maps is the easy part. The hard, unproven part is phases 2 through 4, actually running the game's code. So the goal right now is proving those on **one map and one Vault Hunter**, end to end, before spending more time on anything else ([why](ROADMAP.md#priority-the-vertical-slice)).
 
+**Since the switch to Rust (2026-11-14),** the host half of phases 1 to 4 is back to not started, and the game-reading half (reader, VM, combat, mission and item rules) keeps its status. The priority order hasn't changed.
+
 | Phase | What you'll be able to do | Where it is |
 |:--|:--|:--|
-| <img src=".github/assets/icons/done.svg" width="18" height="18" align="absmiddle" alt="Done"> **0 · Read the files** | The engine can open every BL2 file | **Done.** 2,008 packages, gated 2026-09-10 |
-| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **1 · See a map** | Walk around Sanctuary in UE5, verified against the real game. The rest of the 82 maps come in phase 5 | **In progress.** Three maps load as scenery. Sanctuary has matched-camera rounds against the game, and still lacks lighting and NPCs |
-| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to the slice | **In progress.** A C++ bytecode loader, interpreter and Core natives since 2026-09-30. It drives backpack navigation and pieces of the mission and combat rules |
-| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to the slice | **In progress.** Movement numbers from stock data (#77). Maintainer-tested on 2026-10-02, no verification record yet |
-| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **4 · One Vault Hunter, proven** | The full loop on Sanctuary. About 3,800 of Gearbox's undocumented functions have to be worked out. **This is the mountain** | **In progress.** The pieces run with stand-ins, and the scripted loop passes 14 of 14. Not yet compared as a whole with the actual game |
+| <img src=".github/assets/icons/done.svg" width="18" height="18" align="absmiddle" alt="Done"> **0 · Read the files** | The engine can open every BL2 file | **Done.** 2,008 packages, gated 2026-09-10, with the C++ reader. The Rust port has to match it before it takes over |
+| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **0R · Pick the engine** | Bevy, an own engine on wgpu + winit (and maybe Fyrox) each build the same small Sanctuary-and-Maya scene, and I pick from the measurements | **Not started.** Added 2026-11-14 with the switch to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)) |
+| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **1 · See a map** | Walk around Sanctuary in the Rust host, verified against the real game. The rest of the 82 maps come in phase 5 | **Not started in Rust.** The retired UE5 host loaded three maps as scenery and had matched-camera rounds of Sanctuary; that stays on record as the target |
+| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to the slice | **Core in progress, host not started.** A C++ bytecode loader, interpreter and Core natives since 2026-09-30, to be ported to Rust. In the UE5 host it drove backpack navigation and pieces of the mission and combat rules |
+| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to the slice | **Not started in Rust.** Movement numbers from stock data (#77) carry over; the UE5 host's movement was maintainer-tested on 2026-10-02, with no verification record |
+| <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **4 · One Vault Hunter, proven** | The full loop on Sanctuary. About 3,800 of Gearbox's undocumented functions have to be worked out. **This is the mountain** | **Core in progress, host not started.** The combat, mission and item rules carry over. The UE5 host's scripted loop passed 14 of 14 with stand-ins; that doesn't count for the Rust host |
 | <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **5 · Fill it out** | The remaining ~79 maps and 5 Vault Hunters, plus the whole campaign with your real save file | **Not started** |
 | <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **6 · Beyond** | Co-op, DLC, The Pre-Sequel, mods, level editor | **Not started** |
 
 I work on this actively, and I'm not promising completion dates. Checkbox-level detail is in [ROADMAP.md](ROADMAP.md).
 
 <details>
-<summary><b>58 days, in dates</b></summary>
+<summary><b>65 days, in dates</b></summary>
 <br>
 
 | Date | What happened |
@@ -402,6 +428,7 @@ I work on this actively, and I'm not promising completion dates. Checkbox-level 
 | 2026-11-04 | First run of the whole loop as one test: 10 of 14 links |
 | 2026-11-06 | The gun range lands on `main`, with enemies that fight and drop loot |
 | 2026-11-07 | The loop passes 14 of 14 on `main` |
+| 2026-11-14 | The UE5 host is retired and the project moves to Rust. The engine route will be picked by benchmark |
 
 </details>
 
@@ -438,7 +465,7 @@ Full policy: [docs/LEGAL.md](docs/LEGAL.md). License: [MIT](LICENSE). Covers my 
 <br>
 
 **Can I play Borderlands 2 in this?**
-Not yet. There's no download. On my machines Maya can walk Sanctuary, shoot enemies on a test range, loot a gun and run one mission, but that's a developer harness, not the game. The full campaign is Phase 5. It's gonna be a while...
+Not yet. There's no download. Until 2026-11-14, on my machines, Maya could walk Sanctuary, shoot enemies on a test range, loot a gun and run one mission in the UE5 host, but that was a developer harness, not the game, and that host is now retired. The Rust host doesn't run yet. The full campaign is Phase 5. It's gonna be a while...
 
 **Is this a remaster? A remake?**
 Neither. A remaster re-does the *stuff* (new textures, new models). A remake rebuilds everything from scratch. This keeps the original stuff untouched and replaces only the *machine* that runs it. Remasters will follow later on when people enjoy their new modding capabilities.
@@ -449,8 +476,8 @@ That's the plan, but it hasn't been tested. Text mods edit the same game data th
 **Will my saves work?**
 That's the plan, but not yet. Reading and writing real save files is a Phase 5 task and hasn't been validated. The save format is already documented by the community.
 
-**Why Unreal Engine 5?**
-Borderlands 2 is Unreal Engine *3*. UE3's systems (materials, animation, particles, cutscenes, scripting) all have direct descendants in UE5, so we translate into them instead of inventing replacements. That's a much smaller problem.
+**Why Rust? Wasn't this on Unreal Engine 5?**
+It was, until 2026-11-14. Borderlands 2 is Unreal Engine *3*, and the first plan translated its systems into their UE5 descendants. After playing the slice by hand I decided to move the runtime code to Rust instead: the game-reading core gets ported from C++, and the engine underneath gets picked by a benchmark (Bevy, an own engine on wgpu, maybe Fyrox) rather than up front. The whole decision is [here](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md). The UE5 work isn't thrown away: its code is still in the history (commit `08bcf3e`) and its records say what it did, which is the target the Rust host has to meet.
 
 **Who's making this?**
 Me and AI: ChatGPT (Astra and Luna) and Claude as well (Opus 5.5 and Sonnet 5.5) do the grunt work, decoding formats and chasing down smaller one-off tasks. If you want to help cover my monthly sub, or just support the hours going into this, there's a [Buy Me a Coffee](https://buymeacoffee.com/zuhu). Thank you so much to my current supporter (George)! <3
@@ -477,15 +504,15 @@ Everything below is the technical layer. Click to expand.
 
 Measured directly from the installed game: 20,119 functions across the nine code packages. **12,978 (64.5%) are UnrealScript bytecode**, meant to run in our VM as-is (today the VM is partial, and it decodes all but 10 of them). **7,141 (35.5%) were native C++** inside `Borderlands2.exe` and must be rebuilt. Of those, 286 are trivial builtins, 609 are online/save/DLC plumbing we replace rather than replicate, 512 bridge the Scaleform UI, 1,914 are stock UE3 natives whose contracts are public via UDK, and **3,803 are Gearbox's own, undocumented**. Full breakdown: [engine plan §0](docs/OPENWILLOW_ENGINE_PLAN.md#0-ground-truth-the-numbers-this-plan-rests-on).
 
-Three layers. The script VM and the asset pipeline are engine-agnostic C++; the native layer is where the host engine shows up.
+Three layers. The script VM and the asset pipeline are engine-agnostic (C++ today, being ported to Rust); the native layer is where the host engine shows up.
 
 ```
                  ┌──────────────────────────────────────────────────────┐
-                 │  HOST ENGINE (UE5: renderer, physics, audio, UI)     │
+                 │  HOST ENGINE (Rust; route chosen by benchmark)       │
                  └───────────────▲──────────────────────▲───────────────┘
                                  │                      │
    ┌─────────────────────────────┴───┐    ┌─────────────┴──────────────────┐
-   │  NATIVE LAYER (C++)             │    │  ASSET PIPELINE  ◄── Phase 1   │
+   │  NATIVE LAYER (Rust)            │    │  ASSET PIPELINE  ◄── Phase 1   │
    │  the 7,141 rebuilt functions    │    │  package loader (UPK/TFC)  [done] │
    │  Actor/Pawn/Controller, traces, │    │  textures, static meshes   [done] │
    │  movement, animation, particles,│    │  materials (approximation) [wip]  │
@@ -501,7 +528,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic C++; the 
         goal: run the 12,978 inherited functions unchanged
 ```
 
-The host engine is Unreal Engine 5, decided and locked at the Phase 0 gate; the plan rules out switching later. UE3's material graphs, AnimTrees, Cascade, Matinee and Kismet all have direct UE5 descendants to translate *into*, which is the whole reason it won out; all Phase 1 work targets UE 5.8. Full reasoning, and the alternative considered (Godot), is in [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision-decide-by-end-of-phase-0-never-after).
+Until 2026-11-14 the host engine was Unreal Engine 5, chosen at the Phase 0 gate. That choice was reversed: new runtime code is Rust, the UE5 host is removed (last held by commit `08bcf3e`), and no Rust engine is chosen yet. A Phase 0R benchmark builds the same small scene in Bevy and in an own engine on wgpu + winit (Fyrox optional), and the maintainer picks from the measurements. The `[done]` and `[wip]` marks in the diagram are the C++ core's; the host-side ones were done in UE5 and have to be done again. Reasoning: [the decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md) and [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision).
 
 </details>
 
@@ -525,9 +552,9 @@ It's a one-person project, and I'm not quiet about the tooling. I own every arch
 
 Every claim above comes from a dated verification record. Automated checks are reported separately from "a human looked at it," and anything unverified is labelled `UNVERIFIED` in the code and docs.
 
-- **Phase 0, gated 2026-09-10.** The reader reads 2,008 of 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture were extracted and rendered in UE 5.8.
-- **Phase 1, in progress.** `Ash_P`, `Sanctuary_P` and `SouthpawFactory_P` load as frozen scenes with a four-channel material approximation, an inspection lighting rig, a Sanctuary sky approximation, an opt-in outer-hull import and a free-flight camera. Saved scenes reopen with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`), and an in-game Tab list switches between imported scenes. Walking is verified on Sanctuary only. Sanctuary runs at 12 to 15 FPS on an integrated-GPU laptop. Not done: native sky graph decode and parity, lightmaps, real material graphs, full collision, the other 79 maps.
-- **Slice gate, 2026-11-07.** `tools/test_slice_gate.ps1` on `main` at 7eee9ee, four runs: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14, each. Host behaviour only.
+- **Phase 0, gated 2026-09-10.** The reader reads 2,008 of 2,008 packages: 4,751,329 serialized exports. Nine code packages decode byte-for-byte identically to an independent Python reader. Tagged properties on a real weapon part match BLCMM's dump. One mesh and one texture were extracted and rendered in UE 5.8 (the host of the time).
+- **Phase 1, in the retired UE5 host.** `Ash_P`, `Sanctuary_P` and `SouthpawFactory_P` loaded as frozen scenes with a four-channel material approximation, an inspection lighting rig, a Sanctuary sky approximation, an opt-in outer-hull import and a free-flight camera. Saved scenes reopened with zero verification errors. A command-line selector lists 37 base-game maps (82 with `--include-dlc`), and an in-game Tab list switched between imported scenes. Walking was verified on Sanctuary only. Sanctuary ran at 12 to 15 FPS on an integrated-GPU laptop. In the Rust host, Phase 1 is not started.
+- **Slice gate, 2026-11-07.** `tools/test_slice_gate.ps1` on `main` at 7eee9ee, four runs: 14 PASS, 0 FAIL, 0 NOT_AVAILABLE of 14, each. UE5 host behaviour only; it does not count toward the Rust host's gate.
 
 Records: [decisions log](DECISIONS.md) · [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md) · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md) · [cooked materials](docs/verification/COOKED_MATERIAL_VERIFICATION.md) · [map selection / Southpaw Factory](docs/verification/MAP_SELECTOR_VERIFICATION.md) · [UV / winding](docs/verification/UV_WINDING_VERIFICATION.md) · [collision and walking](COLLISION_WALKING_VERIFICATION.md) · [performance / in-game selector](docs/verification/PERFORMANCE.md) · [umodel cross-check](docs/verification/UMODEL_CROSSCHECK.md) · [object-dump cross-check](docs/verification/BLCMM_DUMP_CROSSCHECK.md) · [BSP texture axes](docs/verification/BSP_TEXTURE_AXES.md) · [slice gate](docs/verification/SLICE_GATE.md) · [gates and baseline](docs/verification/GATES.md).
 
@@ -539,7 +566,18 @@ The progress gallery's images are game content, so they are release assets and n
 <summary><b>Build and run it</b></summary>
 <br>
 
-You need: Windows, CMake, Visual Studio 2022 C++ build tools, Python 3, and an installed Borderlands 2. Unreal Engine 5.8 is only needed for the map viewer and the in-engine slice.
+You need: Windows, Rust 1.96 (pinned in [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` picks it up), CMake, Visual Studio 2022 C++ build tools, Python 3, and an installed Borderlands 2. Unreal Engine is not needed any more.
+
+The Rust workspace (crates under `crates/`, no third-party crates yet):
+
+```powershell
+cargo build --workspace
+cargo test --workspace                                         # synthetic tests, no game needed
+```
+
+The crates are skeletons for now. `ow-host --game <install folder>` only checks that it was given a Borderlands 2 install and says that no engine route is chosen; nothing renders yet.
+
+The C++ core in `src/` still builds and is the reference until each Rust crate matches it (same synthetic fixtures, same `verify_packages.py` results):
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -549,9 +587,9 @@ python tools/verify_packages.py --reader build/Release/ow-package.exe   # needs 
 & ./build/Release/ow-package.exe "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/Core.upk"
 ```
 
-Inspecting properties, running the full-install census, extracting a texture or mesh, preparing and opening a map in the UE5 viewer: [docs/TOOLING.md](docs/TOOLING.md). Everything the tools produce lands under `local/`, which is git-ignored, so extracted assets never enter the tree. The current pass/fail baseline for each gate is in [docs/verification/GATES.md](docs/verification/GATES.md).
+Inspecting properties, running the full-install census, extracting a texture or mesh: [docs/TOOLING.md](docs/TOOLING.md). Everything the tools produce lands under `local/`, which is git-ignored, so extracted assets never enter the tree. The current pass/fail baseline for each gate is in [docs/verification/GATES.md](docs/verification/GATES.md).
 
-The code keeps the working-title prefixes from before the rename: the reader is `ow-package`, the CMake option is `OPENWILLOW_LZO`, the UE host reads `OPENWILLOW_BL2`.
+The code keeps the working-title prefixes from before the rename: the reader is `ow-package`, the crates are `ow-*`, and the CMake option is `OPENWILLOW_LZO`.
 
 </details>
 
@@ -561,11 +599,11 @@ The code keeps the working-title prefixes from before the rename: the reader is 
 
 A standalone x64 C++20 tool, `ow-package`, reads version 832/46 packages: name/import/export tables; fully and partially LZO-compressed containers; object records with outer paths; a `PackageStore` that indexes an install lazily and resolves imports across packages; per-class export census; tagged properties (scalars, object refs, nested and fixed-layout structs, arrays via a schema file); resident `Texture2D` mips to PNG (DXT1/DXT5/A8R8G8B8, inline or TFC-streamed); all render LODs of a `StaticMesh` and one LOD to OBJ; bulk scene metadata and bounded payload bytes for the level preparer.
 
-`tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest. `host/ue5/` is a UE5 C++ project plus editor-Python importer/verifier that builds the scene, an inspection lighting rig and a free-flight spectator pawn, then reopens the saved scene and verifies it.
+`tools/prepare_level.py` follows a map's serialized sublevel references, extracts reusable mesh sections and four-channel materials, and writes a manifest.
 
-The Sanctuary slice lives in `host/`: Maya's movement, state, HUD, guns, grenades, melee, pickups, Phaselock, the gun range, the Fire mission, the skills page, vending and lootables, with labelled stand-ins and unverified rules where the records say so. The slice gate (`tools/test_slice_gate.ps1`) runs its 14 checks in sequence and reports any link whose piece the host lacks as NOT_AVAILABLE.
+The Rust workspace has six skeleton crates (`ow-container`, `ow-package`, `ow-vm`, `ow-game`, `ow-cli`, `ow-host`) with their scope written down; none of them reads a package yet. Until 2026-11-14 the Sanctuary slice (Maya's movement, HUD, guns, Phaselock, the gun range, the Fire mission, skills, vending and lootables) lived in the UE5 host under `host/ue5/`, with its 14-link slice gate. That host is removed; `git show 08bcf3e:<path>` recovers any of its files, and its records in [docs/verification/](docs/verification/) say what it did.
 
-Not implemented: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, saves, and checked playback of the game's own sounds. (Terrain and BSP are imported for Sanctuary only; skeletal meshes come in through UModel for the slice's characters.)
+Not implemented in the core: runtime package streaming, other pixel formats, lightmaps, material graph translation, full UE3 collision parity, a general native layer, saves, and checked playback of the game's own sounds. Not started: any Rust host. (In the UE5 host, terrain and BSP were imported for Sanctuary only, and skeletal meshes came in through UModel for the slice's characters.)
 
 Full detail and what each check does and does not prove: [docs/TOOLING.md](docs/TOOLING.md).
 

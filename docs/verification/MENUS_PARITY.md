@@ -5,6 +5,8 @@ spawn, fight, loot a gun, equip, Phaselock, one mission, die, respawn). Raw scri
 value (colours, thresholds, markup constants, localized and mission text) stay under ignored `local/menus/` and
 `local/ui/run/missionlog.json`; this page records rules in our own words and names of game objects and movie clips only.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 **Evidence levels.** "Read" = read from the installed packages (UnrealScript with `research/script_disasm.py`, the movie's AS2
 with a local helper, data with `ow-package --object-dump`); "seen" = compared with the running real game. Nothing on this page
 was seen in the real game in this round: bl-sdk is not installed in this machine's Borderlands 2 (no `sdk_mods`, no loader

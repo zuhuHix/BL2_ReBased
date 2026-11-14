@@ -7,11 +7,12 @@ what is specific to Claude Code.
 [docs/verification/GATES.md](docs/verification/GATES.md) (gate commands and the current baseline), then open longer
 documents only for the part your task touches.
 
-BL2_ReBased (code prefix `OpenWillow` / `ow`) is a Borderlands 2 engine reimplementation on Unreal Engine 5. The
-original game must be installed on the user's machine: the project ships no Gearbox files and no Gearbox code, and
-project code is written from an understanding of what the game does. The project's own code and documents are
-MIT-licensed; that covers no third-party component and no game content. The maintainer, zuhu, is a solo, largely
-self-taught developer directing an AI-heavy build.
+BL2_ReBased (code prefix `OpenWillow` / `ow`) is a Borderlands 2 engine reimplementation in Rust. The C++ core
+in `src/` is being ported crate by crate (`crates/`), and the host's engine route waits on the Phase 0R benchmark
+(`docs/verification/ENGINE_BENCHMARK.md`). The original game must be installed on the user's machine: the project
+ships no Gearbox files and no Gearbox code, and project code is written from an understanding of what the game does.
+The project's own code and documents are MIT-licensed; that covers no third-party component and no game content. The
+maintainer, zuhu, is a solo, largely self-taught developer directing an AI-heavy build.
 
 ## Rules that do not bend
 
@@ -37,8 +38,10 @@ releases or anything published, money, or anything that moves game-derived data.
    match the census), and label what is fitted and not proven `UNVERIFIED`.
 5. **No loosened bounds checks.** If a check fails, fix the cause.
 6. **Maintainer decisions stay with the maintainer:** `THIRD_PARTY.md`, `LICENSE`, and any new tool, dependency,
-   licence or provenance change. The host-engine choice (UE5, `docs/OPENWILLOW_ENGINE_PLAN.md` section 2.1) is made;
-   do not reopen it.
+   licence or provenance change. The language is chosen: runtime code is Rust, which replaced the UE5 host
+   (`docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md`); do not reopen it.
+   The engine route (Bevy, an own engine on wgpu, or Fyrox) is the maintainer's pick from the Phase 0R benchmark; do
+   not pick it, and add no candidate to the tree before its `THIRD_PARTY.md` entry.
 7. **Honest verification.** A rule that has not been confirmed in the running game stays `UNVERIFIED` in code and
    docs, and a confirmed one says how it was confirmed. A passing host suite means "the host did this", not parity.
    Count agreement is not compatibility. Never report a result you did not see.
@@ -56,15 +59,19 @@ releases or anything published, money, or anything that moves game-derived data.
 
 Porting all 82 maps is the easier part of this project. The hard, unproven part is Phases 2-4: the script VM, the
 stock UE3 natives and Gearbox's undocumented natives. Porting 80 maps only to find in Phase 2-4 that the approach does
-not hold would waste most of the project's time, so the order (adopted 2026-09-18, see `DECISIONS.md`) is:
+not hold would waste most of the project's time, so the order (adopted 2026-09-18, kept for the Rust switch on
+2026-11-14, see `DECISIONS.md`) is:
 
-1. Finish **Sanctuary** to visual and walkable parity (Phase 1). It is the most complete map; do not start over on
-   another.
-2. Get **Maya** working end to end: movement, a few weapons, animations, her action skill (Phaselock). Her skill trees
+1. Port the core to Rust until each crate matches `src/` (the same synthetic fixtures give the same results, and
+   `tools/verify_packages.py --reader` gives the same counts and class bodies; the C++ reader stays the reference until
+   then), and run the Phase 0R engine benchmark so the maintainer can pick the route.
+2. Bring **Sanctuary** to visual and walkable parity in the Rust host (Phase 1). It is the most complete map; do not
+   start over on another.
+3. Get **Maya** working end to end: movement, a few weapons, animations, her action skill (Phaselock). Her skill trees
    (Motion, Harmony, Cataclysm) are the target for Phase 4's skill-tree work.
-3. Prove engine and gameplay integration (Phase 2's VM, Phase 3's stock natives) only as far as Sanctuary and Maya
+4. Prove engine and gameplay integration (Phase 2's VM, Phase 3's stock natives) only as far as Sanctuary and Maya
    need. Not the full native surface, not every `AnimNode` type.
-4. One hand-picked simple mission and a handful of guns, end to end: spawn, fight, loot, equip, use a skill, complete
+5. One hand-picked simple mission and a handful of guns, end to end: spawn, fight, loot, equip, use a skill, complete
    the mission, die, respawn. That is Phase 4's gate in `ROADMAP.md`.
 
 Broad map coverage (about 79 more maps) and the other Vault Hunters come after that gate (Phases 5 and 6). If you are
@@ -128,8 +135,8 @@ natives). Policy: `docs/LEGAL.md`, "Analysing the executable". Practice: `docs/N
   unsupported types, duplicates, output size and output location. Adding the tool is still a maintainer decision
   (rule 6).
 - Exports are payloads, not truth. Check object identity, package references, materials, LODs, animations, collision
-  and map placement before using them in the host. UModel material files are heuristic and do not prove UE5
-  material-graph compatibility.
+  and map placement before using them in the host. UModel material files are heuristic and do not prove that a
+  host material reproduces the game's.
 - Package identity, object-path resolution, cross-package references, scene manifests, provenance and reproducible
   verification stay in our own code.
 - Never assume a batch exported every object without an inventory, and do not claim "all assets work" unless
@@ -139,11 +146,14 @@ natives). Policy: `docs/LEGAL.md`, "Analysing the executable". Practice: `docs/N
 
 Since 2026-09-30 these need no confirmation: `src/package.cpp` (the `Reader` struct, `require()`, `limit`, size and
 terminator checks), `src/container.cpp` / `src/container.hpp` (LZO container validation) and `CMakeLists.txt`. The
-C++ port of the script VM may touch the `Reader` and `CMakeLists.txt` on the same terms. What you owe afterwards:
+C++ port of the script VM may touch the `Reader` and `CMakeLists.txt` on the same terms. The same terms cover their
+Rust ports, `crates/ow-container/` and `crates/ow-package/`, and the workspace files `Cargo.toml` and
+`rust-toolchain.toml` (a new third-party crate is still a dependency under rule 6). What you owe afterwards:
 
 - **Warn the maintainer in your final message:** name each of these files you touched, what changed and why, and what
   is verified versus `UNVERIFIED`.
-- Keep `ctest` and `tools/verify_packages.py` green, and add a decision file when parsing behaviour changes.
+- Keep `ctest`, `cargo test --workspace` and `tools/verify_packages.py` green, and add a decision file when parsing
+  behaviour changes.
 
 Rules 4 to 6 apply here more than anywhere else.
 
@@ -161,20 +171,20 @@ None of this relaxes a rule above, and nothing counts as verified until it has b
 
 ## Every change
 
-- Run `ctest --test-dir build -C Release --output-on-failure` and
-  `python tools/verify_packages.py --reader build/Release/ow-package.exe`, and paste the output. The gates for the
+- Run `ctest --test-dir build -C Release --output-on-failure`,
+  `python tools/verify_packages.py --reader build/Release/ow-package.exe`, `cargo build --workspace` and
+  `cargo test --workspace`, and paste the output. The gates for the
   part you touched, the build commands and the current baseline are in `docs/verification/GATES.md`. Not every Python
   or JS test is in ctest, so also run the ones for the part you touched (`python tests/<name>_test.py`,
   `node tests/inventory_navigation_test.js`).
 - Report automated extraction and tests, visual validation, and runtime or gameplay validation (host runs, and
   real-game checks where there are any) separately, with pass and fail counts as they came out, including steps that
   fail only because local data is missing.
-- Menu work: re-observe the real game (`docs/TOOLING.md`, "Tracing the real game's UI code") instead of guessing, and
-  rerun `tools/test_inventory_actions.ps1` after any change to `tools/hud_overlay/inventory.js` or the page report in
-  `OpenWillowMayaHUD.cpp`.
-- Unreal: build the CMake Release libraries before the UE module. Only one editor or game runs per machine; the suite
-  scripts take the machine-wide lock themselves (`tools/ue_lock.ps1`). The overlay page loads `tools/hud_overlay/*.js`
-  from disk at start, so do not edit those files while a run is in progress.
+- Menu work: re-observe the real game (`docs/TOOLING.md`, "Tracing the real game's UI code") instead of guessing. The
+  UE inventory suite left the tree with the UE5 host, so until the Rust host has its own check, the real game is the
+  reference for menu behaviour.
+- Heavy runs (the real game, and Rust host runs once they exist) are one per machine: take the machine-wide lock
+  (`tools/ue_lock.ps1`; the real-game helpers take it themselves).
 - Add a decision file when parsing behaviour changes, saying what is verified and what is not: one new file under
   `docs/decisions/`, named and checked as `DECISIONS.md` says. Keep `README.md`,
   `ROADMAP.md` and `docs/TOOLING.md` in agreement with the decision files and the verification records; a `ROADMAP.md`
@@ -189,13 +199,13 @@ believed it. Look status up where it is maintained.
 |---|---|
 | What works, what is next | `ROADMAP.md`, "How it's going" and "Now / next" |
 | Current test numbers | `docs/verification/GATES.md` |
-| Evidence and open items for one area | its record in `docs/verification/` (`HUD_*`, `COMBAT_*`, `WEAPON_*`, `SANCTUARY_*`, `SLICE_*`, and the own-words `NATIVE_*` notes); the slice gate is `docs/verification/SLICE_GATE.md` |
+| Evidence and open items for one area | its record in `docs/verification/` (`HUD_*`, `COMBAT_*`, `WEAPON_*`, `SANCTUARY_*`, `SLICE_*`, and the own-words `NATIVE_*` notes); the slice gate is `docs/verification/SLICE_GATE.md` (its runs so far were the retired UE5 host's: history, not a gate result) |
 | A past decision | `python tools/decisions_index.py --tail N` or `--grep WORD` (one file per decision under `docs/decisions/`) |
 | A native function | `python tools/native_index_find.py <name>` |
 | Tools, build, data preparation | `docs/TOOLING.md` |
 | Landing PRs, and the standing approval with its exceptions | `docs/TOOLING.md`, "Landing PRs in a batch" |
 
-**A fresh worktree** gets no ignored data (`host/ue5/OpenWillow/Content`, `local/`) from git. Where the shared
+**A fresh worktree** gets no ignored data (`local/`) from git. Where the shared
 post-checkout provisioner is installed, the default folders are already seeded, so look before you fill anything. To
 continue earlier work, `tools/provision_worktree_assets.ps1 -SourceWorktree <previous worktree>` copies the missing
 files. Then configure and build `build/` and run the checks above, and regenerate only what is missing or older than

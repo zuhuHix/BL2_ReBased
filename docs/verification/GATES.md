@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**Rust switch (2026-11-14, branch rust-switch):** on main 08bcf3e plus the switch, zuhu desktop: ctest 160/160 (177 entries before; the 17 removed covered only the UE5 host or its scripts: `anim-import-frames`, `controls-keys`, `movie-hud-switch`, `play-slice-launcher`, `suite-map-tracked` and 12 `py-*`), 189 s with `-j 4`; verify_packages 9 packages, decoded bytes, counts and export fields match, all class bodies exact; `cargo build --workspace --locked` clean and `cargo test --workspace --locked` 4 passed / 0 failed (`ow-host`'s install check; the other crates hold no tests yet); `python tools/decisions_index.py --check --baseline origin/main` OK, 1 added; `viewer_test.py` and `level_test.py` pass; `tools/leak_gate.py --staged` 0 errors (warnings: the `ci.yml` gate change, and `.rs`/`.toml`/`.lock` as file types the gate does not know yet).
+
+The UE5-host suite numbers below (`test_quest`, `test_mover`, `test_inventory_actions`, `test_weapon_firing`, the HUD
+shots, the slice gate and `ambient`) are history; those suites left the tree with the host on 2026-11-14. The ctest,
+verify_packages, Fire checker and combat checker numbers below were the baseline of their day.
+
 **Baseline (2026-10-08, commit c33ed0c, second machine):** ctest 15/15; verify_packages 9 packages, 3,339/3,339 class
 bodies exact; Fire event order self-test and 32 of 32 rules; test_quest 117/117 plus resume 11/11; test_mover 16/16;
 test_inventory_actions 49 pass / 0 fail; verify_combat_pawn `--vm` 25 pass / 0 fail / 4 missing (the Defense Boost rows).
@@ -50,40 +56,27 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
 ## Every change
 - Build (Windows; CMake ships with VS Build Tools):
   `export PATH="/c/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH"`,
-  then `cmake --build build --config Release --parallel`. A fresh configure uses the toolset Unreal uses:
+  then `cmake --build build --config Release --parallel`. A fresh configure pins the project's MSVC toolset:
   `cmake -S . -B build -T version=14.50`.
 - `ctest --test-dir build -C Release --output-on-failure`
 - `python tools/verify_packages.py --reader build/Release/ow-package.exe`
+- `cargo build --workspace` and `cargo test --workspace` (Rust toolchain pinned by `rust-toolchain.toml`).
 
 ## When the VM, missions or the slice change
 - `python tools/verify_fire_event_order.py --self-test` and `python tools/verify_fire_event_order.py --reader build/Release/ow-package.exe`
 - Compare `--slice-run` output before and after against a copy of the previous build, and explain every difference.
 
-- The slice gate's `-Shield` run (`slice_gate_shield`, desktop only): since 2026-11-13, when
-  `local/slice/stock_shield_gear.json` exists (`python tools/prepare_stock_shield.py --reader <abs reader> --game <install>`),
-  the launcher passes it as `-owgear=`, so the run should equip that one generated level-8 card under the normal level rule, in
-  place of the observed manifest. First run in the engine on main 25a5ce2 (2026-11-13, zuhu desktop, hub candidate 29):
-  `OWSLICEGATE SUMMARY pass=14 fail=0 na=0`, then `Shield source used: the generated card (data-derived, UNVERIFIED in game)`
-  (log: the desktop runner's `local/z58/cand29/suites/slice_gate_shield.log`; the same two lines on candidate 30, tree of main 0d2405e). Its numbers are data-derived and UNVERIFIED in game. The launcher prints `Shield source offered:` and,
-  after the run, `Shield source used:` (generated card, generated card or observed manifest under the level override, observed
-  manifest, or the health-sized pool). A pass with the generated card says the host equipped and used that card; it says nothing about parity.
+- The slice gate's `-Shield` run was a UE5-host run and left the tree with it; its last numbers are history
+  (`git show 08bcf3e:docs/verification/GATES.md`).
 
 ## When combat changes
 - `python tools/verify_combat_pawn.py --self-test`, and `--vm <json>` on a fresh `--combat-run`.
 - `python tools/verify_combat_pawn.py --live` checks the formulas against ignored live dumps when they exist.
 
-## When the host or anything it reads changes (UE; one process at a time)
-- UE module build: `powershell -File local/p2/locked.ps1 -Owner <lane> -Command build` (or the build step of the suite scripts).
-- `tools/test_quest.ps1`, `tools/test_mover.ps1`, `tools/test_inventory_actions.ps1`. Rerun the inventory suite after any change to
-  `tools/hud_overlay/inventory.js` or the HUD page report. Report pass and fail counts honestly, including steps that fail only
-  because local data is missing. Run the inventory suite with `-Items local/inventory-actions/bounded-recipes` (the six-weapon set the
-  baseline uses): a larger local set can fill the backpack, and the suite then refuses to start (fewer than 2 free rows after its fixture).
-  Since 2026-11-04 (inventory round 24) the suite had 50 steps (number keys no longer pick a transfer slot; `locked_slot_transfer_cancel`
-  added); baseline then 50 pass / 0 fail. On main the suite has 53 steps: `OWINVTEST SUMMARY result=PASS steps=53 passed=53 failed=0 not_run=0
-  known_divergence=0` on 2026-11-13, zuhu desktop, hub candidate 30 (tree of main 0d2405e; log: the desktop runner's `local/z58/cand30/suites/inventory.log`).
-- UE automation tests: `tools/test_automation.ps1` (the `ue_automation` suite; `-DryRun` shows the command without starting
-  anything). Its `#pass` line wants `AUTOMATION SUMMARY success=13 failed=0 expected=13 timed_out=0`; `tests/automation_paths_test.py` (ctest)
-  holds the launcher's names and count to the declared test paths.
+## When the Rust host changes
+Not defined yet: no engine route is chosen, and `ow-host` only checks that it was given a Borderlands 2 install. The
+host's checks will be set with the route, from the Phase 0R benchmark record (`docs/verification/ENGINE_BENCHMARK.md`,
+written, NOT RUN). The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records
 - `python tools/decisions_index.py --check --baseline origin/main` after adding, editing or moving decisions (with the
@@ -114,12 +107,11 @@ needs both). `prepare_mission_log` skips one of its 4 cases where file symlinks 
 |---|---|---|
 | `cash_capture` (236-237 s), `realgame_snapshot` (147-148 s), `skills_live_probe` (60-61 s) | over the budget: a file may add about 90 s and all additions together about 3 minutes (lane C, 2026-11-13). The three registered real-game files take that 3 minutes. `cash_capture` could be split (its 74 cases outside `DenDownReplacementTest` and `LoadWaitTest` take about 85 s), but that subset would not fit beside them, and a subset named by class would leave out any class added later | pass, also in the sanitised shell (2026-11-13) |
 | `check_hud_minimap` (30 s), `provision_worktree` (36 s) | too slow for every PR (2026-11-11 times, not re-measured) | pass |
-| `run_ue_flash_hud` | refuses (exit 2, `NOT RUN`) while any Unreal editor runs on the PC, so a shared PC fails it | not run here: an editor was up |
 
-Notes: a test that skips cases there, or skips all of them, does not count as passing. Four registered tests skip cases off Windows
+Notes (as of 2026-11-12; `lootables_editor` and `run_limit` left with the UE5 host on 2026-11-14): a test that skips cases there, or skips all of them, does not count as passing. Four registered tests skipped cases off Windows
 (`check_overlay_data`, `lootables_editor`, `private_sync`, `run_limit`: junctions, PowerShell launchers); CI runs
 on Windows, so they run there. `serve_paths` skips nothing: it makes a directory symlink, and on Windows falls back to a junction when that is refused. `private_sync` also skips its UNC alias case without an administrative share. `game_colours` and
 `prepare_hud_strings` create `local/` in a clean checkout (the second leaves it empty); it is git-ignored and harmless. The slowest registered entry
-that starts processes, `run_limit` (about 40 PowerShell runs), took 11.2 s on CI (PR #219, run 43062806521) and 15.4 s here, well under
+that started processes then, `run_limit` (about 40 PowerShell runs), took 11.2 s on CI (PR #219, run 43062806521) and 15.4 s here, well under
 its 120 s timeout. On that CI run (Python 3.12) the new entries took 66 s of 172 s with LZO on. `weapon_reload_library`
 skips its junction case when `mklink /J` fails; on CI that skip fails the job.

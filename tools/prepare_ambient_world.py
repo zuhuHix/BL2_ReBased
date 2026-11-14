@@ -2,7 +2,7 @@
 """Host manifest for the Sanctuary ambient NPCs: spawns, node graph, perches, imported assets.
 
 AI-assisted (Claude), 2026-10-04. Clean room: no game data lives in this file; the output ``local/slice/ambient_world.json``
-(schema ``ow-ambient-world-v1``, read by host/ue5/OpenWillow/Source/OpenWillow/OpenWillowAmbient.cpp) is game-derived and
+(schema ``ow-ambient-world-v1``, read by the retired UE5 host's OpenWillowAmbient.cpp, git show 08bcf3e) is game-derived and
 stays under the ignored ``local/``. It joins three things made earlier, all read from the installed packages by our reader:
 
 * ``local/slice/ambient_npcs.json``      tools/census_ambient_npcs.py (dens, population points, node graph, perch definitions,
@@ -233,7 +233,8 @@ def component_transform(bone_rel, att):
     return [round(float(v), 4) for v in total[:3, 3]], [round(float(v), 6) for v in to_quat(rotation)], [round(float(v), 5) for v in sizes]
 
 
-AMBIENT_ATTACH_STEP = 'powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <the same amb_compose json>'
+AMBIENT_ATTACH_STEP = ('powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <the same amb_compose json>'
+                       ' [that script left with the UE5 host on 2026-11-14 (git show 08bcf3e:tools/seed_ambient_npc_assets.ps1); the Rust host has no replacement yet]')
 
 
 def annotate_looks(spawns, compose_file, kinds, report, known_missing=()):

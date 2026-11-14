@@ -89,14 +89,22 @@ if (Test-Path -LiteralPath $PushHookDestination) {
 }
 $PushHookText = [IO.File]::ReadAllText((Join-Path $RepositoryRoot '.githooks\pre-push')) -replace "`r`n", "`n"
 [IO.File]::WriteAllText($PushHookDestination, $PushHookText, (New-Object Text.UTF8Encoding $false))
+# The path is converted first, as for the post-checkout hook above: Windows PowerShell 5.1 drops the inner double quotes of a
+# nested "$(cygpath -u "...")" when it passes the argument to bash, which then fails on an unterminated $( (seen 2026-11-14).
 $env:OPENWILLOW_HOOK_PATH = $PushHookDestination
-& $GitBashPath -lc 'chmod +x "$(cygpath -u "$OPENWILLOW_HOOK_PATH")"'
+$PushHookUnixPath = (& $GitBashPath -lc 'cygpath -u "$OPENWILLOW_HOOK_PATH"').Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($PushHookUnixPath)) {
+    throw "Could not convert the hook path for Git Bash: $PushHookDestination"
+}
+$env:OPENWILLOW_HOOK_UNIX_PATH = $PushHookUnixPath
+& $GitBashPath -lc 'chmod +x "$OPENWILLOW_HOOK_UNIX_PATH"'
 if ($LASTEXITCODE -ne 0) { throw "Could not make the hook executable: $PushHookDestination" }
 Remove-Item Env:\OPENWILLOW_HOOK_PATH
+Remove-Item Env:\OPENWILLOW_HOOK_UNIX_PATH
 
 # 4. A manifest of what the seed holds (informational; nothing reads it).
 $Folders = [ordered]@{}
-foreach ($Name in @('Content') + @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'worktree_seed_folders.txt') -Encoding UTF8 |
+foreach ($Name in @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'worktree_seed_folders.txt') -Encoding UTF8 |
         ForEach-Object { ($_ -replace '#.*$', '').Trim() } | Where-Object { $_ })) {
     $Dir = Join-Path $SeedRoot $Name
     $Folders[$Name] = if (Test-Path -LiteralPath $Dir -PathType Container) { (Get-ChildItem -LiteralPath $Dir -Recurse -File -Force).Count } else { 0 }
@@ -112,4 +120,4 @@ $Manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $SeedRoot 'mani
 
 Write-Output "Installed shared post-checkout asset seeding at $HookDestination"
 Write-Output "Installed the leak gate pre-push hook at $PushHookDestination"
-Write-Output "Seed cache: $SeedRoot (Content: $($Folders['Content']) files)"
+Write-Output "Seed cache: $SeedRoot ($(($Folders.Values | Measure-Object -Sum).Sum) files)"

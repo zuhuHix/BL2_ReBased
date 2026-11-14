@@ -6,6 +6,8 @@ critic Codex GPT-6-Luna). The host drives BL2's own HUD movie (`UI_HUD.HUD`, con
 transparent page over UE5); nothing below is redrawn natively. Converted movies, real-game frames, live reads and host
 captures stay under ignored `local/`.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## Element inventory (the slice loop)
 
 HUD lane, 2026-11-03. The rows are the HUD movie's own named clips under `p1` (read from the converted `UI_HUD.HUD`

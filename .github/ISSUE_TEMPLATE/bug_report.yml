@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Reminder: there is no playable game yet. Bugs here are about the package reader, the tools and the UE5 viewer.
+        Reminder: there is no playable game yet. Bugs here are about the package reader, the tools and the Rust crates (the UE5 viewer left the tree on 2026-11-14).
         **Do not attach game files, extracted assets, decompiler output or listings, or dumps containing raw asset bytes.**
   - type: input
     id: commit
@@ -39,7 +39,7 @@ body:
     id: env
     attributes:
       label: Environment
-      description: OS, compiler, Python version, game platform (Steam/Epic), DLC and UHD pack, UE version if relevant.
+      description: OS, compiler, Python version, `cargo --version` and the crate (e.g. ow-package, ow-host) if relevant, game platform (Steam/Epic), DLC and UHD pack.
     validations:
       required: true
   - type: checkboxes

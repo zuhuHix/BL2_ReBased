@@ -628,7 +628,7 @@ int main(int argc, char** argv) {
         if (mode == "--mission-run") {
             // --mission-run <mission-path> --cooked <dir> <step>...   steps: accept | kickoff | obj:<name>[:<bit>] | custom:<name> |
             // turnin | tick:<seconds> | script:accept | script:turnin | script:screen | script:use | stage:<n> | player:<level>:<experience> | pool |
-            // lines:<seconds> (a test line player: every dialog line lasts that long) | timedlines:<seconds> (a timed line player, the UE host's kind) | talker:<name tag path> (a pawn that can talk) |
+            // lines:<seconds> (a test line player: every dialog line lasts that long) | timedlines:<seconds> (a timed line player, the retired UE5 host's kind) | talker:<name tag path> (a pawn that can talk) |
             // kismet:<variable>|<name tag path> (a new talker pawn bound to the mission's named Kismet variable; no tag clears the variable)
             if (argc < 6 || std::string(argv[4]) != "--cooked") usage();
             PackageStore store(argv[5]);
@@ -678,7 +678,7 @@ int main(int argc, char** argv) {
                 }
                 else if (step == "pool" && script) script->updateExperiencePool();
                 else if (step.rfind("lines:", 0) == 0) mission.dialog().setTestLineLength(std::stod(step.substr(6)));   // every dialog line lasts <s>
-                else if (step.rfind("timedlines:", 0) == 0) {     // a timed line player (the UE host's kind): every line's audio lasts <s>
+                else if (step.rfind("timedlines:", 0) == 0) {     // a timed line player (the retired UE5 host's kind): every line's audio lasts <s>
                     const double length = std::stod(step.substr(11));
                     mission.dialog().setTimedLinePlayer([length](const vm::DialogSystem::Line&) { return length; });
                     mission.dialog().onLineStopped = [](int lineId) { std::cerr << "dialog line stopped while playing: " << lineId << '\n'; };

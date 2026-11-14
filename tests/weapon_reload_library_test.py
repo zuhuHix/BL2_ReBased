@@ -42,8 +42,8 @@ class ReloadPlanTests(unittest.TestCase):
 
     def test_import_lines_keep_spaces_and_quotes_inside_one_argument(self):
         arms, weapons = library.import_lines(["A=C:\\my dir\\it's.json"], ['K=C:\\my dir\\k.json'])
-        self.assertIn("= 'A=C:\\my dir\\it''s.json' then", arms)
-        self.assertTrue(weapons.endswith("-Reloads 'K=C:\\my dir\\k.json'"))
+        self.assertEqual(arms, "Arms clips: 'A=C:\\my dir\\it''s.json'")
+        self.assertEqual(weapons, "Weapon clips: 'K=C:\\my dir\\k.json'")
 
 
 class MainTests(unittest.TestCase):
@@ -85,12 +85,13 @@ class MainTests(unittest.TestCase):
             code = library.main(argv, repo=self.repo)
         return code, stdout.getvalue()
 
-    def test_a_good_run_writes_both_results_and_names_the_imports(self):
+    def test_a_good_run_writes_both_results_and_names_the_lists(self):
         code, text = self.run_main(self.TYPES, exported=('Reload_A',) + library.BASE_CLIPS)
         self.assertEqual(code, 0, text)
         self.assertEqual(list(json.loads((self.out / 'weapons/Shotgun.json').read_text(encoding='utf-8'))), ['Reload_A'])
         self.assertTrue((self.out / 'arms/Shotgun.json').is_file())
-        self.assertIn('OPENWILLOW_CHARACTER_ANIMS', text)
+        self.assertIn('Arms clips: ', text)
+        self.assertIn('Weapon clips: ', text)
 
     def test_a_table_without_reload_clips_fails_and_writes_nothing(self):
         for types in ({}, {'WT.A': dict(self.TYPES['WT.A'], reload_animation=None)}):

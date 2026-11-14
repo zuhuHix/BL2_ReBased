@@ -9,6 +9,8 @@ quoted were decoded from the installed packages with `ow-package --properties` (
 type); field names were matched to the native code with `tools/ghidra/class_layout.py` (every field used below landed on
 a field of the expected type). Raw output is in the lane's Ghidra project out folder and under ignored `local/p2/G13/`.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 Scope: what happens when Maya fires one of the slice guns (the Fire mission's lent Maliwan pistol
 `GD_Weap_Pistol.A_Weapons_Elemental.Pistol_Maliwan_2_Fire`, and the other pistol, SMG and shotgun types). Card stats and
 part generation are in [NATIVE_WEAPON_RULES.md](NATIVE_WEAPON_RULES.md) (not repeated); muzzle flash, glow and first-person

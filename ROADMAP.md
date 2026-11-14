@@ -9,7 +9,16 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 1 · **Last update:** 2026-11-13
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R (Rust core and engine benchmark) · **Last update:** 2026-11-14
+
+**2026-11-14: the host engine changes.** The maintainer reversed the Unreal Engine 5 host choice
+([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). New runtime code is Rust; Python stays for tools and analysis. The UE5 host
+(`host/ue5/`, its scripts and suites) left the tree; main 08bcf3e is the last commit that holds it, and
+`git show 08bcf3e:<path>` recovers any of it. The C++ core in `src/` will be ported to Rust crate by crate (not started: the crates are skeletons) and stays the
+reference until each crate matches it. No Rust engine is chosen yet: Phase 0R benchmarks the candidates and the
+maintainer picks. Host results below are the retired UE5 host's: they say what that host did and no longer count
+toward a gate. Host-independent evidence (real-game captures, native notes, script disassembly, reader checks, the
+core's VM, combat, mission and item results) keeps its status. Nothing about the Rust route is verified yet.
 
 ---
 
@@ -29,9 +38,20 @@ end-to-end: spawn, fight, loot a gun, equip it, use her action skill
 Broad map coverage (79 more maps) and the remaining Vault Hunters are
 deferred until that gate is met; they move to Phase 5/6.
 
+The slice priority is unchanged by the switch to Rust (2026-11-14); the order
+in front of it is: port the C++ core to Rust to parity and run the engine
+benchmark (Phase 0R), let the maintainer pick the engine route, then build the
+slice again in the Rust host, Sanctuary first and Maya next, reusing the
+host-independent rules and evidence already recorded.
+
 ---
 
 ## How it's going
+
+*History. Everything below that says "the host" or "in the host" describes the
+UE5 host, retired on 2026-11-14 ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)); it is
+kept as a record of what that host did and as a target, not as a description of
+a host that exists. The Rust host has no results yet.*
 
 The project is worked on actively. There are no completion dates, no time
 estimates and no completion percentages here; this section only records what
@@ -41,25 +61,26 @@ backs it ([DECISIONS.md](DECISIONS.md) entry date or verification file). Where
 a number is an automated check it says so; "passes" is never parity with the
 original game.
 
-**As of 2026-11-13** ("in the host" means the UE5 build with labelled stand-ins; a passing suite says the host did this, not parity)
+**As of 2026-11-13, in the retired UE5 host** ("in the host" means the UE5 build with labelled stand-ins; a passing suite says the host did this, not parity)
 
-- The slice loop runs in the host in one session (`tools/test_slice_gate.ps1`): the forced variants have passed 14 of 14 links in
+- The slice loop ran in the host in one session (`tools/test_slice_gate.ps1`, removed 2026-11-14): the forced variants passed 14 of 14 links in
   every recorded run since 7eee9ee (2026-11-07), the later runs as the hub's log reported them ([slice gate](docs/verification/SLICE_GATE.md));
   the `-Shield` run equipped one generated level-8 card from game data, 14 of 14 on main 25a5ce2 (the card is UNVERIFIED in game)
   ([gates](docs/verification/GATES.md)).
-- The unforced variant is not reliable yet: 3 of its first 8 runs (2026-11-11) failed a link ([slice gate](docs/verification/SLICE_GATE.md),
+- The unforced variant was not reliable: 3 of its first 8 runs (2026-11-11) failed a link ([slice gate](docs/verification/SLICE_GATE.md),
   "The unforced variant"). The Phase 4 gate is not claimed as met.
-- Fight: range enemies with a host brain; the adult's and the regular's swing cycles and the adult's stand distance are graded in the
+- Fight: range enemies with a host brain; the adult's and the regular's swing cycles and the adult's stand distance were graded in the
   engine against live reads ([range](docs/verification/COMBAT_RANGE.md)). Leaps and thrown rocks, the biggest gap, are described in an own-words
   note, UNVERIFIED in game, and not built ([note](docs/verification/NATIVE_AI_LEAP_THROW.md)).
-- Down and respawn: the host's respawn wait on the station path is split into the moments seen in six live respawns (2026-11-12, two
+- Down and respawn: the host's respawn wait on the station path was split into the moments seen in six live respawns (2026-11-12, two
   maps, one player level) ([down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), "What the host does").
-- Loot, equip, Phaselock and the Fire mission run end to end in the gate ([slice gate](docs/verification/SLICE_GATE.md)); a critic agent scored
+- Loot, equip, Phaselock and the Fire mission ran end to end in the gate ([slice gate](docs/verification/SLICE_GATE.md)); a critic agent scored
   Phaselock's captures 5.1 to 5.7 of 10, not parity ([Phaselock](docs/verification/PHASELOCK_STOCK_DATA.md)).
-- Sanctuary's ambient citizens wear their captured pieces (ambient suite PASS on main a3daacf, 35 pawns, 89 worn pieces); their
-  movement is a host stand-in, UNVERIFIED ([gates](docs/verification/GATES.md), "Ambient gate").
-- Tests: ctest has 174 entries since three real-game tool tests and a registration guard joined it (2026-11-13); CI passed 174 of
-  174 on main 81d87f9, LZO on ([gates](docs/verification/GATES.md)).
+- Sanctuary's ambient citizens wore their captured pieces (ambient suite PASS on main a3daacf, 35 pawns, 89 worn pieces); their
+  movement was a host stand-in, UNVERIFIED ([gates](docs/verification/GATES.md), "Ambient gate").
+- Tests: ctest had 174 entries after three real-game tool tests and a registration guard joined it (2026-11-13); CI passed 174 of
+  174 on main 81d87f9, LZO on; removing the UE5 host's tests changes this count, and the current one is in
+  [gates](docs/verification/GATES.md).
 - Evidence: two unattended capture sessions on 2026-11-12 (9 item runs, 0 game crashes; [real-game reads](docs/verification/REALGAME_GROUND_TRUTH.md)),
   among them downs on Three Horns Divide and in Sanctuary and a den capture, recorded in own words
   ([down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), [range](docs/verification/COMBAT_RANGE.md)).
@@ -304,22 +325,22 @@ prototypes, so the repository's clock started a little after the work did.
 - Captures of the original game now exist for the Fire mission's event order
   (lane L2), a bullymong fight on another map (lanes L3-L9), Phaselock frames and
   the menus and HUD; none covers the whole slice loop in Sanctuary yet.
-- In the UE host the range's enemies notice, chase and hit Maya with a host brain (a stand-in, with live-read
-  notice radii, the swing cycles of the adult, baby, regular and slinger, and the adult's and baby's stand distances), Maya goes down, bleeds out and respawns at a station, and a
-  range kill rolls its loot at the stock chance ([range](docs/verification/COMBAT_RANGE.md),
+- In the retired UE5 host the range's enemies noticed, chased and hit Maya with a host brain (a stand-in, with live-read
+  notice radii, the swing cycles of the adult, baby, regular and slinger, and the adult's and baby's stand distances), Maya went down, bled out and respawned at a station, and a
+  range kill rolled its loot at the stock chance ([range](docs/verification/COMBAT_RANGE.md),
   [down and respawn](docs/verification/COMBAT_DOWN_RESPAWN.md), [slice gate](docs/verification/SLICE_GATE.md)). The VM
   (`--combat-run`) runs the hit, death, kill-XP, down and loot steps; its melee blow is a guaranteed-hit fixture
-  ([record](docs/verification/COMBAT_MELEE.md)). The host's enemy brain is not the game's AI: leaps and thrown
+  ([record](docs/verification/COMBAT_MELEE.md)). That host's enemy brain was not the game's AI: leaps and thrown
   rocks are described in a note ([note](docs/verification/NATIVE_AI_LEAP_THROW.md), UNVERIFIED) and not built.
 - Runtime flight timing of projectiles has no in-engine check since the #59 merge
   (DECISIONS 2026-11-02), and the spread distribution and status proc rate are
   not measured ([record](docs/verification/WEAPON_PROJECTILES.md)).
 - Sanctuary visual parity, the stripped sky graph, native material graphs and
   the 79 untouched maps (see Now / next and Phase 1).
-- Slice audio plays in the host from the player's own install: decoded with vgmstream (outside the
+- Slice audio played in the retired UE5 host from the player's own install: decoded with vgmstream (outside the
   repository; maintainer decision of 2026-11-07) into ignored `local/`, then played through UE's procedural
   sound wave, for fire, hit, the Phaselock cast, equip, reload, doors and the mission's dialog lines; the
-  pickup has no sound yet. A recording of a host run (2026-11-11) holds the played files; nobody has confirmed
+  pickup had no sound. A recording of a host run (2026-11-11) holds the played files; nobody has confirmed
   by ear that a sound is right (UNVERIFIED), and this is not parity
   ([record](docs/verification/SLICE_AUDIO_CHAIN.md), sections 3, 5 and 7a).
 - Two quest-suite first runs on 2026-10-02 ended silently after check 67; the
@@ -333,135 +354,33 @@ No phase after Phase 0 has passed its gate.
 
 ## Now / next
 
-The first world-object connection is a bounded Sanctuary Matinee door: installed
-movement keys drive the existing mesh/collision, and original mover notification
-scripts run in the VM using placed state. Activation is a developer interaction;
-mission gating, sequence dispatch, audio and original-game motion parity remain
-open. See [the mover record](docs/verification/SANCTUARY_MOVER_PROTOTYPE.md).
-Slice progress (2026-10-02): the door is activated through its installed Kismet events, and the stock
-"Rock, Paper, Genocide: Fire Weapons!" mission runs in the host through native executors over installed data
-(mission, behavior provider, dummy provider) with stock world data: a placed Marcus whose walk the installed Kismet
-starts, the stock range cylinder, the stock dummy (standing on the lane floor; the earlier "kneeling" dummy was its
-mesh hanging below an origin placed at floor level, fixed by attaching it at the holder's socket from data) and target
-Matinee, formula-based health, decoded respawn selection, a lent stock mission pistol, damage type taken from the held
-item, candidate XP into the skills component, Phaselock read from stock data (lift rule, valid-target rule and cast
-gate from script and data), progression in the quest save, health recomputed on level change, and save/resume. The
-executors now follow the native dispatch notes (link-id filters, trigger limits, Kismet op stack, mission set
-completion), all `UNVERIFIED`. Recorded checks (DECISIONS 2026-10-02): quest suite 73/73 and resume 10/10, door suite
-16/16, inventory suite 45 PASS / 0 FAIL / 2 NOT_RUN / 2 KNOWN_DIVERGENCE, CTest 10/10, packages 9/9.
-All of it is host behaviour with labelled stand-ins (native auto-aim selection and constraint evaluation for
-Phaselock, a save-state fixture for the dependency mission; the turn-in loot stand-in was removed on 2026-10-07, the
-mission gives XP only as the stock data does) and `UNVERIFIED` rules; at that date nothing had been compared against the original game (the
-Fire mission's event order was compared with a live trace on 2026-10-07, lane L2), and every parity claim remains open. Hand play: `tools/run_quest.ps1 -Fresh`. See
-[the route record](docs/verification/SANCTUARY_RPG_MISSION.md) and
-[the dispatch notes](docs/verification/NATIVE_MISSION_DISPATCH.md).
+The Rust route, in the order it is being taken (2026-11-14). None of it is
+started beyond the workspace skeleton; nothing here is verified yet.
 
-The concrete open items, roughly in the order they are being taken. Small,
-well-bounded ones are marked *good first task*.
+- [ ] Port `ow-container` (LZO1X and the chunk container) to Rust; the same
+      synthetic fixtures as the C++ tests give the same results.
+- [ ] Port `ow-package` (header, name, import and export tables, tagged
+      properties), reusing the offsets the C++ reader already recovered and
+      checked; nothing about 832/46 is re-derived.
+- [ ] `tools/verify_packages.py --reader <the Rust reader>` gives the same
+      counts and exact class bodies as the C++ reader. Only then does the
+      matching part of `src/` retire.
+- [ ] Engine benchmark: Bevy and an own engine on wgpu + winit (Fyrox
+      optional), the same small scene in each, prototypes under ignored
+      `local/bench/`, measured on each project PC
+      ([record](docs/verification/ENGINE_BENCHMARK.md), not run).
+- [ ] The maintainer picks the engine route from the measurements; the pick
+      becomes a decision file, and the engine's `THIRD_PARTY.md` entry comes
+      before it lands.
+- [ ] Port the script VM and the game rules (combat, missions, items,
+      weapons) crate by crate, each against the C++ results.
+- [ ] Rebuild Sanctuary in the Rust host (Phase 1), then Maya (Phases 3-4),
+      with the retired UE5 host's records as the behaviour target.
 
-- [x] Decode `PF_A8R8G8B8` textures: synthetic pixel/bulk tests pass and the
-      real 256x256 Ash sky transition texture extracts successfully. Native sky
-      shading remains open. See [verification](docs/verification/A8R8G8B8_TEXTURE.md).
-- [x] Diagnose the mirrored Sanctuary shop sign: the host adapter reversed
-      winding twice, exposing back faces. Corrected isolated sign renders
-      readable; saved UV and winding checks now guard the import path.
-- [~] Sky rendering: the accepted Sanctuary `Sky_Dome` now renders a
-      daytime gradient with cloud bands built from the instance's own named
-      inputs (`Time_of_Day` column of the transition strip over dome V,
-      horizon-tinted `Clouds_01.R`), and the blue host shell that hid the
-      dome is no longer spawned there. The stripped master graph is not
-      decoded: the column reading and the cloud combine are `UNVERIFIED`,
-      and the sun spot, masks, cloud motion and time-of-day animation are
-      omitted. The `_Outer` city hull imports opt-in (`--outer-shell`) with
-      its mesh-default materials in place of the unrecoverable `_Teleported`
-      overrides. `OpenWillow_SkyAtmosphere` remains for ambient light; Ash
-      coverage, Kismet activation (`_Land` vs `_Outer`) and visual parity
-      remain open. See the
-      [sky approximation record](docs/verification/NATIVE_SKY_APPROXIMATION.md),
-      the [native skybox record](docs/verification/NATIVE_SKYBOX_VERIFICATION.md)
-      and [sky census](docs/verification/SKY_CENSUS.md).
-- [~] Material fallbacks: the full Sanctuary pipeline now has 3 opaque
-      materials lacking diffuse with 1 placed section (Roland's map table,
-      whose packed `_Comp` channels are recoloured in game), down from 8 / 34
-      on 2026-10-21; five more inspected single-texture fallbacks (icicles,
-      distant snow and mountains, a chemical tank) are `partial_unverified`.
-      Layer blends, tints, glow and reflection remain unreconstructed. Ash is
-      unchanged at 13 opaque gaps / 117 sections; Southpaw has none. See the
-      [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md),
-      the [glacier record](docs/verification/GLACIER_PRIMARY_LAYER.md) and the
-      [earlier baseline](docs/verification/SANCTUARY_MATERIAL_BASELINE.md).
-- [~] Terrain / BSP geometry: Sanctuary's eight terrains now emit 15 component
-      meshes with corroborated topology and host triangle collision, and the
-      two persistent-level root Models emit 228 cross-checked polygons (571
-      triangles, 105 sections) with native materials, native texture axes
-      (field roles confirmed against 15,393 editor FPoly records, 0 differ;
-      texel scale still `UNVERIFIED`) and opt-in triangle collision. Native
-      terrain blend parity (31 cooked weights now reproduce their PF_G8
-      textures and drive eight host weighted-sum materials), the BSP texel
-      scale and V orientation, lightmaps / collision flags,
-      other maps and original-game alignment remain open. Hole runtime
-      assertions include occluded/displaced probes; see the
-      [terrain handoff](docs/verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md),
-      the [BSP record](docs/verification/SANCTUARY_BSP_POLYGONS.md) and the
-      [texture-axis record](docs/verification/BSP_TEXTURE_AXES.md).
-- [~] Sanctuary visual defects observed in the editor fly-through: the native
-      dome now uses a two-sided interior policy, and the four known
-      `Common_Meshes.Blocking.Blocking_Cube` actors, 94 collision helpers, four
-      cloud planes, and the observed start-view blocking box are hidden from
-      rendering while source collision is retained where recovered. Ground-floor
-      materials now have scoped FrozenLake and regular-concrete/HLS fallbacks;
-      native layer blending, HLS UV mapping and matched original screenshots
-      remain open. See the [artifact pass](docs/verification/SANCTUARY_ARTIFACT_PASS.md).
-      The Hyperion moon base in the sky now uses its own inspected
-      diffuse/normal/emissive textures instead of the neutral fallback; its
-      tint and fog terms remain omitted. The moon's Unlit color is scaled by
-      its own `p_moonColor`; the station shadow mask, relief and
-      time-of-day tint remain omitted pending an in-game reference. See the
-      [moon base record](docs/verification/MOON_BASE_SURFACE.md).
-- [~] Unsupported component owners and color-stream variants: Sanctuary has
-      none left (2026-10-21). Interactive objects and the wiring cable are
-      placed (checked against the running game at Plan B), mission-item preview
-      meshes and duplicate components are listed with reasons, and the reader
-      accepts the doubled colour buffers found on 27 base-game meshes. The same
-      owner rules place 21 interactive objects on Ash and 4 on Southpaw
-      (`UNVERIFIED` there: not compared with the running game). Ash still has
-      271 unclassified owners (AI markers, vehicle stations, props) and
-      Southpaw one. See the
-      [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
-- [~] Complete walking collision: initial Sanctuary convex/box collision and
-      placeholder walking are verified. Since 2026-10-21 blocking volumes
-      (static, and dynamic ones in the state observed live) and sphere/capsule
-      elements are imported, and `OpenWillow.RouteWalking` replays 35 stair and
-      route probes recorded in the running game: 29/29 of the probes the
-      original finished pass, volumes 5/5. Open: town-wide routes, two probes
-      the host walks but the original does not, Kismet volume toggles, the
-      jump arc, Ash and Southpaw refreshes; terrain uses triangle collision
-      verified by `OpenWillow.TerrainWalking` on Sanctuary only (one hole
-      assertion fails on this machine's probe data, not from this change). See
-      [walking verification](COLLISION_WALKING_VERIFICATION.md).
-- [ ] Broader map coverage. Command-line and in-game selectors exist; the
-      in-game list only offers already imported scenes (2026-09-14).
-      *Lower priority than the vertical slice above until the Phase 4 gate is
-      met (2026-09-18).*
-- [ ] Performance: Sanctuary profiled at 12–15 FPS on an Intel Iris Xe
-      laptop, GPU-bound with ~72% of the frame in TSR; `-LowEnd` reaches the
-      60 FPS cap. Candidate anti-aliasing change recorded, not applied. See
-      [performance record](docs/verification/PERFORMANCE.md).
-- [~] Matched-viewpoint screenshots against the original game: the plan's
-      per-map verification method. Sanctuary has eight matched cameras and four
-      independent critic-agent rounds (judgement, not parity; 5.0/10 for the
-      default state, 2026-10-22); 8/10 not
-      reached, other maps not started. See the
-      [import-gaps record](docs/verification/SANCTUARY_SCENE_IMPORT_GAPS.md).
-- [x] Cross-check the census against umodel's view of the same packages:
-      4,750,427 exports over 2006 base and DLC packages, no offset, size or
-      class disagreement; the 7 name-only differences are umodel-side
-      normalization. Sanctuary meshes, textures and material picks were also
-      compared with umodel exports and with the game's own object dumps. See
-      [umodel record](docs/verification/UMODEL_CROSSCHECK.md) and
-      [dump record](docs/verification/BLCMM_DUMP_CROSSCHECK.md).
-- [ ] Array element types from class reflection instead of hand-written
-      schemas (needs cross-package class loading; touches Phase 2).
+The UE5-era list (sky, materials, terrain and BSP, visual defects, walking
+collision, performance, matched screenshots) is in
+`git show 08bcf3e:ROADMAP.md`. Its data-side findings stay in the records it
+linked; its host-side results were the UE5 host's.
 
 ---
 
@@ -499,11 +418,37 @@ Goal: a repo, a build, a package loader, and a decided host engine.
       LOD to OBJ.
 - [x] Host engine decided: **Unreal Engine 5**. Hello-world project builds;
       the probe mesh and its verified diffuse texture render in UE 5.8.2.
-      First screenshot user-verified.
+      First screenshot user-verified. *Caveat:* reversed on 2026-11-14; the
+      engine decision is Phase 0R's now.
 
 **Gate passed.** The census exists; one mesh and one texture from BL2 render in
 the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 2026-09-10.
+
+---
+
+## Phase 0R: Rust core and engine benchmark <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+
+*Added 2026-11-14 with the switch to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)).*
+
+Goal: the engine-agnostic core in Rust, matching the C++ core, and a host
+engine route picked from measurements.
+
+- [x] Cargo workspace at the repository root with skeleton crates
+      (`ow-container`, `ow-package`, `ow-vm`, `ow-game`, `ow-cli`, `ow-host`)
+      and no third-party crates. *Caveat:* skeletons only; no Rust code reads a
+      package yet.
+- [ ] `ow-container` ported; same results as the C++ code on the same
+      synthetic fixtures
+- [ ] `ow-package` ported; same results on the same synthetic fixtures
+- [ ] `tools/verify_packages.py --reader` on the Rust reader: same counts and
+      exact class bodies as the C++ reader
+- [ ] Engine benchmark run (Bevy, own engine on wgpu + winit; Fyrox optional)
+      and recorded in [ENGINE_BENCHMARK.md](docs/verification/ENGINE_BENCHMARK.md)
+- [ ] Engine route picked by the maintainer and recorded as a decision
+
+**Gate:** the Rust reader matches `verify_packages.py`, the benchmark is
+recorded, and the maintainer has picked the route.
 
 ---
 
@@ -527,21 +472,21 @@ replacing OpenWillow's metadata, reference and verification responsibilities.
       texture: `Ash_Road01` produced glTF and its binary buffer in 0.1 seconds,
       `MetalRoadConcrete_Dif` produced a 1024x1024 DDS in 0.09 seconds, and
       `Skel_BugMorph` produced glTF in 0.08 seconds. UModel warnings and output
-      inventories are recorded; UE5 import and visual parity are not yet
+      inventories are recorded; host import and visual parity are not yet
       verified.
 - [ ] Export representative animations, materials and sounds.
 - [ ] Run a bounded multi-package batch and inventory successes, failures,
       unsupported types, duplicates, warnings, output bytes and elapsed time.
 - [ ] Compare the external inventory with the `ow-package` census and prepared
       scene manifests.
-- [ ] Import representative outputs into UE5 and choose the most reproducible
-      adapter format (glTF, PSK/PSA or another proven path).
+- [ ] Import representative outputs into the Rust host (after Phase 0R) and
+      choose the most reproducible adapter format (glTF, PSK/PSA or another proven path).
 - [ ] Decide whether UModel becomes the default visual payload backend. Keep
       `ow-package` authoritative for package identity, object paths, placement
       metadata and verification regardless of the outcome.
 
 **Gate:** representative exports are repeatable, all failures and unsupported
-categories are enumerated, at least one output path reaches UE5, and the
+categories are enumerated, at least one output path reaches the host, and the
 external inventory can be related back to package/object identity. Until then,
 the full-install export remains an unmeasured experiment.
 
@@ -550,9 +495,15 @@ and [tooling reference](docs/TOOLING.md#external-tools).
 
 ---
 
-## Phase 1: World viewer (M1) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+## Phase 1: World viewer (M1) <img src=".github/assets/icons/todo.svg" width="22" align="absmiddle" alt="">
 
-*Started 2026-09-10.*
+*Started 2026-09-10 in the UE5 host; the host side went back to not started on
+2026-11-14 when that host was retired. What carried over: the package reader,
+the importer APIs and the decoding results (meshes, textures, collision hulls,
+placement, terrain and BSP data, material parameters), which are core code.
+What did not: rendering, lighting, camera, walking and the in-game selector,
+which were the UE5 host's. Those items are unticked and marked "retired UE5
+host" until the Rust host does them; their records stay as history.*
 
 Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
 
@@ -590,47 +541,50 @@ Goal: walk around any BL2 map in a modern 64-bit renderer. Ship publicly.
         transforms (collection tails: observed 84-byte layout, Ash and
         Sanctuary) *Caveat:* observed layout, not a general format guarantee
   - [x] `_Dynamic` props placed as static
-    - [~] Skybox: observed `Sky_Dome` placement renders a labeled
-          approximation from its named inputs (gradient column, cloud layer);
-          `_Outer` hull opt-in with mesh-default materials; master graph,
-          time-of-day animation, Kismet activation and visual parity remain
-          open
+    - [~] Skybox: observed `Sky_Dome` placement and its named inputs
+          (gradient column, cloud layer) are decoded; the labeled
+          approximation rendered in the retired UE5 host; `_Outer` hull
+          opt-in with mesh-default materials; master graph, time-of-day
+          animation, Kismet activation and visual parity remain open
   - [~] Terrain / BSP *Caveat:* Sanctuary only; single-layer terrain and
         planar-UV BSP approximations, both labeled `UNVERIFIED`
   - [ ] Runtime streaming (all sublevels currently load at once)
 - [ ] Lighting
-  - [x] Inspection rig: movable sun, neutral skylight, reflection capture,
-        auto exposure, AO. For geometry/material checks only
-  - [~] Source lighting: Sanctuary's decoded directional light, sky light,
-        height fog and post-process settings drive the host (2026-10-22)
-        *Caveat:* Sanctuary only; the calibrations to UE5 units are screenshot
-        fits, `UNVERIFIED`
-  - [ ] Modern: dynamic GI
+  - [ ] Inspection rig: movable sun, neutral skylight, reflection capture,
+        auto exposure, AO. For geometry/material checks only *(done in the
+        retired UE5 host)*
+  - [ ] Source lighting: Sanctuary's decoded directional light, sky light,
+        height fog and post-process settings drove the UE5 host (2026-10-22)
+        *(retired UE5 host; the decoded settings carry over, the calibrations
+        to UE5 units were screenshot fits, `UNVERIFIED`)*
+  - [ ] Modern: dynamic GI in the host
   - [ ] Fidelity: parse SM3 lightmaps from `Lighting.tfc`
 - [ ] Camera and movement
-  - [x] Free-flight spectator pawn, saved start pose and FOV; automated
-        movement/camera test passes on Ash and Sanctuary
-  - [x] Placeholder character controller with collision (opt-in `-Walk`)
-        *Caveat:* UE5 movement defaults, verified at the Sanctuary start only
-- [ ] Map coverage: **3 / 82** (`Ash_P`, `Sanctuary_P`, `SouthpawFactory_P`)
+  - [ ] Free-flight spectator pawn, saved start pose and FOV *(done in the
+        retired UE5 host; automated test on Ash and Sanctuary)*
+  - [ ] Placeholder character controller with collision *(done in the
+        retired UE5 host with UE5 movement defaults, Sanctuary start only)*
+- [ ] Map coverage: **0 / 82** in the Rust host (3 / 82 loaded in the retired
+      UE5 host: `Ash_P`, `Sanctuary_P`, `SouthpawFactory_P`)
       *Caveat: broadening past Sanctuary is deferred until the Phase 4
       vertical-slice gate is met; see the priority note above.*
   - [x] Command-line base-game map selector (`tools/viewer.py`)
   - [x] Optional DLC package discovery (82 installed map names total)
-  - [x] In-game map selector (Tab list, digit keys; imported scenes only)
-        *Caveat:* automated level switch verified, physical key press not
+  - [ ] In-game map selector *(done in the retired UE5 host: Tab list, digit
+        keys, imported scenes only)*
   - [ ] Loading times and memory profile *Caveat:* one settled frame-time
-        and process-memory sample on Sanctuary recorded; no load-time
-        measurement
-- [~] Verification: side-by-side screenshots against the real game per map.
-      Sanctuary: eight matched cameras, critic 5.0/10 for the default state
-      (2026-10-22); other maps not started
+        and process-memory sample on Sanctuary was recorded in the retired UE5
+        host; no load-time measurement
+- [ ] Verification: side-by-side screenshots against the real game per map.
+      The eight matched Sanctuary cameras and their real-game references carry
+      over; the critic's 5.0/10 (2026-10-22) scored the retired UE5 host
 
 **Gate (rescoped 2026-09-18):** Sanctuary loads, is walkable, and is visually
 verified against the real game → work moves on to Phase 2 for the vertical
 slice (Sanctuary + one Vault Hunter). Full 82/82 map coverage remains the
 eventual completion target for this phase but is deferred until the Phase 4
-vertical-slice gate is met; see Phase 5. *(Three maps already load.)*
+vertical-slice gate is met; see Phase 5. *(Three maps loaded in the retired
+UE5 host; none in the Rust host yet.)*
 
 Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md)
 · [Phase 1 viewer](docs/verification/PHASE1_VIEWER_VERIFICATION.md)
@@ -642,7 +596,11 @@ Records: [Material v1 / Ash](docs/verification/MATERIAL_LEVEL_V1_VERIFICATION.md
 
 ---
 
-## Phase 2: UnrealScript VM (M2) (prototype, in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+## Phase 2: UnrealScript VM (M2) (C++ prototype, in progress; Rust port pending) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">
+
+*The VM prototype is C++ core work in `src/` and stays valid; it is the
+reference the `ow-vm` crate is ported against (Phase 0R). Its host
+connections were the retired UE5 host's.*
 
 Goal: Gearbox's own gameplay code executing, scoped to what Sanctuary and the
 chosen first Vault Hunter actually need (see
@@ -659,8 +617,9 @@ coverage.
       [the record](docs/verification/SCRIPT_BYTECODE_DISASM.md). C++ object
       loading, interpretation, Core natives and a default-state sweep exist;
       full states/latent behavior and opcode semantics remain unverified.
-      First UE5 inventory connection executes original `MoveDelta` on item-only
-      backpack rows; the rest of the menu remains on the host adapter.
+      The first UE5 inventory connection (retired UE5 host) executed original
+      `MoveDelta` on item-only backpack rows; the rest of the menu was on the
+      host adapter.
       Class export bodies decode 3,339 / 3,339 in `verify_packages` (structural,
       DECISIONS 2026-10-06).
 - [ ] Interpreter: expressions, locals, `out` params, structs, dynamic arrays,
@@ -702,7 +661,8 @@ animation playback), not all 1,914 up front. Ground truth: UDK.
       falling, jumping, slopes, input, camera, possession
 - [ ] `SkeletalMeshComponent` (127), ~30 `AnimNode*` types,
       `PhysicsAssetInstance` (19)
-- [ ] `ParticleSystemComponent` (46) + Cascade modules → Niagara
+- [ ] `ParticleSystemComponent` (46) + Cascade modules → the host's particle
+      system
       *Caveat:* only a read-only template reader exists
       (`research/particle_system.py`, Phaselock templates, layouts checked by
       oracles); nothing is converted or rendered.
@@ -714,7 +674,12 @@ collision, matching UDK-derived golden tests.
 
 ---
 
-## Phase 4: Willow natives (M3b) (slice pieces in the host, in progress) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">: the mountain
+## Phase 4: Willow natives (M3b) (core rules in progress; host half reset 2026-11-14) <img src=".github/assets/icons/now.svg" width="22" align="absmiddle" alt="">: the mountain
+
+*The native notes, the live confirmations and the core's combat, mission and
+item results keep their status. The host half (Maya moving, shooting and
+casting in a host, the slice gate runs) was the retired UE5 host's and is not
+started in the Rust host.*
 
 Goal: **Maya**, the vertical slice's first Vault Hunter, walks, shoots a
 handful of real guns, uses Phaselock and her skill trees, and enemies on
@@ -750,23 +715,23 @@ Priority order:
       on the VM. Other item kinds and the general attribute system are not done.
 - [ ] `WillowPawn` (246), `WillowPlayerPawn` (65): health/shield, FFYL, damage
       *Progress:* health, the hit and death chains and FFYL (down, bleed-out,
-      second wind, respawn) run on the VM against recorded live rows. The UE host
-      has Maya's shield (shield first, then health; recharge after a delay) and the
-      down state with a station respawn timed to the live reads; the start shield is
-      a slice choice and its numbers are stand-ins (UNVERIFIED). Not done: the death
+      second wind, respawn) run on the VM against recorded live rows. The retired
+      UE5 host had Maya's shield (shield first, then health; recharge after a
+      delay) and the down state with a station respawn timed to the live reads;
+      the start shield was a slice choice and its numbers stand-ins (UNVERIFIED). Not done: the death
       camera and tunnel effects, the respawn without a station
       ([record](docs/verification/COMBAT_DOWN_RESPAWN.md)).
 - [ ] `WillowPlayerController` (298): input, aiming, skills, interaction
 - [ ] `WillowWeapon` (121), `WillowProjectile` (95): fire, reload, spread,
       recoil, elemental procs
       *Progress:* firing modes, light bullets, rockets, splash, status damage and
-      the Tediore throw from the parts in the host (rules confirmed live, see
-      above); spread distribution, proc rate, elemental impacts, beams and
+      the Tediore throw from the parts in the retired UE5 host (rules confirmed
+      live, see above); spread distribution, proc rate, elemental impacts, beams and
       ricochets are not.
 - [ ] `WillowInventory` (50), `WillowItem` (39), item generation from parts
-      *Progress:* weapon generation from parts in C++ and the host
-      (`ow.RollGun`); guns assembled from their parts; non-weapon items not
-      generated.
+      *Progress:* weapon generation from parts in C++ (and in the retired UE5
+      host, `ow.RollGun`, where guns were assembled from their parts);
+      non-weapon items not generated in a host.
 - [ ] AI: `WillowAIPawn` (121), `WillowMind` (47), `WillowAIComponent` (45),
       GearboxFramework `AIComponent` (48), `GearboxMind` (32),
       `GearboxCoverStateManager` (48)
@@ -776,9 +741,9 @@ Priority order:
 - [ ] `WillowVehicle` (156)
 - [ ] Scaleform bridge (512), `WillowHUDGFxMovie` (98), `WillowUIInteraction`
       (41) via an SWF VM; debug HUD until then
-      *Progress:* BL2's own HUD, inventory and Skills movies run in a Ruffle
-      overlay; the action-skill indicator and minimap follow rules read from the
-      live movie. Ruffle is a stand-in for Scaleform, not this step.
+      *Progress:* BL2's own HUD, inventory and Skills movies ran in a Ruffle
+      overlay over the retired UE5 host; the action-skill indicator and minimap
+      rules were read from the live movie and carry over. Ruffle is a stand-in for Scaleform, not this step.
 - [ ] Wwise audio (17 + `AkAudio`), Bink video
 
 **Gate:** a full loop on Sanctuary with Maya: spawn, fight enemies, loot a
@@ -786,9 +751,9 @@ gun, equip it, use Phaselock, complete one hand-picked mission, die, respawn.
 This is the vertical slice; once met, broad map and character coverage
 (Phase 5/6) becomes the priority again.
 
-Gate progress (2026-11-11, the fight and respawn lines updated 2026-11-13; "in the host" means the UE5 build, with labelled stand-ins; none of it is parity).
-The Phase 4 gate is not claimed as met. `tools/test_slice_gate.ps1` runs the whole loop in one session; its forced
-variants have passed 14 of 14 links in every recorded run since their first run on main (7eee9ee, 2026-11-07), on
+Gate progress in the retired UE5 host (history: 2026-11-11, the fight and respawn lines updated 2026-11-13; "in the host" means the UE5 build, with labelled stand-ins; none of it is parity, and none of it counts toward the gate for the Rust host).
+The Phase 4 gate is not claimed as met. `tools/test_slice_gate.ps1` (removed 2026-11-14) ran the whole loop in one session; its forced
+variants passed 14 of 14 links in every recorded run since their first run on main (7eee9ee, 2026-11-07), on
 main or on a batch's candidate; the later runs are as the hub's log reported them
 ([slice gate](docs/verification/SLICE_GATE.md)). Its `-Unforced` variant takes four of the test's stand-ins away:
 the gun drop comes from the host's own loot roll, the Phaselock point is bought on the skills page, the mission is
@@ -797,8 +762,8 @@ fixtures (the hold on fire, one shot at a time, shots that ignore the gun's fire
 drops) stay. In 8 unforced runs on
 2026-11-11, 5 passed all 14 links and 109 of 112 link attempts passed; the three failures were two pickups with an
 enemy standing in the view line and one Phaselock cast refused because Maya was already down.
-- Spawn: Maya spawns in Sanctuary with first-person arms, collision and a stand-in start shield (a slice choice).
-- Fight: the range's enemies notice, chase and hit Maya with a host brain. Notice radii, update rate, the adult's and
+- Spawn: Maya spawned in Sanctuary with first-person arms, collision and a stand-in start shield (a slice choice).
+- Fight: the range's enemies noticed, chased and hit Maya with a host brain. Notice radii, update rate, the adult's and
   the baby's stand distances, the swing cycles of four kinds (adult, baby, regular, slinger) and the chase speeds of the
   adult, slinger and baby come from live reads (the regular's and the psycho's speeds are stand-ins); a third read of the
   adult's cycle (2026-11-12, 407 gaps) settled its value, while the rule behind it stays UNVERIFIED. The range
@@ -806,7 +771,7 @@ enemy standing in the view line and one Phaselock cast refused because Maya was 
   spawns no baby or slinger, so theirs are checked in the light tier only. The psycho has no live read and the
   regular's stand distance is open. The range itself is a host contrivance, and leaps and thrown rocks are described
   in a note ([note](docs/verification/NATIVE_AI_LEAP_THROW.md), UNVERIFIED) and not built.
-- Loot a gun: range kills roll their loot in the host at the stock chance. Unforced, a gun dropped after 20 to 41
+- Loot a gun: range kills rolled their loot in the host at the stock chance. Unforced, a gun dropped after 20 to 41
   kills. The pickup card and the use key take the aimed drop.
 - Equip: the gate equips through the call the inventory page uses. The page's own equip is covered by the
   inventory suite, on a bounded item set.
@@ -816,7 +781,7 @@ enemy standing in the view line and one Phaselock cast refused because Maya was 
 - One mission: the Fire mission runs from accept to turn-in in the gate and in the quest suite, and its event
   order in the VM was compared with one live trace (45 events matched, 2 out of order, 4 extra). It gives XP only,
   as the stock data does (a host loot stand-in was removed by maintainer decision, 2026-10-07).
-- Die and respawn: Maya is downed by the range's enemies, bleeds out (12 s for a first down) and respawns at the
+- Die and respawn: Maya was downed by the range's enemies, bled out (12 s for a first down) and respawned at the
   decoded station with full health. The steps of the respawn wait on the station path were confirmed
   in two live sessions (six samples, two maps, one player level), and the host follows them. Which station the game
   picks was seen only where one station was both the active and the nearest, so the selection order is not told
@@ -844,7 +809,7 @@ Records: [arms and held guns](docs/verification/WEAPON_VISUALS.md), [walking](CO
       Kismet, behavior and mission executors already run the Fire mission's
       installed data (rules `UNVERIFIED`; see Now / next), which is not this
       step's general interpreter.
-- [ ] Matinee → Sequencer for cutscenes
+- [ ] Matinee → a host cutscene player for cutscenes
 - [ ] Mission system, objectives, fast travel, vending, ECHO/dialogue, Bink
       playback
 - [ ] Save files: read/write real BL2 saves (Gibbed format)

@@ -4,7 +4,7 @@
 // tools/weapon_stats.evaluate(). It reads the line-based manifest written by
 // tools/weapon_gen_manifest.py (format in that tool's docstring) and reproduces the
 // Python results exactly, including single-precision rounding (tools/weapon_gen_parity.py
-// checks this). Standard C++ only, so the UE module can compile it as is.
+// checks this). Standard C++ only, so a host can compile it as is (the retired UE5 module did).
 //
 // The rules are the Python ones and keep their status: read from the game's code or
 // fitted on item cards, UNVERIFIED in game unless docs/verification says otherwise.
@@ -222,7 +222,7 @@ struct WeaponGenManifest {
 };
 
 WeaponGenManifest LoadWeaponGenManifest(const std::string& path, std::string* error);
-// Same, from the manifest text itself (tests, UE packaging).
+// Same, from the manifest text itself (tests, a host's packaging).
 WeaponGenManifest ParseWeaponGenManifest(const std::string& text, std::string* error);
 
 // ---- results (plain fields, so a host wrapper can copy them into its item struct) ----

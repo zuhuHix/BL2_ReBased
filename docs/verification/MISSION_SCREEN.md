@@ -2,6 +2,8 @@
 
 AI-assisted (Claude), mission UI lane. A pass of the host's suite means the host did this, not that it matches the game. "What the real game does" below reports the live captures; the host's own frames were seen by the runner only and have not been compared with the real ones side by side.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## What was wrong
 
 The first scripted playtest showed one E accepting the mission with no text, no reward and no button, and one E turning it in with no reward screen, then a second E, with nothing prompting it, closing a page nobody could see. From the code, the cause is that `OpenWillowQuest::TryUse` runs Marcus's chain on the VM, finds what the screen would offer, and confirms it itself. The screen was logic with no page behind it (`UI_Mission.MissionInterface_Definition` was logged and nothing drawn).

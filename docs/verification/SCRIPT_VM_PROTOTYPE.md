@@ -8,6 +8,8 @@ ahead of the remote. The only uncommitted tracked edit was `src/cli.cpp`'s
 backed up under ignored `local/phase2/handoff-backup/cli.cpp` before editing.
 No reset, stash, checkout, extraction, dependency or license change was needed.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 UModel remains the existing external asset backend. This slice uses the
 project's own package reader and bytecode VM; no external tool code was copied.
 Package identity, imports, execution and provenance remain project-owned.

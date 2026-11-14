@@ -16,6 +16,8 @@ layout, and is being handled separately on `fix/missing-materials`.
 
 ## 1. In-game map selector
 
+**Retired 2026-11-14:** this task was for the UE5 host, which left the tree (files below: `git show 08bcf3e:<path>`).
+
 **Why:** ROADMAP.md's Phase 1 checklist has `[ ] In-game map selector` open.
 Today, map choice is entirely command-line (`tools/viewer.py --map <name>
 --action view`), which calls `tools/run_ue_level.ps1` → launches
@@ -60,6 +62,8 @@ is enough.
 ---
 
 ## 2. Performance profiling (Sanctuary ~8-9 FPS)
+
+**Retired 2026-11-14:** the numbers were the UE5 host's; frame time for the Rust candidates is measured by the Phase 0R benchmark.
 
 **Why:** ROADMAP.md flags "Sanctuary ran at ~8-9 FPS during automation
 startup on the development machine. Not yet profiled." This is a
@@ -131,10 +135,9 @@ user-facing.
 ## Every change (all three tasks)
 
 Per CLAUDE.md, before calling any of these done:
-- Run `ctest --test-dir build -C Release --output-on-failure` and
-  `python tools/verify_packages.py --reader build/Release/ow-package.exe`;
-  paste the output.
+- Run `ctest --test-dir build -C Release --output-on-failure`,
+  `python tools/verify_packages.py --reader build/Release/ow-package.exe`,
+  `cargo build --workspace` and `cargo test --workspace`; paste the output.
 - Report automated checks separately from in-game checks.
-- Task 1 (in-game selector) needs an actual in-editor check (open the
-  editor, use the widget) since it's UI — say explicitly if that wasn't
-  possible in the delegated environment.
+- Task 1 (in-game selector) needed an in-editor check; it is retired with
+  the UE5 host (2026-11-14).

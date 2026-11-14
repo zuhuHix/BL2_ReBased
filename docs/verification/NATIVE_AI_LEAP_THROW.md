@@ -3,6 +3,8 @@
 AI-assisted (Claude Code), analyst lane L. Written in our own words for a later implementer, who works from this note only. No listing,
 pseudo-code, script dump or extracted table is reproduced here; tables below are summaries with the few values an implementer needs.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 **Status, once for the whole note.** No real-game session was available. Unless a line says otherwise, every rule here is **read from data or
 code and UNVERIFIED in the running game**. Lines that lean on an observation say which record holds it. Each statement carries one of these
 source tags:
