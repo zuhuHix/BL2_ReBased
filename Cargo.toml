@@ -4,13 +4,32 @@
 # synthetic fixtures and on tools/verify_packages.py. No third-party crates: each one added later needs its
 # THIRD_PARTY.md entry first (AGENTS.md rule 6). The host's engine route is not chosen yet (Phase 0R benchmark,
 # docs/verification/ENGINE_BENCHMARK.md).
+#
+# The 22 crates and their allowed dependency edges are listed in crates/README.md; tests/crate_edges_test.py fails on
+# an edge outside that table.
 [workspace]
 resolver = "3"
 members = [
+    "crates/ow-core",
     "crates/ow-container",
     "crates/ow-package",
+    "crates/ow-object",
+    "crates/ow-script",
+    "crates/ow-defs",
+    "crates/ow-attr",
+    "crates/ow-balance",
+    "crates/ow-items",
     "crates/ow-vm",
-    "crates/ow-game",
+    "crates/ow-world",
+    "crates/ow-inventory",
+    "crates/ow-behavior",
+    "crates/ow-combat",
+    "crates/ow-skills",
+    "crates/ow-ai",
+    "crates/ow-mission",
+    "crates/ow-save",
+    "crates/ow-ui",
+    "crates/ow-assets",
     "crates/ow-cli",
     "crates/ow-host",
 ]

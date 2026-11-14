@@ -1,6 +1,6 @@
 [package]
 name = "ow-package"
-description = "UE3 version 832/46 package reader: names, imports, exports, tagged properties (port of src/package.*)"
+description = "UE3 version 832/46 package reader: header, tables, tagged properties, package store (port of src/package.*)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,5 +10,12 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The shared builder for synthetic packages (src/testkit.rs, lane W1-TESTKIT), for other crates' tests.
+test-support = []
+
+# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD:
+# no later lane edits this file (tests/crate_edges_test.py checks it).
 [dependencies]
+ow-core = { path = "../ow-core" }
 ow-container = { path = "../ow-container" }

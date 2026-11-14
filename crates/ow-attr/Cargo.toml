@@ -1,0 +1,23 @@
+[package]
+name = "ow-attr"
+description = "Attribute system: modifier stacks, initialization-data evaluator, resolvers, attribute effects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD:
+# no later lane edits this file (tests/crate_edges_test.py checks it).
+[dependencies]
+ow-core = { path = "../ow-core" }
+ow-container = { path = "../ow-container" }
+ow-package = { path = "../ow-package" }
+ow-object = { path = "../ow-object" }
+ow-defs = { path = "../ow-defs" }
+
+[dev-dependencies]
+ow-package = { path = "../ow-package", features = ["test-support"] }

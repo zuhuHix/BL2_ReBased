@@ -57,7 +57,7 @@ set(OW_STANDALONE_PY_TESTS
   audio_census blcmm_dumps block_saves bsp_calibration bsp check_action_skill_hud check_hud_down
   check_hud_shots check_interactives check_mission_page check_overlay_data check_phaselock_kill check_shield_check
   controls_capture
-  check_slice_gate check_vendors check_weapon_firing collision crosscheck_blcmm_dumps crosscheck_bsp_polys
+  check_slice_gate check_vendors check_weapon_firing collision crate_edges crosscheck_blcmm_dumps crosscheck_bsp_polys
   crosscheck_umodel_assets crosscheck_umodel den_probe editor_inputs game_colours gen_confirm gestalt_sockets
   golden_card_compare gun_ads_capture inspection_views inventory_gear land_batch
   leak_gate leak_gate_hook leak_gate_policy leak_gate_push leak_gate_repo loot_pools

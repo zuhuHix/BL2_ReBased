@@ -1,0 +1,21 @@
+[package]
+name = "ow-object"
+description = "Object model: ids, values, heap, class layouts, reflection and typed decoding (port of the loading half of src/vm.cpp)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD:
+# no later lane edits this file (tests/crate_edges_test.py checks it).
+[dependencies]
+ow-core = { path = "../ow-core" }
+ow-container = { path = "../ow-container" }
+ow-package = { path = "../ow-package" }
+
+[dev-dependencies]
+ow-package = { path = "../ow-package", features = ["test-support"] }

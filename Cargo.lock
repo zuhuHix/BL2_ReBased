@@ -3,40 +3,335 @@
 version = 4
 
 [[package]]
-name = "ow-cli"
+name = "ow-ai"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-assets"
 version = "0.0.0"
 dependencies = [
  "ow-container",
- "ow-game",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
  "ow-package",
+]
+
+[[package]]
+name = "ow-attr"
+version = "0.0.0"
+dependencies = [
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
+ "ow-package",
+]
+
+[[package]]
+name = "ow-balance"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
+ "ow-package",
+]
+
+[[package]]
+name = "ow-behavior"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
+ "ow-package",
+ "ow-script",
  "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-cli"
+version = "0.0.0"
+dependencies = [
+ "ow-ai",
+ "ow-assets",
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-mission",
+ "ow-object",
+ "ow-package",
+ "ow-save",
+ "ow-script",
+ "ow-skills",
+ "ow-ui",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-combat"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-vm",
+ "ow-world",
 ]
 
 [[package]]
 name = "ow-container"
 version = "0.0.0"
+dependencies = [
+ "ow-core",
+]
 
 [[package]]
-name = "ow-game"
+name = "ow-core"
+version = "0.0.0"
+
+[[package]]
+name = "ow-defs"
 version = "0.0.0"
 dependencies = [
- "ow-vm",
+ "ow-container",
+ "ow-core",
+ "ow-object",
+ "ow-package",
 ]
 
 [[package]]
 name = "ow-host"
 version = "0.0.0"
+dependencies = [
+ "ow-ai",
+ "ow-assets",
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-mission",
+ "ow-object",
+ "ow-package",
+ "ow-save",
+ "ow-script",
+ "ow-skills",
+ "ow-ui",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-inventory"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-items",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-items"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
+ "ow-package",
+]
+
+[[package]]
+name = "ow-mission"
+version = "0.0.0"
+dependencies = [
+ "ow-ai",
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-skills",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-object"
+version = "0.0.0"
+dependencies = [
+ "ow-container",
+ "ow-core",
+ "ow-package",
+]
 
 [[package]]
 name = "ow-package"
 version = "0.0.0"
 dependencies = [
  "ow-container",
+ "ow-core",
+]
+
+[[package]]
+name = "ow-save"
+version = "0.0.0"
+dependencies = [
+ "ow-ai",
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-mission",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-skills",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-script"
+version = "0.0.0"
+dependencies = [
+ "ow-container",
+ "ow-core",
+ "ow-package",
+]
+
+[[package]]
+name = "ow-skills"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-vm",
+ "ow-world",
+]
+
+[[package]]
+name = "ow-ui"
+version = "0.0.0"
+dependencies = [
+ "ow-ai",
+ "ow-attr",
+ "ow-balance",
+ "ow-behavior",
+ "ow-combat",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-inventory",
+ "ow-items",
+ "ow-mission",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-skills",
+ "ow-vm",
+ "ow-world",
 ]
 
 [[package]]
 name = "ow-vm"
 version = "0.0.0"
 dependencies = [
+ "ow-attr",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
  "ow-package",
+ "ow-script",
+]
+
+[[package]]
+name = "ow-world"
+version = "0.0.0"
+dependencies = [
+ "ow-attr",
+ "ow-balance",
+ "ow-container",
+ "ow-core",
+ "ow-defs",
+ "ow-object",
+ "ow-package",
+ "ow-script",
+ "ow-vm",
 ]
