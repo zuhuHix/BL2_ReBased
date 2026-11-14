@@ -1,0 +1,15 @@
+[package]
+name = "ow-core"
+description = "Shared foundation: typed not-yet errors, identifiers, deterministic maps, numerics, randomness, simulation clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD:
+# no later lane edits this file (tests/crate_edges_test.py checks it).
+[dependencies]

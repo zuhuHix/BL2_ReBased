@@ -1,0 +1,31 @@
+[package]
+name = "ow-combat"
+description = "Firing maths, hit chain, damage, death, down state, respawn, loot on death, damage-dealing behavior handlers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD:
+# no later lane edits this file (tests/crate_edges_test.py checks it).
+[dependencies]
+ow-core = { path = "../ow-core" }
+ow-container = { path = "../ow-container" }
+ow-package = { path = "../ow-package" }
+ow-object = { path = "../ow-object" }
+ow-script = { path = "../ow-script" }
+ow-defs = { path = "../ow-defs" }
+ow-attr = { path = "../ow-attr" }
+ow-balance = { path = "../ow-balance" }
+ow-items = { path = "../ow-items" }
+ow-vm = { path = "../ow-vm" }
+ow-world = { path = "../ow-world" }
+ow-inventory = { path = "../ow-inventory" }
+ow-behavior = { path = "../ow-behavior" }
+
+[dev-dependencies]
+ow-package = { path = "../ow-package", features = ["test-support"] }

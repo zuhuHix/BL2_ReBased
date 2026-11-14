@@ -1,0 +1,18 @@
+//! Combat: firing maths, the hit chain, damage pipeline natives, death, down state (FFYL), respawn, kill-XP glue,
+//! loot on death, the scripted combat run and the damage-dealing behavior
+//! handlers (port of `src/weapon_firing.*` and `src/combat*.cpp`).
+//!
+//! Engine-agnostic gameplay rules. Each rule keeps the evidence label it has in `docs/verification/` (verified
+//! how, or UNVERIFIED); porting a rule does not change what is known about it.
+//!
+//! Scaffold (W0-SCAFFOLD): every module file exists with its owner lane named in its header; lanes fill their
+//! own files and never edit this `lib.rs` (architecture section 2.3).
+
+pub mod damage;
+pub mod death;
+pub mod down;
+pub mod firing;
+pub mod hit;
+pub mod loot;
+pub mod run;
+pub mod xp;
