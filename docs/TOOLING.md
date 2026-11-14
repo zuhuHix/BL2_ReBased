@@ -322,21 +322,27 @@ cargo test --workspace
 cargo run -p ow-host -- --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2"
 ```
 
-The crates port the C++ core in `src/` one at a time; they do not wrap it. Until a crate meets its rule below, the
-C++ build stays the reference and keeps building and testing with CMake and ctest, and nothing about the 832/46 format
-is re-derived: the port reuses the offsets the C++ code already recovered and checked (rule 4), and its bounds checks
-keep their meaning (rule 5).
+The crates port the C++ core in `src/` one at a time; they do not wrap it. Until a crate meets its done-when rule
+(in its `lib.rs` doc comment where one is written), the C++ build stays the reference and keeps building and testing
+with CMake and ctest, and nothing about the 832/46 format is re-derived: the port reuses the offsets the C++ code
+already recovered and checked (rule 4), and its bounds checks keep their meaning (rule 5).
 
-| Crate | Ports | Done when (from the crate's doc comment) |
-|---|---|---|
-| `ow-container` | `src/container.*` (the LZO1X container) | the synthetic container fixtures `tests/` builds give the same results as the C++ build, and the real packages decompress to the same bytes as `ow-package` from `build/Release`. It gets its own decoder, written from the LZO1X format and the project's pure-Python decoder in `research/native_count.py`, so no C code is translated |
-| `ow-package` | `src/package.*` (header, names, imports, exports, tagged properties), `src/assets.*`, `src/census.*` | `python tools/verify_packages.py --reader <the Rust ow-package>` reports the same packages, counts and exact class bodies as the C++ reader, and the synthetic fixtures pass in both. The C++ `Reader`'s `require()` and limit checks become `Result` errors, never panics or wider bounds |
-| `ow-vm` | `src/script.*`, `src/vm.*`, `src/interp.*`, `src/natives.*`, `src/kismet.*`, `src/behavior.*` | the VM's synthetic tests and the Fire event-order check (`tools/verify_fire_event_order.py`) give the same results as with the C++ build |
-| `ow-game` | `src/combat*`, `src/mission*`, `src/progression.*`, `src/dialog.*`, `src/mover.*`, `src/slice.*`, `src/inventory_navigation.*`, `src/weapon_gen.*`, `src/weapon_firing.*` | no crate-specific rule yet; the workspace rule applies (same synthetic fixtures, same results). Each rule keeps the evidence label it has in `docs/verification/`: porting a rule does not change what is known about it |
-| `ow-cli` | `src/cli.cpp`; builds the binary `ow-package` | not ported yet: it prints that and exits 2. Use `build/Release/ow-package.exe` |
-| `ow-host` | the host; binary `ow-host --game <install>` | checks that the folder holds `WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk` and `WillowGame.upk` (rule 11), then says that no engine route is chosen and stops (exit 0; 1 when it refuses the folder, 2 for a wrong call) |
+The workspace has 22 crates, one per layer (`ow-core`, `ow-container`, `ow-package`, `ow-object`, `ow-defs`,
+`ow-script`, `ow-attr`, `ow-balance`, `ow-items`, `ow-vm`, `ow-world`, `ow-inventory`, `ow-behavior`, `ow-combat`,
+`ow-skills`, `ow-ai`, `ow-mission`, `ow-save`, `ow-ui`, `ow-assets`, `ow-cli`, `ow-host`). What each owns, what it ports
+from `src/` and `tools/`, the allowed dependency edges and the Rust `ow-package`'s flag-to-file map are in
+[crates/README.md](../crates/README.md); every module file names its owner lane in its first line.
+`python tests/crate_edges_test.py` (ctest `py-crate_edges`) fails on an edge outside the table, a third-party crate, a
+banned numeric or determinism pattern, or a C++ CLI flag without a Rust entry.
 
-Every crate but `ow-host`'s install check is a skeleton ("Not started" in its doc comment); nothing in Rust reads a
+- `ow-host --game <install>` checks that the folder holds `WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk`
+  and `WillowGame.upk` (rule 11), then says that no engine route is chosen and stops (exit 0; 1 when it refuses the
+  folder, 2 for a wrong call).
+- The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines; until a command family is ported it prints
+  `<flag> is not ported to Rust yet (lane <lane>)` and exits 3. Use `build/Release/ow-package.exe` meanwhile.
+
+Beyond `ow-host`'s install check and five finished `ow-core` files (`NotYet`, object paths, the key-ordered and
+insertion-ordered maps, the parity mode), every module is a stub that its owner lane fills; nothing in Rust reads a
 package yet, so every statement about the Rust route is `UNVERIFIED`. The engine route is not chosen: a timeboxed
 Phase 0R benchmark (Bevy and an own engine on wgpu + winit required, Fyrox optional) builds the same small scene in
 each, its prototypes live under ignored `local/bench/` because each candidate is a new dependency, and the maintainer
@@ -926,7 +932,7 @@ content paths some preparers still take (`prepare_weapon_paint.py --mesh`): set 
 | Path | What |
 |---|---|
 | `src/` | `ow-core` library (package reader, LZO container, asset importers, VM, gameplay rules) and the `ow-package` and `ow-weapongen` CLIs; the reference until the Rust crates match it |
-| `crates/` | The Rust workspace (`Cargo.toml` at the root): `ow-container`, `ow-package`, `ow-vm`, `ow-game`, `ow-cli`, `ow-host` |
+| `crates/` | The Rust workspace (`Cargo.toml` at the root): 22 crates from `ow-core` to `ow-cli` and `ow-host`, listed with their edges in [crates/README.md](../crates/README.md) |
 | `tests/` | Synthetic CTest suites and tool unit tests; no game data |
 | `tools/` | Census, scene and slice preparation, real-game drivers, overlay pages, checkers, array schemas |
 | `third_party/lzokay/` | Vendored MIT LZO1X decoder (provenance in `THIRD_PARTY.md`) |

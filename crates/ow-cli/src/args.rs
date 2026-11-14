@@ -1,8 +1,9 @@
 //! Owner: lane W0-SCAFFOLD. The command dispatch table of the Rust `ow-package` (a frozen contract, architecture
 //! section 7): every command flag of `src/cli.cpp`'s usage and the Rust-only flags of architecture section 2.3, the
 //! command family (`cmd/<family>.rs`) each goes to and the lane that ports it. Options are listed with the commands
-//! that read them in `src/cli.cpp`. Owner lanes parse their own options inside their
-//! `cmd/` file; they never edit this table or `main.rs`. `tests/crate_edges_test.py` fails when a flag of the C++
+//! that read them in `src/cli.cpp` (the Rust-only ones as architecture section 15 lists them). This table is the
+//! usage record only: each `cmd/` module parses its own trailing modifiers, and lanes never edit this table or
+//! `main.rs`. `tests/crate_edges_test.py` fails when a flag of the C++
 //! usage text has no entry or option here.
 
 /// Where the command flag stands on the command line.
@@ -100,6 +101,36 @@ const fn cmd(
 use Family as F;
 use Position::{AfterPackage as P, Either as E, First};
 
+// The Rust-only commands' modifiers (architecture section 15, item 3). `--op-level` is the OP level; `--op` is a
+// Kismet option of `--kismet-run`.
+/// `--def-dump <object path> --cooked <dir> [--overlay <file>]`.
+const DEF_DUMP: &[&str] = &["--cooked", "--overlay"];
+/// `--item-registry --cooked <dir> [--overlay <file>]`.
+const ITEM_REGISTRY: &[&str] = &["--cooked", "--overlay"];
+/// `--item-roll <balance path>` and `--item-pool <pool path>`: `--cooked <dir> --stage <n> --seed <n> [--count <n>]
+/// [--playthrough <index>] [--op-level <n>] [--overlay <file>]`.
+const ITEM_ROLL: &[&str] = &[
+    "--cooked",
+    "--stage",
+    "--seed",
+    "--count",
+    "--playthrough",
+    "--op-level",
+    "--overlay",
+];
+/// `--item-stats` and `--item-card`: `--cooked <dir>`, then `--data <file>` or the `--item-roll` modifiers,
+/// `[--overlay <file>]`.
+const ITEM_STATS: &[&str] = &[
+    "--cooked",
+    "--data",
+    "--stage",
+    "--seed",
+    "--count",
+    "--playthrough",
+    "--op-level",
+    "--overlay",
+];
+
 /// Every command. The first block is the C++ usage text in its order; the last block is Rust-only.
 pub const COMMANDS: &[Command] = &[
     cmd("--exports", P, F::Tables, &[]),
@@ -188,12 +219,12 @@ pub const COMMANDS: &[Command] = &[
     // In src/cli.cpp's dispatch but not in its usage text.
     cmd("--mover-event", P, F::Mover, &["--cooked"]),
     // Rust-only flags (architecture.md section 2.3, CLI command files and flags).
-    cmd("--def-dump", E, F::Defs, &["--overlay"]),
-    cmd("--item-registry", E, F::Items, &[]),
-    cmd("--item-roll", E, F::ItemsRoll, &[]),
-    cmd("--item-stats", E, F::ItemsStats, &[]),
-    cmd("--item-card", E, F::ItemsStats, &[]),
-    cmd("--item-pool", E, F::ItemsPools, &[]),
+    cmd("--def-dump", E, F::Defs, DEF_DUMP),
+    cmd("--item-registry", E, F::Items, ITEM_REGISTRY),
+    cmd("--item-roll", E, F::ItemsRoll, ITEM_ROLL),
+    cmd("--item-stats", E, F::ItemsStats, ITEM_STATS),
+    cmd("--item-card", E, F::ItemsStats, ITEM_STATS),
+    cmd("--item-pool", E, F::ItemsPools, ITEM_ROLL),
 ];
 
 /// `ow-package <package>` with no command flag (the header summary), or with one the table does not know: the C++

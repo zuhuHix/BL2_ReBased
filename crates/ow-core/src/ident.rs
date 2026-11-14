@@ -4,9 +4,17 @@
 //! (`folded()` in `src/package.cpp`, `std::tolower` in the C locale). Each value keeps the spelling it was made from
 //! for printing. Equality, ordering and hashing all use the folded form, so `DetMap` keys and lookups agree.
 //!
-//! An object path is the dot-joined outer chain that `Package::path` prints in the C++ reader
-//! (`GD_Weap_Shared.Foo.Bar`): its first component is the outermost object, which for a cooked package's top-level
-//! export is the package-like group the tools call its package. Nothing else about the path is interpreted here.
+//! An object path is the outer chain from the outermost object to the object itself. The C++ reader joins it with
+//! `.` (`Package::path`, `src/package.cpp`); the game, bl-sdk and OpenBLCMM write a sub-object as `Owner:Name`
+//! (`tools/weapon_catalog.py`, `tools/weapon_balance.py`). Both separators are accepted, and for comparing, hashing
+//! and splitting `:` counts as `.`, so `A.B:C` and `A.B.C` are the same path; printing keeps the spelling given. The
+//! first component is the outermost object, which for a cooked package's top-level export is the package-like group
+//! the tools call its package. Nothing else about the path is interpreted here.
+//!
+//! Ordering is the folded byte order. A `DetMap<ObjectPath, _>` therefore sorts case-folded and merges keys that
+//! differ only in case or separator: it matches an oracle only if that oracle folds its keys the same way. An oracle
+//! keyed by the raw string (a C++ `std::map<std::string, _>`, Python `json.dumps(sort_keys=True)`) sorts by the exact
+//! bytes and keeps case variants apart; mirror it with `DetMap<String, _>`.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -18,11 +26,12 @@ use std::hash::{Hash, Hasher};
 pub enum IdentError {
     /// The text is empty.
     Empty,
-    /// A component between dots is empty (a leading, trailing or doubled dot); `at` is its byte offset.
+    /// A component between separators (`.` or `:`) is empty (a leading, trailing or doubled separator); `at` is its
+    /// byte offset.
     EmptyComponent { at: usize },
     /// A control character (below 0x20, or 0x7F) at byte offset `at`.
     ControlCharacter { at: usize },
-    /// A package name holds a `.`, `/` or `\` at byte offset `at`.
+    /// A package name holds a `.`, `:`, `/` or `\` at byte offset `at`.
     Separator { at: usize },
 }
 
@@ -49,15 +58,26 @@ fn check_text(s: &str) -> Result<(), IdentError> {
     Ok(())
 }
 
+/// The byte as comparing sees it: ASCII lower case, and `:` as `.`.
+fn fold(b: u8) -> u8 {
+    if b == b':' {
+        b'.'
+    } else {
+        b.to_ascii_lowercase()
+    }
+}
+
+fn is_separator(b: u8) -> bool {
+    b == b'.' || b == b':'
+}
+
 fn folded_cmp(a: &str, b: &str) -> Ordering {
-    a.bytes()
-        .map(|c| c.to_ascii_lowercase())
-        .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    a.bytes().map(fold).cmp(b.bytes().map(fold))
 }
 
 fn folded_hash<H: Hasher>(s: &str, state: &mut H) {
     for b in s.bytes() {
-        state.write_u8(b.to_ascii_lowercase());
+        state.write_u8(fold(b));
     }
     state.write_u8(0xFF); // terminator, so "ab"+"c" and "a"+"bc" differ when hashed in sequence
 }
@@ -66,7 +86,7 @@ macro_rules! folded_traits {
     ($t:ident) => {
         impl PartialEq for $t {
             fn eq(&self, other: &Self) -> bool {
-                self.0.eq_ignore_ascii_case(&other.0)
+                folded_cmp(&self.0, &other.0) == Ordering::Equal
             }
         }
         impl Eq for $t {}
@@ -93,19 +113,20 @@ macro_rules! folded_traits {
     };
 }
 
-/// A dot-separated object path, compared case-insensitively.
+/// An object path with `.` or `:` separators, compared case-insensitively with `:` equal to `.`.
 #[derive(Debug, Clone)]
 pub struct ObjectPath(Box<str>);
 
 folded_traits!(ObjectPath);
 
 impl ObjectPath {
-    /// Accepts any non-empty text without control characters whose dot-separated components are all non-empty.
+    /// Accepts any non-empty text without control characters whose components (split at `.` and `:`) are all
+    /// non-empty.
     pub fn parse(s: &str) -> Result<Self, IdentError> {
         check_text(s)?;
         let mut start = 0;
         for (i, b) in s.bytes().enumerate() {
-            if b == b'.' {
+            if is_separator(b) {
                 if i == start {
                     return Err(IdentError::EmptyComponent { at: i });
                 }
@@ -120,17 +141,17 @@ impl ObjectPath {
 
     /// The first component: the outermost object.
     pub fn package(&self) -> &str {
-        self.0.split('.').next().unwrap_or(&self.0)
+        self.components().next().unwrap_or(&self.0)
     }
 
     /// The last component: the object's own name.
     pub fn name(&self) -> &str {
-        self.0.rsplit('.').next().unwrap_or(&self.0)
+        self.0.rsplit(['.', ':']).next().unwrap_or(&self.0)
     }
 
-    /// The components from the outermost to the object itself.
+    /// The components from the outermost to the object itself, split at `.` and `:`.
     pub fn components(&self) -> impl Iterator<Item = &str> {
-        self.0.split('.')
+        self.0.split(['.', ':'])
     }
 
     /// The path as it was spelled when made.
@@ -146,10 +167,14 @@ pub struct PackageName(Box<str>);
 folded_traits!(PackageName);
 
 impl PackageName {
-    /// Accepts any non-empty text without control characters, dots or path separators.
+    /// Accepts any non-empty text without control characters, object path separators (`.`, `:`) or folder
+    /// separators.
     pub fn parse(s: &str) -> Result<Self, IdentError> {
         check_text(s)?;
-        if let Some(at) = s.bytes().position(|b| b == b'.' || b == b'/' || b == b'\\') {
+        if let Some(at) = s
+            .bytes()
+            .position(|b| is_separator(b) || b == b'/' || b == b'\\')
+        {
             return Err(IdentError::Separator { at });
         }
         Ok(PackageName(s.into()))
@@ -220,6 +245,29 @@ mod tests {
             ObjectPath::parse("A.\tB"),
             Err(IdentError::ControlCharacter { at: 2 })
         );
+        assert_eq!(
+            ObjectPath::parse("A.:B"),
+            Err(IdentError::EmptyComponent { at: 2 })
+        );
+        assert_eq!(
+            ObjectPath::parse("A:"),
+            Err(IdentError::EmptyComponent { at: 2 })
+        );
+    }
+
+    #[test]
+    fn a_colon_sub_object_equals_the_dotted_path() {
+        // The game and bl-sdk write Owner:Name; the C++ reader writes Owner.Name.
+        let colon = ObjectPath::parse("A.B:C").unwrap();
+        let dotted = ObjectPath::parse("a.b.c").unwrap();
+        assert_eq!(colon, dotted);
+        assert_eq!(colon.cmp(&dotted), Ordering::Equal);
+        assert_eq!(hash_of(&colon), hash_of(&dotted));
+        assert_eq!(colon.name(), "C");
+        assert_eq!(colon.package(), "A");
+        assert_eq!(colon.components().collect::<Vec<_>>(), ["A", "B", "C"]);
+        assert_eq!(colon.to_string(), "A.B:C");
+        assert_ne!(colon, ObjectPath::parse("A.BC").unwrap());
     }
 
     #[test]
@@ -233,6 +281,10 @@ mod tests {
         );
         assert_eq!(
             PackageName::parse("a/b"),
+            Err(IdentError::Separator { at: 1 })
+        );
+        assert_eq!(
+            PackageName::parse("a:b"),
             Err(IdentError::Separator { at: 1 })
         );
         assert_eq!(PackageName::parse(""), Err(IdentError::Empty));

@@ -29,8 +29,8 @@ Each module file names its owner lane in its first line; a lane fills its own fi
 | `ow-world` | L5 | `World`, actors, iterators, timers, resource pools, level-up | `combat.cpp` pools, `mission_script.cpp` pools and level-up |
 | `ow-inventory` | L7 | inventory natives, equip, pickups, backpack sort, menu navigation | `inventory_navigation.*` |
 | `ow-behavior` | L8a | behavior providers, the kernel and its handler registry, the handlers that need only the world | `src/behavior.*` |
-| `ow-combat` | L9 | firing maths, hit chain, damage, death, down state, respawn, loot on death, damage-dealing behavior handlers | `weapon_firing.*`, `combat*.cpp` |
-| `ow-skills` | L8b | skills, skill trees, `SkillEffectManager`, action skill, Phaselock (above `ow-combat`) | `tools/skill_stats.py`, the `prepare_skill_*` rules, the skill notes |
+| `ow-combat` | L9 | firing maths, hit chain, damage, death, down state, respawn, loot on death, the damage-dealing and loot-spawn behavior handlers | `weapon_firing.*`, `combat*.cpp` |
+| `ow-skills` | L8b (built above L9) | skills, skill trees, `SkillEffectManager`, action skill, Phaselock (above `ow-combat`: skills read the held weapon and deal damage; the Phaselock lift of an AI target runs through the installed script and the world's natives, so there is no edge to `ow-ai`) | `tools/skill_stats.py`, the `prepare_skill_*` rules, the skill notes |
 | `ow-ai` | L10 | AI pawns, minds, awareness, targeting, melee, population | the notes and live records |
 | `ow-mission` | L11 | mission tracker, script bridge, Kismet, dialog, movers, interactive objects, vendors, the Fire slice | `mission*.cpp`, `kismet.*`, `dialog.*`, `mover.*`, `slice.*` |
 | `ow-save` | L12 | `PlayerSaveGame` model, load order, save triggers | nothing in `src/` |
@@ -75,17 +75,27 @@ Forbidden on purpose: `ow-attr`, `ow-balance` and `ow-items` depending on `ow-vm
 `ow-skills` or `ow-items` (handlers from above register into the kernel's registry); anything depending on `ow-host`
 or `ow-cli`.
 
-The same test also refuses, in every Rust file, `mul_add`; `powf`, `powi`, `exp` and `ln` outside
-`ow-core/src/num.rs` (every power goes through `ow_core::num`); and `HashMap::new` / `HashSet::new` (lookups use a
-fixed hasher, and rule code never iterates a hash map). It also checks that every flag of `src/cli.cpp`'s usage text
-has an entry in `crates/ow-cli/src/args.rs`.
+The same test also refuses, in every Rust file:
+
+- `mul_add` (no fused multiply-add);
+- the float functions (powers, exponentials, logarithms, roots, trigonometry: `powf`, `exp`, `ln`, `log10`, `sqrt`,
+  `sin`, `atan2` and the rest, as `x.f()` or `f64::f(x)`) outside `ow-core/src/num.rs`, which is their one choke point;
+- the names `HashMap` and `HashSet` outside `ow-core/src/detmap.rs`: lookups use `ow_core::FixedHashMap` /
+  `FixedHashSet` (a fixed hasher), and rule code never iterates a hash map;
+- reading the parity mode (`parity_mode(`, `init_parity_mode`, `mode_from_env`, `ENV_VAR`, `"OW_PARITY"`) outside
+  `ow-core/src/parity.rs` and the binaries' `main.rs` (plus `ow-cli/tests/not_ported.rs`, which drives the binary
+  with the variable set): libraries take a `ParityMode` value.
+
+It also checks that every flag of `src/cli.cpp`'s usage text has an entry or option in `crates/ow-cli/src/args.rs`,
+and that every flag `src/cli.cpp`'s `main()` dispatches on has a `cmd("--flag"` entry.
 
 ## The Rust `ow-package`
 
 `cargo build -p ow-cli` builds `target/debug/ow-package.exe`. It takes the C++ binary's command lines. A command
 whose family is not ported yet prints `ow-package (Rust): <flag> is not ported to Rust yet (lane <lane>)` on stderr
 and exits with code 3, which the C++ binary never uses; until then, use `build/Release/ow-package.exe`. The parity
-mode is read once at start-up from `OW_PARITY` (`reference` or unset; any other value stops the run).
+mode is read once at start-up from `OW_PARITY` (`reference` or unset); any other value prints
+`ow-package: OW_PARITY must be "reference" or unset, ...` and exits 1.
 
 The dispatch table is `crates/ow-cli/src/args.rs`; each family is one file under `crates/ow-cli/src/cmd/`, owned by
 one lane. The command flags (architecture section 2.3, revision 2):
@@ -120,7 +130,10 @@ The other flags of the usage text are options, parsed by the command that reads 
 `--texture`), `--failures` (`--script-check`, `--class-check`), `--class`, `--limit`, `--top` (`--vm-sweep`),
 `--steps` (`--vm-sweep`, `--native-census`), `--no-static` (`--native-census`), `--remote`, `--mission`, `--op`,
 `--originator`, `--tick` (`--kismet-run`), `--all` (`--object-dump`), `--self`, `--arg` (`--run`), `--native-args`
-(`--native`), and the Rust-only `--overlay` (`--def-dump`). Architecture section 2.3 lists some of these options
+(`--native`). The Rust-only commands take the modifiers of architecture section 15: `--cooked` and `--overlay`
+(all of them), `--stage`, `--seed`, `--count`, `--playthrough`, `--op-level` (`--item-roll`, `--item-pool`, and
+`--item-stats` / `--item-card` without `--data`), `--data` (`--item-stats`, `--item-card`). Each `cmd/` module parses
+its own trailing modifiers; the lists in `args.rs` are the usage record. Architecture section 2.3 lists some of these options
 under another file (`--all` and `--top` under `cmd/census.rs`, `--class` and `--steps` under `cmd/vm.rs`,
 `--mission` and `--tick` under `cmd/mission.rs`, `--cooked` under `cmd/resolve.rs`); where they differ, this list
 says which command reads the option in `src/cli.cpp`.

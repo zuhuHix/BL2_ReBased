@@ -14,3 +14,5 @@ pub mod playthrough;
 pub mod stage;
 pub mod types;
 pub mod xp;
+
+pub use types::GameStage;

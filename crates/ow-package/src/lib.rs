@@ -23,4 +23,5 @@ pub mod tables;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testkit;
 
+pub use package::PackageId;
 pub use store::PackageStore;

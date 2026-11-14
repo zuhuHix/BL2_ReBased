@@ -17,8 +17,9 @@ pub mod rand;
 pub mod sim;
 pub mod units;
 
-pub use detmap::{DetMap, DetSet};
+pub use detmap::{DetMap, DetSet, FixedHashMap, FixedHashSet};
 pub use ident::{IdentError, ObjectPath, PackageName};
 pub use notyet::{Missing, NotYet};
 pub use ordmap::OrderedMap;
-pub use parity::{ParityMode, parity_mode};
+// `parity::init_parity_mode` and `parity::parity_mode` are for binaries only and are not re-exported here.
+pub use parity::{ParityMode, mode_from_value};
