@@ -37,7 +37,7 @@ The project uses three cooperating paths:
 2. **OpenWillow data path:** the project's reader remains authoritative for
    package identity, object paths, cross-package references, actor placement,
    scene manifests, provenance and reproducible verification.
-3. **UE5 runtime:** this project owns import validation, material and collision
+3. **Rust runtime:** this project owns import validation, material and collision
    decisions, the UnrealScript VM, native behavior, movement, weapons, skills,
    enemies, missions, UI, saves and the rest of the playable loop.
 
@@ -46,6 +46,14 @@ playable. Exported meshes, materials, LODs, animations, collision, references
 and placement must be checked before they become part of the Sanctuary slice.
 
 ## Work order
+
+The host engine changed on 2026-11-14: the UE5 host was retired and the runtime
+is now Rust, with the engine route picked by a benchmark
+([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md),
+[benchmark record](docs/verification/ENGINE_BENCHMARK.md)). Before step 2 the
+C++ core is ported to Rust to parity and the maintainer picks the engine; the
+steps below then run in the Rust host. The UE5 host's slice results stay as
+history and as a target, not as progress on these steps.
 
 ### 1. Prove the extraction path
 
@@ -56,7 +64,7 @@ and placement must be checked before they become part of the Sanctuary slice.
   failures, unsupported types, duplicates, warnings and output locations.
 - Compare the export inventory to the `ow-package` census and Sanctuary scene
   manifests.
-- Import representative results into UE5 and record automated, visual and
+- Import representative results into the host and record automated, visual and
   runtime checks separately.
 
 Do not run an unmeasured full-install dump or change the architecture just

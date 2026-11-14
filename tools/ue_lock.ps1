@@ -1,15 +1,18 @@
-# The machine-wide Unreal run lock (dot-source: . (Join-Path $PSScriptRoot 'ue_lock.ps1')).
+# The machine-wide run lock (dot-source: . (Join-Path $PSScriptRoot 'ue_lock.ps1')).
 #
-# One Unreal Editor or commandlet (and one real-game session) at a time per machine. Every script that launches
-# UnrealEditor*.exe takes this lock before the launch and releases it after the process has exited:
+# One heavy run at a time per machine: today the real-game sessions (tools/real_game/, which also wait for Borderlands2);
+# a run of the future Rust host is to take it too. It was named for the retired UE5 host, whose launchers took it around
+# every Unreal Editor or commandlet (git show 08bcf3e:tools/); the name stays because the real-game tools dot-source it.
+# It still waits while an Unreal editor runs on the machine (one started from an older checkout would compete for the
+# same PC). A script takes it before its launch and releases it after the process has exited:
 #
 #   . (Join-Path $PSScriptRoot 'ue_lock.ps1')
-#   Enter-OwUeLock -Owner 'test_quest' -TimeoutSeconds 600
+#   Enter-OwUeLock -Owner 'gun_ads_capture' -TimeoutSeconds 600
 #   try { ...launch, wait for exit... } finally { Exit-OwUeLock }
 #
 # Path: %LOCALAPPDATA%\OpenWillow\ue_run.lock, or the absolute path in OPENWILLOW_UE_LOCK (a relative override is
 # rejected: it would name a different file in every worktree). Until 2026-11-03 the lock was local/ue_run.lock in each
-# checkout, so editors from different worktrees did not see each other.
+# checkout, so runs from different worktrees did not see each other.
 #
 # The lock file holds its owner: the PowerShell process id, that process's start time and the script name. A lock is
 # stale only when that exact process is gone (no process with the id, or one with a different start time). An unreadable
@@ -145,20 +148,4 @@ function Invoke-OwUeLocked {
     )
     Enter-OwUeLock -Owner $Owner -TimeoutSeconds $TimeoutSeconds
     try { & $Body } finally { Exit-OwUeLock }
-}
-
-function Invoke-OwUeEditor {
-    # Starts UnrealEditor.exe and waits for it to exit (`& $editor` does not wait for a GUI program, so a lock released
-    # after it would be released while the editor still runs). Arguments with spaces or quotes are quoted the way
-    # PowerShell quotes them for `&`. Returns nothing; throws on a non-zero exit code unless -AllowFailure.
-    param(
-        [Parameter(Mandatory)][string]$FilePath,
-        [string[]]$Arguments = @(),
-        [switch]$AllowFailure
-    )
-    $quoted = @($Arguments | ForEach-Object { if ($_ -match '[\s"]' -and $_ -notmatch '^".*"$') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } })
-    $process = Start-Process -FilePath $FilePath -ArgumentList $quoted -PassThru
-    $null = $process.Handle   # without this, Start-Process -PassThru does not populate ExitCode
-    $process.WaitForExit()
-    if (!$AllowFailure -and $process.ExitCode -ne 0) { throw "$FilePath exited with $($process.ExitCode)" }
 }

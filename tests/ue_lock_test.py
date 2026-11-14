@@ -1,11 +1,12 @@
-"""The Unreal run lock is one file per machine, every Unreal launch holds it, and only a dead owner's lock is stale.
+"""The machine-wide run lock (tools/ue_lock.ps1) is one file per machine, every launch holds it, and only a dead owner's lock is stale.
 
 AI-assisted. Synthetic: reads the tracked scripts and drives tools/ue_lock.ps1 against temporary lock files; no game
 data, and no editor is started.
 
 Static (always run):
 1. Every script that names UnrealEditor.exe or UnrealEditor-Cmd.exe dot-sources tools/ue_lock.ps1 and takes the lock
-   (Enter-OwUeLock / Invoke-OwUeLocked), and every script that takes it releases it (Exit-OwUeLock).
+   (Enter-OwUeLock / Invoke-OwUeLocked), and every script that takes it releases it (Exit-OwUeLock). Since the UE5 host left the
+   tree (git show 08bcf3e) no tracked script launches Unreal, so the first rule has nothing to check until one does.
 2. No script builds a per-checkout lock path or opens a lock with CreateNew itself.
 Runtime (PowerShell needed). Each test's PowerShell process redefines Get-OwUeBusyProcess after loading the helper
 (no process running, or python itself to check the wait), so a real editor elsewhere on the machine does not matter and
@@ -50,8 +51,8 @@ def code(path):
 
 class StaticTest(unittest.TestCase):
     def test_every_unreal_launcher_holds_the_lock(self):
+        # Until 2026-11-14 this also required more than 20 launchers; they were the retired UE5 host's and left with it.
         launchers = [p for p in scripts() if LAUNCH.search(code(p))]
-        self.assertGreater(len(launchers), 20)
         for path in launchers:
             body = code(path)
             with self.subTest(script=path.name):

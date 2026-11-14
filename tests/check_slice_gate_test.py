@@ -437,13 +437,6 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('an unreadable burst token', out)
 
-    def test_host_burst_line_has_every_token_the_checker_reads(self):
-        # The host's format string (OpenWillowSliceGate.cpp, TickBurst) names every key the checker needs.
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
-        start = source.index('"; burst: burst_shots=')
-        text = source[start:source.index('"),', start)]
-        for key in chk.BURST_KEYS:
-            self.assertIn(f'burst_{key}=', text)
 
     # The pickup links' wait for a clear view line (lane U, 2026-11-13).
     def test_card_link_pass_without_the_view_wait_is_overruled(self):
@@ -560,20 +553,10 @@ class SliceGateTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertNotIn('overruled', out)
 
-    def test_host_prints_the_equip_level_tokens(self):
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
-        self.assertIn('" equip_refused=%d"', source)
-        self.assertIn('" loot_kills=%d/%d loot_time=%.1fs/%.0fs', source)
-        self.assertIn('no equippable gun within the loot bound', source)
-
     def test_older_variants_do_not_need_the_down_wait(self):
         code, out = self.run_checker(self.write_log(build({'phaselock_enemy': ('PASS', 'synthetic lift')})))
         self.assertEqual(code, 0, out)
 
-    def test_host_prints_the_wait_tokens_the_checker_reads(self):
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
-        self.assertEqual(source.count('view_wait=%.2fs/%.0fs view_line=%s'), 2, 'both pickup links print the view-line wait')
-        self.assertEqual(source.count('" down_wait=%.1fs/%.0fs"'), 3, 'the pickups (one helper), the burst and the Phaselock print the down wait')
 
     # Review r1 of #270.
     def test_equip_burst_interval_is_bounded_by_its_own_shots_frame(self):
@@ -607,12 +590,6 @@ class SliceGateTest(unittest.TestCase):
                 self.assertEqual(code, 1, out)
                 self.assertIn(why, self.row(out, 6))
 
-    def test_host_prints_the_review_tokens(self):
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
-        self.assertEqual(source.count('view_line=%s view_blocker=%s'), 2)
-        self.assertIn('burst_frames=%s burst_spin_up=%.3f', source)
-        self.assertIn('Maya still down after the %.0fs wait for her own recovery', source)
-        self.assertIn('AddTickPrerequisiteActor(Owner)', source)
 
     # Review r2 of #270.
     def test_unforced_reloot_pickup_is_held_to_link_6s_conditions(self):
@@ -630,24 +607,6 @@ class SliceGateTest(unittest.TestCase):
                 self.assertEqual(code, 0 if why is None else 1, out)
                 if why:
                     self.assertIn(why, self.row(out, 8))
-
-    def test_host_round_2_texts(self):
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
-        self.assertIn('BurstEnemyHealth.Remove(BurstTarget.Get())', source, "the burst's own target is not counted as hurt")
-        self.assertIn('Why.StartsWith(TEXT("EquipItem("))', source, 'the re-loot starts only on the level rule refusal')
-        self.assertIn("the re-loot's gun dropped far from every corpse", source)
-        self.assertIn('loot_time=%.1fs/%.0fs', source)
-        self.assertIn(' reloot_pickup=%s/%s/%s/%d reloot_view_wait=%.2fs/%.0fs reloot_view_line=%s reloot_view_blocker=%s reloot_down_wait=%.1fs/%.0fs', source)
-
-    def test_the_hosts_no_block_detail_names_both_regeneration_steps(self):
-        # The FAIL detail is the host's text (OpenWillowSliceGate.cpp, EStep::Equip); read it from the source, as the runner
-        # tests read the runner's text.
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowSliceGate.cpp').read_text(encoding='utf-8')
-        start = source.index('firing=none: no firing block was loaded')
-        detail = source[start:source.index('*Why', start)]
-        for step in ('python tools/weapon_gen_firing.py --game <BL2 folder>', 'python tools/weapon_firing_coverage.py --game',
-                     '<BL2 folder> --only-firing', 'OWWEAPONGEN', 'rolled gun', 'recipe gun'):
-            self.assertIn(step, detail)
 
     def test_enemy_attack_not_available_fails_with_the_range(self):
         results = {'enemy_attacks_maya': ('NOT_AVAILABLE', 'synthetic gap')}
@@ -986,29 +945,6 @@ class SliceGateTest(unittest.TestCase):
                               capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(done.returncode, 2)
         self.assertIn('no slice-gate run in this log', done.stdout)
-
-
-class RunnerSourceTest(unittest.TestCase):
-    """tools/test_slice_gate.ps1: -Unforced changes nothing the older variants launch (read from the script's text)."""
-
-    def setUp(self):
-        self.source = (Path(__file__).resolve().parents[1] / 'tools' / 'test_slice_gate.ps1').read_text(encoding='utf-8')
-
-    def test_base_arguments_have_no_unforced_switch_or_page(self):
-        base = self.source[self.source.index('$arguments = @('):self.source.index("if ($Gun)")]
-        for switch in ('-owslicegateunforced', '-owflashskills', '-owflashmissionscreen', '-owflashhud'):
-            self.assertNotIn(switch, base)
-        self.assertIn("'-owcanvashud'", base)
-
-    def test_unforced_switches_are_added_only_under_the_switch(self):
-        code = [line.split('#')[0].strip() for line in self.source.splitlines()]
-        lines = [line for line in code if '-owslicegateunforced' in line or '--expect-unforced' in line or 'Start-OwMovieHud -Port' in line]
-        self.assertEqual(len(lines), 3, lines)
-        for line in lines:
-            self.assertTrue(line.startswith('if ($Unforced)'), line)
-
-    def test_unforced_refuses_the_fixture_variants(self):
-        self.assertIn("if ($Unforced -and ($Shield -or $DownAfterFight)) { throw", self.source)
 
 
 class BarePawnTest(unittest.TestCase):

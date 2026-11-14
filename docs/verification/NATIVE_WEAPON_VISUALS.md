@@ -7,6 +7,8 @@ a listing or pseudo-code. Companion to [NATIVE_WEAPON_RULES.md](NATIVE_WEAPON_RU
 Lane C's paint reading in `tools/weapon_paint_model.py` (the shader side). Raw output is under ignored
 `local/analysis/E/`.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 **Every rule here is `UNVERIFIED` in the running game.** "Read" means read from native code or script. The data values
 quoted are those of the installed packages.
 

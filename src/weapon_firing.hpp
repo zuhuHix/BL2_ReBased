@@ -1,7 +1,8 @@
 #pragma once
 #include <vector>
 
-// What one shot of a weapon does, as plain maths the UE5 host calls (OpenWillowFiring / OpenWillowProjectile).
+// What one shot of a weapon does, as plain maths a host calls (the retired UE5 host called it from OpenWillowFiring and
+// OpenWillowProjectile).
 // Rules are our own-words readings in docs/verification/NATIVE_WEAPON_FIRING.md (section numbers below); every one is
 // UNVERIFIED in game unless that note or docs/verification/WEAPON_PROJECTILES.md says how it was confirmed.
 // Angles are UE3 rotator units (65536 per turn) unless a name says degrees. Random numbers are passed in, so callers

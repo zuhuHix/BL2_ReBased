@@ -5,6 +5,8 @@ packages (data) or from UnrealScript bytecode (script). Nothing was observed in 
 below is UNVERIFIED in the game** until a bl-sdk capture confirms it. Native bodies were not read (no Ghidra run).
 Raw tool output stays in `local/skills/raw/` (implementers must not open it).
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 Confidence labels per rule:
 - **read from script**: the UnrealScript function was read (control flow known).
 - **read from data**: object properties / behavior graphs / behavior variable values were read.

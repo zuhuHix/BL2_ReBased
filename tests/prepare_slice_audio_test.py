@@ -3,8 +3,6 @@
 import json
 import math
 import os
-from pathlib import Path
-import re
 import struct
 import sys
 import tempfile
@@ -119,13 +117,6 @@ class PrepareSliceAudioTest(unittest.TestCase):
         roles, unresolved = psa.build_play_map(manifest([{'source': 1, 'duration_s': 1.0}]), self.dir)
         self.assertNotIn('fire', roles)
         self.assertIn('more than', unresolved['fire'])
-
-    def test_the_limits_match_the_host(self):
-        header = (Path(__file__).resolve().parent.parent / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowAudio.h').read_text(encoding='utf-8')
-        for name, value in (('MinSampleRate', psa.MIN_SAMPLE_RATE), ('MaxSampleRate', psa.MAX_SAMPLE_RATE)):
-            self.assertEqual(int(re.search(name + r' = (\d+);', header).group(1)), value)
-        for name, value in (('MaxFileBytes', psa.MAX_FILE_BYTES), ('MaxTotalBytes', psa.MAX_TOTAL_BYTES)):
-            self.assertEqual(int(re.search(name + r' = (\d+) \* 1024 \* 1024;', header).group(1)) * 1024 * 1024, value)
 
     def test_tone_is_16_bit_mono_of_the_asked_length(self):
         with wave.open(self.tone('t.wav', seconds=0.5), 'rb') as wav:
@@ -327,7 +318,6 @@ class PrepareSliceAudioTest(unittest.TestCase):
         psa.main(['--tone-only', '--out', out, '--tone', os.path.join(self.dir, 'tone.wav')])
         with open(out, encoding='utf-8') as fh:
             self.assertEqual(json.load(fh)['timing'], {})
-
 
 
 # ---- The game's static mix (SLICE_AUDIO_CHAIN.md section 7): an invented bank, built byte by byte -----------------------------------
@@ -566,11 +556,6 @@ class GameMixTest(unittest.TestCase):
             psa.main(['--manifest', man, '--decoded-dir', folder, '--game', os.path.join(folder, 'no_such_game'),
                       '--out', os.path.join(folder, 'p.json'), '--tone', os.path.join(folder, 't.wav')])
         self.assertIn('not a folder', str(raised.exception))
-
-    def test_the_gain_limits_match_the_host(self):
-        header = (Path(__file__).resolve().parent.parent / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowAudio.h').read_text(encoding='utf-8')
-        for name, value in (('MinGainDb', psa.MIN_GAIN_DB), ('MaxGainDb', psa.MAX_GAIN_DB)):
-            self.assertEqual(float(re.search(name + r' = (-?[\d.]+);', header).group(1)), value)
 
     def test_tone_only_map_has_a_unity_gain_per_file(self):
         out = os.path.join(tempfile.mkdtemp(), 'play.json')

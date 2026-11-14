@@ -1,0 +1,18 @@
+[package]
+name = "ow-host"
+description = "The Rust host. Engine route not chosen (Phase 0R benchmark)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ow-host"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"

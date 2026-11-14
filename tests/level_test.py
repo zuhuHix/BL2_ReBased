@@ -11,9 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 spec = importlib.util.spec_from_file_location('prepare_level', Path(__file__).parents[1] / 'tools/prepare_level.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-geometry_spec = importlib.util.spec_from_file_location('scene_geometry', Path(__file__).parents[1] / 'host/ue5/scene_geometry.py')
-geometry = importlib.util.module_from_spec(geometry_spec)
-geometry_spec.loader.exec_module(geometry)
 
 
 def tags(**kwargs):
@@ -450,14 +447,6 @@ class SceneTests(unittest.TestCase):
         names[a] = 'Map:Textures.Building_Nrm'
         self.assertIsNone(m.unnamed_diffuse_candidate(p, names.__getitem__))
 
-    def test_host_handedness_adapter(self):
-        source = 'v 1 2 3\nvn 0 1 0\nvt .25 .75\nf 1/1/1 2/2/2 3/3/3\n'
-        self.assertEqual(geometry.host_obj(source),
-                         'v 1 -2 3\nvn 0 -1 0\nvt .25 .75\nf 1/1/1 2/2/2 3/3/3\n')
-        self.assertEqual(geometry.host_obj(geometry.host_obj(source)), source)
-        self.assertNotEqual(geometry.actor_label('Map', 'Actor1.Mesh', 0),
-                            geometry.actor_label('Map', 'Actor2.Mesh', 0))
-
     def test_actor_component_units_and_signed_scale(self):
         t = m.transform({'Location': {'X': 25}, 'Rotation': {'Yaw': 16384, 'Roll': -32768},
                          'DrawScale': 2, 'DrawScale3D': {'X': -3, 'Y': 4, 'Z': 5}})
@@ -484,22 +473,6 @@ class SceneTests(unittest.TestCase):
         self.assertTrue(m.placement_collision(
             'Sanctuary_Outer', 'TheWorld.PersistentLevel.InterpActor_26.StaticMeshComponent_20', {}))
         self.assertFalse(m.placement_collision('Sanctuary_P', 'Other.Component', {'BlockActors': False}))
-
-    def test_game_winding_becomes_outward_obj_face(self):
-        # UE game index order opposes the stored outward normal. After the
-        # handedness adapter, standard OBJ cross products must agree with it.
-        source = ('v 500 -200 200\nv 500 200 200\nv 500 -200 -200\n'
-                  'vt 0 1\nvt 1 1\nvt 0 0\nvn -1 0 0\n'
-                  'f 3/3/1 2/2/1 1/1/1\n')
-        lines = [line.split() for line in geometry.host_obj(source).splitlines()]
-        vertices = [list(map(float, line[1:])) for line in lines if line[0] == 'v']
-        normal = next(list(map(float, line[1:])) for line in lines if line[0] == 'vn')
-        face = next(line[1:] for line in lines if line[0] == 'f')
-        p = [vertices[int(corner.split('/')[0]) - 1] for corner in face]
-        a = [p[1][k] - p[0][k] for k in range(3)]
-        b = [p[2][k] - p[0][k] for k in range(3)]
-        cross = [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
-        self.assertGreater(sum(cross[k]*normal[k] for k in range(3)), 0)
 
     def test_numeric_import_uses_loaded_path_and_class_before_global_scan(self):
         scene = object.__new__(m.Scene)

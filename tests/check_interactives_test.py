@@ -598,13 +598,6 @@ class LidCaptureTest(unittest.TestCase):
         self.assertEqual(row[1], 'FAIL')
         self.assertIn('share one frame name', row[2])
 
-    def test_each_run_has_its_own_log_and_frames_folder(self):
-        script = (Path(__file__).resolve().parents[1] / 'tools/test_interactives.ps1').read_text(encoding='utf-8')
-        stamp = next(row for row in script.splitlines() if row.startswith('$stamp = '))
-        self.assertIn('$PID', stamp)
-        self.assertIn('NewGuid', stamp)
-        self.assertIn('"shots-$stamp"', script)
-
     def test_a_frame_name_is_unique_per_full_balance(self):
         self.assertNotEqual(ci.lid_frame_name('One.Leaf', 'mid'), ci.lid_frame_name('Two.Leaf', 'mid'))
         self.assertEqual(ci.lid_frame_name('Pkg.Grades.Leaf', 'mid'), 'OWLootLid_Pkg_Grades_Leaf_mid.png')

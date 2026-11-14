@@ -2,16 +2,13 @@
 /local/
 __pycache__/
 *.pyc
-/host/ue5/OpenWillow/Binaries/
-/host/ue5/OpenWillow/Intermediate/
-/host/ue5/OpenWillow/Saved/
-/host/ue5/OpenWillow/DerivedDataCache/
-/host/ue5/OpenWillow/Content/
-/host/ue5/OpenWillow/.vs/
+# The retired UE5 host (removed 2026-11-14; git show 08bcf3e:host/ue5). Its ignored local data (Content, Saved, builds) stays
+# on disk until the maintainer removes it, so the whole folder is ignored.
+/host/ue5/
 *.sln
 
-# Local UE 5.8 project and generated assets
-/host/ue5/OpenWillow 5.8/
+# Cargo build output
+/target/
 
 # Local Claude settings
 .claude/settings.local.json

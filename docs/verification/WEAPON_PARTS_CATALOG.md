@@ -5,6 +5,8 @@ coverage and rules in our own words only. The catalog itself (object paths, valu
 reports and live dumps are game-derived and stay under ignored `local/` (`local/weapons/catalog/`,
 `local/weapons/gen/`, `local/realgame/weapons/`, `local/realgame/gen_confirm/`).
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 Automated checks, live-game observations and rules read from native code are reported separately. Every rule
 read from native code is `UNVERIFIED` in game unless a section says how it was confirmed.
 

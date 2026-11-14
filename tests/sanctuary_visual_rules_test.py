@@ -6,27 +6,7 @@ import struct
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'host' / 'ue5'))
 import prepare_level as prepare
-from scene_import_rules import (temporary_sky_policy, ue3_color_linear,
-                                SANCTUARY_AUTO_EXPOSURE_CALIBRATION_BIAS,
-                                SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS,
-                                SANCTUARY_SKY_LIGHT_COLOR_CALIBRATION,
-                                SANCTUARY_GRAFITTO_INK_COLOR,
-                                SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING,
-                                SANCTUARY_GRAFITTO_INK_OPACITY_GAIN,
-                                SANCTUARY_LIGHT_BRIGHTNESS_CEILING,
-                                SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE,
-                                SANCTUARY_WORLD_MAP_PALETTE,
-                                ue3_decal_dimensions_to_ue5,
-                                ue3_grafitto_dimensions_to_ue5,
-                                ue3_grafitto_projection_to_ue5,
-                                ue3_directional_brightness_to_ue5,
-                                ue3_sky_light_color_to_ue5,
-                                ue3_world_post_process_to_ue5,
-                                sanctuary_grafitto_opacity,
-                                sanctuary_light_calibration,
-                                sanctuary_world_map_color)
 
 
 def property_tags(**values):
@@ -43,24 +23,6 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         ]), {'Scene_Desaturation': 0.2})
         with self.assertRaises(ValueError):
             prepare.byte_color_rgb({'R': 256, 'G': 0, 'B': 0})
-
-    def test_native_dome_disables_temporary_sky_shell_and_atmosphere(self):
-        scene = {
-            'actors': [{'native_skybox': True, 'mesh': 'dome', 'materials': ['sky']}],
-            'meshes': {'dome': {'sections': [{'material': 'sky'}]}},
-            'materials': {'sky': {'sky_approximation': {'status': 'partial_unverified'}}},
-        }
-        self.assertEqual(temporary_sky_policy(scene), {
-            'native_sky_approximated': True,
-            'spawn_sky_fallback': False,
-            'spawn_sky_atmosphere': False,
-        })
-        scene['materials']['sky'].pop('sky_approximation')
-        self.assertEqual(temporary_sky_policy(scene), {
-            'native_sky_approximated': False,
-            'spawn_sky_fallback': True,
-            'spawn_sky_atmosphere': True,
-        })
 
     def test_scene_recipe_requires_exact_base_and_each_cooked_texture(self):
         old = prepare.INSPECTED_SCENE_MATERIAL_RECIPES
@@ -247,7 +209,7 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertIn('unsupported light component class', issues[0]['error'])
 
-    def test_exact_package_name_anchor_and_host_calibration_rules(self):
+    def test_exact_package_name_anchor_and_decal_opacity_rules(self):
         payload = b'prefix' + struct.pack('<ii', 3, 0) + b'suffix'
         self.assertEqual(prepare.property_name_offsets(payload, ['X', 'Y', 'Z', 'LightmassSettings'],
                                                         'LightmassSettings'), [6])
@@ -266,39 +228,6 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         self.assertEqual(prepare.decal_opacity_source('BLEND_Masked'),
                          'Texture2D alpha channel')
         self.assertIsNone(prepare.decal_opacity_source('BLEND_Translucent'))
-        # Expected values are the formula applied to invented inputs, referencing
-        # the host constants rather than literal calibrated outputs.
-        self.assertEqual(ue3_directional_brightness_to_ue5(1.25),
-                         1.25 * SANCTUARY_DIRECTIONAL_LUX_PER_SOURCE_BRIGHTNESS)
-        sky_input = [50 / 255, 100 / 255, 150 / 255]
-        sky_fill = ue3_sky_light_color_to_ue5(sky_input)
-        sky_linear = ue3_color_linear(sky_input)
-        for channel, tint in enumerate(SANCTUARY_SKY_LIGHT_COLOR_CALIBRATION):
-            self.assertAlmostEqual(sky_fill[channel], sky_linear[channel] * tint, places=9)
-        with self.assertRaisesRegex(ValueError, 'three normalized finite channels'):
-            ue3_sky_light_color_to_ue5([1.1, 0.5, 0.2])
-        with self.assertRaises(ValueError):
-            ue3_directional_brightness_to_ue5(float('inf'))
-        mapped = ue3_world_post_process_to_ue5({
-            'Scene_TonemapperScale': 4.0,
-            'Scene_MidTones': {'X': 1.3, 'Y': 1.4, 'Z': 1.5},
-            'Scene_Shadows': {'X': 0.05, 'Y': 0.06, 'Z': 0.07},
-            'Bloom_Scale': 2.5,
-        })
-        self.assertAlmostEqual(mapped['auto_exposure_bias'],
-                               math.log2(4.0) + SANCTUARY_AUTO_EXPOSURE_CALIBRATION_BIAS)
-        self.assertEqual(mapped['color_gain'], [1.3, 1.4, 1.5])
-        self.assertEqual(mapped['color_offset'], [0.05, 0.06, 0.07])
-        self.assertEqual(mapped['bloom_intensity'], 2.5)
-        with self.assertRaisesRegex(ValueError, 'decoded structs'):
-            ue3_world_post_process_to_ue5({'Scene_MidTones': [1.0, 1.0, 1.0]})
-        self.assertEqual(ue3_decal_dimensions_to_ue5({
-            'width': 500, 'height': 400, 'thickness': 10, 'near_plane': 0, 'far_plane': 300,
-        }), [150.0, 250.0, 200.0])
-        with self.assertRaisesRegex(ValueError, 'far plane'):
-            ue3_decal_dimensions_to_ue5({
-                'width': 1, 'height': 1, 'thickness': 1, 'near_plane': 2, 'far_plane': 1,
-            })
 
     def test_anchored_property_stream_requires_exact_name_and_complete_decode(self):
         names = ['None', 'LightmassSettings']
@@ -389,51 +318,13 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         self.assertEqual(denied['actors'][0]['status'], 'excluded_default_deny')
         self.assertIn('round-3 default-deny', denied['actors'][0]['exclusion_reason'])
 
-    def test_graffito_mask_and_projection_are_tightly_calibrated(self):
-        self.assertEqual(sanctuary_grafitto_opacity([1.0, 1.0, 1.0]), 0.0)
-        self.assertEqual(sanctuary_grafitto_opacity([0.0, 0.0, 0.0]), 1.0)
-        self.assertEqual(sanctuary_grafitto_opacity([0.6, 0.6, 0.6]), 0.0)
-        # Calibration constants are checked structurally, not against literal values.
-        self.assertTrue(0.0 < SANCTUARY_GRAFITTO_INK_LUMINANCE_CEILING < 1.0)
-        self.assertGreater(SANCTUARY_GRAFITTO_INK_OPACITY_GAIN, 0.0)
-        self.assertEqual(len(SANCTUARY_GRAFITTO_INK_COLOR), 3)
-        self.assertTrue(all(0.0 <= channel <= 1.0 for channel in SANCTUARY_GRAFITTO_INK_COLOR))
-        self.assertEqual(ue3_grafitto_dimensions_to_ue5({
-            'width': 500, 'height': 400, 'thickness': 10,
-            'near_plane': 0, 'far_plane': 300}), [64.0, 250.0, 200.0])
-        self.assertEqual(ue3_grafitto_dimensions_to_ue5({
-            'width': 500, 'height': 400, 'thickness': 10,
-            'near_plane': 0, 'far_plane': 900}), [64.0, 250.0, 200.0])
-        location, forward = ue3_grafitto_projection_to_ue5(
-            [100.0, 200.0, 300.0], [0.0, -1.0, 0.0], {
-                'width': 500, 'height': 400, 'thickness': 10,
-                'near_plane': 0, 'far_plane': 300})
-        self.assertEqual(location, [100.0, 264.0, 300.0])
-        self.assertEqual(forward, [0.0, -1.0, 0.0])
-        with self.assertRaises(ValueError):
-            sanctuary_grafitto_opacity([1.2, 0.0, 0.0])
-        with self.assertRaises(ValueError):
-            ue3_grafitto_projection_to_ue5([0, 0, 0], [0, 0, 0], {
-                'width': 100, 'height': 100, 'thickness': 10,
-                'near_plane': 0, 'far_plane': 100})
-
     def test_world_map_palette_has_cyan_backing_and_dark_mask_channels(self):
         palette = prepare.INSPECTED_SCENE_MATERIAL_RECIPES[
             'Sanctuary_P:Prop_Electronics.Materials.Mat_WorldMap']['palette']
-        for masks, expected in (([0.0, 0.0, 0.0], palette['background']),
-                                ([1.0, 0.0, 0.0], palette['land']),
-                                ([0.0, 1.0, 0.0], palette['grid']),
-                                ([0.0, 0.0, 1.0], palette['markers'])):
-            for actual_channel, expected_channel in zip(sanctuary_world_map_color(masks), expected):
-                self.assertAlmostEqual(actual_channel, expected_channel, places=7)
         self.assertGreater(palette['background'][2], palette['background'][0])
         self.assertLess(palette['grid'][1], palette['land'][1])
         self.assertGreater(palette['land'][1] - palette['background'][1], 0.3)
         self.assertLess(palette['markers'][1], palette['background'][1] * 0.1)
-        self.assertEqual({key: tuple(value) for key, value in palette.items()},
-                         SANCTUARY_WORLD_MAP_PALETTE)
-        with self.assertRaises(ValueError):
-            sanctuary_world_map_color([0.0, float('nan'), 0.0])
 
     def test_static_light_selection_enforces_thresholds_spatial_quota_and_global_cap(self):
         candidates = [
@@ -464,15 +355,6 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
         self.assertEqual(by_source['small']['skip_reason'], 'below_radius_or_brightness_threshold')
         self.assertEqual(by_source['unsupported']['skip_reason'], 'missing_values')
         self.assertEqual(counts['skip_reasons']['global_cap'], 4)
-        self.assertEqual(sanctuary_light_calibration('Point', 2.0), 50.0)
-        self.assertEqual(sanctuary_light_calibration('Spot', 2.0), 50.0)
-        self.assertEqual(sanctuary_light_calibration('Point', 40.0),
-                         SANCTUARY_LIGHT_BRIGHTNESS_CEILING * 25.0)
-        self.assertEqual(sanctuary_light_calibration('Point', 40.0, [1.0, 0.44, 0.0]),
-                         SANCTUARY_LIGHT_BRIGHTNESS_CEILING * 25.0
-                         * SANCTUARY_ORANGE_POINT_LIGHT_INTENSITY_SCALE)
-        self.assertEqual(sanctuary_light_calibration('Spot', 40.0, [1.0, 0.44, 0.0]),
-                         SANCTUARY_LIGHT_BRIGHTNESS_CEILING * 25.0)
 
     def test_decal_like_mesh_candidates_stay_on_verified_mesh_path(self):
         old = prepare.DECAL_LIKE_STATIC_MESH_IDENTITIES
@@ -493,11 +375,6 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
             self.assertEqual(result[0]['status'], 'already_imported_as_static_mesh')
         finally:
             prepare.DECAL_LIKE_STATIC_MESH_IDENTITIES = old
-
-    def test_ue3_byte_color_is_decoded_with_gamma_2_2(self):
-        # Byte 0 and 255 stay black and white; a mid byte becomes darker in linear space.
-        self.assertEqual(ue3_color_linear([0.0, 1.0, 0.5])[:2], [0.0, 1.0])
-        self.assertAlmostEqual(ue3_color_linear([0.5])[0], 0.5 ** 2.2)
 
     def test_xmas_bulb_recipe_is_warm_emissive_from_its_own_atlas(self):
         # Synthetic check of the table shape only; the atlas itself is game data
@@ -547,14 +424,6 @@ class SanctuaryVisualRulesTest(unittest.TestCase):
                 scene.diffuse_tint(('S', 1), lit)
         finally:
             prepare.INSPECTED_DIFFUSE_TINTS = old
-    def test_sky_cloud_opacity_is_scaled_and_bounded(self):
-        from scene_import_rules import sanctuary_sky_cloud_opacity
-        self.assertAlmostEqual(sanctuary_sky_cloud_opacity(1.0), 0.14)
-        self.assertAlmostEqual(sanctuary_sky_cloud_opacity(0.0), 0.0)
-        self.assertAlmostEqual(sanctuary_sky_cloud_opacity(10.0), 1.0)
-        for bad in (-0.1, float('nan'), True, 'one'):
-            with self.assertRaises(ValueError):
-                sanctuary_sky_cloud_opacity(bad)
 
 
 if __name__ == '__main__':

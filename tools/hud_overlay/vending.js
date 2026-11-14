@@ -211,5 +211,5 @@ document.addEventListener('keydown', event => {
   }
 });
 
-// Tells the host the page can take input (it keeps game input until this line arrives; OpenWillowVendorPage.cpp).
+// Tells the host the page can take input (it keeps game input until this line arrives; the retired UE5 host's OpenWillowVendorPage.cpp).
 console.log('OWVENDREADY');

@@ -49,7 +49,7 @@ RELOAD_TIMING_KEY = {'reload_out': 'clip_out_s', 'reload_in': 'clip_in_s'}
 # role of the event tag it chose. A tag with no decoded file stays unresolved, and that line stays silent.
 LINE_PREFIXES = ('dialog:', 'marcus_group:')
 DURATION_TOLERANCE_S = 0.05
-# The host's limits (OpenWillowAudio.h; a test compares them): a file past them would be mapped here and then refused there.
+# The limits of the retired UE5 host's player (OpenWillowAudio.h, git show 08bcf3e): a file past them was mapped here and then refused there.
 MIN_SAMPLE_RATE = 8000
 MAX_SAMPLE_RATE = 96000
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -236,7 +236,7 @@ FX_ENTRY_BYTES = 7                   # per effect, after one byte of bypass bits
 FIRST_PERSON = 'firstperson'
 THIRD_PERSON = 'thirdperson'
 PLAYER_ROLES = ('fire', 'hit', 'phaselock_cast', 'pickup', 'equip', 'reload_out', 'reload_in')   # the 2D roles (section 5d)
-# Gains the host accepts (OpenWillowAudio.h; a test compares them). Wwise allows +12 dB on one object; a sum below -144 dB is silence in 16 bits.
+# Gains the retired UE5 host accepted (OpenWillowAudio.h, git show 08bcf3e). Wwise allows +12 dB on one object; a sum below -144 dB is silence in 16 bits.
 MIN_GAIN_DB = -144.0
 MAX_GAIN_DB = 12.0
 

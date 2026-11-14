@@ -148,8 +148,7 @@ Everything the tools generate from the installed game is regenerable and stays m
 that are worth sharing are the ones that cost human time and cannot be regenerated: your analysis
 database and any hand-made patches to imported content.
 
-1. Regenerate what is regenerable. The seed and prepare scripts rebuild `local/` and the UE `Content/`
-   folder from the installed game (`tools/worktree-assets.md`, `docs/TOOLING.md`). Install the game and
+1. Regenerate what is regenerable. The prepare scripts rebuild `local/` from the installed game (`tools/worktree-assets.md`, `docs/TOOLING.md`). Install the game and
    UModel on each machine; set `OPENWILLOW_BL2` and `OPENWILLOW_UMODEL`.
 2. Commit your own-words behaviour notes and code. They are the part of the analysis that other machines
    need, and they are not game data.

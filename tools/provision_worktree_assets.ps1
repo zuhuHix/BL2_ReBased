@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$WorktreeRoot,
-    # Copy missing ignored data from another populated worktree (Content and every local/ folder)
-    # instead of the older shared seed. Existing files are never overwritten (unless -RefreshStale).
+    # Copy missing ignored data from another populated worktree (every local/ folder) instead of the older shared seed.
+    # Until 2026-11-14 the UE5 host's ignored Content folder was copied too; that host was retired (git show 08bcf3e). Existing files are never overwritten (unless -RefreshStale).
     [string]$SourceWorktree,
-    # Fill the seed (-SeedDirectory) from this checkout instead of provisioning a worktree: Content and the seed folders.
+    # Fill the seed (-SeedDirectory) from this checkout instead of provisioning a worktree: the seed folders.
     # tools/install_worktree_assets_hook.ps1 runs this, so the seed and the installer share this one code path.
     [string]$FillSeedFrom,
     # The default is the list in worktree_seed_folders.txt next to this script (a seed's copy reads its own copy).
@@ -16,7 +16,7 @@ param(
     [string[]]$ExcludeFolderNames = @('shots', 'screenshots', 'logs', 'captures', 'realgame', 'h4x', 'z3x', 'runs', 'worktree-refresh-backup'),
     # Generated files that are per-run or regenerable and that no suite or host code reads: never copied. observed_gear.json is
     # written by tools/prepare_inventory_gear.py from traces; the host reads only gear_manifest.json.
-    # *.resolved.json beside a job is the per-checkout copy the editor launchers write (tools/checkout_guard.ps1); it holds absolute paths.
+    # *.resolved.json beside a job is the per-checkout copy the retired UE5 host's editor launchers wrote; it holds absolute paths.
     [string[]]$ExcludeFileNames = @('observed_gear.json', 'editor_job.resolved.json', 'attach_job.resolved.json'),
     # Also replace a file that exists when the source's copy is newer and differs (size or content). The old file is first moved to
     # <the worktree's git directory>\ow-refresh\<time-pid>\<path> (per worktree and never shared, also with a junctioned
@@ -206,11 +206,7 @@ if ($FillSeedFrom) {
     $SeedRoot = [IO.Path]::GetFullPath($SeedDirectory).TrimEnd('\')
     $BackupAnchor = $SeedRoot
     $BackupBase = Join-Path $SeedRoot "worktree-refresh-backup\$RefreshStamp"
-    if (!(Test-Path -LiteralPath (Join-Path $SourceRoot 'host\ue5\OpenWillow\Content') -PathType Container)) {
-        throw "Required local asset directory is missing: $SourceRoot\host\ue5\OpenWillow\Content"
-    }
-    $Pairs = @(@{ Name = 'Content'; Folder = ''; Source = (Join-Path $SourceRoot 'host\ue5\OpenWillow\Content'); SourceAnchor = $SourceRoot;
-                  Destination = (Join-Path $SeedRoot 'Content'); DestinationAnchor = $SeedRoot })
+    $Pairs = @()
     foreach ($Name in $AllFolders) {
         $Pairs += @{ Name = "seed/$Name"; Folder = $Name; Source = (Join-Path $SourceRoot "local\$Name"); SourceAnchor = $SourceRoot;
                      Destination = (Join-Path $SeedRoot $Name); DestinationAnchor = $SeedRoot }
@@ -226,7 +222,8 @@ if ([string]::IsNullOrWhiteSpace($WorktreeRoot)) {
 }
 
 $WorktreeRoot = [IO.Path]::GetFullPath($WorktreeRoot).TrimEnd('\')
-$ProjectFile = Join-Path $WorktreeRoot 'host\ue5\OpenWillow\OpenWillow.uproject'
+# A checkout of this repository holds this script (until 2026-11-14 the check was the UE5 host's .uproject).
+$ProjectFile = Join-Path $WorktreeRoot 'tools\provision_worktree_assets.ps1'
 if (!(Test-Path -LiteralPath $ProjectFile)) {
     throw "Not an OpenWillow worktree: $WorktreeRoot"
 }
@@ -241,10 +238,7 @@ if ($SeedDirectory) {
     $SeedRoot = Join-Path $RepositoryRoot 'local\worktree-seed'
 }
 
-$Pairs = @(
-    @{ Name = 'Content'; Folder = ''; Source = (Join-Path $SeedRoot 'Content'); SourceAnchor = $SeedRoot;
-       Destination = (Join-Path $WorktreeRoot 'host\ue5\OpenWillow\Content'); DestinationAnchor = $WorktreeRoot }
-)
+$Pairs = @()
 foreach ($Name in $AllFolders) {
     $Pairs += @{ Name = "local/$Name"; Folder = $Name; Source = (Join-Path $SeedRoot $Name); SourceAnchor = $SeedRoot;
                  Destination = (Join-Path $WorktreeRoot "local\$Name"); DestinationAnchor = $WorktreeRoot }
@@ -254,8 +248,7 @@ $MissingNote = ' (not in the seed)'
 if ($SourceWorktree) {
     $SourceWorktree = [IO.Path]::GetFullPath($SourceWorktree).TrimEnd('\')
     if ($SourceWorktree -eq $WorktreeRoot) { throw 'SourceWorktree is the worktree being provisioned.' }
-    $Pairs = @(@{ Name = 'Content'; Folder = ''; Source = (Join-Path $SourceWorktree 'host\ue5\OpenWillow\Content'); SourceAnchor = $SourceWorktree;
-                  Destination = (Join-Path $WorktreeRoot 'host\ue5\OpenWillow\Content'); DestinationAnchor = $WorktreeRoot })
+    $Pairs = @()
     $SourceLocal = Join-Path $SourceWorktree 'local'
     if (Test-Path -LiteralPath $SourceLocal -PathType Container) {
         foreach ($Dir in Get-ChildItem -LiteralPath $SourceLocal -Directory -Force) {
@@ -266,12 +259,12 @@ if ($SourceWorktree) {
         }
     }
     $MissingNote = ''
-} elseif (!(Test-Path -LiteralPath (Join-Path $SeedRoot 'Content') -PathType Container)) {
+} elseif (!(Test-Path -LiteralPath $SeedRoot -PathType Container)) {
     throw "OpenWillow asset seed is missing at $SeedRoot; run tools/install_worktree_assets_hook.ps1 from a populated worktree."
 }
 
 # A worktree whose local\ is itself a junction (a shared data root, e.g. on a runner) keeps that data: its local pairs are
-# skipped with one line, Content is still provisioned. Any other junction is refused by the preflight.
+# skipped with one line. Any other junction is refused by the preflight.
 $LocalIsJunction = Test-Reparse (Join-Path $WorktreeRoot 'local')
 # This worktree's own git directory (per worktree, never tracked, and not under local\, which may be a shared junctioned root): it
 # holds the provisioning marker and the -RefreshStale backups.

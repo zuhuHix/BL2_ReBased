@@ -1,0 +1,21 @@
+[package]
+name = "ow-cli"
+description = "Command-line front end of the Rust core (port of src/cli.cpp)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ow-package"
+path = "src/main.rs"
+
+[dependencies]
+ow-container = { path = "../ow-container" }
+ow-package = { path = "../ow-package" }
+ow-vm = { path = "../ow-vm" }
+ow-game = { path = "../ow-game" }

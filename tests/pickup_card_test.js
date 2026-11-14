@@ -259,10 +259,8 @@ const FILES = ['UI_Inworld/Weapon_Card.swf'];
     for (const page of ['index', 'inventory', 'map', 'missions', 'skills', 'pickup_card'])
       assert.ok(fs.readFileSync(path.join(__dirname, `../tools/hud_overlay/${page}.html`), 'utf8').includes('<script src="movie_guard.js"></script>'), page);
     const hud = fs.readFileSync(path.join(__dirname, '../tools/hud_overlay/index.html'), 'utf8');
-    assert.ok(hud.includes("console.log('OpenWillow HUD movie lost')"), 'the host goes back to the canvas HUD on this line (hud_movie_loss_test.js runs that page)');
-    const host = fs.readFileSync(path.join(__dirname, '../host/ue5/OpenWillow/Source/OpenWillow/OpenWillowMayaHUD.cpp'), 'utf8');
-    assert.ok(host.includes('TEXT("OpenWillow HUD movie lost")'));
-    passed++; console.log('PASS Every page that loads a movie has the guard, serve.py routes it, and the HUD and host agree on the lost line');
+    assert.ok(hud.includes("console.log('OpenWillow HUD movie lost')"), 'a host goes back to its own HUD on this line (hud_movie_loss_test.js runs that page)');
+    passed++; console.log('PASS Every page that loads a movie has the guard, serve.py routes it, and the HUD logs the lost line');
   }
   console.log(`${passed}/${passed} pickup card checks passed (synthetic items; card size, placement and timing UNVERIFIED)`);
 })().catch(error => { console.error(error); process.exit(1); });

@@ -19,10 +19,11 @@ project's primary correctness method. Build the reader (README, *Build and run i
   and `python tools/census.py ...` against your install. Report the totals,
   your platform (Steam/Epic), which DLC you own, and whether the UHD pack is
   installed. Different installs are different test cases.
-- If you have Unreal Engine 5.8: prepare and open a map
-  ([docs/TOOLING.md](docs/TOOLING.md)), stand in the same spot in the real
-  game, and compare. Report what's missing, mirrored, mis-coloured or
-  misplaced, with both screenshots.
+- In-host map comparison waits for the Rust host: the UE5 host that could
+  open a prepared map left the tree on 2026-11-14, and the Rust host's engine
+  route is not chosen yet. Until then, `cargo build --workspace` and
+  `cargo test --workspace` on your machine are a useful report, with
+  `cargo --version` and your platform.
 
 Use the **Verification report** issue template. Never attach package files or
 extracted assets; screenshots are fine.
@@ -52,7 +53,7 @@ agreed. This matters most for anything that touches the sensitive areas below.
   goes under `local/`, which is ignored; never move their output into the
   tree.
 - **Report checks honestly and separately.** Automated checks (CTest,
-  `tests/level_test.py`, `tools/verify_packages.py`) are one thing; in-game
+  `cargo test`, `tests/level_test.py`, `tools/verify_packages.py`) are one thing; in-game
   or visual checks are another. Say which you ran and paste the output. Do
   not present count agreement as full compatibility.
 - **Label guesses.** Behaviour inferred rather than verified against the
@@ -68,8 +69,8 @@ agreed. This matters most for anything that touches the sensitive areas below.
   outside the repository to accelerate local extraction. Record the tool
   version, command, output inventory, failures, unsupported types, duplicates,
   elapsed time and license. Do not commit their binaries or game-derived
-  output, and do not treat a successful export as proof of UE5 or gameplay
-  compatibility.
+  output, and do not treat a successful export as proof that a host renders it
+  correctly or of gameplay compatibility.
 - **Executable analysis stays local.** You may disassemble or decompile
   `Borderlands2.exe` on your own machine to understand a native function
   ([docs/NATIVE_ANALYSIS.md](docs/NATIVE_ANALYSIS.md)). Never paste,
@@ -85,12 +86,17 @@ Changes here need explicit discussion first and a decision file (see DECISIONS.m
 - `src/package.cpp`: the `Reader` struct, `require()`, `limit`, size and
   terminator checks. Never loosen a bounds check to make something work.
 - `src/container.cpp` / `.hpp`: LZO container validation.
+- Their Rust ports, `crates/ow-package/` and `crates/ow-container/`, on the
+  same terms, and `Cargo.toml` / `rust-toolchain.toml` (a new crate is a new
+  dependency).
 - Struct/array property decoding, `Texture2D` and `StaticMesh` serialization,
   the cooked `Material` resource reader: the 832/46 layout has no public
   spec; do not invent offsets.
 - `CMakeLists.txt`, `THIRD_PARTY.md`, any `LICENSE` file: dependency and
   license decisions are the maintainer's.
-- The host-engine choice is made and is not reopened.
+- The language choice (Rust, replacing the UE5 host on 2026-11-14) is made
+  and is not reopened; the engine route is the maintainer's pick from the
+  Phase 0R benchmark.
 
 Safe to work on without ceremony: census and CLI output, synthetic tests,
 JSON output flags, tooling scripts, documentation.
@@ -100,8 +106,8 @@ JSON output flags, tooling scripts, documentation.
 The PR template asks for:
 
 1. What changed and why, in one paragraph.
-2. Output of `ctest --test-dir build -C Release --output-on-failure` and
-   `python tests/level_test.py`.
+2. Output of `ctest --test-dir build -C Release --output-on-failure`,
+   `python tests/level_test.py` and `cargo test --workspace`.
 3. For reader changes: output of `tools/verify_packages.py` against your own
    install. For census/property/asset/level changes: the relevant tool's
    numbers against your install.

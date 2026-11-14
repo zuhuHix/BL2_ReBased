@@ -1,11 +1,10 @@
 # Test registration for ctest. The top-level CMakeLists.txt pulls this file in with include(), so it runs in the top directory's
 # scope: ${CMAKE_SOURCE_DIR} and relative source paths resolve as they did there, and ow-weapon-firing-test is still built to
-# build/<config>/. Adding, removing or relabelling a test edits this file only, not the top CMakeLists.txt (which every in-engine
-# suite counts as covered, because the Unreal module links the core it builds). Never add it with add_subdirectory(tests): the
-# relative source path tests/weapon_firing_math_test.cpp would then resolve under tests/tests/ and stop the configure, and
-# ow-weapon-firing-test would move to build/tests/<config>/.
+# build/<config>/. Adding, removing or relabelling a test edits this file only, not the top CMakeLists.txt. Never add it with
+# add_subdirectory(tests): the relative source path tests/weapon_firing_math_test.cpp would then resolve under tests/tests/ and
+# stop the configure, and ow-weapon-firing-test would move to build/tests/<config>/.
 # The core targets (ow-core, ow-package, ow-weapongen) and their sources and flags stay in the top CMakeLists.txt; this file holds
-# test registration only. The in-engine suites do not count it as covered, so a core change made here would not make them due.
+# test registration only.
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME package-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/package_test.py $<TARGET_FILE:ow-package>)
@@ -17,7 +16,6 @@ add_test(NAME item-roll-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_D
 add_test(NAME natives-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/natives_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME vm-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/vm_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME script-disasm-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/script_disasm_test.py)
-add_test(NAME controls-keys COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/controls_keys_test.py)
 add_test(NAME controls-check COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_controls_test.py)
 add_test(NAME kismet-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/kismet_test.py $<TARGET_FILE:ow-package>)
 add_test(NAME weapon-gen-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_gen_test.py $<TARGET_FILE:ow-weapongen>)
@@ -35,8 +33,6 @@ add_test(NAME decode-slice-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE
 add_test(NAME check-audio-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_audio_test.py)
 add_test(NAME listen-report-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/listen_report_test.py)
 add_test(NAME ue-lock-machine-wide COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ue_lock_test.py)
-add_test(NAME movie-hud-switch COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/movie_hud_test.py)
-add_test(NAME play-slice-launcher COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/play_slice_test.py)
 add_test(NAME audio-events-capture-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/audio_events_capture_test.py)
 add_executable(ow-weapon-firing-test tests/weapon_firing_math_test.cpp)
 target_link_libraries(ow-weapon-firing-test PRIVATE ow-core)
@@ -45,7 +41,6 @@ add_test(NAME weapon-firing-math COMMAND ow-weapon-firing-test)
 add_test(NAME weapon-firing-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_firing_test.py)
 add_test(NAME weapon-projectile-fx-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/weapon_projectile_fx_test.py)
 add_test(NAME grenade-mod-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/grenade_mod_test.py)
-add_test(NAME anim-import-frames COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/anim_import_frames_test.py)
 if(OPENWILLOW_LZO)
   add_test(NAME container-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/package_test.py $<TARGET_FILE:ow-package> --compressed)
   add_test(NAME assets-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/assets_test.py $<TARGET_FILE:ow-package>)
@@ -59,21 +54,20 @@ endif()
 #   too slow for every PR, or refuses on a shared PC: in OW_OUTSIDE_CTEST below, each with its reason
 #   tests/*_test.js: in OW_NODE_TESTS below, registered only where Node is found
 set(OW_STANDALONE_PY_TESTS
-  audio_census automation_paths blcmm_dumps block_saves bsp_calibration bsp build_phaselock_fx_constants check_action_skill_hud check_hud_down
+  audio_census blcmm_dumps block_saves bsp_calibration bsp check_action_skill_hud check_hud_down
   check_hud_shots check_interactives check_mission_page check_overlay_data check_phaselock_kill check_shield_check
   controls_capture
   check_slice_gate check_vendors check_weapon_firing collision crosscheck_blcmm_dumps crosscheck_bsp_polys
-  crosscheck_umodel_assets crosscheck_umodel den_probe editor_inputs engine_default game_colours gen_confirm gestalt_sockets
-  golden_card_compare gun_ads_capture import_phaselock_fx_source inspection_views inventory_gear land_batch
+  crosscheck_umodel_assets crosscheck_umodel den_probe editor_inputs game_colours gen_confirm gestalt_sockets
+  golden_card_compare gun_ads_capture inspection_views inventory_gear land_batch
   leak_gate leak_gate_hook leak_gate_policy leak_gate_push leak_gate_repo loot_pools
-  lootables_editor
   material_assignment material_audit material_resource mission_camera_probe mission_screen_capture particle_system
-  phaselock_attachment_check phaselock_fx_inputs phaselock_integrity_probe preflight prepare_action_skill prepare_hud_strings
+  phaselock_attachment_check phaselock_integrity_probe prepare_action_skill prepare_hud_strings
   prepare_interactives prepare_inventory_movie prepare_stock_shield prepare_vendors private_sync range_kind_melee range_tools real_game_capture_safety real_game_finalizer_recheck
   real_game_loot_capture real_game_menus_paths real_game_migration real_game_minimap_paths real_game_pending realgame_registration realgame_reply_guard
-  research_corpus run_limit sanctuary_geometry
-  sanctuary_host_flags sanctuary_visual_rules serve_paths skill_effects skill_stats sky_census slice_watch slice_world
-  start_shield suite_map_lint suites_due terrain_geometry terrain_material terrain_probe terrain terrain_weightmap ui_trace_returns walking_routes
+  research_corpus sanctuary_geometry
+  sanctuary_visual_rules serve_paths skill_effects skill_stats sky_census slice_watch slice_world
+  terrain_geometry terrain_material terrain_probe terrain terrain_weightmap ui_trace_returns walking_routes
   weapon_assembly_oracle weapon_assembly_sample weapon_balance weapon_capture_items weapon_catalog weapon_library
   weapon_muzzle_fx weapon_parity2_probe weapon_parity_probe weapon_recipe weapon_stats weapon_view_model)
 foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
@@ -81,8 +75,6 @@ foreach(ow_test IN LISTS OW_STANDALONE_PY_TESTS)
            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   set_tests_properties(py-${ow_test} PROPERTIES TIMEOUT 120)
 endforeach()
-# preflight runs every case under Windows PowerShell 5.1 and under pwsh (about 50 s on the zuhu desktop).
-set_tests_properties(py-preflight PROPERTIES TIMEOUT 300)
 # land_batch runs the landing script in eleven throwaway repositories (about 100 s on the zuhu desktop).
 set_tests_properties(py-land_batch PROPERTIES TIMEOUT 300)
 # Three tests of the real-game tools (lane C, 2026-11-13): each starts Windows PowerShell for nearly every case, 43-72 s on the zuhu
@@ -99,15 +91,7 @@ set(OW_OUTSIDE_CTEST
   skills_live_probe   # too slow for the budget beside the three above: 60-61 s (two functions take 51 s of it)
   check_hud_minimap   # left out 2026-11-11 as too slow (about 30 s then); not re-measured by lane C
   provision_worktree  # left out 2026-11-11 as too slow (about 36 s then); not re-measured by lane C
-  run_ue_flash_hud    # refuses (exit 2, "NOT RUN") while any Unreal editor runs on the PC, so a shared PC fails it
   )
-# suites_due starts the batch driver under Windows PowerShell three times (the file takes about 40 s on the main desktop).
-set_tests_properties(py-suites_due PROPERTIES TIMEOUT 300)
-# The tracked suite map against this checkout: a PR that adds a load to a suite script without updating tools/suites.txt fails.
-# Run as the plain command (no arguments: the tracked map with the tracked tools/suites_switch_only.txt, since 2026-11-13), so
-# the command people run and this entry give the same answer.
-add_test(NAME suite-map-tracked COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/suite_map_lint.py
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # Tests that need Node or numpy (lane ci-test-deps, 2026-11-11). CI installs both (.github/workflows/ci.yml). Elsewhere a group
 # is registered only when configure finds its tool, and configure says so when it does not, so a machine without Node or numpy

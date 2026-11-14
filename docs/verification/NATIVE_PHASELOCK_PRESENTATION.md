@@ -6,6 +6,8 @@ and archetype data (`ow-package --properties`) and a local Ghidra reading of `Bo
 a listing or pseudo-code. Companion to [NATIVE_PHASELOCK_TARGETING.md](NATIVE_PHASELOCK_TARGETING.md) (target choice,
 constraints, lift bob) and [PHASELOCK_STOCK_DATA.md](PHASELOCK_STOCK_DATA.md) (identities, numbers, event chain).
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 **Confidence.** Almost all of this is *script* (the whole presentation chain is UnrealScript plus data, not native C++),
 so it is read exactly; "read" is not "seen in the running game". Everything is `UNVERIFIED` in game unless a line says
 otherwise. The native part is only how a special move turns into a played clip (section 2.3). Raw output stays under

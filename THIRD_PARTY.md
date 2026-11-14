@@ -174,13 +174,15 @@ decision before implementation.
   `%LOCALAPPDATA%/ruffle/video/`; it is Ruffle's, unused by this project.
 - Use: local execution only, as a timeboxed benchmark of running the game's
   converted HUD movie (maintainer approval 2026-09-26). Not a dependency, not
-  linked, not vendored. Embedding it in the UE5 host is a separate decision.
+  linked, not vendored. Ruffle is written in Rust, so the Rust host could embed
+  its crates (one of the Phase 0R benchmark questions, decision 2026-11-14-01);
+  that would make them a dependency and needs its own entry here first.
 - Web build `@ruffle-rs/ruffle` `0.7.0-nightly.2026.9.26` (MIT OR Apache-2.0,
   its `package.json`), unpacked under ignored `local/ui/run/ruffle/`. It is
-  served locally to the browser bench and to the UE5 browser-overlay prototype
-  (`tools/hud_overlay/`, maintainer approval 2026-09-26). The overlay uses
-  UE's own `WebBrowser` module (CEF, shipped with the engine); no Ruffle code
-  is in the repository.
+  served locally to a browser by `tools/hud_overlay/serve.py` (maintainer
+  approval 2026-09-26). Until 2026-11-14 the retired UE5 host showed those pages
+  through UE's own `WebBrowser` module (CEF, shipped with that engine); no
+  Ruffle code is in the repository.
 
 ### unrealsdk, pyunrealsdk and the willow2 mod manager (installed by the player)
 
@@ -254,13 +256,30 @@ decision before implementation.
 
   Every licence file is matched to a binary and every binary to a licence file. The zip itself ships only `COPYING`, not those files. None of these is redistributed by this project.
 - **Use:** external execution only. `tools/decode_slice_audio.py` runs it on the player's own game files, with an explicit path or `OPENWILLOW_VGMSTREAM`, to write PCM WAV under ignored
-  `local/` for the UE5 host. Not a dependency of the build: nothing links it, no binary or code from it is in the repository, the script never downloads it, and no decoded output is tracked.
+  `local/` for the host (the retired UE5 host read it until 2026-11-14; the Rust host will define its own reading). Not a dependency of the build: nothing links it, no binary or code from it is in the repository, the script never downloads it, and no decoded output is tracked.
   Each player obtains it themselves. Benchmark: `docs/verification/SLICE_AUDIO_CHAIN.md` section 3.
 
 ### gameswf - benchmark candidate (pending)
 
 - tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
   Approved for the same benchmark; not yet downloaded or built.
+
+## Rust toolchain (maintainer decision 2026-11-14)
+
+- **Rust** 1.96.0 (`rustc` and `cargo` 1.96.0, released 2026-05-25), https://github.com/rust-lang/rust, licence MIT OR
+  Apache-2.0 (upstream `COPYRIGHT`, `LICENSE-MIT`, `LICENSE-APACHE`). Pinned by `rust-toolchain.toml`. On the zuhu
+  desktop `cargo 1.96.0 (30a34c682 2026-05-25)` is on the path without `rustup`; how it was installed there: not
+  checked. CI relies on the `rustup` that GitHub's Windows runner image ships, which reads `rust-toolchain.toml`.
+- **Use:** builds the Cargo workspace (`Cargo.toml`, `crates/`) that replaces the UE5 host and ports the C++ core
+  (decision `docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md`). The
+  toolchain is a build tool: nothing from it is vendored, and the workspace's binaries link only Rust's standard
+  library.
+- **Crates:** none. The workspace has no third-party crate, and `Cargo.lock` lists only the project's own six. Each
+  crate added later needs an entry here before it lands (AGENTS.md rule 6).
+- **Engine candidates for the Phase 0R benchmark (not dependencies):** Bevy, wgpu with winit, and optionally Fyrox.
+  Their prototypes live under ignored `local/bench/`, outside the tree; licences as each project states them (Bevy,
+  wgpu and winit: MIT OR Apache-2.0; Fyrox: MIT) are to be read from each upstream licence file, at the version used,
+  before any of them lands. Record: `docs/verification/ENGINE_BENCHMARK.md`.
 
 ## Tools CI installs for the tests (Node.js, numpy, Pillow)
 
@@ -269,11 +288,11 @@ tests that need them only where configure finds them (`tests/CMakeLists.txt`; `d
 outside ctest"). They are not test-only on a developer's machine: by `git grep` on 2026-11-12, 10 tracked scripts
 under `tools/` import numpy and 8 import Pillow, all local helpers (data preparation, a cross-check against UModel
 output, visual comparisons and contact sheets, the listening report, a real-game frame helper); 5 scripts import both.
-Other scripts need them through one of these: `tools/lootables_editor.py`, for one, imports `slice_npc_assets` in its
-`tracks` mode and needs numpy there; a full count of such indirect uses was not made. No tracked script outside
-`tests/` runs Node.js; outside the tests, the overlay scripts in `tools/hud_overlay/` run in the UE browser, not in
-Node.js. Node.js is also what runs REA locally (see "REA (Reverse Engineer Anything) MCP server" above). The build,
-the reader and the UE5 host do not use any of the three, nothing is shipped with them, none is vendored, and no code
+Other scripts need them through one of these (`tools/lootables_editor.py`, removed with the UE5 host on 2026-11-14,
+was one: it imported `slice_npc_assets` in its `tracks` mode); a full count of such indirect uses was not made. No
+tracked script outside `tests/` runs Node.js; outside the tests, the overlay scripts in `tools/hud_overlay/` run in a
+browser, not in Node.js. Node.js is also what runs REA locally (see "REA (Reverse Engineer Anything) MCP server"
+above). The build, the reader and the Rust workspace do not use any of the three, nothing is shipped with them, none is vendored, and no code
 or file from them is copied into the repository. No `package.json` or requirements file pins them; the pins are the CI
 steps below. Licences were read from each project's upstream licence file at that version on 2026-11-12. What a
 downloaded binary or wheel bundles beyond that file was not checked.

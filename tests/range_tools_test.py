@@ -665,59 +665,20 @@ class CheckRangeTest(unittest.TestCase):
                     if extra:
                         self.assertIn('no attachments list', out.getvalue())
 
-    def test_the_marker_is_the_host_line_and_the_gate_checker_text(self):
+    def test_the_marker_is_the_gate_checker_text(self):
         import check_slice_gate
-        source = (Path(__file__).resolve().parents[1] / 'host/ue5/OpenWillow/Source/OpenWillow/OpenWillowCombatTarget.cpp').read_text(encoding='utf-8')
-        self.assertIn('TEXT("' + check_range.MISSING_ATTACHMENTS, source)
         self.assertEqual(check_range.MISSING_ATTACHMENTS, check_slice_gate.MISSING_ATTACHMENTS)
-        # The worn line the host logs for a list (also an empty one) must not contain the marker.
-        self.assertIn('OpenWillow target: %d of %d attachments on the stock pawn', source)
+        # The worn line logged for a list (also an empty one) must not contain the marker.
         self.assertNotIn(check_range.MISSING_ATTACHMENTS, self.NONE_WORN)
 
 
 # ---- Leaps and thrown rocks (2026-11-13, NATIVE_AI_LEAP_THROW.md) -------------------------------------------------------------------------
-SOURCE = Path(__file__).resolve().parents[1] / 'host' / 'ue5' / 'OpenWillow' / 'Source' / 'OpenWillow'
-
-
-def source(name):
-    return (SOURCE / name).read_text(encoding='utf-8')
-
-
-def flat_row(kind):
-    """The checker's ATTACKS row for kind, flattened in the order of the host's initializer (OpenWillowLeapThrow.h)."""
-    import itertools
-    row = check_range.ATTACKS[kind]
-    leap = row['leap'] or (0.0, 0.0, 0.0, 0.0, 0.0, False, 0.0, 0.0)
-    throw = row['throw'] or (0.0, 0.0, 0.0, 0.0, 0.0, False, False, ())
-    clips = list(itertools.chain.from_iterable([seconds, len(moments)] + list(moments) + [0.0] * (2 - len(moments)) for seconds, moments in throw[7]))
-    return [row['close']] + list(row['weights']) + [float(v) for v in leap] + [float(v) for v in throw[:7]] + [float(len(throw[7]))] + [float(v) for v in clips]
-
-
-def host_rows():
-    """{kind: [numbers]} from the one-line rows of OpenWillowFindKindAttacks: every number, true / false as 1 / 0, in order."""
-    import re
-    text = source('OpenWillowLeapThrow.h')
-    block = text[text.index('static const FOpenWillowKindAttacks Rows[] = {'):]
-    block = block[:block.index('};')]
-    rows = {}
-    for line in block.splitlines():
-        m = re.match(r'\s*\{TEXT\("(\w+)"\),(.*)\},\s*$', line)
-        if m:
-            tokens = re.findall(r'true|false|-?\d+(?:\.\d+)?', m.group(2))
-            rows[m.group(1)] = [1.0 if t == 'true' else 0.0 if t == 'false' else float(t) for t in tokens]
-    return rows
 
 
 class LeapThrowRowsTest(unittest.TestCase):
-    def test_the_host_rows_are_the_checkers_number_by_number(self):
-        rows = host_rows()
-        self.assertEqual(set(rows), set(check_range.ATTACKS))
-        for kind in check_range.ATTACKS:
-            with self.subTest(kind=kind):
-                self.assertEqual(rows[kind], flat_row(kind))
 
     def test_the_rows_are_the_notes(self):
-        # A few values straight from the note's section 2.1, 3.2 and 4 (the full rows are in the checker, held to the host above).
+        # A few values straight from the note's section 2.1, 3.2 and 4 (the full rows are in the checker).
         a = check_range.ATTACKS
         self.assertEqual(a['bullymong_adult']['weights'], (1.0, 0.25, 0.25))
         self.assertEqual(a['bullymong']['weights'][:2], (1.0, 0.5))
@@ -875,60 +836,6 @@ class LeapThrowTiedToSpawnsTest(unittest.TestCase):
         counts = check_range.fight_counts(text)
         self.assertEqual((counts['leap_starts'], counts['leap_lands'], counts['leap_hits'], counts['rocks'], counts['rock_hits']), (1, 1, 1, 1, 1))
         self.assertEqual(counts['picks'], {('bullymong', 'leap'): 1})
-
-
-class LeapThrowHostTest(unittest.TestCase):
-    def test_the_host_logs_what_the_checker_reads(self):
-        rng = source('OpenWillowRange.cpp')
-        step = rng[rng.index('case 96: // leap and throw'):rng.index('// ---------------------------------------------------------------------------------------------- loot driver')]
-        for key in check_range.LEAP_FIELDS + check_range.THROW_FIELDS:
-            self.assertIn(' %s=' % key if key != 'kind' else 'kind=%s', step, key)
-        enemy = source('OpenWillowEnemy.cpp')
-        self.assertIn('OWRANGE enemy %s attacks kind=%s close=%.0f weights=%.2f:%.2f:%.2f leap=%.0f-%.0f', enemy)
-        for key in ('leap_speed', 'leap_angle_pct', 'leap_lead_cap', 'leap_resource', 'leap_clips', 'throw_speed', 'throw_angle_pct', 'throw_lead_cap',
-                    'throw_front', 'throw_resource', 'throw_clips'):
-            self.assertIn(' %s=' % key, enemy)
-        self.assertIn('source=none (plain melee only)', enemy)
-
-    def test_kind_melee_measures_the_plain_swing_alone(self):
-        rng = source('OpenWillowRange.cpp')
-        step = rng[rng.index('case 94: // kind_melee'):rng.index('case 95:')]
-        self.assertIn('Enemy->SetRangedAttacks(false);', step)
-        self.assertEqual(check_range.EXPECTED.index('leap'), check_range.EXPECTED.index('kind_melee') + 1)
-
-    def test_the_notice_chase_and_swing_steps_run_without_leaps_or_rocks(self):
-        # Review r1: approach put Maya inside the regular's leap band and passed on a point of a leap's arc. The shared reset of steps 16-36
-        # turns E0's leaps and throws off; the leap and throw steps turn their enemy's back on, and the end of those steps every enemy's.
-        rng = source('OpenWillowRange.cpp')
-        reset = rng[rng.index('auto Reset = [this, Pawn, E0, Now](const TCHAR* Why)'):rng.index('auto OnlyActive')]
-        self.assertIn('E0->SetRangedAttacks(false);', reset)
-        self.assertLess(reset.index('E0->ResetForAITest('), reset.index('E0->SetRangedAttacks(false);'))
-        ranged = rng[rng.index('case 96: // leap and throw'):rng.index('case 97:')]
-        self.assertLess(ranged.index('Reset(StepName);'), ranged.index('Enemy->ResetForAITest('))
-        self.assertIn('Each->SetRangedAttacks(true);', ranged)
-        self.assertIn('bRangedAttacks = true;', source('OpenWillowEnemy.cpp'))   # ResetForAITest turns them back on
-
-    def test_the_rock_traces_the_world_before_it_tests_maya(self):
-        # Review r1: a wall between Maya and the rock inside one tick's step must stop it.
-        enemy = source('OpenWillowEnemy.cpp')
-        tick = enemy[enemy.index('void AOpenWillowRangeRock::Tick'):enemy.index('void AOpenWillowRangeRock::Finish')]
-        self.assertLess(tick.index('LineTraceSingleByObjectType'), tick.index('SegmentDistToSegmentSafe(From, End,'))
-
-    def test_the_brain_draws_once_per_finished_attack_and_gives_resources_back(self):
-        brain = source('OpenWillowEnemyAI.cpp')
-        self.assertIn('if (bStateUpdate && bAware && In.Attacks && !bSwingPending)', brain)
-        self.assertIn('if (Pick != EOpenWillowAttack::None) return;', brain)
-        self.assertIn('if (Pick == EOpenWillowAttack::Melee) Pick = EOpenWillowAttack::None;', brain)
-        self.assertIn('HeldDen->LeapUsers = FMath::Max(0, HeldDen->LeapUsers - 1);', brain)
-        self.assertIn('EndAttack(TEXT("stopped"));', brain)
-        self.assertIn('constexpr int32 LeapUsersMax = 1;', source('OpenWillowLeapThrow.h'))
-        self.assertIn('constexpr int32 ThrowUsersMax = 3;', source('OpenWillowLeapThrow.h'))
-
-    def test_no_brace_less_if_with_a_ue_log_before_an_else(self):
-        # C2181 (project memory): a brace-less if holding a UE_LOG and followed by else does not compile.
-        import re
-        for name in ('OpenWillowEnemyAI.cpp', 'OpenWillowEnemy.cpp', 'OpenWillowRange.cpp'):
-            self.assertNotRegex(source(name), r'\bif \([^\n]*\)\s*\n\s*UE_LOG\([^;]*\);\s*\n\s*else', name)
 
 
 class LeapThrowClipRolesTest(unittest.TestCase):

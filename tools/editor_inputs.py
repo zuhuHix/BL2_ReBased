@@ -1,7 +1,9 @@
 """What the NPC editor steps will import, checked before they change anything.
 
-AI-assisted (Claude), 2026-11-09. Plain Python (no ``unreal``): tests/editor_inputs_test.py runs it, and the editor scripts
-(tools/slice_npc_editor.py ``npcs`` mode, tools/phaselock_target_editor.py, tools/phaselock_target_attach_editor.py) call it first.
+AI-assisted (Claude), 2026-11-09. Plain Python (no ``unreal``): tests/editor_inputs_test.py runs it. The editor steps that called it
+(tools/slice_npc_editor.py ``npcs`` mode, tools/phaselock_target_editor.py, tools/phaselock_target_attach_editor.py) were the retired UE5
+host's and left the tree with it (git show 08bcf3e:<path>); tools/prepare_phaselock_target.py still uses ``file_problem`` and
+``ZONE_TEXTURES``, and the step checks stay as the description of what an import of these jobs needs.
 
 Why: Unreal's importer asserts (editor exit 3) on a missing source instead of failing cleanly, and a job written without the UModel
 exports holds the string "None" for every glTF (2026-11-09, runner-z36). Each check covers only the files its step actually imports, so
@@ -25,8 +27,8 @@ def file_problem(path):
 def producer(job):
     """The command that writes this job, for the failure message."""
     if 'phaselock' in str(job.get('tool', '')).lower():
-        return 'powershell -File tools/import_phaselock_target.ps1 -Steps prepare'
-    return 'powershell -File tools/seed_slice_npc_assets.ps1 -Steps extract,import'
+        return 'python tools/prepare_phaselock_target.py editor-job'
+    return 'python tools/slice_npc_assets.py editor-job'
 
 
 def _report(job, step, problems):

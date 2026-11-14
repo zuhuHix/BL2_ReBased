@@ -5,6 +5,8 @@ movie loaded into it, driven by the page the way `StatusMenuMapGFxObject` drives
 ActionScript listing (our own local AVM1 lister, from the public SWF format) stay under ignored `local/analysis/inv24/map/`;
 captures under ignored `local/inv24/mapshots/`. Nothing below was observed in the running game.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## What the game does (script, installed class defaults and the movie's ActionScript)
 
 - `TrySwitchToScreen(2)` and `GotoPrevTab` / `GotoNextTab` go to the StatusMenu movie's `map` frame. Its `map` clip

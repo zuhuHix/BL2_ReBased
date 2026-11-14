@@ -23,7 +23,8 @@ Steps (``all`` runs identity, extract, editor-job; ``anims`` needs the editor's 
 * ``anims``      convert the chosen MD5 clips to UE bone tracks (needs ``ref_pose_<Id>.json`` from the editor).
 * ``attachments`` add the worn static meshes to ``host_target.json`` (needs the editor's ``attach`` report).
 
-Run the whole thing with ``tools/import_phaselock_target.ps1``.
+The whole chain ran through ``tools/import_phaselock_target.ps1``, which left with the UE5 host on 2026-11-14
+(``git show 08bcf3e:tools/import_phaselock_target.ps1``); the Rust host has no replacement yet.
 """
 import argparse
 import json
@@ -323,9 +324,9 @@ def job_problems(job):
     return problems
 
 
-ATTACH_STEP = 'powershell -File tools/import_phaselock_target.ps1 -Steps attach'
+ATTACH_STEP = 'powershell -File tools/import_phaselock_target.ps1 -Steps attach' + ' [that script left with the UE5 host on 2026-11-14 (git show 08bcf3e:tools/import_phaselock_target.ps1); the Rust host has no replacement yet]'
 IDENTITY_STEP = ('powershell -File tools/import_phaselock_target.ps1 -Steps prepare,attach (its identity step reads the worn pieces, '
-                 'then attach writes their placements)')
+                 'then attach writes their placements)' ' [that script left with the UE5 host on 2026-11-14 (git show 08bcf3e:tools/import_phaselock_target.ps1); the Rust host has no replacement yet]')
 
 
 def unread_worn(identity):
@@ -394,7 +395,7 @@ def editor_job_step(args):
     if problems:
         lines = '\n  '.join(problems)
         sys.exit('editor-job: the UModel exports are incomplete, so no job was written (the editor would assert or keep plain '
-                 f'materials):\n  {lines}\nRun powershell -File tools/import_phaselock_target.ps1 -Steps prepare (UModel extract) first.')
+                 f'materials):\n  {lines}\nThe UModel extract was the -Steps prepare step of tools/import_phaselock_target.ps1' + ' [that script left with the UE5 host on 2026-11-14 (git show 08bcf3e:tools/import_phaselock_target.ps1); the Rust host has no replacement yet]')
     # Checked above with absolute paths; stored relative to the repository root (the launcher resolves them: tools/repo_paths.py).
     npc.write_json(OUT / 'editor_job.json', job_to_repo(job, ROOT))
     notes = keep_placements(hosts, npc.read_json(OUT / 'host_target.json'), identity)

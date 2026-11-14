@@ -4,9 +4,9 @@ AI-assisted (Claude Opus 5.5), 2026-11-11. Plain Python (no ``unreal``), tested 
 
 Why: ``local/slice/editor_job.json`` and ``local/phaselock/target/editor_job.json`` held absolute paths. Copied into another worktree
 (by tools/provision_worktree_assets.ps1 or by hand) they pointed into the worktree that wrote them, and once that one was deleted the
-target dummy's zone step found no textures (2026-11-10). The writers now store paths relative to the repository root; the
-PowerShell launchers resolve a job against their own checkout (``resolve-job`` below) before the editor reads it, so the editor
-scripts keep reading plain absolute paths.
+target dummy's zone step found no textures (2026-11-10). The writers now store paths relative to the repository root, and a reader
+resolves a job against its own checkout (``resolve-job`` below) into plain absolute paths. The readers were the retired UE5 host's
+launchers and editor scripts (git show 08bcf3e:tools/checkout_guard.ps1); the writers and ``resolve-job`` stay.
 
 A stored path must stay inside this checkout: a relative value that climbs out (``../other/local``), a rooted one (``/local/x``) or a
 drive-relative one (``C:foo``) is refused. Junctions follow tools/worktree-assets.md: (a) the real location of ``<root>/local`` is this
@@ -49,10 +49,10 @@ def _same(a, b):
 
 def checkout_of(path):
     """The checkout of this repository that really holds ``path`` (junctions followed): the nearest folder upwards with a ``.git``
-    entry and ``host/ue5/OpenWillow/OpenWillow.uproject``, as tools/checkout_guard.ps1 tests it. None when there is none."""
+    entry and ``tools/repo_paths.py``. None when there is none. (Until the UE5 host left the tree the marker was its .uproject.)"""
     folder = Path(os.path.realpath(path))
     for candidate in (folder, *folder.parents):
-        if (candidate / '.git').exists() and (candidate / 'host/ue5/OpenWillow/OpenWillow.uproject').is_file():
+        if (candidate / '.git').exists() and (candidate / 'tools/repo_paths.py').is_file():
             return candidate
     return None
 
@@ -152,15 +152,14 @@ def job_from_repo(job, root=ROOT, source='the job', regenerate='its producer'):
 
 def regenerate_command(job):
     if 'ambient' in str(job.get('tool', '')).lower():
-        return ('python tools/ambient_npc_assets.py editor-job, or attachments for attach_job.json '
-                '(or powershell -File tools/seed_ambient_npc_assets.ps1)')
+        return 'python tools/ambient_npc_assets.py editor-job, or attachments for attach_job.json'
     if 'phaselock' in str(job.get('tool', '')).lower():
-        return 'python tools/prepare_phaselock_target.py editor-job (or powershell -File tools/import_phaselock_target.ps1 -Steps prepare)'
-    return 'python tools/slice_npc_assets.py editor-job (or powershell -File tools/seed_slice_npc_assets.ps1 -Steps import)'
+        return 'python tools/prepare_phaselock_target.py editor-job'
+    return 'python tools/slice_npc_assets.py editor-job'
 
 
 def resolve_job_file(job_file, out_file, root=ROOT):
-    """Reads a stored job, writes the resolved one the editor reads. Raises StalePath."""
+    """Reads a stored job, writes the resolved one (plain absolute paths). Raises StalePath."""
     job = json.loads(Path(job_file).read_text(encoding='utf-8'))
     resolved = job_from_repo(job, root, source=str(job_file), regenerate=regenerate_command(job))
     Path(out_file).write_text(json.dumps(resolved, indent=1), encoding='utf-8')
@@ -168,7 +167,7 @@ def resolve_job_file(job_file, out_file, root=ROOT):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Resolve a stored editor job against this checkout for the editor.')
+    parser = argparse.ArgumentParser(description='Resolve a stored editor job against this checkout.')
     parser.add_argument('step', choices=['resolve-job'])
     parser.add_argument('job')
     parser.add_argument('out')

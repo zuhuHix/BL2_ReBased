@@ -91,6 +91,33 @@ jobs:
             echo "expected a non-zero exit with no arguments"; exit 1
           fi
 
+  rust-workspace:
+    # The Cargo workspace (decision 2026-11-14-01: Rust replaces the UE5 host). rust-toolchain.toml pins the toolchain;
+    # the runner image's rustup installs it on the first cargo call. No third-party crates, so nothing is downloaded
+    # from crates.io. --locked fails the job if Cargo.lock is out of date.
+    name: Windows / Rust workspace
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: ow-host refuses to start without the game
+        shell: bash
+        run: |
+          if cargo run --locked -q -p ow-host -- --game "$RUNNER_TEMP/no-game-here"; then
+            echo "expected ow-host to refuse a folder that is not a Borderlands 2 install"; exit 1
+          fi
+
   leak-gate:
     # tools/leak_gate.py (docs/TOOLING.md, "Leak gate"): game files, decompiler output, dumps and personal
     # identifiers. A separate job with no path filter, so it can be made a required check. The gate script and its

@@ -5,6 +5,8 @@ through this repository's reader, a census over every base-game package and live
 Every report, texture, scene and capture stays under ignored `local/` (`local/lanea/`, `local/realgame/`,
 `local/sanctuary/`) and the local gallery named below. No game-derived file is committed.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## Matched-viewpoint pass, rounds 1-4 (2026-10-21/22)
 
 Lane A matched the host import against eight real-game cameras (`reference/`, same location, rotation and FOV) over

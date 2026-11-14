@@ -5,8 +5,13 @@ build, what each tool does, what has been checked, and what each check does and 
 Everything here reads the player's own installed game and writes only under
 the ignored `local/` directory.
 
-Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3. The UE5
-host additionally needs Unreal Engine 5.8 installed.
+Requirements: CMake, Visual Studio 2022 C++ build tools, Python 3, and the Rust toolchain that `rust-toolchain.toml`
+pins (1.96.0; `rustup` installs it on first use). Since 2026-11-14 there is no Unreal Engine 5 host: the UE5 host and
+the scripts that built, seeded, imported into or launched Unreal left the tree, and new runtime code is Rust
+([decision](decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). Borderlands 2
+itself is a UE3 game, and everything about UE3 below (packages, UnrealScript, UModel) is unchanged. The full text of
+this file as it stood with the UE5 host is `git show 08bcf3e:docs/TOOLING.md`; what left is summarised in "Retired
+with the UE5 host (2026-11-14)" at the end.
 
 ## Main tools at a glance (maintainer, 2026-10-22)
 
@@ -20,14 +25,20 @@ still applies.
 | Decoding anything: native functions, binary formats, movies, runtime call tracing | **REA** ("reverse engineer anything", npm `rea-agents` 6.0.0, used through its `rea` MCP server; it drives the local Ghidra) | MCP tools `open_binary`, `procedure_pseudo_code`, `search_strings`, `observe_native_calls`, `trace_native_values`, ...; raw output only under `local/analysis/` (docs/NATIVE_ANALYSIS.md) |
 | Headless executable analysis behind REA | Ghidra 12.1.4 + Temurin JDK 21 | `%USERPROFILE%\Tools\`, `tools/ghidra_import.ps1` |
 | Meshes, textures, animations, sounds | UModel / UE Viewer build 1590 | "UModel / UE Viewer" below |
-| Package identity, properties, scene records | `ow-package` (ours) | "`ow-package`: the package reader" below |
+| Package identity, properties, scene records | `ow-package` (ours; the C++ build is the reference, the Rust port is not started) | "`ow-package`: the package reader" below |
 | UnrealScript bytecode | `research/script_disasm.py` (ours) | "Reading the game's UnrealScript" below |
 | The game's object dumps as an oracle | OpenBLCMM datapack | `tools/blcmm_dumps.py`, THIRD_PARTY.md |
-| BL2's Scaleform UI movies | Ruffle (desktop and web builds) | "BL2's HUD movie over UE5" below |
+| BL2's Scaleform UI movies | Ruffle (desktop and web builds), our overlay pages served by `tools/hud_overlay/serve.py` in a browser | "BL2's UI movies in the browser (overlay pages)" below |
 | Save-file layout and save-editing behaviour (SDU tables, item serials, character fields) | Gibbed's Borderlands 2 save editor, as a reference to check against | Behaviour reference only. Not installed in `%USERPROFILE%\Tools` and not yet in THIRD_PARTY.md. Record its version and licence there before relying on it, and copy no code. |
 
 REA is recorded in THIRD_PARTY.md ("REA (Reverse Engineer Anything) MCP server": 4.1.0 on 2026-10-07, updated to 6.0.0 on
 2026-10-08). Gibbed has no THIRD_PARTY.md entry yet. That is a maintainer decision and is still open (2026-10-22).
+
+**Outputs whose consumer was the UE5 host.** Several preparers below still write fields that only the retired UE5 host
+read: `/Game/...` content paths (for example `prepare_weapon_paint.py --mesh` and `--mesh-folder`, the Phaselock
+target's `host_target.json`), `*-runtime.json` files for its walking tests, and the editor job files under `local/slice/` and
+`local/phaselock/`. Manifests such as the mover's and the minimap's were passed to it by command-line switches. They are kept as they are, so the data stays reproducible; the Rust host will define its own import and
+will not inherit these shapes by default.
 
 ## External tools
 
@@ -49,7 +60,7 @@ as provenance; no source was copied into this project.
 The official project page documents package listing and export of static and
 skeletal meshes, animations, textures and sounds. It also documents important
 limits: some material types are unsupported, exported material files are
-heuristic, and exported data does not prove UE5 material or gameplay parity.
+heuristic, and exported data does not prove material or gameplay parity in any host.
 
 The current maintainer checkout is outside this repository at
 `%USERPROFILE%\Documents\BL2_Tools\UEViewer-src`. Other machines must pass
@@ -177,7 +188,7 @@ Messages never quote the scanned input, an argument or a policy line.
 | `account-id`, `credential` | error | Steam account ids; well-known token prefixes, JWTs, Slack and Discord webhook URLs and private-key blocks (encrypted ones too) |
 | `private-name` | error | a token from the private names list `local/leak_gate_names.txt` (ignored, never tracked; `OPENWILLOW_LEAK_NAMES` overrides the path). Its baseline sits next to it, not in the tracked baseline. The summary line says whether a list was found; without one the rule is not checked, as in CI |
 | `object-format` | error | a commit or tag header the gate does not know, an object id or type header of the wrong shape, or a signature block that is not armoured base64: what the gate cannot read is refused |
-| `dump-like` | warning | a numeric table larger than any the tree holds (8 lines and 48 numbers, 24 lines, or 64 numbers on one line), or 8 or more lines of hash-length hex (a hash list): reported, refused only at the `dump` sizes. Measured once on 2026-11-11: the longest numeric run is 6 lines with 12 numbers (`docs/verification/WEAPON_VISUALS.md`), the most numbers on one line 28 (`host/ue5/import_weapon_paint.py`), 24 in `tests/` (`tests/collision_test.py`); the only file whose numeric lines add up past the error size is `research/native_by_class.json`, held by the baseline as it is |
+| `dump-like` | warning | a numeric table larger than any the tree holds (8 lines and 48 numbers, 24 lines, or 64 numbers on one line), or 8 or more lines of hash-length hex (a hash list): reported, refused only at the `dump` sizes. Measured once on 2026-11-11: the longest numeric run is 6 lines with 12 numbers (`docs/verification/WEAPON_VISUALS.md`), the most numbers on one line 28 (the UE5 host's `import_weapon_paint.py`, removed 2026-11-14), 24 in `tests/` (`tests/collision_test.py`); the only file whose numeric lines add up past the error size is `research/native_by_class.json`, held by the baseline as it is |
 | `unknown-type` | warning | a new file whose type the tree has never held |
 | `address-hex` | warning | a hex value in prose shaped like an address in the executable; constants share that range, so it is not refused |
 | `local-copy` | warning | a changed file byte-identical to a file under `local/` (64 bytes or more; copies of the repository itself under `local/` are skipped) |
@@ -282,6 +293,8 @@ ctest --test-dir build -C Release --output-on-failure
 python tests/level_test.py
 python tools/verify_packages.py --reader build/Release/ow-package.exe
 & ./build/Release/ow-package.exe "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole/Core.upk"
+cargo build --workspace
+cargo test --workspace
 ```
 
 The CTest suites and `tests/level_test.py` use synthetic fixtures only and are
@@ -289,150 +302,81 @@ what CI runs. `tools/verify_packages.py` needs an installed game; for a
 non-default install add
 `--cooked "D:/path/Borderlands 2/WillowGame/CookedPCConsole"`. It only reads
 installed packages; temporary decompressed files are removed when the check
-exits.
+exits. The current test counts are in [GATES.md](verification/GATES.md), not here.
 
 For a decoder-free build add `-DOPENWILLOW_LZO=OFF`; that build accepts only
 decompressed packages and skips the container, asset and compressed tests. The
 LZO decoder is the vendored MIT-licensed lzokay; see
 [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-### Playing the slice by hand (`tools/play_slice.ps1`, 2026-11-11)
+## Rust workspace (since 2026-11-14)
 
-One command for the vertical slice with no test driver: Sanctuary_P with Marcus's Fire mission, the gun range's enemies
-(`-owrangestart`), Phaselock's data, the sounds (`-owaudioplay`), BL2's HUD movie and status pages from
-`tools/hud_overlay/serve.py`, and the start shield. It refuses to start, naming each missing file and the tool that makes it,
-and holds the machine-wide UE run lock (below) while the window is open. Heavy: it opens the editor in `-game`.
+The repository root is a Cargo workspace (`Cargo.toml`, crates under `crates/`, build output in the ignored `target/`).
+`rust-toolchain.toml` pins Rust 1.96.0 for every machine and CI; change it in its own commit. The crates use edition
+2024 and forbid `unsafe` code. There are **no third-party crates**: each one added later needs its `THIRD_PARTY.md`
+entry first (AGENTS.md rule 6), and that is the maintainer's decision.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -Fresh              # play; -Level N, -Save <file>, -Port N
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -CheckSeconds 180    # unattended smoke: PASS/FAIL per item
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -PrintCommandLine    # the line only; starts nothing
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/play_slice.ps1 -NoRange             # no range: Maya is not moved, no enemies
+cargo build --workspace
+cargo test --workspace
+cargo run -p ow-host -- --game "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2"
 ```
 
-Exit codes: 0 played or passed, 1 a smoke item failed, 2 refused (missing data), 3 never launched (lock timeout, page server
-refused, editor would not start).
+The crates port the C++ core in `src/` one at a time; they do not wrap it. Until a crate meets its rule below, the
+C++ build stays the reference and keeps building and testing with CMake and ctest, and nothing about the 832/46 format
+is re-derived: the port reuses the offsets the C++ code already recovered and checked (rule 4), and its bounds checks
+keep their meaning (rule 5).
 
-The smoke passes only when the log shows the mission ready, the range built, Phaselock's data, the audio play map, the start
-shield, and the HUD, inventory, skills, missions and mission-screen pages ready (`-GradeLog <log>` grades a log again). The
-route and what stays UNVERIFIED: [SANCTUARY_RPG_MISSION.md](verification/SANCTUARY_RPG_MISSION.md), "Hand play (updated)".
-Tests: `tests/play_slice_test.py` (CTest `play-slice-launcher`; synthetic data; the launch runs a stub editor and a stand-in lock, never Unreal).
+| Crate | Ports | Done when (from the crate's doc comment) |
+|---|---|---|
+| `ow-container` | `src/container.*` (the LZO1X container) | the synthetic container fixtures `tests/` builds give the same results as the C++ build, and the real packages decompress to the same bytes as `ow-package` from `build/Release`. It gets its own decoder, written from the LZO1X format and the project's pure-Python decoder in `research/native_count.py`, so no C code is translated |
+| `ow-package` | `src/package.*` (header, names, imports, exports, tagged properties), `src/assets.*`, `src/census.*` | `python tools/verify_packages.py --reader <the Rust ow-package>` reports the same packages, counts and exact class bodies as the C++ reader, and the synthetic fixtures pass in both. The C++ `Reader`'s `require()` and limit checks become `Result` errors, never panics or wider bounds |
+| `ow-vm` | `src/script.*`, `src/vm.*`, `src/interp.*`, `src/natives.*`, `src/kismet.*`, `src/behavior.*` | the VM's synthetic tests and the Fire event-order check (`tools/verify_fire_event_order.py`) give the same results as with the C++ build |
+| `ow-game` | `src/combat*`, `src/mission*`, `src/progression.*`, `src/dialog.*`, `src/mover.*`, `src/slice.*`, `src/inventory_navigation.*`, `src/weapon_gen.*`, `src/weapon_firing.*` | no crate-specific rule yet; the workspace rule applies (same synthetic fixtures, same results). Each rule keeps the evidence label it has in `docs/verification/`: porting a rule does not change what is known about it |
+| `ow-cli` | `src/cli.cpp`; builds the binary `ow-package` | not ported yet: it prints that and exits 2. Use `build/Release/ow-package.exe` |
+| `ow-host` | the host; binary `ow-host --game <install>` | checks that the folder holds `WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk` and `WillowGame.upk` (rule 11), then says that no engine route is chosen and stops (exit 0; 1 when it refuses the folder, 2 for a wrong call) |
 
-### One Unreal run per machine
+Every crate but `ow-host`'s install check is a skeleton ("Not started" in its doc comment); nothing in Rust reads a
+package yet, so every statement about the Rust route is `UNVERIFIED`. The engine route is not chosen: a timeboxed
+Phase 0R benchmark (Bevy and an own engine on wgpu + winit required, Fyrox optional) builds the same small scene in
+each, its prototypes live under ignored `local/bench/` because each candidate is a new dependency, and the maintainer
+picks from the record, [ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md).
 
-Every script that launches `UnrealEditor.exe` or `UnrealEditor-Cmd.exe` (the suites, the seed and import scripts,
-the shot runners, the `run_ue_*` launchers, `test_ue_viewer.ps1`) and the real-game helpers (`tools/real_game/realgame.ps1`)
-hold one lock file per machine, `%LOCALAPPDATA%\OpenWillow\ue_run.lock`, from before the launch until the process has
-exited; interactive launchers (`run_ue_level.ps1 -ViewOnly`, `run_ue_flash_hud.ps1`, `run_ue_character.ps1 -Play`,
-`run_quest.ps1`, `play_slice.ps1`) therefore keep their PowerShell window busy until the editor is closed. All of it lives in
-`tools/ue_lock.ps1`, which the scripts dot-source:
+## The run lock: one heavy run per machine
 
-- `Enter-OwUeLock -Owner <script>` waits while any `UnrealEditor`/`UnrealEditor-Cmd` process runs and the lock is held,
-  then creates the file atomically and writes its owner: the PowerShell process id, that process's start time and the
-  script name. `Exit-OwUeLock` deletes it only when the caller owns it. `Invoke-OwUeLocked -Owner <script> -Body { ... }`
-  does both around a block; `Invoke-OwUeEditor` starts the editor and waits for it (`& $editor` does not wait for a GUI program).
+`tools/ue_lock.ps1` (dot-source it) is the machine-wide run lock: one heavy run at a time per machine. Today the
+real-game helpers take it (`Enter-RunLock` in `tools/real_game/realgame.ps1`, and the record and recovery steps of
+`tools/real_game/pending.ps1`); a run of the future Rust host is to take it too. It is named for the retired UE5 host,
+whose launchers held it around every Unreal Editor or commandlet run (this section was "One Unreal run per machine"
+until 2026-11-14); the name stays because the real-game tools dot-source it. A script holds one lock file,
+`%LOCALAPPDATA%\OpenWillow\ue_run.lock`, from before its launch until the process has exited:
+
+- `Enter-OwUeLock -Owner <script> [-TimeoutSeconds 600] [-AlsoWaitFor <process names>]` waits while any
+  `UnrealEditor`/`UnrealEditor-Cmd` process runs (an editor started from an older checkout would compete for the same
+  PC) and while the lock is held, then creates the file atomically and writes its owner: the PowerShell process id,
+  that process's start time and the script name. `Exit-OwUeLock` deletes it only when the caller owns it.
+  `Invoke-OwUeLocked -Owner <script> -Body { ... }` does both around a block.
 - A lock is stale only when its owner process is gone (no process with that id, or one with another start time); `Enter`
   then removes it and takes its place. The check, the removal and the atomic create happen together behind a machine-wide
   named mutex (`Global\OpenWillowUeLockGate`; if that name cannot be opened, the scripts stop with an error rather than
-  use a separate gate), so two waiters cannot both replace the
-  same stale lock. After creating the lock, `Enter` looks for running editors once more and gives the lock back if one
-  appeared (started by a script that bypasses the lock). Age alone never makes a lock stale, and a lock without owner fields (written by
-  a branch older than 2026-11-03) is never removed automatically: check that no editor or game it guarded runs, then
-  delete it by hand.
-- The real-game helpers (`Enter-RunLock` in `tools/real_game/realgame.ps1`) and `run_phaselock_shots.ps1`,
-  `test_ambient.ps1` and `seed_ambient_npc_assets.ps1` also wait while `Borderlands2` runs, so real-game probes and
-  Unreal runs never overlap.
+  use a separate gate), so two waiters cannot both replace the same stale lock. After creating the lock, `Enter` looks
+  for running editors once more and gives the lock back if one appeared. Age alone never makes a lock stale, and a lock
+  without owner fields (written by a branch older than 2026-11-03) is never removed automatically: check that no editor
+  or game it guarded runs, then delete it by hand.
+- The real-game helpers also wait while `Borderlands2` runs (`-AlsoWaitFor Borderlands2`), so two real-game runs never
+  overlap.
 - Nobody launches the game while a capture runs: a game started and closed between its checks goes unnoticed.
 - **Bar lifted (2026-11-09):** `action_skill_hud_capture`, `hud_integrity_capture`, `hud_layout_capture`, `hud_parity_capture`, `weapon_part_session`, `projectiles_capture` and `weapon_parity2_capture` are no longer barred. The first five rest on run Z41 on zuhu, which ran `tools/real_game/hud_layout_capture.ps1 -Resolutions 1280x720` on main with PR #182 at commit 6da8d34. It exited 0: Sanctuary_P loaded, the HUD was read, the saves were identical after two restores, sdk_settings were restored, and the pending record was removed once the tree hash matched. The same day `tools/real_game/phaselock_integrity_capture.ps1 -SkipDown` also finished with a clean restore. Z41 exercised the shared `Complete-BackupRun` cleanup, which these five use. The two finalizers (`projectiles_capture`, `weapon_parity2_capture`) were barred because they restored before re-checking the backup; since PR #200 both restore through `Restore-VerifiedRoots`, one hash table, and a missing or changed backup is refused with the record and both locks kept. Run Z44 on zuhu (2026-11-09, PR #200 head, `hud_layout_capture.ps1 -Resolutions 1280x720`) exited 0 with saves identical after three restores, three changed files restored, the pending record removed after the tree-hash check, and no BACKUP CHANGED, MISSING or REFUSED rows. Z44 exercised the shared restore through `hud_layout_capture`, not the two finalizers of `projectiles_capture` and `weapon_parity2_capture`. Neither of those two has run against the game since the fix. Each of the seven stays UNVERIFIED for its own capture until it has run once against the game. The synthetic tests (`tests/real_game_pending_test.py`, `tests/real_game_migration_test.py`, `tests/real_game_finalizer_recheck_test.py`) still cover the shared cleanup.
 - `OPENWILLOW_UE_LOCK` overrides the path; it must be absolute (a relative path would name a different lock in every
   worktree and is rejected). The lock is per Windows user; two different accounts on one machine are not serialized. Set `OPENWILLOW_UE_LOCK` to the same absolute path for both if that's ever needed.
 
-Until 2026-11-03 the lock was `local/ue_run.lock` inside each checkout, so editors started from different worktrees ran
-side by side; a branch older than that still uses the per-checkout file, so rebase it before running suites next to newer
-worktrees. CTest `ue-lock-machine-wide` fails when a script that names `UnrealEditor*.exe` does not use the helper, and
-checks the owner and staleness rules against temporary lock files.
+Until 2026-11-03 the lock was `local/ue_run.lock` inside each checkout, so runs from different worktrees did not see each
+other. CTest `ue-lock-machine-wide` checks the path rules, the owner and staleness rules against temporary lock files, the
+atomic stale recovery, and that every real-game script that starts the game takes the lock and waits for Borderlands 2.
+Its rule that every script naming `UnrealEditor*.exe` takes the lock has nothing to check since the UE5 host left the
+tree, and applies again if such a script returns.
 
-### Before a suite: engine path, preflight and the suite-map lint (2026-11-12)
-
-- **Engine path.** Every script that launches the editor and has an `-Engine` default takes it from `OPENWILLOW_UE` when it
-  is set, and `C:\Program Files\Epic Games\UE_5.8` otherwise; set the variable on a PC with Unreal elsewhere. Five scripts
-  still require `-Engine` with no default (`run_ue_level.ps1`, `run_ue_character.ps1`, `run_ue_flash_hud.ps1`,
-  `run_ue_probe.ps1`, `import_maya_combat_anims.ps1`). CTest `py-engine_default`.
-- **`tools/preflight.ps1`** looks before a run and changes nothing: it deletes no lock, stops no process and writes nothing
-  but its report (it may create the lock's folder, never the lock; git runs with `--no-optional-locks`, so the
-  worktree's index is not refreshed), and it reads a lock with delete sharing so the owner's release is never delayed. Each check is off until
-  its parameter is passed, so a driver asks for what applies to one suite: `-Data` (a file, or a folder holding one),
-  `-Generators <data>=<generator>` (data newer than the generator's last commit), `-CheckLinks` (no link under `local\`
-  resolves outside the worktree), `-Port`, `-NoEditor` (the two editor names `ue_lock.ps1` always waits for, not a caller's
-  extra names), `-CheckLock` (the run lock above) and `-AlsoLock <file>`, `-ReportHold <file>` (reported, never a failure),
-  `-CheckBuild`, `-CheckEngine`. `-CheckBuild` judges the module DLL by file times against what it is built from (files
-  under `host/ue5/OpenWillow/Source`, headers under `src`, the two CMake libraries), and `build\Release\ow-core.lib` by
-  content: every CMake build, also one that rebuilds nothing, writes `ow-core.lib.inputs` next to it
-  (target `ow-build-stamp` in `CMakeLists.txt`: git's entries for `src`, `third_party/lzokay` and the two `CMakeLists.txt`), and the
-  preflight compares that with the entries now. It says `UNKNOWN`, never ok, when it cannot tell: no stamp yet (run
-  `cmake --build build --config Release` once), a stamp from a build with uncommitted inputs, a configure after the last
-  build (`CMakeCache.txt` newer than the stamp), a newer `*.Build.cs`, `*.Target.cs` or `.uproject`, and a folder under
-  `Source` newer than the DLL with no newer file in it (a file there was added, deleted or renamed, possibly and back
-  again; the line stays until the DLL is relinked). A newer file is stale. With the project's build command a
-  failed `ow-core` leaves the old stamp untouched, so the check then fails and names the changed file (checked with a
-  real build on 2026-11-12). Not tested and not covered: a build driver that keeps going after a failed project and
-  still runs dependent steps, a commit or checkout made while a build is running, and settings that live outside the
-  checkout (environment variables, the compiler or engine installed). It prints one `PREFLIGHT ok|FAIL|NOTE|UNKNOWN` line per check and a summary, also when
-  git or a check fails, and exits 1 when a check failed (`UNKNOWN` is not a failure), 2 for a wrong call. `-Generators`
-  compares file times with committer dates, which cuts both ways: a rebase after the generator ran makes the data look
-  stale, and a checkout of a commit dated before the run makes it look fresh. Uncommitted changes to the generator
-  fail on their own line. CTest `py-preflight`, run under Windows PowerShell 5.1 and pwsh where each is present.
-
-  ```powershell
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools/preflight.ps1 -NoEditor -CheckLock -Port 8795 -CheckBuild -CheckEngine
-  ```
-- **`tools/suite_map_lint.py --map <suites.txt> [--repo <checkout>] [--commit <rev>] [--smoke-only <file>] [--switch-only <file>]`**
-  checks a suite map in the hub's format with the hub helper's path matching. It refuses what `suites-due.sh` refuses (a
-  byte-order mark, a bad or repeated name, a suite with no paths, a misplaced `*`, `./`, a leading `/` or a backslash, a
-  suite that covers no file), and reports a path that matches no tracked file; a command whose `-File` script is not
-  tracked; a file the suite's script loads that the suite does not cover, where a load is `Join-Path $PSScriptRoot '<file>'`
-  or `Join-Path $repo '<file>'` (repository root; helpers followed; case ignored as PowerShell does, and a path built from a
-  variable is not read); and a tracked file under `host/ue5/OpenWillow/Source/` or `src/` that only a whole-tree suite (`.`)
-  covers, unless `--smoke-only` lists it. The lint does not read switches, so a load behind a switch the suite never passes
-  is reported too; `--switch-only` (lines of `<suite> <path>`) accepts it. Exit 1 on any error. `--map` defaults to the
-  tracked `tools/suites.txt`, and without `--map` and `--switch-only` the tracked `tools/suites_switch_only.txt` (the loads
-  that sit behind a switch the suite never passes) is read with it (since 2026-11-13; `--switch-only ''` reads none). CTest
-  `py-suite_map_lint` (which also checks that every pair in that list is still reported without it), and `suite-map-tracked`,
-  which runs the plain command, so a PR that adds a tool to a suite script without adding it to the map fails CI.
-
-### Heavy suites: the suite map (2026-11-12)
-
-The in-engine suites are too slow to run on every commit, so each one runs only when something it covers changed.
-`tools/suites.txt` lists them, one line per suite: `name | minutes | paths | command`, then a
-`#pass <name> | <must match> | <must not match>` line read by the driver. Paths are folders (`src/`), files, suffixes
-(`*.py`) or `.` (everything), split on spaces and tabs and matched case-sensitively; the `*ignore*` line lists paths
-no suite depends on. The map and `tools/suites_switch_only.txt` are on `unit`'s line (its CTest entry reads them), so
-editing either makes `unit` due, and `slice_gate` too, since it covers `.`. A covered path must not be a symbolic link.
-The map holds no machine paths: the Unreal folder comes from `OPENWILLOW_UE` and the game from `OPENWILLOW_BL2`. Its minutes
-were measured on the main desktop.
-
-- **What is due:** `python tools/suites_due.py due <commit>` prints each suite with no recorded pass on the content it covers now (name, minutes, command), and a total. A pass is keyed by the git hash of the suite's
-  covered files plus its command, so a rebase, a merge or a docs change makes nothing due, and changing a suite's paths
-  (so that they cover other files) or its command makes that suite due once. `why <commit> <suite>` lists the covered
-  files changed since its last pass. `due`, `record` and `why` read the map as committed in `<commit>` (a commit with no
-  `tools/suites.txt` is refused unless `--map <file>` names one), and refuse to run when the helper's own
-  `tools/suites_due.py` or `tools/suite_map_lint.py` differs from that commit's: run them from a checkout of the commit
-  being judged. `list` prints the working-tree map. Exit 1 when a suite covers no file at that commit.
-- **Run them:** `powershell -NoProfile -File tools/run_suites.ps1 -Worktree <test worktree> -Commit <40-char sha>
-  -OutDir <log folder> [-Suites a,b] [-Repeat <suite>:<n>]`. It refuses a worktree that is not clean or not at the
-  commit, reads the map inside that worktree, runs the due suites (or `-Suites`) one after another, gives a failed suite exactly one rerun, writes one log per
-  attempt and `results.tsv`, records each pass at once (not when the checkout moved or a tracked file changed during
-  the run: that suite counts as failed), and exits with the number of suites that ended `FAIL` (100 when it
-  refused to start). It starts no build, kills no process and deletes no lock; build first, as the map's header says.
-- **Record a pass by hand:** `python tools/suites_due.py record <commit> <suite>...`, only after a complete pass of that
-  suite on that commit. Passes go to `local/hub/test-ledger.txt` in the main checkout (`HUB_DIR` overrides the folder),
-  one `suite|key|commit|time` line each. The ledger is machine state and stays untracked; a line means the same on any
-  machine, so lines can be copied between them. After regenerating ignored data a suite reads, delete that suite's lines.
-
-The helper is a port of the hub's earlier `suites-due.sh` and computes the same keys, so passes recorded before the move
-stay valid. CTest `py-suites_due` (synthetic repository and maps; the driver cases need Windows PowerShell).
-
-### Landing PRs in a batch
+## Landing PRs in a batch
 
 `tools/land_batch.sh` lands several reviewed PRs with one push to `main` (Git Bash, with `gh` logged in):
 
@@ -444,8 +388,8 @@ bash tools/land_batch.sh -w ../BL2_ReBased-landing -D "<pr>:<head>"    # Markdow
 ```
 
 `<head>` is the full 40-character commit that was reviewed and tested; `<tested-commit>` is the integration commit
-(current `main` plus exactly these PRs, in this order) that the in-engine suites have passed on, in the sense of "What
-counts as passed" below. The script rebases the
+(current `main` plus exactly these PRs, in this order) on which the tests were run (see "What counts as passed" below).
+The script rebases the
 listed PRs into one chain on top of `origin/main`. One atomic push moves the PR branches to their commits in the chain
 (all or none); once GitHub shows the new heads and the required checks have passed on the chain's tip (below), `main`
 fast-forwards in a second push, leased on the `main` the chain was built on. With the check that the chain contains
@@ -523,19 +467,15 @@ given to `-t` (or, for a Markdown-only PR, its review is clean), and reports wha
 for the maintainer's explicit OK: changes to `THIRD_PARTY.md` or `LICENSE`, a new dependency or tool, `ROADMAP.md`,
 history rewrites, releases, and anything public outside the repository.
 
-**What counts as passed.** A suite has passed on the tested commit when it ran green on that commit, or ran green on
-an earlier commit in which every file the suite covers is byte-identical to the tested commit's. What each suite
-covers is the path list in `tools/suites.txt` at the tested commit; a suite that is not listed there has no recorded
-coverage and runs on every tested commit as before. `python tools/suites_due.py due <tested-commit>` prints the
-listed suites that have no such pass, and it must print none before the batch lands. Nothing else about the checks above
-changes: the chain's tree must still be byte-identical to the tested commit's.
-
-The earlier rule was every suite on every tested commit. Between 2026-11-08 and 2026-11-10 that meant rerunning
-suites each time `main` moved under a PR that had already passed, roughly three hours in all (an estimate from the
-hub's message timestamps), and in the cases on record none of those reruns found a failure the first run had not. The amended rule keeps a rerun whenever
-a covered file changed, which is the case where one can find something. It rests on the path lists being right: a
-list that is too narrow skips a run that was needed. The full regression the hub runs on `main` once per hub run is
-the check on that, and a failure there means widening the list.
+**What counts as passed.** Until 2026-11-14 this meant the in-engine suites: a suite had passed on the tested commit
+when it ran green on that commit, or on an earlier commit in which every file it covers (its path list in the suite map
+`tools/suites.txt`) was byte-identical, and `python tools/suites_due.py due <tested-commit>` had to print no suite before
+the batch landed (amended 2026-11-11 from "every suite on every tested commit"). The UE5 host's suites, the suite map
+and its helper (`tools/suites.txt`, `tools/suites_due.py`, `tools/run_suites.ps1`, all removed 2026-11-14) left the
+tree with the host, so the suite half of the standing approval has nothing to run today. What a tested commit must pass
+in its place, until a Rust host has heavy runs of its own, is not decided in this file; the checks every change runs are
+in [GATES.md](verification/GATES.md), "Every change". The full old text: `git show 08bcf3e:docs/TOOLING.md`. Nothing
+else about the checks above changes: with `-t`, the chain's tree must still be byte-identical to the tested commit's.
 
 ## `ow-package`: the package reader
 
@@ -645,102 +585,58 @@ Local checks on 2026-09-10, Release build, all against the installed game:
   (1024×1024 DXT1, streamed from `Textures.tfc`, 11 resident mips) from
   `Ash_P.upk`, and confirms through the material's `TextureParameterValues`
   that the texture is that mesh's `p_Diffuse`.
-- The UE5.8.2 host probe rendered this mesh and texture in
-  `/Game/Phase0/Phase0`; the first Phase 0 screenshot is user-verified.
+- The retired UE5 host's probe rendered this mesh and texture; that first Phase 0
+  screenshot was user-verified. It is history of that host, not evidence for a Rust host.
 
 These checks establish agreement with the research reader and a visually
 plausible texture, not independent proof of every format field or gameplay
 compatibility.
 
-## Host engine probe (Phase 0)
-
-`host/ue5/OpenWillow/` is a minimal UE5 C++ project whose module refuses to
-start without `OPENWILLOW_BL2` pointing at an installed game.
-`tools/run_ue_probe.ps1 -Engine <UE5 root> -Game <BL2 root>` builds it and
-launches the editor with `host/ue5/import_probe.py`, which imports the probe
-OBJ and PNG, wires the texture into a material, and places the mesh, a camera
-and lights in `/Game/Phase0/Phase0`. This editor import remains a diagnostic
-spike, not the eventual runtime loader.
-
-## Material v1 and the first map loader (Phase 1)
+## Material v1 and map preparation (Phase 1)
 
 ```powershell
 python tools/prepare_level.py --reader build/Release/ow-package.exe --game $game --map Ash_P
 python tests/level_test.py
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game
 ```
 
 The preparer follows `Ash_P`'s serialized sublevel references, extracts reusable
 LOD0 mesh sections and four-channel materials, and writes `local/ash/scene.json`.
-The UE5 importer creates `/Game/OpenWillow/Ash_P/Ash_P` with sublevel folders,
-collection and ordinary actor transforms, section material overrides and a
-spectator camera. Play controls: WASD/mouse, Q/E down/up. `_Dynamic` placements
-remain static; there is no physics or script execution. Use `-ImportOnly` for a
-headless editor import; that does not validate rendering or camera gestures.
+Preparation defaults to a separate `local/<map-name>` directory, so preparing
+`Sanctuary_P` does not overwrite the Ash manifest. `_Dynamic` placements are
+recorded as static; there is no physics or script execution. The retired UE5 host
+imported these manifests into its own content (sublevel folders, actor transforms,
+material overrides, an inspection lighting rig and a spectator camera) and verified
+the saved scene; that importer, its UV verifier and its viewer left the tree on
+2026-11-14. Counts and results of the first Ash import are history in the
+[Material v1 / Ash verification](verification/MATERIAL_LEVEL_V1_VERIFICATION.md).
+`tests/prepare_ue_smoke.py` and `tests/prepare_uv_smoke.py` still write their
+synthetic four-channel and UV-orientation scenes under `local/`; their consumer was
+that importer.
 
 Material v1 supports named diffuse/normal/specular/emissive texture parameters,
-parent inheritance and named base-material defaults. It uses opaque lit shading,
-linear normal/specular maps, sRGB diffuse/emissive, specular red, emissive RGB
-masked by alpha, and constant roughness 0.65. This approximates UE3 shading.
+parent inheritance and named base-material defaults. Its recipe assumes opaque lit
+shading, linear normal/specular maps, sRGB diffuse/emissive, specular red, emissive
+RGB masked by alpha, and constant roughness 0.65. This approximates UE3 shading.
 Unsupported assets, graphs and interactive component owners are listed in
-`scene.json` under `issues`. Terrain/BSP, skeletal meshes, lightmaps and full
-material graphs are not loaded.
-
-The imported map uses a reproducible inspection lighting rig (sun, skylight, reflection capture, exposure and
-ambient-occlusion override, anchored at the start camera). It is an inspection approximation, not UE3 lighting; its
-values and limits are in the [Material v1 / Ash verification](verification/MATERIAL_LEVEL_V1_VERIFICATION.md).
+`scene.json` under `issues`. Lightmaps and full material graphs are not decoded.
 
 `--scene-records tools/level-arrays.schema` is bulk CLI metadata for this slice;
 `--payload <positive export index>` exposes bounded bytes for observed collection
 tails. The Ash-specific prefixes and native collection layout remain subject to
 independent visual/in-game validation; see [DECISIONS.md](../DECISIONS.md).
 
-`-ImportOnly` writes the import commandlet log to `<scene>/ue-import.log` and
-fails if any material reported `Failed to compile Material`; such a material
-would otherwise render as UE's default checkerboard while the graph checks
-below still pass. It also reopens and verifies the saved scene: placement counts,
-collection transforms, material overrides, imported section bounds against
-source OBJ vertices, and material graph/color-space settings. To exercise all
-four channels independently of game data, run `python tests/prepare_ue_smoke.py`
-then pass `-Scene local/material-smoke -ImportOnly` to the launcher. `-SkipBuild`
-uses an already compiled host. All fixture data is synthetic.
+### Sanctuary: materials, sky and hidden helpers
 
-Imports also run `host/ue5/verify_uv.py` in a fresh editor process. It checks
-saved LOD0 UV0 bindings at every imported vertex instance against the OBJ,
-including the inverse OBJ V conversion, and verifies oriented triangle
-topology against the original game index order. Results are written to
-`ue-uv-verify.json`. This checks the export/import path, not material-graph UV
-operations or the original game's appearance. `python tests/prepare_uv_smoke.py`
-creates a separate `local/uv-smoke` square: red top-left, green top-right,
-blue bottom-left and yellow bottom-right when viewed from its saved camera.
-
-Counts and results of the first Ash import, and what remains open, are in the
-[Material v1 / Ash verification](verification/MATERIAL_LEVEL_V1_VERIFICATION.md).
-
-### Sanctuary and the free-flight viewer
-
-The viewer uses the possessed spectator pawn as its camera after restart. Its
-collision is disabled for free flight; this does not implement walking or UE3
-collision parity. Open an already imported scene without another import:
-
-```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild
-```
-
-Preparation defaults to a separate `local/<map-name>` directory, so preparing
-`Sanctuary_P` does not overwrite the Ash manifest. To iterate on material
-translation without extracting meshes again:
+To iterate on material translation without extracting meshes again:
 
 ```powershell
 python tools/refresh_materials.py --reader build/Release/ow-package.exe --game $game --scene local/sanctuary --reuse-textures --outer-shell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ImportOnly -SkipBuild
-./tools/test_ue_viewer.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary
 ```
 
 Use `--reuse-textures` only with the same unchanged game installation. The
 refresh preserves placement data and resolves materials by both path and class.
-`--outer-shell` is the opt-in hull policy described under the sky notes below;
-omit it to keep the placed `_Teleported` overrides.
+`--outer-shell` is the opt-in hull policy described below; omit it to keep the
+placed `_Teleported` overrides.
 
 For the narrow Sanctuary hull placement experiment, rebuild the manifest with
 
@@ -754,34 +650,12 @@ the default serialized placement remains unchanged. See the
 [hull placement note](verification/NATIVE_SKY_APPROXIMATION.md#matinee-first-key-placement-experiment)
 for the explicit status and limitations.
 
-On a machine without a discrete GPU, add `-LowEnd` to `run_ue_level.ps1`. It starts the editor or standalone viewer
-with reduced rendering settings (listed in [performance](verification/PERFORMANCE.md)). The first launch recompiles
-shaders for SM5 and is slow; later launches reuse the cache. The switch changes rendering only; imported content and
-saved scenes are identical with or without it. To repeat the recorded sample, `test_ue_viewer.ps1 -Profile` (optionally
-`-LowEnd`) runs `OpenWillow.Profile`; other machines will differ.
-
-```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -LowEnd
-```
 A single unnamed sample with an explicit `_Dif` texture name can supply
 approximate diffuse color when there is no named diffuse parameter; this is
 recorded as an inference, not reconstruction of stripped graphs or material
 tint. The preparer also reads the cooked Material resource's texture reference
 list after the tagged-property terminator; see
 [Cooked-material verification](verification/COOKED_MATERIAL_VERIFICATION.md).
-
-The runtime test checks pawn movement and camera following and captures three
-settled views in `Saved/Screenshots/WindowsEditor`. It supplies engine movement
-input, not physical keyboard/mouse gestures. The test process uses a 1 FPS
-startup threshold to allow correctness inspection on slow maps; this is not a
-performance pass. See
-[Phase 1 viewer verification](verification/PHASE1_VIEWER_VERIFICATION.md).
-
-The runtime test also logs a `Viewer diagnostic` record: 90 engine frame-time
-samples during movement (mean and p95 milliseconds), current process physical
-memory and peak process physical memory. These are short correctness-run
-diagnostics, affected by startup, window state and shader work; they are not
-a controlled renderer benchmark or GPU-memory measurement.
 
 To list remaining diffuse gaps, their effective placed section uses, and the
 recorded repair buckets:
@@ -794,17 +668,10 @@ The report is read-only and follows actor overrides. It groups gaps by `gap_stat
 `--all-gaps` to print masked/translucent gaps alongside the default opaque priority list. See the
 [audit improvements](verification/SKY_FALLBACK_VERIFICATION.md#audit-improvements) and the
 [Sanctuary material baseline](verification/SANCTUARY_MATERIAL_BASELINE.md).
-
 The audit also counts `surface_approximation` recipes separately. The two
 inspected glacier materials use a partial primary diffuse/normal layer with
 retained instance tiling on UV0; snow blend, glow and reflection remain open.
 See [glacier validation and limits](verification/GLACIER_PRIMARY_LAYER.md).
-
-The generated UE5 inspection map also receives a temporary `OpenWillow_SkyAtmosphere` actor and, unless a native sky
-dome is accepted, a blue `OpenWillow_SkyFallback` shell. Both are labelled `temporary_sky_fallback` in `ue-import.json`
-and `ue-verify.json` and are not visual-parity evidence; see the
-[sky fallback record](verification/SKY_FALLBACK_VERIFICATION.md) (`PF_A8R8G8B8` extraction:
-[record](verification/A8R8G8B8_TEXTURE.md)).
 
 To locate a map's native sky placements and explain why each one does or does
 not get a diffuse under the current policy:
@@ -818,63 +685,43 @@ cooked textures. `--extract` writes the meshes as OBJ and the textures as PNG un
 policy and interprets no stripped graph, Kismet streaming state or lighting. See the
 [sky census record](verification/SKY_CENSUS.md).
 
-Scene preparation carries the one accepted native `Prop_Skybox.Meshes.Sky_Dome` placement (Unlit effective material)
-into `scene.json`; the importer places it under `NativeSkybox/` without collision or shadows. A second Sanctuary
-`Sky_Dome` placement with a floor-material override is deliberately left as ordinary geometry. See the
-[native skybox verification record](verification/NATIVE_SKYBOX_VERIFICATION.md).
+What the preparer writes into `scene.json` for the sky (the UE5 host's temporary sky fallback actors were its own and
+left with it; [sky fallback record](verification/SKY_FALLBACK_VERIFICATION.md)):
 
-When the dome's effective material descends from `Common_Materials.Sky.Mat_SkyTimeOfDay_Master`, the preparer also
-writes a `sky_approximation` record from the named inputs that survive along the instance chain, and the importer
-builds one fixed graph from it; the verifier reports `verified_sky_approximation_materials`. The stripped master graph
-is not decoded and the `Time_of_Day` column reading (`/256`) is `UNVERIFIED`. Inputs, graph and omissions:
-[sky approximation record](verification/NATIVE_SKY_APPROXIMATION.md).
-
-The `Sanctuary_Outer` hull (`Prop_Skybox.Meshes.SanctuarySky` and its two antennas) is placed with masked
-`_Teleported` overrides that Material v1 cannot recover, so it imports invisible by default. `--outer-shell` (on
-`viewer.py --action prepare`, `prepare_level.py` and `refresh_materials.py`) drops only those overrides whose
-mesh-default material resolved a diffuse, records each replacement in the actor's `outer_shell_replaced` list, and
-imports the actors under `OuterShell/` without shadow casting. Which of `_Outer` and `_Land` the running game shows is
-Kismet state and is not interpreted. See the
-[sky approximation record](verification/NATIVE_SKY_APPROXIMATION.md).
-
-The Hyperion station in front of the moon (`Prop_MoonBase.Mesh.MoonBase02`) has a named entry in
-`INSPECTED_COLOR_FALLBACKS` in `prepare_level.py`, and the moon (`Mati_Moon`) one in
-`INSPECTED_UNLIT_COLOR_MULTIPLIERS` (recorded as `unlit_color_multiplier`; `verify_level.py` checks the pair as
-`verified_unlit_multiplier_materials`). The station shadow mask, crater relief and time-of-day tint stay omitted. See the
-[moon base record](verification/MOON_BASE_SURFACE.md).
+- the one accepted native `Prop_Skybox.Meshes.Sky_Dome` placement (Unlit effective material); a second Sanctuary
+  `Sky_Dome` placement with a floor-material override is deliberately left as ordinary geometry
+  ([native skybox record](verification/NATIVE_SKYBOX_VERIFICATION.md));
+- when the dome's effective material descends from `Common_Materials.Sky.Mat_SkyTimeOfDay_Master`, a
+  `sky_approximation` record from the named inputs that survive along the instance chain. The stripped master graph is
+  not decoded and the `Time_of_Day` column reading (`/256`) is `UNVERIFIED`
+  ([sky approximation record](verification/NATIVE_SKY_APPROXIMATION.md));
+- with `--outer-shell` (on `viewer.py --action prepare`, `prepare_level.py` and `refresh_materials.py`), the
+  `Sanctuary_Outer` hull (`Prop_Skybox.Meshes.SanctuarySky` and its two antennas): only the masked `_Teleported`
+  overrides whose mesh-default material resolved a diffuse are dropped, and each replacement is recorded in the actor's
+  `outer_shell_replaced` list. Which of `_Outer` and `_Land` the running game shows is Kismet state and is not
+  interpreted;
+- the Hyperion station in front of the moon (`Prop_MoonBase.Mesh.MoonBase02`) has a named entry in
+  `INSPECTED_COLOR_FALLBACKS` in `prepare_level.py`, and the moon (`Mati_Moon`) one in
+  `INSPECTED_UNLIT_COLOR_MULTIPLIERS` (recorded as `unlit_color_multiplier`). The station shadow mask, crater relief and
+  time-of-day tint stay omitted ([moon base record](verification/MOON_BASE_SURFACE.md)). Unlit colours and their
+  synthetic fixture: [Unlit color verification](verification/UNLIT_COLOR.md).
 
 Observed blocking helpers are retained for source collision where recovered and
-hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
+marked hidden from rendering: five `Common_Meshes.Blocking.Blocking_Cube` placements,
 the 81 of 94 `Common_Meshes.CollisionCube` placements whose component sets
 `HiddenGame`, whose owner actor sets `bHidden`, or which carry no material
 other than the cube's own `Mat_Collision`, plus three oversized adjacent
 `Sanctuary_P` placements (`StaticMeshActor_372`, `StaticMeshActor_690`, and
 `StaticMeshCollectionActor_27` instance `SMC_544`), whose concrete-tile
-overrides had made collision boxes visible across rooftops. The two actor
-placements are roughly 10 x 9 x 4 m; the collection instance is about 5 m per
-side. Their source collision remains enabled. Six cloud
-`Blocking_Plane` placements (four `Mat_CloudLayer_Light`, two
-`Mat_CloudLayer_01`) are hidden as well. The exact `Sanctuary_Outer`
-`InterpActor_34` `Prop_Garbage.Meshes.BoxLrg` placement that blocked the start
-view is also hidden. Two additional oversized `Sanctuary_Outer`
-`Prop_Garbage.Meshes.BoxLrg` placements (`InterpActor_26` and `InterpActor_33`)
-were identified in the UE viewport and hidden as visual-only blockers. `_26`
-and `_33` retain their source collision. `_34` does not: its box encloses the
-game's own `WillowCoopPlayerStart_0`, so it cannot block landed play (see
-DECISIONS.md, 2026-09-23). The remaining 10
-`CollisionCube` placements, including
-the thin concrete street slabs in front of Scooter's garage, render with their
-placed materials. Any other static (non-`InterpActor`) placement whose
+overrides had made collision boxes visible across rooftops. Six cloud
+`Blocking_Plane` placements and three `Sanctuary_Outer` `Prop_Garbage.Meshes.BoxLrg`
+placements (`InterpActor_26`, `_33` and `_34`) are hidden as well; `_34` keeps no
+source collision, because its box encloses the game's own `WillowCoopPlayerStart_0`
+(DECISIONS.md, 2026-09-23). Any other static (non-`InterpActor`) placement whose
 component sets `HiddenGame` or whose owner sets `bHidden` is hidden the same
-way, collision kept. Nearly all of these are `Sanctuary_Px` low-detail shells
-and `_Low` sidewalk proxies that otherwise cover the street with roof atlases
-(DECISIONS.md, 2026-09-23). This is a bounded visual artifact policy, not
-complete collision or material parity.
-
-Unlit Material v1 colors now feed Emissive Color when no explicit emissive
-texture exists. The saved-scene verifier reports `verified_unlit_materials`.
-See the [Unlit color verification](verification/UNLIT_COLOR.md) for scope
-and the synthetic regression fixture.
+way, collision kept; nearly all are `Sanctuary_Px` low-detail shells and `_Low`
+sidewalk proxies. This is a bounded visual artifact policy, not complete collision
+or material parity.
 
 To investigate the remaining cooked Material resource bytes before extending
 serialization support:
@@ -891,42 +738,67 @@ raw observations. The observed tail structure and its limits are in the
 [census record](verification/MATERIAL_RESOURCE_CENSUS.md). The report directory must be under this checkout's ignored
 `local/`; these reports must never be committed.
 
-### First collision and walking slice
+Sanctuary visual opt-in (2026-10-22): `tools/prepare_level.py` writes the decoded lighting, decal and diffuse-tint records
+into `scene.json` for `Sanctuary_P` only (other maps get no `lighting` key, and their decals default-deny). The retired
+UE5 host applied them behind `OPENWILLOW_SANCTUARY_OPT_IN`. See
+[SANCTUARY_SCENE_IMPORT_GAPS.md](verification/SANCTUARY_SCENE_IMPORT_GAPS.md) for the calibrations, all `UNVERIFIED`.
 
-Prepared scenes now include observed RB_BodySetup convex and box hulls. The
-collision refresh/import and walking regression have been verified on Sanctuary.
-For a scene already imported with collision, launch the placeholder character:
+### Collision, terrain and BSP
+
+Prepared scenes include observed RB_BodySetup convex and box hulls
+([collision preparation, checks and limits](../COLLISION_WALKING_VERIFICATION.md); the walking runs there were the
+UE5 host's). `tools/refresh_collision.py` also writes the map's blocking volumes (`tools/collision_volumes.py`) and
+`volumes-runtime.json`; pass `--live-volumes` with a walking capture to settle dynamic ones.
+`tools/walking_routes.py candidates` proposes stair probes, `tools/real_game/walking_capture.ps1` walks them in the
+running game (takes the screen and keyboard; output under `local/realgame/walking/`), and `tools/walking_routes.py
+routes` writes `walk-routes.json`.
+
+For a complete Sanctuary preparation, use:
 
 ```powershell
-./tools/run_ue_level.ps1 -Engine 'C:/Program Files/Epic Games/UE_5.8' -Game $game -Scene local/sanctuary -ViewOnly -SkipBuild -Walk
+python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctuary-geometry --outer-shell
 ```
 
-Use WASD and mouse, with Space to jump. Omit `-Walk` for the free-flight viewer.
-This uses UE5 movement defaults tuned for inspection; it does not reproduce BL2
-movement physics. See [collision preparation, checks and limits](../COLLISION_WALKING_VERIFICATION.md).
+This runs static-mesh preparation, terrain preparation, then BSP preparation
+with triangle collision, stopping on a failed stage. It is scoped to Sanctuary.
 
-Blocking volumes and recorded routes (2026-10-21): `tools/refresh_collision.py` also writes the map's blocking
-volumes (`tools/collision_volumes.py`) and `volumes-runtime.json`; pass `--live-volumes` with a walking capture to
-settle dynamic ones. `tools/walking_routes.py candidates` proposes stair probes, `tools/real_game/walking_capture.ps1`
-walks them in the running game (takes the screen and keyboard; output under `local/realgame/walking/`),
-`tools/walking_routes.py routes` writes `walk-routes.json`, and `tools/test_ue_viewer.ps1 -Route` runs
-`OpenWillow.RouteWalking` and `OpenWillow.CollisionShapes`.
+`tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+rewrites a prepared scene with one static mesh per TerrainComponent whose vertex/strip data corroborates the terrain
+hole/diagonal flags, a labeled material approximation, and (with `--collision`) triangle-mesh collision. Cooked weighted
+materials drive a weighted sum only when every weight array matches its paired PF_G8 texture (31/31 on Sanctuary;
+[DECISIONS.md](../DECISIONS.md) 2026-09-22); failed verification keeps the labeled dominant-layer fallback. This does
+not establish native shader or original-game visual parity. It also writes `terrain-runtime.json` (read by the UE5
+host's terrain walking test). See [the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
 
-Sanctuary visual opt-in (2026-10-22): `tools/prepare_level.py` writes the decoded lighting, decal and diffuse-tint records
-into `scene.json` for `Sanctuary_P` only (other maps get no `lighting` key, and their decals default-deny). The host applies
-the round-4 visuals only when the environment variable `OPENWILLOW_SANCTUARY_OPT_IN` lists them: `grade`, `diffuse_tint`,
-`xmas_bulbs`, `static_lights`, `graffiti_decals` (comma-separated; all default OFF). The 0.14 cloud-cap scale stays on. See
-[SANCTUARY_SCENE_IMPORT_GAPS.md](verification/SANCTUARY_SCENE_IMPORT_GAPS.md) for the calibrations, all `UNVERIFIED`.
+`tools/prepare_bsp.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
+adds the persistent-level root `Model`/`ModelComponent` polygons of a frozen Sanctuary scene as ordinary mesh sections
+with native material assignments, texture coordinates projected onto each surface's own base point and texture axes
+(`--uv surface_axes`, the default; `--uv planar` keeps the earlier 128 cm world-planar placeholder), and (with
+`--collision`) triangle collision. Every decode gate must pass before any file is written; volume-owned Models are
+rejected structurally. The divisor that turns projected distances into repeats is not in the package, so
+`--texel-scale` (default 128) is recorded in the manifest as `UNVERIFIED`; lightmaps and collision flags are kept only
+as opaque hashes. The script is scoped to `Sanctuary_P` plus `Sanctuary_Land` and also writes `bsp-runtime.json`.
+Sections whose preparer could not choose a material (currently two terrains) are labeled `neutral_constant`.
+`python tests/bsp_test.py` covers the decoder on synthetic fixtures. See [the BSP record](verification/SANCTUARY_BSP_POLYGONS.md)
+and the [texture-axis record](verification/BSP_TEXTURE_AXES.md).
+
+`tools/audit_sanctuary_artifacts.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --output local/artifact-pass.json`
+records IcePlate, WorldTransition and HLS effective placements plus source
+properties and omitted terrain/BSP class counts. Use it after material refresh;
+counts do not establish which missing floors terrain/BSP will fill. See
+[the verification record](verification/SANCTUARY_ARTIFACT_PASS.md).
+
+`tools/prepare_inspection_views.py --scene local/sanctuary` reads a hand-written `local/sanctuary/inspection-views.json`
+(or `--input`), checks it and writes it back (or to `--output`): 1 to 12 views, each with `location` in world centimeters, `rotation` as pitch, yaw, roll in degrees, and `fov` from
+10 to 150 degrees; `--repair-obstructed` adds host-side candidate poses for the known obstructed terrain view, from
+`terrain-runtime.json`. The
+UE5 host's inspection mode that captured these views is retired; the poses are inspection candidates, not recovered
+original-game cameras.
 
 ### Selecting an installed map
 
-`tools/viewer.py` lists persistent packages in the base-game cooked directory.
-Inside the running viewer, Tab shows an on-screen list of prepared scenes
-(`local/*/scene.json`) and imported maps (`Content/OpenWillow/<Map>/`); the
-digit keys open an imported one, and entries without a saved map are marked
-"not imported". `OWMapList` and `OWMapOpen <n>` do the same from the console.
-The list never prepares or imports; `test_ue_viewer.ps1 -Selector` runs the
-automated level-switch check.
+`tools/viewer.py` lists persistent packages in the base-game cooked directory and prepares one; since 2026-11-14
+`--action prepare` is its only action (import and view launched the retired UE5 host).
 Package discovery does not imply successful preparation or rendering. Add
 `--include-dlc` to discovery and preparation to include the install's `DLC`
 directory. The current install has 37 base-game and 45 DLC persistent maps.
@@ -935,16 +807,12 @@ directory. The current install has 37 base-game and 45 DLC persistent maps.
 python tools/viewer.py --game $game --list
 python tools/viewer.py --game $game --include-dlc --list
 python tools/viewer.py --game $game --map SouthpawFactory_P --action prepare
-python tools/viewer.py --game $game --map SouthpawFactory_P --action import --engine 'C:/Program Files/Epic Games/UE_5.8'
-python tools/viewer.py --game $game --map SouthpawFactory_P --action view --engine 'C:/Program Files/Epic Games/UE_5.8' --skip-build
 ```
 
 Omit `--map` for an interactive numbered selection. Use `--list --json` for
 machine-readable discovery. Names are matched case-insensitively; duplicate
 package names fail explicitly. Preparation writes to this checkout's
-`local/<map-name>/`; import and view require a matching prepared manifest.
-Import performs the existing saved-scene verification, while view requires an
-already imported map. `--skip-build` requires this checkout's compiled host.
+`local/<map-name>/`.
 
 DLC preparation indexes packages across the install and locates the named
 texture cache. A cache alongside the source package wins; otherwise the cache
@@ -956,29 +824,19 @@ the existing base-game search root. DLC discovery alone is not DLC compatibility
 
 `tools/provision_worktree_assets.ps1` (run by the shared `post-checkout` hook; setup in [tools/worktree-assets.md](../tools/worktree-assets.md))
 copies **missing files only** from the seed, under the main checkout's `local/worktree-seed/`, and never overwrites a file a worktree already has.
-It copies `host/ue5/OpenWillow/Content/` and these `local/` folders, each from `seed\<name>\` into `local\<name>\`:
-
-| Folder | Read by (examples, from the suites and check or run scripts) |
-|---|---|
-| `items`, `character`, `ui` | the weapon, character and HUD suites (`test_controls.ps1`, `run_quest.ps1`, `test_hud_minimap.ps1`, `test_mission_log.ps1`, `run_ue_flash_hud.ps1`) |
-| `slice` | the largest group (21 scripts): `check_vendors.py`, `check_shield_check.py`, `play_range.ps1`, `run_quest.ps1` and the `prepare_*_test.py` tests |
-| `doors` | `test_mover.ps1`, `test_quest.ps1`, `test_slice_gate.ps1`, `test_mission_page.ps1` |
-| `range` | `test_range.ps1`, `play_range.ps1`, `check_range.py`, `test_slice_gate.ps1` |
-| `quest` | `run_quest.ps1`, `test_quest.ps1` |
-| `menus` | `test_controls.ps1`, `test_mission_log.ps1`, `test_mission_page.ps1` |
-| `lootables`, `interactives` | `test_interactives.ps1`, `lootables_editor_test.py` |
-| `phaselock` | `run_phaselock_shots.ps1` |
-| `weapons`, `vendors`, `inventory-actions` | `test_vendors.ps1` (`inventory-actions` also the `-Items` path of GATES.md) |
-| `inventory` | `test_inventory_actions.ps1` (GATES.md): the host reads `local/inventory/gear_manifest.json` (`OpenWillowWalker.cpp`); `prepare_inventory_gear.py` writes `observed_gear.json` there |
-| `minimap`, `skillhud`, `ambient`, `audio`, `firing` | `test_hud_minimap.ps1`, `test_action_skill_hud.ps1`, `test_ambient.ps1`, `test_audio.ps1`, `test_weapon_firing.ps1` |
+It copies these `local/` folders, each from `seed\<name>\` into `local\<name>\`: `items`, `character`, `ui`, `slice`, `doors`,
+`range`, `quest`, `menus`, `lootables`, `phaselock`, `weapons`, `vendors`, `interactives`, `minimap`, `ambient`, `skillhud`,
+`audio`, `firing`, `inventory-actions` and `inventory`. Until 2026-11-14 it also copied the UE5 host's
+`host/ue5/OpenWillow/Content/`, and most of these folders were chosen for that host's suites; today their readers are the
+Python preparers and checkers (for example `check_vendors.py`, `check_shield_check.py`, `check_range.py`), the
+`prepare_*_test.py` tests and, for `ui`, the overlay pages. A Content folder still on disk is ignored and not copied.
 
 **Left out by default:**
 
-- `sanctuary` is read by several suites (`test_controls.ps1`, `test_interactives.ps1`, `test_inventory_actions.ps1`, `run_hud_shots.ps1`, …)
-  but is about 1.7 GB in the main checkout, most of it intermediate (`ue-obj`, `center-pillar-umodel`). Add it for one run with
+- `sanctuary` is about 1.7 GB in the main checkout, most of it intermediate (`ue-obj`, `center-pillar-umodel`). Add it for one run with
   `-ExtraSeedFolders sanctuary`.
 - `external/` (UModel exports; the full export is over 10 GB). Copy only the subfolder a task needs, by hand.
-- `weapon_library` and `gestalt`: read by import and prepare tools only, by no suite script.
+- `weapon_library` and `gestalt`: read by preparation tools only.
 
 **Never copied, at any depth:** folders named `shots`, `screenshots`, `logs`, `captures`, `realgame`, `h4x`, `z3x` and `runs`
 (per-run output). `-ExcludeFolderNames` changes that list. The file `observed_gear.json` (written by `prepare_inventory_gear.py`, read by
@@ -996,14 +854,14 @@ is provisioned at its first real checkout, and a provisioned worktree skips bran
 git directory, not under `local\`, because `local\` can be a shared junctioned root. `OPENWILLOW_PROVISION=1` forces a run. To top up an existing
 worktree, run it by hand: `powershell -File tools/provision_worktree_assets.ps1 -WorktreeRoot <worktree>` (still missing files only; add `-RefreshStale` to also replace a file whose source copy is newer and differs, each one printed, see [tools/worktree-assets.md](../tools/worktree-assets.md)).
 
-**Refused, not copied.** Provisioning stops with an error when a junction or symlink sits on a destination path (`local\`, a
-`local\<folder>\`, `host\ue5\OpenWillow\Content\`) or on a seed or source path, and it checks that every write lands under the
+**Refused, not copied.** Provisioning stops with an error when a junction or symlink sits on a destination path (`local\` or a
+`local\<folder>\`) or on a seed or source path, and it checks that every write lands under the
 folder it was meant for. Fill such a folder by hand, or remove the junction first. A pair whose own folder name is excluded
 (for example a top-level `local\logs` under `-SourceWorktree`) is skipped and reported as `skipped (excluded name)`.
 
 **Every pair is checked before the first copy,** so a refusal leaves all destinations untouched. A worktree whose `local\` is itself
 a junction (a shared data root, as on the pc-hummer runners) is the one intended exception: its local pairs are skipped with one
-line, `local\ is a junction (shared data root); not provisioning local`, Content is still provisioned, and the exit code is 0. Any
+line, `local\ is a junction (shared data root); not provisioning local`, and the exit code is 0. Any
 other junction stays a refusal. The installer validates the seed path (`local\` and `local\worktree-seed`) before it writes anything,
 and refuses a junction there.
 
@@ -1028,17 +886,18 @@ that checks it sees a failure. Look at the hook's messages, fix the seed, then r
 A folder missing from the seed is reported as `(not in the seed)`. `-SourceWorktree` keeps its old behaviour (every `local/` folder of
 a populated worktree) but skips the excluded names too.
 
-Sizes: this list is what the suites read; in the main checkout today only `sanctuary` (1.7 GB), `character` (2.2 MB), `external` (4 MB here)
-and `slice` (one 0.5 MB file) are present, so the other folders could not be measured here. The seed's own folders are not measured here either;
-measure them after the hub fills it (`du` per folder, the same list as the table).
+Sizes: in the main checkout on the day this list was made only `sanctuary` (1.7 GB), `character` (2.2 MB), `external` (4 MB there)
+and `slice` (one 0.5 MB file) were present, so the other folders were not measured. The seed's own folders are not measured here either;
+measure them after the hub fills it (`du` per folder, the same list as above).
 
 ## Regenerating local data on a fresh machine
 
-Everything under `local/` and `host/ue5/OpenWillow/Content/` is generated from the installed game and is not in Git. A
-from-scratch regeneration on a second PC (2026-11-02/03, main 683a083) went through the order below; each tool's own
-section in this file has its options. Run the non-UE steps in any order their inputs allow; run UE steps one at a time
-(they wait for the machine-wide run lock, `tools/ue_lock.ps1`, and for no running editor), and only after the UE module has been built
-(`host/ue5/OpenWillow/Binaries/Win64/UnrealEditor-OpenWillow.dll`).
+Everything under `local/` is generated from the installed game and is not in Git. A from-scratch regeneration on a
+second PC (2026-11-02/03, main 683a083) went through the order below; each tool's own section in this file has its
+options. Run the steps in any order their inputs allow. That run also had UE imports between steps 6 and 7 (Sanctuary,
+Maya and her clips, the slice items and NPCs, the Phaselock effects, the paint and the weapon library) and UE suites last;
+both left with the UE5 host on 2026-11-14 (`git show 08bcf3e:docs/TOOLING.md`), and the Rust host will define its own
+import.
 
 1. Build the core (`cmake -S . -B build -T version=14.50`, then `cmake --build build --config Release`) and run
    `tools/verify_packages.py`. Pass the reader to the Python tools as an absolute path: on Windows a relative
@@ -1051,102 +910,34 @@ section in this file has its options. Run the non-UE steps in any order their in
    `tools/weapon_view_model.py`.
 4. UModel exports for Maya (glTF body, head and hands, PNG textures; MD5 hands and first-person AnimSets).
 5. UI: the font library first, then the movies, the harnesses, `tools/prepare_inventory_movie.py` on
-   `SharedWillowInventory`, the skill tree, HUD icons, minimap and the Ruffle web build (section "BL2's HUD movie over UE5").
+   `SharedWillowInventory`, the skill tree, HUD icons, minimap and the Ruffle web build (section "BL2's UI movies in the
+   browser (overlay pages)").
 6. Weapon part library inputs (part census, `export_weapon_skins.py`, library meshes, skins, index) and the firing
    coverage recipes.
-7. UE imports, one editor at a time: Sanctuary (`run_ue_level.ps1 -ImportOnly`), Maya and her arm and combat clips, then
-   `seed_slice_player_assets.ps1 -Steps fx` **before** `seed_inventory_assets.ps1` (the weapon items need the Infinity
-   material that step creates), the slice NPCs, the Phaselock effects (`research/particle_system.py`, the UModel FX
-   exports, `import_phaselock_fx.ps1`, `tools/prepare_phaselock_fx.py`, then the import again), the slice paint and the
-   weapon library import.
-8. Weapon previews (`tools/render_weapon_previews.py`), then the worktree seed (`tools/install_worktree_assets_hook.ps1`).
-9. Suites: quest, weapon firing, inventory actions, action-skill HUD, minimap.
+7. Weapon previews (`tools/render_weapon_previews.py`), then the worktree seed (`tools/install_worktree_assets_hook.ps1`).
 
-Machine notes: scripts that default to `C:\Program Files\Epic Games\UE_5.8` take `-Engine <path>` for an engine
-installed elsewhere. In Git Bash, MSYS rewrites arguments that start with `/` into Windows paths, which breaks UE content
-paths such as `/Game/OpenWillow/...`: set `MSYS2_ARG_CONV_EXCL=/Game` for tools that take them (PowerShell is not
-affected). New worktrees get only part of this data from the seed; see [tools/worktree-assets.md](../tools/worktree-assets.md).
+Machine notes: in Git Bash, MSYS rewrites arguments that start with `/` into Windows paths, which breaks the `/Game/...`
+content paths some preparers still take (`prepare_weapon_paint.py --mesh`): set `MSYS2_ARG_CONV_EXCL=/Game` for them
+(PowerShell is not affected). New worktrees get only part of this data from the seed; see
+[tools/worktree-assets.md](../tools/worktree-assets.md).
 
 ## Where things are
 
 | Path | What |
 |---|---|
-| `src/` | `ow-core` library (package reader, LZO container, asset importers) and the `ow-package` CLI |
-| `tests/` | Synthetic CTest suites and scene-preparation unit tests; no game data |
-| `tools/` | Census, probe/level preparation, material refresh, UE launch scripts, array schemas |
-| `host/ue5/` | Minimal UE5 C++ project, editor-Python importer/verifier, in-game map selector, viewer/walking/selector/profile automation tests |
+| `src/` | `ow-core` library (package reader, LZO container, asset importers, VM, gameplay rules) and the `ow-package` and `ow-weapongen` CLIs; the reference until the Rust crates match it |
+| `crates/` | The Rust workspace (`Cargo.toml` at the root): `ow-container`, `ow-package`, `ow-vm`, `ow-game`, `ow-cli`, `ow-host` |
+| `tests/` | Synthetic CTest suites and tool unit tests; no game data |
+| `tools/` | Census, scene and slice preparation, real-game drivers, overlay pages, checkers, array schemas |
 | `third_party/lzokay/` | Vendored MIT LZO1X decoder (provenance in `THIRD_PARTY.md`) |
 | `research/` | Community-demand fetch and analysis scripts (the Steam review text they fetch stays in ignored `local/`) and the original Python package reader used as a comparison oracle |
 | `docs/` | Plan, research, verification records; this file |
 | `local/` | Ignored. Every game-derived output lands here |
 
-## Sanctuary artifact trace
+`host/ue5/` (the UE5 project, its editor-Python importers and its automation tests) was removed on 2026-11-14; a local
+`host/ue5/OpenWillow/Content` left on disk is ignored, game-derived and the maintainer's to delete by hand.
 
-`tools/audit_sanctuary_artifacts.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --output local/artifact-pass.json`
-records IcePlate, WorldTransition and HLS effective placements plus source
-properties and omitted terrain/BSP class counts. Use it after material refresh;
-counts do not establish which missing floors terrain/BSP will fill. See
-[the verification record](verification/SANCTUARY_ARTIFACT_PASS.md).
-
-## Terrain floors
-
-For a complete Sanctuary preparation, use:
-
-```powershell
-python tools/viewer.py --game $game --map Sanctuary_P --action prepare --sanctuary-geometry --outer-shell
-```
-
-This runs static-mesh preparation, terrain preparation, then BSP preparation
-with triangle collision, stopping on a failed stage. It is scoped to Sanctuary.
-Import the resulting scene normally. Native terrain blending, the BSP texel
-scale and collision flags retain the limitations below.
-
-`tools/prepare_terrain.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
-rewrites a prepared scene with one static mesh per TerrainComponent whose vertex/strip data corroborates the terrain
-hole/diagonal flags, a labeled material approximation, and (with `--collision`) triangle-mesh collision. Cooked weighted
-materials drive a host weighted sum only when every weight array matches its paired PF_G8 texture (31/31 on Sanctuary;
-[DECISIONS.md](../DECISIONS.md) 2026-09-22); failed verification keeps the labeled dominant-layer fallback. This does
-not establish native shader or original-game visual parity. It also writes `terrain-runtime.json`;
-`test_ue_viewer.ps1 -Terrain` then runs `OpenWillow.TerrainWalking`, which stands on each terrain, drops into a flagged
-hole cell and walks one component seam, and logs `Terrain hole path:` records for every probe frame. A displaced or
-occluded endpoint does not directly verify the original hole location. See
-[the terrain handoff](verification/SANCTUARY_TERRAIN_BSP_HANDOFF.md).
-
-## Sanctuary root BSP polygons
-
-`tools/prepare_bsp.py --reader build/Release/ow-package.exe --game $env:OPENWILLOW_BL2 --scene local/sanctuary --collision`
-adds the persistent-level root `Model`/`ModelComponent` polygons of a frozen Sanctuary scene as ordinary mesh sections
-with native material assignments, texture coordinates projected onto each surface's own base point and texture axes
-(`--uv surface_axes`, the default; `--uv planar` keeps the earlier 128 cm world-planar placeholder), and (with
-`--collision`) host triangle collision. Every decode gate must pass before any file is written; volume-owned Models are
-rejected structurally. The divisor that turns projected distances into repeats is not in the package, so
-`--texel-scale` (default 128) is recorded in the manifest as `UNVERIFIED`; lightmaps and collision flags are kept only
-as opaque hashes. The script is scoped to `Sanctuary_P` plus `Sanctuary_Land` and also writes `bsp-runtime.json`;
-`test_ue_viewer.ps1 -Bsp` then runs `OpenWillow.BspWalking`. `python tests/bsp_test.py` covers the decoder on
-synthetic fixtures. See [the BSP record](verification/SANCTUARY_BSP_POLYGONS.md) and the
-[texture-axis record](verification/BSP_TEXTURE_AXES.md).
-
-Sections whose preparer could not choose a material (currently two terrains labeled `neutral_constant`) import with
-the lit gray `M_OpenWillowNeutralFallback` host material and are counted as `neutral_fallback_sections` in
-`ue-import.json` / `ue-verify.json` (see the BSP record above).
-
-## Repeatable inspection viewpoints
-
-Create `local/sanctuary/inspection-views.json` with a `views` array containing
-1 to 12 objects. Each object requires `location` (world centimeters),
-`rotation` (pitch, yaw, roll in degrees), and `fov` (10 to 150 degrees).
-For example, a synthetic viewpoint is
-`{"location":[0,0,1000],"rotation":[-20,45,0],"fov":75}`.
-
-Run `tools/test_ue_viewer.ps1 -Engine $engine -Game $game -Scene local/sanctuary -Inspect`.
-The host waits eight seconds at each viewpoint, asserts camera position,
-rotation and FOV, and requests numbered PNGs under the project's ignored
-`Saved/Screenshots/WindowsEditor/` directory. Inspect the resulting files;
-the camera assertions alone do not verify appearance or original-game parity.
-The saved map and its starting pose are not changed. `-Inspect` is exclusive
-with the walking, terrain, BSP, selector and profile test modes.
-
-## Maya with the Infinity and Phaselock (host prototype)
+## The Infinity, rolled guns and the weapon generator
 
 The Infinity visual keeps only chosen fragments of UModel's pistol gestalt
 glTF. Decode the gestalt part ranges with a local array schema, then filter:
@@ -1185,24 +976,16 @@ python tools/weapon_gen_firing.py --game <BL2>  # -> local/weapons/gen/weapon_ge
 python tools/weapon_gen_parity.py              # Python vs C++ on every balance, stages and seeds; report under local/
 ```
 
-In the host, `-owweapongen=<manifest>` overrides the default path, `ow.RollGun <balance or pool> [stage] [seed]` adds a
-rolled gun to the backpack and `-owweapongentest` writes a host self-check under `local/weapons/gen/host_check/`. Live
-confirmation: `tools/real_game/gen_confirm_capture.ps1` then `python -I tools/real_game/gen_confirm.py stats ...`.
+Live confirmation: `tools/real_game/gen_confirm_capture.ps1` then `python -I tools/real_game/gen_confirm.py stats ...`.
+The UE5 host's Maya prototype (the Infinity proxy import, the combat test and its capture switches, `ow.RollGun`) is
+retired; see "Retired with the UE5 host (2026-11-14)".
 
-Import with `OPENWILLOW_PISTOL_GLTF` pointing at the filtered glTF and
-`OPENWILLOW_INFINITY_TEXTURES` at UModel's PNG export of
-`Mati_VladofLegendaryPistol_Infinity`, running
-`host/ue5/import_infinity_proxy.py` as a `pythonscript` commandlet. The pistol
-and Phaselock arm clips come from `tools/import_maya_combat_anims.ps1`.
+## BL2's UI movies in the browser (overlay pages)
 
-`-owwalk -owmaya -owcombattest -owcombatshots` on `Sanctuary_P` spawns a
-training dummy once Maya lands, runs a fixed aim/fire/Phaselock sequence and
-writes `OWCombat_1_Idle` to `OWCombat_5_FiringWall` PNGs under
-`Saved/Screenshots/WindowsEditor/`, then quits. Controls in play: LMB fire,
-F Phaselock, 1 equip, 0 holster. See DECISIONS.md (2026-09-25) for what is
-data-derived and what is estimated.
-
-## BL2's HUD movie over UE5 (browser-overlay prototype)
+This section was "BL2's HUD movie over UE5 (browser-overlay prototype)" until 2026-11-14: the pages were drawn over the
+UE5 host's game window. The pages, the converters and `tools/hud_overlay/serve.py` stay, and run in an ordinary
+browser; the host-side half (the launcher, the in-game key handling, the host's skill and inventory state, the in-engine
+checks) left with that host. The pages stay until the Rust host has its own way to show BL2's movies.
 
 Marcus's mission screen has its own step: `python tools/prepare_mission_screen.py --reader build/Release/ow-package.exe --game "$env:OPENWILLOW_BL2"` ([MISSION_SCREEN.md](verification/MISSION_SCREEN.md)).
 
@@ -1217,54 +1000,31 @@ under `copied_font_libraries` in the movie's `.json` report). A movie converted 
 import and shows fallback fonts: convert it again. After converting `SharedWillowInventory`, run
 `python tools/prepare_inventory_movie.py --input <converted SharedWillowInventory.swf> --output local/ui/run/SharedWillowInventory/SharedWillowInventory.swf`
 (the Ruffle nested-import workaround, [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md)); without
-it the inventory suite fails. Then:
+it the inventory page does not load. `python tools/check_overlay_data.py` lists the converted movies a worktree lacks.
 
-```powershell
-./tools/run_ue_flash_hud.ps1 -Engine $engine -Game $game            # editor; press Play
-./tools/run_ue_flash_hud.ps1 -Engine $engine -Game $game -GameWindow
-```
+Serve the pages with `python tools/hud_overlay/serve.py --movies local/ui/run` (port 8767) and open them in a browser:
+`http://127.0.0.1:8767/` is the HUD; `skills.html`, `inventory.html`, `missions.html`, `map.html`, `mission_screen.html`,
+`pickup_card.html` and `vending.html` are the other pages. Add `?hud3d=affine` to the HUD page's URL for the 2D
+stand-in of the perspective warp of the turned clusters. The page logic and the host adapter it expected are described
+in the records: [HUD_PARITY.md](verification/HUD_PARITY.md), [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md),
+[ACTION_SKILL_HUD.md](verification/ACTION_SKILL_HUD.md), [HUD_MINIMAP.md](verification/HUD_MINIMAP.md); their host runs
+are history of the UE5 host.
 
-A switch that drives a run and quits, such as `-owinvshots`, needs `-GameWindow`: without it the script opens the editor, no game starts, and it refuses to run.
-With `-GameWindow` such a run is stopped after 20 minutes (an estimate, not measured; an hour for `-owgunshots`, whose list has any length: pass `-TimeoutSeconds` for a long list): the script stops the editor and any page server it started, by process id after checking the
-command line, and fails with a nonzero exit; a game that exits with a nonzero code (a crash) gets the same. After a clean exit a server stays up for the next run. `-TimeoutSeconds N` sets the limit and `-TimeoutSeconds 0` removes it. Someone playing with `-GameWindow` and no
-such switch gets no limit, and without `-GameWindow` there is never one. The switches are a list in `tools/run_limit.ps1`, so a new driver has to be added there.
+Data the pages read:
 
-Tests, with no editor: `python tests/run_limit_test.py` (the rules) and `python tests/run_ue_flash_hud_test.py` (the real launcher, a stand-in editor and the real `serve.py`: stall, crash, clean exit, a server it did not start, the lock released each time). With a real editor running nothing can be tested: it prints `NOT RUN: an editor is running` and exits nonzero unless `--allow-skip` is given.
-
-The script starts `tools/hud_overlay/serve.py` on port 8767 if it is not
-running and launches Sanctuary as Maya with `-owflashhud=<url>` and
-`-owflashskills=<url>`. The HUD overlay logs "OpenWillow Flash HUD page loaded"
-and "HUD movie ready" in the UE log.
-Since 2026-10-22 the movie is the default gameplay HUD: without `-owflashhud` the host opens
-`http://127.0.0.1:8767/` itself (so a running `serve.py` on that port is enough) and draws the canvas fallback until the
-page reports ready (echoing the per-run id the host put in its URL) or if it fails to load; `-owcanvashud` forces the fallback (the scripted test and capture runs pass it). The log says `OpenWillow HUD path:
-movie|canvas (<reason>)` and, from the page, `OpenWillow HUD 3D path warp|affine: <why>` (the perspective warp of the
-turned clusters; add `?hud3d=affine` to the page URL for the 2D stand-in). Gameplay-HUD captures for a parity review:
-`./tools/run_hud_shots.ps1 -Game $game [-Level 36 -Shield] [-Affine]` (slice weapons, at rest and after three shots,
-checked by `tools/check_hud_shots.py`; output under `local/hudshots/`); real-game reads of the HUD texts, crosshair and
-ammo icon per weapon: `tools/real_game/hud_parity_capture.ps1 -Character <your save file>` (PowerShell 7). See `docs/verification/HUD_PARITY.md`.
-It is a prototype: see DECISIONS.md for what is driven and what is not.
-Maya's action-skill indicator (the icon's cooldown veil and the Siren emblem while Phaselock holds) needs the icon
-movie: `python tools/prepare_hud_icons.py --reader build/Release/ow-package.exe --game $game`. Its in-engine check,
-`./tools/test_action_skill_hud.ps1 -Game $game [-SharedLock <file>]`, casts once and checks the logged state against
-the real game's timings; real-game capture: `tools/real_game/action_skill_hud_capture.ps1`, layout read:
-`tools/real_game/hud_layout_capture.ps1` (`docs/verification/ACTION_SKILL_HUD.md`).
-The minimap (`p1.minimapEcho.minimap`, `docs/verification/HUD_MINIMAP.md`) needs the level's map movie and an icon
-manifest: `python tools/prepare_minimap.py --reader build/Release/ow-package.exe --game $game` (writes
-`local/ui/run/UI_TacticalMap_Sanctuary/`, `SharedWillowTacMaps/` and `local/slice/minimap.json`; the host reads the
-manifest by default or from `-owminimap=<json>`). Its in-engine check, `./tools/test_hud_minimap.ps1 -Game $game
-[-SharedLock <file>]`, puts Maya at eight real-game capture spots; live reads: `tools/real_game/scripts/minimap.py`.
-The BL2-style StatusMenu Inventory movie is enabled by default; press **Tab** (or **I**) for Inventory and **K** for
-Skills; the header tabs and the K/I keys switch between the two pages. Pass `-NoInventoryMovie` only to use the
-fallback host inventory panel. Equip, transfer and comparison flows follow the observed stock behaviour: see
-[INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md) (2026-09-30 and 2026-10-04 sections). Weapon
-cells use static mesh previews generated from the locally exported UModel glTF meshes; if those ignored previews are
-absent, run `python tools/render_weapon_previews.py` to create them under `local/ui/run/previews/`.
-
-**F** opens the native UE weapon mesh preview (hold the left mouse button and drag to orbit it; **F** or **Escape**
-returns to inventory). It uses the already imported `Weapons/Items/SK_<recipe ID>` asset, and gear meshes that cannot be
-resolved show unavailable. Design and limits: [DECISIONS.md](../DECISIONS.md) 2026-09-30 "Stock inventory target,
-camera-space framing and native item inspection".
+- Maya's action-skill indicator (the icon's cooldown veil and the Siren emblem while Phaselock holds) needs the icon
+  movie: `python tools/prepare_hud_icons.py --reader build/Release/ow-package.exe --game $game`. Real-game capture:
+  `tools/real_game/action_skill_hud_capture.ps1`; layout read: `tools/real_game/hud_layout_capture.ps1`. Real-game reads
+  of the HUD texts, crosshair and ammo icon per weapon: `tools/real_game/hud_parity_capture.ps1 -Character <your save file>`
+  (PowerShell 7).
+- The minimap (`p1.minimapEcho.minimap`) needs the level's map movie and an icon manifest:
+  `python tools/prepare_minimap.py --reader build/Release/ow-package.exe --game $game` (writes
+  `local/ui/run/UI_TacticalMap_Sanctuary/`, `SharedWillowTacMaps/` and `local/slice/minimap.json`); live reads:
+  `tools/real_game/scripts/minimap.py`.
+- Weapon cells use static mesh previews generated from the locally exported UModel glTF meshes; if those ignored
+  previews are absent, run `python tools/render_weapon_previews.py` to create them under `local/ui/run/previews/`.
+- `tools/check_hud_shots.py` and the other `tools/check_*.py` graders read logs and captures of the UE5 host's runs; they
+  stay as the definition of what those runs checked.
 
 Existing UI Trace SDK observations can populate local gear cards without
 guessing rolled parts or package identity:
@@ -1272,57 +1032,29 @@ guessing rolled parts or package identity:
 ```powershell
 python tools/prepare_inventory_gear.py local/ui/traces/<trace>.jsonl --output local/inventory/observed_gear.json
 python tests/inventory_gear_test.py
-./tools/test_inventory_actions.ps1 -Port 8791 -Extra @('-owinventoryshots','-NoLiveCoding')
 ```
 
 The exporter does not equip observations or merge them into a live manifest.
 Review the output, preserve stable IDs and copy only reviewed entries into
 `local/inventory/gear_manifest.json`. `funStatsMarkup` preserves observed Flash
 TextField formatting; the adapter passes it only to the movie, never browser
-HTML. `packageResolved` and `visualIdentityResolved` remain false. The capture
-flag writes settled open/equip/inspect/close screenshots to the ignored UE
-Saved/Screenshots directory. Drag/drop tests dispatch DOM events; key tests
-use Slate, so physical mouse/keyboard verification remains separate.
+HTML. `packageResolved` and `visualIdentityResolved` remain false.
 
-Maya's inventory preview plays the game's own third-person `Idle_Inventory`
-clip and draws an ink outline. To build them in a fresh worktree:
+Maya's inventory preview played the game's own third-person `Idle_Inventory` clip. The UModel 1590 MD5 export of the
+body and its AnimSets still works without a host:
 
 ```powershell
-# 1. UModel 1590 MD5 export of the third-person body and its AnimSets
 umodel.exe -path=<CookedPCConsole> -game=border -export -md5 -out=local/external/umodel/maya-body-anims GD_Siren_Streaming_SF Skel_SirenBody SkeletalMesh
 umodel.exe -path=<CookedPCConsole> -game=border -export -md5 -out=local/external/umodel/maya-body-anims GD_Siren_Streaming_SF Base_Siren AnimSet
-# 2. Body reference pose, then conversion (--anchor none: no first-person camera correction; needs numpy)
-$env:OPENWILLOW_CHARACTER_MESH='Skel_SirenBody'; $env:OPENWILLOW_CHARACTER_ANIM_FOLDER='ThirdPerson'
-$env:OPENWILLOW_CHARACTER_REFERENCE='local/character/anim/body_ref_pose.json'; $env:OPENWILLOW_CHARACTER_ANIMS=''
-UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
-python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBody.md5mesh --reference local/character/anim/body_ref_pose.json --animset <...>/AnimSet/Base_Siren --clips Idle_Inventory Idle_var1 --output local/character/anim/siren_body.json
-# 3. Import the clips, then the outline material and matte character material
-$env:OPENWILLOW_CHARACTER_REFERENCE=''; $env:OPENWILLOW_CHARACTER_ANIMS='Body=local/character/anim/siren_body.json'
-UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
-# Optional default head colour correction for the inventory display only.
-# UModel export includes the local property dump used by the look script.
-umodel.exe -path=<CookedPCConsole> -game=border -export -png -out=local/external/umodel/maya-menu-head CD_Siren_Skin_Default_SF Mati_Default_Head MaterialInstanceConstant
-$env:OPENWILLOW_MENU_HEAD_PROPS="$pwd/local/external/umodel/maya-menu-head/CD_Siren_Skin_Default_SF/MaterialInstanceConstant/Mati_Default_Head.props.txt"
-UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_menu_look.py -unattended -nullrhi
-# 4. Armed inventory pose, from the already exported Rifle_Siren AnimSet
-# Use the Python environment with numpy installed. Paths passed to the UE
-# commandlet must be absolute because its working directory differs.
-python tools/prepare_character_anims.py --anchor none --mesh <...>/Skel_SirenBody.md5mesh --reference local/character/anim/body_ref_pose.json --animset <...>/AnimSet/Rifle_Siren --clips Idle_Inventory --output local/character/anim/siren_body_inventory_rifle.json
-$env:OPENWILLOW_CHARACTER_ANIMS="InventoryRifle=$pwd/local/character/anim/siren_body_inventory_rifle.json"
-UnrealEditor-Cmd.exe <uproject> -run=pythonscript -script=host/ue5/import_character_anims.py -unattended -nullrhi
 ```
 
-Framing, clip and outline width are `Config=Game` properties of `AOpenWillowInventoryMayaDisplay`
-(`[/Script/OpenWillow.OpenWillowInventoryMayaDisplay]` in `DefaultGame.ini`). Without the clip Maya shows in bind pose;
-without the outline material she has no ink line. How the selected weapon is attached and posed, and what is still
-unverified, is in [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md) ("Selected weapon on Maya's
-display copy").
-
-The same menu-look script creates `M_OW_MenuBackdrop`, the world dimming that excludes Maya's stencil-247 pixels
-(renderer setting `r.CustomDepth=3`; gain, saturation and vignette are configurable on the display actor). Without this
-material, world dimming is disabled and the host logs a warning. No new extraction is needed; regenerate this local
-material after updating an existing worktree. Design: [DECISIONS.md](../DECISIONS.md) 2026-09-30 "Inventory backdrop
-grading excludes Maya".
+The clip conversion, `tools/prepare_character_anims.py --anchor none --mesh <md5mesh> --reference <pose json> --animset
+<AnimSet folder> --clips Idle_Inventory ...` (needs numpy), converts against the reference pose of the skeleton the UE5
+host had imported (`local/character/anim/body_ref_pose.json`, written by that host's import script, removed
+2026-11-14). A fresh machine has no tool that writes that pose today, and the Rust host will need its own skeleton
+import. The clip import, the ink outline, the menu head look and the menu backdrop were that host's
+([INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md), "Selected weapon on Maya's display copy", and
+[DECISIONS.md](../DECISIONS.md) 2026-09-30).
 
 For Maya's Skills tab, convert `UI_StatusMenu.StatusMenu` and its shared imports
 into `local/ui/run` with the same converter and a StatusMenu harness, then
@@ -1340,33 +1072,11 @@ seed, or receive the file with `tools/private_sync.ps1 -Direction Pull`). Withou
 neutral greys and say so once. Run it before `prepare_skill_tree.py`, which bakes the skill-tag colour in.
 
 Open `http://127.0.0.1:8767/skills.html?points=41&action=1` for a standalone visual
-check. In the UE game window, press **K** to open Maya's Skills tab, hover a
-skill for its description, use the arrows to rotate branches, and press
-**Esc** or the movie's close button to return to play. The standalone `points`
-query is only a display check; the page never changes grades itself.
-
-In UE the host owns Maya's level, XP and grades (`UOpenWillowSkills`). The host earns no XP yet, so pass
-`-Extra @('-owlevel=45')` to start with points (one per level from level 5; the default level 1 has none). Phaselock
-(**F**) works only after its point is spent in Skills; `-owcombattest` starts at level 5 or more with Phaselock trained.
-Clicking a skill or the action skill logs `OWSKILL {"branch":B,"tier":T,"cell":C}` (`-1,-1,-1` for the action
-skill); the host validates it and answers with `owSkills({points, actionGrade, grades})`, and logs each decision as
-"OpenWillow Skills spend (B,T,C) accepted" or "refused: <reason>". Grades live on the walker (no save file yet) and
-their effects are not applied. The host reads `local/ui/run/skilltree_siren.json` (`-owskilltree=<file>` overrides). The
-spend rules are in [DECISIONS.md](../DECISIONS.md) 2026-09-27 "Host-owned skill points for Maya"; the info box and
-footer (built from the install by `prepare_skill_tree.py` via `tools/skill_stats.py` and arranged by
-`tools/hud_overlay/skill_info.js`) are in 2026-09-27 "Skill info box, footer and progress band from install data".
-Synthetic tests: `python tests/skill_stats_test.py` and `node tests/skill_info_test.js`. `OpenWillow.Skills` is a UE
-automation test of the spend rules on a synthetic tree; run it in `-game` mode (see `tools/test_ue_viewer.ps1` for the
-pattern).
-
-For a repeatable UE capture, launch the same script with
-`-GameWindow -Extra @('-owcombattest','-owcombatshots','-owskillshots')`. It writes the `OWCombat_*` PNGs (including
-`OWCombat_8_Skills.png` and `OWCombat_9_AfterSkills.png`) under UE `Saved/Screenshots` before quitting. `-owcombatshots`
-is test-only: it raises Maya's level, fills the weapon slots and sets demo currency and ammo (made-up numbers). Other
-switches: `-owslots=<2..4>`, `-owmoney=<n>`, `-owerid=<n>`, `-owinventoryselftest` (one PASS or FAILED line per check, then the `passed`/`FAILED` summary and a quit, unless another driver such as `-owinventoryactions` is on the command line); **R** reloads in play.
-`-owinvshots` is a separate capture that drives the inventory page with the stock keys and writes `OWCombat_D*.png`. What
-each switch sets up, the page's `OWINVTIME` lines and the steps of `tools/test_inventory_actions.ps1` are described in
-[INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md) (2026-09-29 and 2026-10-04 sections).
+check. The standalone `points` query is only a display check; the page never changes grades itself (the UE5 host owned
+Maya's level, XP and grades). The spend rules are in [DECISIONS.md](../DECISIONS.md) 2026-09-27 "Host-owned skill
+points for Maya"; the info box and footer (built from the install by `prepare_skill_tree.py` via `tools/skill_stats.py`
+and arranged by `tools/hud_overlay/skill_info.js`) are in 2026-09-27 "Skill info box, footer and progress band from
+install data". Synthetic tests: `python tests/skill_stats_test.py` and `node tests/skill_info_test.js`.
 
 ## Tracing the real game's UI code (golden files for menus)
 
@@ -1398,7 +1108,7 @@ zero-filled inputs as proof of a flat transform (see "Getter output observation 
 
 ```powershell
 . tools/real_game/realgame.ps1
-Enter-RunLock; Backup-Saves; Install-Driver          # lock shared with UE runs; copy saves first
+Enter-RunLock; Backup-Saves; Install-Driver          # the machine-wide run lock; copy saves first
 Start-Game @('-windowed','-ResX=1280','-ResY=720','-nostartupmovies')
 Invoke-GamePy 'print(block_saves(), get_pc())'       # at the main menu, before loading a character
 Invoke-GamePyFile tools/real_game/scripts/weapon_cards.py cards   # helpers: spawn, record, card trace
@@ -1661,24 +1371,22 @@ three ran in each of the six `cash_capture` items of 2026-11-12 (three smoke ite
 each, every den trial and each den down's first placement), with 0 game crashes. That is a record of runs, not proof that they cannot
 crash the game. Known follow-up: the first placement and the kill target could be picked by pool fields, as `dp_replace` does.
 
-## Sanctuary ambient NPCs (host, behind a flag)
+## Sanctuary ambient NPCs (data)
 
-Off by default. `-owambient=<manifest>` (or `OPENWILLOW_AMBIENT`) spawns the town's citizens and runs the stock perch
-cycle and node walks with stand-in rules ([record](verification/SANCTUARY_AMBIENT_NPCS.md), all movement rules UNVERIFIED).
+The town's citizens: the census and the world manifest stay; the UE5 host that spawned them behind `-owambient` and
+ran the stock perch cycle and node walks with stand-in rules is retired ([record](verification/SANCTUARY_AMBIENT_NPCS.md),
+all movement rules UNVERIFIED).
 
 ```powershell
 python tools/census_ambient_npcs.py                      # dens, points, node graph, perch definitions -> local/slice/
-powershell -File tools/seed_ambient_npc_assets.ps1       # UModel extraction, clip conversion, import (needs OPENWILLOW_UMODEL)
-powershell -File tools/seed_ambient_npc_assets.ps1 -Steps attach -Compose <amb_compose json>   # hair, hats, gear, head textures
-powershell -File tools/seed_ambient_npc_assets.ps1 -Steps outline   # rebuild only the ink-line material
 python tools/prepare_ambient_world.py                    # census-only manifest local/slice/ambient_world.json (no worn pieces)
 python tools/prepare_ambient_world.py --observed <amb_dump> --samples <amb_sample> --compose <amb_compose> --stops-from <amb_dump>   # the shipped look
-powershell -File tools/test_ambient.ps1 -Seconds 60      # self-test, takes the run lock; -Shots tours the viewpoints
 ```
 
 With `--compose`, `prepare_ambient_world.py` stops (since 2026-11-12) when a worn piece the capture shows on a used bone is missing from
-`local/slice/ambient/editor_report_attach.json` and the attach job did not record its mesh as unavailable: rerun the attach step above
-with the same capture.
+`local/slice/ambient/editor_report_attach.json` and the attach job did not record its mesh as unavailable. That report was
+written by the UE5 host's attach step (removed 2026-11-14), so `--compose` works today only with a report kept from an
+earlier run.
 
 The bare call writes a census-only world: the seeded realisation of the dens, citizens without their hair, hats and gear. The
 citizens' shipped look needs the real-game ambient capture (`tools/real_game/scripts/ambient_npcs.py`: `amb_dump`, `amb_sample`,
@@ -1686,9 +1394,8 @@ citizens' shipped look needs the real-game ambient capture (`tools/real_game/scr
 maintainer's machines. Since 2026-11-12 the tool keeps or refuses, never degrades: it does not write over an existing capture-based
 manifest (`observed`, or any worn pieces) with one that has no capture or fewer worn pieces, nor over a file it cannot read, unless
 `--replace-observed` is given (another `--output` path is not affected), and `--compose` or `--stops-from` without `--observed`
-stops. `tools/test_ambient.ps1` checks the manifest first (`--check-manifest`): its result line ends with
-`manifest observed=... spawns=... worn=...`, and a manifest that is not capture-based fails before launch unless the run passes
-`-CensusWorld`.
+stops. `--check-manifest <manifest> [--census-ok]` prints the manifest's look (observed, spawns, worn pieces) and exits 1
+unless it is capture-based or `--census-ok` is given; it was the retired ambient suite's preflight.
 
 ## Reading the game's UnrealScript (bytecode disassembler prototype)
 
@@ -1733,25 +1440,15 @@ retain defaults; other missing inputs fail. Output is JSONL with case index,
 result type/value, native flag, per-case error and unimplemented-call list.
 The batch command exits zero when individual cases fail: inspect those fields.
 
-The UE5 inventory now links the C++ VM for item-only backpack movement. Build
-`cmake --build build --config Release` before the Win64 UE editor target; its
-module links `build/Release/ow-core.lib` and `ow-lzokay.lib`. Inventory opens
-the VM lazily from `OPENWILLOW_BL2`. `OWINVVM` log entries carry script expression
-counts/errors; page reports include `vm.enabled/calls/errors/steps/discarded`.
-The in-engine suite includes `vm_backpack_down` and `vm_backpack_up`, which must
-observe new successful script calls and the expected actual page selections.
-Equipment, transfers and sorting still use the existing host adapter.
-
-For a direct installed-script check:
+Until 2026-11-14 the UE5 host's inventory linked this C++ VM for item-only backpack movement (`OWINVVM` log entries,
+the `vm_backpack_down` and `vm_backpack_up` suite checks); that host is retired. For a direct installed-script check:
 
 ```powershell
 $cooked = Join-Path $env:OPENWILLOW_BL2 'WillowGame/CookedPCConsole'
 build/Release/ow-package.exe "$cooked/WillowGame.upk" --inventory-move 1 0 5 --cooked $cooked
 ```
 
-The provider covers item-only rows (headers and empty cells are not modelled). If UE stalls waiting for the local Zen
-server before loading, the inventory runner accepts the installed fallback:
-`-Extra @('-ddc=InstalledNoZenLocalFallback','-d3d11')`, a launch-time workaround only. Evidence: the
+The provider covers item-only rows (headers and empty cells are not modelled). Evidence: the
 [VM record](verification/SCRIPT_VM_PROTOTYPE.md).
 
 ### Native functions and sharing local files
@@ -1793,7 +1490,7 @@ Native analysis of the executable (local only; policy in [LEGAL.md](LEGAL.md), w
 The step and event names above are examples from the verification records; the rules the executors follow are the
 `UNVERIFIED` notes in [NATIVE_MISSION_DISPATCH.md](verification/NATIVE_MISSION_DISPATCH.md).
 
-Weapon paint and effects (detail in "Weapon paint: where the Master_Gun reading comes from" above):
+Weapon paint and effects (detail in "Weapon paint: where the Master_Gun reading comes from" below):
 
 | Tool | What it does | Command |
 |---|---|---|
@@ -1801,17 +1498,7 @@ Weapon paint and effects (detail in "Weapon paint: where the Master_Gun reading 
 | `tools/weapon_paint_model.py` | Library: our own-words reading of Master_Gun's colour model, shared by the preparer, the thumbnail renderer and the tests (not a command) | `python tests/weapon_paint_test.py` |
 | `research/d3d9_bytecode.py` | Library: our own SM3 (vs_3_0 / ps_3_0) token reader, written from Microsoft's public D3D9 bytecode description; `disassemble(code)` prints a plain register listing; listings are game-derived and stay under `local/` | imported by the paint research; checked in `python tests/weapon_paint_test.py` |
 | `research/particle_system.py` | Reads cooked `ParticleSystem` templates (emitters, LODs, modules, baked distributions, `BurstList`, `DynamicParams`) to JSON under `local/phaselock/emitters/`; reads only, renders nothing | `python research/particle_system.py [Part_SirenASHandOrb ...] [--package GD_Siren_Streaming_SF] [--oracle]`, tests `python tests/particle_system_test.py` |
-| `tools/prepare_phaselock_target.py` + `tools/import_phaselock_target.ps1` | A stock Phaselock target for the host: the bullymong's mesh, zone-colour material, idle, death and its four `PhaseLock_*` clips (our reader for identities, UModel for the exports, the slice NPC clip conversion), imported under the ignored `/Game/OpenWillow/Characters/PhaselockTarget`; `host_target.json` tells the host the paths, mesh offset and scale | `powershell -File tools/import_phaselock_target.ps1 -Game <BL2> -UModel <umodel.exe>` (under the UE lock), then `tools/run_phaselock_shots.ps1 -Extra '-owcombatpawn=Bullymong'`; tests `python tests/prepare_phaselock_target_test.py` |
-
-Inventory open-time benchmark (DECISIONS 2026-10-02; results in the 2026-10-02 section of
-[INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md); one PC, no original-game figure):
-
-- `-owinvopenbench=<N>` and `-owinvopenbenchdelay=<s>` (UE command line) open the inventory N times and log `OWINVTIME`
-  lines per open; `-owinvnopreload` turns off the level-start preloads for an A/B comparison (it is not a test default).
-- `powershell -File tools/test_inventory_actions.ps1 -OpenBench 5 [-OpenBenchDelay 20] [-Items local/items/slice]
-  [-NoInventoryMovie]` runs the benchmark instead of the action suite and prints one row per open. Pass
-  `-Extra @('-ddc=InstalledNoZenLocalFallback','-d3d11','-owinvnopreload')` for the no-preload run; `-Extra` replaces the
-  default list, so repeat the defaults.
+| `tools/prepare_phaselock_target.py` | A stock Phaselock target: the bullymong's mesh, zone-colour material, idle, death and its four `PhaseLock_*` clips (our reader for identities, UModel for the exports, the slice NPC clip conversion). It writes under ignored `local/phaselock/target/` and `local/external/umodel/phaselock-target/`; its `host_target.json` and editor job named the UE5 host's content folder, whose import and shot runner are retired | `python tools/prepare_phaselock_target.py all --game <BL2> --umodel <umodel.exe>` (steps `identity`, `extract`, `editor-job`, `anims`, `attachments`); tests `python tests/prepare_phaselock_target_test.py` |
 
 ## Independent oracles: umodel and the game's own object dumps
 
@@ -1893,28 +1580,19 @@ non-zero on a `differ`, an out-of-range reference or a parse error; `no_unique_p
 Backpack scrolling, transfer flows and Maya's preview framing are recorded in
 [INVENTORY_MOVIE_PROTOTYPE.md](verification/INVENTORY_MOVIE_PROTOTYPE.md) (2026-09-30 sections), not repeated here.
 
-An optional paint pass applies the existing thumbnail palette approximation to
-one already imported recipe mesh, without reimporting meshes or deleting folders:
+An optional paint pass prepares the existing thumbnail palette approximation for one recipe mesh:
 
 ```powershell
 python tools/prepare_weapon_paint.py --recipe local/items/smg_maliwan_epic_1.json `
   --materials local/external/umodel/weapon-materials-20260929 `
   --output local/items/paint/smg_maliwan_epic_1.json
-$env:OPENWILLOW_WEAPON_PAINT = "$pwd/local/items/paint/smg_maliwan_epic_1.json"
-& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' `
-  "$pwd/host/ue5/OpenWillow/OpenWillow.uproject" -run=pythonscript `
-  "-script=$pwd/host/ue5/import_weapon_paint.py" -unattended -nullrhi
 ```
 
-Run this after `import_weapon_items.py`, which replaces item materials. The
-prepared JSON and imported textures/materials remain ignored. This is tested
-only for the selected Maliwan epic SMG; packed normal/emissive semantics,
-pattern placement and original Master_Gun lighting remain unverified.
-
-`--recipe` also accepts several explicit paths, writing a list when there is
-more than one. The UE importer accepts either form. Inputs are validated before
-preparation writes its output; unsupported pattern inputs fail rather than
-silently choosing a substitute. Keep existing Infinity paint imports separate.
+The prepared JSON stays ignored. Its consumer, the UE5 host's paint import (removed 2026-11-14), drew it on that host's
+imported meshes; the reading was tested only for the selected Maliwan epic SMG, and packed normal/emissive semantics,
+pattern placement and original Master_Gun lighting remain unverified. `--recipe` also accepts several explicit paths,
+writing a list when there is more than one. Inputs are validated before preparation writes its output; unsupported
+pattern inputs fail rather than silently choosing a substitute.
 
 Audit Maya's third-person hold references without changing the package decoder:
 
@@ -1935,15 +1613,11 @@ poll `window.owPanelProjectionProbeState`. A visual hold argument of at most
 Ruffle player, isolates equipment-panel art and tests a synthetic CSS plane
 with a matching HTML target. Angles/perspective are synthetic, not stock values.
 
-
 ## Bounded Sanctuary mover bridge
 
 `tools/prepare_mover.py` follows one installed SeqAct_Interp/group/actor binding and emits an ignored local manifest.
-Build CMake Release before UE5, then pass `-owmover=<manifest>` to enable Maya's nearby E interaction (no manifest
-leaves the bridge inactive). `tools/test_mover.ps1` runs the two-cycle input/movement/collision test; it refuses an
-existing editor and never saves the map. Commands, limitations and evidence:
-[mover record](verification/SANCTUARY_MOVER_PROTOTYPE.md).
-
+The UE5 host read it through `-owmover=<manifest>` for Maya's nearby E interaction; that host and its two-cycle test
+are retired. Commands, limitations and evidence: [mover record](verification/SANCTUARY_MOVER_PROTOTYPE.md).
 
 ## Sanctuary Fire-mission slice data (stock values instead of stand-ins)
 
@@ -1969,45 +1643,40 @@ python tools/prepare_action_skill.py --reader $reader --game $game     # local/c
 # Weapons: legal parts of a balance, card stats, the slice guns, drop tables
 python tools/weapon_balance.py --reader $reader --package "$cooked\Startup.upk" parts --help
 python tools/weapon_slice_gear.py --reader $reader --game $game --level 8 --seed 1   # local/items/slice
-python tools/prepare_stock_shield.py --reader $reader --game $game  # local/slice/stock_shield_gear.json (-Shield; UNVERIFIED)
+python tools/prepare_stock_shield.py --reader $reader --game $game  # local/slice/stock_shield_gear.json (UNVERIFIED)
 python tools/loot_pools.py --reader $reader --package "$cooked\Startup.upk" table --help
 python tools/weapon_card_audit.py --reader $reader --package "$cooked\Startup.upk" --trace <ui trace .jsonl>
 
 # What a shot does (docs/verification/WEAPON_PROJECTILES.md): add the "firing" block to a recipe that has stats
 python tools/weapon_firing.py --reader $reader --package "$cooked\Startup.upk" --recipe <recipe .json> [--print]
 python tools/weapon_firing_coverage.py --game $game [--only-firing]     # the firing test's coverage recipes + firing blocks (local/items)
-pwsh -File tools/test_weapon_firing.ps1 [-Guns a,b,c] [-SkipBuild] [-Engine <UE>]  # in-engine -owfiringtest + check_weapon_firing.py
-# (tools/weapon_refresh_firing.py, the L7 live-dump firing block, was retired on 2026-11-02: the cooked firing block replaces it)
-powershell -File tools/capture_firing_frames.ps1                       # host frames at the real frames' pose (-owfiringshots)
 python tools/firing_contact_sheet.py --offsets=-2:10                   # real / host sheets under local/firing/frames/sheets
 
 # Audio identity chain (no decoding): UE3 AkEvent -> Wwise event -> bank -> .wem
 python tools/audio_census.py census
 python tools/audio_slice_chain.py --reader $reader                     # local/slice/audio.json (every line of the mission's dialog group)
 
-# Marcus, the target dummy and the stock Maliwan pistol: UModel export + UE import job
+# Marcus, the target dummy and the stock Maliwan pistol: identities and UModel exports
 python tools/slice_npc_assets.py all                                   # local/slice/npc_assets.json
-powershell -File tools/seed_slice_npc_assets.ps1                       # runs tools/slice_npc_editor.py in the editor
 
-# Player side: mission pistol paint, then the UE assets (additive; see below). The turn-in loot stand-in (--reward-only) was removed on 2026-10-07.
+# Mission pistol and slice gun paint (the --mesh / --mesh-folder targets are the UE5 host's /Game/ paths)
 python tools/prepare_weapon_paint.py --recipe local/items/slice/slice_mission_pistol_fire.json `
   --materials local/external/umodel/slice-npc/Pistol --mesh /Game/OpenWillow/Weapons/MaliwanPistol/SK_Pistol_Maliwan_2_Fire_seed1 `
   --reader $reader --package "$cooked\Startup.upk" `
   --output local/items/paint/slice_mission_pistol_fire.json
-powershell -File tools/seed_slice_player_assets.ps1                    # steps fx, items, paint
-
-# Slice guns: export each recipe's MaterialInstanceConstant chain, prepare, then paint Weapons/SliceItems
 umodel.exe -path=$cooked -game=border -export -png -out=local/external/umodel/slice-guns Startup <Mati name> MaterialInstanceConstant
 python tools/prepare_weapon_paint.py --recipe <local/items/slice/slice_*.json ...> `
   --materials local/external/umodel/slice-guns --mesh-folder /Game/OpenWillow/Weapons/SliceItems `
   --reader $reader --package "$cooked\Startup.upk" --output local/items/paint/slice_guns.json
-powershell -File tools/seed_slice_player_assets.ps1 -Steps paint -Paint local/items/paint/slice_guns.json
 ```
 
 `--reader/--package` lets the paint tool fill scalar and vector parameters that no MIC sets from the base Material's
 own parameter expressions, and read the leaf MIC's static parameters ([DECISIONS.md](../DECISIONS.md) 2026-10-01 and
 2026-10-02); without them a chain that leaves a zone colour to the base material fails rather than guessing.
-`tools/slice_npc_assets.py` needs numpy and Pillow in the Python that runs it.
+`tools/slice_npc_assets.py` needs numpy and Pillow in the Python that runs it. The host frames that
+`firing_contact_sheet.py` puts under the real ones came from the UE5 host's frame capture (removed 2026-11-14); its
+in-engine firing test and the slice seeding and import steps are retired too
+([SANCTUARY_RPG_MISSION.md](verification/SANCTUARY_RPG_MISSION.md) keeps their history).
 
 ### Weapon paint: where the Master_Gun reading comes from
 
@@ -2030,36 +1699,27 @@ python tools/render_weapon_previews.py slice_pistol --items local/items/slice `
 - `tools/material_static_parameters.py` decodes the static parameter set a cooked MIC keeps after its properties (631 of
   631 in `Startup.upk`); `research/d3d9_bytecode.py` is our own SM3 token reader, written from Microsoft's public
   description (its output is game-derived and stays under `local/`); the colour model is written in our own words in
-  `tools/weapon_paint_model.py` and drawn by `host/ue5/import_weapon_paint.py`. The reading, the texture colour space
-  (pass 2) and the shading inputs (pass 3, behind a flag) are all `UNVERIFIED` against the running game; see the three
-  weapon-paint entries dated 2026-10-02 in [DECISIONS.md](../DECISIONS.md).
-
-`tools/seed_slice_player_assets.ps1` holds the machine-wide UE run lock (`tools/ue_lock.ps1`) for each editor launch and never deletes
-`Weapons/Items`, Maya's folder or slice NPC content. `fx` runs `host/ue5/import_infinity_proxy.py` only when
-`Weapons/InfinityProxy` is absent (it supplies `M_OW_FxAdditive` and `M_OW_BulletHole`). `items` runs the additive
-`host/ue5/import_slice_items.py` (pool-rolled slice guns into `Weapons/SliceItems`, grey stand-in material; existing
-`SK_<id>` assets are skipped). `paint` runs `import_weapon_paint.py`, which accepts a `mesh` target and MIC chains
-without a pattern texture. How `tools/run_quest.ps1` and `tools/test_quest.ps1` use the slice items:
-[SANCTUARY_RPG_MISSION.md](verification/SANCTUARY_RPG_MISSION.md).
+  `tools/weapon_paint_model.py` and drawn by the thumbnail renderer (the UE5 host's drawing of it was removed on
+  2026-11-14). The reading, the texture colour space (pass 2) and the shading inputs (pass 3, behind a flag) are all
+  `UNVERIFIED` against the running game; see the three weapon-paint entries dated 2026-10-02 in
+  [DECISIONS.md](../DECISIONS.md).
 
 Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
 - `tools/weapon_refresh_fragments.py` rebuilds the fragment list (body variants, no `*_None` parts, hidden-bone
   triangles cut) of existing local recipes; `tools/weapon_refresh_stats.py` re-evaluates their `stats`, optionally on
-  the live overlay; `host/ue5/import_gun_meshes.py` re-imports the meshes of named ids only.
-- `-owgunshots -owgunids=<id,id>` captures each gun in first person and from the side (`OWGun_<id>.png`,
-  `OWGun_<id>_side.png`); `tools/weapon_visual_compare.py` compares a real and a host frame cell by cell.
-- The arms play per-type clip sets: convert `Anim_1st_Person.<type>` with `tools/prepare_character_anims.py --clips
-  Idle Run_F Sprint Jump_Start Jump_Idle Jump_End Draw ADD_Fire_Recoil` (bones are matched by name, so the rifle set's
-  other bone order converts), then import with `OPENWILLOW_CHARACTER_ANIMS=AssaultRifle=...;SMG=...;Shotgun=...`.
+  the live overlay.
+- `tools/weapon_visual_compare.py` compares a real and a host frame of a gun cell by cell (the host frames on record are
+  the UE5 host's).
+- The arms' per-type clip sets were converted with `tools/prepare_character_anims.py --clips Idle Run_F Sprint
+  Jump_Start Jump_Idle Jump_End Draw ADD_Fire_Recoil` (bones are matched by name) against the UE5 host's skeleton
+  reference, as for Maya's body clips above.
 - `python tools/weapon_view_model.py --game <BL2 dir> --dir <items folder...>` writes `weapon_view.json` beside the
-  recipes: each recipe's weapon-type `PlayerViewOffset` and `FirstPersonMeshFOV`. The walker places the arms and sets the
-  foreground FOV from it when a gun is selected; rerun it when a recipe folder changes (a recipe without an entry gets
-  no offset and 45).
+  recipes: each recipe's weapon-type `PlayerViewOffset` and `FirstPersonMeshFOV` (the UE5 host placed the arms and set
+  the foreground FOV from it; a recipe without an entry got no offset and 45). Rerun it when a recipe folder changes.
   Since 2026-11-03 it also writes `muzzle_flash_fx` (per element, the type's muzzle-flash particle emitters: axis lock,
   size, offset, life, colour) and `shell_casing_fx` (the casing particle's life, start velocity and acceleration), read
   from the cooked particle systems by `tools/weapon_muzzle_fx.py` (`--system <ParticleSystem>` / `--collection <path>`
-  print one as JSON; the lookup-table layout is fitted, see WEAPON_VISUALS.md section 18). `-owflashfill=<f>` sets the
-  host's flash-quad fill (default 0.5).
+  print one as JSON; the lookup-table layout is fitted, see WEAPON_VISUALS.md section 18).
 - `pwsh tools/real_game/gun_ads_capture.ps1` (real game, hub lock, saves backed up and compared, written 2026-11-07, never run): an idle and an ADS still of each
   named recipe in Sanctuary, lane E's way, with the live zoom state read back, output under ignored `local/realgame/gun_ads/`. Default guns: the slice shotgun and a Hyperion pistol on iron sights
   (`WEAPON_VISUALS.md` section 23). `-MeasureFov` adds, per gun at hip and at full zoom, the view's horizontal FOV from known directions projected through the HUD canvas and two frames 4 degrees apart under `fov/`, so the turn can be measured from pixels too. Each gun is made at Maya's level. The finalizer is the migrated one, which `tests/gun_ads_capture_test.py` holds equal to `phaselock_integrity_capture.ps1`'s. Do not add `slice_mission_pistol_fire`:
@@ -2070,52 +1730,31 @@ Gun visuals (2026-10-04, `docs/verification/WEAPON_VISUALS.md`):
   run to completion yet (the game stopped at a Steam message box). Not run since the finalizer fix (PR #200): `UNVERIFIED` for its own capture until it runs once.
 
 Weapon part library (2026-10-23, `docs/verification/WEAPON_PART_ASSETS.md`): every gestalt mesh once and every skin as a
-material instance, guns assembled from their parts at run time (`OpenWillowWeaponAssembly`).
+material instance, so a host can assemble guns from their parts at run time (the UE5 host did, until 2026-11-14).
 
 ```powershell
 python tools/weapon_part_census.py --game $env:OPENWILLOW_BL2 --live local/realgame/wpa/live_visual_census.json `
   --output local/wpa/census/visual_census.json          # cooked census (+ comparison with the live one)
 pwsh tools/real_game/weapon_part_session.ps1 -Mode Census   # live census (game, saves blocked; RTSE-style find_all)
 python tools/export_weapon_skins.py --umodel <umodel.exe>    # UModel 1590: every skin MIC + textures, inventoried
-python tools/weapon_library.py meshes                        # one glTF primitive (UE slot) per gestalt fragment
+python tools/weapon_library.py meshes                        # one glTF primitive (host material slot) per gestalt fragment
 python tools/weapon_library.py skins --game $env:OPENWILLOW_BL2
 python tools/weapon_library.py index                         # local/weapon_library/library.json (parts, skins, bones)
-powershell -File tools/import_weapon_library.ps1 [-Only meshes|skins] [-Reloads 'Pistol=<prepared reload json>,...']
 python tools/weapon_assembly_sample.py --game $env:OPENWILLOW_BL2  # sample: type x manufacturer, legendaries, skin sweep
-powershell -File tools/run_weapon_assembly_shots.ps1 -Items local/wpa/sample -Quick   # host frames + assembly log
-python tools/weapon_assembly_oracle.py --log <run.log...> --index local/wpa/sample/sample_index.json `
-  --live local/realgame/wpa/live_guns.json                   # triangle oracle: game = host per gun
 pwsh tools/real_game/weapon_part_session.ps1 -Mode Capture -Inspect -RecipeList <file of recipe paths>
 ```
 
-- The host backpack holds 39 items (the game's maximum), so `run_weapon_assembly_shots.ps1` shows at most 39 guns per run;
-  split a larger sample into folders. Run `weapon_view_model.py` on each folder so the guns are held at their type's offset.
-- `-owweaponprebuilt` forces the old per-recipe meshes (A/B); a recipe with an explicit `MeshPath` always uses it. A gun the
-  library cannot build completely falls back too, with `fallback to the pre-built mesh ... (<reason>)` in the log.
-- `OpenWillow.WeaponAssembly.Core` is a UE automation test of the planning rules on a synthetic library; run it in `-game` mode
-  (`UnrealEditor.exe <uproject> -game -nullrhi -ExecCmds="Automation RunTests OpenWillow.WeaponAssembly; Quit"`, which also
-  runs the four other `OpenWillow.WeaponAssembly.*` tests). It was plain `OpenWillow.WeaponAssembly` until 2026-11-12: a test
-  path that is also the folder of other tests is never run, and `tests/automation_paths_test.py` now refuses one.
-- The `ue_automation` suite (these five tests and eight others) runs through `tools/test_automation.ps1` since 2026-11-13. Its
-  `-Tests` and `-Expected` defaults are the one place the names and the count live; `tests/automation_paths_test.py` reads
-  them and the suite's `#pass` line. `-DryRun` prints the command line without taking the lock or starting the editor. The
-  run prints `AUTOMATION PATHS n: ...` (the `Path=` of every completed test) before `AUTOMATION SUMMARY success=N failed=M expected=K timed_out=0|1` (a run stopped at the timeout exits 1).
-- A meshes import re-imports the reload clips recorded in `local/weapon_library/reloads.json`.
-- `-owgunexec=<cmd>|<cmd>` (with `-owgunshots`) runs console commands before the captures, `+` for a space, e.g.
-  `-owgunexec=ow.RollGun+GD_Itempools.WeaponPools.Pool_Weapons_All_06_Legendary+30+1 -owgunids=gen_Pistol_Torgue_5_Calla_30_1`
-  shows a generated gun (`-ExecCmds` did not reach the console in a map launch here).
+- `tools/weapon_assembly_oracle.py` compares the triangles per gun between the real game's live dump and a host's
+  assembly log; the log format it reads is the UE5 host's, so it has no host side to read today.
 - The capture session spawns guns in memory only, empties the save's backpack in memory for Inspect (saves are blocked and
   compared afterwards), closes the queued "Unlocked!" notices through the SDK, and holds each gun through the inventory
   manager (the quick-slot key did not switch to a freshly spawned gun).
 
 - `tools/audio_slice_chain.py` stops at raw Wwise Vorbis `.wem` files. No decoder is approved
   yet; picking one is a maintainer decision (license and provenance entry first).
-- `tools/slice_npc_editor.py` imports `unreal` and only runs inside the editor.
-- `tools/build_phaselock_fx_constants.py` rebuilds the ignored `local/phaselock/fx_constants.json` that `import_phaselock_fx.py` needs, from the decoded emitters and `fx_manifest.json`. One colour in it stays hand-kept: the tool keeps it and stops if it is missing ([PHASELOCK_STOCK_DATA.md](verification/PHASELOCK_STOCK_DATA.md), "The stock colour constants").
-- `tools/import_phaselock_fx.ps1` waits for the machine-wide UE run lock (`tools/ue_lock.ps1`) like the suite scripts. `host/ue5/import_phaselock_fx.py`
-  and the `tools/run_phaselock_shots.ps1 -Extra` switches `-owbubbleradius` and `-owfxscalar` are described in
-  [PHASELOCK_STOCK_DATA.md](verification/PHASELOCK_STOCK_DATA.md). Write the values as literals, since a PowerShell
-  variable inside `-Extra` from a `-File` call is not expanded.
+- The Phaselock stock data (the decoded emitters, `fx_manifest.json`, the one hand-kept colour) are described in
+  [PHASELOCK_STOCK_DATA.md](verification/PHASELOCK_STOCK_DATA.md); the UE5 host's constants builder, effect import and
+  shot runner that turned them into host effects are retired.
 - The structural oracles (`research/behavior_census.py`, `research/struct_defaults_census.py`),
   `ow-package --properties-batch` and `tools/weapon_card_audit.py` are described in
   [BEHAVIOR_DATA_DECODE.md](verification/BEHAVIOR_DATA_DECODE.md) and
@@ -2127,3 +1766,47 @@ Records: [behavior data](verification/BEHAVIOR_DATA_DECODE.md),
 [Phaselock stock data](verification/PHASELOCK_STOCK_DATA.md),
 [audio chain](verification/SLICE_AUDIO_CHAIN.md),
 [NPC assets](verification/SLICE_NPC_ASSETS.md).
+
+## Retired with the UE5 host (2026-11-14)
+
+These sections documented the UE5 host and the tools that built, seeded, imported into, launched or tested it. They
+left the tree with that host on 2026-11-14
+([decision](decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). Their full text
+is in `git show 08bcf3e:docs/TOOLING.md`, and any of the tools is `git show 08bcf3e:<path>`. The host's code and the
+records of its runs stay useful as a behaviour reference; nothing it showed counts toward a Rust host's gate.
+
+- **Playing the slice by hand** (`tools/play_slice.ps1`): one command that opened Sanctuary with Marcus's Fire mission,
+  the range, Phaselock, the sounds and the overlay pages in the editor, with an unattended smoke mode.
+- **One Unreal run per machine**: the lock text for the Unreal launchers; what still holds is in "The run lock: one heavy
+  run per machine" above.
+- **Before a suite: engine path, preflight and the suite-map lint**: `OPENWILLOW_UE` and `-Engine`, `tools/preflight.ps1`
+  (with the `ow-build-stamp` CMake target it read, also removed) and `tools/suite_map_lint.py`.
+- **Heavy suites: the suite map**: `tools/suites.txt`, `tools/suites_switch_only.txt`, `tools/suites_due.py`,
+  `tools/run_suites.ps1` and the `tools/test_*.ps1` suites with their `PASS` lines and the pass ledger
+  `local/hub/test-ledger.txt`; the landing rule that used them is under "Landing PRs in a batch", "What counts as passed".
+- **Host engine probe (Phase 0)**, **the UE import and the free-flight viewer**, **first collision and walking slice**,
+  **the in-viewer map selector** and **repeatable inspection viewpoints**: `tools/run_ue_probe.ps1`,
+  `tools/run_ue_level.ps1` (`-ImportOnly`, `-ViewOnly`, `-Walk`, `-LowEnd`), `tools/test_ue_viewer.ps1` (`-Route`,
+  `-Terrain`, `-Bsp`, `-Selector`, `-Inspect`, `-Profile`), the editor-Python importer and verifiers under `host/ue5/`,
+  and `viewer.py --action import|view`. The preparers they read from are documented above.
+- **Maya with the Infinity and Phaselock (host prototype)**: the Infinity proxy import, the combat test and its capture
+  switches (`-owcombattest`, `-owcombatshots`, `-owskillshots`), `-owweapongen` and `ow.RollGun`,
+  `tools/import_maya_combat_anims.ps1`.
+- **The host half of the HUD overlay**: `tools/run_ue_flash_hud.ps1` and its time limit (`tools/run_limit.ps1`), the
+  movie-or-canvas HUD switch, `tools/run_hud_shots.ps1`, `tools/test_action_skill_hud.ps1`, `tools/test_hud_minimap.ps1`,
+  `tools/test_inventory_actions.ps1` (and the inventory open-time benchmark it ran), the native weapon preview, the
+  host-owned skill points, Maya's menu display (clip import, outline, menu head look, backdrop) and their UE automation
+  tests.
+- **Sanctuary ambient NPCs (host, behind a flag)**: `tools/seed_ambient_npc_assets.ps1`, `tools/test_ambient.ps1` and the
+  `-owambient` spawner.
+- **UE import and seed jobs for the slice**: `tools/seed_slice_player_assets.ps1`, `tools/seed_slice_npc_assets.ps1`,
+  `tools/seed_inventory_assets.ps1`, `tools/slice_npc_editor.py`, `tools/import_lootables.ps1`,
+  `tools/import_phaselock_fx.ps1`, `tools/import_phaselock_target.ps1`, `tools/import_weapon_library.ps1`,
+  `tools/build_phaselock_fx_constants.py`, `tools/checkout_guard.ps1`, and the shot and test runners
+  (`tools/run_phaselock_shots.ps1`, `tools/run_weapon_assembly_shots.ps1`, `tools/capture_firing_frames.ps1`,
+  `tools/test_weapon_firing.ps1`, `tools/test_mover.ps1`, `tools/test_quest.ps1`, `tools/run_quest.ps1`,
+  `tools/play_range.ps1`, `tools/test_automation.ps1`).
+- **The C++ VM in the UE5 inventory**: the module linked `build/Release/ow-core.lib`, which is why the old build order
+  was CMake before the UE module. There is no UE module to build now.
+
+All of the paths in this list were removed on 2026-11-14.

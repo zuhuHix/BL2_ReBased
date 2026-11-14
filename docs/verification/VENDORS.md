@@ -5,6 +5,8 @@ AI-assisted (Claude), 2026-11-03. Our own words. Package facts come from `ow-pac
 running `tools/real_game/scripts/vendors_probe.py`). Both outputs are game data and stay under ignored `local/`. Each
 rule below is marked **confirmed (live)**, **package data**, or `UNVERIFIED`.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## 1. Where the machines come from
 
 **Package data.** Sanctuary places no vending machine actor. The machines are spawned at

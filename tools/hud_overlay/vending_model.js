@@ -9,7 +9,7 @@
   // Machine kinds follow the host's classification (tools/prepare_vendors.py): weapons, items (ammo and grenades),
   // health, and the black market (listed, not stocked yet).
   const MACHINE_KINDS = ['weapons', 'items', 'health', 'blackmarket'];
-  // Row kinds the host sends (OpenWillowVendor.cpp): guns, the item rows (ammo, health), shields and grenade mods, and gear
+  // Row kinds the host sends (the retired UE5 host's OpenWillowVendor.cpp): guns, the item rows (ammo, health), shields and grenade mods, and gear
   // the page lists as plain items or class mods.
   const ITEM_KINDS = ['weapon', 'item', 'ammo', 'health', 'shield', 'grenade_mod', 'class_mod'];
   const ACTIONS = ['buy', 'sell', 'buyback', 'close'];

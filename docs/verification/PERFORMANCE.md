@@ -1,5 +1,7 @@
 # Sanctuary performance sample and in-game map selector — 2026-09-14
 
+> **Retired host (2026-11-14).** This note is AI-assisted (Claude Code); the record below predates it. Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 Checkout `t3code-b88eb790`, UE 5.8, installed Steam game. Game-derived files
 stay in ignored local directories. This is a diagnostic sample on one
 integrated-GPU laptop, not a benchmark, and nothing in it changes renderer

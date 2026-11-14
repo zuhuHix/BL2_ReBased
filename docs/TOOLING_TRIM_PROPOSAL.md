@@ -2,6 +2,8 @@
 
 # docs/TOOLING.md trim proposal (not applied)
 
+Since 2026-11-14 the UE5 host is retired; the rows about its sections (HUD movie over UE5, Maya host prototype, Sanctuary ambient NPCs, mover bridge, Host engine probe) are history.
+
 Proposal only. Nothing in docs/TOOLING.md has been deleted. The maintainer approves each row before any edit.
 
 Method: section sizes are the UTF-8 bytes of each `##` section (its `###` children included), in KiB (bytes / 1024), measured

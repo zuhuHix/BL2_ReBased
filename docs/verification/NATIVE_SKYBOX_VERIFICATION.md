@@ -8,6 +8,8 @@ policy and limits below otherwise still apply.*
 AI-assisted implementation in `t3code-dc91995f`. This is a bounded Sanctuary
 skybox import slice. It does not recover the complete UE3 sky graph.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 `tools/sky_census.py` found 31 sky-named placements in Sanctuary_P. Two use
 `Prop_Skybox.Meshes.Sky_Dome` in `Sanctuary_Light`; one has the effective
 `Mati_Sky_Dynamic_INST` Unlit material and the other is overridden with

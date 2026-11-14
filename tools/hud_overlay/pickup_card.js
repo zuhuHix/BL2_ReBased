@@ -4,7 +4,7 @@
 // the item, so it floats in the world. The host has no such particle: this page draws the converted movie in its own
 // Ruffle player over the HUD and places it from the item's screen point. Card size and placement are host fits
 // (UNVERIFIED: the particle's size and offset are not read). The card is filled by item_card.js, the code the inventory
-// page uses, from the host's "pickupCard" field (OpenWillowPickupCard.cpp): {id, x, y, level, item, compare} or null.
+// page uses, from the host's "pickupCard" field (the retired UE5 host's OpenWillowPickupCard.cpp): {id, x, y, level, item, compare} or null.
 (function (root) {
   'use strict';
   const CARD = '_level1.inventory.card1';

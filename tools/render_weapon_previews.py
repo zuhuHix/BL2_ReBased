@@ -47,7 +47,7 @@ ID_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 
 # Detail atlas channel per weapon class. UNVERIFIED inference from the atlas
 # names (Launcher/Shotgun/Pistol and AssaultRifle/SubMachineGun/Sniper packed
-# R/G/B); host/ue5/import_infinity_proxy.py makes the same guess for pistols.
+# R/G/B); the retired UE5 host's import_infinity_proxy.py made the same guess for pistols.
 DETAIL_CHANNELS = {
     ("Weap_LauncherShotgunPistol_Comp", "pistol"): 2,
     ("Weap_LauncherShotgunPistol_Comp", "shotgun"): 1,

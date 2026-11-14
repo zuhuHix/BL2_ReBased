@@ -1,7 +1,8 @@
 """Grade one -owinteractives run of the in-engine lootables suite (tools/test_interactives.ps1).
 
-Reads the host's log lines (host/ue5/OpenWillow/Source/OpenWillow/OpenWillowInteractive.cpp and
-OpenWillowInteractivePickup.cpp) and the automation log of OpenWillow.Interactive.Loot. Prints one line per check:
+That suite and the host it ran were the retired UE5 host's (git show 08bcf3e:tools/test_interactives.ps1); the grader stays as
+the description of what such a run must show. Reads the host's log lines (OpenWillowInteractive.cpp and
+OpenWillowInteractivePickup.cpp in that host) and the automation log of OpenWillow.Interactive.Loot. Prints one line per check:
     CHECK <name> PASS|FAIL|MISSING|INCOMPLETE|SKIPPED <detail>
 then SUMMARY passed=N failed=M missing=K skipped=S incomplete=I. Exit 0 when nothing fails or is missing or incomplete, 1
 otherwise, 2 on bad arguments. INCOMPLETE: the check ran, but what it needs could not be seen (no clear view of a lootable).

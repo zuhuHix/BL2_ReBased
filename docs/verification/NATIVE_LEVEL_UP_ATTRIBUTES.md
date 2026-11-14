@@ -9,6 +9,8 @@ class that tool could not size (it stops at a map property in `WillowPlayerContr
 gives a map property 60 bytes; the class size that comes out agrees with the size the executable registers for the class,
 which is the oracle.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 The question this note answers is the one left open by NATIVE_ATTRIBUTES section 8 and by the "Script swap 7" section of
 [SANCTUARY_RPG_MISSION.md](SANCTUARY_RPG_MISSION.md): `WillowPlayerController.RecalculateAttributeInitializedState`, which
 `OnExpLevelChange` calls after the level rises, was a thunk whose body was not read, and the level-up's health refill was

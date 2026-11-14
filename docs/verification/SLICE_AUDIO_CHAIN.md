@@ -6,6 +6,8 @@ the decode benchmark are reported separately. Generated output is game-derived a
 Reproduce: `python tools/audio_census.py census`, `python tools/audio_slice_chain.py` (about 5 minutes; most of it is
 `--object-dump` on `Sanctuary_Dynamic`), `python tests/audio_census_test.py`.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## 1. Where the audio is
 
 Base game, `WillowGame/CookedPCConsole` (the only audio files for the base game; there is no loose `.bnk`/`.wem`):

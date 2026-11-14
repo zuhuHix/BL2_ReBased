@@ -1,16 +1,14 @@
-"""Synthetic tests for tools/editor_inputs.py and the editor steps that use it (no game data, no Unreal: a stub ``unreal`` module).
+"""Synthetic tests for tools/editor_inputs.py and tools/repo_paths.py (no game data, no editor).
 
 AI-assisted (Claude), 2026-11-09 (PR #195 review r1). The pure checks: an invalid source in any form is reported, a plain slot the zone step
-keeps on purpose is accepted. The editor scripts (zone, attach, the slice npcs mode) are then run against the stub with a bad job: each must
-stop with the problem named and make no import, delete, create or save call.
+keeps on purpose is accepted. The runs of the retired UE5 host's editor scripts against a stub ``unreal`` module, and of the launchers'
+checkout guard, left with those scripts (git show 08bcf3e:tests/editor_inputs_test.py).
 Run: python tests/editor_inputs_test.py
 """
 import json
 import os
-import runpy
 import sys
 import tempfile
-import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,14 +42,14 @@ def test_zone_checks_only_what_it_imports():
         job = {'tool': 'tools/slice_npc_assets.py', 'npcs': [{'id': 'A', 'slots': [plain, plain_broken, zoned]}]}
         assert e.zone_problem(job) is None                                                    # p_CustomPattern is not imported either
         zoned['textures']['p_Masks'] = empty
-        assert 'A/Skin p_Masks' in e.zone_problem(job) and 'seed_slice_npc_assets' in e.zone_problem(job)
+        assert 'A/Skin p_Masks' in e.zone_problem(job) and 'slice_npc_assets.py editor-job' in e.zone_problem(job)
 
 
 def test_zone_reports_an_expected_mask_that_was_not_exported():
     job = {'tool': 'tools/prepare_phaselock_target.py', 'npcs': [{'id': 'B', 'slots': [
         {'slot': 'S', 'textures': {}, 'missing_textures': ['p_Masks', 'p_Diffuse', 'p_Normal']}]}]}
     problem = e.zone_problem(job)
-    assert 'p_Masks, p_Diffuse not in the UModel output' in problem and 'import_phaselock_target' in problem
+    assert 'p_Masks, p_Diffuse not in the UModel output' in problem and 'prepare_phaselock_target.py editor-job' in problem
 
 
 def test_npcs_and_attach():
@@ -67,109 +65,7 @@ def test_npcs_and_attach():
         assert 'A/P' in e.attach_problem(job)
 
 
-# --- the editor scripts against a stub unreal ------------------------------------------------------------------------------------
-
-# Any of these in a call path is a change to content: imports, deletes, creates, saves, and every material-instance mutation the zone step
-# makes (clear_all_material_instance_parameters, set_material_instance_parent and the *_parameter_value setters all contain "material").
-FORBIDDEN = ('import_asset_tasks', 'delete_directory', 'delete_asset', 'create_asset', 'save_loaded_asset', 'save_directory',
-             'set_editor_property', 'set_material', 'clear_all_material_instance_parameters')
-
-
-class Recorder:
-    """Any attribute or call on the stub returns another recorder and logs its dotted path."""
-    def __init__(self, log, path):
-        self._log, self._path = log, path
-
-    def __getattr__(self, name):
-        return Recorder(self._log, f'{self._path}.{name}')
-
-    def __call__(self, *args, **kwargs):
-        self._log.append(self._path)
-        return Recorder(self._log, self._path + '()')
-
-    def __iter__(self):
-        return iter(())
-
-
-class StubClassMeta(type):
-    """An unreal class (capitalised name): a real type, so isinstance() works; its attributes are recorders, so calls are logged."""
-    def __getattr__(cls, name):
-        return Recorder(cls._log, f'unreal.{cls.__name__}.{name}')
-
-
-def stub_attribute(log, name):
-    if name[:1].isupper():
-        cls = StubClassMeta(name, (Recorder,), {'_log': log})
-        original = cls.__init__
-        cls.__init__ = lambda self, *args, **kwargs: (log.append(f'unreal.{name}()'), original(self, log, f'unreal.{name}()'))[1]
-        return cls
-    return Recorder(log, f'unreal.{name}')
-
-
-def run_with_stub(script, job, mode=None):
-    log = []
-    stub = types.ModuleType('unreal')
-    classes = {}
-    stub.__getattr__ = lambda name: classes.setdefault(name, stub_attribute(log, name))
-    with tempfile.TemporaryDirectory() as tmp:
-        job_file = Path(tmp) / 'job.json'
-        job.setdefault('slice_dir', tmp)
-        job_file.write_text(json.dumps(job), encoding='utf-8')
-        saved = dict(os.environ)
-        os.environ['OPENWILLOW_SLICE_JOB'] = str(job_file)
-        if mode:
-            os.environ['OPENWILLOW_SLICE_MODE'] = mode
-        sys.modules['unreal'] = stub
-        try:
-            runpy.run_path(str(ROOT / 'tools' / script), run_name='__main__')
-            error = None
-        except Exception as raised:   # a stopped step raises RuntimeError; anything else is reported the same way, with what was touched
-            error = f'{type(raised).__name__}: {raised}'
-        finally:
-            sys.modules.pop('unreal', None)
-            os.environ.clear()
-            os.environ.update(saved)
-    return error, log
-
-
-def touched(log):
-    return [call for call in log if any(word in call for word in FORBIDDEN)]
-
-
-def test_zone_step_stops_before_any_change():
-    # A valid zoned slot comes first, so a check placed after (or inside) the loop would already have changed that slot's instance.
-    with tempfile.TemporaryDirectory() as tmp:
-        good, empty, absent = files(tmp)
-        valid = {'slot': 'Good', 'material': 'Mati_Good', 'textures': {'p_Diffuse': good, 'p_Masks': good, 'p_Normal': good}, 'vectors': {},
-                 'scalars': {}}
-        broken = {'slot': 'Bad', 'material': 'Mati_Bad', 'textures': {'p_Diffuse': good, 'p_Masks': empty}, 'vectors': {}, 'scalars': {}}
-        job = {'tool': 'tools/prepare_phaselock_target.py', 'npcs': [
-            {'id': 'A', 'dest': '/Game/A', 'mesh_name': 'M', 'master': 'Master_Creature', 'slots': [valid]},
-            {'id': 'B', 'dest': '/Game/B', 'mesh_name': 'M', 'master': 'Master_Creature', 'slots': [broken]}]}
-        error, log = run_with_stub('phaselock_target_editor.py', job)
-    assert error and 'zone: inputs missing' in error and 'B/Bad p_Masks' in error and not touched(log), (error, touched(log))
-
-
-def test_attach_step_stops_before_any_import():
-    job = {'tool': 'tools/prepare_phaselock_target.py', 'npcs': [{'id': 'B', 'dest': '/Game/X',
-           'attachment_meshes': [{'id': 'Piece', 'gltf': 'None', 'material': 'Mati_X'}]}]}
-    error, log = run_with_stub('phaselock_target_attach_editor.py', job)
-    assert error and 'attach: inputs missing' in error and 'B/Piece' in error and not touched(log), (error, touched(log))
-
-
-def test_npcs_mode_stops_before_clean_or_import():
-    with tempfile.TemporaryDirectory() as tmp:
-        good, empty, absent = files(tmp)
-        job = {'tool': 'tools/slice_npc_assets.py', 'npcs': [
-            {'id': 'Fine', 'dest': '/Game/A', 'gltf': good, 'slots': [{'slot': 'S', 'material': 'M', 'textures': {'p_Diffuse': good}}]},
-            {'id': 'Broken', 'dest': '/Game/B', 'gltf': good, 'slots': [{'slot': 'S', 'material': 'M', 'textures': {'p_Diffuse': absent}}]}]}
-        error, log = run_with_stub('slice_npc_editor.py', job, mode='npcs')
-    # The first NPC is fine, but nothing may happen to it either: the check covers the whole job before the first clean().
-    assert error and 'Broken/S p_Diffuse' in error and not touched(log), (error, touched(log))
-
-
-
-# --- repository-relative job paths (tools/repo_paths.py) and the launchers' checkout guard -----------------------------------------
+# --- repository-relative job paths (tools/repo_paths.py) ---------------------------------------------------------------------------
 
 import repo_paths as rp  # noqa: E402
 import shutil  # noqa: E402
@@ -177,10 +73,11 @@ import subprocess  # noqa: E402
 
 
 def synthetic_checkout(base, name):
-    """A folder that looks like a checkout of this repository: a .git entry and the project file."""
+    """A folder that looks like a checkout of this repository: a .git entry and tools/repo_paths.py."""
     root = Path(base) / name
-    (root / 'host/ue5/OpenWillow').mkdir(parents=True)
-    (root / 'host/ue5/OpenWillow/OpenWillow.uproject').write_text('{}', encoding='utf-8')
+    (root / 'tools').mkdir(parents=True)
+    (root / 'tools/repo_paths.py').write_text('', encoding='utf-8')
+    (root / 'other').mkdir()
     (root / '.git').mkdir()
     return root
 
@@ -319,81 +216,17 @@ def test_junction_rules():
         assert junction(here / 'local/slice', main / 'local/slice') is None
         assert 'inside another checkout' in refused('local/slice/in.png', here)
         assert 'inside another checkout' in refused('local/slice', here, output=True)
-        assert junction(here / 'host/data', main / 'local') is None
-        assert 'inside another checkout' in refused('host/data/slice/in.png', here)
+        assert junction(here / 'other/data', main / 'local') is None
+        assert 'inside another checkout' in refused('other/data/slice/in.png', here)
         # (c) delete the checkout the junction points into: the dangling junction is refused, relative and absolute, input and output.
         shutil.rmtree(main)
         for value, output in (('local/slice/in.png', False), ('local/slice', True), (str(here / 'local/slice/x.json'), True),
-                              ('host/data/slice/in.png', False)):
+                              ('other/data/slice/in.png', False)):
             assert 'target is gone' in refused(value, here, output), value
         # (d) a file and folders not written yet under real, verified folders are fine.
         assert rp.from_repo('local/fresh/editor_report_zone.json', here, output=True) == str(here / 'local/fresh/editor_report_zone.json')
-        for link in (here / 'local/slice', here / 'host/data'):
+        for link in (here / 'local/slice', here / 'other/data'):
             os.rmdir(link)                                  # junctions only; the temp folder is removed afterwards
-
-
-POWERSHELL = shutil.which('powershell') or shutil.which('pwsh')
-
-
-def guard(cwd):
-    call = f". '{ROOT / 'tools' / 'checkout_guard.ps1'}'; $r = Assert-OwCheckout '{ROOT / 'tools'}'; Write-Output \"returned=$r\""
-    return subprocess.run([POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', call], cwd=cwd,
-                          capture_output=True, text=True, encoding='utf-8', errors='replace')
-
-
-def test_checkout_guard():
-    if not POWERSHELL:
-        print('test_checkout_guard: skipped (no PowerShell)')
-        return
-    with tempfile.TemporaryDirectory() as tmp:
-        other = synthetic_checkout(tmp, 'other')
-        (other / 'tools').mkdir()
-        refused = guard(other / 'tools')                  # cwd in another checkout of this repository
-        assert refused.returncode != 0 and 'another checkout of this repository' in refused.stderr + refused.stdout, refused
-        assert f'Repository root: {ROOT}' in refused.stdout, refused.stdout
-        plain = guard(tmp)                                 # cwd in no checkout at all: allowed
-        assert plain.returncode == 0 and f'returned={ROOT}' in plain.stdout, plain
-    ours = guard(ROOT / 'tools')                           # cwd in the script's own checkout
-    assert ours.returncode == 0 and f'returned={ROOT}' in ours.stdout, ours
-    # The same checkout reached through a junction is the same checkout (compared by physical path, not by text).
-    with tempfile.TemporaryDirectory() as tmp:
-        link = Path(tmp) / 'via-junction'
-        made = subprocess.run(f'mklink /J "{link}" "{ROOT}"', shell=True, capture_output=True, text=True)
-        if made.returncode != 0:
-            print(f'test_checkout_guard: junction case skipped, mklink /J failed: {made.stdout.strip()} {made.stderr.strip()}')
-            return
-        try:
-            through = guard(link / 'tools')
-            assert through.returncode == 0 and f'returned={ROOT}' in through.stdout, through
-        finally:
-            os.rmdir(link)                                 # removes the junction only, never the checkout behind it
-
-
-def test_launcher_resolves_the_job_through_the_shared_function():
-    """The wiring the three launchers use: Resolve-OwEditorJob runs the resolver, returns the resolved file for OPENWILLOW_SLICE_JOB,
-    and throws on a job that does not resolve. Runs without Unreal."""
-    if not POWERSHELL:
-        print('test_launcher_resolves_the_job_through_the_shared_function: skipped (no PowerShell)')
-        return
-    with tempfile.TemporaryDirectory() as tmp:
-        job = Path(tmp) / 'editor_job.json'
-        job.write_text(json.dumps({'tool': 'tools/slice_npc_assets.py', 'slice_dir': 'local/slice', 'npcs': []}), encoding='utf-8')
-        call = (f". '{ROOT / 'tools' / 'checkout_guard.ps1'}'; $env:OPENWILLOW_SLICE_JOB = Resolve-OwEditorJob '{sys.executable}' "
-                f"'{job}'; Write-Output \"job=$env:OPENWILLOW_SLICE_JOB\"")
-        run = lambda: subprocess.run([POWERSHELL, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', call], cwd=tmp,
-                                     capture_output=True, text=True, encoding='utf-8', errors='replace')
-        done = run()
-        resolved = Path(tmp) / 'editor_job.resolved.json'
-        assert done.returncode == 0 and f'job={resolved}' in done.stdout, done
-        assert json.loads(resolved.read_text(encoding='utf-8'))['slice_dir'] == str(ROOT / 'local/slice')
-        # A sibling that cannot be this checkout: a fixed name such as runner-z55 resolves back into the root when the test runs in a
-        # worktree of that name (it did, in the hub's test worktree), and the job is then rightly accepted.
-        job.write_text(json.dumps({'tool': 'tools/slice_npc_assets.py', 'slice_dir': f'../{ROOT.name}-not-this-checkout/local/slice'}),
-                       encoding='utf-8')
-        resolved.unlink()
-        stale = run()
-        assert stale.returncode != 0 and 'leaves the repository root' in stale.stderr and 'does not resolve' in stale.stderr, stale
-        assert 'job=' not in stale.stdout and not resolved.exists(), stale
 
 
 if __name__ == '__main__':

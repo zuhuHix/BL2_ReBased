@@ -110,7 +110,7 @@
     return calls;
   }
 
-  // The use prompt: null, or {frame: a label of p1.tools, text: for its desc field} (OpenWillowUsePrompt.cpp). Which of these the game
+  // The use prompt: null, or {frame: a label of p1.tools, text: for its desc field} (the retired UE5 host's OpenWillowUsePrompt.cpp). Which of these the game
   // drives, and how, is native and was not read live (UNVERIFIED). `desc` is both the field's instance name and its bound variable on the
   // clip. Read in the Ruffle bench (2026-11-06): a dot path to it does not give the field, and writing through that path only took the first
   // time, so a later prompt kept the first one's words. Writing and reading the variable on the clip tracks every change.

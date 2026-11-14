@@ -72,7 +72,8 @@ SUMMARY = re.compile(r'OWSLICEGATE SUMMARY pass=(?P<pass>\d+) fail=(?P<fail>\d+)
 # tools/check_range.py's MISSING_ATTACHMENTS (tests/check_slice_gate_test.py holds the two and the host source together). An empty
 # list is a valid answer and logs "0 of 0 attachments" instead.
 MISSING_ATTACHMENTS = 'OpenWillow target: no attachments list on the stock pawn entry'
-ATTACH_STEP = ('powershell -File tools/import_phaselock_target.ps1 -Steps attach, then python tools/prepare_range.py')
+ATTACH_STEP = ('powershell -File tools/import_phaselock_target.ps1 -Steps attach, then python tools/prepare_range.py'
+               ' [that script left with the UE5 host on 2026-11-14 (git show 08bcf3e:tools/import_phaselock_target.ps1); the Rust host has no replacement yet]')
 
 
 def bare_pawn_errors(lines):

@@ -4,6 +4,8 @@ AI-assisted implementation and independent critic review. **Overall 5/10;
 the requested 8/10 real-game comparison gate is not met.** This is an opt-in
 prototype, not inventory, HUD, skills or weapon parity.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## External tools and ownership
 
 The established UModel build 1590 export path remains the gun payload source;

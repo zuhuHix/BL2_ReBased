@@ -42,22 +42,6 @@ class ViewerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'not installed'):
                 viewer.select(records, '../Other_P')
 
-    def test_view_rejects_wrong_manifest_before_launch(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            scene = root / 'local/ash'
-            scene.mkdir(parents=True)
-            (scene / 'scene.json').write_text('{"map": "Other_P"}')
-            records = [{'map': 'Ash_P', 'selectable': True}]
-            with patch.object(viewer, 'ROOT', root), patch.object(viewer, 'catalog', return_value=records), \
-                    patch.object(viewer.sys, 'argv', ['viewer', '--game', folder, '--map', 'Ash_P',
-                                                    '--engine', folder]), \
-                    patch.object(viewer.subprocess, 'run') as run:
-                with self.assertRaises(SystemExit) as error:
-                    viewer.main()
-                self.assertEqual(error.exception.code, 1)
-                run.assert_not_called()
-
     def test_prepare_without_opt_in_runs_only_the_level_preparation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -134,19 +118,6 @@ class ViewerTests(unittest.TestCase):
             with patch.object(viewer, 'ROOT', root), patch.object(viewer, 'catalog', return_value=records), \
                     patch.object(viewer.sys, 'argv', ['viewer', '--game', folder, '--map', 'Ash_P',
                                                     '--action', 'prepare', '--sanctuary-geometry']), \
-                    patch.object(viewer.subprocess, 'run') as run:
-                with self.assertRaises(SystemExit) as error:
-                    viewer.main()
-                self.assertEqual(error.exception.code, 1)
-                run.assert_not_called()
-
-    def test_sanctuary_geometry_rejects_unsupported_action_before_launch(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            records = [{'map': 'Sanctuary_P', 'selectable': True}]
-            with patch.object(viewer, 'ROOT', root), patch.object(viewer, 'catalog', return_value=records), \
-                    patch.object(viewer.sys, 'argv', ['viewer', '--game', folder, '--map', 'Sanctuary_P',
-                                                    '--action', 'import', '--sanctuary-geometry']), \
                     patch.object(viewer.subprocess, 'run') as run:
                 with self.assertRaises(SystemExit) as error:
                     viewer.main()

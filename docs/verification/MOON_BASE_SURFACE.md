@@ -11,6 +11,8 @@ No reader, serialization, container or bounds-check code changed. Neither
 policy decodes the stripped `Mat_MoonBase_02a` or `Mat_Moon` graph or compares
 against the original game.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## Starting point
 
 The Hyperion station that hangs in front of the moon in Sanctuary's sky is

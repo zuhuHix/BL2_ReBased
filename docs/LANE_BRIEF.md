@@ -15,7 +15,9 @@ your task touches. If this page and a long document disagree, the long document 
    oracles; label what is fitted rather than proven `UNVERIFIED`.
 4. Loosen a bounds check to make something work. Fix the cause.
 5. Add a tool, dependency or licence (`THIRD_PARTY.md`, `LICENSE`): that is the maintainer's decision.
-6. Kill a process you did not start, or delete someone else's lock.
+6. Kill a process by image name (`taskkill /IM`, `Stop-Process -Name`, `pkill`, `killall`), or any process you did not
+   start. Stop only a PID your own run started, after checking its command line. Never delete a lock you do not hold.
+   Put this rule in every worker and sub-agent brief.
 7. Hand an error back unread, or claim more than you checked.
 
 ## Clean room (native code)
@@ -28,6 +30,8 @@ your task touches. If this page and a long document disagree, the long document 
   `Borderlands2.exe` (a fixed 330 s startup limit), so use Ghidra for that binary.
 
 ## Evidence
+- Tools, in this order: bl-sdk live reads and hooks of the running game (the RTSE way), then REA (the `rea` MCP
+  server) for decoding, then Ghidra for `Borderlands2.exe`. Put this line in every worker and sub-agent brief.
 - Live game first: if a value, a native's inputs and outputs, a before/after state or an event order can be seen
   in the running game, get it there (`tools/real_game/`, pyunrealsdk; method in
   `docs/verification/REALGAME_GROUND_TRUTH.md`). Read code only for what cannot be observed.
@@ -37,12 +41,15 @@ your task touches. If this page and a long document disagree, the long document 
 - Fixtures in `tests/` are synthetic only: invented values, built with the existing `package()` / `tag()` helpers.
 
 ## Files that need care
-- `src/package.cpp`, `src/container.*`, `CMakeLists.txt`: edit when the work needs it, then list each one in your
-  final message with what changed, why, and what is verified.
+- `src/package.cpp`, `src/container.*`, `CMakeLists.txt`, and their Rust counterparts `crates/ow-container/`,
+  `crates/ow-package/`, `Cargo.toml` and `rust-toolchain.toml`: edit when the work needs it, then list each one in
+  your final message with what changed, why, and what is verified. A new third-party crate is a new dependency
+  (Never 5).
 - Real-game runs: only when your brief says so. Back up the saves first; afterwards the saves, config and SDK
   settings must be byte-identical (restore from the backup what the game rewrote, and say so).
-- One UE editor or game process per machine: `%LOCALAPPDATA%\OpenWillow\ue_run.lock` (`tools/ue_lock.ps1`; `OPENWILLOW_UE_LOCK` overrides it). The suite scripts take it themselves; for a UE build
-  use `local/p2/locked.ps1 -Owner <lane> -Command build` when that helper exists in the worktree.
+- One heavy run per machine: `%LOCALAPPDATA%\OpenWillow\ue_run.lock` (`tools/ue_lock.ps1`; `OPENWILLOW_UE_LOCK`
+  overrides it). Despite its name it now guards real-game runs (the real-game helpers take it themselves) and, once
+  they exist, Rust host runs. The UE5 host it was written for left the tree on 2026-11-14.
 
 ## Gates
 Run the commands in `docs/verification/GATES.md` for the parts you touched, paste the output with numbers, and

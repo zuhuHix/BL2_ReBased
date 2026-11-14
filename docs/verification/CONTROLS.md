@@ -3,6 +3,8 @@
 AI-assisted (Claude). Host work so a person at the keyboard can do the slice's basic verbs. A passing
 `tools/test_controls.ps1` says the host did this; it does not say the host matches the game.
 
+> **Retired host (2026-11-14).** Host runs in this record were made with the UE5 host, which left the tree on 2026-11-14 ([decision](../decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md); its code is at main `08bcf3e`). They say what that host did and no longer count toward a gate. Evidence here that does not depend on the host (real-game captures, native and script reading, package checks, core results) keeps its status.
+
 ## What was loaded during the real-game reads
 
 Both sessions ran with bl-sdk mods enabled, so no read here is from a game without mods: Better UI Controls, Dialog Skipper, Item Lights, Loot Collector, Apple's Borderlands
