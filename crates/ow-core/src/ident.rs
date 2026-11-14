@@ -15,6 +15,10 @@
 //! differ only in case or separator: it matches an oracle only if that oracle folds its keys the same way. An oracle
 //! keyed by the raw string (a C++ `std::map<std::string, _>`, Python `json.dumps(sort_keys=True)`) sorts by the exact
 //! bytes and keeps case variants apart; mirror it with `DetMap<String, _>`.
+//!
+//! The C++ reader does not do this fold: `PackageStore::key` (`src/package.cpp`) lower-cases only, and its first
+//! segment splits at `.` alone, so `A:B` and `A.B` are different keys there. A port of the C++ resolver (W2-STORE,
+//! `--resolve`) keys on the C++-equivalent fold, not on `ObjectPath`, to keep its output byte-identical (rule R7).
 
 use std::cmp::Ordering;
 use std::fmt;

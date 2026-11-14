@@ -79,12 +79,15 @@ The same test also refuses, in every Rust file:
 
 - `mul_add` (no fused multiply-add);
 - the float functions (powers, exponentials, logarithms, roots, trigonometry: `powf`, `exp`, `ln`, `log10`, `sqrt`,
-  `sin`, `atan2` and the rest, as `x.f()` or `f64::f(x)`) outside `ow-core/src/num.rs`, which is their one choke point;
+  `sin`, `atan2`, `asinh` and the rest, as `x.f()`, `f64::f(x)` or `<f64>::f(x)`) outside `ow-core/src/num.rs`, which
+  is their one choke point. The method form matches any method of these names, so rule code does not name its own
+  methods `log`, `tan` and so on;
 - the names `HashMap` and `HashSet` outside `ow-core/src/detmap.rs`: lookups use `ow_core::FixedHashMap` /
   `FixedHashSet` (a fixed hasher), and rule code never iterates a hash map;
-- reading the parity mode (`parity_mode(`, `init_parity_mode`, `mode_from_env`, `ENV_VAR`, `"OW_PARITY"`) outside
-  `ow-core/src/parity.rs` and the binaries' `main.rs` (plus `ow-cli/tests/not_ported.rs`, which drives the binary
-  with the variable set): libraries take a `ParityMode` value.
+- reading the parity mode (the identifiers `parity_mode`, `init_parity_mode`, `mode_from_env`, `ENV_VAR`, in calls,
+  paths and `use` lines alike) outside `ow-core/src/parity.rs` and the binaries' `main.rs`, and the string
+  `"OW_PARITY"` outside those files and `crates/*/tests/`, where a test sets it for the binary it runs. Libraries
+  and command families take a `ParityMode` value: `main` reads it and passes it to `cmd::run`.
 
 It also checks that every flag of `src/cli.cpp`'s usage text has an entry or option in `crates/ow-cli/src/args.rs`,
 and that every flag `src/cli.cpp`'s `main()` dispatches on has a `cmd("--flag"` entry.
