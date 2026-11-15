@@ -444,6 +444,8 @@ pub struct CensusInput {
     pub root: PathBuf,
     pub paths: Vec<PathHolders>,
     pub defaults: Vec<(String, String)>,
+    /// Files that failed to load, with the text the tool keeps for them (`ow-package: <error>`, the reader's
+    /// stderr line).
     pub load_failures: Vec<(PathBuf, String)>,
 }
 
@@ -509,7 +511,7 @@ impl CensusInput {
             .failures
             .into_iter()
             .filter(|f| rank.contains_key(&f.file))
-            .map(|f| (f.file, error_text(&f.error)))
+            .map(|f| (f.file, format!("ow-package: {}", f.error)))
             .collect();
         input
     }
@@ -1554,8 +1556,9 @@ pub struct CensusReport {
     pub decode_failures: DetMap<String, String>,
     /// `duplicate_export_paths_all_classes`.
     pub duplicate_export_paths: usize,
-    /// `scan_errors`: package files that failed to load.
-    pub load_failures: Vec<(PathBuf, String)>,
+    /// `scan_errors`: the package files that failed to load, keyed by their path relative to the install folder in
+    /// POSIX form (`Path.relative_to(game).as_posix()`), with the reader's stderr line (`ow-package: <error>`).
+    pub scan_errors: DetMap<String, String>,
 }
 
 /// The item registry: the `openwillow-item-registry/1` tree, the census counts, and the values it read (so that
@@ -1961,7 +1964,11 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
     report.name_list_entries_empty = census.null_name_entries.values().sum();
     report.decode_failures = census.failed.clone();
     report.duplicate_export_paths = census.duplicates;
-    report.load_failures = census.load_failures.clone();
+    report.scan_errors = census
+        .load_failures
+        .iter()
+        .map(|(file, text)| (relative_posix(file, &census.root), text.clone()))
+        .collect();
 
     let mut tree = DetMap::new();
     tree.insert("schema".to_string(), Pv::text(SCHEMA_TAG));
@@ -2829,7 +2836,7 @@ mod tests {
     fn one_balance_per_kind() {
         let install = Install::new("kinds");
         let reg = install.registry();
-        assert!(reg.report().load_failures.is_empty());
+        assert!(reg.report().scan_errors.is_empty());
         for (path, kind) in [
             ("GD_Syn.Grades.Shield_Leaf", "shield"),
             ("GD_Syn.Grades.Grenade", "grenade_mod"),
@@ -3213,6 +3220,38 @@ mod tests {
         let input = CensusInput::from_store(store_census(&install), &install.0);
         assert_eq!(input, install.census());
         assert_eq!(build_from_census(input, "Game").to_json(), tool);
+    }
+
+    #[test]
+    fn scan_errors_are_keyed_by_the_posix_path_with_the_readers_line() {
+        use ow_defs::identity::FileFailure;
+        use ow_defs::store::DefError;
+        let install = Install::new("scanerrors");
+        let mut census = store_census(&install);
+        let broken = install.0.join("DLC/SynDLC/Content/Broken.upk");
+        let outside = install.0.join("Engine/Broken.upk");
+        census.files.push(broken.clone());
+        census.files.push(outside.clone());
+        let failure = |file: &PathBuf| {
+            let error = DefError::Io {
+                path: "x".into(),
+                reason: "bad magic".into(),
+            };
+            FileFailure::new(file.clone(), error)
+        };
+        census.failures = vec![failure(&broken), failure(&outside)];
+        let reg = build_from_census(CensusInput::from_store(census, &install.0), "Game");
+        let errors: Vec<(&str, &str)> = reg
+            .report()
+            .scan_errors
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        // The file outside the tool's list is not the tool's scan error.
+        assert_eq!(
+            errors,
+            [("DLC/SynDLC/Content/Broken.upk", "ow-package: x: bad magic")]
+        );
     }
 
     #[test]
