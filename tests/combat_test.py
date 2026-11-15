@@ -930,10 +930,7 @@ with tempfile.TemporaryDirectory() as folder:
     check('loot: the native returns false below the minimum stage (5 calls, 0 true, 0 inventories) and true at it',
           got['rows'].get('loot.roll.Pool_Gated.stage4.true') == 0 and got['rows'].get('loot.roll.Pool_Gated.stage4.items') == 0
           and got['rows'].get('loot.roll.Pool_Gated.stage5.true') == 5 and got['rows'].get('loot.roll.Pool_Gated.stage5.items') == 5, got['rows'])
-    result = got['steps'][4]['result']
-    check('loot: 7 calls of Pool_Coins at stage 4 make 21 stand-in inventories, coins with bDropOnDeath set',
-          got['rows'].get('loot.roll.Pool_Coins.stage4.items') == 21 and got['rows'].get('loot.roll.Pool_Coins.stage4.true') == 7
-          and result['inventories'] == [{'class': 'WillowUsableItem', 'drop_on_death': True}] * 3, (got['rows'], result))
+    # (the stand-in inventories of the Pool_Coins step are checked in tests/combat_loot_standin_test.py)
     check('loot: the pool natives are bound, not stubs', not [k for k in got['stubs'] if 'ItemPool' in k or 'SetupPawnItemPoolList' in k], got['stubs'])
 
 if failures:
