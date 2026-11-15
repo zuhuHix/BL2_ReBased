@@ -29,9 +29,10 @@ struct Failure(String);
 
 impl From<PackageError> for Failure {
     /// The error and each of its causes (`source()`), joined with `: `. A reader, header or table error is one text,
-    /// the C++ one, and so is a bad package magic ("invalid package magic"). Any other container error reads "cannot
-    /// decode the package container: <the container's text>..."; those texts are `ow-container`'s own, not
-    /// `src/container.cpp`'s, so stderr differs from the C++ binary there (the exit code, 1, does not).
+    /// the C++ one, and so is a bad magic at the start of the file ("invalid package magic"). Any other container
+    /// error, a bad magic inside a partial-compression chunk among them, reads "cannot decode the package container:
+    /// <the container's text>..."; those texts are `ow-container`'s own, not `src/container.cpp`'s, so stderr differs
+    /// from the C++ binary there (the exit code, 1, does not).
     fn from(e: PackageError) -> Self {
         let mut text = e.to_string();
         let mut cause = std::error::Error::source(&e);
