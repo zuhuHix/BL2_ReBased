@@ -1476,13 +1476,17 @@ W1-NUM is the lane to start first and review first.
   `pub(crate)` seams `Vm::tick` and `Vm::stub_site`, and, once frames exist, the C++ `<- caller` trace in the
   depth-limit message (`interp.cpp:711-713`). Any other change to `api.rs` or `error.rs` is a contract change
   (section 7). The 0x5F typed let converts the right-hand side with the VM's assignment rule (`interp.cpp:511-522`)
-  before `let_base`, which refuses another kind.
+  before `let_base`, which refuses another kind. Also granted (hub decision, PR #302, decision 2026-11-15-07): the
+  `Vm` additions `find_method(class, name, state)` and `class_declares_state(class, state)` (C++
+  `Runtime::findMethod`, `Class::states`), and the edit of `register()` in `natives_core.rs` that wires them in
+  place of `ContractStates`, so `GotoState` under `ParityMode::Reference` runs.
 - Inputs: W2-SCRIPT, W2-VMAPI, W3-DECODE, W3-DEFS, W1-ATTRMATH.
 - Not yet: struct/array element ops, `foreach`, delegates, interfaces (W4-INTERP2), states and latent code (W5-STATES).
 - Done when: Rust unit tests on `testkit` packages for every feature this lane owns, re-expressed from the
   `vm_test.py` and `runtime_test.py` cases that use only these features; `diff` manifest lines (`--run`, `--run-batch`,
   `--native` on those packages) equal to C++. The whole-file lines (`vm_test.py`, `runtime_test.py`) are W4-INTERP2's
-  gate; `tests/vm_states_test.py` is a `mode=reference` line from W3-CORENAT on.
+  gate. `tests/vm_states_test.py` (a `mode=reference` line) and `natives_test.py` run `--native-census` and
+  `--native-selftest`, so their `corenat.txt` lines land with W4-VMTOOLS (decision 2026-11-15-07).
 
 **W3-CORENAT: Core natives** · M · game: no · Opus 5.5 medium
 - Goal: port `natives_core.cpp` onto the W2-VMAPI registry: operators, math (through the `ow_core::num` choke points),
@@ -1498,7 +1502,8 @@ W1-NUM is the lane to start first and review first.
 - Stub policy: the exploration commands log and return zero (3.8 table); `natives_test.py:16-20` asserts it and is not
   a stand-in.
 - Done when: every native has a direct unit test from the C++ expectations; `natives_test.py {bin}` passes once
-  W3-INTERP is in.
+  W4-VMTOOLS brings `--native-selftest` (decision 2026-11-15-07). Shipped by PR #302: `GotoState` under Reference and
+  the interface checks answer `NotYet` until W3-INTERP and W4-INTERP2 add their lookups.
 
 **W3-ATTREVAL: the one evaluator** · L · game: yes (real-data parity) · Opus 5.5 high
 - Goal: `AttributeSystem::evaluate_init`, `value_of`, `expressions_hold` and the value resolvers the notes read
@@ -1558,18 +1563,22 @@ W1-NUM is the lane to start first and review first.
 **W4-INTERP2: aggregates, iteration, delegates** · M-L · game: yes (sweep) · Opus 5.5 high
 - Goal: struct and dynamic-array ops (element, length, insert, remove, add, find, sort, struct compare), `foreach`
   over iterator natives and dynamic arrays, delegates, interface context and casts.
-- Owns: `crates/ow-vm/src/interp/{aggregate,iter,delegate}.rs`.
+- Owns: `crates/ow-vm/src/interp/{aggregate,iter,delegate}.rs`. Granted (hub decision, PR #302): the `Vm` interface
+  query (C++ `Runtime::implements`) and the edit of `register()` in `natives_core.rs` that wires it into
+  `QueryInterface` and the iterators' InterfaceClass filter.
 - Inputs: W3-INTERP.
-- Done when: all of `vm_test.py` (after W1-PINSPLIT), `runtime_test.py`, `natives_test.py` pass on the Rust binary in
-  Off mode; `tests/vm_states_test.py` passes as a `mode=reference` line; the cases of `ui_trace_returns_test.py` (a Python tool on fake data) re-expressed as Rust
+- Done when: all of `vm_test.py` (after W1-PINSPLIT) and `runtime_test.py` pass on the Rust binary in Off mode (`natives_test.py`
+  and the `vm_states_test.py` `mode=reference` line follow with W4-VMTOOLS); the cases of `ui_trace_returns_test.py` (a Python tool on fake data) re-expressed as Rust
   unit tests of the scalar trace replay.
 
 **W4-VMTOOLS: census and sweep** · M · game: yes · Opus 5.5 medium
 - Goal: port `census.*` and `vm_sweep.cpp`; CLI `--native-census`, `--vm-sweep`, `--native-selftest`.
 - Owns: `crates/ow-vm/src/{census,sweep}.rs`, `crates/ow-cli/src/cmd/census.rs`.
 - Inputs: W4-INTERP2, W3-CORENAT.
-- Done when: `--vm-sweep` JSON identical to C++ on the 9 packages under `OW_PARITY=reference` (the `ow-vm` gate);
-  then freeze the C++ VM files.
+- Done when: `--vm-sweep` JSON identical to C++ on the 9 packages under `OW_PARITY=reference` (the `ow-vm` gate),
+  apart from the differences decision 2026-11-15-07 lists in advance (non-ASCII text through the seven string-unit
+  natives); `natives_test.py {bin}` and `vm_states_test.py` (`mode=reference`) added to `tests/rust_parity.d/corenat.txt`
+  and passing; then freeze the C++ VM files.
 
 **W4-REGISTRY: item registry** · M · game: yes · Opus 5.5 medium
 - Goal: the registry of every kind incl. DLC from `DefStore`, emitting the `openwillow-item-registry/1` JSON
