@@ -21,6 +21,11 @@ rules the layouts use.
 - **`load_code_packages(store, names, classes) -> Result<CodeIndex, ReflectError>`** fails only when a code package is
   missing or a super chain holds a non-class (the C++ throws there). A class whose layout cannot be defined stays
   declared; `CodeIndex::layout_of` and `layout_failures` report it with its cause chain.
+- **The structural interface rule is C++ behaviour, not a project stand-in.** `implements` falls back to
+  `implements_structurally` (an `I<Upper>` name, at least one function, every one defined along the class chain)
+  whenever a class chain's bodies did not decode, in both parity modes. That is what the C++ `Runtime::implements`
+  does, and it is ported as such (hub decision for this lane). It is not behind `ParityMode::Reference` and not in
+  architecture section 6.1.
 - **Layout reading rules** (the C++ `readProperty` / `childProperties` / `structAt` reading, now typed):
   - own declarations are the child exports whose class name ends in `Property`, in descending export order. A child
     under the 40-byte header is skipped, as the C++ skips it. A read past the package data is an error here, where the
@@ -40,11 +45,15 @@ rules the layouts use.
   - a super class reference that resolves to nothing is refused. The C++ loader leaves that class with no super.
     A class whose super chain held a non-class keeps that error for every later call. The C++ keeps such a class
     registered without its super.
-- **`MapProperty` is `NotYet`.** The W1-OBJ `PropKind` has no map kind. A class declaring a map property, and every
-  subclass, returns `NotYet { LayerAbsent }` from `define_layout`. A `PropKind::Map` (additive on a
-  `#[non_exhaustive]` enum) is a W1-OBJ contract change for the hub.
+- **`PropKind::Map { key, value }` is added to `crates/ow-object/src/layout.rs`** (W1-OBJ's file, hub grant for this
+  lane; additive on the `#[non_exhaustive]` enum, with its arms in `kind_name`, `check_kind`, `zero_value` and
+  `fits`). `key` and `value` are `Option<Box<PropKind>>`, not boxed kinds: all 50 map properties of the nine code
+  packages have both type references at 0, so there is no key or value kind to read, and none is invented. A map's
+  value is `Value::None`, as the C++ VM gives a map property `Value()`. Where a package does name them, the first
+  reference is read as the key and the second as the value.
 - **Rust-only `--layouts` modifier** on `--interface-compare` prints the layout summary of the nine code packages.
-  `args.rs`'s usage text does not list it.
+  `args.rs` lists it in that command's options (hub grant); the C++ usage text, which `args.rs` keeps byte for byte,
+  does not.
 - **Output line ends are `\n`.** The C++ binary writes `\r\n` on Windows; the parity harness is to normalise them
   (hub decision, change pending).
 
@@ -56,17 +65,26 @@ rules the layouts use.
   - Rust and C++ give the same stdout, stderr and exit code on 20 synthetic command lines. The packages are
     `tests/vm_test.py`'s interface fixture, its four `mutate` variants and its plain package, generated under ignored
     `local/`. The command lines include the option and file errors.
-  - Layouts: 3,228 of 3,339 classes of the nine code packages get one. All 111 failures are `MapProperty` `NotYet`:
-    the 32 classes that declare the 50 map properties, and their subclasses. 214 attribute value properties are
-    linked to a base and a stack. The other 43 of the record's 257 sit in those 111 classes.
+  - Layouts: 3,339 of 3,339 classes of the nine code packages get one, `Engine.WorldInfo` and
+    `WillowGame.WillowPlayerController` among them; none fails. 257 attribute value properties are linked to a base
+    and a stack, the record's 257 (`src/interp.cpp`, NATIVE_ATTRIBUTES.md).
   - Rust unit tests re-express `vm_test.py`'s class-check, interface and `mutate` cases and cover each layout rule.
     The `testkit/reflect.rs` builders are pinned byte for byte against the Python helpers.
+- **Open, outside this lane's files.** `Heap::check_value` (`crates/ow-object/src/heap.rs`) has no arm for a map, so
+  `Heap::alloc` of a class with a map property is refused: a local probe gave
+  `WrongKind { expected: "Map", found: "None" }`. Allocating `WorldInfo` or `WillowPlayerController` needs a
+  `(PropKind::Map { .. }, Value::None) => Ok(())` arm there (W1-OBJ's file).
 - **UNVERIFIED.**
   - In the running game: the meaning of the class body's fields and the interface-table rule
     (NATIVE_CLASS_SERIAL_LAYOUT.md).
   - The declaration order rule. The C++ checked it on 5,980 of 5,984 Core and Engine functions, not on classes or
     structs.
   - The enum end check, which is fitted on the packages.
-  - Struct field order. It is the declared order (super struct first), while the C++ VM's zero values of eight
-    native structs use its own field order (`nativeStruct`: `Plane` as W, X, Y, Z). The tagless struct values W3-DECODE
-    reads must follow the C++ order, not this one.
+  - For W3-DECODE: struct field order. The ClassTable has the declared order (a super struct's fields first, then
+    the struct's own in descending export order), while the C++ VM's zero values of eight native structs use its own
+    field order (`nativeStruct`: `Plane` as W, X, Y, Z). The tagless struct values W3-DECODE reads must follow the C++
+    order, or say why not. The declared order of those eight structs in the installed Core was not looked at here.
+  - For W3-DECODE: the descending-export declaration order is unchecked for classes and structs (the declaration
+    order item above); the slot order of every layout rests on it.
+  - The key-then-value reading of a map's two references. No C++ code reads them, and no installed code package has
+    a non-zero one.

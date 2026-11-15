@@ -28,10 +28,13 @@
 //! bound 1024 is `enumNames` in `src/behavior.cpp`; the exact end is the structural check PHASELOCK_STOCK_DATA.md
 //! records, which holds for all 792 Enum exports of the nine code packages).
 //!
-//! **Not yet.** A `MapProperty` declaration has no [`PropKind`] in the W1-OBJ contract, so a class declaring one
-//! returns `NotYet` from [`CodeIndex::define_layout`], and so does every subclass (50 map properties in 32 classes
-//! of the nine code packages, among them `Engine.WorldInfo` and `WillowGame.WillowPlayerController`). Tagged default
-//! values, struct defaults and class default objects are W3-DECODE's; function parameter layouts are the VM's.
+//! **Maps.** A `MapProperty` is a [`PropKind::Map`] whose key and value kinds are read from its first two references
+//! where they are not 0 (key first, UNVERIFIED: no C++ code reads them). All 50 map properties of the nine code
+//! packages (32 classes, among them `Engine.WorldInfo` and `WillowGame.WillowPlayerController`) have both at 0, so
+//! their key and value are `None`.
+//!
+//! **Not yet.** Tagged default values, struct defaults and class default objects are W3-DECODE's; function parameter
+//! layouts are the VM's.
 //!
 //! Status: a port. Every rule here has the label its record gives it; the interface table rule and the meaning of
 //! the class body's fields are UNVERIFIED in the running game (NATIVE_CLASS_SERIAL_LAYOUT.md), and so is the
@@ -1210,11 +1213,20 @@ impl CodeIndex {
                 PropKind::Array(Box::new(self.kind(store, names, classes, &inner, false)?))
             }
             "MapProperty" => {
-                return Err(ReflectError::NotYet(NotYet::layer_absent(
-                    format!("MapProperty {}", raw.name),
-                    "a map kind in ow-object's PropKind",
-                    "W1-OBJ contract (architecture section 3.3)",
-                )));
+                // Key, then value: the order is UNVERIFIED (no C++ code reads them; every map property of the nine
+                // code packages names neither, so both are `None` there).
+                let mut inner = [None, None];
+                for (slot, &reference) in inner.iter_mut().zip(&raw.refs[..2]) {
+                    if reference != 0 {
+                        let declared =
+                            self.referenced_property(store, raw, reference, "map property")?;
+                        *slot = Some(Box::new(
+                            self.kind(store, names, classes, &declared, false)?,
+                        ));
+                    }
+                }
+                let [key, value] = inner;
+                PropKind::Map { key, value }
             }
             other => return Err(ReflectError::UnknownPropertyClass(other.to_string())),
         })

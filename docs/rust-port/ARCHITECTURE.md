@@ -593,9 +593,20 @@ impl ObjectSpace {
     pub fn set_struct_default(&mut self, s: StructId, entry: u32, v: Value) -> Result<(), HeapError>;   // one entry (one tag),
     pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), HeapError>;              // or all; check_value first
 }
-// reflect.rs (W2-REFLECT), decode.rs (W3-DECODE)
+// class_body.rs (W2-REFLECT)
+pub fn decode_class_body(pkg: &Package, export: i32) -> Result<ClassBody, ClassBodyError>;  // C++ texts; ends exactly at the serial size
+pub struct ClassBody { class_flags, within, default_object, config_name, interfaces: Vec<InterfaceEntry> }  // non_exhaustive
+pub struct InterfaceEntry { pub class_ref: i32, pub table_property: i32 }   pub const CLASS_INTERFACE: u32 = 0x4000;
+// reflect.rs (W2-REFLECT)
 pub fn load_code_packages(store: &mut PackageStore, names: &mut NameTable, classes: &mut ClassTable) -> Result<CodeIndex, ReflectError>;
-pub fn decode_class_body(pkg: &Package, export: i32) -> Result<ClassBody, ReflectError>;   // ends exactly at the serial size
+                                    // Err: a code package missing, a super chain holding a non-class; a layout failure
+                                    // stays per class: CodeIndex::layout_of / layout_failures
+pub struct CodeIndex { .. }  // the C++ loader: class_at, find_class, resolve_ref, find_export, implements,
+                             // implements_structurally, functions_only, find_method, check_class_bodies,
+                             // compare_interfaces; layouts: define_layout, define_layouts, layout_of, key_of
+pub struct ClassKey(..); pub struct ClassInfo { package, export, name, path, super_class, body, functions, .. }
+// As shipped by W2-REFLECT (decision 2026-11-15-06).
+// decode.rs (W3-DECODE)
 pub struct ReflectionTyper<'a> { .. }  impl ArrayTyper for ReflectionTyper<'_> { .. }
 pub fn to_value(tree: &PropValue, decl: &PropertyDecl, cx: &mut ValueCx) -> Result<Value, DecodeError>;
 pub enum PropertyPrefix { Ordinary = 4, PlacedActor = 26, Component = 8 }   // copied from the C++ (UNVERIFIED as a rule, ROADMAP Phase 0)

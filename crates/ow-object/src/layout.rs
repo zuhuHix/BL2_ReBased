@@ -88,6 +88,14 @@ pub enum PropKind {
     ByteAttribute {
         enum_: Option<EnumId>,
     },
+    /// A native map (`MapProperty`) from the key kind to the value kind, each `None` where the package names no
+    /// key or value declaration (both references are 0 in all 50 map properties of the nine code packages). Its
+    /// value is [`Value::None`], as the C++ VM gives a map property `Value()` (`Runtime::zeroValue`). Added by
+    /// W2-REFLECT (decision 2026-11-15-06).
+    Map {
+        key: Option<Box<PropKind>>,
+        value: Option<Box<PropKind>>,
+    },
 }
 
 impl PropKind {
@@ -109,6 +117,7 @@ impl PropKind {
             PropKind::FloatAttribute => "FloatAttribute",
             PropKind::IntAttribute => "IntAttribute",
             PropKind::ByteAttribute { .. } => "ByteAttribute",
+            PropKind::Map { .. } => "Map",
         }
     }
 
@@ -668,6 +677,11 @@ impl ClassTable {
                 }
             }
             PropKind::Array(inner) => self.check_kind(inner, false)?,
+            PropKind::Map { key, value } => {
+                for inner in [key, value].into_iter().flatten() {
+                    self.check_kind(inner, false)?;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -858,7 +872,8 @@ impl ClassTable {
             | (PropKind::Name, Value::Name(_))
             | (PropKind::Object { .. }, Value::Object(_))
             | (PropKind::Interface { .. }, Value::Interface(_))
-            | (PropKind::Delegate, Value::Delegate(_)) => true,
+            | (PropKind::Delegate, Value::Delegate(_))
+            | (PropKind::Map { .. }, Value::None) => true,
             (PropKind::Class { meta }, Value::Class(c)) => {
                 c.is_none_or(|c| self.is_child_of(c, *meta))
             }
@@ -1135,6 +1150,7 @@ impl ClassTable {
             }
             PropKind::Array(_) => self.empty_array.clone(),
             PropKind::Delegate => Value::Delegate(None),
+            PropKind::Map { .. } => Value::None,
         }
     }
 
