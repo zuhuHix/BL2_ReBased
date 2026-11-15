@@ -89,6 +89,20 @@ impl From<AttrError> for VmError {
     }
 }
 
+/// For a world that runs script inside the attribute system (a change-notification override, a resolver that calls
+/// into the VM): `NotYet`, heap and attribute errors pass through unchanged, so a caller still sees what is missing;
+/// every other VM error travels as `AttrError::World` with its text.
+impl From<VmError> for AttrError {
+    fn from(e: VmError) -> Self {
+        match e {
+            VmError::NotYet(n) => AttrError::NotYet(n),
+            VmError::Heap(h) => AttrError::Heap(h),
+            VmError::Attr(a) => a,
+            other => AttrError::World(other.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +121,28 @@ mod tests {
         assert_eq!(VmError::from(n.clone()), VmError::NotYet(n));
         let a = AttrError::NotYet(NotYet::not_read("x", "r"));
         assert_eq!(VmError::from(a.clone()), VmError::Attr(a));
+    }
+
+    #[test]
+    fn vm_errors_reach_the_attribute_system() {
+        let n = NotYet::layer_absent("x", "ow-world", "r");
+        assert_eq!(
+            AttrError::from(VmError::NotYet(n.clone())),
+            AttrError::NotYet(n)
+        );
+        let heap = HeapError::WrongKind {
+            expected: "Int",
+            found: "Float",
+        };
+        assert_eq!(
+            AttrError::from(VmError::Heap(heap.clone())),
+            AttrError::Heap(heap)
+        );
+        let inner = AttrError::World("inner".into());
+        assert_eq!(AttrError::from(VmError::Attr(inner.clone())), inner);
+        assert_eq!(
+            AttrError::from(VmError::StepLimit),
+            AttrError::World("step limit exceeded (runaway script?)".into())
+        );
     }
 }
