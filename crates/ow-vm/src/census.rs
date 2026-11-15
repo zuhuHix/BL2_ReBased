@@ -334,11 +334,10 @@ impl From<HeapError> for CensusError {
     }
 }
 
-/// A message of the census itself (the C++ `RuntimeError` text).
-impl From<String> for CensusError {
-    fn from(text: String) -> Self {
-        CensusError::Entry(text)
-    }
+/// A package lookup's error as the VM reports a definition store error: a `NotYet` stays `NotYet`
+/// (`DefError::from`, `VmError::from`).
+fn store_error(e: ow_object::reflect::ReflectError) -> CensusError {
+    CensusError::Vm(VmError::from(ow_defs::store::DefError::from(e)))
 }
 
 // ------------------------------------------------------------------------------------------------ the census
@@ -584,29 +583,63 @@ impl Census<'_> {
             "y" => Value::Byte(stoll(body).ok_or_else(bad)? as u8),
             "s" => Value::string(body),
             "n" => Value::Name(self.vm.space.names.intern(body)),
-            "class" => Value::Class(Some(self.vm.find_class(body)?)),
-            "struct" => self.new_struct(body)?,
+            "class" => {
+                self.package_of_value(line, token, body)?;
+                Value::Class(Some(self.vm.find_class(body)?))
+            }
+            "struct" => {
+                self.package_of_value(line, token, body)?;
+                self.new_struct(body)?
+            }
             _ => return Err(fail(line, format!("unknown value kind {kind}"))),
         })
+    }
+
+    /// The package a `class:` or `struct:` value names, loaded first, as the C++ `findClass` and `newStruct` load it.
+    /// The C++ store's failure is not a `RuntimeError`, so `value` reports it as `bad value <token>`; a `NotYet` stays
+    /// `NotYet`. A path with no package part is left to the lookup, which gives the C++ text.
+    fn package_of_value(
+        &mut self,
+        line: &Line,
+        token: &str,
+        path: &str,
+    ) -> Result<(), CensusError> {
+        let Some((package, _)) = path.split_once('.') else {
+            return Ok(());
+        };
+        let (code, store) = self.vm.defs.code_mut();
+        match code.package(store, package) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let e = store_error(e);
+                if e.not_yet().is_some() {
+                    return Err(e);
+                }
+                Err(fail(line, format!("bad value {token}")))
+            }
+        }
     }
 
     /// C++ `Runtime::newStruct`: the struct export at `Package.<path>`, with its defaults.
     fn new_struct(&mut self, path: &str) -> Result<Value, CensusError> {
         let Some((package, rest)) = path.split_once('.') else {
-            return Err(format!("struct path must be Package.Struct: {path}").into());
+            return Err(CensusError::Entry(format!(
+                "struct path must be Package.Struct: {path}"
+            )));
         };
         let full = {
             let (code, store) = self.vm.defs.code_mut();
-            let id = code.package(store, package).map_err(|e| chain(&e))?;
+            let id = code.package(store, package).map_err(store_error)?;
             let index = code.find_export(store, id, rest);
             if index == 0 {
-                return Err(format!("struct not found: {path}").into());
+                return Err(CensusError::Entry(format!("struct not found: {path}")));
             }
             let pkg = store.get(id);
             format!(
                 "{}.{}",
                 pkg.name,
-                pkg.path_of(index).map_err(|e| e.to_string())?
+                pkg.path_of(index)
+                    .map_err(|e| CensusError::Entry(chain(&e)))?
             )
         };
         // The C++ `structAt` loads the struct; here a struct is defined when a class or function that uses it loads.
@@ -647,7 +680,7 @@ impl Census<'_> {
                 let (Some(t), Some(close)) = (found.as_mut(), close) else {
                     return Err(fail(line, format!("bad index in {target}")));
                 };
-                let index = stoul(&target[at + 1..close])?;
+                let index = stoul(&target[at + 1..close]).map_err(CensusError::Entry)?;
                 let no_element = || fail(line, format!("no element in {target}"));
                 let index = u32::try_from(index).map_err(|_| no_element())?;
                 if t.path.is_empty() && field_dim.is_none() {
@@ -687,7 +720,7 @@ impl Census<'_> {
                     }
                     continue;
                 }
-                let current = self.read(t).map_err(|e| chain(&e))?;
+                let current = self.read(t)?;
                 let (Value::Array(items), PropKind::Array(inner)) = (&current, &t.kind) else {
                     return Err(no_element());
                 };
@@ -707,7 +740,7 @@ impl Census<'_> {
             field_dim = None;
             match found.as_mut() {
                 None => {
-                    let class = self.vm.space.heap.get(object).map_err(|e| chain(&e))?.class;
+                    let class = self.vm.space.heap.get(object)?.class;
                     let prop = self.vm.space.prop(class, name).ok_or_else(missing)?;
                     let kind = self
                         .vm
@@ -724,7 +757,7 @@ impl Census<'_> {
                     });
                 }
                 Some(t) => {
-                    let current = self.read(t).map_err(|e| chain(&e))?;
+                    let current = self.read(t)?;
                     let (Value::Struct(s), Some(id)) = (&current, self.vm.space.names.find(name))
                     else {
                         return Err(missing());
@@ -781,7 +814,7 @@ impl Census<'_> {
     /// one, and the engine iterators would visit both (decision 2026-11-15-23).
     fn export(&mut self, line: &Line, package: &str, path: &str) -> Result<ObjRef, CensusError> {
         let (code, store) = self.vm.defs.code_mut();
-        let id = code.package(store, package).map_err(|e| chain(&e))?;
+        let id = code.package(store, package).map_err(store_error)?;
         if code.find_export(store, id, path) <= 0 {
             return Err(fail(line, format!("export not found: {package} {path}")));
         }
@@ -961,7 +994,7 @@ pub fn native_census(
                 }
                 ("add", 3) => {
                     let t = c.target(line, &w[1])?;
-                    let current = c.read(&t).map_err(|e| chain(&e))?;
+                    let current = c.read(&t)?;
                     let v = c.value(line, &w[2])?;
                     let PropKind::Array(inner) = &t.kind else {
                         return Err(fail(line, format!("add needs an array property: {}", w[1])));
@@ -1841,7 +1874,7 @@ fn report(
     let (mut union_a, mut union_b) = (BTreeSet::new(), BTreeSet::new());
     if options.static_closure {
         for (i, &f) in functions.iter().enumerate() {
-            closure.analyse(vm, f)?;
+            closure.analyse(vm, f).map_err(CensusError::Entry)?;
             reach_a[i] = closure.reachable_from(f, false);
             reach_b[i] = closure.reachable_from(f, true);
             union_a.extend(reach_a[i].iter().copied());
@@ -2414,6 +2447,14 @@ mod tests {
             (
                 format!("{new}set $foo.Count q:1\n"),
                 "entry file line 2: unknown value kind q",
+            ),
+            (
+                format!("{new}set $foo.Count class:NoPkg.X\n"),
+                "entry file line 2: bad value class:NoPkg.X",
+            ),
+            (
+                format!("{new}set $foo.Count struct:NoPkg.X\n"),
+                "entry file line 2: bad value struct:NoPkg.X",
             ),
             (
                 format!("{new}set $foo.Count 12\n"),
