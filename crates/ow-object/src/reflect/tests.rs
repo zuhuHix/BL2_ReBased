@@ -1176,6 +1176,80 @@ fn a_rewritten_file_under_a_second_id_stays_apart() {
     );
 }
 
+/// Review of PR #306: the second id comes from the store's global fallback, with no `scan()` in between. Game.upk
+/// imports `Actor` inside its own export `Ghost`, so the index hands the import to the store (it looks up an
+/// all-import chain itself, without the fallback). The root package name, Ghost, matches no file, so the store finds
+/// `Ghost.Actor` in Engine.upk (which holds an export Ghost with the class Actor inside it) and answers with a fresh
+/// id for that file. The declaration is still one class, filed under the id the index met first.
+#[test]
+fn a_global_fallback_answer_is_filed_under_the_first_id() {
+    let tree = Tree::new("fallback-id");
+    let mut engine = Declarations::new(&["Int"]);
+    let package_class = engine.p.add_import("Core", "Class", 0, "Package");
+    let ghost = engine.p.add_export(package_class, "Ghost", ints(&[0]));
+    let actor = engine.cls("Actor", 0);
+    engine.p.set_outer(actor, ghost);
+    engine.prop("Int", actor, "Health", 0);
+    let engine_path = tree.write("Engine.upk", &engine.build());
+    let mut game = Declarations::new(&[]);
+    let game_package_class = game.p.add_import("Core", "Class", 0, "Package");
+    let local_ghost = game.p.add_export(game_package_class, "Ghost", ints(&[0]));
+    let actor_import = game.p.add_import("Core", "Class", local_ghost, "Actor");
+    let pawn = game.cls("Pawn", actor_import);
+    tree.write("Game.upk", &game.build());
+
+    let mut store = tree.store();
+    let first = store.load_path(&engine_path).unwrap();
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, first)
+        .unwrap();
+    assert_eq!(
+        (summary.classes, summary.defined),
+        (1, 1),
+        "{:?}",
+        summary.failures
+    );
+
+    let game_id = store.load_path(&tree.0.join("Game.upk")).unwrap();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, game_id)
+        .unwrap();
+    assert_eq!(
+        (summary.classes, summary.defined),
+        (1, 1),
+        "{:?}",
+        summary.failures
+    );
+
+    // Ids are positions in the store's list of loaded packages (store.rs): Engine.upk 0, Game.upk 1, and 2 the fresh
+    // id the fallback handed out for Engine.upk while the index resolved Pawn's super class. (A second store lookup
+    // answers from the store's path cache, with the first id.)
+    assert_eq!((first, game_id), (0, 1));
+    let fallback: PackageId = 2;
+    assert_eq!(store.get(fallback).source, store.get(first).source);
+    assert_eq!(store.get(fallback).path_of(actor).unwrap(), "Ghost.Actor");
+    assert_eq!(index.filed_id(fallback), first);
+
+    // The index: one Actor, under the first id.
+    assert_eq!(index.classes().count(), 2, "Actor once, Pawn once");
+    assert_eq!(
+        index.resolve_ref(&mut store, game_id, actor_import),
+        Some((first, actor))
+    );
+    let actor_key = index.loaded_class(first, actor).unwrap();
+    assert_eq!(index.loaded_class(fallback, actor), Some(actor_key));
+    assert_eq!(index.class(actor_key).package, first);
+    let pawn_id = classes.by_path("Game.Pawn").unwrap();
+    let pawn_key = index.loaded_class(game_id, pawn).unwrap();
+    assert_eq!(index.layout_id(pawn_key), Some(pawn_id));
+    assert_eq!(
+        classes.layout(pawn_id).super_class(),
+        index.layout_id(actor_key)
+    );
+}
+
 /// The read-only lookups answer from what earlier calls loaded, and nothing else.
 #[test]
 fn read_only_lookups_answer_from_the_cache() {
