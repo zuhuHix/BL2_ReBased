@@ -7,15 +7,19 @@
 //!
 //! - **N1, reference platform.** Bit parity is gated on `x86_64-pc-windows-msvc`. There `f64::powf` and the other std
 //!   float functions lower to the C runtime (UCRT) functions the C++ core and Python call, and the tables in this
-//!   module's tests were made by both of those on the zuhu desktop. The tests run on every platform and fail loudly
-//!   where the platform's `pow` (or `sin`, `exp`, ...) differs from that table; such a platform's results are reported,
-//!   not used for parity.
+//!   module's tests were made by both of those on the zuhu desktop. The tests run on every platform and, on purpose,
+//!   fail loudly where the platform's `pow` (or `sin`, `exp`, ...) differs from that table: they are not skipped off
+//!   MSVC. Such a platform's results are reported, not used for parity.
 //! - **N2, no fused multiply-add.** Rust never contracts `a * b + c` on its own; `mul_add` is banned in every crate
 //!   (`tests/crate_edges_test.py`).
 //! - **N3, one choke point per function.** Every `pow`, `exp`, `ln`, `sqrt` and trigonometric call in the workspace
 //!   goes through a function of this file; the std methods are banned everywhere else. If a portable implementation
 //!   is ever needed (another platform, or a game form read from the executable), it replaces the body here and no
-//!   caller changes.
+//!   caller changes. Each choke point is `#[inline(never)]` and passes its arguments through
+//!   `std::hint::black_box`: otherwise, once inlined into a caller with constant arguments, LLVM rewrites the call
+//!   (`pow(2, x)` to `exp2`, `pow(x, 2)` to a multiply, `pow(x, 0.5)` to `sqrtsd`) and the C runtime is never
+//!   reached (found by review r1 with a scratch build at opt-level 3). The test
+//!   `choke_points_called_with_literals_match_the_table` calls them with literals.
 //! - **N4, attribute values are `f32`.** One `+ - * /` of two `f32` values in `f32` gives the same bits as the C++
 //!   "double, then rounded to float" (`f32r(a as f64 + b as f64)`), because `f64` carries more than 2 x 24 + 2
 //!   bits. A *compound* expression does not: `(a * b) + c` in `f64` rounded once can differ from the same in `f32`
@@ -48,6 +52,8 @@
 //! only where both oracles agree, or where only one of them can produce the value (marked per cell). The README in
 //! `num/gen/` says how to regenerate them.
 
+use std::hint::black_box;
+
 /// Rounds a double to single precision and back, as `weapon_gen.cpp` `F32()` and `weapon_recipe.f32()` do: round to
 /// nearest even, infinity on overflow, NaN stays NaN.
 pub fn f32r(x: f64) -> f64 {
@@ -57,63 +63,75 @@ pub fn f32r(x: f64) -> f64 {
 
 /// The one double `pow`: the C runtime's `pow` on the reference target (`weapon_gen.cpp:562`, `natives_core.cpp:140`,
 /// Python `math.pow`).
+#[inline(never)]
 pub fn pow_f64(base: f64, exp: f64) -> f64 {
-    base.powf(exp)
+    black_box(base).powf(black_box(exp))
 }
 
 /// The one single `pow`: the C runtime's `powf` (`progression.cpp:248`, `std::pow(float, float)`).
+#[inline(never)]
 pub fn pow_f32(base: f32, exp: f32) -> f32 {
-    base.powf(exp)
+    black_box(base).powf(black_box(exp))
 }
 
 /// `e^x` in double: `natives_core.cpp` `Object.Exp` (then `makeFloat`).
+#[inline(never)]
 pub fn exp_f64(x: f64) -> f64 {
-    x.exp()
+    black_box(x).exp()
 }
 
 /// Natural logarithm in double: `natives_core.cpp` `Object.Loge` (C `log`).
+#[inline(never)]
 pub fn ln_f64(x: f64) -> f64 {
-    x.ln()
+    black_box(x).ln()
 }
 
 /// Square root in double: `natives_core.cpp` `Object.Sqrt`.
+#[inline(never)]
 pub fn sqrt_f64(x: f64) -> f64 {
-    x.sqrt()
+    black_box(x).sqrt()
 }
 
 /// Sine in double, radians: `natives_core.cpp` `Object.Sin` (C `sin`, then `makeFloat`).
+#[inline(never)]
 pub fn sin_f64(x: f64) -> f64 {
-    x.sin()
+    black_box(x).sin()
 }
 
 /// Cosine in double, radians: `natives_core.cpp` `Object.Cos`.
+#[inline(never)]
 pub fn cos_f64(x: f64) -> f64 {
-    x.cos()
+    black_box(x).cos()
 }
 
 /// Tangent in double, radians: `natives_core.cpp` `Object.Tan`.
+#[inline(never)]
 pub fn tan_f64(x: f64) -> f64 {
-    x.tan()
+    black_box(x).tan()
 }
 
 /// Arc sine in double: `natives_core.cpp` `Object.Asin`.
+#[inline(never)]
 pub fn asin_f64(x: f64) -> f64 {
-    x.asin()
+    black_box(x).asin()
 }
 
 /// Arc cosine in double: `natives_core.cpp` `Object.Acos`.
+#[inline(never)]
 pub fn acos_f64(x: f64) -> f64 {
-    x.acos()
+    black_box(x).acos()
 }
 
 /// Arc tangent in double: `natives_core.cpp` `Object.Atan`.
+#[inline(never)]
 pub fn atan_f64(x: f64) -> f64 {
-    x.atan()
+    black_box(x).atan()
 }
 
 /// `atan2(y, x)` in double: `natives_core.cpp` `Object.Atan2`.
+#[inline(never)]
 pub fn atan2_f64(y: f64, x: f64) -> f64 {
-    y.atan2(x)
+    black_box(y).atan2(black_box(x))
 }
 
 /// Float to int on the attribute path (`interp.cpp:561`): toward zero, and `i32::MIN` for NaN and for anything at or
@@ -162,7 +180,11 @@ pub fn trunc_i64_wrap_i32(x: f64) -> i32 {
 pub enum RoundingMode {
     /// `ATTRROUNDING_Float`: no rounding.
     Float = 0,
-    /// `ATTRROUNDING_IntRound`: `floor(x + 0.5)`.
+    /// `ATTRROUNDING_IntRound`, as the C++ core's attribute-initialization path rounds it: `floor(x + 0.5)`
+    /// ([`round_mode`]; `weapon_gen.cpp:568`, `weapon_recipe.ROUNDING`), so `-2.5` gives `-2`. The same value 1 in
+    /// `progression.cpp` `restricted()` (XP curve, health base) is `std::round` instead, halves away from zero
+    /// ([`round_half_away_f32`]): `-2.5` gives `-3`. Which one the game uses for each rule is UNVERIFIED
+    /// (architecture 5.3).
     HalfUp = 1,
     /// `ATTRROUNDING_IntFloor`.
     Floor = 2,
@@ -196,8 +218,9 @@ impl RoundingMode {
 }
 
 /// An attribute initialization's rounding, as `weapon_gen.cpp` `Round()` and `weapon_recipe.ROUNDING`: done in
-/// double on the float value (`floor(x + 0.5)` for half up), then rounded back to single. The game's precision for
-/// this step is UNVERIFIED.
+/// double on the float value (`floor(x + 0.5)` for half up, so a negative half goes up: `-2.5` gives `-2`), then
+/// rounded back to single. `progression.cpp` `restricted()` rounds its mode 1 with [`round_half_away_f32`] instead
+/// (architecture 5.3). The game's form and precision for this step are UNVERIFIED.
 pub fn round_mode(x: f32, m: RoundingMode) -> f32 {
     let wide = f64::from(x);
     let rounded = match m {
@@ -208,6 +231,14 @@ pub fn round_mode(x: f32, m: RoundingMode) -> f32 {
         RoundingMode::Ceiling => wide.ceil(),
     };
     rounded as f32
+}
+
+/// C `roundf` (`std::round(float)`): to nearest, halves away from zero, the sign kept (`-0.3` gives `-0.0`,
+/// `-2.5` gives `-3`). This is `progression.cpp:311` `restricted()`'s RoundingMode 1 (the XP curve and the health
+/// base); the attribute-initialization path rounds the same mode with `floor(x + 0.5)` ([`round_mode`]). Which form
+/// the game uses for each rule is UNVERIFIED (architecture 5.3).
+pub fn round_half_away_f32(x: f32) -> f32 {
+    x.round()
 }
 
 /// Python's `round(x)` (no digits): to nearest, ties to even. `loot_pools.py` rounds a pool's Quantity this way; that
@@ -322,12 +353,109 @@ mod tests {
         // 1.13^L and n^2.8 for L, n in 1..=80, and 10^d for d in 0..=6 (architecture 5.2).
         let table = rows("pow64");
         let has = |a: f64, b: f64| table.iter().any(|r| hex64(r[0]) == a && hex64(r[1]) == b);
+        // Also float-widened, as weapon_gen FormulaValue and the VM's ** receive them (1.13 and 2.8 stored as floats).
+        let (a, b) = (f64::from(1.13f32), f64::from(2.8f32));
         for i in 1..=80 {
             assert!(has(1.13, f64::from(i)) && has(f64::from(i), 2.8), "{i}");
+            assert!(has(a, f64::from(i)) && has(f64::from(i), b), "{i} widened");
         }
         for d in 0..=6 {
             assert!(has(10.0, f64::from(d)), "{d}");
         }
+    }
+
+    /// The table's output for these inputs (bits), found by value.
+    fn table64(kind: &str, inputs: &[f64]) -> u64 {
+        let row = rows(kind)
+            .into_iter()
+            .find(|r| {
+                inputs
+                    .iter()
+                    .enumerate()
+                    .all(|(i, x)| hex64(r[i]).to_bits() == x.to_bits())
+            })
+            .unwrap_or_else(|| panic!("no {kind} row for {inputs:?}"));
+        u64::from_str_radix(row[inputs.len()], 16).unwrap()
+    }
+
+    fn table32(kind: &str, inputs: &[f32]) -> u32 {
+        let row = rows(kind)
+            .into_iter()
+            .find(|r| {
+                inputs
+                    .iter()
+                    .enumerate()
+                    .all(|(i, x)| hex32(r[i]).to_bits() == x.to_bits())
+            })
+            .unwrap_or_else(|| panic!("no {kind} row for {inputs:?}"));
+        u32::from_str_radix(row[inputs.len()], 16).unwrap()
+    }
+
+    /// Literal arguments, no `black_box` here: the shapes LLVM rewrites after inlining (`pow(2, x)` to `exp2`,
+    /// `pow(x, 2)` to a multiply, `pow(x, 0.5)` to `sqrt`, constant folding) must still give the C runtime's bits.
+    /// Meaningful under `cargo test --release`, where the optimiser runs.
+    #[test]
+    fn choke_points_called_with_literals_match_the_table() {
+        assert_eq!(pow_f64(2.0, 0.5).to_bits(), table64("pow64", &[2.0, 0.5]));
+        assert_eq!(pow_f64(3.0, 2.0).to_bits(), table64("pow64", &[3.0, 2.0]));
+        assert_eq!(
+            pow_f64(2.0, -1074.0).to_bits(),
+            table64("pow64", &[2.0, -1074.0])
+        );
+        assert_eq!(pow_f64(10.0, 3.0).to_bits(), table64("pow64", &[10.0, 3.0]));
+        assert_eq!(
+            pow_f64(1.13, 17.0).to_bits(),
+            table64("pow64", &[1.13, 17.0])
+        );
+        assert_eq!(pow_f64(7.0, 2.8).to_bits(), table64("pow64", &[7.0, 2.8]));
+        assert_eq!(pow_f32(2.0, 0.5).to_bits(), table32("pow32", &[2.0, 0.5]));
+        assert_eq!(pow_f32(3.0, 2.0).to_bits(), table32("pow32", &[3.0, 2.0]));
+        assert_eq!(
+            pow_f32(1.13, 17.0).to_bits(),
+            table32("pow32", &[1.13, 17.0])
+        );
+        assert_eq!(pow_f32(7.0, 2.8).to_bits(), table32("pow32", &[7.0, 2.8]));
+        assert_eq!(exp_f64(1.0).to_bits(), table64("exp", &[1.0]));
+        assert_eq!(exp_f64(710.0).to_bits(), table64("exp", &[710.0]));
+        assert_eq!(ln_f64(2.0).to_bits(), table64("ln", &[2.0]));
+        assert_eq!(ln_f64(0.0).to_bits(), table64("ln", &[0.0]));
+        assert_eq!(sqrt_f64(2.0).to_bits(), table64("sqrt", &[2.0]));
+        assert_eq!(sqrt_f64(-1.0).to_bits(), table64("sqrt", &[-1.0]));
+        assert_eq!(
+            sin_f64(std::f64::consts::PI).to_bits(),
+            table64("sin", &[std::f64::consts::PI])
+        );
+        assert_eq!(cos_f64(0.5).to_bits(), table64("cos", &[0.5]));
+        assert_eq!(
+            tan_f64(std::f64::consts::FRAC_PI_4).to_bits(),
+            table64("tan", &[std::f64::consts::FRAC_PI_4])
+        );
+        assert_eq!(asin_f64(0.5).to_bits(), table64("asin", &[0.5]));
+        assert_eq!(acos_f64(2.0).to_bits(), table64("acos", &[2.0]));
+        assert_eq!(atan_f64(1e22).to_bits(), table64("atan", &[1e22]));
+        assert_eq!(atan2_f64(1.0, 0.0).to_bits(), table64("atan2", &[1.0, 0.0]));
+        assert_eq!(
+            atan2_f64(-0.0, -0.0).to_bits(),
+            table64("atan2", &[-0.0, -0.0])
+        );
+    }
+
+    #[test]
+    fn round_half_away_matches_the_oracle_table() {
+        let table = rows("round32");
+        for row in &table {
+            let x = black_box(hex32(row[0]));
+            let got = round_half_away_f32(x).to_bits();
+            let want = u32::from_str_radix(row[1], 16).unwrap();
+            assert_eq!(got, want, "std::round({})", row[0]);
+        }
+        assert!(table.len() >= 60, "{}", table.len());
+        // The two half-up forms part on negative halves.
+        assert_eq!(round_half_away_f32(-2.5), -3.0);
+        assert_eq!(round_mode(-2.5, RoundingMode::HalfUp), -2.0);
+        assert_eq!(round_half_away_f32(-0.3).to_bits(), (-0.0f32).to_bits());
+        assert_eq!(round_half_away_f32(2.5), 3.0);
+        assert_eq!(round_half_away_f32(0.499_999_97), 0.0);
     }
 
     #[test]

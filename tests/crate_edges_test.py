@@ -9,8 +9,8 @@ What it checks:
     holds no package with a `source`;
   - the banned patterns appear in no Rust file outside the places allowed: N2 `mul_add`; N3 the float functions
     (powers, exponentials, logarithms, roots, trigonometry) outside ow-core/src/num.rs; N7 the std HashMap/HashSet
-    outside ow-core/src/detmap.rs (which holds the fixed-hasher aliases); R3 reading the parity mode outside the
-    binaries' main.rs;
+    outside ow-core/src/detmap.rs (which holds the fixed-hasher aliases); N6 a float format spec (`{:e}`, `{:.3}`)
+    outside ow-core/src/fmt.rs; R3 reading the parity mode outside the binaries' main.rs;
   - every flag of src/cli.cpp's usage text has an entry or option in the Rust CLI's dispatch table
     (crates/ow-cli/src/args.rs), and every flag src/cli.cpp's main() dispatches on has a cmd("--flag" entry.
 Each check also has a case proving it fails on a deliberately bad input.
@@ -84,6 +84,13 @@ BANNED = [
      re.compile(r'\b(?:parity_mode|init_parity_mode|mode_from_env|ENV_VAR)\b'),
      _PARITY_READERS),
     ('R3 parity variable named outside a binary or its test', re.compile(r'"OW_PARITY"'), _PARITY_VAR_NAMERS),
+    # N6: a format spec with an exponent (`{:e}`, `{x:E}`) or a precision (`{:.3}`, `{:.*}`, `{:8.2e}`) is float
+    # text in Rust's own form, which matches no oracle; ow_core::fmt is the one place that builds output floats
+    # from it. A float behind a bare `{}` cannot be seen here (a review item). A string cut by precision fails too:
+    # slice it instead.
+    ('N6 float text outside ow_core::fmt',
+     re.compile(r'\{[A-Za-z0-9_]*:[^{}"\s]*(?:\.(?:[0-9]+\$?|\*)[^{}"\s]*|[eE])\}'),
+     {'crates/ow-core/src/fmt.rs'}),
 ]
 
 
@@ -292,7 +299,10 @@ class FailsOnBadInput(unittest.TestCase):
             'fn r() { let m: ow_core::FixedHashMap<u8, u8> = Default::default(); }\n'
             'fn s(v: &[u8]) -> Option<u8> { v.iter().max().copied() }\n'
             'fn t(x: f64) -> f64 { <f64>::sqrt(x) }\n'
-            'fn u(x: f64) -> f64 { x.asinh() + < f32 >::atanh(0.5) as f64 }\n', encoding='utf-8')
+            'fn u(x: f64) -> f64 { x.asinh() + < f32 >::atanh(0.5) as f64 }\n'
+            'fn v(x: f64) -> String { format!("{:.3} {x:e}", x) }\n'
+            'fn w(x: f64) -> String { format!("{:>8.2e}|{:.*}", x, 2, x) }\n'
+            'fn y(n: u32) -> String { format!("{n:08x} {n:>4} {:?} {}", n, n) }\n', encoding='utf-8')
         found = check_banned(self.tmp)
         names = [p.split(': ')[1] for p in found]
         self.assertEqual(names.count('N2 fused multiply-add'), 1)
@@ -302,10 +312,14 @@ class FailsOnBadInput(unittest.TestCase):
         # h, k, o, p, q: every way of naming the std containers; r (the fixed-hasher alias) passes
         self.assertEqual(names.count('N7 std HashMap/HashSet outside ow_core::detmap'), 5, found)
         self.assertFalse(any('bad.rs:12:' in p or 'bad.rs:13:' in p for p in found), found)
+        # v and w (precision and exponent specs); y (hex, width, Debug, Display) passes
+        self.assertEqual(names.count('N6 float text outside ow_core::fmt'), 2, found)
+        self.assertFalse(any('bad.rs:18:' in p for p in found), found)
         num = self.tmp / 'crates' / 'ow-core' / 'src'
         num.mkdir(parents=True)
         (num / 'num.rs').write_text('pub fn p(a: f64) -> f64 { a.powf(2.0) + f64::sqrt(a) }\n', encoding='utf-8')
         (num / 'detmap.rs').write_text('pub type M<K, V> = std::collections::HashMap<K, V>;\n', encoding='utf-8')
+        (num / 'fmt.rs').write_text('pub fn g(x: f64) -> String { format!("{:.*e}", 3, x) }\n', encoding='utf-8')
         self.assertEqual([p for p in check_banned(self.tmp) if 'ow-core' in p], [])
 
     def test_reading_the_parity_mode_in_a_library_fails(self):

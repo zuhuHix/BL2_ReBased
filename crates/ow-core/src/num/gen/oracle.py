@@ -135,10 +135,27 @@ def fmt_values():
     return out + nan_bits()
 
 
-def pow_pairs():
+def record_pairs():
+    """1.13^L and n^2.8 for L, n in 1..=80, and 10^d for d in 0..=6 (architecture 5.2)."""
     pairs = [(1.13, float(l)) for l in range(1, 81)]
     pairs += [(float(n), 2.8) for n in range(1, 81)]
     pairs += [(10.0, float(d)) for d in range(0, 7)]
+    return pairs
+
+
+def round_inputs():
+    """Floats for std::round(float) (progression.cpp restricted(), RoundingMode 1)."""
+    values = [0.5, 1.5, 2.5, 3.5, -0.5, -1.5, -2.5, -3.5, 0.3, -0.3, 0.0, -0.0, 0.49999997, -0.49999997, 0.50000006,
+              -0.50000006, 8388607.5, -8388607.5, 8388609.0, 16777215.0, 1e10, -1e10, 1.4e-45, -1.4e-45, 99.5, -99.5,
+              math.inf, -math.inf, math.nan]
+    rng = Lcg(2468)
+    values += [rng.uniform(-200, 200) for _ in range(30)]
+    values += [int(rng.uniform(-200, 200)) + 0.5 for _ in range(10)]
+    return [h32(f32(v)) for v in values]
+
+
+def pow_pairs():
+    pairs = record_pairs()
     rng = Lcg(4242)
     for _ in range(180):
         pairs.append((rng.uniform(0.0, 100.0), rng.uniform(-4.0, 4.0)))
@@ -170,7 +187,7 @@ def transcendental_inputs():
 def trunc_inputs():
     values = [0.0, -0.0, 0.5, -0.5, 0.9999999, -0.9999999, 1.5, -1.5, 2147483647.0, 2147483647.9, 2147483648.0,
               -2147483648.0, -2147483648.9, -2147483649.0, 4294967295.0, 4294967296.0, 4294967297.5, -4294967297.5,
-              9.2233720368547748e18, 9.223372036854775e18, -9.2233720368547758e18, -9.223372036854778e18, 1e19, -1e19,
+              9.2233720368547748e18, 2.0 ** 63, -9.2233720368547758e18, -9.223372036854778e18, 1e19, -1e19,
               1e300, math.inf, -math.inf, math.nan, 123456.789, -98765.4321, 3e9, -3e9, 6442450943.0]
     return [h64(v) for v in values] + ['fff8000000000000']
 
@@ -192,6 +209,11 @@ def write_inputs(path):
     for a, b in pow_pairs():
         lines.append(f'pow64 {h64(a)} {h64(b)}')
         lines.append(f'pow32 {h32(f32(a))} {h32(f32(b))}')
+    # The record constants again with float-widened inputs, as weapon_gen FormulaValue and the VM's ** receive them
+    # (1.13 and 2.8 stored as floats); the pow32 rows above already hold those float inputs.
+    for a, b in record_pairs():
+        if (f32(a), f32(b)) != (a, b):
+            lines.append(f'pow64 {h64(f32(a))} {h64(f32(b))}')
     common, pairs = transcendental_inputs()
     for name in ('exp', 'ln', 'sqrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan'):
         for x in common:
@@ -200,6 +222,8 @@ def write_inputs(path):
         lines.append(f'atan2 {h64(y)} {h64(x)}')
     for h in trunc_inputs():
         lines.append(f'trunc {h}')
+    for h in round_inputs():
+        lines.append(f'round32 {h}')
     for x, digits in card_inputs():
         lines.append(f'card {h32(x)} {digits}')
     for h in fmt_values():
@@ -259,6 +283,11 @@ def run_python(inputs, path):
                 res = [str(wrapped), MISSING]
             else:
                 res = [MISSING, MISSING]
+        elif kind == 'round32':
+            # std::round: halves away from zero, the sign kept. Exact in double for a float input.
+            x = from32(args[0])
+            r = py_or_missing(lambda: math.copysign(float(math.floor(abs(x) + 0.5)), x))
+            res = [MISSING if r is None else h32(f32(r))]
         elif kind == 'card':
             x, digits = from32(args[0]), int(args[1])
             scale = f32(10.0 ** digits)
