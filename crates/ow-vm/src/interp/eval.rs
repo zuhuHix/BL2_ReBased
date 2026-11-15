@@ -158,6 +158,20 @@ pub(crate) fn run_frame(
         (None, None) => None,
     };
     let mut store = new_frame_store(vm, &code)?;
+    // The arguments go into the storage before it is pushed, so a refused argument leaves no frame behind.
+    let mut omitted = vec![false; code.locals.len()];
+    let mut aliases = vec![None; code.locals.len()];
+    for (position, &entry) in code.params.iter().enumerate() {
+        match args.get(position) {
+            Some(a) if a.supplied => {
+                bind_parameter(&mut store.slots, &code.locals[entry], a, &code.path)?;
+                if a.out {
+                    aliases[entry] = a.alias.as_ref().map(|al| al.0.clone());
+                }
+            }
+            _ => omitted[entry] = true,
+        }
+    }
     vm.code.frame_serial += 1;
     store.serial = vm.code.frame_serial;
     let at = FrameRef {
@@ -170,23 +184,12 @@ pub(crate) fn run_frame(
         code: code.clone(),
         this,
         at,
-        omitted: vec![false; code.locals.len()],
-        aliases: vec![None; code.locals.len()],
+        omitted,
+        aliases,
         switch_value: Value::None,
         result: Value::None,
         returned: false,
     };
-    for (position, &entry) in code.params.iter().enumerate() {
-        match args.get(position) {
-            Some(a) if a.supplied => {
-                vm.code.frames[at.index].slots[code.locals[entry].slot] = a.value.clone();
-                if a.out {
-                    frame.aliases[entry] = a.alias.as_ref().map(|al| al.0.clone());
-                }
-            }
-            _ => frame.omitted[entry] = true,
-        }
-    }
     vm.code.stack.push(f);
     let ran = run(vm, &mut frame, &script);
     vm.code.stack.pop();
@@ -194,7 +197,7 @@ pub(crate) fn run_frame(
         args.iter()
             .enumerate()
             .map(|(position, a)| match code.params.get(position) {
-                Some(&entry) if a.out && a.supplied => read(vm, &local_place_of(&frame, entry)),
+                Some(&entry) if a.out && a.supplied => read_parameter(vm, &frame, entry),
                 _ => Ok(a.value.clone()),
             })
             .collect::<Result<Vec<_>, _>>()
@@ -205,6 +208,62 @@ pub(crate) fn run_frame(
         ret: frame.result,
         outs: outs?,
     })
+}
+
+/// A supplied argument into its parameter's slots. A scalar parameter takes the value as it is (the C++ copies the
+/// value into the local). A static-array parameter (`array_dim > 1`, consecutive slots here, one array value in the
+/// C++) takes the elements of an array of exactly its size, the value a static array read as a whole gives
+/// (`aggregate::whole_static`), one element a slot (decision 2026-11-15-28, cause C); an `out` one with no alias (a
+/// host call such as the sweep's, or a script temporary) is read back whole ([`read_parameter`]). Any other value, and
+/// a static-array `out` argument aliasing the caller's storage, is `NotYet`: the C++ keeps such a value whole in the
+/// local (or aliases the caller's one array), which slots cannot hold.
+fn bind_parameter(
+    slots: &mut [Value],
+    local: &super::Local,
+    a: &Arg,
+    path: &str,
+) -> Result<(), VmError> {
+    let missing = || script_error(path, "a parameter slot outside its frame's storage");
+    let dim = local.decl.array_dim;
+    if dim <= 1 {
+        *slots.get_mut(local.slot).ok_or_else(missing)? = a.value.clone();
+        return Ok(());
+    }
+    let items = a
+        .value
+        .elements()
+        .filter(|items| a.alias.is_none() && i32::try_from(items.len()).is_ok_and(|n| n == dim))
+        .ok_or_else(|| {
+            VmError::from(NotYet::not_ported(
+                format!(
+                    "a static-array parameter of {path} given a value that is not an array of its {dim} elements, \
+                     or aliasing the caller's storage"
+                ),
+                "decision 2026-11-15-28 (a static array is passed whole as an array of its elements)",
+            ))
+        })?;
+    let end = local.slot.checked_add(items.len()).ok_or_else(missing)?;
+    slots
+        .get_mut(local.slot..end)
+        .ok_or_else(missing)?
+        .clone_from_slice(items);
+    Ok(())
+}
+
+/// An `out` parameter's value after the call: what its place holds, and for a static-array parameter the array of
+/// its elements (the C++ local holds the one array).
+fn read_parameter(vm: &Vm, frame: &Frame, entry: usize) -> Result<Value, VmError> {
+    let local = &frame.code.locals[entry];
+    match local_place_of(frame, entry) {
+        Place::Slot(at, slot) if local.decl.array_dim > 1 => {
+            let dim = usize::try_from(local.decl.array_dim).unwrap_or(0);
+            (slot..slot.saturating_add(dim))
+                .map(|i| read(vm, &Place::Slot(at, i)))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::array)
+        }
+        place => read(vm, &place),
+    }
 }
 
 /// A frame's storage, its size checked against the bounds before anything is allocated and reserved fallibly; each
@@ -367,7 +426,10 @@ fn run(vm: &mut Vm, f: &mut Frame, script: &Code) -> Result<(), VmError> {
                 None if vm.parity == ParityMode::Reference => pc += 1,
                 None => {
                     return Err(NotYet::not_read(
-                        format!("a GotoLabel in the function {}: where the game resumes", f.path()),
+                        format!(
+                            "a GotoLabel in the function {}: where the game resumes",
+                            f.path()
+                        ),
                         "NATIVE_ENGINE_CORE.md (Object state machine)",
                     )
                     .into());
@@ -695,6 +757,10 @@ pub(crate) fn fit_for_heap(vm: &Vm, kind: &PropKind, value: Value) -> Value {
         (PropKind::Object { .. }, Value::Interface(o)) => Value::Object(o),
         (PropKind::Object { .. }, Value::None) => Value::Object(None),
         (PropKind::Delegate, Value::Object(None) | Value::None) => Value::Delegate(None),
+        // The C++ bag keeps a byte in the integer field it reads for an int, so a byte it stores into an int slot
+        // without the assignment rule (an `IntConstByte` argument added to an `array<int>`) reads as that int
+        // everywhere: the int of the same number (decision 2026-11-15-28, cause C).
+        (PropKind::Int, Value::Byte(b)) => Value::Int(i32::from(b)),
         (kind, Value::None) => vm.space.classes.zero_value(kind),
         (_, v) => v,
     }
@@ -823,6 +889,9 @@ fn constant(vm: &mut Vm, e: &Expr) -> Result<Value, VmError> {
 
 /// A variable: its place, then its value.
 fn variable(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, VmError> {
+    if aggregate::names_static(vm, f, e) {
+        return aggregate::whole_static(vm, f, e, ctx);
+    }
     let place = lval(vm, f, e, ctx)?;
     read(vm, &place)
 }
@@ -1203,7 +1272,15 @@ pub(crate) fn bind_arguments(
     let shape = parameter_shape(vm, function);
     let mut args = Vec::with_capacity(shape.len());
     for (i, &(out, optional)) in shape.iter().enumerate() {
-        args.push(bind_argument(vm, f, e.kids.get(i), out, optional)?);
+        let mut arg = bind_argument(vm, f, e.kids.get(i), out, optional)?;
+        if arg.supplied
+            && !arg.out
+            && matches!(arg.value, Value::None)
+            && let Some(zero) = native_struct_zero(vm, function, i)
+        {
+            arg.value = zero;
+        }
+        args.push(arg);
     }
     for kid in e.kids.iter().skip(shape.len()) {
         eval(vm, f, kid, f.this)?;
@@ -1221,6 +1298,22 @@ fn parameter_shape(vm: &Vm, function: FuncId) -> Vec<(bool, bool)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The zero struct a `None` given by value to parameter `i` of native `function` becomes, when that parameter is a
+/// struct (decision 2026-11-15-28, cause C). The C++ hands the native the `None` and its `comp` reads every field of a
+/// value that is not a struct as 0, so the vector and rotator natives compute with a zero struct; the Rust natives take
+/// a struct and leave the conversion to the interpreter (`natives_core.rs`, "Arguments"). A script callee keeps the
+/// `None` in its untyped local, as the C++ does. The one Core native that reads the value whole,
+/// `==(vector,vector)` / `!=(vector,vector)`, then compares a zero vector where the C++ compares `None` (unequal to a
+/// zero vector there). The sweeps of the nine code packages make this conversion 4 times, none for those two natives
+/// (decision 2026-11-15-28).
+fn native_struct_zero(vm: &Vm, function: FuncId, i: usize) -> Option<Value> {
+    let decl = vm.function(function).filter(|d| d.is_native())?;
+    match &decl.params.get(i)?.kind {
+        kind @ PropKind::Struct(_) => Some(vm.space.classes.zero_value(kind)),
+        _ => None,
+    }
 }
 
 fn bind_argument(
