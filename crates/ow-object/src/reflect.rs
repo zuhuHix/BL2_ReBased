@@ -33,6 +33,12 @@
 //! packages (32 classes, among them `Engine.WorldInfo` and `WillowGame.WillowPlayerController`) have both at 0, so
 //! their key and value are `None`.
 //!
+//! **Bad input.** Cycles give typed errors: a super chain (`SuperCycle`), a struct held by value inside itself
+//! (`StructCycle`; through an array or a map it is legal, and such structs are defined after the class that reached
+//! them), an array or map whose inner declarations lead back to it (`PropertyCycle`). All recursion nests at most
+//! [`MAX_NESTING`] deep (`TooDeep`, a Rust-only bound: the C++ has none). A class is published in the [`ClassTable`]
+//! only once its declarations and attribute companions all hold.
+//!
 //! **Not yet.** Tagged default values, struct defaults and class default objects are W3-DECODE's; function parameter
 //! layouts are the VM's.
 //!
@@ -52,8 +58,8 @@ use ow_package::store::{PackageStore, StoreError};
 use ow_package::tables;
 
 use crate::class_body::{ClassBody, ClassBodyError, decode_class_body};
-use crate::ids::{ClassId, EnumId, StructId};
-use crate::layout::{ClassTable, LayoutError, PropKind, PropertyDecl};
+use crate::ids::{ClassId, EnumId, PropId, StructId};
+use crate::layout::{AttrCompanions, ClassTable, LayoutError, PropKind, PropertyDecl};
 use crate::names::NameTable;
 
 /// The nine code packages, in the order the C++ loads them (`buildNativeIndex`, `compareInterfaces`).
@@ -88,6 +94,11 @@ pub const PROPERTY_HEADER: usize = 40;
 
 /// Property flag `0x20`: a 16-bit replication offset follows the header.
 pub const CPF_NET: u64 = 0x20;
+
+/// How deep class loading, layouts, struct definitions and array or map expansion may nest before reflection refuses
+/// with [`ReflectError::TooDeep`]. A Rust-only bound (the C++ recursion has none), so a hostile package gives a typed
+/// error instead of a stack overflow; the installed code packages nest far less (decision 2026-11-15-06).
+pub const MAX_NESTING: usize = 128;
 
 /// Why reflection failed. `Display` gives the C++ text where the C++ has one; wrappers name the class, struct, enum
 /// or property and carry the cause as their `source()`.
@@ -137,6 +148,16 @@ pub enum ReflectError {
     StructCycle(String),
     /// "cyclic super chain at <path>"
     SuperCycle(String),
+    /// "<property> contains itself": an array or map property whose inner declarations lead back to it.
+    PropertyCycle(String),
+    /// "<property> names <what> <package>:<index>, which is not one of the class's own declarations"
+    CompanionNotOwn {
+        property: String,
+        what: &'static str,
+        target: (PackageId, i32),
+    },
+    /// "reflection nests deeper than <n> levels": the Rust-only [`MAX_NESTING`] bound.
+    TooDeep(usize),
     /// The class table refused a definition. Transparent.
     Layout(LayoutError),
     /// "class <path>", with the cause as `source()`.
@@ -189,6 +210,19 @@ impl fmt::Display for ReflectError {
             ReflectError::EnumTrailing => f.write_str("enum does not end at the serial size"),
             ReflectError::StructCycle(path) => write!(f, "{path} holds itself by value"),
             ReflectError::SuperCycle(path) => write!(f, "cyclic super chain at {path}"),
+            ReflectError::PropertyCycle(property) => write!(f, "{property} contains itself"),
+            ReflectError::CompanionNotOwn {
+                property,
+                what,
+                target,
+            } => write!(
+                f,
+                "{property} names {what} {}:{}, which is not one of the class's own declarations",
+                target.0, target.1
+            ),
+            ReflectError::TooDeep(limit) => {
+                write!(f, "reflection nests deeper than {limit} levels")
+            }
             ReflectError::Layout(e) => e.fmt(f),
             ReflectError::InClass { path, .. } => write!(f, "class {path}"),
             ReflectError::InStruct { path, .. } => write!(f, "struct {path}"),
@@ -276,7 +310,9 @@ pub struct ClassInfo {
     /// Lower-cased function name -> the function export (the C++ `Class::functions` keys). A later child of the same
     /// lower-cased name replaces an earlier one, as the C++ map assignment does.
     pub functions: BTreeMap<String, i32>,
-    /// The error the super chain gave while this class loaded, returned by every later [`CodeIndex::class_at`].
+    /// The error the super chain gave while this class loaded. As the C++ `loadClass`, the class stays registered
+    /// without its super class (and without its functions), and a later [`CodeIndex::class_at`] returns it; only
+    /// [`CodeIndex::define_layout`] refuses it with this error.
     load_error: Option<ReflectError>,
     /// The resolved interface entries of the body: `None` until resolved (lazily, entry by entry, as the C++).
     interface_targets: Vec<Option<Option<ClassKey>>>,
@@ -421,7 +457,12 @@ pub struct CodeIndex {
     class_in_progress: FixedHashSet<ClassKey>,
     structs: FixedHashMap<(PackageId, i32), Result<StructId, ReflectError>>,
     struct_in_progress: FixedHashMap<(PackageId, i32), StructId>,
+    /// Structs reached only through an array or a map, declared and defined after the class that reached them.
+    deferred_structs: Vec<(PackageId, i32)>,
+    property_in_progress: FixedHashSet<(PackageId, i32)>,
     enums: FixedHashMap<(PackageId, i32), Result<EnumId, ReflectError>>,
+    nesting: usize,
+    max_nesting: usize,
 }
 
 /// Loads the nine code packages ([`CODE_PACKAGES`]) and every class they export, and defines each class's layout
@@ -447,6 +488,72 @@ pub fn load_code_packages(
 impl CodeIndex {
     pub fn new() -> Self {
         CodeIndex::default()
+    }
+
+    /// Runs `f` one nesting level deeper, refused past [`MAX_NESTING`].
+    fn nested<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ReflectError>,
+    ) -> Result<T, ReflectError> {
+        if self.nesting >= MAX_NESTING {
+            return Err(ReflectError::TooDeep(MAX_NESTING));
+        }
+        self.nesting += 1;
+        self.max_nesting = self.max_nesting.max(self.nesting);
+        let result = f(self);
+        self.nesting -= 1;
+        result
+    }
+
+    /// The deepest nesting any call of this index reached so far (at most [`MAX_NESTING`]).
+    pub fn max_nesting(&self) -> usize {
+        self.max_nesting
+    }
+
+    // Read-only, cache-only lookups (for a reflection typer behind `&self`): each answers only from what earlier
+    // `&mut` calls loaded, and loads nothing.
+
+    /// The loaded class of export `index` of `package`, if [`CodeIndex::class_at`] loaded it.
+    pub fn loaded_class(&self, package: PackageId, index: i32) -> Option<ClassKey> {
+        self.by_export.get(&(package, index)).copied()
+    }
+
+    /// [`CodeIndex::resolve_ref`] from the cache: `Some(answer)` where the answer is known without loading (0, an
+    /// export, an import resolved before), `None` where it is not.
+    pub fn cached_ref(
+        &self,
+        store: &PackageStore,
+        package: PackageId,
+        reference: i32,
+    ) -> Option<Option<(PackageId, i32)>> {
+        match reference {
+            0 => Some(None),
+            r if r > 0 => {
+                Some((r as usize <= store.get(package).exports.len()).then_some((package, r)))
+            }
+            r => self.ref_cache.get(&(package, r)).copied(),
+        }
+    }
+
+    /// The [`ClassTable`] class defined from loaded class `key`, once its layout succeeded.
+    pub fn layout_id(&self, key: ClassKey) -> Option<ClassId> {
+        self.layouts
+            .get(&key)
+            .and_then(|o| o.as_ref().ok().copied())
+    }
+
+    /// The struct defined from ScriptStruct export `index` of `package`, once defined.
+    pub fn struct_of(&self, package: PackageId, index: i32) -> Option<StructId> {
+        self.structs
+            .get(&(package, index))
+            .and_then(|o| o.as_ref().ok().copied())
+    }
+
+    /// The enum defined from Enum export `index` of `package`, once defined.
+    pub fn enum_of(&self, package: PackageId, index: i32) -> Option<EnumId> {
+        self.enums
+            .get(&(package, index))
+            .and_then(|o| o.as_ref().ok().copied())
     }
 
     /// The loaded class `key`.
@@ -573,7 +680,8 @@ impl CodeIndex {
 
     /// The class `reference` of `package` names, loaded on first use (C++ `Runtime::classAt`). `Ok(None)` where the
     /// reference resolves to nothing. A target that is not a Class export is an error ("export is not a class"), and
-    /// so is a super chain that holds one; a class whose super chain failed keeps that error.
+    /// so is a super chain that holds one, on the call that loads the class; as in the C++, the class stays registered
+    /// without its super class and later calls return it.
     pub fn class_at(
         &mut self,
         store: &mut PackageStore,
@@ -584,12 +692,10 @@ impl CodeIndex {
             return Ok(None);
         };
         if let Some(&key) = self.by_export.get(&target) {
-            return match &self.classes[key.index()].load_error {
-                Some(error) => Err(error.clone()),
-                None => Ok(Some(key)),
-            };
+            return Ok(Some(key));
         }
-        self.load_class(store, target.0, target.1).map(Some)
+        self.nested(|index| index.load_class(store, target.0, target.1))
+            .map(Some)
     }
 
     /// C++ `loadClass`: registered before its super class loads, so a cyclic reference finds it.
@@ -976,7 +1082,7 @@ impl CodeIndex {
             return Err(ReflectError::SuperCycle(path));
         }
         let outcome = self
-            .define_layout_inner(store, names, classes, key, &path)
+            .nested(|index| index.define_layout_inner(store, names, classes, key, &path))
             .map_err(in_class(&path));
         self.class_in_progress.remove(&key);
         if let Ok(id) = outcome {
@@ -994,6 +1100,9 @@ impl CodeIndex {
         key: ClassKey,
         path: &str,
     ) -> Result<ClassId, ReflectError> {
+        if let Some(error) = &self.classes[key.index()].load_error {
+            return Err(error.clone());
+        }
         let (package, export) = (
             self.classes[key.index()].package,
             self.classes[key.index()].export,
@@ -1014,45 +1123,108 @@ impl CodeIndex {
             }
         };
         let raws = self.child_properties(store, package, export)?;
-        let mut decls = Vec::with_capacity(raws.len());
-        for raw in &raws {
-            decls.push(self.declaration(store, names, classes, raw)?);
+        let deferred_from = self.deferred_structs.len();
+        let outcome = self.class_declarations(store, names, classes, path, super_id, &raws);
+        if outcome.is_err() {
+            // Structs this class deferred stay declared only; the next reference queues them again.
+            self.deferred_structs.truncate(deferred_from);
         }
-        let id = classes.define(path, super_id, decls)?;
-        for raw in &raws {
-            self.link_attribute(store, names, classes, id, raw)?;
-        }
-        Ok(id)
+        outcome
     }
 
-    /// Links the companions an attribute value property names (flag bit 63): its stack and base, from its own
-    /// references, shifted by one for a byte attribute.
-    fn link_attribute(
+    /// The declarations of a class, their attribute companions, the structs they reached through arrays and maps,
+    /// then the definition. Nothing is published in `classes` before every part succeeded: the companions are given
+    /// to [`ClassTable::define`], which checks them and leaves the class undefined if they do not hold.
+    fn class_declarations(
         &mut self,
         store: &mut PackageStore,
         names: &mut NameTable,
         classes: &mut ClassTable,
-        class: ClassId,
+        path: &str,
+        super_id: Option<ClassId>,
+        raws: &[RawProperty],
+    ) -> Result<ClassId, ReflectError> {
+        let deferred_from = self.deferred_structs.len();
+        let mut decls = Vec::with_capacity(raws.len());
+        for raw in raws {
+            decls.push(self.declaration(store, names, classes, raw)?);
+        }
+        // Slots as the table lays them out (decision D14): after the super class's, each declaration `array_dim`
+        // long. `define` checks every companion against the declaration at its slot.
+        let id = classes.declare(path)?;
+        let mut cursor = super_id.map_or(0, |s| classes.layout(s).slot_count());
+        let mut slots = Vec::with_capacity(raws.len());
+        for raw in raws {
+            slots.push(cursor);
+            cursor = cursor.saturating_add(raw.array_dim as u32);
+        }
+        for (position, raw) in raws.iter().enumerate() {
+            if let Some((stack, base)) = self.companions(store, raws, raw)? {
+                let prop = |at: usize| PropId {
+                    slot: slots[at],
+                    declared_in: id,
+                };
+                let attr = AttrCompanions {
+                    value: prop(position),
+                    base: prop(base),
+                    stack: prop(stack),
+                };
+                decls[position].attr = Some(attr);
+                decls[base].attr = Some(attr);
+            }
+        }
+        while self.deferred_structs.len() > deferred_from {
+            let target = self.deferred_structs.remove(deferred_from);
+            self.define_struct(store, names, classes, target)?;
+        }
+        Ok(classes.define(path, super_id, decls)?)
+    }
+
+    /// The own declarations an attribute value property (flag bit 63) names as its modifier stack and its base, by
+    /// position in `raws`: its first two references, shifted by one for a byte attribute (enum first). Each must
+    /// resolve to one of `raws` itself (the same package and export), never a property that only shares a name.
+    fn companions(
+        &mut self,
+        store: &mut PackageStore,
+        raws: &[RawProperty],
         raw: &RawProperty,
-    ) -> Result<(), ReflectError> {
+    ) -> Result<Option<(usize, usize)>, ReflectError> {
         let byte = raw.class == "ByteAttributeProperty";
         let attribute =
             byte || raw.class == "FloatAttributeProperty" || raw.class == "IntAttributeProperty";
         if !attribute || raw.flags & PropertyDecl::STACK_ATTRIBUTE == 0 {
-            return Ok(());
+            return Ok(None);
         }
         let (stack_ref, base_ref) = if byte {
             (raw.refs[1], raw.refs[2])
         } else {
             (raw.refs[0], raw.refs[1])
         };
-        let stack = self.referenced_property(store, raw, stack_ref, "modifier stack")?;
-        let base = self.referenced_property(store, raw, base_ref, "base value")?;
-        let value = names.intern(&raw.name);
-        let base = names.intern(&base.name);
-        let stack = names.intern(&stack.name);
-        classes.link_attribute(class, value, base, stack)?;
-        Ok(())
+        let mut own = |reference: i32, what: &'static str| {
+            if reference == 0 {
+                return Err(ReflectError::NoReference {
+                    property: raw.name.clone(),
+                    what,
+                });
+            }
+            let target = self
+                .resolve_ref(store, raw.package, reference)
+                .ok_or_else(|| ReflectError::Unresolved {
+                    property: raw.name.clone(),
+                    what,
+                    reference,
+                })?;
+            raws.iter()
+                .position(|r| (r.package, r.index) == target)
+                .ok_or_else(|| ReflectError::CompanionNotOwn {
+                    property: raw.name.clone(),
+                    what,
+                    target,
+                })
+        };
+        let stack = own(stack_ref, "modifier stack")?;
+        let base = own(base_ref, "base value")?;
+        Ok(Some((stack, base)))
     }
 
     /// The property export `reference` of `raw`'s package names (C++ `declAt`).
@@ -1208,28 +1380,57 @@ impl CodeIndex {
             "StructProperty" => {
                 PropKind::Struct(self.struct_ref(store, names, classes, raw, by_value)?)
             }
-            "ArrayProperty" => {
-                let inner = self.referenced_property(store, raw, raw.refs[0], "inner property")?;
-                PropKind::Array(Box::new(self.kind(store, names, classes, &inner, false)?))
-            }
-            "MapProperty" => {
-                // Key, then value: the order is UNVERIFIED (no C++ code reads them; every map property of the nine
-                // code packages names neither, so both are `None` there).
-                let mut inner = [None, None];
-                for (slot, &reference) in inner.iter_mut().zip(&raw.refs[..2]) {
-                    if reference != 0 {
-                        let declared =
-                            self.referenced_property(store, raw, reference, "map property")?;
-                        *slot = Some(Box::new(
-                            self.kind(store, names, classes, &declared, false)?,
-                        ));
-                    }
-                }
-                let [key, value] = inner;
-                PropKind::Map { key, value }
+            "ArrayProperty" | "MapProperty" => {
+                return self.expanding(raw, |index| {
+                    index.container_kind(store, names, classes, raw)
+                });
             }
             other => return Err(ReflectError::UnknownPropertyClass(other.to_string())),
         })
+    }
+
+    /// Runs `f` with `raw` marked as being expanded, one nesting level deeper; a property already being expanded is a
+    /// cycle (an array whose inner declaration leads back to it).
+    fn expanding<T>(
+        &mut self,
+        raw: &RawProperty,
+        f: impl FnOnce(&mut Self) -> Result<T, ReflectError>,
+    ) -> Result<T, ReflectError> {
+        let key = (raw.package, raw.index);
+        if !self.property_in_progress.insert(key) {
+            return Err(ReflectError::PropertyCycle(raw.name.clone()));
+        }
+        let result = self.nested(f);
+        self.property_in_progress.remove(&key);
+        result
+    }
+
+    /// The kind of an array (its inner declaration) or a map (key, then value; the order is UNVERIFIED: no C++ code
+    /// reads them, and every map property of the nine code packages names neither, so both are `None` there).
+    fn container_kind(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        raw: &RawProperty,
+    ) -> Result<PropKind, ReflectError> {
+        if raw.class == "ArrayProperty" {
+            let inner = self.referenced_property(store, raw, raw.refs[0], "inner property")?;
+            return Ok(PropKind::Array(Box::new(
+                self.kind(store, names, classes, &inner, false)?,
+            )));
+        }
+        let mut inner = [None, None];
+        for (slot, &reference) in inner.iter_mut().zip(&raw.refs[..2]) {
+            if reference != 0 {
+                let declared = self.referenced_property(store, raw, reference, "map property")?;
+                *slot = Some(Box::new(
+                    self.kind(store, names, classes, &declared, false)?,
+                ));
+            }
+        }
+        let [key, value] = inner;
+        Ok(PropKind::Map { key, value })
     }
 
     /// `<package stem>.<object path>` of export `index`.
@@ -1328,7 +1529,8 @@ impl CodeIndex {
         outcome.map(Some)
     }
 
-    /// The struct a struct property names, defined on first use (its super struct and by-value fields first).
+    /// The struct a struct property names: defined now when held by value (its super struct and by-value fields
+    /// first), only declared and queued when reached through an array or a map.
     fn struct_ref(
         &mut self,
         store: &mut PackageStore,
@@ -1359,6 +1561,9 @@ impl CodeIndex {
                 found,
             });
         }
+        if let Some(outcome) = self.structs.get(&target) {
+            return outcome.clone();
+        }
         if let Some(&id) = self.struct_in_progress.get(&target) {
             if by_value {
                 return Err(ReflectError::StructCycle(Self::object_path(
@@ -1367,7 +1572,16 @@ impl CodeIndex {
             }
             return Ok(id);
         }
-        self.define_struct(store, names, classes, target)
+        if by_value {
+            return self.define_struct(store, names, classes, target);
+        }
+        // Reached through an array or a map: only the declaration is needed now. The struct is defined after the
+        // class that reached it, so a cycle is checked along by-value edges only, whatever the load order.
+        let id = classes.declare_struct(&Self::object_path(store, target.0, target.1)?)?;
+        if !self.deferred_structs.contains(&target) {
+            self.deferred_structs.push(target);
+        }
+        Ok(id)
     }
 
     /// C++ `structAt` as a [`ClassTable`] definition: the super struct, then the struct's own child properties.
@@ -1385,7 +1599,7 @@ impl CodeIndex {
         let declared = classes.declare_struct(&path)?;
         self.struct_in_progress.insert(target, declared);
         let outcome = self
-            .define_struct_inner(store, names, classes, target, &path)
+            .nested(|index| index.define_struct_inner(store, names, classes, target, &path))
             .map_err(in_struct(&path));
         self.struct_in_progress.remove(&target);
         self.structs.insert(target, outcome.clone());

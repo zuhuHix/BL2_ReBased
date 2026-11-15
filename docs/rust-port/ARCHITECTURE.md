@@ -603,7 +603,8 @@ pub fn load_code_packages(store: &mut PackageStore, names: &mut NameTable, class
                                     // stays per class: CodeIndex::layout_of / layout_failures
 pub struct CodeIndex { .. }  // the C++ loader: class_at, find_class, resolve_ref, find_export, implements,
                              // implements_structurally, functions_only, find_method, check_class_bodies,
-                             // compare_interfaces; layouts: define_layout, define_layouts, layout_of, key_of
+                             // compare_interfaces; layouts: define_layout, define_layouts, layout_of, key_of;
+                             // read-only, cache-only (&self): loaded_class, cached_ref, layout_id, struct_of, enum_of
 pub struct ClassKey(..); pub struct ClassInfo { package, export, name, path, super_class, body, functions, .. }
 // As shipped by W2-REFLECT (decision 2026-11-15-06).
 // decode.rs (W3-DECODE)
