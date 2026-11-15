@@ -361,6 +361,11 @@ impl Fx {
                 "GeneralSkillPointsPerLevelUp",
                 PropKind::Struct(aid),
             ),
+            d(
+                &mut space,
+                "ExpPointsRequiredForLevel",
+                PropKind::Struct(aid),
+            ),
         ];
         let globals_definition = class(&mut space, "Test.GlobalsDefinition", object, decls);
 
@@ -546,6 +551,14 @@ impl Fx {
         );
         let f = self.formula(m, l, p, o);
         self.definition(vec![("ValueFormula", f)])
+    }
+
+    /// A globals definition whose `ExpPointsRequiredForLevel` is `data` (the installed game holds the curve as
+    /// `AttributeInitializationData { 0, None, the definition, 1 }`).
+    pub fn curve_globals(&mut self, data: InitData) -> ObjRef {
+        let v = self.data(data);
+        let c = self.globals_definition;
+        self.obj(c, "Globals", vec![("ExpPointsRequiredForLevel", v)])
     }
 
     /// `Init_PlayerHealth`'s recorded shape (NATIVE_PROGRESSION.md section 4): Multiplier {94, attribute 80}, Level

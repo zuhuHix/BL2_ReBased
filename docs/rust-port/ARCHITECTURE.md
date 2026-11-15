@@ -921,6 +921,7 @@ pub enum BalanceError { NotYet(NotYet), OutOfRange { what: &'static str, value: 
 // W3-BALANCE, as shipped (decision 2026-11-15-18). `globals_definition` is the GlobalsDefinition object, passed in:
 // which WillowGlobals property holds it is not recorded (the C++ finds GD_Globals.General.Globals by path).
 // curve.rs: the level goes into global slot 0 (left there, as the game's routine leaves it)
+pub fn curve_definition(cx: &mut EvalCx, globals_definition: ObjRef) -> Result<ObjRef, BalanceError>; // ExpPointsRequiredForLevel's {0, None, def, 1}; else NotYet
 pub fn experience_point(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, level: ExpLevel) -> Result<i64, BalanceError>; // trunc(f(n))
 pub fn experience_required(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, level: ExpLevel) -> Result<i64, BalanceError>;
 pub fn experience_span(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, level: ExpLevel) -> Result<i64, BalanceError>; // R(L+1) - R(L)
