@@ -1,0 +1,9 @@
+# AI-assisted (Claude Code). Lane W3-DECODE: --object-dump.
+#
+# No line yet. A diff line needs a tracked package file and a test-command line a tracked tests/*.py that runs only
+# this command; neither exists (tests/behavior_test.py runs --object-dump but also --behavior-dump and --behavior-run,
+# which are W5-BEHAVIOR's). The C++ and Rust outputs were compared locally instead, on the installed game: every class
+# default object of the nine code packages and the attribute definitions of Startup.upk, with and without --all, in
+# both parity modes, and 20 command lines with bad arguments (counts in decision 2026-11-15-08). The Rust unit tests in
+# crates/ow-object/src/decode/tests.rs, cdo/tests.rs and crates/ow-cli/src/cmd/objects.rs cover the same rules on
+# invented packages; the CLI test texts were checked byte for byte against the C++ binary.
