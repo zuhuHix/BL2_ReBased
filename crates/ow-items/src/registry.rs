@@ -473,7 +473,10 @@ impl CensusInput {
             .failures
             .into_iter()
             .filter(|f| rank.contains_key(&f.file))
-            .map(|f| (f.file, format!("ow-package: {}", f.error)))
+            .map(|f| {
+                let line = format!("ow-package: {f}");
+                (f.file, line)
+            })
             .collect();
         input
     }

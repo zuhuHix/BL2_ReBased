@@ -1,7 +1,8 @@
 # AI-assisted (Claude Code). Lane W3-DEFS: --def-dump (Rust-only), the definition store.
 #
-# No line yet. --def-dump has no C++ counterpart, so a `diff` line cannot gate it, and a test-command line needs a
-# tracked tests/*.py script, which this lane does not own (a tests/def_dump_test.py was proposed in its handoff).
-# What gates the store meanwhile: the Rust unit tests in crates/ow-defs/src/{store/tests.rs,overlay.rs,tail.rs,
-# identity.rs} and crates/ow-cli/src/cmd/defs.rs, all on invented packages, and the local comparison of --def-dump
-# with the C++ --object-dump --all on the installed game (counts in decision 2026-11-15-16).
+# tests/def_dump_test.py runs --def-dump on an invented package, with and without --overlay (the test format and a live
+# capture in weapon_dump.py's shape). --def-dump has no C++ counterpart, so there is no diff line; ctest also runs the
+# script on the Rust binary alone (def-dump-synthetic). The Rust unit tests in crates/ow-defs/src (store/tests.rs,
+# overlay.rs, tail.rs, identity.rs) and crates/ow-cli/src/cmd/defs.rs cover each rule; the installed game was compared
+# locally (counts in decision 2026-11-15-16).
+python tests/def_dump_test.py {bin}
