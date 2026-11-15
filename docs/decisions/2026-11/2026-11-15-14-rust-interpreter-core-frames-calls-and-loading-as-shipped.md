@@ -19,6 +19,9 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     - Review r1 of PR #314 (granted): `Arg` carries a crate-private alias of the caller's storage, and
       `NativeCall::set_out` writes through it at once; `run_bytecode` lets the interpreter decode before the depth
       check; `Vm::call` documents the stack a caller needs.
+    - Review r2 (granted): `NativeCall::arg` reads an aliased out argument from the caller's storage;
+      `NativeCall::args` is crate-private, so `set_out` is the only way to write an out value (`arg_count()` added);
+      the outs of a native call are read the same way; the docs of `Arg::value`, `Arg::out` and `set_out` say so.
   - `Vm::find_method(&mut self, class, name, state)` and `Vm::class_declares_state(&mut self, class, state)` (C++
     `findMethod`, `Class::states`) load the class's code first if it is not loaded, so `GotoState` called from the host
     on a class nobody loaded still finds its states. A class defined by hand (no package behind it) declares nothing.
@@ -30,7 +33,12 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
   - `ow_vm::interp` (public): `describe` and `describe_for_string` (the C++ `Value::describe` and `describeForString`),
     `instantiate_from_defaults` (a new object that starts from the class default object, as the C++ `instantiate`
     copies `defaults->props`; `Vm::instantiate` starts from the layout's defaults only), `STACK_SIZE`, `MAX_NESTING`,
-    `MAX_FRAME_SLOTS`, `MAX_LIVE_SLOTS` and `on_vm_stack` (runs a closure on a `STACK_SIZE` thread).
+    `MAX_FRAME_SLOTS`, `MAX_LIVE_SLOTS`, `on_vm_stack` (runs a closure on a `STACK_SIZE` thread) and
+    `VmThreadError` (a panic on that thread is handed back as `Panicked`, not re-raised).
+  - `ow_core::num::strtod_prefix` and `StrtodPrefix` (additive, review r2): the C `strtod` prefix scanner, shared by
+    the VM's string-to-float cast and the CLI's `std::stod`.
+  - `ow_object::heap` (review r2, granted): `check_value` accepts a class value for an object property declared as a
+    class's ancestor (`CLASS_ANCESTORS`).
   - The W4-INTERP2 files `interp/aggregate.rs`, `iter.rs` and `delegate.rs` are `NotYet { NotPorted }` stubs.
 - **Rules ported.**
   - **Steps.** One per statement, per expression, per place taken (`lval`) and per call, where the C++ ticks: the
@@ -39,13 +47,18 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     object's property element, or a temporary).
   - **Out arguments alias the caller's storage live**, as the C++ `Slot::alias`. A frame's storage lives on the VM's
     frame stack, so a place can name any active frame's slot. An out argument's place travels with the argument: a
-    script callee reads and writes it, and a native's `set_out` writes through it at once. With `x = 0`,
-    `F(out A, out B) { A = 1; return B; }` called as `F(x, x)` returns 1 and leaves `x` 1, as the C++; a native's out
-    write is seen by script it calls back into. An out argument that is not a storage location (the C++ `scratch`)
-    keeps a copy in the callee. What still differs: a native reading its own out argument (`NativeCall::arg`) after a
-    callback changed the caller's variable another way reads the value at the call (the C++ reads the alias).
+    script callee reads and writes it, and a native reads it (`NativeCall::arg`) and writes it (`set_out`, the only way)
+    at once. With `x = 0`, `F(out A, out B) { A = 1; return B; }` called as `F(x, x)` returns 1 and leaves `x` 1, as the
+    C++; a native's out write is seen by script it calls back into; with `x = 1`, `x += ++x` gives 4, as the C++; a
+    native given one variable for two out parameters sees a write through the other. An out argument that is not a
+    storage location (the C++ `scratch`) keeps a copy in the callee.
+  - **Stale frames** (Rust-only). A frame slot is named by its index and the serial number the VM gave the frame. An
+    `Arg` copy kept past its call still names the caller's frame; once that frame has returned, a read or write through
+    it is a typed stale-frame `VmError::Script`, never a panic and never a read of or a write into the frame that took
+    the index since (the C++ alias would dangle).
   - **Error order** as the C++ `invoke`: a function that cannot run, or does not decode, says so before the depth
-    check. The 0x5F let finds the companions (from the property's declaring class) before it evaluates the right side.
+    check. The 0x5F let finds the companions (from the property's declaring class) before it evaluates the right side,
+    then finds the value, its base and its stack on the container by name, as `interp.cpp:588-592` does.
   - **`GotoLabel` and state variables** as the C++: a `GotoLabel` is stepped over (latent state code is not run), and
     a state variable reads as an instance variable. Both UNVERIFIED in the game; state code is W5-STATES'.
   - **Loading.** Loading a class declares every function it and its states declare, with typed parameters and the
@@ -64,7 +77,8 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
   3. Any other `None` stored into a property becomes the property's zero. The C++ stores the `None` kind there,
      which reads as 0 wherever a number is read.
   4. A class stored into an object property declared as a class's ancestor (`Core.Object`, `Field`, `Struct`, `State`,
-     `Class`, the public UE3 chain, UNVERIFIED for this executable) is kept: a class is an object in UnrealScript.
+     `Class`, the public UE3 chain, UNVERIFIED for this executable) is kept: a class is an object in UnrealScript. This
+     rule is the heap's own (`ow_object::heap::check_value`, review r2).
   5. An object of an engine-native stand-in class that the heap refuses for a typed object property is `NotYet`, not
      the heap's `WrongClass`: its real chain is unknown.
   6. Locals stay untyped, as in the C++.
@@ -77,12 +91,15 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
 - **Stack depth (the brief's question; review r1).** The VM runs on a thread with a larger stack. Expressions nest at
   most `MAX_NESTING` (51,400 = 200 x 257) levels across all active frames; past it a call is a typed `VmError::Script`
   (a Rust-only bound), never a stack overflow.
-  - The worst case: 200 frames, each a statement nesting about 250 levels of eval -> native -> call (the unit test
-    `the_worst_case_nesting_fits_the_vm_stack`).
-  - Measured locally: about 5.5 KB of stack a level and 278 MB in all in a debug build, 1.3 KB and 65 MB in a release
-    build. The interpreter's dispatch functions are split so their frames stay small unoptimised (21 KB a level before).
+  - Measured locally on one shape: 200 frames, each a statement nesting 252 levels of eval -> native -> call (the unit
+    test `the_worst_case_nesting_fits_the_vm_stack`): 278 MB against 512 MiB in a debug build (about 5.5 KB a level),
+    65 MB in a release build (1.3 KB a level). A second shape adds a function decoded first at the 200th frame and
+    nesting 254 levels (`a_decode_at_depth_fits_the_vm_stack`). UNVERIFIED as a bound for every dispatch path: another
+    path through the interpreter may cost more stack a level. The interpreter's dispatch functions are split so their
+    frames stay small unoptimised (21 KB a level before).
   - A caller needs `interp::STACK_SIZE` (512 MiB, reserved address space, committed as it is used): `ow-cli` runs
-    every VM command through `interp::on_vm_stack`, and `Vm::call` says so. Decoding stays lazy inside a call, as the C++.
+    every VM command through `interp::on_vm_stack`, and `Vm::call` says so; a panic on that thread is reported ("the VM
+    thread panicked"), not re-raised. Decoding stays lazy inside a call, as the C++.
 - **Frame bounds (Rust-only refusals, review r1).** Before a frame is allocated, its storage is checked: at most
   `MAX_FRAME_SLOTS` (4,096) value slots a frame and `MAX_LIVE_SLOTS` (1,048,576) for all active frames together. The
   storage is then reserved fallibly (`try_reserve_exact`); a refusal or a failed reservation is a typed
@@ -113,7 +130,7 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     it. A batch `s:`/`t:` value that is not UTF-8 becomes U+FFFD where the C++ keeps the raw bytes. A
     `ComponentProperty` parameter is reported as `ObjectProperty` in the batch's type checks.
 - **Verified (automated, local, pc-hummer; C++ `build/Release/ow-package.exe` of this branch, MSVC 14.50).**
-  - **Unit tests.** 34 interpreter tests on an invented package, re-expressing the `vm_test.py` cases that use only
+  - **Unit tests.** 38 interpreter tests on an invented package, re-expressing the `vm_test.py` cases that use only
     this lane's features (constants, natives and the 32-bit wrap, `SumTo`, `Pick`, virtual dispatch, instance
     variables, optional and out parameters, unbound natives and native indices, the typed temporaries and their errors,
     `NoneCtx` and the `SumTo` census counters, casts, steps, the step and depth limits, the `GoA` state events under
@@ -127,7 +144,10 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     nesting on a `STACK_SIZE` thread (the depth limit first, the nesting bound with the depth raised), `GotoLabel` and
     a state variable, a class kept in an object property and a stand-in object refused with `NotYet`, `find_method` and
     `GotoState` on a class nobody loaded, the decode error before the depth error, and 0x5F on an object without the
-    property. Also 3 CLI tests, 3 reflection tests, and a Core natives test of `IsA` / `ClassIsChildOf` through a
+    property. Review r2 added: `x += ++x` (4, the C++ value), a native `F(x, x)` seeing a write through its other
+    argument (7), a kept `Arg` refused as a stale frame after its frame returned and when a new frame holds its index
+    (the new frame's variable not written), a decode at depth on a `STACK_SIZE` thread, and a VM-thread panic handed
+    back. A heap test of the class-ancestor rule and an `ow_core::num` test of `strtod_prefix`. Also 3 CLI tests, 3 reflection tests, and a Core natives test of `IsA` / `ClassIsChildOf` through a
     stand-in class.
     `tests/runtime_test.py` runs no VM command, so none of its cases is this lane's.
   - **`--native`.** `tests/rust_parity.d/vm.txt`: 8 diff lines (the `natives_test.py` command lines among them), 8 pass.
@@ -158,8 +178,6 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
   - Typed error sources on `VmError` for reflection and bytecode decoding, in place of the C++-text `Script`
     strings this lane uses for them (W2-VMAPI's contract). Definition store errors already travel as W3-DEFS's
     `VmError::Def`.
-  - A native that reads its own out argument (`NativeCall::arg`) after a script callback changed the caller's variable
-    another way reads the value at the call; the C++ reads the alias. No Core native does this.
   - Architecture section 3.8 text for the seams above.
 - **UNVERIFIED.** Every rule here is the C++ VM's reading, none checked in the running game: the evaluation order of
   arguments in the caller's context, the live out-argument aliasing, `GotoLabel` stepped over and state variables read

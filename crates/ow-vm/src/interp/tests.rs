@@ -895,6 +895,159 @@ fn fixture() -> Fixture {
         a.stmt().return_nothing();
         a.end();
     });
+    // Native out reads go through the live alias (review r2 of PR #314): X = 1; X += ++X gives 4 in the C++ (`++X`
+    // writes 2 through the alias before `+=` reads its first argument).
+    let add_eq = {
+        let mut sp = spec(OPERATOR, "+=");
+        sp.native = 161;
+        t.function(
+            object,
+            "AddEqual_IntInt",
+            &[param("Int", "A", CPF_OUT), param("Int", "B", 0)],
+            Some(("Int", 0)),
+            &[],
+            &sp,
+            |_| None,
+        )
+        .function
+    };
+    let pre_inc = {
+        let mut sp = spec(OPERATOR | 0x10, "++");
+        sp.native = 163;
+        t.function(
+            object,
+            "PreIncrement_Int",
+            &[param("Int", "A", CPF_OUT)],
+            Some(("Int", 0)),
+            &[],
+            &sp,
+            |_| None,
+        )
+        .function
+    };
+    script(
+        &mut t,
+        foo,
+        "IncTwice",
+        &[],
+        Some(("Int", 0)),
+        &[("Int", "X")],
+        |ids, a| {
+            let x = ids.get("X");
+            a.stmt().raw(&[0x0F]).local(x).raw(&[0x26]);
+            a.stmt().final_function(add_eq, |a| {
+                a.local(x).final_function(pre_inc, |a| {
+                    a.local(x);
+                });
+            });
+            returns(a, |a| {
+                a.local(x);
+            });
+        },
+    );
+    // A native with two out parameters given one variable sees a write through the other: TwoOut (registered by the
+    // test) sets A = 7 and returns B.
+    let native_out = |t: &mut ScriptToy, name: &str, params: &[Param]| {
+        t.function(
+            foo,
+            name,
+            params,
+            Some(("Int", 0)),
+            &[],
+            &spec(FUNC_NATIVE | FUNC_PUBLIC, name),
+            |_| None,
+        )
+        .function
+    };
+    let two_out = native_out(
+        &mut t,
+        "TwoOut",
+        &[param("Int", "A", CPF_OUT), param("Int", "B", CPF_OUT)],
+    );
+    let keep = native_out(&mut t, "Keep", &[param("Int", "A", CPF_OUT)]);
+    script(
+        &mut t,
+        foo,
+        "CallTwoOut",
+        &[],
+        Some(("Int", 0)),
+        &[("Int", "X")],
+        |ids, a| {
+            returns(a, |a| {
+                a.final_function(two_out, |a| {
+                    a.local(ids.get("X")).local(ids.get("X"));
+                });
+            })
+        },
+    );
+    // Keep (registered by the test) keeps a copy of its arguments past the call; CallKeep() = Keep(X); return X.
+    script(
+        &mut t,
+        foo,
+        "CallKeep",
+        &[],
+        Some(("Int", 0)),
+        &[("Int", "X")],
+        |ids, a| {
+            a.stmt().final_function(keep, |a| {
+                a.local(ids.get("X"));
+            });
+            returns(a, |a| {
+                a.local(ids.get("X"));
+            });
+        },
+    );
+    // A function decoded first at depth: DeepN(N) = N <= 0 ? Leaf() : 0 + (... 250 levels ... DeepN(N - 1) ...), and
+    // Leaf() nests 254 levels. DeepN(198) runs 199 frames, then Leaf decodes and runs at the 200th.
+    let leaf = script(&mut t, foo, "Leaf", &[], Some(("Int", 0)), &[], |_, a| {
+        returns(a, |a| {
+            for _ in 0..254 {
+                a.raw(&[146]);
+            }
+            a.int_const(1);
+            for _ in 0..254 {
+                a.int_const(0).raw(&[0x16]);
+            }
+        })
+    })
+    .function;
+    let deep_n = t.p.next_export() + 2;
+    let deep_body = |ids: &FunctionIds, other: u16| -> (Asm, u16) {
+        let n = ids.get("N");
+        let mut a = Asm::new();
+        a.stmt().raw(&[0x07]).w(other).native(152, |a| {
+            a.local(n).raw(&[0x25]);
+        });
+        a.stmt().raw(&[0x04]).final_function(leaf, |_| {});
+        let at = a.here() as u16;
+        returns(&mut a, |a| {
+            for _ in 0..250 {
+                a.raw(&[146]);
+            }
+            a.final_function(deep_n, |a| {
+                a.native(146, |a| {
+                    a.local(n).int_const(-1);
+                });
+            });
+            for _ in 0..250 {
+                a.int_const(0).raw(&[0x16]);
+            }
+        });
+        (a, at)
+    };
+    let made = t.function(
+        foo,
+        "DeepN",
+        &[param("Int", "N", 0)],
+        Some(("Int", 0)),
+        &[],
+        &spec(SCRIPT, "DeepN"),
+        |ids| {
+            let (_, other) = deep_body(ids, 0);
+            Some(deep_body(ids, other).0)
+        },
+    );
+    assert_eq!(made.function, deep_n);
     // Recursion (the depth limit) and a loop that never ends (the step limit).
     let rec = t.p.next_export() + 1;
     script(&mut t, foo, "Rec", &[], Some(("Int", 0)), &[], |ids, a| {
@@ -2204,4 +2357,106 @@ fn let_attribute_on_an_object_without_the_property() {
         message,
         "let attribute: Speed is missing on its object in Core.Foo.SetSpeedOn"
     );
+}
+
+#[test]
+fn a_natives_out_read_goes_through_the_live_alias() {
+    // X = 1; X += ++X: the C++ gives 4 (`++X` writes 2 through the alias, `+=` reads 2 + 2).
+    let mut r = start(ParityMode::Off);
+    assert_eq!(r.on("Core.Foo", "Core.Foo.IncTwice", vec![]), Value::Int(4));
+    // A native given one variable for two out parameters sees a write through the other: 7.
+    r.vm.register_native(
+        "Foo.TwoOut(int,int)",
+        Rc::new(|c: &mut crate::api::NativeCall<'_>| {
+            c.set_out(0, Value::Int(7))?;
+            Ok(c.arg(1)?.clone())
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        r.on("Core.Foo", "Core.Foo.CallTwoOut", vec![]),
+        Value::Int(7)
+    );
+}
+
+#[test]
+fn an_alias_kept_past_its_frame_is_a_stale_frame_error() {
+    use crate::api::{Arg, NativeCall};
+    use std::cell::RefCell;
+    let mut r = start(ParityMode::Off);
+    let kept: Rc<RefCell<Option<Vec<Arg>>>> = Rc::new(RefCell::new(None));
+    let refused: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let (k, seen) = (kept.clone(), refused.clone());
+    r.vm.register_native(
+        "Foo.Keep(int)",
+        Rc::new(move |c: &mut NativeCall<'_>| {
+            let earlier = k.borrow_mut().take();
+            match earlier {
+                // First call: keep a copy of the arguments (the alias names CallKeep's X).
+                None => *k.borrow_mut() = Some(c.args.clone()),
+                // Second call: write through the copy. Its frame returned; CallKeep's new frame holds the same index.
+                Some(args) => {
+                    let function = c.function;
+                    let mut old = NativeCall::new(c.vm, function, None, args);
+                    for e in [
+                        old.set_out(0, Value::Int(99)).unwrap_err(),
+                        old.arg(0).unwrap_err(),
+                    ] {
+                        seen.borrow_mut().push(script_message(Err::<(), _>(e)));
+                    }
+                }
+            }
+            Ok(Value::Int(0))
+        }),
+    )
+    .unwrap();
+    let o = r.object("Core.Foo");
+    assert_eq!(
+        r.call("Core.Foo.CallKeep", Some(o), vec![]).unwrap().ret,
+        Value::Int(0)
+    );
+    // After the call returned: the kept alias names a frame no longer on the stack.
+    {
+        let args = kept.borrow().clone().unwrap();
+        let keep = r.vm.find_function("Core.Foo.Keep").unwrap();
+        let mut late = NativeCall::new(&mut r.vm, keep, None, args.clone());
+        let e = late.set_out(0, Value::Int(5)).unwrap_err();
+        assert!(script_message(Err::<(), _>(e)).starts_with("stale frame"));
+        *kept.borrow_mut() = Some(args);
+    }
+    // A reused index: the second CallKeep's frame sits where the first one did. The kept copy is refused, and the new
+    // frame's X is not written (CallKeep returns 0, not 99).
+    assert_eq!(
+        r.call("Core.Foo.CallKeep", Some(o), vec![]).unwrap().ret,
+        Value::Int(0)
+    );
+    let refused = refused.borrow();
+    assert_eq!(refused.len(), 2);
+    assert!(
+        refused.iter().all(|m| m.starts_with("stale frame")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_decode_at_depth_fits_the_vm_stack() {
+    // DeepN(198): 199 frames of 252 levels each, then Leaf, decoded first at the 200th frame, nesting 254 levels.
+    let outcome = super::on_vm_stack(|| {
+        let mut r = start(ParityMode::Off);
+        let o = r.object("Core.Foo");
+        let ret = r
+            .call("Core.Foo.DeepN", Some(o), vec![Value::Int(198)])
+            .map(|c| c.ret == Value::Int(1))
+            .map_err(|e| e.to_string());
+        (ret, r.vm.code.nesting)
+    })
+    .unwrap();
+    assert_eq!(outcome, (Ok(true), 0));
+}
+
+#[test]
+fn a_panic_on_the_vm_thread_is_handed_back() {
+    let caught = super::on_vm_stack(|| -> u32 { panic!("a VM thread panic, on purpose") });
+    assert!(matches!(caught, Err(super::VmThreadError::Panicked)));
+    assert_eq!(super::on_vm_stack(|| 7).unwrap(), 7);
 }

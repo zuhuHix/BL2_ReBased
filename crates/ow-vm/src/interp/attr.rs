@@ -74,7 +74,7 @@ pub(crate) fn let_attribute(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> R
         .and_then(|d| d.attr)
         .ok_or_else(no_companions)?;
     let rhs = eval(vm, f, &e.kids[1], ctx)?;
-    // The object must hold the property (C++: base, value and stack found on it by name).
+    // The value, its base and its stack are found on the object by name, as the C++ does (`interp.cpp:588-592`).
     let missing = || {
         script_error(
             &path,
@@ -85,9 +85,17 @@ pub(crate) fn let_attribute(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> R
         return Err(missing());
     }
     let class = vm.space.heap.get(object)?.class;
-    if !vm.space.classes.is_child_of(class, declaring) {
-        return Err(missing());
-    }
+    let companions = vm
+        .space
+        .classes
+        .prop(class, decl.name)
+        .and_then(|p| vm.space.classes.decl(p))
+        .and_then(|d| d.attr)
+        .filter(|c| {
+            let named = |p| vm.space.classes.decl(p).map(|d| d.name);
+            named(c.base) == named(companions.base) && named(c.stack) == named(companions.stack)
+        })
+        .ok_or_else(missing)?;
     let base = vm
         .space
         .read(object, PropAddr::scalar(companions.base))?

@@ -74,13 +74,15 @@ use ow_script::function::FunctionInfo;
 pub use convert::{describe, describe_for_string};
 pub use load::instantiate_from_defaults;
 
-pub(crate) use eval::{Alias, is_a_named, is_child, prepare, run_frame, write_alias};
+pub(crate) use eval::{Alias, alias_value, is_a_named, is_child, prepare, run_frame, write_alias};
 pub(crate) use load::{find_class, find_function};
 
-/// The stack a thread running the VM needs (module documentation, "Stack depth"). It covers the worst case the bounds
-/// allow in a debug build: `Limits::max_call_depth` (200) frames, each a statement nesting about 250 expression levels
-/// that go eval -> native -> call (the `the_worst_case_nesting_fits_the_vm_stack` unit test). Measured locally on that
-/// case: about 5.5 KB a level and 278 MB in all in a debug build, about 1.3 KB a level and 65 MB in a release build.
+/// The stack a thread running the VM needs (module documentation, "Stack depth"). Measured locally on one shape:
+/// `Limits::max_call_depth` (200) frames, each a statement nesting 252 expression levels that go eval -> native ->
+/// call (the `the_worst_case_nesting_fits_the_vm_stack` unit test): 278 MB against 512 MiB in a debug build, about
+/// 5.5 KB a level (65 MB, 1.3 KB a level, in a release build). A second shape adds a function decoded first at that
+/// depth (`a_decode_at_depth_fits_the_vm_stack`). UNVERIFIED as a bound for every dispatch path: another path through
+/// the interpreter may cost more stack a level.
 pub const STACK_SIZE: usize = 512 * 1024 * 1024;
 
 /// How deep expressions (`eval` and `lval`) nest across all active frames before a call is refused with a typed
@@ -96,17 +98,45 @@ pub const MAX_LIVE_SLOTS: usize = 1 << 20;
 
 /// Runs `f` on a new thread with [`STACK_SIZE`] bytes of stack and returns its result: the way to run a VM call
 /// from a thread whose stack is smaller (a `Vm` is not `Send`, so `f` builds or owns the VM it uses). A panic in `f`
-/// is resumed on the caller's thread; a thread that cannot be started is the `io::Error`.
-pub fn on_vm_stack<T: Send>(f: impl FnOnce() -> T + Send) -> std::io::Result<T> {
+/// is handed back as [`VmThreadError::Panicked`] (not re-raised), and a thread that cannot be started as
+/// [`VmThreadError::Spawn`].
+pub fn on_vm_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, VmThreadError> {
     std::thread::scope(|scope| {
         let handle = std::thread::Builder::new()
             .name("ow-vm".into())
             .stack_size(STACK_SIZE)
-            .spawn_scoped(scope, f)?;
-        Ok(handle
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+            .spawn_scoped(scope, f)
+            .map_err(VmThreadError::Spawn)?;
+        handle.join().map_err(|_| VmThreadError::Panicked)
     })
+}
+
+/// Why [`on_vm_stack`] has no result.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum VmThreadError {
+    /// The thread could not be started.
+    Spawn(std::io::Error),
+    /// The closure panicked on the VM thread.
+    Panicked,
+}
+
+impl std::fmt::Display for VmThreadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VmThreadError::Spawn(e) => write!(f, "cannot start the VM thread: {e}"),
+            VmThreadError::Panicked => f.write_str("the VM thread panicked"),
+        }
+    }
+}
+
+impl std::error::Error for VmThreadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            VmThreadError::Spawn(e) => Some(e),
+            VmThreadError::Panicked => None,
+        }
+    }
 }
 
 /// What the interpreter keeps per VM: the loaded functions and classes, the native index and the active frames.
@@ -130,11 +160,15 @@ pub(crate) struct CodeState {
     live_slots: usize,
     /// Expression levels (`eval`, `lval`) in progress across the active frames (bounded by [`MAX_NESTING`]).
     nesting: u32,
+    /// The serial number of the last frame pushed (every frame gets the next one; none is reused).
+    frame_serial: u64,
 }
 
 /// One active frame's storage.
 #[derive(Debug, Default)]
 struct FrameStore {
+    /// The serial number the VM gave this frame (`CodeState::frame_serial`).
+    serial: u64,
     /// Every declaration's elements, at the slots the loader gave them.
     slots: Vec<ow_object::value::Value>,
     /// Local-variable references to no declaration of the function (the C++ makes such a slot on first use).

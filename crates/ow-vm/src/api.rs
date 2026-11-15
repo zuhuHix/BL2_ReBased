@@ -284,14 +284,20 @@ pub type AttrNotifyFn = Rc<dyn Fn(&mut Vm, ObjRef, PropId, NumForms) -> Result<(
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arg {
+    /// The value as the call was bound. For an out argument from script, the live value is the caller's storage
+    /// ([`NativeCall::arg`] reads it); this field holds what the native last wrote through [`NativeCall::set_out`].
     pub value: Value,
-    /// An `out` parameter: its value after the native returns is copied back to the caller.
+    /// An `out` parameter: the native writes it with [`NativeCall::set_out`]. From script, the write goes to the
+    /// caller's storage at once (the C++ alias); from the host, the caller sees it in [`CallResult::outs`].
     pub out: bool,
     /// False for an omitted optional parameter (its value is `Value::None`, as the C++ leaves it).
     pub supplied: bool,
     /// The caller's storage an out argument from script aliases (the C++ `NativeCall::Arg::alias`), set by the
-    /// interpreter (W3-INTERP): a script callee reads and writes it live, and [`NativeCall::set_out`] writes through
-    /// it at once, so script a native calls back into sees the write. `None` for a call from the host.
+    /// interpreter (W3-INTERP): a script callee and [`NativeCall::arg`] read it live, and [`NativeCall::set_out`]
+    /// writes through it at once, so script a native calls back into sees the write. `None` for a call from the host.
+    /// A copy of the argument kept past its call (an `Arg` is `Clone`) still names the caller's frame: once that frame
+    /// has returned, reading or writing through it is a typed stale-frame `VmError::Script`, never a read of or a
+    /// write into the frame that took its place.
     pub(crate) alias: Option<crate::interp::Alias>,
 }
 
@@ -326,13 +332,14 @@ pub struct CallResult {
 }
 
 /// One native call as the implementation sees it. Built by the VM (and by the interpreter, through
-/// [`NativeCall::new`]).
+/// [`NativeCall::new`]). The arguments are read with [`NativeCall::arg`] and out arguments written only with
+/// [`NativeCall::set_out`], so an out argument from script always reads and writes the caller's storage.
 #[non_exhaustive]
 pub struct NativeCall<'a> {
     pub vm: &'a mut Vm,
     pub function: FuncId,
     pub this: Option<ObjRef>,
-    pub args: Vec<Arg>,
+    pub(crate) args: Vec<Arg>,
 }
 
 impl<'a> NativeCall<'a> {
@@ -345,17 +352,28 @@ impl<'a> NativeCall<'a> {
         }
     }
 
-    /// Argument `i`. An index past the declared parameters is [`VmError::BadArgument`] (a native's bug, reported,
-    /// not a panic).
+    /// Argument `i`: for an out argument from script, the caller's storage as it is now (the C++ read through the
+    /// alias), so a write through another argument naming the same variable, or by script the native called back
+    /// into, shows. An index past the declared parameters is [`VmError::BadArgument`] (a native's bug, reported, not
+    /// a panic).
     pub fn arg(&self, i: usize) -> Result<&Value, VmError> {
         match self.args.get(i) {
+            Some(Arg {
+                alias: Some(alias), ..
+            }) => crate::interp::alias_value(self.vm, alias),
             Some(a) => Ok(&a.value),
             None => Err(self.bad_arg(i, "no such argument")),
         }
     }
 
-    /// Writes `out` argument `i`; the caller sees it after the native returns. Writing a parameter that is not
-    /// `out` is refused.
+    /// How many arguments the call has (one per declared parameter).
+    pub fn arg_count(&self) -> usize {
+        self.args.len()
+    }
+
+    /// Writes `out` argument `i`, the only way to write one. From script, the value goes to the caller's storage at
+    /// once (the C++ write through the alias); from the host, the caller sees it in [`CallResult::outs`]. Writing a
+    /// parameter that is not `out` is refused.
     pub fn set_out(&mut self, i: usize, v: Value) -> Result<(), VmError> {
         match self.args.get_mut(i) {
             Some(a) if a.out => {
@@ -915,10 +933,11 @@ impl Vm {
     ) -> Result<CallResult, VmError> {
         let mut call = NativeCall::new(self, f, this, args);
         let ret = imp(&mut call)?;
-        Ok(CallResult {
-            ret,
-            outs: call.args.into_iter().map(|a| a.value).collect(),
-        })
+        // Every argument as it stands now (an aliased out argument read from the caller's storage).
+        let outs = (0..call.args.len())
+            .map(|i| call.arg(i).cloned())
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CallResult { ret, outs })
     }
 
     /// An unbound native under the stub policy: refused, or logged with the return type's zero value and the out

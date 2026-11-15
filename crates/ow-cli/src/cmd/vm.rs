@@ -12,11 +12,10 @@
 //!
 //! Both run commands load the source package first (as the C++ does, before the options are read), use
 //! `StubPolicy::LogAndZero` and the Core natives, and run the VM on a thread of `ow_vm::interp::STACK_SIZE` bytes
-//! (`ow_vm::interp::on_vm_stack`)
-//! (`ow_vm::interp`, "Stack depth"). `mode` is the run's parity mode, read once by `main`; it goes to the definition
-//! store and the VM. Error texts are the C++ ones where the C++ has one (a `std::stoll` / `std::stod` failure
-//! included); a `NotYet` prints its own text. Lines end in `\n`; the parity harness reads the C++ `\r\n` as `\n`
-//! (decision 2026-11-15-09).
+//! (`ow_vm::interp::on_vm_stack`, `ow_vm::interp`, "Stack depth"); a panic there prints "the VM thread panicked".
+//! `mode` is the run's parity mode, read once by `main`; it goes to the definition store and the VM. Error texts are
+//! the C++ ones where the C++ has one (a `std::stoll` / `std::stod` failure included); a `NotYet` prints its own
+//! text. Lines end in `\n`; the parity harness reads the C++ `\r\n` as `\n` (decision 2026-11-15-09).
 //!
 //! Until the W3-DEFS body lands, `DefStore::class_default` is `NotYet`, so `--self`, a batch case with a self class,
 //! and any call that needs a class default object (a call with no `--self` runs against the owner's) print that
@@ -30,6 +29,7 @@ use std::rc::Rc;
 use ow_attr::AttributeSystem;
 use ow_core::ParityMode;
 use ow_core::fmt::fmt_g;
+use ow_core::num::{StrtodPrefix, strtod_prefix};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
@@ -71,9 +71,8 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
                 "--run" => run_one(args, mode),
                 _ => run_batch(args, mode),
             });
-            ran.unwrap_or_else(|e| {
-                Outcome::failed(String::new(), format!("cannot start the VM thread: {e}"))
-            })
+            // A panic on the VM thread is reported, not re-raised: "the VM thread panicked".
+            ran.unwrap_or_else(|e| Outcome::failed(String::new(), e.to_string()))
         }
     };
     // Ignore a failed write (a closed pipe), as the C++ binary does.
@@ -191,101 +190,19 @@ fn stoll(text: &str) -> Result<(i64, usize), String> {
     Ok((value, at))
 }
 
-// The C `strtod` prefix scanner, as `ow_vm::interp::convert` has it for the script casts (crate-private there,
-// so the command-line parser keeps its own copy).
-
-/// C `isspace` in the C locale.
-fn is_c_space(c: u8) -> bool {
-    c == b' ' || (0x09..=0x0d).contains(&c)
-}
-
-/// The length of the longest prefix of `s` (after white space) that C `strtod` reads as a decimal number, `inf`,
-/// `infinity` or `nan` (optionally `nan(...)`), and whether it is a hexadecimal float. `None` when nothing converts.
-fn strtod_prefix(s: &str) -> Option<(usize, usize, bool)> {
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() && is_c_space(b[i]) {
-        i += 1;
-    }
-    let start = i;
-    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
-        i += 1;
-    }
-    let rest = &s[i..];
-    let lower = rest.to_ascii_lowercase();
-    if lower.starts_with("infinity") {
-        return Some((start, i + 8, false));
-    }
-    if lower.starts_with("inf") {
-        return Some((start, i + 3, false));
-    }
-    if lower.starts_with("nan") {
-        let mut end = i + 3;
-        if b.get(end) == Some(&b'(')
-            && let Some(close) = b[end..].iter().position(|&c| c == b')')
-            && b[end + 1..end + close]
-                .iter()
-                .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        {
-            end += close + 1;
-        }
-        return Some((start, end, false));
-    }
-    if lower.starts_with("0x")
-        && (lower
-            .as_bytes()
-            .get(2)
-            .is_some_and(|c| c.is_ascii_hexdigit())
-            || (lower.as_bytes().get(2) == Some(&b'.')
-                && lower
-                    .as_bytes()
-                    .get(3)
-                    .is_some_and(|c| c.is_ascii_hexdigit())))
-    {
-        return Some((start, i, true));
-    }
-    let digits_from = i;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    let mut mantissa = i - digits_from;
-    if i < b.len() && b[i] == b'.' {
-        let dot = i;
-        i += 1;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        mantissa += i - dot - 1;
-        if mantissa == 0 {
-            return None;
-        }
-    }
-    if mantissa == 0 {
-        return None;
-    }
-    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-        let mut j = i + 1;
-        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
-            j += 1;
-        }
-        let exp_from = j;
-        while j < b.len() && b[j].is_ascii_digit() {
-            j += 1;
-        }
-        if j > exp_from {
-            i = j;
-        }
-    }
-    Some((start, i, false))
-}
-
-/// `std::stod(text, &used)`: decimal text, `inf` and `nan` ([`strtod_prefix`]); an overflow to an
+/// `std::stod(text, &used)`: decimal text, `inf` and `nan` (`ow_core::num::strtod_prefix`); an overflow to an
 /// infinity is the MSVC `out_of_range`. A hexadecimal float is refused here (no parser for it is written).
 fn stod(text: &str) -> Result<(f64, usize), String> {
-    let Some((start, end, hex)) = strtod_prefix(text) else {
+    let Some(StrtodPrefix {
+        start,
+        end,
+        hexadecimal,
+        ..
+    }) = strtod_prefix(text)
+    else {
         return Err("invalid stod argument".into());
     };
-    if hex {
+    if hexadecimal {
         return Err(format!(
             "hexadecimal float text is not read by the Rust binary: {text}"
         ));
