@@ -63,6 +63,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import item_registry  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 import prepare_stock_shield as ps  # noqa: E402
 import prepare_vendors as pv  # noqa: E402
 import weapon_catalog  # noqa: E402
@@ -646,7 +647,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--census', action='store_true', help='roll and check every balance of the four kinds')
     parser.add_argument('--registry', default=DEFAULT_REGISTRY)
-    parser.add_argument('--reader', default=str(item_registry.DEFAULT_READER), help='ow-package executable')
+    parser.add_argument('--reader', default=str(default_reader()), help='ow-package executable')
     parser.add_argument('--game', default=str(weapon_catalog.DEFAULT_GAME), help='Borderlands 2 install directory')
     parser.add_argument('--out', default=DEFAULT_OUT, help='output folder inside local/ (default %(default)s)')
     parser.add_argument('--rolls', type=int, default=DEFAULT_ROLLS, help='seeds per balance and stage')

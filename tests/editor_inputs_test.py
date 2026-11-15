@@ -229,6 +229,32 @@ def test_junction_rules():
             os.rmdir(link)                                  # junctions only; the temp folder is removed afterwards
 
 
+def test_default_reader_stops_on_a_missing_rust_binary():
+    """default_reader (W3-SWITCH): one line naming the path and the build command, never a silent fall-back to C++; --reader on
+    the command line, an import (a caller that is not __main__) and waits_for skip the check."""
+    saved = rp.RUST_READER, sys.argv
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            rp.RUST_READER = Path(folder) / 'absent' / 'ow-package.exe'
+            as_program, as_import = {'__name__': '__main__', 'rp': rp}, {'__name__': 'some_tool', 'rp': rp}
+            sys.argv = ['tool.py']
+            try:
+                exec('rp.default_reader()', as_program)
+                raise AssertionError('no exit for a missing Rust binary')
+            except SystemExit as stop:
+                message = str(stop.code)
+            assert str(rp.RUST_READER) in message and 'cargo build --release -p ow-cli --locked' in message, message
+            assert '\n' not in message and str(rp.CXX_READER) in message, message
+            for argv in (['tool.py', '--reader', 'x'], ['tool.py', '--reader=x']):
+                sys.argv = argv
+                assert eval('rp.default_reader()', as_program) == rp.RUST_READER
+            sys.argv = ['tool.py']
+            assert eval('rp.default_reader()', as_import) == rp.RUST_READER
+            assert eval("rp.default_reader(waits_for='--slice-run')", as_program) == rp.CXX_READER
+        finally:
+            rp.RUST_READER, sys.argv = saved
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for test in tests:

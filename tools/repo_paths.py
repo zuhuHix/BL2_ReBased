@@ -37,8 +37,23 @@ def default_reader(waits_for=None):
     """The ``--reader`` default of a tool: the Rust binary, or the C++ one when ``waits_for`` names the ow-package flag the tool
     waits for: one not ported yet (``default_reader(waits_for='--mission-run')``), or a ported one whose Rust output still
     changes the tool's result (the tool says how next to the call). The switch lane that ports a flag finds its tools with
-    ``grep -n "waits_for='--flag'" tools/*.py`` and drops the argument. A path the caller passes with ``--reader`` always wins."""
-    return CXX_READER if waits_for else RUST_READER
+    ``grep -n "waits_for='--flag'" tools/*.py`` and drops the argument. A path the caller passes with ``--reader`` always wins.
+
+    When the Rust binary is not built, a tool run as the program with no ``--reader`` stops here with one line that names the
+    path and the build command; it never falls back to the C++ binary. The check is left out when the tool is imported (a
+    test calling its ``main()``, a module-level constant), since the default is then not what runs."""
+    if waits_for:
+        return CXX_READER
+    caller = sys._getframe(1).f_globals.get('__name__')
+    if caller == '__main__' and not reader_given(sys.argv[1:]) and not RUST_READER.is_file():
+        sys.exit(f'{Path(sys.argv[0]).name}: no Rust ow-package at {RUST_READER}; build it with '
+                 f'"cargo build --release -p ow-cli --locked", or pass --reader {CXX_READER} for the C++ one')
+    return RUST_READER
+
+
+def reader_given(argv):
+    """Whether a command line sets --reader itself (``--reader X`` or ``--reader=X``)."""
+    return any(arg == '--reader' or arg.startswith('--reader=') for arg in argv)
 
 # Job keys holding a file the editor reads (inputs) or writes (outputs). ``textures`` maps a parameter to a file.
 INPUT_KEYS = ('gltf', 'tracks', 'sample_gltf', 'candidates_gltf', 'props')

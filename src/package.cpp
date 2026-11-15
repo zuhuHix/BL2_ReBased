@@ -1,8 +1,8 @@
 // FROZEN (lane W3-SWITCH, 2026-11-15; docs/rust-port/ARCHITECTURE.md section 6). The C++ package reader stops being
 // developed: no new feature, no new consumer, edits only to keep it building. It stays the differential reference of
 // the Rust port (crates/ow-package, tools/rust_parity.py --cxx) until W7-RETIRE deletes it. Tools read packages through
-// the Rust binary by default (tools/repo_paths.py, default_reader); only tools that call an unported ow-package flag
-// default to build/Release/ow-package.exe.
+// the Rust binary by default (tools/repo_paths.py, default_reader); only tools that call an unported ow-package flag,
+// or a ported flag whose Rust output still changes the tool's result, default to build/Release/ow-package.exe.
 #include <cstdlib>
 #include <iostream>
 #include "package.hpp"

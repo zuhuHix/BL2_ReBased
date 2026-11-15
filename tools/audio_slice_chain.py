@@ -56,6 +56,7 @@ class Ue3:
         return self.index(pkg)[path.lower()]
 
     def dump(self, pkg, path):
+        # also waits for --object-dump parity (decision 2026-11-15-17) once --mission-run is ported
         return self.run(pkg, '--object-dump', self.find(pkg, path)['index'], 4, '--cooked', self.cooked)['properties']
 
     def ak_event(self, pkg, path):
@@ -162,6 +163,7 @@ def weapon_chain(ue3):
     for exp in ue3.index('Startup').values():
         if exp['class'] != 'Engine.AnimSequence' or not exp['path'].lower().startswith(ANIM_SET.lower() + '.animsequence_'):
             continue
+        # also waits for --object-dump parity (decision 2026-11-15-17) once --mission-run is ported
         seq = ue3.run('Startup', '--object-dump', exp['index'], 4, '--cooked', ue3.cooked)['properties']
         if seq.get('sequencename') not in names:
             continue
