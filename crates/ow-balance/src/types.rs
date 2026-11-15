@@ -9,13 +9,14 @@
 
 use std::fmt;
 
+use ow_attr::api::AttrError;
 use ow_core::NotYet;
 
 /// Why a balance value was refused or is not available.
 ///
-/// The `Attr(AttrError)` variant of architecture section 3.6 is added once `ow-attr` has an error type (W2-ATTRAPI);
-/// the enum is `#[non_exhaustive]`, so that is an additive change. It derives `PartialEq` but not `Eq`, so that
-/// variant may carry an error holding an `f32` or a `Value`.
+/// The `Attr(AttrError)` variant of architecture section 3.6 was added by W3-BALANCE once `ow-attr` had its error
+/// type (an additive change: the enum is `#[non_exhaustive]`). It derives `PartialEq` but not `Eq`, so that variant
+/// may carry an error holding an `f32` or a `Value`.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum BalanceError {
@@ -28,6 +29,9 @@ pub enum BalanceError {
     OpLevelOutsideUvhm { op: u8, playthrough: Playthrough },
     /// Bits outside the three known level-cap packs in a [`LevelCapUpgrades`] set.
     UnknownLevelCapPackBits { bits: u32 },
+    /// The attribute layer failed (an evaluation, a definition load, bad data). Its `NotYet` is not here: it converts
+    /// to [`BalanceError::NotYet`] (`From<AttrError>`), so a missing layer reads the same at every level.
+    Attr(AttrError),
 }
 
 impl fmt::Display for BalanceError {
@@ -46,11 +50,28 @@ impl fmt::Display for BalanceError {
                 f,
                 "level-cap pack bits {bits:#x}: only bits 0x1, 0x2 and 0x4 name a pack"
             ),
+            BalanceError::Attr(e) => write!(f, "attributes: {e}"),
         }
     }
 }
 
-impl std::error::Error for BalanceError {}
+impl std::error::Error for BalanceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BalanceError::Attr(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<AttrError> for BalanceError {
+    fn from(e: AttrError) -> Self {
+        match e {
+            AttrError::NotYet(n) => BalanceError::NotYet(n),
+            other => BalanceError::Attr(other),
+        }
+    }
+}
 
 impl From<NotYet> for BalanceError {
     fn from(n: NotYet) -> Self {
@@ -594,5 +615,29 @@ mod tests {
         let e: BalanceError =
             NotYet::needs_real_game("UVHM region stage", 2, "architecture section 12").into();
         assert!(matches!(e, BalanceError::NotYet(_)));
+    }
+
+    #[test]
+    fn attribute_errors_convert_and_keep_their_cause() {
+        use std::error::Error;
+        // A NotYet from the attribute layer stays a NotYet (one convention at every level).
+        let n = NotYet::not_read("x", "r");
+        assert_eq!(
+            BalanceError::from(AttrError::NotYet(n.clone())),
+            BalanceError::NotYet(n)
+        );
+        let bad = AttrError::BadData { reason: "y".into() };
+        let e = BalanceError::from(bad.clone());
+        assert_eq!(e, BalanceError::Attr(bad));
+        assert_eq!(e.to_string(), "attributes: bad attribute data: y");
+        assert!(e.source().is_some());
+        assert!(
+            BalanceError::OutOfRange {
+                what: "w",
+                value: 1
+            }
+            .source()
+            .is_none()
+        );
     }
 }
