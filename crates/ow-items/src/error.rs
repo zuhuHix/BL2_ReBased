@@ -19,8 +19,9 @@ pub enum ItemError {
     /// Data the rule cannot use (a path that does not parse, an init naming an object no package holds, a number
     /// out of range where the oracle raises).
     BadData(String),
-    /// A call made in a parity mode it does not serve (`roll_candidate` is Off-mode only: Reference rolls go
-    /// through `roll`).
+    /// A call made in a parity mode it does not serve (for example `roll_candidate`, which is Off-mode only).
+    /// `#[non_exhaustive]`, so a field can be added later.
+    #[non_exhaustive]
     WrongMode {
         call: &'static str,
         mode: ParityMode,
@@ -35,10 +36,9 @@ impl std::fmt::Display for ItemError {
             ItemError::Attr(e) => e.fmt(f),
             ItemError::Balance(e) => e.fmt(f),
             ItemError::BadData(reason) => write!(f, "bad item data: {reason}"),
-            ItemError::WrongMode { call, mode } => write!(
-                f,
-                "{call} does not serve parity mode {mode:?}: Reference rolls go through roll"
-            ),
+            ItemError::WrongMode { call, mode } => {
+                write!(f, "{call} does not serve parity mode {mode:?}")
+            }
         }
     }
 }
