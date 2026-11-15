@@ -197,8 +197,10 @@ fn integer(v: &Value) -> Option<i64> {
 ///   equals `0.0`).
 /// - Int, Bool and Byte compare by their integer (`Byte(1) == Int(1) == Bool(true)`).
 /// - Strings compare case-sensitively, byte for byte; names by id, which is case-insensitive.
-/// - Object and interface references compare by handle, classes by id; `Value::None` equals every null reference
-///   (object, interface, class) in either order.
+/// - Object and interface references compare by handle, classes by id. `Value::None` equals every null reference
+///   (object, interface, class) in either order, and a null class equals a null object or interface reference in
+///   either order: the script's `None` literal is `Object(None)` (`EX_NoObject`), so `ClassVar == None` holds for a
+///   null class. A class that is not null equals neither.
 /// - Structs compare field by field in order (the struct type is not compared, as in the C++), arrays by length and
 ///   then element by element.
 /// - Delegates are equal when they name the same object and the same function, which is what the C++ interpreter's
@@ -209,8 +211,11 @@ fn integer(v: &Value) -> Option<i64> {
 /// Where the C++ `sameValue` differs, on purpose (no C++ test pins any of these):
 /// - `sameValue` answers by the left side's kind, so mixed kinds are lopsided there: `Name == Str` compares the
 ///   lower-cased texts and `Str == Name` the bytes; `Class(null) == None` is true and `None == Class(null)` false; an
-///   int against a string, an object or `None` compares the integer fields both leave at 0. Here a name and a string
-///   are unequal in both orders, a null class equals `None` in both orders, and other unrelated variants are unequal.
+///   int against a string, an object or `None` compares the integer fields both leave at 0; `Object(null) == Class(c)`
+///   compares the object fields, so it is true for every class `c`, while `Class(c) == Object(null)` is true only for a
+///   null `c`. Here a name and a string are unequal in both orders; a null class equals `None`, `Object(None)` and
+///   `Interface(None)` in both orders and a class that is not null equals none of them; other unrelated variants are
+///   unequal.
 /// - `sameValue` returns false for every delegate pair (it has no case for them); the interpreter's own delegate
 ///   operators compare object and function, and this follows those (above).
 pub fn same_value(a: &Value, b: &Value) -> bool {
@@ -234,10 +239,42 @@ pub fn same_value(a: &Value, b: &Value) -> bool {
             r.is_none()
         }
         (V::None, V::Class(c)) | (V::Class(c), V::None) => c.is_none(),
+        (V::Class(c), V::Object(r) | V::Interface(r))
+        | (V::Object(r) | V::Interface(r), V::Class(c)) => c.is_none() && r.is_none(),
         (V::Struct(x), V::Struct(y)) => all_same(&x.fields, &y.fields),
         (V::Array(x), V::Array(y)) => all_same(x, y),
         (V::Delegate(x), V::Delegate(y)) => x == y,
         _ => false,
+    }
+}
+
+/// Whether `v` holds a reference for which `dead` is true: an object or interface reference or a delegate's
+/// receiver, inside arrays and structs too.
+pub(crate) fn mentions(v: &Value, dead: &dyn Fn(ObjRef) -> bool) -> bool {
+    match v {
+        Value::Object(Some(r)) | Value::Interface(Some(r)) => dead(*r),
+        Value::Delegate(Some(d)) => d.object.is_some_and(dead),
+        Value::Struct(s) => s.fields.iter().any(|f| mentions(f, dead)),
+        Value::Array(a) => a.iter().any(|e| mentions(e, dead)),
+        _ => false,
+    }
+}
+
+/// Clears every reference in `v` for which `dead` is true (object and interface references to null, a delegate to
+/// unbound), copying a shared aggregate only when it holds one.
+pub(crate) fn clear_refs(v: &mut Value, dead: &dyn Fn(ObjRef) -> bool) {
+    if !mentions(v, dead) {
+        return;
+    }
+    match v {
+        Value::Object(r) | Value::Interface(r) => *r = None,
+        Value::Delegate(d) => *d = None,
+        Value::Struct(s) => Rc::make_mut(s)
+            .fields
+            .iter_mut()
+            .for_each(|f| clear_refs(f, dead)),
+        Value::Array(a) => Rc::make_mut(a).iter_mut().for_each(|e| clear_refs(e, dead)),
+        _ => {}
     }
 }
 
@@ -335,10 +372,16 @@ mod tests {
         let some_class = Value::Class(Some(ClassId::new(2)));
         assert!(!same_value(&some_class, &Value::None));
         assert!(!same_value(&Value::None, &some_class));
-        assert!(
-            !same_value(&Value::Object(None), &Value::Class(None)),
-            "different reference kinds"
-        );
+        // The script's None literal is Object(None): a null class equals it (and a null interface) in both
+        // orders; a class that is not null equals neither, and a null class does not equal a live object.
+        for null_ref in [Value::Object(None), Value::Interface(None)] {
+            assert!(same_value(&null_ref, &Value::Class(None)));
+            assert!(same_value(&Value::Class(None), &null_ref));
+            assert!(!same_value(&null_ref, &some_class));
+            assert!(!same_value(&some_class, &null_ref));
+        }
+        assert!(!same_value(&obj(1, 0), &Value::Class(None)));
+        assert!(!same_value(&Value::Class(None), &obj(1, 0)));
     }
 
     #[test]

@@ -413,16 +413,20 @@ one thread and talks to the host through `Send` message types; tools that want t
 shared `Arc<Package>` bytes. A compile-time assertion in `ow-object` stops the build if `Value`, `ClassTable`, `Heap` or
 `ObjectSpace` becomes `Send`.
 
-*Shipped shapes (W1-OBJ, PR #282, review r1; replaces the revision 3 sketch).* The module path is part of each name
-(`lib.rs` re-exports nothing): `ids::`, `value::`, `names::`, `layout::`, `heap::`.
+*Shipped shapes (W1-OBJ, PR #282, review r2; replaces the revision 3 sketch).* The module path is part of each name
+(`lib.rs` re-exports nothing): `ids::`, `value::`, `names::`, `layout::`, `heap::`. Every enum below that may grow is
+`#[non_exhaustive]`, and so are `PropertyDecl` and `Object` (built with their constructors).
 
 ```rust
 // ids.rs
-pub struct ObjRef { index: u32, generation: u32 }          // made only by the heap; a freed object's handle is Stale
+pub struct ObjRef { index: u32, generation: u32 }          // made only by the heap; .index(), .generation()
 pub struct ClassId(u32); pub struct StructId(u32); pub struct EnumId(u32); pub struct FuncId(u32);  // ::new(raw), .raw(), .index()
-pub struct NameId { index: u32, number: u32 }              // FName: base entry + instance number (0 = none, n = "_<n-1>")
+pub struct NameId { index: u32, number: u32 }              // FName: base entry + instance number (0 = none, n = "_<n-1>");
+                                                           // made only by NameTable (one id per text); .index(), .raw_index(),
+                                                           // .number(); NameId::NONE
 pub struct PropId { pub slot: u32, pub declared_in: ClassId }     // first slot of the property
-pub struct PropAddr { pub prop: PropId, pub index: u32 }         // index 0 for a scalar; < array_dim, checked
+pub struct PropAddr { pub prop: PropId, pub index: u32 }         // index 0 for a scalar; < array_dim, checked;
+                                                                 // PropAddr::scalar(p), PropAddr::element(p, i), From<PropId>
 
 // value.rs
 pub enum Value { None, Int(i32) /* wrapping arithmetic */, Float(f32), Bool(bool), Byte(u8), Str(Rc<str>) /* UTF-8 */,
@@ -433,61 +437,85 @@ pub struct DelegateValue { pub object: Option<ObjRef>, pub function: NameId }
 impl Value { pub fn string(&str); pub fn array(Vec<Value>); pub fn structure(StructId, Vec<Value>); pub fn kind_name(&self);
              pub fn elements(&self); pub fn array_mut(&mut self); pub fn as_struct(&self); pub fn struct_mut(&mut self);
              pub fn truth(&self, names: &NameTable) -> bool /* C++ Value::truth */ }
-pub fn same_value(a: &Value, b: &Value) -> bool;   // UnrealScript ==, the C++ sameValue with the documented differences
-                                                   // (mixed kinds symmetric; delegates compare object and function)
+pub fn same_value(a: &Value, b: &Value) -> bool;   // UnrealScript ==, the C++ sameValue with the documented differences:
+                                                   // mixed kinds symmetric; a null class equals None, Object(None) and
+                                                   // Interface(None) in both orders; delegates compare object and function
 
 // names.rs: case-insensitive (ASCII fold), first spelling kept, None = entry 0, trailing "_<n>" split into the number
-impl NameTable { pub fn intern(&mut self, s: &str) -> NameId; pub fn intern_number(&mut self, base: &str, number: u32) -> NameId;
+impl NameTable { pub fn new() -> Self; pub fn intern(&mut self, s: &str) -> NameId;
+                 pub fn intern_number(&mut self, base: &str, number: u32) -> NameId;   // goes through the text: one id per text
+                 pub fn with_number(&mut self, n: NameId, number: u32) -> NameId;      // n's base text, another number
                  pub fn find(&self, s: &str) -> Option<NameId>; pub fn text(&self, n: NameId) -> Cow<'_, str>;
-                 pub fn base_text(&self, n: NameId) -> &str; pub fn get(&self, n: NameId) -> Option<Cow<'_, str>>; }
+                 pub fn base_text(&self, n: NameId) -> &str; pub fn get(&self, n: NameId) -> Option<Cow<'_, str>>;
+                 pub fn len(&self) -> usize; pub fn is_empty(&self) -> bool; }
 
 // layout.rs
-#[non_exhaustive] pub enum PropKind { Int, Float, Bool, Byte { enum_: Option<EnumId> }, Str, Name, Object { class: ClassId },
+pub enum PropKind { Int, Float, Bool, Byte { enum_: Option<EnumId> }, Str, Name, Object { class: ClassId },
                     Class { meta: ClassId }, Interface { class: ClassId }, Struct(StructId), Array(Box<PropKind>),
-                    Delegate, FloatAttribute, IntAttribute, ByteAttribute { enum_: Option<EnumId> } }
+                    Delegate, FloatAttribute, IntAttribute, ByteAttribute { enum_: Option<EnumId> } }   // .kind_name(), .is_attribute()
 pub struct AttrCompanions { pub value: PropId, pub base: PropId, pub stack: PropId }   // NATIVE_BYTECODE_OPCODES typeRef/2/3
-#[non_exhaustive] pub struct PropertyDecl { pub name: NameId, pub kind: PropKind, pub flags: u64, pub array_dim: i32,
+pub struct PropertyDecl { pub name: NameId, pub kind: PropKind, pub flags: u64, pub array_dim: i32,
                           pub attr: Option<AttrCompanions>, pub source: Option<(PackageId, i32)> }
 impl PropertyDecl { pub fn new(name, kind); with_flags; with_array_dim; with_attr; with_source;
                     pub fn is_stack_attribute(&self) /* bit 63 */; is_plain_attribute /* bit 62 */; notifies /* bit 61 */;
-                    is_param; is_out; is_optional; is_return; }   // consts OPTIONAL, PARAM, OUT, RETURN, STACK_ATTRIBUTE, ...
+                    is_param; is_out; is_optional; is_return; }   // consts OPTIONAL, PARAM, OUT, RETURN, STACK_ATTRIBUTE,
+                                                                   // PLAIN_ATTRIBUTE, NOTIFY
+pub enum LayoutError { BadPath { path, error: IdentError }, AlreadyDefined { path }, UnknownClass(ClassId), UnknownStruct(StructId),
+                       UnknownEnum(EnumId), NotDefined(ClassId), SuperNotDefined { class, super_ }, UnknownSuperStruct { owner, super_ },
+                       StructNotDefined(StructId), BadDefault { owner, reason }, DuplicateName { owner, name },
+                       BadArrayDim { owner, name, dim }, TooManySlots { owner }, NotInClass { class, prop }, NotAProperty(PropId),
+                       IndexOutOfRange { prop, index, dim }, BadAttribute { owner, name, reason } }   // Display + Error
+
+pub struct ClassLayout { .. }   // path() -> &ObjectPath, super_class(), is_defined(), first_slot(), slot_count(),
+                                // own_decls() -> impl Iterator<Item = (u32, &PropertyDecl)>
+pub struct StructLayout { .. }  // path(), super_struct(), slot_count() (entries), fields() -> DoubleEndedIterator<(u32, &PropertyDecl)>,
+                                // field(name) -> Option<(u32, &PropertyDecl)>, entry_field(entry) -> Option<(u32, &PropertyDecl)>,
+                                // zero() -> &Value (no defaults), own_defaults() -> &[(u32, Value)]
+pub struct EnumLayout { .. }    // path(), values() -> &[NameId], index_of(name) -> Option<usize>
 
 pub struct ClassTable { .. }
 impl ClassTable {
+    pub fn new() -> Self;
     pub fn declare(&mut self, path: &str) -> Result<ClassId, LayoutError>;        // reserve an id: mutual references
     pub fn define(&mut self, path: &str, super_: Option<ClassId>, props: Vec<PropertyDecl>) -> Result<ClassId, LayoutError>;
     pub fn link_attribute(&mut self, c: ClassId, value: NameId, base: NameId, stack: NameId) -> Result<AttrCompanions, LayoutError>;
     pub fn declare_struct(&mut self, path: &str) -> Result<StructId, LayoutError>; // structs holding arrays of themselves
     pub fn define_struct(&mut self, path: &str, super_: Option<StructId>, fields: Vec<PropertyDecl>) -> Result<StructId, LayoutError>;
     pub fn define_enum(&mut self, path: &str, values: Vec<NameId>) -> Result<EnumId, LayoutError>;
-    pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), LayoutError>;           // every entry
-    pub fn set_struct_default(&mut self, s: StructId, entry: u32, v: Value) -> Result<(), LayoutError>; // one entry (one tag)
+    // Struct defaults are set through ObjectSpace (reference-checked); the table's own setters are crate-private.
     pub fn struct_defaults(&self, s: StructId) -> Result<Value, LayoutError>;   // computed per call: zero, inner defaults, own entries
     pub fn zero_value(&self, kind: &PropKind) -> Value;                         // no struct defaults
     pub fn default_value(&self, kind: &PropKind) -> Result<Value, LayoutError>; // the C++ Runtime::zeroValue
     pub fn zero_slots(&self, c: ClassId) -> Result<Vec<Value>, LayoutError>;
     pub fn default_slots(&self, c: ClassId) -> Result<Vec<Value>, LayoutError>; // what Heap::alloc starts from
     pub fn layout(&self, c: ClassId) -> &ClassLayout;  pub fn get_layout(&self, c: ClassId) -> Option<&ClassLayout>;
-    pub fn struct_layout(&self, s: StructId) -> Option<&StructLayout>;  pub fn enum_layout(&self, e: EnumId) -> Option<&EnumLayout>;
+    pub fn struct_layout(&self, s: StructId) -> Option<&StructLayout>;  // None while only declared
+    pub fn enum_layout(&self, e: EnumId) -> Option<&EnumLayout>;
     pub fn is_child_of(&self, c: ClassId, base: ClassId) -> bool;   // false for an id the table did not make
     pub fn prop(&self, c: ClassId, name: NameId) -> Option<PropId>;  pub fn decl(&self, p: PropId) -> Option<&PropertyDecl>;
     pub fn resolve(&self, c: ClassId, a: PropAddr) -> Result<usize, LayoutError>;   // the checked slot
     pub fn props(&self, c: ClassId) -> Result<Vec<(PropId, &PropertyDecl)>, LayoutError>;
     pub fn fits(&self, kind: &PropKind, v: &Value) -> bool;          // shape only, references not followed
-    pub fn by_path(&self, path: &str) -> Option<ClassId>;  struct_by_path;  enum_by_path;
+    pub fn by_path(&self, path: &str) -> Option<ClassId>;  struct_by_path;  enum_by_path;  len;  is_empty;
 }
 // Order of definition: super class before subclass; super struct and every by-value struct before what holds it
 // (a by-value struct cycle cannot be built); a reference or an array element needs only a declaration.
 
-#[non_exhaustive] pub enum Origin { Runtime, Export { package: PackageId, index: i32 }, Default { class: ClassId },
-                                    Resource { package: PackageId, index: i32 } }   // Origin::is_instance: Runtime, Export
-#[non_exhaustive] pub struct Object { pub class: ClassId, pub name: NameId, pub outer: Option<ObjRef>, pub slots: Vec<Value>,
+// heap.rs
+pub enum Origin { Runtime, Export { package: PackageId, index: i32 }, Default { class: ClassId },
+                  Resource { package: PackageId, index: i32 } }   // Origin::is_instance: Runtime, Export
+pub struct Object { pub class: ClassId, pub name: NameId, pub outer: Option<ObjRef>, pub slots: Vec<Value>,
                     pub state: Option<NameId>, pub destroyed: bool, pub origin: Origin }   // Object::new(class, name, outer, slots, origin)
-#[non_exhaustive] pub enum Step { Element(u32), Field(u32) }   // into an array element / a struct entry
+pub enum Step { Element(u32), Field(u32) }   // into an array element / a struct entry
+pub enum HeapError { Stale(ObjRef), Layout(LayoutError), WrongKind { expected, found }, WrongClass { expected, found },
+                     WrongStruct { expected, found }, WrongFieldCount { ty, expected, found }, SlotMissing { object, slot },
+                     BadPath { at, reason }, FreedTwice(ObjRef) }   // Display + Error; From<LayoutError>
 pub struct Heap { .. }
 impl Heap {
+    pub fn new() -> Self;  pub fn len(&self) -> usize /* not freed, destroyed included */;  pub fn is_empty(&self) -> bool;
     pub fn alloc(&mut self, classes: &ClassTable, class: ClassId, name: NameId, outer: Option<ObjRef>, origin: Origin)
-        -> Result<ObjRef, HeapError>;                                   // default_slots; a defined class; a live outer
+        -> Result<ObjRef, HeapError>;   // a defined class; an outer that is not freed; default_slots, each checked as a
+                                        // write (a stale or wrong-class struct default is refused, never copied)
     pub fn get(&self, o: ObjRef) -> Result<&Object, HeapError>;  pub fn get_mut(&mut self, o: ObjRef) -> Result<&mut Object, HeapError>;
     pub fn contains(&self, o: ObjRef) -> bool;
     pub fn read(&self, classes: &ClassTable, o: ObjRef, a: PropAddr) -> Result<&Value, HeapError>;
@@ -497,14 +525,24 @@ impl Heap {
     pub fn slot_mut(&mut self, classes: &ClassTable, o: ObjRef, a: PropAddr) -> Result<&mut Value, HeapError>;  // address checked
     pub fn check_value(&self, classes: &ClassTable, kind: &PropKind, v: &Value) -> Result<(), HeapError>;
     pub fn destroy(&mut self, o: ObjRef) -> Result<(), HeapError>;      // pending kill: readable, skipped by live()
-    pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError>;     // the GC step: nulls every reference to o held in
-                                                                        // the heap (VM frames are the VM's), bumps the generation
+    pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError>;     // the GC step in the heap: nulls every reference to o
+                                                                        // held by objects (VM frames are the VM's), bumps the
+                                                                        // generation; does NOT reach struct defaults
+    pub fn free_many(&mut self, objects: &[ObjRef]) -> Result<Vec<Object>, HeapError>;   // one heap walk for the set;
+                                                                        // stale or repeated handle: refused, nothing changed
     pub fn live<'a>(&'a self, classes: &'a ClassTable, base: ClassId) -> impl Iterator<Item = ObjRef> + 'a;
                                                                         // instances only, creation order, not destroyed
 }
 pub struct ObjectSpace { pub heap: Heap, pub classes: ClassTable, pub names: NameTable }   // what offline tools and the VM share
-impl ObjectSpace { alloc(class, name: &str, outer, origin); read(o, a); write(o, a, v); write_in(o, a, path, v); slot_mut(o, a);
-                   prop(class, name: &str); live(base) }   // the Heap calls with this space's tables
+impl ObjectSpace {
+    pub fn new() -> Self;
+    alloc(class, name: &str, outer, origin); read(o, a); write(o, a, v); write_in(o, a, path, v); slot_mut(o, a);
+    prop(class, name: &str); live(base);   // the Heap calls with this space's tables
+    pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError>;                         // Heap::free + clears o out of
+    pub fn free_many(&mut self, objects: &[ObjRef]) -> Result<Vec<Object>, HeapError>;      // every struct default
+    pub fn set_struct_default(&mut self, s: StructId, entry: u32, v: Value) -> Result<(), HeapError>;   // one entry (one tag),
+    pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), HeapError>;              // or all; check_value first
+}
 // reflect.rs (W2-REFLECT), decode.rs (W3-DECODE)
 pub fn load_code_packages(store: &mut PackageStore, names: &mut NameTable, classes: &mut ClassTable) -> Result<CodeIndex, ReflectError>;
 pub fn decode_class_body(pkg: &Package, export: i32) -> Result<ClassBody, ReflectError>;   // ends exactly at the serial size
@@ -516,10 +554,14 @@ pub enum PropertyPrefix { Ordinary = 4, PlacedActor = 26, Component = 8 }   // c
 Arena semantics differ from the C++ `shared_ptr` bag in one place: an unreferenced object stays alive until `free`.
 `destroy` is UE3's pending kill; `free` is the garbage-collection step and clears the heap's references to the object
 in the same call, as UE3's collector clears references when it removes an object (when that happens after
-`Destroy()` in BL2 is UNVERIFIED). For actors (what the iterators walk) this matches UE3, where actors live until
-destroyed; who calls `free` and when is for the world and VM lanes. Strings are UTF-8 while the game's `FString` is
-UTF-16: which unit `Len`/`Mid` count in is W2-VMAPI's / W3-CORENAT's decision (UNVERIFIED). Decision file
-2026-11-15-01 records these differences.
+`Destroy()` in BL2 is UNVERIFIED). Each `free` walks the whole heap once; `free_many` clears a set in one walk, which is
+what a world should use for a tick's dead objects. Struct defaults live in the class table, which the heap cannot
+reach, so the world frees through `ObjectSpace::free` / `free_many`, which also clear them; `alloc` refuses a default
+left stale by a bare `Heap::free`. Freeing an outer leaves its inner objects with no outer (UE3 keeps or collects
+inners with their outer: UNVERIFIED which applies). For actors (what the iterators walk) this matches UE3, where actors
+live until destroyed; who calls `free` and when is for the world and VM lanes. Strings are UTF-8 while the game's
+`FString` is UTF-16: which unit `Len`/`Mid` count in is W2-VMAPI's / W3-CORENAT's decision (UNVERIFIED). Decision file
+2026-11-15-02 records these differences.
 
 ### 3.4 `ow-defs` (W3-DEFS)
 

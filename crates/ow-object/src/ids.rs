@@ -118,9 +118,9 @@ impl NameId {
         number: 0,
     };
 
-    /// The name with base entry `index` and instance `number`. Tables make their own ids; other code uses this only
-    /// to rebuild an id it stored as numbers.
-    pub const fn new(index: u32, number: u32) -> Self {
+    /// The name with base entry `index` and instance `number`. Only the name table makes ids: built here, a pair could
+    /// name a text that already has another id (`("Foo_5", 0)` against `("Foo", 6)`).
+    pub(crate) const fn new(index: u32, number: u32) -> Self {
         NameId { index, number }
     }
 
@@ -137,14 +137,6 @@ impl NameId {
     /// The instance number: 0 for none, `n` for the suffix `_<n - 1>`.
     pub const fn number(self) -> u32 {
         self.number
-    }
-
-    /// The same base with another instance number.
-    pub const fn with_number(self, number: u32) -> Self {
-        NameId {
-            index: self.index,
-            number,
-        }
     }
 }
 
@@ -205,10 +197,10 @@ mod tests {
         assert_eq!(format!("{:?}", EnumId::new(2)), "EnumId(2)");
         assert_eq!((NameId::NONE.index(), NameId::NONE.number()), (0, 0));
         let n = NameId::new(3, 0);
-        assert_eq!(n.with_number(5).number(), 5);
-        assert_ne!(n, n.with_number(1));
+        assert_eq!(NameId::new(3, 5).number(), 5);
+        assert_ne!(n, NameId::new(3, 1));
         assert_eq!(format!("{n:?}"), "NameId(3)");
-        assert_eq!(format!("{:?}", n.with_number(1)), "NameId(3_0)");
+        assert_eq!(format!("{:?}", NameId::new(3, 1)), "NameId(3_0)");
         let r = ObjRef::new(4, 9);
         assert_eq!((r.index(), r.generation()), (4, 9));
         assert_eq!(format!("{r:?}"), "ObjRef(4#9)");
