@@ -9,13 +9,14 @@
 //! implements [`ow_attr::api::AttrWorld`], so the attribute system evaluates against the running world through
 //! `EvalCx::new(&mut vm)`.
 //!
-//! **What is not here yet.** The interpreter (W3-INTERP): calling a script function that no binding overrides is
-//! `NotYet { NotPorted }`; the call-depth counter and the step tick ([`Vm::tick`]) are already in place for it.
-//! Function loading from the code packages (W3-INTERP with W2-REFLECT): functions enter the table through
-//! [`Vm::declare_function`], and [`Vm::find_function`] / [`Vm::find_class`] answer only for what is already declared,
-//! else `NotYet { LayerAbsent }`. `instantiate_export` waits for `ow_object::prefix` (W3-DECODE). The typed let of
-//! an attribute (opcode 0x5F, W3-INTERP) converts the right-hand side with the VM's own assignment rule
-//! (`interp.cpp:511-522`) **before** it calls `ow_attr::let_base`, which refuses a right-hand side of another kind.
+//! **The interpreter** is [`crate::interp`] (W3-INTERP): [`Vm::run_frame`] runs one bytecode frame there, and
+//! [`Vm::find_function`] / [`Vm::find_class`] load functions and classes from the code packages of the definition
+//! store (`DefStore::code_mut`) when they are not declared yet. A script function declared by hand
+//! ([`Vm::declare_function`], no package export behind it) has no bytecode: calling it without an override is still
+//! `NotYet { NotPorted }`. With a store that holds no packages at all, an undeclared path is `NotYet { LayerAbsent }`
+//! as before. `instantiate_export` waits for `ow_object::prefix` (W3-DECODE). The typed let of an attribute (opcode
+//! 0x5F) converts the right-hand side with the VM's own assignment rule (`interp.cpp:511-522`) **before** it calls
+//! `ow_attr::let_base`, which refuses a right-hand side of another kind.
 //!
 //! **Single-threaded on purpose** (decision D18): the VM holds `Rc` values and is `!Send`; a compile-time check
 //! below stops the build if that changes.
@@ -421,6 +422,9 @@ pub struct Vm {
     active_calls: u32,
     /// Bytecode frames in progress, across natives (checked against `Limits::max_call_depth`).
     script_depth: u32,
+    /// What the interpreter loaded and keeps per VM (lane W3-INTERP): the functions of the code packages, their
+    /// bytecode, the classes whose functions and states are loaded, the native index, the active script frames.
+    pub(crate) code: crate::interp::CodeState,
 }
 
 /// `Vm` stays `!Send` (decision D18). Ambiguous impls make this fail to compile if `Vm` ever becomes `Send`.
@@ -480,6 +484,7 @@ impl Vm {
             steps: 0,
             active_calls: 0,
             script_depth: 0,
+            code: crate::interp::CodeState::default(),
         }
     }
 
@@ -498,17 +503,12 @@ impl Vm {
 
     // ---- classes, functions, objects -------------------------------------------------------------------------
 
-    /// The class at `path` if the class table has it. Loading a class from the code packages is not built yet
-    /// (W2-REFLECT / W3-DEFS): an unknown path is `NotYet { LayerAbsent }`.
+    /// The class at `path` (`Package.Class`, C++ `Runtime::findClass`): one the class table has, or one loaded from
+    /// the code packages of the definition store, with its functions and states (W3-INTERP, [`crate::interp`]).
+    /// A path no package holds is the C++ error (`class not found: <path>`, the store's text for a missing
+    /// package); with a store that holds no packages at all, `NotYet { LayerAbsent }`.
     pub fn find_class(&mut self, path: &str) -> Result<ClassId, VmError> {
-        self.space.classes.by_path(path).ok_or_else(|| {
-            NotYet::layer_absent(
-                format!("class {path}: loading classes from the code packages"),
-                "ow-object reflect",
-                "lanes W2-REFLECT, W3-DEFS",
-            )
-            .into()
-        })
+        crate::interp::find_class(self, path)
     }
 
     /// Adds a function to the table and returns its id. A path declared twice is refused.
@@ -532,20 +532,22 @@ impl Vm {
         Ok(id)
     }
 
-    /// The function at `path` (`Package.Class.Function`) if it is declared. Loading functions from the code packages
-    /// is the interpreter lane's (W3-INTERP): an undeclared path is `NotYet { LayerAbsent }`.
+    /// The function at `path` (`Package.Class.Function`, C++ `Runtime::findFunction`): a declared one, or one loaded
+    /// from the code packages of the definition store with its class (W3-INTERP, [`crate::interp`]). A path no
+    /// package holds is the C++ error (`function not found: <path>`, `not a function: <path>`); with a store that
+    /// holds no packages at all, `NotYet { LayerAbsent }`.
     pub fn find_function(&mut self, path: &str) -> Result<FuncId, VmError> {
-        let found = ObjectPath::parse(path)
+        if let Some(found) = self.declared_function(path) {
+            return Ok(found);
+        }
+        crate::interp::find_function(self, path)
+    }
+
+    /// The declared function at `path`, if any (paths compare case-insensitively).
+    pub(crate) fn declared_function(&self, path: &str) -> Option<FuncId> {
+        ObjectPath::parse(path)
             .ok()
-            .and_then(|p| self.function_by_path.get(&p).copied());
-        found.ok_or_else(|| {
-            NotYet::layer_absent(
-                format!("function {path}: loading functions from the code packages"),
-                "ow-vm function loading",
-                "lane W3-INTERP",
-            )
-            .into()
-        })
+            .and_then(|p| self.function_by_path.get(&p).copied())
     }
 
     /// The declaration of `f`, if this VM made it.
@@ -553,7 +555,7 @@ impl Vm {
         self.functions.get(f.index()).map(|x| &x.decl)
     }
 
-    fn function_path(&self, f: FuncId) -> String {
+    pub(crate) fn function_path(&self, f: FuncId) -> String {
         match self.function(f) {
             Some(d) => d.path.as_str().to_string(),
             None => format!("{f:?}"),
@@ -729,6 +731,31 @@ impl Vm {
         result
     }
 
+    /// [`Vm::call`] with arguments the interpreter bound itself (W3-INTERP): an omitted parameter may sit before a
+    /// supplied one (`EmptyParmValue`), which a plain value list cannot say. `args` has one entry per parameter.
+    pub(crate) fn call_bound(
+        &mut self,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Arg>,
+    ) -> Result<CallResult, VmError> {
+        self.services.check_none_borrowed()?;
+        if self.active_calls == 0 {
+            debug_assert_eq!(self.script_depth, 0, "a bytecode frame outlived its call");
+            self.steps = 0;
+        }
+        self.active_calls += 1;
+        let result = self.invoke(f, this, args);
+        self.active_calls -= 1;
+        result
+    }
+
+    /// The steps the running (or the last) top-level call used, as the C++ `Runtime::steps` the `--run` output
+    /// prints. A new top-level call starts it at 0.
+    pub fn steps(&self) -> u64 {
+        self.steps
+    }
+
     fn bind_args(&self, f: FuncId, mut args: Vec<Value>) -> Result<Vec<Arg>, VmError> {
         let decl = self.function(f).ok_or_else(|| VmError::Script {
             function: format!("{f:?}"),
@@ -823,8 +850,15 @@ impl Vm {
     ) -> Result<CallResult, VmError> {
         if self.script_depth >= self.limits.max_call_depth {
             let path = self.function_path(f);
+            // The C++ names the four innermost active script functions, oldest first (`interp.cpp:711-713`).
+            let active = &self.code.stack;
+            let mut trace = String::new();
+            for caller in &active[active.len().saturating_sub(4)..] {
+                trace.push_str(" <- ");
+                trace.push_str(&self.function_path(*caller));
+            }
             return Err(VmError::Script {
-                message: format!("call depth limit reached in {path}"),
+                message: format!("call depth limit reached in {path}{trace}"),
                 function: path,
             });
         }
@@ -834,20 +868,14 @@ impl Vm {
         result
     }
 
-    /// Runs one bytecode frame of script function `f`. W3-INTERP fills this body (its grant in architecture
-    /// section 8); until then it is `NotYet { NotPorted }`.
+    /// Runs one bytecode frame of script function `f` ([`crate::interp::run_frame`], lane W3-INTERP).
     fn run_frame(
         &mut self,
         f: FuncId,
         this: Option<ObjRef>,
         args: Vec<Arg>,
     ) -> Result<CallResult, VmError> {
-        let _ = (this, args);
-        Err(NotYet::not_ported(
-            format!("running script function {}", self.function_path(f)),
-            "lane W3-INTERP (the interpreter)",
-        )
-        .into())
+        crate::interp::run_frame(self, f, this, args)
     }
 
     fn run_native(
