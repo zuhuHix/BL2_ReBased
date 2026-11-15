@@ -606,19 +606,379 @@ fn map_properties_get_a_map_kind() {
     assert_eq!(classes.layout(below_id).first_slot(), 2);
 }
 
-/// A super chain that holds a non-class is the C++ "export is not a class", returned again on every later call.
+/// A super chain that holds a non-class is the C++ "export is not a class" on the call that loads the class. As the
+/// C++ `loadClass`, the class stays registered without its super class, so a later `class_at` returns it; only its
+/// layout is refused.
 #[test]
-fn a_super_that_is_not_a_class_fails_the_load() {
+fn a_class_whose_super_is_not_a_class_stays_registered() {
     let tree = Tree::new("notclass");
-    let mut d = Declarations::new(&["Int"]);
+    let mut d = Declarations::with_imports(&["Class", "Function", "IntProperty"]);
     let odd = d.prop("Int", 0, "Loose", 0);
     let child = d.cls("Child", odd);
+    let function = d.import("Function");
+    let mut f = Export::new(function, "Act", Vec::new());
+    f.outer = child;
+    d.p.add_export_with(f);
     tree.write("Core.upk", &d.build());
     let (mut store, id) = load(&tree, "Core.upk");
     let mut index = CodeIndex::new();
-    let expected = Err(ReflectError::NotAClass("Loose".into()));
-    assert_eq!(index.class_at(&mut store, id, child), expected);
-    assert_eq!(index.class_at(&mut store, id, child), expected, "kept");
+    let refusal = ReflectError::NotAClass("Loose".into());
+    assert_eq!(index.class_at(&mut store, id, child), Err(refusal.clone()));
+    let key = index
+        .class_at(&mut store, id, child)
+        .unwrap()
+        .expect("kept, as the C++ keeps it");
+    assert_eq!(index.class(key).super_class, None);
+    assert!(
+        index.class(key).functions.is_empty(),
+        "the C++ stops before the functions"
+    );
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let error = index
+        .define_layout(&mut store, &mut names, &mut classes, key)
+        .unwrap_err();
+    assert!(matches!(error, ReflectError::InClass { error, .. } if *error == refusal));
+}
+
+/// The root cause behind the class, struct and enum wrappers.
+fn root(mut e: ReflectError) -> ReflectError {
+    while let ReflectError::InClass { error, .. }
+    | ReflectError::InStruct { error, .. }
+    | ReflectError::InEnum { error, .. } = e
+    {
+        e = *error;
+    }
+    e
+}
+
+/// An array whose inner declaration is itself, an array and a map that name each other, and two arrays in two
+/// packages that name each other through imports: each is a typed cycle, not an endless recursion.
+#[test]
+fn cyclic_property_references_are_refused() {
+    let tree = Tree::new("propcycle");
+    let mut d = Declarations::with_imports(&["Class", "ArrayProperty", "MapProperty"]);
+    let selfish = d.cls("Selfish", 0);
+    let own = d.p.next_export();
+    d.prop("Array", selfish, "Me", own);
+    let mutual = d.cls("Mutual", 0);
+    let array = d.p.next_export();
+    d.prop("Array", mutual, "List", array + 1);
+    d.prop_with(&PropSpec {
+        tail: Some(ints(&[array, 0])),
+        ..PropSpec::new("Map", array, "List")
+    });
+    tree.write("Core.upk", &d.build());
+
+    // Left.Owner.Y names Right.Holder.X as its inner declaration, and Right.Holder.X names Left.Owner.Y.
+    let across = |this: &str,
+                  class: &str,
+                  array: &str,
+                  other: &str,
+                  other_class: &str,
+                  other_array: &str| {
+        let mut d = Declarations::with_imports(&["Class", "ArrayProperty"]);
+        let package = d.p.add_import("Core", "Package", 0, other);
+        let holder = d.p.add_import("Core", "Class", package, other_class);
+        let inner = d.p.add_import("Core", "ArrayProperty", holder, other_array);
+        let c = d.cls(class, 0);
+        d.prop("Array", c, array, inner);
+        tree.write(&format!("{this}.upk"), &d.build());
+    };
+    across("Left", "Owner", "Y", "Right", "Holder", "X");
+    across("Right", "Holder", "X", "Left", "Owner", "Y");
+
+    let (mut store, id) = load(&tree, "Core.upk");
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, id)
+        .unwrap();
+    assert_eq!((summary.classes, summary.defined), (2, 0));
+    assert_eq!(
+        root(summary.failures[0].1.clone()),
+        ReflectError::PropertyCycle("Me".into())
+    );
+    assert_eq!(
+        root(summary.failures[1].1.clone()),
+        ReflectError::PropertyCycle("List".into())
+    );
+    let left = index.package(&mut store, "Left").unwrap();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, left)
+        .unwrap();
+    assert_eq!(summary.defined, 0);
+    assert_eq!(
+        root(summary.failures[0].1.clone()),
+        ReflectError::PropertyCycle("Y".into())
+    );
+}
+
+/// A chain of `n` classes, each the super class of the next: returns the package bytes and the references.
+fn class_chain(n: usize) -> (Vec<u8>, Vec<i32>) {
+    let mut d = Declarations::new(&["Int"]);
+    let mut refs = Vec::with_capacity(n);
+    let mut previous = 0;
+    for i in 0..n {
+        previous = d.cls(&format!("C{i}"), previous);
+        refs.push(previous);
+    }
+    (d.build(), refs)
+}
+
+/// Super-class loading, layouts and struct inheritance nest at most `MAX_NESTING` deep: past it, a typed
+/// `TooDeep`, not a stack overflow. A chain just inside the bound loads and lays out.
+#[test]
+fn nesting_past_the_budget_is_a_typed_error() {
+    let tree = Tree::new("deep");
+    let (bytes, refs) = class_chain(MAX_NESTING + 8);
+    tree.write("Core.upk", &bytes);
+    let (mut store, id) = load(&tree, "Core.upk");
+    let last = *refs.last().unwrap();
+    // Loading the deepest class first nests once per super class.
+    assert_eq!(
+        CodeIndex::new().class_at(&mut store, id, last),
+        Err(ReflectError::TooDeep(MAX_NESTING))
+    );
+    // Loaded from the root up, each load is shallow; the layout of the last then nests once per super class.
+    let mut index = CodeIndex::new();
+    for &r in &refs {
+        index.class_at(&mut store, id, r).unwrap();
+    }
+    let key = index.loaded_class(id, last).unwrap();
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let error = index
+        .define_layout(&mut store, &mut names, &mut classes, key)
+        .unwrap_err();
+    assert_eq!(root(error), ReflectError::TooDeep(MAX_NESTING));
+    assert_eq!(index.max_nesting(), MAX_NESTING);
+
+    // Just inside the bound: a chain of MAX_NESTING - 1 classes lays out from its last class.
+    let inside = Tree::new("deep-inside");
+    let (bytes, refs) = class_chain(MAX_NESTING - 1);
+    inside.write("Core.upk", &bytes);
+    let (mut store, id) = load(&inside, "Core.upk");
+    let mut index = CodeIndex::new();
+    let key = index
+        .class_at(&mut store, id, *refs.last().unwrap())
+        .unwrap()
+        .unwrap();
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    assert!(
+        index
+            .define_layout(&mut store, &mut names, &mut classes, key)
+            .is_ok()
+    );
+
+    // A struct whose super chain is past the bound, held by value.
+    let structs = Tree::new("deep-structs");
+    let mut d = Declarations::with_imports(&["Class", "ScriptStruct", "StructProperty"]);
+    let holder = d.cls("Holder", 0);
+    let mut previous = 0;
+    for i in 0..MAX_NESTING + 8 {
+        previous = d.struct_in(holder, &format!("S{i}"), previous, None);
+    }
+    d.prop("Struct", holder, "Deep", previous);
+    structs.write("Core.upk", &d.build());
+    let (mut store, id) = load(&structs, "Core.upk");
+    let mut index = CodeIndex::new();
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, id)
+        .unwrap();
+    assert_eq!(summary.defined, 0);
+    assert_eq!(
+        root(summary.failures[0].1.clone()),
+        ReflectError::TooDeep(MAX_NESTING)
+    );
+}
+
+/// A class whose attribute companions do not hold is not published: `define` checks them before the class is
+/// defined, so it cannot be allocated half linked.
+#[test]
+fn a_class_whose_companions_fail_is_not_published() {
+    let tree = Tree::new("halfdefined");
+    let mut d = Declarations::with_imports(&[
+        "Class",
+        "FloatAttributeProperty",
+        "ArrayProperty",
+        "ObjectProperty",
+    ]);
+    let class = d.cls("Speedy", 0);
+    let speed = d.p.next_export();
+    d.prop_with(&PropSpec {
+        flags: PropertyDecl::STACK_ATTRIBUTE,
+        tail: Some(ints(&[speed + 2, speed + 1])),
+        ..PropSpec::new("FloatAttribute", class, "Speed")
+    });
+    // The base without the plain-attribute flag: the companions do not form a triple.
+    d.prop_with(&PropSpec::new("FloatAttribute", class, "SpeedBase"));
+    d.array_of(class, "SpeedStack", "Object", class);
+    tree.write("Core.upk", &d.build());
+    let (mut store, id) = load(&tree, "Core.upk");
+    let mut space = crate::heap::ObjectSpace::new();
+    let mut index = CodeIndex::new();
+    let summary = index
+        .define_layouts(&mut store, &mut space.names, &mut space.classes, id)
+        .unwrap();
+    assert_eq!(summary.defined, 0);
+    assert!(matches!(
+        root(summary.failures[0].1.clone()),
+        ReflectError::Layout(LayoutError::BadAttribute { .. })
+    ));
+    let speedy = space.classes.by_path("Core.Speedy").unwrap();
+    assert!(!space.classes.layout(speedy).is_defined());
+    assert!(
+        space
+            .alloc(speedy, "S", None, crate::heap::Origin::Runtime)
+            .is_err()
+    );
+}
+
+/// Companions are found by reference and must be those very declarations: a reference to another class's property
+/// of the same name is refused, never linked to the own declaration of that name.
+#[test]
+fn companions_must_be_the_declarations_they_name() {
+    let tree = Tree::new("companions");
+    let mut d = Declarations::with_imports(&[
+        "Class",
+        "FloatAttributeProperty",
+        "ArrayProperty",
+        "ObjectProperty",
+    ]);
+    let triple = |d: &mut Declarations, class: i32, base_at: i32| {
+        let speed = d.p.next_export();
+        d.prop_with(&PropSpec {
+            flags: PropertyDecl::STACK_ATTRIBUTE,
+            tail: Some(ints(&[
+                speed + 2,
+                if base_at == 0 { speed + 1 } else { base_at },
+            ])),
+            ..PropSpec::new("FloatAttribute", class, "Speed")
+        });
+        d.prop_with(&PropSpec {
+            flags: PropertyDecl::PLAIN_ATTRIBUTE,
+            ..PropSpec::new("FloatAttribute", class, "SpeedBase")
+        });
+        d.array_of(class, "SpeedStack", "Object", class);
+        speed + 1
+    };
+    let other = d.cls("Other", 0);
+    let other_base = triple(&mut d, other, 0);
+    let wrong = d.cls("Wrong", 0);
+    triple(&mut d, wrong, other_base);
+    tree.write("Core.upk", &d.build());
+    let (mut store, id) = load(&tree, "Core.upk");
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, id)
+        .unwrap();
+    assert_eq!((summary.classes, summary.defined), (2, 1));
+    assert_eq!(
+        root(summary.failures[0].1.clone()),
+        ReflectError::CompanionNotOwn {
+            property: "Speed".into(),
+            what: "base value",
+            target: (id, other_base),
+        }
+    );
+}
+
+/// `A { array<B> }` with `B { A }` lays out in either load order: B, reached through an array, is defined after the
+/// class that reached it, so the cycle is checked along by-value edges only.
+#[test]
+fn a_struct_cycle_through_an_array_loads_in_either_order() {
+    for (tag, a_first) in [("cycle-a", true), ("cycle-b", false)] {
+        let tree = Tree::new(tag);
+        let mut d = Declarations::with_imports(&[
+            "Class",
+            "ScriptStruct",
+            "StructProperty",
+            "ArrayProperty",
+        ]);
+        let owner = d.cls("Owner", 0);
+        let a = d.struct_in(owner, "A", 0, None);
+        let b = d.struct_in(owner, "B", 0, None);
+        d.array_of(a, "Bs", "Struct", b);
+        d.prop("Struct", b, "Inner", a);
+        let (first, second) = if a_first { (a, b) } else { (b, a) };
+        let one = d.cls("HoldFirst", 0);
+        d.prop("Struct", one, "Held", first);
+        let two = d.cls("HoldSecond", 0);
+        d.prop("Struct", two, "Held", second);
+        tree.write("Core.upk", &d.build());
+        let (mut store, id) = load(&tree, "Core.upk");
+        let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+        let mut index = CodeIndex::new();
+        let summary = index
+            .define_layouts(&mut store, &mut names, &mut classes, id)
+            .unwrap();
+        assert_eq!(
+            (summary.classes, summary.defined),
+            (3, 3),
+            "{tag}: {:?}",
+            summary.failures
+        );
+        let a_id = classes.struct_by_path("Core.Owner.A").unwrap();
+        let b_id = classes.struct_by_path("Core.Owner.B").unwrap();
+        let kinds = |s: StructId| -> Vec<PropKind> {
+            classes
+                .struct_layout(s)
+                .unwrap()
+                .fields()
+                .map(|(_, f)| f.kind.clone())
+                .collect()
+        };
+        assert_eq!(
+            kinds(a_id),
+            [PropKind::Array(Box::new(PropKind::Struct(b_id)))],
+            "{tag}"
+        );
+        assert_eq!(kinds(b_id), [PropKind::Struct(a_id)], "{tag}");
+        assert_eq!(
+            (index.struct_of(id, a), index.struct_of(id, b)),
+            (Some(a_id), Some(b_id))
+        );
+    }
+}
+
+/// The read-only lookups answer from what earlier calls loaded, and nothing else.
+#[test]
+fn read_only_lookups_answer_from_the_cache() {
+    let tree = Tree::new("readonly");
+    let mut d = Declarations::with_imports(&["Class", "Enum", "ByteProperty"]);
+    let engine = d.p.add_import("Core", "Package", 0, "Engine");
+    let asked = d.p.add_import("Core", "Class", engine, "Asked");
+    let never = d.p.add_import("Core", "Class", engine, "Never");
+    let thing = d.cls("Thing", 0);
+    let kinds = d.enum_(thing, "EKind", &["K_A"]);
+    d.prop("Byte", thing, "Kind", kinds);
+    tree.write("Core.upk", &d.build());
+    let (mut store, id) = load(&tree, "Core.upk");
+    let mut index = CodeIndex::new();
+    assert_eq!(index.loaded_class(id, thing), None);
+    assert_eq!(index.cached_ref(&store, id, asked), None, "not asked yet");
+    assert_eq!(index.resolve_ref(&mut store, id, asked), None);
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    index
+        .define_layouts(&mut store, &mut names, &mut classes, id)
+        .unwrap();
+    let key = index.loaded_class(id, thing).unwrap();
+    assert_eq!(index.layout_id(key), classes.by_path("Core.Thing"));
+    assert_eq!(
+        index.enum_of(id, kinds),
+        classes.enum_by_path("Core.Thing.EKind")
+    );
+    assert_eq!(index.struct_of(id, thing), None);
+    assert_eq!(
+        index.cached_ref(&store, id, asked),
+        Some(None),
+        "asked: known to resolve to nothing"
+    );
+    assert_eq!(index.cached_ref(&store, id, never), None, "never asked");
+    assert_eq!(index.cached_ref(&store, id, thing), Some(Some((id, thing))));
+    assert_eq!(index.cached_ref(&store, id, 99), Some(None));
+    assert_eq!(index.cached_ref(&store, id, 0), Some(None));
 }
 
 /// An enum holds at most 1024 names and ends exactly at its serial size.

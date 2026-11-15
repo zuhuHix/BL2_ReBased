@@ -17,7 +17,9 @@ rules the layouts use.
   (`class_at`, `find_class`), caches reference answers (`resolve_ref`: an all-import chain is looked up in its root's
   package with no global fallback; one nested in a local export goes through `PackageStore::resolve`) and keeps per
   class what the interface rules need: super class, body or its error, declared function names. `ClassKey` names a
-  loaded class. `implements` resolves interface entries lazily, one by one, as the C++ does.
+  loaded class. `implements` resolves interface entries lazily, one by one, as the C++ does. Read-only,
+  cache-only lookups answer from what earlier calls loaded, for a reflection typer behind `&self` (W3-DECODE):
+  `loaded_class`, `cached_ref`, `layout_id`, `struct_of`, `enum_of`, as well as `class`, `layout_of`, `key_of`.
 - **`load_code_packages(store, names, classes) -> Result<CodeIndex, ReflectError>`** fails only when a code package is
   missing or a super chain holds a non-class (the C++ throws there). A class whose layout cannot be defined stays
   declared; `CodeIndex::layout_of` and `layout_failures` report it with its cause chain.
@@ -34,20 +36,35 @@ rules the layouts use.
     first; a class property its metaclass second; struct and array properties their struct and inner declaration; a
     byte property its enum or 0;
   - an attribute value property (flag bit 63) names its stack, then its base. A byte attribute names its enum first,
-    so the stack is its second reference and the base its third. They are linked with `ClassTable::link_attribute`;
+    so the stack is its second reference and the base its third. Each reference must resolve to one of the class's
+    own declarations, the same package and export (`CompanionNotOwn` otherwise; never matched by name alone). The
+    companions are handed to `ClassTable::define` with the declarations, which checks them and leaves the class
+    undefined when they do not hold, so no class is published half linked;
   - a referenced class is only declared: `<stem>.<name>` when it resolves, its import path when no installed package
-    holds it (`Core.Class` and the other engine-native classes). A struct is defined on first use, its super struct and
-    by-value fields first. A struct inside an array that is still being defined (an array of itself) is only declared;
-    a by-value cycle is refused;
+    holds it (`Core.Class` and the other engine-native classes). A struct held by value is defined on first use, its
+    super struct and by-value fields first. A struct reached through an array or a map is only declared there and
+    defined after the class that reached it, so struct cycles are checked along by-value edges only and the outcome
+    does not depend on the load order (`A { array<B> }` with `B { A }` loads either way); a by-value cycle is refused;
+  - an array or map property whose inner declarations lead back to it, in one package or across packages, is
+    `PropertyCycle`;
   - an Enum export is `[net index][None][next][count][names]` with a count of at most 1024 (`enumNames`). It must also
     end exactly at its serial size. The C++ does not check that; it holds for all 792 Enum exports of the nine code
     packages and is the structural check `PHASELOCK_STOCK_DATA.md` records;
   - a super class reference that resolves to nothing is refused. The C++ loader leaves that class with no super.
-    A class whose super chain held a non-class keeps that error for every later call. The C++ keeps such a class
-    registered without its super.
+  - a class whose super chain holds a non-class is the C++ "export is not a class" on the call that loads it. As in
+    the C++ `loadClass`, it then stays registered without its super class and its functions, and a later `class_at`
+    returns it (so `--class-check` answers as the C++ on such input); only `define_layout` refuses it, with that
+    error.
+- **A Rust-only nesting bound.** Super-class loading, layouts, struct definitions and array or map expansion nest
+  at most `MAX_NESTING` (128) deep and then refuse with `TooDeep`. The C++ recursion has no bound; here a hostile
+  package gets a typed error instead of a stack overflow, which aborts. The installed code packages are far below it:
+  the deepest super chain is 10 classes and `--layouts` nested at most 5 levels. Measured locally, a nesting of 128
+  fits in a 512 KB stack in a debug build and 256 KB in release, so the 1 MB main thread of the binary keeps at
+  least twice that.
 - **`PropKind::Map { key, value }` is added to `crates/ow-object/src/layout.rs`** (W1-OBJ's file, hub grant for this
   lane; additive on the `#[non_exhaustive]` enum, with its arms in `kind_name`, `check_kind`, `zero_value` and
-  `fits`). `key` and `value` are `Option<Box<PropKind>>`, not boxed kinds: all 50 map properties of the nine code
+  `fits`), and `Heap::check_value` (`heap.rs`, also granted) accepts `Value::None` for it, so a class declaring or
+  inheriting a map allocates. `key` and `value` are `Option<Box<PropKind>>`, not boxed kinds: all 50 map properties of the nine code
   packages have both type references at 0, so there is no key or value kind to read, and none is invented. A map's
   value is `Value::None`, as the C++ VM gives a map property `Value()`. Where a package does name them, the first
   reference is read as the key and the second as the value.
@@ -68,12 +85,13 @@ rules the layouts use.
   - Layouts: 3,339 of 3,339 classes of the nine code packages get one, `Engine.WorldInfo` and
     `WillowGame.WillowPlayerController` among them; none fails. 257 attribute value properties are linked to a base
     and a stack, the record's 257 (`src/interp.cpp`, NATIVE_ATTRIBUTES.md).
-  - Rust unit tests re-express `vm_test.py`'s class-check, interface and `mutate` cases and cover each layout rule.
-    The `testkit/reflect.rs` builders are pinned byte for byte against the Python helpers.
-- **Open, outside this lane's files.** `Heap::check_value` (`crates/ow-object/src/heap.rs`) has no arm for a map, so
-  `Heap::alloc` of a class with a map property is refused: a local probe gave
-  `WrongKind { expected: "Map", found: "None" }`. Allocating `WorldInfo` or `WillowPlayerController` needs a
-  `(PropKind::Map { .. }, Value::None) => Ok(())` arm there (W1-OBJ's file).
+  - Rust unit tests re-express `vm_test.py`'s class-check, interface and `mutate` cases and cover each layout rule,
+    including property cycles, the nesting bound, an unpublished class whose companions fail, a companion of another
+    class, a struct cycle through an array in both load orders, the C++ caching after a failed super chain, and the
+    read-only lookups. A heap test allocates a class declaring a map and one inheriting it. The `testkit/reflect.rs`
+    builders are pinned byte for byte against the Python helpers.
+- **Closed: allocating a class with a map.** Review r1 found that `Heap::alloc` refused a map slot
+  (`WrongKind { expected: "Map", found: "None" }`); `Heap::check_value` now accepts `Value::None` for a map.
 - **UNVERIFIED.**
   - In the running game: the meaning of the class body's fields and the interface-table rule
     (NATIVE_CLASS_SERIAL_LAYOUT.md).

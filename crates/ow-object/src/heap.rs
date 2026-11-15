@@ -434,7 +434,8 @@ impl Heap {
             | (PropKind::Bool, Value::Bool(_))
             | (PropKind::Byte { .. } | PropKind::ByteAttribute { .. }, Value::Byte(_))
             | (PropKind::Str, Value::Str(_))
-            | (PropKind::Name, Value::Name(_)) => Ok(()),
+            | (PropKind::Name, Value::Name(_))
+            | (PropKind::Map { .. }, Value::None) => Ok(()),
             (PropKind::Delegate, Value::Delegate(d)) => match d {
                 Some(DelegateValue {
                     object: Some(r), ..
@@ -1667,6 +1668,44 @@ mod tests {
         assert!(
             w.space.heap.contains(inner),
             "the inner object is not freed with it (UNVERIFIED rule)"
+        );
+    }
+
+    /// A native map holds `Value::None` (W2-REFLECT, decision 2026-11-15-06): a class declaring one, and a class
+    /// inheriting one, allocate, and only `None` may be written to it.
+    #[test]
+    fn a_map_slot_holds_none_declared_or_inherited() {
+        let mut space = ObjectSpace::new();
+        let lookup = space.names.intern("Lookup");
+        let extra = space.names.intern("Extra");
+        let map = PropKind::Map {
+            key: Some(Box::new(PropKind::Name)),
+            value: None,
+        };
+        let base = space
+            .classes
+            .define("Engine.Mapped", None, vec![PropertyDecl::new(lookup, map)])
+            .unwrap();
+        let below = space
+            .classes
+            .define(
+                "Engine.Below",
+                Some(base),
+                vec![PropertyDecl::new(extra, PropKind::Int)],
+            )
+            .unwrap();
+        let own = space.alloc(base, "M", None, Origin::Runtime).unwrap();
+        let inherited = space.alloc(below, "B", None, Origin::Runtime).unwrap();
+        let slot = PropAddr::scalar(space.prop(base, "Lookup").unwrap());
+        assert_eq!(space.read(own, slot), Ok(&Value::None));
+        assert_eq!(space.read(inherited, slot), Ok(&Value::None));
+        assert_eq!(space.write(inherited, slot, Value::None), Ok(()));
+        assert_eq!(
+            space.write(own, slot, Value::Int(1)),
+            Err(HeapError::WrongKind {
+                expected: "Map",
+                found: "Int"
+            })
         );
     }
 }

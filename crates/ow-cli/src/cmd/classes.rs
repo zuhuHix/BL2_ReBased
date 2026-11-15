@@ -210,13 +210,22 @@ fn layout_summary(store: &mut PackageStore) -> Result<String, String> {
                 .count()
         })
         .sum();
+    // How deep the loading nested (the Rust-only bound is reflect::MAX_NESTING), and the longest super chain.
+    let deepest_chain = index
+        .classes()
+        .map(|(key, _)| index.super_chain(key).count())
+        .max()
+        .unwrap_or(0);
     let mut out = String::new();
     let _ = write!(
         out,
-        "{{\"classes\":{classes},\"defined\":{},\"failed\":{},\"table_classes\":{},\"linked_attributes\":{attributes},\"failures\":[",
+        "{{\"classes\":{classes},\"defined\":{},\"failed\":{},\"table_classes\":{},\"linked_attributes\":{attributes},\
+         \"max_nesting\":{},\"nesting_limit\":{},\"deepest_super_chain\":{deepest_chain},\"failures\":[",
         classes - failures.len(),
         failures.len(),
-        space.classes.len()
+        space.classes.len(),
+        index.max_nesting(),
+        reflect::MAX_NESTING
     );
     for (i, (path, error)) in failures.iter().enumerate() {
         if i > 0 {
