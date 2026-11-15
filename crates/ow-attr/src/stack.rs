@@ -3,9 +3,9 @@
 //! arithmetic on numbers; no objects (the caller maps each `AttributeModifier` object to a [`ModifierId`]).
 //!
 //! The rules are NATIVE_ATTRIBUTES.md section 3, read from native code and **UNVERIFIED in the running game**. The
-//! stack formula is behind the 69 of 69 golden weapon cards matched with the live overlay (NATIVE_WEAPON_RULES.md,
-//! REALGAME_GROUND_TRUTH.md, decision 2026-10-03-04), which checks the numbers of those cards, not the formula's
-//! precision.
+//! stack formula is behind the main four stats of the 69 of 69 golden weapon cards matched with the live overlay
+//! (NATIVE_WEAPON_RULES.md, REALGAME_GROUND_TRUTH.md, decision 2026-10-03-04), which checks the numbers of those
+//! cards, not the formula's precision.
 //!
 //! # The two combine forms (architecture section 5.3)
 //!
