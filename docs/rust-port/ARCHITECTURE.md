@@ -634,7 +634,10 @@ impl WorldParts<'_> { pub fn new(space, defs) -> Self; pub fn defs(&mut self) ->
     Inventory { definition: ObjRef, equipped_only: bool }, PlayerController, AttributeContextSource }  // W3-ATTRCTX adds more
 // Implementations: ow_vm::Vm (the running world; attribute_changed dispatches the class's notification, which may run
 // script, because the Vm is borrowed whole), ow_balance::OfflineWorld (tools and tests), and ow_items::RollWorld, an
-// adapter that forwards everything to an inner world except rng(), which returns the roll's one CrtRand for every stream.
+// adapter that forwards everything to an inner world except rng() and attribute_changed: rng() returns the roll's one
+// CrtRand for every stream, and attribute_changed forwards only when the inner world runs no script (OfflineWorld);
+// over a world that may run script (the Vm) it answers NotYet { NotPorted }, so a nested evaluation can never draw from
+// the inner world's generators (the adapter rule above).
 #[non_exhaustive] #[derive(Clone, PartialEq)]   // not Eq: BalanceError and VmError carry Attr(AttrError)
 pub enum AttrError { NotYet(NotYet), Heap(HeapError), Layout(LayoutError), BadData { reason: Cow<'static, str> },
                      DuplicateResolver { class: String }, World(String) /* the world's own error as text */ }  // W3-DEFS adds Def(DefError)
@@ -709,9 +712,11 @@ impl AttributeSystem {
     pub fn remove_modifier_by_name(..same..) -> Result<RemoveModifierOutcome, AttrError>;
     pub fn attribute_value_by_name(&self, object: ObjRef, attribute_name: NameId, cx: &mut EvalCx) -> Result<f32, AttrError>;  // 0.0: not an attribute
 }
-// storage.rs (W3-ATTREFFECTS). 0x5F: the right side is a typed Value stored into the base companion with the ordinary
-// assignment's conversion to the base's type (an Int stays an integer, interp.cpp:593), then the value is recomputed in
-// `form`; no change notification (NATIVE_BYTECODE_OPCODES opcode 5F, high confidence; NATIVE_LEVEL_UP_ATTRIBUTES's pool
+// storage.rs (W3-ATTREFFECTS). 0x5F: the VM converts the right side with its own assignment rule first (interp.cpp:511-522,
+// ow-vm's W3-INTERP; ow-attr keeps no copy of it); let_base takes the converted Value, stores it into the base companion
+// as is (an Int stays exact, interp.cpp:593) and recomputes the value in `form`. A Value whose kind differs from the
+// base's is refused with AttrError::BadData, nothing written: a deliberate refusal (the C++ stores it silently). No change
+// notification (NATIVE_BYTECODE_OPCODES opcode 5F, high confidence; NATIVE_LEVEL_UP_ATTRIBUTES's pool
 // rebase depends on it; interp.cpp:566-569). The NATIVE_ATTRIBUTES "Open" line on the typed let predates that reading.
 pub fn let_base(space: &mut ObjectSpace, owner: ObjRef, c: AttrCompanions, rhs: Value, form: CombineForm) -> Result<(), AttrError>; // UNVERIFIED in the game
 ```
@@ -773,7 +778,10 @@ pub struct InventoryInstance { pub data: DefinitionData, pub quantity: i32, pub 
 pub struct Registry { .. }  pub fn build_registry(defs: &mut DefStore, space: &mut ObjectSpace) -> Result<Registry, ItemError>;
 // One RNG per roll, as the oracle draws one CrtRand(seed) stream for the whole roll (item_roll.py:22, 281): the roll's
 // world is a RollWorld whose rng() returns that one generator for every stream, including the evaluator's variance.
-pub struct RollWorld<'a> { pub inner: &'a mut dyn AttrWorld, pub rng: &'a mut CrtRand }   // impl AttrWorld
+// It forwards everything else to `inner` except attribute_changed, which it forwards only when `inner_runs_script` is
+// false (an OfflineWorld); over a world that may run script (the Vm) it answers NotYet { NotPorted }, because the
+// nested evaluation would draw from the inner world's generators (the adapter rule of 3.5).
+pub struct RollWorld<'a> { pub inner: &'a mut dyn AttrWorld, pub rng: &'a mut CrtRand, pub inner_runs_script: bool }   // impl AttrWorld
 pub struct RollCx<'a> { pub balance: &'a BalanceSnapshot, pub eval: EvalCx<'a> }        // eval.world is a RollWorld
 pub fn roll(reg: &Registry, balance: &ObjectPath, cx: &mut RollCx) -> Result<DefinitionData, ItemError>;
 pub fn instantiate_stats(data: &DefinitionData, cx: &mut EvalCx) -> Result<ObjRef, ItemError>;  // the weapon/item object the stats live on
@@ -1386,7 +1394,9 @@ W1-NUM is the lane to start first and review first.
 - Owns: `crates/ow-attr/src/{eval,expr}.rs`, `crates/ow-attr/src/value_resolvers/*`. The bodies of `resolve_context`,
   `resolve_contexts`, `value_of`, `base_value_of`, `value_from_context`, `base_value_from_context` and `evaluate_init`
   are `eval.rs`'s stubs, `expressions_hold`'s is `expr.rs`'s, and the registrations go in `value_resolvers::register`;
-  `registry.rs` (W2-ATTRAPI) only delegates and is not edited.
+  `registry.rs` (W2-ATTRAPI) only delegates and is not edited. Context resolvers, NoContextNeeded included, are
+  W3-ATTRCTX's to register; until that lane lands, this lane's parity tests register NoContextNeeded in their own test
+  world.
 - Inputs: W2-ATTRAPI, W3-DEFS.
 - Not yet: context resolvers beyond NoContextNeeded and a fixed test context (W3-ATTRCTX); effects (W3-ATTREFFECTS).
 - Done when: the `ow-attr` gate of section 6 for the evaluator fixtures; section 5.3 settled or reported for both
@@ -1399,7 +1409,8 @@ W1-NUM is the lane to start first and review first.
   StatusEffectChance, Designer, Skill) over `AttrWorld`, engine-side lookups through `engine_query`; the ~8 unread
   `NotYet`.
 - Owns: `crates/ow-attr/src/context_resolvers/*`. The registrations go in `context_resolvers::register`, which
-  `AttributeSystem::standard` calls; `registry.rs` (W2-ATTRAPI) is not edited.
+  `AttributeSystem::standard` calls; `registry.rs` (W2-ATTRAPI) is not edited. Every context resolver class,
+  NoContextNeeded included, is registered there by this lane.
 - Inputs: W2-ATTRAPI, W3-DEFS.
 - Done when: each resolver has a synthetic-world test (chain ends at the first None; empty chain is None; override
   context first) and the `pawn`/`mind`/`controller` cases of `progression.hpp` reproduce.

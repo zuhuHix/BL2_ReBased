@@ -5,8 +5,8 @@
 
 use ow_object::ids::ObjRef;
 
+use crate::api::not_ported;
 use crate::api::{AttrError, EvalCx, ExprData, ExprMode};
-use crate::eval::not_ported;
 use crate::registry::AttributeSystem;
 
 /// [`AttributeSystem::expressions_hold`].

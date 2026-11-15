@@ -26,6 +26,12 @@ use crate::stack::{CombineForm, ModifierId, ModifierType, NumKind};
 
 use crate::registry::AttributeSystem;
 
+/// The `NotYet { NotPorted }` every stub of the W3 attribute lanes returns until its owner fills it. Shared by the
+/// stubs in `eval.rs`, `expr.rs`, `effects.rs` and `storage.rs`, so it lives here, in no W3 lane's file.
+pub(crate) fn not_ported<T>(what: &'static str) -> Result<T, AttrError> {
+    Err(NotYet::not_ported(what, "architecture.md section 3.5 (W3 attribute lanes)").into())
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------------------------------------------
@@ -152,7 +158,8 @@ pub enum EngineQuery {
 }
 
 /// The world the attribute system reads and edits: the running VM (`ow_vm::Vm`), an offline world
-/// (`ow_balance::OfflineWorld`), or an adapter (`ow_items::RollWorld`, which forwards everything except [`rng`]).
+/// (`ow_balance::OfflineWorld`), or an adapter (`ow_items::RollWorld`, which forwards everything except [`rng`] and
+/// [`attribute_changed`]; it forwards the notification only over a world that runs no script, else answers `NotYet`).
 ///
 /// Implementations must give every borrow from one method at a time: [`parts`] is the only way to the object
 /// space and the store, and it gives both at once.

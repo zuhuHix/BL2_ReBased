@@ -3,15 +3,10 @@
 //! signature; the owner replaces the bodies (architecture section 3.5). Chain walks and the
 //! `AttributeInitializationData` evaluator (NATIVE_ATTRIBUTES.md section 1, NATIVE_PROGRESSION.md section 1).
 
-use ow_core::NotYet;
 use ow_object::ids::ObjRef;
 
-use crate::api::{AttrError, AttrValue, EvalCx, InitData};
+use crate::api::{AttrError, AttrValue, EvalCx, InitData, not_ported};
 use crate::registry::AttributeSystem;
-
-pub(crate) fn not_ported<T>(what: &'static str) -> Result<T, AttrError> {
-    Err(NotYet::not_ported(what, "architecture.md section 3.5 (W3 attribute lanes)").into())
-}
 
 /// [`AttributeSystem::resolve_context`].
 pub(crate) fn resolve_context(

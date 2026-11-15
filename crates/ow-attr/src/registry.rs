@@ -344,9 +344,14 @@ impl AttributeSystem {
     }
 }
 
-/// The script VM's typed let into an attribute property (opcode 0x5F): stores `rhs` into the base companion,
-/// converted to the base property's own type the way an ordinary assignment converts (so an `Int` right side keeps
-/// its integer, `interp.cpp:593`), then recomputes the value from the base and the stack in `form`. **No change
+/// The script VM's typed let into an attribute property (opcode 0x5F): stores `rhs` into the base companion as it
+/// is, then recomputes the value from the base and the stack in `form`.
+///
+/// The conversion is the caller's: the VM converts the right-hand side with its own assignment rule first
+/// (`interp.cpp:511-522`, ported in `ow-vm` by W3-INTERP), so this function holds no copy of it. `rhs` must already
+/// have the base property's kind; a `Value` of another kind is **refused** with [`AttrError::BadData`] and nothing is
+/// written. That refusal is deliberate: the C++ stores a mismatched kind silently. An `Int` base keeps the integer
+/// exactly (16,777,217 included, `interp.cpp:593`) until the recompute. **No change
 /// notification**: NATIVE_BYTECODE_OPCODES.md (opcode 5F, high confidence for what it does) reads it so,
 /// NATIVE_LEVEL_UP_ATTRIBUTES.md (the pool rebase) depends on it and `interp.cpp:566-569` implements it. The "Open"
 /// line of NATIVE_ATTRIBUTES.md about how the typed let runs predates that reading and is stale. Status: UNVERIFIED in

@@ -9,8 +9,8 @@ use ow_object::ids::{NameId, ObjRef};
 use ow_object::layout::AttrCompanions;
 use ow_object::value::Value;
 
+use crate::api::not_ported;
 use crate::api::{AddModifierOutcome, AttrError, EvalCx, RemoveModifierOutcome};
-use crate::eval::not_ported;
 use crate::registry::AttributeSystem;
 use crate::stack::CombineForm;
 
@@ -51,7 +51,8 @@ pub(crate) fn attribute_value_by_name(
     not_ported("AttributeSystem::attribute_value_by_name")
 }
 
-/// [`crate::registry::let_base`].
+/// [`crate::registry::let_base`]: refuses an `rhs` whose kind differs from the base companion's
+/// (`AttrError::BadData`), converts nothing, keeps an integer exact.
 pub(crate) fn let_base(
     space: &mut ObjectSpace,
     owner: ObjRef,
