@@ -17,6 +17,7 @@ use std::fmt;
 use ow_core::NotYet;
 use ow_core::rand::{CrtStream, Rand15};
 use ow_defs::DefStore;
+use ow_defs::store::DefError;
 use ow_object::heap::{HeapError, ObjectSpace};
 use ow_object::ids::{ObjRef, PropId};
 use ow_object::layout::{AttrCompanions, LayoutError};
@@ -41,8 +42,8 @@ pub(crate) fn not_ported<T>(what: &'static str) -> Result<T, AttrError> {
 /// ([`AddModifierOutcome`], [`RemoveModifierOutcome`], `Ok(None)`).
 ///
 /// `Clone + PartialEq` but not `Eq` on purpose: `ow_balance::BalanceError` and `ow_vm::VmError` carry it as
-/// `Attr(AttrError)` and derive `Clone + PartialEq` themselves. `#[non_exhaustive]`: W3-DEFS adds a `Def(DefError)`
-/// variant once `DefStore` has its error type.
+/// `Attr(AttrError)` and derive `Clone + PartialEq` themselves. `#[non_exhaustive]`; the `Def` variant was added by
+/// W3-DEFS (an additive change, section 7).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttrError {
@@ -60,6 +61,9 @@ pub enum AttrError {
     /// An error raised by the world implementation (for example script run by the VM's change notification),
     /// carried as text because `ow-attr` cannot name the world's error type.
     World(String),
+    /// The definition store failed (lookup, load, overlay). Its `NotYet` and heap errors are not here: they convert
+    /// to [`AttrError::NotYet`] and [`AttrError::Heap`] (`From<DefError>`).
+    Def(DefError),
 }
 
 impl fmt::Display for AttrError {
@@ -73,6 +77,7 @@ impl fmt::Display for AttrError {
                 write!(f, "resolver class {class} registered twice")
             }
             AttrError::World(message) => write!(f, "world: {message}"),
+            AttrError::Def(e) => write!(f, "definitions: {e}"),
         }
     }
 }
@@ -94,6 +99,18 @@ impl From<HeapError> for AttrError {
 impl From<LayoutError> for AttrError {
     fn from(e: LayoutError) -> Self {
         AttrError::Layout(e)
+    }
+}
+
+/// `NotYet` and heap errors keep their own variants (a definition that is not there yet is a `NotYet` like any other);
+/// the rest is [`AttrError::Def`].
+impl From<DefError> for AttrError {
+    fn from(e: DefError) -> Self {
+        match e {
+            DefError::NotYet(n) => AttrError::NotYet(n),
+            DefError::Heap(h) => AttrError::Heap(h),
+            other => AttrError::Def(other),
+        }
     }
 }
 
@@ -1222,5 +1239,21 @@ mod tests {
             (d.base_value_scale_constant, d.base_value_attribute),
             (1.0, None)
         );
+    }
+
+    #[test]
+    fn definition_store_errors_keep_not_yet_and_heap() {
+        let n = NotYet::not_ported("DefStore::find", "r");
+        assert_eq!(
+            AttrError::from(DefError::NotYet(n.clone())),
+            AttrError::NotYet(n)
+        );
+        let heap = HeapError::InstanceStandIn(Origin::Runtime);
+        assert_eq!(
+            AttrError::from(DefError::Heap(heap.clone())),
+            AttrError::Heap(heap)
+        );
+        let d = DefError::NotADefinition("Core.Object".into());
+        assert_eq!(AttrError::from(d.clone()), AttrError::Def(d));
     }
 }
