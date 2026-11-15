@@ -6,9 +6,10 @@ AI-assisted (Claude Code). Record created 2026-11-14 with the decision that Rust
 **Status: RUN, route picked (2026-11-15).** Two candidates were built and measured on 2026-11-14: Bevy (lane B1, on
 pc-hummer) and an own engine on wgpu + winit (lane B2, on the zuhu desktop). Fyrox, the optional one, was not built.
 The maintainer picked **the own engine on wgpu + winit**
-([decision](../decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The numbers below are
-as the two lanes' results files give them (`local/bench/wgpu/results.md` on the zuhu desktop and
-`local/bench/bevy/results.md` on pc-hummer, both ignored); nothing was measured beyond them.
+([decision](../decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The wgpu numbers
+below are as that lane's results file and logs give them (`local/bench/wgpu/`, ignored, on the zuhu desktop). The
+Bevy numbers come from the B1 lane's report; its results file (`local/bench/bevy/results.md`) is on pc-hummer, not in
+this checkout. Nothing was measured beyond them.
 
 ## Purpose
 
@@ -72,13 +73,13 @@ post pass); frame time is the interval between successive frame starts, reported
 | Frame time, 1280x720 | median 1.33 ms, p95 1.80 ms (3 runs of 60 s pooled, release) | median 0.527 / 0.535 / 0.529 ms, p95 0.607 / 0.976 / 0.599 ms (3 runs of 60 s, release) | not built |
 | Frame time, 1920x1080 | median 1.35 ms, p95 2.10 ms (3 runs pooled); one hitch of about 538 ms in each third run, cause not found | median 0.528 / 0.573 / 0.679 / 0.604 ms, p95 0.701 / 1.200 / 1.420 / 1.471 ms (4 runs) | not built |
 | Frame time on the other PCs | not measured on the zuhu desktop or zuhu-laptop | not measured on pc-hummer or zuhu-laptop | not built |
-| Draws | about 4,500 meshes, culling off | 784 instanced draws, no culling | not built |
+| Draws | about 4,500 meshes, culling off (B1's count; that this makes the frame CPU-bound is the lane's unprofiled guess) | 784 instanced draws, no culling | not built |
 | Memory (process, scene loaded) | process RAM 2.4-3.0 GiB; GPU not measured | peak working set 2053-2101 MiB, peak private bytes 4385-4423 MiB, GPU +2298-2448 MiB | not built |
-| Binary size (release) | 96.8 MiB | 22,562,304 bytes with Ruffle, 11,591,168 bytes without | not built |
+| Binary size (release) | 96.8 MiB, no Ruffle | 21.5 MiB (22,562,304 bytes) with Ruffle, 11.1 MiB (11,591,168 bytes) without | not built |
 | Lines of our own code | 754 | 1821 (1724 Rust, 97 WGSL; 103 of the Rust lines embed Ruffle) | not built |
 | What was missing and had to be written | not summarised here (B1's results file is on pc-hummer) | renderer (pipelines, instancing, reverse-Z depth, mips, sRGB), scene and OBJ loading, glTF skin and clip player with GPU skinning, rapier collider glue, Ruffle render target, benchmark harness | not built |
 | Ruffle movie shown natively, or how | not embedded (git dependency, outside the brief) | yes, on the engine's own wgpu device; `ruffle_core` needs a Java JDK at build time | not built |
-| Hosting the `!Send` simulation (D18) | as a `NonSend` main-thread resource, outside Bevy's parallel scheduling | on the event-loop thread, or on a simulation thread with channels; neither ruled out | not built |
+| Hosting the `!Send` simulation (D18) | tested on the main thread: a 43-line test held it as a non-send resource and stepped it from host messages, 300 steps; systems touching it are pinned to the main thread while others still run in parallel; its state cannot live in components, ordinary resources or `Send + Sync` plugins; a separate thread with channels was described, not tried | on the event-loop thread, or on a simulation thread with channels; neither ruled out | not built |
 
 The B2 numbers were taken with the release binary while holding the machine run lock: frame times with `Instant` at
 each redraw (throughput, not GPU time), memory by polling the started PID every 250 ms, and the GPU with
@@ -129,7 +130,7 @@ any of them lands** in the tree (`AGENTS.md` rule 6). Nothing has been added.
 
 The maintainer picked the own engine on wgpu + winit on 2026-11-15
 ([decision](../decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The reasons given
-there: Ruffle embeds natively on the same wgpu device (BL2's UI is Flash); a 4-8 times smaller binary; no ECS
+there: Ruffle embeds natively on the same wgpu device (BL2's UI is Flash); an about 4.5-9 times smaller binary (21.5 MiB with Ruffle, 11.1 MiB without, against 96.8 MiB); no ECS
 scheduler imposing `Send` rules on the simulation; no forced toolchain bump; and Bevy's renderer, animation and scenes
 would not match BL2's AnimTree, materials or Kismet anyway. The cost: about 2.4 times as much own code in this scene,
 and an animation and material pipeline written by hand. Each engine crate's `THIRD_PARTY.md` entry comes before any
