@@ -512,10 +512,12 @@ fn collision(what: &'static str) -> VmError {
 ///
 /// 1. `None` for: no class; a class that is not an actor class; after play began, a class whose default object is
 ///    `bStatic` or `bNoDelete`; a template of another class.
-/// 2. `NotYet`, before anything is made, for what needs collision: the placement spot search (template
-///    `bCollideWorld`, or `bCollideWhenPlacing` outside a client, unless `bNoCollisionFail`), and the encroachment
-///    check or relocation of an actor that collides with actors (`bCollideActors`). A template other than the class
-///    default object is `NotYet` too (how its instanced subobjects are copied is not read).
+/// 2. `NotYet`, before anything is made, for what needs collision, judged on the class defaults: the placement spot
+///    search (`bCollideWorld`, or `bCollideWhenPlacing` outside a client, unless `bNoCollisionFail`); after play
+///    began, the encroachment check or relocation of an actor that collides with actors (`bCollideActors`), and the
+///    base search of step 4. A template other than the class default object is `NotYet` too (how its instanced
+///    subobjects are copied is not read). An actor that does not collide with actors is taken to pass the
+///    encroachment check (UNVERIFIED: the check's internals are not read).
 /// 3. The actor is made from the class defaults and appended to the level list; `CreationTime` = the world's
 ///    `TimeSeconds`, `WorldInfo`, `Location` and `Rotation` (the spawner's when omitted), the owner through
 ///    [`set_owner`] (`GainedChild`), then `Instigator` = **the spawner's** `Instigator`.
@@ -523,8 +525,15 @@ fn collision(what: &'static str) -> VmError {
 ///    no `Base`, collides with the world, `bShouldBaseAtStartup` and `Physics` is `PHYS_None` or `PHYS_Rotating`
 ///    (`NotYet`: collision). Before play began none of these run (the game's later begin-play pass is not read).
 ///
-/// An event that destroys the actor makes the spawn return `None`. Not modelled, each a step the record leaves
-/// unread or a layer this world lacks: `bTicked`, `PhysicsVolume`, the physics-body and state-frame set-up of step
+/// An event that destroys the actor makes the spawn return `None`. The begin-play events can change the fields the
+/// collision refusals read, so `bCollideActors` is checked again after `PreBeginPlay` and the base search after
+/// `SetInitialState`. A `NotYet` from one of those post-event checks leaves the actor made, in the level list and
+/// past the events that ran; the run is meant to stop there, as at any `NotYet`.
+///
+/// `bTicked` (step 5, set from the level's tick state) is not written; its effect is the tick's rule that an actor
+/// spawned during a tick is first ticked in the next one ([`crate::world::World::tick`], UNVERIFIED).
+///
+/// Not modelled, each a step the record leaves unread or a layer this world lacks: `PhysicsVolume`, the physics-body and state-frame set-up of step
 /// 6, the zone and tick-group changes after `PreBeginPlay`, the per-component call of step 8.
 ///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
@@ -574,10 +583,13 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     {
         return Err(collision("the spawn placement spot search"));
     }
-    if flag(space, defaults, "bCollideActors")? {
+    if begun && flag(space, defaults, "bCollideActors")? {
         return Err(collision(
             "the post-spawn encroachment check (or relocation) of an actor that collides with actors",
         ));
+    }
+    if begun && needs_base_search(space, defaults)? {
+        return Err(collision("the base search after PostBeginPlay"));
     }
     let time = float(space, world_info, "TimeSeconds")?;
     let location = match &req.location {
@@ -635,18 +647,21 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     if is_destroyed(&vm.space, actor)? {
         return Ok(None);
     }
-    let space = &vm.space;
-    if object(space, actor, "Base")?.is_none()
-        && flag(space, actor, "bCollideWorld")?
-        && flag(space, actor, "bShouldBaseAtStartup")?
-        && matches!(
-            physics(space, actor)?.as_str(),
-            "PHYS_None" | "PHYS_Rotating"
-        )
-    {
-        return Err(collision("the base search after PostBeginPlay"));
+    if needs_base_search(&vm.space, actor)? {
+        return Err(collision(
+            "the base search of an actor that its begin-play events made need one",
+        ));
     }
     Ok(Some(actor))
+}
+
+/// Step 10's base search condition: no `Base`, collides with the world, `bShouldBaseAtStartup`, and `Physics`
+/// `PHYS_None` or `PHYS_Rotating`.
+fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, VmError> {
+    Ok(object(space, o, "Base")?.is_none()
+        && flag(space, o, "bCollideWorld")?
+        && flag(space, o, "bShouldBaseAtStartup")?
+        && matches!(physics(space, o)?.as_str(), "PHYS_None" | "PHYS_Rotating"))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -663,7 +678,8 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
 ///   with attached actors based on it, or touching others (the unbase and untouch routines are physics natives, not
 ///   read), and a `Destroy` of an actor whose own destroy routine is running.
 /// - Otherwise: `bPendingDelete`, script `Destroyed()`, `SetOwner(None)` (`LostChild` to the old owner), then the
-///   actor leaves the level list, `bDeleteMe` is set and the heap marks it destroyed. It is not freed here.
+///   actor leaves the level list, `bDeleteMe` is set, the heap marks it destroyed and its timer entries are dropped.
+///   It is not freed here.
 pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
     let space = &vm.space;
     if is_destroyed(space, actor)? {
@@ -757,6 +773,13 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
         .remove(actor);
     set_field(&mut vm.space, actor, "bDeleteMe", Value::Bool(true))?;
     vm.space.heap.destroy(actor)?;
+    // The destroyed actor's timer entries go with it (its update pass never runs again).
+    if let Some(timers) = vm.service::<crate::timers::Timers>() {
+        timers
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("Timers"))?
+            .forget(actor);
+    }
     Ok(true)
 }
 

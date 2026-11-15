@@ -42,23 +42,37 @@ session in this lane.
   zeroed parameters; after each callback the pass stops on actor destruction, a cleared entry is removed, a `Count`
   of exactly 0 keeps a non-loop entry; a due non-loop entry is removed afterwards. **Rust-only refusals** (`NotYet {
   NotRead }`, the record leaves them untraced): a due timer with a negative rate, and a loop due more than `i32::MAX`
-  times in one pass. The entries live in the `Timers` service, not in the heap's `Timers` property: script never
-  reads that array.
+  times in one pass. Both are refused before the pass changes anything (review r1 of PR #325), judged on what step
+  1 would make of each entry whose target is still there; an entry a callback appends meets them at its own check.
+  The entries live in the `Timers` service, not in the heap's `Timers` property: script never reads that array.
+  A destroyed actor's entries are dropped by its destroy.
 - **The tick.** `WorldInfo.TimeDilation` is copied into the clock first; a value the clock refuses stops the tick with
   `WorldError::Clock`, the clock keeping its last good value (the lane decision `ow_core::sim` left open). A bad
   delta is `WorldError::BadDelta`, not the clock's panic. `TimeSeconds` and `RealTimeSeconds` are written from the
-  clock. Actors are ticked by tick group 0 to 4, each group over the level list as it stands when the group starts.
-  One actor's tick is the record's authoritative path: `Tick(DeltaTime)`, the state-code step, the timer pass,
-  `LifeSpan` (destroyed at 0.0001 or below, and the tick ends), physics when `Physics` is not `PHYS_None`. `Role` 0
-  gets only a physics step in the four modes the record names; `RemoteRole` 2 is `NotYet { NotRead }`. The
+  clock. Actors are ticked by tick group 0 to 4. Each actor's group is read once per tick, before the clock
+  advances (review r1): an actor gets at most one tick and keeps that group if its `TickGroup` changes meanwhile,
+  and an actor spawned during a tick is first ticked in the next one. The record sets a spawned actor's `bTicked`
+  from the level's tick state (spawn step 5); reading that as "waits for the next tick" is UNVERIFIED, as is the
+  order across actors. One actor's tick is the record's authoritative path: `Tick(DeltaTime)`, the state-code step,
+  the timer pass, `LifeSpan` (destroyed at 0.0001 or below, and the tick ends), physics when `Physics` is not
+  `PHYS_None` and `Role` is not 2 (simulated proxy). Physics of an actor with a `Base` is `NotYet { NotRead }`:
+  whether the base is being moved by a rigid-body step is the record's condition and the world cannot see it, so
+  the physics hook is not handed that rule. `Role` 0 gets only a physics step in the four modes the record names;
+  `RemoteRole` 2 is `NotYet { NotRead }`. **Note for W6:** nothing in single player sets `RemoteRole` to none, so a
+  class whose defaults carry `RemoteRole` 2 stops the tick with that `NotYet`. The
   state-code step (W5-STATES) and the physics step (the host) are hooks; without one, an actor that needs it is
   `NotYet { LayerAbsent }`. Physics modes are compared by their enum names, read from the property's enum.
 - **Spawn and destroy**, in the record's order, with these choices:
   - Spawn returns None for the record's refusals it can evaluate. A template other than the class default object is
     `NotYet` (how instanced subobjects are copied is not read). Everything that needs collision is `NotYet {
-    LayerAbsent }`, checked on the class defaults before anything is made: the placement spot search, the
-    encroachment check or relocation of an actor with `bCollideActors`, and the base search. Before play begins no
-    begin-play event runs (the later begin-play pass is not read). The abstract and "not instantiable" class-flag
+    LayerAbsent }`, checked on the class defaults before anything is made: the placement spot search and, after play
+    began, the encroachment check or relocation of an actor with `bCollideActors` and the base search (which
+    review r1 found ran only after the events; now checked first too). An actor that does not collide with actors is
+    taken to pass the encroachment check (UNVERIFIED: its internals are not read). The begin-play events can change
+    those fields, so `bCollideActors` is checked again after `PreBeginPlay` and the base search after
+    `SetInitialState`; a `NotYet` from those post-event checks leaves the actor made, listed and past its events, and
+    the run is meant to stop there. Before play begins no begin-play event, encroachment check or base search runs
+    (the later begin-play pass is not read). The abstract and "not instantiable" class-flag
     refusals are **not applied**: the class table holds no class flags and the record does not identify the bits
     (open item).
   - Destroy returns the record's results. It is `NotYet`, before anything changes, for a `Controller`, an actor with
@@ -73,26 +87,31 @@ session in this lane.
 - **Iterators.** `AllActors` walks the level list from index 0 (the `WorldInfo` included), `DynamicActors` from the
   first-dynamic index skipping `bStatic` actors, both skipping destroyed actors, then the class and interface filters
   of W4-INTERP2. One persistent level only. The first-dynamic index is stated by the map load (how the game computes
-  it is not in the record). The list is taken when the loop starts, where the game's walk is live (the `foreach`
-  contract takes a list; contract item below).
+  it is not in the record). The list is taken when the loop starts (the `foreach` contract takes a list).
+  - **Known divergence, kept by hub decision; a live walk is a follow-up.** The record reads the game's walk from
+    the executable as live: an actor added during the body is visited, and removing an earlier actor shifts the scan
+    so the next actor is skipped. The snapshot reproduces neither: actors spawned during the body are missed, and no
+    actor is skipped by a removal.
 - **`EvaluateInitializationData`** calls `ow-attr`'s evaluator with both context sources. The C++ refuses an override
   source; the Rust follows the record, which tries it first.
 - **Where the output differs from the C++, and why.** The C++ binary has no world command (the mover adapter's
   scoped `SetTimer`/`ClearTimer` sits behind `--mover-event`, W5-DIALOG's), so `tests/rust_parity.d/world.txt` holds
   no line. Differences in behaviour: the iterators with a world source (None BaseClass, level list), the override
   context source above, and every rule the C++ never had.
-- **Verified (automated, local, pc-hummer).** 29 `ow-world` unit tests on an invented `Engine.upk` built with the
+- **Verified (automated, local, pc-hummer).** 32 `ow-world` unit tests on an invented `Engine.upk` built with the
   `ScriptToy` helpers, whose script event functions call a test native that records the order: each timer rule of
   the row, the tick order and groups, `Role` 0, world time and dilation, a replay of one delta list twice (identical
   clock and timer counts), the hooks, spawn and destroy orders and refusals, `SetOwner`, both iterators through the
-  `ActorSource` seam, `EvaluateInitializationData` and `GetWorldInfo`. The `ow-vm` tests are unchanged and pass.
+  `ActorSource` seam, `EvaluateInitializationData` and `GetWorldInfo`; after review r1 also the base-search
+  refusal before anything is made, one tick per actor per tick, the timer refusals before any change, the physics
+  conditions and the dropped timer entries of a destroyed actor. The `ow-vm` tests are unchanged and pass.
   **Native keys against the installed game:** each of the 15 keys `world::Pack` registers equals the key the Rust
   loader derives from the installed `Engine.upk` for that function (`--run <function>` under `LogAndZero` logs the
   key of the unbound native; output kept under `local/`). That checks the binding, not the behaviour.
 - **Open items.**
   - The abstract and not-instantiable spawn refusals (class flags in the class table; the second bit's identity).
-  - Live iterator walks: the `foreach` contract (`IteratorResult` takes a list) cannot see actors spawned during the
-    body. A contract change, for the hub.
+  - Live iterator walks: the `foreach` contract (`IteratorResult` takes a list) cannot follow the game's live walk
+    (above). The hub kept the list for now; a live walk is a contract follow-up.
   - The probe mask, `EndState` on destroy and the state-code step: W5-STATES. Kismet destroyed events: W5-KISMET.
     Collision, physics and the unbase and untouch routines: the host track.
   - Where the world's `TimeDilation` and an actor's `CustomTimeDilation` enter the tick delta (NATIVE_ENGINE_CORE.md,

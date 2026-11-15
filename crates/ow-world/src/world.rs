@@ -14,14 +14,20 @@
 //!    the tick with [`WorldError::Clock`] (the clock keeps its last good value). Then `SimClock::advance`, and
 //!    `WorldInfo.TimeSeconds` and `RealTimeSeconds` are written from the clock. UNVERIFIED: where and how the game
 //!    advances them was not located (the clock is a placeholder, `ow_core::sim`).
-//! 2. The actors are ticked by tick group (`TickingGroup` values 0 to 4 in order), each group over the level list
-//!    in order as it stands when the group starts; destroyed actors are skipped. UNVERIFIED: the record reads one
-//!    actor's tick, not the order across actors or what an actor spawned during a group gets.
+//! 2. The actors are ticked by tick group (`TickingGroup` values 0 to 4 in order). Each actor's group is read once,
+//!    before the clock advances, from the level list in order; an actor gets at most one tick, keeps that group if
+//!    its `TickGroup` changes during the tick, and is skipped if destroyed by then. An actor spawned during a tick
+//!    is first ticked in the next one: the record sets a spawned actor's `bTicked` from the level's tick state
+//!    (spawn step 5), read here that way. UNVERIFIED: that reading, and the order across actors (the record reads
+//!    one actor's tick).
 //! 3. One actor's tick is the record's authoritative path (NATIVE_ENGINE_CORE.md, "Actor tick order"): script
 //!    `Tick(DeltaTime)`, the state-code step, the timer update pass, `LifeSpan` (destroyed when it falls to 0.0001
-//!    or below, and the tick ends), then physics when `Physics` is not `PHYS_None`. An actor with `Role` 0 gets only
-//!    a physics step, and only in `PHYS_Falling`, `PHYS_Rotating`, `PHYS_Projectile` or `PHYS_Interpolating`; one
-//!    whose `RemoteRole` is 2 takes a variant the record did not read (`NotYet`).
+//!    or below, and the tick ends), then physics when `Physics` is not `PHYS_None` and `Role` is not 2 (simulated
+//!    proxy). Physics of an actor with a `Base` is `NotYet`: whether the base is being moved by a rigid-body step is
+//!    the record's condition and this world cannot see it. An actor with `Role` 0 gets only a physics step, and only
+//!    in `PHYS_Falling`, `PHYS_Rotating`, `PHYS_Projectile` or `PHYS_Interpolating`; one whose `RemoteRole` is 2
+//!    takes a variant the record did not read (`NotYet`). Nothing in single player sets `RemoteRole` to none, so a
+//!    class whose defaults carry `RemoteRole` 2 stops the tick there.
 //! 4. The state-code step and the physics step are hooks ([`World::set_state_step`], [`World::set_physics_step`]):
 //!    lane W5-STATES and the host provide them. Without one, an actor in a state, or one with physics to run, is
 //!    `NotYet` naming that layer. The delta every part gets is the clock's dilated delta; an actor's
@@ -43,7 +49,8 @@ use ow_vm::error::VmError;
 use ow_vm::natives_core::{ActorSource, ActorWalkFn};
 
 use crate::actors::{
-    self, Actors, actors_of, arg_object, byte, float, is_destroyed, physics, send_event, set_field,
+    self, Actors, actors_of, arg_object, byte, float, is_destroyed, object, physics, send_event,
+    set_field,
 };
 use crate::query::{self, WorldQuery};
 use crate::timers::{self, Timers};
@@ -56,6 +63,9 @@ pub const ACTOR_CLASS: &str = "Engine.Actor";
 
 /// `LifeSpan` at or below this destroys the actor (NATIVE_ENGINE_CORE.md, "Actor tick order", step 4).
 pub const LIFESPAN_END: f32 = 0.0001;
+
+/// `Role` 2, which the record's physics condition skips (simulated proxy).
+const ROLE_SIMULATED_PROXY: u8 = 2;
 
 /// The `RemoteRole` whose tick variant the record did not read (NATIVE_ENGINE_CORE.md: value 2).
 const REMOTE_ROLE_VARIANT: u8 = 2;
@@ -228,6 +238,11 @@ impl World {
                 .set_time_dilation(d)
                 .map_err(WorldError::Clock)?;
         }
+        // Each actor's group is decided once, here, before anything moves: an actor that changes its TickGroup
+        // during the tick keeps this tick's group, and an actor spawned during the tick is not in the plan, so it is
+        // first ticked in the next one. The record sets a spawned actor's bTicked from the level's tick state (spawn
+        // step 5); reading that as "waits for the next tick" is UNVERIFIED, as is the order across actors.
+        let plan = self.tick_plan()?;
         let step = self.vm.clock.advance(real_dt);
         if let Some(wi) = world_info {
             let (t, r) = (
@@ -239,29 +254,38 @@ impl World {
         }
         let mut index = 0u8;
         while let Some(group) = TickGroup::from_index(index) {
-            let list = self.borrow_actors()?.list().to_vec();
-            for actor in list {
-                if is_destroyed(&self.vm.space, actor)? {
-                    continue;
-                }
-                let g = byte(&self.vm.space, actor, "TickGroup")?;
-                if TickGroup::from_index(g).is_none() {
-                    return Err(VmError::Script {
-                        function: "World::tick".to_string(),
-                        message: format!(
-                            "{}.TickGroup is {g}, not a tick group",
-                            ow_attr::eval::class_path(&self.vm.space, actor)
-                        ),
-                    }
-                    .into());
-                }
-                if g == group.index() {
+            for &(actor, g) in &plan {
+                if g == group.index() && !is_destroyed(&self.vm.space, actor)? {
                     self.tick_actor(actor, step.dt)?;
                 }
             }
             index += 1;
         }
         Ok(step)
+    }
+
+    /// Every listed actor that is not destroyed, with its tick group, in list order.
+    fn tick_plan(&self) -> Result<Vec<(ObjRef, u8)>, WorldError> {
+        let list = self.borrow_actors()?.list().to_vec();
+        let mut plan = Vec::with_capacity(list.len());
+        for actor in list {
+            if is_destroyed(&self.vm.space, actor)? {
+                continue;
+            }
+            let g = byte(&self.vm.space, actor, "TickGroup")?;
+            if TickGroup::from_index(g).is_none() {
+                return Err(VmError::Script {
+                    function: "World::tick".to_string(),
+                    message: format!(
+                        "{}.TickGroup is {g}, not a tick group",
+                        ow_attr::eval::class_path(&self.vm.space, actor)
+                    ),
+                }
+                .into());
+            }
+            plan.push((actor, g));
+        }
+        Ok(plan)
     }
 
     fn borrow_actors(&self) -> Result<std::cell::Ref<'_, Actors>, WorldError> {
@@ -343,7 +367,17 @@ impl World {
                 return Ok(());
             }
         }
-        if physics(&self.vm.space, actor)? != "PHYS_None" {
+        let space = &self.vm.space;
+        if physics(space, actor)? != "PHYS_None"
+            && byte(space, actor, "Role")? != ROLE_SIMULATED_PROXY
+        {
+            if object(space, actor, "Base")?.is_some() {
+                return Err(NotYet::not_read(
+                    "the physics condition of an actor with a Base (whether its base is being moved by a                      rigid-body step)",
+                    RECORD,
+                )
+                .into());
+            }
             self.physics_or_not_yet(actor, dt)?;
         }
         Ok(())

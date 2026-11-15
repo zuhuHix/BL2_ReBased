@@ -718,6 +718,10 @@ fn a_callback_that_destroys_the_actor_stops_the_pass() {
             "Kill, its Destroyed event; Ping never fires"
         );
         assert!(crate::actors::is_destroyed(&x.w.vm.space, p).unwrap());
+        assert!(
+            x.w.timers().borrow().of(p).is_empty(),
+            "destroy drops the actor's timer entries"
+        );
     });
 }
 
@@ -790,12 +794,25 @@ fn a_due_timer_with_a_negative_rate_is_not_yet() {
     run(|| {
         let mut x = fx();
         let p = x.spawn("Probe");
+        x.set_timer(p, 0.05, false, "Pong", None);
         x.set_timer(p, -1.0, false, "Ping", None);
         assert_eq!(x.timer_rate(p, "Ping"), -1.0, "stored as given");
         assert!(matches!(
             missing(x.w.tick(0.1).unwrap_err()),
             Missing::NotRead
         ));
+        // Refused before the pass changed anything: Pong (first, due) neither grew nor fired.
+        assert_eq!(x.noted(p), Vec::<i32>::new());
+        assert_eq!(x.timer_count(p, "Pong"), 0.0);
+        // The same before step 1 for a loop that would come due more than i32::MAX times.
+        let mut y = fx();
+        let q = y.spawn("Probe");
+        y.set_timer(q, 1e-30, true, "Ping", None);
+        assert!(matches!(
+            missing(y.w.tick(0.1).unwrap_err()),
+            Missing::NotRead
+        ));
+        assert_eq!(y.timer_count(q, "Ping"), 0.0);
     });
 }
 
@@ -1049,8 +1066,135 @@ fn spawn_refusals_return_none_and_collision_is_not_yet() {
 fn before_play_begins_spawn_sends_no_begin_play_events() {
     run(|| {
         let mut x = fx_with(false);
-        let p = x.spawn("Probe");
+        let cdo =
+            x.w.vm
+                .defs
+                .class_default(&mut x.w.vm.space, "Engine.Probe")
+                .unwrap();
+        for b in ["bCollideActors", "bCollideWorld", "bShouldBaseAtStartup"] {
+            set_field(&mut x.w.vm.space, cdo, b, Value::Bool(true)).unwrap();
+        }
+        let c = x.class("Probe");
+        let wi = x.wi;
+        let req = SpawnRequest::new(Some(c)).with_no_collision_fail(true);
+        let p = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
         assert_eq!(x.noted(p), Vec::<i32>::new());
+        assert!(
+            x.all_notes().is_empty(),
+            "no begin-play event before play begins"
+        );
+        // Before play the encroachment check and the base search do not run, so neither refuses.
+    });
+}
+
+#[test]
+fn the_base_search_is_refused_before_the_actor_is_made() {
+    run(|| {
+        let mut x = fx();
+        let cdo =
+            x.w.vm
+                .defs
+                .class_default(&mut x.w.vm.space, "Engine.Probe")
+                .unwrap();
+        for b in ["bCollideWorld", "bShouldBaseAtStartup"] {
+            set_field(&mut x.w.vm.space, cdo, b, Value::Bool(true)).unwrap();
+        }
+        let c = x.class("Probe");
+        let wi = x.wi;
+        let before = x.w.actors().borrow().list().len();
+        x.clear_notes();
+        let req = SpawnRequest::new(Some(c)).with_no_collision_fail(true);
+        let e = spawn(&mut x.w.vm, wi, &req).unwrap_err();
+        assert!(matches!(vm_missing(e), Missing::LayerAbsent(_)));
+        assert_eq!(
+            x.w.actors().borrow().list().len(),
+            before,
+            "nothing made or listed"
+        );
+        assert!(x.all_notes().is_empty(), "no event sent");
+        // In PHYS_Walking no base search is needed and the spawn goes through.
+        set_field(&mut x.w.vm.space, cdo, "Physics", Value::Byte(1)).unwrap();
+        assert!(spawn(&mut x.w.vm, wi, &req).unwrap().is_some());
+    });
+}
+
+#[test]
+fn each_actor_ticks_once_per_tick_and_a_spawned_one_waits_for_the_next() {
+    run(|| {
+        let mut x = fx();
+        let p = x.spawn("Probe");
+        let cdo =
+            x.w.vm
+                .defs
+                .class_default(&mut x.w.vm.space, "Engine.Probe")
+                .unwrap();
+        set_field(&mut x.w.vm.space, cdo, "TickGroup", Value::Byte(2)).unwrap();
+        let s = x.name("Busy");
+        x.w.vm.space.heap.get_mut(p).unwrap().state = Some(s);
+        let spawned: Rc<RefCell<Option<ObjRef>>> = Rc::new(RefCell::new(None));
+        let out = spawned.clone();
+        let (probe, wi) = (x.class("Probe"), x.wi);
+        // p's state step (after its Tick event) moves p to group 2 and spawns a Probe into group 2, once.
+        x.w.set_state_step(Rc::new(move |vm, a, _| {
+            set_field(&mut vm.space, a, "TickGroup", Value::Byte(2))?;
+            if out.borrow().is_none() {
+                let n = spawn(vm, wi, &SpawnRequest::new(Some(probe)))?;
+                *out.borrow_mut() = n;
+            }
+            Ok(())
+        }))
+        .unwrap();
+        x.clear_notes();
+        x.tick(0.1);
+        let fresh = spawned.borrow().expect("spawned");
+        let ticks = |x: &Fx, o: ObjRef| {
+            x.all_notes()
+                .iter()
+                .filter(|(a, k)| *a == o && *k == 10)
+                .count()
+        };
+        assert_eq!(
+            ticks(&x, p),
+            1,
+            "moved from group 0 to 2 during its tick: still one tick"
+        );
+        assert_eq!(
+            ticks(&x, fresh),
+            0,
+            "spawned during the tick: not ticked in it"
+        );
+        x.clear_notes();
+        x.tick(0.1);
+        assert_eq!((ticks(&x, p), ticks(&x, fresh)), (1, 1));
+    });
+}
+
+#[test]
+fn physics_skips_a_simulated_proxy_and_an_actor_with_a_base_is_not_yet() {
+    run(|| {
+        let mut x = fx();
+        let p = x.spawn("Probe");
+        let other = x.spawn("Probe");
+        set_field(&mut x.w.vm.space, p, "Physics", Value::Byte(2)).unwrap();
+        set_field(&mut x.w.vm.space, p, "Role", Value::Byte(2)).unwrap();
+        x.tick(0.1); // Role 2: no physics step, so no NotYet without a physics hook
+        set_field(&mut x.w.vm.space, p, "Role", Value::Byte(3)).unwrap();
+        set_field(&mut x.w.vm.space, p, "Base", Value::Object(Some(other))).unwrap();
+        let seen = Rc::new(RefCell::new(0));
+        let s2 = seen.clone();
+        x.w.set_physics_step(Rc::new(move |_, _, _| {
+            *s2.borrow_mut() += 1;
+            Ok(())
+        }))
+        .unwrap();
+        assert!(matches!(
+            missing(x.w.tick(0.1).unwrap_err()),
+            Missing::NotRead
+        ));
+        assert_eq!(*seen.borrow(), 0, "the hook is not asked for a based actor");
+        set_field(&mut x.w.vm.space, p, "Base", Value::Object(None)).unwrap();
+        x.tick(0.1);
+        assert_eq!(*seen.borrow(), 1);
     });
 }
 

@@ -19,7 +19,8 @@
 //!   `Count` of exactly 0 (a re-set) keeps a non-loop entry; a due non-loop entry is removed afterwards.
 //!
 //! **Open, `NotYet`:** a due timer with a negative rate (the record says the code does not guard it but the outcome
-//! was not traced), and a loop due more than `i32::MAX` times in one pass. **UNVERIFIED:** the delta the pass gets
+//! was not traced), and a loop due more than `i32::MAX` times in one pass. Both are refused before the pass changes
+//! anything, from what step 1 would make of the entries; an entry a callback appends meets them at its own check. **UNVERIFIED:** the delta the pass gets
 //! (the world tick's delta, with the world `TimeDilation` applied by `SimClock` and an actor's `CustomTimeDilation`
 //! not applied; where the game applies either was not located).
 //!
@@ -160,6 +161,11 @@ impl Timers {
         }
     }
 
+    /// Drops every entry of `actor` (its destroy).
+    pub(crate) fn forget(&mut self, actor: ObjRef) {
+        self.by_actor.remove(&actor);
+    }
+
     fn entry(&self, actor: ObjRef, i: usize) -> Option<Timer> {
         self.by_actor.get(&actor).and_then(|v| v.get(i)).copied()
     }
@@ -193,6 +199,30 @@ fn borrow_mut(t: &RefCell<Timers>) -> Result<std::cell::RefMut<'_, Timers>, VmEr
 /// The engine's timer update pass for `actor` with this tick's `delta` (module documentation).
 pub fn update_pass(vm: &mut Vm, actor: ObjRef, delta: f32) -> Result<(), VmError> {
     let timers = timers_of(vm)?;
+    // The two open cases are refused before anything changes, judged on what step 1 is about to make of each
+    // entry whose target is still there: a negative rate (due on every pass), and a loop due more than i32::MAX
+    // times. Entries a callback appends during the pass meet the same refusals at their own check below.
+    let entries = borrow(&timers)?.of(actor).to_vec();
+    for e in entries {
+        if e.rate == 0.0 || is_destroyed(&vm.space, e.object)? {
+            continue;
+        }
+        if e.rate < 0.0 {
+            return Err(NotYet::not_read("a due timer with a negative rate", RECORD).into());
+        }
+        let count = if e.paused {
+            e.count
+        } else {
+            e.count + e.dilation * delta
+        };
+        if e.looping && count > e.rate && trunc_i32(count / e.rate) < 1 {
+            return Err(NotYet::not_read(
+                "a loop timer due more than i32::MAX times in one pass",
+                RECORD,
+            )
+            .into());
+        }
+    }
     {
         let mut t = borrow_mut(&timers)?;
         for e in t.by_actor.get_mut(&actor).into_iter().flatten() {
