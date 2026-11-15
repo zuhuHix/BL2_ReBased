@@ -13,9 +13,8 @@
 //!
 //! **The entry file** (text; `#` starts a comment; tokens are separated by C-locale white space):
 //! - `new <label> <Package.Class>`: an object built from the class defaults, named `<label>`;
-//! - `export <label> <Package> <ObjectPath>`: a new object named after the installed export, with the export's data
-//!   (the definition store's object for the export, read with the ordinary 4-byte prefix, copied into a new object,
-//!   as the C++ `instantiateExport(pkg, index, 4)` builds a new one);
+//! - `export <label> <Package> <ObjectPath>`: in the C++, a new object named after the installed export, with its
+//!   data (`instantiateExport(pkg, index, 4)`). Here `NotYet` after the package and export lookups (below);
 //! - `set <path> <value>`, `add <path> <value>`: assign a property, append to an array property (a path is
 //!   `$label.Property` then any `.Field` and `[index]` steps into structs and arrays that already exist);
 //! - `run <Package.Class.Function> <self> [<value>...]`: one entry; `self` is `$label` or `-` (no object: the owner's
@@ -33,9 +32,13 @@
 //!   an object becomes an interface reference for an interface property, as the interpreter's own stores do.
 //! - A static-array property is consecutive heap slots, not one array value, so `$o.Arr[i]` addresses element `i`
 //!   of the property.
-//! - `struct:` needs the struct loaded (a struct is defined when a class or function that uses it loads), as
-//!   `--run`'s `st:` arguments; otherwise it is an error naming that.
-//! - `f:` refuses hexadecimal float text, as `--run` does.
+//! - `struct:` of a struct that is not loaded is `NotYet` (a struct is defined when a class or function that uses it
+//!   loads; the C++ `structAt` loads it).
+//! - `f:` with hexadecimal float text is `NotYet` (no parser for it is written).
+//! - `export` is `NotYet`: the definition store holds the export's object under its path, so a copy, as the C++
+//!   makes, would leave two live objects where the C++ has one, and the engine iterators would visit both.
+//!
+//! A `NotYet` comes back as [`CensusError::Vm`] (see [`CensusError::not_yet`]); the command exits with code 3 for it.
 //!
 //! **The static walk** reads the bytecode itself (`ow_script::decode::decode`, the decoder the interpreter uses) and
 //! types receivers from the declarations the definition store's `CodeIndex` gives
@@ -50,11 +53,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use ow_core::num::strtod_prefix;
-use ow_core::{FixedHashMap, ObjectPath};
-use ow_object::heap::{HeapError, Origin, Step};
+use ow_core::{FixedHashMap, NotYet, ObjectPath};
+use ow_object::heap::{HeapError, Step};
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr};
 use ow_object::layout::{PropKind, PropertyDecl};
-use ow_object::prefix::PropertyPrefix;
 use ow_object::reflect::{CODE_PACKAGES, ClassKey};
 use ow_object::value::Value;
 use ow_package::PackageId;
@@ -267,6 +269,78 @@ pub struct CensusReport {
     pub static_summary: Option<StaticSummary>,
 }
 
+/// Why the census did not run to its report (C++ `nativeCensus` throws).
+///
+/// A script that fails while an entry runs is a stopped entry in the report, never this error.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum CensusError {
+    /// The entry file is malformed or names something the census cannot use: the C++ `RuntimeError` text
+    /// (`entry file line <n>: ...` where the C++ says so).
+    Entry(String),
+    /// The VM refused a lookup or a value: a class or function not found, or `NotYet` for what the Rust port does not
+    /// do yet (a struct that is not loaded, an `export` line, hexadecimal float text).
+    Vm(VmError),
+}
+
+impl CensusError {
+    /// The `NotYet` behind this error, if that is what it is (the command exits with code 3 then).
+    pub fn not_yet(&self) -> Option<&NotYet> {
+        match self {
+            CensusError::Vm(VmError::NotYet(n)) => Some(n),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for CensusError {
+    /// The C++ `what()` text without the causes, which `source()` carries: a script error's own message, a
+    /// definition store error's own text.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CensusError::Entry(text) => f.write_str(text),
+            CensusError::Vm(VmError::Script { message, .. }) => f.write_str(message),
+            CensusError::Vm(VmError::Def(e)) => write!(f, "{e}"),
+            CensusError::Vm(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for CensusError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CensusError::Entry(_) | CensusError::Vm(VmError::Script { .. }) => None,
+            CensusError::Vm(VmError::Def(e)) => e.source(),
+            CensusError::Vm(e) => e.source(),
+        }
+    }
+}
+
+impl From<VmError> for CensusError {
+    fn from(e: VmError) -> Self {
+        CensusError::Vm(e)
+    }
+}
+
+impl From<NotYet> for CensusError {
+    fn from(e: NotYet) -> Self {
+        CensusError::Vm(VmError::NotYet(e))
+    }
+}
+
+impl From<HeapError> for CensusError {
+    fn from(e: HeapError) -> Self {
+        CensusError::Vm(VmError::Heap(e))
+    }
+}
+
+/// A message of the census itself (the C++ `RuntimeError` text).
+impl From<String> for CensusError {
+    fn from(text: String) -> Self {
+        CensusError::Entry(text)
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ the census
 
 /// A line of the entry file.
@@ -280,8 +354,8 @@ fn is_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
 }
 
-fn fail(line: &Line, why: impl std::fmt::Display) -> String {
-    format!("entry file line {}: {why}", line.number)
+fn fail(line: &Line, why: impl std::fmt::Display) -> CensusError {
+    CensusError::Entry(format!("entry file line {}: {why}", line.number))
 }
 
 /// Digits replaced by `#` in the first 90 bytes (the C++ log category).
@@ -320,14 +394,15 @@ fn stoll(text: &str) -> Option<i64> {
 }
 
 /// `std::stod(text)`: decimal text, `inf` and `nan` (`ow_core::num::strtod_prefix`); an overflow to an infinity
-/// fails, as the MSVC `out_of_range`. Hexadecimal float text is refused with its own message.
-fn stod(text: &str) -> Result<Option<f64>, String> {
+/// fails, as the MSVC `out_of_range`. Hexadecimal float text is `NotYet` (no parser for it is written).
+fn stod(text: &str) -> Result<Option<f64>, NotYet> {
     let Some(prefix) = strtod_prefix(text) else {
         return Ok(None);
     };
     if prefix.hexadecimal {
-        return Err(format!(
-            "hexadecimal float text is not read by the Rust binary: {text}"
+        return Err(NotYet::not_ported(
+            format!("hexadecimal float text in a census value: {text}"),
+            "decision 2026-11-15-23 (census values)",
         ));
     }
     let lower = text[prefix.start..prefix.end].to_ascii_lowercase();
@@ -480,7 +555,7 @@ impl Census<'_> {
         }
     }
 
-    fn object(&self, line: &Line, token: &str) -> Result<ObjRef, String> {
+    fn object(&self, line: &Line, token: &str) -> Result<ObjRef, CensusError> {
         let Some(label) = token.strip_prefix('$') else {
             return Err(fail(line, format!("expected $label, got {token}")));
         };
@@ -490,7 +565,7 @@ impl Census<'_> {
         }
     }
 
-    fn value(&mut self, line: &Line, token: &str) -> Result<Value, String> {
+    fn value(&mut self, line: &Line, token: &str) -> Result<Value, CensusError> {
         if token == "none" {
             return Ok(Value::Object(None));
         }
@@ -509,23 +584,23 @@ impl Census<'_> {
             "y" => Value::Byte(stoll(body).ok_or_else(bad)? as u8),
             "s" => Value::string(body),
             "n" => Value::Name(self.vm.space.names.intern(body)),
-            "class" => Value::Class(Some(self.vm.find_class(body).map_err(|e| what(&e))?)),
+            "class" => Value::Class(Some(self.vm.find_class(body)?)),
             "struct" => self.new_struct(body)?,
             _ => return Err(fail(line, format!("unknown value kind {kind}"))),
         })
     }
 
     /// C++ `Runtime::newStruct`: the struct export at `Package.<path>`, with its defaults.
-    fn new_struct(&mut self, path: &str) -> Result<Value, String> {
+    fn new_struct(&mut self, path: &str) -> Result<Value, CensusError> {
         let Some((package, rest)) = path.split_once('.') else {
-            return Err(format!("struct path must be Package.Struct: {path}"));
+            return Err(format!("struct path must be Package.Struct: {path}").into());
         };
         let full = {
             let (code, store) = self.vm.defs.code_mut();
             let id = code.package(store, package).map_err(|e| chain(&e))?;
             let index = code.find_export(store, id, rest);
             if index == 0 {
-                return Err(format!("struct not found: {path}"));
+                return Err(format!("struct not found: {path}").into());
             }
             let pkg = store.get(id);
             format!(
@@ -534,18 +609,23 @@ impl Census<'_> {
                 pkg.path_of(index).map_err(|e| e.to_string())?
             )
         };
+        // The C++ `structAt` loads the struct; here a struct is defined when a class or function that uses it loads.
         let id = self.vm.space.classes.struct_by_path(&full).ok_or_else(|| {
-            format!("not yet: the struct {full} is not loaded (a struct is defined when a class or function that uses it loads)")
+            NotYet::not_ported(
+                format!("the census value struct:{path}: the struct {full} is not loaded"),
+                "decision 2026-11-15-23 (a struct loads with a class or function that uses it)",
+            )
         })?;
-        self.vm
+        Ok(self
+            .vm
             .space
             .classes
             .struct_defaults(id)
-            .map_err(|e| chain(&e))
+            .map_err(HeapError::from)?)
     }
 
     /// `$label.Property`, then `.Field` and `[index]` steps (C++ `property`); the element must exist.
-    fn target(&mut self, line: &Line, target: &str) -> Result<Target, String> {
+    fn target(&mut self, line: &Line, target: &str) -> Result<Target, CensusError> {
         let Some(dot) = target.find('.') else {
             return Err(fail(
                 line,
@@ -688,49 +768,28 @@ impl Census<'_> {
         Ok(current)
     }
 
-    fn write(&mut self, t: &Target, value: Value) -> Result<(), String> {
-        self.vm
+    fn write(&mut self, t: &Target, value: Value) -> Result<(), CensusError> {
+        Ok(self
+            .vm
             .space
-            .write_in(t.object, t.addr, &t.path, fit(&t.kind, value))
-            .map_err(|e| chain(&e))
+            .write_in(t.object, t.addr, &t.path, fit(&t.kind, value))?)
     }
 
     /// C++ `instantiateExport(package, index, 4)`: a new object named after the export, from the export's data.
-    fn export(&mut self, line: &Line, package: &str, path: &str) -> Result<ObjRef, String> {
-        let (id, index, name) = {
-            let (code, store) = self.vm.defs.code_mut();
-            let id = code.package(store, package).map_err(|e| chain(&e))?;
-            let index = code.find_export(store, id, path);
-            if index <= 0 {
-                return Err(fail(line, format!("export not found: {package} {path}")));
-            }
-            let name = store.get(id).exports[index as usize - 1].name.clone();
-            (id, index, name)
-        };
-        let loaded =
-            self.vm
-                .defs
-                .load_export(&mut self.vm.space, id, index, PropertyPrefix::Ordinary);
-        self.vm.log.extend(self.vm.defs.take_log());
-        let definition = loaded.map_err(|e| chain(&e))?;
-        let (class, slots) = {
-            let o = self.vm.space.heap.get(definition).map_err(|e| chain(&e))?;
-            (o.class, o.slots.clone())
-        };
-        self.intern_names_of(id);
-        self.intern_package_names(class);
-        let object = self
-            .vm
-            .space
-            .alloc(class, &name, None, Origin::Runtime)
-            .map_err(|e| chain(&e))?;
-        self.vm
-            .space
-            .heap
-            .get_mut(object)
-            .map_err(|e| chain(&e))?
-            .slots = slots;
-        Ok(object)
+    /// The package and the export are looked up as the C++ does; making the object is `NotYet`. The definition store
+    /// holds the export's object under its path, so a copy of it would leave two live objects where the C++ makes
+    /// one, and the engine iterators would visit both (decision 2026-11-15-23).
+    fn export(&mut self, line: &Line, package: &str, path: &str) -> Result<ObjRef, CensusError> {
+        let (code, store) = self.vm.defs.code_mut();
+        let id = code.package(store, package).map_err(|e| chain(&e))?;
+        if code.find_export(store, id, path) <= 0 {
+            return Err(fail(line, format!("export not found: {package} {path}")));
+        }
+        Err(NotYet::not_ported(
+            format!("the census line export {package} {path}: one object for an installed export"),
+            "decision 2026-11-15-23 (census export)",
+        )
+        .into())
     }
 }
 
@@ -745,8 +804,14 @@ fn chain(error: &dyn std::error::Error) -> String {
     text
 }
 
-/// Runs one entry and files what the call census and the log recorded (C++ `execute`).
-fn execute(vm: &mut Vm, function: FuncId, this: Option<ObjRef>, args: Vec<Value>) -> CensusEntry {
+/// Runs one entry and files what the call census and the log recorded (C++ `execute`). An error is a counted
+/// function the VM cannot find again by its path (C++ `countedFunctions.at` throws).
+fn execute(
+    vm: &mut Vm,
+    function: FuncId,
+    this: Option<ObjRef>,
+    args: Vec<Value>,
+) -> Result<CensusEntry, CensusError> {
     vm.log.clear();
     vm.census = Some(CallCensus::default());
     let decl = vm.function(function).cloned();
@@ -812,11 +877,10 @@ fn execute(vm: &mut Vm, function: FuncId, this: Option<ObjRef>, args: Vec<Value>
     // Log lines other than the stub lines the counters already cover, grouped with digits dropped.
     let mut stub_lines = BTreeSet::new();
     for stub in entry.stubs.keys() {
+        let f = counted(vm, stub)?;
         let key = vm
-            .find_function(stub)
-            .ok()
-            .and_then(|f| vm.function(f).map(|d| d.display_key().to_string()))
-            .unwrap_or_else(|| stub.clone());
+            .function(f)
+            .map_or_else(|| stub.clone(), |d| d.display_key().to_string());
         stub_lines.insert(format!("UNIMPLEMENTED {key}"));
     }
     for line in &vm.log {
@@ -828,18 +892,29 @@ fn execute(vm: &mut Vm, function: FuncId, this: Option<ObjRef>, args: Vec<Value>
             entry.log_head.push(head(line, 200));
         }
     }
-    entry
+    Ok(entry)
+}
+
+/// The function the call census counted under `path` (C++ `countedFunctions.at(path)`), found again by its path.
+fn counted(vm: &mut Vm, path: &str) -> Result<FuncId, CensusError> {
+    vm.find_function(path).map_err(|e| {
+        CensusError::Entry(format!(
+            "the call census counted {path}, which the VM does not find again: {}",
+            what(&e)
+        ))
+    })
 }
 
 /// Runs the entry file `text` on `vm` and returns the report (C++ `nativeCensus`). The VM should use
 /// `StubPolicy::LogAndZero` and the Core natives, as the command builds it. An error is a malformed file, an object,
-/// class or function that cannot be found, or a value that cannot be made (`entry file line <n>: ...` where the C++
-/// says so); a script that fails while it runs is a stopped entry, not an error. The census is off again afterwards.
+/// class or function that cannot be found, or a value that cannot be made ([`CensusError`]: `entry file line <n>: ...`
+/// where the C++ says so, or `NotYet` for what the port does not do yet); a script that fails while it runs is a
+/// stopped entry, not an error. The census is off again on success.
 pub fn native_census(
     vm: &mut Vm,
     text: &str,
     options: &CensusOptions,
-) -> Result<CensusReport, String> {
+) -> Result<CensusReport, CensusError> {
     let mut lines = Vec::new();
     // `std::getline`: lines end at `\n`; a `\r` before it is white space to the tokenizer.
     for (i, raw) in text.split('\n').enumerate() {
@@ -869,9 +944,9 @@ pub fn native_census(
             let w = &line.words;
             match (w[0].as_str(), w.len()) {
                 ("new", 3) => {
-                    let class = c.vm.find_class(&w[2]).map_err(|e| what(&e))?;
+                    let class = c.vm.find_class(&w[2])?;
                     c.intern_package_names(class);
-                    let o = instantiate_named(c.vm, class, &w[1]).map_err(|e| what(&e))?;
+                    let o = instantiate_named(c.vm, class, &w[1])?;
                     c.labels.insert(w[1].clone(), Value::Object(Some(o)));
                 }
                 ("export", 4) => {
@@ -889,10 +964,7 @@ pub fn native_census(
                     let current = c.read(&t).map_err(|e| chain(&e))?;
                     let v = c.value(line, &w[2])?;
                     let PropKind::Array(inner) = &t.kind else {
-                        return Err(format!(
-                            "entry file line {}: add needs an array property: {}",
-                            line.number, w[1]
-                        ));
+                        return Err(fail(line, format!("add needs an array property: {}", w[1])));
                     };
                     let mut items = current
                         .elements()
@@ -902,7 +974,7 @@ pub fn native_census(
                     c.write(&t, Value::array(items))?;
                 }
                 ("run", n) if n >= 3 => {
-                    let function = c.vm.find_function(&w[1]).map_err(|e| what(&e))?;
+                    let function = c.vm.find_function(&w[1])?;
                     let this = if w[2] == "-" {
                         None
                     } else {
@@ -912,7 +984,7 @@ pub fn native_census(
                     for token in &w[3..] {
                         args.push(c.value(line, token)?);
                     }
-                    let mut entry = execute(c.vm, function, this, args);
+                    let mut entry = execute(c.vm, function, this, args)?;
                     entry.this = w[2].clone();
                     entry.args = w[3..].to_vec();
                     entries.push(entry);
@@ -921,13 +993,12 @@ pub fn native_census(
                 ("runclass", 2) => {
                     // Every script function the class itself declares, once each on one object built from its
                     // defaults, with no arguments. Natives and inherited functions are not entries.
-                    let class = c.vm.find_class(&w[1]).map_err(|e| what(&e))?;
-                    let this = crate::interp::instantiate_from_defaults(c.vm, class)
-                        .map_err(|e| what(&e))?;
+                    let class = c.vm.find_class(&w[1])?;
+                    let this = crate::interp::instantiate_from_defaults(c.vm, class)?;
                     let declared = declared_script_functions(c.vm, class);
                     let shown = format!("new {}", class_path(c.vm, class));
                     for function in declared.into_values() {
-                        let mut entry = execute(c.vm, function, Some(this), Vec::new());
+                        let mut entry = execute(c.vm, function, Some(this), Vec::new())?;
                         entry.this = shown.clone();
                         entries.push(entry);
                         functions.push(function);
@@ -1763,7 +1834,7 @@ fn report(
     mut entries: Vec<CensusEntry>,
     functions: &[FuncId],
     options: &CensusOptions,
-) -> Result<CensusReport, String> {
+) -> Result<CensusReport, CensusError> {
     let mut closure = Closure::new();
     let mut reach_a: Vec<BTreeSet<FuncId>> = vec![BTreeSet::new(); entries.len()];
     let mut reach_b = reach_a.clone();
@@ -1789,9 +1860,7 @@ fn report(
     let mut script_dynamic: BTreeMap<String, u64> = BTreeMap::new();
     for (i, entry) in entries.iter().enumerate() {
         for (path, &count) in entry.natives.iter().chain(&entry.stubs) {
-            let Ok(f) = vm.find_function(path) else {
-                continue;
-            };
+            let f = counted(vm, path)?;
             if !natives.contains_key(path) {
                 let row = native_row(vm, &mut closure, f);
                 natives.insert(path.clone(), (f, row));
@@ -2176,9 +2245,43 @@ mod tests {
                            run Core.Foo.CallGet $foo\nrun Core.Foo.CallGet $bar\nrun Core.Foo.CallMystery $foo\n\
                            run Core.Foo.NoneCtx $foo\nrunclass Core.Bar\n";
 
+    /// The census of `text`, its error as the command prints it (the text and its causes).
     fn census(text: &str, options: &CensusOptions) -> Result<CensusReport, String> {
         let mut t = toy::vm(ParityMode::Off);
-        native_census(&mut t.vm, text, options)
+        native_census(&mut t.vm, text, options).map_err(|e| chain(&e))
+    }
+
+    #[test]
+    fn what_the_port_does_not_do_yet_is_not_yet() {
+        let new = "new foo Core.Foo\n";
+        for (text, what) in [
+            (
+                format!("{new}set $foo.Count struct:Core.Foo\n"),
+                "the census value struct:Core.Foo: the struct Core.Foo is not loaded",
+            ),
+            (
+                format!("{new}set $foo.Count f:0x1p3\n"),
+                "hexadecimal float text in a census value: 0x1p3",
+            ),
+            (
+                "export e Core Foo\n".to_string(),
+                "the census line export Core Foo: one object for an installed export",
+            ),
+        ] {
+            let mut t = toy::vm(ParityMode::Off);
+            let e = native_census(&mut t.vm, &text, &CensusOptions::default()).unwrap_err();
+            let n = e.not_yet().unwrap_or_else(|| panic!("{text:?}: {e}"));
+            assert_eq!(n.what, what);
+        }
+        // An export the package does not hold is the C++ error, not NotYet.
+        let mut t = toy::vm(ParityMode::Off);
+        let e = native_census(&mut t.vm, "export e Core Nope\n", &CensusOptions::default())
+            .unwrap_err();
+        assert!(e.not_yet().is_none());
+        assert_eq!(
+            e.to_string(),
+            "entry file line 1: export not found: Core Nope"
+        );
     }
 
     #[test]

@@ -1741,7 +1741,7 @@ W1-NUM is the lane to start first and review first.
 - Inputs: W4-INTERP2, W3-CORENAT.
 - Done when: `--vm-sweep` JSON identical to C++ on the 9 packages under `OW_PARITY=reference` (the `ow-vm` gate),
   apart from the differences decision 2026-11-15-07 lists in advance (non-ASCII text through the seven string-unit
-  natives); `natives_test.py {bin}` and `vm_states_test.py` (`mode=reference`) added to `tests/rust_parity.d/corenat.txt`
+  natives) and decision 2026-11-15-23's causes A and B (hub decision, as the section 6 row); `natives_test.py {bin}` and `vm_states_test.py` (`mode=reference`) added to `tests/rust_parity.d/corenat.txt`
   and passing; then freeze the C++ VM files.
 
 **W4-REGISTRY: item registry** · M · game: yes · Opus 5.5 medium

@@ -300,37 +300,34 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
     report
 }
 
-/// Releases the objects made at run time that no other such object references, as the C++ VM's reference counts do
+/// Releases the objects made at run time that nothing the heap lists references, as the C++ VM's reference counts do
 /// once an attempt's frames and its `self` are gone (`ObjectPtr` is a `std::shared_ptr`; its `live_` list is weak, so
-/// the engine iterators stop seeing a released object). A reference is a property value (inside structs and arrays
-/// too), an interface or a delegate's object, or the `Outer`; a cycle keeps itself, as shared pointers leak a cycle
-/// (a camera and its modifiers, which point back at it, stay alive in the C++ sweep). The Rust heap keeps every
-/// object until it is freed, so without this the iterators of later attempts would visit every object the earlier
-/// ones made. A released object is destroyed ([`ow_object::heap::Heap::destroy`]): `Heap::live` skips it.
+/// the engine iterators stop seeing a released object). The released objects are freed
+/// ([`ow_object::heap::ObjectSpace::free_many`], one heap walk), so the heap does not grow with the sweep.
 ///
-/// Only references held by runtime objects are counted: the heap lists no other objects to a caller outside
-/// `ow-object`, so an object that script stored into a class default object, which the C++ keeps alive, is released
-/// here. That difference was not met on the nine code packages (sweep identical where nothing else differs).
+/// - **Holders:** every instance `Heap::live` lists, whatever its origin: the runtime objects and the definitions the
+///   store loaded (`Origin::Export`). A reference is a property value (inside structs and arrays too), an interface,
+///   a delegate's object, or the `Outer`.
+/// - **Released:** a runtime object (`Origin::Runtime`) that no holder references once the released ones are gone.
+///   A cycle keeps itself, as shared pointers leak a cycle (a camera and its modifiers, which point back at it, stay
+///   alive in the C++ sweep).
+/// - **Holders it cannot see** (decision 2026-11-15-23, open): class default objects, resource stand-ins and objects
+///   script has destroyed are not instances `Heap::live` lists, and the heap lists no other objects to a caller
+///   outside `ow-object`. An object only they reference is released here, where the C++ keeps it, and freeing it
+///   clears their reference.
 fn release_unreferenced(vm: &mut Vm, root: ow_object::ids::ClassId) {
     use ow_object::heap::Origin;
     use ow_object::ids::ObjRef;
-    let made: Vec<ObjRef> = vm
-        .space
-        .live(root)
-        .filter(|&o| {
-            vm.space
-                .heap
-                .get(o)
-                .is_ok_and(|x| x.origin == Origin::Runtime)
-        })
-        .collect();
-    let index: BTreeMap<ObjRef, usize> = made.iter().enumerate().map(|(i, &o)| (o, i)).collect();
-    let mut incoming = vec![0usize; made.len()];
-    let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); made.len()];
-    for (i, &o) in made.iter().enumerate() {
+    let holders: Vec<ObjRef> = vm.space.live(root).collect();
+    let index: BTreeMap<ObjRef, usize> = holders.iter().enumerate().map(|(i, &o)| (o, i)).collect();
+    let mut candidate = vec![false; holders.len()];
+    let mut incoming = vec![0usize; holders.len()];
+    let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); holders.len()];
+    for (i, &o) in holders.iter().enumerate() {
         let Ok(object) = vm.space.heap.get(o) else {
             continue;
         };
+        candidate[i] = object.origin == Origin::Runtime;
         let mut found = Vec::new();
         if let Some(outer) = object.outer {
             found.push(outer);
@@ -345,22 +342,27 @@ fn release_unreferenced(vm: &mut Vm, root: ow_object::ids::ClassId) {
             }
         }
     }
-    let mut queue: Vec<usize> = (0..made.len()).filter(|&i| incoming[i] == 0).collect();
-    let mut released = vec![false; made.len()];
+    let mut queue: Vec<usize> = (0..holders.len())
+        .filter(|&i| candidate[i] && incoming[i] == 0)
+        .collect();
+    let mut released = vec![false; holders.len()];
     while let Some(i) = queue.pop() {
         released[i] = true;
         for &t in &outgoing[i] {
             incoming[t] -= 1;
-            if incoming[t] == 0 && !released[t] {
+            if incoming[t] == 0 && candidate[t] && !released[t] {
                 queue.push(t);
             }
         }
     }
-    for (i, &o) in made.iter().enumerate() {
-        if released[i] {
-            let _ = vm.space.heap.destroy(o);
-        }
-    }
+    let freed: Vec<ObjRef> = holders
+        .iter()
+        .zip(&released)
+        .filter_map(|(&o, &r)| r.then_some(o))
+        .collect();
+    // Every handle is current and listed once (`Heap::live`), so the free is not refused; if it were, the objects
+    // would stay, as before this rule, and the sweep would go on.
+    let _ = vm.space.free_many(&freed);
 }
 
 /// Every object `v` references (inside structs and arrays too), once per reference.
