@@ -418,12 +418,31 @@ pub struct SchemaTyper { .. }                      // the --array-schema file (i
 // typer's ArrayScope (with its root) differ from revision 3 here, to carry what the C++ walker prints and what a reflection typer needs.
 
 // store.rs (W2-STORE)
-pub struct PackageStore { .. }
-impl PackageStore { pub fn new(cooked_root: PathBuf) -> Self; pub fn scan(&mut self) -> Result<(), StoreError>;
-    pub fn load(&mut self, name: &PackageName) -> Result<PackageId, StoreError>; pub fn get(&self, id: PackageId) -> &Package;
+pub struct PackageStore { .. }                     // Send + Sync; Default = new_empty()
+impl PackageStore { pub fn new_empty() -> Self;
+    pub fn new(cooked_root: PathBuf) -> Self;      // absolute + lexically normal root; does NOT scan
+    pub fn open(cooked_root: PathBuf) -> Result<Self, StoreError>;   // new + scan: the C++ constructor
+    pub fn scan(&mut self) -> Result<(), StoreError>;   // empties the caches and the global index, as the C++ does, but
+                                                   // keeps the packages handed out: every PackageId stays valid
+    pub fn root(&self) -> &Path; pub fn scan_order(&self) -> &[PathBuf]; pub fn indexed_package_count(&self) -> usize;
+    pub fn paths_named(&self, name: &str) -> &[PathBuf];   // every file with that folded stem: all the candidates
+    pub fn load(&mut self, name: &PackageName) -> Result<PackageId, StoreError>;   // AmbiguousName for 2+ files: no choice
+    pub fn load_path(&mut self, path: &Path) -> Result<PackageId, StoreError>;
+    pub fn adopt(&mut self, package: Arc<Package>) -> Result<PackageId, StoreError>;   // a loaded package, by its source
+    pub fn get(&self, id: PackageId) -> &Package; pub fn shared(&self, id: PackageId) -> Arc<Package>;
     pub fn resolve(&mut self, from: PackageId, reference: i32) -> Result<Option<(PackageId, i32)>, StoreError>;
+                                                   // None only for reference 0; an import found nowhere is ImportNotFound
     pub fn resolve_path(&mut self, package: &PackageName, path: &str) -> Result<Option<(PackageId, i32)>, StoreError>;
-    pub fn scan_order(&self) -> &[PathBuf]; }
+                                                   // None where the package has no such export (C++ throws there)
+    pub fn set_resolve_check(&mut self, check: Option<ResolveCheck>); pub fn take_check_log(&mut self) -> Vec<String>; }
+pub struct ResolveCheck { pub fail_in_build: Option<String> }   // the C++ OPENWILLOW_RESOLVE_CHECK oracle as a value;
+                                                   // the binary reads the variables, the library collects the OWRESOLVECHECK lines
+pub enum StoreError { NotADirectory, PackageNotFound(String), AmbiguousName(String), NoSourcePath, CyclicImport,
+                      NoPackageQualifiedPath, ImportNotFound { package: String, object: String }, CheckDisagrees(String),
+                      Package(PackageError) /* transparent */, NotYet(NotYet) }   // Display: the C++ texts
+pub const MAX_OUTER_CHAIN: usize = 256;            // buildGlobalIndex's maxOuterChain
+// As shipped by W2-STORE (decision 2026-11-15-05): open, the scan-free new, the Option meanings, the added methods and
+// ResolveCheck differ from revision 3 here.
 ```
 
 ### 3.3 `ow-object` (contract W1-OBJ; the most important freeze)
