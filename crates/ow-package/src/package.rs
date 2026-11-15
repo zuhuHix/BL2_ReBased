@@ -29,6 +29,9 @@ pub const MAX_OUTER_DEPTH: usize = 256;
 
 /// Why a package could not be loaded or an object in it could not be named. `Display` gives the C++ exception
 /// text, which the CLI prints after `ow-package: `.
+///
+/// It stays `Clone + PartialEq + Eq` so tests can compare errors: any future cause that is neither (an `io::Error`, a
+/// boxed error) is carried as its text (a `String` field), never as the error value itself, so the derives stay.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackageError {
@@ -110,7 +113,7 @@ impl Package {
     /// Reads, decodes and parses the package file at `path` (C++ `Package::load`).
     pub fn load(path: &Path) -> Result<Arc<Package>, PackageError> {
         let raw = std::fs::read(path).map_err(|_| PackageError::Open)?;
-        let source = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let source = lexically_normal(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -193,11 +196,19 @@ impl Package {
             }
             seen.push(index);
             let current = self.object(index)?;
-            parts.push(&current.name);
+            parts.push(current.name.as_str());
             index = current.outer;
         }
-        parts.reverse();
-        Ok(parts.join("."))
+        // C++ `Package::path`: a `.` goes in only when the text built so far is non-empty, so a leading outer with an
+        // empty name adds no separator (`""` then `Thing` gives `Thing`, not `.Thing`).
+        let mut result = String::new();
+        for part in parts.iter().rev() {
+            if !result.is_empty() {
+                result.push('.');
+            }
+            result.push_str(part);
+        }
+        Ok(result)
     }
 
     /// The first export whose path equals `object_path`, compared with ASCII case folded (C++ `findExport`, which
@@ -216,6 +227,35 @@ impl Package {
             }
         }
         Ok(None)
+    }
+}
+
+/// The path with `.` components dropped and each `..` resolved against the component before it, from the text alone
+/// (no file system access), as C++ `std::filesystem::path::lexically_normal` does for the `absolute(path)` that
+/// `Package::load` keeps (`src/package.cpp`), and `PackageStore` keys on. `std::path::absolute` already does this on
+/// Windows but keeps `..` on POSIX. A `..` directly under the root is dropped; a leading `..` of a relative path (only
+/// the fallback when `absolute` fails) is kept.
+pub fn lexically_normal(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out: Vec<Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match out.last() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                _ => out.push(component),
+            },
+            _ => out.push(component),
+        }
+    }
+    let normal: PathBuf = out.iter().collect();
+    if normal.as_os_str().is_empty() && !path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normal
     }
 }
 
@@ -379,6 +419,56 @@ mod tests {
             ..ObjectEntry::default()
         };
         assert_eq!(p.path_of(-1).unwrap(), "Outer.Inner");
+    }
+
+    /// Review r1 item 1: an empty-named leading outer adds no separator, as C++ `Package::path` (it adds `.` only
+    /// after a non-empty prefix). A later empty part still gets its separator there, so `A`, ``, `B` is `A..B`.
+    #[test]
+    fn an_empty_leading_name_adds_no_separator() {
+        use crate::testkit::{Export, PackageBuilder};
+        let mut b = PackageBuilder::new_empty();
+        let empty = b.add_export(0, "", vec![]);
+        let mut thing = Export::new(0, "Thing", vec![]);
+        thing.outer = empty;
+        let thing = b.add_export_with(thing);
+        let a = b.add_export(0, "A", vec![]);
+        let mut gap = Export::new(0, "", vec![]);
+        gap.outer = a;
+        let gap = b.add_export_with(gap);
+        let mut last = Export::new(0, "B", vec![]);
+        last.outer = gap;
+        let last = b.add_export_with(last);
+        let p = parse(b.build()).unwrap();
+        assert_eq!(p.path_of(empty).unwrap(), "");
+        assert_eq!(p.path_of(thing).unwrap(), "Thing");
+        assert_eq!(p.path_of(gap).unwrap(), "A.");
+        assert_eq!(p.path_of(last).unwrap(), "A..B");
+        assert_eq!(p.find_export("Thing").unwrap(), Some(thing));
+    }
+
+    /// Review r1 item 5: `source` is lexically normal, as C++ `absolute(path).lexically_normal()`.
+    #[test]
+    fn source_paths_are_lexically_normal() {
+        let root = std::path::absolute(Path::new("base")).unwrap();
+        let messy = root.join("dir").join("..").join(".").join("X.upk");
+        assert_eq!(lexically_normal(&messy), root.join("X.upk"));
+        assert_eq!(lexically_normal(Path::new("a/./b/../c")), Path::new("a").join("c"));
+        assert_eq!(lexically_normal(Path::new("../a")), Path::new("..").join("a"));
+        assert_eq!(lexically_normal(Path::new("a/..")), Path::new("."));
+
+        // Through `load`: a real file reached as `dir/../X.upk`.
+        let folder = std::env::temp_dir().join(format!("ow-package-w1pkg-{}", std::process::id()));
+        std::fs::create_dir_all(folder.join("dir")).unwrap();
+        let file = folder.join("X.upk");
+        let mut b = crate::testkit::PackageBuilder::new_empty();
+        b.add_export(0, "Obj", vec![]);
+        std::fs::write(&file, b.build()).unwrap();
+        let loaded = Package::load(&folder.join("dir").join("..").join("X.upk"));
+        std::fs::remove_dir_all(&folder).unwrap();
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.source, lexically_normal(&std::path::absolute(&file).unwrap()));
+        assert!(!loaded.source.components().any(|c| matches!(c, std::path::Component::ParentDir)));
+        assert_eq!(loaded.name, "X");
     }
 
     #[test]

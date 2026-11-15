@@ -359,15 +359,19 @@ pub enum ContainerError { Truncated { at: usize, need: usize }, BadMagic, BadChu
 // ow-package
 pub struct Reader<'a> { bytes: &'a [u8], pos: usize, limit: usize }
 impl Reader<'_> { pub fn require(&self, n: usize) -> Result<(), ReadError>; pub fn u32(&mut self) -> Result<u32, ReadError>;
-                  pub fn i32(..); pub fn string(..); pub fn name(&mut self, names: usize) -> Result<(i32, i32), ReadError>;
+                  pub fn i32(..); pub fn string(..); pub fn name(&mut self, count: i32) -> Result<(i32, i32), ReadError>;
                   pub fn reference(&mut self, imports: i32, exports: i32) -> Result<i32, ReadError>; pub fn with_limit(..) }
 pub struct ObjectEntry { pub class: i32, pub super_: i32, pub outer: i32, pub archetype: i32, pub name: String,
                          pub size: i32, pub offset: i32, pub class_package: String, pub class_name: String }
-pub struct Package { pub source: PathBuf, pub name: PackageName, pub version: u16, pub licensee: u16,
+pub struct Package { pub source: PathBuf, pub name: String /* the C++ file stem */, pub version: u16, pub licensee: u16,
                      pub data: Vec<u8>, pub names: Vec<String>, pub imports: Vec<ObjectEntry>, pub exports: Vec<ObjectEntry> }
 impl Package { pub fn load(path: &Path) -> Result<Arc<Package>, PackageError>; pub fn from_bytes(..);
+               pub fn from_decoded(source: PathBuf, name: String, data: Vec<u8>) -> Result<Package, PackageError>;
+               pub fn package_name(&self) -> Result<PackageName, IdentError>;   // typed; W2-STORE keys identity on it
                pub fn path_of(&self, reference: i32) -> Result<String, PackageError>;
-               pub fn find_export(&self, object_path: &str) -> Option<i32>; }
+               pub fn find_export(&self, object_path: &str) -> Result<Option<i32>, PackageError>; }  // Err: cyclic chain
+// As shipped by W1-PKG (decision 2026-11-15-03): name, from_decoded, package_name, find_export and Reader::name differ
+// from revision 3 here, each to mirror the C++ reader.
 pub type PackageId = u32;                          // index into PackageStore, stable for one store (placed by W0, final)
 // Package and PackageStore are Send + Sync (Arc<Package>), so threaded tools can share package bytes (D18).
 
