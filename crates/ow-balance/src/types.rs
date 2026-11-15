@@ -130,8 +130,8 @@ impl Playthrough {
 /// unlocked nor the last choice stored in the save: the controller holds `NumOverpowerLevelsUnlocked` and the last
 /// overpower choice from the save in any playthrough (NATIVE_SAVE_LOAD.md, `ApplyPlayerSaveGameData` and the save
 /// markers, codes 4 and 5); those belong to the save lane. The 0..=10 bound here is only the type's range: the record's
-/// "capped at 10 (8 plus 2)" means the highest level actually allowed depends on the licensed DLC, a cross-field rule
-/// for W3-BALANCE, not checked here.
+/// "capped at 10 (8 plus 2)" suggests the highest level actually allowed depends on more than this range; which input
+/// decides it is UNVERIFIED. That cross-field rule is W3-BALANCE's, not checked here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct OpLevel(u8);
 
@@ -313,7 +313,8 @@ impl LevelCapUpgrades {
     pub const ALL: Self = LevelCapUpgrades(0x7);
 
     /// The set held in `bits`; any bit other than 0x1, 0x2 and 0x4 is refused with
-    /// [`BalanceError::UnknownLevelCapPackBits`].
+    /// [`BalanceError::UnknownLevelCapPackBits`]. The 0x1/0x2/0x4 bits are this crate's own encoding, not a game or
+    /// save format; mapping the game's DLC identity to a pack belongs to W3-BALANCE or the save lane.
     pub fn from_bits(bits: u32) -> Result<Self, BalanceError> {
         if bits & !u32::from(Self::ALL.0) == 0 {
             Ok(LevelCapUpgrades(bits as u8))
