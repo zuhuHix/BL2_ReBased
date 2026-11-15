@@ -16,7 +16,13 @@ unresolved probability. Then:
 The comparison needs the oracle's rules (round-half-even quantities, every listed pool fired), which the Rust roll
 reproduces only in Reference mode, so it runs as a `mode=reference` line (tests/rust_parity.d/pools.txt) or as ctest
 `item-pools-rust`, which sets the same mode. A Rust line whose drops are objects means the binary ran in Off mode, and
-the test fails saying so. Every name and number is invented. Run:
+the test fails saying so. Every name and number is invented.
+
+The oracle's pool totals depend on the interpreter: CPython 3.12 adds an int into a float `sum()` plainly, 3.14 with
+compensation (decision 2026-11-15-25). The test checks which rule its own interpreter follows (and fails, saying so,
+when it follows neither), passes it to the Rust binary as `--python-sum`, and holds a pool whose int and float weights
+sum differently under the two rules. The parity file is game-shaped output, so it is written under the workspace's
+ignored `local/`, the only place `--parity` accepts. Run:
 python tests/item_pools_rust_test.py <C++ ow-package> <Rust ow-package>
 """
 import json
@@ -34,6 +40,44 @@ import loot_pools  # noqa: E402
 import weapon_recipe  # noqa: E402
 
 CXX = RUST = None
+ROOT = HERE.parent
+# sum([0.1, 2, 0.2, 5]) under each rule (measured with CPython 3.12.10 and 3.14.7).
+SUM_PROBE = ([0.1, 2, 0.2, 5], {'3.12': '0x1.d333333333334p+2', '3.14': '0x1.d333333333333p+2'})
+# The SumRule pool's weights as the reader prints them, and their sums under each rule.
+SUM_RULE_WEIGHTS = (2.9, 5, 1.29, 6)
+
+
+def python_sum_rule():
+    """The --python-sum name of this interpreter's sum() rule, checked against the probe."""
+    name = '3.14' if sys.version_info >= (3, 14) else '3.12'
+    items, expected = SUM_PROBE
+    got = sum(items).hex()
+    if got != expected[name]:
+        raise SystemExit(f'Python {sys.version.split()[0]}: sum({items}) is {got}, which matches neither the 3.12 nor '
+                         f'the 3.14 rule ({expected}); the oracle comparison cannot name its rule')
+    return name
+
+
+def rule_sum(items, compensate_ints):
+    """CPython's sum() under one rule (3.12: ints added plainly into a float total; 3.14: with compensation)."""
+    it, total = iter(items), 0
+    for v in it:
+        if isinstance(v, int):
+            total += v
+            continue
+        s, c = float(total) + v, 0.0
+        break
+    else:
+        return total
+    for v in it:
+        if isinstance(v, float) or compensate_ints:
+            x = float(v)
+            t = s + x
+            c += ((s - t) + x) if abs(s) >= abs(x) else ((x - t) + s)
+            s = t
+        else:
+            s += float(v)
+    return s + c if c and c == c else s
 STARTUP = 'WillowGame/CookedPCConsole/Startup.upk'
 STAGES = (1, 8, 15, 30, 50, 80)
 SEEDS = 20
@@ -133,6 +177,9 @@ def package():
     p.add(pools + 'CycA', IP, [items(entry(fx.const(1), pool=pools + 'CycB'),
                                      entry(fx.const(1), balance='GD_PoolSyn.Guns.C'))])
     p.add(pools + 'CycB', IP, [items(entry(fx.const(1), pool=pools + 'CycA'))])
+    # Int and float weights whose total differs between CPython 3.12 and 3.14 (2.9000001, 5, 1.28999996, 6).
+    p.add(pools + 'SumRule', IP, [items(*(entry(fx.const(w), balance=f'GD_PoolSyn.Guns.{g}')
+                                          for w, g in zip(SUM_RULE_WEIGHTS, 'ABCD')))])
     p.add('GD_PoolSyn.Lists.Main', W + 'ItemPoolListDefinition', [('ItemPools', fx.Array([
         listed(pools + 'Outer', init(0, attribute='GD_PoolSyn.Odds')),
         listed(pools + 'Late', fx.const(1)),
@@ -155,7 +202,9 @@ def lines(path):
 class PoolsRustTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.rule = python_sum_rule()
         cls.folder = tempfile.TemporaryDirectory()
+        cls.out = tempfile.TemporaryDirectory(dir=ROOT / 'local') if (ROOT / 'local').is_dir() else None
         root = Path(cls.folder.name)
         cls.game = (root / 'Game').absolute()
         package().save(cls.game / STARTUP)
@@ -163,8 +212,11 @@ class PoolsRustTest(unittest.TestCase):
         schema.write_text('\n'.join(loot_pools.SCHEMA_LINES) + '\n', encoding='utf-8')
         cls.package = weapon_recipe.Package(CXX, cls.game / STARTUP, str(schema.resolve()))
         cls.values = loot_pools.Values(cls.package)
-        target = root / 'parity.jsonl'
-        run = subprocess.run([RUST, '--item-pool', '--parity', str(target), '--cooked', str(cls.game)],
+        if cls.out is None:
+            raise unittest.SkipTest(f'no {ROOT / "local"} to hold the parity file')
+        target = Path(cls.out.name) / 'parity.jsonl'
+        run = subprocess.run([RUST, '--item-pool', '--parity', str(target), '--cooked', str(cls.game),
+                              '--python-sum', cls.rule],
                              capture_output=True)
         assert run.returncode == 0, run.stderr.decode('utf-8', 'replace')
         cls.parity = lines(target)
@@ -172,6 +224,8 @@ class PoolsRustTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.folder.cleanup()
+        if cls.out is not None:
+            cls.out.cleanup()
 
     def oracle(self, pool, stage, seed):
         """weapon_gen_parity.pool_drops."""
@@ -184,7 +238,7 @@ class PoolsRustTest(unittest.TestCase):
 
     def single(self, pool, stage):
         run = subprocess.run([RUST, '--item-pool', pool, '--cooked', str(self.game), '--stage', str(stage),
-                              '--seed', '1', '--count', str(SEEDS)], capture_output=True)
+                              '--seed', '1', '--count', str(SEEDS), '--python-sum', self.rule], capture_output=True)
         self.assertEqual(run.returncode, 0, run.stderr.decode('utf-8', 'replace'))
         return [json.loads(line) for line in run.stdout.decode('utf-8').splitlines()]
 
@@ -193,10 +247,28 @@ class PoolsRustTest(unittest.TestCase):
         self.assertTrue(all(isinstance(d, str) for line in self.parity for d in line.get('drops', [None])),
                         'the Rust binary rolled in Off mode: run this test as a mode=reference line')
 
+    def test_the_sum_rule_pool_tells_the_interpreters_apart(self):
+        entries = loot_pools.pool_entries(self.package, self.values, 'GD_PoolSyn.WeaponPools.SumRule')
+        weights = [e['weight'] for e in entries]
+        self.assertEqual([type(w) for w in weights], [float, int, float, int])
+        self.assertNotEqual(rule_sum(weights, False), rule_sum(weights, True))
+        self.assertEqual(sum(weights), rule_sum(weights, self.rule == '3.14'))
+        # A rule that is not one of the two is refused.
+        run = subprocess.run([RUST, '--item-pool', 'GD_PoolSyn.WeaponPools.SumRule', '--cooked', str(self.game),
+                              '--stage', '8', '--seed', '1', '--python-sum', '2.7'], capture_output=True)
+        self.assertEqual(run.returncode, 1)
+
+    def test_the_parity_file_must_stay_under_local(self):
+        outside = Path(self.folder.name) / 'outside.jsonl'
+        run = subprocess.run([RUST, '--item-pool', '--parity', str(outside), '--cooked', str(self.game)],
+                             capture_output=True)
+        self.assertEqual(run.returncode, 1)
+        self.assertFalse(outside.exists())
+
     def test_the_parity_batch_covers_the_fixture(self):
         pools = sorted(p for p, c in self.package.classes.items()
                        if ('ItemPoolDefinition' in c and '.WeaponPools.' in p) or c.endswith('ItemPoolListDefinition'))
-        self.assertEqual(len(pools), 12)
+        self.assertEqual(len(pools), 13)
         requests = [(p, s, seed) for p in pools for s in STAGES for seed in range(1, SEEDS + 1)]
         self.assertEqual([(line['pool'], line['stage'], line['seed']) for line in self.parity], requests)
         # Not a vacuous comparison: most requests drop something, and some drop nothing.
