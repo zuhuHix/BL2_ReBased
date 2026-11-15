@@ -113,25 +113,32 @@ class RegistryRustTest(unittest.TestCase):
         # The scan error's text is the reader's stderr, compared in its own test below.
         self.assertEqual(kept(cxx_census, False), kept(rust_census, False))
 
-    def exports_stderr(self, binary):
+    def exports(self, binary):
+        """(exit code, stderr line) of `--exports` on the file that is not a package."""
         said = subprocess.run([binary, str(self.game / BROKEN), '--exports'], capture_output=True, text=True)
-        self.assertEqual(said.returncode, 1)
-        return said.stderr.strip()
+        return said.returncode, said.stderr.strip()
 
     def test_scan_errors_hold_the_cxx_readers_stderr_line(self):
-        text = self.exports_stderr(CXX)
+        code, text = self.exports(CXX)
+        self.assertEqual(code, 1)
         self.assertTrue(text.startswith('ow-package: '), text)
         self.assertEqual(self.cxx_report['scan_errors'], {BROKEN: text})
+
+    def test_both_readers_refuse_a_file_that_is_not_a_package(self):
+        self.assertEqual([self.exports(b)[0] for b in (CXX, RUST)], [1, 1])
 
     @unittest.expectedFailure
     def test_the_rust_reader_says_what_the_cxx_reader_says_for_a_file_that_is_not_a_package(self):
         """Known gap of the Rust reader (ow-container / ow-package, rule R7), found by this test: for a file with a bad
         magic the C++ prints `invalid package magic`, the Rust `cannot decode the package container: not a UE3 package
-        (bad tag)`. The tool keeps that line as the file's scan error. Expected to fail until the reader is fixed; an
-        unexpected success then fails the run, so the marker is removed with the fix."""
-        self.assertEqual(self.exports_stderr(RUST), self.exports_stderr(CXX))
+        (bad tag)`. The tool keeps that line as the file's scan error. Only the text is under the marker (the exit code
+        is checked above). Expected to fail until the reader is fixed; an unexpected success then fails the run, so
+        the marker is removed with the fix."""
+        self.assertEqual(self.exports(RUST)[1], self.exports(CXX)[1])
 
-    def test_the_rust_registry_writes_the_tools_bytes(self):
+    def rust_registry(self):
+        """(stdout bytes, census bytes) of the Rust `--item-registry`; skips the test while the store's census answers
+        NotYet (W3-DEFS)."""
         census_file = Path(self.folder.name) / 'rust_census.json'
         run = subprocess.run([RUST, '--item-registry', '--cooked', str(self.game), '--census', str(census_file)],
                              capture_output=True)
@@ -139,10 +146,23 @@ class RegistryRustTest(unittest.TestCase):
             self.skipTest('the Rust --item-registry answers NotYet until DefStore::census() has a body (W3-DEFS): '
                           + run.stderr.decode('utf-8', 'replace').strip())
         self.assertEqual(run.returncode, 0, run.stderr.decode('utf-8', 'replace'))
-        cxx_registry, cxx_census = self.tool_files(self.cxx_out)
-        self.assertEqual(run.stdout, cxx_registry)
-        self.assertEqual(kept(census_file.read_bytes()), kept(cxx_census))
+        return run.stdout, census_file.read_bytes()
 
+    def test_the_rust_registry_writes_the_tools_bytes(self):
+        registry, census = self.rust_registry()
+        cxx_registry, cxx_census = self.tool_files(self.cxx_out)
+        self.assertEqual(registry, cxx_registry)
+        # The scan error's text is the reader's line, compared in the expected-failure test below.
+        self.assertEqual(kept(census, False), kept(cxx_census, False))
+
+    @unittest.expectedFailure
+    def test_the_rust_registrys_scan_error_text_is_the_cxx_readers(self):
+        """The census `FileFailure.error` the Rust registry writes after `ow-package: ` must print as the C++
+        `--exports` stderr does (decision 2026-11-15-15). Expected to fail with the reader gap above; skipped while
+        the store's census answers NotYet."""
+        _, census = self.rust_registry()
+        _, cxx_census = self.tool_files(self.cxx_out)
+        self.assertEqual(json.loads(census)['scan_errors'], json.loads(cxx_census)['scan_errors'])
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
