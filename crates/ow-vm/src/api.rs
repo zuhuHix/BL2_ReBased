@@ -289,6 +289,10 @@ pub struct Arg {
     pub out: bool,
     /// False for an omitted optional parameter (its value is `Value::None`, as the C++ leaves it).
     pub supplied: bool,
+    /// The caller's storage an out argument from script aliases (the C++ `NativeCall::Arg::alias`), set by the
+    /// interpreter (W3-INTERP): a script callee reads and writes it live, and [`NativeCall::set_out`] writes through
+    /// it at once, so script a native calls back into sees the write. `None` for a call from the host.
+    pub(crate) alias: Option<crate::interp::Alias>,
 }
 
 impl Arg {
@@ -297,6 +301,17 @@ impl Arg {
             value,
             out,
             supplied,
+            alias: None,
+        }
+    }
+
+    /// An out argument aliasing the caller's storage (W3-INTERP).
+    pub(crate) fn aliasing(value: Value, alias: crate::interp::Alias) -> Self {
+        Arg {
+            value,
+            out: true,
+            supplied: true,
+            alias: Some(alias),
         }
     }
 }
@@ -344,7 +359,12 @@ impl<'a> NativeCall<'a> {
     pub fn set_out(&mut self, i: usize, v: Value) -> Result<(), VmError> {
         match self.args.get_mut(i) {
             Some(a) if a.out => {
-                a.value = v;
+                let alias = a.alias.clone();
+                a.value = v.clone();
+                // An out argument from script writes through to the caller's storage at once, as the C++ alias.
+                if let Some(alias) = alias {
+                    crate::interp::write_alias(self.vm, &alias, v)?;
+                }
                 Ok(())
             }
             Some(_) => Err(self.bad_arg(i, "not an out parameter")),
@@ -706,8 +726,14 @@ impl Vm {
     /// from C++ `Runtime::call` made inside a native, which starts a fresh `Interp` (new budget, depth 0;
     /// `interp.cpp:915-917`): the Rust VM has one entry point and gives it the `callFromNative` meaning.
     ///
-    /// A native runs its implementation, or the stub policy decides. A script function runs its override binding;
-    /// without one it is `NotYet { NotPorted }` until the interpreter lands (W3-INTERP fills [`Vm::run_frame`]).
+    /// A native runs its implementation, or the stub policy decides. A script function runs its override binding, or
+    /// its bytecode on the interpreter ([`crate::interp`]).
+    ///
+    /// **Stack.** Running script recurses (expression, call, frame, up to `Limits::max_call_depth` frames and
+    /// [`crate::interp::MAX_NESTING`] expression levels). A caller must run the VM on a thread with at least
+    /// [`crate::interp::STACK_SIZE`] bytes of stack, which covers the worst case in a debug build;
+    /// [`crate::interp::on_vm_stack`] runs a closure on such a thread. Past the nesting bound a call is a typed
+    /// [`VmError::Script`], never a stack overflow.
     pub fn call(
         &mut self,
         f: FuncId,
@@ -848,6 +874,8 @@ impl Vm {
         this: Option<ObjRef>,
         args: Vec<Arg>,
     ) -> Result<CallResult, VmError> {
+        // The C++ `invoke` reports a function that cannot run, and decodes, before it checks the depth.
+        crate::interp::prepare(self, f)?;
         if self.script_depth >= self.limits.max_call_depth {
             let path = self.function_path(f);
             // The C++ names the four innermost active script functions, oldest first (`interp.cpp:711-713`).

@@ -164,7 +164,7 @@ fn is_c_space(c: u8) -> bool {
 
 /// The length of the longest prefix of `s` (after white space) that C `strtod` reads as a decimal number, `inf`,
 /// `infinity` or `nan` (optionally `nan(...)`), and whether it is a hexadecimal float. `None` when nothing converts.
-pub fn strtod_prefix(s: &str) -> Option<(usize, usize, bool)> {
+pub(crate) fn strtod_prefix(s: &str) -> Option<(usize, usize, bool)> {
     let b = s.as_bytes();
     let mut i = 0;
     while i < b.len() && is_c_space(b[i]) {

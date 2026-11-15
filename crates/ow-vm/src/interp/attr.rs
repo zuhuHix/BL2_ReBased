@@ -55,7 +55,26 @@ pub(crate) fn let_attribute(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> R
             format!("let attribute: {name} is not an attribute value property in {path}"),
         ));
     }
+    // The companions come from the property's declaring class, before the right side runs (the C++ `companions()`
+    // reads the declaration's own references first).
+    let no_companions = || {
+        script_error(
+            &path,
+            format!("let attribute: {name} has no modifier stack and base value in {path}"),
+        )
+    };
+    let (package, export) = decl.source.ok_or_else(no_companions)?;
+    let outer = vm.defs.packages().get(package).exports[export as usize - 1].outer;
+    let declaring = super::load::class_at(vm, package, outer, &path)?.ok_or_else(no_companions)?;
+    let companions = vm
+        .space
+        .classes
+        .prop(declaring, decl.name)
+        .and_then(|p| vm.space.classes.decl(p))
+        .and_then(|d| d.attr)
+        .ok_or_else(no_companions)?;
     let rhs = eval(vm, f, &e.kids[1], ctx)?;
+    // The object must hold the property (C++: base, value and stack found on it by name).
     let missing = || {
         script_error(
             &path,
@@ -66,22 +85,9 @@ pub(crate) fn let_attribute(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> R
         return Err(missing());
     }
     let class = vm.space.heap.get(object)?.class;
-    let prop = vm
-        .space
-        .classes
-        .prop(class, decl.name)
-        .ok_or_else(missing)?;
-    let companions = vm
-        .space
-        .classes
-        .decl(prop)
-        .and_then(|d| d.attr)
-        .ok_or_else(|| {
-            script_error(
-                &path,
-                format!("let attribute: {name} has no modifier stack and base value in {path}"),
-            )
-        })?;
+    if !vm.space.classes.is_child_of(class, declaring) {
+        return Err(missing());
+    }
     let base = vm
         .space
         .read(object, PropAddr::scalar(companions.base))?
