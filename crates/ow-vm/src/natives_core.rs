@@ -72,6 +72,40 @@ impl NativePack for Pack {
     }
 }
 
+/// Which list an engine actor iterator asks the world for ([`ActorSource`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorWalk {
+    /// `Actor.AllActors`.
+    All,
+    /// `Actor.DynamicActors`.
+    Dynamic,
+}
+
+/// The walk behind `Actor.AllActors` and `Actor.DynamicActors`: the actors a world's level lists give, in walk order,
+/// before the class and interface filters.
+pub type ActorWalkFn = Rc<dyn Fn(&Vm, ActorWalk) -> Result<Vec<ObjRef>, VmError>>;
+
+/// The world's actor lists for the two engine iterators, a VM service (seam added for lane W5-WORLD, decision
+/// 2026-11-15-26): `ow-world` adds one, and the iterators then visit what it walks instead of the heap's live
+/// instances (the C++ list). The walk borrows nothing across the call; the service cell is borrowed only to clone
+/// the function out.
+pub struct ActorSource {
+    walk: ActorWalkFn,
+}
+
+impl ActorSource {
+    pub fn new(walk: ActorWalkFn) -> Self {
+        ActorSource { walk }
+    }
+}
+
+impl std::fmt::Debug for ActorSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorSource").finish_non_exhaustive()
+    }
+}
+
 /// Registers every Core native and the two engine iterators on `vm`. A second call on one VM is refused (duplicate
 /// registration).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -1159,22 +1193,57 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
     )?;
 
     // Engine iterators: Actor.AllActors(BaseClass, out Actor, optional InterfaceClass) and Actor.DynamicActors (same
-    // parameters, read from the Engine package by the C++). Both visit the live instances of BaseClass or a child
-    // of it, in creation order; the loop binds the out parameter (index 1). A None BaseClass matches nothing.
-    // UNVERIFIED (as in the C++): the real DynamicActors visits only actors spawned at run time, here it is the same
-    // list as AllActors; the real walk is live, here the list is taken when the loop starts. An InterfaceClass keeps
-    // the objects whose class implements it (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2); a
-    // "no" for an object whose class chain runs through an engine-native stand-in class is NotYet (decision
-    // 2026-11-15-08). Only `implements` decides, as in the C++; `is_child` is asked for that NotYet alone.
-    fn actors(c: &mut NativeCall<'_>) -> Result<IteratorResult, VmError> {
+    // parameters, read from the Engine package by the C++); the loop binds the out parameter (index 1).
+    //
+    // Without an [`ActorSource`] service (the C++ list): both visit the live instances of BaseClass or a child of it,
+    // in creation order, and a None BaseClass matches nothing. UNVERIFIED (as in the C++): the real DynamicActors
+    // visits only actors spawned at run time, here it is the same list as AllActors.
+    //
+    // With an [`ActorSource`] (lane W5-WORLD adds one): the candidates are the world's walk for that iterator, kept
+    // when their class is BaseClass or a child of it; a None BaseClass keeps every candidate (NATIVE_ENGINE_CORE.md,
+    // "Iterators": None means Actor, and the world's lists hold actors only).
+    //
+    // Either way the list is taken when the loop starts, where the game's walk is live (UNVERIFIED as a game rule;
+    // the `foreach` contract takes a list). An InterfaceClass keeps the objects whose class implements it
+    // (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2); a "no" for an object whose class chain
+    // runs through an engine-native stand-in class is NotYet (decision 2026-11-15-08). Only `implements` decides, as
+    // in the C++; `is_child` is asked for that NotYet alone.
+    fn actors(c: &mut NativeCall<'_>, walk: ActorWalk) -> Result<IteratorResult, VmError> {
         let base = if c.has(0) { class(c, 0)? } else { None };
         let interface = if c.has(2) { class(c, 2)? } else { None };
-        let Some(base) = base else {
-            return Ok(IteratorResult::new(1, Vec::new()));
+        let source = match c.vm.service::<ActorSource>() {
+            Some(cell) => Some(
+                cell.try_borrow()
+                    .map_err(|_| VmError::ServiceBorrowed("ActorSource"))?
+                    .walk
+                    .clone(),
+            ),
+            None => None,
         };
-        let live: Vec<ObjRef> = c.vm.space.live(base).collect();
-        let mut items = Vec::with_capacity(live.len());
-        for o in live {
+        let candidates: Vec<ObjRef> = match source {
+            Some(walk_fn) => {
+                let listed = walk_fn(c.vm, walk)?;
+                match base {
+                    None => listed,
+                    Some(b) => {
+                        let mut kept = Vec::with_capacity(listed.len());
+                        for o in listed {
+                            let own = c.vm.space.heap.get(o)?.class;
+                            if c.vm.space.classes.is_child_of(own, b) {
+                                kept.push(o);
+                            }
+                        }
+                        kept
+                    }
+                }
+            }
+            None => match base {
+                Some(base) => c.vm.space.live(base).collect(),
+                None => return Ok(IteratorResult::new(1, Vec::new())),
+            },
+        };
+        let mut items = Vec::with_capacity(candidates.len());
+        for o in candidates {
             let keep = match interface {
                 None => true,
                 Some(iface) => {
@@ -1192,8 +1261,14 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
         }
         Ok(IteratorResult::new(1, items))
     }
-    vm.register_iterator("Actor.AllActors(class,object,class)", Rc::new(actors))?;
-    vm.register_iterator("Actor.DynamicActors(class,object,class)", Rc::new(actors))?;
+    vm.register_iterator(
+        "Actor.AllActors(class,object,class)",
+        Rc::new(|c: &mut NativeCall<'_>| actors(c, ActorWalk::All)),
+    )?;
+    vm.register_iterator(
+        "Actor.DynamicActors(class,object,class)",
+        Rc::new(|c: &mut NativeCall<'_>| actors(c, ActorWalk::Dynamic)),
+    )?;
 
     reg(vm, "Object.GetStateName()", |c| {
         let state = match c.this {
