@@ -191,6 +191,12 @@ if(EXISTS ${OW_RUST_PACKAGE})
   add_test(NAME item-stats-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_stats_rust_test.py
            $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
   set_tests_properties(item-stats-rust PROPERTIES TIMEOUT 300 LABELS rust ENVIRONMENT "OW_PARITY=reference")
+  # Lane W4-POOLS: the Rust --item-pool against tools/loot_pools.py's CrtRand path on the C++ reader. The oracle's rules
+  # are reproduced only in Reference mode, so it runs with OW_PARITY=reference, as its mode=reference manifest line
+  # (tests/rust_parity.d/pools.txt) does under tools/rust_parity.py.
+  add_test(NAME item-pools-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_pools_rust_test.py
+           $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
+  set_tests_properties(item-pools-rust PROPERTIES TIMEOUT 300 LABELS rust ENVIRONMENT "OW_PARITY=reference")
   # Lane W3-DEFS: --def-dump is Rust-only (the C++ binary has no such command), so this runs the Rust binary alone.
   add_test(NAME def-dump-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/def_dump_test.py ${OW_RUST_PACKAGE})
   set_tests_properties(def-dump-synthetic PROPERTIES TIMEOUT 120 LABELS rust)
