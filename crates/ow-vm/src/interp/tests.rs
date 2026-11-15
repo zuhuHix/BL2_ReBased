@@ -1864,19 +1864,32 @@ fn a_function_that_does_not_decode_says_why_on_every_call() {
 }
 
 #[test]
-fn class_defaults_wait_for_the_definition_store() {
+fn class_defaults_come_from_the_definition_store() {
     let mut r = start(ParityMode::Off);
-    // No object: the frame runs against the owner's class default object (DefStore::class_default).
+    // No object: the frame runs against the owner's class default object (DefStore::class_default, W3-DEFS), and
+    // Answer returns its constant 42 whatever object it runs on.
     let f = r.vm.find_function("Core.Foo.Answer").unwrap();
-    not_yet(r.vm.call(f, None, vec![]));
+    assert_eq!(r.vm.call(f, None, vec![]).unwrap().ret, Value::Int(42));
     let o = r.object("Core.Foo");
-    for path in [
-        "Core.Foo.LevelThroughClass",
-        "Core.Foo.StaticAnswer",
-        "Core.Foo.MakeMod",
-    ] {
-        not_yet(r.call(path, Some(o), vec![]));
-    }
+    // A class constant (Util) and a call through it run GetLevel on Util's class default object, whose Level no
+    // default tag sets: the declared zero.
+    assert_eq!(
+        r.call("Core.Foo.LevelThroughClass", Some(o), vec![])
+            .unwrap()
+            .ret,
+        Value::Int(0)
+    );
+    // A virtual call in Foo's class context runs on Foo's class default object, so Foo.Get (1), not Bar.Get (2).
+    assert_eq!(
+        r.call("Core.Foo.StaticAnswer", Some(o), vec![])
+            .unwrap()
+            .ret,
+        Value::Int(1)
+    );
+    // `new class'Mod'` makes a Mod from Mod's class default object; Off mode names it per class, so the first is
+    // Mod_0.
+    let made = r.call("Core.Foo.MakeMod", Some(o), vec![]).unwrap().ret;
+    assert_eq!(r.text(&made), "Mod'Mod_0'");
 }
 
 /// Adds a `Core.Mod` modifier (`Type`, `Value`) to `o`'s stack property `stack`, as `vm_test.py`'s `AddSpeedMod` /
