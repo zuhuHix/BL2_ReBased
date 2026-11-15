@@ -285,6 +285,18 @@ fn lower(text: &str) -> String {
     text.to_ascii_lowercase()
 }
 
+/// A package file's identity for [`CodeIndex`]: its source path (absolute and lexically normal, as `Package::load`
+/// keeps it) with `/` separators on Windows, ASCII case folded: the key of the store's path cache (C++ `loadPath`).
+fn file_key(source: &std::path::Path) -> String {
+    let text = source.to_string_lossy();
+    let generic = if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    };
+    lower(&generic)
+}
+
 /// A class loaded by [`CodeIndex::class_at`]: an index into the index's class list, stable for its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClassKey(u32);
@@ -298,6 +310,7 @@ impl ClassKey {
 /// One loaded class: the part of the C++ `Class` the interface rules and the layout need.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
+    /// The package the class was loaded from, as its filed id ([`CodeIndex::filed_id`]).
     pub package: PackageId,
     pub export: i32,
     /// The export's name.
@@ -446,6 +459,8 @@ pub struct LayoutSummary {
 
 /// The reflection index over a store: loaded classes, cached reference answers, per-package lookup tables, and the
 /// layouts defined from them. Built empty with [`CodeIndex::new`] and filled lazily, or by [`load_code_packages`].
+/// Everything is keyed by package file, not by store id: the store may hand out several ids for one file, and the
+/// index files them all under the first it met ([`CodeIndex::filed_id`], decision 2026-11-15-10).
 #[derive(Debug, Default)]
 pub struct CodeIndex {
     classes: Vec<ClassInfo>,
@@ -467,6 +482,14 @@ pub struct CodeIndex {
     struct_stack: Vec<(PackageId, i32)>,
     property_in_progress: FixedHashSet<(PackageId, i32)>,
     enums: FixedHashMap<(PackageId, i32), Result<EnumId, ReflectError>>,
+    /// Every package id this index met, and the id it files that package under: the first id it met for the same
+    /// file with the same bytes. The store hands out several ids for one file (after `scan()`, and for a package its
+    /// global fallback matched; decision 2026-11-15-05), and every cache here is keyed by the filed id, so one
+    /// declaration reached under two ids is one class, one struct and one enum.
+    filed_as: FixedHashMap<PackageId, PackageId>,
+    /// The folded source path of each file met (as the store's path cache folds it), and the ids filed under it: one
+    /// per distinct content, so a file rewritten between two loads keeps its two packages apart.
+    by_file: FixedHashMap<String, Vec<PackageId>>,
     nesting: usize,
     max_nesting: usize,
 }
@@ -516,12 +539,48 @@ impl CodeIndex {
         self.max_nesting
     }
 
+    /// The id `package` is filed under (see [`CodeIndex::filed_id`]), recorded on first meeting. A package with no
+    /// source path (bytes given directly) is its own file.
+    fn file(&mut self, store: &PackageStore, package: PackageId) -> PackageId {
+        if let Some(&filed) = self.filed_as.get(&package) {
+            return filed;
+        }
+        let pkg = store.get(package);
+        let filed = if pkg.source.as_os_str().is_empty() {
+            package
+        } else {
+            let ids = self.by_file.entry(file_key(&pkg.source)).or_default();
+            match ids.iter().copied().find(|&other| {
+                let other = store.get(other);
+                other.name == pkg.name && other.data == pkg.data
+            }) {
+                Some(other) => other,
+                None => {
+                    ids.push(package);
+                    package
+                }
+            }
+        };
+        self.filed_as.insert(package, filed);
+        filed
+    }
+
+    /// The id this index files `package` under: the first id it met for the same file (the same source path,
+    /// folded as the store's path cache folds it) with the same bytes. Every [`PackageId`] the index hands out
+    /// (in [`ClassInfo::package`], [`CodeIndex::resolve_ref`], declaration sources) is a filed id. An id the index
+    /// has not met yet is returned unchanged.
+    pub fn filed_id(&self, package: PackageId) -> PackageId {
+        self.filed_as.get(&package).copied().unwrap_or(package)
+    }
+
     // Read-only, cache-only lookups (for a reflection typer behind `&self`): each answers only from what earlier
-    // `&mut` calls loaded, and loads nothing.
+    // `&mut` calls loaded, and loads nothing. They take any id the index met for the package.
 
     /// The loaded class of export `index` of `package`, if [`CodeIndex::class_at`] loaded it.
     pub fn loaded_class(&self, package: PackageId, index: i32) -> Option<ClassKey> {
-        self.by_export.get(&(package, index)).copied()
+        self.by_export
+            .get(&(self.filed_id(package), index))
+            .copied()
     }
 
     /// [`CodeIndex::resolve_ref`] from the cache: `Some(answer)` where the answer is known without loading (0, an
@@ -532,12 +591,13 @@ impl CodeIndex {
         package: PackageId,
         reference: i32,
     ) -> Option<Option<(PackageId, i32)>> {
+        let filed = self.filed_id(package);
         match reference {
             0 => Some(None),
             r if r > 0 => {
-                Some((r as usize <= store.get(package).exports.len()).then_some((package, r)))
+                Some((r as usize <= store.get(package).exports.len()).then_some((filed, r)))
             }
-            r => self.ref_cache.get(&(package, r)).copied(),
+            r => self.ref_cache.get(&(filed, r)).copied(),
         }
     }
 
@@ -551,14 +611,14 @@ impl CodeIndex {
     /// The struct defined from ScriptStruct export `index` of `package`, once defined.
     pub fn struct_of(&self, package: PackageId, index: i32) -> Option<StructId> {
         self.structs
-            .get(&(package, index))
+            .get(&(self.filed_id(package), index))
             .and_then(|o| o.as_ref().ok().copied())
     }
 
     /// The enum defined from Enum export `index` of `package`, once defined.
     pub fn enum_of(&self, package: PackageId, index: i32) -> Option<EnumId> {
         self.enums
-            .get(&(package, index))
+            .get(&(self.filed_id(package), index))
             .and_then(|o| o.as_ref().ok().copied())
     }
 
@@ -586,10 +646,12 @@ impl CodeIndex {
     ) -> Result<PackageId, ReflectError> {
         let parsed = PackageName::parse(name)
             .map_err(|_| ReflectError::Store(StoreError::PackageNotFound(name.to_string())))?;
-        Ok(store.load(&parsed)?)
+        let id = store.load(&parsed)?;
+        Ok(self.file(store, id))
     }
 
     fn index_of(&mut self, store: &PackageStore, package: PackageId) -> Rc<PackageIndex> {
+        let package = self.file(store, package);
         Rc::clone(
             self.indexes
                 .entry(package)
@@ -639,6 +701,7 @@ impl CodeIndex {
         if reference == 0 {
             return None;
         }
+        let package = self.file(store, package);
         if reference > 0 {
             let exports = store.get(package).exports.len();
             return (reference as usize <= exports).then_some((package, reference));
@@ -646,7 +709,9 @@ impl CodeIndex {
         if let Some(&cached) = self.ref_cache.get(&(package, reference)) {
             return cached;
         }
-        let result = self.resolve_import(store, package, reference);
+        let result = self
+            .resolve_import(store, package, reference)
+            .map(|(target, index)| (self.file(store, target), index));
         self.ref_cache.insert((package, reference), result);
         result
     }
@@ -872,6 +937,7 @@ impl CodeIndex {
         store: &mut PackageStore,
         package: PackageId,
     ) -> Result<ClassCheck, ReflectError> {
+        let package = self.file(store, package);
         let pkg = store.shared(package);
         let table = self.index_of(store, package);
         let mut check = ClassCheck {
@@ -1050,6 +1116,7 @@ impl CodeIndex {
         classes: &mut ClassTable,
         package: PackageId,
     ) -> Result<LayoutSummary, ReflectError> {
+        let package = self.file(store, package);
         let mut summary = LayoutSummary::default();
         let exports = store.get(package).exports.len() as i32;
         for index in 1..=exports {

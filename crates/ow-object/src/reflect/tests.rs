@@ -1048,6 +1048,134 @@ fn a_reused_struct_brings_its_deferred_dependencies() {
     }
 }
 
+/// Invented `Engine.upk` (class Actor with enum EKind and struct Params, which gets `extra` more Int fields) and
+/// `Game.upk` (Pawn under Engine.Actor, holding Engine.Actor.Params through an import). Returns the Engine path and
+/// the references Actor, Params, EKind, and Game's Actor import.
+fn two_package_tree(tree: &Tree, extra: usize) -> (PathBuf, [i32; 4]) {
+    let mut engine = Declarations::new(&["Int", "Struct", "Byte"]);
+    let actor = engine.cls("Actor", 0);
+    let kinds = engine.enum_(actor, "EKind", &["K_A"]);
+    engine.prop("Byte", actor, "Kind", kinds);
+    // Held is the last export, so the first declaration read (descending order): the struct is reached first.
+    let params = engine.struct_in(actor, "Params", 0, None);
+    engine.prop("Int", params, "X", 0);
+    engine.prop("Struct", actor, "Held", params);
+    for n in 0..extra {
+        engine.prop("Int", params, &format!("Extra{n}"), 0);
+    }
+    let engine_path = tree.write("Engine.upk", &engine.build());
+    let mut game = Declarations::new(&["Struct"]);
+    let package = game.p.add_import("Core", "Package", 0, "Engine");
+    let actor_import = game.p.add_import("Core", "Class", package, "Actor");
+    let params_import = game
+        .p
+        .add_import("Core", "ScriptStruct", actor_import, "Params");
+    let pawn = game.cls("Pawn", actor_import);
+    game.prop("Struct", pawn, "Also", params_import);
+    tree.write("Game.upk", &game.build());
+    (engine_path, [actor, params, kinds, actor_import])
+}
+
+/// REFLECT-FIX: one file reached under two package ids (a load after `scan()`; the store's global fallback hands
+/// out a fresh id the same way, decision 2026-11-15-05) is one class, one struct and one enum. Before the fix the
+/// second id loaded Engine.Actor again and its layout was refused with `AlreadyDefined`, as W3-DECODE's Sanctuary
+/// run saw for `ImpactResponseParameters`.
+#[test]
+fn one_file_under_two_ids_is_one_declaration() {
+    let tree = Tree::new("two-ids");
+    let (engine_path, [actor, params, kinds, actor_import]) = two_package_tree(&tree, 0);
+    let mut store = tree.store();
+    let first = store.load_path(&engine_path).unwrap();
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, first)
+        .unwrap();
+    assert_eq!((summary.classes, summary.defined), (1, 1));
+
+    store.scan().unwrap();
+    let second = store.load_path(&engine_path).unwrap();
+    assert_ne!(first, second, "the store hands out a second id");
+    assert_eq!(store.get(first).source, store.get(second).source);
+
+    // Through the second id directly, then through an import that the store now answers with it.
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, second)
+        .unwrap();
+    assert_eq!(
+        (summary.classes, summary.defined),
+        (1, 1),
+        "{:?}",
+        summary.failures
+    );
+    let game = store.load_path(&tree.0.join("Game.upk")).unwrap();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, game)
+        .unwrap();
+    assert_eq!(
+        (summary.classes, summary.defined),
+        (1, 1),
+        "{:?}",
+        summary.failures
+    );
+    assert_eq!(index.classes().count(), 2, "Actor once, Pawn once");
+    assert_eq!(
+        index.resolve_ref(&mut store, game, actor_import),
+        Some((first, actor)),
+        "answered under the id the index met first"
+    );
+    let actor_key = index.loaded_class(first, actor).unwrap();
+    assert_eq!(index.loaded_class(second, actor), Some(actor_key));
+    assert_eq!(index.class(actor_key).package, first);
+    let struct_id = classes.struct_by_path("Engine.Actor.Params");
+    assert!(struct_id.is_some());
+    assert_eq!(index.struct_of(first, params), struct_id);
+    assert_eq!(index.struct_of(second, params), struct_id);
+    assert_eq!(
+        index.enum_of(second, kinds),
+        classes.enum_by_path("Engine.Actor.EKind")
+    );
+    assert_eq!(
+        index.cached_ref(&store, second, actor),
+        Some(Some((first, actor)))
+    );
+    let pawn_id = classes.by_path("Game.Pawn").unwrap();
+    assert_eq!(
+        classes.layout(pawn_id).super_class(),
+        classes.by_path("Engine.Actor")
+    );
+}
+
+/// The same path with other bytes (the file was rewritten between the two loads) is not the same declaration: the
+/// second id is not folded into the first, and its class is refused as defined twice, as before.
+#[test]
+fn a_rewritten_file_under_a_second_id_stays_apart() {
+    let tree = Tree::new("two-ids-rewritten");
+    let (engine_path, [actor, ..]) = two_package_tree(&tree, 0);
+    let mut store = tree.store();
+    let first = store.load_path(&engine_path).unwrap();
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    index
+        .define_layouts(&mut store, &mut names, &mut classes, first)
+        .unwrap();
+    two_package_tree(&tree, 1);
+    store.scan().unwrap();
+    let second = store.load_path(&engine_path).unwrap();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, second)
+        .unwrap();
+    assert_eq!((summary.classes, summary.defined), (1, 0));
+    assert!(matches!(
+        root(summary.failures[0].1.clone()),
+        ReflectError::Layout(LayoutError::AlreadyDefined { .. })
+    ));
+    assert_ne!(
+        index.loaded_class(second, actor),
+        index.loaded_class(first, actor)
+    );
+}
+
 /// The read-only lookups answer from what earlier calls loaded, and nothing else.
 #[test]
 fn read_only_lookups_answer_from_the_cache() {
