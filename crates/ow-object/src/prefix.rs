@@ -9,7 +9,9 @@
 //! and which prefix a given export needs, are observations of the installed packages, UNVERIFIED as a rule of the game
 //! (ROADMAP Phase 0, "the observed 4-byte prefix is UNVERIFIED as a rule").
 
-/// The bytes before an export's tags. The discriminant is the byte count.
+/// The bytes before an export's tags. The discriminant is the byte count. `#[non_exhaustive]` (granted to W3-DEFS):
+/// distribution subobjects may need a 16-byte case (PHASELOCK_STOCK_DATA.md).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PropertyPrefix {
     /// An ordinary object: 4 bytes.

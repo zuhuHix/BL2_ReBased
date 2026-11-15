@@ -655,15 +655,17 @@ impl Overlay { pub fn from_live_capture(name: &str, json: &str) -> Result<Overla
 #[non_exhaustive] pub struct Segment { pub name: String, pub index: Option<u32> }
 #[non_exhaustive] pub struct PropertyPath { pub segments: Vec<Segment> }   // ::parse: Name[i]?(.Name[i]?)*
 // tail.rs
-#[non_exhaustive] pub struct Tail { pub package: PackageId, pub data: Arc<Package>, pub range: Range<usize> }  // ::new, bytes()
+#[non_exhaustive] pub struct Tail { pub package: PackageId, pub data: Arc<Package>, pub range: Range<usize> }
+impl Tail { pub fn new(package, data, range) -> Option<Tail> /* None: reversed or past the data */; pub fn bytes(&self) -> &[u8]; }
 // store.rs
 pub const RECORD: &str;
 #[non_exhaustive] #[derive(Clone, PartialEq)] pub enum DefError { Store(StoreError), Reflect(ReflectError),
     Decode(DecodeError), Heap(HeapError) /* the four transparent */, Io { path, reason }, OverlaySyntax { line, column, reason },
     OverlayShape { object, reason }, BadPropertyPath { path, reason }, BadPatch { object, property, reason },
     NoSuchProperty { class, property }, NotADefinition(String), PrefixMismatch { object, derived, given }, NotYet(NotYet) }
-    // From<StoreError | ReflectError | DecodeError | HeapError | NotYet> flatten: a lower layer's NotYet is NotYet, its
-    // heap error Heap, a store or reflection error inside a decode error Store or Reflect
+    // From<StoreError | ReflectError | DecodeError | HeapError | NotYet> flatten: a NotYet or heap error from the decode,
+    // reflection and store layers (a container's NotYet in a package error too) is NotYet or Heap, a store or reflection
+    // error inside a decode error Store or Reflect
 pub struct DefStore { .. }                         // owns the PackageStore, the CodeIndex and the DecodeState; Default = new_empty
 impl DefStore {
     pub fn new(store: PackageStore, policy: IdentityPolicy, mode: ParityMode) -> Self;   // no overlay installed (D1)
@@ -681,7 +683,7 @@ impl DefStore {
                                                    // object that is not an unloaded handle; errors only for stale handles
     pub fn is_loaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool; pub fn is_unloaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool;
     pub fn load_export(&mut self, w: &mut ObjectSpace, package: PackageId, index: i32, prefix: PropertyPrefix)
-        -> Result<ObjRef, DefError>;               // prefix only checked against the class's (PrefixMismatch)
+        -> Result<ObjRef, DefError>;               // prefix only checked against the derived one (PrefixMismatch)
     pub fn owners(&mut self, path: &ObjectPath) -> Result<Holders, DefError>;   // every holder, scan order, and failures
     pub fn census(&mut self) -> Result<Census, DefError>;   // every export path of the scan; keeps no file loaded
     pub fn push_overlay(&mut self, w: &mut ObjectSpace, o: Overlay) -> Result<OverlayId, DefError>;   // also patches loaded objects
@@ -710,11 +712,17 @@ impl DefStore {
 //   heap (SlotMissing), never with a guessed value.
 // - Stand-ins that stay stand-ins (ensure_loaded returns them unchanged, load refuses them with NotADefinition): a
 //   decoded reference whose path no holder has keeps a stand-in naming the import, as the C++ does, and logs
-//   `defs: no holder for <path>` (it never decodes as None); the Reference-mode `?` stand-in; native-class stand-ins
-//   (ClassTable::is_native).
-// - Prefix by class: an export whose class derives from Core.Component reads its tags from 8 bytes in, one deriving from
-//   Engine.Actor from 26, any other from 4 (the C++ definition consumers' value), so the load order cannot change a
-//   decode. The byte counts are prefix.rs's; deriving them from the class is UNVERIFIED as a game rule.
+//   `defs: no holder for <path>` (it never decodes as None), keyed by folded path in Off (the identity rule) and by
+//   (importing package's filed id, import index) under Reference, as the C++ Runtime::resource; the Reference-mode `?`
+//   stand-in; native-class stand-ins (ClassTable::is_native).
+// - A failed load is remembered: the handle keeps its error, and later calls return it without decoding again or adding
+//   log lines (take_log stays deterministic); the handle stays unloaded.
+// - Prefix derived from the export, so the load order cannot change a decode: 8 for an Engine.ActorComponent subclass,
+//   26 for an Engine.Actor export whose outer is a level, 4 for a class deriving from neither Core.Component nor
+//   Engine.Actor; any other export (other Core.Component subclasses, actor archetypes) takes its derived prefix only
+//   when a structural check holds (the tag stream parses cleanly to None within the serial size), else NotYet, never
+//   a guess. The byte counts are prefix.rs's (PropertyPrefix is #[non_exhaustive], for a possible 16-byte case); the
+//   per-class rule is UNVERIFIED and belongs to the implementation: it may be refined without an API change.
 // - Code exports (class, struct, enum, function, state, property) give DefError::NotADefinition from find; their layouts
 //   are reached through class_id and key. A Default__<Class> export is that class's default object (class_default).
 // - Code packages: the store never calls load_code_packages; its CodeIndex starts empty and loads classes lazily. A lane
@@ -725,11 +733,12 @@ impl DefStore {
 // - Overlays patch values only (they define no class): pushed in order, a later patch of an element wins; applied to
 //   loaded objects at once and to others when they load; a patch replaces the whole element its path ends at (a struct
 //   from its defaults with the listed fields set); a patch that does not type leaves the cooked value and is recorded in
-//   OverlayStatus::failed; a patch on a Default__ object fails with NotADefinition (failed, not pending); on a static
+//   OverlayStatus::failed; a patch on a Default__ object is failed, not pending (NotADefinition for LiveCapture and
+//   Test, NotYet for TextMod and Hotfix, which do set class defaults); on a static
 //   array, an unindexed path with a List sets the whole array, with a scalar element 0. The default overlay set is empty
 //   (D1). Static-array patches (`Prop[3].Field`) address PropAddr.
 // - The store passes its ParityMode to every decode and adds no stand-in of its own.
-// As shipped by the W3-DEFS contract (PR #307, review r1): the ParityMode argument, open, from_synthetic, Owner with its
+// As shipped by the W3-DEFS contract (PR #307, reviews r1 and r2): the ParityMode argument, open, from_synthetic, Owner with its
 // class and id, Holders, Census, PatchValue, Tail, the PropAddr origin, ValueOrigin::NotADefinition, &mut on owners and
 // key, PrefixMismatch, and the added load, ensure_loaded, is_loaded, is_unloaded, load_export, census, code_mut,
 // class_id, class_default, overlay_status, take_log and PropertyPath differ from revision 3 here.
@@ -1004,8 +1013,8 @@ pub enum VmError { Script { function: String, message: String }, StepLimit, Unbo
                    Heap(HeapError), Attr(AttrError), Decode(String), Registration { key: String, reason: &'static str },
                    BadArgument { function: String, index: usize, reason: &'static str }, ServiceBorrowed(&'static str),
                    Def(DefError) /* added by W3-DEFS */ }   // From<NotYet | HeapError | AttrError | DefError>; from a DefError,
-                   // NotYet -> NotYet, Heap -> Heap, the rest Def; From<AttrError> passes AttrError::Def through as Def
-impl From<VmError> for AttrError { .. }   // NotYet, Heap, Attr and Def pass through unchanged; the rest as AttrError::World(text)
+                   // NotYet -> NotYet, Heap -> Heap, the rest Def; From<AttrError> converts AttrError::Def as a DefError
+impl From<VmError> for AttrError { .. }   // NotYet, Heap and Attr pass through, Def converts as a DefError; the rest as AttrError::World(text)
 ```
 
 ```rust

@@ -99,29 +99,30 @@ impl From<DefError> for VmError {
 }
 
 /// `NotYet` and heap errors keep their own variants (so a `NotYet` raised inside a notification override still matches
-/// `VmError::NotYet` and gives the CLI's "not yet" exit code); a definition store error is `VmError::Def` unchanged;
-/// the rest is `VmError::Attr`.
+/// `VmError::NotYet` and gives the CLI's "not yet" exit code); a definition store error converts as a `DefError` does
+/// (so its `NotYet` and heap errors keep their variants too); the rest is `VmError::Attr`.
 impl From<AttrError> for VmError {
     fn from(e: AttrError) -> Self {
         match e {
             AttrError::NotYet(n) => VmError::NotYet(n),
             AttrError::Heap(h) => VmError::Heap(h),
-            AttrError::Def(d) => VmError::Def(d),
+            AttrError::Def(d) => d.into(),
             other => VmError::Attr(other),
         }
     }
 }
 
 /// For a world that runs script inside the attribute system (a change-notification override, a resolver that calls
-/// into the VM): `NotYet`, heap, attribute and definition store errors pass through unchanged, so a caller still sees
-/// what is missing; every other VM error travels as `AttrError::World` with its text.
+/// into the VM): `NotYet`, heap and attribute errors pass through unchanged and a definition store error converts as a
+/// `DefError` does, so a caller still sees what is missing; every other VM error travels as `AttrError::World` with its
+/// text.
 impl From<VmError> for AttrError {
     fn from(e: VmError) -> Self {
         match e {
             VmError::NotYet(n) => AttrError::NotYet(n),
             VmError::Heap(h) => AttrError::Heap(h),
             VmError::Attr(a) => a,
-            VmError::Def(d) => AttrError::Def(d),
+            VmError::Def(d) => d.into(),
             other => AttrError::World(other.to_string()),
         }
     }
@@ -211,5 +212,15 @@ mod tests {
             AttrError::Def(d.clone())
         );
         assert_eq!(VmError::from(AttrError::Def(d.clone())), VmError::Def(d));
+        // A NotYet held in a Def reaches the NotYet variant both ways.
+        let n = NotYet::not_read("y", "r");
+        assert_eq!(
+            VmError::from(AttrError::Def(DefError::NotYet(n.clone()))),
+            VmError::NotYet(n.clone())
+        );
+        assert_eq!(
+            AttrError::from(VmError::Def(DefError::NotYet(n.clone()))),
+            AttrError::NotYet(n)
+        );
     }
 }
