@@ -610,44 +610,81 @@ pub enum PowForm { Single /* progression.cpp */, DoubleThenSingle /* weapon_gen.
 // Both forms stay parameters of the frozen API even after 5.3 settles the game's form (callers then pass the settled one).
 pub fn combine_base(mode: BaseValueMode, base: f32, def_value: f32) -> f32;
 
-// api.rs, registry.rs (W2-ATTRAPI): the upward edge.
+// api.rs, registry.rs (W2-ATTRAPI). Shipped shapes (W2-ATTRAPI; replaces the revision 3 sketch): module path
+// ow_attr::api for the traits and data, ow_attr::registry for AttributeSystem and let_base.
 pub trait AttrWorld {
-    fn parts(&mut self) -> WorldParts<'_>;            // one split borrow: both halves at once (DefStore::find needs both)
+    fn parts(&mut self) -> WorldParts<'_>;            // one split borrow: both halves at once (DefStore lookups need both)
     fn globals(&mut self) -> Result<Option<ObjRef>, AttrError>;                       // NoContextNeeded target
     fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError>;
-    fn engine_query(&mut self, q: EngineQuery, source: ObjRef) -> Result<Option<ObjRef>, AttrError>;  // default: NotYet
+    fn engine_query(&mut self, q: EngineQuery, source: ObjRef) -> Result<Option<ObjRef>, AttrError>;  // default: NotYet { LayerAbsent("ow-world") }
     fn attribute_changed(&mut self, owner: ObjRef, value_prop: PropId) -> Result<(), AttrError>;     // notify-flag properties only
     fn rng(&mut self, s: CrtStream) -> &mut dyn Rand15;                               // random variance, Random resolver
 }
-pub struct WorldParts<'a> { pub space: &'a mut ObjectSpace, pub defs: Option<&'a mut DefStore> }   // None: NotYet { LayerAbsent }
+#[non_exhaustive] pub struct WorldParts<'a> { pub space: &'a mut ObjectSpace, pub defs: Option<&'a mut DefStore> }
+impl WorldParts<'_> { pub fn new(space, defs) -> Self; pub fn defs(&mut self) -> Result<&mut DefStore, AttrError> /* None: NotYet { LayerAbsent("ow-defs") } */ }
+#[non_exhaustive] pub enum EngineQuery { ResourcePool { resource: ObjRef }, EquippedInventory { location: u8 },
+    Inventory { definition: ObjRef, equipped_only: bool }, PlayerController, AttributeContextSource }  // W3-ATTRCTX adds more
 // Implementations: ow_vm::Vm (the running world; attribute_changed dispatches the class's notification, which may run
 // script, because the Vm is borrowed whole), ow_balance::OfflineWorld (tools and tests), and ow_items::RollWorld, an
 // adapter that forwards everything to an inner world except rng(), which returns the roll's one CrtRand for every stream.
+#[non_exhaustive] #[derive(Clone, PartialEq)]   // not Eq: BalanceError and VmError carry Attr(AttrError)
+pub enum AttrError { NotYet(NotYet), Heap(HeapError), Layout(LayoutError), BadData { reason: Cow<'static, str> },
+                     DuplicateResolver { class: String }, World(String) /* the world's own error as text */ }  // W3-DEFS adds Def(DefError)
 pub struct GlobalSlots { pub experience_point_test_level: f32 /* slot 0 */, pub badass_token_test_rank: f32 /* slot 1 */ }
-pub struct EvalCx<'a> { pub world: &'a mut dyn AttrWorld, pub globals: GlobalSlots }   // no RNG field: one borrow, world.rng()
-pub trait ContextResolver { fn resolve(&self, resolver: ObjRef, source: ObjRef, cx: &mut EvalCx) -> Result<Option<ObjRef>, AttrError>; }
+                                    // get(i): 0.0 beyond slot 1; set(i): NotYet { NotRead } beyond slot 1
+pub struct NumForms { pub pow: PowForm, pub combine: CombineForm }   // defaults DoubleThenSingle, WeaponGen (section 5.3)
+pub struct EvalCx<'a> { pub world: &'a mut dyn AttrWorld, pub globals: GlobalSlots, pub forms: NumForms }   // no RNG field: one borrow, world.rng()
+impl<'a> EvalCx<'a> { pub fn new(world: &'a mut dyn AttrWorld) -> Self; with_globals(..); with_forms(..) }
+// Resolvers get the calling system, so a resolver can resolve another definition's chain with the same cx.
+pub trait ContextResolver { fn resolve(&self, sys: &AttributeSystem, resolver: ObjRef, attr: ObjRef, source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Option<ObjRef>, AttrError>; }
 pub trait ValueResolver {
-    fn value(&self, resolver: ObjRef, context: ObjRef, cx: &mut EvalCx) -> Result<f32, AttrError>;
-    fn storage(&self, resolver: ObjRef, context: ObjRef, cx: &mut EvalCx) -> Result<Option<Storage>, AttrError> { Ok(None) } // writable: ObjectProperty only
+    fn value(&self, sys: &AttributeSystem, resolver: ObjRef, context: ObjRef, previous: f32, cx: &mut EvalCx) -> Result<f32, AttrError>;   // previous: the chain's fold
+    fn base_value(..same..) -> Result<f32, AttrError> { self.value(..) }                                     // class default
+    fn storage(&self, sys: &AttributeSystem, resolver: ObjRef, context: ObjRef, cx: &mut EvalCx) -> Result<Option<Storage>, AttrError> { Ok(None) } // writable: ObjectProperty only
 }
-pub enum Storage { Stack { owner: ObjRef, companions: AttrCompanions, kind: NumKind }, Plain { owner: ObjRef, prop: PropId } }
-pub struct AttributeSystem { .. }   // immutable registry keyed by resolver class path; unknown class -> NotYet { NotRead }
+#[non_exhaustive] pub enum Storage { Stack { owner: ObjRef, companions: AttrCompanions, kind: NumKind }, Plain { owner: ObjRef, prop: PropId, kind: NumKind } }
+pub struct InitData { pub base_value_constant: f32, pub base_value_attribute: Option<ObjRef>, pub initialization_definition: Option<ObjRef>,
+                      pub base_value_scale_constant: f32 }   // AttributeInitializationData; InitData::constant(v)
+pub struct ExprData { pub attribute_operand1: Option<ObjRef>, pub comparison_operator: Comparison, pub operand2_usage: Operand2Usage,
+                      pub attribute_operand2: Option<ObjRef>, pub constant_operand2: f32 }   // AttributeExpressionData
+pub enum Comparison { EqualTo = 0, .., GreaterThanOrEqual = 5 }  pub enum Operand2Usage { PreferAttribute = 0, Multiply = 1 }
+pub enum ExprMode { And = 0, Or = 1 }
+#[non_exhaustive] pub struct EffectData { pub attribute_to_modify: Option<ObjRef>, pub modifier_type: ModifierType, pub base_modifier_value: InitData }  // ::new
+pub struct AppliedEffect { pub context: ObjRef, pub attribute: ObjRef, pub modifier: ObjRef }   pub struct Applied(pub Vec<AppliedEffect>);
+pub struct AttrValue { pub context: ObjRef, pub value: f32 }
+pub fn modifier_id_of(modifier: ObjRef) -> ModifierId;   // generation << 32 | index: the AttributeModifier object's identity
+// Add and remove take the AttributeModifier OBJECT (the stack holds object references; its Type and Value are read at
+// each recompute) and answer an outcome, not a count: a plain attribute's remove answers true and changes nothing
+// (NATIVE_ATTRIBUTES section 3), which a count of 0 would read as false. .succeeded() is the native's bool.
+#[non_exhaustive] pub enum AddModifierOutcome { Added, Duplicate, AppliedInPlace /* plain attribute */, Refused(Refusal) }
+#[non_exhaustive] pub enum RemoveModifierOutcome { Removed { count: usize }, NotPresent, PlainNoOp /* true */, Refused(Refusal) }
+#[non_exhaustive] pub enum Refusal { NoContext, NoValueResolvers, NullResolver, NotWritable, NotAnAttribute }
+pub struct AttributeSystem { .. }   // immutable registry keyed by the EXACT resolver class path (a subclass is not served by
+                                    // its parent's entry); unknown class -> NotYet { NotRead }
                                     // held as Rc<AttributeSystem>; a caller clones the Rc, then lends the world:
-                                    //   let attrs = vm.attrs.clone(); attrs.evaluate_init(&d, src, &mut EvalCx::new(&mut vm))?;
+                                    //   let attrs = vm.attrs.clone(); attrs.evaluate_init(&d, src, None, &mut EvalCx::new(&mut vm))?;
                                     // (no borrow of vm.attrs is live while vm is lent, so no E0502)
 impl AttributeSystem {
     pub fn new_empty() -> Self;                                                       // the placeholder's constructor, kept
-    pub fn standard() -> Self;                                                        // every resolver class the notes read
-    pub fn value_of(&self, attr: ObjRef, source: ObjRef, cx: &mut EvalCx) -> Result<Option<f32>, AttrError>; // None: chain did not resolve
-    pub fn evaluate_init(&self, data: &InitData, source: Option<ObjRef>, cx: &mut EvalCx) -> Result<f32, AttrError>;
-    pub fn expressions_hold(&self, exprs: &[ExprData], mode: ExprMode, source: ObjRef, cx: &mut EvalCx) -> Result<bool, AttrError>;
-    pub fn add_modifier(&self, attr: ObjRef, context: ObjRef, m: Modifier, cx: &mut EvalCx) -> Result<AddOutcome, AttrError>;
-    pub fn remove_modifier(&self, attr: ObjRef, context: ObjRef, id: ModifierId, cx: &mut EvalCx) -> Result<usize, AttrError>;
-    pub fn set_base(&self, attr: ObjRef, context: ObjRef, v: f32, cx: &mut EvalCx) -> Result<(), AttrError>;
-    pub fn apply_effects(&self, effects: &[EffectData], source: ObjRef, override_cx: Option<ObjRef>, cx: &mut EvalCx) -> Result<Applied, AttrError>;
+    pub fn standard() -> Self;                                                        // every resolver class the notes read (W3 fills)
+    pub fn with_value_resolver(self, class_path: &str, r: impl ValueResolver + 'static) -> Result<Self, AttrError>;   // twice: refused
+    pub fn with_context_resolver(self, class_path: &str, r: impl ContextResolver + 'static) -> Result<Self, AttrError>;
+    pub fn value_resolver(&self, space: &ObjectSpace, resolver: ObjRef) -> Result<&dyn ValueResolver, AttrError>;
+    pub fn context_resolver(&self, space: &ObjectSpace, resolver: ObjRef) -> Result<&dyn ContextResolver, AttrError>;
+    // Until its W3 lane fills it, every method below returns NotYet { NotPorted }. `override_source` is the script's
+    // OptionalOverrideContextSource, tried first. A script "Object ContextSource" may be None, so sources are Option.
+    pub fn resolve_context(&self, attr: ObjRef, source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Option<ObjRef>, AttrError>;
+    pub fn value_of(&self, attr: ObjRef, source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Option<AttrValue>, AttrError>; // None: chain did not resolve
+    pub fn base_value_of(..same..) -> Result<Option<AttrValue>, AttrError>;
+    pub fn evaluate_init(&self, data: &InitData, source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<f32, AttrError>;
+    pub fn expressions_hold(&self, exprs: &[ExprData], mode: ExprMode, source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<bool, AttrError>;
+    pub fn add_modifier(&self, attr: ObjRef, context: Option<ObjRef>, modifier: ObjRef, suppress_notify: bool, cx: &mut EvalCx) -> Result<AddModifierOutcome, AttrError>;
+    pub fn remove_modifier(&self, attr: ObjRef, context: Option<ObjRef>, modifier: ObjRef, suppress_notify: bool, cx: &mut EvalCx) -> Result<RemoveModifierOutcome, AttrError>;
+    pub fn set_base(&self, attr: ObjRef, source: Option<ObjRef>, v: f32, suppress_notify: bool, cx: &mut EvalCx) -> Result<bool, AttrError>; // the native's bool
+    pub fn apply_effects(&self, effects: &[EffectData], source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Applied, AttrError>;
     pub fn remove_effects(&self, applied: Applied, cx: &mut EvalCx) -> Result<(), AttrError>;
 }
-pub fn let_base(space: &mut ObjectSpace, owner: ObjRef, c: AttrCompanions, v: f32) -> Result<(), AttrError>; // 0x5F: base + recompute, no notification (UNVERIFIED)
+pub fn let_base(space: &mut ObjectSpace, owner: ObjRef, c: AttrCompanions, v: f32, form: CombineForm) -> Result<(), AttrError>; // 0x5F: base + recompute, no notification (UNVERIFIED)
 ```
 
 ### 3.6 `ow-balance`
