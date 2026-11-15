@@ -1,4 +1,4 @@
-//! Owner: lane W3-ATTRCTX. The resolvers whose rule needs what this layer cannot do yet (an interface test, script)
+//! Owner: lane W3-ATTRCTX. The resolvers whose rule this layer cannot run yet (an unrecorded interface, script)
 //! and the classes not read at all. Each answers `NotYet`, naming what is missing; a None source is None where the
 //! record says the resolver works on a source.
 
@@ -9,18 +9,14 @@ use super::RECORD;
 use crate::api::{AttrError, ContextResolver, EvalCx};
 use crate::registry::AttributeSystem;
 
-/// The answer of a resolver whose rule needs an engine query the contract does not have yet.
-fn needs_query(what: &'static str) -> AttrError {
-    NotYet::not_ported(
-        what,
-        "architecture.md section 3.5 (EngineQuery; W3-ATTRCTX handoff)",
-    )
-    .into()
+/// The answer of a resolver whose rule is script: the VM runs it, so the layer missing is `ow-vm`.
+fn script(what: &'static str) -> AttrError {
+    NotYet::layer_absent(what, "ow-vm", RECORD).into()
 }
 
 /// `BalancedActorAttributeContextResolver` (confidence medium-low): the source if it implements the balanced-actor
-/// interface, else None. The class table holds no interface list and [`crate::api::EngineQuery`] has no interface
-/// test yet, so a source is `NotYet { NotPorted }`.
+/// interface, else None. That interface class is not recorded and the C++ has no such rule, so a source is
+/// `NotYet { NotRead }`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BalancedActor;
 
@@ -35,9 +31,11 @@ impl ContextResolver for BalancedActor {
     ) -> Result<Option<ObjRef>, AttrError> {
         match source {
             None => Ok(None),
-            Some(_) => Err(needs_query(
-                "BalancedActorAttributeContextResolver: an engine query for the balanced-actor interface",
-            )),
+            Some(_) => Err(NotYet::not_read(
+                "BalancedActorAttributeContextResolver: the balanced-actor interface (its class is not recorded)",
+                RECORD,
+            )
+            .into()),
         }
     }
 }
@@ -70,8 +68,8 @@ impl ContextResolver for StatusEffectChance {
 
 /// `DesignerAttributeContextResolver` and its `ByName` form (script, confidence medium): the source's (or its
 /// owner's) `IDesignerAttributeProvider`'s `InstancedDesignerAttribute` for the definition's `ValueName`; the ByName
-/// form first checks `HasDesignerAttribute`. The interface calls need an engine query the contract does not have:
-/// `NotYet { NotPorted }` for a source.
+/// form first checks `HasDesignerAttribute`. Both are script, which the VM runs: `NotYet { LayerAbsent("ow-vm") }`
+/// for a source. (The C++ oracle keeps the previous object instead: decision 2026-11-15-12.)
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Designer {
     /// The `DesignerAttributeContextResolverByName` form.
@@ -89,11 +87,11 @@ impl ContextResolver for Designer {
     ) -> Result<Option<ObjRef>, AttrError> {
         match (source, self.by_name) {
             (None, _) => Ok(None),
-            (Some(_), false) => Err(needs_query(
-                "DesignerAttributeContextResolver: an engine query for the designer attribute provider",
+            (Some(_), false) => Err(script(
+                "DesignerAttributeContextResolver.GetAttributeContext (script)",
             )),
-            (Some(_), true) => Err(needs_query(
-                "DesignerAttributeContextResolverByName: an engine query for the designer attribute provider",
+            (Some(_), true) => Err(script(
+                "DesignerAttributeContextResolverByName.GetAttributeContext (script)",
             )),
         }
     }
@@ -126,10 +124,19 @@ impl ContextResolver for Skill {
     }
 }
 
-/// A context resolver class the notes do not read ([`super::UNREAD`]): every call is `NotYet { NotRead }`, a None
-/// source included (whether it needs one is not read either).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Unread;
+/// A context resolver class whose rule is not read ([`super::UNREAD`]): every call is `NotYet { NotRead }` naming
+/// `record`, the place the class is known from, a None source included (whether it needs one is not read either).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy)]
+pub struct Unread {
+    pub record: &'static str,
+}
+
+impl Unread {
+    pub fn new(record: &'static str) -> Self {
+        Unread { record }
+    }
+}
 
 impl ContextResolver for Unread {
     fn resolve(
@@ -149,10 +156,6 @@ impl ContextResolver for Unread {
             .and_then(|o| parts.space.classes.get_layout(o.class))
             .map(|l| l.path().as_str().to_string())
             .unwrap_or_default();
-        Err(NotYet::not_read(
-            format!("context resolver class {class}"),
-            "NATIVE_ATTRIBUTES.md \"Not read yet\"",
-        )
-        .into())
+        Err(NotYet::not_read(format!("context resolver class {class}"), self.record).into())
     }
 }

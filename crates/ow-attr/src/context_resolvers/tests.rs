@@ -495,6 +495,17 @@ fn pawn() {
     );
     let game_info = w.game_info;
     assert_eq!(walk(sys, &[Some(r)], game_info, w), Ok(None));
+    // Both resolve, to different pawns: the override's wins (the player controller gives the player, the mind
+    // gives the enemy).
+    let (pc, mind, enemy) = (s.pc, s.mind, s.enemy);
+    assert_eq!(
+        walk_with_override(sys, &[Some(r)], Some(pc), Some(mind), w),
+        Ok(Some(enemy))
+    );
+    assert_eq!(
+        walk_with_override(sys, &[Some(r)], Some(mind), Some(pc), w),
+        Ok(Some(player))
+    );
 }
 
 #[test]
@@ -781,7 +792,7 @@ fn the_unported_resolvers_say_what_they_wait_for() {
     let cases: [(&str, Missing); 6] = [
         (
             "Engine.BalancedActorAttributeContextResolver",
-            Missing::NotPorted,
+            Missing::NotRead,
         ),
         (
             "WillowGame.StatusEffectChanceModifierResolver",
@@ -789,11 +800,11 @@ fn the_unported_resolvers_say_what_they_wait_for() {
         ),
         (
             "WillowGame.DesignerAttributeContextResolver",
-            Missing::NotPorted,
+            Missing::LayerAbsent("ow-vm"),
         ),
         (
             "WillowGame.DesignerAttributeContextResolverByName",
-            Missing::NotPorted,
+            Missing::LayerAbsent("ow-vm"),
         ),
         (
             "WillowGame.InventoryAttributeContextResolver",
@@ -860,7 +871,11 @@ fn standard_registers_every_recorded_class_once_and_no_guessed_path() {
         "WillowGame.DesignerAttributeContextResolverByName",
     ];
     let object = s.c.object;
-    for path in recorded.iter().copied().chain(UNREAD.iter().copied()) {
+    for path in recorded
+        .iter()
+        .copied()
+        .chain(UNREAD.iter().map(|&(path, _)| path))
+    {
         let r = if path == NO_CONTEXT {
             s.no_context
         } else {
@@ -870,7 +885,7 @@ fn standard_registers_every_recorded_class_once_and_no_guessed_path() {
         // Registering it again is refused: `standard` holds it once.
         let again = AttributeSystem::standard()
             .unwrap()
-            .with_context_resolver(path, Unread);
+            .with_context_resolver(path, Unread::new("test"));
         assert!(
             matches!(again, Err(AttrError::DuplicateResolver { .. })),
             "{path}"
@@ -978,10 +993,12 @@ fn a_reference_property_of_another_kind_is_bad_data() {
 /// `src/progression.hpp`'s `AttributeContext` holds a fixed `replicationInfo`, `controller`, `pawn` and `mind`,
 /// filled by `src/combat.cpp` `describe` from the source: a player controller gives its replication info and
 /// itself; a `WillowMind` gives itself and its `Pawn`; a `WillowAIPawn` gives itself and its `MyWillowMind`. Its
-/// resolvers (`src/progression.cpp` `attributeValue`) answer that field or end the chain. Every case the C++
-/// answers reproduces here. Where the C++ subset has no field (a player controller's pawn, an AI's controller) it
-/// answers None and the port follows NATIVE_ATTRIBUTES.md section 5 instead; those cases are listed in
-/// [`where_the_port_goes_past_the_cpp_subset`].
+/// resolvers (`src/progression.cpp` `attributeValue`) answer that field or end the chain, whatever the previous
+/// step answered. So the C++ answers reproduce here for single-step chains and for chains that start with
+/// NoContextNeeded (which passes the source on), the cases below; a later step of a longer chain may differ, because
+/// here each step reads what the previous one answered. Where the C++ subset has no field (a player controller's
+/// pawn, an AI's controller) it answers None and the port follows NATIVE_ATTRIBUTES.md section 5 instead. Those
+/// cases, and a two-step chain that differs, are listed in [`where_the_port_goes_past_the_cpp_subset`].
 #[test]
 fn the_progression_hpp_pawn_mind_and_controller_cases_reproduce() {
     let mut s = scene();
@@ -1044,8 +1061,9 @@ fn the_progression_hpp_pawn_mind_and_controller_cases_reproduce() {
     );
 }
 
-/// The cases where the C++ subset answers None only because its `AttributeContext` has no such field, and the port
-/// answers what NATIVE_ATTRIBUTES.md section 5 says. Both are UNVERIFIED; this pins the difference.
+/// The cases where the C++ subset answers otherwise only because its `AttributeContext` is a fixed set of fields
+/// (none for some sources, and the same fields at every step of a chain), and the port answers what
+/// NATIVE_ATTRIBUTES.md section 5 says. Both are UNVERIFIED; this pins the difference.
 #[test]
 fn where_the_port_goes_past_the_cpp_subset() {
     let mut s = scene();
@@ -1068,5 +1086,89 @@ fn where_the_port_goes_past_the_cpp_subset() {
     assert_eq!(
         walk(&s.sys, &[Some(controller_r)], Some(enemy), &mut s.w),
         Ok(Some(mind))
+    );
+    // A two-step chain from the player controller: the C++ reads `context.controller` at the second step and gives
+    // the controller; here the Controller step gets the replication info, an actor with no Instigator and no pawn,
+    // and the chain ends.
+    let pri_r = s.w.resolver(
+        object,
+        "WillowGame.PlayerReplicationInfoAttributeContextResolver",
+        vec![],
+    );
+    assert_eq!(
+        walk(
+            &s.sys,
+            &[Some(pri_r), Some(controller_r)],
+            Some(pc),
+            &mut s.w
+        ),
+        Ok(None)
+    );
+}
+
+/// `src/progression.cpp:85-87` treats `GameInfoAttributeContextResolver` and `DesignerAttributeContextResolver` as
+/// always resolving and keeps the object the chain held before them (the loot's artifact weights read a designer
+/// attribute that way). The port answers NATIVE_ATTRIBUTES.md section 5: GameInfo gives the game info, and Designer
+/// is script (`NotYet { LayerAbsent("ow-vm") }`). An expected difference, recorded as candidate stand-in rows in
+/// decision 2026-11-15-12 (owners W4-ROLL and W6-LOOT); both readings are UNVERIFIED.
+#[test]
+fn where_the_cpp_keeps_the_previous_object_for_game_info_and_designer() {
+    let mut s = scene();
+    let object = s.c.object;
+    let pri_r = s.w.resolver(
+        object,
+        "WillowGame.PlayerReplicationInfoAttributeContextResolver",
+        vec![],
+    );
+    let game_info_r =
+        s.w.resolver(object, "Engine.GameInfoAttributeContextResolver", vec![]);
+    let designer_r = s.w.resolver(
+        object,
+        "WillowGame.DesignerAttributeContextResolver",
+        vec![],
+    );
+    let (pc, pri) = (s.pc, s.pri);
+    let game_info = s.w.game_info;
+    // [PRI, GameInfo] from the player controller: the C++ keeps the replication info; the port gives the game info.
+    let cpp_answer = Some(pri);
+    let got = walk(
+        &s.sys,
+        &[Some(pri_r), Some(game_info_r)],
+        Some(pc),
+        &mut s.w,
+    );
+    assert_eq!(got, Ok(game_info));
+    assert_ne!(got, Ok(cpp_answer));
+    // [PRI, Designer] from the player controller: the C++ keeps the replication info; the port waits for the VM.
+    let got = walk(&s.sys, &[Some(pri_r), Some(designer_r)], Some(pc), &mut s.w);
+    assert_eq!(missing(got), Missing::LayerAbsent("ow-vm"));
+}
+
+#[test]
+fn an_unread_class_names_where_it_is_known_from() {
+    let mut s = scene();
+    let player = s.player;
+    for &(path, record) in UNREAD {
+        let r = registered(&mut s, path, vec![]);
+        match walk(&s.sys, &[Some(r)], Some(player), &mut s.w) {
+            Err(AttrError::NotYet(n)) => {
+                assert_eq!((n.missing, n.record), (Missing::NotRead, record), "{path}")
+            }
+            other => panic!("{path}: expected NotYet, got {other:?}"),
+        }
+    }
+    let census: Vec<&str> = UNREAD
+        .iter()
+        .filter(|(_, record)| record.starts_with("research/"))
+        .map(|&(path, _)| path)
+        .collect();
+    assert_eq!(
+        census,
+        [
+            "Engine.OwnerAttributeContextResolver",
+            "Engine.GameReplicationInfoAttributeContextResolver",
+            "GearboxFramework.AIComponentAttributeContextResolver",
+            "WillowGame.InventoryDefinitionAttributeContextResolver",
+        ]
     );
 }

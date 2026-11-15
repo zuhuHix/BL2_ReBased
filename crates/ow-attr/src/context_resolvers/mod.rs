@@ -65,22 +65,57 @@ pub const PACKAGE_NOT_RECORDED: &[(&str, &str)] = &[
     ("SkillAttributeContextResolver", "Skill"),
 ];
 
-/// Context resolver classes the notes list as not read (NATIVE_ATTRIBUTES.md "Not read yet") or name without
-/// reading the body, under the paths `research/native_by_class.json` records. Each is registered as [`Unread`], so
-/// a chain naming one says which class is missing. `ObjectPropertyContextResolver` and the `BestTarget...` /
-/// `PopulationMaster...` families are not listed where no full path is recorded.
-pub const UNREAD: &[&str] = &[
-    "Engine.ProjectileAttributeContextResolver",
-    "Engine.VehicleAttributeContextResolver",
-    "Engine.OwnerAttributeContextResolver",
-    "Engine.GameReplicationInfoAttributeContextResolver",
-    "GearboxFramework.ActorAttributeContextResolver",
-    "GearboxFramework.AIComponentAttributeContextResolver",
-    "GearboxFramework.PopulationMasterAttributeContextResolver",
-    "WillowGame.WillowInventoryManagerAttributeContextResolver",
-    "WillowGame.WillowInteractiveObjectAttributeContextResolver",
-    "WillowGame.CurrentProficiencySkillAttributeContextResolver",
-    "WillowGame.InventoryDefinitionAttributeContextResolver",
+/// Where an unread class is known from: the notes' list of classes not read.
+const NOT_READ_YET: &str = "NATIVE_ATTRIBUTES.md \"Not read yet\"";
+/// Where an unread class is known from: named in the notes' section 5 table, body not read in detail.
+const SECTION_5_UNREAD: &str = "NATIVE_ATTRIBUTES.md section 5 (named, not read in detail)";
+/// Where an unread class is known from: the native-function census only, not the notes.
+const CENSUS_ONLY: &str = "research/native_by_class.json (not in the notes)";
+
+/// Context resolver classes whose rule is not read, each under the path `research/native_by_class.json` records and
+/// with the place it is known from. Each is registered as [`Unread`], so a chain naming one says which class is
+/// missing.
+///
+/// Left out: `ObjectPropertyContextResolver` and the `BestTarget...` families (no full path recorded), and
+/// `WillowGame.InstanceDataContextResolver`, which the census lists but nothing records as an attribute context
+/// resolver: its name does not say so, and its super class is not recorded, so registering it here would claim a
+/// kind the evidence does not give.
+pub const UNREAD: &[(&str, &str)] = &[
+    ("Engine.ProjectileAttributeContextResolver", NOT_READ_YET),
+    ("Engine.VehicleAttributeContextResolver", NOT_READ_YET),
+    (
+        "GearboxFramework.ActorAttributeContextResolver",
+        NOT_READ_YET,
+    ),
+    (
+        "GearboxFramework.PopulationMasterAttributeContextResolver",
+        NOT_READ_YET,
+    ),
+    (
+        "WillowGame.WillowInventoryManagerAttributeContextResolver",
+        NOT_READ_YET,
+    ),
+    (
+        "WillowGame.WillowInteractiveObjectAttributeContextResolver",
+        NOT_READ_YET,
+    ),
+    (
+        "WillowGame.CurrentProficiencySkillAttributeContextResolver",
+        SECTION_5_UNREAD,
+    ),
+    ("Engine.OwnerAttributeContextResolver", CENSUS_ONLY),
+    (
+        "Engine.GameReplicationInfoAttributeContextResolver",
+        CENSUS_ONLY,
+    ),
+    (
+        "GearboxFramework.AIComponentAttributeContextResolver",
+        CENSUS_ONLY,
+    ),
+    (
+        "WillowGame.InventoryDefinitionAttributeContextResolver",
+        CENSUS_ONLY,
+    ),
 ];
 
 /// Registers every context resolver class this module implements under its recorded path, `NoContextNeeded`
@@ -118,8 +153,8 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
             "WillowGame.DesignerAttributeContextResolverByName",
             Designer { by_name: true },
         )?;
-    for class in UNREAD {
-        sys = sys.with_context_resolver(class, Unread)?;
+    for &(class, record) in UNREAD {
+        sys = sys.with_context_resolver(class, Unread::new(record))?;
     }
     Ok(sys)
 }
