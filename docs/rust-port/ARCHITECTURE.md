@@ -428,7 +428,8 @@ impl PackageStore { pub fn new_empty() -> Self;
     pub fn paths_named(&self, name: &str) -> &[PathBuf];   // every file with that folded stem: all the candidates
     pub fn load(&mut self, name: &PackageName) -> Result<PackageId, StoreError>;   // AmbiguousName for 2+ files: no choice
     pub fn load_path(&mut self, path: &Path) -> Result<PackageId, StoreError>;
-    pub fn adopt(&mut self, package: Arc<Package>) -> Result<PackageId, StoreError>;   // a loaded package, by its source
+    pub fn adopt(&mut self, package: Arc<Package>) -> Result<PackageId, StoreError>;   // a Package::load result whose
+                                                   // source is the real file; a path already loaded wins, `package` is dropped
     pub fn get(&self, id: PackageId) -> &Package; pub fn shared(&self, id: PackageId) -> Arc<Package>;
     pub fn resolve(&mut self, from: PackageId, reference: i32) -> Result<Option<(PackageId, i32)>, StoreError>;
                                                    // None only for reference 0; an import found nowhere is ImportNotFound
@@ -441,6 +442,9 @@ pub enum StoreError { NotADirectory, PackageNotFound(String), AmbiguousName(Stri
                       NoPackageQualifiedPath, ImportNotFound { package: String, object: String }, CheckDisagrees(String),
                       Package(PackageError) /* transparent */, NotYet(NotYet) }   // Display: the C++ texts
 pub const MAX_OUTER_CHAIN: usize = 256;            // buildGlobalIndex's maxOuterChain
+// Ids: equal ids are the same package, but one file can have several ids (a load after scan(), a global-fallback match,
+// which keeps the exact package it matched): compare get(id).source for file identity. Every package handed out stays
+// alive for the store's lifetime.
 // As shipped by W2-STORE (decision 2026-11-15-05): open, the scan-free new, the Option meanings, the added methods and
 // ResolveCheck differ from revision 3 here.
 ```

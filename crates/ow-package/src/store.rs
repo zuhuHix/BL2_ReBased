@@ -28,7 +28,9 @@
 //!
 //! `PackageId`s are positions in the store's list of loaded packages. They stay valid for the store's life: a new
 //! [`scan`](PackageStore::scan) empties the caches (as the C++ does) but keeps the packages already handed out, as a
-//! C++ caller's `shared_ptr` keeps its package.
+//! C++ caller's `shared_ptr` keeps its package. Equal ids mean the same package. One file can have several ids,
+//! though: a load after `scan`, and a package the global fallback matched, each get a new id. For file identity,
+//! compare `get(id).source`. Every package handed out stays alive for the store's lifetime.
 //!
 //! Status: a port. The fallback rule's evidence is the C++ record (PACKAGE_GLOBAL_INDEX.md); whether the game picks
 //! the same file for a path held by several packages is UNVERIFIED (object identity, W3-DEFS).
@@ -196,9 +198,10 @@ impl PackageStore {
     /// Lists the tree again (C++ `scan`): every regular file below the root whose extension folds to `.upk`,
     /// `.umap` or `.u`. Empties the caches and the global index; packages already handed out keep their ids.
     ///
-    /// Folders that cannot be read are skipped, as the C++ `skip_permission_denied` iterator with its errors
-    /// cleared does. Symbolic links to files count as files; links to folders are not followed (the C++ iterator's
-    /// default).
+    /// A folder or entry that cannot be read is skipped and the walk goes on. The C++ iterator
+    /// (`skip_permission_denied`) skips only permission errors; on any other error it ends the whole walk.
+    /// UNVERIFIED: how far that differs in practice. Symbolic links to files count as files; links to folders are
+    /// not followed (the C++ iterator's default). Junctions were not checked (UNVERIFIED).
     pub fn scan(&mut self) -> Result<(), StoreError> {
         if !std::fs::metadata(&self.root).is_ok_and(|m| m.is_dir()) {
             return Err(StoreError::NotADirectory);
@@ -267,9 +270,12 @@ impl PackageStore {
         Ok(self.insert(key, package))
     }
 
-    /// Puts a package that is already loaded into the store under its `source` path, or returns the one already
-    /// loaded from that path. Where the C++ resolves from a package it was handed (`resolve(const Package&)`), it
-    /// loads the source path again; this keeps the package given, which has the same bytes unless the file changed.
+    /// Puts a package that is already loaded into the store under its `source` path. It is meant for a package from
+    /// `Package::load`, whose `source` is the real file. If that path is already loaded, the loaded package wins:
+    /// its id is returned and `package` is dropped. Where the C++ resolves from a package it was handed
+    /// (`resolve(const Package&)`), it calls `loadPath` on the source path, which also returns the cached package.
+    /// When the path is not loaded yet, this keeps the package given, which has the same bytes unless the file
+    /// changed.
     pub fn adopt(&mut self, package: Arc<Package>) -> Result<PackageId, StoreError> {
         if package.source.as_os_str().is_empty() {
             return Err(StoreError::NoSourcePath);
@@ -325,9 +331,15 @@ impl PackageStore {
     }
 
     fn insert(&mut self, key: String, package: Arc<Package>) -> PackageId {
+        let id = self.push(package);
+        self.loaded.insert(key, id);
+        id
+    }
+
+    /// A new id for `package`, outside the path cache.
+    fn push(&mut self, package: Arc<Package>) -> PackageId {
         let id = self.packages.len() as PackageId;
         self.packages.push(package);
-        self.loaded.insert(key, id);
         id
     }
 
@@ -431,8 +443,11 @@ impl PackageStore {
             }
             match found {
                 Some((package, index)) => {
+                    // The exact package the lookup matched, under an id of its own: the C++ returns this fresh
+                    // candidate and does not put it in the path cache, so neither does this (a copy loaded from the
+                    // same path earlier may hold older bytes, and the index belongs to these).
                     let path = package.source.clone();
-                    let id = self.adopt(package)?;
+                    let id = self.push(package);
                     target = Some(id);
                     target_index = index;
                     self.global_matches
@@ -1095,6 +1110,37 @@ mod tests {
         for (error, text) in cases {
             assert_eq!(error.to_string(), text);
         }
+    }
+
+    /// Review r1 of PR #299: a package loaded before its file was rewritten must not stand in for the fresh one the
+    /// global fallback matched. The answer is the matched package itself, under a new id; the old id is unchanged.
+    #[test]
+    fn the_global_answer_is_the_package_it_matched() {
+        let tree = Tree::new("stale");
+        tree.write("Source.upk", &package(GDX_OBJ, &[]));
+        let holder = tree.write("Holder.upk", &package(&[], HOLDS));
+        let mut store = tree.store();
+        let old = store.load_path(&holder).unwrap();
+        // Rewritten: GDX.Obj is export 3 now, past the end of the old copy's two exports.
+        tree.write(
+            "Holder.upk",
+            &package(&[], &[("Pad", 0), ("GDX", 0), ("Obj", 2)]),
+        );
+        let source = store.load_path(&tree.0.join("Source.upk")).unwrap();
+        let (id, index) = store.resolve(source, -2).unwrap().unwrap();
+        assert_ne!(id, old);
+        assert_eq!(index, 3);
+        assert_eq!(store.get(id).path_of(index).unwrap(), "GDX.Obj");
+        assert_eq!(
+            store.get(old).exports.len(),
+            2,
+            "the old id keeps its package"
+        );
+        assert_eq!(
+            store.get(id).source,
+            store.get(old).source,
+            "same file, two ids"
+        );
     }
 
     #[test]

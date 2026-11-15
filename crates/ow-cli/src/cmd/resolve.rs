@@ -10,8 +10,9 @@
 //! a `ResolveCheck` value; the `OWRESOLVECHECK` lines the store collects go to stderr before any error message, the
 //! order the C++ writes them in.
 //!
-//! Lines end in `\n` on every platform. The C++ binary's text-mode streams write `\r\n` on Windows; the parity
-//! harness compares with line ends normalised (hub decision for wave 2), so that difference is not mirrored here.
+//! Lines end in `\n` on every platform. The C++ binary's text-mode streams write `\r\n` on Windows. That difference
+//! is not mirrored here: the parity harness is to normalise line ends (hub decision for wave 2, change pending).
+//! Until it does, a diff line that compares this command's stderr fails on line ends alone.
 //!
 //! The command does not depend on the parity mode.
 
