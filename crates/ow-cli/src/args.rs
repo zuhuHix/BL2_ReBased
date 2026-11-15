@@ -106,8 +106,8 @@ use Position::{AfterPackage as P, Either as E, First};
 // Kismet option of `--kismet-run`.
 /// `--def-dump <object path> --cooked <dir> [--overlay <file>]`.
 const DEF_DUMP: &[&str] = &["--cooked", "--overlay"];
-/// `--item-registry --cooked <dir> [--overlay <file>]`.
-const ITEM_REGISTRY: &[&str] = &["--cooked", "--overlay"];
+/// `--item-registry --cooked <dir> [--census <file>] [--overlay <file>]`; items family: `<dir>` is the install folder.
+const ITEM_REGISTRY: &[&str] = &["--cooked", "--census", "--overlay"];
 /// `--item-roll <balance path>` and `--item-pool <pool path>`: `--cooked <dir> --stage <n> --seed <n> [--count <n>]
 /// [--playthrough <index>] [--op-level <n>] [--overlay <file>]`.
 const ITEM_ROLL: &[&str] = &[
