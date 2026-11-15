@@ -42,6 +42,7 @@ import struct
 import tempfile
 
 import weapon_recipe
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MISSION = 'GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire'
@@ -283,7 +284,7 @@ def build(reader, game, levels=range(1, 16)):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
+    p.add_argument('--reader', type=Path, default=default_reader())
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--output', type=Path, default=ROOT / 'local/slice/values.json')
     args = p.parse_args()

@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'tools'))
 from filter_gestalt_gltf import gestalt_parts  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 # (balance leaf name, seed). Leaf names are resolved to full object paths from
 # the package's export list, so a wrong name fails loudly.
@@ -49,7 +50,7 @@ def balance_paths(reader, package):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
+    parser.add_argument('--reader', type=Path, default=default_reader())
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--gestalt', type=Path, default=ROOT / 'local/gestalt',
                         help='folder holding <Type>.json part tables')

@@ -33,7 +33,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slice_npc_assets as S  # noqa: E402
-from repo_paths import job_to_repo  # noqa: E402
+from repo_paths import job_to_repo, default_reader  # noqa: E402
 
 AMBIENT = ROOT / 'local/slice/ambient'
 CENSUS = ROOT / 'local/slice/ambient_npcs.json'
@@ -468,7 +468,7 @@ STEPS = {'attachments': attachments_step, 'identity': identity_step, 'extract': 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('step', choices=sorted(STEPS) + ['all'])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', help='Borderlands 2 folder (default $OPENWILLOW_BL2)')
     parser.add_argument('--umodel', help='umodel.exe (default $OPENWILLOW_UMODEL)')
     parser.add_argument('--only', nargs='*', help='restrict extract/anims to these NPC ids')

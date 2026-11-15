@@ -35,6 +35,9 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -487,7 +490,7 @@ def run_vm(reader, levels):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reader", default=os.path.join(REPO, "build", "Release", "ow-package.exe"))
+    parser.add_argument("--reader", default=str(default_reader(waits_for='--combat-run')))
     parser.add_argument("--levels", default="1-50")
     parser.add_argument("--target", default=os.path.join(REPO, "local", "phaselock", "target", "host_target.json"))
     parser.add_argument("--identity", help="the import's identity.json (worn pieces per asset); default: next to --target")

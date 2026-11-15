@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from filter_gestalt_gltf import gestalt_parts  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 TYPES = ['Pistol', 'SMG', 'AssaultRifle', 'Shotgun', 'SniperRifle', 'Launcher']
@@ -321,7 +322,7 @@ def main():
     skins = sub.add_parser('skins', help='prepare every census skin through prepare_weapon_paint (skins.json)')
     skins.add_argument('--materials', type=Path, nargs='+', default=[ROOT / 'local/external/umodel/weapon-skins'])
     skins.add_argument('--inventory', type=Path, default=ROOT / 'local/external/umodel/weapon-skins/inventory.json')
-    skins.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
+    skins.add_argument('--reader', type=Path, default=default_reader())
     skins.add_argument('--game', type=Path, required=True)
     index_parser = sub.add_parser('index', help='write the parts, skins and weapon_types sections of library.json')
     index_parser.add_argument('--live', type=Path, default=ROOT / 'local/realgame/wpa/live_visual_census.json')

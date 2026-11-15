@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 from prepare_level import Scene
+from repo_paths import default_reader  # noqa: E402
 
 SCHEMA = '''InterpGroups=ObjectProperty
 InterpTracks=ObjectProperty
@@ -300,7 +301,7 @@ def prepare(reader, game, scene_path, package, action_path, group_name, output):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--reader', type=Path, default=Path('build/Release/ow-package.exe'))
+    p.add_argument('--reader', type=Path, default=default_reader())
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--scene', type=Path, default=Path('local/sanctuary/scene.json'))
     p.add_argument('--package', required=True)

@@ -10,13 +10,15 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 
 def main():
     root = Path(__file__).resolve().parents[1]
     ap = argparse.ArgumentParser()
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'))
-    ap.add_argument('--reader', default=str(root / 'build/Release/ow-package.exe'))
+    ap.add_argument('--reader', default=str(default_reader()))
     ap.add_argument('--out', default=str(root / 'local/census/exports'))
     ap.add_argument('--only', nargs='*', help='package names without extension')
     args = ap.parse_args()

@@ -26,11 +26,12 @@ sys.path.insert(0, str(ROOT / 'tools'))
 sys.path.insert(0, str(ROOT / 'tools' / 'real_game'))
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('--dir', type=Path, nargs='+', required=True)
     parser.add_argument('--live-data', type=Path, help='live_weapon_data.json: use the values read from the running game')

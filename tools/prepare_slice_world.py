@@ -39,6 +39,7 @@ import tempfile
 
 import prepare_mover
 from prepare_level import transform
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MISSION = 'GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire'
@@ -848,7 +849,7 @@ def build(reader_exe, game, scene=None):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
+    p.add_argument('--reader', type=Path, default=default_reader())
     p.add_argument('--game', type=Path, required=True)
     p.add_argument('--scene', type=Path, default=ROOT / 'local/sanctuary/scene.json')
     p.add_argument('--output', type=Path, default=ROOT / 'local/slice/world.json')

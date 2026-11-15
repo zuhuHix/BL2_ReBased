@@ -28,7 +28,7 @@ What is realised, and the rules the host applies to it, are stand-ins unless the
   spawns (kind from the mesh, position and yaw as found, walker/idle from whether the pawn moved during the sample and whether
   it stood on a perch). This replaces the native population's own choice of which points are live; the rest of the rules stay.
 
-  python tools/prepare_ambient_world.py [--game DIR] [--reader build/Release/ow-package.exe]
+  python tools/prepare_ambient_world.py [--game DIR] [--reader target/release/ow-package.exe]
                                         [--observed local/realgame/ambient/t0_start.json --samples local/realgame/ambient/walk_a.jsonl]
 """
 import argparse
@@ -40,6 +40,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -590,7 +592,7 @@ def check_manifest(path, census_ok):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'))
-    ap.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    ap.add_argument('--reader', default=str(default_reader()))
     ap.add_argument('--observed', help='real-game dump (ambient_npcs.py amb_dump) whose live citizens become the spawns')
     ap.add_argument('--samples', help='real-game position samples (ambient_npcs.py amb_sample) used with --observed')
     ap.add_argument('--compose', help='real-game amb_compose output (hair, hats, heads of the observed pawns); needs the attach step')

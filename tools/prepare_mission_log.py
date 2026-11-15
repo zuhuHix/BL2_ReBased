@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from gfx_to_swf import load_localization  # noqa: E402
 from prepare_skill_tree import ALIAS, key_aliases  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 OBJECTS = {
@@ -148,7 +149,7 @@ def output_file(output, repo=REPO):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(REPO / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'))
     parser.add_argument('--output', default=str(REPO / 'local/ui/run'))
     args = parser.parse_args()

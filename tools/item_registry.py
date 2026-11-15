@@ -66,6 +66,7 @@ import prepare_stock_shield as ps  # noqa: E402
 import prepare_vendors as pv  # noqa: E402
 import weapon_catalog  # noqa: E402
 import weapon_recipe  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_TAG = 'openwillow-item-registry/1'
@@ -73,7 +74,7 @@ SCHEMA_LINE = (f'{SCHEMA_TAG}: balances, definitions, parts, part_lists, name_pa
                'path; candidates unevaluated (weights and stage windows as numbers or attribute init data); see the '
                'docstring of tools/item_registry.py')
 DEFAULT_OUT = 'local/items/registry'
-DEFAULT_READER = ROOT / 'build/Release/ow-package.exe'
+DEFAULT_READER = default_reader()
 # The manufacturer grade list of a balance (ManufacturerGradeData.Grades): tagged struct elements, like every other array here.
 SCHEMA_LINES = list(dict.fromkeys(loot_pools.SCHEMA_LINES + pv.SCHEMA_EXTRA + ['Grades=StructProperty:GradeData']))
 

@@ -43,13 +43,14 @@ TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 from render_weapon_previews import resolve_material  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 MIC_CLASS = "Engine.MaterialInstanceConstant"
 MAX_PARENT_DEPTH = 8
 MESSAGE_RE = re.compile(r"unsupported|warning|ignoring|unknown|not found|error", re.I)
 PARENT_RE = re.compile(r"^Parent = (\w+)'([^']+)'", re.M)
 DEFAULT_GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2"
-DEFAULT_READER = REPO / "build" / "Release" / "ow-package.exe"
+DEFAULT_READER = default_reader()
 DEFAULT_CENSUS = REPO / "local" / "wpa" / "census" / "visual_census.json"
 DEFAULT_OUTPUT = REPO / "local" / "external" / "umodel" / "weapon-skins"
 

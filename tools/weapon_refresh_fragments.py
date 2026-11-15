@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import weapon_recipe  # noqa: E402
 import weapon_slice_gear  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,7 +87,7 @@ def drop_hidden_bone_triangles(gltf_path, bones):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--dir', type=Path, nargs='+', required=True, help='recipe folders (<id>.json with <id>.gltf)')
     parser.add_argument('--gestalt', type=Path, required=True)

@@ -17,6 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import audio_census as ac  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 MISSION = 'GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire'
 # `kickoff` plays the kickoff (Default id 12) after acceptance, as the slice host does (NATIVE_MISSION_DISPATCH.md B9).
@@ -272,7 +273,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'))
     ap.add_argument('--decoded-dir', help='folder holding <source id>.wav/.ogg once a decoder has been approved and run')
-    ap.add_argument('--reader', default=os.path.join(root, 'build', 'Release', 'ow-package.exe'))
+    ap.add_argument('--reader', default=str(default_reader(waits_for='--mission-run')))
     args = ap.parse_args()
     if not args.game:
         sys.exit('set OPENWILLOW_BL2 or pass --game')

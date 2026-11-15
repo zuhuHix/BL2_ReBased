@@ -38,6 +38,8 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 TOOL = 'tools/mission_closure.py'
 TOOL_VERSION = '1'
@@ -1456,7 +1458,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'), help='Borderlands 2 install directory')
     ap.add_argument('--mission', required=True, help='MissionDefinition path, e.g. GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire')
-    ap.add_argument('--reader', default=str(ROOT / 'build' / 'Release' / 'ow-package.exe'))
+    ap.add_argument('--reader', default=str(default_reader()))
     ap.add_argument('--out', default=None, help='output directory under local/ (default local/missions/<slug>)')
     ap.add_argument('--maps', default='Sanctuary_Dynamic,Sanctuary_P', help='level packages that hold placed actors and Kismet')
     ap.add_argument('--prefer', default='Sanctuary_Dynamic,Sanctuary_P,Startup',

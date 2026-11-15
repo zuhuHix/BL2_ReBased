@@ -40,6 +40,7 @@ import weapon_gen_manifest  # noqa: E402
 import weapon_projectile_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 SPEED_MULTIPLIER = weapon_stats.ATTR + 'WeaponProjectileSpeedMultiplier'
 # Filled from the rolled card by apply_roll, or only documentation of one roll.
@@ -236,7 +237,7 @@ def collect(package, source, localize, balances, stages=STAGES, seeds=SEEDS):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--output', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_firing.json')
     parser.add_argument('--manifest', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_manifest.txt')
