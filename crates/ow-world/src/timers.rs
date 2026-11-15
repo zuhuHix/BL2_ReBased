@@ -18,9 +18,10 @@
 //!   parameters; after each callback the pass stops if the actor was destroyed, a cleared entry is removed, and a
 //!   `Count` of exactly 0 (a re-set) keeps a non-loop entry; a due non-loop entry is removed afterwards.
 //!
-//! **Open, `NotYet`:** a due timer with a negative rate (the record says the code does not guard it but the outcome
-//! was not traced), and a loop due more than `i32::MAX` times in one pass. Both are refused before the pass changes
-//! anything, from what step 1 would make of the entries; an entry a callback appends meets them at its own check. **UNVERIFIED:** the delta the pass gets
+//! **Open, `NotYet`:** a timer with a negative rate (the record says the code does not guard it but the outcome
+//! was not traced; refused up front, due or not), and a loop due more than `i32::MAX` times in one pass. Both are
+//! refused before the pass changes anything, from what step 1 would make of the entries; an entry a callback
+//! appends or re-sets meets them at its own check. **UNVERIFIED:** the delta the pass gets
 //! (the world tick's delta, with the world `TimeDilation` applied by `SimClock` and an actor's `CustomTimeDilation`
 //! not applied; where the game applies either was not located).
 //!
@@ -199,16 +200,20 @@ fn borrow_mut(t: &RefCell<Timers>) -> Result<std::cell::RefMut<'_, Timers>, VmEr
 /// The engine's timer update pass for `actor` with this tick's `delta` (module documentation).
 pub fn update_pass(vm: &mut Vm, actor: ObjRef, delta: f32) -> Result<(), VmError> {
     let timers = timers_of(vm)?;
-    // The two open cases are refused before anything changes, judged on what step 1 is about to make of each
-    // entry whose target is still there: a negative rate (due on every pass), and a loop due more than i32::MAX
-    // times. Entries a callback appends during the pass meet the same refusals at their own check below.
+    // The two open cases are refused before anything changes, for each entry whose target is still there: a timer
+    // with a negative rate (refused up front, due or not), and a loop that step 1 would make due more than i32::MAX
+    // times. Entries a callback appends or re-sets during the pass meet the same refusals at their own check below.
     let entries = borrow(&timers)?.of(actor).to_vec();
     for e in entries {
         if e.rate == 0.0 || is_destroyed(&vm.space, e.object)? {
             continue;
         }
         if e.rate < 0.0 {
-            return Err(NotYet::not_read("a due timer with a negative rate", RECORD).into());
+            return Err(NotYet::not_read(
+                "a timer with a negative rate (refused up front, due or not)",
+                RECORD,
+            )
+            .into());
         }
         let count = if e.paused {
             e.count
