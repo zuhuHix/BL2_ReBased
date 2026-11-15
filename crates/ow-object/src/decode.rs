@@ -45,7 +45,11 @@
 //!
 //! **References and stand-ins.** A [`ReferenceResolver`] on the context decides what a decoded reference points at
 //! (a definition store answers with the objects it loads). Resolver calls nest at most [`MAX_RESOLVE_DEPTH`] deep, for
-//! every resolver ([`DecodeError::ResolveTooDeep`] past it, the counter restored on every path). The default,
+//! every resolver ([`DecodeError::ResolveTooDeep`] past it, the counter restored on every path), and one top-level load
+//! ([`ValueCx::load`]: a class default object or an instantiated export, with what a loading resolver decodes inside)
+//! makes at most [`MAX_RESOLVES_PER_LOAD`] resolver calls; past that the load aborts ([`DecodeError::ResolveBudget`],
+//! which no stream skips) and the objects it allocated are freed. An export reached again while it is being
+//! instantiated is [`DecodeError::InstantiationCycle`] for that reference. The default,
 //! [`StandIns`], gives each referenced object one heap object of its own class with [`Origin::Resource`] and no
 //! property slots ([`ObjectSpace::alloc_stand_in`]), as the C++ stand-in holds no properties. A reference outside its
 //! package's tables gets, under [`ParityMode::Reference`], the C++ stand-in named `?` (class `Core.Object`), whose path
@@ -53,7 +57,7 @@
 //! engine-native class such as `Engine.StaticMesh`, or `Core.Class` for a class object) takes a layout something else
 //! defined at that class's path (an overlay, a native pack) in either mode; failing that, under
 //! [`ParityMode::Reference`] only, the class is defined at its import path with no properties of its own under
-//! `Core.Object` ([`DecodeState::native_classes`], [`DecodeState::is_native_stand_in`]): nothing about its native
+//! `Core.Object` ([`DecodeState::native_classes`], [`ClassTable::is_native`]): nothing about its native
 //! properties is invented, and the classes between it and `Core.Object`, if any, are UNVERIFIED. In
 //! [`ParityMode::Off`] such a reference is a [`NotYet`] (the class's layout is not read) and the property is skipped.
 //! Any other failure to find or lay out a class is returned as it is. A class an overlay or a native pack defines must
@@ -75,7 +79,10 @@
 //! defaults wait on its own (`A { array<B> }` with `B { array<A> }`), or on a chain of others longer than
 //! [`MAX_DEFAULTS_NESTING`]. Such defaults are refused: every struct whose stream met the cycle or the bound, swallowed
 //! or not, fails with [`DecodeError::StructDefaultsCycle`] (or [`DecodeError::DefaultsTooDeep`]) and publishes
-//! nothing, whichever struct was asked first; a value of such a struct, or a class holding one by value, fails with it.
+//! nothing; for a ring this holds whichever struct is asked first. A straight chain (no ring) longer than the bound is
+//! the one order-dependent case: asked from its head it meets the bound and is refused, asked from far enough down it
+//! fits and is read (a Rust-only Off-mode bound). A value of a refused struct, or a class holding one by value, fails
+//! with it.
 //! Each struct's and enum's export is the one its declaring property's type reference names, recorded when a class's
 //! layout is first used, so a second package id for the same file still finds it.
 //!
@@ -135,6 +142,13 @@ pub const MAX_DEFAULTS_NESTING: usize = 64;
 /// found there). A Rust-only bound shared by every resolver: past it a reference is [`DecodeError::ResolveTooDeep`],
 /// so a chain of lazily loaded definitions that leads back to itself ends instead of overflowing the stack.
 pub const MAX_RESOLVE_DEPTH: usize = 64;
+
+/// How many [`ReferenceResolver`] calls one top-level load may make ([`DecodeState::resolve_budget`]): one
+/// `cdo::class_default` or `cdo::instantiate_export` call with everything a loading resolver decodes inside it. A
+/// Rust-only bound: a graph of definitions that branches back on itself cannot grow without end (the nesting bound
+/// alone would let each level fan out). Past it the load aborts with [`DecodeError::ResolveBudget`], which no stream
+/// swallows, and the objects it allocated are freed.
+pub const MAX_RESOLVES_PER_LOAD: usize = 1 << 16;
 
 /// The decision file that records this module's rules (named by `NotYet` values).
 pub const RECORD: &str = "docs/decisions/2026-11/2026-11-15-08-rust-typed-values-class-defaults-and-object-dumps-contract.md";
@@ -231,6 +245,12 @@ pub enum DecodeError {
     },
     /// Reference resolution nested deeper than [`MAX_RESOLVE_DEPTH`].
     ResolveTooDeep(usize),
+    /// A top-level load made more resolver calls than its budget ([`MAX_RESOLVES_PER_LOAD`]). It aborts the whole load
+    /// ([`DecodeError::aborts`]): no stream skips it, and the load's objects are freed.
+    ResolveBudget(usize),
+    /// An export reached again while it is being instantiated (a loading resolver following a reference back to it).
+    /// The reference that reached it is skipped; the instantiation in progress goes on.
+    InstantiationCycle(String),
     /// An enum value whose position does not fit a byte ([`ParityMode::Off`]; the C++ keeps its low 8 bits).
     EnumPastByte {
         property: String,
@@ -297,6 +317,12 @@ impl fmt::Display for DecodeError {
             DecodeError::ResolveTooDeep(limit) => {
                 write!(f, "reference resolution nests deeper than {limit} levels")
             }
+            DecodeError::ResolveBudget(budget) => {
+                write!(f, "a load resolves more than {budget} references")
+            }
+            DecodeError::InstantiationCycle(path) => {
+                write!(f, "{path} is reached again while it is being instantiated")
+            }
             DecodeError::EnumPastByte { property, position } => {
                 write!(
                     f,
@@ -314,6 +340,14 @@ impl fmt::Display for DecodeError {
             }
             DecodeError::NotYet(e) => e.fmt(f),
         }
+    }
+}
+
+impl DecodeError {
+    /// Whether this error aborts the whole top-level load instead of skipping one value
+    /// ([`DecodeError::ResolveBudget`]).
+    pub fn aborts(&self) -> bool {
+        matches!(self, DecodeError::ResolveBudget(_))
     }
 }
 
@@ -394,6 +428,14 @@ pub struct DecodeState {
     pub native_classes: Vec<String>,
     /// How many [`ReferenceResolver`] calls are under way ([`MAX_RESOLVE_DEPTH`]).
     resolve_depth: usize,
+    /// How many resolver calls one top-level load may make ([`MAX_RESOLVES_PER_LOAD`] unless changed).
+    pub resolve_budget: usize,
+    /// The top-level load under way: how deeply loads nest, how many resolver calls it made, what it allocated.
+    pub(crate) load_depth: usize,
+    load_resolves: usize,
+    pub(crate) load_allocated: Vec<ObjRef>,
+    /// The exports being instantiated right now, innermost last.
+    pub(crate) instantiating: Vec<(PackageId, i32)>,
     /// How many times a struct-defaults refusal (a cycle, or the nesting bound) was returned, and how many of those were
     /// the nesting bound (read and compared by [`ValueCx::ensure_struct_defaults`], so a stream that swallowed one is not
     /// published).
@@ -425,6 +467,11 @@ impl Default for DecodeState {
             dropped: Vec::new(),
             native_classes: Vec::new(),
             resolve_depth: 0,
+            resolve_budget: MAX_RESOLVES_PER_LOAD,
+            load_depth: 0,
+            load_resolves: 0,
+            load_allocated: Vec::new(),
+            instantiating: Vec::new(),
             refusals: 0,
             depth_refusals: 0,
             sources: FixedHashMap::default(),
@@ -437,15 +484,6 @@ impl Default for DecodeState {
 impl DecodeState {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Whether class `c` of `classes` is an engine-native stand-in class ([`ValueCx::resource`]): a class known only
-    /// by its import path, with no properties of its own and `Core.Object` as its super class, so `IsA` through it is
-    /// not the game's answer (W3-INTERP answers `NotYet` there). The mark is the class table's
-    /// ([`ClassTable::mark_native`]), so every state over one object space gives the same answer, whichever state
-    /// defined the class.
-    pub fn is_native_stand_in(&self, classes: &ClassTable, c: ClassId) -> bool {
-        classes.is_native(c)
     }
 }
 
@@ -555,6 +593,52 @@ impl<'a> ValueCx<'a> {
             mode,
             resolver: &StandIns,
         }
+    }
+
+    /// Runs `load` as one top-level load (or as part of the load under way): the [resolve budget](DecodeState::resolve_budget)
+    /// counts from the start of the outermost one, and when that one fails with an [aborting](DecodeError::aborts)
+    /// error, every object allocated during it is freed and dropped from the caches (stand-ins, class default
+    /// objects; references to them in struct defaults are cleared by the free). Objects a resolver allocates by itself,
+    /// not through this context, are not tracked; a resolver's own cache of the load's objects holds stale handles.
+    pub fn load<T>(
+        &mut self,
+        load: impl FnOnce(&mut ValueCx<'a>) -> Result<T, DecodeError>,
+    ) -> Result<T, DecodeError> {
+        let outermost = self.state.load_depth == 0;
+        if outermost {
+            self.state.load_resolves = 0;
+            self.state.load_allocated.clear();
+        }
+        self.state.load_depth += 1;
+        let outcome = load(self);
+        self.state.load_depth -= 1;
+        if outermost {
+            if outcome.as_ref().is_err_and(DecodeError::aborts) {
+                self.roll_back();
+            }
+            self.state.load_allocated.clear();
+        }
+        outcome
+    }
+
+    /// Records an object a load allocated, for [`ValueCx::load`]'s roll-back.
+    pub(crate) fn allocated(&mut self, o: ObjRef) {
+        if self.state.load_depth > 0 {
+            self.state.load_allocated.push(o);
+        }
+    }
+
+    fn roll_back(&mut self) {
+        let mut dead: Vec<ObjRef> = Vec::new();
+        for &o in &self.state.load_allocated {
+            if self.space.heap.contains(o) && !dead.contains(&o) {
+                dead.push(o);
+            }
+        }
+        let gone: FixedHashSet<ObjRef> = self.state.load_allocated.iter().copied().collect();
+        self.state.resources.retain(|_, o| !gone.contains(o));
+        self.state.class_defaults.retain(|_, o| !gone.contains(o));
+        let _ = self.space.free_many(&dead);
     }
 
     /// This context with `resolver` deciding what decoded references point at.
@@ -749,6 +833,11 @@ impl<'a> ValueCx<'a> {
             };
             r.set_limit(saved);
             r.set_pos(end);
+            if let Err(e) = &outcome
+                && e.aborts()
+            {
+                return Err(e.clone());
+            }
             if outcome.is_err() {
                 self.state.log.push(format!(
                     "defaults: skipped {class_name}.{} ({})",
@@ -1055,6 +1144,11 @@ impl<'a> ValueCx<'a> {
             };
             r.set_limit(saved);
             r.set_pos(end);
+            if let Err(e) = &decoded
+                && e.aborts()
+            {
+                return Err(e.clone());
+            }
             let (Ok(v), Some((entry, decl))) = (decoded, field) else {
                 continue;
             };
@@ -1091,7 +1185,8 @@ impl<'a> ValueCx<'a> {
     /// Defaults that need themselves (through arrays of structs in default streams, which only [`ParityMode::Off`]
     /// reads), or that wait on others deeper than [`MAX_DEFAULTS_NESTING`], are refused: every struct whose stream met
     /// such a refusal, swallowed or not, gets [`DecodeError::StructDefaultsCycle`] (or [`DecodeError::DefaultsTooDeep`]
-    /// when the bound was met) and publishes nothing, so the outcome does not depend on which struct was asked first.
+    /// when the bound was met) and publishes nothing, so for a ring the outcome does not depend on which struct was
+    /// asked first (a straight chain longer than the bound does; module documentation).
     pub fn ensure_struct_defaults(&mut self, s: StructId) -> Result<(), DecodeError> {
         let outcome = match self.state.struct_defaults.get(&s) {
             Some(Defaults::Done(outcome)) => outcome.clone(),
@@ -1124,6 +1219,11 @@ impl<'a> ValueCx<'a> {
         self.state.defaults_nesting += 1;
         let outcome = self.read_struct_defaults(s);
         self.state.defaults_nesting -= 1;
+        if outcome.as_ref().is_err_and(DecodeError::aborts) {
+            // An aborted load caches nothing: the next load reads these defaults again.
+            self.state.struct_defaults.remove(&s);
+            return outcome;
+        }
         self.state
             .struct_defaults
             .insert(s, Defaults::Done(outcome.clone()));
@@ -1188,6 +1288,11 @@ impl<'a> ValueCx<'a> {
         if self.state.refusals != refusals_before {
             return Err(DecodeError::StructDefaultsCycle(path.as_str().to_string()));
         }
+        if let Err(e) = &read
+            && e.aborts()
+        {
+            return Err(e.clone());
+        }
         if read.is_err() || r.pos() != end {
             return Ok(());
         }
@@ -1229,6 +1334,12 @@ impl<'a> ValueCx<'a> {
             if self.state.resolve_depth >= MAX_RESOLVE_DEPTH {
                 return Err(DecodeError::ResolveTooDeep(MAX_RESOLVE_DEPTH));
             }
+            if self.state.load_depth > 0 {
+                if self.state.load_resolves >= self.state.resolve_budget {
+                    return Err(DecodeError::ResolveBudget(self.state.resolve_budget));
+                }
+                self.state.load_resolves += 1;
+            }
             let resolver = self.resolver;
             self.state.resolve_depth += 1;
             let resolved = resolver.resolve(self, package, reference);
@@ -1251,6 +1362,10 @@ impl<'a> ValueCx<'a> {
         Ok(Value::Class(Some(self.layout(key)?)))
     }
 
+    /// The stand-in cache is keyed by `(filed package id, index)`: the id [`CodeIndex::resolve_ref`] and
+    /// [`CodeIndex::filed_id`] file a package under (the first id met for its file, decision 2026-11-15-10), so a
+    /// reference through a second id of the same file (decision 2026-11-15-05) finds the same stand-in.
+    ///
     /// The stand-in for the object `reference` of `package` names (the C++ `Runtime::resource`), the default
     /// [`ReferenceResolver`]: an import is followed to the export that holds it where one does (else the stand-in
     /// names the import), and each object gets one stand-in, of the object's class, with [`Origin::Resource`] and no
@@ -1267,12 +1382,11 @@ impl<'a> ValueCx<'a> {
         if reference == 0 {
             return Ok(None);
         }
-        let (owner, index) = if reference < 0 {
-            self.code
-                .resolve_ref(self.store, package, reference)
-                .unwrap_or((package, reference))
-        } else {
-            (package, reference)
+        // Keyed by the id the reflection index files the package under: one object, one stand-in, whichever id of
+        // its file the reference came through. `resolve_ref` files `package` first, also when it answers nothing.
+        let (owner, index) = match self.code.resolve_ref(self.store, package, reference) {
+            Some(target) => target,
+            None => (self.code.filed_id(package), reference),
         };
         if let Some(&o) = self.state.resources.get(&(owner, index)) {
             return Ok(Some(o));
@@ -1307,6 +1421,7 @@ impl<'a> ValueCx<'a> {
             },
         )?;
         self.state.resources.insert((owner, index), o);
+        self.allocated(o);
         Ok(Some(o))
     }
 
@@ -1358,7 +1473,7 @@ impl<'a> ValueCx<'a> {
     /// The class of a stand-in for an object whose class no installed package exports. Only under
     /// [`ParityMode::Reference`] (the C++ stand-in needs no class): the class at its import path, defined (once, if
     /// nothing defined that path before) with no properties of its own under `Core.Object`, the root every class
-    /// derives from, and listed in [`DecodeState::native_classes`] and [`DecodeState::is_native_stand_in`]. Its native
+    /// derives from, and listed in [`DecodeState::native_classes`] and marked in the class table ([`ClassTable::mark_native`]). Its native
     /// properties are not in the packages, so none is invented; the classes between it and `Core.Object`, if any, are
     /// not known (UNVERIFIED). A class an overlay or a native pack defines must be defined before any decode, or the
     /// stand-in class takes its path first. A layout defined at that path by anything else is used in either mode.
@@ -1403,12 +1518,14 @@ impl<'a> ValueCx<'a> {
         value: &str,
     ) -> Result<u8, DecodeError> {
         if self.mode == ParityMode::Reference {
-            return Ok(
-                match enum_.and_then(|e| self.state.sources.get(&Source::Enum(e)).copied()) {
-                    Some((package, index)) => self.cxx_enum_position(package, index, value),
-                    None => 0,
-                },
-            );
+            let source = match enum_ {
+                Some(e) => self.enum_export(e),
+                None => None,
+            };
+            return Ok(match source {
+                Some((package, index)) => self.cxx_enum_position(package, index, value),
+                None => 0,
+            });
         }
         let unknown = |cx: &Self| DecodeError::UnknownEnumValue {
             property: cx.space.names.text(property).into_owned(),
@@ -1427,6 +1544,25 @@ impl<'a> ValueCx<'a> {
             property: self.space.names.text(property).into_owned(),
             position,
         })
+    }
+
+    /// The Enum export enum `e` was defined from: the source recorded from a declaring property, else found by its path
+    /// `<package stem>.<object path>` (an enum whose declarations did not pass through this state's [`ValueCx::layout`]).
+    fn enum_export(&mut self, e: EnumId) -> Option<(PackageId, i32)> {
+        if let Some(&src) = self.state.sources.get(&Source::Enum(e)) {
+            return Some(src);
+        }
+        let path = self
+            .space
+            .classes
+            .enum_layout(e)?
+            .path()
+            .as_str()
+            .to_string();
+        let (stem, _) = path.split_once('.')?;
+        let package = self.code.package(self.store, stem).ok()?;
+        let index = self.code.find_export(self.store, package, &path);
+        (index != 0 && self.code.enum_of(package, index) == Some(e)).then_some((package, index))
     }
 
     /// The C++ `byteFromEnum` (reference mode): the first Enum export of the package being read named exactly
