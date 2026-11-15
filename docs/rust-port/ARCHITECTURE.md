@@ -558,10 +558,23 @@ pub struct OpLevel(u8);        // 0..=10 (NATIVE_LOOT cap reading, UNVERIFIED); 
 pub struct PlayerCount(u8);    // 1..=4; single player = 1 (D12)
 pub struct GameStage(pub i32);   // placed by W0, final (W1-ITEMDATA uses it before W1-BALTYPES lands)
 pub struct ExpLevel(i32); pub struct AwesomeLevel(i32);
-pub struct LevelCapUpgrades(u8); // 0, 1, 2 level-cap packs (cap 50 / 61 / 72; the third-playthrough cap rule reads it)
+pub enum LevelCapPack { First, Second, Third }  // record order; increments 11 / 11 / 8 are data for W3-BALANCE
+impl LevelCapPack { pub const ALL: [LevelCapPack; 3]; pub fn bit(self) -> u8 /* 0x1, 0x2, 0x4: this crate's encoding */ }
+pub struct LevelCapUpgrades(u8); // set of licensed level-cap packs; input to the player level cap in every playthrough
+impl LevelCapUpgrades { pub const NONE: Self; pub const ALL: Self;
+                        pub fn from_bits(bits: u32) -> Result<Self, BalanceError> /* unknown bits refused */;
+                        pub fn bits(self) -> u8; pub fn with(self, pack: LevelCapPack) -> Self;
+                        pub fn contains(self, pack: LevelCapPack) -> bool; pub fn is_empty(self) -> bool }
+#[non_exhaustive]
 pub struct BalanceSnapshot { pub playthrough: Playthrough, pub op: OpLevel, pub players: PlayerCount,
-                             pub player_level: ExpLevel, pub stage: GameStage, pub awesome: AwesomeLevel }
-pub enum BalanceError { NotYet(NotYet), OutOfRange { what: &'static str, value: i64 }, Attr(AttrError) }
+                             pub player_level: ExpLevel, pub stage: GameStage, pub awesome: AwesomeLevel,
+                             pub level_cap_packs: LevelCapUpgrades }
+impl BalanceSnapshot { pub fn new(/* the seven fields in order */) -> Result<Self, BalanceError> /* validates */;
+                       pub fn validate(&self) -> Result<(), BalanceError> /* nonzero OP only in UVHM, UNVERIFIED */ }
+#[non_exhaustive]  // Clone + PartialEq, not Eq (so Attr(AttrError) need not be Eq)
+pub enum BalanceError { NotYet(NotYet), OutOfRange { what: &'static str, value: i64 },
+                        OpLevelOutsideUvhm { op: u8, playthrough: Playthrough }, UnknownLevelCapPackBits { bits: u32 },
+                        Attr(AttrError) /* added once ow-attr has its error type */ }
 
 // W3-BALANCE
 pub fn experience_required(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, level: ExpLevel) -> Result<i64, BalanceError>;
@@ -979,8 +992,8 @@ W1-NUM is the lane to start first and review first.
 - Inputs: W0.
 - Not yet: any rule (curve, stage, cap): those are W3-BALANCE.
 - Tests / done when: `Playthrough::from_index(0).count() == 1`; out-of-range indices refused; `OpLevel` refused
-  above 10 and nonzero outside UVHM (as a typed error, labelled UNVERIFIED); `LevelCapUpgrades` 0..=2 (doc: caps 50,
-  61, 72 as the records give them, UNVERIFIED).
+  above 10 and nonzero outside UVHM (as a typed error, labelled UNVERIFIED); `LevelCapUpgrades` a set of the three level-cap
+  packs (increments 11, 11, 8 in the records), unknown bits refused with a typed error (independent licensing UNVERIFIED).
 
 **W1-ITEMDATA: item identity** · S · game: yes (read the struct declarations with the C++ tool) · Opus 5.5 medium
 - Goal: `ow-items::data` as in 3.7. The field list mirrors `WeaponDefinitionData` and `ItemDefinitionData` as the
@@ -1218,7 +1231,8 @@ W1-NUM is the lane to start first and review first.
 
 **W3-BALANCE: balance service** · M · game: yes · Opus 5.5 high
 - Goal: section 3.6 rules: XP curve, region game stage (stored where the game stores it, first query wins), item stage
-  cap, playthrough modifiers, mission and kill XP, skill points, `OfflineWorld`.
+  cap, the player max level (`GetMaxExpLevel`: 50 + the increment of each licensed level-cap pack, clamped to 50 + the
+  sum of all; NATIVE_PROGRESSION.md, "Level cap"), playthrough modifiers, mission and kill XP, skill points, `OfflineWorld`.
 - Owns: `crates/ow-balance/src/{curve,stage,cap,playthrough,xp,offline}.rs`.
 - Inputs: W1-BALTYPES, W3-ATTREVAL, W3-ATTRCTX.
 - Not yet: UVHM region stage (`NeedsRealGame(2)`), playthrough modifier effects above index 0 where unread, kill XP
