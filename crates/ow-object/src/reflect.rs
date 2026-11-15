@@ -323,6 +323,8 @@ pub struct ClassInfo {
     /// Lower-cased function name -> the function export (the C++ `Class::functions` keys). A later child of the same
     /// lower-cased name replaces an earlier one, as the C++ map assignment does.
     pub functions: BTreeMap<String, i32>,
+    /// The states the class declares: lower-cased state name -> the state (the C++ `Class::states` keys).
+    states: BTreeMap<String, StateInfo>,
     /// The error the super chain gave while this class loaded. As the C++ `loadClass`, the class stays registered
     /// without its super class (and without its functions), and a later [`CodeIndex::class_at`] returns it; only
     /// [`CodeIndex::define_layout`] refuses it with this error.
@@ -340,6 +342,27 @@ impl ClassInfo {
     pub fn body_decoded(&self) -> bool {
         self.body.is_ok()
     }
+
+    /// The states the class itself declares (not its super classes'), by lower-cased name: the C++ `Class::states`
+    /// that `loadClass` collects. A State export is a child of the class export whose class name is `State`; its
+    /// functions are its own children whose class name is `Function`. Empty until the class loaded its functions
+    /// (a class whose super chain failed to load keeps none, as it keeps no functions).
+    pub fn states(&self) -> &BTreeMap<String, StateInfo> {
+        &self.states
+    }
+}
+
+/// One state a class declares ([`ClassInfo::states`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateInfo {
+    /// The State export's name as the package spells it.
+    pub name: String,
+    /// The State export (in the class's package).
+    pub export: i32,
+    /// Lower-cased function name -> the function export, as [`ClassInfo::functions`]: a later child of the same
+    /// lower-cased name replaces an earlier one, as the C++ map assignment does.
+    pub functions: BTreeMap<String, i32>,
 }
 
 /// The C++ `PackageIndex` of one package: each export's class name, each export's children, the first export of each
@@ -797,6 +820,7 @@ impl CodeIndex {
             super_class: None,
             body,
             functions: BTreeMap::new(),
+            states: BTreeMap::new(),
             load_error: None,
             interface_targets,
         });
@@ -812,12 +836,33 @@ impl CodeIndex {
         }
         let table = self.index_of(store, package);
         let mut functions = BTreeMap::new();
-        for &child in table.children.get(&index).map(Vec::as_slice).unwrap_or(&[]) {
-            if table.class_names[child as usize - 1] == "Function" {
-                functions.insert(lower(&pkg.exports[child as usize - 1].name), child);
+        let mut states = BTreeMap::new();
+        let children = |of: i32| table.children.get(&of).map(Vec::as_slice).unwrap_or(&[]);
+        for &child in children(index) {
+            match table.class_names[child as usize - 1].as_str() {
+                "Function" => {
+                    functions.insert(lower(&pkg.exports[child as usize - 1].name), child);
+                }
+                "State" => {
+                    let mut state = StateInfo {
+                        name: pkg.exports[child as usize - 1].name.clone(),
+                        export: child,
+                        functions: BTreeMap::new(),
+                    };
+                    for &member in children(child) {
+                        if table.class_names[member as usize - 1] == "Function" {
+                            state
+                                .functions
+                                .insert(lower(&pkg.exports[member as usize - 1].name), member);
+                        }
+                    }
+                    states.insert(lower(&state.name), state);
+                }
+                _ => {}
             }
         }
         self.classes[key.index()].functions = functions;
+        self.classes[key.index()].states = states;
         Ok(key)
     }
 
@@ -1106,6 +1151,53 @@ impl CodeIndex {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The typed declarations of `outer`'s own child property exports, in declaration order: a function's parameters,
+    /// locals and return value, or any other export's children (the C++ `childProperties`, which `functionAt` reads
+    /// for a function). Each is typed exactly as [`CodeIndex::define_layout`] types a class's own declarations (flags,
+    /// array dimension, source export; a struct held by value defined now, one reached through an array or a map
+    /// defined before this returns; a referenced class only declared). Attribute companions are not linked: those
+    /// belong to a class's layout, which [`CodeIndex::define_layout`] builds. Nothing is cached: each call reads the
+    /// exports again (the structs, enums and classes they name are cached as usual). On an error, the structs this
+    /// call queued stay declared only, as after a class whose layout fails.
+    pub fn child_declarations(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        package: PackageId,
+        outer: i32,
+    ) -> Result<Vec<PropertyDecl>, ReflectError> {
+        let package = self.file(store, package);
+        self.nested(|index| {
+            let raws = index.child_properties(store, package, outer)?;
+            let deferred_from = index.deferred_structs.len();
+            let outcome = index.typed_children(store, names, classes, &raws, deferred_from);
+            if outcome.is_err() {
+                index.deferred_structs.truncate(deferred_from);
+            }
+            outcome
+        })
+    }
+
+    fn typed_children(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        raws: &[RawProperty],
+        deferred_from: usize,
+    ) -> Result<Vec<PropertyDecl>, ReflectError> {
+        let mut decls = Vec::with_capacity(raws.len());
+        for raw in raws {
+            decls.push(self.declaration(store, names, classes, raw)?);
+        }
+        while self.deferred_structs.len() > deferred_from {
+            let target = self.deferred_structs.remove(deferred_from);
+            self.define_struct(store, names, classes, target)?;
+        }
+        Ok(decls)
     }
 
     /// Loads every export of `package` whose class name is `Class` and defines its layout. Only a load failure that

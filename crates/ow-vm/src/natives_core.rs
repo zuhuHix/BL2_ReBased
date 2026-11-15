@@ -35,11 +35,11 @@
 //!
 //! **States.** `GotoState` reproduces the C++ name-and-events approximation only under `ParityMode::Reference` (a
 //! stand-in, section 6.1, pinned by `tests/vm_states_test.py`); otherwise it is `NotYet { NotPorted }` until W5-STATES
-//! ports the game's state machine (NATIVE_ENGINE_CORE.md). Even under Reference it needs two things the W2-VMAPI
-//! contract does not carry yet: the states a class declares and the method lookup by class and state (C++
-//! `Class::states`, `Runtime::findMethod`). W3-INTERP adds them (`Vm::find_method`, `Vm::class_declares_state`)
-//! and wires them into [`register`]; until then both answer `NotYet { LayerAbsent }` (see `ContractStates`). The
-//! algorithm itself is tested here over a stand-in lookup (decision 2026-11-15-07).
+//! ports the game's state machine (NATIVE_ENGINE_CORE.md). Under Reference it reads the states a class declares and
+//! the method lookup by class and state (C++ `Class::states`, `Runtime::findMethod`) from the classes the VM loaded:
+//! [`register`] wires `Vm::class_declares_state` and `Vm::find_method` (W3-INTERP; a class defined by hand, with no
+//! package behind it, declares no state). The algorithm itself is tested here over a stand-in lookup (decision
+//! 2026-11-15-07).
 //!
 //! **Interfaces.** `QueryInterface` and the iterators' interface filter need a class's interface table (C++
 //! `Runtime::implements`), which the VM cannot query yet: where the answer depends on it, they return
@@ -74,7 +74,24 @@ impl NativePack for Pack {
 /// Registers every Core native and the two engine iterators on `vm`. A second call on one VM is refused (duplicate
 /// registration).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
-    register_with(vm, Rc::new(ContractStates))
+    /// `GotoState`'s lookup over the loaded classes: `Vm::class_declares_state` and `Vm::find_method` (W3-INTERP,
+    /// decision 2026-11-15-07).
+    struct LoadedStates;
+    impl StateLookup for LoadedStates {
+        fn declares_state(&self, vm: &Vm, class: ClassId, state: NameId) -> Result<bool, VmError> {
+            vm.class_declares_state(class, state)
+        }
+        fn find_method(
+            &self,
+            vm: &Vm,
+            class: ClassId,
+            name: &str,
+            state: Option<NameId>,
+        ) -> Result<Option<FuncId>, VmError> {
+            vm.find_method(class, name, state)
+        }
+    }
+    register_with(vm, Rc::new(LoadedStates))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -94,42 +111,6 @@ trait StateLookup {
         name: &str,
         state: Option<NameId>,
     ) -> Result<Option<FuncId>, VmError>;
-}
-
-/// The lookup the shipped contract supports: none yet. The class table holds no state table and the VM no method
-/// lookup by class and state. W3-INTERP adds both (`Vm::find_method`, `Vm::class_declares_state`) and replaces this
-/// in [`register`].
-struct ContractStates;
-
-impl ContractStates {
-    fn absent(what: &'static str) -> VmError {
-        NotYet::layer_absent(
-            what,
-            "ow-vm Vm::find_method and Vm::class_declares_state",
-            "lane W3-INTERP (decision 2026-11-15-07)",
-        )
-        .into()
-    }
-}
-
-impl StateLookup for ContractStates {
-    fn declares_state(&self, _: &Vm, _: ClassId, _: NameId) -> Result<bool, VmError> {
-        Err(Self::absent(
-            "Object.GotoState: the states a class declares",
-        ))
-    }
-
-    fn find_method(
-        &self,
-        _: &Vm,
-        _: ClassId,
-        _: &str,
-        _: Option<NameId>,
-    ) -> Result<Option<FuncId>, VmError> {
-        Err(Self::absent(
-            "Object.GotoState: the state events' method lookup",
-        ))
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -3032,7 +3013,10 @@ mod tests {
     }
 
     #[test]
-    fn goto_state_under_reference_waits_for_the_state_tables() {
+    fn goto_state_under_reference_reads_the_loaded_states() {
+        // `register` wires Vm::class_declares_state and Vm::find_method (W3-INTERP). These classes are defined by
+        // hand, with no package behind them, so they declare no state: a change only sets the name (logged), and
+        // no state event runs. The package-loaded case is in crates/ow-vm/src/interp/tests.rs.
         let mut h = build(ParityMode::Reference, true, None);
         let p = h.vm.instantiate(h.pawn, "P").unwrap();
         // Nothing to look up: no object, no state argument, or the same state without bForceEvents.
@@ -3057,22 +3041,23 @@ mod tests {
             h.vm.log,
             ["GotoState: label Begin not run (latent state code is not run)"]
         );
-        // A change needs the declared states: NotYet, and the state is left alone.
-        let e = h.try_call(GOTO, Some(p), vec![a], &[]).unwrap_err();
-        assert!(matches!(not_yet(e), Missing::LayerAbsent(_)));
-        let e = h
-            .try_call(
-                GOTO,
-                Some(p),
-                vec![none, Value::Name(NameId::NONE), b(true)],
-                &[],
-            )
-            .unwrap_err();
-        assert!(
-            matches!(not_yet(e), Missing::LayerAbsent(_)),
-            "to None with bForceEvents: EndState lookup"
+        h.vm.log.clear();
+        assert_eq!(
+            h.try_call(GOTO, Some(p), vec![a], &[]).unwrap().ret,
+            Value::None
         );
+        assert_eq!(
+            h.vm.log,
+            ["GotoState: state A is not declared on Pawn; name set, no state events"]
+        );
+        let state = h.vm.space.heap.get(p).unwrap().state;
+        assert_eq!(state.map(|s| h.vm.space.names.text(s).into_owned()), Some("A".to_string()));
+        // Back to the default state with bForceEvents: no EndState or BeginState is declared anywhere.
+        h.vm.log.clear();
+        h.try_call(GOTO, Some(p), vec![none, Value::Name(NameId::NONE), b(true)], &[])
+            .unwrap();
         assert_eq!(h.vm.space.heap.get(p).unwrap().state, None);
+        assert!(h.vm.log.is_empty(), "{:?}", h.vm.log);
     }
 
     /// A stand-in lookup for one class: declared states, and per (state or class level, event) one function.

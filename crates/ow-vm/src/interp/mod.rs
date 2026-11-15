@@ -1,4 +1,134 @@
-//! Owner: lane W3-INTERP. Not started: this file is a scaffold stub (W0-SCAFFOLD); the owner lane fills it.
+//! Owner: lane W3-INTERP. The UnrealScript interpreter core (architecture section 8, lane W3-INTERP): a port of
+//! `src/interp.cpp` and of the run half of `src/vm.cpp` (`functionAt`, `findMethod`, `findFunction`, `findClass`,
+//! `buildNativeIndex`, `nativeByIndex`). AI-assisted (Claude Code).
 //!
-//! W3-INTERP adds its own files here and creates `aggregate.rs`, `iter.rs` and `delegate.rs` as `NotYet`
-//! stubs for W4-INTERP2 (architecture section 8).
+//! **What runs here.** One bytecode frame per script call ([`run_frame`], reached through `Vm::call` →
+//! `Vm::run_bytecode`, which keeps the depth bookkeeping): locals, parameters and out parameters, the optional-parameter
+//! prologue, `Return`, `Jump`/`JumpIfNot`, `Switch`/`Case`, `Context` and `ClassContext`, the primitive, dynamic and
+//! meta casts, the constants, virtual, final, global and super calls, numbered natives (`&&`/`||` short-circuit as
+//! the C++ does), `New`, `Assert`, the Gearbox hidden typed temporaries (opcodes 0x4C-0x50), the attribute read 0x5E
+//! and the typed let 0x5F (through `ow_attr::registry::let_base`), the step budget (one step per statement, per
+//! expression and per call, as the C++ `tick`), the census of `Context` expressions whose object was None, and the
+//! `<- caller` trace of the depth-limit message.
+//!
+//! **What waits for other lanes** (each answers `NotYet { NotPorted }` naming the lane): struct and array element
+//! operations, dynamic arrays, struct comparison and static arrays as a whole (`aggregate.rs`, W4-INTERP2);
+//! `foreach` (`iter.rs`, W4-INTERP2); delegates (`delegate.rs`, W4-INTERP2); interface context, interface casts and
+//! the object-interface primitive casts (W4-INTERP2); state variables, `GotoLabel` and latent code (W5-STATES).
+//!
+//! **Loading** (`load.rs`). Functions and classes come from the code packages of the definition store, through
+//! `DefStore::code_mut` (its package store and reflection index, so one `CodeIndex` defines every layout). Loading a
+//! class declares every function it and its states declare, with parameters typed by
+//! `CodeIndex::child_declarations` and the native key built as `vm.cpp:600-606` builds it; the bytecode is decoded
+//! on a function's first call, as the C++ does. Class default objects (a call with no object, `Class.static`,
+//! `default.` reads, `New`) come from `DefStore::class_default`, which answers `NotYet` until the W3-DEFS body lands.
+//!
+//! **Stack depth.** The interpreter recurses (expression, call, frame), the decoder recurses up to 256 levels inside
+//! a call, and calls nest up to `Limits::max_call_depth` (200) frames. That needs more than a 1 MiB main thread in a
+//! debug build, so the VM must run on a thread with a larger stack: `ow-cli` runs every VM command on a thread of
+//! [`STACK_SIZE`] bytes, and the deep unit tests do the same. Decoding stays lazy (inside the first call), as the C++.
+//!
+//! **Values.** The C++ keeps one dynamically typed bag per object; here properties live in typed heap slots
+//! (decision 2026-11-15-02), so a few representation rules are added at a heap write, after the C++ assignment rule
+//! (`interp.cpp:511-522`): a `None` value or the `None` literal stored into a class, interface or delegate property
+//! becomes that kind's null, an object reference stored into an interface property becomes an interface reference
+//! (and back), and a `None` value stored into any other property becomes the property's zero (the C++ stores the
+//! `None` kind there, which reads as 0 everywhere a number is read). Locals stay untyped, as in the C++. String
+//! constants: an ANSI constant's bytes are read one character each (Latin-1, the UE3 widening of an ANSI character),
+//! a Unicode constant's UTF-16 units are decoded with lone surrogates as U+FFFD (the `Value::Str` limit, decision
+//! 2026-11-15-07). For ASCII both equal the C++ text; past ASCII the C++ keeps the raw bytes.
+//!
+//! Status: a port of the C++ reading. Every rule here is UNVERIFIED in the running game unless its line says
+//! otherwise; the C++ labels are kept where it has them.
+
+mod aggregate;
+mod attr;
+mod convert;
+mod delegate;
+mod eval;
+mod iter;
+mod load;
+
+#[cfg(test)]
+mod tests;
+
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+
+use ow_core::FixedHashMap;
+use ow_object::ids::{ClassId, FuncId};
+use ow_object::layout::PropertyDecl;
+use ow_package::PackageId;
+use ow_script::decode::Code;
+use ow_script::function::FunctionInfo;
+
+pub use convert::{describe, describe_for_string, strtod_prefix};
+pub use load::instantiate_from_defaults;
+
+pub(crate) use eval::run_frame;
+pub(crate) use load::{find_class, find_function};
+
+/// The stack size `ow-cli` gives the thread a VM command runs on (see the module documentation). Measured need in a
+/// debug build: the depth-limit unit test (200 nested script frames) runs in under 16 MiB; this leaves room for
+/// deep expressions in every frame.
+pub const STACK_SIZE: usize = 256 * 1024 * 1024;
+
+/// What the interpreter keeps per VM: the loaded functions and classes, the native index and the active frames.
+#[derive(Debug, Default)]
+pub(crate) struct CodeState {
+    /// Script functions running, innermost last (the C++ `Interp::stack`), for the depth-limit message.
+    pub(crate) stack: Vec<FuncId>,
+    /// Function export (filed package id, index) -> its function.
+    functions: FixedHashMap<(PackageId, i32), FuncId>,
+    /// What the loader read for each function it declared.
+    code: FixedHashMap<FuncId, Rc<FuncCode>>,
+    /// Classes whose functions and states are loaded.
+    classes: FixedHashMap<ClassId, Rc<ClassCode>>,
+    /// Native index -> the native (or why it could not be loaded), built on first use over the code packages.
+    natives: Option<Rc<FixedHashMap<u32, Result<FuncId, String>>>>,
+    /// (filed package, outer export) -> the typed child declarations of that export, for property references.
+    children: FixedHashMap<(PackageId, i32), Children>,
+}
+
+/// The typed child declarations of one export, or why they did not type.
+type Children = Result<Rc<Vec<PropertyDecl>>, String>;
+
+/// One function the loader declared from a package export.
+#[derive(Debug)]
+pub(crate) struct FuncCode {
+    /// The filed id of the package that holds it.
+    package: PackageId,
+    /// `Package.Outer.Name`.
+    path: String,
+    info: FunctionInfo,
+    owner: Option<ClassId>,
+    /// Every child declaration (parameters, locals, the return value) with its first frame slot, in declaration
+    /// order.
+    locals: Vec<Local>,
+    /// The child export index of each entry of `locals`.
+    by_export: FixedHashMap<i32, usize>,
+    /// The `locals` entry of each parameter, in order.
+    params: Vec<usize>,
+    /// The `locals` entry of the return value.
+    result: Option<usize>,
+    /// Frame slots: one per element of every declaration.
+    slot_count: usize,
+    /// Why the function cannot run (its header did not read, or a declaration did not type).
+    failure: Option<String>,
+    /// The decoded script, decoded on the first call (the C++ `Function::code` / `decodeFailed`).
+    script: RefCell<Option<Result<Rc<Code>, String>>>,
+}
+
+#[derive(Debug)]
+struct Local {
+    decl: PropertyDecl,
+    slot: usize,
+}
+
+/// The functions and states one class declares (not its super classes'), by lower-cased name.
+#[derive(Debug, Default)]
+struct ClassCode {
+    functions: BTreeMap<String, FuncId>,
+    states: BTreeMap<String, BTreeMap<String, FuncId>>,
+}

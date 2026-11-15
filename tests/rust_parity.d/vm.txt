@@ -1,0 +1,17 @@
+# AI-assisted (Claude Code). Lane W3-INTERP: --run, --run-batch, --native (crates/ow-cli/src/cmd/vm.rs, crates/ow-vm/src/interp).
+#
+# --native loads no package, so its command lines are diff lines here, the ones tests/natives_test.py runs among them.
+# --run and --run-batch need a package file: a diff line would need a tracked one (no game file, and no package of any
+# kind, may be tracked) and a test-command line a tracked tests/*.py that runs only these commands (tests/vm_test.py
+# runs them with --native-census, --inventory-move and --mover-probe, and is W4-INTERP2's whole-file gate). They were
+# compared locally instead, on the invented package of tests/vm_test.py and on the installed game's code packages
+# (counts in decision 2026-11-15-14), and the interpreter's cases run as Rust unit tests in
+# crates/ow-vm/src/interp/tests.rs and crates/ow-cli/src/cmd/vm.rs.
+diff --native WillowGame.WillowWeapon.Fire --native-args a,b
+diff --native Engine.Actor.Trace
+diff --native Core.Object.Rand --native-args 10 mode=reference
+diff --native exit=1 stderr
+diff --native '' --native-args x exit=1 stderr
+diff --native A --native-args exit=1 stderr
+diff --native A --bogus x exit=1 stderr
+diff --native A --native-args x extra exit=1 stderr

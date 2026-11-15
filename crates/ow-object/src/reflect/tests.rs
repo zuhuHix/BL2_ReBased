@@ -1324,3 +1324,158 @@ fn errors_print_the_cxx_texts_and_chain_their_causes() {
         "not a property export"
     );
 }
+
+// ---- child_declarations and states (lane W3-INTERP, additive) ----------------------------------------------------
+
+/// A class with one function (parameters, a local, a return value) and one state declaring a function, plus a class
+/// with a function whose child has an unknown property class. Invented names and values.
+fn function_fixture() -> (Declarations, i32, i32, i32) {
+    let mut d = Declarations::with_imports(&[
+        "Class",
+        "ScriptStruct",
+        "Function",
+        "State",
+        "IntProperty",
+        "FloatProperty",
+        "StructProperty",
+        "ArrayProperty",
+        "ObjectProperty",
+        "WeirdProperty",
+    ]);
+    let object = d.cls("Object", 0);
+    let vec = d.struct_in(object, "Vec", 0, None);
+    d.prop("Float", vec, "X", 0);
+    let pair = d.struct_in(object, "PairList", 0, None);
+    d.prop("Int", pair, "N", 0);
+    // Children in reverse declaration order, then the function: ReturnValue, B, V, A, then the local L (first).
+    let function = d.p.next_export() + 6;
+    let parm = 0x80;
+    d.prop_with(&PropSpec {
+        flags: parm | 0x100 | 0x400,
+        ..PropSpec::new("Int", function, "ReturnValue")
+    });
+    d.prop_with(&PropSpec {
+        flags: parm | 0x100 | 0x10,
+        ..PropSpec::new("Float", function, "B")
+    });
+    d.prop_with(&PropSpec {
+        flags: parm,
+        type_ref: vec,
+        ..PropSpec::new("Struct", function, "V")
+    });
+    d.prop_with(&PropSpec {
+        flags: parm,
+        dim: 2,
+        ..PropSpec::new("Int", function, "A")
+    });
+    d.array_of(function, "L", "Struct", pair);
+    let mut f = Export::new(d.import("Function"), "Compute", vec![0u8; 8]);
+    f.outer = object;
+    assert_eq!(d.p.add_export_with(f), function);
+    let mut state = Export::new(d.import("State"), "Waiting", vec![0u8; 8]);
+    state.outer = object;
+    let state = d.p.add_export_with(state);
+    let mut in_state = Export::new(d.import("Function"), "Tick", vec![0u8; 8]);
+    in_state.outer = state;
+    d.p.add_export_with(in_state);
+    let odd = d.p.next_export() + 1;
+    d.prop("Weird", odd, "Q", 0);
+    let mut broken = Export::new(d.import("Function"), "Broken", vec![0u8; 8]);
+    broken.outer = object;
+    assert_eq!(d.p.add_export_with(broken), odd);
+    (d, object, function, odd)
+}
+
+#[test]
+fn child_declarations_type_a_functions_children_in_declaration_order() {
+    let tree = Tree::new("children");
+    let (mut d, _, function, _) = function_fixture();
+    tree.write("Core.upk", &d.build());
+    let (mut store, id) = load(&tree, "Core.upk");
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let decls = index
+        .child_declarations(&mut store, &mut names, &mut classes, id, function)
+        .unwrap();
+    let shown: Vec<(String, u64, i32)> = decls
+        .iter()
+        .map(|p| (names.text(p.name).into_owned(), p.flags, p.array_dim))
+        .collect();
+    assert_eq!(
+        shown,
+        vec![
+            ("L".to_string(), 0, 1),
+            ("A".to_string(), 0x80, 2),
+            ("V".to_string(), 0x80, 1),
+            ("B".to_string(), 0x80 | 0x100 | 0x10, 1),
+            ("ReturnValue".to_string(), 0x80 | 0x100 | 0x400, 1),
+        ]
+    );
+    let vec = classes.struct_by_path("Core.Object.Vec").unwrap();
+    let pair = classes.struct_by_path("Core.Object.PairList").unwrap();
+    assert_eq!(decls[2].kind, PropKind::Struct(vec));
+    assert_eq!(decls[0].kind, PropKind::Array(Box::new(PropKind::Struct(pair))));
+    assert_eq!(decls[3].kind, PropKind::Float);
+    // The struct reached only through the array is defined before the call returns, not just declared.
+    assert!(classes.struct_layout(pair).is_some_and(|l| l.slot_count() == 1));
+    assert_eq!(decls[1].source, Some((id, function - 3)));
+    assert!(decls.iter().all(|p| p.attr.is_none()));
+    // A second call reads the same declarations again (nothing cached per outer).
+    let again = index
+        .child_declarations(&mut store, &mut names, &mut classes, id, function)
+        .unwrap();
+    assert_eq!(again, decls);
+}
+
+#[test]
+fn child_declarations_refuse_an_unknown_property_class_and_answer_empty_for_no_children() {
+    let tree = Tree::new("children-bad");
+    let (mut d, object, _, odd) = function_fixture();
+    tree.write("Core.upk", &d.build());
+    let (mut store, id) = load(&tree, "Core.upk");
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let error = index
+        .child_declarations(&mut store, &mut names, &mut classes, id, odd)
+        .unwrap_err();
+    assert_eq!(error, ReflectError::UnknownPropertyClass("WeirdProperty".into()));
+    // A struct export's own fields and an export with no property children.
+    let vec = d.p.next_export(); // past the last export: no children at all
+    assert_eq!(
+        index
+            .child_declarations(&mut store, &mut names, &mut classes, id, vec)
+            .unwrap(),
+        Vec::new()
+    );
+    let _ = object;
+}
+
+#[test]
+fn a_class_lists_its_states_and_their_functions() {
+    let tree = Tree::new("states");
+    let (mut d, object, function, odd) = function_fixture();
+    tree.write("Core.upk", &d.build());
+    let (mut store, id) = load(&tree, "Core.upk");
+    let mut index = CodeIndex::new();
+    let key = index.class_at(&mut store, id, object).unwrap().unwrap();
+    let info = index.class(key);
+    assert_eq!(
+        info.functions.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(),
+        vec![("broken", odd), ("compute", function)]
+    );
+    let states: Vec<(&str, &str, i32, Vec<&str>)> = info
+        .states()
+        .iter()
+        .map(|(k, s)| {
+            (
+                k.as_str(),
+                s.name.as_str(),
+                s.export,
+                s.functions.keys().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(states, vec![("waiting", "Waiting", function + 1, vec!["tick"])]);
+    // The state's function is not a class-level function.
+    assert!(!info.functions.contains_key("tick"));
+}
