@@ -24,9 +24,10 @@
 //! mapping and comparison work on that text and give the C++ results byte for byte. The natives that count
 //! characters (`Len`, `Left`, `Right`, `Mid`, `InStr`, `Asc`, `Chr`) count UTF-16 code units, the unit of the game's
 //! `FString`: for ASCII text that is the C++ byte count, for other text the C++ would split a UTF-8 sequence, which a
-//! Rust `str` cannot hold. A cut through a surrogate pair gives U+FFFD. `Chr` takes the low 16 bits (the C++ takes the
-//! low 8). `Caps`/`Locs` map ASCII only, as C++ `toupper`/`tolower` in the C locale. Status: UNVERIFIED for non-ASCII
-//! text (no live check of a non-ASCII string yet).
+//! Rust `str` cannot hold. A lone surrogate or a cut through a surrogate pair gives U+FFFD (a limit of `Value::Str`).
+//! `Chr` takes the low 16 bits (the C++ takes the low 8). `Caps`/`Locs` map ASCII only, as C++ `toupper`/`tolower` in
+//! the C locale. Status: UNVERIFIED for non-ASCII text (no live check of a non-ASCII string yet). Decision
+//! 2026-11-15-07.
 //!
 //! **Random numbers.** `Rand`/`FRand` draw from `vm.rng.script(ScriptStream::Rand / FRand)`: the C++ static LCGs
 //! (`VmLcg`, seeds 12345 / 54321) under `ParityMode::Reference`, a `CrtRand` stream of the world seed otherwise
@@ -36,12 +37,13 @@
 //! stand-in, section 6.1, pinned by `tests/vm_states_test.py`); otherwise it is `NotYet { NotPorted }` until W5-STATES
 //! ports the game's state machine (NATIVE_ENGINE_CORE.md). Even under Reference it needs two things the W2-VMAPI
 //! contract does not carry yet: the states a class declares and the method lookup by class and state (C++
-//! `Class::states`, `Runtime::findMethod`). Until the loader (W3-INTERP) provides them, both answer
-//! `NotYet { LayerAbsent }` (see `ContractStates`); the algorithm itself is tested here over a stand-in lookup.
+//! `Class::states`, `Runtime::findMethod`). W3-INTERP adds them (`Vm::find_method`, `Vm::class_declares_state`)
+//! and wires them into [`register`]; until then both answer `NotYet { LayerAbsent }` (see `ContractStates`). The
+//! algorithm itself is tested here over a stand-in lookup (decision 2026-11-15-07).
 //!
 //! **Interfaces.** `QueryInterface` and the iterators' interface filter need a class's interface table (C++
-//! `Runtime::implements`), which the class table does not hold yet: where the answer depends on it, they return
-//! `NotYet { LayerAbsent }`.
+//! `Runtime::implements`), which the VM cannot query yet: where the answer depends on it, they return
+//! `NotYet { LayerAbsent }` until W4-INTERP2 adds the interface query and wires it into [`register`].
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -95,15 +97,16 @@ trait StateLookup {
 }
 
 /// The lookup the shipped contract supports: none yet. The class table holds no state table and the VM no method
-/// lookup by class and state; the loader (W3-INTERP) is expected to provide both.
+/// lookup by class and state. W3-INTERP adds both (`Vm::find_method`, `Vm::class_declares_state`) and replaces this
+/// in [`register`].
 struct ContractStates;
 
 impl ContractStates {
     fn absent(what: &'static str) -> VmError {
         NotYet::layer_absent(
             what,
-            "ow-vm function loading (class states, method lookup)",
-            "lane W3-INTERP; W3-CORENAT handoff, contract problem 1",
+            "ow-vm Vm::find_method and Vm::class_declares_state",
+            "lane W3-INTERP (decision 2026-11-15-07)",
         )
         .into()
     }
@@ -437,8 +440,8 @@ fn interfaces(vm: &mut Vm) -> Result<(), VmError> {
         }
         Err(NotYet::layer_absent(
             "Object.QueryInterface: a class's interface table (Runtime::implements)",
-            "ow-object class interface tables",
-            "lanes W2-REFLECT, W3-INTERP",
+            "ow-vm interface query (Runtime::implements)",
+            "lane W4-INTERP2 (decision 2026-11-15-07)",
         )
         .into())
     })
@@ -1201,8 +1204,8 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
         if interface.is_some() && !items.is_empty() {
             return Err(NotYet::layer_absent(
                 "Actor.AllActors / DynamicActors: the InterfaceClass filter (Runtime::implements)",
-                "ow-object class interface tables",
-                "lanes W2-REFLECT, W3-INTERP",
+                "ow-vm interface query (Runtime::implements)",
+                "lane W4-INTERP2 (decision 2026-11-15-07)",
             )
             .into());
         }
@@ -1348,9 +1351,13 @@ fn state_events(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Tests: one or more direct cases per native, from the C++ source (`src/natives_core.cpp`), on invented classes and
-// values (rule 9). Expected numbers are what the C++ expression gives; where it goes through a choke point, the test
-// computes the expectation through the same choke point.
+// Tests: one or more direct cases per native, read from the C++ source (`src/natives_core.cpp`), on invented classes
+// and values (rule 9). Exact values are written by hand where the arithmetic is exact. Where a result depends on
+// rounding or on the C runtime (the choke-point functions, pow, Lerp, a reciprocal, GetAxes), the expectation is an
+// f32 bit pattern marked "C++ build": the C++ `ow-package` (Release, MSVC 14.50) confirmed it with `--run` on a
+// synthetic package whose script functions return `Native(constants) == FloatConst(bits)`. Each returned true, and
+// one ulp off returned false (review r1; the generator stays under ignored local/). Rand/FRand are the C++ values,
+// confirmed by the same build and by a hand computation of the C++ LCG.
 // ---------------------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1539,6 +1546,10 @@ mod tests {
     }
     fn s(v: &str) -> Value {
         Value::string(v)
+    }
+    /// A float from its bit pattern.
+    fn fb(bits: u32) -> Value {
+        Value::Float(f32::from_bits(bits))
     }
     fn fields(v: &Value) -> Vec<Value> {
         v.as_struct().unwrap().fields.clone()
@@ -1836,9 +1847,11 @@ mod tests {
     #[test]
     fn float_arithmetic_rounds_once_to_single() {
         let mut h = off();
-        let (a, c) = (0.1f32, 0.2f32);
-        let want = (f64::from(a) + f64::from(c)) as f32;
-        assert_eq!(h.call("Object.+(float,float)", vec![f(a), f(c)]), f(want));
+        // C++ build.
+        assert_eq!(
+            h.call("Object.+(float,float)", vec![f(0.1), f(0.2)]),
+            fb(0x3e99_999a)
+        );
         assert_eq!(
             h.call("Object.-(float,float)", vec![f(1.5), f(2.0)]),
             f(-0.5)
@@ -1875,9 +1888,10 @@ mod tests {
             h.call("Object.**(float,float)", vec![f(2.0), f(10.0)]),
             f(1024.0)
         );
+        // C++ build.
         assert_eq!(
             h.call("Object.**(float,float)", vec![f(1.7), f(0.3)]),
-            f(pow_f64(f64::from(1.7f32), f64::from(0.3f32)) as f32)
+            fb(0x3f96_1669)
         );
         assert_eq!(h.call("Object.-_pre(float)", vec![f(2.5)]), f(-2.5));
         assert_eq!(h.call("Object.Square(float)", vec![f(-3.0)]), f(9.0));
@@ -1951,26 +1965,25 @@ mod tests {
     #[test]
     fn float_functions_go_through_the_choke_points() {
         let mut h = off();
-        let x = 0.7f32;
-        let d = f64::from(x);
-        type Unary = fn(f64) -> f64;
-        let one: [(&str, Unary); 9] = [
-            ("Object.Sin(float)", sin_f64),
-            ("Object.Cos(float)", cos_f64),
-            ("Object.Tan(float)", tan_f64),
-            ("Object.Asin(float)", asin_f64),
-            ("Object.Acos(float)", acos_f64),
-            ("Object.Atan(float)", atan_f64),
-            ("Object.Exp(float)", exp_f64),
-            ("Object.Loge(float)", ln_f64),
-            ("Object.Sqrt(float)", sqrt_f64),
+        // C++ build, every value at 0.7f32.
+        let one = [
+            ("Object.Sin(float)", 0x3f24_eb73),
+            ("Object.Cos(float)", 0x3f43_ccb3),
+            ("Object.Tan(float)", 0x3f57_a036),
+            ("Object.Asin(float)", 0x3f46_8073),
+            ("Object.Acos(float)", 0x3f4b_9f42),
+            ("Object.Atan(float)", 0x3f1c_5889),
+            ("Object.Exp(float)", 0x4000_e153),
+            ("Object.Loge(float)", 0xbeb6_9e1a),
+            ("Object.Sqrt(float)", 0x3f56_2f5a),
         ];
-        for (key, func) in one {
-            assert_eq!(h.call(key, vec![f(x)]), f(func(d) as f32), "{key}");
+        for (key, bits) in one {
+            assert_eq!(h.call(key, vec![f(0.7)]), fb(bits), "{key}");
         }
+        // C++ build.
         assert_eq!(
             h.call("Object.Atan2(float,float)", vec![f(1.0), f(-2.0)]),
-            f(atan2_f64(1.0, -2.0) as f32)
+            fb(0x402b_6374)
         );
         assert_eq!(h.call("Object.Sqrt(float)", vec![f(16.0)]), f(4.0));
         // Out of the domain: NaN, as the C runtime gives.
@@ -2055,12 +2068,13 @@ mod tests {
             ),
             f(2.5)
         );
-        // Computed in double and rounded once.
-        let (a, c, t) = (0.1f32, 0.7f32, 0.3f32);
-        let want = (f64::from(a) + f64::from(t) * (f64::from(c) - f64::from(a))) as f32;
+        // Computed in double and rounded once. C++ build.
         assert_eq!(
-            h.call("Object.Lerp(float,float,float)", vec![f(a), f(c), f(t)]),
-            f(want)
+            h.call(
+                "Object.Lerp(float,float,float)",
+                vec![f(0.1), f(0.7), f(0.3)]
+            ),
+            fb(0x3e8f_5c29)
         );
         let cubic = "Object.FCubicInterp(float,float,float,float,float)";
         assert_eq!(
@@ -2129,6 +2143,17 @@ mod tests {
     #[test]
     fn rand_and_frand_reproduce_the_cpp_lcgs_under_reference() {
         let mut h = build(ParityMode::Reference, true, None);
+        // C++ build and by hand: state 12345 -> 87628868, (>> 8) % 10 = 0; -> 71072467, (>> 8) % 1000 = 626. FRand:
+        // 54321 -> 1238253532, (>> 8) / 2^24 = 0.28830331563949585 (f32 0x3e939c7e).
+        assert_eq!(h.call("Object.Rand(int)", vec![i(10)]), i(0));
+        assert_eq!(h.call("Object.Rand(int)", vec![i(1000)]), i(626));
+        assert_eq!(h.call("Object.FRand()", vec![]), fb(0x3e93_9c7e));
+        assert_eq!(
+            f64::from(f32::from_bits(0x3e93_9c7e)),
+            0.288_303_315_639_495_85
+        );
+        // Further draws agree with ow-core's VmLcg (limit 0 and below still step the state, as the C++ does).
+        let mut h = build(ParityMode::Reference, true, None);
         let mut rand = VmLcg::new(VmLcg::RAND_SEED);
         let mut frand = VmLcg::new(VmLcg::FRAND_SEED);
         for limit in [10, 1, 0, -5, 1000, 7] {
@@ -2140,13 +2165,6 @@ mod tests {
             );
             assert_eq!(h.call("Object.FRand()", vec![]), f(frand.frand()));
         }
-        // The first C++ draw, by hand: 12345 * 1664525 + 1013904223 (mod 2^32) = 87628868; >> 8 = 342300; % 10 = 0.
-        let mut fresh = build(ParityMode::Reference, true, None);
-        assert_eq!(fresh.call("Object.Rand(int)", vec![i(10)]), i(0));
-        assert_eq!(
-            fresh.call("Object.Rand(int)", vec![i(1000)]),
-            i(VmLcg { state: 87_628_868 }.rand_limit(1000))
-        );
     }
 
     /// The replacement test of the VM LCG stand-in (architecture 6.1): outside Reference both natives draw from the
@@ -2267,7 +2285,8 @@ mod tests {
             s("ba")
         );
         assert_eq!(h.call_out(cut, vec![s("aaa"), s("aa")], &[0]).1[0], s("a"));
-        // The search resumes at the erase point, so a match formed across it is removed too.
+        // The search resumes at the erase point, so a match formed across it (here the "ab" made of the first "a" and
+        // the last "b") is not removed: "aabb" gives "ab".
         assert_eq!(
             h.call_out(cut, vec![s("aabb"), s("ab")], &[0]).1[0],
             s("ab")
@@ -2375,6 +2394,16 @@ mod tests {
     #[test]
     fn string_case_and_characters() {
         let mut h = off();
+        // A known limit of Value::Str (decision 2026-11-15-07): a lone surrogate cannot be held, so the two halves of
+        // a pair made with Chr come back as two U+FFFD, not as the pair.
+        let (hi, lo) = (
+            h.call("Object.Chr(int)", vec![i(0xD83D)]),
+            h.call("Object.Chr(int)", vec![i(0xDE00)]),
+        );
+        assert_eq!(
+            h.call("Object.$(string,string)", vec![hi, lo]),
+            s("\u{FFFD}\u{FFFD}")
+        );
         assert_eq!(
             h.call("Object.Caps(string)", vec![s("aB1\u{e9}")]),
             s("AB1\u{e9}"),
@@ -2521,11 +2550,10 @@ mod tests {
             "not logged"
         );
         assert!(h.vm.log.is_empty());
-        // Divided as times the double reciprocal, then rounded.
-        let want = (f64::from(1.0f32) * (1.0 / f64::from(3.0f32))) as f32;
+        // Divided as times the double reciprocal, then rounded. C++ build.
         assert_eq!(
-            fields(&h.call("Object./(vector,float)", vec![a.clone(), f(3.0)]))[0],
-            f(want)
+            fields(&h.call("Object./(vector,float)", vec![a.clone(), f(3.0)])),
+            vec![fb(0x3eaa_aaab), fb(0x3f2a_aaab), fb(0x3f80_0000)]
         );
         assert_eq!(
             h.call("Object.-_pre(vector)", vec![a.clone()]),
@@ -2760,15 +2788,15 @@ mod tests {
                 );
             }
         }
-        // The first row by the C++ formula: (cos p cos y, cos p sin y, sin p), radians = units * pi / 32768.
-        let k = std::f64::consts::PI / 32768.0;
-        let (p, y) = (3000.0 * k, -12000.0 * k);
-        let want = vec![
-            f((cos_f64(p) * cos_f64(y)) as f32),
-            f((cos_f64(p) * sin_f64(y)) as f32),
-            f(sin_f64(p) as f32),
+        // All three rows, C++ build.
+        let rows = [
+            [0x3ec8_5626, 0xbf60_1e13, 0x3e91_3d79],
+            [0x3f49_755a, 0x3e22_4dd3, 0xbf18_a824],
+            [0x3ef4_44d9, 0x3ee9_c294, 0x3f40_3ec8],
         ];
-        assert_eq!(fields(&axes[1]), want);
+        for (row, bits) in rows.into_iter().enumerate() {
+            assert_eq!(fields(&axes[row + 1]), bits.map(fb).to_vec(), "row {row}");
+        }
     }
 
     // ---- objects and classes ---------------------------------------------------------------------------------
