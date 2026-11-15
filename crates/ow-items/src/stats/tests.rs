@@ -13,6 +13,7 @@ use ow_attr::api::{AttrWorld, GlobalSlots, NumForms, WorldParts};
 use ow_core::rand::{CrtStream, Rand15};
 use ow_object::ids::{ClassId, PropId, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
+use ow_package::package::Package;
 use std::path::PathBuf;
 
 pub(crate) const FILE: &str = "WillowGame/CookedPCConsole/StatsTest.upk";
@@ -630,21 +631,22 @@ fn the_gestalt_assembly_reads_every_static_array_element() {
     let install = Install::new("gestalt", b.build());
     let input = install.census();
     let data = RollData::new(&input).unwrap();
-    let statics = StaticArrays::new(&input).unwrap();
+    let stats = StatsData::new(&data);
+    // The registry's own static-array reading (Props::statics), every element in index order.
     assert_eq!(
-        statics
-            .names("Body.Twin", "AdditionalGestaltModeSkeletalMeshNames")
+        stats
+            .statics("Body.Twin", "AdditionalGestaltModeSkeletalMeshNames")
             .unwrap(),
         vec![
-            Some("Frag_Var0".to_string()),
-            Some("None".to_string()),
-            Some("Frag_Var2".to_string())
+            Pv::Str("Frag_Var0".to_string()),
+            Pv::Str("None".to_string()),
+            Pv::Str("Frag_Var2".to_string())
         ]
     );
     let recipe = WeaponRecipe::new("Type.Plain")
         .with_part("Body", "Body.Twin")
         .with_part("Stock", "Body.Stock_None");
-    let a = assembly(&StatsData::new(&data), &statics, &recipe).unwrap();
+    let a = assembly(&stats, &recipe).unwrap();
     assert_eq!(a.fragments, vec!["Frag_Main", "Frag_Var0", "Frag_Var2"]);
     assert_eq!(a.gestalt, Pv::Str("Gestalt_Test".to_string()));
     assert_eq!(a.material, Pv::Null);
@@ -1134,9 +1136,27 @@ impl HeapWorld {
                 0,
             ),
             decl(&mut space, "AttributeSlotMaxActivated", PropKind::Int, 0),
-            decl(&mut space, "InstantHitDamage", PropKind::Struct(aid), 0),
-            decl(&mut space, "ClipSize", PropKind::Float, 0),
+            decl(&mut space, "bUseOverheatBehavior", PropKind::Bool, 0),
+            decl(&mut space, "bIsSpinningEnabled", PropKind::Bool, 0),
+            decl(&mut space, "bFlapsEnabled", PropKind::Bool, 0),
+            decl(&mut space, "PartVariation", PropKind::Int, 0),
         ];
+        // One test class for the type, the parts and the items: every field the base-value functions read (an
+        // evaluated one is init data, a copied one a float).
+        let mut decls = decls;
+        for (_, field, from) in WEAPON_BASE_VALUES {
+            let kind = match from {
+                BaseFrom::Evaluate => PropKind::Struct(aid),
+                BaseFrom::Copy => PropKind::Float,
+            };
+            decls.push(decl(&mut space, field, kind, 0));
+        }
+        for (_, field) in WEAPON_OVERHEAT_VALUES {
+            decls.push(decl(&mut space, field, PropKind::Float, 0));
+        }
+        for (_, field, _, _) in WEAPON_PART_BASE_VALUES {
+            decls.push(decl(&mut space, field, PropKind::Struct(aid), 0));
+        }
         class(&mut space, "Test.Definition", object, decls);
         // The instances: a shield with a level, a weapon with two stack attributes and a level.
         let stack = |space: &mut ObjectSpace, name: &str, int: bool| {
@@ -1174,11 +1194,28 @@ impl HeapWorld {
         class(&mut space, "WillowGame.WillowShield", object, decls);
         let actor = class(&mut space, "Engine.Actor", object, vec![]);
         let weapon = class(&mut space, "Engine.Weapon", actor, vec![]);
-        let mut decls = stack(&mut space, "InstantHitDamage", false);
-        decls.extend(stack(&mut space, "ClipSize", true));
+        // Every property the base-value functions set, as a stack attribute (the four integer attributes as ints).
+        let mut names: Vec<&str> = WEAPON_BASE_VALUES.iter().map(|(p, _, _)| *p).collect();
+        names.extend(WEAPON_OVERHEAT_VALUES.iter().map(|(p, _)| *p));
+        for (_, _, barrel, body) in WEAPON_PART_BASE_VALUES {
+            names.extend([barrel, body]);
+        }
+        let mut decls = Vec::new();
+        for name in &names {
+            let int = INT_ATTRIBUTES.contains(&format!("Weapon{name}").as_str())
+                || [
+                    "ShotCost",
+                    "ClipSize",
+                    "ProjectilesPerShot",
+                    "AutomaticBurstCount",
+                ]
+                .contains(name);
+            decls.extend(stack(&mut space, name, int));
+        }
         decls.push(level(&mut space));
+        decls.push(decl(&mut space, "BodyVariation", PropKind::Int, 0));
         let willow = class(&mut space, "WillowGame.WillowWeapon", weapon, decls);
-        for name in ["InstantHitDamage", "ClipSize"] {
+        for name in names {
             let v = space.names.intern(name);
             let b = space.names.intern(&format!("{name}BaseValue"));
             let s = space.names.intern(&format!("{name}ModifierStack"));
@@ -1537,17 +1574,36 @@ fn an_off_mode_weapon_holds_its_stats_on_its_instance() {
         "Engine.WeaponAttributeContextResolver",
         "ClipSize",
     );
-    let base = w.init(10.0, None, None);
+    let spread = w.property(
+        "D_Attributes.Weapon.WeaponSpread",
+        "Engine.WeaponAttributeContextResolver",
+        "Spread",
+    );
+    let (base, momentum) = (w.init(10.0, None, None), w.init(2.0, None, None));
     let (scale, pre) = (w.init(0.5, None, None), w.init(2.0, None, None));
     let down = w.init(-0.2, None, None);
+    let spin = w.init(0.75, None, None);
     let type_effects = vec![w.effect(damage, 1, pre)];
+    // Two activating slots on the spread, at most one activated (AttributeSlotMaxActivated 1).
+    let slots = vec![
+        w.slot("First", spread, 0.0, false, false, 1.0),
+        w.slot("Second", spread, 0.0, false, false, 4.0),
+    ];
+    let upgrades = vec![w.upgrade("First", 0, true), w.upgrade("Second", 0, true)];
     w.obj(
         "Test.Type",
         "Test.Definition",
         vec![
             ("InstantHitDamage", base),
-            ("ClipSize", Value::Float(12.0)),
+            ("InstantHitMomentum", momentum),
+            ("ClipSize", Value::Float(12.7)),
+            ("Spread", Value::Float(1.5)),
+            ("bUseOverheatBehavior", Value::Bool(true)),
+            ("RegenRate", Value::Float(3.0)),
             ("WeaponAttributeEffects", Value::array(type_effects)),
+            ("AttributeSlotEffects", Value::array(slots)),
+            ("AttributeSlotUpgrades", Value::array(upgrades)),
+            ("AttributeSlotMaxActivated", Value::Int(1)),
         ],
     );
     let down2 = down.clone();
@@ -1559,7 +1615,12 @@ fn an_off_mode_weapon_holds_its_stats_on_its_instance() {
     w.obj(
         "Body.A",
         "Test.Definition",
-        vec![("WeaponAttributeEffects", Value::array(body_effects))],
+        vec![
+            ("WeaponAttributeEffects", Value::array(body_effects)),
+            ("bIsSpinningEnabled", Value::Bool(true)),
+            ("SpinUpDuration", spin),
+            ("PartVariation", Value::Int(3)),
+        ],
     );
     let known = w.known.clone();
     let mut parts: [Option<ObjectPath>; 9] = Default::default();
@@ -1579,15 +1640,32 @@ fn an_off_mode_weapon_holds_its_stats_on_its_instance() {
     let sys = AttributeSystem::standard().unwrap();
     let mut cx = EvalCx::new(&mut w);
     let instance = instantiate_stats(&data, 1, &sys, &mut cx, &known).unwrap();
-    // The attribute paths resolve through `known` only in this test world: the weapon's attributes are read by
-    // path from the world's store otherwise.
     let read = |cx: &mut EvalCx<'_>, a: ObjRef| {
         sys.value_of(a, Some(instance.object), None, cx)
             .unwrap()
             .unwrap()
             .value
     };
-    // (10 + 2) * (1 + 0.5) / (1 + 0.2) = 15; clip trunc(12 / 1.2) = 9 (the same fold as Reference's).
+    // (10 + 2) * (1 + 0.5) / (1 + 0.2) = 15; clip: the copied 12.7 enters the int attribute as 12, trunc(12 / 1.2)
+    // = 9; spread 1.5 scaled by the first slot's +1 = 3 (both slots would scale by 1 + 1 + 4: the second is past the
+    // activation limit).
     assert_eq!(read(&mut cx, damage), 15.0);
     assert_eq!(read(&mut cx, clip), 9.0);
+    assert_eq!(read(&mut cx, spread), 3.0);
+    drop(cx);
+    let get = |w: &HeapWorld, name: &str| {
+        let class = w.space.heap.get(instance.object).unwrap().class;
+        let p = w.space.prop(class, name).unwrap();
+        w.space
+            .read(instance.object, PropAddr::scalar(p))
+            .unwrap()
+            .clone()
+    };
+    // The momentum is scaled by 100 after it is set; the overheat block runs for an overheating type; the body's
+    // spin-up is a magazine duration; its variation is copied.
+    assert_eq!(get(&w, "InstantHitMomentum"), Value::Float(200.0));
+    assert_eq!(get(&w, "RegenRate"), Value::Float(3.0));
+    assert_eq!(get(&w, "MagazineSpinUpDuration"), Value::Float(0.75));
+    assert_eq!(get(&w, "BarrelSpinUpDuration"), Value::Float(0.0));
+    assert_eq!(get(&w, "BodyVariation"), Value::Int(3));
 }

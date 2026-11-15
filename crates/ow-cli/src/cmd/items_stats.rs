@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ow_attr::AttributeSystem;
-use ow_attr::api::EvalCx;
+use ow_attr::api::{AttrError, AttrWorld, EvalCx, GlobalSlots, NumForms, WorldParts};
 use ow_balance::offline::{
     GAME_REPLICATION_INFO_CLASS, GLOBALS_CLASS, OfflineWorld, PLAYER_CONTROLLER_CLASS,
     REPLICATION_INFO_CLASS,
@@ -51,7 +51,7 @@ use ow_balance::types::{
     AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
     Playthrough,
 };
-use ow_core::rand::CrtRand;
+use ow_core::rand::{CrtRand, CrtStream, Rand15};
 use ow_core::{DetMap, DetSet, NotYet, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
@@ -67,10 +67,10 @@ use ow_items::registry::{
 };
 use ow_items::roll::{CENSUS_STAGES, RollCx, RollResult, RollWorld, Rolled, roll};
 use ow_items::stats::{
-    StaticArrays, StatsData, Values, WeaponRecipe, assembly, instantiate_stats, item_stats,
-    weapon_attributes,
+    StatsData, Values, WeaponRecipe, assembly, instantiate_stats, item_stats, weapon_attributes,
 };
 use ow_object::heap::ObjectSpace;
+use ow_object::ids::{ObjRef, PropId};
 
 use super::NOT_PORTED;
 use crate::args::Command;
@@ -232,13 +232,63 @@ fn snapshot(stage: i32) -> Result<BalanceSnapshot, ItemError> {
     )?)
 }
 
+/// The world the command evaluates in (module documentation).
+enum World {
+    Offline(Box<OfflineWorld>),
+    Bare(Box<BareWorld>),
+}
+
+/// A world with no engine objects, over the store only: used when the offline world's classes are not laid out
+/// (an install without the code packages). Every evaluation that needs a world object answers `NotYet`.
+struct BareWorld {
+    space: ObjectSpace,
+    defs: DefStore,
+    slots: GlobalSlots,
+}
+
+impl AttrWorld for BareWorld {
+    fn parts(&mut self) -> WorldParts<'_> {
+        WorldParts::new(&mut self.space, Some(&mut self.defs))
+    }
+    fn globals(&mut self) -> Result<ObjRef, AttrError> {
+        Err(NotYet::layer_absent(
+            "the engine globals (the offline world's classes are not laid out in this space)",
+            "ow-object reflection of the WillowGame classes",
+            ow_items::stats::RECORD,
+        )
+        .into())
+    }
+    fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
+        Ok(None)
+    }
+    fn global_slots(&mut self) -> &mut GlobalSlots {
+        &mut self.slots
+    }
+    fn attribute_changed(&mut self, _: ObjRef, _: PropId, _: NumForms) -> Result<(), AttrError> {
+        Err(NotYet::layer_absent(
+            "a change notification offline",
+            "ow-world",
+            ow_items::stats::RECORD,
+        )
+        .into())
+    }
+    fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
+        Err(NotYet::layer_absent(
+            format!("a random source for {s:?}"),
+            "ow-world",
+            ow_items::stats::RECORD,
+        )
+        .into())
+    }
+}
+
 struct Session {
     reg: Registry,
     weapons: Vec<String>,
     data: RollData,
-    statics: StaticArrays,
     sys: AttributeSystem,
-    world: Option<OfflineWorld>,
+    /// The offline world when its classes lay out from the store, else a world over the store alone.
+    world: World,
     localization: Localization,
     red: [u8; 3],
     mode: ParityMode,
@@ -269,7 +319,6 @@ impl Session {
             .map(|e| e.path.clone())
             .collect();
         let data = RollData::new(&input)?;
-        let statics = StaticArrays::new(&input)?;
         let reg = build_from_census(input, &python_path_text(&root.to_string_lossy()));
         let sys = AttributeSystem::standard()?;
         let mut space = ObjectSpace::new();
@@ -282,15 +331,22 @@ impl Session {
         .iter()
         .all(|c| defs.class_id(&mut space, c).is_ok());
         let world = if laid_out {
-            Some(OfflineWorld::new(space, Some(defs), snapshot(1)?)?)
+            World::Offline(Box::new(OfflineWorld::new(
+                space,
+                Some(defs),
+                snapshot(1)?,
+            )?))
         } else {
-            None
+            World::Bare(Box::new(BareWorld {
+                space,
+                defs,
+                slots: GlobalSlots::default(),
+            }))
         };
         Ok(Session {
             reg,
             weapons: weapons.into_iter().collect(),
             data,
-            statics,
             sys,
             world,
             localization: Localization::new(cooked),
@@ -302,13 +358,10 @@ impl Session {
     fn roll(&mut self, balance: &str, stage: i32, seed: u32) -> Result<RollResult, ItemError> {
         let snap = snapshot(stage)?;
         let path = ObjectPath::parse(balance).map_err(|e| bad(format!("{balance}: {e}")))?;
-        let Some(world) = self.world.as_mut() else {
-            return Err(NotYet::layer_absent(
-                "the offline world (its classes are not laid out from this install)",
-                "ow-object reflection of the WillowGame classes",
-                ow_items::stats::RECORD,
-            )
-            .into());
+        // A Reference roll reads tag streams and needs no world object, so the store-only world serves it too.
+        let world: &mut dyn AttrWorld = match &mut self.world {
+            World::Offline(w) => w.as_mut(),
+            World::Bare(w) => w.as_mut(),
         };
         let mut rng = CrtRand::new(seed);
         let mut rw = RollWorld::new(world, &mut rng, false);
@@ -388,7 +441,7 @@ impl Session {
             parts.insert(s.slot.clone(), Pv::Map(p));
         }
         out.insert("parts".to_string(), Pv::Map(parts));
-        let a = assembly(&stats, &self.statics, &recipe)?;
+        let a = assembly(&stats, &recipe)?;
         out.insert("gestalt".to_string(), a.gestalt);
         out.insert(
             "gestalt_fragments".to_string(),
@@ -433,6 +486,17 @@ fn weapon_stats_pv(
         Pv::List(v.unresolved.iter().cloned().map(Pv::Str).collect()),
     );
     Ok(Pv::Map(out))
+}
+
+/// `{"line":<n>,"error":"<why>"}`: a request line that names no gun.
+fn error_line(line: usize, why: &str) -> String {
+    let mut m = DetMap::new();
+    m.insert(
+        "line".to_string(),
+        Pv::Int(i64::try_from(line).unwrap_or(i64::MAX)),
+    );
+    m.insert("error".to_string(), Pv::Str(why.to_string()));
+    Pv::Map(m).to_json()
 }
 
 fn outcome_line(balance: &str, stage: i32, seed: u32, key: &str, value: &str) -> String {
@@ -624,7 +688,7 @@ fn data_line(session: &mut Session, line: &Line, card: bool) -> Result<String, I
     );
     if item.kind == ItemKind::Shield {
         let shown: Vec<Pv> = s
-            .shield()
+            .shield_card(session.mode)?
             .into_iter()
             .map(|(label, v)| {
                 let mut m = DetMap::new();
@@ -642,7 +706,7 @@ fn data_line(session: &mut Session, line: &Line, card: bool) -> Result<String, I
 /// `--data` in Off mode: the instance through `ow-attr` (`instantiate_stats`).
 fn off_data_line(session: &mut Session, item: &DataItem) -> Result<String, ItemError> {
     let data = definition_data(item)?;
-    let Some(world) = session.world.as_mut() else {
+    let World::Offline(world) = &mut session.world else {
         return Err(NotYet::layer_absent(
             "the offline world (its classes are not laid out from this install)",
             "ow-object reflection of the WillowGame classes",
@@ -650,7 +714,7 @@ fn off_data_line(session: &mut Session, item: &DataItem) -> Result<String, ItemE
         )
         .into());
     };
-    let mut cx = EvalCx::new(world);
+    let mut cx = EvalCx::new(world.as_mut());
     let instance = instantiate_stats(&data, item.level, &session.sys, &mut cx, &DetMap::new())?;
     let mut out = DetMap::new();
     if item.kind == ItemKind::Weapon {
@@ -662,7 +726,7 @@ fn off_data_line(session: &mut Session, item: &DataItem) -> Result<String, ItemE
             out.insert(field.to_string(), Pv::Map(m));
         }
     } else if item.kind == ItemKind::Shield {
-        for (label, v) in instance.external.shield() {
+        for (label, v) in instance.external.shield_card(session.mode)? {
             out.insert(label.to_string(), Pv::Str(shield_number_text(v)));
         }
     }
@@ -691,12 +755,18 @@ fn execute(line: &Line, cooked: &Path, mode: ParityMode, card: bool) -> Result<(
         let _ = out.flush();
         return Ok(());
     }
-    let (requests, file): (Vec<(String, i32, u32)>, &str) = if let Some(f) = &line.weapons {
+    // A request is a gun to roll, or the line already known for it (a request line that is not one, or a cap): one
+    // output line per request, so one bad request does not stop the batch.
+    enum Request {
+        Gun(String, i32, u32),
+        Known(String),
+    }
+    let (requests, file): (Vec<Request>, &str) = if let Some(f) = &line.weapons {
         let mut r = Vec::new();
         for b in session.weapons.clone() {
             for stage in CENSUS_STAGES {
                 for seed in 1..=line.seeds {
-                    r.push((b.clone(), stage, seed));
+                    r.push(Request::Gun(b.clone(), stage, seed));
                 }
             }
         }
@@ -707,44 +777,56 @@ fn execute(line: &Line, cooked: &Path, mode: ParityMode, card: bool) -> Result<(
         let mut r = Vec::new();
         for (n, l) in text.lines().enumerate() {
             let f: Vec<&str> = l.split_whitespace().collect();
-            match f.as_slice() {
-                [] => {}
-                ["balance", path, stage, seed] => {
-                    let stage = stage
-                        .parse::<i32>()
-                        .map_err(|_| bad(format!("{input}:{}: stage {stage}", n + 1)))?;
-                    let seed = seed
-                        .parse::<u32>()
-                        .map_err(|_| bad(format!("{input}:{}: seed {seed}", n + 1)))?;
-                    r.push((path.to_string(), stage, seed));
+            let parsed = match f.as_slice() {
+                [] => continue,
+                ["balance", path, stage, seed] => match (stage.parse::<i32>(), seed.parse::<u32>())
+                {
+                    (Ok(stage), Ok(seed)) => Request::Gun(path.to_string(), stage, seed),
+                    _ => Request::Known(error_line(n + 1, "a stage or seed that is not a number")),
+                },
+                ["balance", path, stage, seed, _] => {
+                    match (stage.parse::<i32>(), seed.parse::<u32>()) {
+                        (Ok(stage), Ok(seed)) => Request::Known(outcome_line(
+                            path,
+                            stage,
+                            seed,
+                            "not_yet",
+                            "a stage cap (Reference applies none; W4-ROLL)",
+                        )),
+                        _ => Request::Known(error_line(
+                            n + 1,
+                            "a stage or seed that is not a number",
+                        )),
+                    }
                 }
-                ["balance", _, _, _, _] => {
-                    return Err(NotYet::not_ported(
-                        format!(
-                            "{input}:{}: a stage cap (Reference applies none; W4-ROLL)",
-                            n + 1
-                        ),
-                        ow_items::stats::RECORD,
-                    )
-                    .into());
-                }
-                _ => {
-                    return Err(bad(format!(
-                        "{input}:{}: not a `balance <path> <stage> <seed>` line",
-                        n + 1
-                    )));
-                }
-            }
+                _ => Request::Known(error_line(
+                    n + 1,
+                    "not a `balance <path> <stage> <seed>` line",
+                )),
+            };
+            r.push(parsed);
         }
         (r, line.output.as_deref().unwrap_or_default())
     };
     let mut text = String::new();
-    for (balance, stage, seed) in requests {
-        let gun = match session.gun_line(&balance, stage, seed, card) {
-            Err(ItemError::NotYet(n)) => {
-                outcome_line(&balance, stage, seed, "not_yet", &n.missing.to_string())
+    for request in requests {
+        let gun = match request {
+            Request::Known(known) => known,
+            Request::Gun(balance, stage, seed) => {
+                match session.gun_line(&balance, stage, seed, card) {
+                    Ok(gun) => gun,
+                    Err(ItemError::NotYet(n)) => {
+                        outcome_line(&balance, stage, seed, "not_yet", &n.missing.to_string())
+                    }
+                    Err(e) => outcome_line(
+                        &balance,
+                        stage,
+                        seed,
+                        "error",
+                        &super::properties::error_text(&e),
+                    ),
+                }
             }
-            other => other?,
         };
         text.push_str(&gun);
         text.push('\n');
@@ -1050,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_install_writes_no_gun_and_a_stage_cap_is_not_there_yet() {
+    fn every_request_writes_one_line_and_a_bad_one_does_not_stop_the_batch() {
         let dir = std::env::temp_dir().join(format!("ow-cli-items-stats-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let d = dir.to_string_lossy().to_string();
@@ -1063,7 +1145,13 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "");
         let requests = dir.join("r.txt");
-        std::fs::write(&requests, "balance X.Y 8 1 50\n").unwrap();
+        // A cap is not there yet, a line naming no gun is an error, a balance no package holds is not rollable: one
+        // line each, in order, and the batch finishes.
+        std::fs::write(
+            &requests,
+            "balance X.Y 8 1 50\nnonsense\nbalance X.Y eight 1\nbalance X.Y 8 1\n",
+        )
+        .unwrap();
         let r = requests.to_string_lossy().to_string();
         let line = args(&[
             "--item-card",
@@ -1076,7 +1164,27 @@ mod tests {
         ]);
         assert_eq!(
             run(command("--item-card"), &line, ParityMode::Reference),
-            ExitCode::from(NOT_PORTED)
+            ExitCode::SUCCESS
+        );
+        let written = std::fs::read_to_string(&out).unwrap();
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), 4, "{written}");
+        assert!(
+            lines[0].contains("\"not_yet\":") && lines[0].contains("stage cap"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("{\"error\":") && lines[1].contains("\"line\":2"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].contains("\"line\":3"), "{}", lines[2]);
+        // An empty install holds no balance: the store-only world rolls it, and it is not rollable.
+        assert!(
+            lines[3].starts_with("{\"balance\":\"X.Y\"") && lines[3].contains("\"not_rollable\":"),
+            "{}",
+            lines[3]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

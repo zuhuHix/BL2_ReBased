@@ -1786,6 +1786,14 @@ impl std::ops::Deref for Props {
     }
 }
 
+impl Props {
+    /// `static_arrays()[name]`: every element of the static array `name` in element order (empty when the property is
+    /// untagged), which the decoded dict holds only the last of. Added by W4-STATS (review r1 of PR #323), read-only.
+    pub fn statics(&self, name: &str) -> &[Pv] {
+        self.0.statics.get(name).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// The tool's census of one scan as a property lookup, read with given schema lines: what `item_roll.py` and
 /// `weapon_recipe.py` read through `lookup.props` / `lookup.get` and `weapon_recipe.attribute_value`, the same
 /// owner rule and tag-stream reading as the registry ("Where values come from" above). Lane W4-ROLL reads the values
