@@ -384,29 +384,37 @@ pub fn partial(builder: &mut PackageBuilder) -> Vec<u8>;       // build_partial(
 // testkit/reflect.rs (placeholder; W2-REFLECT): property, struct, class and enum exports, class_body().
 // testkit/script.rs (placeholder; W2-SCRIPT): function exports and the Asm bytecode writer.
 
-// props.rs (W2-PROPS): the serialized tree, references still package-relative.
+// props.rs (W2-PROPS): the serialized tree, references still package-relative. Every type below is #[non_exhaustive];
+// the structs have `new` constructors.
 pub enum PropValue { Int(i32), Float(f32), Bool(bool), Byte(u8), Enum(String), Name(String), Str(String),
-                     Object(i32), Struct { ty: String, fields: Vec<PropEntry> }, Array(Vec<PropValue>),
+                     Object(i32), Struct { ty: String, fields: Vec<PropEntry>, start: usize /* from the payload start */ },
+                     Array(Vec<PropValue>),
                      Raw(Vec<u8>) /* a value the C++ walker leaves undecoded (unknown tag type, untyped array): kept, never guessed */,
                      Delegate { object: i32, function: String } /* reserved for W3-DECODE; never produced: delegate tags are Raw */ }
 pub struct PropEntry { pub name: String, pub index: i32, pub value: PropValue,
                        pub tag: Option<Tag> /* None for a fixed-layout struct field (Vector, Box, ...) */ }
-pub struct Tag { pub ty: String, pub type_name: Option<String>, pub offset: usize, pub size: i32, pub array: Option<ArrayTag> }
+pub struct Tag { pub ty: String, pub type_name: Option<String>, pub offset: usize /* struct-relative inside a struct */,
+                 pub size: i32, pub array: Option<ArrayTag> }
 pub struct ArrayTag { pub count: i32, pub element: Option<ElementType> }
 pub enum ElementType { Int, Float, Name, Str, Object, Byte, Struct(String),
-                       Other(String) /* a schema text the C++ accepts: an empty array decodes, an element fails */ }
-pub trait ArrayTyper { fn element(&self, owner_class: &str, property: &str) -> Option<ElementType>; }
-                                                   // owner_class: the export's class object name (`Class` for class 0),
-                                                   // the struct name inside a struct; SchemaTyper ignores it
+                       Other(String) /* no decoder in this walker yet: an empty array decodes, an element fails */ }
+pub struct ArrayScope<'a> { pub owner: &'a str,         // the export's class object name (`Class` for class 0), or
+                                                         // the struct name inside a struct
+                            pub owner_ref: Option<i32>, // the owning class or struct, where known (top level only)
+                            pub path: &'a [String] }    // enclosing struct/array property names from the root
+pub trait ArrayTyper { fn element(&self, scope: &ArrayScope<'_>, property: &str) -> Option<ElementType>; }
+pub struct StreamRoot { pub owner: String, pub owner_ref: Option<i32> }   // StreamRoot::for_export(pkg, export)
 pub fn property_range(pkg: &Package, export: i32, start: usize) -> Result<(usize, usize), PropError>;
 pub fn read_tagged(pkg: &Package, export: i32, start: usize, typer: &dyn ArrayTyper)
     -> Result<TaggedProps, PropError>;            // TaggedProps { entries, end: usize }  (end = start of any untagged tail,
                                                    // from the export's payload start)
+pub fn read_tagged_in(pkg: &Package, export: i32, start: usize, root: &StreamRoot, typer: &dyn ArrayTyper)
+    -> Result<TaggedProps, PropError>;            // the same with the caller's root
 pub enum PropError { Package(PackageError), InStruct { ty: String, error: Box<PropError> } /* cause via source() */,
                      /* the walker's eleven C++ texts */ .. }
-pub struct SchemaTyper { .. }                      // the --array-schema file; retired by W3-DECODE's gate
-// As shipped by W2-PROPS (decision 2026-11-15-04): PropError, PropEntry.tag, ElementType::Other and the owner text
-// differ from revision 3 here, each to carry what the C++ walker prints.
+pub struct SchemaTyper { .. }                      // the --array-schema file (ignores the scope); retired by W3-DECODE's gate
+// As shipped by W2-PROPS (decision 2026-11-15-04): PropError, PropEntry.tag, Struct.start, ElementType::Other and the
+// typer's ArrayScope differ from revision 3 here, to carry what the C++ walker prints and what a reflection typer needs.
 
 // store.rs (W2-STORE)
 pub struct PackageStore { .. }

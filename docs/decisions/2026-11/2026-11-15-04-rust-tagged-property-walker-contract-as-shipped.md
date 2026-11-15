@@ -15,15 +15,33 @@ where the shipped interface differs from revision 3 of `docs/rust-port/ARCHITECT
 - **`PropEntry` has a fourth field, `tag: Option<Tag>`.** `--properties` prints each tag's type, offset, size, struct
   or enum name and array element count and type; the contract's three fields cannot carry them. Fixed-layout struct
   fields (Vector, Box, ...) have no tag and hold `None`.
-- **`ElementType` is an enum of the six scalar element kinds, `Struct(name)` and `Other(text)`.** `Other` keeps a
-  schema value the C++ loader accepts but cannot decode: an empty array of it decodes, an element of it fails with
-  "unsupported array schema type". `ElementType::parse` and `spec` round-trip every text, so `element_type` prints
-  the schema's text.
-- **`ArrayTyper::element` gets the owner as text:** the export's class object name (`Class` for class reference 0)
-  for the export's own tags, the struct name inside a struct. `SchemaTyper` ignores it, as the C++ `arrayTypes` map
-  is keyed by property name only.
+- **`PropValue::Struct` records `start`,** where the struct's bytes begin from the export's payload start, so a
+  consumer can place a nested value: `Tag.offset` inside a struct counts from that struct's start (as the C++ prints
+  it). The CLI output does not print it and does not change.
+- **`ElementType` is an enum of the six scalar element kinds, `Struct(name)` and `Other(text)`.** `Other` is a
+  schema value with no decoder in this walker yet: the C++ loader accepts it, an empty array of it decodes, an
+  element of it fails with "unsupported array schema type". `ElementType::parse` and `spec` round-trip every text,
+  so `element_type` prints the schema's text. When kinds are added (`ClassProperty`, `ComponentProperty`,
+  `InterfaceProperty`, a 32-bit `BoolProperty`, as `src/vm.cpp:828-834` handles them), `parse` keeps mapping those
+  texts to what the C++ `--array-schema` walker does with them, so a schema's output stays the same.
+- **`ArrayTyper::element(&self, scope: &ArrayScope, property)`.** Review r1 of PR #297: an owner name alone cannot
+  identify a declaration (W3-DECODE decoding struct defaults would see `ScriptStruct`; two structs named `State`
+  with an `Items` field look the same). `ArrayScope` (`#[non_exhaustive]`, filled by the walker) holds the owner text
+  (the export's class object name, `Class` for class reference 0, or the struct name inside a struct), the
+  package-relative reference of the owning class or struct where the walker knows it (the root's, so the export's
+  class at the top level; `None` inside a struct, whose tag names it by name only), and the path of enclosing
+  struct and array property names from the stream's root. `read_tagged` takes the root from the export
+  (`StreamRoot::for_export`); `read_tagged_in` takes a caller's `StreamRoot`. `SchemaTyper` ignores the scope, as
+  the C++ `arrayTypes` map is keyed by property name only, so `--array-schema` output is unchanged.
+- **`#[non_exhaustive]`** on `PropValue`, `ElementType`, `PropEntry`, `Tag`, `ArrayTag`, `TaggedProps`,
+  `ArrayScope`, `StreamRoot` and the error enums (architecture section 1, types that may grow), with `new`
+  constructors for the structs.
 - **`PropValue::Delegate` is never produced.** The C++ walker leaves `DelegateProperty` undecoded, so a delegate tag
   is `Raw` bytes; the variant stays for W3-DECODE.
+- **Input files read as the C++ reads them on Windows.** The C++ binary reads `--array-schema` files and the
+  `--properties-batch` index file through MSVC text-mode `ifstream`: reading stops at the first 0x1A byte and
+  `\r\n` becomes `\n` before the line split. `schema::text_mode` applies both rules to both files (review r1).
+  UNVERIFIED for a non-MSVC C++ build, which does neither.
 - **New helpers:** `property_range` (the range checks of `Package::properties`, so a caller can build the path
   between them and the walk, the C++ error order), `NoArrayTypes`, `MAX_DEPTH`, `MAX_ARRAY_COUNT`; in `ow-cli`,
   `properties_json`, `error_text` and `unsigned_number` are public in `cmd/properties.rs` for W2-ASSETS's
@@ -34,9 +52,11 @@ where the shipped interface differs from revision 3 of `docs/rust-port/ARCHITECT
 - **Verified (automated, local).** `--properties-batch` over every export of the 9 code packages and `Startup.upk`
   (157,763 exports), at property offsets 0, 4, 8 and 26, with no schema and with each of the five
   `tools/*-arrays.schema` files: 240 runs, stdout byte-identical to the C++ binary in every run (error rows
-  included), line ends normalised. A synthetic differential of 172 command lines (every tag kind, fixed structs and
-  their truncations, nesting, arrays of each element type, malformed tags, option and schema errors, batch rows)
-  matches the C++ stdout, stderr and exit code except a container error's text, the difference W1-PKG recorded.
+  included), line ends normalised; after the review r1 changes, rerun at offset 4 with no schema and with
+  `level-arrays.schema`: 20 runs, 0 differ. A synthetic differential of 178 command lines (every tag kind, fixed
+  structs and their truncations, nesting, arrays of each element type, malformed tags, option and schema errors,
+  batch rows, 0x1A and `\r\r\n` in schema and index files) matches the C++ stdout, stderr and exit code except a
+  container error's text, the difference W1-PKG recorded.
   `tests/properties_test.py` passes on the Rust binary with its `--terrain-records` block removed (that command is
   W2-ASSETS's).
 - **Not verified.** Nothing here is checked against the running game: parity is with the C++ walker, whose fixed
