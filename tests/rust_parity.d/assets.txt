@@ -1,0 +1,6 @@
+# Lane W2-ASSETS (textures and meshes: --texture, --mesh, --scene-records, --terrain-records).
+#
+# tests/assets_test.py builds synthetic DXT1/DXT5/A8R8G8B8/G8 textures (inline, TFC-streamed, LZO-compressed) and
+# static meshes and checks the PNG and OBJ files and the refusals. Its compressed fixtures fail on the LZO-off C++
+# build, so it is a test-command line (Rust binary only), not a diff line.
+python tests/assets_test.py {bin}
