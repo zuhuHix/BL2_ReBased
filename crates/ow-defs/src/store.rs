@@ -19,23 +19,53 @@
 //! [`ObjRef`], and its origin becomes `Origin::Export` with the filed id. Because loads do not nest, no load ever
 //! reaches an object that is still being built: references among definitions, cyclic ones included, are always
 //! handles, and an object is handed out loaded only once it is complete. The decoder's `InstantiationCycle` therefore
-//! cannot arise from the store's loads. A caller that reads a referenced definition's properties calls
-//! [`DefStore::load`] on it first; reading a slot of an unloaded handle fails in the heap (`SlotMissing`), it never
-//! reads a guessed value.
+//! cannot arise from the store's loads.
 //!
-//! **Prefix.** Lazy loads read an export's tags from the ordinary 4-byte prefix (`PropertyPrefix::Ordinary`), the
-//! value every C++ definition consumer passes (`behavior.cpp`, `mission.cpp`, `kismet.cpp`, `combat_run.cpp`). A
-//! component or a placed actor is loaded with [`DefStore::load_export`] and the caller's prefix.
+//! **Callers load before they read.** A caller that reads a referenced definition's properties loads it first:
+//! [`DefStore::ensure_loaded`] for any object a slot may hold (it leaves every object that is not an unloaded handle
+//! as it is), or [`DefStore::load`] where the object must be a definition. Reading a slot of an unloaded handle fails
+//! in the heap (`SlotMissing`); it never reads a guessed value.
+//!
+//! **Stand-ins that stay stand-ins.** Three kinds of slotless object are not unloaded handles and never load:
+//! - a decoded reference whose path no holder has (an import into no installed package, or none in the load set)
+//!   keeps a stand-in that names the import (`Origin::Resource` with the importing package and the import's
+//!   reference), as the C++ `Runtime::resource` does, and the store logs `defs: no holder for <path>` once per path
+//!   ([`DefStore::take_log`]). It never decodes as `None`;
+//! - under `ParityMode::Reference`, the decoder's `?` stand-in for a reference outside its package's tables (decision
+//!   2026-11-15-08) is kept;
+//! - a stand-in of an engine-native class (`ClassTable::is_native`, Reference mode only) is kept.
+//!
+//! [`DefStore::ensure_loaded`] returns all three unchanged; [`DefStore::load`] refuses them with
+//! [`DefError::NotADefinition`].
+//!
+//! **Prefix by class.** Where an export's tags start is derived from its class, so the order loads happen in cannot
+//! change a decode: an export whose class derives from `Core.Component` reads its tags from 8 bytes in
+//! (`PropertyPrefix::Component`), one whose class derives from `Engine.Actor` from 26 (`PropertyPrefix::PlacedActor`),
+//! any other from 4 (`PropertyPrefix::Ordinary`, the value every C++ definition consumer passes). The byte counts are
+//! the C++ and the tools' (`ow_object::prefix`); deriving them from the class is this store's rule and UNVERIFIED as
+//! a rule of the game, as the prefixes are. [`DefStore::load_export`]'s prefix is only checked against the derived one.
 //!
 //! **Code is not a definition.** Class, struct, enum, function, state and property exports are reflection's
 //! (`ow_object::reflect`): [`DefStore::find`] refuses them with [`DefError::NotADefinition`]; their layouts are
 //! reached through [`DefStore::class_id`] and [`DefStore::key`]. A `Default__<Class>` export is that class's default
 //! object, the one [`DefStore::class_default`] gives.
 //!
+//! **Code packages.** The store never calls `ow_object::reflect::load_code_packages`: its [`CodeIndex`] starts empty
+//! and loads each class lazily, on the first decode or lookup that needs it, which is all a definition needs. A lane
+//! that wants every class of the nine code packages laid out up front (the VM's function and native index) builds
+//! that index itself and installs it through [`DefStore::code_mut`] **before the store's first decode or lookup**:
+//! `let (code, store) = defs.code_mut(); *code = load_code_packages(store, &mut w.names, &mut w.classes)?;`. Later,
+//! the store's classes are already in the class table and a second definition of them is refused (`AlreadyDefined`).
+//!
+//! **Iterating definitions.** Loaded definitions are instances (`Origin::Export`), so they appear in `Heap::live()`, in
+//! load order; unloaded handles do not. That order depends on what happened to be loaded, so code that iterates
+//! definitions (W4-INTERP2's iterators included) goes through [`DefStore::exports_of_class`] or [`DefStore::census`]
+//! and loads what it visits, never through `live()`.
+//!
 //! **Parity mode.** The store passes its mode to every decode: under `ParityMode::Reference` the decoder keeps its C++
 //! stand-ins (decision 2026-11-15-08, architecture section 6.1). The store adds none of its own.
 //!
-//! Status: contract only (W3-DEFS contract commit). Every method that loads or looks anything up returns
+//! Status: contract only (W3-DEFS contract commit, review r1). Every method that loads or looks anything up returns
 //! [`DefError::NotYet`]; the constructors and accessors work.
 
 use std::fmt;
@@ -50,16 +80,18 @@ use ow_object::reflect::{CodeIndex, ReflectError};
 use ow_package::PackageId;
 use ow_package::store::{PackageStore, StoreError};
 
-use crate::identity::{IdentityPolicy, Owner};
+use crate::identity::{Census, Holders, IdentityPolicy};
 use crate::keys::KeyCache;
 use crate::overlay::{Overlay, OverlayId, OverlayStatus, ValueOrigin};
-use crate::tail::Tails;
+use crate::tail::{Tail, Tails};
 
 /// The record a `NotYet` of this crate names.
 pub const RECORD: &str = "docs/rust-port/ARCHITECTURE.md section 3.4 (lane W3-DEFS)";
 
 /// Why a definition store operation failed. The layer variants are transparent: they print as the inner error, and
-/// their `source()` is the inner error's cause.
+/// their `source()` is the inner error's cause. The `From` conversions flatten: a `NotYet` or a heap error from any
+/// lower layer is [`DefError::NotYet`] or [`DefError::Heap`], and a store or reflection error inside a decode error
+/// is [`DefError::Store`] or [`DefError::Reflect`], so a caller matches one variant per cause.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DefError {
@@ -99,8 +131,15 @@ pub enum DefError {
         class: String,
         property: String,
     },
-    /// The path or object is not a definition (code, a run-time object, or not this store's).
+    /// The path or object is not a definition (code, a class default, a run-time object, a stand-in that stays one,
+    /// or not this store's).
     NotADefinition(String),
+    /// [`DefStore::load_export`] was given another prefix than the one the export's class gives.
+    PrefixMismatch {
+        object: String,
+        derived: PropertyPrefix,
+        given: PropertyPrefix,
+    },
     NotYet(NotYet),
 }
 
@@ -132,6 +171,16 @@ impl fmt::Display for DefError {
                 write!(f, "{class} has no property {property}")
             }
             DefError::NotADefinition(what) => write!(f, "not a definition: {what}"),
+            DefError::PrefixMismatch {
+                object,
+                derived,
+                given,
+            } => write!(
+                f,
+                "{object}: its class gives a {}-byte property prefix, not {}",
+                derived.bytes(),
+                given.bytes()
+            ),
             DefError::NotYet(e) => e.fmt(f),
         }
     }
@@ -151,19 +200,32 @@ impl std::error::Error for DefError {
 
 impl From<StoreError> for DefError {
     fn from(e: StoreError) -> Self {
-        DefError::Store(e)
+        match e {
+            StoreError::NotYet(n) => DefError::NotYet(n),
+            other => DefError::Store(other),
+        }
     }
 }
 
 impl From<ReflectError> for DefError {
     fn from(e: ReflectError) -> Self {
-        DefError::Reflect(e)
+        match e {
+            ReflectError::NotYet(n) => DefError::NotYet(n),
+            ReflectError::Store(s) => s.into(),
+            other => DefError::Reflect(other),
+        }
     }
 }
 
 impl From<DecodeError> for DefError {
     fn from(e: DecodeError) -> Self {
-        DefError::Decode(e)
+        match e {
+            DecodeError::NotYet(n) => DefError::NotYet(n),
+            DecodeError::Heap(h) => DefError::Heap(h),
+            DecodeError::Store(s) => s.into(),
+            DecodeError::Reflect(r) => r.into(),
+            other => DefError::Decode(other),
+        }
     }
 }
 
@@ -204,7 +266,8 @@ impl Default for DefStore {
 
 impl DefStore {
     /// A store over `store` (scanned or not; an unscanned store finds nothing by name), choosing holders by `policy`
-    /// and decoding in `mode`. No overlay is installed (D1).
+    /// and decoding in `mode`. No overlay is installed (D1). The reflection index starts empty (module
+    /// documentation, "Code packages").
     pub fn new(store: PackageStore, policy: IdentityPolicy, mode: ParityMode) -> Self {
         DefStore {
             packages: store,
@@ -279,8 +342,16 @@ impl DefStore {
         &self.code
     }
 
-    /// The decode log lines (`defaults: ...`, the C++ `Runtime::log` texts) the store's loads wrote since the last
-    /// call, in order.
+    /// The reflection index and the package store, borrowed together, for reflection calls that need both
+    /// (`CodeIndex::class_at`, `find_method`, installing `load_code_packages`: module documentation, "Code packages").
+    /// A caller may load classes and packages through it; it must not replace the index after the store's first
+    /// decode or lookup, and must not `scan()` the package store (the store's identity map holds its ids).
+    pub fn code_mut(&mut self) -> (&mut CodeIndex, &mut PackageStore) {
+        (&mut self.code, &mut self.packages)
+    }
+
+    /// The decode log lines (`defaults: ...`, the C++ `Runtime::log` texts, and the store's own `defs: ...` lines)
+    /// the store's loads wrote since the last call, in order.
     pub fn take_log(&mut self) -> Vec<String> {
         std::mem::take(&mut self.state.log)
     }
@@ -301,8 +372,8 @@ impl DefStore {
     /// The object `reference` of package `from` names, loaded: `None` for 0. `from` may be any id the package store
     /// handed out for the file. An export reference is that export's object path, an import its path; either goes
     /// through the identity policy like [`DefStore::find`], so a path is one object however it is reached. An import
-    /// whose path no holder has is `Ok(None)` under `Loaded` and the store's `ImportNotFound` otherwise; a reference
-    /// outside the package's tables is an error in either mode.
+    /// whose path no holder has is the stand-in naming the import (module documentation), not loaded and not an
+    /// error; a reference outside the package's tables is an error in either mode.
     pub fn resolve_ref(
         &mut self,
         w: &mut ObjectSpace,
@@ -314,10 +385,20 @@ impl DefStore {
     }
 
     /// Loads `obj` in place if it is one of the store's unloaded handles (module documentation) and returns it; a
-    /// loaded definition is returned as it is. An object the store did not make is [`DefError::NotADefinition`].
+    /// loaded definition is returned as it is. Strict: any object that is not a definition of this store (a run-time
+    /// object, a class default object, a stand-in that stays one) is [`DefError::NotADefinition`], and a stale handle
+    /// is [`DefError::Heap`]. Use [`DefStore::ensure_loaded`] for an object a slot may hold.
     pub fn load(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<ObjRef, DefError> {
         let _ = (w, obj);
         Err(not_yet("DefStore::load"))
+    }
+
+    /// Total loading: loads `obj` in place if it is an unloaded handle, and is `Ok(())` for every other live object
+    /// (loaded definitions, run-time objects, class default objects, the stand-ins that stay stand-ins). Fails only
+    /// for a stale handle ([`DefError::Heap`]) or a handle whose load fails.
+    pub fn ensure_loaded(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<(), DefError> {
+        let _ = (w, obj);
+        Err(not_yet("DefStore::ensure_loaded"))
     }
 
     /// Whether `obj` is a definition of this store that is loaded.
@@ -326,10 +407,17 @@ impl DefStore {
         false
     }
 
-    /// Export `index` of `package`, loaded with `prefix` (a component: 8; a placed actor: 26). It is the same
-    /// object as the path's (identity by path), so an export another holder owns under the policy is
-    /// [`DefError::NotADefinition`] here rather than a second copy. Loading an object already loaded with another
-    /// prefix is an error.
+    /// Whether `obj` is one of the store's unloaded handles: [`DefStore::ensure_loaded`] would load it. False for
+    /// every other object, the stand-ins that stay stand-ins included.
+    pub fn is_unloaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool {
+        let _ = (w, obj);
+        false
+    }
+
+    /// Export `index` of `package`, loaded. Its tags are read from the prefix its class gives (module documentation,
+    /// "Prefix by class"); `prefix` is the caller's expectation, checked against it ([`DefError::PrefixMismatch`]).
+    /// It is the same object as the path's (identity by path), so an export another holder owns under the policy is
+    /// [`DefError::NotADefinition`] here rather than a second copy.
     pub fn load_export(
         &mut self,
         w: &mut ObjectSpace,
@@ -342,11 +430,19 @@ impl DefStore {
     }
 
     /// Every file holding `path`, in the store's scan order, whatever the policy (for audits: the policy's choice is
-    /// the first under `FirstInScanOrder`). Files that fail to load are not holders, as in the store's global
-    /// fallback.
-    pub fn owners(&mut self, path: &ObjectPath) -> Result<Vec<Owner>, DefError> {
+    /// the first under `FirstInScanOrder`), each loaded into the package store (so `Owner::id` is set), and the
+    /// candidate files that failed to load or search, reported in `Holders::failures`. Only the files the store's
+    /// global index lists as candidates for the path are read.
+    pub fn owners(&mut self, path: &ObjectPath) -> Result<Holders, DefError> {
         let _ = path;
         Err(not_yet("DefStore::owners"))
+    }
+
+    /// Every export path of every file of the scan, with its holders and their classes, the class defaults apart and
+    /// the files that failed (`crate::identity::Census`). Reads each file once and keeps none loaded; loads no
+    /// definition.
+    pub fn census(&mut self) -> Result<Census, DefError> {
+        Err(not_yet("DefStore::census"))
     }
 
     /// Installs overlay `o` above the earlier ones (`crate::overlay`): every property path is parsed first, and one
@@ -369,9 +465,9 @@ impl DefStore {
         ValueOrigin::NotADefinition
     }
 
-    /// The bytes after loaded definition `obj`'s tag stream to the end of its export (`crate::tail`), possibly
-    /// empty; `None` for an object that is not a loaded definition of this store.
-    pub fn raw_tail(&self, obj: ObjRef) -> Option<&[u8]> {
+    /// The bytes after loaded definition `obj`'s tag stream to the end of its export (`crate::tail`), as an owned
+    /// view (possibly empty); `None` for an object that is not a loaded definition of this store.
+    pub fn raw_tail(&self, obj: ObjRef) -> Option<Tail> {
         let _ = (obj, &self.tails);
         None
     }
@@ -430,9 +526,12 @@ mod tests {
             defs.push_overlay(&mut w, Overlay::new("t", OverlayKind::Test, Vec::new())),
             Err(DefError::NotYet(_))
         ));
+        assert!(matches!(defs.census(), Err(DefError::NotYet(_))));
         assert_eq!(defs.overlay_status(OverlayId::new(0)), None);
         assert_eq!(defs.mode(), ParityMode::Off);
         assert_eq!(defs.policy(), &IdentityPolicy::FirstInScanOrder);
+        let (_code, store) = defs.code_mut();
+        assert_eq!(store.indexed_package_count(), 0);
     }
 
     #[test]
@@ -457,5 +556,36 @@ mod tests {
         let e = DefError::from(StoreError::PackageNotFound("X".into()));
         assert_eq!(e.to_string(), "package not found: X");
         assert!(std::error::Error::source(&e).is_none());
+    }
+
+    #[test]
+    fn conversions_flatten_not_yet_heap_store_and_reflection() {
+        let n = NotYet::not_read("x", "r");
+        assert_eq!(
+            DefError::from(DecodeError::NotYet(n.clone())),
+            DefError::NotYet(n.clone())
+        );
+        assert_eq!(
+            DefError::from(ReflectError::NotYet(n.clone())),
+            DefError::NotYet(n.clone())
+        );
+        assert_eq!(
+            DefError::from(StoreError::NotYet(n.clone())),
+            DefError::NotYet(n)
+        );
+        let s = StoreError::PackageNotFound("P".into());
+        assert_eq!(
+            DefError::from(DecodeError::Reflect(ReflectError::Store(s.clone()))),
+            DefError::Store(s.clone())
+        );
+        assert_eq!(
+            DefError::from(DecodeError::Store(s.clone())),
+            DefError::Store(s)
+        );
+        let h = HeapError::InstanceStandIn(ow_object::heap::Origin::Runtime);
+        assert_eq!(
+            DefError::from(DecodeError::Heap(h.clone())),
+            DefError::Heap(h)
+        );
     }
 }

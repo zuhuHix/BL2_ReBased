@@ -15,6 +15,16 @@
 //! is recorded in the overlay's [`OverlayStatus`]; it is never clamped or guessed. `DefStore::origin` tells, per
 //! element ([`ow_object::ids::PropAddr`]), whether the value is cooked or which overlay wrote it last.
 //!
+//! **Edge cases.**
+//! - A static-array property (`array_dim > 1`) patched without an index on its first segment: a [`PatchValue::List`]
+//!   sets the whole array (exactly `array_dim` elements, element `i` to `PropAddr` index `i`; another length does not
+//!   type), any other value sets element 0. With an index, the patch sets that element only.
+//! - A patch whose object is a class default (`Default__<Class>`, or a path inside one) fails with
+//!   `DefError::NotADefinition` and counts as failed, not pending: overlays patch definitions, not class defaults.
+//! - A patch whose object no package holds stays pending (`OverlayStatus::pending`).
+//! - The numbers Python's `json.dumps` writes for non-finite floats, `NaN`, `Infinity` and `-Infinity`, are accepted
+//!   as [`PatchValue::Number`] text (they type only into a float).
+//!
 //! **Formats.** [`Overlay::from_live_capture`] reads the file `tools/real_game/scripts/weapon_dump.py` writes and
 //! `tools/real_game/live_overlay.py` reads: one JSON object `{path: {"class": .., "properties": {key: value}}}`, each
 //! property one patch of the whole property, in the shape `live_overlay.py` cleans it to (object references written
@@ -66,7 +76,8 @@ pub enum PatchValue {
     /// `null`: a null object, class or interface reference.
     Null,
     Bool(bool),
-    /// A JSON number, as written (`12`, `-0.25`, `1e3`).
+    /// A JSON number, as written (`12`, `-0.25`, `1e3`), or one of the non-finite floats Python writes (`NaN`,
+    /// `Infinity`, `-Infinity`).
     Number(String),
     /// A JSON string: a string, a name, an enum value name, or an object path for a reference.
     Text(String),

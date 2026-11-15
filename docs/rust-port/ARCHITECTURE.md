@@ -629,15 +629,22 @@ live until destroyed; who calls `free` and when is for the world and VM lanes. S
 
 ```rust
 // identity.rs
-#[non_exhaustive] pub struct LoadSet { pub packages: Vec<PackageName> }   // ::new; the game's loaded set, in load order
+#[non_exhaustive] pub struct LoadSet { pub packages: Vec<PackageName> }   // ::new; load order; by stem: a stem two files
+                                                   // share is AmbiguousName (the store never picks one)
 #[non_exhaustive] pub enum IdentityPolicy { #[default] FirstInScanOrder /* the tools' convention; parity; UNVERIFIED as a
                                             game rule */, Loaded(LoadSet) /* first holder in load order; UNVERIFIED */ }
-#[non_exhaustive] pub struct Owner { pub package: String /* file stem */, pub file: PathBuf, pub export: i32 }   // ::new
+#[non_exhaustive] pub struct Owner { pub package: String /* file stem */, pub file: PathBuf, pub export: i32,
+    pub class: String /* as --exports prints it */, pub id: Option<PackageId> /* Some when the store holds it loaded */ }
+#[non_exhaustive] pub struct FileFailure { pub file: PathBuf, pub error: DefError }
+#[non_exhaustive] pub struct Holders { pub holders: Vec<Owner>, pub failures: Vec<FileFailure> }   // owners()
+#[non_exhaustive] pub struct Census { pub files: Vec<PathBuf> /* scan order */, pub entries: Vec<CensusEntry>,
+    pub class_defaults: Vec<CensusEntry> /* Default__ kept apart */, pub failures: Vec<FileFailure> /* never dropped */ }
+#[non_exhaustive] pub struct CensusEntry { pub path: String /* exact text */, pub holders: Vec<Owner> }   // ::new
 // overlay.rs
 pub struct OverlayId(u32);                         // ::new(raw), raw(): push order from 0
 #[non_exhaustive] pub enum OverlayKind { LiveCapture, Hotfix, TextMod, Test }
-#[non_exhaustive] pub enum PatchValue { Null, Bool(bool), Number(String) /* as written */, Text(String),
-                                        List(Vec<PatchValue>), Fields(Vec<(String, PatchValue)>) }   // the JSON value model
+#[non_exhaustive] pub enum PatchValue { Null, Bool(bool), Number(String) /* as written; NaN, Infinity, -Infinity too */,
+                                        Text(String), List(Vec<PatchValue>), Fields(Vec<(String, PatchValue)>) }
 #[non_exhaustive] pub struct Patch { pub object: ObjectPath, pub property: String /* "Prop[3].Field" */, pub value: PatchValue }
 #[non_exhaustive] pub struct Overlay { pub name: String, pub kind: OverlayKind, pub patches: Vec<Patch> }   // ::new
 impl Overlay { pub fn from_live_capture(name: &str, json: &str) -> Result<Overlay, DefError>;   // weapon_dump.py's file
@@ -647,12 +654,16 @@ impl Overlay { pub fn from_live_capture(name: &str, json: &str) -> Result<Overla
 #[non_exhaustive] pub enum ValueOrigin { Cooked, Overlay(OverlayId), NotADefinition }
 #[non_exhaustive] pub struct Segment { pub name: String, pub index: Option<u32> }
 #[non_exhaustive] pub struct PropertyPath { pub segments: Vec<Segment> }   // ::parse: Name[i]?(.Name[i]?)*
+// tail.rs
+#[non_exhaustive] pub struct Tail { pub package: PackageId, pub data: Arc<Package>, pub range: Range<usize> }  // ::new, bytes()
 // store.rs
 pub const RECORD: &str;
 #[non_exhaustive] #[derive(Clone, PartialEq)] pub enum DefError { Store(StoreError), Reflect(ReflectError),
     Decode(DecodeError), Heap(HeapError) /* the four transparent */, Io { path, reason }, OverlaySyntax { line, column, reason },
     OverlayShape { object, reason }, BadPropertyPath { path, reason }, BadPatch { object, property, reason },
-    NoSuchProperty { class, property }, NotADefinition(String), NotYet(NotYet) }
+    NoSuchProperty { class, property }, NotADefinition(String), PrefixMismatch { object, derived, given }, NotYet(NotYet) }
+    // From<StoreError | ReflectError | DecodeError | HeapError | NotYet> flatten: a lower layer's NotYet is NotYet, its
+    // heap error Heap, a store or reflection error inside a decode error Store or Reflect
 pub struct DefStore { .. }                         // owns the PackageStore, the CodeIndex and the DecodeState; Default = new_empty
 impl DefStore {
     pub fn new(store: PackageStore, policy: IdentityPolicy, mode: ParityMode) -> Self;   // no overlay installed (D1)
@@ -662,17 +673,21 @@ impl DefStore {
         -> Result<Self, DefError>;                 // test support: writes the files under dir, then opens it
     pub fn policy(&self) -> &IdentityPolicy; pub fn mode(&self) -> ParityMode;
     pub fn packages(&self) -> &PackageStore; pub fn code(&self) -> &CodeIndex; pub fn take_log(&mut self) -> Vec<String>;
+    pub fn code_mut(&mut self) -> (&mut CodeIndex, &mut PackageStore);   // split borrow; see "Code packages" below
     pub fn find(&mut self, w: &mut ObjectSpace, path: &ObjectPath) -> Result<Option<ObjRef>, DefError>;   // loaded + overlays
     pub fn resolve_ref(&mut self, w: &mut ObjectSpace, from: PackageId, reference: i32) -> Result<Option<ObjRef>, DefError>;
-    pub fn load(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<ObjRef, DefError>;   // an unloaded handle, in place
-    pub fn is_loaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool;
+    pub fn load(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<ObjRef, DefError>;   // strict: definitions only
+    pub fn ensure_loaded(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<(), DefError>;   // total: Ok for any live
+                                                   // object that is not an unloaded handle; errors only for stale handles
+    pub fn is_loaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool; pub fn is_unloaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool;
     pub fn load_export(&mut self, w: &mut ObjectSpace, package: PackageId, index: i32, prefix: PropertyPrefix)
-        -> Result<ObjRef, DefError>;               // components (8) and placed actors (26)
-    pub fn owners(&mut self, path: &ObjectPath) -> Result<Vec<Owner>, DefError>;   // every holder, scan order, for audits
+        -> Result<ObjRef, DefError>;               // prefix only checked against the class's (PrefixMismatch)
+    pub fn owners(&mut self, path: &ObjectPath) -> Result<Holders, DefError>;   // every holder, scan order, and failures
+    pub fn census(&mut self) -> Result<Census, DefError>;   // every export path of the scan; keeps no file loaded
     pub fn push_overlay(&mut self, w: &mut ObjectSpace, o: Overlay) -> Result<OverlayId, DefError>;   // also patches loaded objects
     pub fn overlay_status(&self, id: OverlayId) -> Option<&OverlayStatus>;
     pub fn origin(&self, obj: ObjRef, at: PropAddr) -> ValueOrigin;   // per element: Cooked | Overlay(id) | NotADefinition
-    pub fn raw_tail(&self, obj: ObjRef) -> Option<&[u8]>;   // untagged bytes after the tags (behavior providers), from tags_end
+    pub fn raw_tail(&self, obj: ObjRef) -> Option<Tail>;   // untagged bytes after the tags (behavior providers), from tags_end
     pub fn exports_of_class(&mut self, class_path: &str) -> Result<Vec<ObjectPath>, DefError>;  // exact class, scan order, censuses
     pub fn key(&mut self, w: &mut ObjectSpace, class_path: &str, prop: &str) -> Result<PropId, DefError>;   // typed key, cached
     pub fn class_id(&mut self, w: &mut ObjectSpace, class_path: &str) -> Result<ClassId, DefError>;
@@ -682,26 +697,41 @@ impl DefStore {
 // - Identity is by object path: each path is one object, the export of the holder the policy picks, however it is
 //   reached (find, an export reference, an import naming the path). Its key is that export as (filed id, index), the id
 //   CodeIndex::filed_id files the package under (decision 2026-11-15-10); no map is keyed by a raw PackageId. A path
-//   matches a file as Package::find_export matches it (folded, a leading `<file stem>.` dropped).
+//   matches a file as Package::find_export matches it (folded, a leading `<file stem>.` dropped). The tools' file order
+//   (.upk only, base game first, then DLC folders) is not the store's scan order; Census carries every holder's file.
 // - Lazy loading in place: naming a definition allocates its one heap object unloaded (slotless, Origin::Resource, as
 //   the decoder's stand-ins); references decoded inside a definition are such handles. find, resolve_ref and load
 //   apply the class default and the export's tags into that same ObjRef, whose origin becomes Origin::Export with the
 //   filed id.
 // - Loads never nest: loading a definition never loads what it references, so no object still being built is handed
 //   out and the decoder's InstantiationCycle cannot come from the store's loads. Cyclic references are handles.
-// - Callers must load() a referenced definition before reading its slots: an unloaded handle has no slots, and reading
-//   one fails in the heap (SlotMissing), never with a guessed value.
-// - Lazy loads read tags from the 4-byte prefix (PropertyPrefix::Ordinary), the value every C++ definition consumer
-//   passes; components and placed actors go through load_export with the caller's prefix.
+// - Callers must load a referenced definition before reading its slots: ensure_loaded for anything a slot may hold
+//   (total), load where it must be a definition (strict). An unloaded handle has no slots, and reading one fails in the
+//   heap (SlotMissing), never with a guessed value.
+// - Stand-ins that stay stand-ins (ensure_loaded returns them unchanged, load refuses them with NotADefinition): a
+//   decoded reference whose path no holder has keeps a stand-in naming the import, as the C++ does, and logs
+//   `defs: no holder for <path>` (it never decodes as None); the Reference-mode `?` stand-in; native-class stand-ins
+//   (ClassTable::is_native).
+// - Prefix by class: an export whose class derives from Core.Component reads its tags from 8 bytes in, one deriving from
+//   Engine.Actor from 26, any other from 4 (the C++ definition consumers' value), so the load order cannot change a
+//   decode. The byte counts are prefix.rs's; deriving them from the class is UNVERIFIED as a game rule.
 // - Code exports (class, struct, enum, function, state, property) give DefError::NotADefinition from find; their layouts
 //   are reached through class_id and key. A Default__<Class> export is that class's default object (class_default).
+// - Code packages: the store never calls load_code_packages; its CodeIndex starts empty and loads classes lazily. A lane
+//   that wants every code class laid out (the VM's index) installs `load_code_packages(store, names, classes)?` through
+//   code_mut before the store's first decode or lookup; later, the classes are already defined (AlreadyDefined).
+// - Loaded definitions appear in Heap::live() in load order; unloaded handles do not. Iterate definitions through
+//   exports_of_class or census plus a load, never through live() (W4-INTERP2's iterators included).
 // - Overlays patch values only (they define no class): pushed in order, a later patch of an element wins; applied to
 //   loaded objects at once and to others when they load; a patch replaces the whole element its path ends at (a struct
 //   from its defaults with the listed fields set); a patch that does not type leaves the cooked value and is recorded in
-//   OverlayStatus::failed. The default overlay set is empty (D1). Static-array patches (`Prop[3].Field`) address PropAddr.
+//   OverlayStatus::failed; a patch on a Default__ object fails with NotADefinition (failed, not pending); on a static
+//   array, an unindexed path with a List sets the whole array, with a scalar element 0. The default overlay set is empty
+//   (D1). Static-array patches (`Prop[3].Field`) address PropAddr.
 // - The store passes its ParityMode to every decode and adds no stand-in of its own.
-// As shipped by the W3-DEFS contract commit: the ParityMode argument, open, from_synthetic, Owner, PatchValue, the
-// PropAddr origin, ValueOrigin::NotADefinition, &mut on owners and key, and the added load, is_loaded, load_export,
+// As shipped by the W3-DEFS contract (PR #307, review r1): the ParityMode argument, open, from_synthetic, Owner with its
+// class and id, Holders, Census, PatchValue, Tail, the PropAddr origin, ValueOrigin::NotADefinition, &mut on owners and
+// key, PrefixMismatch, and the added load, ensure_loaded, is_loaded, is_unloaded, load_export, census, code_mut,
 // class_id, class_default, overlay_status, take_log and PropertyPath differ from revision 3 here.
 ```
 
@@ -760,7 +790,8 @@ impl WorldParts<'_> { pub fn new(space, defs) -> Self; pub fn defs(&mut self) ->
 // the inner world's generators (the adapter rule above).
 #[non_exhaustive] #[derive(Clone, PartialEq)]   // not Eq: BalanceError and VmError carry Attr(AttrError)
 pub enum AttrError { NotYet(NotYet), Heap(HeapError), Layout(LayoutError), BadData { reason: Cow<'static, str> },
-                     DuplicateResolver { class: String }, World(String) /* the world's own error as text */ }  // W3-DEFS adds Def(DefError)
+                     DuplicateResolver { class: String }, World(String) /* the world's own error as text */,
+                     Def(DefError) /* added by W3-DEFS */ }  // From<DefError>: NotYet -> NotYet, Heap -> Heap, the rest Def
 pub struct GlobalSlots { pub experience_point_test_level: f32 /* slot 0 */, pub badass_token_test_rank: f32 /* slot 1 */ }
                                     // get(i): 0.0 beyond slot 1; set(i): NotYet { NotRead } beyond slot 1
 pub struct NumForms { pub pow: PowForm, pub combine: CombineForm }   // defaults DoubleThenSingle, WeaponGen (section 5.3)
@@ -971,9 +1002,10 @@ impl Vm {
 pub trait NativePack { fn register(&self, vm: &mut Vm) -> Result<(), VmError>; }   // every crate above the VM exports one
 pub enum VmError { Script { function: String, message: String }, StepLimit, UnboundNative(String), NotYet(NotYet),
                    Heap(HeapError), Attr(AttrError), Decode(String), Registration { key: String, reason: &'static str },
-                   BadArgument { function: String, index: usize, reason: &'static str }, ServiceBorrowed(&'static str) }
-                   // Def(DefError) pending W3-DEFS (additive); From<NotYet | HeapError | AttrError>
-impl From<VmError> for AttrError { .. }   // NotYet, Heap and Attr pass through unchanged; the rest as AttrError::World(text)
+                   BadArgument { function: String, index: usize, reason: &'static str }, ServiceBorrowed(&'static str),
+                   Def(DefError) /* added by W3-DEFS */ }   // From<NotYet | HeapError | AttrError | DefError>; from a DefError,
+                   // NotYet -> NotYet, Heap -> Heap, the rest Def; From<AttrError> passes AttrError::Def through as Def
+impl From<VmError> for AttrError { .. }   // NotYet, Heap, Attr and Def pass through unchanged; the rest as AttrError::World(text)
 ```
 
 ```rust

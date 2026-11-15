@@ -4,13 +4,13 @@
 //! Rust VM keeps the cases a caller can act on apart and puts the rest in [`VmError::Script`]. `NotYet` is how a
 //! missing layer or an unread rule shows (architecture rule R3): never a stand-in value.
 //!
-//! `Def(DefError)` of the section 3.8 sketch is not here yet: `ow-defs` has no error type until W3-DEFS. The enum is
-//! `#[non_exhaustive]`, so adding the variant then is the additive kind of contract change (section 7).
+//! `Def(DefError)` of the section 3.8 sketch was added by W3-DEFS (an additive change, section 7).
 
 use std::fmt;
 
 use ow_attr::api::AttrError;
 use ow_core::NotYet;
+use ow_defs::store::DefError;
 use ow_object::heap::HeapError;
 
 /// Why a VM operation, a call or a native failed.
@@ -30,6 +30,9 @@ pub enum VmError {
     Heap(HeapError),
     /// The attribute system failed.
     Attr(AttrError),
+    /// The definition store failed (lookup, load, overlay). Its `NotYet` and heap errors convert to
+    /// [`VmError::NotYet`] and [`VmError::Heap`] instead (`From<DefError>`).
+    Def(DefError),
     /// A function's bytecode or a value did not decode.
     Decode(String),
     /// A registration was refused: a key registered twice (C++ "duplicate native registration"), an override of a
@@ -55,6 +58,7 @@ impl fmt::Display for VmError {
             VmError::NotYet(n) => n.fmt(f),
             VmError::Heap(e) => write!(f, "heap: {e}"),
             VmError::Attr(e) => write!(f, "attribute system: {e}"),
+            VmError::Def(e) => write!(f, "definitions: {e}"),
             VmError::Decode(text) => write!(f, "decode: {text}"),
             VmError::Registration { key, reason } => write!(f, "cannot register {key}: {reason}"),
             VmError::BadArgument {
@@ -83,27 +87,41 @@ impl From<HeapError> for VmError {
     }
 }
 
+/// `NotYet` and heap errors keep their own variants, as for attribute errors; the rest is [`VmError::Def`].
+impl From<DefError> for VmError {
+    fn from(e: DefError) -> Self {
+        match e {
+            DefError::NotYet(n) => VmError::NotYet(n),
+            DefError::Heap(h) => VmError::Heap(h),
+            other => VmError::Def(other),
+        }
+    }
+}
+
 /// `NotYet` and heap errors keep their own variants (so a `NotYet` raised inside a notification override still matches
-/// `VmError::NotYet` and gives the CLI's "not yet" exit code); the rest is `VmError::Attr`.
+/// `VmError::NotYet` and gives the CLI's "not yet" exit code); a definition store error is `VmError::Def` unchanged;
+/// the rest is `VmError::Attr`.
 impl From<AttrError> for VmError {
     fn from(e: AttrError) -> Self {
         match e {
             AttrError::NotYet(n) => VmError::NotYet(n),
             AttrError::Heap(h) => VmError::Heap(h),
+            AttrError::Def(d) => VmError::Def(d),
             other => VmError::Attr(other),
         }
     }
 }
 
 /// For a world that runs script inside the attribute system (a change-notification override, a resolver that calls
-/// into the VM): `NotYet`, heap and attribute errors pass through unchanged, so a caller still sees what is missing;
-/// every other VM error travels as `AttrError::World` with its text.
+/// into the VM): `NotYet`, heap, attribute and definition store errors pass through unchanged, so a caller still sees
+/// what is missing; every other VM error travels as `AttrError::World` with its text.
 impl From<VmError> for AttrError {
     fn from(e: VmError) -> Self {
         match e {
             VmError::NotYet(n) => AttrError::NotYet(n),
             VmError::Heap(h) => AttrError::Heap(h),
             VmError::Attr(a) => a,
+            VmError::Def(d) => AttrError::Def(d),
             other => AttrError::World(other.to_string()),
         }
     }
@@ -169,5 +187,29 @@ mod tests {
             AttrError::from(VmError::StepLimit),
             AttrError::World("step limit exceeded (runaway script?)".into())
         );
+    }
+
+    #[test]
+    fn definition_store_errors_keep_not_yet_and_heap_and_pass_through_unchanged() {
+        let n = NotYet::not_ported("DefStore::find", "r");
+        assert_eq!(
+            VmError::from(DefError::NotYet(n.clone())),
+            VmError::NotYet(n)
+        );
+        let heap = HeapError::WrongKind {
+            expected: "Int",
+            found: "Float",
+        };
+        assert_eq!(
+            VmError::from(DefError::Heap(heap.clone())),
+            VmError::Heap(heap)
+        );
+        let d = DefError::NotADefinition("Core.Object".into());
+        assert_eq!(VmError::from(d.clone()), VmError::Def(d.clone()));
+        assert_eq!(
+            AttrError::from(VmError::Def(d.clone())),
+            AttrError::Def(d.clone())
+        );
+        assert_eq!(VmError::from(AttrError::Def(d.clone())), VmError::Def(d));
     }
 }
