@@ -230,33 +230,85 @@ impl Package {
     }
 }
 
-/// The path with `.` components dropped and each `..` resolved against the component before it, from the text alone
-/// (no file system access), as C++ `std::filesystem::path::lexically_normal` does for the `absolute(path)` that
-/// `Package::load` keeps (`src/package.cpp`), and `PackageStore` keys on. `std::path::absolute` already does this on
-/// Windows but keeps `..` on POSIX. A `..` directly under the root is dropped; a leading `..` of a relative path (only
-/// the fallback when `absolute` fails) is kept.
-pub fn lexically_normal(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut out: Vec<Component<'_>> = Vec::new();
+/// C++ `std::filesystem::path::lexically_normal`, from the text alone (no file system access): what `Package::load`
+/// keeps of `absolute(path)` (`src/package.cpp`) and what `PackageStore` keys on. `std::path::absolute` already
+/// resolves `.` and `..` on Windows but keeps `..` on POSIX, and Rust's `components()` drops the trailing separator
+/// the C++ form keeps, so the steps of the standard ([fs.path.generic]) are done here:
+///
+/// - Separators become one preferred separator (`\` on Windows, `/` elsewhere), in the root name too.
+/// - `.` goes. `name/..` goes (a `name` that is not `..`). Directly under a root directory (`/`, `C:\`) a `..` goes;
+///   after a drive with no root directory (`C:..\X.upk`) and in a relative path, a leading `..` is kept.
+/// - A trailing separator is kept, and so is the one a final `.` or `name/..` leaves (`a/b/` -> `a\b\`,
+///   `a/.` -> `a\`, `a/b/..` -> `a\` on Windows), except after a final `..` (`a/../../` -> `..`).
+/// - An empty result is `.`; an empty path stays empty.
+/// - A UNC path's root name is `\\server` and its share an ordinary name (`\\server\share\..` -> `\\server\`), as
+///   MSVC parses it. Other prefixes (`\\?\C:`, `\\.\`) are kept as `std::path` reads them.
+///
+/// The cases in the tests are what MSVC 14.50's `lexically_normal` printed for them (a local probe).
+pub(crate) fn lexically_normal(path: &Path) -> PathBuf {
+    use std::ffi::{OsStr, OsString};
+    use std::path::{Component, Prefix};
+    if path.as_os_str().is_empty() {
+        return PathBuf::new();
+    }
+    let sep = if cfg!(windows) { "\\" } else { "/" };
+    let is_sep = |b: u8| b == b'/' || (cfg!(windows) && b == b'\\');
+
+    let mut root_name = OsString::new();
+    let mut prefix_len = 0;
+    let mut has_root = false;
+    let mut names: Vec<&OsStr> = Vec::new();
     for component in path.components() {
         match component {
-            Component::CurDir => {}
-            Component::ParentDir => match out.last() {
-                Some(Component::Normal(_)) => {
-                    out.pop();
+            Component::Prefix(p) => {
+                prefix_len = p.as_os_str().len();
+                if let Prefix::UNC(server, share) = p.kind() {
+                    root_name.push(r"\\");
+                    root_name.push(server);
+                    has_root = true;
+                    names.push(share);
+                } else {
+                    root_name.push(p.as_os_str());
                 }
-                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
-                _ => out.push(component),
+            }
+            Component::RootDir => has_root = true,
+            Component::CurDir => {}
+            Component::ParentDir => match names.last() {
+                Some(last) if *last != ".." => {
+                    names.pop();
+                }
+                None if has_root => {}
+                _ => names.push(OsStr::new("..")),
             },
-            _ => out.push(component),
+            Component::Normal(name) => names.push(name),
         }
     }
-    let normal: PathBuf = out.iter().collect();
-    if normal.as_os_str().is_empty() && !path.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        normal
+
+    // The raw text after the prefix tells whether it ended in a separator, a `.` or a `..`; each leaves a trailing
+    // separator in the C++ form unless nothing or a `..` is left before it.
+    let raw = path.as_os_str().as_encoded_bytes();
+    let rest = raw.get(prefix_len..).unwrap_or_default();
+    let last_element = rest.rsplit(|&b| is_sep(b)).next().unwrap_or_default();
+    let ends_open = rest.last().is_some_and(|&b| is_sep(b)) || last_element == b"." || last_element == b"..";
+    let trailing = ends_open && names.last().is_some_and(|last| *last != "..");
+
+    let mut out = root_name;
+    if has_root {
+        out.push(sep);
     }
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            out.push(sep);
+        }
+        out.push(name);
+    }
+    if trailing {
+        out.push(sep);
+    }
+    if out.is_empty() {
+        out.push(".");
+    }
+    PathBuf::from(out)
 }
 
 fn starts_with_folded(text: &str, prefix: &str) -> bool {
@@ -446,15 +498,99 @@ mod tests {
         assert_eq!(p.find_export("Thing").unwrap(), Some(thing));
     }
 
+    /// Compares on the OS string: `Path` equality ignores a trailing separator and `.` components.
+    fn normal_text(input: &str) -> String {
+        lexically_normal(Path::new(input))
+            .as_os_str()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Review r2: each input with what MSVC 14.50's `std::filesystem::path::lexically_normal` printed for it (a
+    /// local probe program, `(input, output)` copied from its output).
+    #[cfg(windows)]
+    #[test]
+    fn lexically_normal_matches_msvc() {
+        let cases: &[(&str, &str)] = &[
+            (r"C:..\X.upk", r"C:..\X.upk"),
+            (r"C:\..\X.upk", r"C:\X.upk"),
+            (r"C:a\..\..\b", r"C:..\b"),
+            ("a/b/", r"a\b\"),
+            ("a/.", r"a\"),
+            ("a/b/..", r"a\"),
+            ("../a", r"..\a"),
+            ("a/../../b", r"..\b"),
+            (".", "."),
+            ("/..", r"\"),
+            ("dir/../X.upk", "X.upk"),
+            (r"C:\dir\..\X.upk", r"C:\X.upk"),
+            ("a/./b/../c", r"a\c"),
+            ("a/..", "."),
+            ("a//b", r"a\b"),
+            (r"a\\b\", r"a\b\"),
+            ("./", "."),
+            ("./a", "a"),
+            ("../", ".."),
+            ("a/../../", ".."),
+            ("..", ".."),
+            ("C:", "C:"),
+            ("C:.", "C:"),
+            (r"C:\", r"C:\"),
+            (r"C:\.", r"C:\"),
+            (r"C:\..", r"C:\"),
+            ("C:/a/b/../c", r"C:\a\c"),
+            (r"C:\a\b\..\..\..", r"C:\"),
+            (r"\\server\share\a\..\b", r"\\server\share\b"),
+            (r"\\server\share\..", r"\\server\"),
+            ("//server/share/x", r"\\server\share\x"),
+            (r"\\?\C:\a\..\b", r"\\?\C:\b"),
+            ("/a/b/../..", r"\"),
+            ("a/./", r"a\"),
+            ("a/b/../", r"a\"),
+            ("x/./.", r"x\"),
+            (".a/..b/../c.", r".a\c."),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(normal_text(input), *expected, "{input}");
+        }
+        assert_eq!(normal_text(""), "");
+    }
+
+    /// The same rules with `/` as the only separator (no drive prefixes off Windows).
+    #[cfg(not(windows))]
+    #[test]
+    fn lexically_normal_matches_the_standard_on_posix() {
+        let cases: &[(&str, &str)] = &[
+            ("a/b/", "a/b/"),
+            ("a/.", "a/"),
+            ("a/b/..", "a/"),
+            ("../a", "../a"),
+            ("a/../../b", "../b"),
+            (".", "."),
+            ("/..", "/"),
+            ("dir/../X.upk", "X.upk"),
+            ("a//b", "a/b"),
+            ("./", "."),
+            ("../", ".."),
+            ("a/../../", ".."),
+            ("/a/b/../..", "/"),
+            ("x/./.", "x/"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(normal_text(input), *expected, "{input}");
+        }
+        assert_eq!(normal_text(""), "");
+    }
+
     /// Review r1 item 5: `source` is lexically normal, as C++ `absolute(path).lexically_normal()`.
     #[test]
     fn source_paths_are_lexically_normal() {
         let root = std::path::absolute(Path::new("base")).unwrap();
         let messy = root.join("dir").join("..").join(".").join("X.upk");
-        assert_eq!(lexically_normal(&messy), root.join("X.upk"));
-        assert_eq!(lexically_normal(Path::new("a/./b/../c")), Path::new("a").join("c"));
-        assert_eq!(lexically_normal(Path::new("../a")), Path::new("..").join("a"));
-        assert_eq!(lexically_normal(Path::new("a/..")), Path::new("."));
+        assert_eq!(
+            lexically_normal(&messy).as_os_str(),
+            root.join("X.upk").as_os_str()
+        );
 
         // Through `load`: a real file reached as `dir/../X.upk`.
         let folder = std::env::temp_dir().join(format!("ow-package-w1pkg-{}", std::process::id()));
@@ -466,7 +602,10 @@ mod tests {
         let loaded = Package::load(&folder.join("dir").join("..").join("X.upk"));
         std::fs::remove_dir_all(&folder).unwrap();
         let loaded = loaded.unwrap();
-        assert_eq!(loaded.source, lexically_normal(&std::path::absolute(&file).unwrap()));
+        assert_eq!(
+            loaded.source.as_os_str(),
+            lexically_normal(&std::path::absolute(&file).unwrap()).as_os_str()
+        );
         assert!(!loaded.source.components().any(|c| matches!(c, std::path::Component::ParentDir)));
         assert_eq!(loaded.name, "X");
     }
