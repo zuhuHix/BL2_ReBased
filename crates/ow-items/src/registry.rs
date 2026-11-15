@@ -433,9 +433,9 @@ impl PathHolders {
     }
 }
 
-/// What the registry needs from a scan of the install, in scan order: every non-default path with its holders, the
-/// `Default__` objects (path and class) apart, and the files that failed to load. The shape of `DefStore::census()`
-/// (W3-DEFS contract fix), which feeds [`build_registry`].
+/// What the registry needs from a scan of the install, in the tool's file order: every non-default path with its
+/// holders, the `Default__` objects (path and class) apart, and the files that failed to load.
+/// [`CensusInput::from_store`] makes it from `DefStore::census()`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CensusInput {
@@ -453,6 +453,65 @@ impl CensusInput {
             root,
             ..Self::default()
         }
+    }
+
+    /// The definition store's census (`DefStore::census`, every file of the store's scan in its order) in the tool's
+    /// file list and order (`weapon_catalog.package_files`): only `.upk` files, those below
+    /// `WillowGame/CookedPCConsole` first, then those below `DLC/`, each group sorted as pathlib sorts. Within a path,
+    /// holders keep their export order per file; paths are ordered by where the tool first meets them. So the owner
+    /// of a path (its first holder) is the tool's "first package holding a path": `FirstInScanOrder` in the tool's
+    /// scan order (UNVERIFIED as a game rule, as the tool's is).
+    pub fn from_store(census: ow_defs::identity::Census, root: &Path) -> CensusInput {
+        let mut ranked: Vec<((u8, Vec<String>), PathBuf)> = census
+            .files
+            .iter()
+            .filter_map(|f| tool_file_key(f, root).map(|k| (k, f.clone())))
+            .collect();
+        ranked.sort();
+        let rank: DetMap<PathBuf, usize> = ranked
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, f))| (f, i))
+            .collect();
+        let holders_of = |owners: Vec<ow_defs::identity::Owner>| -> Vec<(usize, Holder)> {
+            let mut kept: Vec<(usize, Holder)> = owners
+                .into_iter()
+                .filter_map(|o| {
+                    rank.get(&o.file)
+                        .map(|&r| (r, Holder::new(o.file, o.class, o.export)))
+                })
+                .collect();
+            // Stable: the holders of one file keep their export order.
+            kept.sort_by_key(|(r, _)| *r);
+            kept
+        };
+        let mut input = CensusInput::new(root.to_path_buf());
+        let mut entries: Vec<((usize, i32), PathHolders)> = Vec::new();
+        for entry in census.entries {
+            let kept = holders_of(entry.holders);
+            if let Some((r, first)) = kept.first() {
+                let key = (*r, first.export);
+                let holders = kept.into_iter().map(|(_, h)| h).collect();
+                entries.push((key, PathHolders::new(entry.path, holders)));
+            }
+        }
+        entries.sort_by_key(|(k, _)| *k);
+        input.paths = entries.into_iter().map(|(_, e)| e).collect();
+        let mut defaults: Vec<((usize, i32), (String, String))> = Vec::new();
+        for entry in census.class_defaults {
+            for (r, h) in holders_of(entry.holders) {
+                defaults.push(((r, h.export), (entry.path.clone(), h.class)));
+            }
+        }
+        defaults.sort_by_key(|(k, _)| *k);
+        input.defaults = defaults.into_iter().map(|(_, d)| d).collect();
+        input.load_failures = census
+            .failures
+            .into_iter()
+            .filter(|f| rank.contains_key(&f.file))
+            .map(|f| (f.file, error_text(&f.error)))
+            .collect();
+        input
     }
 }
 
@@ -602,6 +661,13 @@ impl Census {
         }
         if let Some(first) = first {
             self.duplicates += 1;
+            // The tool decodes a path from its owner file's `{path: index}` dict, so a file exporting the path twice
+            // gives its last export (weapon_recipe.Package.index).
+            if let Some(owner) = self.owner.get_mut(path)
+                && owner.0 == h.file
+            {
+                owner.1 = h.export;
+            }
             if short(&first) != name && (is_relevant || relevant(short(&first))) {
                 self.conflicts.push(Conflict {
                     path: path.to_string(),
@@ -744,29 +810,52 @@ fn relative_posix(file: &Path, root: &Path) -> String {
         .join("/")
 }
 
-/// `weapon_catalog.package_files`' DLC name of a file: `base` below `WillowGame/CookedPCConsole`, the folder name
-/// below `DLC/`, `?` for a file the tool does not scan (outside both, or not `.upk`).
-fn dlc_of_file(file: &Path, root: &Path) -> String {
+/// Where `weapon_catalog.package_files` puts a file, or `None` for a file the tool does not list: group 0 for a
+/// `.upk` below `WillowGame/CookedPCConsole`, 1 for a `.upk` below `DLC/`, then the sort key of its path. On Windows
+/// the tool's paths compare and match case-insensitively (pathlib folds each part), elsewhere as they are.
+fn tool_file_key(file: &Path, root: &Path) -> Option<(u8, Vec<String>)> {
     let is_upk = file
         .extension()
         .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("upk"));
-    let Ok(rel) = file.strip_prefix(root) else {
-        return "?".to_string();
-    };
+    if !is_upk {
+        return None;
+    }
+    let rel = file.strip_prefix(root).ok()?;
     let parts: Vec<String> = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
-    if !is_upk || parts.len() < 2 {
-        return "?".to_string();
+    let fold = |p: &str| {
+        if cfg!(windows) {
+            p.to_lowercase()
+        } else {
+            p.to_string()
+        }
+    };
+    let key: Vec<String> = parts.iter().map(|p| fold(p)).collect();
+    if parts.len() >= 3 && key[0] == fold("WillowGame") && key[1] == fold("CookedPCConsole") {
+        return Some((0, key));
     }
-    if parts.len() >= 3 && parts[0] == "WillowGame" && parts[1] == "CookedPCConsole" {
-        return "base".to_string();
+    if parts.len() >= 2 && key[0] == fold("DLC") {
+        return Some((1, key));
     }
-    if parts[0] == "DLC" && parts.len() >= 3 {
-        return parts[1].clone();
+    None
+}
+
+/// `weapon_catalog.package_files`' DLC name of a file: `base` below `WillowGame/CookedPCConsole`, the first part
+/// below `DLC/` as it is on disk, `?` for a file the tool does not list.
+fn dlc_of_file(file: &Path, root: &Path) -> String {
+    match tool_file_key(file, root) {
+        Some((0, _)) => "base".to_string(),
+        Some(_) => file
+            .strip_prefix(root)
+            .ok()
+            .and_then(|rel| rel.components().nth(1))
+            .map_or("?".to_string(), |c| {
+                c.as_os_str().to_string_lossy().into_owned()
+            }),
+        None => "?".to_string(),
     }
-    "?".to_string()
 }
 
 // ---- values ------------------------------------------------------------------------------------------------------
@@ -1553,23 +1642,24 @@ impl Registry {
     }
 }
 
-/// Builds the registry from the definition store's census (every path of every file of the scan, DLC included,
-/// with its holders; the owner is the first, as the store's identity policy puts it). `game` is the install folder
-/// as the caller names it, written into the registry's `game` field.
+/// Builds the registry of the install the store's root names (the folder holding `WillowGame/CookedPCConsole` and
+/// `DLC/`) from the store's census, taken in the tool's file order ([`CensusInput::from_store`]). `game` is the
+/// install folder as the caller names it, written into the registry's `game` field.
 ///
 /// Values are read from the owner's tag stream (module documentation); `space` is not used until values come from
-/// heap objects. Status: needs `DefStore::census()` (W3-DEFS contract fix): until it lands this returns `NotYet`.
+/// heap objects. Answers `NotYet` while `DefStore::census` has no body (W3-DEFS).
 pub fn build_registry(
     defs: &mut DefStore,
     space: &mut ObjectSpace,
     game: &str,
 ) -> Result<Registry, RegistryError> {
-    let _ = (defs, space, game);
-    Err(RegistryError::NotYet(NotYet::layer_absent(
-        "item registry census",
-        "ow-defs DefStore::census (W3-DEFS contract fix)",
-        RECORD,
-    )))
+    let _ = space;
+    let census = defs.census()?;
+    let root = defs.packages().root().to_path_buf();
+    Ok(build_from_census(
+        CensusInput::from_store(census, &root),
+        game,
+    ))
 }
 
 /// Builds the registry from a census (the tool's `build`). `game` is written into the `game` field.
@@ -3049,9 +3139,138 @@ mod tests {
         assert_eq!(first, install.registry().to_json());
     }
 
+    /// The install's census as `DefStore::census` gives it: every file of the store's scan in the store's order
+    /// (path order, so `DLC/` before `WillowGame/`), each path with every holder, plus holders in files the tool does
+    /// not list (a `.umap`, a package outside the two folders), which must not change the owner.
+    fn store_census(install: &Install) -> ow_defs::identity::Census {
+        use ow_defs::identity::{Census, CensusEntry, Owner};
+        let tool = install.census();
+        let decoy_map = install.0.join("DLC/SynDLC/Content/Syn_Map.umap");
+        let decoy_pkg = install.0.join("Engine/SynEngine.upk");
+        let mut census = Census::default();
+        census.files = vec![
+            decoy_map.clone(),
+            install.0.join(DLC_FILE),
+            decoy_pkg.clone(),
+            install.0.join(BASE_FILE),
+        ];
+        let owner = |h: &Holder| {
+            let stem = h.file.file_stem().unwrap().to_string_lossy().into_owned();
+            Owner::new(stem, h.file.clone(), h.export, h.class.clone(), None)
+        };
+        // Store order: the DLC file's exports first, then the base file's.
+        let mut entries: Vec<CensusEntry> = Vec::new();
+        for file in [install.0.join(DLC_FILE), install.0.join(BASE_FILE)] {
+            for p in &tool.paths {
+                for h in p.holders.iter().filter(|h| h.file == file) {
+                    let holder = owner(h);
+                    match entries.iter_mut().find(|e| e.path == p.path) {
+                        Some(e) => e.holders.push(holder),
+                        None => entries.push(CensusEntry::new(p.path.clone(), vec![holder])),
+                    }
+                }
+            }
+        }
+        // Decoys: a map and a stray package holding the manufacturer as another class, listed first.
+        for e in entries.iter_mut().filter(|e| e.path == ALPHA) {
+            e.holders.insert(
+                0,
+                Owner::new(
+                    "Syn_Map".into(),
+                    decoy_map.clone(),
+                    1,
+                    "WillowGame.Odd".into(),
+                    None,
+                ),
+            );
+            e.holders.insert(
+                1,
+                Owner::new(
+                    "SynEngine".into(),
+                    decoy_pkg.clone(),
+                    1,
+                    "Engine.Odd".into(),
+                    None,
+                ),
+            );
+        }
+        census.entries = entries;
+        let base = Package::load(&install.0.join(BASE_FILE)).unwrap();
+        for (path, class) in &tool.defaults {
+            let export = base.find_export(path).unwrap().unwrap();
+            let h = Holder::new(base.source.clone(), class.clone(), export);
+            census
+                .class_defaults
+                .push(CensusEntry::new(path.clone(), vec![owner(&h)]));
+        }
+        census
+    }
+
+    #[test]
+    fn the_store_census_in_the_tools_order_gives_the_same_bytes() {
+        let install = Install::new("storeorder");
+        let tool = install.registry().to_json();
+        let input = CensusInput::from_store(store_census(&install), &install.0);
+        assert_eq!(input, install.census());
+        assert_eq!(build_from_census(input, "Game").to_json(), tool);
+    }
+
+    #[test]
+    fn a_path_exported_twice_in_one_file_reads_its_last_export() {
+        // weapon_recipe.Package.index keeps the last export of a path; the census lists both, first one first.
+        let mut p = Syn::default();
+        p.add(
+            "GD_Dup.Gestalt_A",
+            "GearboxFramework.GestaltSkeletalMeshDefinition",
+            vec![],
+        );
+        p.add(
+            "GD_Dup.Gestalt_B",
+            "GearboxFramework.GestaltSkeletalMeshDefinition",
+            vec![],
+        );
+        p.add(
+            "GD_Dup.Def",
+            "WillowGame.ShieldDefinition",
+            vec![("GestaltMesh", r("GD_Dup.Gestalt_A"))],
+        );
+        p.add(
+            "GD_Dup.Def",
+            "WillowGame.ShieldDefinition",
+            vec![("GestaltMesh", r("GD_Dup.Gestalt_B"))],
+        );
+        let dir =
+            std::env::temp_dir().join(format!("ow-items-registry-dup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join(BASE_FILE);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, p.build()).unwrap();
+        let root = std::path::absolute(&dir).unwrap();
+        let pkg = Package::load(&root.join(BASE_FILE)).unwrap();
+        let mut input = CensusInput::new(root.clone());
+        let mut seen: Vec<String> = Vec::new();
+        for i in 1..=pkg.exports.len() as i32 {
+            let path = pkg.path_of(i).unwrap();
+            let class = pkg.path_of(pkg.object(i).unwrap().class).unwrap();
+            let h = Holder::new(pkg.source.clone(), class, i);
+            match seen.iter().position(|s| *s == path) {
+                Some(at) => input.paths[at].holders.push(h),
+                None => {
+                    seen.push(path.clone());
+                    input.paths.push(PathHolders::new(path, vec![h]));
+                }
+            }
+        }
+        let reg = build_from_census(input, "Game");
+        let def = reg.tree().at("definitions").at("GD_Dup.Def");
+        assert_eq!(def.at("gestalt").as_str(), Some("GD_Dup.Gestalt_B"));
+        assert_eq!(reg.report().duplicate_export_paths, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_store_census_is_not_there_yet() {
-        // Flips when DefStore::census() lands (W3-DEFS contract fix): build_registry then runs on the store.
+        // Flips when the body of DefStore::census() lands (W3-DEFS): build_registry then runs on the store.
         let install = Install::new("store");
         let mode = ow_core::ParityMode::Off;
         let mut defs =

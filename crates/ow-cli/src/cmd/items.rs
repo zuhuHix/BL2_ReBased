@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn the_store_census_is_not_there_yet() {
-        // Flips when DefStore::census() lands (W3-DEFS contract fix).
+        // Flips when the body of DefStore::census() lands (W3-DEFS).
         let dir = std::env::temp_dir().join(format!("ow-cli-items-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let line = args(&["--item-registry", "--cooked", &dir.to_string_lossy()]);
