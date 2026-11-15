@@ -10,7 +10,7 @@ use ow_package::testkit::{PackageBuilder, ints};
 
 /// The class package: `Core.Object`, `Core.Component`, struct `Pair { A, Label }`, enum `EKind`, and class `Thing`
 /// with `ClipSize`, `Damage`, `Next` (a `Thing`), `Pair`, `Slots[3]`, `List` (ints) and `Kind` (an `EKind`); its
-/// default object sets `ClipSize` 1.
+/// default object sets `ClipSize` 1 and `List` [7, 8].
 fn core() -> Vec<u8> {
     let mut d = Declarations::new(&["Int", "Float", "Object", "Struct", "Array", "Name", "Byte"]);
     let object = d.cls("Object", 0);
@@ -39,6 +39,7 @@ fn core() -> Vec<u8> {
     d.prop("Byte", thing, "Kind", kind);
     let mut payload = ints(&[0]);
     payload.extend(d.p.int_tag("ClipSize", 1));
+    payload.extend(d.p.array_tag("List", 2, &ints(&[7, 8])));
     payload.extend_from_slice(&d.none);
     d.p.add_export(thing, "Default__Thing", payload);
     d.build()
@@ -1008,9 +1009,24 @@ fn a_live_capture_skips_an_empty_value_for_a_property_the_export_does_not_tag() 
         (status.applied, status.pending, status.failed.len()),
         (4, 0, 0)
     );
-    // Not tagged by Part_B: the inherited values stay (ClipSize 1 from the class default).
+    // Not tagged by Part_B: the inherited values stay, ClipSize 1 and the non-empty List [7, 8] of the class default:
+    // the capture's `[]` does not overwrite it.
     assert_eq!(t.read(b, "ClipSize"), Value::Int(1));
-    assert_eq!(t.read(b, "List"), Value::array(vec![]));
+    assert_eq!(
+        t.read(b, "List"),
+        Value::array(vec![Value::Int(7), Value::Int(8)])
+    );
+    let list = t.key("List");
+    assert_eq!(
+        t.defs.origin(
+            b,
+            PropAddr {
+                prop: list,
+                index: 0
+            }
+        ),
+        ValueOrigin::Cooked
+    );
     let clip = t.key("ClipSize");
     assert_eq!(
         t.defs.origin(
@@ -1079,14 +1095,38 @@ fn a_broken_outer_chain_hides_only_the_exports_after_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The output folder of the real-game checks, `OW_DEFS_LOCAL_OUT`, refused unless one of its path components is
-/// `local` (the ignored folder): what they write is game data (AGENTS.md rule 1).
+/// The output folder of the real-game checks, `OW_DEFS_LOCAL_OUT`, refused unless it lies inside this workspace's own
+/// ignored `local/` folder (the workspace root is two levels above `CARGO_MANIFEST_DIR`): what they write is game data
+/// (AGENTS.md rule 1). The path is resolved through its nearest existing ancestor, and a `..` in the rest is refused.
 fn local_out() -> PathBuf {
     let out = PathBuf::from(std::env::var("OW_DEFS_LOCAL_OUT").expect("OW_DEFS_LOCAL_OUT"));
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let local = std::fs::canonicalize(workspace.join("local"))
+        .expect("the workspace's local/ folder exists (it holds the real-game outputs)");
+    let absolute = std::path::absolute(&out).expect("an absolute form of OW_DEFS_LOCAL_OUT");
+    let mut existing = absolute.as_path();
+    let mut rest = Vec::new();
+    while !existing.exists() {
+        rest.push(
+            existing
+                .file_name()
+                .expect("a path below an existing folder"),
+        );
+        existing = existing.parent().expect("a path below an existing folder");
+    }
+    let mut resolved = std::fs::canonicalize(existing).unwrap();
+    for name in rest.iter().rev() {
+        assert!(
+            *name != "..",
+            "OW_DEFS_LOCAL_OUT holds '..': {}",
+            out.display()
+        );
+        resolved.push(name);
+    }
     assert!(
-        out.components()
-            .any(|c| c.as_os_str().eq_ignore_ascii_case("local")),
-        "OW_DEFS_LOCAL_OUT must be under the ignored local/ folder: {}",
+        resolved.starts_with(&local),
+        "OW_DEFS_LOCAL_OUT must be inside the workspace's local/ folder ({}): {}",
+        local.display(),
         out.display()
     );
     out

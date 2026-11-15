@@ -7,9 +7,10 @@
 //! and edge paths the C++ code has. `tests/runtime_test.py` runs only `--resolve`, `--scene-records` and `--payload`,
 //! so none of its cases is this lane's.
 //!
-//! Until the W3-DEFS body lands, `DefStore::class_default` answers `NotYet`, so every call here passes its object:
-//! one made with `Vm::instantiate` (zero slots, no class default object). The cases that need a class default object
-//! (a call with no object, `Class.static`, `New`) assert that `NotYet`. The 0x5F let runs through W3-ATTREFFECTS'
+//! Most calls here pass their own object, one made with `Vm::instantiate` (zero slots, no class default object). The
+//! cases that need a class default object (a call with no object, `Class.static`, `New`) get it from
+//! `DefStore::class_default`, which answers since the W3-DEFS body landed;
+//! `class_defaults_come_from_the_definition_store` asserts their results. The 0x5F let runs through W3-ATTREFFECTS'
 //! `ow_attr::registry::let_base` with `vm_test.py`'s expected values.
 
 use std::path::PathBuf;

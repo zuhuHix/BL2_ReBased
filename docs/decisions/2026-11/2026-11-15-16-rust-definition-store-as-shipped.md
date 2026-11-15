@@ -109,6 +109,11 @@ records how the store does what section 3.4 says, and what was checked.
   and W3-ATTREVAL's test of an unloaded definition with an empty store now expects the contract's heap error
   (`crates/ow-attr/src/value_resolvers/tests.rs`, granted): that store did not make the object, so `ensure_loaded`
   leaves it, and reading its slots fails with `SlotMissing`.
+- **Resolved for decision 2026-11-15-14.** Its `vm_test.py` comparison counted 37 of 64 command lines printing
+  `DefStore::class_default`'s `NotYet`. That `NotYet` is gone: the store builds class default objects, so `--self`,
+  object-less calls, `Class.static` and `New` run (`ow-vm` `class_defaults_come_from_the_definition_store`), and
+  `tests/vm_test.py` on the Rust binary now passes its class-default cases and stops first at `MakePair` (struct
+  defaults), one of the four differences decision 14 lists.
 - **Open.**
   - Load cost grows with the heap: each load instantiates into a new object and frees it after moving its slots into
     the handle (`ObjectSpace::free`), and the free walks every live object and every struct default
