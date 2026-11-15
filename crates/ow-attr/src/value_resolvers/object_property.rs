@@ -14,8 +14,10 @@
 //! UNVERIFIED.
 //!
 //! A context whose class chain has no property of that name is not read (the record says what happens for a
-//! property that is not an attribute, not for a missing one): `NotYet { NotRead }`. A stack attribute without its
-//! companions is the engine's "Modifier stack not found" data bug: `BadData`. Status: UNVERIFIED.
+//! property that is not an attribute, not for a missing one): `NotYet { NotRead }`. The record gives "Modifier stack
+//! not found" (a data bug) only for add and remove, so a value read of a stack attribute without its companions
+//! returns the stored number; the base read and `storage`, which need the companions, are `BadData` then. Status:
+//! UNVERIFIED.
 
 use ow_core::NotYet;
 use ow_object::ids::{ObjRef, PropAddr, PropId};
@@ -33,7 +35,8 @@ pub(crate) struct ObjectProperty;
 enum Target {
     Stack {
         prop: PropId,
-        companions: AttrCompanions,
+        /// `None`: the companions could not be found (the value is still readable).
+        companions: Option<AttrCompanions>,
         kind: NumKind,
     },
     Plain {
@@ -79,12 +82,9 @@ fn target(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<Targ
     })?;
     let what = space.names.text(property).into_owned();
     if decl.is_stack_attribute() {
-        let companions = decl.attr.ok_or_else(|| AttrError::BadData {
-            reason: format!("Modifier stack not found for attribute {what}").into(),
-        })?;
         Ok(Target::Stack {
             prop,
-            companions,
+            companions: decl.attr,
             kind: num_kind(&decl.kind, &what)?,
         })
     } else if decl.is_plain_attribute() {
@@ -95,6 +95,25 @@ fn target(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<Targ
     } else {
         Ok(Target::Neither)
     }
+}
+
+/// The companions a base read or a storage needs; their absence is the engine's "Modifier stack not found" data
+/// bug.
+fn need(
+    cx: &mut EvalCx<'_>,
+    prop: PropId,
+    companions: Option<AttrCompanions>,
+) -> Result<AttrCompanions, AttrError> {
+    companions.ok_or_else(|| {
+        let space = cx.world.parts().space;
+        let what = match space.classes.decl(prop) {
+            Some(d) => space.names.text(d.name).into_owned(),
+            None => format!("{prop:?}"),
+        };
+        AttrError::BadData {
+            reason: format!("Modifier stack not found for attribute {what}").into(),
+        }
+    })
 }
 
 fn read(cx: &mut EvalCx<'_>, context: ObjRef, prop: PropId) -> Result<f32, AttrError> {
@@ -129,7 +148,12 @@ impl ValueResolver for ObjectProperty {
         cx: &mut EvalCx<'_>,
     ) -> Result<f32, AttrError> {
         match target(cx, resolver, context)? {
-            Target::Stack { companions, .. } => read(cx, context, companions.base),
+            Target::Stack {
+                prop, companions, ..
+            } => {
+                let companions = need(cx, prop, companions)?;
+                read(cx, context, companions.base)
+            }
             Target::Plain { prop, .. } => read(cx, context, prop),
             Target::Neither => Ok(0.0),
         }
@@ -144,10 +168,12 @@ impl ValueResolver for ObjectProperty {
     ) -> Result<Option<Storage>, AttrError> {
         Ok(match target(cx, resolver, context)? {
             Target::Stack {
-                companions, kind, ..
+                prop,
+                companions,
+                kind,
             } => Some(Storage::Stack {
                 owner: context,
-                companions,
+                companions: need(cx, prop, companions)?,
                 kind,
             }),
             Target::Plain { prop, kind } => Some(Storage::Plain {

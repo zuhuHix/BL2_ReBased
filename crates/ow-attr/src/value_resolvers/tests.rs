@@ -199,18 +199,51 @@ fn the_live_health_base_through_a_definition() {
         }
         assert_eq!(bits[0], bits[1], "level {level}");
     }
+    // The same bits under both forms at every level 1..80, through the definition (one world, the level rewritten).
+    let mut fx = Fx::new();
+    let (level_attr, pri) = player_level(&mut fx, 1);
+    let m = fx.constant_attr("Att_UniversalBalanceMultiplier_HealthShields", 80.0);
+    let l = fx.constant_attr("Att_UniversalBalanceScaler", 1.13);
+    let (m, l, p, o) = (
+        fx.of_attr(m),
+        fx.of_attr(l),
+        fx.of_attr(level_attr),
+        fx.k(0.0),
+    );
+    let f = fx.formula(m, l, p, o);
+    let r = fx.range(Some(20.0), None);
+    let def = fx.definition(vec![("ValueFormula", f), ("RangeRestriction", r)]);
+    let exp_level = PropAddr::scalar(fx.w.space.prop(fx.c.pri, "ExpLevel").unwrap());
+    for level in 1..=80 {
+        fx.w.space
+            .write(pri, exp_level, Value::Int(black_box(level)))
+            .unwrap();
+        let single = eval_in(&mut fx, of_def(def), None, None, forms(PowForm::Single)).unwrap();
+        let double = eval_in(
+            &mut fx,
+            of_def(def),
+            None,
+            None,
+            forms(PowForm::DoubleThenSingle),
+        )
+        .unwrap();
+        assert_eq!(single.to_bits(), double.to_bits(), "level {level}");
+    }
 }
 
 #[test]
 fn the_invented_health_pool_of_mission_script_test() {
     // mission_script_test.py swap 7: 10 x 1.5 ^ PlayerExperienceLevel: 50.625 (4), 75.9375 (5), 113.90625 (6).
-    for (level, expected) in [(4, 50.625f32), (5, 75.9375), (6, 113.90625)] {
-        let mut fx = Fx::new();
-        let (p, _) = player_level(&mut fx, level);
-        let (m, l, p, o) = (fx.k(10.0), fx.k(1.5), fx.of_attr(p), fx.k(0.0));
-        let f = fx.formula(m, l, p, o);
-        let def = fx.definition(vec![("ValueFormula", f)]);
-        assert_eq!(eval(&mut fx, of_def(def), None), Ok(expected));
+    for pow in FORMS {
+        for (level, expected) in [(4, 50.625f32), (5, 75.9375), (6, 113.90625)] {
+            let mut fx = Fx::new();
+            let (p, _) = player_level(&mut fx, level);
+            let (m, l, p, o) = (fx.k(10.0), fx.k(1.5), fx.of_attr(p), fx.k(0.0));
+            let f = fx.formula(m, l, p, o);
+            let def = fx.definition(vec![("ValueFormula", f)]);
+            let got = eval_in(&mut fx, of_def(def), None, None, forms(pow));
+            assert_eq!(got, Ok(expected), "{pow:?} level {level}");
+        }
     }
 }
 
@@ -1299,4 +1332,64 @@ fn player_skill_reads_the_grade_through_the_typed_engine_query() {
         .value_of(none, None, None, &mut EvalCx::new(&mut fx.w))
         .unwrap_err();
     assert_eq!(missing(e), Missing::NotRead);
+}
+
+#[test]
+fn a_shared_sub_definition_past_the_work_budget_is_bad_data() {
+    // Each definition names the previous one in all four formula terms: 4^n evaluations at depth n. Twelve levels
+    // (about 5.6e6 steps if nothing stopped them) stay far under the depth cap and far over the work budget.
+    let mut fx = Fx::new();
+    let mut shared: Option<ObjRef> = None;
+    for _ in 0..12 {
+        let term = |fx: &mut Fx| match shared {
+            Some(d) => fx.of_def(d),
+            None => fx.k(1.0),
+        };
+        let (m, l, p, o) = (term(&mut fx), term(&mut fx), term(&mut fx), term(&mut fx));
+        let f = fx.formula(m, l, p, o);
+        shared = Some(fx.definition(vec![("ValueFormula", f)]));
+    }
+    let e = eval(&mut fx, of_def(shared.unwrap()), None).unwrap_err();
+    assert!(is_bad_data(&e, "more than 10000 steps"), "{e:?}");
+    // The budget is per outermost step: a small shared chain still evaluates, and the count starts again.
+    let mut small: Option<ObjRef> = None;
+    for _ in 0..3 {
+        let term = |fx: &mut Fx| match small {
+            Some(d) => fx.of_def(d),
+            None => fx.k(1.0),
+        };
+        let (m, l, p, o) = (term(&mut fx), term(&mut fx), term(&mut fx), term(&mut fx));
+        let f = fx.formula(m, l, p, o);
+        small = Some(fx.definition(vec![("ValueFormula", f)]));
+    }
+    // 1 x (1 ^ 1 + 1) = 2, then 2 x (2 ^ 2 + 2) = 12, then 12 x (12 ^ 12 + 12).
+    let expected = 12.0f32 * (8_916_100_448_256.0f32 + 12.0);
+    assert_eq!(eval(&mut fx, of_def(small.unwrap()), None), Ok(expected));
+}
+
+#[test]
+fn a_stack_attribute_without_companions_reads_its_value_only() {
+    // NATIVE_ATTRIBUTES.md section 3 gives "Modifier stack not found" for add and remove only: the value read takes
+    // the stored number; the base read and the storage need the companions.
+    let mut fx = Fx::new();
+    let loose = fx.obj(fx.c.unlinked, "Loose", vec![("Loose", Value::Float(6.5))]);
+    let attr = fx.property_attr("Loose", loose, "Loose");
+    let sys = system();
+    let mut cx = EvalCx::new(&mut fx.w);
+    let v = sys
+        .value_of(attr, None, None, &mut cx)
+        .unwrap()
+        .map(|v| v.value);
+    assert_eq!(v, Some(6.5));
+    let e = sys.base_value_of(attr, None, None, &mut cx).unwrap_err();
+    assert!(
+        is_bad_data(&e, "Modifier stack not found for attribute Loose"),
+        "{e:?}"
+    );
+    let r = fx.property_resolver("Loose");
+    let res = sys.value_resolver(&fx.w.space, r).unwrap();
+    let e = res
+        .storage(&sys, r, loose, &mut EvalCx::new(&mut fx.w))
+        .unwrap_err();
+    assert!(is_bad_data(&e, "Modifier stack not found"), "{e:?}");
 }
