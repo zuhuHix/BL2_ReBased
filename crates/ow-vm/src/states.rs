@@ -160,6 +160,20 @@ impl From<ReadError> for StateBodyError {
 /// Reads the body of State export `index` of `package`: the struct part and the state part of the class body layout
 /// (see [`StateBody`]), with every check the class body reader makes for those parts, and nothing after them.
 pub fn read_state_body(package: &Package, index: i32) -> Result<StateBody, StateBodyError> {
+    read_body(package, index, true)
+}
+
+/// Reads the struct part and the state part of Class export `index`: the layout `ow_object::class_body` reads (the
+/// C++ `decodeClassBody`, checked on every Class export of the nine code packages), stopping after the state flags,
+/// before the function map and the class part. `flags` are the class's own state flags.
+pub fn read_class_state_part(package: &Package, index: i32) -> Result<StateBody, StateBodyError> {
+    read_body(package, index, false)
+}
+
+/// `state_export`: a State export (a plain object's net index and an empty tagged-property block first, the
+/// function map and the end checked); otherwise a Class export (the class body's first word first, nothing read
+/// after the state flags).
+fn read_body(package: &Package, index: i32, state_export: bool) -> Result<StateBody, StateBodyError> {
     let exported = usize::try_from(index)
         .ok()
         .filter(|&i| i >= 1)
@@ -178,7 +192,7 @@ pub fn read_state_body(package: &Package, index: i32) -> Result<StateBody, State
     // Base object part: the net index (the class body's first word), then the tagged properties, which must be
     // empty (only the `None` terminator). A State export with tagged properties is refused, not walked.
     r.i32()?; // net index (the class body's "unknown reference"), not range checked
-    if tables::read_name(&mut r, &package.names)? != "None" {
+    if state_export && tables::read_name(&mut r, &package.names)? != "None" {
         return Err(StateBodyError::TaggedProperties);
     }
     // Struct part (as `ow_object::class_body`).
@@ -208,6 +222,17 @@ pub fn read_state_body(package: &Package, index: i32) -> Result<StateBody, State
     let probe_mask = r.u32()?;
     let label_table = u16_le(&mut r)?;
     let flags = u16_le(&mut r)?;
+    if !state_export {
+        return Ok(StateBody {
+            super_ref,
+            memory_size,
+            script_offset,
+            script_size,
+            probe_mask,
+            label_table,
+            flags,
+        });
+    }
     let count = r.i32()?;
     if !(0..=MAX_COUNT).contains(&count) {
         return Err(StateBodyError::CountOutOfRange);
@@ -395,6 +420,8 @@ struct Running {
     object: ObjRef,
     state: StateKey,
     stop: Option<Stop>,
+    /// A `PushState` ran on the object during this run (the position it saved may sit inside a loop).
+    pushed: bool,
 }
 
 /// The state frames, the states read so far and the state code running (a VM service, added on first use).
@@ -750,8 +777,9 @@ fn changes(vm: &mut Vm, o: ObjRef) -> Result<u64, VmError> {
 }
 
 /// The function `name` as an event sent to `o` sees it: the active state's own functions, then its parents', then
-/// the class chain (the record's function lookup).
-fn find_event(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, VmError> {
+/// the class chain (the record's function lookup). This is the Off-mode lookup over this module's state frame;
+/// [`send_world_event`] also gives the Reference one.
+pub fn find_event(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, VmError> {
     let class = vm.space.heap.get(o)?.class;
     let node = frame(vm, o, |fr| fr.node)?;
     let lower = name.to_ascii_lowercase();
@@ -765,24 +793,54 @@ fn find_event(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<FuncId>, VmEr
     vm.find_method(class, name, None)
 }
 
+/// Sends event `name` to `o` with `args` for the world (the destroy sequence, the actor tick); whether it was sent.
+/// Outside `ParityMode::Reference` it goes through [`find_event`] and, for a probe event, the frame's mask (a probe
+/// id the record does not name is `NotYet`). Under Reference it is the C++ lookup by the heap's state name, with no
+/// mask. A missing event is silent (`false`).
+pub fn send_world_event(
+    vm: &mut Vm,
+    o: ObjRef,
+    name: &str,
+    args: Vec<Value>,
+) -> Result<bool, VmError> {
+    if vm.parity == ParityMode::Reference {
+        let (class, state) = {
+            let object = vm.space.heap.get(o)?;
+            (object.class, object.state)
+        };
+        let Some(f) = vm.find_method(class, name, state)? else {
+            return Ok(false);
+        };
+        vm.call(f, Some(o), args)?;
+        return Ok(true);
+    }
+    let gate = match probe(name) {
+        Probe::Bit(bit) => Some(bit),
+        Probe::Unread => return Err(unread_probe(name)),
+        Probe::Other => None,
+    };
+    send_event(vm, o, name, args, gate)
+}
+
 /// Sends event `name` to `o` with `args`, if the object defines it and, for a probe event (`gate`), its frame's mask
-/// has the probe's bit. A missing event is silent.
+/// has the probe's bit; whether it was sent. A missing event is silent.
 fn send_event(
     vm: &mut Vm,
     o: ObjRef,
     name: &str,
     args: Vec<Value>,
     gate: Option<u32>,
-) -> Result<(), VmError> {
+) -> Result<bool, VmError> {
     if let Some(bit) = gate
         && frame(vm, o, |fr| fr.probes & bit)? == 0
     {
-        return Ok(());
+        return Ok(false);
     }
-    if let Some(f) = find_event(vm, o, name)? {
-        vm.call(f, Some(o), args)?;
-    }
-    Ok(())
+    let Some(f) = find_event(vm, o, name)? else {
+        return Ok(false);
+    };
+    vm.call(f, Some(o), args)?;
+    Ok(true)
 }
 
 /// The position of label `label` in the code of `node` or of its parents.
@@ -891,9 +949,9 @@ fn goto_state(
         Change::Done => apply_label(vm, o, label, explicit, "GotoState"),
         Change::Superseded => Ok(()),
         Change::NoState => {
-            // None is silent (Auto never gets here); another name was not found. The wording is this port's: the
-            // record says only "a not-found style warning".
-            if target != NameId::NONE {
+            // None and Auto are silent; another name was not found. The wording is this port's: the record says
+            // only "a not-found style warning".
+            if target != NameId::NONE && !is_auto(vm, target) {
                 let class = vm.space.heap.get(o)?.class;
                 let text = vm.space.names.text(target).into_owned();
                 let line = format!(
@@ -907,6 +965,63 @@ fn goto_state(
     }
 }
 
+/// What `Auto` resolves to for an object of `class` (the record: the class itself if it is flagged auto, else the
+/// first state flagged auto, else no state). Which state flag bit means auto is not read, but auto is a bit of the
+/// state flags (this port's reading, UNVERIFIED), so when the class's own state flags and those of every state its
+/// chain declares are all 0 the answer is no state, whatever the bit is (129 of the 166 installed states have flags
+/// 0, decision 2026-11-15-27). Otherwise, or when the class body does not read, `NotYet { NotRead }`.
+fn auto_state(vm: &mut Vm, class: ClassId) -> Result<Option<StateKey>, VmError> {
+    let not_read = |why: &str| -> VmError {
+        NotYet::not_read(
+            format!("GotoState('Auto'): which state flag bit marks an auto state ({why})"),
+            RECORD,
+        )
+        .into()
+    };
+    // Loads the chain's code, so its states are listed.
+    let auto = vm.space.names.intern("Auto");
+    vm.class_declares_state(class, auto)?;
+    let Some((package, export)) = vm.defs.code().key_of(class).map(|k| {
+        let info = vm.defs.code().class(k);
+        (info.package, info.export)
+    }) else {
+        return Err(not_read("the class has no package export"));
+    };
+    let pkg = vm.defs.packages().shared(package);
+    match read_class_state_part(&pkg, export) {
+        Ok(body) if body.flags == 0 => {}
+        Ok(_) => return Err(not_read("the class's own state flags are not 0")),
+        Err(_) => return Err(not_read("the class body's state flags do not read")),
+    }
+    for c in chain(vm, class) {
+        let states: Vec<(PackageId, i32)> = vm
+            .defs
+            .code()
+            .key_of(c)
+            .map(|k| {
+                let info = vm.defs.code().class(k);
+                info.states()
+                    .values()
+                    .map(|s| (info.package, s.export))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (package, export) in states {
+            let pkg = vm.defs.packages().shared(package);
+            match read_state_body(&pkg, export) {
+                Ok(body) if body.flags == 0 => {}
+                Ok(_) => {
+                    return Err(not_read(
+                        "a state of the class chain has state flags that are not 0",
+                    ));
+                }
+                Err(e) => return Err(decode_error(&format!("{}:{export}", pkg.name), &e)),
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// The state change routine (the record's steps 1 to 7; every object has a frame here, so step 1 never fails).
 fn change_state(
     vm: &mut Vm,
@@ -917,14 +1032,11 @@ fn change_state(
 ) -> Result<Change, VmError> {
     // 2. Resolve the target. An unknown name falls back to the class (no state) and the name to None.
     let class = vm.space.heap.get(o)?.class;
-    if is_auto(vm, target) {
-        return Err(NotYet::not_read(
-            "GotoState('Auto'): which State export flag bit marks an auto state",
-            RECORD,
-        )
-        .into());
-    }
-    let new_node = node_for(vm, class, target)?;
+    let new_node = if is_auto(vm, target) {
+        auto_state(vm, class)?
+    } else {
+        node_for(vm, class, target)?
+    };
     let new_name = match new_node {
         Some(k) => loaded(vm, k)?.name,
         None => NameId::NONE,
@@ -1029,10 +1141,19 @@ fn push_state(vm: &mut Vm, o: ObjRef, target: NameId, label: NameId) -> Result<(
     let (current, on_stack) = frame(vm, o, |fr| {
         (fr.node, fr.stack.iter().any(|p| p.node == Some(node)))
     })?;
+    // The record: "if the new state is not the current one: ... then jump to the label". That a push of the current
+    // state does nothing at all, the label jump included, is this port's reading of that sentence (UNVERIFIED).
     if on_stack || current == Some(node) {
         return Ok(());
     }
     send_event(vm, o, "PausedState", Vec::new(), None)?;
+    with(vm, |m| {
+        if let Some(r) = m.running.last_mut()
+            && r.object == o
+        {
+            r.pushed = true;
+        }
+    })?;
     // When state code runs the PushState, its position is already the statement after it.
     frame(vm, o, |fr| {
         let entry = Pushed {
@@ -1071,7 +1192,7 @@ fn pop_state_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// `Object.IsInState(TestState, bTestStateStack)` outside Reference: the active state or one of its parents, or
-/// with `bTestStateStack` a pushed state; false without a state frame.
+/// with `bTestStateStack` a pushed state. The frame is made first, as the other state natives do.
 pub(crate) fn is_in_state_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(this) = c.this else {
         return Ok(Value::Bool(false));
@@ -1079,6 +1200,9 @@ pub(crate) fn is_in_state_native(c: &mut NativeCall<'_>) -> Result<Value, VmErro
     let test = name_arg(c, 0)?;
     let stack = c.has(1) && c.arg(1)?.truth(&c.vm.space.names);
     let vm = &mut *c.vm;
+    // As GotoState, PushState, Enable and Disable do: a state name set before the frame existed is resolved first,
+    // so IsInState and GetStateName agree whatever the order of the calls.
+    ensure_frame(vm, this)?;
     let Some((node, pushed)) = with(vm, |m| {
         m.frames.get(&this).map(|fr| {
             let pushed: Vec<StateKey> = fr.stack.iter().filter_map(|p| p.node).collect();
@@ -1152,7 +1276,8 @@ pub fn probe_enabled(vm: &mut Vm, object: ObjRef, name: &str) -> Result<bool, Vm
     }
 }
 
-/// Drops `object`'s state frame (for the world's destroy; a destroyed object's state code does not run anyway).
+/// Drops `object`'s state frame. Every path that frees objects should call it (the world's destroy, and the sweep's
+/// `release_unreferenced`): a frame kept for a freed handle is never read again, but it holds memory.
 pub fn forget(vm: &mut Vm, object: ObjRef) -> Result<(), VmError> {
     with(vm, |m| {
         m.frames.remove(&object);
@@ -1224,6 +1349,7 @@ pub fn process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmEr
                 object,
                 state: pos.state,
                 stop: None,
+                pushed: false,
             })
         })?;
         let ran = vm.call(function, Some(object), Vec::new());
@@ -1297,9 +1423,19 @@ pub(crate) fn at_statement(vm: &mut Vm, o: ObjRef, pc: usize) -> Result<(), VmEr
 }
 
 /// The interpreter's seam, after each statement of `o`'s state code: whether the run ends here (the code position
-/// was set, the object was destroyed, or a latent action is pending). A latent call inside a `foreach` (`no_loop`
-/// false) is `NotYet`: how the loop survives the wait is not read.
+/// was set, the object was destroyed, or a latent action is pending). A latent call or a `PushState` inside a
+/// `foreach` (`no_loop` false) is `NotYet`: how the loop survives the wait or the push is not read.
 pub(crate) fn yields(vm: &mut Vm, o: ObjRef, no_loop: bool) -> Result<bool, VmError> {
+    let pushed = with(vm, |m| {
+        m.running.last().is_some_and(|r| r.object == o && r.pushed)
+    })?;
+    if pushed && !no_loop {
+        return Err(NotYet::not_read(
+            "a PushState inside a foreach of state code: how the loop survives until the PopState",
+            RECORD,
+        )
+        .into());
+    }
     let destroyed = vm.space.heap.get(o).map_or(true, |x| x.destroyed);
     let (moved, latent) = with(vm, |m| {
         m.frames
@@ -1374,9 +1510,14 @@ pub(crate) fn running_code_of(vm: &mut Vm, o: ObjRef) -> Result<bool, VmError> {
     with(vm, |m| m.running.last().is_some_and(|r| r.object == o))
 }
 
-/// `o`'s latent action.
-pub(crate) fn latent_of(vm: &mut Vm, o: ObjRef) -> Result<Option<LatentAction>, VmError> {
+/// `o`'s pending latent action (none without a state frame).
+pub fn latent_of(vm: &mut Vm, o: ObjRef) -> Result<Option<LatentAction>, VmError> {
     with(vm, |m| m.frames.get(&o).and_then(|fr| fr.latent))
+}
+
+/// Whether `o` waits on a latent action (its state code does not continue until the poll clears it).
+pub fn latent_pending(vm: &mut Vm, o: ObjRef) -> Result<bool, VmError> {
+    Ok(latent_of(vm, o)?.is_some())
 }
 
 /// Sets `o`'s latent action.
@@ -1414,6 +1555,7 @@ mod tests {
     use ow_defs::identity::IdentityPolicy;
     use ow_object::heap::ObjectSpace;
     use ow_package::testkit::script::{Asm, CPF_OPT, FunctionSpec, Param, ScriptToy};
+    use ow_package::testkit::reflect::{ClassBodySpec, class_body};
     use ow_package::testkit::{Export, ints};
 
     use super::*;
@@ -1477,6 +1619,18 @@ mod tests {
     /// A State export of `owner` with parent `parent` (0 for none) and code `code` (a body and its label table
     /// offset), in the layout [`read_state_body`] reads.
     fn state(t: &mut ScriptToy, owner: i32, name: &str, parent: i32, code: Option<&(Asm, u16)>) -> i32 {
+        state_full(t, owner, name, parent, code, 0)
+    }
+
+    /// [`state`] with state flags `flags`.
+    fn state_full(
+        t: &mut ScriptToy,
+        owner: i32,
+        name: &str,
+        parent: i32,
+        code: Option<&(Asm, u16)>,
+        flags: u16,
+    ) -> i32 {
         let none = t.none;
         let mut payload = ints(&[0]);
         payload.extend_from_slice(&none);
@@ -1492,12 +1646,17 @@ mod tests {
         payload.extend_from_slice(&script);
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&label.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&flags.to_le_bytes());
         payload.extend_from_slice(&ints(&[0]));
         let mut export = Export::new(t.import("State"), name, payload);
         export.outer = owner;
         export.super_ = parent;
         t.p.add_export_with(export)
+    }
+
+    /// A State export of `owner` with no code and state flags `flags`.
+    fn state_flags(t: &mut ScriptToy, owner: i32, name: &str, flags: u16) -> i32 {
+        state_full(t, owner, name, 0, None, flags)
     }
 
     /// An event of `owner` that appends `text` to `Trace` (and, with `keep`, stores its name argument in `Arg`).
@@ -1533,6 +1692,8 @@ mod tests {
             "FloatProperty",
             "BoolProperty",
             "ByteProperty",
+            "IntProperty",
+            "ArrayProperty",
         ]);
         let object = t.class("Object", 0);
         let mut concat = FunctionSpec::new(OPERATOR, "$");
@@ -1601,6 +1762,11 @@ mod tests {
         let mach = t.class("Mach", actor);
         let trace = t.prop("Str", mach, "Trace", 0, 0);
         let arg = t.prop("Name", mach, "Arg", 0, 0);
+        // Items: array<int>, its inner property adopted after the array exists; Item: the loop variable.
+        let inner = t.prop("Int", 0, "ItemsInner", 0, 0);
+        let items = t.prop("Array", mach, "Items", 0, inner);
+        t.p.set_outer(inner, items);
+        let item = t.prop("Int", mach, "Item", 0, 0);
         let ids = Ids { trace, arg };
         for (name, text) in [
             ("PausedState", "Pa;"),
@@ -1744,6 +1910,59 @@ mod tests {
             finish(&mut t, a, &[("Begin", begin)])
         };
         state(&mut t, mach, "R", 0, Some(&code_r));
+
+        // F: Begin: foreach Items(Item) { PushState('Q'); } Stop.
+        let code_f = {
+            let mut a = Asm::new();
+            let begin = a.here();
+            a.stmt().raw(&[0x58]).instance(items).instance(item).raw(&[0]);
+            a.instance(item);
+            let at = a.bytes.len();
+            a.w(0);
+            call_with_name(&mut a, push, name_q);
+            a.stmt().raw(&[0x31]);
+            let end = u16::try_from(a.here()).unwrap();
+            a.stmt().raw(&[0x30]);
+            a.bytes[at..at + 2].copy_from_slice(&end.to_le_bytes());
+            a.stmt().raw(&[0x08]);
+            finish(&mut t, a, &[("Begin", begin)])
+        };
+        state(&mut t, mach, "F", 0, Some(&code_f));
+
+        // X / Y: each one's BeginState goes to the other (no end).
+        let (name_x, name_y) = (t.p.name("X"), t.p.name("Y"));
+        for (name, other) in [("X", name_y), ("Y", name_x)] {
+            let s = state(&mut t, mach, name, 0, None);
+            t.function(
+                s,
+                "BeginState",
+                &[param("Name", "PreviousStateName", 0)],
+                None,
+                &[],
+                &FunctionSpec::new(VIRTUAL, "BeginState"),
+                |_| {
+                    let mut a = Asm::new();
+                    call_with_name(&mut a, goto, other);
+                    a.stmt().return_nothing();
+                    a.end();
+                    Some(a)
+                },
+            );
+        }
+
+        // Plain and Flagged extend Mach with real class bodies whose own state flags are 0; Flagged also declares
+        // a state Z with flags 2.
+        for name in ["Plain", "Flagged"] {
+            let mut body = class_body(&mut t.p, &ClassBodySpec::new(mach, 0, 0));
+            // The state flags follow ten words, the (empty) script, the probe mask and the label table offset.
+            body[46..48].copy_from_slice(&0u16.to_le_bytes());
+            let mut export = Export::new(t.import("Class"), name, body);
+            export.super_ = mach;
+            let class = t.p.add_export_with(export);
+            if name == "Flagged" {
+                state_flags(&mut t, class, "Z", 2);
+            }
+        }
 
         let remote = t.class("Remote", mach);
         t.prop("Byte", remote, "Role", 0, 0);
@@ -2038,7 +2257,29 @@ mod tests {
     }
 
     #[test]
-    fn goto_state_auto_is_not_read_yet() {
+    fn goto_state_auto_is_no_state_when_every_candidate_state_flag_is_0() {
+        let mut r = start(ParityMode::Off);
+        let o = r.object("Core.Plain");
+        r.goto(o, &["A"]);
+        r.goto(o, &["Auto"]);
+        assert_eq!(r.trace(o), "bA;eA;", "EndState(None) on A, no BeginState");
+        assert_eq!(r.arg(o), "None");
+        assert_eq!(r.state(o), "None");
+        assert!(r.vm.log.is_empty(), "Auto is silent: {:?}", r.vm.log);
+    }
+
+    #[test]
+    fn goto_state_auto_is_not_read_yet_when_a_candidate_state_flag_is_set() {
+        let mut r = start(ParityMode::Off);
+        let o = r.object("Core.Flagged");
+        let auto = r.name("Auto");
+        let f = r.vm.find_function("Core.Object.GotoState").unwrap();
+        assert_eq!(not_yet(r.vm.call(f, Some(o), vec![auto])).missing, Missing::NotRead);
+    }
+
+    #[test]
+    fn goto_state_auto_is_not_read_yet_when_the_class_body_does_not_read() {
+        // Mach has the testkit's 16-byte stand-in class body.
         let mut r = start(ParityMode::Off);
         let m = r.mach();
         let auto = r.name("Auto");
@@ -2158,6 +2399,218 @@ mod tests {
         r.vm.space.write(o, PropAddr::scalar(role), Value::Byte(3)).unwrap();
         r.step(o);
         assert_eq!(r.trace(o), "bA;1");
+    }
+
+    #[test]
+    fn is_in_state_and_get_state_name_agree_on_a_state_set_before_the_frame() {
+        let mut r = start(ParityMode::Off);
+        // A declared state written into the heap before any state native ran: IsInState resolves it first.
+        let m = r.mach();
+        let a = r.vm.space.names.intern("A");
+        r.vm.space.heap.get_mut(m).unwrap().state = Some(a);
+        assert!(r.in_state(m, "A", false));
+        let got = r.call("Core.Object.GetStateName", m, vec![]).unwrap();
+        assert_eq!(got, r.name("A"));
+        // An undeclared one is dropped by the frame: IsInState and GetStateName then both say no state.
+        let n = r.mach();
+        let nope = r.vm.space.names.intern("Nope");
+        r.vm.space.heap.get_mut(n).unwrap().state = Some(nope);
+        assert!(!r.in_state(n, "Nope", false));
+        let got = r.call("Core.Object.GetStateName", n, vec![]).unwrap();
+        assert_eq!(got, Value::Name(NameId::NONE));
+    }
+
+    #[test]
+    fn state_changes_that_never_settle_give_the_typed_depth_error() {
+        // X's BeginState goes to Y, Y's to X: the call depth limit, on the VM's stack-sized thread.
+        let message = crate::interp::on_vm_stack(|| {
+            let mut r = start(ParityMode::Off);
+            let m = r.mach();
+            let x = r.name("X");
+            let f = r.vm.find_function("Core.Object.GotoState").unwrap();
+            match r.vm.call(f, Some(m), vec![x]) {
+                Err(VmError::Script { message, .. }) => message,
+                other => format!("unexpected: {other:?}"),
+            }
+        })
+        .unwrap();
+        assert!(message.starts_with("call depth limit reached"), "{message}");
+    }
+
+    #[test]
+    fn a_push_state_inside_a_foreach_of_state_code_is_not_read_yet() {
+        let mut r = start(ParityMode::Off);
+        let m = r.mach();
+        let class = r.vm.space.heap.get(m).unwrap().class;
+        let items = r.vm.space.prop(class, "Items").unwrap();
+        r.vm.space
+            .write(m, PropAddr::scalar(items), Value::array(vec![Value::Int(1)]))
+            .unwrap();
+        r.goto(m, &["F"]);
+        assert_eq!(not_yet(process_state(&mut r.vm, m, DT)).missing, Missing::NotRead);
+    }
+
+    #[test]
+    fn the_world_functions_send_events_and_report_latent_actions() {
+        let mut r = start(ParityMode::Off);
+        let m = r.mach();
+        assert!(!latent_pending(&mut r.vm, m).unwrap());
+        r.goto(m, &["A"]);
+        r.step(m);
+        assert!(latent_pending(&mut r.vm, m).unwrap());
+        assert_eq!(latent_of(&mut r.vm, m).unwrap(), Some(LatentAction::Sleep));
+        // A state event through the state chain, a missing one, a gated probe, a probe the record does not name.
+        assert!(find_event(&mut r.vm, m, "EndState").unwrap().is_some());
+        let b = r.name("B");
+        assert!(send_world_event(&mut r.vm, m, "PausedState", vec![]).unwrap());
+        assert!(!send_world_event(&mut r.vm, m, "NoSuchEvent", vec![]).unwrap());
+        let end = r.name("EndState");
+        r.call("Core.Object.Disable", m, vec![end]).unwrap();
+        assert!(!send_world_event(&mut r.vm, m, "EndState", vec![b]).unwrap());
+        assert_eq!(r.trace(m), "bA;1Pa;");
+        assert_eq!(
+            not_yet(send_world_event(&mut r.vm, m, "Bump", vec![])).missing,
+            Missing::NotRead
+        );
+        forget(&mut r.vm, m).unwrap();
+        assert!(!latent_pending(&mut r.vm, m).unwrap());
+    }
+
+    // ---- the installed game (local, ignored) ----------------------------------------------------------------
+
+    type Counts = std::collections::BTreeMap<String, u64>;
+
+    fn bump(n: &mut Counts, key: &str) {
+        *n.entry(key.to_string()).or_insert(0) += 1;
+    }
+
+    /// Counts how a serialized probe mask (restricted to the ten named probes) compares with the probe functions an
+    /// export declares: all of them (`own.0`), and only those with a script (`own.1`).
+    fn compare_mask(n: &mut Counts, kind: &str, serialized: u32, own: (u32, u32)) {
+        let known: u32 = PROBES.iter().map(|&(_, id)| 1u32 << (id - 300)).sum();
+        let s = serialized & known;
+        bump(n, &format!("{kind}: compared"));
+        if serialized & !known != 0 {
+            bump(n, &format!("{kind}: serialized bits outside the ten named probes"));
+        }
+        if s == own.0 {
+            bump(n, &format!("{kind}: serialized == declared probe functions"));
+        }
+        if s == own.1 {
+            bump(n, &format!("{kind}: serialized == declared probe functions with a body"));
+        }
+        if s != own.0 && s != own.1 {
+            bump(n, &format!("{kind}: serialized differs from both"));
+        }
+        if own.0 != own.1 {
+            bump(n, &format!("{kind}: declares a probe function without a body"));
+        }
+    }
+
+    /// The structural check behind the fitted State layout, and the serialized probe masks against the probe
+    /// functions each state and class declares, on the installed code packages (`OW_COOKED`, else the default Steam
+    /// folder). Prints counts only and writes nothing. Run with
+    /// `cargo test -p ow-vm --lib -- --ignored --nocapture installed`.
+    #[test]
+    #[ignore = "reads the installed game"]
+    fn installed_state_exports_meet_the_fitted_layout() {
+        use ow_script::function::{is_function_export, read_function};
+        let cooked = std::env::var("OW_COOKED").unwrap_or_else(|_| {
+            "C:/Program Files (x86)/Steam/steamapps/common/Borderlands 2/WillowGame/CookedPCConsole".to_string()
+        });
+        let mut n = Counts::new();
+        for package in ow_object::reflect::CODE_PACKAGES {
+            let path = std::path::Path::new(&cooked).join(format!("{package}.upk"));
+            let pkg = Package::load(&path).unwrap();
+            let class_of = |i: i32| -> String {
+                match pkg.exports[i as usize - 1].class {
+                    0 => "Class".to_string(),
+                    c if c < 0 => pkg.imports[(-c - 1) as usize].name.clone(),
+                    c => pkg.exports[c as usize - 1].name.clone(),
+                }
+            };
+            // The probe bits of the functions `owner` declares (all of them, and those with a script).
+            let declared = |owner: i32| -> (u32, u32) {
+                let (mut all, mut with_body) = (0, 0);
+                for i in 1..=pkg.exports.len() as i32 {
+                    let e = &pkg.exports[i as usize - 1];
+                    if e.outer != owner || !is_function_export(&pkg, i) {
+                        continue;
+                    }
+                    if let Probe::Bit(bit) = probe(&e.name) {
+                        all |= bit;
+                        if read_function(&pkg, i).is_ok_and(|f| f.has_script()) {
+                            with_body |= bit;
+                        }
+                    }
+                }
+                (all, with_body)
+            };
+            for i in 1..=pkg.exports.len() as i32 {
+                match class_of(i).as_str() {
+                    "State" => {
+                        bump(&mut n, "state: exports");
+                        let Ok(body) = read_state_body(&pkg, i) else {
+                            bump(&mut n, "state: body does not read");
+                            continue;
+                        };
+                        bump(&mut n, "state: body ends at the exact size");
+                        compare_mask(&mut n, "state probe mask", body.probe_mask, declared(i));
+                        if body.script_size == 0 {
+                            continue;
+                        }
+                        let info = FunctionInfo {
+                            index: i,
+                            memory_size: body.memory_size,
+                            script_offset: body.script_offset,
+                            script_size: body.script_size,
+                            ..FunctionInfo::default()
+                        };
+                        let Ok(code) = ow_script::decode::decode(&pkg, &info) else {
+                            bump(&mut n, "state: code does not decode");
+                            continue;
+                        };
+                        bump(&mut n, "state: code decodes");
+                        if body.label_table == NO_LABEL_TABLE {
+                            bump(&mut n, "state: no label table");
+                            continue;
+                        }
+                        let table = u32::from(body.label_table)
+                            .checked_sub(1)
+                            .and_then(|at| code.statement_at.get(&at))
+                            .and_then(|&s| code.statements.get(s))
+                            .filter(|s| s.op == op::LABEL_TABLE);
+                        let Some(table) = table else {
+                            bump(&mut n, "state: label table offset misses");
+                            continue;
+                        };
+                        bump(&mut n, "state: label table offset one past a LabelTable token");
+                        for (_, offset) in &table.labels {
+                            let lands = u32::try_from(*offset)
+                                .is_ok_and(|o| code.statement_at.contains_key(&o));
+                            bump(
+                                &mut n,
+                                if lands {
+                                    "state: label on a statement"
+                                } else {
+                                    "state: label off a statement"
+                                },
+                            );
+                        }
+                    }
+                    "Class" => match read_class_state_part(&pkg, i) {
+                        Ok(body) => {
+                            compare_mask(&mut n, "class probe mask", body.probe_mask, declared(i))
+                        }
+                        Err(_) => bump(&mut n, "class: state part does not read"),
+                    },
+                    _ => {}
+                }
+            }
+        }
+        for (k, v) in &n {
+            println!("{k}: {v}");
+        }
     }
 
     // ---- PushState and PopState -----------------------------------------------------------------------------
