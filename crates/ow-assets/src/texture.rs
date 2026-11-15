@@ -370,7 +370,8 @@ pub const BULK_UNUSED: u32 = 32;
 /// Every flag the importer accepts (8 is accepted and has no effect, as in the C++).
 const BULK_KNOWN: u32 = 1 | 8 | 16 | 32;
 
-/// One decoded mip.
+/// One decoded mip. Not kept yet: the raw DXT block bytes (for a BC1/BC3 upload); fields may be added.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextureMip {
     /// The mip's position among the serialized records.
@@ -392,7 +393,8 @@ impl TextureMip {
     }
 }
 
-/// A texture export with its resident mips.
+/// A texture export with its resident mips. Fields may be added (non-exhaustive) as the host needs them.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextureAsset {
     pub path: String,
