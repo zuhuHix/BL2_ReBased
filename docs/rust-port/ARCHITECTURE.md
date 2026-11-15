@@ -372,9 +372,12 @@ pub type PackageId = u32;                          // index into PackageStore, s
 
 // testkit.rs (feature "test-support"; placeholder W0, real W1-TESTKIT): synthetic packages for Rust tests, rule 9.
 pub struct PackageBuilder { .. }   // header 832/46, names, imports, exports, payloads, the same layout package_test.py writes
-pub fn tag(name: &str, kind: &str, value: &[u8]) -> Vec<u8>;   // the tests/ tag() helpers' byte form
+impl PackageBuilder { pub fn tag(&mut self, name: &str, kind: &str, value: &[u8]) -> Vec<u8>; .. }  // tags need the name
+                                   // table: the tests/ tag() helpers' byte form; tag_detail, tag_full, typed tags too
 pub fn container(data: &[u8], block: usize) -> Vec<u8>;        // a valid LZO container made of literal runs only
-pub fn partial(..) -> Vec<u8>;                                 // a partially compressed package (package_test.py:64-79 shape)
+pub fn partial(builder: &mut PackageBuilder) -> Vec<u8>;       // build_partial(): the package_test.py:64-79 shape
+// testkit/reflect.rs (placeholder; W2-REFLECT): property, struct, class and enum exports, class_body().
+// testkit/script.rs (placeholder; W2-SCRIPT): function exports and the Asm bytecode writer.
 
 // props.rs (W2-PROPS): the serialized tree, references still package-relative.
 pub enum PropValue { Int(i32), Float(f32), Bool(bool), Byte(u8), Enum(String), Name(String), Str(String),

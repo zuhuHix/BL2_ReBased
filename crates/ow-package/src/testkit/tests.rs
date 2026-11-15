@@ -319,6 +319,33 @@ fn behavior_test_growing_names_and_typed_tags() {
     same(&p.build(), BEHAVIOR_PACKAGE);
 }
 
+/// Two of `properties_test.py`'s bad tags (lines 116-125): the raw size -1 header and an array index of -1. The
+/// expected bytes are what those Python expressions produced.
+#[test]
+fn properties_test_bad_tags_with_negative_fields() {
+    let mut p = PackageBuilder::new_empty();
+    p.names_utf16(PROPERTY_NAMES);
+    // fname('Test') + fname('IntProperty') + ints(-1, 0)
+    same(
+        &p.tag_full("Test", 0, "IntProperty", -1, &[], &[]),
+        &["0d000000000000000400000000000000ffffffff00000000"],
+    );
+    // tag('IntProperty', ints(0), index=-1)
+    same(
+        &p.tag_full("Test", -1, "IntProperty", 4, &[], &ints(&[0])),
+        &["0d00000000000000040000000000000004000000ffffffff00000000"],
+    );
+}
+
+#[test]
+fn export_count_and_next_export_follow_the_added_exports() {
+    let mut p = PackageBuilder::new_empty();
+    assert_eq!((p.export_count(), p.next_export()), (0, 1));
+    let reserved = p.next_export();
+    assert_eq!(p.add_export(0, "First", Vec::new()), reserved);
+    assert_eq!((p.export_count(), p.next_export()), (1, 2));
+}
+
 #[test]
 fn none_is_added_last_when_unused() {
     let mut p = PackageBuilder::new_empty();
