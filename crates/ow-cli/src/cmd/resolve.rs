@@ -11,8 +11,7 @@
 //! order the C++ writes them in.
 //!
 //! Lines end in `\n` on every platform. The C++ binary's text-mode streams write `\r\n` on Windows. That difference
-//! is not mirrored here: the parity harness is to normalise line ends (hub decision for wave 2, change pending).
-//! Until it does, a diff line that compares this command's stderr fails on line ends alone.
+//! is not mirrored here: the parity harness reads each CRLF as LF when it compares (decision 2026-11-15-09).
 //!
 //! The command does not depend on the parity mode.
 
