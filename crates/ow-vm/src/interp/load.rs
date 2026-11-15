@@ -550,20 +550,20 @@ pub(crate) fn loaded_for_read(vm: &mut Vm, object: ObjRef, context: &str) -> Res
 
 impl Vm {
     /// The function `name` (any case) as an object of `class` in `state` sees it (C++ `Runtime::findMethod`): from
-    /// `class` up, the state's own function first, then the class's. `state` `None` is the default state. A class
-    /// defined by hand (no package behind it) declares nothing. The code of a class from the packages must be loaded
-    /// (the interpreter loads it before every call on an object of that class; `find_class` loads it too); one that
-    /// is not is an error, not a guess.
+    /// `class` up, the state's own function first, then the class's. `state` `None` is the default state. The code
+    /// of the class and its super classes is loaded first if it is not (a class defined by hand, with no package
+    /// behind it, declares nothing).
     pub fn find_method(
-        &self,
+        &mut self,
         class: ClassId,
         name: &str,
         state: Option<NameId>,
     ) -> Result<Option<FuncId>, VmError> {
+        ensure_class_code(self, class)?;
         let key = name.to_ascii_lowercase();
         let state_key = state.map(|s| self.space.names.text(s).to_ascii_lowercase());
         for c in self.class_chain(class) {
-            let Some(code) = self.class_code(c)? else {
+            let Some(code) = self.code.classes.get(&c) else {
                 continue;
             };
             if let Some(sk) = &state_key
@@ -579,17 +579,16 @@ impl Vm {
     }
 
     /// Whether `class` or a super class declares the state `state` (any case; C++ `Class::states` along the chain).
-    /// The same loading rule as [`Vm::find_method`].
-    pub fn class_declares_state(&self, class: ClassId, state: NameId) -> Result<bool, VmError> {
+    /// Loads the class's code first, as [`Vm::find_method`] does.
+    pub fn class_declares_state(&mut self, class: ClassId, state: NameId) -> Result<bool, VmError> {
+        ensure_class_code(self, class)?;
         let key = self.space.names.text(state).to_ascii_lowercase();
-        for c in self.class_chain(class) {
-            if let Some(code) = self.class_code(c)?
-                && code.states.contains_key(&key)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(self.class_chain(class).iter().any(|c| {
+            self.code
+                .classes
+                .get(c)
+                .is_some_and(|code| code.states.contains_key(&key))
+        }))
     }
 
     fn class_chain(&self, class: ClassId) -> Vec<ClassId> {
@@ -607,27 +606,5 @@ impl Vm {
                 .and_then(|l| l.super_class());
         }
         chain
-    }
-
-    /// The loaded code of `class`; `None` for a class defined by hand; an error for a package class whose code
-    /// is not loaded.
-    fn class_code(&self, class: ClassId) -> Result<Option<&ClassCode>, VmError> {
-        if let Some(code) = self.code.classes.get(&class) {
-            return Ok(Some(code));
-        }
-        if self.defs.code().key_of(class).is_none() {
-            return Ok(None);
-        }
-        let path = self
-            .space
-            .classes
-            .get_layout(class)
-            .map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string());
-        Err(script_error(
-            &path,
-            format!(
-                "the functions of {path} are not loaded (load the class with Vm::find_class first)"
-            ),
-        ))
     }
 }

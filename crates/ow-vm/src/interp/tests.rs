@@ -23,6 +23,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
+use ow_package::testkit::reflect::property_payload;
 use ow_package::testkit::script::{
     Asm, CPF_OPT, CPF_OUT, FunctionIds, FunctionSpec, Param, ScriptToy, function_payload,
 };
@@ -702,6 +703,198 @@ fn fixture() -> Fixture {
             })
         });
     }
+    // Out parameters alias the caller's storage (review r1 of PR #314). AliasTwo(out int A, out int B) { A = 1;
+    // return B; }: with both arguments one variable, the C++ returns 1 and leaves the variable 1.
+    let alias_two = script(
+        &mut t,
+        foo,
+        "AliasTwo",
+        &[param("Int", "A", CPF_OUT), param("Int", "B", CPF_OUT)],
+        Some(("Int", 0)),
+        &[],
+        |ids, a| {
+            a.stmt().raw(&[0x0F]).local(ids.get("A")).raw(&[0x26]);
+            returns(a, |a| {
+                a.local(ids.get("B"));
+            });
+        },
+    )
+    .function;
+    script(
+        &mut t,
+        foo,
+        "AliasLocal",
+        &[],
+        Some(("Int", 0)),
+        &[("Int", "X")],
+        |ids, a| {
+            returns(a, |a| {
+                a.final_function(alias_two, |a| {
+                    a.local(ids.get("X")).local(ids.get("X"));
+                });
+            })
+        },
+    );
+    script(
+        &mut t,
+        foo,
+        "AliasLocalAfter",
+        &[],
+        Some(("Int", 0)),
+        &[("Int", "X")],
+        |ids, a| {
+            a.stmt().final_function(alias_two, |a| {
+                a.local(ids.get("X")).local(ids.get("X"));
+            });
+            returns(a, |a| {
+                a.local(ids.get("X"));
+            });
+        },
+    );
+    script(
+        &mut t,
+        foo,
+        "AliasCount",
+        &[],
+        Some(("Int", 0)),
+        &[],
+        |_, a| {
+            returns(a, |a| {
+                a.final_function(alias_two, |a| {
+                    a.instance(count).instance(count);
+                });
+            })
+        },
+    );
+    // A native's out write is seen at once by script it calls back into: PokeAndPeek(out int A) is registered by the
+    // test (sets A = 5, then returns GetCount() on its object); CallPoke() = PokeAndPeek(Count).
+    let poke = t
+        .function(
+            foo,
+            "PokeAndPeek",
+            &[param("Int", "A", CPF_OUT)],
+            Some(("Int", 0)),
+            &[],
+            &spec(FUNC_NATIVE | FUNC_PUBLIC, "PokeAndPeek"),
+            |_| None,
+        )
+        .function;
+    script(
+        &mut t,
+        foo,
+        "CallPoke",
+        &[],
+        Some(("Int", 0)),
+        &[],
+        |_, a| {
+            returns(a, |a| {
+                a.final_function(poke, |a| {
+                    a.instance(count);
+                });
+            })
+        },
+    );
+    // Frames past the bounds: a local of 65,535 elements; a recursion whose frames hold 4,001 slots each.
+    for (name, dim, recurse) in [
+        ("BigFrame", 65_535u32, false),
+        ("BigRecursion", 4_000, true),
+    ] {
+        let function = t.p.next_export() + 2;
+        t.prop("Int", function, "ReturnValue", 0x80 | 0x100 | 0x400, 0);
+        let payload = property_payload(&t.none, dim, 0, &[]);
+        let mut local = Export::new(t.import("IntProperty"), "Big", payload);
+        local.outer = function;
+        t.p.add_export_with(local);
+        let mut a = Asm::new();
+        returns(&mut a, |a| {
+            if recurse {
+                a.final_function(function, |_| {});
+            } else {
+                a.int_const(1);
+            }
+        });
+        let payload = function_payload(&mut t.p, Some(&a), &spec(SCRIPT, name));
+        let mut export = Export::new(t.import("Function"), name, payload);
+        export.outer = foo;
+        assert_eq!(t.p.add_export_with(export), function);
+    }
+    // The worst case of the stack: Deep() = 0 + (0 + (... 250 levels ... (Deep()) ...)), recursing to the depth limit.
+    let deep = t.p.next_export() + 1;
+    script(&mut t, foo, "Deep", &[], Some(("Int", 0)), &[], |ids, a| {
+        assert_eq!(ids.function, deep);
+        returns(a, |a| {
+            for _ in 0..250 {
+                a.raw(&[146]);
+            }
+            a.final_function(deep, |_| {});
+            for _ in 0..250 {
+                a.int_const(0).raw(&[0x16]);
+            }
+        })
+    });
+    // GotoLabel steps over (the C++), a state variable reads as an instance variable (the C++).
+    let label = t.p.name("SomeLabel");
+    script(
+        &mut t,
+        foo,
+        "StepsOverGotoLabel",
+        &[],
+        Some(("Int", 0)),
+        &[],
+        |_, a| {
+            a.stmt().raw(&[0x0D, 0x21]).i32(label).i32(0);
+            returns(a, |a| {
+                a.int_const(1);
+            });
+        },
+    );
+    script(
+        &mut t,
+        foo,
+        "ReadStateVariable",
+        &[],
+        Some(("Int", 0)),
+        &[],
+        |_, a| {
+            returns(a, |a| {
+                a.raw(&[0x03]).reference(count);
+            })
+        },
+    );
+    // Heap typing: an object property declared Core.Object holds a class; one declared Bar refuses a Foo object.
+    let owner_ref = t.prop("Object", foo, "Owner", 0, object);
+    let bar_ref = t.prop("Object", foo, "BarRef", 0, bar);
+    script(&mut t, foo, "SetOwnerClass", &[], None, &[], |_, a| {
+        a.stmt()
+            .raw(&[0x0F])
+            .instance(owner_ref)
+            .raw(&[0x20])
+            .reference(foo);
+        a.stmt().return_nothing();
+        a.end();
+    });
+    script(
+        &mut t,
+        foo,
+        "ReadOwner",
+        &[],
+        Some(("Object", object)),
+        &[],
+        |_, a| {
+            returns(a, |a| {
+                a.instance(owner_ref);
+            })
+        },
+    );
+    let o = Param {
+        type_ref: object,
+        ..param("Object", "O", 0)
+    };
+    script(&mut t, foo, "SetBarRef", &[o], None, &[], |ids, a| {
+        a.stmt().raw(&[0x0F]).instance(bar_ref).local(ids.get("O"));
+        a.stmt().return_nothing();
+        a.end();
+    });
     // Recursion (the depth limit) and a loop that never ends (the step limit).
     let rec = t.p.next_export() + 1;
     script(&mut t, foo, "Rec", &[], Some(("Int", 0)), &[], |ids, a| {
@@ -1786,4 +1979,229 @@ fn describe_prints_the_cxx_forms() {
         assert_eq!(r.text(&v), want);
     }
     assert_eq!(r.text(&Value::Object(Some(o))), "Bar'Bar_0'");
+}
+
+#[test]
+fn out_parameters_alias_the_callers_storage_live() {
+    // The C++ values (review r1 of PR #314): AliasTwo(x, x) with x = 0 returns 1 and leaves x = 1.
+    let mut r = start(ParityMode::Off);
+    assert_eq!(
+        r.on("Core.Foo", "Core.Foo.AliasLocal", vec![]),
+        Value::Int(1)
+    );
+    assert_eq!(
+        r.on("Core.Foo", "Core.Foo.AliasLocalAfter", vec![]),
+        Value::Int(1)
+    );
+    // The same through an instance variable (a heap place).
+    let o = r.object("Core.Foo");
+    assert_eq!(
+        r.call("Core.Foo.AliasCount", Some(o), vec![]).unwrap().ret,
+        Value::Int(1)
+    );
+    let foo = r.vm.find_class("Core.Foo").unwrap();
+    let count = PropAddr::scalar(r.vm.space.prop(foo, "Count").unwrap());
+    assert_eq!(r.vm.space.read(o, count).unwrap(), &Value::Int(1));
+}
+
+#[test]
+fn a_natives_out_write_is_seen_by_script_it_calls_back_into() {
+    // The C++ writes a native's out argument through the caller's alias at once, so GetCount() called back from the
+    // native sees 5.
+    let mut r = start(ParityMode::Off);
+    r.vm.register_native(
+        "Foo.PokeAndPeek(int)",
+        Rc::new(|c: &mut crate::api::NativeCall<'_>| {
+            c.set_out(0, Value::Int(5))?;
+            let get = c.vm.find_function("Core.Foo.GetCount")?;
+            let this = c.this;
+            Ok(c.call_script(get, this, vec![])?.ret)
+        }),
+    )
+    .unwrap();
+    let o = r.object("Core.Foo");
+    assert_eq!(
+        r.call("Core.Foo.CallPoke", Some(o), vec![]).unwrap().ret,
+        Value::Int(5)
+    );
+}
+
+#[test]
+fn frames_past_the_bounds_are_refused_before_they_are_allocated() {
+    let mut r = start(ParityMode::Off);
+    let o = r.object("Core.Foo");
+    let message = script_message(r.call("Core.Foo.BigFrame", Some(o), vec![]));
+    assert!(
+        message.contains("needs 65536 value slots") && message.contains("Rust-only refusal"),
+        "{message}"
+    );
+    // All active frames together: 4,001 slots a frame meets the live bound before a raised depth limit.
+    let outcome = super::on_vm_stack(|| {
+        let mut r = start(ParityMode::Off);
+        r.vm.limits.max_call_depth = 2_000;
+        let o = r.object("Core.Foo");
+        let message = script_message(r.call("Core.Foo.BigRecursion", Some(o), vec![]));
+        (message, r.vm.code.frames.len(), r.vm.code.live_slots)
+    })
+    .unwrap();
+    assert!(
+        outcome
+            .0
+            .contains("for all active frames (a Rust-only refusal)"),
+        "{}",
+        outcome.0
+    );
+    assert_eq!((outcome.1, outcome.2), (0, 0), "every frame was popped");
+}
+
+#[test]
+fn the_worst_case_nesting_fits_the_vm_stack() {
+    // 200 frames, each a statement nesting 252 levels eval -> native -> call: the depth limit stops it, on a thread of
+    // STACK_SIZE bytes (a debug build included), and the nesting counter unwinds.
+    let outcome = super::on_vm_stack(|| {
+        let mut r = start(ParityMode::Off);
+        let o = r.object("Core.Foo");
+        let message = script_message(r.call("Core.Foo.Deep", Some(o), vec![]));
+        (message, r.vm.code.nesting)
+    })
+    .unwrap();
+    let deep = "Core.Foo.Deep";
+    assert_eq!(
+        outcome.0,
+        format!("call depth limit reached in {deep} <- {deep} <- {deep} <- {deep} <- {deep}")
+    );
+    assert_eq!(outcome.1, 0);
+    // With the depth limit raised, the nesting bound stops it first, with a typed error.
+    let outcome = super::on_vm_stack(|| {
+        let mut r = start(ParityMode::Off);
+        r.vm.limits.max_call_depth = 250;
+        let o = r.object("Core.Foo");
+        let message = script_message(r.call("Core.Foo.Deep", Some(o), vec![]));
+        (message, r.vm.code.nesting, r.vm.code.frames.len())
+    })
+    .unwrap();
+    assert!(
+        outcome
+            .0
+            .contains("expressions nest deeper than 51400 levels"),
+        "{}",
+        outcome.0
+    );
+    assert_eq!((outcome.1, outcome.2), (0, 0));
+}
+
+#[test]
+fn goto_label_steps_over_and_a_state_variable_reads_as_an_instance_variable() {
+    let mut r = start(ParityMode::Off);
+    assert_eq!(
+        r.on("Core.Foo", "Core.Foo.StepsOverGotoLabel", vec![]),
+        Value::Int(1)
+    );
+    let o = r.object("Core.Foo");
+    let foo = r.vm.find_class("Core.Foo").unwrap();
+    let count = PropAddr::scalar(r.vm.space.prop(foo, "Count").unwrap());
+    r.vm.space.write(o, count, Value::Int(4)).unwrap();
+    assert_eq!(
+        r.call("Core.Foo.ReadStateVariable", Some(o), vec![])
+            .unwrap()
+            .ret,
+        Value::Int(4)
+    );
+}
+
+#[test]
+fn heap_typing_of_classes_and_stand_in_objects() {
+    let mut r = start(ParityMode::Off);
+    let o = r.object("Core.Foo");
+    let foo = r.vm.find_class("Core.Foo").unwrap();
+    // A class into an object property declared Core.Object: stored and read back.
+    r.call("Core.Foo.SetOwnerClass", Some(o), vec![]).unwrap();
+    assert_eq!(
+        r.call("Core.Foo.ReadOwner", Some(o), vec![]).unwrap().ret,
+        Value::Class(Some(foo))
+    );
+    // A Foo object into a property declared Bar: the heap's WrongClass.
+    let other = r.object("Core.Foo");
+    let refused = r.call(
+        "Core.Foo.SetBarRef",
+        Some(o),
+        vec![Value::Object(Some(other))],
+    );
+    assert!(matches!(refused, Err(VmError::Heap(_))), "{refused:?}");
+    // An object of an engine-native stand-in class: its chain is unknown, so NotYet.
+    let object = r.vm.find_class("Core.Object").unwrap();
+    let native =
+        r.vm.space
+            .classes
+            .define("Engine.StandIn", Some(object), vec![])
+            .unwrap();
+    r.vm.space.classes.mark_native(native).unwrap();
+    let stand_in = r.vm.instantiate(native, "S").unwrap();
+    let n = not_yet(r.call(
+        "Core.Foo.SetBarRef",
+        Some(o),
+        vec![Value::Object(Some(stand_in))],
+    ));
+    assert_eq!(n.missing, Missing::NotRead);
+}
+
+#[test]
+fn find_method_loads_a_class_whose_code_is_not_loaded() {
+    // Mach's layout is defined straight through the code index, so its functions and states are not loaded.
+    let mut r = start(ParityMode::Reference);
+    let mach = {
+        let (code, store) = r.vm.defs.code_mut();
+        let key = code.find_class(store, "Core.Mach").unwrap();
+        code.define_layout(store, &mut r.vm.space.names, &mut r.vm.space.classes, key)
+            .unwrap()
+    };
+    assert!(!r.vm.code.classes.contains_key(&mach));
+    assert!(r.vm.find_method(mach, "Where", None).unwrap().is_some());
+    // GotoState called from the host on an object of a class nobody loaded: the state events still run.
+    let mut r = start(ParityMode::Reference);
+    let mach = {
+        let (code, store) = r.vm.defs.code_mut();
+        let key = code.find_class(store, "Core.Mach").unwrap();
+        code.define_layout(store, &mut r.vm.space.names, &mut r.vm.space.classes, key)
+            .unwrap()
+    };
+    let m = r.vm.instantiate(mach, "").unwrap();
+    let goto = r.vm.find_function("Core.Object.GotoState").unwrap();
+    let a = r.vm.space.names.intern("A");
+    r.vm.call(goto, Some(m), vec![Value::Name(a)]).unwrap();
+    assert_eq!(
+        r.call("Core.Mach.ReadTrace", Some(m), vec![]).unwrap().ret,
+        Value::string("bA;")
+    );
+}
+
+#[test]
+fn a_function_that_cannot_run_says_so_before_the_depth_check() {
+    // The C++ `invoke` decodes before it checks the depth.
+    let mut r = start(ParityMode::Off);
+    r.vm.limits.max_call_depth = 0;
+    let o = r.object("Core.Foo");
+    assert_eq!(
+        script_message(r.call("Core.Foo.Broken", Some(o), vec![])),
+        "cannot run Core.Foo.Broken: unknown opcode 0x5b"
+    );
+    let message = script_message(r.call("Core.Foo.Answer", Some(o), vec![]));
+    assert_eq!(message, "call depth limit reached in Core.Foo.Answer");
+}
+
+#[test]
+fn let_attribute_on_an_object_without_the_property() {
+    // The companions are found first (from the declaring class); the object must hold the property.
+    let mut r = start(ParityMode::Off);
+    let o = r.object("Core.Foo");
+    let mach = r.object("Core.Mach");
+    let message = script_message(r.call(
+        "Core.Foo.SetSpeedOn",
+        Some(o),
+        vec![Value::Float(1.0), Value::Object(Some(mach))],
+    ));
+    assert_eq!(
+        message,
+        "let attribute: Speed is missing on its object in Core.Foo.SetSpeedOn"
+    );
 }

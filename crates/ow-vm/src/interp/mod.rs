@@ -9,12 +9,15 @@
 //! the C++ does), `New`, `Assert`, the Gearbox hidden typed temporaries (opcodes 0x4C-0x50), the attribute read 0x5E
 //! and the typed let 0x5F (through `ow_attr::registry::let_base`), the step budget (one step per statement, per
 //! expression and per call, as the C++ `tick`), the census of `Context` expressions whose object was None, and the
-//! `<- caller` trace of the depth-limit message.
+//! `<- caller` trace of the depth-limit message. Out parameters alias the caller's storage live (`eval.rs`). A state
+//! variable reads as an instance variable and a `GotoLabel` is stepped over, as the C++ does (latent state code is
+//! W5-STATES'; both UNVERIFIED in the game).
 //!
 //! **What waits for other lanes** (each answers `NotYet { NotPorted }` naming the lane): struct and array element
 //! operations, dynamic arrays, struct comparison and static arrays as a whole (`aggregate.rs`, W4-INTERP2);
 //! `foreach` (`iter.rs`, W4-INTERP2); delegates (`delegate.rs`, W4-INTERP2); interface context, interface casts and
-//! the object-interface primitive casts (W4-INTERP2); state variables, `GotoLabel` and latent code (W5-STATES).
+//! the object-interface primitive casts (W4-INTERP2); states beyond the C++ approximation and latent code
+//! (W5-STATES).
 //!
 //! **Loading** (`load.rs`). Functions and classes come from the code packages of the definition store, through
 //! `DefStore::code_mut` (its package store and reflection index, so one `CodeIndex` defines every layout). Loading a
@@ -24,16 +27,21 @@
 //! `default.` reads, `New`) come from `DefStore::class_default`, which answers `NotYet` until the W3-DEFS body lands.
 //!
 //! **Stack depth.** The interpreter recurses (expression, call, frame), the decoder recurses up to 256 levels inside
-//! a call, and calls nest up to `Limits::max_call_depth` (200) frames. That needs more than a 1 MiB main thread in a
-//! debug build, so the VM must run on a thread with a larger stack: `ow-cli` runs every VM command on a thread of
-//! [`STACK_SIZE`] bytes, and the deep unit tests do the same. Decoding stays lazy (inside the first call), as the C++.
+//! a call, and calls nest up to `Limits::max_call_depth` (200) frames. Expressions nest at most [`MAX_NESTING`]
+//! levels across all active frames (a typed error past it, a Rust-only bound), so the stack a call needs is bounded.
+//! That bound needs more than a 1 MiB main thread in a debug build: a caller runs the VM on a thread of at least
+//! [`STACK_SIZE`] bytes ([`on_vm_stack`]), as `ow-cli` does for every VM command and the deep unit tests do. Decoding
+//! stays lazy (inside the first call), as the C++.
 //!
 //! **Values.** The C++ keeps one dynamically typed bag per object; here properties live in typed heap slots
 //! (decision 2026-11-15-02), so a few representation rules are added at a heap write, after the C++ assignment rule
 //! (`interp.cpp:511-522`): a `None` value or the `None` literal stored into a class, interface or delegate property
 //! becomes that kind's null, an object reference stored into an interface property becomes an interface reference
 //! (and back), and a `None` value stored into any other property becomes the property's zero (the C++ stores the
-//! `None` kind there, which reads as 0 everywhere a number is read). Locals stay untyped, as in the C++. String
+//! `None` kind there, which reads as 0 everywhere a number is read). A class stored into an object property declared
+//! as a class's ancestor (`Core.Object` .. `Core.Class`) is kept (a class is an object in UnrealScript), and an object
+//! of an engine-native stand-in class that the heap refuses for a typed object property is `NotYet`, since its real
+//! chain is unknown (decision 2026-11-15-08). Locals stay untyped, as in the C++. String
 //! constants: an ANSI constant's bytes are read one character each (Latin-1, the UE3 widening of an ANSI character),
 //! a Unicode constant's UTF-16 units are decoded with lone surrogates as U+FFFD (the `Value::Str` limit, decision
 //! 2026-11-15-07). For ASCII both equal the C++ text; past ASCII the C++ keeps the raw bytes.
@@ -63,16 +71,43 @@ use ow_package::PackageId;
 use ow_script::decode::Code;
 use ow_script::function::FunctionInfo;
 
-pub use convert::{describe, describe_for_string, strtod_prefix};
+pub use convert::{describe, describe_for_string};
 pub use load::instantiate_from_defaults;
 
-pub(crate) use eval::run_frame;
+pub(crate) use eval::{Alias, is_a_named, is_child, prepare, run_frame, write_alias};
 pub(crate) use load::{find_class, find_function};
 
-/// The stack size `ow-cli` gives the thread a VM command runs on (see the module documentation). Measured need in a
-/// debug build: the depth-limit unit test (200 nested script frames) runs in under 16 MiB; this leaves room for
-/// deep expressions in every frame.
-pub const STACK_SIZE: usize = 256 * 1024 * 1024;
+/// The stack a thread running the VM needs (module documentation, "Stack depth"). It covers the worst case the bounds
+/// allow in a debug build: `Limits::max_call_depth` (200) frames, each a statement nesting about 250 expression levels
+/// that go eval -> native -> call (the `the_worst_case_nesting_fits_the_vm_stack` unit test). Measured locally on that
+/// case: about 5.5 KB a level and 278 MB in all in a debug build, about 1.3 KB a level and 65 MB in a release build.
+pub const STACK_SIZE: usize = 512 * 1024 * 1024;
+
+/// How deep expressions (`eval` and `lval`) nest across all active frames before a call is refused with a typed
+/// error (a Rust-only bound): 200 frames of 256 levels each, the decoder's own nesting bound, fit under it.
+pub const MAX_NESTING: u32 = 200 * 257;
+
+/// The value slots one frame may hold (a Rust-only refusal, checked before the frame is allocated). The installed
+/// code packages need at most 257 (16,323 functions with children, measured locally).
+pub const MAX_FRAME_SLOTS: usize = 4096;
+
+/// The value slots all active frames together may hold (a Rust-only refusal, checked with [`MAX_FRAME_SLOTS`]).
+pub const MAX_LIVE_SLOTS: usize = 1 << 20;
+
+/// Runs `f` on a new thread with [`STACK_SIZE`] bytes of stack and returns its result: the way to run a VM call
+/// from a thread whose stack is smaller (a `Vm` is not `Send`, so `f` builds or owns the VM it uses). A panic in `f`
+/// is resumed on the caller's thread; a thread that cannot be started is the `io::Error`.
+pub fn on_vm_stack<T: Send>(f: impl FnOnce() -> T + Send) -> std::io::Result<T> {
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .name("ow-vm".into())
+            .stack_size(STACK_SIZE)
+            .spawn_scoped(scope, f)?;
+        Ok(handle
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+    })
+}
 
 /// What the interpreter keeps per VM: the loaded functions and classes, the native index and the active frames.
 #[derive(Debug, Default)]
@@ -89,6 +124,23 @@ pub(crate) struct CodeState {
     natives: Option<Rc<FixedHashMap<u32, Result<FuncId, String>>>>,
     /// (filed package, outer export) -> the typed child declarations of that export, for property references.
     children: FixedHashMap<(PackageId, i32), Children>,
+    /// The storage of the active frames, innermost last (`eval::Frame` holds its index).
+    frames: Vec<FrameStore>,
+    /// The value slots the active frames hold together (bounded by [`MAX_LIVE_SLOTS`]).
+    live_slots: usize,
+    /// Expression levels (`eval`, `lval`) in progress across the active frames (bounded by [`MAX_NESTING`]).
+    nesting: u32,
+}
+
+/// One active frame's storage.
+#[derive(Debug, Default)]
+struct FrameStore {
+    /// Every declaration's elements, at the slots the loader gave them.
+    slots: Vec<ow_object::value::Value>,
+    /// Local-variable references to no declaration of the function (the C++ makes such a slot on first use).
+    extra: FixedHashMap<i32, ow_object::value::Value>,
+    /// The hidden typed temporaries 4C-50, by (opcode, operand).
+    typed: BTreeMap<(u8, i32), ow_object::value::Value>,
 }
 
 /// The typed child declarations of one export, or why they did not type.

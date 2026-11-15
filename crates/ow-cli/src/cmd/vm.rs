@@ -12,6 +12,7 @@
 //!
 //! Both run commands load the source package first (as the C++ does, before the options are read), use
 //! `StubPolicy::LogAndZero` and the Core natives, and run the VM on a thread of `ow_vm::interp::STACK_SIZE` bytes
+//! (`ow_vm::interp::on_vm_stack`)
 //! (`ow_vm::interp`, "Stack depth"). `mode` is the run's parity mode, read once by `main`; it goes to the definition
 //! store and the VM. Error texts are the C++ ones where the C++ has one (a `std::stoll` / `std::stod` failure
 //! included); a `NotYet` prints its own text. Lines end in `\n`; the parity harness reads the C++ `\r\n` as `\n`
@@ -37,7 +38,7 @@ use ow_object::value::Value;
 use ow_package::package::Package;
 use ow_vm::api::{StubPolicy, Vm};
 use ow_vm::error::VmError;
-use ow_vm::interp::{STACK_SIZE, describe, instantiate_from_defaults, strtod_prefix};
+use ow_vm::interp::{describe, instantiate_from_defaults, on_vm_stack};
 
 use crate::args::{Command, USAGE};
 use crate::cmd::properties::error_text;
@@ -66,22 +67,13 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     let outcome = match command.flag {
         "--native" => native(args),
         flag => {
-            let flag = flag.to_string();
-            let owned = args.to_vec();
-            let worker = std::thread::Builder::new()
-                .name("ow-vm".into())
-                .stack_size(STACK_SIZE)
-                .spawn(move || match flag.as_str() {
-                    "--run" => run_one(&owned, mode),
-                    _ => run_batch(&owned, mode),
-                });
-            match worker.map(|w| w.join()) {
-                Ok(Ok(outcome)) => outcome,
-                Ok(Err(_)) => Outcome::failed(String::new(), "the VM thread panicked".into()),
-                Err(e) => {
-                    Outcome::failed(String::new(), format!("cannot start the VM thread: {e}"))
-                }
-            }
+            let ran = on_vm_stack(|| match flag {
+                "--run" => run_one(args, mode),
+                _ => run_batch(args, mode),
+            });
+            ran.unwrap_or_else(|e| {
+                Outcome::failed(String::new(), format!("cannot start the VM thread: {e}"))
+            })
         }
     };
     // Ignore a failed write (a closed pipe), as the C++ binary does.
@@ -199,7 +191,95 @@ fn stoll(text: &str) -> Result<(i64, usize), String> {
     Ok((value, at))
 }
 
-/// `std::stod(text, &used)`: decimal text, `inf` and `nan` (`ow_vm::interp::strtod_prefix`); an overflow to an
+// The C `strtod` prefix scanner, as `ow_vm::interp::convert` has it for the script casts (crate-private there,
+// so the command-line parser keeps its own copy).
+
+/// C `isspace` in the C locale.
+fn is_c_space(c: u8) -> bool {
+    c == b' ' || (0x09..=0x0d).contains(&c)
+}
+
+/// The length of the longest prefix of `s` (after white space) that C `strtod` reads as a decimal number, `inf`,
+/// `infinity` or `nan` (optionally `nan(...)`), and whether it is a hexadecimal float. `None` when nothing converts.
+fn strtod_prefix(s: &str) -> Option<(usize, usize, bool)> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && is_c_space(b[i]) {
+        i += 1;
+    }
+    let start = i;
+    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+    }
+    let rest = &s[i..];
+    let lower = rest.to_ascii_lowercase();
+    if lower.starts_with("infinity") {
+        return Some((start, i + 8, false));
+    }
+    if lower.starts_with("inf") {
+        return Some((start, i + 3, false));
+    }
+    if lower.starts_with("nan") {
+        let mut end = i + 3;
+        if b.get(end) == Some(&b'(')
+            && let Some(close) = b[end..].iter().position(|&c| c == b')')
+            && b[end + 1..end + close]
+                .iter()
+                .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        {
+            end += close + 1;
+        }
+        return Some((start, end, false));
+    }
+    if lower.starts_with("0x")
+        && (lower
+            .as_bytes()
+            .get(2)
+            .is_some_and(|c| c.is_ascii_hexdigit())
+            || (lower.as_bytes().get(2) == Some(&b'.')
+                && lower
+                    .as_bytes()
+                    .get(3)
+                    .is_some_and(|c| c.is_ascii_hexdigit())))
+    {
+        return Some((start, i, true));
+    }
+    let digits_from = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let mut mantissa = i - digits_from;
+    if i < b.len() && b[i] == b'.' {
+        let dot = i;
+        i += 1;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        mantissa += i - dot - 1;
+        if mantissa == 0 {
+            return None;
+        }
+    }
+    if mantissa == 0 {
+        return None;
+    }
+    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+        let mut j = i + 1;
+        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
+            j += 1;
+        }
+        let exp_from = j;
+        while j < b.len() && b[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > exp_from {
+            i = j;
+        }
+    }
+    Some((start, i, false))
+}
+
+/// `std::stod(text, &used)`: decimal text, `inf` and `nan` ([`strtod_prefix`]); an overflow to an
 /// infinity is the MSVC `out_of_range`. A hexadecimal float is refused here (no parser for it is written).
 fn stod(text: &str) -> Result<(f64, usize), String> {
     let Some((start, end, hex)) = strtod_prefix(text) else {
@@ -744,7 +824,12 @@ mod tests {
 
     #[test]
     fn native_prints_the_stub_line_and_refuses_bad_command_lines() {
-        let done = native(&strings(&["--native", "WillowGame.WillowWeapon.Fire", "--native-args", "a,b"]));
+        let done = native(&strings(&[
+            "--native",
+            "WillowGame.WillowWeapon.Fire",
+            "--native-args",
+            "a,b",
+        ]));
         assert_eq!(done.code, 0);
         assert_eq!(
             done.stdout,
@@ -752,16 +837,26 @@ mod tests {
              \"log\":\"UNIMPLEMENTED WillowGame.WillowWeapon.Fire(a,b)\"}\n"
         );
         let bare = native(&strings(&["--native", "Engine.Actor.Trace"]));
-        assert!(bare.stdout.contains("\"log\":\"UNIMPLEMENTED Engine.Actor.Trace()\""));
+        assert!(
+            bare.stdout
+                .contains("\"log\":\"UNIMPLEMENTED Engine.Actor.Trace()\"")
+        );
         for (bad, message) in [
             (vec!["--native"], USAGE),
             (vec!["--native", "", "--native-args", "x"], USAGE),
-            (vec!["--native", "A", "--native-args"], "missing value for --native-args"),
+            (
+                vec!["--native", "A", "--native-args"],
+                "missing value for --native-args",
+            ),
             (vec!["--native", "A", "--bogus", "x"], USAGE),
             (vec!["--native", "A", "--native-args", "x", "extra"], USAGE),
         ] {
             let done = native(&strings(&bad));
-            assert_eq!((done.code, done.stdout.as_str(), done.error.as_deref()), (1, "", Some(message)), "{bad:?}");
+            assert_eq!(
+                (done.code, done.stdout.as_str(), done.error.as_deref()),
+                (1, "", Some(message)),
+                "{bad:?}"
+            );
         }
     }
 
@@ -770,7 +865,10 @@ mod tests {
         assert_eq!(stoll(" -42x"), Ok((-42, 4)));
         assert_eq!(stoll("+7"), Ok((7, 2)));
         assert_eq!(stoll("x").unwrap_err(), "invalid stoll argument");
-        assert_eq!(stoll("99999999999999999999").unwrap_err(), "stoll argument out of range");
+        assert_eq!(
+            stoll("99999999999999999999").unwrap_err(),
+            "stoll argument out of range"
+        );
         assert_eq!(stod("1.5e2xyz"), Ok((150.0, 5)));
         assert_eq!(stod(" .5"), Ok((0.5, 3)));
         assert_eq!(stod("1e"), Ok((1.0, 1)));
@@ -792,15 +890,32 @@ mod tests {
         let object = t.class("Object", 0);
         let mut add = FunctionSpec::new(0x400 | 0x1000 | 0x23000, "+");
         add.native = 146;
-        t.function(object, "Add_IntInt", &[Param::new("Int", "A"), Param::new("Int", "B")], Some(("Int", 0)), &[], &add, |_| None);
+        t.function(
+            object,
+            "Add_IntInt",
+            &[Param::new("Int", "A"), Param::new("Int", "B")],
+            Some(("Int", 0)),
+            &[],
+            &add,
+            |_| None,
+        );
         let foo = t.class("Foo", object);
-        t.function(foo, "Answer", &[], Some(("Int", 0)), &[], &FunctionSpec::new(0x20003, "Answer"), |_| {
-            let mut a = ow_package::testkit::script::Asm::new();
-            a.stmt().raw(&[0x04]).int_const(42);
-            a.end();
-            Some(a)
-        });
-        let dir = std::env::temp_dir().join(format!("ow-cli-vm-{}-{}", std::process::id(), line!()));
+        t.function(
+            foo,
+            "Answer",
+            &[],
+            Some(("Int", 0)),
+            &[],
+            &FunctionSpec::new(0x20003, "Answer"),
+            |_| {
+                let mut a = ow_package::testkit::script::Asm::new();
+                a.stmt().raw(&[0x04]).int_const(42);
+                a.end();
+                Some(a)
+            },
+        );
+        let dir =
+            std::env::temp_dir().join(format!("ow-cli-vm-{}-{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pkg = dir.join("Core.upk");
@@ -815,7 +930,17 @@ mod tests {
         let d = dir.display().to_string();
         // A native called directly needs no class default object.
         let done = run_one(
-            &strings(&[&p, "--run", "Core.Object.Add_IntInt", "--cooked", &d, "--arg", "i:40", "--arg", "i:2"]),
+            &strings(&[
+                &p,
+                "--run",
+                "Core.Object.Add_IntInt",
+                "--cooked",
+                &d,
+                "--arg",
+                "i:40",
+                "--arg",
+                "i:2",
+            ]),
             ParityMode::Off,
         );
         assert_eq!(done.code, 0, "{:?}", done.error);
@@ -825,20 +950,46 @@ mod tests {
              \"args\":[\"40\",\"2\"],\"log\":[]}\n"
         );
         let too_many = run_one(
-            &strings(&[&p, "--run", "Core.Object.Add_IntInt", "--cooked", &d, "--arg", "i:1", "--arg", "i:2", "--arg", "i:3"]),
+            &strings(&[
+                &p,
+                "--run",
+                "Core.Object.Add_IntInt",
+                "--cooked",
+                &d,
+                "--arg",
+                "i:1",
+                "--arg",
+                "i:2",
+                "--arg",
+                "i:3",
+            ]),
             ParityMode::Off,
         );
         assert_eq!(too_many.code, 1);
-        assert!(too_many.stdout.contains("\"error\":\"too many arguments for Core.Object.Add_IntInt\",\"steps\":0"));
-        let missing = run_one(&strings(&[&p, "--run", "Core.Foo.Missing", "--cooked", &d]), ParityMode::Off);
-        assert_eq!((missing.stdout.as_str(), missing.error.as_deref()), ("", Some("function not found: Core.Foo.Missing")));
+        assert!(
+            too_many.stdout.contains(
+                "\"error\":\"too many arguments for Core.Object.Add_IntInt\",\"steps\":0"
+            )
+        );
+        let missing = run_one(
+            &strings(&[&p, "--run", "Core.Foo.Missing", "--cooked", &d]),
+            ParityMode::Off,
+        );
+        assert_eq!(
+            (missing.stdout.as_str(), missing.error.as_deref()),
+            ("", Some("function not found: Core.Foo.Missing"))
+        );
         for bad in [
             vec![p.as_str(), "--run", "--cooked", &d],
             vec![p.as_str(), "--run", "Core.Foo.Answer"],
             vec![p.as_str(), "--run", "A", "B", "--cooked", &d],
             vec![p.as_str(), "--run", "A", "--cooked", &d, "--arg", "zz"],
         ] {
-            assert_eq!(run_one(&strings(&bad), ParityMode::Off).error.as_deref(), Some(USAGE), "{bad:?}");
+            assert_eq!(
+                run_one(&strings(&bad), ParityMode::Off).error.as_deref(),
+                Some(USAGE),
+                "{bad:?}"
+            );
         }
         let batch = dir.join("cases.tsv");
         std::fs::write(
@@ -846,7 +997,16 @@ mod tests {
             "Core.Object.Add_IntInt\t\tB=d:2\ta=d:40\r\n\nCore.Foo.Missing\t\nCore.Object.Add_IntInt\t\tA=d:1\noneField\n",
         )
         .unwrap();
-        let done = run_batch(&strings(&[&p, "--run-batch", &batch.display().to_string(), "--cooked", &d]), ParityMode::Off);
+        let done = run_batch(
+            &strings(&[
+                &p,
+                "--run-batch",
+                &batch.display().to_string(),
+                "--cooked",
+                &d,
+            ]),
+            ParityMode::Off,
+        );
         assert_eq!(done.code, 0);
         let lines: Vec<&str> = done.stdout.lines().collect();
         assert_eq!(
@@ -858,7 +1018,10 @@ mod tests {
                 "{\"case\":3,\"type\":\"None\",\"value\":\"\",\"native\":false,\"error\":\"malformed case\",\"unimplemented\":[]}",
             ]
         );
-        let none = run_batch(&strings(&[&p, "--run-batch", "nope.tsv", "--cooked", &d]), ParityMode::Off);
+        let none = run_batch(
+            &strings(&[&p, "--run-batch", "nope.tsv", "--cooked", &d]),
+            ParityMode::Off,
+        );
         assert_eq!(none.error.as_deref(), Some("cannot open batch file"));
         let _ = std::fs::remove_dir_all(&dir);
     }

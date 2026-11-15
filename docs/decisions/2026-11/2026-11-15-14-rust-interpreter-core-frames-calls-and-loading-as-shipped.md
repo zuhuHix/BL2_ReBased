@@ -16,25 +16,38 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     - Two small seams, flagged for the hub: `pub(crate) Vm::call_bound` (a call with arguments the interpreter bound
       itself, since an omitted argument may sit before a supplied one) and `pub fn Vm::steps()` (the C++ `Runtime::steps`
       that `--run` prints).
-  - `Vm::find_method(class, name, state)` and `Vm::class_declares_state(class, state)` (C++ `findMethod`, `Class::states`)
-    read the classes whose code the VM loaded. A class defined by hand (no package behind it) declares nothing. A
-    package class whose code is not loaded is an error, not a guess. `natives_core::register` wires both in place of
-    `ContractStates`, which is removed; the one test that pinned the missing lookup now checks the wired one.
+    - Review r1 of PR #314 (granted): `Arg` carries a crate-private alias of the caller's storage, and
+      `NativeCall::set_out` writes through it at once; `run_bytecode` lets the interpreter decode before the depth
+      check; `Vm::call` documents the stack a caller needs.
+  - `Vm::find_method(&mut self, class, name, state)` and `Vm::class_declares_state(&mut self, class, state)` (C++
+    `findMethod`, `Class::states`) load the class's code first if it is not loaded, so `GotoState` called from the host
+    on a class nobody loaded still finds its states. A class defined by hand (no package behind it) declares nothing.
+    `natives_core::register` wires both in place of `ContractStates`, which is removed; `StateLookup` takes `&mut Vm`.
+    `Object.IsA` and `Object.ClassIsChildOf` (granted in review r1) answer through the interpreter's class checks.
   - `ow_object::reflect` (additive): `CodeIndex::child_declarations(store, names, classes, package, outer)` types any
     export's child properties exactly as `define_layout` types a class's own (no attribute companions), and
     `ClassInfo::states()` / `StateInfo` list a class's states and their functions as the C++ `loadClass` collects them.
   - `ow_vm::interp` (public): `describe` and `describe_for_string` (the C++ `Value::describe` and `describeForString`),
     `instantiate_from_defaults` (a new object that starts from the class default object, as the C++ `instantiate`
-    copies `defaults->props`; `Vm::instantiate` starts from the layout's defaults only), `strtod_prefix` and
-    `STACK_SIZE`.
+    copies `defaults->props`; `Vm::instantiate` starts from the layout's defaults only), `STACK_SIZE`, `MAX_NESTING`,
+    `MAX_FRAME_SLOTS`, `MAX_LIVE_SLOTS` and `on_vm_stack` (runs a closure on a `STACK_SIZE` thread).
   - The W4-INTERP2 files `interp/aggregate.rs`, `iter.rs` and `delegate.rs` are `NotYet { NotPorted }` stubs.
 - **Rules ported.**
   - **Steps.** One per statement, per expression, per place taken (`lval`) and per call, where the C++ ticks: the
     `--run` step counts equal the C++ ones.
   - **Places.** Where the C++ holds a `Value*`, the interpreter keeps a place (a frame slot, a typed temporary, an
     object's property element, or a temporary).
-  - **Out arguments.** An out argument's place is taken before the call and written back after it. The C++ writes
-    through an alias during the call; the two differ only if the callee also reaches the caller's variable another way.
+  - **Out arguments alias the caller's storage live**, as the C++ `Slot::alias`. A frame's storage lives on the VM's
+    frame stack, so a place can name any active frame's slot. An out argument's place travels with the argument: a
+    script callee reads and writes it, and a native's `set_out` writes through it at once. With `x = 0`,
+    `F(out A, out B) { A = 1; return B; }` called as `F(x, x)` returns 1 and leaves `x` 1, as the C++; a native's out
+    write is seen by script it calls back into. An out argument that is not a storage location (the C++ `scratch`)
+    keeps a copy in the callee. What still differs: a native reading its own out argument (`NativeCall::arg`) after a
+    callback changed the caller's variable another way reads the value at the call (the C++ reads the alias).
+  - **Error order** as the C++ `invoke`: a function that cannot run, or does not decode, says so before the depth
+    check. The 0x5F let finds the companions (from the property's declaring class) before it evaluates the right side.
+  - **`GotoLabel` and state variables** as the C++: a `GotoLabel` is stepped over (latent state code is not run), and
+    a state variable reads as an instance variable. Both UNVERIFIED in the game; state code is W5-STATES'.
   - **Loading.** Loading a class declares every function it and its states declare, with typed parameters and the
     native key built as `vm.cpp:600-606` builds it.
   - **Decoding** happens on a function's first call (as the C++), and a failure is kept and reported on every call
@@ -42,24 +55,39 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
   - **Native index.** Built on first use over the nine code packages in the C++ order, first index wins.
   - **Class default objects.** Used for a call with no object, `Class.static`, `default.` reads and `New`; they come
     from `DefStore::class_default`.
-  - **IsA through stand-ins.** A cast through an engine-native stand-in class (decision 2026-11-15-08) that is not
-    already a yes is `NotYet`, not `false`.
+  - **IsA through stand-ins.** A cast, `IsA` or `ClassIsChildOf` through an engine-native stand-in class (decision
+    2026-11-15-08) that is not already a yes is `NotYet`, not `false`.
 - **Representation rules** (the typed slots of decision 2026-11-15-02). A heap write gets four rules after the C++
   assignment rule (`interp.cpp:511-522`):
   1. `None`, or the `None` literal, stored into a class, interface or delegate property becomes that kind's null.
   2. An object reference stored into an interface property becomes an interface reference, and the reverse.
   3. Any other `None` stored into a property becomes the property's zero. The C++ stores the `None` kind there,
      which reads as 0 wherever a number is read.
-  4. Locals stay untyped, as in the C++.
+  4. A class stored into an object property declared as a class's ancestor (`Core.Object`, `Field`, `Struct`, `State`,
+     `Class`, the public UE3 chain, UNVERIFIED for this executable) is kept: a class is an object in UnrealScript.
+  5. An object of an engine-native stand-in class that the heap refuses for a typed object property is `NotYet`, not
+     the heap's `WrongClass`: its real chain is unknown.
+  6. Locals stay untyped, as in the C++.
 
   String constants:
   - An ANSI constant is one character per byte (Latin-1, the UE3 widening of an ANSI character).
   - A Unicode constant is decoded from its UTF-16 units: a surrogate pair is its character, a lone surrogate U+FFFD
     (decision 2026-11-15-07).
   - For ASCII both equal the C++ text.
-- **Stack depth (the brief's question).** The VM runs on a thread with a larger stack. `ow-cli` runs every VM command
-  on a 256 MiB thread (`interp::STACK_SIZE`), and the deep unit test (200 nested frames, the depth limit) passes on a
-  16 MiB thread in a debug build. Decoding stays lazy inside a call, as the C++ does.
+- **Stack depth (the brief's question; review r1).** The VM runs on a thread with a larger stack. Expressions nest at
+  most `MAX_NESTING` (51,400 = 200 x 257) levels across all active frames; past it a call is a typed `VmError::Script`
+  (a Rust-only bound), never a stack overflow.
+  - The worst case: 200 frames, each a statement nesting about 250 levels of eval -> native -> call (the unit test
+    `the_worst_case_nesting_fits_the_vm_stack`).
+  - Measured locally: about 5.5 KB of stack a level and 278 MB in all in a debug build, 1.3 KB and 65 MB in a release
+    build. The interpreter's dispatch functions are split so their frames stay small unoptimised (21 KB a level before).
+  - A caller needs `interp::STACK_SIZE` (512 MiB, reserved address space, committed as it is used): `ow-cli` runs
+    every VM command through `interp::on_vm_stack`, and `Vm::call` says so. Decoding stays lazy inside a call, as the C++.
+- **Frame bounds (Rust-only refusals, review r1).** Before a frame is allocated, its storage is checked: at most
+  `MAX_FRAME_SLOTS` (4,096) value slots a frame and `MAX_LIVE_SLOTS` (1,048,576) for all active frames together. The
+  storage is then reserved fallibly (`try_reserve_exact`); a refusal or a failed reservation is a typed
+  `VmError::Script` naming the function and the sizes. No dimension is clamped. The installed code packages need at
+  most 257 slots a frame (16,323 functions with children, measured locally), so no installed function meets it.
 - **Where the output differs from the C++, and why.**
   - **`vm_test.py`'s invented package declares reference properties with no class.**
     - The places: the `<Name>ModifierStack_Element` object properties; `make_function`'s object and class
@@ -85,7 +113,7 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     it. A batch `s:`/`t:` value that is not UTF-8 becomes U+FFFD where the C++ keeps the raw bytes. A
     `ComponentProperty` parameter is reported as `ObjectProperty` in the batch's type checks.
 - **Verified (automated, local, pc-hummer; C++ `build/Release/ow-package.exe` of this branch, MSVC 14.50).**
-  - **Unit tests.** 25 interpreter tests on an invented package, re-expressing the `vm_test.py` cases that use only
+  - **Unit tests.** 34 interpreter tests on an invented package, re-expressing the `vm_test.py` cases that use only
     this lane's features (constants, natives and the 32-bit wrap, `SumTo`, `Pick`, virtual dispatch, instance
     variables, optional and out parameters, unbound natives and native indices, the typed temporaries and their errors,
     `NoneCtx` and the `SumTo` census counters, casts, steps, the step and depth limits, the `GoA` state events under
@@ -93,7 +121,14 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     and value both set (10, 10), adding modifiers recomputes nothing, then 40.5 for base 20, 8.25 for base 2 through
     `Context(Self)`, the int attribute truncated toward zero (13 for 10, -11 for -10), an int right side converted to
     the float base (7, giving 12), no change notification, and the None context logged. A string right side, which the
-    C++ stores silently, is refused by `let_base` with nothing written. Also 3 CLI tests and 3 reflection tests.
+    C++ stores silently, is refused by `let_base` with nothing written. Review r1 added: `F(x, x)` with two out
+    parameters (1 and `x` = 1, the C++ values) through a local and through an instance variable, a native's out write
+    seen by the script it calls back into (5), a 65,536-slot frame and a live-slot overflow refused, the worst-case
+    nesting on a `STACK_SIZE` thread (the depth limit first, the nesting bound with the depth raised), `GotoLabel` and
+    a state variable, a class kept in an object property and a stand-in object refused with `NotYet`, `find_method` and
+    `GotoState` on a class nobody loaded, the decode error before the depth error, and 0x5F on an object without the
+    property. Also 3 CLI tests, 3 reflection tests, and a Core natives test of `IsA` / `ClassIsChildOf` through a
+    stand-in class.
     `tests/runtime_test.py` runs no VM command, so none of its cases is this lane's.
   - **`--native`.** `tests/rust_parity.d/vm.txt`: 8 diff lines (the `natives_test.py` command lines among them), 8 pass.
   - **`vm_test.py`'s package, with the two fixture patches above.** 64 `--run`, `--run-batch` and `--native` command
@@ -123,10 +158,11 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
   - Typed error sources on `VmError` for reflection and bytecode decoding, in place of the C++-text `Script`
     strings this lane uses for them (W2-VMAPI's contract). Definition store errors already travel as W3-DEFS's
     `VmError::Def`.
-  - `IsA` / `ClassIsChildOf` in `natives_core.rs` still answer `false` through an engine-native stand-in class
-    (W3-CORENAT).
+  - A native that reads its own out argument (`NativeCall::arg`) after a script callback changed the caller's variable
+    another way reads the value at the call; the C++ reads the alias. No Core native does this.
   - Architecture section 3.8 text for the seams above.
 - **UNVERIFIED.** Every rule here is the C++ VM's reading, none checked in the running game: the evaluation order of
-  arguments in the caller's context, the out-argument write-back, the typed temporaries 0x4C-0x50, the 0x5E/0x5F
+  arguments in the caller's context, the live out-argument aliasing, `GotoLabel` stepped over and state variables read
+  as instance variables, the class-into-object-property rule, the typed temporaries 0x4C-0x50, the 0x5E/0x5F
   attribute opcodes, the primitive casts and their string forms, the rotator-vector conversions, and the Latin-1
   reading of ANSI constants.

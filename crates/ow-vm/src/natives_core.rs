@@ -78,12 +78,12 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     /// decision 2026-11-15-07).
     struct LoadedStates;
     impl StateLookup for LoadedStates {
-        fn declares_state(&self, vm: &Vm, class: ClassId, state: NameId) -> Result<bool, VmError> {
+        fn declares_state(&self, vm: &mut Vm, class: ClassId, state: NameId) -> Result<bool, VmError> {
             vm.class_declares_state(class, state)
         }
         fn find_method(
             &self,
-            vm: &Vm,
+            vm: &mut Vm,
             class: ClassId,
             name: &str,
             state: Option<NameId>,
@@ -101,12 +101,12 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 /// What `GotoState` needs from the loaded classes: C++ `Class::states` and `Runtime::findMethod`.
 trait StateLookup {
     /// Whether `class` or a super class declares the state `state`.
-    fn declares_state(&self, vm: &Vm, class: ClassId, state: NameId) -> Result<bool, VmError>;
+    fn declares_state(&self, vm: &mut Vm, class: ClassId, state: NameId) -> Result<bool, VmError>;
     /// The function `name` as an object of `class` in state `state` (`None`: no state) sees it: for each class from
     /// `class` up, the state's own function first, then the class's.
     fn find_method(
         &self,
-        vm: &Vm,
+        vm: &mut Vm,
         class: ClassId,
         name: &str,
         state: Option<NameId>,
@@ -1132,28 +1132,20 @@ fn rotators(vm: &mut Vm) -> Result<(), VmError> {
 }
 
 fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
+    // Through an engine-native stand-in class the real chain is unknown: a "no" there is NotYet, not false
+    // (crate::interp, decision 2026-11-15-08).
     reg(vm, "Object.IsA(name)", |c| {
         let Some(this) = c.this else {
             return Ok(Value::Bool(false));
         };
-        let wanted = lowered(&text(c, 0)?);
-        let classes = &c.vm.space.classes;
-        let mut cursor = Some(c.vm.space.heap.get(this)?.class);
-        while let Some(k) = cursor {
-            let Some(layout) = classes.get_layout(k) else {
-                break;
-            };
-            if lowered(layout.path().name()) == wanted {
-                return Ok(Value::Bool(true));
-            }
-            cursor = layout.super_class();
-        }
-        Ok(Value::Bool(false))
+        let wanted = text(c, 0)?;
+        let class = c.vm.space.heap.get(this)?.class;
+        Ok(Value::Bool(crate::interp::is_a_named(c.vm, class, &wanted)?))
     })?;
     reg(vm, "Object.ClassIsChildOf(class,class)", |c| {
         let (a, b) = (class(c, 0)?, class(c, 1)?);
         Ok(Value::Bool(match (a, b) {
-            (Some(a), Some(b)) => c.vm.space.classes.is_child_of(a, b),
+            (Some(a), Some(b)) => crate::interp::is_child(c.vm, a, b)?,
             _ => false,
         }))
     })?;
@@ -2829,6 +2821,33 @@ mod tests {
     }
 
     #[test]
+    fn isa_and_class_is_child_of_answer_not_yet_through_an_engine_native_class() {
+        // Through an engine-native stand-in class (decision 2026-11-15-08) the real chain is unknown: a "no" there is
+        // NotYet, a "yes" found before it still stands (crate::interp::is_a_named / is_child).
+        let mut h = off();
+        let object = h.object;
+        let native = h.vm.space.classes.define("Engine.StandIn", Some(object), vec![]).unwrap();
+        h.vm.space.classes.mark_native(native).unwrap();
+        let leaf = h.vm.space.classes.define("Game.Leaf", Some(native), vec![]).unwrap();
+        let o = h.vm.instantiate(leaf, "L").unwrap();
+        for name in ["Leaf", "standin"] {
+            let n = h.name(name);
+            assert_eq!(h.call_on("Object.IsA(name)", o, vec![n]), b(true), "{name}");
+        }
+        let actor = h.name("Actor");
+        let id = h.declare("Object.IsA(name)", 1, &[]);
+        let e = h.vm.call(id, Some(o), vec![actor]).unwrap_err();
+        assert_eq!(not_yet(e), Missing::NotRead);
+        let key = "Object.ClassIsChildOf(class,class)";
+        let (leaf_c, native_c) = (Value::Class(Some(leaf)), Value::Class(Some(native)));
+        assert_eq!(h.call(key, vec![leaf_c.clone(), native_c]), b(true));
+        let e = h
+            .try_call(key, None, vec![leaf_c, Value::Class(Some(h.actor))], &[])
+            .unwrap_err();
+        assert_eq!(not_yet(e), Missing::NotRead);
+    }
+
+    #[test]
     fn query_interface() {
         let mut h = off();
         let p = h.vm.instantiate(h.pawn, "P").unwrap();
@@ -3067,12 +3086,12 @@ mod tests {
     }
 
     impl StateLookup for FakeStates {
-        fn declares_state(&self, vm: &Vm, _: ClassId, state: NameId) -> Result<bool, VmError> {
+        fn declares_state(&self, vm: &mut Vm, _: ClassId, state: NameId) -> Result<bool, VmError> {
             Ok(self.declared.contains(&lowered(&name_text(vm, state))))
         }
         fn find_method(
             &self,
-            vm: &Vm,
+            vm: &mut Vm,
             _: ClassId,
             name: &str,
             state: Option<NameId>,
