@@ -6,10 +6,10 @@
 
 use ow_object::ids::ObjRef;
 
+use crate::api::not_ported;
 use crate::api::{
     AddModifierOutcome, Applied, AttrError, EffectData, EvalCx, RemoveModifierOutcome,
 };
-use crate::eval::not_ported;
 use crate::registry::AttributeSystem;
 
 /// [`AttributeSystem::add_modifier`].
