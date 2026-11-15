@@ -680,7 +680,6 @@ mod tests {
     use ow_core::rand::CrtRand;
     use ow_object::heap::Origin;
     use ow_object::ids::ClassId;
-    use ow_object::value::Value;
 
     use super::*;
 
@@ -1021,44 +1020,6 @@ mod tests {
         assert_eq!(missing(e).0, Missing::LayerAbsent("ow-world"));
         let e = cx.world.rng(CrtStream::AttributeVariance).err().unwrap();
         assert_eq!(missing(e).0, Missing::LayerAbsent("ow-world"));
-    }
-
-    #[test]
-    fn every_entry_point_is_not_ported_yet() {
-        let (mut w, c) = world(registered());
-        let a = obj(&mut w, c.object, "Att");
-        let m = obj(&mut w, c.object, "Modifier");
-        let name = w.space.names.intern("MaxValue");
-        let attrs = w.attrs.clone();
-        let mut cx = EvalCx::new(&mut w);
-        let data = InitData::constant(1.0);
-        let effect = EffectData::new(Some(a), ModifierType::Scale, data);
-        let errors = [
-            attrs.add_modifier(a, Some(a), m, false, &mut cx).err(),
-            attrs.remove_modifier(a, Some(a), m, true, &mut cx).err(),
-            attrs.set_base(a, Some(a), 4.0, false, &mut cx).err(),
-            attrs.apply_effects(&[effect], Some(a), None, &mut cx).err(),
-            attrs.remove_effects(Applied::default(), &mut cx).err(),
-            attrs.add_modifier_by_name(a, m, name, false, &mut cx).err(),
-            attrs
-                .remove_modifier_by_name(a, m, name, false, &mut cx)
-                .err(),
-            attrs.attribute_value_by_name(a, name, &mut cx).err(),
-        ];
-        for e in errors {
-            assert_eq!(missing(e.expect("not ported yet")).0, Missing::NotPorted);
-        }
-        let owner = obj(&mut w, c.object, "Owner");
-        let p = prop0(&c);
-        let companions = AttrCompanions {
-            value: p,
-            base: p,
-            stack: p,
-        };
-        // The typed let takes the right side as a typed value: an integer above 2^24 is conveyed exactly.
-        let rhs = Value::Int(16_777_217);
-        let e = crate::registry::let_base(&mut w.space, owner, companions, rhs, CombineForm::Vm5F);
-        assert_eq!(missing(e.err().unwrap()).0, Missing::NotPorted);
     }
 
     #[test]

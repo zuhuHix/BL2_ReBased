@@ -66,6 +66,10 @@ fn value_chain(cx: &mut EvalCx<'_>, attr: ObjRef) -> Result<Vec<Option<ObjRef>>,
 }
 
 /// The storage resolver `r` names on `context`, or `None` when its class takes no writes.
+///
+/// `None` also comes back when a writable resolver names a property that is not an attribute (`storage::storage_of`):
+/// the contract's `Option<Storage>` does not tell the two apart, so both are reported as `Refusal::NotWritable`. The
+/// native's bool is the same (false) either way; only the refusal reason is coarser (open item).
 fn storage_at(
     sys: &AttributeSystem,
     r: ObjRef,
