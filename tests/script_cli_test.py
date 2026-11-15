@@ -4,9 +4,9 @@
     python tests/script_cli_test.py <ow-package binary>
 
 Runs on the C++ binary in ctest (`script-cli-synthetic`) and on the Rust binary through `tests/rust_parity.d/script.txt`.
-The package is invented (AGENTS.md rule 9): a toy `Core` with one class `Foo` and five functions, built with the package writer
-of `tests/vm_test.py` and the function payload of `Toy.function` in `tests/mission_script_test.py` (no child properties, since
-none of the bodies names one). The function layout is the one recovered from the real packages
+The package is invented (AGENTS.md rule 9): a toy `Core` with one class `Foo`, six functions and one local, built with the package writer
+of `tests/vm_test.py` and the function payload of `Toy.function` in `tests/mission_script_test.py` (child properties only where
+a body names one: Local's N). The function layout is the one recovered from the real packages
 (docs/verification/SCRIPT_BYTECODE_DISASM.md). The bodies:
 
   Answer   return 42;                      04 | 1D 2A000000 | 53
@@ -14,6 +14,7 @@ none of the bodies names one). The function layout is the one recovered from the
   Skip     if (true) return; (jump lands)  07 0600 27 | 04 0B | 53       the JumpIfNot target 6 is the EndOfScript statement
   Native   a native function, no script    (counted as native, not decoded)
   Broken   a jump into an instruction      06 0100 | 04 0B | 53          target 1 is inside the jump, not a statement start
+  Local    N = 5; if (true) return;        0F 00 <N> 1D 05000000 | 07 1500 27 | 04 0B | 53   one reference: file and memory offsets differ
 
 Line ends are compared after reading CRLF as LF: the C++ binary's text-mode streams print CRLF on Windows (decision 2026-11-15-09).
 """
@@ -97,6 +98,14 @@ def make():
     ]
     for name, script, flags in bodies:
         p.add_export(fn, name, function_payload(p, name, script, flags=flags), outer=foo)
+    # Local: one object reference, so file and in-memory offsets differ. The local N is exported first (7), inside
+    # the function (8). Let(N, 5) is 11 bytes in the file and 15 in memory; the JumpIfNot target is a memory offset.
+    none = p.fname('None')
+    local = p.add_export(p.add_import('Class', 'IntProperty'), 'N',
+                         w32(0) + none + w32(0) + u32(1) + struct.pack('<Q', 0) + none + w32(0) + w32(0), outer=8)  # 7
+    script = bytes([0x0F, 0x00]) + w32(local) + bytes([0x1D]) + w32(5) \
+        + bytes([0x07]) + u16(21) + bytes([0x27, 0x04, 0x0B, 0x53])
+    assert p.add_export(fn, 'Local', function_payload(p, 'Local', script, refs=1), outer=foo) == 8
     return p.build()
 
 
@@ -119,17 +128,17 @@ class ScriptCli(unittest.TestCase):
     def test_script_check_counts(self):
         code, out, err = run(self.path, '--script-check')
         self.assertEqual((code, err), (0, ''))
-        self.assertEqual(out, '{"package":"Core","functions":5,"native":1,"script":4,"decoded":3,"failed":1}\n')
+        self.assertEqual(out, '{"package":"Core","functions":6,"native":1,"script":5,"decoded":4,"failed":1}\n')
 
     def test_script_check_lists_the_failing_function(self):
         code, out, err = run(self.path, '--script-check', '--failures')
         self.assertEqual((code, err), (0, ''))
         summary = json.loads(out)
         self.assertEqual({k: summary[k] for k in ('functions', 'native', 'script', 'decoded', 'failed')},
-                         {'functions': 5, 'native': 1, 'script': 4, 'decoded': 3, 'failed': 1})
+                         {'functions': 6, 'native': 1, 'script': 5, 'decoded': 4, 'failed': 1})
         self.assertEqual(len(summary['failures']), 1)
         self.assertTrue(summary['failures'][0].startswith('Foo.Broken: '), summary['failures'])
-        self.assertEqual(out, '{"package":"Core","functions":5,"native":1,"script":4,"decoded":3,"failed":1,'
+        self.assertEqual(out, '{"package":"Core","functions":6,"native":1,"script":5,"decoded":4,"failed":1,'
                               '"failures":["Foo.Broken: ' + BROKEN + '"]}\n')
 
     def test_disasm_by_path_and_by_index(self):
@@ -137,6 +146,7 @@ class ScriptCli(unittest.TestCase):
             'Foo.Answer': (2, ANSWER),
             'Foo.Nothing': (3, NOTHING),
             'Foo.Skip': (4, SKIP),
+            'Foo.Local': (8, LOCAL),
         }
         for target, (index, text) in expected.items():
             for argument in (target, str(index)):
@@ -158,6 +168,9 @@ class ScriptCli(unittest.TestCase):
 # so Answer's EndOfScript sits after 1 (Return) + 1 (IntConst) + 4 (the value) bytes. The flags are SCRIPTED (0x20003).
 ANSWER = '// Foo.Answer  flags 0x20003\n0: Return(IntConst(42))\n6: EndOfScript\n'
 NOTHING = '// Foo.Nothing  flags 0x20003\n0: Return(Nothing)\n2: EndOfScript\n'
+# Local's statements are listed at their file offsets (0, 11, 15, 17); the jump's operand, 21, is the in-memory offset
+# of EndOfScript (17 + 4 for the one reference).
+LOCAL = '// Foo.Local  flags 0x20003\n0: Let(LocalVariable(Foo.Local.N), IntConst(5))\n11: JumpIfNot(21, True)\n15: Return(Nothing)\n17: EndOfScript\n'
 SKIP = '// Foo.Skip  flags 0x20003\n0: JumpIfNot(6, True)\n4: Return(Nothing)\n6: EndOfScript\n'
 BROKEN = 'jump target 1 is not a statement start'
 
