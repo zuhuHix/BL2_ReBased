@@ -8,9 +8,10 @@ what is specific to Claude Code.
 documents only for the part your task touches.
 
 BL2_ReBased (code prefix `OpenWillow` / `ow`) is a Borderlands 2 engine reimplementation in Rust. The C++ core
-in `src/` is being ported crate by crate (`crates/`), and the host's engine route waits on the Phase 0R benchmark
-(`docs/verification/ENGINE_BENCHMARK.md`). The original game must be installed on the user's machine: the project
-ships no Gearbox files and no Gearbox code, and project code is written from an understanding of what the game does.
+in `src/` is being ported crate by crate (`crates/`), and the host will be our own engine on wgpu + winit, picked from
+the Phase 0R benchmark (`docs/verification/ENGINE_BENCHMARK.md`). The original game must be installed on the user's
+machine: the project ships no Gearbox files and no Gearbox code, and project code is written from an understanding of
+what the game does.
 The project's own code and documents are MIT-licensed; that covers no third-party component and no game content. The
 maintainer, zuhu, is a solo, largely self-taught developer directing an AI-heavy build.
 
@@ -40,8 +41,9 @@ releases or anything published, money, or anything that moves game-derived data.
 6. **Maintainer decisions stay with the maintainer:** `THIRD_PARTY.md`, `LICENSE`, and any new tool, dependency,
    licence or provenance change. The language is chosen: runtime code is Rust, which replaced the UE5 host
    (`docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md`); do not reopen it.
-   The engine route (Bevy, an own engine on wgpu, or Fyrox) is the maintainer's pick from the Phase 0R benchmark; do
-   not pick it, and add no candidate to the tree before its `THIRD_PARTY.md` entry.
+   The engine route is picked too: an own engine on wgpu + winit, the maintainer's pick from the Phase 0R benchmark
+   (`docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md`); do not reopen it, and
+   add no engine crate to the tree before its `THIRD_PARTY.md` entry.
 7. **Honest verification.** A rule that has not been confirmed in the running game stays `UNVERIFIED` in code and
    docs, and a confirmed one says how it was confirmed. A passing host suite means "the host did this", not parity.
    Count agreement is not compatibility. Never report a result you did not see.
@@ -64,7 +66,7 @@ not hold would waste most of the project's time, so the order (adopted 2026-09-1
 
 1. Port the core to Rust until each crate matches `src/` (the same synthetic fixtures give the same results, and
    `tools/verify_packages.py --reader` gives the same counts and class bodies; the C++ reader stays the reference until
-   then), and run the Phase 0R engine benchmark so the maintainer can pick the route.
+   then). The Phase 0R engine benchmark is done and the route is picked (own engine on wgpu + winit).
 2. Bring **Sanctuary** to visual and walkable parity in the Rust host (Phase 1). It is the most complete map; do not
    start over on another.
 3. Get **Maya** working end to end: movement, a few weapons, animations, her action skill (Phaselock). Her skill trees

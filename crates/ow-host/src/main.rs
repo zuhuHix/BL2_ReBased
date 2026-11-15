@@ -1,4 +1,5 @@
-//! `ow-host --game <install>`: checks the install and stops, because no engine route is chosen yet.
+//! `ow-host --game <install>`: checks the install and stops, because the host on the chosen engine route (own engine on
+//! wgpu + winit) is not written yet.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,8 +17,8 @@ fn main() -> ExitCode {
         Ok(install) => {
             println!("Borderlands 2 install found: {}", install.cooked.display());
             println!(
-                "No engine route is chosen yet (Phase 0R benchmark, docs/verification/ENGINE_BENCHMARK.md); \
-                 nothing to run."
+                "Engine route chosen: own engine on wgpu + winit (docs/verification/ENGINE_BENCHMARK.md); \
+                 the host is not written yet, nothing to run."
             );
             ExitCode::SUCCESS
         }

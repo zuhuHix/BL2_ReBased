@@ -336,17 +336,18 @@ from `src/` and `tools/`, the allowed dependency edges and the Rust `ow-package`
 banned numeric or determinism pattern, or a C++ CLI flag without a Rust entry.
 
 - `ow-host --game <install>` checks that the folder holds `WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk`
-  and `WillowGame.upk` (rule 11), then says that no engine route is chosen and stops (exit 0; 1 when it refuses the
-  folder, 2 for a wrong call).
+  and `WillowGame.upk` (rule 11), then says that the host on the chosen engine route is not written yet and stops
+  (exit 0; 1 when it refuses the folder, 2 for a wrong call).
 - The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines; until a command family is ported it prints
   `<flag> is not ported to Rust yet (lane <lane>)` and exits 3. Use `build/Release/ow-package.exe` meanwhile.
 
 Beyond `ow-host`'s install check and five finished `ow-core` files (`NotYet`, object paths, the key-ordered and
 insertion-ordered maps, the parity mode), every module is a stub that its owner lane fills; nothing in Rust reads a
-package yet, so every statement about the Rust route is `UNVERIFIED`. The engine route is not chosen: a timeboxed
-Phase 0R benchmark (Bevy and an own engine on wgpu + winit required, Fyrox optional) builds the same small scene in
-each, its prototypes live under ignored `local/bench/` because each candidate is a new dependency, and the maintainer
-picks from the record, [ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md).
+package yet, so every statement about the Rust route is `UNVERIFIED`. The engine route is chosen: the maintainer picked
+an own engine on wgpu + winit on 2026-11-15 from the Phase 0R benchmark
+([record](verification/ENGINE_BENCHMARK.md),
+[decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). Its prototypes stay under
+ignored `local/bench/`, and no engine crate enters the workspace before its `THIRD_PARTY.md` entry is approved.
 
 ## The run lock: one heavy run per machine
 

@@ -14,7 +14,7 @@ One developer, a lot of AI, and a written record of every check.
 [![Status: prototype](https://img.shields.io/badge/status-prototype-orange)](#where-things-stand)
 [![Playable: not yet](https://img.shields.io/badge/playable-not%20yet-lightgrey)](#where-things-stand)
 [![Rust 1.96](https://img.shields.io/badge/Rust-1.96-black)](rust-toolchain.toml)
-[![Engine route: benchmark](https://img.shields.io/badge/engine%20route-benchmark%20pending-lightgrey)](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)
+[![Engine route: own engine on wgpu](https://img.shields.io/badge/engine%20route-own%20engine%20on%20wgpu-blue)](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)
 [![C++20 core](https://img.shields.io/badge/C%2B%2B-20%20core-00599C)](CMakeLists.txt)
 [![CI](https://github.com/zuhuHix/BL2_ReBased/actions/workflows/ci.yml/badge.svg)](https://github.com/zuhuHix/BL2_ReBased/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -32,7 +32,7 @@ One developer, a lot of AI, and a written record of every check.
 > **2026-11-14: the project moved from Unreal Engine 5 to Rust.** The UE5 host has been removed from the repository ([the decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). What that means:
 >
 > - The pictures on this page, "See it running" included, were made with the retired UE5 host. They show what that host did, not a build you can get today.
-> - The Rust host is not running yet. Which engine it builds on (Bevy, an own engine on wgpu, maybe Fyrox) will be chosen from a benchmark, and that benchmark hasn't been run.
+> - The Rust host is not running yet. On 2026-11-15 I picked the engine it builds on from a benchmark: our own engine on wgpu + winit, not Bevy ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The host itself isn't written yet.
 > - The part that reads the game carries over: the package reader, the script VM and the combat, mission and item rules. It's being ported from C++ to Rust crate by crate, and the C++ version stays the reference until each Rust crate matches it.
 > - The last commit with the UE5 host is `08bcf3e`, if you want to look at it.
 
@@ -87,10 +87,10 @@ Every big complaint people have (broken co-op, out-of-memory crashes, no ultrawi
 Same idea as [OpenMW](https://openmw.org/) (Morrowind), [OpenRCT2](https://openrct2.org/) (RollerCoaster Tycoon 2) and [Ship of Harkinian](https://www.shipofharkinian.com/) (Ocarina of Time). Those work. As far as I know, nobody's done it for BL2 yet. That's the challenge.
 
 <p align="center">
-  <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed the Rust host, whose engine route is chosen by benchmark.">
+  <img src=".github/assets/how-it-works.svg" width="100%" alt="Your copy of BL2 goes into ow-package, which feeds the asset pipeline and the script VM. The script VM calls the native layer. The asset pipeline and the native layer both feed the Rust host, whose engine route was chosen by benchmark: an own engine on wgpu + winit.">
 </p>
 
-<sub>The target design. The game-reading core (package reader, script VM, combat, mission and item rules) is C++ today and is being ported to Rust. The host (the "host" in the docs) is not started in Rust: its engine route is still to be picked by a benchmark. Until 2026-11-14 the host was a UE5 project, now retired; in it, only parts of the slice ran on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run).</sub>
+<sub>The target design. The game-reading core (package reader, script VM, combat, mission and item rules) is C++ today and is being ported to Rust. The host (the "host" in the docs) is not started in Rust: its engine route is picked (an own engine on wgpu + winit, from a benchmark), but none of it is written yet. Until 2026-11-14 the host was a UE5 project, now retired; in it, only parts of the slice ran on the script VM (backpack navigation, pieces of the Fire mission, and the combat rules in a command-line run).</sub>
 
 <details>
 <summary><b>Why can't mods just fix this?</b></summary>
@@ -325,11 +325,11 @@ An independent AI critic, one that didn't build the thing, gets our frames and m
 
 ## Where things stand
 
-*Updated 2026-11-14.*
+*Updated 2026-11-15.*
 
 **Short version:** there's no game to play yet. On 2026-11-14 the UE5 host was removed and the project switched to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). Right now:
 
-- **The host is back to not started.** No Rust engine is chosen. A benchmark (Bevy and an own engine on wgpu + winit, Fyrox optional) builds the same small Sanctuary-and-Maya scene in each, and I pick from the measurements. It hasn't run yet.
+- **The host is back to not started, but its engine is picked.** A benchmark built the same small Sanctuary-and-Maya scene in Bevy and in an own engine on wgpu + winit, and on 2026-11-15 I picked the own engine on wgpu + winit ([record](docs/verification/ENGINE_BENCHMARK.md), [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). Its main draws: BL2's Flash UI runs through Ruffle on the same GPU device, and the binary is several times smaller. None of its crates is in the repository yet.
 - **The core carries over.** The package reader, the census, the VM prototype and the combat, mission and item rules keep their status. They're C++ today and get ported to Rust crate by crate. The Rust workspace exists, but its crates are skeletons: no Rust code reads a package yet.
 - **The evidence stays.** Real-game captures, the own-words native notes and the script disassembly don't depend on the host. What the UE5 host showed stays on record as history and as a target, but doesn't count toward the Rust host's gates.
 
@@ -360,12 +360,12 @@ Each item names its PR. Anything not checked against the running game is `UNVERI
 
 **Not yet:**
 
-- **A Rust host.** No engine route is chosen, and nothing renders, moves or plays in Rust yet.
+- **A Rust host.** The engine route is picked (own engine on wgpu + winit), but nothing renders, moves or plays in the repository's Rust yet.
 - **Parity with the original game.** Nothing here should be read as "it works like the real thing" unless its record says so.
 - **An enemy that actually downs Maya in the gate run.** In the UE5 host, enemies hit her on the range, but the gate's down still came from the test.
 - **The rest of the game.** The other ~79 maps, the other Vault Hunters, the full campaign, co-op, your saves.
 
-**Next up:** the engine benchmark, porting the C++ core to Rust crate by crate until each crate matches it, then Sanctuary and Maya again in the Rust host. The order is the same as before: Sanctuary and Maya first, then the Phase 4 gate, then breadth. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
+**Next up:** porting the C++ core to Rust crate by crate until each crate matches it, starting the host on wgpu + winit, then Sanctuary and Maya again in the Rust host. The order is the same as before: Sanctuary and Maya first, then the Phase 4 gate, then breadth. The small items are tagged *good first task* in [ROADMAP.md](ROADMAP.md#now--next).
 
 ## What you'd get (eventually)
 
@@ -401,7 +401,7 @@ Six phases. Each one ends with a gate, a thing you can actually see or do, so it
 | Phase | What you'll be able to do | Where it is |
 |:--|:--|:--|
 | <img src=".github/assets/icons/done.svg" width="18" height="18" align="absmiddle" alt="Done"> **0 · Read the files** | The engine can open every BL2 file | **Done.** 2,008 packages, gated 2026-09-10, with the C++ reader. The Rust port has to match it before it takes over |
-| <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **0R · Pick the engine** | Bevy, an own engine on wgpu + winit (and maybe Fyrox) each build the same small Sanctuary-and-Maya scene, and I pick from the measurements | **Not started.** Added 2026-11-14 with the switch to Rust ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)) |
+| <img src=".github/assets/icons/done.svg" width="18" height="18" align="absmiddle" alt="Done"> **0R · Pick the engine** | Bevy and an own engine on wgpu + winit each build the same small Sanctuary-and-Maya scene, and I pick from the measurements | **Picked 2026-11-15: own engine on wgpu + winit** ([record](docs/verification/ENGINE_BENCHMARK.md), [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The Rust core port, the other half of 0R, is still in progress |
 | <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **1 · See a map** | Walk around Sanctuary in the Rust host, verified against the real game. The rest of the 82 maps come in phase 5 | **Not started in Rust.** The retired UE5 host loaded three maps as scenery and had matched-camera rounds of Sanctuary; that stays on record as the target |
 | <img src=".github/assets/icons/now.svg" width="18" height="18" align="absmiddle" alt="In progress"> **2 · Run the game's brain** | BL2's own gameplay code executes, scoped to the slice | **Core in progress, host not started.** A C++ bytecode loader, interpreter and Core natives since 2026-09-30, to be ported to Rust. In the UE5 host it drove backpack navigation and pieces of the mission and combat rules |
 | <img src=".github/assets/icons/todo.svg" width="18" height="18" align="absmiddle" alt="Not started"> **3 · Make a body move** | Walking, jumping, falling, animation, collision, scoped to the slice | **Not started in Rust.** Movement numbers from stock data (#77) carry over; the UE5 host's movement was maintainer-tested on 2026-10-02, with no verification record |
@@ -412,7 +412,7 @@ Six phases. Each one ends with a gate, a thing you can actually see or do, so it
 I work on this actively, and I'm not promising completion dates. Checkbox-level detail is in [ROADMAP.md](ROADMAP.md).
 
 <details>
-<summary><b>65 days, in dates</b></summary>
+<summary><b>66 days, in dates</b></summary>
 <br>
 
 | Date | What happened |
@@ -429,6 +429,7 @@ I work on this actively, and I'm not promising completion dates. Checkbox-level 
 | 2026-11-06 | The gun range lands on `main`, with enemies that fight and drop loot |
 | 2026-11-07 | The loop passes 14 of 14 on `main` |
 | 2026-11-14 | The UE5 host is retired and the project moves to Rust. The engine route will be picked by benchmark |
+| 2026-11-15 | Engine benchmark run; I pick an own engine on wgpu + winit over Bevy |
 
 </details>
 
@@ -477,7 +478,7 @@ That's the plan, but it hasn't been tested. Text mods edit the same game data th
 That's the plan, but not yet. Reading and writing real save files is a Phase 5 task and hasn't been validated. The save format is already documented by the community.
 
 **Why Rust? Wasn't this on Unreal Engine 5?**
-It was, until 2026-11-14. Borderlands 2 is Unreal Engine *3*, and the first plan translated its systems into their UE5 descendants. After playing the slice by hand I decided to move the runtime code to Rust instead: the game-reading core gets ported from C++, and the engine underneath gets picked by a benchmark (Bevy, an own engine on wgpu, maybe Fyrox) rather than up front. The whole decision is [here](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md). The UE5 work isn't thrown away: its code is still in the history (commit `08bcf3e`) and its records say what it did, which is the target the Rust host has to meet.
+It was, until 2026-11-14. Borderlands 2 is Unreal Engine *3*, and the first plan translated its systems into their UE5 descendants. After playing the slice by hand I decided to move the runtime code to Rust instead: the game-reading core gets ported from C++, and the engine underneath was picked by a benchmark rather than up front: on 2026-11-15, our own engine on wgpu + winit over Bevy ([that decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The switch itself is [here](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md). The UE5 work isn't thrown away: its code is still in the history (commit `08bcf3e`) and its records say what it did, which is the target the Rust host has to meet.
 
 **Who's making this?**
 Me and AI: ChatGPT (Astra and Luna) and Claude as well (Opus 5.5 and Sonnet 5.5) do the grunt work, decoding formats and chasing down smaller one-off tasks. If you want to help cover my monthly sub, or just support the hours going into this, there's a [Buy Me a Coffee](https://buymeacoffee.com/zuhu). Thank you so much to my current supporter (George)! <3
@@ -508,7 +509,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic (C++ toda
 
 ```
                  ┌──────────────────────────────────────────────────────┐
-                 │  HOST ENGINE (Rust; route chosen by benchmark)       │
+                 │  HOST ENGINE (Rust; own engine on wgpu + winit)      │
                  └───────────────▲──────────────────────▲───────────────┘
                                  │                      │
    ┌─────────────────────────────┴───┐    ┌─────────────┴──────────────────┐
@@ -528,7 +529,7 @@ Three layers. The script VM and the asset pipeline are engine-agnostic (C++ toda
         goal: run the 12,978 inherited functions unchanged
 ```
 
-Until 2026-11-14 the host engine was Unreal Engine 5, chosen at the Phase 0 gate. That choice was reversed: new runtime code is Rust, the UE5 host is removed (last held by commit `08bcf3e`), and no Rust engine is chosen yet. A Phase 0R benchmark builds the same small scene in Bevy and in an own engine on wgpu + winit (Fyrox optional), and the maintainer picks from the measurements. The `[done]` and `[wip]` marks in the diagram are the C++ core's; the host-side ones were done in UE5 and have to be done again. Reasoning: [the decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md) and [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision).
+Until 2026-11-14 the host engine was Unreal Engine 5, chosen at the Phase 0 gate. That choice was reversed: new runtime code is Rust, the UE5 host is removed (last held by commit `08bcf3e`), and the Rust engine route was picked on 2026-11-15 from a Phase 0R benchmark that built the same small scene in Bevy and in an own engine on wgpu + winit: the own engine on wgpu + winit ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). The `[done]` and `[wip]` marks in the diagram are the C++ core's; the host-side ones were done in UE5 and have to be done again. Reasoning: [the decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md) and [engine plan §2.1](docs/OPENWILLOW_ENGINE_PLAN.md#21-host-engine-decision).
 
 </details>
 
@@ -575,7 +576,7 @@ cargo build --workspace
 cargo test --workspace                                         # synthetic tests, no game needed
 ```
 
-The crates are skeletons for now. `ow-host --game <install folder>` only checks that it was given a Borderlands 2 install and says that no engine route is chosen; nothing renders yet.
+The crates are skeletons for now. `ow-host --game <install folder>` only checks that it was given a Borderlands 2 install and says that the host on the chosen route (own engine on wgpu + winit) is not written yet; nothing renders yet.
 
 The C++ core in `src/` still builds and is the reference until each Rust crate matches it (same synthetic fixtures, same `verify_packages.py` results):
 
