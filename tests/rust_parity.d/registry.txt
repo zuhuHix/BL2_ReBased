@@ -1,0 +1,9 @@
+# AI-assisted (Claude Code). Lane W4-REGISTRY: --item-registry (crates/ow-items/src/registry.rs).
+#
+# No line yet. tests/item_registry_rust_test.py compares tools/item_registry.py (C++ reader) with the Rust
+# --item-registry byte for byte; ctest runs it as item-registry-rust. Its Rust comparison is skipped while
+# DefStore::census() answers NotYet (W3-DEFS), and the runner fails a line that reports a skip, so the line lands with
+# the census body, after the Rust reader's text for a file that is not a package matches the C++ (the test's
+# expectedFailure case):
+#
+# python tests/item_registry_rust_test.py build/Release/ow-package.exe {bin}

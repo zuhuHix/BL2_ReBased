@@ -174,6 +174,11 @@ if(EXISTS ${OW_RUST_PACKAGE})
   add_test(NAME rust-parity COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/rust_parity.py --bin ${OW_RUST_PACKAGE}
            --cxx $<TARGET_FILE:ow-package> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   set_tests_properties(rust-parity PROPERTIES TIMEOUT 1800 LABELS rust)
+  # Lane W4-REGISTRY: tools/item_registry.py on the C++ binary against the Rust reader and the Rust --item-registry,
+  # byte for byte (the Rust registry comparison is reported skipped while DefStore::census() answers NotYet).
+  add_test(NAME item-registry-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_registry_rust_test.py
+           $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
+  set_tests_properties(item-registry-rust PROPERTIES TIMEOUT 300 LABELS rust)
 elseif(OW_REQUIRE_TEST_TOOLS)
   message(FATAL_ERROR "OW_REQUIRE_TEST_TOOLS is ON and there is no Rust binary at ${OW_RUST_PACKAGE}: rust-parity is not registered (cargo build --release -p ow-cli --locked)")
 else()

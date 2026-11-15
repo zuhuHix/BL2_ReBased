@@ -31,6 +31,7 @@
 //! struct, a non-numeric constant) is read here as having no value; a negative base with a non-integral power goes
 //! through the C `pow` (NaN) where Python would raise.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -38,16 +39,14 @@ use std::sync::Arc;
 
 use ow_core::fmt::{fmt_g, fmt_py_repr, json_quote_py};
 use ow_core::num::{f32r, pow_f64};
-use ow_core::{DetMap, DetSet, NotYet, OrderedMap};
+use ow_core::{DetMap, DetSet, OrderedMap};
 use ow_defs::DefStore;
-use ow_defs::store::DefError;
 use ow_object::heap::ObjectSpace;
 use ow_package::package::Package;
 use ow_package::props::{self, PropEntry, PropValue};
 use ow_package::schema::SchemaTyper;
 
-/// The record a `NotYet` of this module names.
-pub const RECORD: &str = "docs/rust-port/ARCHITECTURE.md section 8, lane W4-REGISTRY";
+use crate::ItemError;
 
 pub const SCHEMA_TAG: &str = "openwillow-item-registry/1";
 pub const SCHEMA_LINE: &str = "openwillow-item-registry/1: balances, definitions, parts, part_lists, name_parts, \
@@ -159,48 +158,6 @@ const UNLISTED_SUFFIXES: [&str; 3] = [
     "PartListCollectionDefinition",
     "PartListDefinition",
 ];
-
-/// Why the registry could not be built.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
-pub enum RegistryError {
-    /// The definition store failed (transparent: prints as the store's error, `source()` is its cause).
-    Defs(DefError),
-    NotYet(NotYet),
-}
-
-impl fmt::Display for RegistryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RegistryError::Defs(e) => e.fmt(f),
-            RegistryError::NotYet(e) => e.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for RegistryError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            RegistryError::Defs(e) => e.source(),
-            RegistryError::NotYet(_) => None,
-        }
-    }
-}
-
-impl From<DefError> for RegistryError {
-    fn from(e: DefError) -> Self {
-        match e {
-            DefError::NotYet(n) => RegistryError::NotYet(n),
-            other => RegistryError::Defs(other),
-        }
-    }
-}
-
-impl From<NotYet> for RegistryError {
-    fn from(e: NotYet) -> Self {
-        RegistryError::NotYet(e)
-    }
-}
 
 // ---- the Python value model ----------------------------------------------------------------------------------------
 
@@ -442,6 +399,9 @@ pub struct CensusInput {
     /// The install folder: package paths are written relative to it, and `WillowGame/CookedPCConsole` and `DLC/<x>`
     /// below it name the DLC folder of a file.
     pub root: PathBuf,
+    /// Every file the tool lists (`weapon_catalog.package_files`, failed ones included), in its order: what
+    /// `packages_scanned` counts and what orders `paths_with_two_classes`.
+    pub files: Vec<PathBuf>,
     pub paths: Vec<PathHolders>,
     pub defaults: Vec<(String, String)>,
     /// Files that failed to load, with the text the tool keeps for them (`ow-package: <error>`, the reader's
@@ -470,10 +430,11 @@ impl CensusInput {
             .filter_map(|f| tool_file_key(f, root).map(|k| (k, f.clone())))
             .collect();
         ranked.sort();
-        let rank: DetMap<PathBuf, usize> = ranked
-            .into_iter()
+        let files: Vec<PathBuf> = ranked.into_iter().map(|(_, f)| f).collect();
+        let rank: DetMap<PathBuf, usize> = files
+            .iter()
             .enumerate()
-            .map(|(i, (_, f))| (f, i))
+            .map(|(i, f)| (f.clone(), i))
             .collect();
         let holders_of = |owners: Vec<ow_defs::identity::Owner>| -> Vec<(usize, Holder)> {
             let mut kept: Vec<(usize, Holder)> = owners
@@ -488,6 +449,7 @@ impl CensusInput {
             kept
         };
         let mut input = CensusInput::new(root.to_path_buf());
+        input.files = files.clone();
         let mut entries: Vec<((usize, i32), PathHolders)> = Vec::new();
         for entry in census.entries {
             let kept = holders_of(entry.holders);
@@ -588,13 +550,23 @@ struct Census {
     null_name_entries: DetMap<String, usize>,
     unlisted_classes: DetMap<String, usize>,
     unlisted_part_data: DetMap<String, DetSet<String>>,
-    conflicts: Vec<Conflict>,
+    conflicts: Vec<((usize, i32), Conflict)>,
     duplicates: usize,
+    files: Vec<PathBuf>,
+    rank: DetMap<PathBuf, usize>,
     load_failures: Vec<(PathBuf, String)>,
     typer: SchemaTyper,
-    packages: DetMap<PathBuf, Result<Arc<Package>, String>>,
+    /// The last few packages read, most recent first: decoding is grouped by owner file ([`Census::preload`]), and
+    /// what is read later (attribute definitions, resolvers) seldom needs more than a few files. Only decoded values
+    /// stay for the run.
+    packages: Vec<(PathBuf, Result<Arc<Package>, String>)>,
     cache: DetMap<String, Rc<Decoded>>,
+    /// Paths that did not decode, with why (decoding is deterministic, so a failure is not retried).
+    bad: DetMap<String, String>,
 }
+
+/// How many packages [`Census`] keeps loaded between lookups.
+const PACKAGES_KEPT: usize = 4;
 
 impl Census {
     /// `RegistryCensus.add` over every (path, class, file) of the scan, in scan order.
@@ -616,10 +588,18 @@ impl Census {
             unlisted_part_data: DetMap::new(),
             conflicts: Vec::new(),
             duplicates: 0,
+            rank: input
+                .files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.clone(), i))
+                .collect(),
+            files: input.files,
             load_failures: input.load_failures,
             typer,
-            packages: DetMap::new(),
+            packages: Vec::new(),
             cache: DetMap::new(),
+            bad: DetMap::new(),
         };
         for (_, class) in &input.defaults {
             let name = short(class);
@@ -641,6 +621,8 @@ impl Census {
                 c.add(&entry.path, h);
             }
         }
+        // `RegistryCensus.add` runs file by file, export by export: its conflicts come in that order.
+        c.conflicts.sort_by_key(|(k, _)| *k);
         c
     }
 
@@ -671,12 +653,17 @@ impl Census {
                 owner.1 = h.export;
             }
             if short(&first) != name && (is_relevant || relevant(short(&first))) {
-                self.conflicts.push(Conflict {
+                let key = (
+                    self.rank.get(&h.file).copied().unwrap_or(usize::MAX),
+                    h.export,
+                );
+                let conflict = Conflict {
                     path: path.to_string(),
                     first,
                     second: h.class,
                     second_package: h.file,
-                });
+                };
+                self.conflicts.push((key, conflict));
             }
             return;
         }
@@ -693,14 +680,56 @@ impl Census {
     }
 
     fn package(&mut self, file: &Path) -> Result<Arc<Package>, String> {
-        if !self.packages.contains_key(file) {
-            let loaded = Package::load(file).map_err(|e| error_text(&e));
-            self.packages.insert(file.to_path_buf(), loaded);
+        let at = match self.packages.iter().position(|(f, _)| f == file) {
+            Some(at) => at,
+            None => {
+                let loaded = Package::load(file).map_err(|e| error_text(&e));
+                self.packages.insert(0, (file.to_path_buf(), loaded));
+                self.packages.truncate(PACKAGES_KEPT);
+                0
+            }
+        };
+        let entry = self.packages.remove(at);
+        let result = entry.1.clone();
+        self.packages.insert(0, entry);
+        result
+    }
+
+    /// The tool's `preload`: decodes `paths` grouped by owner file, each file read once and dropped after its group.
+    fn preload(&mut self, paths: &[String]) {
+        let mut groups: DetMap<PathBuf, Vec<(String, i32)>> = DetMap::new();
+        for path in paths {
+            if self.cache.contains_key(path) || self.bad.contains_key(path) {
+                continue;
+            }
+            if let Some((file, export)) = self.owner.get(path) {
+                groups
+                    .entry(file.clone())
+                    .or_default()
+                    .push((path.clone(), *export));
+            }
         }
-        match self.packages.get(file) {
-            Some(Ok(p)) => Ok(Arc::clone(p)),
-            Some(Err(e)) => Err(e.clone()),
-            None => Err("package not loaded".to_string()),
+        for (file, group) in groups {
+            match Package::load(&file) {
+                Ok(pkg) => {
+                    for (path, export) in group {
+                        match decode(&pkg, export, &self.typer) {
+                            Ok(d) => {
+                                self.cache.insert(path, Rc::new(d));
+                            }
+                            Err(e) => {
+                                self.bad.insert(path, error_text(&e));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let text = error_text(&e);
+                    for (path, _) in group {
+                        self.bad.insert(path, text.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -709,14 +738,26 @@ impl Census {
         if let Some(d) = self.cache.get(path) {
             return Ok(Rc::clone(d));
         }
+        if let Some(e) = self.bad.get(path) {
+            return Err(e.clone());
+        }
         let Some((file, export)) = self.owner.get(path).cloned() else {
             return Err(format!("{path} is not an export of any package"));
         };
-        let pkg = self.package(&file)?;
-        let decoded = decode(&pkg, export, &self.typer).map_err(|e| error_text(&e))?;
-        let decoded = Rc::new(decoded);
-        self.cache.insert(path.to_string(), Rc::clone(&decoded));
-        Ok(decoded)
+        let result = self
+            .package(&file)
+            .and_then(|pkg| decode(&pkg, export, &self.typer).map_err(|e| error_text(&e)));
+        match result {
+            Ok(d) => {
+                let d = Rc::new(d);
+                self.cache.insert(path.to_string(), Rc::clone(&d));
+                Ok(d)
+            }
+            Err(e) => {
+                self.bad.insert(path.to_string(), e.clone());
+                Err(e)
+            }
+        }
     }
 
     /// `census.get`: the decoded properties, or `None` (the reason is kept in `failed`).
@@ -816,9 +857,14 @@ fn relative_posix(file: &Path, root: &Path) -> String {
 /// `.upk` below `WillowGame/CookedPCConsole`, 1 for a `.upk` below `DLC/`, then the sort key of its path. On Windows
 /// the tool's paths compare and match case-insensitively (pathlib folds each part), elsewhere as they are.
 fn tool_file_key(file: &Path, root: &Path) -> Option<(u8, Vec<String>)> {
-    let is_upk = file
-        .extension()
-        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("upk"));
+    let is_upk = file.extension().is_some_and(|e| {
+        let e = e.to_string_lossy();
+        if cfg!(windows) {
+            e.eq_ignore_ascii_case("upk")
+        } else {
+            e == "upk"
+        }
+    });
     if !is_upk {
         return None;
     }
@@ -909,10 +955,24 @@ fn rounding(mode: &Pv, x: f64) -> f64 {
     }
 }
 
+/// How deep [`attribute_value`] follows init data into definitions (formula terms, range bounds) before it gives
+/// up with `Err`, where the tool gets a `RecursionError` (a `RuntimeError`, which its callers catch as "no value").
+/// Cyclic init data reaches either limit; acyclic data deeper than this and shallower than Python's stack limit
+/// would differ. The cut-off is ours and UNVERIFIED: Python's depends on its recursion limit and stack.
+const MAX_INIT_DEPTH: u32 = 200;
+
 /// `weapon_recipe.attribute_value` with no attribute values given: `Ok(None)` when the init needs runtime state,
-/// `Err` where the tool raises (a definition no package holds or that does not decode). Order read from the game's
-/// evaluator (NATIVE_PROGRESSION.md section 1, UNVERIFIED in game); single precision throughout.
+/// `Err` where the tool raises (a definition no package holds or that does not decode, or init data nested deeper
+/// than [`MAX_INIT_DEPTH`]). Order read from the game's evaluator (NATIVE_PROGRESSION.md section 1, UNVERIFIED in
+/// game); single precision throughout.
 fn attribute_value(census: &mut Census, init: &Pv) -> Result<Option<f64>, ()> {
+    attribute_value_at(census, init, 0)
+}
+
+fn attribute_value_at(census: &mut Census, init: &Pv, depth: u32) -> Result<Option<f64>, ()> {
+    if depth > MAX_INIT_DEPTH {
+        return Err(());
+    }
     let definition = init.at("InitializationDefinition");
     let mut base = if init.at("BaseValueAttribute").truthy() {
         None
@@ -945,7 +1005,7 @@ fn attribute_value(census: &mut Census, init: &Pv) -> Result<Option<f64>, ()> {
                 let term = formula.at(key);
                 let empty = Pv::Map(DetMap::new());
                 let term = if term.truthy() { term } else { &empty };
-                match attribute_value(census, term)? {
+                match attribute_value_at(census, term, depth + 1)? {
                     Some(v) => *slot = v,
                     None => return Ok(None),
                 }
@@ -984,14 +1044,14 @@ fn attribute_value(census: &mut Census, init: &Pv) -> Result<Option<f64>, ()> {
     // Python max(value, low): value unless low is larger.
     if clamp.at("bEnableMinValueRestriction").truthy()
         && clamp.at("MinValue").truthy()
-        && let Some(low) = attribute_value(census, clamp.at("MinValue"))?
+        && let Some(low) = attribute_value_at(census, clamp.at("MinValue"), depth + 1)?
         && low > value
     {
         value = low;
     }
     if clamp.at("bEnableMaxValueRestriction").truthy()
         && clamp.at("MaxValue").truthy()
-        && let Some(high) = attribute_value(census, clamp.at("MaxValue"))?
+        && let Some(high) = attribute_value_at(census, clamp.at("MaxValue"), depth + 1)?
         && high < value
     {
         value = high;
@@ -1526,56 +1586,80 @@ fn part_fragments(path: &str, d: &Decoded) -> Vec<Pv> {
 
 // ---- the registry --------------------------------------------------------------------------------------------------
 
-/// Counts of what the build met (the parts of the tool's `census.json` that need no other tool and no clock).
-#[non_exhaustive]
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CensusReport {
-    /// `objects_by_class`: registry class -> paths.
-    pub objects_by_class: DetMap<String, usize>,
-    /// `definitions_without_balance_by_kind`.
-    pub definitions_without_balance_by_kind: DetMap<String, usize>,
-    /// `skipped`: reason -> count (decode failures and class default objects).
-    pub skipped: DetMap<String, usize>,
-    /// `paths_in_several_packages_by_class`.
-    pub paths_in_several_packages_by_class: DetMap<String, usize>,
-    /// `paths_with_two_classes`.
-    pub paths_with_two_classes: Vec<Conflict>,
-    /// `by_dlc`: folder -> `balances_<kind>` / `definitions_<kind>` / `parts_<kind>` / `part_lists` / `name_parts`.
-    pub by_dlc: DetMap<String, DetMap<String, usize>>,
-    /// `unlisted_classes.export_classes`.
-    pub unlisted_export_classes: DetMap<String, usize>,
-    /// `unlisted_classes.part_data_properties`.
-    pub unlisted_part_data: DetMap<String, usize>,
-    /// `part_list_rows_naming_no_part.rows`.
-    pub part_list_rows_naming_no_part: usize,
-    /// `name_list_entries_empty.entries`.
-    pub name_list_entries_empty: usize,
-    /// Candidate parts no installed package exports (`unresolved.part`, de-duplicated, sorted).
-    pub unresolved_parts: Vec<String>,
-    /// `decode_failures`: path -> error text.
-    pub decode_failures: DetMap<String, String>,
-    /// `duplicate_export_paths_all_classes`.
-    pub duplicate_export_paths: usize,
-    /// `scan_errors`: the package files that failed to load, keyed by their path relative to the install folder in
-    /// POSIX form (`Path.relative_to(game).as_posix()`), with the reader's stderr line (`ow-package: <error>`).
-    pub scan_errors: DetMap<String, String>,
+/// The order of a variant's slot dict in the tool (`item_registry.variant_slots`, `order`): the balance's own slots,
+/// then the weapon slots a weapon part list added. The registry's dicts are written with sorted keys, but every list
+/// built by walking the slots (name parts, the census's checks) follows this order.
+fn slot_order(weapon_balance: bool) -> Vec<&'static str> {
+    let own: &[&'static str] = if weapon_balance {
+        &WEAPON_SLOTS
+    } else {
+        &ITEM_SLOTS
+    };
+    let mut out: Vec<&'static str> = Vec::new();
+    for slot in own.iter().chain(WEAPON_SLOTS.iter()) {
+        if !out.contains(slot) {
+            out.push(slot);
+        }
+    }
+    out
 }
 
-/// The item registry: the `openwillow-item-registry/1` tree, the census counts, and the values it read (so that
+/// A variant's slots in the tool's dict order.
+fn ordered_slots(slots: &Pv, weapon_balance: bool) -> Vec<(&'static str, &Pv)> {
+    slot_order(weapon_balance)
+        .into_iter()
+        .filter_map(|s| slots.get(s).map(|v| (s, v)))
+        .collect()
+}
+
+fn is_weapon_balance(record: &Pv) -> bool {
+    record
+        .at("class")
+        .as_str()
+        .is_some_and(|c| WEAPON_BALANCES.contains(&c))
+}
+
+/// The tool's `census.json` without what is not a result of the build: the run's timestamp (`generated`) and time
+/// (`seconds`), and the cross-checks against `weapon_recipe` and `prepare_vendors` (`check_*`, W4-ROLL's tools).
+/// `decode_failures` holds the paths the tool's would, with this reader's error text (the tool's text embeds its
+/// subprocess command line).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CensusReport {
+    tree: Pv,
+}
+
+impl CensusReport {
+    pub fn tree(&self) -> &Pv {
+        &self.tree
+    }
+
+    /// One field, as the tool names it.
+    pub fn at(&self, key: &str) -> &Pv {
+        self.tree.at(key)
+    }
+
+    /// The JSON bytes, sorted keys, as `item_registry.write_json` writes `census.json`.
+    pub fn to_json(&self) -> String {
+        self.tree.to_json()
+    }
+}
+
+/// The item registry: the `openwillow-item-registry/1` tree, the census report, and the values it read (so that
 /// [`Registry::candidates_at`] can evaluate attribute inits).
 pub struct Registry {
     tree: Pv,
     report: CensusReport,
-    census: Census,
+    census: RefCell<Census>,
 }
 
 impl fmt::Debug for Registry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Registry")
-            .field("report", &self.report)
-            .finish_non_exhaustive()
+        f.debug_struct("Registry").finish_non_exhaustive()
     }
 }
+
+/// `{slot: {part: weight}}` in the tool's slot order and candidate order.
+pub type Candidates = OrderedMap<String, OrderedMap<String, Option<f64>>>;
 
 impl Registry {
     /// The whole registry as the tool writes it (sorted keys, no timestamp).
@@ -1598,26 +1682,43 @@ impl Registry {
         self.tree.at("balances").get(path)
     }
 
-    /// `item_registry.candidates_at`: `{slot: {part: weight}}` of one variant's slots at one stage for one
-    /// manufacturer: the stage window as `weapon_recipe.slot_candidates` applies it, then entries at or below
-    /// [`MIN_WEIGHT`] dropped and a repeated part keeping its later weight at its first position. A weight that needs
-    /// runtime state stays `None`. Same rules and labels as the tool (UNVERIFIED for items).
+    /// `item_registry.candidates_at` on variant `variant` of balance `balance`: `{slot: {part: weight}}` at one
+    /// stage for one manufacturer. The stage window applies as `weapon_recipe.slot_candidates` applies it; entries at
+    /// or below [`MIN_WEIGHT`] are dropped; a repeated part keeps its later weight at its first position. A weight
+    /// that needs runtime state stays `None`. `None` for a balance or variant the registry does not hold.
+    ///
+    /// **The tool's offline stand-in, not the roll's rule.** It evaluates attribute inits with
+    /// `weapon_recipe.attribute_value`'s subset (no attribute values, no conditionals), exactly as the tool and
+    /// `prepare_stock_shield` do, so it can be compared with them. W4-ROLL's roll path evaluates weights and windows
+    /// through the `ow-attr` evaluator in context. Rules and labels as the tool's (UNVERIFIED for items).
     pub fn candidates_at(
-        &mut self,
-        slots: &Pv,
+        &self,
+        balance: &str,
+        variant: usize,
         stage: i64,
         manufacturer: Option<&str>,
-    ) -> DetMap<String, OrderedMap<String, Option<f64>>> {
-        let mut out = DetMap::new();
-        let Pv::Map(slots) = slots else {
-            return out;
-        };
+    ) -> Option<Candidates> {
+        let record = self.balance(balance)?;
+        let slots = record.at("variants").items().get(variant)?.at("slots");
+        Some(self.candidates_at_slots(slots, is_weapon_balance(record), stage, manufacturer))
+    }
+
+    /// [`Registry::candidates_at`] on a slot dict of this registry; `weapon_balance` gives the tool's slot order.
+    pub fn candidates_at_slots(
+        &self,
+        slots: &Pv,
+        weapon_balance: bool,
+        stage: i64,
+        manufacturer: Option<&str>,
+    ) -> Candidates {
+        let mut census = self.census.borrow_mut();
+        let mut out = Candidates::new();
         let stage_f = stage as f64;
-        for (slot, entries) in slots {
+        for (slot, entries) in ordered_slots(slots, weapon_balance) {
             let mut live: OrderedMap<String, Option<f64>> = OrderedMap::new();
             for c in entries.items() {
-                let low = value_at(&mut self.census, c.at("min_stage"));
-                let high = value_at(&mut self.census, c.at("max_stage"));
+                let low = value_at(&mut census, c.at("min_stage"));
+                let high = value_at(&mut census, c.at("max_stage"));
                 if low.is_some_and(|l| stage_f < l.trunc())
                     || high.is_some_and(|h| h.trunc() < stage_f)
                 {
@@ -1627,8 +1728,8 @@ impl Registry {
                 let w = match manufacturer.filter(|m| !m.is_empty()) {
                     Some(maker) if weight.at("source").as_str() != Some("flat") => {
                         match weight.at("by_manufacturer").get(maker) {
-                            Some(v) => value_at(&mut self.census, &v.clone()),
-                            None => value_at(&mut self.census, &weight.at("default").clone()),
+                            Some(v) => value_at(&mut census, v),
+                            None => value_at(&mut census, weight.at("default")),
                         }
                     }
                     _ => Some(FLAT_WEIGHT),
@@ -1638,7 +1739,7 @@ impl Registry {
                 }
             }
             if !live.is_empty() {
-                out.insert(slot.clone(), live);
+                out.insert(slot.to_string(), live);
             }
         }
         out
@@ -1646,23 +1747,495 @@ impl Registry {
 }
 
 /// Builds the registry of the install the store's root names (the folder holding `WillowGame/CookedPCConsole` and
-/// `DLC/`) from the store's census, taken in the tool's file order ([`CensusInput::from_store`]). `game` is the
-/// install folder as the caller names it, written into the registry's `game` field.
+/// `DLC/`; architecture section 3.7) from the store's census, taken in the tool's file order
+/// ([`CensusInput::from_store`]). The registry's `game` field is the store's root as Python's `str(Path(..))` prints
+/// it ([`python_path_text`]), so the tool run with `--game <that folder>` writes the same text.
 ///
 /// Values are read from the owner's tag stream (module documentation); `space` is not used until values come from
 /// heap objects. Answers `NotYet` while `DefStore::census` has no body (W3-DEFS).
-pub fn build_registry(
-    defs: &mut DefStore,
-    space: &mut ObjectSpace,
-    game: &str,
-) -> Result<Registry, RegistryError> {
+pub fn build_registry(defs: &mut DefStore, space: &mut ObjectSpace) -> Result<Registry, ItemError> {
     let _ = space;
     let census = defs.census()?;
     let root = defs.packages().root().to_path_buf();
+    let game = python_path_text(&root.to_string_lossy());
     Ok(build_from_census(
         CensusInput::from_store(census, &root),
-        game,
+        &game,
     ))
+}
+
+/// A Python `Counter` as the report writes it (`dict(counter)`): a key exists once it was touched, even by 0.
+type Counts = DetMap<String, i64>;
+
+fn bump(c: &mut Counts, key: &str, by: i64) {
+    *c.entry(key.to_string()).or_insert(0) += by;
+}
+
+fn counts_pv(c: &Counts) -> Pv {
+    Pv::Map(c.iter().map(|(k, v)| (k.clone(), Pv::Int(*v))).collect())
+}
+
+fn nested_pv(c: &DetMap<String, Counts>) -> Pv {
+    Pv::Map(c.iter().map(|(k, v)| (k.clone(), counts_pv(v))).collect())
+}
+
+/// What the build hands the census report.
+struct Built<'a> {
+    by_class: &'a OrderedMap<String, Vec<String>>,
+    balances: &'a DetMap<String, Pv>,
+    definitions: &'a DetMap<String, DetMap<String, Pv>>,
+    parts: &'a DetMap<String, DetMap<String, Pv>>,
+    part_lists: &'a Pv,
+    name_parts: &'a Pv,
+    /// Balance, definition and part paths in the order the tool's dicts hold them (its build order).
+    balance_order: &'a [String],
+    definition_order: &'a [String],
+    part_order: &'a [String],
+    problems: &'a [(String, String, Pv)],
+    skipped: Counts,
+    skipped_examples: DetMap<String, Vec<String>>,
+}
+
+/// `item_registry.resolve_problem`: `None` when `path` is an export of a class `expect` accepts, else the reason.
+fn resolve_problem(census: &Census, path: &Pv, expect: &dyn Fn(&str) -> bool) -> Option<String> {
+    let Some(class) = path.as_str().and_then(|p| census.classes.get(p)) else {
+        return Some("no installed package exports it".to_string());
+    };
+    if expect(short(class)) {
+        return None;
+    }
+    let p = path.as_str().unwrap_or("");
+    let others: DetSet<&str> = census
+        .conflicts
+        .iter()
+        .filter(|(_, c)| c.path == p)
+        .map(|(_, c)| c.second.as_str())
+        .collect();
+    let extra = if others.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = others.iter().map(|o| short(o)).collect();
+        format!(" (another package holds it as {})", names.join(", "))
+    };
+    Some(format!(
+        "class {} is not the expected kind{extra}",
+        short(class)
+    ))
+}
+
+/// `item_registry.census_report`, then the fields `run` adds that are results of the build.
+fn census_report(census: &Census, b: Built<'_>) -> Pv {
+    // Unresolved references, in the tool's order: the part lists that did not decode, then the checks.
+    let mut unresolved: OrderedMap<String, Vec<(Pv, String, String)>> = OrderedMap::new();
+    fn push_row(
+        rows: &mut OrderedMap<String, Vec<(Pv, String, String)>>,
+        what: &str,
+        row: (Pv, String, String),
+    ) {
+        match rows.get_mut(what) {
+            Some(v) => v.push(row),
+            None => {
+                rows.insert(what.to_string(), vec![row]);
+            }
+        }
+    }
+    for (owner, what, path) in b.problems {
+        let row = (path.clone(), "does not decode".to_string(), owner.clone());
+        push_row(&mut unresolved, &format!("{what} (does not decode)"), row);
+    }
+    let is_part = |n: &str| kind_of(&PART_KINDS, n).is_some();
+    let is_list = |n: &str| LIST_CLASSES.contains(&n);
+    let is_definition = |n: &str| definition_kind(n).is_some();
+    let is_maker = |n: &str| n == "ManufacturerDefinition";
+    let is_name = |n: &str| NAME_PART_CLASSES.contains(&n);
+    let is_gestalt = |n: &str| n == "GestaltSkeletalMeshDefinition";
+    let mut check = |what: &str, path: &Pv, expect: &dyn Fn(&str) -> bool, owner: &str| {
+        if let Some(reason) = resolve_problem(census, path, expect) {
+            push_row(
+                &mut unresolved,
+                what,
+                (path.clone(), reason, owner.to_string()),
+            );
+        }
+    };
+    let names_of_record = |r: &Pv| -> Vec<Pv> {
+        let mut v = r.at("prefix").items().to_vec();
+        v.extend(r.at("title").items().iter().cloned());
+        v
+    };
+    for path in b.balance_order {
+        let Some(record) = b.balances.get(path) else {
+            continue;
+        };
+        let weapon = is_weapon_balance(record);
+        for variant in record.at("variants").items() {
+            for (_, entries) in ordered_slots(variant.at("slots"), weapon) {
+                for c in entries.items() {
+                    check("part", c.at("part"), &is_part, path);
+                    check("part list", c.at("list"), &is_list, path);
+                }
+            }
+            for step in variant.at("merge").items() {
+                check("part list", step.at("list"), &is_list, path);
+            }
+        }
+        for item in record.at("definitions").items() {
+            check("definition", item, &is_definition, path);
+        }
+        for maker in record.at("manufacturers").items() {
+            check("manufacturer", maker.at("manufacturer"), &is_maker, path);
+        }
+        for name in names_of_record(record.at("name_parts")) {
+            check("name part", &name, &is_name, path);
+        }
+        if record.at("gestalt").truthy() {
+            check("gestalt", record.at("gestalt"), &is_gestalt, path);
+        }
+    }
+    for path in b.definition_order {
+        let Some(record) = b.definitions.get(path) else {
+            continue;
+        };
+        let record = Pv::Map(record.clone());
+        if let Pv::Map(lists) = record.at("part_lists") {
+            for source in lists.values() {
+                check("part list", source, &is_list, path);
+            }
+        }
+        for name in names_of_record(&record) {
+            check("name part", &name, &is_name, path);
+        }
+    }
+    for path in b.part_order {
+        let Some(record) = b.parts.get(path) else {
+            continue;
+        };
+        for name in names_of_record(&Pv::Map(record.clone())) {
+            check("name part", &name, &is_name, path);
+        }
+    }
+    let mut merged = DetMap::new();
+    let mut unresolved_counts = Counts::new();
+    for (what, rows) in unresolved.iter() {
+        let mut by_path: OrderedMap<String, (Pv, String, Vec<String>)> = OrderedMap::new();
+        for (path, reason, owner) in rows {
+            let key = key_text(path);
+            match by_path.get_mut(key.as_str()) {
+                Some(entry) => {
+                    if !entry.2.contains(owner) {
+                        entry.2.push(owner.clone());
+                    }
+                }
+                None => {
+                    by_path.insert(key, (path.clone(), reason.clone(), vec![owner.clone()]));
+                }
+            }
+        }
+        let mut list: Vec<(String, Pv)> = by_path
+            .iter()
+            .map(|(k, (path, reason, owners))| {
+                let row = Pv::map([
+                    ("path", path.clone()),
+                    ("reason", Pv::Str(reason.clone())),
+                    (
+                        "named_by",
+                        Pv::List(owners.iter().map(|o| Pv::text(o)).collect()),
+                    ),
+                ]);
+                (k.clone(), row)
+            })
+            .collect();
+        list.sort_by(|a, b| a.0.cmp(&b.0));
+        unresolved_counts.insert(what.clone(), list.len() as i64);
+        merged.insert(
+            what.clone(),
+            Pv::List(list.into_iter().map(|(_, r)| r).collect()),
+        );
+    }
+
+    // Per kind.
+    let mut per_kind: DetMap<String, Counts> = DetMap::new();
+    let mut slot_cover: DetMap<String, DetMap<String, DetSet<String>>> = DetMap::new();
+    let mut slot_empty: DetMap<String, Counts> = DetMap::new();
+    let mut no_slots = Counts::new();
+    let mut unresolved_values = Counts::new();
+    let mut constant_hints = Counts::new();
+    for record in b.balances.values() {
+        let kind = record.at("kind").as_str().unwrap_or("").to_string();
+        let counts = per_kind.entry(kind.clone()).or_default();
+        bump(counts, "balances", 1);
+        bump(
+            counts,
+            &format!("chain_{}", record.at("chain_end").as_str().unwrap_or("")),
+            1,
+        );
+        bump(
+            counts,
+            "variants",
+            record.at("variants").items().len() as i64,
+        );
+        if !record.at("manufacturers").truthy() {
+            bump(counts, "balances_without_manufacturer", 1);
+        }
+        if record.get("inventory_definition_root_first").is_some() {
+            bump(counts, "definition_differs_root_first", 1);
+        }
+        if record.get("manufacturers_root_first").is_some() {
+            bump(counts, "manufacturers_differ_root_first", 1);
+        }
+        if !record
+            .at("variants")
+            .items()
+            .iter()
+            .any(|v| v.at("slots").truthy())
+        {
+            bump(&mut no_slots, &kind, 1);
+        }
+        for variant in record.at("variants").items() {
+            if let Pv::Map(slots) = variant.at("slots") {
+                for (slot, entries) in slots {
+                    if entries.truthy() {
+                        let cover = slot_cover
+                            .entry(kind.clone())
+                            .or_default()
+                            .entry(slot.clone())
+                            .or_default();
+                        cover.extend(entries.items().iter().map(|c| key_text(c.at("part"))));
+                    } else {
+                        bump(slot_empty.entry(kind.clone()).or_default(), slot, 1);
+                    }
+                }
+                for c in slots.values().flat_map(Pv::items) {
+                    for key in ["min_stage", "max_stage"] {
+                        if let Pv::Map(m) = c.at(key) {
+                            bump(&mut unresolved_values, key, 1);
+                            bump(
+                                &mut constant_hints,
+                                key,
+                                i64::from(m.contains_key("attribute_constant")),
+                            );
+                        }
+                    }
+                    let weight = c.at("weight");
+                    if weight.at("source").as_str() == Some("manufacturer") {
+                        let mut values: Vec<&Pv> = match weight.at("by_manufacturer") {
+                            Pv::Map(m) => m.values().collect(),
+                            _ => Vec::new(),
+                        };
+                        values.push(weight.at("default"));
+                        if values.iter().any(|v| matches!(v, Pv::Map(_))) {
+                            bump(&mut unresolved_values, "weight", 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (kind, counts) in per_kind.iter_mut() {
+        counts.insert(
+            "balances_with_no_part_slot".to_string(),
+            no_slots.get(kind).copied().unwrap_or(0),
+        );
+    }
+    let mut definitions_by_kind = Counts::new();
+    let mut definitions_unused = Counts::new();
+    for r in b.definitions.values() {
+        let kind = r.get("kind").and_then(Pv::as_str).unwrap_or("");
+        bump(&mut definitions_by_kind, kind, 1);
+        if r.get("balances").is_some_and(|v| v.items().is_empty()) {
+            bump(&mut definitions_unused, kind, 1);
+        }
+    }
+    let mut parts_by_kind = Counts::new();
+    let mut parts_unlisted = Counts::new();
+    for r in b.parts.values() {
+        let kind = r.get("kind").and_then(Pv::as_str).unwrap_or("");
+        bump(&mut parts_by_kind, kind, 1);
+        if r.get("balances").is_some_and(|v| v.items().is_empty()) {
+            bump(&mut parts_unlisted, kind, 1);
+        }
+    }
+    let mut per_dlc: DetMap<String, Counts> = DetMap::new();
+    let dlc_of = |r: &Pv| r.at("dlc").as_str().unwrap_or("").to_string();
+    for r in b.balances.values() {
+        let key = format!("balances_{}", r.at("kind").as_str().unwrap_or(""));
+        bump(per_dlc.entry(dlc_of(r)).or_default(), &key, 1);
+    }
+    for (prefix, table) in [("definitions", b.definitions), ("parts", b.parts)] {
+        for r in table.values() {
+            let r = Pv::Map(r.clone());
+            let key = format!("{prefix}_{}", r.at("kind").as_str().unwrap_or(""));
+            bump(per_dlc.entry(dlc_of(&r)).or_default(), &key, 1);
+        }
+    }
+    for (name, table) in [("part_lists", b.part_lists), ("name_parts", b.name_parts)] {
+        if let Pv::Map(m) = table {
+            for r in m.values() {
+                bump(per_dlc.entry(dlc_of(r)).or_default(), name, 1);
+            }
+        }
+    }
+    let mut holders_many = Counts::new();
+    for (path, files) in &census.holders {
+        if files.len() > 1 {
+            bump(
+                &mut holders_many,
+                census.classes.get(path).map_or("?", |c| short(c)),
+                1,
+            );
+        }
+    }
+    let mut skipped_all = b.skipped;
+    for (name, count) in &census.class_defaults {
+        skipped_all.insert(
+            format!("{name}: class default object (Default__), not a game object"),
+            *count as i64,
+        );
+    }
+    let parts_per_slot: DetMap<String, Pv> = slot_cover
+        .iter()
+        .map(|(kind, slots)| {
+            let m: DetMap<String, Pv> = slots
+                .iter()
+                .map(|(s, parts)| (s.clone(), Pv::Int(parts.len() as i64)))
+                .collect();
+            (kind.clone(), Pv::Map(m))
+        })
+        .collect();
+    let game = python_path_text(&census.root.to_string_lossy());
+    let sep = if cfg!(windows) { "\\" } else { "/" };
+    let conflicts: Vec<Pv> = census
+        .conflicts
+        .iter()
+        .map(|(_, c)| {
+            // `str(file)`: the tool's file is `game / <relative path>`.
+            let rel = relative_posix(&c.second_package, &census.root).replace('/', sep);
+            Pv::map([
+                ("path", Pv::text(&c.path)),
+                ("first", Pv::text(&c.first)),
+                ("second", Pv::text(&c.second)),
+                ("second_package", Pv::Str(format!("{game}{sep}{rel}"))),
+            ])
+        })
+        .collect();
+    let null_lists: Counts = census
+        .null_part_entries
+        .iter()
+        .map(|(k, v)| (k.clone(), *v as i64))
+        .collect();
+    let null_owners: Counts = census
+        .null_name_entries
+        .iter()
+        .filter(|(_, v)| **v > 0)
+        .map(|(k, v)| (k.clone(), *v as i64))
+        .collect();
+    let unlisted_data: Counts = census
+        .unlisted_part_data
+        .iter()
+        .map(|(k, v)| (k.clone(), v.len() as i64))
+        .collect();
+    let unlisted_classes: Counts = census
+        .unlisted_classes
+        .iter()
+        .map(|(k, v)| (k.clone(), *v as i64))
+        .collect();
+    let scan_errors: DetMap<String, Pv> = census
+        .load_failures
+        .iter()
+        .map(|(file, text)| (relative_posix(file, &census.root), Pv::text(text)))
+        .collect();
+    let mut t = DetMap::new();
+    let mut put = |k: &str, v: Pv| {
+        t.insert(k.to_string(), v);
+    };
+    put("schema", Pv::Str(format!("{SCHEMA_TAG}/census")));
+    put(
+        "objects_by_class",
+        Pv::Map(
+            b.by_class
+                .iter()
+                .map(|(k, v)| (k.clone(), Pv::Int(v.len() as i64)))
+                .collect(),
+        ),
+    );
+    put("balances_by_kind", nested_pv(&per_kind));
+    put("definitions_by_kind", counts_pv(&definitions_by_kind));
+    put(
+        "definitions_without_balance_by_kind",
+        counts_pv(&definitions_unused),
+    );
+    put("parts_by_kind", counts_pv(&parts_by_kind));
+    put("parts_no_balance_lists_by_kind", counts_pv(&parts_unlisted));
+    put("parts_per_slot", Pv::Map(parts_per_slot));
+    put("enabled_slots_left_empty", nested_pv(&slot_empty));
+    put(
+        "candidate_values_needing_runtime_state",
+        counts_pv(&unresolved_values),
+    );
+    put(
+        "of_which_attribute_constant_hint",
+        counts_pv(&constant_hints),
+    );
+    put("by_dlc", nested_pv(&per_dlc));
+    put(
+        "paths_in_several_packages_by_class",
+        counts_pv(&holders_many),
+    );
+    put("paths_with_two_classes", Pv::List(conflicts));
+    put(
+        "unlisted_classes",
+        Pv::map([
+            ("export_classes", counts_pv(&unlisted_classes)),
+            ("part_data_properties", counts_pv(&unlisted_data)),
+        ]),
+    );
+    put("skipped", counts_pv(&skipped_all));
+    put(
+        "skipped_examples",
+        Pv::Map(
+            b.skipped_examples
+                .iter()
+                .map(|(k, v)| (k.clone(), Pv::List(v.iter().map(|p| Pv::text(p)).collect())))
+                .collect(),
+        ),
+    );
+    put(
+        "decode_failures",
+        Pv::Map(
+            census
+                .failed
+                .iter()
+                .map(|(k, v)| (k.clone(), Pv::text(v)))
+                .collect(),
+        ),
+    );
+    put(
+        "part_list_rows_naming_no_part",
+        Pv::map([
+            ("rows", Pv::Int(null_lists.values().sum())),
+            ("lists", counts_pv(&null_lists)),
+        ]),
+    );
+    put(
+        "name_list_entries_empty",
+        Pv::map([
+            (
+                "entries",
+                Pv::Int(census.null_name_entries.values().sum::<usize>() as i64),
+            ),
+            ("owners", counts_pv(&null_owners)),
+        ]),
+    );
+    put("unresolved_counts", counts_pv(&unresolved_counts));
+    put("unresolved", Pv::Map(merged));
+    // What `item_registry.run` adds.
+    put("packages_scanned", Pv::Int(census.files.len() as i64));
+    put("scan_errors", Pv::Map(scan_errors));
+    put(
+        "duplicate_export_paths_all_classes",
+        Pv::Int(census.duplicates as i64),
+    );
+    Pv::Map(t)
 }
 
 /// Builds the registry from a census (the tool's `build`). `game` is written into the `game` field.
@@ -1683,19 +2256,39 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
     for paths in by_class.values_mut() {
         paths.sort();
     }
+    // The tool's preload: balances, definitions, parts and part lists, decoded grouped by owner file.
+    let decode_first: Vec<String> = by_class
+        .iter()
+        .filter(|(name, _)| {
+            is_balance(name)
+                || definition_kind(name).is_some()
+                || kind_of(&PART_KINDS, name).is_some()
+                || LIST_CLASSES.contains(&name.as_str())
+        })
+        .flat_map(|(_, paths)| paths.iter().cloned())
+        .collect();
+    census.preload(&decode_first);
 
-    let mut skipped: DetMap<String, usize> = DetMap::new();
-    let mut skip = |reason: String| *skipped.entry(reason).or_default() += 1;
+    let mut skipped = Counts::new();
+    let mut skipped_examples: DetMap<String, Vec<String>> = DetMap::new();
+    let mut skip = |reason: String, path: &str| {
+        bump(&mut skipped, &reason, 1);
+        let examples = skipped_examples.entry(reason).or_default();
+        if examples.len() < 5 {
+            examples.push(path.to_string());
+        }
+    };
 
     // Definitions and weapon types.
     let mut definitions: DetMap<String, DetMap<String, Pv>> = DetMap::new();
+    let mut definition_order: Vec<String> = Vec::new();
     for (name, paths) in by_class.iter() {
         let Some(kind) = definition_kind(name) else {
             continue;
         };
         for path in paths {
             let Some(d) = census.get(path) else {
-                skip(format!("{name}: does not decode"));
+                skip(format!("{name}: does not decode"), path);
                 continue;
             };
             let (prefix, title) = names_of(&mut census, path, &d.props);
@@ -1734,16 +2327,18 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
             );
             r.insert("balances".into(), Pv::List(Vec::new()));
             definitions.insert(path.clone(), r);
+            definition_order.push(path.clone());
         }
     }
 
     // Parts.
     let mut parts: DetMap<String, DetMap<String, Pv>> = DetMap::new();
+    let mut part_order: Vec<String> = Vec::new();
     for (name, kind) in PART_KINDS {
         let paths = by_class.get(name).cloned().unwrap_or_default();
         for path in &paths {
             let Some(d) = census.get(path) else {
-                skip(format!("{name}: does not decode"));
+                skip(format!("{name}: does not decode"), path);
                 continue;
             };
             let (prefix, title) = names_of(&mut census, path, &d.props);
@@ -1774,11 +2369,14 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
             r.insert("material".into(), d.props.at("Material").clone());
             r.insert("balances".into(), Pv::List(Vec::new()));
             parts.insert(path.clone(), r);
+            part_order.push(path.clone());
         }
     }
 
     // Balances.
     let mut balances: DetMap<String, Pv> = DetMap::new();
+    let mut balance_order: Vec<String> = Vec::new();
+    let mut problems: Vec<(String, String, Pv)> = Vec::new();
     let mut balance_names: Vec<&str> = WEAPON_BALANCES
         .iter()
         .chain(ITEM_BALANCES.iter())
@@ -1789,10 +2387,12 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
         let paths = by_class.get(name).cloned().unwrap_or_default();
         for path in &paths {
             if census.get(path).is_none() {
-                skip(format!("{name}: does not decode"));
+                skip(format!("{name}: does not decode"), path);
                 continue;
             }
-            let (mut record, _problems) = balance_record(&mut census, path);
+            let (mut record, trouble) = balance_record(&mut census, path);
+            problems.extend(trouble.into_iter().map(|(what, r)| (path.clone(), what, r)));
+            let weapon = WEAPON_BALANCES.contains(&name);
             let mut prefix: Vec<Pv> = Vec::new();
             let mut title: Vec<Pv> = Vec::new();
             for item in record.get("definitions").map_or(&[][..], Pv::items) {
@@ -1806,10 +2406,8 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
                 title.extend(def.get("title").map_or(&[][..], Pv::items).iter().cloned());
             }
             for variant in record.get("variants").map_or(&[][..], Pv::items) {
-                let Pv::Map(slots) = variant.at("slots") else {
-                    continue;
-                };
-                for entries in slots.values() {
+                // The tool walks each variant's slots in its dict order, not in the sorted order they are written in.
+                for (_, entries) in ordered_slots(variant.at("slots"), weapon) {
                     for candidate in entries.items() {
                         let Some(part) =
                             candidate.at("part").as_str().and_then(|k| parts.get_mut(k))
@@ -1839,6 +2437,7 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
                 ]),
             );
             balances.insert(path.clone(), Pv::Map(record));
+            balance_order.push(path.clone());
         }
     }
     for record in definitions.values_mut().chain(parts.values_mut()) {
@@ -1867,108 +2466,25 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
         }
         Pv::Map(m)
     };
-
-    // The census report (counts only).
-    let mut report = CensusReport {
-        objects_by_class: by_class.iter().map(|(k, v)| (k.clone(), v.len())).collect(),
-        ..CensusReport::default()
-    };
-    for r in definitions.values() {
-        if r.get("balances").is_some_and(|b| b.items().is_empty()) {
-            let kind = r.get("kind").and_then(Pv::as_str).unwrap_or("").to_string();
-            *report
-                .definitions_without_balance_by_kind
-                .entry(kind)
-                .or_default() += 1;
-        }
-    }
-    let mut unresolved: DetSet<String> = DetSet::new();
-    for record in balances.values() {
-        let dlc = record.at("dlc").as_str().unwrap_or("").to_string();
-        let kind = record.at("kind").as_str().unwrap_or("");
-        *report
-            .by_dlc
-            .entry(dlc)
-            .or_default()
-            .entry(format!("balances_{kind}"))
-            .or_default() += 1;
-        for variant in record.at("variants").items() {
-            if let Pv::Map(slots) = variant.at("slots") {
-                for c in slots.values().flat_map(Pv::items) {
-                    if let Some(p) = c.at("part").as_str()
-                        && !census.classes.contains_key(p)
-                    {
-                        unresolved.insert(p.to_string());
-                    }
-                }
-            }
-        }
-    }
-    for (prefix, table_records) in [("definitions", &definitions), ("parts", &parts)] {
-        for r in table_records.values() {
-            let dlc = r.get("dlc").and_then(Pv::as_str).unwrap_or("").to_string();
-            let kind = r.get("kind").and_then(Pv::as_str).unwrap_or("");
-            *report
-                .by_dlc
-                .entry(dlc)
-                .or_default()
-                .entry(format!("{prefix}_{kind}"))
-                .or_default() += 1;
-        }
-    }
-    report.unresolved_parts = unresolved.into_iter().collect();
-
     let part_lists = table(&census, &LIST_CLASSES);
     let name_parts = table(&census, &NAME_PART_CLASSES);
-    for (table_name, t) in [("part_lists", &part_lists), ("name_parts", &name_parts)] {
-        if let Pv::Map(m) = t {
-            for r in m.values() {
-                let dlc = r.at("dlc").as_str().unwrap_or("").to_string();
-                *report
-                    .by_dlc
-                    .entry(dlc)
-                    .or_default()
-                    .entry(table_name.to_string())
-                    .or_default() += 1;
-            }
-        }
-    }
-    for (path, files) in &census.holders {
-        if files.len() > 1 {
-            let class = census
-                .classes
-                .get(path)
-                .map_or("?", |c| short(c))
-                .to_string();
-            *report
-                .paths_in_several_packages_by_class
-                .entry(class)
-                .or_default() += 1;
-        }
-    }
-    for (name, count) in &census.class_defaults {
-        skipped.insert(
-            format!("{name}: class default object (Default__), not a game object"),
-            *count,
-        );
-    }
-    report.skipped = skipped;
-    report.paths_with_two_classes = census.conflicts.clone();
-    report.unlisted_export_classes = census.unlisted_classes.clone();
-    report.unlisted_part_data = census
-        .unlisted_part_data
-        .iter()
-        .map(|(k, v)| (k.clone(), v.len()))
-        .collect();
-    report.part_list_rows_naming_no_part = census.null_part_entries.values().sum();
-    report.name_list_entries_empty = census.null_name_entries.values().sum();
-    report.decode_failures = census.failed.clone();
-    report.duplicate_export_paths = census.duplicates;
-    report.scan_errors = census
-        .load_failures
-        .iter()
-        .map(|(file, text)| (relative_posix(file, &census.root), text.clone()))
-        .collect();
+    let report = census_report(
+        &census,
+        Built {
+            by_class: &by_class,
+            balances: &balances,
+            definitions: &definitions,
+            parts: &parts,
+            part_lists: &part_lists,
+            name_parts: &name_parts,
+            balance_order: &balance_order,
+            definition_order: &definition_order,
+            part_order: &part_order,
+            problems: &problems,
+            skipped,
+            skipped_examples,
+        },
+    );
 
     let mut tree = DetMap::new();
     tree.insert("schema".to_string(), Pv::text(SCHEMA_TAG));
@@ -2018,23 +2534,28 @@ pub fn build_from_census(input: CensusInput, game: &str) -> Registry {
     );
     Registry {
         tree: Pv::Map(tree),
-        report,
-        census,
+        report: CensusReport { tree: report },
+        census: RefCell::new(census),
     }
 }
 
-/// `str(Path(text))` on Windows, as the tool writes its `game` field: separators as `\`, empty and `.` parts
-/// dropped, no trailing separator. Other platforms keep `/`.
+/// `str(Path(text))` as the tool writes its `game` field. On Windows: separators as `\`, empty and `.` parts dropped,
+/// no trailing separator except after a drive (`C:\`) or a UNC share (`\\server\share\`), a UNC prefix kept. Other
+/// platforms keep `/` (a leading `//` stays, as POSIX pathlib keeps it).
 pub fn python_path_text(text: &str) -> String {
     let sep = if cfg!(windows) { '\\' } else { '/' };
     let is_sep = |c: char| c == '/' || (cfg!(windows) && c == '\\');
-    let absolute = text.starts_with(is_sep);
+    let leading = text.chars().take_while(|c| is_sep(*c)).count();
     let parts: Vec<&str> = text
         .split(is_sep)
         .filter(|p| !p.is_empty() && *p != ".")
         .collect();
+    let unc = cfg!(windows) && leading == 2 && parts.len() >= 2;
     let mut out = String::new();
-    if absolute {
+    if unc || (!cfg!(windows) && leading == 2) {
+        out.push(sep);
+        out.push(sep);
+    } else if leading > 0 {
         out.push(sep);
     }
     for (i, p) in parts.iter().enumerate() {
@@ -2042,10 +2563,12 @@ pub fn python_path_text(text: &str) -> String {
             out.push(sep);
         }
         out.push_str(p);
-        // `C:` alone keeps its separator (`C:\`).
-        if i == 0 && parts.len() == 1 && p.ends_with(':') && text.len() > p.len() {
-            out.push(sep);
-        }
+    }
+    // A drive alone (`C:\`) or a share alone (`\\server\share\`) keeps its root separator.
+    let drive_root =
+        cfg!(windows) && parts.len() == 1 && parts[0].ends_with(':') && text.len() > parts[0].len();
+    if drive_root || (unc && parts.len() == 2) {
+        out.push(sep);
     }
     if out.is_empty() {
         out.push('.');
@@ -2695,7 +3218,100 @@ mod tests {
             IB,
             vec![("BaseDefinition", r("GD_Syn.Grades.Loop_A"))],
         );
+        add_slot_titles(&mut p);
         p
+    }
+
+    /// Parts with titles in two slots whose sorted order differs from the slot order (Body before Barrel; Gamma
+    /// before Delta): the name parts follow the slot order, as the tool walks its slot dict.
+    fn add_slot_titles(p: &mut Syn) {
+        p.add(
+            "GD_Syn.Names.Title_Body",
+            "WillowGame.WeaponNamePartDefinition",
+            vec![],
+        );
+        p.add(
+            "GD_Syn.Names.Title_Barrel",
+            "WillowGame.WeaponNamePartDefinition",
+            vec![],
+        );
+        p.add(
+            "GD_Syn.Names.Title_Gamma",
+            "WillowGame.ItemNamePartDefinition",
+            vec![],
+        );
+        p.add(
+            "GD_Syn.Names.Title_Delta",
+            "WillowGame.ItemNamePartDefinition",
+            vec![],
+        );
+        p.add(
+            "GD_Syn.Gun.Body_T",
+            "WillowGame.WeaponPartDefinition",
+            one("TitleList", vec![r("GD_Syn.Names.Title_Body")]),
+        );
+        p.add(
+            "GD_Syn.Gun.Barrel_T",
+            "WillowGame.WeaponPartDefinition",
+            one("TitleList", vec![r("GD_Syn.Names.Title_Barrel")]),
+        );
+        p.add(
+            "GD_Syn.Gun.Coll_Titles",
+            WCOLL,
+            vec![
+                (
+                    "BodyPartData",
+                    part_data(vec![w("GD_Syn.Gun.Body_T")], true),
+                ),
+                (
+                    "BarrelPartData",
+                    part_data(vec![w("GD_Syn.Gun.Barrel_T")], true),
+                ),
+                mode("EPRM_Selective"),
+                consolidated(),
+            ],
+        );
+        p.add(
+            "GD_Syn.Gun.Titles",
+            "WillowGame.WeaponBalanceDefinition",
+            vec![
+                ("InventoryDefinition", r("GD_Syn.Gun.Type")),
+                ("WeaponPartListCollection", r("GD_Syn.Gun.Coll_Titles")),
+            ],
+        );
+        p.add(
+            "GD_Syn.Grenade.Gamma_T",
+            "WillowGame.GrenadeModPartDefinition",
+            one("TitleList", vec![r("GD_Syn.Names.Title_Gamma")]),
+        );
+        p.add(
+            "GD_Syn.Grenade.Delta_T",
+            "WillowGame.GrenadeModPartDefinition",
+            one("TitleList", vec![r("GD_Syn.Names.Title_Delta")]),
+        );
+        p.add(
+            "GD_Syn.Grenade.Coll_Titles",
+            COLL,
+            vec![
+                (
+                    "GammaPartData",
+                    part_data(vec![w("GD_Syn.Grenade.Gamma_T")], true),
+                ),
+                (
+                    "DeltaPartData",
+                    part_data(vec![w("GD_Syn.Grenade.Delta_T")], true),
+                ),
+                consolidated(),
+            ],
+        );
+        p.add(
+            "GD_Syn.Grades.Grenade_Titles",
+            IB,
+            vec![
+                ("InventoryDefinition", r("GD_Syn.Grenade.Def")),
+                ("PartListCollection", r("GD_Syn.Grenade.Coll_Titles")),
+            ],
+        );
     }
 
     fn dlc_package() -> Syn {
@@ -2754,6 +3370,10 @@ mod tests {
         /// every export in export order. The stand-in for `DefStore::census()` until the store's body lands.
         fn census(&self) -> CensusInput {
             let mut input = CensusInput::new(self.0.clone());
+            input.files = vec![self.0.join(BASE_FILE), self.0.join(DLC_FILE)]
+                .into_iter()
+                .map(|f| Package::load(&f).unwrap().source.clone())
+                .collect();
             let mut index: DetMap<String, usize> = DetMap::new();
             for name in [BASE_FILE, DLC_FILE] {
                 let pkg = Package::load(&self.0.join(name)).unwrap();
@@ -2819,8 +3439,17 @@ mod tests {
             .collect()
     }
 
-    fn counts(m: &DetMap<String, usize>) -> Vec<(&str, usize)> {
-        m.iter().map(|(k, v)| (k.as_str(), *v)).collect()
+    /// A report field that is a dict of counts, as (key, count) rows.
+    fn counts(v: &Pv) -> Vec<(&str, i64)> {
+        let Pv::Map(m) = v else {
+            panic!("not a dict: {v:?}")
+        };
+        m.iter()
+            .map(|(k, v)| match v {
+                Pv::Int(n) => (k.as_str(), *n),
+                other => panic!("not a count: {other:?}"),
+            })
+            .collect()
     }
 
     fn modes(variant: &Pv) -> Vec<&str> {
@@ -2836,7 +3465,7 @@ mod tests {
     fn one_balance_per_kind() {
         let install = Install::new("kinds");
         let reg = install.registry();
-        assert!(reg.report().scan_errors.is_empty());
+        assert_eq!(reg.report().at("scan_errors"), &Pv::Map(DetMap::new()));
         for (path, kind) in [
             ("GD_Syn.Grades.Shield_Leaf", "shield"),
             ("GD_Syn.Grades.Grenade", "grenade_mod"),
@@ -2900,7 +3529,7 @@ mod tests {
     #[test]
     fn weights_windows_and_manufacturers() {
         let install = Install::new("weights");
-        let mut reg = install.registry();
+        let reg = install.registry();
         let leaf = reg.balance("GD_Syn.Grades.Shield_Leaf").unwrap().clone();
         let slots = leaf.at("variants").items()[0].at("slots").clone();
         let body_b = &slots.at("Alpha").items()[0];
@@ -2937,19 +3566,21 @@ mod tests {
             windows,
             [(&Pv::Int(1), &Pv::Int(4)), (&Pv::Int(5), &Pv::Int(50))]
         );
-        let at = reg.candidates_at(&slots, 10, Some(ALPHA));
+        const LEAF: &str = "GD_Syn.Grades.Shield_Leaf";
+        let at = reg.candidates_at(LEAF, 0, 10, Some(ALPHA)).unwrap();
         assert_eq!(
-            at["Alpha"].iter().collect::<Vec<_>>(),
+            at.get("Alpha").unwrap().iter().collect::<Vec<_>>(),
             [(&"GD_Syn.Shield.Body_B".to_string(), &Some(7.0))]
         );
         assert!(
-            !reg.candidates_at(&slots, 3, Some(ALPHA))
+            !reg.candidates_at(LEAF, 0, 3, Some(ALPHA))
+                .unwrap()
                 .contains_key("Alpha"),
             "below its window"
         );
-        let beta = reg.candidates_at(&slots, 10, Some(BETA));
+        let beta = reg.candidates_at(LEAF, 0, 10, Some(BETA)).unwrap();
         assert_eq!(
-            beta["Alpha"].get("GD_Syn.Shield.Body_B"),
+            beta.get("Alpha").unwrap().get("GD_Syn.Shield.Body_B"),
             Some(&Some(1.0)),
             "another maker takes DefaultWeight"
         );
@@ -2990,7 +3621,17 @@ mod tests {
     fn census_reports_missing_and_broken_chains() {
         let install = Install::new("broken");
         let reg = install.registry();
-        assert_eq!(reg.report().unresolved_parts, ["GD_Syn.Shield.Ghost"]);
+        let parts = reg.report().at("unresolved").at("part");
+        assert_eq!(
+            strs(&Pv::List(
+                parts.items().iter().map(|r| r.at("path").clone()).collect()
+            )),
+            ["GD_Syn.Shield.Ghost"]
+        );
+        assert_eq!(
+            parts.items()[0].at("reason").as_str(),
+            Some("no installed package exports it")
+        );
         let orphan = reg.balance("GD_Syn.Grades.Orphan").unwrap();
         assert_eq!(
             (
@@ -3007,11 +3648,11 @@ mod tests {
             Some("cycle")
         );
         assert_eq!(
-            counts(&reg.report().definitions_without_balance_by_kind),
+            counts(reg.report().at("definitions_without_balance_by_kind")),
             [("mission_item", 1)]
         );
         assert_eq!(
-            counts(&reg.report().skipped),
+            counts(reg.report().at("skipped")),
             [(
                 "ShieldDefinition: class default object (Default__), not a game object",
                 1
@@ -3024,7 +3665,7 @@ mod tests {
         let install = Install::new("dlc");
         let reg = install.registry();
         assert_eq!(
-            counts(&reg.report().paths_in_several_packages_by_class),
+            counts(reg.report().at("paths_in_several_packages_by_class")),
             [
                 ("InventoryBalanceDefinition", 1),
                 ("ManufacturerDefinition", 1)
@@ -3032,9 +3673,10 @@ mod tests {
         );
         let two: Vec<&str> = reg
             .report()
-            .paths_with_two_classes
+            .at("paths_with_two_classes")
+            .items()
             .iter()
-            .map(|c| c.path.as_str())
+            .map(|c| c.at("path").as_str().unwrap())
             .collect();
         assert_eq!(two, ["GD_Syn.Grades.Usable"]);
         let alpha = reg.tree().at("manufacturers").at(ALPHA);
@@ -3053,7 +3695,7 @@ mod tests {
         let grade = &dlc.at("manufacturers").items()[0].at("grades").items()[0];
         assert_eq!(grade.at("definition").as_str(), Some("GD_Syn.Shield.Def"));
         assert_eq!(
-            counts(&reg.report().by_dlc["SynDLC"]),
+            counts(reg.report().at("by_dlc").at("SynDLC")),
             [("balances_shield", 1)]
         );
     }
@@ -3063,14 +3705,14 @@ mod tests {
         // The tool's check_stock_shield on the base balance at level 10: Alpha holds Body_A, Body_B (10 is inside
         // 5..30) and Cap_A; Beta holds Cap_B and Ghost (it weighs 100 but no package exports it: kept).
         let install = Install::new("stock");
-        let mut reg = install.registry();
+        let reg = install.registry();
         let record = reg.balance("GD_Syn.Grades.Shield_Base").unwrap().clone();
         let slots = record.at("variants").items()[0].at("slots").clone();
         let maker = record.at("manufacturers").items()[0]
             .at("manufacturer")
             .as_str()
             .map(String::from);
-        let at = reg.candidates_at(&slots, 10, maker.as_deref());
+        let at = reg.candidates_at_slots(&slots, false, 10, maker.as_deref());
         let sizes: Vec<(&str, usize)> = at.iter().map(|(k, v)| (k.as_str(), v.len())).collect();
         assert_eq!(sizes, [("Alpha", 3), ("Beta", 2)]);
         assert_eq!(at.values().map(|v| v.len()).product::<usize>(), 6);
@@ -3099,8 +3741,16 @@ mod tests {
             slots_parts(complete),
             [("Grip".to_string(), vec!["GD_Syn.Gun.Grip_A".to_string()])]
         );
-        assert_eq!(reg.report().part_list_rows_naming_no_part, 1);
-        assert_eq!(reg.report().name_list_entries_empty, 1);
+        // The row is counted each time a balance reads its list (the tool's describe_entries): two grenade balances
+        // name the definition that holds it.
+        assert_eq!(
+            reg.report().at("part_list_rows_naming_no_part").at("rows"),
+            &Pv::Int(2)
+        );
+        assert_eq!(
+            reg.report().at("name_list_entries_empty").at("entries"),
+            &Pv::Int(1)
+        );
         assert_eq!(
             reg.tree().at("parts").at("GD_Syn.Shield.Cap_A").at("title"),
             &Pv::List(Vec::new())
@@ -3128,11 +3778,15 @@ mod tests {
         let install = Install::new("unlisted");
         let reg = install.registry();
         assert_eq!(
-            counts(&reg.report().unlisted_export_classes),
+            counts(reg.report().at("unlisted_classes").at("export_classes")),
             [("SynthOddBalanceDefinition", 1)]
         );
         assert_eq!(
-            counts(&reg.report().unlisted_part_data),
+            counts(
+                reg.report()
+                    .at("unlisted_classes")
+                    .at("part_data_properties")
+            ),
             [("IotaPartData", 1)]
         );
         assert!(reg.balance("GD_Syn.Odd.Balance").is_none());
@@ -3241,11 +3895,12 @@ mod tests {
         };
         census.failures = vec![failure(&broken), failure(&outside)];
         let reg = build_from_census(CensusInput::from_store(census, &install.0), "Game");
-        let errors: Vec<(&str, &str)> = reg
-            .report()
-            .scan_errors
+        let Pv::Map(m) = reg.report().at("scan_errors") else {
+            panic!("scan_errors")
+        };
+        let errors: Vec<(&str, &str)> = m
             .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .map(|(k, v)| (k.as_str(), v.as_str().unwrap()))
             .collect();
         // The file outside the tool's list is not the tool's scan error.
         assert_eq!(
@@ -3303,7 +3958,90 @@ mod tests {
         let reg = build_from_census(input, "Game");
         let def = reg.tree().at("definitions").at("GD_Dup.Def");
         assert_eq!(def.at("gestalt").as_str(), Some("GD_Dup.Gestalt_B"));
-        assert_eq!(reg.report().duplicate_export_paths, 1);
+        assert_eq!(
+            reg.report().at("duplicate_export_paths_all_classes"),
+            &Pv::Int(1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn name_parts_follow_the_slot_order_not_the_sorted_keys() {
+        let install = Install::new("slotorder");
+        let reg = install.registry();
+        let gun = reg.balance("GD_Syn.Gun.Titles").unwrap();
+        assert_eq!(
+            strs(gun.at("name_parts").at("title")),
+            [
+                "GD_Syn.Names.Title_Gun",
+                "GD_Syn.Names.Title_Body",
+                "GD_Syn.Names.Title_Barrel"
+            ]
+        );
+        let grenade = reg.balance("GD_Syn.Grades.Grenade_Titles").unwrap();
+        assert_eq!(
+            strs(grenade.at("name_parts").at("title")),
+            ["GD_Syn.Names.Title_Gamma", "GD_Syn.Names.Title_Delta"]
+        );
+        let at = reg
+            .candidates_at("GD_Syn.Grades.Grenade_Titles", 0, 10, None)
+            .unwrap();
+        assert_eq!(
+            at.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["Gamma", "Delta"]
+        );
+    }
+
+    #[test]
+    fn cyclic_init_data_gives_no_value_instead_of_overflowing() {
+        // An init definition whose formula's multiplier is initialised by the same definition: the tool's
+        // attribute_value recurses until Python raises RecursionError, which init_value reads as no value.
+        let mut p = Syn::default();
+        let cyclic = V::Struct(
+            "AttributeInitializationData",
+            vec![
+                ("InitializationDefinition", r("GD_Cyc.Init")),
+                ("BaseValueConstant", V::Float(1.0)),
+            ],
+        );
+        p.add(
+            "GD_Cyc.Init",
+            "GearboxFramework.AttributeInitializationDefinition",
+            vec![(
+                "ValueFormula",
+                V::Struct(
+                    "AttributeInitializationValueFormula",
+                    vec![("bEnabled", V::Bool(true)), ("Multiplier", cyclic)],
+                ),
+            )],
+        );
+        let dir =
+            std::env::temp_dir().join(format!("ow-items-registry-cyc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join(BASE_FILE);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, p.build()).unwrap();
+        let pkg = Package::load(&file).unwrap();
+        let mut input = CensusInput::new(std::path::absolute(&dir).unwrap());
+        let class = pkg.path_of(pkg.object(1).unwrap().class).unwrap();
+        input.paths.push(PathHolders::new(
+            "GD_Cyc.Init".into(),
+            vec![Holder::new(pkg.source.clone(), class, 1)],
+        ));
+        let mut census = Census::new(input);
+        let mut init = DetMap::new();
+        init.insert(
+            "InitializationDefinition".to_string(),
+            Pv::text("GD_Cyc.Init"),
+        );
+        assert_eq!(
+            attribute_value(&mut census, &Pv::Map(init.clone())),
+            Err(())
+        );
+        assert!(matches!(
+            init_value(&mut census, &[Pv::Map(init)], &Pv::Int(0)),
+            Pv::Map(_)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3315,8 +4053,8 @@ mod tests {
         let mut defs =
             DefStore::open(install.0.clone(), IdentityPolicy::FirstInScanOrder, mode).unwrap();
         let mut space = ObjectSpace::new();
-        let error = build_registry(&mut defs, &mut space, "Game").unwrap_err();
-        assert!(matches!(error, RegistryError::NotYet(_)), "{error}");
+        let error = build_registry(&mut defs, &mut space).unwrap_err();
+        assert!(matches!(error, ItemError::NotYet(_)), "{error}");
     }
 
     #[test]
@@ -3385,6 +4123,11 @@ mod tests {
             );
             assert_eq!(python_path_text("C:\\Games\\.\\BL2"), "C:\\Games\\BL2");
             assert_eq!(python_path_text("C:/"), "C:\\");
+            assert_eq!(
+                python_path_text("\\\\server\\share\\BL2\\"),
+                "\\\\server\\share\\BL2"
+            );
+            assert_eq!(python_path_text("//server/share"), "\\\\server\\share\\");
         }
         assert_eq!(python_path_text(""), ".");
     }
@@ -3402,6 +4145,7 @@ mod tests {
         let game = python_path_text(&install.0.to_string_lossy());
         let reg = build_from_census(install.census(), &game);
         std::fs::write(dir.join("rust_registry.json"), reg.to_json()).unwrap();
+        std::fs::write(dir.join("rust_census.json"), reg.report().to_json()).unwrap();
         std::mem::forget(install);
     }
 }
