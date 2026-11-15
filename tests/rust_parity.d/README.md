@@ -6,7 +6,9 @@ Each `*.txt` file in this folder is one lane's list of checks the Rust `ow-packa
 (`docs/rust-port/ARCHITECTURE.md` section 6; one file per lane, so lanes do not collide). `tools/rust_parity.py` runs
 every line and prints `PASS` or `FAIL` per line and a summary; ctest runs it as `rust-parity` when
 `target/release/ow-package.exe` existed at configure time (build it with `cargo build --release -p ow-cli --locked`,
-then configure again). This README is not a manifest: only `*.txt` files are read.
+then configure again). The entry judges whatever release binary was built last, so rebuild it
+(`cargo build --release -p ow-cli --locked`) before every ctest run. This README is not a manifest: only `*.txt`
+files are read, and any other entry in this folder (a file with another extension, a subfolder) fails the run.
 
     python tools/rust_parity.py --bin target/release/ow-package.exe --cxx build/Release/ow-package.exe [--file pkg.txt]
 
@@ -17,18 +19,22 @@ line (so quote an argument with spaces, and write paths with forward slashes) an
 
 | Line | What runs | Passes when |
 |---|---|---|
-| `python tests/package_test.py {bin}` | the command, with `{bin}` replaced by the Rust binary's path and a first word `python` by the runner's Python | it exits 0 |
-| `diff --names <package>` | the arguments on the C++ binary (`--cxx`) and on the Rust binary (`--bin`) | stdout (bytes) and the exit code are equal |
+| `python tests/package_test.py {bin}` | the command, with `{bin}` (required) replaced by the Rust binary's path and a first word `python` by the runner's Python | it exits 0 and reports no skipped unittest case (`skipped=N`, `OK (skipped`) |
+| `diff --names <package>` | the arguments on the C++ binary (`--cxx`) and on the Rust binary (`--bin`) | stdout (bytes) and the exit code are equal, both binaries exit 0 and the C++ stdout is not empty |
 
 Trailing markers, in either order:
 
-- `stderr` (diff lines only): stderr must be equal too. Add it where a C++ test asserts stderr text.
+- `stderr` (diff lines only): stderr must be equal too. A diff line where either binary exits non-zero or the C++
+  stdout is empty passes only with it, so two binaries that refuse the arguments the same way (a typo in a flag, a
+  missing package) cannot pass. Add it also where a C++ test asserts stderr text.
 - `mode=reference`: the line runs with `OW_PARITY=reference`, which turns on the reference stand-ins
   (`docs/rust-port/ARCHITECTURE.md` section 6.1). Every other line runs with `OW_PARITY` removed, whatever the
   caller's environment holds. Mark only the lines that pin a stand-in, and list each in your handoff with the
   Rust-native test of its replacement.
 
-There is no expected-failure marker: a line goes into the manifest when it passes.
+A marker word anywhere but at the end of a line, a `#` inside a line (no inline comments) and a backslash (write paths
+with forward slashes) make the line a bad line, which fails. There is no expected-failure marker: a line goes into the
+manifest when it passes.
 
 ## What a line may hold
 
