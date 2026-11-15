@@ -36,7 +36,6 @@ pub use pending::{BalancedActor, Designer, Skill, StatusEffectChance, Unread};
 pub use pools::{ResourcePool, WeaponResourcePool};
 
 use ow_core::NotYet;
-use ow_defs::store::DefError;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
@@ -219,42 +218,36 @@ pub(crate) fn not_declared(
 
 /// Makes sure the resolver object `o` has its slots before its fields are read. A definition reached through a
 /// chain may be one of the store's unloaded handles (slotless, architecture section 3.4): it is loaded in place
-/// through the world's `DefStore`. A world without a store answers `NotYet { LayerAbsent("ow-defs") }`.
+/// ([`DefStore::is_unloaded`](ow_defs::DefStore::is_unloaded), then
+/// [`DefStore::ensure_loaded`](ow_defs::DefStore::ensure_loaded)). Any other object is read as it is; a slotless one
+/// then fails in the heap (`SlotMissing`), never with a guessed value. A world without a store that hands over a
+/// slotless object answers `NotYet { LayerAbsent("ow-defs") }`.
 pub(crate) fn ensure_loaded(cx: &mut EvalCx<'_>, o: ObjRef) -> Result<(), AttrError> {
-    let mut parts = cx.world.parts();
-    let object = parts.space.heap.get(o)?;
-    let needed = parts
-        .space
-        .classes
-        .get_layout(object.class)
-        .map(|l| l.slot_count() as usize)
-        .unwrap_or(0);
-    if object.slots.len() >= needed {
-        return Ok(());
-    }
-    // The two fields are borrowed apart: the store loads into the space.
+    let parts = cx.world.parts();
     let space = &mut *parts.space;
-    match parts.defs.as_deref_mut() {
+    match parts.defs {
         Some(defs) => {
-            defs.load(space, o).map_err(def_error)?;
+            if defs.is_unloaded(space, o) {
+                defs.ensure_loaded(space, o)?;
+            }
             Ok(())
         }
-        None => Err(NotYet::layer_absent(
-            "loading an unloaded resolver definition (this world has no definition store)",
-            "ow-defs",
-            RECORD,
-        )
-        .into()),
-    }
-}
-
-/// A store error as an attribute error. `AttrError` has no `Def` variant yet (architecture section 3.5 says W3-DEFS
-/// adds one; the contract commit did not), so the store's `NotYet` and heap errors keep their variant and the rest
-/// is carried as text.
-pub(crate) fn def_error(e: DefError) -> AttrError {
-    match e {
-        DefError::NotYet(n) => AttrError::NotYet(n),
-        DefError::Heap(h) => AttrError::Heap(h),
-        other => AttrError::World(format!("definition store: {other}")),
+        None => {
+            let object = space.heap.get(o)?;
+            let needed = space
+                .classes
+                .get_layout(object.class)
+                .map(|l| l.slot_count() as usize)
+                .unwrap_or(0);
+            if object.slots.len() >= needed {
+                return Ok(());
+            }
+            Err(NotYet::layer_absent(
+                "loading an unloaded resolver definition (this world has no definition store)",
+                "ow-defs",
+                RECORD,
+            )
+            .into())
+        }
     }
 }

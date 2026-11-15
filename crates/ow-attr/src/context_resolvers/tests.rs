@@ -9,7 +9,7 @@
 use ow_core::rand::{CrtStream, Rand15};
 use ow_core::{Missing, ObjectPath};
 use ow_defs::DefStore;
-use ow_object::heap::{ObjectSpace, Origin};
+use ow_object::heap::{HeapError, ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, PropId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
@@ -916,10 +916,14 @@ fn an_unloaded_resolver_definition_is_loaded_through_the_store() {
     // No store: the layer is absent.
     let got = walk(&s.sys, &[Some(handle)], Some(player), &mut s.w);
     assert_eq!(missing(got), Missing::LayerAbsent("ow-defs"));
-    // A store whose loading is not there yet: its NotYet comes through as a NotYet.
+    // With a store, a slotless object that is none of its unloaded handles stays a stand-in: reading its field fails
+    // in the heap, not with a guessed value.
     s.w.defs = Some(DefStore::new_empty());
     let got = walk(&s.sys, &[Some(handle)], Some(player), &mut s.w);
-    assert!(matches!(got, Err(AttrError::NotYet(_))), "{got:?}");
+    assert!(
+        matches!(got, Err(AttrError::Heap(HeapError::SlotMissing { .. }))),
+        "{got:?}"
+    );
     // A loaded (slotted) resolver never touches the store.
     let loaded = s.w.obj(class, "Loaded");
     assert_eq!(
