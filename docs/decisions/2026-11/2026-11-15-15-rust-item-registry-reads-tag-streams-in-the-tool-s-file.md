@@ -59,5 +59,11 @@ must match that tool's `registry.json` byte for byte (architecture section 8, W4
   the C++ one (rule R7, `ow-container` / `ow-package`). The tool keeps that line as the file's `scan_errors` text, so
   the installed game's two bad-magic packages will differ there until the reader is fixed. The test marks the case
   `expectedFailure`, so the fix flips it.
+- **What the store's census must print (review r2).** The registry writes a failed file's scan error as
+  `ow-package: ` followed by its census `FileFailure.error`, so that error must print exactly as the reader's
+  `--exports` stderr does after that prefix, nothing more (no `ow-package: ` of its own, no other wording). The hub
+  passes this to W3-DEFS. The test compares that text in its own `expectedFailure` case (skipped while the census has
+  no body); the rest of the census is compared with the scan errors by path only, so the gate does not go red when
+  the census body lands before the reader is fixed.
 - The rules the registry carries keep the tool's labels: the weapon merge was checked in game for part identity; the
   item merge, item weights and item stage windows are UNVERIFIED.

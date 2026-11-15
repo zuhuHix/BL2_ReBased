@@ -109,7 +109,7 @@ const DEF_DUMP: &[&str] = &["--cooked", "--overlay"];
 /// `--item-registry --cooked <dir> [--census <file>] [--overlay <file>]`; items family: `<dir>` is the install folder.
 const ITEM_REGISTRY: &[&str] = &["--cooked", "--census", "--overlay"];
 /// `--item-roll <balance path>` and `--item-pool <pool path>`: `--cooked <dir> --stage <n> --seed <n> [--count <n>]
-/// [--playthrough <index>] [--op-level <n>] [--overlay <file>]`.
+/// [--playthrough <index>] [--op-level <n>] [--overlay <file>]`; items family: `<dir>` is the install folder.
 const ITEM_ROLL: &[&str] = &[
     "--cooked",
     "--stage",
@@ -120,7 +120,7 @@ const ITEM_ROLL: &[&str] = &[
     "--overlay",
 ];
 /// `--item-stats` and `--item-card`: `--cooked <dir>`, then `--data <file>` or the `--item-roll` modifiers,
-/// `[--overlay <file>]`.
+/// `[--overlay <file>]`; items family: `<dir>` is the install folder.
 const ITEM_STATS: &[&str] = &[
     "--cooked",
     "--data",

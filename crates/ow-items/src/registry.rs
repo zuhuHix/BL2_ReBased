@@ -4115,6 +4115,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
+    fn on_posix_the_tool_lists_only_lower_case_upk() {
+        // rglob('*.upk') matches the case there; on Windows it folds it.
+        let root = Path::new("/game");
+        assert_eq!(
+            tool_file_key(Path::new("/game/WillowGame/CookedPCConsole/Foo.UPK"), root),
+            None
+        );
+        assert!(
+            tool_file_key(Path::new("/game/WillowGame/CookedPCConsole/Foo.upk"), root).is_some()
+        );
+        // POSIX pathlib keeps a leading `//`.
+        assert_eq!(python_path_text("//x/y"), "//x/y");
+        assert_eq!(python_path_text("/x//y/"), "/x/y");
+    }
+
+    #[test]
     fn python_paths_print_as_pathlib_does() {
         if cfg!(windows) {
             assert_eq!(
