@@ -17,9 +17,9 @@
 //! the C++ ones where the C++ has one (a `std::stoll` / `std::stod` failure included); a `NotYet` prints its own
 //! text. Lines end in `\n`; the parity harness reads the C++ `\r\n` as `\n` (decision 2026-11-15-09).
 //!
-//! Until the W3-DEFS body lands, `DefStore::class_default` is `NotYet`, so `--self`, a batch case with a self class,
-//! and any call that needs a class default object (a call with no `--self` runs against the owner's) print that
-//! `NotYet`. The differences from the C++ output that stay, and why, are in decision 2026-11-15-14.
+//! `--self`, a batch case with a self class, and any call that needs a class default object (a call with no `--self`
+//! runs against the owner's) take it from `DefStore::class_default`. The differences from the C++ output that stay,
+//! and why, are in decision 2026-11-15-14 (its class-default `NotYet` is resolved, decision 2026-11-15-16).
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

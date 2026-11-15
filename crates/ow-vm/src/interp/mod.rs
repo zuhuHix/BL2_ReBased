@@ -24,7 +24,7 @@
 //! class declares every function it and its states declare, with parameters typed by
 //! `CodeIndex::child_declarations` and the native key built as `vm.cpp:600-606` builds it; the bytecode is decoded
 //! on a function's first call, as the C++ does. Class default objects (a call with no object, `Class.static`,
-//! `default.` reads, `New`) come from `DefStore::class_default`, which answers `NotYet` until the W3-DEFS body lands.
+//! `default.` reads, `New`) come from `DefStore::class_default`, built on first use by the definition store.
 //!
 //! **Stack depth.** The interpreter recurses (expression, call, frame), the decoder recurses up to 256 levels inside
 //! a call, and calls nest up to `Limits::max_call_depth` (200) frames. Expressions nest at most [`MAX_NESTING`]

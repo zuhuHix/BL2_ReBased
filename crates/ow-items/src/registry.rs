@@ -3370,7 +3370,8 @@ mod tests {
         }
 
         /// `weapon_catalog.package_files` + `RegistryCensus.add`'s input: the base game first, then the DLC folder,
-        /// every export in export order. The stand-in for `DefStore::census()` until the store's body lands.
+        /// every export in export order: the comparison oracle for `DefStore::census()` (the registry built from the
+        /// store's census must give the same bytes, `the_store_census_builds_the_registry`).
         fn census(&self) -> CensusInput {
             let mut input = CensusInput::new(self.0.clone());
             input.files = vec![self.0.join(BASE_FILE), self.0.join(DLC_FILE)]
