@@ -124,7 +124,7 @@ each candidate, and the maintainer picked from the measurements
   own code, and what was missing and had to be written. Each prototype ran on one PC only, with different draw
   strategies, so the frame times are not like for like; both were far under a 16.7 ms frame.
 - Why wgpu + winit: Ruffle embedded natively on the same wgpu device (BL2's UI is Flash; the Bevy prototype did not
-  embed it), a 4-8 times smaller binary, no ECS scheduler imposing `Send` rules on the deliberately `!Send` simulation
+  embed it), an about 4.5-9 times smaller binary (11.1-21.5 MiB against 96.8 MiB), no ECS scheduler imposing `Send` rules on the deliberately `!Send` simulation
   (D18 in `docs/rust-port/ARCHITECTURE.md`), no forced toolchain bump, and Bevy's renderer, animation and scenes would
   not match BL2's AnimTree, materials or Kismet anyway. The cost: more own code (about 2.4 times as much in the
   benchmark scene) and an animation and material pipeline written by hand.
@@ -522,5 +522,6 @@ done in Phase 0; `git show 08bcf3e:docs/OPENWILLOW_ENGINE_PLAN.md` has it. The R
 9. Build the same scene on wgpu + winit under `local/bench/wgpu/` (and Fyrox, if there is time). Measure it the same
    way on each project PC.
 10. Fill in the benchmark record with what was measured, and only that. The maintainer picks the route. That pick is
-    Phase 0R's gate and the first thing you post. (Done 2026-11-14 and 2026-11-15, except Ruffle in the Bevy prototype; the route is an own engine on wgpu + winit,
+    Phase 0R's gate and the first thing you post. (Steps 8-10 done 2026-11-14/15, with exceptions: no Ruffle in the
+    Bevy prototype, one PC per candidate, Fyrox not built. The route is an own engine on wgpu + winit,
     [decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md).)
