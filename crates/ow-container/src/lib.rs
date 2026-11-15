@@ -68,9 +68,10 @@ impl fmt::Display for ContainerError {
                 f.write_str("bytes after the last partially compressed chunk")
             }
             ContainerError::BadHeader { reason } => write!(f, "bad container header: {reason}"),
-            ContainerError::InPartialChunk { index, at, error } => write!(
+            // The inner error is not repeated here: `source()` returns it, so chained reporters print it once.
+            ContainerError::InPartialChunk { index, at, .. } => write!(
                 f,
-                "partial compression chunk {index} (file byte {at}): {error} (offsets within the chunk)"
+                "in partial-chunk entry {index} at file byte {at} (the cause's offsets count from there)"
             ),
             ContainerError::NotYet(n) => n.fmt(f),
         }
@@ -136,7 +137,9 @@ mod tests {
         match error {
             ContainerError::BadMagic => any(&["invalid package magic"]),
             ContainerError::Truncated { .. } => {
-                // C++ reports a block table cut off by the end of the file as a size mismatch.
+                // C++ reports a block table cut off by the end of the file as a size mismatch. It uses that one
+                // message ("compressed size/table mismatch", container.cpp:71-72) for both this case and
+                // BadHeader's compressed-size case, so this gate cannot tell Truncated and BadHeader apart there.
                 any(&[
                     "truncated container header",
                     "invalid summary folder length",
@@ -163,6 +166,31 @@ mod tests {
             ContainerError::InPartialChunk { error, .. } => same_kind_as_cxx(error, cxx),
             _ => false,
         }
+    }
+
+    #[test]
+    fn in_partial_chunk_leaves_its_cause_to_source() {
+        use std::error::Error;
+        let inner = ContainerError::Lzo {
+            at: 7,
+            reason: "input overrun",
+        };
+        let outer = ContainerError::InPartialChunk {
+            index: 2,
+            at: 144,
+            error: Box::new(inner.clone()),
+        };
+        let text = outer.to_string();
+        assert_eq!(
+            text,
+            "in partial-chunk entry 2 at file byte 144 (the cause's offsets count from there)"
+        );
+        assert!(!text.contains(&inner.to_string()));
+        assert_eq!(
+            outer.source().map(|s| s.to_string()),
+            Some(inner.to_string())
+        );
+        assert!(inner.source().is_none());
     }
 
     #[test]
@@ -254,6 +282,17 @@ mod tests {
                 .trim()
                 .replace(['\t', '\r', '\n'], " ")
         };
+        // An error with its `source()` chain, the way a chained reporter prints it.
+        let chain = |e: &ContainerError| {
+            let mut text = e.to_string();
+            let mut cause = std::error::Error::source(e);
+            while let Some(c) = cause {
+                text.push_str(": ");
+                text.push_str(&c.to_string());
+                cause = c.source();
+            }
+            text
+        };
         writeln!(tsv, "package\tresult\tdecoded_bytes\tsha256\tdetail").unwrap();
         let (mut matched, mut both_refused, mut failures) = (0usize, 0usize, Vec::new());
         for package in &packages {
@@ -282,6 +321,7 @@ mod tests {
                     }
                 }
                 Err(e) => {
+                    let text = chain(&e);
                     let run = Command::new(&cxx)
                         .arg(package)
                         .arg("--names")
@@ -289,18 +329,18 @@ mod tests {
                         .unwrap();
                     let err = one_line(&run.stderr);
                     if run.status.success() {
-                        writeln!(tsv, "{rel}\tRUST_ONLY_REFUSED\t\t\t{e}").unwrap();
+                        writeln!(tsv, "{rel}\tRUST_ONLY_REFUSED\t\t\t{text}").unwrap();
                         failures.push(format!(
-                            "{rel}: refused here ({e}) but the C++ reader reads it"
+                            "{rel}: refused here ({text}) but the C++ reader reads it"
                         ));
                     } else if !same_kind_as_cxx(&e, &err) {
-                        writeln!(tsv, "{rel}\tKIND_DIFFERS\t\t\trust: {e}; c++: {err}").unwrap();
+                        writeln!(tsv, "{rel}\tKIND_DIFFERS\t\t\trust: {text}; c++: {err}").unwrap();
                         failures.push(format!(
                             "{rel}: refused by both, but as {e:?} here and \"{err}\" in C++"
                         ));
                     } else {
                         both_refused += 1;
-                        writeln!(tsv, "{rel}\tboth_refused\t\t\trust: {e}; c++: {err}").unwrap();
+                        writeln!(tsv, "{rel}\tboth_refused\t\t\trust: {text}; c++: {err}").unwrap();
                     }
                 }
             }
