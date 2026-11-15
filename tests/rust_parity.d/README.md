@@ -20,7 +20,7 @@ line (so quote an argument with spaces, and write paths with forward slashes) an
 | Line | What runs | Passes when |
 |---|---|---|
 | `python tests/package_test.py {bin}` | the test script, with `{bin}` (required) replaced by the Rust binary's path and `python` by the runner's Python | it exits 0 and reports no skipped unittest case (`skipped=N`, `OK (skipped`) |
-| `diff --names <package>` | the arguments on the C++ binary (`--cxx`) and on the Rust binary (`--bin`) | stdout (bytes) and the exit code are equal, and the rules below hold |
+| `diff --names <package>` | the arguments on the C++ binary (`--cxx`) and on the Rust binary (`--bin`) | stdout (bytes, each CRLF read as LF; decision 2026-11-15-09) and the exit code are equal, and the rules below hold |
 
 A test-command line starts with `python`, and the next word is a tracked `tests/*.py` file (`git ls-files`). No
 interpreter option goes before it: `-O` would strip the test's asserts, and the runner removes `PYTHONOPTIMIZE` from

@@ -4,9 +4,7 @@
 //!
 //! As in the C++ binary, the package is loaded before the command's own arguments are checked. Lines end in a plain
 //! `\n` on every platform, and the MSVC build's text-mode `\r\n` is not mirrored (the hub's decision for the Rust
-//! binary). `tools/rust_parity.py` is to compare with CRLF normalised to LF, but that change is pending: on main it
-//! still compares raw bytes, so until it lands a diff line against the C++ binary differs on Windows in line endings
-//! only.
+//! binary). `tools/rust_parity.py` reads each CRLF as LF when it compares (decision 2026-11-15-09).
 //!
 //! Neither command depends on the parity mode.
 

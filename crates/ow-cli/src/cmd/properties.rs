@@ -10,8 +10,7 @@
 //! the lines printed so far kept, as the C++ binary does.
 //!
 //! Lines end in `\n` on every platform (hub decision for the Rust port). The C++ binary's text-mode streams print
-//! `\r\n` on Windows; the parity harness comparing with line ends normalised is pending the maintainer's yes, so
-//! until then the harness's `diff` lines see the two binaries differ in line ends.
+//! `\r\n` on Windows; the parity harness reads each CRLF as LF when it compares (decision 2026-11-15-09).
 //!
 //! The index file and the schema files are read as the C++ text-mode `ifstream` reads them on Windows
 //! ([`ow_package::schema::text_mode`]: stop at the first 0x1A byte, `\r\n` to `\n`).
