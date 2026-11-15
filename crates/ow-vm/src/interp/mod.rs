@@ -13,11 +13,13 @@
 //! variable reads as an instance variable and a `GotoLabel` is stepped over, as the C++ does (latent state code is
 //! W5-STATES'; both UNVERIFIED in the game).
 //!
-//! **What waits for other lanes** (each answers `NotYet { NotPorted }` naming the lane): struct and array element
-//! operations, dynamic arrays, struct comparison and static arrays as a whole (`aggregate.rs`, W4-INTERP2);
-//! `foreach` (`iter.rs`, W4-INTERP2); delegates (`delegate.rs`, W4-INTERP2); interface context, interface casts and
-//! the object-interface primitive casts (W4-INTERP2); states beyond the C++ approximation and latent code
-//! (W5-STATES).
+//! **Aggregates, `foreach`, delegates and interfaces** (W4-INTERP2, decision 2026-11-15-20): struct members, array
+//! elements and the dynamic-array operations (`aggregate.rs`, places inside an aggregate are `eval::Place::In`),
+//! `foreach` over dynamic arrays and engine iterators (`iter.rs`), delegates (`delegate.rs`), and the interface
+//! context and casts through `Vm::implements`. A static array used as a whole stays `NotYet`.
+//!
+//! **What waits for other lanes** (each answers `NotYet` naming it): states beyond the C++ approximation and latent
+//! code (W5-STATES).
 //!
 //! **Loading** (`load.rs`). Functions and classes come from the code packages of the definition store, through
 //! `DefStore::code_mut` (its package store and reflection index, so one `CodeIndex` defines every layout). Loading a

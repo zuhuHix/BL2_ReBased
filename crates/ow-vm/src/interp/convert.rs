@@ -104,14 +104,9 @@ pub(crate) fn cast(vm: &mut Vm, code: u8, v: Value) -> Result<Value, VmError> {
         }
         0x39 => rotator_to_vector(vm, &v)?,
         0x50 => vector_to_rotator(vm, &v)?,
-        // Object <-> interface views: interfaces are W4-INTERP2's.
-        0x36 | 0x37 | 0x46 => {
-            return Err(NotYet::not_ported(
-                format!("primitive cast 0x{code:02x} (an object-interface view)"),
-                "lane W4-INTERP2 (interfaces)",
-            )
-            .into());
-        }
+        // Object <-> interface views share a reference: the value as it is (the C++ reading, W4-INTERP2; UNVERIFIED in
+        // the running game).
+        0x36 | 0x37 | 0x46 => v,
         _ => {
             vm.stub_site(
                 &format!("primitive cast 0x{code:02x}"),
