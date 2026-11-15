@@ -29,7 +29,7 @@
 use std::rc::Rc;
 
 use ow_core::NotYet;
-use ow_object::heap::HeapError;
+use ow_object::heap::{HeapError, Step};
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::value::{Value, same_value};
@@ -56,7 +56,7 @@ pub(crate) struct Frame {
     /// The frame's own object (`frame.self`): the call's object, or the owner's class default object.
     pub(crate) this: Ctx,
     /// This frame's storage on the VM's frame stack.
-    at: FrameRef,
+    pub(crate) at: FrameRef,
     /// Per `code.locals` entry: an optional parameter the call did not supply.
     omitted: Vec<bool>,
     /// Per `code.locals` entry: the caller's storage an out parameter aliases.
@@ -94,6 +94,9 @@ pub(crate) enum Place {
     Prop(ObjRef, PropAddr),
     /// Not a storage location: a temporary holding this value (the C++ `scratch`). Writes are dropped.
     Temp(Value),
+    /// Inside the struct or dynamic array held at the base place: its struct entries and array elements along the
+    /// path, outermost first (W4-INTERP2, `aggregate.rs`). The base is never itself `In`.
+    In(Box<Place>, Vec<Step>),
 }
 
 /// The caller's storage an out argument aliases (carried on `Arg`). A frame slot it names is checked against the
@@ -264,6 +267,8 @@ fn decoded(vm: &Vm, code: &FuncCode) -> Result<Rc<Code>, VmError> {
 fn run(vm: &mut Vm, f: &mut Frame, script: &Code) -> Result<(), VmError> {
     let statements = &script.statements;
     let mut pc = 0;
+    // The frame's `foreach` states (the C++ `Frame::iterators`), innermost last.
+    let mut iterators = iter::Iterators::default();
     // Prologue: one entry per optional parameter, either Nothing or DefaultParmValue ... EndParmValue.
     let optional: Vec<usize> = f
         .code
@@ -336,7 +341,7 @@ fn run(vm: &mut Vm, f: &mut Frame, script: &Code) -> Result<(), VmError> {
                 }
             }
             op::DYN_ARRAY_ITERATOR | op::ITERATOR | op::ITERATOR_NEXT | op::ITERATOR_POP => {
-                return Err(iter::statement(s.op));
+                pc = iter::statement(vm, f, &mut iterators, script, s, pc)?;
             }
             // The C++ steps over both: a label table is data, and a GotoLabel (a jump to a label of state code) is not
             // run, as latent state code is not (W5-STATES ports state code; UNVERIFIED in the game).
@@ -351,7 +356,7 @@ fn run(vm: &mut Vm, f: &mut Frame, script: &Code) -> Result<(), VmError> {
 }
 
 /// The statement a jump's in-memory offset names.
-fn target(f: &Frame, script: &Code, offset: u16) -> Result<usize, VmError> {
+pub(crate) fn target(f: &Frame, script: &Code, offset: u16) -> Result<usize, VmError> {
     script
         .statement_at
         .get(&u32::from(offset))
@@ -367,7 +372,7 @@ fn target(f: &Frame, script: &Code, offset: u16) -> Result<usize, VmError> {
 // ------------------------------------------------------------------------------------------------ places
 
 /// One more level of expression nesting (across all frames), refused past [`MAX_NESTING`].
-fn enter(vm: &mut Vm, f: &Frame) -> Result<(), VmError> {
+pub(crate) fn enter(vm: &mut Vm, f: &Frame) -> Result<(), VmError> {
     if vm.code.nesting >= MAX_NESTING {
         return Err(script_error(
             f.path(),
@@ -400,11 +405,9 @@ fn lval_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Place, V
             instance_place(vm, f, e.refs[0], ctx)
         }
         op::DEFAULT_VARIABLE => default_place(vm, f, e.refs[0], ctx),
-        op::BOOL_VARIABLE => lval(vm, f, &e.kids[0], ctx),
-        op::INTERFACE_CONTEXT => Err(interfaces("InterfaceContext")),
-        op::STRUCT_MEMBER | op::ARRAY_ELEMENT | op::DYN_ARRAY_ELEMENT => {
-            Err(aggregate::element(e.op))
-        }
+        op::BOOL_VARIABLE | op::INTERFACE_CONTEXT => lval(vm, f, &e.kids[0], ctx),
+        op::STRUCT_MEMBER => aggregate::member_place(vm, f, e, ctx),
+        op::ARRAY_ELEMENT | op::DYN_ARRAY_ELEMENT => aggregate::element_place(vm, f, e, ctx),
         op::CONTEXT | op::CLASS_CONTEXT => match context_target(vm, f, e, ctx)? {
             None => {
                 note_none_context(vm, f);
@@ -418,7 +421,7 @@ fn lval_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Place, V
 }
 
 /// The place of `code.locals` entry `entry`: the caller's storage for an aliased out parameter, else the frame slot.
-fn local_place_of(f: &Frame, entry: usize) -> Place {
+pub(crate) fn local_place_of(f: &Frame, entry: usize) -> Place {
     match &f.aliases[entry] {
         Some(alias) => alias.clone(),
         None => Place::Slot(f.at, f.code.locals[entry].slot),
@@ -547,6 +550,7 @@ fn place_ref<'a>(vm: &'a Vm, p: &'a Place) -> Result<&'a Value, VmError> {
             .ok_or_else(missing),
         Place::Prop(o, a) => Ok(vm.space.read(*o, *a)?),
         Place::Temp(v) => Ok(v),
+        Place::In(base, path) => aggregate::walk(place_ref(vm, base)?, path),
     }
 }
 
@@ -583,8 +587,33 @@ pub(crate) fn store(vm: &mut Vm, p: &Place, value: Value) -> Result<(), VmError>
         }
         Place::Prop(o, a) => store_property(vm, *o, *a, value)?,
         Place::Temp(_) => {}
+        Place::In(base, path) => aggregate::store_in(vm, base, path, value)?,
     }
     Ok(())
+}
+
+/// The value a frame place holds, for changing in place (W4-INTERP2's array operations); `None` for a place that is
+/// not a frame's storage.
+pub(crate) fn frame_value_mut<'a>(
+    vm: &'a mut Vm,
+    p: &Place,
+) -> Result<Option<&'a mut Value>, VmError> {
+    let missing = || script_error("", "a frame slot outside its frame's storage");
+    Ok(Some(match p {
+        Place::Slot(at, i) => frame_store_mut(vm, *at)?
+            .slots
+            .get_mut(*i)
+            .ok_or_else(missing)?,
+        Place::Extra(at, r) => frame_store_mut(vm, *at)?
+            .extra
+            .get_mut(r)
+            .ok_or_else(missing)?,
+        Place::Typed(at, o, n) => frame_store_mut(vm, *at)?
+            .typed
+            .get_mut(&(*o, *n))
+            .ok_or_else(missing)?,
+        Place::Prop(..) | Place::Temp(_) | Place::In(..) => return Ok(None),
+    }))
 }
 
 /// A heap write with the representation rules the C++ bag does not need (module documentation of `interp`).
@@ -611,7 +640,7 @@ fn store_property(vm: &mut Vm, object: ObjRef, at: PropAddr, value: Value) -> Re
 }
 
 /// Whether `class` or a super class is an engine-native stand-in class (decision 2026-11-15-08).
-fn through_native(vm: &Vm, class: ClassId) -> bool {
+pub(crate) fn through_native(vm: &Vm, class: ClassId) -> bool {
     let classes = &vm.space.classes;
     let mut cursor = Some(class);
     let mut left = classes.len();
@@ -626,7 +655,7 @@ fn through_native(vm: &Vm, class: ClassId) -> bool {
 }
 
 /// The representation rules a heap slot needs that the C++ bag does not (module documentation of `interp`).
-fn fit_for_heap(vm: &Vm, kind: &PropKind, value: Value) -> Value {
+pub(crate) fn fit_for_heap(vm: &Vm, kind: &PropKind, value: Value) -> Value {
     match (kind, value) {
         (PropKind::Class { .. }, Value::Object(None) | Value::None) => Value::Class(None),
         (PropKind::Interface { .. }, Value::Object(o)) => Value::Interface(o),
@@ -689,27 +718,25 @@ fn eval_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, V
         | op::OP_4C..=op::OP_50
         | op::OP_5E
         | op::STATE_VARIABLE
-        | op::BOOL_VARIABLE => variable(vm, f, e, ctx),
+        | op::BOOL_VARIABLE
+        | op::STRUCT_MEMBER => variable(vm, f, e, ctx),
+        op::ARRAY_ELEMENT | op::DYN_ARRAY_ELEMENT => aggregate::read_element(vm, f, e, ctx),
         op::CONTEXT | op::CLASS_CONTEXT => context(vm, f, e, ctx),
         op::SKIP => eval(vm, f, &e.kids[0], ctx),
         op::OP_5F => let_attribute(vm, f, e, ctx),
-        op::LET | op::LET_BOOL => let_(vm, f, e, ctx),
+        op::LET | op::LET_BOOL | op::LET_DELEGATE => let_(vm, f, e, ctx),
         op::CONDITIONAL => conditional(vm, f, e, ctx),
         op::VIRTUAL_FUNCTION => call_virtual(vm, f, e, ctx, false),
         op::GLOBAL_FUNCTION => call_virtual(vm, f, e, ctx, true),
         op::FINAL_FUNCTION => call_final(vm, f, e, ctx),
         op::PRIMITIVE_CAST => primitive_cast(vm, f, e, ctx),
-        op::DYNAMIC_CAST => dynamic_cast(vm, f, e, ctx),
+        op::DYNAMIC_CAST | op::INTERFACE_CAST => dynamic_cast(vm, f, e, ctx),
         op::META_CAST => meta_cast(vm, f, e, ctx),
         op::NEW => new_object(vm, f, e, ctx),
         op::ASSERT => assert(vm, f, e, ctx),
         op::RETURN_NOTHING => Ok(zero_for(vm, f, e.refs[0])),
-        op::INTERFACE_CONTEXT => Err(interfaces("InterfaceContext")),
-        op::INTERFACE_CAST => Err(interfaces("InterfaceCast")),
-        op::STRUCT_MEMBER
-        | op::ARRAY_ELEMENT
-        | op::DYN_ARRAY_ELEMENT
-        | op::STRUCT_CMP_EQ
+        op::INTERFACE_CONTEXT => eval(vm, f, &e.kids[0], ctx),
+        op::STRUCT_CMP_EQ
         | op::STRUCT_CMP_NE
         | op::DYN_ARRAY_LENGTH
         | op::DYN_ARRAY_ADD
@@ -720,16 +747,15 @@ fn eval_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, V
         | op::DYN_ARRAY_REMOVE_ITEM
         | op::DYN_ARRAY_FIND
         | op::DYN_ARRAY_FIND_STRUCT
-        | op::DYN_ARRAY_SORT => Err(aggregate::element(e.op)),
-        op::DELEGATE_FUNCTION
-        | op::LET_DELEGATE
-        | op::EQUAL_EQUAL_DEL_DEL
+        | op::DYN_ARRAY_SORT => aggregate::expression(vm, f, e, ctx),
+        op::DELEGATE_FUNCTION => delegate::call(vm, f, e, ctx),
+        op::EQUAL_EQUAL_DEL_DEL
         | op::EQUAL_EQUAL_DEL_FUNC
         | op::NOT_EQUAL_DEL_DEL
         | op::NOT_EQUAL_DEL_FUNC
         | op::EMPTY_DELEGATE
         | op::DELEGATE_PROPERTY
-        | op::INSTANCE_DELEGATE => Err(delegate::expression(e.op)),
+        | op::INSTANCE_DELEGATE => delegate::expression(vm, f, e, ctx),
         other => Err(not_evaluable(f, other)),
     }
 }
@@ -791,7 +817,7 @@ fn let_attribute(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value
 fn let_(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, VmError> {
     let lhs = &e.kids[0];
     if lhs.op == op::DYN_ARRAY_LENGTH {
-        return Err(aggregate::element(op::DYN_ARRAY_LENGTH));
+        return aggregate::set_length(vm, f, e, ctx);
     }
     let place = lval(vm, f, lhs, ctx)?;
     let value = eval(vm, f, &e.kids[1], ctx)?;
@@ -950,8 +976,9 @@ pub(crate) fn zero_for(vm: &mut Vm, f: &Frame, reference: i32) -> Value {
     }
 }
 
-/// `DynamicCast`: the object when its class is the wanted class or a child of it; an interface wanted is
-/// W4-INTERP2's; otherwise None.
+/// `DynamicCast` and `InterfaceCast` (one C++ case): the value when it is an object whose class is the wanted class
+/// or a child of it, or implements it (`Vm::implements`, the C++ `Runtime::implements`); otherwise None. A "no"
+/// through an engine-native stand-in class is `NotYet` ([`is_child`]).
 fn dynamic_cast(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, VmError> {
     let v = eval(vm, f, &e.kids[0], ctx)?;
     let want = class_at(vm, f.code.package, e.refs[0], f.path())?;
@@ -962,14 +989,10 @@ fn dynamic_cast(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value,
         return Ok(Value::Object(None));
     };
     let class = vm.space.heap.get(object)?.class;
-    if is_child(vm, class, want)? {
-        return Ok(Value::Object(Some(object)));
+    if vm.space.classes.is_child_of(class, want) || vm.implements(class, want) {
+        return Ok(v);
     }
-    if may_be_interface(vm, want) {
-        return Err(interfaces(
-            "DynamicCast to an interface class (Runtime::implements)",
-        ));
-    }
+    is_child(vm, class, want)?;
     Ok(Value::Object(None))
 }
 
@@ -999,23 +1022,6 @@ pub(crate) fn is_child(vm: &Vm, class: ClassId, want: ClassId) -> Result<bool, V
         cursor = classes.get_layout(c).and_then(|l| l.super_class());
     }
     Ok(false)
-}
-
-/// Whether `class` could be an interface the C++ `implements` might answer yes for: flagged as one in its body, or
-/// named `I<Upper>...` (the structural fallback for bodies that do not decode).
-fn may_be_interface(vm: &Vm, class: ClassId) -> bool {
-    let Some(key) = vm.defs.code().key_of(class) else {
-        return false;
-    };
-    let info = vm.defs.code().class(key);
-    let named = info.name.len() >= 2
-        && info.name.as_bytes()[0] == b'I'
-        && info.name.as_bytes()[1].is_ascii_uppercase();
-    info.is_interface() || named
-}
-
-fn interfaces(what: &str) -> VmError {
-    NotYet::not_ported(format!("{what} (interfaces)"), "lane W4-INTERP2").into()
 }
 
 /// `Object.IsA(name)` (`natives_core.rs`): whether `class` or a super class is named `name` (any case). Through an
@@ -1145,7 +1151,7 @@ fn short_circuit(vm: &mut Vm, f: &mut Frame, e: &Expr, and: bool) -> Result<Valu
 /// call's target: UE3's `Stack.Object` versus `Context`, UNVERIFIED), an omitted optional one is not supplied, an
 /// out argument aliases its place (the callee writes the caller's storage live), surplus arguments are evaluated and
 /// dropped. Out arguments were written through their aliases during the call, so nothing is copied back.
-fn call_function(
+pub(crate) fn call_function(
     vm: &mut Vm,
     f: &mut Frame,
     function: FuncId,
@@ -1156,7 +1162,7 @@ fn call_function(
     invoke(vm, function, target, args)
 }
 
-fn bind_arguments(
+pub(crate) fn bind_arguments(
     vm: &mut Vm,
     f: &mut Frame,
     function: FuncId,

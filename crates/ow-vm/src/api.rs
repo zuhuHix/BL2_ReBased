@@ -670,6 +670,20 @@ impl Vm {
         self.iterators.get(key).cloned()
     }
 
+    /// Whether `class` implements the interface class `iface` (C++ `Runtime::implements`, lane W4-INTERP2): `iface`
+    /// is an interface class and the interface table of `class` or of a super class names `iface` or a class derived
+    /// from it (`CodeIndex::implements`, NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running game). A chain whose
+    /// bodies did not all decode (synthetic packages) falls back to the structural rule, as the C++ does. A class
+    /// with no package export behind it (one defined by hand) implements nothing. Being a child of `iface` is not
+    /// asked here: the callers (`QueryInterface`, the casts) ask the class table first, as the C++ does.
+    pub fn implements(&mut self, class: ClassId, iface: ClassId) -> bool {
+        let (code, store) = self.defs.code_mut();
+        match (code.key_of(class), code.key_of(iface)) {
+            (Some(c), Some(i)) => code.implements(store, c, i),
+            _ => false,
+        }
+    }
+
     /// Replaces a **script** function with a host binding that runs instead of its bytecode (C++ `overrideScript`,
     /// for a call that only presents something, and architecture R2's offline rules reached through script). The
     /// function must be declared and not native, and is overridden once.

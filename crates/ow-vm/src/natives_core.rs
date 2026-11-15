@@ -41,9 +41,8 @@
 //! package behind it, declares no state). The algorithm itself is tested here over a stand-in lookup (decision
 //! 2026-11-15-07).
 //!
-//! **Interfaces.** `QueryInterface` and the iterators' interface filter need a class's interface table (C++
-//! `Runtime::implements`), which the VM cannot query yet: where the answer depends on it, they return
-//! `NotYet { LayerAbsent }` until W4-INTERP2 adds the interface query and wires it into [`register`].
+//! **Interfaces.** `QueryInterface` and the iterators' interface filter ask `Vm::implements` (the C++
+//! `Runtime::implements`, a class's interface table), which W4-INTERP2 added and wired into [`register`].
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -408,23 +407,16 @@ fn register_with(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError
 
 fn interfaces(vm: &mut Vm) -> Result<(), VmError> {
     // Object.QueryInterface (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): the object itself when its class is the
-    // interface class or derives from it, or implements it; else None. "Implements" needs the class's interface table
-    // (C++ Runtime::implements), which the class table does not hold yet: NotYet where it would decide.
+    // interface class or derives from it, or implements it (`Vm::implements`, the C++ Runtime::implements, wired by
+    // W4-INTERP2); else None.
     reg(vm, "Object.QueryInterface(class)", |c| {
         let want = class(c, 0)?;
         let (Some(this), Some(want)) = (c.this, want) else {
             return Ok(Value::Object(None));
         };
         let own = c.vm.space.heap.get(this)?.class;
-        if c.vm.space.classes.is_child_of(own, want) {
-            return Ok(Value::Object(Some(this)));
-        }
-        Err(NotYet::layer_absent(
-            "Object.QueryInterface: a class's interface table (Runtime::implements)",
-            "ow-vm interface query (Runtime::implements)",
-            "lane W4-INTERP2 (decision 2026-11-15-07)",
-        )
-        .into())
+        let yes = c.vm.space.classes.is_child_of(own, want) || c.vm.implements(own, want);
+        Ok(Value::Object(yes.then_some(this)))
     })
 }
 
@@ -1161,26 +1153,27 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
     // parameters, read from the Engine package by the C++). Both visit the live instances of BaseClass or a child
     // of it, in creation order; the loop binds the out parameter (index 1). A None BaseClass matches nothing.
     // UNVERIFIED (as in the C++): the real DynamicActors visits only actors spawned at run time, here it is the same
-    // list as AllActors; the real walk is live, here the list is taken when the loop starts. An InterfaceClass filter
-    // needs a class's interface table, which the class table does not hold yet: NotYet when it would decide.
+    // list as AllActors; the real walk is live, here the list is taken when the loop starts. An InterfaceClass keeps
+    // the objects whose class implements it (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2).
     fn actors(c: &mut NativeCall<'_>) -> Result<IteratorResult, VmError> {
         let base = if c.has(0) { class(c, 0)? } else { None };
         let interface = if c.has(2) { class(c, 2)? } else { None };
         let Some(base) = base else {
             return Ok(IteratorResult::new(1, Vec::new()));
         };
-        let items: Vec<Value> =
-            c.vm.space
-                .live(base)
-                .map(|o| Value::Object(Some(o)))
-                .collect();
-        if interface.is_some() && !items.is_empty() {
-            return Err(NotYet::layer_absent(
-                "Actor.AllActors / DynamicActors: the InterfaceClass filter (Runtime::implements)",
-                "ow-vm interface query (Runtime::implements)",
-                "lane W4-INTERP2 (decision 2026-11-15-07)",
-            )
-            .into());
+        let live: Vec<ObjRef> = c.vm.space.live(base).collect();
+        let mut items = Vec::with_capacity(live.len());
+        for o in live {
+            let keep = match interface {
+                None => true,
+                Some(iface) => {
+                    let own = c.vm.space.heap.get(o)?.class;
+                    c.vm.implements(own, iface)
+                }
+            };
+            if keep {
+                items.push(Value::Object(Some(o)));
+            }
         }
         Ok(IteratorResult::new(1, items))
     }
@@ -2864,12 +2857,13 @@ mod tests {
             h.call(key, vec![Value::Class(Some(h.actor))]),
             Value::Object(None)
         );
-        // Not derived: the answer needs the interface table.
+        // Not derived: the interface table answers (`Vm::implements`); a class defined by hand, with no package
+        // export behind it, implements nothing. The table itself is tested in `interp::delegate`.
         let a = h.vm.instantiate(h.actor, "A").unwrap();
-        let e = h
-            .try_call(key, Some(a), vec![Value::Class(Some(h.pawn))], &[])
-            .unwrap_err();
-        assert!(matches!(not_yet(e), Missing::LayerAbsent(_)));
+        assert_eq!(
+            h.call_on(key, a, vec![Value::Class(Some(h.pawn))]),
+            Value::Object(None)
+        );
     }
 
     #[test]
@@ -2930,9 +2924,10 @@ mod tests {
             )
             .unwrap();
             assert!(r.items.is_empty(), "a None base class matches nothing");
-            // The interface filter needs the interface table; with no candidate there is nothing to decide.
+            // The interface filter keeps the classes the interface table says implement it (`Vm::implements`); a
+            // class defined by hand implements nothing. The table itself is tested in `interp::delegate`.
             let iface = arg(Value::Class(Some(h.object)), true);
-            let e = run(
+            let r = run(
                 &mut h.vm,
                 vec![
                     arg(Value::Class(Some(h.actor)), true),
@@ -2940,8 +2935,8 @@ mod tests {
                     iface.clone(),
                 ],
             )
-            .unwrap_err();
-            assert!(matches!(not_yet(e), Missing::LayerAbsent(_)));
+            .unwrap();
+            assert!(r.items.is_empty());
             let r = run(
                 &mut h.vm,
                 vec![arg(Value::Class(Some(empty)), true), none, iface],
