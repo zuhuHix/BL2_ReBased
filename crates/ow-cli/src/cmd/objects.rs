@@ -168,17 +168,20 @@ fn cpp_same(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// What printing reads.
-struct Printer<'a> {
-    store: &'a PackageStore,
-    code: &'a CodeIndex,
-    space: &'a ObjectSpace,
+/// What printing reads. `pub(crate)` for `cmd/defs.rs` (`--def-dump`), which prints with it.
+pub(crate) struct Printer<'a> {
+    pub(crate) store: &'a PackageStore,
+    pub(crate) code: &'a CodeIndex,
+    pub(crate) space: &'a ObjectSpace,
 }
 
 impl Printer<'_> {
     /// Every property of class `c` by lower-cased name, in byte order, with its first slot. Where two classes of the
     /// chain declare one name, the subclass's declaration is the one printed (the C++ bag keeps one value per name).
-    fn properties(&self, c: ClassId) -> Result<Vec<(String, (usize, &PropertyDecl))>, String> {
+    pub(crate) fn properties(
+        &self,
+        c: ClassId,
+    ) -> Result<Vec<(String, (usize, &PropertyDecl))>, String> {
         let mut by_name: FixedHashMap<String, (usize, &PropertyDecl)> = FixedHashMap::default();
         for (prop, decl) in self.space.classes.props(c).map_err(|e| text(&e))? {
             let key = self.space.names.text(decl.name).to_ascii_lowercase();
@@ -190,7 +193,7 @@ impl Printer<'_> {
     }
 
     /// The value a property shows: its slot, or its slots as one array for a static array (the C++ form).
-    fn property(&self, slots: &[Value], slot: usize, decl: &PropertyDecl) -> Value {
+    pub(crate) fn property(&self, slots: &[Value], slot: usize, decl: &PropertyDecl) -> Value {
         if decl.array_dim > 1 && !matches!(decl.kind, PropKind::Array(_)) {
             Value::array(slots[slot..slot + decl.array_dim as usize].to_vec())
         } else {
@@ -199,7 +202,7 @@ impl Printer<'_> {
     }
 
     /// `valueJson`.
-    fn value(&self, out: &mut String, value: &Value, depth: u32) -> Result<(), String> {
+    pub(crate) fn value(&self, out: &mut String, value: &Value, depth: u32) -> Result<(), String> {
         match value {
             Value::None => out.push_str("null"),
             Value::Int(i) => {

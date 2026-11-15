@@ -87,29 +87,46 @@
 //! **Parity mode.** The store passes its mode to every decode: under `ParityMode::Reference` the decoder keeps its C++
 //! stand-ins (decision 2026-11-15-08, architecture section 6.1). The store adds none of its own.
 //!
-//! Status: contract only (W3-DEFS contract commit, reviews r1 and r2). Every method that loads or looks anything up returns
-//! [`DefError::NotYet`]; the constructors and accessors work.
+//! **Cost.** Under [`IdentityPolicy::FirstInScanOrder`] the first holder lookup builds the package store's global index
+//! (`PackageStore::global_candidates`), which reads every package of the tree once, as the C++ global fallback does on
+//! its first use (about 6.6 s for the 934 files of the installed `CookedPCConsole`, measured locally). Holder answers
+//! are cached per path. A candidate file a lookup reads is kept only as a list of its export paths; only holders'
+//! files stay loaded in the package store.
+//!
+//! Status: implemented (W3-DEFS, decision 2026-11-15-16). Identity, the holder rules, the prefix rule and the overlay
+//! formats are this project's conventions or the tools', UNVERIFIED as rules of the game; the decode is W3-DECODE's.
 
+use std::cell::RefCell;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use ow_container::ContainerError;
-use ow_core::{NotYet, ObjectPath, ParityMode};
-use ow_object::decode::{DecodeError, DecodeState};
-use ow_object::heap::{HeapError, ObjectSpace};
-use ow_object::ids::{ClassId, ObjRef, PropAddr, PropId};
+use ow_core::{FixedHashMap, FixedHashSet, NotYet, ObjectPath, ParityMode};
+use ow_object::cdo;
+use ow_object::decode::{DecodeError, DecodeState, ReferenceResolver, ValueCx};
+use ow_object::heap::{HeapError, ObjectSpace, Origin};
+use ow_object::ids::{ClassId, ObjRef, PropAddr, PropId, StructId};
 use ow_object::prefix::PropertyPrefix;
 use ow_object::reflect::{CodeIndex, ReflectError};
+use ow_object::value::Value;
 use ow_package::PackageId;
-use ow_package::package::PackageError;
+use ow_package::package::{Package, PackageError};
+use ow_package::reader::Reader;
 use ow_package::store::{PackageStore, StoreError};
+use ow_package::tables::{self, ObjectEntry};
 
-use crate::identity::{Census, Holders, IdentityPolicy};
+use crate::identity::{
+    Census, CensusEntry, FileFailure, FileIndex, Holders, IdentityPolicy, Owner, class_text,
+    full_class, full_path, is_class_default, path_key,
+};
 use crate::keys::KeyCache;
-use crate::overlay::{Overlay, OverlayId, OverlayStatus, ValueOrigin};
+use crate::overlay::{
+    Linking, Overlay, OverlayId, OverlayKind, OverlayStatus, PropertyPath, ValueOrigin, write_patch,
+};
 use crate::tail::{Tail, Tails};
 
-/// The record a `NotYet` of this crate names.
+// The record a `NotYet` of this crate names.
 pub const RECORD: &str = "docs/rust-port/ARCHITECTURE.md section 3.4 (lane W3-DEFS)";
 
 /// Why a definition store operation failed. The layer variants are transparent: they print as the inner error, and
@@ -286,9 +303,314 @@ impl From<NotYet> for DefError {
     }
 }
 
-fn not_yet(what: &'static str) -> DefError {
-    DefError::NotYet(NotYet::not_ported(what, RECORD))
+fn package_error(e: PackageError) -> DefError {
+    StoreError::Package(e).into()
 }
+
+/// Class names whose exports are code (reflection's), never definitions.
+fn is_code_class(name: &str) -> bool {
+    matches!(
+        name,
+        "Class"
+            | "ScriptStruct"
+            | "Struct"
+            | "Enum"
+            | "Function"
+            | "State"
+            | "Const"
+            | "Package"
+            | "TextBuffer"
+            | "MetaData"
+            | "ByteProperty"
+            | "IntProperty"
+            | "BoolProperty"
+            | "FloatProperty"
+            | "ObjectProperty"
+            | "ClassProperty"
+            | "ComponentProperty"
+            | "InterfaceProperty"
+            | "NameProperty"
+            | "StrProperty"
+            | "StructProperty"
+            | "ArrayProperty"
+            | "MapProperty"
+            | "DelegateProperty"
+            | "FloatAttributeProperty"
+            | "IntAttributeProperty"
+            | "ByteAttributeProperty"
+    )
+}
+
+/// Why a slotless object of the store stays a stand-in (module documentation, "Stand-ins that stay stand-ins").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stay {
+    /// No holder has its path (an import into no installed package, or none in the load set).
+    NoHolder,
+    /// The decoder's `?` stand-in, or a reference whose path cannot be built.
+    OutsideTables,
+    /// A stand-in of an engine-native class (`ClassTable::is_native`).
+    NativeClass,
+    /// A class, struct, enum, function, state, property or package export.
+    Code,
+    /// A class default object or an object inside one.
+    ClassDefault,
+}
+
+impl Stay {
+    fn reason(self) -> &'static str {
+        match self {
+            Stay::NoHolder => "no package holds it",
+            Stay::OutsideTables => "a reference outside its package's tables",
+            Stay::NativeClass => "an object of an engine-native class",
+            Stay::Code => "a code export",
+            Stay::ClassDefault => "a class default object, or inside one",
+        }
+    }
+}
+
+/// What the store knows of one of its objects.
+#[derive(Debug, Clone)]
+enum Entry {
+    Unloaded {
+        path: String,
+        target: (PackageId, i32),
+    },
+    Loaded {
+        class: ClassId,
+    },
+    Failed {
+        error: DefError,
+    },
+    Stays {
+        path: String,
+        why: Stay,
+    },
+}
+
+/// The identity map: object paths and holder exports to the store's objects, and what each object is.
+#[derive(Debug, Default)]
+struct Handles {
+    /// Folded object path -> its object (in Off also the no-holder stand-ins).
+    by_path: FixedHashMap<String, ObjRef>,
+    /// Holder export (filed id, index) -> its object.
+    by_target: FixedHashMap<(PackageId, i32), ObjRef>,
+    entries: FixedHashMap<ObjRef, Entry>,
+    /// Folded object path -> the holder the policy picked (cached; `None`: no holder).
+    holders: FixedHashMap<String, Option<(PackageId, i32)>>,
+    /// The export paths of every candidate file a holder lookup read, or why it could not be read: read once, and no
+    /// package kept for it (only a holder's file is loaded into the package store).
+    files: FixedHashMap<PathBuf, Result<Rc<FileIndex>, PackageError>>,
+    /// Paths whose `defs: no holder` line was logged.
+    no_holder_logged: FixedHashSet<String>,
+}
+
+impl Handles {
+    /// The export paths of `file`, read on first use.
+    fn file_index(&mut self, file: &Path) -> Result<Rc<FileIndex>, PackageError> {
+        self.files
+            .entry(file.to_path_buf())
+            .or_insert_with(|| FileIndex::read(file).map(Rc::new))
+            .clone()
+    }
+
+    fn prune(&mut self, space: &ObjectSpace) {
+        let live = |o: &ObjRef| space.heap.contains(*o);
+        self.by_path.retain(|_, o| live(o));
+        self.by_target.retain(|_, o| live(o));
+        self.entries.retain(|o, _| live(o));
+    }
+}
+
+/// The store's [`ReferenceResolver`]: every decoded reference becomes the store's object for its path (module
+/// documentation), allocated unloaded on first sight.
+struct Linker<'h> {
+    handles: &'h RefCell<Handles>,
+    policy: &'h IdentityPolicy,
+}
+
+impl ReferenceResolver for Linker<'_> {
+    fn resolve(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ObjRef>, DecodeError> {
+        if reference == 0 {
+            return Ok(None);
+        }
+        self.handle_for_ref(cx, package, reference).map(Some)
+    }
+}
+
+impl Linker<'_> {
+    fn live(&self, cx: &ValueCx<'_>, key: &str) -> Option<ObjRef> {
+        let handles = self.handles.borrow();
+        handles
+            .by_path
+            .get(key)
+            .copied()
+            .filter(|&o| cx.space.heap.contains(o))
+    }
+
+    /// The object `reference` of `package` names (module documentation).
+    fn handle_for_ref(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<ObjRef, DecodeError> {
+        let pkg = cx.store.shared(package);
+        let path = match full_path(&pkg, reference) {
+            Ok(path) => path,
+            Err(error) => {
+                // Outside the tables or a broken outer chain: the decoder's own answer (the `?` stand-in under the
+                // reference mode, an error otherwise).
+                let o = cx.resource(package, reference)?.ok_or(error)?;
+                self.handles
+                    .borrow_mut()
+                    .entries
+                    .entry(o)
+                    .or_insert(Entry::Stays {
+                        path: "?".to_string(),
+                        why: Stay::OutsideTables,
+                    });
+                return Ok(o);
+            }
+        };
+        let key = path_key(&path);
+        if let Some(o) = self.live(cx, &key) {
+            return Ok(o);
+        }
+        match self.holder_of(cx, &path, &key)? {
+            Some(target) => self.handle_for_target(cx, path, key, target),
+            None => {
+                let o = cx
+                    .resource(package, reference)?
+                    .ok_or(DecodeError::UnsupportedRequest)?;
+                let mut handles = self.handles.borrow_mut();
+                if handles.no_holder_logged.insert(key.clone()) {
+                    cx.state.log.push(format!("defs: no holder for {path}"));
+                }
+                handles.entries.entry(o).or_insert(Entry::Stays {
+                    path,
+                    why: Stay::NoHolder,
+                });
+                if cx.mode != ParityMode::Reference {
+                    handles.by_path.insert(key, o);
+                }
+                Ok(o)
+            }
+        }
+    }
+
+    /// The object of holder export `target` for `path`, allocated unloaded on first sight.
+    fn handle_for_target(
+        &self,
+        cx: &mut ValueCx<'_>,
+        path: String,
+        key: String,
+        target: (PackageId, i32),
+    ) -> Result<ObjRef, DecodeError> {
+        let existing = self.handles.borrow().by_target.get(&target).copied();
+        if let Some(o) = existing.filter(|&o| cx.space.heap.contains(o)) {
+            self.handles.borrow_mut().by_path.insert(key, o);
+            return Ok(o);
+        }
+        let class_name = cx.code.class_name(cx.store, target.0, target.1);
+        let o = cx
+            .resource(target.0, target.1)?
+            .ok_or(DecodeError::UnsupportedRequest)?;
+        let why = if is_class_default(&path) {
+            Some(Stay::ClassDefault)
+        } else if is_code_class(&class_name) {
+            Some(Stay::Code)
+        } else if cx.space.classes.is_native(cx.space.heap.get(o)?.class) {
+            Some(Stay::NativeClass)
+        } else {
+            None
+        };
+        let entry = match why {
+            Some(why) => Entry::Stays { path, why },
+            None => Entry::Unloaded { path, target },
+        };
+        let mut handles = self.handles.borrow_mut();
+        handles.entries.entry(o).or_insert(entry);
+        handles.by_target.insert(target, o);
+        handles.by_path.insert(key, o);
+        Ok(o)
+    }
+
+    /// The holder of `path` under the policy (module documentation of `crate::identity`), cached by its key.
+    fn holder_of(
+        &self,
+        cx: &mut ValueCx<'_>,
+        path: &str,
+        key: &str,
+    ) -> Result<Option<(PackageId, i32)>, DecodeError> {
+        if let Some(&answer) = self.handles.borrow().holders.get(key) {
+            return Ok(answer);
+        }
+        let mut answer = None;
+        match self.policy {
+            IdentityPolicy::FirstInScanOrder => {
+                for file in cx.store.global_candidates(path) {
+                    // As the store's global fallback: a file that fails to load or search is no candidate.
+                    let Ok(index) = self.handles.borrow_mut().file_index(&file) else {
+                        continue;
+                    };
+                    if let Some(export) = index.find(path) {
+                        // Only the holder's file is loaded: its definition is decoded from it.
+                        let id = cx.store.load_path(&file)?;
+                        answer = cx.code.resolve_ref(cx.store, id, export);
+                        break;
+                    }
+                }
+            }
+            IdentityPolicy::Loaded(set) => {
+                for name in &set.packages {
+                    let id = cx.store.load(name)?;
+                    let index = cx.code.find_export(cx.store, id, path);
+                    if index != 0 {
+                        answer = Some((cx.code.filed_id(id), index));
+                        break;
+                    }
+                }
+            }
+        }
+        self.handles
+            .borrow_mut()
+            .holders
+            .insert(key.to_string(), answer);
+        Ok(answer)
+    }
+}
+
+/// One installed overlay.
+#[derive(Debug)]
+struct Installed {
+    overlay: Overlay,
+    paths: Vec<PropertyPath>,
+    status: OverlayStatus,
+}
+
+/// The overlay layers: the installed overlays, the patches waiting for their object to load, and which overlay wrote
+/// each element last.
+#[derive(Debug, Default)]
+struct Overlays {
+    installed: Vec<Installed>,
+    pending: FixedHashMap<(PackageId, i32), Vec<(usize, usize)>>,
+    origins: FixedHashMap<(ObjRef, PropAddr), OverlayId>,
+}
+
+/// The census and, per entry, its first holder's `Package.Class` (for `exports_of_class`).
+#[derive(Debug)]
+struct CensusBuilt {
+    census: Census,
+    first_class: Vec<String>,
+}
+
+/// Each loaded class's properties and their element counts (for `origin`).
+type ClassProps = FixedHashMap<ClassId, FixedHashMap<PropId, u32>>;
 
 /// The definition store (module documentation).
 #[derive(Debug)]
@@ -298,14 +620,425 @@ pub struct DefStore {
     state: DecodeState,
     policy: IdentityPolicy,
     mode: ParityMode,
-    overlays: Vec<(Overlay, OverlayStatus)>,
+    handles: RefCell<Handles>,
+    overlays: Overlays,
     keys: KeyCache,
     tails: Tails,
+    class_props: ClassProps,
+    /// For `exports_of_class`: every census path with its first holder's `Package.Class`, built once (the census
+    /// itself is not kept: on the installed game it holds over a million paths).
+    classes_of_paths: Option<Vec<(String, String)>>,
 }
 
 impl Default for DefStore {
     fn default() -> Self {
         Self::new_empty()
+    }
+}
+
+/// Everything a load works with, borrowed from the store and the caller's object space at once.
+struct Loader<'c, 'a> {
+    cx: &'c mut ValueCx<'a>,
+    linker: &'a Linker<'a>,
+    overlays: &'c mut Overlays,
+    tails: &'c mut Tails,
+    class_props: &'c mut ClassProps,
+}
+
+/// [`crate::overlay::Linking`] over a load's context.
+struct PatchLink<'c, 'a> {
+    cx: &'c mut ValueCx<'a>,
+    linker: &'a Linker<'a>,
+}
+
+impl Linking for PatchLink<'_, '_> {
+    fn space(&mut self) -> &mut ObjectSpace {
+        self.cx.space
+    }
+
+    fn object(&mut self, path: &str) -> Result<ObjRef, String> {
+        let key = path_key(path);
+        if let Some(o) = self.linker.live(self.cx, &key) {
+            return Ok(o);
+        }
+        match self
+            .linker
+            .holder_of(self.cx, path, &key)
+            .map_err(|e| e.to_string())?
+        {
+            None => Err(format!("no package holds {path}")),
+            Some(target) => self
+                .linker
+                .handle_for_target(self.cx, path.to_string(), key, target)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    fn class(&mut self, path: &str) -> Result<ClassId, String> {
+        let key = self
+            .cx
+            .code
+            .find_class(self.cx.store, path)
+            .map_err(|e| e.to_string())?;
+        self.cx.layout(key).map_err(|e| e.to_string())
+    }
+
+    fn struct_defaults(&mut self, s: StructId) -> Result<Value, String> {
+        self.cx
+            .ensure_struct_defaults(s)
+            .map_err(|e| e.to_string())?;
+        self.cx
+            .space
+            .classes
+            .struct_defaults(s)
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl Loader<'_, '_> {
+    fn entry(&self, o: ObjRef) -> Option<Entry> {
+        self.linker.handles.borrow().entries.get(&o).cloned()
+    }
+
+    /// Loads `o` if it is an unloaded handle. `strict`: anything else that is not a loaded definition is
+    /// `NotADefinition`; otherwise it is returned unchanged.
+    fn ensure(&mut self, o: ObjRef, strict: bool) -> Result<ObjRef, DefError> {
+        self.cx.space.heap.get(o)?;
+        match self.entry(o) {
+            Some(Entry::Loaded { .. }) => Ok(o),
+            Some(Entry::Failed { error }) => Err(error),
+            Some(Entry::Unloaded { path, target }) => match self.load_unloaded(o, &path, target) {
+                Ok(()) => Ok(o),
+                Err(error) => {
+                    let mut handles = self.linker.handles.borrow_mut();
+                    handles.prune(self.cx.space);
+                    if self.cx.space.heap.contains(o) {
+                        handles.entries.insert(
+                            o,
+                            Entry::Failed {
+                                error: error.clone(),
+                            },
+                        );
+                    }
+                    Err(error)
+                }
+            },
+            Some(Entry::Stays { path, why }) if strict => Err(DefError::NotADefinition(format!(
+                "{path}: {}",
+                why.reason()
+            ))),
+            None if strict => Err(DefError::NotADefinition(format!(
+                "object {o:?} was not made by this definition store"
+            ))),
+            _ => Ok(o),
+        }
+    }
+
+    /// Instantiates holder export `target` and moves the result into handle `o` (module documentation).
+    fn load_unloaded(
+        &mut self,
+        o: ObjRef,
+        path: &str,
+        target: (PackageId, i32),
+    ) -> Result<(), DefError> {
+        let (package, index) = target;
+        let prefix = self.derive_prefix(package, index, path)?;
+        let instance = cdo::instantiate_export(self.cx, package, index, prefix)?;
+        let built = self.cx.space.free(instance.object)?;
+        let class = built.class;
+        {
+            let object = self.cx.space.heap.get_mut(o)?;
+            object.class = built.class;
+            object.name = built.name;
+            object.slots = built.slots;
+            object.origin = Origin::Export { package, index };
+        }
+        let pkg = self.cx.store.shared(package);
+        let entry = pkg.object(index).map_err(package_error)?.clone();
+        // The outer is the store's object for the outer's path, unless the outer is code (a cooked `Package` object
+        // above a definition, a class above its default subobjects): code has no object here, so the outer stays
+        // `None` (no stand-in of an engine-native class is made for it).
+        let outer_is_code = entry.outer > 0
+            && is_code_class(&self.cx.code.class_name(self.cx.store, package, entry.outer));
+        if entry.outer != 0 && !outer_is_code {
+            match self.linker.handle_for_ref(self.cx, package, entry.outer) {
+                Ok(outer) => self.cx.space.heap.get_mut(o)?.outer = Some(outer),
+                Err(e) => self
+                    .cx
+                    .state
+                    .log
+                    .push(format!("defs: outer of {path}: {e}")),
+            }
+        }
+        if let (Ok(start), Ok(size)) = (usize::try_from(entry.offset), usize::try_from(entry.size))
+            && instance.tags_end <= size
+            && start
+                .checked_add(size)
+                .is_some_and(|end| end <= pkg.data.len())
+        {
+            self.tails
+                .spans
+                .insert(o, (package, start + instance.tags_end..start + size));
+        }
+        if !self.class_props.contains_key(&class) {
+            let props = self
+                .cx
+                .space
+                .classes
+                .props(class)
+                .map_err(HeapError::from)?
+                .into_iter()
+                .map(|(p, d)| (p, d.array_dim.max(1) as u32))
+                .collect();
+            self.class_props.insert(class, props);
+        }
+        self.linker
+            .handles
+            .borrow_mut()
+            .entries
+            .insert(o, Entry::Loaded { class });
+        self.apply_pending(target, o);
+        Ok(())
+    }
+
+    /// The property prefix of export `index` of `package` (module documentation, "Prefix by class").
+    fn derive_prefix(
+        &mut self,
+        package: PackageId,
+        index: i32,
+        path: &str,
+    ) -> Result<PropertyPrefix, DefError> {
+        let pkg = self.cx.store.shared(package);
+        let entry = pkg.object(index).map_err(package_error)?.clone();
+        let Some(class) = self.cx.code.class_at(self.cx.store, package, entry.class)? else {
+            return Ok(PropertyPrefix::Ordinary);
+        };
+        let chain: Vec<String> = self
+            .cx
+            .code
+            .super_chain(class)
+            .map(|k| self.cx.code.class(k).path.to_ascii_lowercase())
+            .collect();
+        let has = |p: &str| chain.iter().any(|c| c == p);
+        if has("engine.actorcomponent") {
+            return Ok(PropertyPrefix::Component);
+        }
+        let actor = has("engine.actor");
+        let component = has("core.component");
+        if actor
+            && entry.outer > 0
+            && self.cx.code.class_name(self.cx.store, package, entry.outer) == "Level"
+        {
+            return Ok(PropertyPrefix::PlacedActor);
+        }
+        if !actor && !component {
+            return Ok(PropertyPrefix::Ordinary);
+        }
+        let derived = if actor {
+            PropertyPrefix::PlacedActor
+        } else {
+            PropertyPrefix::Component
+        };
+        if tags_parse(&pkg, &entry, derived.bytes()) {
+            Ok(derived)
+        } else {
+            Err(DefError::NotYet(NotYet::not_read(
+                format!(
+                    "the property prefix of {path}: its tags do not parse from the {}-byte prefix its class gives",
+                    derived.bytes()
+                ),
+                RECORD,
+            )))
+        }
+    }
+
+    fn apply_pending(&mut self, target: (PackageId, i32), o: ObjRef) {
+        let Some(waiting) = self.overlays.pending.remove(&target) else {
+            return;
+        };
+        for (overlay, patch) in waiting {
+            self.overlays.installed[overlay].status.pending -= 1;
+            self.apply_one(overlay, patch, o);
+        }
+    }
+
+    fn apply_one(&mut self, overlay: usize, patch: usize, o: ObjRef) {
+        let installed = &self.overlays.installed[overlay];
+        let path = installed.paths[patch].clone();
+        let p = installed.overlay.patches[patch].clone();
+        let mut link = PatchLink {
+            cx: &mut *self.cx,
+            linker: self.linker,
+        };
+        let outcome = write_patch(&mut link, o, &path, &p.value);
+        let installed = &mut self.overlays.installed[overlay];
+        match outcome {
+            Ok(addrs) => {
+                installed.status.applied += 1;
+                for a in addrs {
+                    self.overlays
+                        .origins
+                        .insert((o, a), OverlayId::new(overlay as u32));
+                }
+            }
+            Err(reason) => installed.status.failed.push((
+                patch,
+                DefError::BadPatch {
+                    object: p.object.as_str().to_string(),
+                    property: p.property,
+                    reason,
+                },
+            )),
+        }
+    }
+
+    /// Places every patch of overlay `overlay` (`DefStore::push_overlay`).
+    fn place_overlay(&mut self, overlay: usize) {
+        let count = self.overlays.installed[overlay].overlay.patches.len();
+        for patch in 0..count {
+            let installed = &self.overlays.installed[overlay];
+            let kind = installed.overlay.kind;
+            let object = installed.overlay.patches[patch].object.as_str().to_string();
+            if is_class_default(&object) {
+                let error = match kind {
+                    OverlayKind::TextMod | OverlayKind::Hotfix => {
+                        DefError::NotYet(NotYet::not_read(
+                            format!("patching the class default {object} ({kind:?} overlay)"),
+                            RECORD,
+                        ))
+                    }
+                    _ => DefError::NotADefinition(format!(
+                        "{object}: a class default object, or inside one"
+                    )),
+                };
+                self.overlays.installed[overlay]
+                    .status
+                    .failed
+                    .push((patch, error));
+                continue;
+            }
+            let key = path_key(&object);
+            match self.linker.holder_of(self.cx, &object, &key) {
+                Err(e) => self.overlays.installed[overlay]
+                    .status
+                    .failed
+                    .push((patch, e.into())),
+                Ok(None) => self.overlays.installed[overlay].status.pending += 1,
+                Ok(Some(target)) => {
+                    let loaded = {
+                        let handles = self.linker.handles.borrow();
+                        handles.by_target.get(&target).copied().filter(|o| {
+                            matches!(handles.entries.get(o), Some(Entry::Loaded { .. }))
+                        })
+                    };
+                    match loaded {
+                        Some(o) => self.apply_one(overlay, patch, o),
+                        None => {
+                            self.overlays
+                                .pending
+                                .entry(target)
+                                .or_default()
+                                .push((overlay, patch));
+                            self.overlays.installed[overlay].status.pending += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn find(&mut self, text: &str) -> Result<Option<ObjRef>, DefError> {
+        let key = path_key(text);
+        if is_class_default(text) {
+            let own = text
+                .rsplit(['.', ':'])
+                .next()
+                .is_some_and(|last| last.starts_with("Default__"));
+            if !own {
+                return Err(DefError::NotADefinition(format!(
+                    "{text}: inside a class default object"
+                )));
+            }
+            let Some((package, index)) = self.linker.holder_of(self.cx, text, &key)? else {
+                return Ok(None);
+            };
+            let pkg = self.cx.store.shared(package);
+            let class_ref = pkg.object(index).map_err(package_error)?.class;
+            let class = self
+                .cx
+                .code
+                .class_at(self.cx.store, package, class_ref)?
+                .ok_or_else(|| {
+                    DefError::NotADefinition(format!("{text}: its class is not loaded"))
+                })?;
+            return Ok(Some(cdo::class_default(self.cx, class)?));
+        }
+        let Some(target) = self.linker.holder_of(self.cx, text, &key)? else {
+            return Ok(None);
+        };
+        // Code is refused before a handle is made: a class object's own class is engine-native, which outside the
+        // reference mode has no stand-in.
+        if is_code_class(&self.cx.code.class_name(self.cx.store, target.0, target.1)) {
+            return Err(DefError::NotADefinition(format!(
+                "{text}: {}",
+                Stay::Code.reason()
+            )));
+        }
+        let o = match self.linker.live(self.cx, &key) {
+            Some(o) => o,
+            None => self
+                .linker
+                .handle_for_target(self.cx, text.to_string(), key, target)?,
+        };
+        self.ensure(o, true).map(Some)
+    }
+}
+
+/// Whether export `entry`'s tag stream, read from `prefix` bytes into its payload, reaches its `None` tag inside the
+/// export's serial data (module documentation, "Prefix by class"): each header readable, each value skipped by its
+/// size, nothing past the end.
+fn tags_parse(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> bool {
+    let (Ok(start), Ok(size)) = (usize::try_from(entry.offset), usize::try_from(entry.size)) else {
+        return false;
+    };
+    let Some(payload) = start
+        .checked_add(size)
+        .and_then(|end| pkg.data.get(start..end))
+    else {
+        return false;
+    };
+    if prefix > payload.len() {
+        return false;
+    }
+    let mut r = Reader::new(payload);
+    r.set_pos(prefix);
+    loop {
+        let Ok(name) = tables::read_name(&mut r, &pkg.names) else {
+            return false;
+        };
+        if name == "None" {
+            return true;
+        }
+        let Ok(ty) = tables::read_name(&mut r, &pkg.names) else {
+            return false;
+        };
+        let (Ok(value_size), Ok(array_index)) = (r.i32(), r.i32()) else {
+            return false;
+        };
+        if value_size < 0 || array_index < 0 {
+            return false;
+        }
+        if (ty == "StructProperty" || ty == "ByteProperty")
+            && tables::read_name(&mut r, &pkg.names).is_err()
+        {
+            return false;
+        }
+        if ty == "BoolProperty" && r.skip(1).is_err() {
+            return false;
+        }
+        if r.skip(value_size as usize).is_err() {
+            return false;
+        }
     }
 }
 
@@ -320,9 +1053,12 @@ impl DefStore {
             state: DecodeState::new(),
             policy,
             mode,
-            overlays: Vec::new(),
+            handles: RefCell::new(Handles::default()),
+            overlays: Overlays::default(),
             keys: KeyCache::default(),
             tails: Tails::default(),
+            class_props: ClassProps::default(),
+            classes_of_paths: None,
         }
     }
 
@@ -401,6 +1137,35 @@ impl DefStore {
         std::mem::take(&mut self.state.log)
     }
 
+    /// Runs `f` with a load context over this store and `w`.
+    fn run<T>(&mut self, w: &mut ObjectSpace, f: impl FnOnce(&mut Loader<'_, '_>) -> T) -> T {
+        let DefStore {
+            packages,
+            code,
+            state,
+            policy,
+            mode,
+            handles,
+            overlays,
+            tails,
+            class_props,
+            ..
+        } = self;
+        let linker = Linker {
+            handles: &*handles,
+            policy: &*policy,
+        };
+        let mut cx = ValueCx::new(packages, code, w, state, *mode).with_resolver(&linker);
+        let mut loader = Loader {
+            cx: &mut cx,
+            linker: &linker,
+            overlays,
+            tails,
+            class_props,
+        };
+        f(&mut loader)
+    }
+
     /// The definition at `path`, loaded, with every overlay applied: the export of the holder the policy picks
     /// (`crate::identity`). `Ok(None)` where no holder exists (under `Loaded`, none in the load set). Code exports
     /// are [`DefError::NotADefinition`]; a `Default__<Class>` export gives that class's default object. A holder
@@ -410,8 +1175,7 @@ impl DefStore {
         w: &mut ObjectSpace,
         path: &ObjectPath,
     ) -> Result<Option<ObjRef>, DefError> {
-        let _ = (w, path);
-        Err(not_yet("DefStore::find"))
+        self.run(w, |l| l.find(path.as_str()))
     }
 
     /// The object `reference` of package `from` names, loaded: `None` for 0. `from` may be any id the package store
@@ -425,8 +1189,17 @@ impl DefStore {
         from: PackageId,
         reference: i32,
     ) -> Result<Option<ObjRef>, DefError> {
-        let _ = (w, from, reference);
-        Err(not_yet("DefStore::resolve_ref"))
+        if reference == 0 {
+            return Ok(None);
+        }
+        self.packages
+            .get(from)
+            .object(reference)
+            .map_err(package_error)?;
+        self.run(w, |l| {
+            let o = l.linker.handle_for_ref(l.cx, from, reference)?;
+            l.ensure(o, false).map(Some)
+        })
     }
 
     /// Loads `obj` in place if it is one of the store's unloaded handles (module documentation) and returns it; a
@@ -434,29 +1207,34 @@ impl DefStore {
     /// object, a class default object, a stand-in that stays one) is [`DefError::NotADefinition`], and a stale handle
     /// is [`DefError::Heap`]. Use [`DefStore::ensure_loaded`] for an object a slot may hold.
     pub fn load(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<ObjRef, DefError> {
-        let _ = (w, obj);
-        Err(not_yet("DefStore::load"))
+        self.run(w, |l| l.ensure(obj, true))
     }
 
     /// Total loading: loads `obj` in place if it is an unloaded handle, and is `Ok(())` for every other live object
     /// (loaded definitions, run-time objects, class default objects, the stand-ins that stay stand-ins). Fails only
     /// for a stale handle ([`DefError::Heap`]) or a handle whose load fails.
     pub fn ensure_loaded(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<(), DefError> {
-        let _ = (w, obj);
-        Err(not_yet("DefStore::ensure_loaded"))
+        self.run(w, |l| l.ensure(obj, false)).map(|_| ())
     }
 
     /// Whether `obj` is a definition of this store that is loaded.
     pub fn is_loaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool {
-        let _ = (w, obj);
-        false
+        w.heap.contains(obj)
+            && matches!(
+                self.handles.borrow().entries.get(&obj),
+                Some(Entry::Loaded { .. })
+            )
     }
 
-    /// Whether `obj` is one of the store's unloaded handles: [`DefStore::ensure_loaded`] would load it. False for
-    /// every other object, the stand-ins that stay stand-ins included.
+    /// Whether `obj` is one of the store's unloaded handles: [`DefStore::ensure_loaded`] would load it (or, for a
+    /// handle whose load failed, return its error again). False for every other object, the stand-ins that stay
+    /// stand-ins included.
     pub fn is_unloaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool {
-        let _ = (w, obj);
-        false
+        w.heap.contains(obj)
+            && matches!(
+                self.handles.borrow().entries.get(&obj),
+                Some(Entry::Unloaded { .. } | Entry::Failed { .. })
+            )
     }
 
     /// Export `index` of `package`, loaded. Its tags are read from the prefix the store derives for it (module
@@ -471,59 +1249,186 @@ impl DefStore {
         index: i32,
         prefix: PropertyPrefix,
     ) -> Result<ObjRef, DefError> {
-        let _ = (w, package, index, prefix);
-        Err(not_yet("DefStore::load_export"))
+        if index <= 0 {
+            return Err(DefError::NotADefinition(format!(
+                "reference {index} is not an export"
+            )));
+        }
+        let pkg = self.packages.shared(package);
+        pkg.object(index).map_err(package_error)?;
+        let path = full_path(&pkg, index).map_err(package_error)?;
+        self.run(w, |l| {
+            let key = path_key(&path);
+            let mine =
+                l.cx.code
+                    .resolve_ref(l.cx.store, package, index)
+                    .ok_or_else(|| DefError::NotADefinition(path.clone()))?;
+            let holder = l.linker.holder_of(l.cx, &path, &key)?;
+            if holder != Some(mine) {
+                return Err(DefError::NotADefinition(format!(
+                    "{path}: another file holds this path under the identity policy"
+                )));
+            }
+            let derived = l.derive_prefix(mine.0, mine.1, &path)?;
+            if derived != prefix {
+                return Err(DefError::PrefixMismatch {
+                    object: path.clone(),
+                    derived,
+                    given: prefix,
+                });
+            }
+            let o = l.linker.handle_for_target(l.cx, path.clone(), key, mine)?;
+            l.ensure(o, true)
+        })
     }
 
     /// Every file holding `path`, in the store's scan order, whatever the policy (for audits: the policy's choice is
-    /// the first under `FirstInScanOrder`), each loaded into the package store (so `Owner::id` is set), and the
-    /// candidate files that failed to load or search, reported in `Holders::failures`. Only the files the store's
-    /// global index lists as candidates for the path are read.
+    /// the first under `FirstInScanOrder`), each holder's file loaded into the package store (so `Owner::id` is set),
+    /// and the candidate files that failed to load or search, reported in `Holders::failures`. Only the files the
+    /// store's global index lists as candidates for the path are read; a candidate that does not hold the path is read
+    /// once for its export paths and not kept loaded.
     pub fn owners(&mut self, path: &ObjectPath) -> Result<Holders, DefError> {
-        let _ = path;
-        Err(not_yet("DefStore::owners"))
+        let mut out = Holders::default();
+        for file in self.packages.global_candidates(path.as_str()) {
+            let index = self.handles.borrow_mut().file_index(&file);
+            let export = match index {
+                Err(e) => {
+                    out.failures.push(FileFailure::new(file, package_error(e)));
+                    continue;
+                }
+                Ok(index) => match index.find(path.as_str()) {
+                    Some(export) => export,
+                    None => continue,
+                },
+            };
+            let id = match self.packages.load_path(&file) {
+                Ok(id) => id,
+                Err(e) => {
+                    out.failures.push(FileFailure::new(file, e.into()));
+                    continue;
+                }
+            };
+            let pkg = self.packages.shared(id);
+            let class = match pkg.object(export).and_then(|e| class_text(&pkg, e.class)) {
+                Ok(class) => class,
+                Err(e) => {
+                    out.failures.push(FileFailure::new(file, package_error(e)));
+                    continue;
+                }
+            };
+            // The id the reflection index files the package under.
+            let filed = self
+                .code
+                .resolve_ref(&mut self.packages, id, export)
+                .map_or(id, |(filed, _)| filed);
+            out.holders.push(Owner::new(
+                pkg.name.clone(),
+                file,
+                export,
+                class,
+                Some(filed),
+            ));
+        }
+        Ok(out)
     }
 
     /// Every export path of every file of the scan, with its holders and their classes, the class defaults apart and
     /// the files that failed (`crate::identity::Census`). Reads each file once and keeps none loaded; loads no
-    /// definition.
+    /// definition. Built anew on every call (nothing of it is kept).
     pub fn census(&mut self) -> Result<Census, DefError> {
-        Err(not_yet("DefStore::census"))
+        Ok(build_census(self.packages.scan_order()).census)
     }
 
     /// Installs overlay `o` above the earlier ones (`crate::overlay`): every property path is parsed first, and one
     /// that does not parse refuses the whole overlay with nothing installed. Then its patches apply to the loaded
     /// objects at once and to the others when they load; patches that do not type are recorded in its status.
     pub fn push_overlay(&mut self, w: &mut ObjectSpace, o: Overlay) -> Result<OverlayId, DefError> {
-        let _ = (w, o);
-        Err(not_yet("DefStore::push_overlay"))
+        let paths = o
+            .patches
+            .iter()
+            .map(|p| PropertyPath::parse(&p.property))
+            .collect::<Result<Vec<_>, _>>()?;
+        let index = self.overlays.installed.len();
+        let id =
+            OverlayId::new(u32::try_from(index).map_err(|_| {
+                DefError::NotYet(NotYet::not_read("more than 2^32 overlays", RECORD))
+            })?);
+        self.overlays.installed.push(Installed {
+            overlay: o,
+            paths,
+            status: OverlayStatus::default(),
+        });
+        self.run(w, |l| l.place_overlay(index));
+        Ok(id)
     }
 
     /// What became of overlay `id`'s patches so far; `None` for an id this store did not hand out.
     pub fn overlay_status(&self, id: OverlayId) -> Option<&OverlayStatus> {
-        self.overlays.get(id.raw() as usize).map(|(_, s)| s)
+        self.overlays
+            .installed
+            .get(id.raw() as usize)
+            .map(|i| &i.status)
     }
 
     /// Where element `at` of definition `obj` comes from: cooked, or the overlay that wrote it last. A patch inside a
     /// struct or array element marks the whole element `at` addresses.
     pub fn origin(&self, obj: ObjRef, at: PropAddr) -> ValueOrigin {
-        let _ = (obj, at);
-        ValueOrigin::NotADefinition
+        let handles = self.handles.borrow();
+        let Some(Entry::Loaded { class }) = handles.entries.get(&obj) else {
+            return ValueOrigin::NotADefinition;
+        };
+        let valid = self
+            .class_props
+            .get(class)
+            .and_then(|props| props.get(&at.prop))
+            .is_some_and(|&dim| at.index < dim);
+        if !valid {
+            return ValueOrigin::NotADefinition;
+        }
+        match self.overlays.origins.get(&(obj, at)) {
+            Some(&id) => ValueOrigin::Overlay(id),
+            None => ValueOrigin::Cooked,
+        }
     }
 
     /// The bytes after loaded definition `obj`'s tag stream to the end of its export (`crate::tail`), as an owned
     /// view (possibly empty); `None` for an object that is not a loaded definition of this store.
     pub fn raw_tail(&self, obj: ObjRef) -> Option<Tail> {
-        let _ = (obj, &self.tails);
-        None
+        if !matches!(
+            self.handles.borrow().entries.get(&obj),
+            Some(Entry::Loaded { .. })
+        ) {
+            return None;
+        }
+        let (package, range) = self.tails.spans.get(&obj)?.clone();
+        Tail::new(package, self.packages.shared(package), range)
     }
 
     /// Every object path whose export's class is exactly `class_path` (`Package.Class`; subclasses are not included)
     /// over every file of the scan, `Default__` objects left out, each path once at its first holder's place, in scan
     /// order then export order: the tools' census (`tools/weapon_catalog.py` `Census`). Loads no definition.
     pub fn exports_of_class(&mut self, class_path: &str) -> Result<Vec<ObjectPath>, DefError> {
-        let _ = class_path;
-        Err(not_yet("DefStore::exports_of_class"))
+        if self.classes_of_paths.is_none() {
+            let built = build_census(self.packages.scan_order());
+            self.classes_of_paths = Some(
+                built
+                    .census
+                    .entries
+                    .into_iter()
+                    .map(|e| e.path)
+                    .zip(built.first_class)
+                    .collect(),
+            );
+        }
+        let mut out = Vec::new();
+        for (path, class) in self.classes_of_paths.iter().flatten() {
+            if class.eq_ignore_ascii_case(class_path) {
+                out.push(ObjectPath::parse(path).map_err(|e| {
+                    DefError::NotADefinition(format!("{path}: not an object path ({e})"))
+                })?);
+            }
+        }
+        Ok(out)
     }
 
     /// The typed key of property `prop` of the class at `class_path` (`crate::keys`), its layout defined in `w` on
@@ -534,14 +1439,29 @@ impl DefStore {
         class_path: &str,
         prop: &str,
     ) -> Result<PropId, DefError> {
-        let _ = (w, class_path, prop, &self.keys);
-        Err(not_yet("DefStore::key"))
+        let cache_key = (class_path.to_ascii_lowercase(), prop.to_ascii_lowercase());
+        if let Some(&p) = self.keys.keys.get(&cache_key) {
+            return Ok(p);
+        }
+        let class = self.class_id(w, class_path)?;
+        let p = w
+            .names
+            .find(prop)
+            .and_then(|n| w.classes.prop(class, n))
+            .ok_or_else(|| DefError::NoSuchProperty {
+                class: class_path.to_string(),
+                property: prop.to_string(),
+            })?;
+        self.keys.keys.insert(cache_key, p);
+        Ok(p)
     }
 
     /// The class at `class_path` (`Package.Class`), its layout defined in `w` on first use.
     pub fn class_id(&mut self, w: &mut ObjectSpace, class_path: &str) -> Result<ClassId, DefError> {
-        let _ = (w, class_path);
-        Err(not_yet("DefStore::class_id"))
+        self.run(w, |l| {
+            let key = l.cx.code.find_class(l.cx.store, class_path)?;
+            Ok(l.cx.layout(key)?)
+        })
     }
 
     /// The default object of the class at `class_path`, built on first use (`ow_object::cdo::class_default`), with no
@@ -551,94 +1471,77 @@ impl DefStore {
         w: &mut ObjectSpace,
         class_path: &str,
     ) -> Result<ObjRef, DefError> {
-        let _ = (w, class_path);
-        Err(not_yet("DefStore::class_default"))
+        self.run(w, |l| {
+            let key = l.cx.code.find_class(l.cx.store, class_path)?;
+            Ok(cdo::class_default(l.cx, key)?)
+        })
+    }
+}
+
+/// The census of `files` (`DefStore::census`).
+fn build_census(files: &[PathBuf]) -> CensusBuilt {
+    let mut census = Census {
+        files: files.to_vec(),
+        ..Census::default()
+    };
+    let mut first_class = Vec::new();
+    let mut entry_at: FixedHashMap<String, usize> = FixedHashMap::default();
+    let mut default_at: FixedHashMap<String, usize> = FixedHashMap::default();
+    for file in files {
+        let pkg = match Package::load(file) {
+            Ok(pkg) => pkg,
+            Err(e) => {
+                census
+                    .failures
+                    .push(FileFailure::new(file.clone(), package_error(e)));
+                continue;
+            }
+        };
+        // The whole listing first: a file whose listing fails contributes nothing (a failing `--exports`).
+        let listing: Result<Vec<(String, String, String)>, PackageError> = (1..=pkg.exports.len()
+            as i32)
+            .map(|i| {
+                let class = pkg.object(i)?.class;
+                Ok((
+                    pkg.path_of(i)?,
+                    class_text(&pkg, class)?,
+                    full_class(&pkg, class)?,
+                ))
+            })
+            .collect();
+        let listing = match listing {
+            Ok(listing) => listing,
+            Err(e) => {
+                census
+                    .failures
+                    .push(FileFailure::new(file.clone(), package_error(e)));
+                continue;
+            }
+        };
+        for (i, (path, class, full)) in listing.into_iter().enumerate() {
+            let owner = Owner::new(pkg.name.clone(), file.clone(), i as i32 + 1, class, None);
+            let (entries, at) = if is_class_default(&path) {
+                (&mut census.class_defaults, &mut default_at)
+            } else {
+                (&mut census.entries, &mut entry_at)
+            };
+            match at.get(&path) {
+                Some(&k) => entries[k].holders.push(owner),
+                None => {
+                    at.insert(path.clone(), entries.len());
+                    if !is_class_default(&path) {
+                        first_class.push(full);
+                    }
+                    entries.push(CensusEntry::new(path, vec![owner]));
+                }
+            }
+        }
+    }
+    CensusBuilt {
+        census,
+        first_class,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::overlay::OverlayKind;
-    use ow_package::testkit::PackageBuilder;
-
-    #[test]
-    fn the_empty_store_answers_not_yet_until_the_body_lands() {
-        let mut defs = DefStore::new_empty();
-        let mut w = ObjectSpace::new();
-        let path = ObjectPath::parse("GD_Test.Part").unwrap();
-        assert!(matches!(defs.find(&mut w, &path), Err(DefError::NotYet(_))));
-        assert!(matches!(
-            defs.push_overlay(&mut w, Overlay::new("t", OverlayKind::Test, Vec::new())),
-            Err(DefError::NotYet(_))
-        ));
-        assert!(matches!(defs.census(), Err(DefError::NotYet(_))));
-        assert_eq!(defs.overlay_status(OverlayId::new(0)), None);
-        assert_eq!(defs.mode(), ParityMode::Off);
-        assert_eq!(defs.policy(), &IdentityPolicy::FirstInScanOrder);
-        let (_code, store) = defs.code_mut();
-        assert_eq!(store.indexed_package_count(), 0);
-    }
-
-    #[test]
-    fn a_synthetic_store_opens_its_files() {
-        let dir = std::env::temp_dir().join(format!("ow-defs-contract-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let bytes = PackageBuilder::new_empty().build();
-        let defs = DefStore::from_synthetic(
-            &dir,
-            &[("Core.upk", &bytes), ("DLC/Extra.upk", &bytes)],
-            IdentityPolicy::FirstInScanOrder,
-            ParityMode::Reference,
-        )
-        .unwrap();
-        assert_eq!(defs.packages().indexed_package_count(), 2);
-        assert_eq!(defs.mode(), ParityMode::Reference);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn errors_print_their_layer_and_keep_its_cause() {
-        let e = DefError::from(StoreError::PackageNotFound("X".into()));
-        assert_eq!(e.to_string(), "package not found: X");
-        assert!(std::error::Error::source(&e).is_none());
-    }
-
-    #[test]
-    fn conversions_flatten_not_yet_heap_store_and_reflection() {
-        let n = NotYet::not_read("x", "r");
-        assert_eq!(
-            DefError::from(DecodeError::NotYet(n.clone())),
-            DefError::NotYet(n.clone())
-        );
-        assert_eq!(
-            DefError::from(ReflectError::NotYet(n.clone())),
-            DefError::NotYet(n.clone())
-        );
-        assert_eq!(
-            DefError::from(StoreError::NotYet(n.clone())),
-            DefError::NotYet(n)
-        );
-        let s = StoreError::PackageNotFound("P".into());
-        assert_eq!(
-            DefError::from(DecodeError::Reflect(ReflectError::Store(s.clone()))),
-            DefError::Store(s.clone())
-        );
-        assert_eq!(
-            DefError::from(DecodeError::Store(s.clone())),
-            DefError::Store(s)
-        );
-        let n = NotYet::not_ported("lzo", "r");
-        let p = PackageError::Container(ContainerError::NotYet(n.clone()));
-        assert_eq!(
-            DefError::from(StoreError::Package(p.clone())),
-            DefError::NotYet(n.clone())
-        );
-        assert_eq!(DefError::from(DecodeError::Package(p)), DefError::NotYet(n));
-        let h = HeapError::InstanceStandIn(ow_object::heap::Origin::Runtime);
-        assert_eq!(
-            DefError::from(DecodeError::Heap(h.clone())),
-            DefError::Heap(h)
-        );
-    }
-}
+mod tests;
