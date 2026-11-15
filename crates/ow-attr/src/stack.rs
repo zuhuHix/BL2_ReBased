@@ -3,8 +3,9 @@
 //! arithmetic on numbers; no objects (the caller maps each `AttributeModifier` object to a [`ModifierId`]).
 //!
 //! The rules are NATIVE_ATTRIBUTES.md section 3, read from native code and **UNVERIFIED in the running game**. The
-//! stack formula reproduces the 69 golden weapon cards with the live overlay (ITEM_ROLL records), which checks the
-//! numbers of those cards, not the formula's precision.
+//! stack formula is behind the 69 of 69 golden weapon cards matched with the live overlay (NATIVE_WEAPON_RULES.md,
+//! REALGAME_GROUND_TRUTH.md, decision 2026-10-03-04), which checks the numbers of those cards, not the formula's
+//! precision.
 //!
 //! # The two combine forms (architecture section 5.3)
 //!
@@ -67,6 +68,9 @@ pub struct Modifier {
 }
 
 /// Which reference implementation's precision a stack combine follows (module doc, architecture section 5.3).
+///
+/// `#[non_exhaustive]`: real-game question 22 may show a third form.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CombineForm {
     /// `interp.cpp:546-561`: sums and result all `f32`; int and byte truncate the `f32` result.
@@ -205,6 +209,10 @@ pub fn plain_apply(stored: f32, m: &Modifier) -> f32 {
 }
 
 /// What [`Stack::add`] did.
+///
+/// `#[non_exhaustive]`: the game's add also answers false for a property that is not an attribute
+/// (NATIVE_ATTRIBUTES.md section 3), a case for the layer that knows properties (W2-ATTRAPI).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AddOutcome {
     /// The modifier was appended; the caller recomputes the value.
@@ -215,6 +223,10 @@ pub enum AddOutcome {
 
 /// A stack attribute's modifier list (`<Name>ModifierStack`), in the order the modifiers were added.
 ///
+/// Each [`Modifier::value`] is a copy. The C++ recompute (`interp.cpp:550`) reads every modifier object's `Value`
+/// when it recomputes, so a caller whose modifier objects can change rebuilds the list from the objects
+/// ([`Stack::from_loaded`]) before each recompute instead of keeping a `Stack` across changes.
+///
 /// Status: UNVERIFIED (NATIVE_ATTRIBUTES.md section 3: add refuses a modifier already on the stack, remove deletes
 /// every copy).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -224,6 +236,21 @@ impl Stack {
     /// An empty stack.
     pub fn new() -> Self {
         Self(Vec::new())
+    }
+
+    /// A stack read back from a loaded `<Name>ModifierStack` array, as it is: order and any repeated modifier kept
+    /// (only [`Stack::add`] refuses a duplicate; an array from a package or a script may hold one twice, and both
+    /// copies count in the sums and in [`Stack::remove_all`]).
+    ///
+    /// ```
+    /// use ow_attr::stack::{CombineForm, Combined, Modifier, ModifierId, ModifierType, NumKind, Stack};
+    /// let twice = Modifier { kind: ModifierType::PreAdd, value: 1.0, id: ModifierId(7) };
+    /// let mut stack = Stack::from_loaded(vec![twice, twice]);
+    /// assert_eq!(stack.combine(10.0, CombineForm::WeaponGen, NumKind::Float), Combined::Float(12.0));
+    /// assert_eq!(stack.remove_all(ModifierId(7)), 2);
+    /// ```
+    pub fn from_loaded(modifiers: Vec<Modifier>) -> Self {
+        Self(modifiers)
     }
 
     /// Appends `m` unless a modifier with the same id is already on the stack.
@@ -555,7 +582,13 @@ mod tests {
     fn remove_all_counts_copies_and_keeps_order() {
         // A stack built from a package can hold the same modifier twice (add refuses that, a loaded array may not);
         // remove deletes every copy.
-        let mut stack = Stack(vec![pre(1.0, 7), post(2.0, 8), pre(1.0, 7), scale(0.5, 9)]);
+        let mut stack =
+            Stack::from_loaded(vec![pre(1.0, 7), post(2.0, 8), pre(1.0, 7), scale(0.5, 9)]);
+        // Both copies count: (0 + 1 + 1) * 1.5 + 2.
+        bits_eq(
+            stack.combine(0.0, CombineForm::WeaponGen, NumKind::Float),
+            5.0,
+        );
         assert_eq!(stack.remove_all(ModifierId(7)), 2);
         assert_eq!(stack.modifiers(), &[post(2.0, 8), scale(0.5, 9)]);
     }
