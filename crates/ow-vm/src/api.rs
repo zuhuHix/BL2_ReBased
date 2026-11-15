@@ -1,4 +1,883 @@
-//! Owner: lane W2-VMAPI. The VM contract of architecture section 3.8: `Vm`, `NativeCall`, `NativeFn`, `NativePack`,
-//! `StubPolicy`, and the `WorldHooks` trait (globals, game info, engine queries) that W2-VMAPI freezes and `ow-world`
-//! implements, held as a service `Rc<RefCell<dyn WorldHooks>>`. Not started: this file is a scaffold stub
-//! (W0-SCAFFOLD); the owner lane fills it.
+//! Owner: lane W2-VMAPI. The VM contract of architecture section 3.8: [`Vm`], [`NativeCall`], [`NativeFn`],
+//! [`NativePack`], [`StubPolicy`], and the [`WorldHooks`] trait (globals, game info, engine queries) that this lane
+//! freezes and `ow-world` implements, held as a service `Rc<RefCell<dyn WorldHooks>>`.
+//!
+//! **What is here.** A VM that owns everything a native needs (architecture 3.9): the object space, the definition
+//! store, the attribute system as `Rc`, the game RNG streams, the simulation clock and the parity mode, which the
+//! caller passes in as a value (library code never reads `OW_PARITY`). It keeps a function table, registers natives,
+//! iterators and script overrides, holds services, and calls a native directly. It implements
+//! [`ow_attr::api::AttrWorld`], so the attribute system evaluates against the running world through
+//! `EvalCx::new(&mut vm)`.
+//!
+//! **What is not here yet.** The interpreter (W3-INTERP): calling a script function that no binding overrides is
+//! `NotYet { NotPorted }`. Function loading from the code packages (W3-INTERP with W2-REFLECT): functions enter the
+//! table through [`Vm::declare_function`], and [`Vm::find_function`] / [`Vm::find_class`] answer only for what is
+//! already declared, else `NotYet { LayerAbsent }`. `instantiate_export` waits for `ow_object::prefix` (W3-DECODE).
+//!
+//! **Single-threaded on purpose** (decision D18): the VM holds `Rc` values and is `!Send`; a compile-time check
+//! below stops the build if that changes.
+//!
+//! **The borrow rule for natives.** A native reaches services through `call.vm.service::<T>()`, borrows the cell for
+//! a short scope and never across [`NativeCall::call_script`] (checked: a nested call while a service is borrowed is
+//! [`VmError::ServiceBorrowed`]). To use the attribute system from a native, clone the `Rc` out first, then lend
+//! the whole VM: `let attrs = call.vm.attrs.clone(); attrs.value_of(a, Some(s), None, &mut EvalCx::new(call.vm))`.
+
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::rc::Rc;
+
+use ow_attr::AttributeSystem;
+use ow_attr::api::{AttrError, AttrWorld, EngineQuery, GlobalSlots, NumForms, WorldParts};
+use ow_core::rand::{CrtStream, GameRng, Rand15};
+use ow_core::sim::SimClock;
+use ow_core::{DetMap, NotYet, ObjectPath, ParityMode};
+use ow_defs::DefStore;
+use ow_object::heap::{HeapError, ObjectSpace, Origin};
+use ow_object::ids::{ClassId, FuncId, ObjRef, PropId};
+use ow_object::layout::PropertyDecl;
+use ow_object::value::Value;
+
+use crate::error::VmError;
+use crate::services::Services;
+
+// ---------------------------------------------------------------------------------------------------------------
+// The upward hook
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The one upward hook the VM's [`AttrWorld`] implementation calls; frozen by W2-VMAPI, implemented by `ow-world`.
+///
+/// Held as a service (`Rc<RefCell<dyn WorldHooks>>`, [`Vm::set_world_hooks`]): the VM clones the `Rc` out of its
+/// service map, borrows it, and passes its own parts, so no borrow of the map is live. The hooks get the object
+/// space and the store, not the VM, so they cannot run script. Balance state (region stages, playthrough) is not
+/// part of this trait: it is a separate service whose type lives in `ow-world` (it names `ow-balance` types, which
+/// `ow-vm` may not).
+///
+/// The running game always has a globals object and a game info object (`progression.cpp:84,87`), so both answer an
+/// object or an error, never "none".
+pub trait WorldHooks {
+    /// The engine globals object (`AttrWorld::globals`).
+    fn globals(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError>;
+    /// The game info object (`AttrWorld::game_info`).
+    fn game_info(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError>;
+    /// An engine query of a context resolver (`AttrWorld::engine_query`). `Ok(None)`: ran, found nothing.
+    fn engine_query(
+        &mut self,
+        q: EngineQuery,
+        source: ObjRef,
+        w: WorldParts<'_>,
+    ) -> Result<Option<ObjRef>, AttrError>;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Policies and limits
+// ---------------------------------------------------------------------------------------------------------------
+
+/// What a call of a native with no implementation does. Each command chooses one (architecture 3.8, "Stub policy per
+/// command"):
+///
+/// | Command | Policy |
+/// |---|---|
+/// | `--native`, `--native-args`, `--native-selftest` | `LogAndZero` (`natives_test.py:16-20`, status `unimplemented`) |
+/// | `--run`, `--run-batch` | `LogAndZero` (`vm_test.py:818`, an iterator native with nothing bound) |
+/// | `--native-census`, `--vm-sweep` | `LogAndZero` (`vm_test.py:886-889`, a stub counted once) |
+/// | `--behavior-run`, `--kismet-run`, `--mission-run`, `--slice-run`, `--combat-run`, `--inventory-move`, `--mover-event`, every `ow-host` world | `Refuse { allow }`, the allow list with a reason per entry kept by the command |
+///
+/// The logged zero result of the exploration commands is their declared behaviour (the Phase 2 harness), not a
+/// stand-in for a game rule. [`Vm::new`] starts with `Refuse` and an empty allow list, so a VM nobody configured fails
+/// loudly on the first unbound native.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StubPolicy {
+    /// Log `UNIMPLEMENTED <key>` (the C++ text, `interp.cpp:692`), leave the out arguments as they are and return the
+    /// return type's zero value (None for a function with no return value).
+    LogAndZero,
+    /// An unbound native is [`VmError::UnboundNative`], except the keys in `allow`, which are stubbed as under
+    /// `LogAndZero`.
+    Refuse { allow: BTreeSet<String> },
+}
+
+impl StubPolicy {
+    /// `Refuse` with nothing allowed.
+    pub fn refuse_all() -> Self {
+        StubPolicy::Refuse {
+            allow: BTreeSet::new(),
+        }
+    }
+
+    /// Whether the native `key` may run as a logged zero-result stub.
+    pub fn allows_stub(&self, key: &str) -> bool {
+        match self {
+            StubPolicy::LogAndZero => true,
+            StubPolicy::Refuse { allow } => allow.contains(key),
+        }
+    }
+}
+
+/// The VM's run limits.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// Executed steps per top-level call, as the C++ `Runtime::stepLimit` (5,000,000). A nested call from a native
+    /// shares the budget of the call that ran the native (C++ `callFromNative`). Every call counts one step; the
+    /// interpreter (W3-INTERP) adds one per executed expression, as the C++ `Interp::tick`.
+    pub step_limit: u64,
+    /// The script call depth, as the C++ `MAX_CALL_DEPTH` (200). Enforced on script frames by the interpreter
+    /// (W3-INTERP); this lane runs no script frame.
+    pub max_call_depth: u32,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            step_limit: 5_000_000,
+            max_call_depth: 200,
+        }
+    }
+}
+
+/// The call census, off unless [`Vm::census`] is `Some` (the C++ `countCalls` counters, `vm.hpp`). Keys are function
+/// paths; counters accumulate until the caller clears them. `DetMap` because the C++ counters are `std::map` and
+/// the census output prints them in key order.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallCensus {
+    /// Script functions entered (a script function a binding overrides counts here, as in C++).
+    pub script_calls: DetMap<String, u64>,
+    /// Natives that ran an implementation.
+    pub native_calls: DetMap<String, u64>,
+    /// Natives with no implementation that ran as a logged stub.
+    pub stub_calls: DetMap<String, u64>,
+    /// Script function -> context expressions whose object was None (filled by the interpreter, W3-INTERP).
+    pub none_contexts: DetMap<String, u64>,
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Functions
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One function the VM can call, as the loader (W3-INTERP) or a test declares it.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionDecl {
+    /// `Package.Class.Function` (C++ `Function::path`); unique in one VM, compared case-insensitively.
+    pub path: ObjectPath,
+    /// The class that declares it (or owns the state it is declared in).
+    pub owner: Option<ClassId>,
+    /// The registry key `Class.Name(type,type)` for a native (C++ `Function::nativeKey`, built by the loader exactly
+    /// as `vm.cpp:600-606` does); `None` for a script function.
+    pub native_key: Option<String>,
+    /// `static` (C++ `FUNC_Static`).
+    pub is_static: bool,
+    /// Parameters in declaration order, return value excluded; `PropertyDecl::is_out` / `is_optional` hold.
+    pub params: Vec<PropertyDecl>,
+    /// The return value, if any.
+    pub result: Option<PropertyDecl>,
+}
+
+impl FunctionDecl {
+    /// A script function (no native key).
+    pub fn script(path: ObjectPath) -> Self {
+        FunctionDecl {
+            path,
+            owner: None,
+            native_key: None,
+            is_static: false,
+            params: Vec::new(),
+            result: None,
+        }
+    }
+
+    /// A native function with its registry key.
+    pub fn native(path: ObjectPath, key: impl Into<String>) -> Self {
+        FunctionDecl {
+            native_key: Some(key.into()),
+            ..FunctionDecl::script(path)
+        }
+    }
+
+    pub fn with_owner(mut self, owner: ClassId) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    pub fn with_static(mut self, is_static: bool) -> Self {
+        self.is_static = is_static;
+        self
+    }
+
+    pub fn with_params(mut self, params: Vec<PropertyDecl>) -> Self {
+        self.params = params;
+        self
+    }
+
+    pub fn with_result(mut self, result: PropertyDecl) -> Self {
+        self.result = Some(result);
+        self
+    }
+
+    /// Whether it is native (has a registry key).
+    pub fn is_native(&self) -> bool {
+        self.native_key.is_some()
+    }
+
+    /// The registry key of a native, the path of a script function: what the stub log line names.
+    pub fn display_key(&self) -> &str {
+        self.native_key.as_deref().unwrap_or(self.path.as_str())
+    }
+}
+
+struct Function {
+    decl: FunctionDecl,
+    /// A host binding that runs instead of the bytecode (`override_script`).
+    binding: Option<NativeFn>,
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Natives
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A native implementation: reads its arguments from the call, may write `out` arguments and returns the result
+/// (`Value::None` for a function with no return value).
+pub type NativeFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<Value, VmError>>;
+
+/// What an engine iterator native (`Actor.AllActors`, `Actor.DynamicActors`) gives a `foreach`: the values the loop
+/// visits, in order, each assigned to the call's out parameter `out_param` (C++ `IteratorResult`).
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IteratorResult {
+    pub out_param: usize,
+    pub items: Vec<Value>,
+}
+
+impl IteratorResult {
+    pub fn new(out_param: usize, items: Vec<Value>) -> Self {
+        IteratorResult { out_param, items }
+    }
+}
+
+/// An iterator native (same key form as a native).
+pub type IteratorFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<IteratorResult, VmError>>;
+
+/// A change-notification override for one class (NATIVE_ATTRIBUTES.md section 4: `ResourcePool` clamps
+/// `CurrentValue`, `Skill` flags a refresh on `Grade`). It gets the whole VM, so it may run script, and the calling
+/// evaluation's forms, for a nested `EvalCx::new(vm).with_forms(forms)`.
+pub type AttrNotifyFn = Rc<dyn Fn(&mut Vm, ObjRef, PropId, NumForms) -> Result<(), AttrError>>;
+
+/// One argument of a native call.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arg {
+    pub value: Value,
+    /// An `out` parameter: its value after the native returns is copied back to the caller.
+    pub out: bool,
+    /// False for an omitted optional parameter (its value is `Value::None`, as the C++ leaves it).
+    pub supplied: bool,
+}
+
+/// What a call returns: the result and every argument as it stands after the call (out parameters updated), as the
+/// C++ `Runtime::call(.., outs)`.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallResult {
+    pub ret: Value,
+    pub outs: Vec<Value>,
+}
+
+/// One native call as the implementation sees it.
+pub struct NativeCall<'a> {
+    pub vm: &'a mut Vm,
+    pub function: FuncId,
+    pub this: Option<ObjRef>,
+    pub args: Vec<Arg>,
+}
+
+impl NativeCall<'_> {
+    /// Argument `i`. An index past the declared parameters is [`VmError::BadArgument`] (a native's bug, reported,
+    /// not a panic).
+    pub fn arg(&self, i: usize) -> Result<&Value, VmError> {
+        match self.args.get(i) {
+            Some(a) => Ok(&a.value),
+            None => Err(self.bad_arg(i, "no such argument")),
+        }
+    }
+
+    /// Writes `out` argument `i`; the caller sees it after the native returns. Writing a parameter that is not
+    /// `out` is refused.
+    pub fn set_out(&mut self, i: usize, v: Value) -> Result<(), VmError> {
+        match self.args.get_mut(i) {
+            Some(a) if a.out => {
+                a.value = v;
+                Ok(())
+            }
+            Some(_) => Err(self.bad_arg(i, "not an out parameter")),
+            None => Err(self.bad_arg(i, "no such argument")),
+        }
+    }
+
+    /// Whether argument `i` exists and was supplied (C++ `NativeCall::has`).
+    pub fn has(&self, i: usize) -> bool {
+        self.args.get(i).is_some_and(|a| a.supplied)
+    }
+
+    /// Calls a function from inside this native: it shares the step budget of the running top-level call (C++
+    /// `callFromNative`). No service may be borrowed across it ([`VmError::ServiceBorrowed`]).
+    pub fn call_script(
+        &mut self,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Value>,
+    ) -> Result<CallResult, VmError> {
+        self.vm.call(f, this, args)
+    }
+
+    fn bad_arg(&self, index: usize, reason: &'static str) -> VmError {
+        VmError::BadArgument {
+            function: self.vm.function_path(self.function),
+            index,
+            reason,
+        }
+    }
+}
+
+/// Every crate above the VM exports one (`pub struct Pack; impl NativePack for Pack`), registering its natives,
+/// iterators, overrides, notification overrides and services.
+pub trait NativePack {
+    fn register(&self, vm: &mut Vm) -> Result<(), VmError>;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The VM
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The script VM and everything a native needs (architecture 3.8, 3.9).
+pub struct Vm {
+    pub space: ObjectSpace,
+    pub defs: DefStore,
+    /// Immutable; clone the `Rc` out before lending the VM to an [`ow_attr::api::EvalCx`].
+    pub attrs: Rc<AttributeSystem>,
+    pub rng: GameRng,
+    /// `GlobalAttributeValueResolver`'s two slots. The world owns them: the game keeps one process-wide pair
+    /// (`AttrWorld::global_slots`).
+    pub global_slots: GlobalSlots,
+    pub clock: SimClock,
+    /// The mode the binary read once and passed in; never read from the environment here.
+    pub parity: ParityMode,
+    /// `Log()` output and every `UNIMPLEMENTED ...` stub line (C++ `Runtime::log`).
+    pub log: Vec<String>,
+    pub limits: Limits,
+    pub stub_policy: StubPolicy,
+    /// The call census, off when `None`.
+    pub census: Option<CallCensus>,
+    /// Call order, off when `None`: every call appends its function path as it starts (C++ `callTrace`).
+    pub trace: Option<Vec<String>>,
+    functions: Vec<Function>,
+    function_by_path: DetMap<ObjectPath, FuncId>,
+    natives: DetMap<String, NativeFn>,
+    iterators: DetMap<String, IteratorFn>,
+    notify: DetMap<ObjectPath, AttrNotifyFn>,
+    services: Services,
+    /// Steps used by the running top-level call.
+    steps: u64,
+    /// Calls in progress (0: the next call is a top-level call).
+    active_calls: u32,
+}
+
+/// `Vm` stays `!Send` (decision D18). Ambiguous impls make this fail to compile if `Vm` ever becomes `Send`.
+const _: fn() = || {
+    trait AmbiguousIfSend<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    struct IsSend;
+    impl<T: ?Sized + Send> AmbiguousIfSend<IsSend> for T {}
+    let _ = <Vm as AmbiguousIfSend<_>>::some_item;
+};
+
+impl std::fmt::Debug for Vm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vm")
+            .field("parity", &self.parity)
+            .field("functions", &self.functions.len())
+            .field("natives", &self.natives.len())
+            .field("stub_policy", &self.stub_policy)
+            .field("services", &self.services)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Vm {
+    /// A VM over `space`, `defs` and `attrs`. The RNG is `GameRng::from_world_seed(0, mode)` (replace it with
+    /// [`Vm::with_rng`]), the clock is at 0, the stub policy refuses every unbound native, census and trace are off.
+    /// `mode` is the value the binary read once (`parity_mode()` in `main`); tests pass either mode.
+    pub fn new(
+        space: ObjectSpace,
+        defs: DefStore,
+        attrs: Rc<AttributeSystem>,
+        mode: ParityMode,
+    ) -> Self {
+        Vm {
+            space,
+            defs,
+            attrs,
+            rng: GameRng::from_world_seed(0, mode),
+            global_slots: GlobalSlots::default(),
+            clock: SimClock::new_empty(),
+            parity: mode,
+            log: Vec::new(),
+            limits: Limits::default(),
+            stub_policy: StubPolicy::refuse_all(),
+            census: None,
+            trace: None,
+            functions: Vec::new(),
+            function_by_path: DetMap::new(),
+            natives: DetMap::new(),
+            iterators: DetMap::new(),
+            notify: DetMap::new(),
+            services: Services::new(),
+            steps: 0,
+            active_calls: 0,
+        }
+    }
+
+    /// Replaces the RNG streams (a world seeded from its own seed). The caller builds `rng` with the VM's parity
+    /// mode; this does not change [`Vm::parity`].
+    pub fn with_rng(mut self, rng: GameRng) -> Self {
+        self.rng = rng;
+        self
+    }
+
+    pub fn with_stub_policy(mut self, policy: StubPolicy) -> Self {
+        self.stub_policy = policy;
+        self
+    }
+
+    // ---- classes, functions, objects -------------------------------------------------------------------------
+
+    /// The class at `path` if the class table has it. Loading a class from the code packages is not built yet
+    /// (W2-REFLECT / W3-DEFS): an unknown path is `NotYet { LayerAbsent }`.
+    pub fn find_class(&mut self, path: &str) -> Result<ClassId, VmError> {
+        self.space.classes.by_path(path).ok_or_else(|| {
+            NotYet::layer_absent(
+                format!("class {path}: loading classes from the code packages"),
+                "ow-object reflect",
+                "lanes W2-REFLECT, W3-DEFS",
+            )
+            .into()
+        })
+    }
+
+    /// Adds a function to the table and returns its id. A path declared twice is refused.
+    pub fn declare_function(&mut self, decl: FunctionDecl) -> Result<FuncId, VmError> {
+        if self.function_by_path.contains_key(&decl.path) {
+            return Err(VmError::Registration {
+                key: decl.path.as_str().to_string(),
+                reason: "a function with this path is already declared",
+            });
+        }
+        let raw = u32::try_from(self.functions.len()).map_err(|_| VmError::Registration {
+            key: decl.path.as_str().to_string(),
+            reason: "the function table is full",
+        })?;
+        let id = FuncId::new(raw);
+        self.function_by_path.insert(decl.path.clone(), id);
+        self.functions.push(Function {
+            decl,
+            binding: None,
+        });
+        Ok(id)
+    }
+
+    /// The function at `path` (`Package.Class.Function`) if it is declared. Loading functions from the code packages
+    /// is the interpreter lane's (W3-INTERP): an undeclared path is `NotYet { LayerAbsent }`.
+    pub fn find_function(&mut self, path: &str) -> Result<FuncId, VmError> {
+        let found = ObjectPath::parse(path)
+            .ok()
+            .and_then(|p| self.function_by_path.get(&p).copied());
+        found.ok_or_else(|| {
+            NotYet::layer_absent(
+                format!("function {path}: loading functions from the code packages"),
+                "ow-vm function loading",
+                "lane W3-INTERP",
+            )
+            .into()
+        })
+    }
+
+    /// The declaration of `f`, if this VM made it.
+    pub fn function(&self, f: FuncId) -> Option<&FunctionDecl> {
+        self.functions.get(f.index()).map(|x| &x.decl)
+    }
+
+    fn function_path(&self, f: FuncId) -> String {
+        match self.function(f) {
+            Some(d) => d.path.as_str().to_string(),
+            None => format!("{f:?}"),
+        }
+    }
+
+    /// A new runtime object of class `c` (no outer), starting from the class's default slots.
+    ///
+    /// An empty `name`: the C++ VM names the object `<Class>_0` (`vm.cpp:1083`), a stand-in; how the game numbers a
+    /// new object's name is not read from the executable. So the C++ form is used only under
+    /// `ParityMode::Reference`; in `Off` an empty name is `NotYet { NotRead }`. (Stand-in listed for W7-RETIRE.)
+    pub fn instantiate(&mut self, c: ClassId, name: &str) -> Result<ObjRef, VmError> {
+        let generated;
+        let name = if !name.is_empty() {
+            name
+        } else {
+            match self.parity {
+                ParityMode::Reference => {
+                    let layout = self.space.classes.get_layout(c).ok_or(HeapError::Layout(
+                        ow_object::layout::LayoutError::UnknownClass(c),
+                    ))?;
+                    generated = format!("{}_0", layout.path().name());
+                    generated.as_str()
+                }
+                ParityMode::Off => {
+                    return Err(NotYet::not_read(
+                        "the name the game gives a new object made without one",
+                        "not read from Borderlands2.exe; vm.cpp:1083 uses <Class>_0 (Reference only)",
+                    )
+                    .into());
+                }
+            }
+        };
+        Ok(self.space.alloc(c, name, None, Origin::Runtime)?)
+    }
+
+    // ---- registration ----------------------------------------------------------------------------------------
+
+    /// Binds the native implementation `f` to `key` (`Class.Name(type,type)`). A key registered twice is refused
+    /// (C++ "duplicate native registration"). Functions declared before or after with this key use it.
+    pub fn register_native(&mut self, key: &str, f: NativeFn) -> Result<(), VmError> {
+        if self.natives.contains_key(key) {
+            return Err(VmError::Registration {
+                key: key.to_string(),
+                reason: "duplicate native registration",
+            });
+        }
+        self.natives.insert(key.to_string(), f);
+        Ok(())
+    }
+
+    /// Whether a native implementation is registered for `key`.
+    pub fn has_native(&self, key: &str) -> bool {
+        self.natives.contains_key(key)
+    }
+
+    /// Binds an iterator native to `key`. A key registered twice is refused (C++ "duplicate iterator registration").
+    pub fn register_iterator(&mut self, key: &str, f: IteratorFn) -> Result<(), VmError> {
+        if self.iterators.contains_key(key) {
+            return Err(VmError::Registration {
+                key: key.to_string(),
+                reason: "duplicate iterator registration",
+            });
+        }
+        self.iterators.insert(key.to_string(), f);
+        Ok(())
+    }
+
+    /// The iterator bound to native `f`'s key, if any (C++ `iteratorFor`). The interpreter's `foreach` uses it.
+    pub fn iterator_for(&self, f: FuncId) -> Option<IteratorFn> {
+        let key = self.function(f)?.native_key.as_deref()?;
+        self.iterators.get(key).cloned()
+    }
+
+    /// Replaces a **script** function with a host binding that runs instead of its bytecode (C++ `overrideScript`,
+    /// for a call that only presents something, and architecture R2's offline rules reached through script). The
+    /// function must be declared and not native, and is overridden once.
+    pub fn override_script(&mut self, path: &str, f: NativeFn) -> Result<(), VmError> {
+        let refused = |reason| VmError::Registration {
+            key: path.to_string(),
+            reason,
+        };
+        let id = ObjectPath::parse(path)
+            .ok()
+            .and_then(|p| self.function_by_path.get(&p).copied())
+            .ok_or(refused("overrideScript needs a script function"))?;
+        let function = &mut self.functions[id.index()];
+        if function.decl.is_native() {
+            return Err(refused("overrideScript needs a script function"));
+        }
+        if function.binding.is_some() {
+            return Err(refused("the script function is already overridden"));
+        }
+        function.binding = Some(f);
+        Ok(())
+    }
+
+    /// Binds the attribute change-notification override of the class at `class_path` (and its subclasses that have
+    /// none of their own). Registered by the pack that owns the class; a class registered twice is refused.
+    pub fn register_attribute_notify(
+        &mut self,
+        class_path: &str,
+        f: AttrNotifyFn,
+    ) -> Result<(), VmError> {
+        let refused = |reason| VmError::Registration {
+            key: class_path.to_string(),
+            reason,
+        };
+        let path = ObjectPath::parse(class_path).map_err(|_| refused("not an object path"))?;
+        if self.notify.contains_key(&path) {
+            return Err(refused("the class already has a notification override"));
+        }
+        self.notify.insert(path, f);
+        Ok(())
+    }
+
+    // ---- services --------------------------------------------------------------------------------------------
+
+    /// The service of type `T`, cloned out (holding it borrows nothing). See the borrow rule in the module doc.
+    pub fn service<T: 'static>(&self) -> Option<Rc<RefCell<T>>> {
+        self.services.get::<T>()
+    }
+
+    /// Adds the service of type `T` and returns its cell; a second service of one type is refused.
+    pub fn add_service<T: 'static>(&mut self, t: T) -> Result<Rc<RefCell<T>>, VmError> {
+        self.services.add(t)
+    }
+
+    /// Sets the [`WorldHooks`] (`ow-world` does this once; a second set is refused).
+    pub fn set_world_hooks(&mut self, hooks: Rc<RefCell<dyn WorldHooks>>) -> Result<(), VmError> {
+        self.services.set_hooks(hooks)
+    }
+
+    /// The world hooks, if set.
+    pub fn world_hooks(&self) -> Option<Rc<RefCell<dyn WorldHooks>>> {
+        self.services.hooks()
+    }
+
+    // ---- calls -----------------------------------------------------------------------------------------------
+
+    /// Calls `f` with `args` (fewer than the parameters: the rest are omitted, `Value::None` and not supplied; more:
+    /// refused, C++ "too many arguments for"). From outside any call this is a top-level call with a fresh step
+    /// budget (C++ `Runtime::call`); from inside a native it shares the running budget (C++ `callFromNative`) and
+    /// refuses while a service is borrowed.
+    ///
+    /// A native runs its implementation, or the stub policy decides. A script function runs its override binding;
+    /// without one it is `NotYet { NotPorted }` until the interpreter lands (W3-INTERP replaces that branch).
+    pub fn call(
+        &mut self,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Value>,
+    ) -> Result<CallResult, VmError> {
+        if self.active_calls == 0 {
+            self.steps = 0;
+        } else {
+            self.services.check_none_borrowed()?;
+        }
+        let bound = self.bind_args(f, args)?;
+        self.active_calls += 1;
+        let result = self.invoke(f, this, bound);
+        self.active_calls -= 1;
+        result
+    }
+
+    fn bind_args(&self, f: FuncId, mut args: Vec<Value>) -> Result<Vec<Arg>, VmError> {
+        let decl = self.function(f).ok_or_else(|| VmError::Script {
+            function: format!("{f:?}"),
+            message: "no such function in this VM".to_string(),
+        })?;
+        if args.len() > decl.params.len() {
+            return Err(VmError::Script {
+                function: decl.path.as_str().to_string(),
+                message: format!(
+                    "too many arguments ({} for {} parameters)",
+                    args.len(),
+                    decl.params.len()
+                ),
+            });
+        }
+        let given = args.len();
+        args.resize(decl.params.len(), Value::None);
+        Ok(args
+            .into_iter()
+            .zip(&decl.params)
+            .enumerate()
+            .map(|(i, (value, p))| Arg {
+                value,
+                out: p.is_out(),
+                supplied: i < given,
+            })
+            .collect())
+    }
+
+    /// One call (C++ `Interp::invoke`): a step, the trace and census entries, then the native, the stub policy or the
+    /// script branch.
+    fn invoke(
+        &mut self,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Arg>,
+    ) -> Result<CallResult, VmError> {
+        self.steps += 1;
+        if self.steps > self.limits.step_limit {
+            return Err(VmError::StepLimit);
+        }
+        let function = &self.functions[f.index()];
+        let path = function.decl.path.as_str().to_string();
+        let native = function
+            .decl
+            .native_key
+            .as_ref()
+            .map(|key| (key.clone(), self.natives.get(key).cloned()));
+        let binding = function.binding.clone();
+        if let Some(trace) = &mut self.trace {
+            trace.push(path.clone());
+        }
+        if let Some(census) = &mut self.census {
+            let counter = match &native {
+                None => &mut census.script_calls,
+                Some((_, Some(_))) => &mut census.native_calls,
+                Some((_, None)) => &mut census.stub_calls,
+            };
+            *counter.entry(path.clone()).or_insert(0) += 1;
+        }
+        match native {
+            Some((_, Some(imp))) => self.run_native(&imp, f, this, args),
+            Some((key, None)) => self.stub(f, &key, args),
+            None => match binding {
+                Some(imp) => self.run_native(&imp, f, this, args),
+                None => Err(NotYet::not_ported(
+                    format!("running script function {path}"),
+                    "lane W3-INTERP (the interpreter)",
+                )
+                .into()),
+            },
+        }
+    }
+
+    fn run_native(
+        &mut self,
+        imp: &NativeFn,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Arg>,
+    ) -> Result<CallResult, VmError> {
+        let mut call = NativeCall {
+            vm: self,
+            function: f,
+            this,
+            args,
+        };
+        let ret = imp(&mut call)?;
+        Ok(CallResult {
+            ret,
+            outs: call.args.into_iter().map(|a| a.value).collect(),
+        })
+    }
+
+    /// An unbound native under the stub policy: refused, or logged with the return type's zero value and the out
+    /// arguments as they were (C++ `interp.cpp:692-695`).
+    fn stub(&mut self, f: FuncId, key: &str, args: Vec<Arg>) -> Result<CallResult, VmError> {
+        if !self.stub_policy.allows_stub(key) {
+            return Err(VmError::UnboundNative(key.to_string()));
+        }
+        self.log.push(format!("UNIMPLEMENTED {key}"));
+        let ret = match &self.functions[f.index()].decl.result {
+            Some(r) => self
+                .space
+                .classes
+                .default_value(&r.kind)
+                .map_err(HeapError::from)?,
+            None => Value::None,
+        };
+        Ok(CallResult {
+            ret,
+            outs: args.into_iter().map(|a| a.value).collect(),
+        })
+    }
+
+    // ---- attribute notification ------------------------------------------------------------------------------
+
+    /// The override for `owner`'s class: the nearest class in its super chain that has one.
+    fn notify_override(&self, owner: ObjRef) -> Result<Option<AttrNotifyFn>, AttrError> {
+        let mut class = Some(self.space.heap.get(owner)?.class);
+        while let Some(c) = class {
+            let layout = self
+                .space
+                .classes
+                .get_layout(c)
+                .ok_or(ow_object::layout::LayoutError::UnknownClass(c))?;
+            if let Some(f) = self.notify.get(layout.path()) {
+                return Ok(Some(f.clone()));
+            }
+            class = layout.super_class();
+        }
+        Ok(None)
+    }
+
+    fn hooks_or_absent(
+        &self,
+        what: &'static str,
+    ) -> Result<Rc<RefCell<dyn WorldHooks>>, AttrError> {
+        self.services.hooks().ok_or_else(|| {
+            NotYet::layer_absent(what, "ow-world", "architecture.md section 3.9 (WorldHooks)")
+                .into()
+        })
+    }
+}
+
+/// The running world as the attribute system sees it.
+impl AttrWorld for Vm {
+    fn parts(&mut self) -> WorldParts<'_> {
+        WorldParts::new(&mut self.space, Some(&mut self.defs))
+    }
+
+    /// Through the [`WorldHooks`]; without them `NotYet { LayerAbsent("ow-world") }`.
+    fn globals(&mut self) -> Result<ObjRef, AttrError> {
+        let hooks = self.hooks_or_absent("the engine globals object")?;
+        let mut hooks = hooks.borrow_mut();
+        hooks.globals(self.parts())
+    }
+
+    /// Through the [`WorldHooks`] (always an object or an error); without them `NotYet { LayerAbsent("ow-world") }`.
+    fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
+        let hooks = self.hooks_or_absent("the game info object")?;
+        let mut hooks = hooks.borrow_mut();
+        hooks.game_info(self.parts()).map(Some)
+    }
+
+    /// Through the [`WorldHooks`]; without them `NotYet { LayerAbsent("ow-world") }`.
+    fn engine_query(
+        &mut self,
+        q: EngineQuery,
+        source: ObjRef,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        let hooks = self.hooks_or_absent("an attribute engine query")?;
+        let mut hooks = hooks.borrow_mut();
+        hooks.engine_query(q, source, self.parts())
+    }
+
+    /// The VM's own pair ([`Vm::global_slots`]).
+    fn global_slots(&mut self) -> &mut GlobalSlots {
+        &mut self.global_slots
+    }
+
+    /// Dispatches the owner class's notification override (NATIVE_ATTRIBUTES.md section 4), found by walking the
+    /// owner's class chain; the override gets the whole VM (no heap borrow is held while it runs) and may run script.
+    /// With no override in the chain nothing happens: the record reads the base implementation as doing nothing.
+    /// Status: UNVERIFIED. Owners whose override the record leaves open (weapon `ClipSize`, inventory manager
+    /// `WeaponReadyMax`, interactive object `MaxHealth`, game info `ShopTimerRate`) are the owning pack's to
+    /// register, as a `NotYet` override until read.
+    fn attribute_changed(
+        &mut self,
+        owner: ObjRef,
+        value_prop: PropId,
+        forms: NumForms,
+    ) -> Result<(), AttrError> {
+        match self.notify_override(owner)? {
+            Some(f) => f(self, owner, value_prop, forms),
+            None => Ok(()),
+        }
+    }
+
+    /// The VM's `GameRng` C-`rand()` stream `s` (the VM always has one).
+    fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
+        Ok(self.rng.crt(s))
+    }
+}
+
+#[cfg(test)]
+mod tests;
