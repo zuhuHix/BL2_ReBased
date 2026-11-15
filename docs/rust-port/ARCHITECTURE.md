@@ -837,7 +837,8 @@ impl Vm {
     pub fn find_class(&mut self, path: &str) -> Result<ClassId, VmError>;     // known classes; else NotYet { LayerAbsent } until loading
     pub fn declare_function(&mut self, d: FunctionDecl) -> Result<FuncId, VmError>;  pub fn function(&self, f: FuncId) -> Option<&FunctionDecl>;
     pub fn find_function(&mut self, path: &str) -> Result<FuncId, VmError>;   // declared functions; else NotYet { LayerAbsent }
-    pub fn instantiate(&mut self, c: ClassId, name: &str) -> Result<ObjRef, VmError>;   // "" -> <Class>_<n>, per-class counter (UNVERIFIED numbering)
+    pub fn instantiate(&mut self, c: ClassId, name: &str) -> Result<ObjRef, VmError>;   // "": Off <Class>_<n>, per-class counter
+                                                   // (UE3's form, UNVERIFIED numbering); Reference <Class>_0 every time (6.1)
     // instantiate_export(pkg, index, PropertyPrefix): absent until W3-DECODE's ow_object::prefix exists
     pub fn call(&mut self, f: FuncId, this: Option<ObjRef>, args: Vec<Value>) -> Result<CallResult, VmError>;
         // top-level: fresh step budget; from inside a native: shares budget and depth (C++ callFromNative); refused
@@ -1042,6 +1043,7 @@ returns) in the same PR. W7-RETIRE owns the split files and deletes each only wh
 | Name parts counted in the rarity sum (the tool labels it STAND-IN; NATIVE_ITEM_RULES.md section 2 says the data supports it) | `tools/item_roll.py:47, 82` (`NAME_PARTS_IN_RARITY`) | W4-ROLL | not a Reference stand-in: Rust uses the same reading in both modes, labelled UNVERIFIED (a reading the record supports), with its own test; question 6 settles it |
 | "A property reading 0 with base 0 is the identity 1" | `combat_hit.cpp` (the lane greps `combat_test.py` for rows that depend on it) | W6-COMBAT | class defaults and start-up modifiers; crit base `NotYet { NeedsRealGame(8) }` |
 | `prepare_stock_shield.py` at `SLICE_LEVEL = 8` | `prepare_stock_shield_test.py` | W4-STATS | non-weapon stats at the region stage |
+| Every unnamed object named `<Class>_0` (`vm.cpp:1083`; several per class from `combat.cpp:325`, `combat_hit.cpp:173`, `combat_loot.cpp:435`, `EX_New` `interp.cpp:472`) | outputs that print unnamed object names; `vm_test.py:937-938` (first object `Foo_0`) holds in both modes | W2-VMAPI (reproduces in `Vm::instantiate`), W7-RETIRE (deletes) | Off mode's per-class `<Class>_<n>` (UE3 `MakeUniqueObjectName` form, numbering UNVERIFIED), `ow-vm` `instantiate_names` |
 
 ---
 
@@ -1410,11 +1412,13 @@ W1-NUM is the lane to start first and review first.
   CLI `--run`, `--run-batch`, `--native`, `--native-args`, `--self`, `--arg`, `--steps`.
 - Owns: `crates/ow-vm/src/interp/*` (except the three W4-INTERP2 files, created as `NotYet` stubs here),
   `crates/ow-cli/src/cmd/vm.rs`, `tests/rust_parity.d/vm.txt`.
-- Granted edits in W2-VMAPI's `crates/ow-vm/src/api.rs` (hub decision, W2-VMAPI review r1): the body of
-  `Vm::run_bytecode` after its depth check (the script branch of `Vm::invoke`), function and class loading behind
-  `Vm::find_function` / `Vm::find_class`, and calls of the `pub(crate)` seams `Vm::tick` and `Vm::stub_site`. Any other
-  change to `api.rs` or `error.rs` is a contract change (section 7). The 0x5F typed let converts the right-hand side
-  with the VM's assignment rule (`interp.cpp:511-522`) before `let_base`, which refuses another kind.
+- Granted edits in W2-VMAPI's `crates/ow-vm/src/api.rs` (hub decision, W2-VMAPI reviews r1 and r2): the body of
+  `Vm::run_frame` (one bytecode frame; `Vm::run_bytecode` around it keeps the depth bookkeeping, so the counter unwinds
+  on every path), function and class loading behind `Vm::find_function` / `Vm::find_class`, calls of the
+  `pub(crate)` seams `Vm::tick` and `Vm::stub_site`, and, once frames exist, the C++ `<- caller` trace in the
+  depth-limit message (`interp.cpp:711-713`). Any other change to `api.rs` or `error.rs` is a contract change
+  (section 7). The 0x5F typed let converts the right-hand side with the VM's assignment rule (`interp.cpp:511-522`)
+  before `let_base`, which refuses another kind.
 - Inputs: W2-SCRIPT, W2-VMAPI, W3-DECODE, W3-DEFS, W1-ATTRMATH.
 - Not yet: struct/array element ops, `foreach`, delegates, interfaces (W4-INTERP2), states and latent code (W5-STATES).
 - Done when: Rust unit tests on `testkit` packages for every feature this lane owns, re-expressed from the

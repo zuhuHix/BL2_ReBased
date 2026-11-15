@@ -83,9 +83,15 @@ impl From<HeapError> for VmError {
     }
 }
 
+/// `NotYet` and heap errors keep their own variants (so a `NotYet` raised inside a notification override still matches
+/// `VmError::NotYet` and gives the CLI's "not yet" exit code); the rest is `VmError::Attr`.
 impl From<AttrError> for VmError {
     fn from(e: AttrError) -> Self {
-        VmError::Attr(e)
+        match e {
+            AttrError::NotYet(n) => VmError::NotYet(n),
+            AttrError::Heap(h) => VmError::Heap(h),
+            other => VmError::Attr(other),
+        }
     }
 }
 
@@ -119,8 +125,27 @@ mod tests {
         );
         let n = NotYet::not_ported("the interpreter", "lane W3-INTERP");
         assert_eq!(VmError::from(n.clone()), VmError::NotYet(n));
-        let a = AttrError::NotYet(NotYet::not_read("x", "r"));
+        let a = AttrError::World("w".into());
         assert_eq!(VmError::from(a.clone()), VmError::Attr(a));
+    }
+
+    #[test]
+    fn not_yet_and_heap_keep_their_variants_both_ways() {
+        let n = NotYet::not_read("x", "r");
+        // An attribute NotYet is the VM's NotYet (CLI exit code 3), not Attr(NotYet).
+        assert_eq!(
+            VmError::from(AttrError::NotYet(n.clone())),
+            VmError::NotYet(n.clone())
+        );
+        // Round trip: VmError::NotYet -> AttrError -> VmError::NotYet.
+        let back = VmError::from(AttrError::from(VmError::NotYet(n.clone())));
+        assert_eq!(back, VmError::NotYet(n));
+        let heap = HeapError::WrongKind {
+            expected: "Int",
+            found: "Float",
+        };
+        let back = VmError::from(AttrError::from(VmError::Heap(heap.clone())));
+        assert_eq!(back, VmError::Heap(heap));
     }
 
     #[test]
