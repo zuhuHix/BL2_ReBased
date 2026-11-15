@@ -10,11 +10,17 @@
 //! - **Strings** are `Rc<str>` and **structs and arrays** are `Rc`: cloning a value shares the text or the aggregate,
 //!   and [`Value::array_mut`] / [`Value::struct_mut`] detach a shared aggregate before changing it (`Rc::make_mut`, the
 //!   C++ `Value::mut()`). A copy therefore never sees a later change to the original.
-//! - **Names** are [`NameId`]s from the [`NameTable`], so name equality is id equality
-//!   (case-insensitive, as FNames).
+//! - **Strings are UTF-8** (`str`), as the C++ `std::string`. The game's `FString` is UTF-16, so `Len`, `Mid`,
+//!   `InStr`, `Left`/`Right` and `Asc`/`Chr` count UTF-16 code units there, where a character outside the Basic
+//!   Multilingual Plane is two units. Which unit the VM counts in is a decision for W2-VMAPI / W3-CORENAT, not made
+//!   here (UNVERIFIED: no live check of a non-ASCII string yet); this type only stores the text.
+//! - **Names** are [`NameId`]s from the [`NameTable`] (a base entry and an FName instance number), so name equality
+//!   is id equality (case-insensitive, as FNames).
 //! - **References** are `Option<ObjRef>` / `Option<ClassId>`: `None` inside is the null reference. [`Value::None`] is
-//!   "no value" (a void result, an unset local), the C++ `Kind::None`; it compares equal to a null reference, as the C++
-//!   `sameValue` does, but a heap write of it to a reference property is refused (write `Value::Object(None)`).
+//!   "no value" (a void result, an unset local), the C++ `Kind::None`; it compares equal to a null reference, but a
+//!   heap write of it to a reference property is refused (write `Value::Object(None)`). The C++ interpreter's `None`
+//!   literal is a null object reference (`EX_NoObject` in `src/interp.cpp`), so W3-INTERP produces
+//!   `Value::Object(None)` for it.
 //!
 //! **Not `Send`, on purpose (decision D18, approved 2026-11-14).** `Value` holds `Rc`, so it, the heap, the class table
 //! and [`ObjectSpace`](crate::heap::ObjectSpace) cannot move to another thread, and the compiler enforces it (the
@@ -183,24 +189,30 @@ fn integer(v: &Value) -> Option<i64> {
     }
 }
 
-/// UnrealScript `==` on two values, as the C++ `sameValue` (`src/vm.cpp`) decides it. The C++ uses it for the
-/// object, interface and vector `==` natives, struct comparison, `switch`/`case`, and the array `Find` / `RemoveItem`
-/// natives.
+/// UnrealScript `==` on two values, as the C++ `sameValue` (`src/vm.cpp`) decides it for two values of the same
+/// type. The C++ uses it for the object, interface and vector `==` natives, struct comparison, `switch`/`case`, and the
+/// array `Find` / `RemoveItem` natives.
 ///
 /// - If either side is a float, both are compared as doubles (so `Int(3) == Float(3.0)`; NaN equals nothing; `-0.0`
 ///   equals `0.0`).
 /// - Int, Bool and Byte compare by their integer (`Byte(1) == Int(1) == Bool(true)`).
 /// - Strings compare case-sensitively, byte for byte; names by id, which is case-insensitive.
-/// - Object and interface references compare by handle, classes by id; `Value::None` equals every null reference.
+/// - Object and interface references compare by handle, classes by id; `Value::None` equals every null reference
+///   (object, interface, class) in either order.
 /// - Structs compare field by field in order (the struct type is not compared, as in the C++), arrays by length and
 ///   then element by element.
+/// - Delegates are equal when they name the same object and the same function, which is what the C++ interpreter's
+///   delegate operators compare (`EX_EqualEqual_DelDel` and its three siblings in `src/interp.cpp`), except that the
+///   function names compare case-insensitively here because names are interned (the interpreter compares the two
+///   strings byte for byte). UNVERIFIED in the running game.
 ///
-/// Two places differ from the C++ on purpose, and nothing in the C++ tests pins either:
-/// - a comparison between unrelated variants (a string with an int, a float with an object) is false. The C++
-///   compared the integer or double fields those variants leave at 0, so `Int(0) == Str("x")` was true there: an
-///   artefact of its one-struct value, not a rule.
-/// - two delegates are equal when they name the same object and the same function. The C++ returned false for every
-///   delegate pair (no case for them). UNVERIFIED in the running game.
+/// Where the C++ `sameValue` differs, on purpose (no C++ test pins any of these):
+/// - `sameValue` answers by the left side's kind, so mixed kinds are lopsided there: `Name == Str` compares the
+///   lower-cased texts and `Str == Name` the bytes; `Class(null) == None` is true and `None == Class(null)` false; an
+///   int against a string, an object or `None` compares the integer fields both leave at 0. Here a name and a string
+///   are unequal in both orders, a null class equals `None` in both orders, and other unrelated variants are unequal.
+/// - `sameValue` returns false for every delegate pair (it has no case for them); the interpreter's own delegate
+///   operators compare object and function, and this follows those (above).
 pub fn same_value(a: &Value, b: &Value) -> bool {
     use Value as V;
     if matches!(a, V::Float(_)) || matches!(b, V::Float(_)) {
@@ -318,6 +330,15 @@ mod tests {
             &Value::Class(Some(ClassId::new(2))),
             &Value::Class(None)
         ));
+        // A null class equals None in both orders (the C++ sameValue only when the class is on the left);
+        // a class that is not null equals None in neither.
+        let some_class = Value::Class(Some(ClassId::new(2)));
+        assert!(!same_value(&some_class, &Value::None));
+        assert!(!same_value(&Value::None, &some_class));
+        assert!(
+            !same_value(&Value::Object(None), &Value::Class(None)),
+            "different reference kinds"
+        );
     }
 
     #[test]
@@ -356,6 +377,11 @@ mod tests {
         assert!(!same_value(&Value::Int(0), &Value::string("x")));
         assert!(!same_value(&Value::Float(0.0), &Value::Object(None)));
         assert!(!same_value(&Value::Int(0), &Value::None));
+        assert!(!same_value(&Value::None, &Value::Int(0)));
+        // A name and a string are unequal in both orders (the C++ compared texts, lopsidedly).
+        let none_text = Value::string("None");
+        assert!(!same_value(&Value::Name(NameId::NONE), &none_text));
+        assert!(!same_value(&none_text, &Value::Name(NameId::NONE)));
     }
 
     #[test]

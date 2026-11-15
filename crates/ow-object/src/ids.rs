@@ -99,16 +99,63 @@ table_id!(
     /// A function in the reflection lane's function table (W2-REFLECT); this crate defines only the handle.
     FuncId
 );
-table_id!(
-    /// An interned name in the [`NameTable`](crate::names::NameTable). Two `NameId`s are equal exactly when their
-    /// texts are equal ignoring ASCII case, as FNames compare.
-    NameId
-);
+/// A name, as a UE3 FName holds it: an entry of the [`NameTable`](crate::names::NameTable) (the base text) and an
+/// instance number. Number 0 means no suffix; number `n > 0` prints as `<base>_<n - 1>`, so `Projectile_1234` is the
+/// entry `Projectile` with number 1235 and spawning many numbered objects does not grow the table. Two `NameId`s are
+/// equal exactly when their texts are equal ignoring ASCII case (the base is folded, the number is exact), as FNames
+/// compare. Packages store names the same way (a name-table index and a number, `Reader::name` in `ow-package`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NameId {
+    index: u32,
+    number: u32,
+}
 
 impl NameId {
-    /// The name `None`, interned first by every [`NameTable`](crate::names::NameTable). It is the zero value of a
-    /// `NameProperty`, as in the C++ VM (`Runtime::zeroValue`).
-    pub const NONE: NameId = NameId(0);
+    /// The name `None` (entry 0, no number), interned first by every [`NameTable`](crate::names::NameTable). It is
+    /// the zero value of a `NameProperty`, as in the C++ VM (`Runtime::zeroValue`).
+    pub const NONE: NameId = NameId {
+        index: 0,
+        number: 0,
+    };
+
+    /// The name with base entry `index` and instance `number`. Tables make their own ids; other code uses this only
+    /// to rebuild an id it stored as numbers.
+    pub const fn new(index: u32, number: u32) -> Self {
+        NameId { index, number }
+    }
+
+    /// The base entry in the name table.
+    pub const fn index(self) -> usize {
+        self.index as usize
+    }
+
+    /// The base entry as stored.
+    pub const fn raw_index(self) -> u32 {
+        self.index
+    }
+
+    /// The instance number: 0 for none, `n` for the suffix `_<n - 1>`.
+    pub const fn number(self) -> u32 {
+        self.number
+    }
+
+    /// The same base with another instance number.
+    pub const fn with_number(self, number: u32) -> Self {
+        NameId {
+            index: self.index,
+            number,
+        }
+    }
+}
+
+impl fmt::Debug for NameId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.number == 0 {
+            write!(f, "NameId({})", self.index)
+        } else {
+            write!(f, "NameId({}_{})", self.index, self.number - 1)
+        }
+    }
 }
 
 /// A property: its first slot in the layout of the class that declares it, and that class. Valid in the declaring
@@ -156,7 +203,12 @@ mod tests {
         assert_eq!(ClassId::new(7).raw(), 7);
         assert_eq!(StructId::new(3).index(), 3);
         assert_eq!(format!("{:?}", EnumId::new(2)), "EnumId(2)");
-        assert_eq!(NameId::NONE.raw(), 0);
+        assert_eq!((NameId::NONE.index(), NameId::NONE.number()), (0, 0));
+        let n = NameId::new(3, 0);
+        assert_eq!(n.with_number(5).number(), 5);
+        assert_ne!(n, n.with_number(1));
+        assert_eq!(format!("{n:?}"), "NameId(3)");
+        assert_eq!(format!("{:?}", n.with_number(1)), "NameId(3_0)");
         let r = ObjRef::new(4, 9);
         assert_eq!((r.index(), r.generation()), (4, 9));
         assert_eq!(format!("{r:?}"), "ObjRef(4#9)");

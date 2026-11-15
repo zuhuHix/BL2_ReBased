@@ -403,50 +403,101 @@ A static array (`array_dim > 1`) takes `array_dim` consecutive slots; heap acces
 `index < array_dim` checked (an overlay patch `Prop[3].Field` and the interpreter's static-array element both resolve to
 one). Shared values use `Rc`, so `ObjectSpace`, `Vm` and `World` are deliberately `!Send` (D18): the simulation lives on
 one thread and talks to the host through `Send` message types; tools that want threads build one space per thread over
-shared `Arc<Package>` bytes.
+shared `Arc<Package>` bytes. A compile-time assertion in `ow-object` stops the build if `Value`, `ClassTable`, `Heap` or
+`ObjectSpace` becomes `Send`.
+
+*Shipped shapes (W1-OBJ, PR #282, review r1; replaces the revision 3 sketch).* The module path is part of each name
+(`lib.rs` re-exports nothing): `ids::`, `value::`, `names::`, `layout::`, `heap::`.
 
 ```rust
-pub struct ObjRef { index: u32, generation: u32 }          // arena handle; stale generation is an error
-pub struct ClassId(u32); pub struct StructId(u32); pub struct EnumId(u32); pub struct FuncId(u32); pub struct NameId(u32);
+// ids.rs
+pub struct ObjRef { index: u32, generation: u32 }          // made only by the heap; a freed object's handle is Stale
+pub struct ClassId(u32); pub struct StructId(u32); pub struct EnumId(u32); pub struct FuncId(u32);  // ::new(raw), .raw(), .index()
+pub struct NameId { index: u32, number: u32 }              // FName: base entry + instance number (0 = none, n = "_<n-1>")
 pub struct PropId { pub slot: u32, pub declared_in: ClassId }     // first slot of the property
 pub struct PropAddr { pub prop: PropId, pub index: u32 }         // index 0 for a scalar; < array_dim, checked
 
-pub enum Value { None, Int(i32) /* wrapping arithmetic */, Float(f32), Bool(bool), Byte(u8), Str(Rc<str>), Name(NameId),
-                 Object(Option<ObjRef>), Class(Option<ClassId>), Interface(Option<ObjRef>),
+// value.rs
+pub enum Value { None, Int(i32) /* wrapping arithmetic */, Float(f32), Bool(bool), Byte(u8), Str(Rc<str>) /* UTF-8 */,
+                 Name(NameId), Object(Option<ObjRef>), Class(Option<ClassId>), Interface(Option<ObjRef>),
                  Struct(Rc<StructValue>), Array(Rc<Vec<Value>>), Delegate(Option<DelegateValue>) }   // Rc::make_mut = copy on write
-pub struct StructValue { pub ty: StructId, pub fields: Vec<Value> }                 // field order = StructLayout
+pub struct StructValue { pub ty: StructId, pub fields: Vec<Value> }   // StructLayout entry order; static-array fields expanded
 pub struct DelegateValue { pub object: Option<ObjRef>, pub function: NameId }
+impl Value { pub fn string(&str); pub fn array(Vec<Value>); pub fn structure(StructId, Vec<Value>); pub fn kind_name(&self);
+             pub fn elements(&self); pub fn array_mut(&mut self); pub fn as_struct(&self); pub fn struct_mut(&mut self);
+             pub fn truth(&self, names: &NameTable) -> bool /* C++ Value::truth */ }
+pub fn same_value(a: &Value, b: &Value) -> bool;   // UnrealScript ==, the C++ sameValue with the documented differences
+                                                   // (mixed kinds symmetric; delegates compare object and function)
 
-pub enum PropKind { Int, Float, Bool, Byte { enum_: Option<EnumId> }, Str, Name, Object { class: ClassId },
+// names.rs: case-insensitive (ASCII fold), first spelling kept, None = entry 0, trailing "_<n>" split into the number
+impl NameTable { pub fn intern(&mut self, s: &str) -> NameId; pub fn intern_number(&mut self, base: &str, number: u32) -> NameId;
+                 pub fn find(&self, s: &str) -> Option<NameId>; pub fn text(&self, n: NameId) -> Cow<'_, str>;
+                 pub fn base_text(&self, n: NameId) -> &str; pub fn get(&self, n: NameId) -> Option<Cow<'_, str>>; }
+
+// layout.rs
+#[non_exhaustive] pub enum PropKind { Int, Float, Bool, Byte { enum_: Option<EnumId> }, Str, Name, Object { class: ClassId },
                     Class { meta: ClassId }, Interface { class: ClassId }, Struct(StructId), Array(Box<PropKind>),
                     Delegate, FloatAttribute, IntAttribute, ByteAttribute { enum_: Option<EnumId> } }
 pub struct AttrCompanions { pub value: PropId, pub base: PropId, pub stack: PropId }   // NATIVE_BYTECODE_OPCODES typeRef/2/3
-pub struct PropertyDecl { pub name: NameId, pub kind: PropKind, pub flags: u64, pub array_dim: i32,
+#[non_exhaustive] pub struct PropertyDecl { pub name: NameId, pub kind: PropKind, pub flags: u64, pub array_dim: i32,
                           pub attr: Option<AttrCompanions>, pub source: Option<(PackageId, i32)> }
-impl PropertyDecl { pub fn is_stack_attribute(&self) -> bool /* bit 31 */; pub fn is_plain_attribute(&self) -> bool /* bit 30 */;
-                    pub fn notifies(&self) -> bool /* bit 29 */; pub fn is_param(&self) -> bool; pub fn is_out(&self) -> bool; }
+impl PropertyDecl { pub fn new(name, kind); with_flags; with_array_dim; with_attr; with_source;
+                    pub fn is_stack_attribute(&self) /* bit 63 */; is_plain_attribute /* bit 62 */; notifies /* bit 61 */;
+                    is_param; is_out; is_optional; is_return; }   // consts OPTIONAL, PARAM, OUT, RETURN, STACK_ATTRIBUTE, ...
 
 pub struct ClassTable { .. }
 impl ClassTable {
-    pub fn define(&mut self, path: &str, super_: Option<ClassId>, props: Vec<PropertyDecl>) -> Result<ClassId, LayoutError>; // synthetic tests
-    pub fn layout(&self, c: ClassId) -> &ClassLayout;  pub fn is_child_of(&self, c: ClassId, base: ClassId) -> bool;
-    pub fn prop(&self, c: ClassId, name: NameId) -> Option<PropId>;  pub fn by_path(&self, path: &str) -> Option<ClassId>;
+    pub fn declare(&mut self, path: &str) -> Result<ClassId, LayoutError>;        // reserve an id: mutual references
+    pub fn define(&mut self, path: &str, super_: Option<ClassId>, props: Vec<PropertyDecl>) -> Result<ClassId, LayoutError>;
+    pub fn link_attribute(&mut self, c: ClassId, value: NameId, base: NameId, stack: NameId) -> Result<AttrCompanions, LayoutError>;
+    pub fn declare_struct(&mut self, path: &str) -> Result<StructId, LayoutError>; // structs holding arrays of themselves
+    pub fn define_struct(&mut self, path: &str, super_: Option<StructId>, fields: Vec<PropertyDecl>) -> Result<StructId, LayoutError>;
+    pub fn define_enum(&mut self, path: &str, values: Vec<NameId>) -> Result<EnumId, LayoutError>;
+    pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), LayoutError>;           // every entry
+    pub fn set_struct_default(&mut self, s: StructId, entry: u32, v: Value) -> Result<(), LayoutError>; // one entry (one tag)
+    pub fn struct_defaults(&self, s: StructId) -> Result<Value, LayoutError>;   // computed per call: zero, inner defaults, own entries
+    pub fn zero_value(&self, kind: &PropKind) -> Value;                         // no struct defaults
+    pub fn default_value(&self, kind: &PropKind) -> Result<Value, LayoutError>; // the C++ Runtime::zeroValue
+    pub fn zero_slots(&self, c: ClassId) -> Result<Vec<Value>, LayoutError>;
+    pub fn default_slots(&self, c: ClassId) -> Result<Vec<Value>, LayoutError>; // what Heap::alloc starts from
+    pub fn layout(&self, c: ClassId) -> &ClassLayout;  pub fn get_layout(&self, c: ClassId) -> Option<&ClassLayout>;
+    pub fn struct_layout(&self, s: StructId) -> Option<&StructLayout>;  pub fn enum_layout(&self, e: EnumId) -> Option<&EnumLayout>;
+    pub fn is_child_of(&self, c: ClassId, base: ClassId) -> bool;   // false for an id the table did not make
+    pub fn prop(&self, c: ClassId, name: NameId) -> Option<PropId>;  pub fn decl(&self, p: PropId) -> Option<&PropertyDecl>;
+    pub fn resolve(&self, c: ClassId, a: PropAddr) -> Result<usize, LayoutError>;   // the checked slot
+    pub fn props(&self, c: ClassId) -> Result<Vec<(PropId, &PropertyDecl)>, LayoutError>;
+    pub fn fits(&self, kind: &PropKind, v: &Value) -> bool;          // shape only, references not followed
+    pub fn by_path(&self, path: &str) -> Option<ClassId>;  struct_by_path;  enum_by_path;
 }
-pub struct NameTable { .. }  impl NameTable { pub fn intern(&mut self, s: &str) -> NameId; pub fn text(&self, n: NameId) -> &str; }
+// Order of definition: super class before subclass; super struct and every by-value struct before what holds it
+// (a by-value struct cycle cannot be built); a reference or an array element needs only a declaration.
 
-pub enum Origin { Runtime, Export { package: PackageId, index: i32 }, Default { class: ClassId }, Resource { package: PackageId, index: i32 } }
-pub struct Object { pub class: ClassId, pub name: NameId, pub outer: Option<ObjRef>, pub slots: Vec<Value>,
-                    pub state: Option<NameId>, pub destroyed: bool, pub origin: Origin }
+#[non_exhaustive] pub enum Origin { Runtime, Export { package: PackageId, index: i32 }, Default { class: ClassId },
+                                    Resource { package: PackageId, index: i32 } }   // Origin::is_instance: Runtime, Export
+#[non_exhaustive] pub struct Object { pub class: ClassId, pub name: NameId, pub outer: Option<ObjRef>, pub slots: Vec<Value>,
+                    pub state: Option<NameId>, pub destroyed: bool, pub origin: Origin }   // Object::new(class, name, outer, slots, origin)
+#[non_exhaustive] pub enum Step { Element(u32), Field(u32) }   // into an array element / a struct entry
 pub struct Heap { .. }
 impl Heap {
-    pub fn alloc(&mut self, classes: &ClassTable, class: ClassId, name: NameId, outer: Option<ObjRef>, origin: Origin) -> ObjRef;
+    pub fn alloc(&mut self, classes: &ClassTable, class: ClassId, name: NameId, outer: Option<ObjRef>, origin: Origin)
+        -> Result<ObjRef, HeapError>;                                   // default_slots; a defined class; a live outer
     pub fn get(&self, o: ObjRef) -> Result<&Object, HeapError>;  pub fn get_mut(&mut self, o: ObjRef) -> Result<&mut Object, HeapError>;
-    pub fn read(&self, o: ObjRef, a: PropAddr) -> Result<&Value, HeapError>;
-    pub fn write(&mut self, o: ObjRef, a: PropAddr, v: Value) -> Result<(), HeapError>;   // kind- and index-checked against the decl
-    pub fn destroy(&mut self, o: ObjRef) -> Result<(), HeapError>;
-    pub fn live<'a>(&'a self, classes: &'a ClassTable, base: ClassId) -> impl Iterator<Item = ObjRef> + 'a; // creation order
+    pub fn contains(&self, o: ObjRef) -> bool;
+    pub fn read(&self, classes: &ClassTable, o: ObjRef, a: PropAddr) -> Result<&Value, HeapError>;
+    pub fn write(&mut self, classes: &ClassTable, o: ObjRef, a: PropAddr, v: Value) -> Result<(), HeapError>;   // kind- and index-checked
+    pub fn write_in(&mut self, classes: &ClassTable, o: ObjRef, a: PropAddr, path: &[Step], v: Value) -> Result<(), HeapError>;
+                                                                        // Arr[i] = x, Location.X = 1: checks only the new value
+    pub fn slot_mut(&mut self, classes: &ClassTable, o: ObjRef, a: PropAddr) -> Result<&mut Value, HeapError>;  // address checked
+    pub fn check_value(&self, classes: &ClassTable, kind: &PropKind, v: &Value) -> Result<(), HeapError>;
+    pub fn destroy(&mut self, o: ObjRef) -> Result<(), HeapError>;      // pending kill: readable, skipped by live()
+    pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError>;     // the GC step: nulls every reference to o held in
+                                                                        // the heap (VM frames are the VM's), bumps the generation
+    pub fn live<'a>(&'a self, classes: &'a ClassTable, base: ClassId) -> impl Iterator<Item = ObjRef> + 'a;
+                                                                        // instances only, creation order, not destroyed
 }
 pub struct ObjectSpace { pub heap: Heap, pub classes: ClassTable, pub names: NameTable }   // what offline tools and the VM share
+impl ObjectSpace { alloc(class, name: &str, outer, origin); read(o, a); write(o, a, v); write_in(o, a, path, v); slot_mut(o, a);
+                   prop(class, name: &str); live(base) }   // the Heap calls with this space's tables
 // reflect.rs (W2-REFLECT), decode.rs (W3-DECODE)
 pub fn load_code_packages(store: &mut PackageStore, names: &mut NameTable, classes: &mut ClassTable) -> Result<CodeIndex, ReflectError>;
 pub fn decode_class_body(pkg: &Package, export: i32) -> Result<ClassBody, ReflectError>;   // ends exactly at the serial size
@@ -455,9 +506,13 @@ pub fn to_value(tree: &PropValue, decl: &PropertyDecl, cx: &mut ValueCx) -> Resu
 pub enum PropertyPrefix { Ordinary = 4, PlacedActor = 26, Component = 8 }   // copied from the C++ (UNVERIFIED as a rule, ROADMAP Phase 0)
 ```
 
-Arena semantics differ from the C++ `shared_ptr` bag in one place: an unreferenced object stays alive until
-`destroy`. For actors (what the iterators walk) that matches UE3, where actors live until destroyed; a garbage
-collector for non-actor objects can be added later behind the same API. The lane records this in its decision file.
+Arena semantics differ from the C++ `shared_ptr` bag in one place: an unreferenced object stays alive until `free`.
+`destroy` is UE3's pending kill; `free` is the garbage-collection step and clears the heap's references to the object
+in the same call, as UE3's collector clears references when it removes an object (when that happens after
+`Destroy()` in BL2 is UNVERIFIED). For actors (what the iterators walk) this matches UE3, where actors live until
+destroyed; who calls `free` and when is for the world and VM lanes. Strings are UTF-8 while the game's `FString` is
+UTF-16: which unit `Len`/`Mid` count in is W2-VMAPI's / W3-CORENAT's decision (UNVERIFIED). Decision file
+2026-11-15-01 records these differences.
 
 ### 3.4 `ow-defs` (W3-DEFS)
 

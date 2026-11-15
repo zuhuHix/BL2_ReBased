@@ -20,7 +20,15 @@
 //! struct a field holds by value before that struct or class, so a layout never depends on something unfinished and a
 //! by-value struct cycle cannot be built. A reference (an object, class or interface property) needs only a declared
 //! class: [`ClassTable::declare`] reserves a class's id before its definition, so two classes can refer to each other.
-//! The reflection lane (W2-REFLECT) defines in that order.
+//! An array element needs only a declared struct: [`ClassTable::declare_struct`] lets a struct hold an array of
+//! itself, or two structs arrays of each other. The reflection lane (W2-REFLECT) defines in that order.
+//!
+//! **Zero and default values.** [`ClassTable::zero_value`] is the plain zero of a kind. Struct defaults (the default
+//! stream a struct export carries, read by W3-DECODE) are set with [`ClassTable::set_struct_default`] /
+//! [`ClassTable::set_struct_defaults`] and applied by [`ClassTable::struct_defaults`] and
+//! [`ClassTable::default_value`], which is the C++ `Runtime::zeroValue`. They are computed on each call, so defaults
+//! set at any time reach every struct and class that holds the struct; new objects start from
+//! [`ClassTable::default_slots`].
 //!
 //! **Attribute companions.** An attribute value property (`FloatAttributeProperty`, `IntAttributeProperty`,
 //! `ByteAttributeProperty` with the stack flag) has a base property and a modifier-stack array in the same class
@@ -122,6 +130,8 @@ pub struct AttrCompanions {
 }
 
 /// One property declaration: of a class, a struct, or (for the reflection lane) a function's parameter or local.
+/// Built with [`PropertyDecl::new`] and the `with_*` methods (the struct may gain fields).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropertyDecl {
     pub name: NameId,
@@ -178,6 +188,18 @@ impl PropertyDecl {
         self
     }
 
+    /// The same declaration with its attribute companions.
+    pub fn with_attr(mut self, attr: AttrCompanions) -> Self {
+        self.attr = Some(attr);
+        self
+    }
+
+    /// The same declaration with the package and export index it was read from.
+    pub fn with_source(mut self, package: PackageId, index: i32) -> Self {
+        self.source = Some((package, index));
+        self
+    }
+
     pub fn is_stack_attribute(&self) -> bool {
         self.flags & Self::STACK_ATTRIBUTE != 0
     }
@@ -230,6 +252,13 @@ pub enum LayoutError {
         owner: String,
         super_: StructId,
     },
+    /// The struct is declared but not defined yet (a by-value field, a super struct, a value or defaults of it).
+    StructNotDefined(StructId),
+    /// A struct default value or entry that does not fit the struct's layout.
+    BadDefault {
+        owner: String,
+        reason: &'static str,
+    },
     /// Two declarations of one class or struct share a name.
     DuplicateName {
         owner: String,
@@ -280,6 +309,12 @@ impl fmt::Display for LayoutError {
             }
             LayoutError::UnknownSuperStruct { owner, super_ } => {
                 write!(f, "{owner}: unknown super struct {super_:?}")
+            }
+            LayoutError::StructNotDefined(s) => {
+                write!(f, "struct {s:?} is declared but not defined")
+            }
+            LayoutError::BadDefault { owner, reason } => {
+                write!(f, "{owner}: struct default: {reason}")
             }
             LayoutError::DuplicateName { owner, name } => {
                 write!(f, "{owner}: two declarations of name {name:?}")
@@ -362,10 +397,15 @@ impl ClassLayout {
 pub struct StructLayout {
     path: ObjectPath,
     super_: Option<StructId>,
+    defined: bool,
     fields: Vec<PropertyDecl>,
     field_slots: Vec<u32>,
     slot_count: u32,
+    /// `Value::None` while the struct is only declared.
     zero: Value,
+    /// The struct's own default entries (entry index, value), ascending, applied over the composed base by
+    /// [`ClassTable::struct_defaults`].
+    defaults: Vec<(u32, Value)>,
 }
 
 impl StructLayout {
@@ -387,9 +427,23 @@ impl StructLayout {
     pub fn field(&self, name: NameId) -> Option<(u32, &PropertyDecl)> {
         self.fields().rev().find(|(_, d)| d.name == name)
     }
-    /// The zero value: every field at its kind's zero (struct defaults from the packages are W3-DECODE's).
+    /// The zero value: every field at its kind's zero, by-value struct fields at their zero value. Struct defaults
+    /// are not in it; [`ClassTable::struct_defaults`] applies them.
     pub fn zero(&self) -> &Value {
         &self.zero
+    }
+    /// The field that entry `entry` belongs to, with the field's first entry index.
+    pub fn entry_field(&self, entry: u32) -> Option<(u32, &PropertyDecl)> {
+        let i = self
+            .field_slots
+            .partition_point(|&first| first <= entry)
+            .checked_sub(1)?;
+        (entry < self.slot_count).then(|| (self.field_slots[i], &self.fields[i]))
+    }
+    /// The struct's own default entries, as set by [`ClassTable::set_struct_defaults`] and
+    /// [`ClassTable::set_struct_default`].
+    pub fn own_defaults(&self) -> &[(u32, Value)] {
+        &self.defaults
     }
 }
 
@@ -562,7 +616,7 @@ impl ClassTable {
         let mut by_name = FixedHashMap::default();
         let mut cursor = first;
         for (i, decl) in props.iter().enumerate() {
-            self.check_kind(&decl.kind)?;
+            self.check_kind(&decl.kind, true)?;
             let dim = u32::try_from(decl.array_dim)
                 .ok()
                 .filter(|d| *d >= 1)
@@ -587,9 +641,10 @@ impl ClassTable {
         Ok((slots, cursor, by_name))
     }
 
-    /// Every id a kind names must be in the table; a struct held by value is always defined (structs are defined in
-    /// one step).
-    fn check_kind(&self, kind: &PropKind) -> Result<(), LayoutError> {
+    /// Every id a kind names must be in the table, and a struct held by value (`by_value`, not inside an array) must
+    /// be defined, so by-value struct nesting cannot form a cycle. A struct inside an array needs only a declaration,
+    /// which lets a struct hold an array of itself.
+    fn check_kind(&self, kind: &PropKind, by_value: bool) -> Result<(), LayoutError> {
         match kind {
             PropKind::Object { class }
             | PropKind::Interface { class }
@@ -598,17 +653,17 @@ impl ClassTable {
                     return Err(LayoutError::UnknownClass(*class));
                 }
             }
-            PropKind::Struct(s) => {
-                if s.index() >= self.structs.len() {
-                    return Err(LayoutError::UnknownStruct(*s));
-                }
-            }
+            PropKind::Struct(s) => match self.structs.get(s.index()) {
+                None => return Err(LayoutError::UnknownStruct(*s)),
+                Some(l) if by_value && !l.defined => return Err(LayoutError::StructNotDefined(*s)),
+                Some(_) => {}
+            },
             PropKind::Byte { enum_: Some(e) } | PropKind::ByteAttribute { enum_: Some(e) } => {
                 if e.index() >= self.enums.len() {
                     return Err(LayoutError::UnknownEnum(*e));
                 }
             }
-            PropKind::Array(inner) => self.check_kind(inner)?,
+            PropKind::Array(inner) => self.check_kind(inner, false)?,
             _ => {}
         }
         Ok(())
@@ -694,8 +749,31 @@ impl ClassTable {
         Ok(companions)
     }
 
-    /// Defines the struct at `path` with super struct `super_` and its own fields in order. Every struct a field holds
-    /// by value is already in the table, so struct values cannot contain themselves.
+    /// The id of the struct at `path`, reserving one (declared, not defined) if the path is new. A declared struct can
+    /// be the element of an array field (a struct holding an array of itself, two structs holding arrays of each
+    /// other) before it is defined; a by-value field needs it defined.
+    pub fn declare_struct(&mut self, path: &str) -> Result<StructId, LayoutError> {
+        let parsed = parse_path(path)?;
+        if let Some(&id) = self.struct_by_path.get(&parsed) {
+            return Ok(id);
+        }
+        let id = StructId::new(next_id(self.structs.len()));
+        self.structs.push(StructLayout {
+            path: parsed.clone(),
+            super_: None,
+            defined: false,
+            fields: Vec::new(),
+            field_slots: Vec::new(),
+            slot_count: 0,
+            zero: Value::None,
+            defaults: Vec::new(),
+        });
+        self.struct_by_path.insert(parsed, id);
+        Ok(id)
+    }
+
+    /// Defines the struct at `path` (declaring it if needed) with super struct `super_` (defined) and its own fields
+    /// in order. Every struct a field holds by value is already defined, so struct values cannot contain themselves.
     pub fn define_struct(
         &mut self,
         path: &str,
@@ -703,13 +781,15 @@ impl ClassTable {
         fields: Vec<PropertyDecl>,
     ) -> Result<StructId, LayoutError> {
         let parsed = parse_path(path)?;
-        if self.struct_by_path.contains_key(&parsed) {
+        if let Some(&id) = self.struct_by_path.get(&parsed)
+            && self.structs[id.index()].defined
+        {
             return Err(LayoutError::AlreadyDefined {
                 path: path.to_string(),
             });
         }
-        let (mut all, first) = match super_ {
-            None => (Vec::new(), 0),
+        let (mut all, mut field_slots, first) = match super_ {
+            None => (Vec::new(), Vec::new(), 0),
             Some(s) => {
                 let parent =
                     self.structs
@@ -718,15 +798,19 @@ impl ClassTable {
                             owner: path.to_string(),
                             super_: s,
                         })?;
-                (parent.fields.clone(), parent.slot_count)
+                if !parent.defined {
+                    return Err(LayoutError::StructNotDefined(s));
+                }
+                (
+                    parent.fields.clone(),
+                    parent.field_slots.clone(),
+                    parent.slot_count,
+                )
             }
         };
+        // Declare first so an array field can hold this struct.
+        let id = self.declare_struct(path)?;
         let (own_slots, slot_count, _) = self.lay_out(path, first, &fields)?;
-        let id = StructId::new(next_id(self.structs.len()));
-        let mut field_slots = match super_ {
-            None => Vec::new(),
-            Some(s) => self.structs[s.index()].field_slots.clone(),
-        };
         field_slots.extend(own_slots);
         all.extend(fields);
         let mut zeros = Vec::with_capacity(slot_count as usize);
@@ -736,16 +820,136 @@ impl ClassTable {
                 zeros.push(zero.clone());
             }
         }
-        self.structs.push(StructLayout {
-            path: parsed.clone(),
-            super_,
-            fields: all,
-            field_slots,
-            slot_count,
-            zero: Value::structure(id, zeros),
-        });
-        self.struct_by_path.insert(parsed, id);
+        let layout = &mut self.structs[id.index()];
+        layout.super_ = super_;
+        layout.defined = true;
+        layout.fields = all;
+        layout.field_slots = field_slots;
+        layout.slot_count = slot_count;
+        layout.zero = Value::structure(id, zeros);
         Ok(id)
+    }
+
+    fn struct_checked(&self, s: StructId) -> Result<&StructLayout, LayoutError> {
+        let layout = self
+            .structs
+            .get(s.index())
+            .ok_or(LayoutError::UnknownStruct(s))?;
+        if !layout.defined {
+            return Err(LayoutError::StructNotDefined(s));
+        }
+        Ok(layout)
+    }
+
+    /// Whether `v` has the shape of kind `kind`: the variant, a class id this table made, a struct's type and entry
+    /// count, and every element and field in turn. Object references are not followed (the heap checks those when a
+    /// value is written to an object).
+    pub fn fits(&self, kind: &PropKind, v: &Value) -> bool {
+        match (kind, v) {
+            (PropKind::Int | PropKind::IntAttribute, Value::Int(_))
+            | (PropKind::Float | PropKind::FloatAttribute, Value::Float(_))
+            | (PropKind::Bool, Value::Bool(_))
+            | (PropKind::Byte { .. } | PropKind::ByteAttribute { .. }, Value::Byte(_))
+            | (PropKind::Str, Value::Str(_))
+            | (PropKind::Name, Value::Name(_))
+            | (PropKind::Object { .. }, Value::Object(_))
+            | (PropKind::Interface { .. }, Value::Interface(_))
+            | (PropKind::Delegate, Value::Delegate(_)) => true,
+            (PropKind::Class { meta }, Value::Class(c)) => {
+                c.is_none_or(|c| self.is_child_of(c, *meta))
+            }
+            (PropKind::Array(inner), Value::Array(items)) => {
+                items.iter().all(|i| self.fits(inner, i))
+            }
+            (PropKind::Struct(ty), Value::Struct(sv)) => {
+                let Ok(layout) = self.struct_checked(*ty) else {
+                    return false;
+                };
+                sv.ty == *ty
+                    && sv.fields.len() == layout.slot_count as usize
+                    && (0u32..).zip(&sv.fields).all(|(i, f)| {
+                        layout
+                            .entry_field(i)
+                            .is_some_and(|(_, d)| self.fits(&d.kind, f))
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets every default entry of struct `s` from the complete struct value `v` (so the struct's own defaults win
+    /// over those of the structs it holds). See [`ClassTable::struct_defaults`].
+    pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), LayoutError> {
+        let layout = self.struct_checked(s)?;
+        if !self.fits(&PropKind::Struct(s), &v) {
+            return Err(LayoutError::BadDefault {
+                owner: layout.path.as_str().to_string(),
+                reason: "the value does not fit the struct's layout",
+            });
+        }
+        let entries = match v {
+            Value::Struct(sv) => (0u32..).zip(sv.fields.iter().cloned()).collect(),
+            _ => Vec::new(),
+        };
+        self.structs[s.index()].defaults = entries;
+        Ok(())
+    }
+
+    /// Sets one default entry of struct `s` (a static-array element is an entry of its own), as one tag of the
+    /// struct's default stream sets one field. Entries not set keep the composed base.
+    pub fn set_struct_default(
+        &mut self,
+        s: StructId,
+        entry: u32,
+        v: Value,
+    ) -> Result<(), LayoutError> {
+        let layout = self.struct_checked(s)?;
+        let bad = |reason| LayoutError::BadDefault {
+            owner: layout.path.as_str().to_string(),
+            reason,
+        };
+        let (_, decl) = layout
+            .entry_field(entry)
+            .ok_or_else(|| bad("entry past the layout"))?;
+        if !self.fits(&decl.kind, &v) {
+            return Err(bad("the value does not fit the field's kind"));
+        }
+        let defaults = &mut self.structs[s.index()].defaults;
+        match defaults.binary_search_by_key(&entry, |(e, _)| *e) {
+            Ok(i) => defaults[i].1 = v,
+            Err(i) => defaults.insert(i, (entry, v)),
+        }
+        Ok(())
+    }
+
+    /// The default value of struct `s`, computed on each call: every field at its zero, every by-value struct field
+    /// at that struct's defaults (recursively), then `s`'s own default entries over that. This is what the C++ VM's
+    /// `Runtime::zeroOfDef` builds (`src/vm.cpp`: zero fields, inner structs through `zeroOfDef`, then
+    /// `applyStructDefaults`, whose stream layout is FITTED); reading the default stream out of a package is
+    /// W3-DECODE's. Because nothing is cached, defaults set on an inner struct at any time reach every struct that
+    /// holds it.
+    pub fn struct_defaults(&self, s: StructId) -> Result<Value, LayoutError> {
+        let layout = self.struct_checked(s)?;
+        let mut fields = Vec::with_capacity(layout.slot_count as usize);
+        for decl in &layout.fields {
+            let base = self.default_value(&decl.kind)?;
+            for _ in 0..decl.array_dim {
+                fields.push(base.clone());
+            }
+        }
+        for (entry, v) in &layout.defaults {
+            fields[*entry as usize] = v.clone();
+        }
+        Ok(Value::structure(s, fields))
+    }
+
+    /// The initial value of a property of kind `kind`: its [zero value](ClassTable::zero_value), except that a struct
+    /// held by value takes its [defaults](ClassTable::struct_defaults). This is the C++ `Runtime::zeroValue`.
+    pub fn default_value(&self, kind: &PropKind) -> Result<Value, LayoutError> {
+        match kind {
+            PropKind::Struct(s) => self.struct_defaults(*s),
+            other => Ok(self.zero_value(other)),
+        }
     }
 
     /// Defines the enum at `path` with its value names in order.
@@ -789,9 +993,9 @@ impl ClassTable {
         Ok(layout)
     }
 
-    /// The layout of struct `s`, or `None` for an id this table did not make.
+    /// The layout of struct `s`, or `None` for an id this table did not make or a struct only declared.
     pub fn struct_layout(&self, s: StructId) -> Option<&StructLayout> {
-        self.structs.get(s.index())
+        self.structs.get(s.index()).filter(|l| l.defined)
     }
 
     /// The layout of enum `e`, or `None` for an id this table did not make.
@@ -799,8 +1003,12 @@ impl ClassTable {
         self.enums.get(e.index())
     }
 
-    /// Whether `c` is `base` or a subclass of it (the C++ `Class::isChildOf`). False for ids this table did not make.
+    /// Whether `c` is `base` or a subclass of it (the C++ `Class::isChildOf`). False if either id was not made by this
+    /// table, also when the two are the same id.
     pub fn is_child_of(&self, c: ClassId, base: ClassId) -> bool {
+        if c.index() >= self.classes.len() || base.index() >= self.classes.len() {
+            return false;
+        }
         let mut cursor = Some(c);
         while let Some(x) = cursor {
             if x == base {
@@ -881,11 +1089,13 @@ impl ClassTable {
         Ok(out)
     }
 
-    /// The zero value of a kind, as the C++ `Runtime::zeroValue`: 0, `false`, `""`, the name `None`, null references,
-    /// an empty array, an unbound delegate, and for a struct its layout's zero value.
+    /// The zero value of a kind: 0, `false`, `""`, the name `None`, null references, an empty array, an unbound
+    /// delegate, and for a struct its layout's [zero](StructLayout::zero) value, **without** struct defaults. The C++
+    /// `Runtime::zeroValue` applies struct defaults; its counterpart here is [`ClassTable::default_value`].
     ///
     /// # Panics
-    /// If `kind` is a struct whose id this table did not make (kinds of defined declarations are checked).
+    /// If `kind` is a struct whose id this table did not make or that is only declared (kinds of by-value fields are
+    /// checked to be defined when their class or struct is defined).
     pub fn zero_value(&self, kind: &PropKind) -> Value {
         match kind {
             PropKind::Int | PropKind::IntAttribute => Value::Int(0),
@@ -897,13 +1107,37 @@ impl ClassTable {
             PropKind::Object { .. } => Value::Object(None),
             PropKind::Class { .. } => Value::Class(None),
             PropKind::Interface { .. } => Value::Interface(None),
-            PropKind::Struct(s) => self.structs[s.index()].zero.clone(),
+            PropKind::Struct(s) => {
+                let layout = &self.structs[s.index()];
+                assert!(
+                    layout.defined,
+                    "zero value of a struct that is only declared"
+                );
+                layout.zero.clone()
+            }
             PropKind::Array(_) => self.empty_array.clone(),
             PropKind::Delegate => Value::Delegate(None),
         }
     }
 
-    /// The zero slots of an object of class `c`.
+    /// The initial slots of an object of class `c`: each property at its [default value](ClassTable::default_value)
+    /// (zero, struct defaults applied), as the C++ fills a new object before its class defaults. [`Heap::alloc`]
+    /// starts objects from these.
+    ///
+    /// [`Heap::alloc`]: crate::heap::Heap::alloc
+    pub fn default_slots(&self, c: ClassId) -> Result<Vec<Value>, LayoutError> {
+        let props = self.props(c)?;
+        let mut slots = Vec::with_capacity(self.classes[c.index()].slot_count as usize);
+        for (_, decl) in props {
+            let value = self.default_value(&decl.kind)?;
+            for _ in 0..decl.array_dim {
+                slots.push(value.clone());
+            }
+        }
+        Ok(slots)
+    }
+
+    /// The zero slots of an object of class `c` (no struct defaults).
     pub fn zero_slots(&self, c: ClassId) -> Result<Vec<Value>, LayoutError> {
         let props = self.props(c)?;
         let mut slots = Vec::with_capacity(self.classes[c.index()].slot_count as usize);
@@ -1345,5 +1579,211 @@ mod tests {
         );
         assert_eq!(PropertyDecl::PLAIN_ATTRIBUTE >> 32, 1 << 30);
         assert_eq!(PropertyDecl::NOTIFY >> 32, 1 << 29);
+    }
+
+    #[test]
+    fn is_child_of_refuses_ids_it_did_not_make() {
+        let (_, base, child, _) = chain();
+        let unknown = ClassId::new(99);
+        let f = Fixture::new();
+        assert!(
+            !f.classes.is_child_of(unknown, unknown),
+            "an unknown id is not its own child"
+        );
+        let (f, ..) = chain();
+        assert!(!f.classes.is_child_of(unknown, base));
+        assert!(!f.classes.is_child_of(child, unknown));
+        assert!(f.classes.is_child_of(base, base));
+    }
+
+    /// Inner { float X; int N[2]; }   Outer { Inner I; int M; }
+    fn nested() -> (Fixture, StructId, StructId) {
+        let mut f = Fixture::new();
+        let x = f.decl("X", PropKind::Float);
+        let n = f.decl("N", PropKind::Int).with_array_dim(2);
+        let inner = f
+            .classes
+            .define_struct("T.Inner", None, vec![x, n])
+            .unwrap();
+        let i = f.decl("I", PropKind::Struct(inner));
+        let m = f.decl("M", PropKind::Int);
+        let outer = f
+            .classes
+            .define_struct("T.Outer", None, vec![i, m])
+            .unwrap();
+        (f, inner, outer)
+    }
+
+    #[test]
+    fn struct_defaults_are_composed_on_demand() {
+        let (mut f, inner, outer) = nested();
+        let zero_inner = f.classes.struct_layout(inner).unwrap().zero().clone();
+        assert_eq!(f.classes.struct_defaults(inner), Ok(zero_inner.clone()));
+        // Defaults set on the inner struct after the outer one was defined reach the outer one.
+        f.classes
+            .set_struct_default(inner, 0, Value::Float(1.5))
+            .unwrap();
+        f.classes
+            .set_struct_default(inner, 2, Value::Int(4))
+            .unwrap();
+        let inner_defaults =
+            Value::structure(inner, vec![Value::Float(1.5), Value::Int(0), Value::Int(4)]);
+        assert_eq!(f.classes.struct_defaults(inner), Ok(inner_defaults.clone()));
+        assert_eq!(
+            f.classes.struct_defaults(outer),
+            Ok(Value::structure(
+                outer,
+                vec![inner_defaults.clone(), Value::Int(0)]
+            ))
+        );
+        // The zero values do not change.
+        assert_eq!(f.classes.struct_layout(inner).unwrap().zero(), &zero_inner);
+        assert_eq!(f.classes.zero_value(&PropKind::Struct(inner)), zero_inner);
+        assert_eq!(
+            f.classes.default_value(&PropKind::Struct(inner)),
+            Ok(inner_defaults.clone())
+        );
+        // An outer entry set later still keeps the inner defaults of the entries it does not set.
+        f.classes
+            .set_struct_default(outer, 1, Value::Int(7))
+            .unwrap();
+        assert_eq!(
+            f.classes.struct_defaults(outer),
+            Ok(Value::structure(outer, vec![inner_defaults, Value::Int(7)]))
+        );
+        assert_eq!(
+            f.classes.struct_layout(outer).unwrap().own_defaults().len(),
+            1
+        );
+        // A complete value replaces every entry, the inner struct included.
+        let full = Value::structure(outer, vec![zero_inner.clone(), Value::Int(1)]);
+        f.classes.set_struct_defaults(outer, full.clone()).unwrap();
+        assert_eq!(f.classes.struct_defaults(outer), Ok(full));
+        // Defaults reach class objects through default_slots, not zero_slots.
+        let holder = f.decl("O", PropKind::Struct(outer));
+        let c = f.classes.define("T.Holder", None, vec![holder]).unwrap();
+        assert_eq!(
+            f.classes.default_slots(c).unwrap()[0],
+            f.classes.struct_defaults(outer).unwrap()
+        );
+        assert_eq!(
+            &f.classes.zero_slots(c).unwrap()[0],
+            f.classes.struct_layout(outer).unwrap().zero()
+        );
+    }
+
+    #[test]
+    fn struct_defaults_are_checked() {
+        let (mut f, inner, outer) = nested();
+        let refuse = |r: Result<(), LayoutError>| {
+            assert!(matches!(r, Err(LayoutError::BadDefault { .. })), "{r:?}")
+        };
+        refuse(f.classes.set_struct_default(inner, 3, Value::Int(0)));
+        refuse(f.classes.set_struct_default(inner, 0, Value::Int(0)));
+        refuse(f.classes.set_struct_default(outer, 0, Value::Int(0)));
+        refuse(
+            f.classes
+                .set_struct_defaults(inner, Value::structure(inner, vec![Value::Float(0.0)])),
+        );
+        refuse(
+            f.classes
+                .set_struct_defaults(inner, Value::structure(outer, vec![])),
+        );
+        refuse(f.classes.set_struct_defaults(inner, Value::Int(0)));
+        assert_eq!(
+            f.classes
+                .set_struct_default(StructId::new(9), 0, Value::Int(0)),
+            Err(LayoutError::UnknownStruct(StructId::new(9)))
+        );
+        let later = f.classes.declare_struct("T.Later").unwrap();
+        assert_eq!(
+            f.classes.struct_defaults(later),
+            Err(LayoutError::StructNotDefined(later))
+        );
+        let e = f.classes.struct_layout(inner).unwrap();
+        assert_eq!(e.entry_field(0).map(|(first, _)| first), Some(0));
+        assert_eq!(e.entry_field(2).map(|(first, _)| first), Some(1));
+        assert!(e.entry_field(3).is_none());
+    }
+
+    #[test]
+    fn declared_structs_allow_recursion_through_arrays() {
+        let mut f = Fixture::new();
+        // Node { array<Node> Children; int V; }
+        let node = f.classes.declare_struct("T.Node").unwrap();
+        assert!(
+            f.classes.struct_layout(node).is_none(),
+            "declared, not defined"
+        );
+        let children = f.decl(
+            "Children",
+            PropKind::Array(Box::new(PropKind::Struct(node))),
+        );
+        let v = f.decl("V", PropKind::Int);
+        assert_eq!(
+            f.classes.define_struct("T.Node", None, vec![children, v]),
+            Ok(node)
+        );
+        assert_eq!(
+            f.classes
+                .struct_defaults(node)
+                .unwrap()
+                .as_struct()
+                .unwrap()
+                .fields[0],
+            Value::array(vec![])
+        );
+        // A { array<B> Bs; }  B { array<A> As; }
+        let b = f.classes.declare_struct("T.B").unwrap();
+        let bs = f.decl("Bs", PropKind::Array(Box::new(PropKind::Struct(b))));
+        let a = f.classes.define_struct("T.A", None, vec![bs]).unwrap();
+        let as_ = f.decl("As", PropKind::Array(Box::new(PropKind::Struct(a))));
+        assert_eq!(f.classes.define_struct("T.B", None, vec![as_]), Ok(b));
+        // By value, a struct must be defined: a struct cannot hold itself.
+        let selfish = f.classes.declare_struct("T.Selfish").unwrap();
+        let me = f.decl("Me", PropKind::Struct(selfish));
+        assert_eq!(
+            f.classes.define_struct("T.Selfish", None, vec![me.clone()]),
+            Err(LayoutError::StructNotDefined(selfish))
+        );
+        assert_eq!(
+            f.classes.define("T.Uses", None, vec![me]),
+            Err(LayoutError::StructNotDefined(selfish))
+        );
+        assert_eq!(
+            f.classes.define_struct("T.Sub", Some(selfish), vec![]),
+            Err(LayoutError::StructNotDefined(selfish))
+        );
+        assert!(matches!(
+            f.classes.define_struct("T.Node", None, vec![]),
+            Err(LayoutError::AlreadyDefined { .. })
+        ));
+        // A nested value fits only with its own type and entry count.
+        let one = Value::structure(node, vec![Value::array(vec![]), Value::Int(1)]);
+        let tree = Value::structure(node, vec![Value::array(vec![one.clone()]), Value::Int(0)]);
+        assert!(f.classes.fits(&PropKind::Struct(node), &tree));
+        let bad = Value::structure(node, vec![Value::array(vec![Value::Int(1)]), Value::Int(0)]);
+        assert!(!f.classes.fits(&PropKind::Struct(node), &bad));
+    }
+
+    #[test]
+    fn declaration_builders() {
+        let mut f = Fixture::new();
+        let id = ClassId::new(0);
+        let p = |slot| PropId {
+            slot,
+            declared_in: id,
+        };
+        let links = AttrCompanions {
+            value: p(0),
+            base: p(1),
+            stack: p(2),
+        };
+        let d = f
+            .decl("X", PropKind::Int)
+            .with_attr(links)
+            .with_source(3, 17);
+        assert_eq!(d.attr, Some(links));
+        assert_eq!(d.source, Some((3, 17)));
     }
 }
