@@ -15,6 +15,7 @@ shipped interface, the places the port does not follow the C++ one to one and wh
     holds the entries, the script-function and native tables and the static summary; the CLI prints them with the
     `quote` escapes. `CensusError` (`#[non_exhaustive]`) is `Entry` (the C++ `RuntimeError` text, `entry file line
     <n>: ...` where the C++ says so) or `Vm` (the `VmError` of a lookup or value, its causes through `source()`).
+    A package lookup's error goes through `DefError` into `VmError`, so a `NotYet` from the store stays `NotYet`.
     `CensusError::not_yet` names the `NotYet` behind one; the command then prints it and exits with code 3
     (architecture section 4), and every other error prints as `ow-package: <text>` with exit code 1.
   - `ow_vm::census::native_self_test()`. It exercises the Rust VM's registry: a key is registered, found and called,
@@ -87,8 +88,16 @@ shipped interface, the places the port does not follow the C++ one to one and wh
       and B, sites, entries, step limit, `--no-static`);
     - entry-file errors, `set` and too-many-arguments, the undecodable listing, the name rule, the self-test and the
       number parsers;
-    - the sweep's counts, the skip of a function an earlier call failed to decode, `--limit`, `--class` and `--top`,
-      and the release rule (a self-referencing object stays, the rest are released);
+    - the sweep's counts, the skip of a function an earlier call failed to decode, `--limit`, `--class` and `--top`
+      (including `--top 0`, which keeps no rows, as the C++ loop `i < top` keeps none; the usage text is the C++ one,
+      byte for byte, so `SweepOptions::top` says it instead);
+    - the release rule after a sweep (a self-referencing object stays, the rest are released);
+    - the release rule on hand-made objects (`the_release_rule_counts_live_holders_and_frees_the_rest`): a loaded
+      definition (`Origin::Export`) that holds runtime R1, which holds R2, keeps both, with valid handles and their
+      references intact. A runtime object nothing holds, and one only a class default object holds, are freed: their
+      handles are stale, `heap.len()` drops by that count, and the class default object's slot reads `Object(None)`.
+      A destroyed object and a resource stand-in are not freed and are not counted as holders, so what only they
+      reference is freed and their slots read `Object(None)`;
     - the census's `NotYet` cases (`struct:` not loaded, hexadecimal `f:`, `export`) and the CLI's exit-3 failure.
   - **The same package through both binaries** (`--vm-sweep` with and without `--limit` and `--class`;
     `--native-census` with, without and with a lowered step limit, on an entry file using every command but
@@ -111,19 +120,52 @@ shipped interface, the places the port does not follow the C++ one to one and wh
     - **Against the unpatched C++** (`build/Release/ow-package.exe` of this tree), the three packages that differ.
       Attempted, the skipped counts and the slowest function are equal in all three.
 
+      The table compares the default ranked lists (`--top 25`):
+
       | Package | Attempted | Succeeded C++ / Rust | Failed C++ / Rust | Total steps C++ / Rust | Failure groups | Unimplemented-native rows |
       |---|---|---|---|---|---|---|
       | Engine | 3,574 | 3,570 / 3,570 | 4 / 4 | 291,269 / 291,659 | the same 4 | the same 25 |
       | GearboxFramework | 508 | 508 / 508 | 0 / 0 | 12,845 / 12,872 | none | the same 25 |
       | WillowGame | 8,355 | 8,318 / 8,313 | 37 / 42 | 1,792,636 / 1,792,800 | the C++'s 13, plus 3 Rust-only groups of 2, 2 and 1 functions (cause C) | 25 each; `Object.Localize(string,string,string)` is reached by 119 in C++ and 118 in Rust, the rest equal |
 
-    - **The A patch, to repeat the comparison.** In `src/vm.cpp`, the loop that applies a class default object's
-      tags picks the value reader by the tag's type name. Add one case before the ObjectProperty case: when the tag
-      says ObjectProperty and the declaration the loop already looked up says ClassProperty, read the reference as a
-      class (the reader the ClassProperty case uses). Rebuild `ow-package` only, run the sweep, and restore the file.
-      With it, GearboxFramework is identical. Engine differs only by B: 100 steps over 3,574 functions, 94 of them in
-      `SVehicle.TakeRadiusDamage`. WillowGame differs only by C's five functions, plus the one `Localize` count that one
-      of them no longer reaches.
+    - **The full lists** (`--top 100000`, more than any list holds). The failure groups match in full: Engine's 4,
+      GearboxFramework's none, and WillowGame's 13 plus the 3 Rust-only groups of cause C. The unimplemented-native
+      lists do **not** match in full beyond `Localize`. GearboxFramework's 89 rows are equal, but rows differ in the
+      other two: 13 in Engine (309 rows in C++, 306 in Rust) and 43 in WillowGame (799 and 794). Every differing row
+      is one of the following:
+      - **cause B's signature.** A C++ row `function ?.<Name>`, a method called on a classless stand-in, where Rust
+        names the native of the stand-in's class (`MeshComponent.SetMaterial(int,object)`), finds a script function
+        instead (no row), or counts that native for more functions. This is 6 method names in Engine and 19 in
+        WillowGame.
+      - **natives reached only behind such a call** (cause B). `Actor.TraceComponent` and `Pawn.GetBoundingCylinder`
+        differ in both packages; in Engine they sit behind `SVehicle.TakeRadiusDamage`'s cast. WillowGame adds three
+        `ParticleSystemComponent` natives and `StatusEffectsComponent.ClearDenStats`. `ClearDenStats` is reached by 1
+        function in C++ and 12 in Rust: the 11 functions whose C++ row is `function ?.OwnerDied` reach the real
+        `OwnerDied` in Rust.
+      - **cause A.** `WillowPlayerInput.InitInputSystem()` (Rust only), and `WillowWeapon.CreateWeaponFromMemento`
+        (2 functions in C++ only, `PopulationFactoryWillowInventory.CreateInventoryPickup` and `RestorePickup`). The
+        second comes from a struct default: the memento struct's class field is cooked with an ObjectProperty tag too.
+      - **cause C.** `Actor.FastTrace` (C++ only, from `DownTrace`) and the `Localize` count (from
+        `OnPlayerDetailsLoaded`). Both functions stop early in Rust.
+
+      The attribution of the "behind such a call" rows in WillowGame (`TraceComponent`, `GetBoundingCylinder` and the
+      three `ParticleSystemComponent` natives) rests on the pattern rather than on a function-by-function check. The
+      other rows were checked: by the A patch, by `ClearDenStats` against the `OwnerDied` rows, and by a census of
+      cause C's functions in both binaries.
+
+    - **The A patch, to repeat the comparison.** `src/vm.cpp` reads tagged values in two loops: the one that applies
+      a class default object's tags, and `TagReader::tagged`, which reads struct values and struct defaults. Each
+      picks the value reader by the tag's type name. In each, add one case before the ObjectProperty case: when the
+      tag says ObjectProperty and the declaration the loop already looked up says ClassProperty, read the reference
+      as a class (the reader the ClassProperty case uses). Rebuild `ow-package` only, run the sweeps, and restore the
+      file (`git checkout -- src/vm.cpp`).
+      - With both cases, GearboxFramework is identical: 12,872 steps on both sides.
+      - Engine differs only by B: 291,559 steps in C++ against 291,659 in Rust. That is 100 steps over 3,574
+        functions, 94 of them in `SVehicle.TakeRadiusDamage`.
+      - WillowGame differs only by B and by C's five functions: 1,792,786 steps in C++ against 1,792,800 in Rust,
+        with succeeded 8,318 against 8,313. This is the number for the cause-C lane to check against; B stays in it.
+      - With only the class-default case, WillowGame's C++ total is 1,792,804, and `CreateWeaponFromMemento` still
+        differs.
     - **Off mode** adds only the stand-ins of architecture section 6.1 and decision 08: `GotoState` `NotYet`, and
       engine-native stand-in classes.
     - **`--native-census` with the static closure**, on a local entry file over the installed packages (`new`, `run`,
@@ -158,15 +200,15 @@ shipped interface, the places the port does not follow the C++ one to one and wh
   - **A. A class-typed default cooked with an ObjectProperty tag.**
     - *Example:* `MoveRequestClass` of `GearboxFramework.Action_PawnMovementBase`, a `ClassProperty` whose cooked
       default tag says ObjectProperty and whose value names a class.
-    - *C++:* the default decode switches on the tag's type (`src/vm.cpp`, `applyTaggedDefaults`), so the property
-      holds an object stand-in. `New` returns None for a value that is not a class (`interp.cpp:469-471`), and every
+    - *C++:* the default decode switches on the tag's type (`src/vm.cpp`, `applyTaggedDefaults`, and
+      `TagReader::tagged` for struct values and struct defaults), so the property holds an object stand-in. `New` returns None for a value that is not a class (`interp.cpp:469-471`), and every
       Context on the result is a None context.
     - *Rust:* the value follows the declared `ClassProperty` (the definition store's typed defaults), so it is a
       class and `New` makes the object.
     - *Why Rust keeps it:* the declaration says the property holds a class, and `New` with a class is what the script
       asks for. The C++ result comes from reading the tag's type in place of the declaration.
-    - *Shown by:* a local, uncommitted change to the C++ decode that followed the declared type. GearboxFramework then
-      matched, and so did the Engine cameras.
+    - *Shown by:* a local, uncommitted change to both C++ decode loops that followed the declared type (above).
+      GearboxFramework then matched, and so did the Engine cameras and the memento pickups.
     - *Settles decision 20's open item:* in `WillowPlayerController.InitInputSystem`, the C++ path that gives None is
       this one, an ObjectProperty-tagged cooked default.
     - *UNVERIFIED:* what the game's `New` does with this default. No session observed it.

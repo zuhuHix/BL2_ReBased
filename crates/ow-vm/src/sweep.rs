@@ -51,7 +51,8 @@ pub struct SweepOptions {
     pub limit: usize,
     /// Steps per function (`Limits::step_limit` for the sweep).
     pub step_limit: u64,
-    /// Entries kept per ranked list.
+    /// Entries kept per ranked list. 0 keeps none, as the C++ loop (`i < top`) does; the usage text is the C++ one,
+    /// byte for byte, so it does not say so.
     pub top: usize,
 }
 
@@ -534,6 +535,71 @@ mod tests {
         let r = sweep(&mut t, &none);
         assert!(r.failures.is_empty() && r.unimplemented_natives.is_empty());
         assert_eq!(r.failed(), 1);
+    }
+
+    /// The release rule on hand-made objects of `Core.Foo` (its `Other` property is a `Foo`).
+    #[test]
+    fn the_release_rule_counts_live_holders_and_frees_the_rest() {
+        use ow_object::heap::Origin;
+        use ow_object::ids::{ObjRef, PropAddr};
+        let mut t = toy::vm(ParityMode::Off);
+        let vm = &mut t.vm;
+        let root = vm.find_class("Core.Object").unwrap();
+        let foo = vm.find_class("Core.Foo").unwrap();
+        let other = PropAddr::scalar(vm.space.prop(foo, "Other").unwrap());
+        let package = {
+            let (code, store) = vm.defs.code_mut();
+            code.package(store, "Core").unwrap()
+        };
+        let make = |vm: &mut Vm, name: &str, origin: Origin| -> ObjRef {
+            vm.space.alloc(foo, name, None, origin).unwrap()
+        };
+        let link = |vm: &mut Vm, from: ObjRef, to: ObjRef| {
+            vm.space
+                .write(from, other, Value::Object(Some(to)))
+                .unwrap()
+        };
+        let export = Origin::Export { package, index: 1 };
+        // A loaded definition holds R1, and R1 holds R2: both stay.
+        let holder = make(vm, "Holder", export);
+        let (r1, r2) = (
+            make(vm, "R1", Origin::Runtime),
+            make(vm, "R2", Origin::Runtime),
+        );
+        link(vm, holder, r1);
+        link(vm, r1, r2);
+        // Nothing holds Lone; only a class default object holds ByDefault (not a holder the sweep can see).
+        let lone = make(vm, "Lone", Origin::Runtime);
+        let default = make(vm, "Default__Foo", Origin::Default { class: foo });
+        let by_default = make(vm, "ByDefault", Origin::Runtime);
+        link(vm, default, by_default);
+        // A destroyed object and a resource stand-in are neither freed nor counted as holders.
+        let dead = make(vm, "Dead", Origin::Runtime);
+        let by_dead = make(vm, "ByDead", Origin::Runtime);
+        link(vm, dead, by_dead);
+        vm.space.heap.destroy(dead).unwrap();
+        let resource = make(vm, "Resource", Origin::Resource { package, index: 1 });
+        let by_resource = make(vm, "ByResource", Origin::Runtime);
+        link(vm, resource, by_resource);
+        let before = vm.space.heap.len();
+        release_unreferenced(vm, root);
+        for kept in [holder, r1, r2, default, dead, resource] {
+            assert!(vm.space.heap.get(kept).is_ok(), "{kept:?} was freed");
+        }
+        assert_eq!(
+            vm.space.read(holder, other).unwrap(),
+            &Value::Object(Some(r1))
+        );
+        assert_eq!(vm.space.read(r1, other).unwrap(), &Value::Object(Some(r2)));
+        for freed in [lone, by_default, by_dead, by_resource] {
+            assert!(vm.space.heap.get(freed).is_err(), "{freed:?} was not freed");
+        }
+        assert_eq!(vm.space.heap.len(), before - 4);
+        // Freeing cleared the references the uncounted holders had.
+        for holder in [default, dead, resource] {
+            assert_eq!(vm.space.read(holder, other).unwrap(), &Value::Object(None));
+        }
+        assert!(vm.space.heap.get(dead).unwrap().destroyed);
     }
 
     #[test]
