@@ -179,6 +179,9 @@ if(EXISTS ${OW_RUST_PACKAGE})
   add_test(NAME item-registry-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_registry_rust_test.py
            $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
   set_tests_properties(item-registry-rust PROPERTIES TIMEOUT 300 LABELS rust)
+  # Lane W3-DEFS: --def-dump is Rust-only (the C++ binary has no such command), so this runs the Rust binary alone.
+  add_test(NAME def-dump-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/def_dump_test.py ${OW_RUST_PACKAGE})
+  set_tests_properties(def-dump-synthetic PROPERTIES TIMEOUT 120 LABELS rust)
 elseif(OW_REQUIRE_TEST_TOOLS)
   message(FATAL_ERROR "OW_REQUIRE_TEST_TOOLS is ON and there is no Rust binary at ${OW_RUST_PACKAGE}: rust-parity is not registered (cargo build --release -p ow-cli --locked)")
 else()

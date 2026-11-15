@@ -1254,11 +1254,12 @@ fn an_unloaded_definition_needs_the_store() {
         missing(eval(&mut fx, of_def(handle), None).unwrap_err()),
         Missing::LayerAbsent("ow-defs")
     );
-    // With a store, its answer comes through (the contract's body is NotYet until W3-DEFS lands it).
+    // With a store, its answer comes through: the store did not make this object, so it is left as it is, and reading
+    // its slots fails in the heap (the ow-defs contract).
     fx.w.defs = Some(DefStore::new_empty());
     assert!(matches!(
         eval(&mut fx, of_def(handle), None).unwrap_err(),
-        AttrError::NotYet(_)
+        AttrError::Heap(ow_object::heap::HeapError::SlotMissing { .. })
     ));
     // A loaded (runtime) definition needs no store at all.
     let (m, l, p, o) = (fx.k(2.0), fx.k(3.0), fx.k(2.0), fx.k(1.0));

@@ -86,14 +86,26 @@ records how the store does what section 3.4 says, and what was checked.
     path sort puts a `DLC/` file before the base game's `WillowGame/` (the tools read the base game first) and 9 where
     two base-game files sort differently because the store compares names by bytes (upper case first) and Python's
     `WindowsPath` sort folds case. So `FirstInScanOrder` over the game root does **not** pick the tools' owner for every
-    registry path, which section 6's gate asks; see the open item below. `census()` carries every holder with its
-    file, so the registry can apply the tools' order itself and reproduce their owners.
-- **Open (for the hub).**
-  - The identity gate of section 6 assumed one known DLC mismatch; on the game root there are 286 order differences.
-    Choices: a policy that takes an explicit file order (an additive `IdentityPolicy` variant: the contract is
-    `#[non_exhaustive]`), or the registry applying its own order to `census()` holders (no change here).
-  - `--def-dump` has no parity-manifest line: a test-command line needs a tracked `tests/*.py`, which this lane does
-    not own (`tests/def_dump_test.py` proposed).
+    registry path, which section 6's gate as first written asked. `census()` carries every holder with its file, and
+    the registry (W4-REGISTRY) re-sorts the holders into the tools' order and so reproduces their owners.
+- **Identity order (hub decision).** `FirstInScanOrder` keeps the store's scan order: the C++ reader's
+  `std::filesystem` order, which the VM's parity reference uses. No `IdentityPolicy` variant for another file order is
+  added: which order the game loads packages in is UNVERIFIED. The `ow-defs` gate of architecture section 6 ("`owners()`
+  + `FirstInScanOrder` picks the same owner as the tools for every registry path, the one DLC mismatch listed") is
+  amended to: **the same owner as the tools for every registry path under the tools' order, which the registry
+  applies** to the `census()` holders. The 277 + 9 differences above are the record of what the two orders do.
+- **Also here.** `tests/def_dump_test.py` (granted) runs `--def-dump` on an invented package with and without
+  `--overlay` (the test format and a live capture); ctest runs it on the Rust release binary only
+  (`def-dump-synthetic`, the C++ binary has no `--def-dump`), and it is the line of `tests/rust_parity.d/defs.txt`.
+  The registry formats a census failure with `FileFailure`'s `Display` (`crates/ow-items/src/registry.rs`, granted),
+  and W3-ATTREVAL's test of an unloaded definition with an empty store now expects the contract's heap error
+  (`crates/ow-attr/src/value_resolvers/tests.rs`, granted): that store did not make the object, so `ensure_loaded`
+  leaves it, and reading its slots fails with `SlotMissing`.
+- **Open.**
+  - Memory: `owners()` loads every holder's file into the package store (so `Owner::id` is set) and keeps it; the
+    764-path audit sample over the whole game root peaked at 8.7 GB. Holder lookups for `find` keep only path lists.
+  - Cost: the first `FirstInScanOrder` lookup builds the global index, reading every package once (6.6 s for
+    `CookedPCConsole`).
   - The decode difference the comparison found (`FirstPersonParticle`, a component reference the C++ prints and the
     Rust decoder skips with a log line, 16 of 658 parts in both modes; and in Off mode 10 runs with log-only
     differences) belongs to W3-DECODE (`ow_object::decode`); not changed here.
