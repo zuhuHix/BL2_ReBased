@@ -5,36 +5,50 @@
 //! refers to it. Here an object lives in a heap slot until it is freed, referenced or not, and an [`ObjRef`] names the
 //! slot and its generation. Life has three steps:
 //!
-//! 1. [`Heap::alloc`] creates the object with every slot at its kind's zero value.
+//! 1. [`Heap::alloc`] creates the object with every slot at its kind's default value (zero, struct defaults applied:
+//!    [`ClassTable::default_slots`]).
 //! 2. [`Heap::destroy`] marks it destroyed (UE3's pending kill, the C++ `Object::destroyed`): it stays readable and
 //!    writable, so script that runs after `Destroy()` still works, but [`Heap::live`] no longer yields it.
-//! 3. [`Heap::free`] removes it. The slot's generation goes up, so every handle to it is refused from then on
-//!    ([`HeapError::Stale`]), also after the slot holds a new object. A slot whose generation would wrap is retired
-//!    instead of reused, so an old handle can never become valid again.
+//! 3. [`Heap::free`] is the garbage-collection step. It removes the object and, in the same call, clears every
+//!    reference to it that the heap holds: object and interface references become null (`Object(None)`,
+//!    `Interface(None)`), a delegate bound to it becomes unbound (`Delegate(None)`), inside arrays and structs too, and
+//!    an object whose outer it was gets no outer. The slot's generation goes up, so a handle kept outside the heap (a VM
+//!    local, a frame: clearing those is the VM's job, W2-VMAPI) is refused from then on ([`HeapError::Stale`]), also
+//!    after the slot holds a new object. A slot whose generation would wrap is retired instead of reused, so an old
+//!    handle can never become valid again. Freeing costs a walk over every object in the heap.
 //!
-//! For actors, what the iterators walk, this matches UE3, where actors live until destroyed. Who frees what and when
-//! (the world after a tick, a collector for non-actor objects) is for the lanes above; a garbage collector can be added
-//! behind this API later. Decision file 2026-11-15, "Object model: slot layouts in an arena heap, not Send".
+//! UE3 clears references to an object when its garbage collector removes it, not when `Destroy()` runs; how long after
+//! `Destroy()` that happens in BL2, and whether a delegate keeps its function name with a null object, is UNVERIFIED.
+//! Who frees what and when (the world after a tick, a collector for non-actor objects) is for the lanes above.
+//! Decision file 2026-11-15, "Object model: slot layouts in an arena heap, not Send".
 //!
-//! **Checked access.** [`Heap::read`] and [`Heap::write`] check the address against the object's class layout (the
-//! declaring class is the object's class or a super class, the index is below `array_dim`) and `write` checks the value
-//! against the declaration: the variant matches the kind, an object reference names a live (not freed) object of the
-//! declared class or a subclass, a class reference names the declared metaclass or a subclass, a struct has the
-//! declared type and its layout's entry count, and arrays and struct fields are checked element by element.
-//! An interface reference is checked only for being live: which classes implement an interface comes from the class
-//! bodies (W2-REFLECT). [`Object::slots`] is public for code that has resolved its slots already; writing there skips
-//! these checks.
+//! **Live objects.** [`Heap::live`] yields the instances ([`Origin::Runtime`] and [`Origin::Export`]) of a class and its
+//! subclasses in creation order, skipping destroyed ones. Class default objects and resource stand-ins are not live
+//! objects, as in the C++ VM (`Runtime::liveObjects`, which only tracks what `instantiate` made).
+//!
+//! **Checked access.** [`Heap::read`], [`Heap::write`] and [`Heap::slot_mut`] check the address against the object's
+//! class layout (the declaring class is the object's class or a super class, the index is below `array_dim`), and
+//! `write` checks the value against the declaration ([`Heap::check_value`]): the variant matches the kind, an object
+//! reference and a delegate's receiver name objects that are not freed, an object reference one of the declared class
+//! or a subclass, a class reference a class of the table that is the declared metaclass or a subclass, a struct has the
+//! declared type and its layout's entry count, and arrays and struct fields are checked element by element. An
+//! interface reference is checked only for not being freed: which classes implement an interface comes from the class
+//! bodies (W2-REFLECT). [`Heap::write_in`] changes one array element or struct field inside a property and checks only
+//! the new value, so `Arr[i] = x` and `Location.X = 1` do not recheck the whole aggregate. [`Heap::slot_mut`] hands out
+//! the slot unchecked for the value; [`Object::slots`] is public for code that has resolved its slots already. Writing
+//! through either skips the value checks.
 //!
 //! **Not `Send`** (decision D18): see [`crate::value`].
 
 use std::fmt;
+use std::rc::Rc;
 
 use ow_package::PackageId;
 
 use crate::ids::{ClassId, NameId, ObjRef, PropAddr, PropId, StructId};
 use crate::layout::{ClassTable, LayoutError, PropKind};
 use crate::names::NameTable;
-use crate::value::Value;
+use crate::value::{DelegateValue, Value};
 
 /// Where an object came from.
 #[non_exhaustive]
@@ -51,7 +65,17 @@ pub enum Origin {
     Resource { package: PackageId, index: i32 },
 }
 
+impl Origin {
+    /// An instance, which [`Heap::live`] yields: made at run time or instantiated from an export. Class default objects
+    /// and resource stand-ins are not.
+    pub fn is_instance(self) -> bool {
+        matches!(self, Origin::Runtime | Origin::Export { .. })
+    }
+}
+
 /// One object: its class, name, outer, property slots (in the class layout's order), current state and origin.
+/// The heap makes objects; [`Object::new`] is for code that builds one to compare with (the struct may gain fields).
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Object {
     pub class: ClassId,
@@ -63,6 +87,38 @@ pub struct Object {
     /// Destroyed (pending kill): still readable, no longer yielded by [`Heap::live`].
     pub destroyed: bool,
     pub origin: Origin,
+}
+
+impl Object {
+    /// An object in the default state, not destroyed.
+    pub fn new(
+        class: ClassId,
+        name: NameId,
+        outer: Option<ObjRef>,
+        slots: Vec<Value>,
+        origin: Origin,
+    ) -> Self {
+        Object {
+            class,
+            name,
+            outer,
+            slots,
+            state: None,
+            destroyed: false,
+            origin,
+        }
+    }
+}
+
+/// One step into a property's value for [`Heap::write_in`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Element `i` of a dynamic array (it must exist: growing the array is the caller's).
+    Element(u32),
+    /// Entry `e` of a struct, as [`StructLayout::entry_field`](crate::layout::StructLayout::entry_field) counts them
+    /// (a static-array field's elements are consecutive entries).
+    Field(u32),
 }
 
 /// Why a heap operation was refused.
@@ -90,6 +146,8 @@ pub enum HeapError {
     },
     /// The object has fewer slots than its layout (its public `slots` were shortened).
     SlotMissing { object: ObjRef, slot: usize },
+    /// Step `at` of a [`Heap::write_in`] path does not lead anywhere.
+    BadPath { at: usize, reason: &'static str },
 }
 
 impl fmt::Display for HeapError {
@@ -122,6 +180,7 @@ impl fmt::Display for HeapError {
             HeapError::SlotMissing { object, slot } => {
                 write!(f, "object {object:?} has no slot {slot}")
             }
+            HeapError::BadPath { at, reason } => write!(f, "path step {at}: {reason}"),
         }
     }
 }
@@ -138,6 +197,35 @@ impl From<LayoutError> for HeapError {
 struct Entry {
     generation: u32,
     object: Option<Object>,
+}
+
+/// Whether `v` holds a reference to `dead`: an object or interface reference, a delegate's receiver, inside arrays and
+/// structs too.
+fn mentions(v: &Value, dead: ObjRef) -> bool {
+    match v {
+        Value::Object(Some(r)) | Value::Interface(Some(r)) => *r == dead,
+        Value::Delegate(Some(d)) => d.object == Some(dead),
+        Value::Struct(s) => s.fields.iter().any(|f| mentions(f, dead)),
+        Value::Array(a) => a.iter().any(|e| mentions(e, dead)),
+        _ => false,
+    }
+}
+
+/// Clears every reference to `dead` in `v`, copying a shared aggregate only when it holds one.
+fn clear_refs(v: &mut Value, dead: ObjRef) {
+    if !mentions(v, dead) {
+        return;
+    }
+    match v {
+        Value::Object(r) | Value::Interface(r) => *r = None,
+        Value::Delegate(d) => *d = None,
+        Value::Struct(s) => Rc::make_mut(s)
+            .fields
+            .iter_mut()
+            .for_each(|f| clear_refs(f, dead)),
+        Value::Array(a) => Rc::make_mut(a).iter_mut().for_each(|e| clear_refs(e, dead)),
+        _ => {}
+    }
 }
 
 /// The arena. See the module documentation.
@@ -158,8 +246,8 @@ impl Heap {
         Self::default()
     }
 
-    /// Creates an object of class `class` (defined in `classes`) with every slot at its zero value. The outer, if
-    /// given, must be a handle to an object that is not freed.
+    /// Creates an object of class `class` (defined in `classes`) with every slot at its default value
+    /// ([`ClassTable::default_slots`]). The outer, if given, must be a handle to an object that is not freed.
     pub fn alloc(
         &mut self,
         classes: &ClassTable,
@@ -168,19 +256,11 @@ impl Heap {
         outer: Option<ObjRef>,
         origin: Origin,
     ) -> Result<ObjRef, HeapError> {
-        let slots = classes.zero_slots(class)?;
+        let slots = classes.default_slots(class)?;
         if let Some(o) = outer {
             self.get(o)?;
         }
-        let object = Object {
-            class,
-            name,
-            outer,
-            slots,
-            state: None,
-            destroyed: false,
-            origin,
-        };
+        let object = Object::new(class, name, outer, slots, origin);
         let handle = match self.free.pop() {
             Some(index) => {
                 let entry = &mut self.entries[index as usize];
@@ -240,6 +320,22 @@ impl Heap {
             .ok_or(HeapError::SlotMissing { object: o, slot })
     }
 
+    /// Element `a` of object `o` for changing in place, after checking the address (not the value written later)
+    /// against the object's class.
+    pub fn slot_mut(
+        &mut self,
+        classes: &ClassTable,
+        o: ObjRef,
+        a: PropAddr,
+    ) -> Result<&mut Value, HeapError> {
+        let object = self.get_mut(o)?;
+        let slot = classes.resolve(object.class, a)?;
+        object
+            .slots
+            .get_mut(slot)
+            .ok_or(HeapError::SlotMissing { object: o, slot })
+    }
+
     /// Writes element `a` of object `o`, after checking the address against the object's class and the value against
     /// the declaration (module documentation).
     pub fn write(
@@ -249,25 +345,84 @@ impl Heap {
         a: PropAddr,
         v: Value,
     ) -> Result<(), HeapError> {
-        let slot = {
-            let object = self.get(o)?;
-            classes.resolve(object.class, a)?
-        };
-        let kind = &classes
+        let kind = Self::decl_kind(classes, a)?;
+        self.read(classes, o, a)?;
+        self.check_value(classes, kind, &v)?;
+        *self.slot_mut(classes, o, a)? = v;
+        Ok(())
+    }
+
+    fn decl_kind(classes: &ClassTable, a: PropAddr) -> Result<&PropKind, HeapError> {
+        Ok(&classes
             .decl(a.prop)
             .ok_or(LayoutError::NotAProperty(a.prop))?
-            .kind;
+            .kind)
+    }
+
+    /// One step down from (`kind`, `v`): the kind and value it leads to, or why it leads nowhere.
+    fn step<'k, 'v>(
+        classes: &'k ClassTable,
+        kind: &'k PropKind,
+        v: &'v Value,
+        at: usize,
+        step: Step,
+    ) -> Result<(&'k PropKind, &'v Value), HeapError> {
+        let bad = |reason| HeapError::BadPath { at, reason };
+        match (kind, v, step) {
+            (PropKind::Array(inner), Value::Array(items), Step::Element(i)) => items
+                .get(i as usize)
+                .map(|item| (&**inner, item))
+                .ok_or_else(|| bad("index past the array's end")),
+            (PropKind::Struct(ty), Value::Struct(s), Step::Field(e)) => {
+                let layout = classes
+                    .struct_layout(*ty)
+                    .ok_or(LayoutError::StructNotDefined(*ty))?;
+                let (_, decl) = layout
+                    .entry_field(e)
+                    .ok_or_else(|| bad("entry past the struct's layout"))?;
+                let field = s
+                    .fields
+                    .get(e as usize)
+                    .ok_or_else(|| bad("the struct value has no such entry"))?;
+                Ok((&decl.kind, field))
+            }
+            (_, _, Step::Element(_)) => Err(bad("not an array")),
+            (_, _, Step::Field(_)) => Err(bad("not a struct")),
+        }
+    }
+
+    /// Writes `v` at `path` inside element `a` of object `o` (`Arr[i] = x`, `Location.X = 1`,
+    /// `Arr[i].Field = x`), checking the address, each step, and the new value against the kind it lands in; the
+    /// rest of the aggregate is not rechecked. A shared aggregate on the path is copied first (copy on write). An
+    /// empty path is [`Heap::write`].
+    pub fn write_in(
+        &mut self,
+        classes: &ClassTable,
+        o: ObjRef,
+        a: PropAddr,
+        path: &[Step],
+        v: Value,
+    ) -> Result<(), HeapError> {
+        let mut kind = Self::decl_kind(classes, a)?;
+        let mut current = self.read(classes, o, a)?;
+        for (at, &s) in path.iter().enumerate() {
+            (kind, current) = Self::step(classes, kind, current, at, s)?;
+        }
         self.check_value(classes, kind, &v)?;
-        let object = self.get_mut(o)?;
-        let target = object
-            .slots
-            .get_mut(slot)
-            .ok_or(HeapError::SlotMissing { object: o, slot })?;
+        let mut target = self.slot_mut(classes, o, a)?;
+        for &s in path {
+            // Every step was checked above on the same value.
+            target = match (target, s) {
+                (Value::Array(items), Step::Element(i)) => &mut Rc::make_mut(items)[i as usize],
+                (Value::Struct(st), Step::Field(e)) => &mut Rc::make_mut(st).fields[e as usize],
+                _ => unreachable!("the path was checked"),
+            };
+        }
         *target = v;
         Ok(())
     }
 
-    /// Whether `v` may be stored in a property of kind `kind`.
+    /// Whether `v` may be stored in a property of kind `kind` (module documentation).
     pub fn check_value(
         &self,
         classes: &ClassTable,
@@ -284,8 +439,13 @@ impl Heap {
             | (PropKind::Bool, Value::Bool(_))
             | (PropKind::Byte { .. } | PropKind::ByteAttribute { .. }, Value::Byte(_))
             | (PropKind::Str, Value::Str(_))
-            | (PropKind::Name, Value::Name(_))
-            | (PropKind::Delegate, Value::Delegate(_)) => Ok(()),
+            | (PropKind::Name, Value::Name(_)) => Ok(()),
+            (PropKind::Delegate, Value::Delegate(d)) => match d {
+                Some(DelegateValue {
+                    object: Some(r), ..
+                }) => self.get(*r).map(|_| ()),
+                _ => Ok(()),
+            },
             (PropKind::Object { class }, Value::Object(r)) => match r {
                 None => Ok(()),
                 Some(r) => {
@@ -305,11 +465,15 @@ impl Heap {
                 Some(r) => self.get(*r).map(|_| ()),
             },
             (PropKind::Class { meta }, Value::Class(c)) => match c {
+                None => Ok(()),
+                Some(c) if classes.get_layout(*c).is_none() => {
+                    Err(LayoutError::UnknownClass(*c).into())
+                }
                 Some(c) if !classes.is_child_of(*c, *meta) => Err(HeapError::WrongClass {
                     expected: *meta,
                     found: *c,
                 }),
-                _ => Ok(()),
+                Some(_) => Ok(()),
             },
             (PropKind::Struct(ty), Value::Struct(s)) => {
                 if s.ty != *ty {
@@ -320,7 +484,7 @@ impl Heap {
                 }
                 let layout = classes
                     .struct_layout(*ty)
-                    .ok_or(LayoutError::UnknownStruct(*ty))?;
+                    .ok_or(LayoutError::StructNotDefined(*ty))?;
                 if s.fields.len() != layout.slot_count() as usize {
                     return Err(HeapError::WrongFieldCount {
                         ty: *ty,
@@ -349,8 +513,8 @@ impl Heap {
         Ok(())
     }
 
-    /// Removes `o`. Every handle to it is refused from now on; the slot is reused with a new generation (or retired if
-    /// the generation would wrap).
+    /// Removes `o` and clears every reference to it held in the heap (module documentation). Every handle to it is
+    /// refused from now on; the slot is reused with a new generation (or retired if the generation would wrap).
     pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError> {
         self.get(o)?;
         let entry = &mut self.entries[o.index() as usize];
@@ -360,6 +524,12 @@ impl Heap {
             self.free.push(o.index());
         } else {
             // Retired: the generation stays at u32::MAX with no object, so no handle matches it again.
+        }
+        for other in self.entries.iter_mut().filter_map(|e| e.object.as_mut()) {
+            if other.outer == Some(o) {
+                other.outer = None;
+            }
+            other.slots.iter_mut().for_each(|v| clear_refs(v, o));
         }
         self.count -= 1;
         self.stale_in_order += 1;
@@ -371,16 +541,17 @@ impl Heap {
         Ok(object)
     }
 
-    /// The objects of class `base` or a subclass that are neither destroyed nor freed, in creation order (the order
-    /// the C++ iterators visit).
+    /// The instances ([`Origin::is_instance`]) of class `base` or a subclass that are neither destroyed nor freed, in
+    /// creation order (the order the C++ iterators visit).
     pub fn live<'a>(
         &'a self,
         classes: &'a ClassTable,
         base: ClassId,
     ) -> impl Iterator<Item = ObjRef> + 'a {
         self.order.iter().copied().filter(move |r| {
-            self.get(*r)
-                .is_ok_and(|o| !o.destroyed && classes.is_child_of(o.class, base))
+            self.get(*r).is_ok_and(|o| {
+                !o.destroyed && o.origin.is_instance() && classes.is_child_of(o.class, base)
+            })
         })
     }
 
@@ -430,6 +601,22 @@ impl ObjectSpace {
         self.heap.write(&self.classes, o, a, v)
     }
 
+    /// [`Heap::write_in`] through this space's classes.
+    pub fn write_in(
+        &mut self,
+        o: ObjRef,
+        a: PropAddr,
+        path: &[Step],
+        v: Value,
+    ) -> Result<(), HeapError> {
+        self.heap.write_in(&self.classes, o, a, path, v)
+    }
+
+    /// [`Heap::slot_mut`] through this space's classes.
+    pub fn slot_mut(&mut self, o: ObjRef, a: PropAddr) -> Result<&mut Value, HeapError> {
+        self.heap.slot_mut(&self.classes, o, a)
+    }
+
     /// The property `name` (any case) of class `c`, without interning the name.
     pub fn prop(&self, c: ClassId, name: &str) -> Option<PropId> {
         self.classes.prop(c, self.names.find(name)?)
@@ -449,8 +636,10 @@ mod tests {
     use super::*;
     use crate::layout::PropertyDecl;
 
-    /// Engine.Actor { int Health; float Ammo[3]; Actor Target; class<Actor> Kind; array<int> List; Vec V; }
+    /// Engine.Actor { int Health; float Ammo[3]; Actor Target; class<Actor> Kind; array<int> List; Vec V;
+    ///                array<Actor> Others; Hit LastHit; delegate OnDone; interface Iface; }
     /// Game.Pawn extends Actor { bool Alive; }   Engine.Info (unrelated) { int Health; }
+    /// Vec { float X; int Y[2]; }   Hit { Actor Who; float Time; }
     struct World {
         space: ObjectSpace,
         actor: ClassId,
@@ -469,6 +658,12 @@ mod tests {
             .define_struct("Core.Object.Vec", None, vec![x, y])
             .unwrap();
         let actor = space.classes.declare("Engine.Actor").unwrap();
+        let who = PropertyDecl::new(n(&mut space, "Who"), PropKind::Object { class: actor });
+        let time = PropertyDecl::new(n(&mut space, "Time"), PropKind::Float);
+        let hit = space
+            .classes
+            .define_struct("Engine.Actor.Hit", None, vec![who, time])
+            .unwrap();
         let decls = vec![
             PropertyDecl::new(n(&mut space, "Health"), PropKind::Int),
             PropertyDecl::new(n(&mut space, "Ammo"), PropKind::Float).with_array_dim(3),
@@ -479,6 +674,13 @@ mod tests {
                 PropKind::Array(Box::new(PropKind::Int)),
             ),
             PropertyDecl::new(n(&mut space, "V"), PropKind::Struct(vec)),
+            PropertyDecl::new(
+                n(&mut space, "Others"),
+                PropKind::Array(Box::new(PropKind::Object { class: actor })),
+            ),
+            PropertyDecl::new(n(&mut space, "LastHit"), PropKind::Struct(hit)),
+            PropertyDecl::new(n(&mut space, "OnDone"), PropKind::Delegate),
+            PropertyDecl::new(n(&mut space, "Iface"), PropKind::Interface { class: actor }),
         ];
         space.classes.define("Engine.Actor", None, decls).unwrap();
         let alive = PropertyDecl::new(n(&mut space, "Alive"), PropKind::Bool);
@@ -877,5 +1079,336 @@ mod tests {
             w.space.read(a, alive.into()),
             Err(HeapError::SlotMissing { .. })
         ));
+    }
+
+    fn obj(r: ObjRef) -> Value {
+        Value::Object(Some(r))
+    }
+
+    #[test]
+    fn free_clears_every_reference_in_the_heap() {
+        let mut w = world();
+        let a = w.new_obj(w.actor, "A");
+        let b = w.new_obj(w.actor, "B");
+        let p = w.new_obj(w.pawn, "P");
+        let inner = w
+            .space
+            .alloc(w.info, "Inner", Some(p), Origin::Runtime)
+            .unwrap();
+        let f = w.space.names.intern("Done");
+        let (target, others, last_hit, on_done, iface) = (
+            w.p(w.actor, "Target"),
+            w.p(w.actor, "Others"),
+            w.p(w.actor, "LastHit"),
+            w.p(w.actor, "OnDone"),
+            w.p(w.actor, "Iface"),
+        );
+        let hit_ty = match w.space.read(a, last_hit.into()).unwrap() {
+            Value::Struct(s) => s.ty,
+            other => panic!("{other:?}"),
+        };
+        let list = Value::array(vec![obj(p), obj(b), obj(p)]);
+        let outside = list.clone();
+        w.space.write(a, target.into(), obj(p)).unwrap();
+        w.space.write(a, others.into(), list.clone()).unwrap();
+        w.space.write(b, others.into(), list).unwrap();
+        w.space
+            .write(
+                a,
+                last_hit.into(),
+                Value::structure(hit_ty, vec![obj(p), Value::Float(2.0)]),
+            )
+            .unwrap();
+        let bound = Value::Delegate(Some(DelegateValue {
+            object: Some(p),
+            function: f,
+        }));
+        w.space.write(a, on_done.into(), bound).unwrap();
+        w.space
+            .write(a, iface.into(), Value::Interface(Some(p)))
+            .unwrap();
+        w.space.write(b, target.into(), obj(a)).unwrap();
+
+        w.space.heap.free(p).unwrap();
+
+        assert_eq!(w.space.read(a, target.into()), Ok(&Value::Object(None)));
+        let cleared = Value::array(vec![Value::Object(None), obj(b), Value::Object(None)]);
+        assert_eq!(w.space.read(a, others.into()), Ok(&cleared));
+        assert_eq!(w.space.read(b, others.into()), Ok(&cleared));
+        assert_eq!(
+            w.space.read(a, last_hit.into()),
+            Ok(&Value::structure(
+                hit_ty,
+                vec![Value::Object(None), Value::Float(2.0)]
+            ))
+        );
+        assert_eq!(w.space.read(a, on_done.into()), Ok(&Value::Delegate(None)));
+        assert_eq!(w.space.read(a, iface.into()), Ok(&Value::Interface(None)));
+        assert_eq!(w.space.heap.get(inner).unwrap().outer, None);
+        // References to other objects stay; a copy held outside the heap is not touched (copy on write).
+        assert_eq!(w.space.read(b, target.into()), Ok(&obj(a)));
+        assert_eq!(outside.elements().unwrap()[0], obj(p));
+        // A handle kept outside the heap is still refused.
+        assert_eq!(
+            w.space.write(a, target.into(), obj(p)),
+            Err(HeapError::Stale(p))
+        );
+    }
+
+    #[test]
+    fn a_freed_delegate_receiver_is_refused() {
+        let mut w = world();
+        let a = w.new_obj(w.actor, "A");
+        let p = w.new_obj(w.pawn, "P");
+        let f = w.space.names.intern("Done");
+        let on_done = w.p(w.actor, "OnDone");
+        let to = |o| {
+            Value::Delegate(Some(DelegateValue {
+                object: Some(o),
+                function: f,
+            }))
+        };
+        w.space.write(a, on_done.into(), to(p)).unwrap();
+        let unbound_receiver = Value::Delegate(Some(DelegateValue {
+            object: None,
+            function: f,
+        }));
+        w.space.write(a, on_done.into(), unbound_receiver).unwrap();
+        w.space.heap.free(p).unwrap();
+        assert_eq!(
+            w.space.write(a, on_done.into(), to(p)),
+            Err(HeapError::Stale(p))
+        );
+        let nested = PropKind::Array(Box::new(PropKind::Delegate));
+        assert_eq!(
+            w.space
+                .heap
+                .check_value(&w.space.classes, &nested, &Value::array(vec![to(a), to(p)])),
+            Err(HeapError::Stale(p))
+        );
+        assert_eq!(
+            w.space
+                .heap
+                .check_value(&w.space.classes, &nested, &Value::array(vec![to(a)])),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn live_yields_instances_only() {
+        let mut w = world();
+        let actor = w.actor;
+        let default = w.space.alloc(
+            actor,
+            "Default__Actor",
+            None,
+            Origin::Default { class: actor },
+        );
+        let resource = w.space.alloc(
+            actor,
+            "Res",
+            None,
+            Origin::Resource {
+                package: 0,
+                index: 1,
+            },
+        );
+        let exported = w
+            .space
+            .alloc(
+                actor,
+                "Placed",
+                None,
+                Origin::Export {
+                    package: 0,
+                    index: 2,
+                },
+            )
+            .unwrap();
+        let spawned = w.new_obj(actor, "Spawned");
+        assert!(default.is_ok() && resource.is_ok());
+        assert_eq!(w.space.live(actor).collect::<Vec<_>>(), [exported, spawned]);
+        assert!(Origin::Runtime.is_instance());
+        assert!(!Origin::Default { class: actor }.is_instance());
+    }
+
+    #[test]
+    fn a_class_value_must_name_a_class_of_the_table() {
+        let mut w = world();
+        let a = w.new_obj(w.actor, "A");
+        let kind = w.p(w.actor, "Kind");
+        let unknown = ClassId::new(99);
+        assert_eq!(
+            w.space.write(a, kind.into(), Value::Class(Some(unknown))),
+            Err(HeapError::Layout(LayoutError::UnknownClass(unknown)))
+        );
+        w.space.write(a, kind.into(), Value::Class(None)).unwrap();
+    }
+
+    #[test]
+    fn slot_mut_checks_the_address() {
+        let mut w = world();
+        let a = w.new_obj(w.actor, "A");
+        let i = w.new_obj(w.info, "I");
+        let health = w.p(w.actor, "Health");
+        *w.space.slot_mut(a, health.into()).unwrap() = Value::Int(9);
+        assert_eq!(w.space.read(a, health.into()), Ok(&Value::Int(9)));
+        assert!(matches!(
+            w.space.slot_mut(i, health.into()),
+            Err(HeapError::Layout(LayoutError::NotInClass { .. }))
+        ));
+        let ammo = w.p(w.actor, "Ammo");
+        assert!(w.space.slot_mut(a, PropAddr::element(ammo, 3)).is_err());
+    }
+
+    #[test]
+    fn write_in_changes_one_element_or_field() {
+        let mut w = world();
+        let a = w.new_obj(w.actor, "A");
+        let b = w.new_obj(w.actor, "B");
+        let p = w.new_obj(w.pawn, "P");
+        let i = w.new_obj(w.info, "I");
+        let (list, v, others, last_hit) = (
+            w.p(w.actor, "List"),
+            w.p(w.actor, "V"),
+            w.p(w.actor, "Others"),
+            w.p(w.actor, "LastHit"),
+        );
+        let shared = Value::array(vec![Value::Int(1), Value::Int(2)]);
+        w.space.write(a, list.into(), shared.clone()).unwrap();
+        w.space.write(b, list.into(), shared).unwrap();
+        // Arr[1] = 5 on a; b keeps its copy.
+        w.space
+            .write_in(a, list.into(), &[Step::Element(1)], Value::Int(5))
+            .unwrap();
+        assert_eq!(
+            w.space.read(a, list.into()),
+            Ok(&Value::array(vec![Value::Int(1), Value::Int(5)]))
+        );
+        assert_eq!(
+            w.space.read(b, list.into()),
+            Ok(&Value::array(vec![Value::Int(1), Value::Int(2)]))
+        );
+        // V.X = 1.5 and V.Y[1] = 3 (entry 2: X is entry 0, Y[0] entry 1).
+        w.space
+            .write_in(a, v.into(), &[Step::Field(0)], Value::Float(1.5))
+            .unwrap();
+        w.space
+            .write_in(a, v.into(), &[Step::Field(2)], Value::Int(3))
+            .unwrap();
+        assert_eq!(
+            w.space
+                .read(a, v.into())
+                .unwrap()
+                .as_struct()
+                .unwrap()
+                .fields,
+            [Value::Float(1.5), Value::Int(0), Value::Int(3)]
+        );
+        assert_eq!(
+            w.space.read(b, v.into()).unwrap(),
+            w.space.classes.struct_layout(w.vec).unwrap().zero(),
+            "b's zero struct was not changed"
+        );
+        // Others[0] = P, then the nested struct: LastHit.Who = P.
+        w.space
+            .write(a, others.into(), Value::array(vec![Value::Object(None)]))
+            .unwrap();
+        w.space
+            .write_in(a, others.into(), &[Step::Element(0)], obj(p))
+            .unwrap();
+        w.space
+            .write_in(a, last_hit.into(), &[Step::Field(0)], obj(p))
+            .unwrap();
+        // Only the new value is checked, and it is checked against the kind it lands in.
+        assert_eq!(
+            w.space
+                .write_in(a, others.into(), &[Step::Element(0)], obj(i)),
+            Err(HeapError::WrongClass {
+                expected: w.actor,
+                found: w.info
+            })
+        );
+        assert!(matches!(
+            w.space
+                .write_in(a, list.into(), &[Step::Element(0)], Value::Float(1.0)),
+            Err(HeapError::WrongKind {
+                expected: "Int",
+                found: "Float"
+            })
+        ));
+        assert_eq!(
+            w.space
+                .write_in(a, list.into(), &[Step::Element(2)], Value::Int(0)),
+            Err(HeapError::BadPath {
+                at: 0,
+                reason: "index past the array's end"
+            })
+        );
+        assert_eq!(
+            w.space
+                .write_in(a, v.into(), &[Step::Field(3)], Value::Int(0)),
+            Err(HeapError::BadPath {
+                at: 0,
+                reason: "entry past the struct's layout"
+            })
+        );
+        assert_eq!(
+            w.space
+                .write_in(a, list.into(), &[Step::Field(0)], Value::Int(0)),
+            Err(HeapError::BadPath {
+                at: 0,
+                reason: "not a struct"
+            })
+        );
+        assert_eq!(
+            w.space.write_in(
+                a,
+                v.into(),
+                &[Step::Field(0), Step::Element(0)],
+                Value::Int(0)
+            ),
+            Err(HeapError::BadPath {
+                at: 1,
+                reason: "not an array"
+            })
+        );
+        // An empty path is a whole-property write.
+        w.space
+            .write_in(a, list.into(), &[], Value::array(vec![]))
+            .unwrap();
+        assert_eq!(w.space.read(a, list.into()), Ok(&Value::array(vec![])));
+    }
+
+    #[test]
+    fn alloc_applies_struct_defaults() {
+        let mut w = world();
+        let vec = w.vec;
+        w.space
+            .classes
+            .set_struct_default(vec, 0, Value::Float(1.0))
+            .unwrap();
+        let a = w.new_obj(w.actor, "A");
+        let v = w.p(w.actor, "V");
+        assert_eq!(
+            w.space
+                .read(a, v.into())
+                .unwrap()
+                .as_struct()
+                .unwrap()
+                .fields,
+            [Value::Float(1.0), Value::Int(0), Value::Int(0)]
+        );
+        let zeros = w.space.classes.zero_slots(w.actor).unwrap();
+        assert_eq!(
+            &zeros[v.slot as usize],
+            w.space.classes.struct_layout(vec).unwrap().zero()
+        );
+    }
+
+    #[test]
+    fn object_new_starts_in_the_default_state() {
+        let o = Object::new(ClassId::new(0), NameId::NONE, None, vec![], Origin::Runtime);
+        assert_eq!((o.state, o.destroyed), (None, false));
     }
 }
