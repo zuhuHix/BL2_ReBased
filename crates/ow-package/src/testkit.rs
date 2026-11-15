@@ -20,6 +20,9 @@
 //! | the partial-compression package of `package_test.py` | [`PackageBuilder::build_partial`], [`partial`] |
 //! | `fstring(value)` (`properties_test.py`) | [`fstring`] |
 //! | `struct.pack_into('<I', ...)` | [`put_u32`] |
+//!
+//! Child modules hold what later lanes add, so they never edit this file: [`reflect`] (W2-REFLECT: property, struct,
+//! class and enum exports) and [`script`] (W2-SCRIPT: function exports and bytecode bodies). Both are placeholders.
 
 /// The UE3 package tag, the first word of a package and of every LZO container.
 pub const PACKAGE_TAG: u32 = 0x9e2a_83c1;
@@ -253,6 +256,17 @@ impl PackageBuilder {
         i32::try_from(self.exports.len()).expect("export count fits i32")
     }
 
+    /// How many exports have been added.
+    pub fn export_count(&self) -> usize {
+        self.exports.len()
+    }
+
+    /// The reference the next added export will get (`len(p.exports) + 1` in the Python helpers), so a payload can
+    /// name its own export before it is added.
+    pub fn next_export(&self) -> i32 {
+        i32::try_from(self.exports.len() + 1).expect("export count fits i32")
+    }
+
     /// Replaces the payload of export `reference` (for payloads that refer to exports added after it, as
     /// `behavior_test.py` does).
     pub fn set_payload(&mut self, reference: i32, payload: impl Into<Vec<u8>>) {
@@ -272,34 +286,30 @@ impl PackageBuilder {
     /// A property tag: name, type, size (the value's length), array index 0, then `value`. `tag()` of
     /// `assets_test.py`.
     pub fn tag(&mut self, name: &str, kind: &str, value: &[u8]) -> Vec<u8> {
-        self.tag_full(name, 0, kind, value.len(), &[], value)
+        self.tag_full(name, 0, kind, len_i32(value), &[], value)
     }
 
     /// A tag whose type-specific detail (a struct name, an enum name, a bool byte) sits between the header and the
     /// value; the size is the value's length. `tag(name, kind, value, extra)` of `assets_test.py`.
     pub fn tag_detail(&mut self, name: &str, kind: &str, detail: &[u8], value: &[u8]) -> Vec<u8> {
-        self.tag_full(name, 0, kind, value.len(), detail, value)
+        self.tag_full(name, 0, kind, len_i32(value), detail, value)
     }
 
     /// A tag with every field given: name, array index, type, size word, detail, value. `size` need not be the
-    /// value's length (malformed-tag tests).
+    /// value's length and may be negative (malformed-tag tests, e.g. the size -1 case of `properties_test.py`).
     pub fn tag_full(
         &mut self,
         name: &str,
         index: i32,
         kind: &str,
-        size: usize,
+        size: i32,
         detail: &[u8],
         value: &[u8],
     ) -> Vec<u8> {
         let mut out = Vec::with_capacity(24 + detail.len() + value.len());
         out.extend_from_slice(&self.fname(name, 0));
         out.extend_from_slice(&self.fname(kind, 0));
-        out.extend_from_slice(
-            &i32::try_from(size)
-                .expect("tag size fits i32")
-                .to_le_bytes(),
-        );
+        out.extend_from_slice(&size.to_le_bytes());
         out.extend_from_slice(&index.to_le_bytes());
         out.extend_from_slice(detail);
         out.extend_from_slice(value);
@@ -591,6 +601,14 @@ pub fn ints(values: &[i32]) -> Vec<u8> {
 pub fn put_u32(data: &mut [u8], at: usize, value: u32) {
     data[at..at + 4].copy_from_slice(&value.to_le_bytes());
 }
+
+/// A value's length as the `i32` size word of a tag.
+fn len_i32(value: &[u8]) -> i32 {
+    i32::try_from(value.len()).expect("tag size fits i32")
+}
+
+pub mod reflect;
+pub mod script;
 
 #[cfg(test)]
 mod tests;
