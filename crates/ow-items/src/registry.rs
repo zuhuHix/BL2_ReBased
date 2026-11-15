@@ -4049,15 +4049,24 @@ mod tests {
     }
 
     #[test]
-    fn the_store_census_is_not_there_yet() {
-        // Flips when the body of DefStore::census() lands (W3-DEFS): build_registry then runs on the store.
+    fn the_store_census_builds_the_registry() {
+        // DefStore::census() has its body (W3-DEFS): build_registry runs on the store of the synthetic install.
         let install = Install::new("store");
         let mode = ow_core::ParityMode::Off;
         let mut defs =
             DefStore::open(install.0.clone(), IdentityPolicy::FirstInScanOrder, mode).unwrap();
         let mut space = ObjectSpace::new();
-        let error = build_registry(&mut defs, &mut space).unwrap_err();
-        assert!(matches!(error, ItemError::NotYet(_)), "{error}");
+        let reg = build_registry(&mut defs, &mut space).unwrap();
+        // The install holds two package files (SynStartup.upk and the DLC's), both read, neither failing.
+        assert_eq!(reg.report().at("packages_scanned"), &Pv::Int(2));
+        assert_eq!(reg.report().at("scan_errors"), &Pv::Map(DetMap::new()));
+        // The same bytes as the registry built from the tool-order census of the same files (the stand-in the tests
+        // used until the store's census landed): the store's census, re-sorted by from_store, loses nothing.
+        let game = python_path_text(&defs.packages().root().to_string_lossy());
+        assert_eq!(
+            reg.to_json(),
+            build_from_census(install.census(), &game).to_json()
+        );
     }
 
     #[test]
