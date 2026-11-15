@@ -27,7 +27,7 @@ the choices a later lane should be able to find.
 - **Engine lookups.** Pools and items go through `AttrWorld::engine_query`. A resolver definition is loaded through
   `DefStore::is_unloaded` and `DefStore::ensure_loaded` before its fields are read.
 - **Verified:** synthetic-world Rust tests only (`context_resolvers/tests.rs`). The three chain rules per resolver
-  (first None ends the chain, empty chain is None, override first) are checked with a test-only walker written from
-  NATIVE_ATTRIBUTES.md section 1, because the evaluator's walk (W3-ATTREVAL) had not landed.
+  (first None ends the chain, empty chain is None, override first) are checked through the evaluator's own walk
+  (`AttributeSystem::resolve_context`, and `value_of` for the override, W3-ATTREVAL) on a synthetic definition.
 - **UNVERIFIED:** every resolver rule in the running game. The stored chain order is kept, and whether it is the game's
   evaluation order stays UNVERIFIED (decision 2026-11-15-08).
