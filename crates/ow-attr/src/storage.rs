@@ -20,6 +20,7 @@
 
 use std::rc::Rc;
 
+use ow_core::NotYet;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{NameId, ObjRef, PropAddr, PropId};
 use ow_object::layout::{AttrCompanions, PropKind, PropertyDecl};
@@ -237,7 +238,9 @@ fn notify_prop(s: Storage) -> (ObjRef, PropId) {
 
 /// The property-level add (section 3) on `s`: a stack attribute refuses a modifier object already on it, else
 /// appends it and recomputes; a plain attribute is edited in place (a type outside 0..=2 changes nothing and still
-/// succeeds, UNVERIFIED). Notifies after a success.
+/// succeeds, UNVERIFIED). Notifies after every success, that one included (section 4 as read: the notification
+/// follows a successful add, remove or set-base; whether a no-change success notifies in the game is UNVERIFIED,
+/// decision 2026-11-15-13).
 pub(crate) fn add_to(
     s: Storage,
     modifier: ObjRef,
@@ -283,9 +286,8 @@ pub(crate) fn add_to(
 }
 
 /// The property-level remove (section 3) on `s`: a stack attribute loses **every** copy of the modifier object and
-/// is recomputed (not present: false); a plain attribute answers true and changes nothing. Notifies after a stack
-/// removal; a plain no-op changes nothing, so it does not notify (UNVERIFIED: the record says the notification
-/// follows "a successful change").
+/// is recomputed (not present: false); a plain attribute answers true and changes nothing. Notifies after every
+/// success, the plain no-op included (UNVERIFIED, decision 2026-11-15-13).
 pub(crate) fn remove_from(
     s: Storage,
     modifier: ObjRef,
@@ -299,6 +301,8 @@ pub(crate) fn remove_from(
         kind,
     } = s
     else {
+        let (owner, prop) = notify_prop(s);
+        notify(owner, prop, suppress_notify, cx)?;
         return Ok(RemoveModifierOutcome::PlainNoOp);
     };
     let count = {
@@ -360,20 +364,26 @@ pub(crate) fn set_base_of(
 /// answers false). Used by the by-name natives; a value resolver that names a property may use it too.
 ///
 /// A stack-flagged property without companions is the record's "Modifier stack not found for attribute", a data
-/// bug: [`AttrError::BadData`]. So is an attribute flag on a property that holds no number (a bool, say), as
-/// W3-ATTREVAL's `ObjectPropertyAttributeValueResolver` answers it.
+/// bug: [`AttrError::BadData`]. An attribute flag on a property that holds no number (a bool, say) is
+/// `NotYet { NotRead }`: the record's census counts flagged float, int and byte properties and does not say whether
+/// any other kind carries the flag (decision 2026-11-15-13). W3-ATTREVAL's `ObjectPropertyAttributeValueResolver`
+/// answers `BadData` for the same case.
 pub fn storage_of(
     space: &ObjectSpace,
     owner: ObjRef,
     p: PropId,
 ) -> Result<Option<Storage>, AttrError> {
     let decl = decl_of(space, p)?;
-    let not_a_number = || {
-        bad(format!(
-            "{}: an attribute flag on a {} property",
-            name_text(space, decl.name),
-            decl.kind.kind_name()
-        ))
+    let not_a_number = || -> AttrError {
+        NotYet::not_read(
+            format!(
+                "an attribute flag on the {} property {}",
+                decl.kind.kind_name(),
+                name_text(space, decl.name)
+            ),
+            "NATIVE_ATTRIBUTES.md, the model in one page (census of float, int and byte properties)",
+        )
+        .into()
     };
     if decl.is_stack_attribute() {
         let companions = match decl.attr {
@@ -693,6 +703,29 @@ mod tests {
         assert_eq!(added, AddModifierOutcome::AppliedInPlace);
         assert_eq!(sys.attribute_value_by_name(gun, base, &mut cx), Ok(11.0));
         assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(10.0));
+    }
+
+    /// Review r1 item 5: the census behind the attribute flags counts float, int and byte properties only, so an
+    /// attribute flag on a bool is not read.
+    #[test]
+    fn an_attribute_flag_on_a_bool_is_not_read() {
+        let (mut w, c) = world();
+        let gun = w.obj(c.weapon, "Gun");
+        let m = w.modifier(&c, PRE, 1.0);
+        let flagged = w.space.names.intern("Flagged");
+        let sys = system();
+        let mut cx = EvalCx::new(&mut w);
+        let e = sys
+            .add_modifier_by_name(gun, m, flagged, false, &mut cx)
+            .unwrap_err();
+        assert!(
+            matches!(e, AttrError::NotYet(ref n) if n.missing == ow_core::Missing::NotRead),
+            "{e:?}"
+        );
+        let e = sys
+            .attribute_value_by_name(gun, flagged, &mut cx)
+            .unwrap_err();
+        assert!(matches!(e, AttrError::NotYet(_)), "{e:?}");
     }
 
     #[test]

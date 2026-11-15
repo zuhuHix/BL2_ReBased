@@ -12,7 +12,7 @@
 //! Every entry point is a one-line delegate into the file of the lane that owns the rule (architecture section 2.3):
 //! `eval.rs` and `expr.rs` (W3-ATTREVAL), `effects.rs` and `storage.rs` (W3-ATTREFFECTS); [`AttributeSystem::standard`]
 //! calls `value_resolvers::register` (W3-ATTREVAL) and `context_resolvers::register` (W3-ATTRCTX). Those lanes fill
-//! their own files and do not edit this one. Until they do, every entry point returns `NotYet { NotPorted }`.
+//! their own files and do not edit this one.
 
 use std::fmt;
 

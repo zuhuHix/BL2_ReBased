@@ -57,7 +57,8 @@ fn storage_at(
     resolver.storage(sys, r, context, cx)
 }
 
-/// The add through the chain, and whether any resolver stored the modifier (so it is referenced).
+/// The add through the chain. `on_stack` is set once a stack attribute's add was asked for the modifier, so a
+/// stack may hold it from then on (also when that add or a later step failed); a plain edit keeps no reference.
 fn add_chain(
     sys: &AttributeSystem,
     attr: ObjRef,
@@ -65,27 +66,31 @@ fn add_chain(
     modifier: ObjRef,
     suppress_notify: bool,
     cx: &mut EvalCx<'_>,
-) -> Result<(AddModifierOutcome, bool), AttrError> {
+    on_stack: &mut bool,
+) -> Result<AddModifierOutcome, AttrError> {
     let Some(context) = context else {
-        return Ok((AddModifierOutcome::Refused(Refusal::NoContext), false));
+        return Ok(AddModifierOutcome::Refused(Refusal::NoContext));
     };
     let chain = value_chain(cx, attr)?;
     let mut outcome = AddModifierOutcome::Refused(Refusal::NoValueResolvers);
-    let mut stored = false;
     for entry in chain {
         outcome = match entry {
             None => AddModifierOutcome::Refused(Refusal::NullResolver),
             Some(r) => match storage_at(sys, r, context, cx)? {
                 None => AddModifierOutcome::Refused(Refusal::NotWritable),
-                Some(s) => storage::add_to(s, modifier, suppress_notify, cx)?,
+                Some(s) => {
+                    if matches!(s, Storage::Stack { .. }) {
+                        *on_stack = true;
+                    }
+                    storage::add_to(s, modifier, suppress_notify, cx)?
+                }
             },
         };
         if !outcome.succeeded() {
             break;
         }
-        stored = true;
     }
-    Ok((outcome, stored))
+    Ok(outcome)
 }
 
 /// [`AttributeSystem::add_modifier`].
@@ -97,7 +102,15 @@ pub(crate) fn add_modifier(
     suppress_notify: bool,
     cx: &mut EvalCx<'_>,
 ) -> Result<AddModifierOutcome, AttrError> {
-    add_chain(sys, attr, context, modifier, suppress_notify, cx).map(|(outcome, _)| outcome)
+    add_chain(
+        sys,
+        attr,
+        context,
+        modifier,
+        suppress_notify,
+        cx,
+        &mut false,
+    )
 }
 
 /// [`AttributeSystem::remove_modifier`].
@@ -258,6 +271,18 @@ fn new_modifier(
     Ok(m)
 }
 
+/// One modifier object an apply call made, and what may hold it.
+struct Made {
+    modifier: ObjRef,
+    attr: ObjRef,
+    /// The context it was offered to, once resolved.
+    context: Option<ObjRef>,
+    /// A stack may hold it (see [`add_chain`]).
+    on_stack: bool,
+    /// It is in the call's records.
+    recorded: bool,
+}
+
 /// The apply loop of NATIVE_ATTRIBUTES.md section 7, per entry in order:
 /// 1. the value: `EvaluateInitializationData(BaseModifierValue, ContextSource, Override)`, once, now (also for an
 ///    entry without an attribute, as the script evaluates it before resolving, so its random variance draws);
@@ -266,8 +291,19 @@ fn new_modifier(
 /// 4. the context: the override's if one was given and it resolves, else the source's;
 /// 5. with a context and a successful `AddAttributeModifier`, a record (context, attribute, modifier).
 ///
-/// A failed entry leaves no record. Its modifier object is freed when no resolver stored it, because nothing else
-/// can hold it (the script leaves it to the garbage collector).
+/// One pass, in entry order: a later entry's value may read what an earlier one changed.
+///
+/// A failed entry leaves no record, as in the game. A modifier that no stack holds and no record names is freed at
+/// the end (nothing else can hold it; the script leaves it to the garbage collector), all in one heap walk.
+///
+/// **An `Err`** (a step that is `NotYet`, a data error) is not a game outcome but this port refusing to go on, so the
+/// call cleans up before it returns the error: every modifier it made that a stack may hold or a record names is
+/// removed again through its attribute's chain (the records, and a modifier a chain stored without a record), then
+/// every modifier it made is freed. An `Err` therefore leaves no stack modifier from the call. Plain edits stay, as
+/// they stay in the game (a plain remove is a no-op). A modifier whose cleanup removal fails is not freed (a stack may
+/// still hold it), and the original error is returned. The no-rollback rule of architecture 3.5 is about a chain's
+/// outcome and is untouched: on `Ok`, a chain that failed after an earlier resolver stored the modifier leaves it
+/// stored.
 fn apply_with(
     sys: &AttributeSystem,
     steps: &dyn EvalSteps,
@@ -277,6 +313,46 @@ fn apply_with(
     cx: &mut EvalCx<'_>,
 ) -> Result<Applied, AttrError> {
     let mut applied = Applied::default();
+    let mut made = Vec::new();
+    let sources = (source, override_source);
+    let run = apply_entries(sys, steps, effects, sources, cx, &mut applied, &mut made);
+    let mut free = Vec::new();
+    match run {
+        Ok(()) => {
+            let unheld = made.iter().filter(|m| !m.on_stack && !m.recorded);
+            free.extend(unheld.map(|m| m.modifier));
+            free_all(cx, &free)?;
+            Ok(applied)
+        }
+        Err(e) => {
+            for m in &made {
+                let removed = match m.context {
+                    Some(context) if m.on_stack || m.recorded => {
+                        remove_modifier(sys, m.attr, Some(context), m.modifier, false, cx).is_ok()
+                    }
+                    _ => true,
+                };
+                if removed || !m.on_stack {
+                    free.push(m.modifier);
+                }
+            }
+            // A failure of the cleanup itself is not returned: the caller's question is the first error.
+            let _ = free_all(cx, &free);
+            Err(e)
+        }
+    }
+}
+
+/// The entries of [`apply_with`], keeping every modifier made in `made` as it goes.
+fn apply_entries(
+    sys: &AttributeSystem,
+    steps: &dyn EvalSteps,
+    effects: &[EffectData],
+    (source, override_source): (Option<ObjRef>, Option<ObjRef>),
+    cx: &mut EvalCx<'_>,
+    applied: &mut Applied,
+    made: &mut Vec<Made>,
+) -> Result<(), AttrError> {
     for effect in effects {
         let value = steps.value(
             sys,
@@ -289,6 +365,14 @@ fn apply_with(
             continue;
         };
         let modifier = new_modifier(cx, source, effect.modifier_type, value)?;
+        let this = made.len();
+        made.push(Made {
+            modifier,
+            attr,
+            context: None,
+            on_stack: false,
+            recorded: false,
+        });
         let mut context = None;
         if override_source.is_some() {
             context = steps.context(sys, attr, override_source, cx)?;
@@ -296,23 +380,31 @@ fn apply_with(
         if context.is_none() {
             context = steps.context(sys, attr, source, cx)?;
         }
-        let (outcome, stored) = match context {
-            Some(_) => add_chain(sys, attr, context, modifier, false, cx)?,
-            None => (AddModifierOutcome::Refused(Refusal::NoContext), false),
+        let Some(context) = context else {
+            continue;
         };
-        match context {
-            Some(context) if outcome.succeeded() => applied.0.push(AppliedEffect {
+        made[this].context = Some(context);
+        let mut on_stack = false;
+        let added = add_chain(sys, attr, Some(context), modifier, false, cx, &mut on_stack);
+        made[this].on_stack = on_stack;
+        if added?.succeeded() {
+            made[this].recorded = true;
+            applied.0.push(AppliedEffect {
                 context,
                 attribute: attr,
                 modifier,
-            }),
-            _ if !stored => {
-                cx.world.parts().space.free(modifier)?;
-            }
-            _ => {}
+            });
         }
     }
-    Ok(applied)
+    Ok(())
+}
+
+/// Frees `objects` in one heap walk (`ObjectSpace::free_many`); nothing for an empty list.
+fn free_all(cx: &mut EvalCx<'_>, objects: &[ObjRef]) -> Result<(), AttrError> {
+    if !objects.is_empty() {
+        cx.world.parts().space.free_many(objects)?;
+    }
+    Ok(())
 }
 
 /// [`AttributeSystem::apply_effects`].
@@ -328,23 +420,28 @@ pub(crate) fn apply_effects(
 
 /// [`AttributeSystem::remove_effects`]: every record's modifier removed from its context through the attribute's
 /// chain, in record order, whatever each removal answers; the records are consumed (the script empties the array).
+/// A removal that fails does not stop the others: every record is tried, and the first error is returned at the end.
 /// The modifier objects are not freed: a script copy of the records may still name them.
 pub(crate) fn remove_effects(
     sys: &AttributeSystem,
     applied: Applied,
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
+    let mut first = None;
     for record in applied.0 {
-        remove_modifier(
+        let removed = remove_modifier(
             sys,
             record.attribute,
             Some(record.context),
             record.modifier,
             false,
             cx,
-        )?;
+        );
+        if let Err(e) = removed {
+            first.get_or_insert(e);
+        }
     }
-    Ok(())
+    first.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]
@@ -713,9 +810,13 @@ mod tests {
             _cx: &mut EvalCx<'_>,
         ) -> Result<f32, AttrError> {
             self.evaluated.set(self.evaluated.get() + 1);
-            assert!(
-                data.base_value_attribute.is_none() && data.initialization_definition.is_none()
-            );
+            if data.base_value_attribute.is_some() || data.initialization_definition.is_some() {
+                return Err(ow_core::NotYet::not_read(
+                    "a test value that is not a constant",
+                    "test",
+                )
+                .into());
+            }
             Ok(data.base_value_constant * data.base_value_scale_constant)
         }
         fn context(
@@ -918,9 +1019,11 @@ mod tests {
         assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(15.0));
     }
 
-    /// `skill_effects_test.py` `test_effect_values`: a Scale 0.25 on one attribute, a PostAdd whose value is a
-    /// number times its scale 0.5 on another, and an entry without an attribute, which leaves no record. Each value is
-    /// evaluated once, at apply time, and kept on the modifier object.
+    /// `skill_effects_test.py` `test_effect_values`: a Scale 0.25 on one attribute, a PostAdd on another whose value
+    /// is an attribute (`Pkg.Runtime` there) times its scale 0.5, and an entry without an attribute, which leaves no
+    /// record. The stand-in steps here take 1 for that attribute's value (the loop alone is under test);
+    /// `apply_effects_runs_through_the_evaluator` reads a real attribute for it. Each value is evaluated once, at apply
+    /// time, and kept on the modifier object.
     #[test]
     fn skill_effect_entries_apply_in_order_and_skip_one_without_an_attribute() {
         let (mut w, c) = world();
@@ -1368,6 +1471,136 @@ mod tests {
         );
         assert_eq!(w.get(gun, "InstantHitDamageBaseValue"), Value::Float(20.0));
         assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(21.0));
+    }
+
+    /// Review r1 item 1: entry 2 of 4 fails. The stack modifier entry 0 added is taken off again, entry 1's plain edit
+    /// stays (as in the game), entry 3 never runs, and every modifier the call made is freed.
+    #[test]
+    fn an_error_partway_takes_the_calls_stack_modifiers_back_and_keeps_plain_edits() {
+        let (mut w, c) = world();
+        let gun = weapon(&mut w, &c);
+        w.set(gun, "ReloadCnt", Value::Int(3));
+        let damage = w.property_attribute(&c, "InstantHitDamage");
+        let reload = w.property_attribute(&c, "ReloadCnt");
+        let clip = w.property_attribute(&c, "ClipSize");
+        let steps = TestSteps::new(vec![
+            (damage, Some(gun), gun),
+            (reload, Some(gun), gun),
+            (clip, Some(gun), gun),
+        ]);
+        let mut refused = InitData::constant(1.0);
+        refused.base_value_attribute = Some(clip);
+        let effects = [
+            effect(Some(damage), ModifierType::PostAdd, 1.0),
+            effect(Some(reload), ModifierType::PreAdd, 2.0),
+            EffectData::new(Some(clip), ModifierType::Scale, refused),
+            effect(Some(damage), ModifierType::PostAdd, 5.0),
+        ];
+        let before = w.space.heap.len();
+        let sys = system();
+        let e = apply_with(
+            &sys,
+            &steps,
+            &effects,
+            Some(gun),
+            None,
+            &mut EvalCx::new(&mut w),
+        )
+        .unwrap_err();
+        assert_eq!(not_yet(e), Missing::NotRead);
+        assert_eq!(steps.evaluated.get(), 3, "entry 3 never ran");
+        assert!(w.stack(gun, "InstantHitDamage").is_empty());
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(10.0));
+        assert_eq!(w.get(gun, "ReloadCnt"), Value::Int(5));
+        assert_eq!(w.space.heap.len(), before);
+
+        // An error inside a chain after its first resolver stored the modifier (no record): the cleanup takes it off
+        // the stack through the same chain, whose second resolver fails again. So that one cleanup removal reports the
+        // error, and its modifier is not freed (a stack might still hold it): one object stays allocated.
+        let named = w.resolver(&c, "InstantHitDamage");
+        let unread = w.obj(c.unread, "Unread");
+        let two = w.attribute(&c, &[Some(named), Some(unread)]);
+        let steps = TestSteps::new(vec![(two, Some(gun), gun), (damage, Some(gun), gun)]);
+        let effects = [
+            effect(Some(damage), ModifierType::PostAdd, 1.0),
+            effect(Some(two), ModifierType::PostAdd, 2.0),
+        ];
+        let before = w.space.heap.len();
+        let e = apply_with(
+            &sys,
+            &steps,
+            &effects,
+            Some(gun),
+            None,
+            &mut EvalCx::new(&mut w),
+        )
+        .unwrap_err();
+        assert_eq!(not_yet(e), Missing::NotRead);
+        assert!(w.stack(gun, "InstantHitDamage").is_empty());
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(10.0));
+        assert_eq!(w.space.heap.len(), before + 1);
+    }
+
+    /// Review r1 item 3: every successful add, remove or set-base notifies a notify-flag property, a plain no-op
+    /// remove and an add of an unknown type included (UNVERIFIED, decision 2026-11-15-13).
+    #[test]
+    fn every_success_notifies_the_plain_no_op_included() {
+        let (mut w, c) = world();
+        let pool = w.obj(c.pool, "Pool");
+        w.base(pool, "MaxValue", Value::Float(100.0));
+        w.set(pool, "CurrentValue", Value::Float(40.0));
+        let current = w.property_attribute(&c, "CurrentValue");
+        let odd = w.modifier(&c, 7, 5.0);
+        assert_eq!(
+            add(&mut w, current, Some(pool), odd),
+            AddModifierOutcome::AppliedInPlace
+        );
+        assert_eq!(w.notified.len(), 1);
+        let no_op = remove(&mut w, current, Some(pool), odd);
+        assert_eq!(no_op, RemoveModifierOutcome::PlainNoOp);
+        assert_eq!(w.notified.len(), 2);
+        let same = Notified::PoolCurrentValue {
+            before: 40.0,
+            after: 40.0,
+        };
+        assert_eq!(w.notified[1], (pool, "CurrentValue".to_string(), same));
+        // Suppressed, it does not.
+        let sys = system();
+        let mut cx = EvalCx::new(&mut w);
+        sys.remove_modifier(current, Some(pool), odd, true, &mut cx)
+            .unwrap();
+        assert_eq!(w.notified.len(), 2);
+    }
+
+    /// Review r1 item 4: a record whose removal fails does not stop the others; the first error comes back at the
+    /// end.
+    #[test]
+    fn remove_effects_tries_every_record_and_returns_the_first_error() {
+        let (mut w, c) = world();
+        let gun = weapon(&mut w, &c);
+        let damage = w.property_attribute(&c, "InstantHitDamage");
+        let unread = w.obj(c.unread, "Unread");
+        let odd = w.attribute(&c, &[Some(unread)]);
+        let m = w.modifier(&c, POST, 1.0);
+        let other = w.modifier(&c, POST, 1.0);
+        add(&mut w, damage, Some(gun), m);
+        let record = |attribute, modifier| AppliedEffect {
+            context: gun,
+            attribute,
+            modifier,
+        };
+        let applied = Applied(vec![
+            record(odd, other),
+            record(damage, m),
+            record(odd, other),
+        ]);
+        let sys = system();
+        let e = sys
+            .remove_effects(applied, &mut EvalCx::new(&mut w))
+            .unwrap_err();
+        assert_eq!(not_yet(e), Missing::NotRead);
+        assert!(w.stack(gun, "InstantHitDamage").is_empty());
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(10.0));
     }
 
     #[test]
