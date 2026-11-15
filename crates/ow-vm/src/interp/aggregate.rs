@@ -12,9 +12,11 @@
 //!
 //! **Static arrays** (`array_dim > 1`) are consecutive slots here (decision 2026-11-15-02), not one array value as in
 //! the C++. `A[i]` on a static-array local, property or struct field is the element's own slot or entry; an index
-//! outside `0..dim` is logged (`accessed array out of bounds: <i>`) and reads None, as the C++. A static array used as
-//! a whole (passed, assigned, compared) stays `NotYet`: compiled script uses static arrays only through their
-//! elements as far as read here.
+//! outside `0..dim` is logged (`accessed array out of bounds: <i>`) and reads None, as the C++. A static array read
+//! as a whole gives what the C++ value is, an array of its `dim` elements ([`whole_static`]), and a script callee's
+//! static-array parameter takes such an array one element a slot (`eval::bind_parameter`); that is how compiled
+//! script passes one (decision 2026-11-15-28). Any other whole use (assigned, passed `out`, a parameter given a value
+//! of another shape) stays `NotYet`.
 //!
 //! **Dynamic arrays** follow the C++ cases one for one, the evaluation order included (the array's place, then the
 //! operands, then the array is made an array if it was not one). Elements a heap array gains (`Add`, `Insert`, a
@@ -569,7 +571,7 @@ fn dim_of(d: i32) -> Option<u32> {
 
 /// Whether `e` names a static-array variable or member (read from the declarations, nothing evaluated): a local, an
 /// instance, state or default variable, a struct member, or one of them under `Context` wrappers.
-fn names_static(vm: &mut Vm, f: &Frame, e: &Expr) -> bool {
+pub(crate) fn names_static(vm: &mut Vm, f: &Frame, e: &Expr) -> bool {
     let mut e = e;
     while matches!(e.op, op::CONTEXT | op::CLASS_CONTEXT) {
         match e.kids.get(1) {
@@ -667,6 +669,30 @@ fn static_base_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<A
                 f.path()
             ),
         )),
+    }
+}
+
+/// A static-array variable or member read as a whole (C++ `eval` as `*lval(e)`, the array value of its elements): an
+/// array of its `dim` elements, read in order, taking the place as `lval` takes it (the same steps). Where the C++
+/// gets a scratch value (no object, no such property, a None context), so does this. Decision 2026-11-15-28.
+pub(crate) fn whole_static(
+    vm: &mut Vm,
+    f: &mut Frame,
+    e: &Expr,
+    ctx: Ctx,
+) -> Result<Value, VmError> {
+    match static_base(vm, f, e, ctx)? {
+        ArrayBase::Static(s) => {
+            let mut items = Vec::new();
+            items
+                .try_reserve_exact(s.dim() as usize)
+                .map_err(|_| script_error(f.path(), "cannot allocate a static array's elements"))?;
+            for i in 0..s.dim() {
+                items.push(read(vm, &s.element(i))?);
+            }
+            Ok(Value::array(items))
+        }
+        ArrayBase::Place(p) => read(vm, &p),
     }
 }
 
@@ -1869,11 +1895,8 @@ pub(super) mod tests {
                 .any(|l| l == "accessed array out of bounds: 3")
         );
         assert_eq!(r.on(o, "Core.Foo.Cells", vec![]), int(15));
-        // A static array used as a whole is NotYet.
-        assert!(matches!(
-            r.call("Core.Foo.WholeGrid", Some(o), vec![]),
-            Err(VmError::NotYet(_))
-        ));
+        // A static array read as a whole is the array of its elements, as the C++ value is (decision 28).
+        assert_eq!(r.on(o, "Core.Foo.WholeGrid", vec![]), ints_of(&[0, 7, 0]));
     }
 
     #[test]
@@ -2453,5 +2476,259 @@ pub(super) mod tests {
         }
         assert!(super::depth(&deep) > super::MAX_VALUE_DEPTH);
         assert!(super::check_depth(0, &deep).is_err());
+    }
+
+    // ---- decision 2026-11-15-28: the sweep's cause C gaps, on invented data
+
+    /// A static array passed whole: read as an array of its elements, and spread into the callee's static-array
+    /// parameter, from a property and from a local; another shape for that parameter is `NotYet`.
+    #[test]
+    fn a_static_array_passes_whole_into_a_static_array_parameter() {
+        let mut toy = Toy::new();
+        let foo = toy.foo;
+        let grid = toy.prop_dim("Int", foo, "Grid", 3, &[]);
+        let none = toy.t.none;
+        // TakeGrid(int G[3]) returns G[1] + G[2].
+        let take = toy.script(
+            "TakeGrid",
+            &[Param::new("Int", "G")],
+            Some(("Int", 0)),
+            |ids, a| {
+                let g = ids.get("G");
+                returns(a, |a| {
+                    a.native(146, |a| {
+                        for i in [1, 2] {
+                            element(
+                                a,
+                                0x1A,
+                                |a| {
+                                    a.int_const(i);
+                                },
+                                |a| {
+                                    a.local(g);
+                                },
+                            );
+                        }
+                    });
+                });
+            },
+        );
+        toy.t
+            .p
+            .set_payload(take.get("G"), property_payload(&none, 3, 0x80, &[]));
+        toy.script("PassGrid", &[], Some(("Int", 0)), |_, a| {
+            for (i, v) in [(1, 7), (2, 5)] {
+                let_(
+                    a,
+                    |a| {
+                        element(
+                            a,
+                            0x1A,
+                            |a| {
+                                a.int_const(i);
+                            },
+                            |a| {
+                                a.instance(grid);
+                            },
+                        )
+                    },
+                    |a| {
+                        a.int_const(v);
+                    },
+                );
+            }
+            returns(a, |a| {
+                a.final_function(take.function, |a| {
+                    a.instance(grid);
+                });
+            });
+        });
+        // PassLocal(int L[3]) passes its own static-array parameter on whole.
+        let pass = toy.script(
+            "PassLocal",
+            &[Param::new("Int", "L")],
+            Some(("Int", 0)),
+            |ids, a| {
+                let l = ids.get("L");
+                returns(a, |a| {
+                    a.final_function(take.function, |a| {
+                        a.local(l);
+                    });
+                });
+            },
+        );
+        toy.t
+            .p
+            .set_payload(pass.get("L"), property_payload(&none, 3, 0x80, &[]));
+        // FillGrid(out int F[3]) sets F[2] = 9; from the host (as the sweep calls) its out value is the whole array.
+        let fill = toy.script("FillGrid", &[Param::new("Int", "F")], None, |ids, a| {
+            let f = ids.get("F");
+            let_(
+                a,
+                |a| {
+                    element(
+                        a,
+                        0x1A,
+                        |a| {
+                            a.int_const(2);
+                        },
+                        |a| {
+                            a.local(f);
+                        },
+                    )
+                },
+                |a| {
+                    a.int_const(9);
+                },
+            );
+            a.end();
+        });
+        toy.t.p.set_payload(
+            fill.get("F"),
+            property_payload(&none, 3, 0x80 | CPF_OUT, &[]),
+        );
+        let mut r = toy.run(ParityMode::Off);
+        let o = r.object("Core.Foo");
+        assert_eq!(r.on(o, "Core.Foo.PassGrid", vec![]), int(12));
+        assert_eq!(
+            r.on(o, "Core.Foo.PassLocal", vec![ints_of(&[1, 2, 3])]),
+            int(5)
+        );
+        // A value that is not an array of the parameter's size is NotYet, and leaves no frame behind.
+        for bad in [int(4), ints_of(&[1, 2])] {
+            assert!(matches!(
+                r.call("Core.Foo.TakeGrid", Some(o), vec![bad]),
+                Err(VmError::NotYet(_))
+            ));
+        }
+        assert_eq!(r.on(o, "Core.Foo.PassGrid", vec![]), int(12));
+        let filled = r
+            .call("Core.Foo.FillGrid", Some(o), vec![ints_of(&[1, 2, 3])])
+            .unwrap();
+        assert_eq!(filled.outs, vec![ints_of(&[1, 2, 9])]);
+    }
+
+    /// A `None` given by value to a native's struct parameter (here an element read past the end of an empty dynamic
+    /// array) reaches the native as the struct's zero; a script callee keeps the `None`.
+    #[test]
+    fn a_none_given_to_a_natives_struct_parameter_is_the_zero_struct() {
+        let mut toy = Toy::new();
+        let foo = toy.foo;
+        let vec = toy.structure(
+            "Vec",
+            &[("Float", "X", 1), ("Float", "Y", 1), ("Float", "Z", 1)],
+        );
+        let vecs = toy_array_of(&mut toy.t, foo, "Vecs", "Struct", vec);
+        let v = Param {
+            type_ref: vec,
+            ..Param::new("Struct", "V")
+        };
+        let native = toy.native(
+            foo,
+            "EchoVec",
+            std::slice::from_ref(&v),
+            Some(("Struct", vec)),
+            0,
+        );
+        let script = toy.script(
+            "ScriptVec",
+            std::slice::from_ref(&v),
+            Some(("Struct", vec)),
+            |ids, a| {
+                returns(a, |a| {
+                    a.local(ids.get("V"));
+                });
+            },
+        );
+        let past_end = |a: &mut Asm| {
+            element(
+                a,
+                0x10,
+                |a| {
+                    a.int_const(0);
+                },
+                |a| {
+                    a.instance(vecs);
+                },
+            );
+        };
+        toy.script("ToNative", &[], Some(("Struct", vec)), |_, a| {
+            returns(a, |a| {
+                a.final_function(native.function, past_end);
+            });
+        });
+        toy.script("ToScript", &[], Some(("Struct", vec)), |_, a| {
+            returns(a, |a| {
+                a.final_function(script.function, past_end);
+            });
+        });
+        let mut r = toy.run(ParityMode::Off);
+        let o = r.object("Core.Foo");
+        let id = r.vm.find_function("Core.Foo.EchoVec").unwrap();
+        let key = r.vm.function(id).unwrap().native_key.clone().unwrap();
+        r.vm.register_native(
+            &key,
+            Rc::new(|c: &mut NativeCall<'_>| Ok(c.arg(0)?.clone())),
+        )
+        .unwrap();
+        let zero = {
+            let classes = &r.vm.space.classes;
+            let s = classes.struct_by_path("Core.Object.Vec").unwrap();
+            classes.zero_value(&ow_object::layout::PropKind::Struct(s))
+        };
+        assert!(zero.as_struct().is_some());
+        assert_eq!(r.on(o, "Core.Foo.ToNative", vec![]), zero);
+        assert!(
+            r.vm.log
+                .iter()
+                .any(|l| l == "accessed array out of bounds: 0"),
+            "{:?}",
+            r.vm.log
+        );
+        assert_eq!(r.on(o, "Core.Foo.ToScript", vec![]), Value::None);
+        // From the host the argument is as given.
+        assert_eq!(
+            r.call("Core.Foo.EchoVec", Some(o), vec![Value::None])
+                .unwrap()
+                .ret,
+            Value::None
+        );
+    }
+
+    /// A byte stored into an int slot of the heap is the int of the same number (the C++ keeps both kinds in one
+    /// integer field), here added to an `array<int>`. The rule is that narrow: a byte for an `array<float>` is still refused.
+    #[test]
+    fn a_byte_stored_into_an_int_slot_is_that_int() {
+        let mut toy = Toy::new();
+        let foo = toy.foo;
+        let nums = toy.array_prop(foo, "Nums", "Int");
+        let reals = toy.array_prop(foo, "Reals", "Float");
+        let add = |array: i32| {
+            move |_: &FunctionIds, a: &mut Asm| {
+                stmt(a, |a| {
+                    add_item(
+                        a,
+                        |a| {
+                            a.instance(array);
+                        },
+                        |a| {
+                            a.byte_const(200);
+                        },
+                    )
+                });
+                a.end();
+            }
+        };
+        toy.script("AddByte", &[], None, add(nums));
+        toy.script("AddByteReal", &[], None, add(reals));
+        let mut r = toy.run(ParityMode::Off);
+        let o = r.object("Core.Foo");
+        r.on(o, "Core.Foo.AddByte", vec![]);
+        assert_eq!(r.prop(o, "Nums", 0), ints_of(&[200]));
+        assert!(matches!(
+            r.call("Core.Foo.AddByteReal", Some(o), vec![]),
+            Err(VmError::Heap(_))
+        ));
+        assert_eq!(r.prop(o, "Reals", 0), Value::array(Vec::new()));
     }
 }

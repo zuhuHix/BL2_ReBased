@@ -363,7 +363,16 @@ fn release_unreferenced(vm: &mut Vm, root: ow_object::ids::ClassId) {
         .collect();
     // Every handle is current and listed once (`Heap::live`), so the free is not refused; if it were, the objects
     // would stay, as before this rule, and the sweep would go on.
-    let _ = vm.space.free_many(&freed);
+    if vm.space.free_many(&freed).is_ok() {
+        // A freed object's state frame is dropped too (decision 2026-11-15-27: every path that frees objects calls
+        // `states::forget`). It fails only while the state machine is borrowed, which no sweep code holds here; a
+        // frame left behind is never read again (its handle is stale), it only holds memory.
+        for &o in &freed {
+            if crate::states::forget(vm, o).is_err() {
+                break;
+            }
+        }
+    }
 }
 
 /// Every object `v` references (inside structs and arrays too), once per reference.
