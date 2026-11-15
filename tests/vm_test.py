@@ -143,7 +143,13 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
         ordered = [(result_kind, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET) for result_kind in ([result] if result else [])] + children
         func_index = first_child + len(ordered)
         for kind, pname, flags_ in ordered:
-            ids[pname] = prop(kind + 'Property', func_index, pname, flags_, type_ref=result_ref if pname == 'ReturnValue' else None)
+            ref = result_ref if pname == 'ReturnValue' else None
+            # An object property names its class first, a class property its metaclass second (the first word is the
+            # Class class, as in UE3): both are the fixture's Object class unless the caller gives one.
+            tail = None
+            if kind == 'Object' and ref is None: ref = obj
+            if kind == 'Class': tail = w32(imp['Class'], ref or obj)
+            ids[pname] = prop(kind + 'Property', func_index, pname, flags_, type_ref=ref, tail=tail)
         asm = asm_fn(ids) if asm_fn else None
         script = bytes(asm.b) if asm else b''
         memory = (len(script) + 4 * asm.refs) if asm else 0
@@ -350,7 +356,7 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
         original = p.exports[result_slot]
         p.exports[result_slot] = (*original[:4], original[4] + w32(enum))
         panel = p.add_export(imp['Class'], 'InventoryListPanelGFxObject', w32(0) * 4, super_ref=obj)
-        data = prop('ObjectProperty', panel, 'DataProvider')
+        data = prop('ObjectProperty', panel, 'DataProvider', type_ref=provider)
         native('Sub_IntInt', '-', 147, ['Int', 'Int'], 'Int')
         def movement(ids):
             a = Asm(); a.stmt(); a.raw(0x04); a.raw(147); a.raw(146)
@@ -418,7 +424,7 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
     def attribute(name, kind, owner=foo):
         first = len(p.exports) + 1                                   # stack's element property, then stack, base, value
         stack, base, value = first + 1, first + 2, first + 3
-        prop('ObjectProperty', stack, name + 'ModifierStack_Element')
+        prop('ObjectProperty', stack, name + 'ModifierStack_Element', type_ref=mod)
         prop('ArrayProperty', owner, name + 'ModifierStack', type_ref=first)
         prop(kind, owner, name + 'BaseValue', 1 << 62, tail=w32(0, value))
         prop(kind, owner, name, 1 << 63, tail=w32(stack, base))
