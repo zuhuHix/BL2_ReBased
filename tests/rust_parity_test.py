@@ -231,6 +231,29 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("stdout differs: line 1: C++ 'cxx-only', Rust 'rust-only'", out)
 
+    def test_crlf_reads_as_lf_and_nothing_else_is_normalised(self):
+        # The MSVC build writes text-mode CRLF, the Rust binary LF (maintainer's decision, 2026-11-15). A lone CR,
+        # or CRLF against nothing, still differs.
+        def pair(cxx_bytes, rust_bytes, stream='stdout'):
+            for binary, data in ((self.cxx, cxx_bytes), (self.rust, rust_bytes)):
+                binary.write_text('import sys\n'
+                                  f'sys.stdout.buffer.write({(data if stream == "stdout" else b"out")!r})\n'
+                                  f'sys.stderr.buffer.write({(data if stream == "stderr" else b"")!r})\n',
+                                  encoding='utf-8')
+        cases = [(b'a\r\nb\r\n', b'a\nb\n', 'stdout', 'PASS'),
+                 (b'a\r\nb', b'a\nb', 'stdout', 'PASS'),
+                 (b'a\rb\n', b'a\nb\n', 'stdout', 'FAIL'),
+                 (b'a\r\n', b'a', 'stdout', 'FAIL'),
+                 (b'e\r\n', b'e\n', 'stderr', 'PASS'),
+                 (b'e\r\r\n', b'e\n', 'stderr', 'FAIL')]
+        for cxx_bytes, rust_bytes, stream, want in cases:
+            with self.subTest(cxx=cxx_bytes, rust=rust_bytes, stream=stream):
+                pair(cxx_bytes, rust_bytes, stream)
+                self.write('d.txt', 'diff x stderr\n' if stream == 'stderr' else 'diff x\n')
+                code, out, _ = self.runner()
+                self.assertEqual(self.verdicts(out), {'d.txt:1': want}, out)
+                self.assertEqual(code, 0 if want == 'PASS' else 1, out)
+
     def test_an_expected_error_needs_the_exit_marker(self):
         # Review r2's probe: once the usage text is ported, both binaries exit 1 with the same usage on stderr, so
         # `stderr` alone must not let a mistyped flag pass. Only exit=N with the C++ exit code does.

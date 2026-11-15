@@ -16,8 +16,9 @@ Manifest lines (files are read in name order; blank lines and lines starting wit
                      binary's path. It runs from the repository root and passes when it exits 0 and its output
                      reports no skipped unittest case (`skipped=N`, `OK (skipped`).
   diff <args>        `ow-package` arguments. They run on the C++ binary (--cxx) and on the Rust binary (--bin); the
-                     line passes when stdout (bytes) and the exit code are equal, and the C++ binary wrote something
-                     (stdout or stderr). An expected error says so: when the C++ binary exits non-zero the line needs
+                     line passes when stdout (bytes, each CRLF read as LF: the MSVC build writes text-mode CRLF on
+                     Windows, the Rust binary LF; no other byte is normalised) and the exit code are equal, and the
+                     C++ binary wrote something (stdout or stderr). An expected error says so: when the C++ binary exits non-zero the line needs
                      `exit=N` with N its exit code, and the C++ stderr must not be empty. A line whose C++ stdout is
                      empty needs `stderr`. (Commands that print nothing belong in test-command lines.)
 
@@ -220,6 +221,12 @@ def shorten(data):
     return text if len(text) <= SHOWN_CHARS else text[:SHOWN_CHARS] + '...'
 
 
+def lf(data):
+    """The bytes with every CRLF read as LF: the MSVC build writes text-mode CRLF on Windows, the Rust binary writes
+    LF everywhere (maintainer's decision, 2026-11-15). Nothing else is normalised: a lone CR still counts."""
+    return data.replace(b'\r\n', b'\n')
+
+
 def first_difference(cxx, rust):
     """Says where two byte strings first differ, by line (line endings count; they are not shown)."""
     a, b = cxx.splitlines(keepends=True), rust.splitlines(keepends=True)
@@ -260,10 +267,10 @@ def run_diff_line(line, binary, cxx, timeout, repo):
         return reasons
     if c_code != r_code:
         reasons.append(f'exit code: C++ {c_code}, Rust {r_code}')
-    if c_out != r_out:
-        reasons.append(f'stdout differs: {first_difference(c_out, r_out)}')
-    if line.stderr and c_err != r_err:
-        reasons.append(f'stderr differs: {first_difference(c_err, r_err)}')
+    if lf(c_out) != lf(r_out):
+        reasons.append(f'stdout differs: {first_difference(lf(c_out), lf(r_out))}')
+    if line.stderr and lf(c_err) != lf(r_err):
+        reasons.append(f'stderr differs: {first_difference(lf(c_err), lf(r_err))}')
     # Rules against vacuous passes: two binaries that print nothing, or that refuse the arguments the same way,
     # agree on everything a diff compares. A line must show output, and an error must be the one it expects.
     if not c_out and not c_err:
