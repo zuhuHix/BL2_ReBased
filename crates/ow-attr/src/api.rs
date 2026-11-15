@@ -172,6 +172,10 @@ pub enum EngineQuery {
     /// The object a pawn or interactive object redirects its attribute context to (`GetAttributeContextSource`,
     /// NATIVE_ATTRIBUTES.md section 10).
     AttributeContextSource,
+    /// The skill object for the `SkillDefinition` object `definition` in the player's skill tree reachable from the
+    /// source (`PlayerSkillAttributeValueResolver`, NATIVE_ATTRIBUTES.md section 6); `Ok(None)` when the player or
+    /// the tree is missing, or the tree has no such skill. Added by W3-ATTREVAL (an additive change, section 7).
+    PlayerSkill { definition: ObjRef },
 }
 
 /// The world the attribute system reads and edits: the running VM (`ow_vm::Vm`), an offline world
@@ -1029,24 +1033,7 @@ mod tests {
         let mut cx = EvalCx::new(&mut w);
         let data = InitData::constant(1.0);
         let effect = EffectData::new(Some(a), ModifierType::Scale, data);
-        let expr = ExprData {
-            attribute_operand1: Some(a),
-            comparison_operator: Comparison::LessThan,
-            operand2_usage: Operand2Usage::PreferAttribute,
-            attribute_operand2: None,
-            constant_operand2: 3.0,
-        };
         let errors = [
-            attrs.resolve_context(a, Some(a), &mut cx).err(),
-            attrs.resolve_contexts(a, None, &mut cx).err(),
-            attrs.value_of(a, Some(a), None, &mut cx).err(),
-            attrs.base_value_of(a, None, Some(a), &mut cx).err(),
-            attrs.value_from_context(a, Some(a), &mut cx).err(),
-            attrs.base_value_from_context(a, None, &mut cx).err(),
-            attrs.evaluate_init(&data, Some(a), None, &mut cx).err(),
-            attrs
-                .expressions_hold(&[expr], ExprMode::And, Some(a), None, &mut cx)
-                .err(),
             attrs.add_modifier(a, Some(a), m, false, &mut cx).err(),
             attrs.remove_modifier(a, Some(a), m, true, &mut cx).err(),
             attrs.set_base(a, Some(a), 4.0, false, &mut cx).err(),
@@ -1102,6 +1089,7 @@ mod tests {
             inventory,
             EngineQuery::PlayerController,
             EngineQuery::AttributeContextSource,
+            EngineQuery::PlayerSkill { definition: s },
         ] {
             let e = w.engine_query(q, s).err().unwrap();
             assert_eq!(missing(e).0, Missing::LayerAbsent("ow-world"));

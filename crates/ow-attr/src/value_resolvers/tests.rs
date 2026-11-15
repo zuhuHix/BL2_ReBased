@@ -1099,14 +1099,7 @@ fn the_conditional_takes_the_first_entry_that_holds() {
 fn resolvers_without_their_layer_or_rule_say_what_is_missing() {
     let mut fx = Fx::new();
     let ctx = fx.no_context();
-    let cases: [(&str, Vec<(&str, Value)>, Missing); 4] = [
-        (
-            "WillowGame.PlayerSkillAttributeValueResolver",
-            vec![],
-            Missing::LayerAbsent(
-                "an engine query for the player's skill tree (ow-world / ow-skills)",
-            ),
-        ),
+    let cases: [(&str, Vec<(&str, Value)>, Missing); 3] = [
         (
             "WillowGame.ResourcePoolStateAttributeValueResolver",
             vec![("PoolState", Value::Byte(1))],
@@ -1267,4 +1260,43 @@ fn standard_registers_every_value_resolver_class() {
         let o = space.alloc(c, "R", None, Origin::Runtime).unwrap();
         assert!(sys.value_resolver(&space, o).is_ok(), "{path}");
     }
+}
+
+/// A PlayerSkill attribute on the player controller `pc` for the skill definition `definition`.
+fn player_skill_attr(fx: &mut Fx, pc: ObjRef, definition: Option<ObjRef>) -> ObjRef {
+    let c = fx.by_path("WillowGame.PlayerSkillAttributeValueResolver");
+    let r = fx.obj(
+        c,
+        "Skill",
+        vec![("AssociatedSkill", Value::Object(definition))],
+    );
+    let ctx = fx.target(Some(pc));
+    fx.attr("SkillGrade", vec![ctx], vec![r])
+}
+
+#[test]
+fn player_skill_reads_the_grade_through_the_typed_engine_query() {
+    let mut fx = Fx::new();
+    let pc = fx.obj(fx.c.controller, "PC", vec![]);
+    let definition = fx.obj(fx.c.object, "SkillDef", vec![]);
+    let other = fx.obj(fx.c.object, "OtherDef", vec![]);
+    let skill = fx.obj(fx.c.skill, "Skill", vec![("Grade", Value::Int(3))]);
+    let attr = player_skill_attr(&mut fx, pc, Some(definition));
+    let sys = system();
+    // A world with no engine side: the query's own NotYet, never a guessed 0.
+    let e = sys
+        .value_of(attr, None, None, &mut EvalCx::new(&mut fx.w))
+        .unwrap_err();
+    assert_eq!(missing(e), Missing::LayerAbsent("ow-world"));
+    // The world answers: the skill's Grade; no such skill in the tree: 0.
+    fx.w.skills = Some(vec![(definition, Some(skill)), (other, None)]);
+    assert_eq!(value_of(&mut fx, attr, None, None), Some((pc, 3.0)));
+    let attr_other = player_skill_attr(&mut fx, pc, Some(other));
+    assert_eq!(value_of(&mut fx, attr_other, None, None), Some((pc, 0.0)));
+    // A resolver naming no skill is not read.
+    let none = player_skill_attr(&mut fx, pc, None);
+    let e = sys
+        .value_of(none, None, None, &mut EvalCx::new(&mut fx.w))
+        .unwrap_err();
+    assert_eq!(missing(e), Missing::NotRead);
 }
