@@ -110,8 +110,8 @@ class RegistryRustTest(unittest.TestCase):
         cxx_registry, cxx_census = self.tool_files(self.cxx_out)
         rust_registry, rust_census = self.tool_files(out)
         self.assertEqual(cxx_registry, rust_registry)
-        # The scan error's text is the reader's stderr, compared in its own test below.
-        self.assertEqual(kept(cxx_census, False), kept(rust_census, False))
+        # The scan error's text is the reader's stderr, so this also checks that both readers print the same line.
+        self.assertEqual(kept(cxx_census), kept(rust_census))
 
     def exports(self, binary):
         """(exit code, stderr line) of `--exports` on the file that is not a package."""
