@@ -322,7 +322,8 @@ impl GameRng {
     pub fn crt(&mut self, s: CrtStream) -> &mut CrtRand;
     pub fn script(&mut self, s: ScriptStream) -> &mut dyn ScriptRng;   // CrtRand, or VmLcg(12345)/VmLcg(54321) under Reference
 }
-pub fn frand_f64(r: &mut dyn Rand15) -> f64;       // rand15 / 32767 in double (weapon_recipe's form)
+pub fn frand_f64(r: &mut dyn Rand15) -> f64;       // rand15 / 32767 in double: the listed-pool probability draw (weapon_gen.cpp:1676)
+pub fn weighted_draw(r: &mut dyn Rand15, total: f64) -> f64;  // total * rand15 / 32767, left to right: every weighted pick (weapon_gen.cpp:757)
 pub fn frand_f32(r: &mut dyn Rand15) -> f32;       // the same in single; each rule names which its oracle uses
 // HostRng (cosmetic randomness: particles, sound variation) lives in ow-host, which no game crate may depend on.
 
