@@ -17,8 +17,8 @@ use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
 
 use crate::api::{
-    AttrError, AttrWorld, Comparison, ContextResolver, EvalCx, GlobalSlots, InitData, NumForms,
-    Operand2Usage, WorldParts,
+    AttrError, AttrWorld, Comparison, ContextResolver, EngineQuery, EvalCx, GlobalSlots, InitData,
+    NumForms, Operand2Usage, WorldParts,
 };
 use crate::eval::{name, object, property, required};
 use crate::registry::AttributeSystem;
@@ -33,6 +33,9 @@ pub(crate) struct World {
     pub rng: Option<CrtRand>,
     pub slots: GlobalSlots,
     pub streams: Vec<CrtStream>,
+    /// Answers to `EngineQuery::PlayerSkill` by skill definition; `None` here: the query is not modelled (the
+    /// trait's default `LayerAbsent`).
+    pub skills: Option<Vec<(ObjRef, Option<ObjRef>)>>,
 }
 
 impl AttrWorld for World {
@@ -44,6 +47,24 @@ impl AttrWorld for World {
     }
     fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
         Ok(None)
+    }
+    fn engine_query(
+        &mut self,
+        q: EngineQuery,
+        source: ObjRef,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        match (q, self.skills.as_ref()) {
+            (EngineQuery::PlayerSkill { definition }, Some(skills)) => Ok(skills
+                .iter()
+                .find(|(d, _)| *d == definition)
+                .and_then(|(_, s)| *s)),
+            _ => Err(NotYet::layer_absent(
+                format!("engine query {q:?} from {source:?}"),
+                "ow-world",
+                "test world",
+            )
+            .into()),
+        }
     }
     fn global_slots(&mut self) -> &mut GlobalSlots {
         &mut self.slots
@@ -158,6 +179,7 @@ pub(crate) struct Classes {
     pub maker: ClassId,
     pub weapon_type: ClassId,
     pub designer: ClassId,
+    pub skill: ClassId,
     pub unread: ClassId,
 }
 
@@ -493,6 +515,11 @@ impl Fx {
             .classes
             .define("Test.WeaponTypeDefinition", Some(object), decls)
             .unwrap();
+        let decls = vec![plain(&mut space, "Grade", PropKind::IntAttribute)];
+        let skill = space
+            .classes
+            .define("Test.Skill", Some(object), decls)
+            .unwrap();
         let decls = vec![plain(&mut space, "Value", PropKind::FloatAttribute)];
         let designer = space
             .classes
@@ -509,6 +536,7 @@ impl Fx {
             rng: Some(CrtRand::new(1)),
             slots: GlobalSlots::default(),
             streams: Vec::new(),
+            skills: None,
         };
         let c = Classes {
             object,
@@ -532,6 +560,7 @@ impl Fx {
             maker,
             weapon_type,
             designer,
+            skill,
             unread,
         };
         Fx { w, c }

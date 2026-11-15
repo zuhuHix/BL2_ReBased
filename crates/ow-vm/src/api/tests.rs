@@ -12,7 +12,7 @@ use ow_core::rand::{CrtStream, GameRng, Rand15, ScriptStream};
 use ow_core::{Missing, NotYet, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_object::heap::{ObjectSpace, Origin};
-use ow_object::ids::{ClassId, ObjRef, PropId};
+use ow_object::ids::{ClassId, ObjRef, PropAddr, PropId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
 
@@ -295,9 +295,43 @@ fn a_service_borrowed_across_a_nested_call_is_refused() {
 #[test]
 fn the_attribute_system_is_called_from_inside_a_native() {
     let mut fx = fixture(ParityMode::Off);
-    let pool = fx.pool;
+    let object = fx.object;
     let vm = &mut fx.vm;
-    let attr = vm.instantiate(pool, "Attr").unwrap();
+    vm.attrs = Rc::new(AttributeSystem::standard().unwrap());
+    // A synthetic attribute definition (invented values, rule 9): a constant value resolver, and an empty context
+    // chain, which resolves no context (NATIVE_ATTRIBUTES.md section 1).
+    let objects = PropKind::Array(Box::new(PropKind::Object { class: object }));
+    let chains = ["ContextResolverChain", "ValueResolverChain"]
+        .map(|n| PropertyDecl::new(vm.space.names.intern(n), objects.clone()));
+    let definition = vm
+        .space
+        .classes
+        .define("Engine.AttributeDefinition", Some(object), chains.to_vec())
+        .unwrap();
+    let constant_value = PropertyDecl::new(vm.space.names.intern("ConstantValue"), PropKind::Float);
+    let constant = vm
+        .space
+        .classes
+        .define(
+            "GearboxFramework.ConstantAttributeValueResolver",
+            Some(object),
+            vec![constant_value],
+        )
+        .unwrap();
+    let resolver = vm
+        .space
+        .alloc(constant, "Constant", None, Origin::Runtime)
+        .unwrap();
+    let at = |vm: &Vm, c: ClassId, n: &str| PropAddr::scalar(vm.space.prop(c, n).unwrap());
+    let addr = at(vm, constant, "ConstantValue");
+    vm.space.write(resolver, addr, Value::Float(2.5)).unwrap();
+    let attr = vm
+        .space
+        .alloc(definition, "Att_Test", None, Origin::Runtime)
+        .unwrap();
+    let addr = at(vm, definition, "ValueResolverChain");
+    let chain = Value::array(vec![Value::Object(Some(resolver))]);
+    vm.space.write(attr, addr, chain).unwrap();
     let r = ret(vm, PropKind::Float);
     let f = vm
         .declare_function(
@@ -309,19 +343,15 @@ fn the_attribute_system_is_called_from_inside_a_native() {
         native(move |c| {
             // The clone-the-Rc pattern: no borrow of c.vm.attrs is live while the VM is lent.
             let attrs = c.vm.attrs.clone();
-            let got = attrs.value_of(attr, Some(attr), None, &mut EvalCx::new(c.vm))?;
-            Ok(Value::Float(got.map_or(0.0, |v| v.value)))
+            let mut cx = EvalCx::new(c.vm);
+            // GetValue resolves no context through the empty chain; the value chain on a given context runs.
+            assert_eq!(attrs.value_of(attr, Some(attr), None, &mut cx)?, None);
+            let got = attrs.value_from_context(attr, Some(attr), &mut cx)?;
+            Ok(Value::Float(got))
         }),
     )
     .unwrap();
-    // The empty system evaluates nothing yet; its NotYet arrives as the VM's NotYet through `?`.
-    assert!(matches!(
-        vm.call(f, None, vec![]),
-        Err(VmError::NotYet(NotYet {
-            missing: Missing::NotPorted,
-            ..
-        }))
-    ));
+    assert_eq!(vm.call(f, None, vec![]).unwrap().ret, Value::Float(2.5));
 }
 
 #[test]
