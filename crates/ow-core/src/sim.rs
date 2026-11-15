@@ -12,20 +12,31 @@
 //! Status: UNVERIFIED as a whole. `NATIVE_ENGINE_CORE.md` records that `WorldInfo.TimeSeconds` advances with the
 //! dilated delta and `RealTimeSeconds` with wall time, but where and by what formula the world advances them, and
 //! where the world's `TimeDilation` and an actor's `CustomTimeDilation` enter an actor's tick delta, were not located
-//! ("Not read yet", and the Open item of "Actor timers"). [`SimClock::advance`] follows the public UE3 convention
-//! (world delta = real delta times `TimeDilation`, one f32 multiply; `TimeSeconds` summed in f32) as a placeholder.
+//! ("Not read yet", and the Open item of "Actor timers"). [`SimClock::advance`] is a placeholder modelled on public
+//! UE3 engine behaviour, not on anything read from this game: world delta = real delta times `TimeDilation` (one f32
+//! multiply), `TimeSeconds` summed in f32. Two things it leaves out are open: public UE3 clamps the dilated delta to
+//! a minimum and maximum frame time after dilation, and pause stops `TimeSeconds` by a route not read here. Whether
+//! and how this game does either is UNVERIFIED; the settling read is a bl-sdk capture of `TimeSeconds`,
+//! `RealTimeSeconds` and the frame's `DeltaSeconds` per frame under `slomo 0` and while paused.
 //! `CustomTimeDilation` is per actor and is not applied here.
+//!
+//! The clock's dilation is a copy: the authoritative value is the heap's `WorldInfo.TimeDilation`, which script,
+//! Kismet, the console and mods can write. The world (W5-WORLD) copies it into the clock with
+//! [`SimClock::set_time_dilation`] before each tick, so there is one source of truth.
 
 /// The default simulation step, 1/60 s (decision D13). Callers pass it to [`SimClock::advance`]; a golden replay
 /// passes its recorded deltas instead.
 pub const DEFAULT_STEP_SECONDS: f32 = 1.0 / 60.0;
 
 /// What one [`SimClock::advance`] produced.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Step {
     /// The world delta of this step in seconds: the real delta times the time dilation, in f32. Status: UNVERIFIED
     /// (see the module comment).
     pub dt: f32,
+    /// The undilated delta the step was given.
+    pub real_dt: f32,
     /// The number of this step, counting from 1 (the first `advance` returns 1). Equals [`SimClock::tick`] after
     /// the call.
     pub tick: u64,
@@ -88,6 +99,7 @@ impl SimClock {
         self.time_f64 += f64::from(dt);
         Step {
             dt,
+            real_dt,
             tick: self.tick,
         }
     }
@@ -117,28 +129,55 @@ impl SimClock {
         self.time_dilation
     }
 
-    /// Sets the world's time dilation for the following steps. 0.0 stops game time while real time runs on. No
-    /// lower or upper clamp is applied: any clamp the game's script or engine applies (for example in the game-speed
-    /// function) was not read and belongs to its caller. Status: UNVERIFIED (where the game applies it).
+    /// Sets the world's time dilation for the following steps, copied from the heap's `WorldInfo.TimeDilation` (the
+    /// authoritative value; see the module comment). At 0.0 this placeholder gives a zero world delta; whether the
+    /// game clamps the dilated delta afterwards is UNVERIFIED. No clamp is applied to `d`: any clamp the game's
+    /// script or engine applies (for example in the game-speed function) was not read and belongs to its caller.
     ///
-    /// # Panics
-    ///
-    /// If `d` is negative, NaN or infinite.
-    pub fn set_time_dilation(&mut self, d: f32) {
-        assert!(
-            d.is_finite() && d >= 0.0,
-            "SimClock::set_time_dilation: the dilation must be finite and not negative, got {d}"
-        );
+    /// Script, Kismet, the console or a mod can write any float into `WorldInfo.TimeDilation`, so a bad value is a
+    /// runtime case, not a caller bug: a negative, NaN or infinite `d` is refused with [`ClockError`] and the clock
+    /// keeps its previous dilation. Whether the game itself guards against such values is UNVERIFIED.
+    pub fn set_time_dilation(&mut self, d: f32) -> Result<(), ClockError> {
+        if !(d.is_finite() && d >= 0.0) {
+            return Err(ClockError::BadTimeDilation(d));
+        }
         self.time_dilation = d;
+        Ok(())
     }
 }
+
+/// A value the clock refuses.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClockError {
+    /// A time dilation that is negative, NaN or infinite.
+    BadTimeDilation(f32),
+}
+
+impl std::fmt::Display for ClockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClockError::BadTimeDilation(d) => {
+                write!(f, "time dilation must be finite and not negative, got {d}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ClockError {}
 
 /// The game's tick groups, `Object.ETickingGroup` in this build's `Core.upk`: five groups plus `TG_MAX`, which is a
 /// count, not a group. The variants are declared in the enum's order, so `Ord` and [`TickGroup::index`] follow it.
 ///
-/// Status: the names, their number and their order are read from the installed `Core.upk` (the enum's name list,
-/// 2026-11-15). That a frame runs the groups in this order, and what each group contains, is the public UE3
-/// convention and was not read from the executable: UNVERIFIED.
+/// Status: the names, their number and their values are read from the installed `Core.upk` (2026-11-15). The
+/// package's name table is alphabetical and says nothing about order; the values come from the enum export itself.
+/// `ow-package Core.upk --exports` gives `Object.ETickingGroup` as export 119 (class `Core.Enum`), and
+/// `ow-package Core.upk --payload 119` gives its bytes, read with the enum layout the C++ reader already uses
+/// (`src/vm.cpp:739`: net index, `None`, next, count, then one name per value, a value's number being its
+/// position). The count is 6 and the names in position order are TG_PreAsyncWork (0), TG_DuringAsyncWork (1),
+/// TG_PostAsyncWork (2), TG_PostUpdateWork (3), TG_EffectsUpdateWork (4), TG_MAX (5). (`--object-dump` refuses an
+/// enum export and `--disasm` needs a function, so neither could show it.) That a frame runs the groups in value
+/// order, and what each group contains, was not read from the executable: UNVERIFIED.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TickGroup {
@@ -273,19 +312,19 @@ mod tests {
     #[test]
     fn time_dilation_scales_the_step_and_not_real_time() {
         let mut c = SimClock::new_empty();
-        c.set_time_dilation(0.5);
+        c.set_time_dilation(0.5).unwrap();
         let s = c.advance(0.1);
         assert_eq!(s.dt.to_bits(), (0.1f32 * 0.5f32).to_bits());
         assert_eq!(c.time_seconds().to_bits(), (0.1f32 * 0.5f32).to_bits());
         assert_eq!(c.real_time_seconds().to_bits(), 0.1f32.to_bits());
 
-        c.set_time_dilation(0.0);
+        c.set_time_dilation(0.0).unwrap();
         let s = c.advance(0.1);
         assert_eq!(s.dt, 0.0);
         assert_eq!(c.time_seconds().to_bits(), (0.1f32 * 0.5f32).to_bits());
         assert_eq!(c.real_time_seconds().to_bits(), (0.1f32 + 0.1f32).to_bits());
 
-        c.set_time_dilation(2.0);
+        c.set_time_dilation(2.0).unwrap();
         assert_eq!(c.advance(0.25).dt, 0.5);
         assert_eq!(c.time_dilation(), 2.0);
     }
@@ -303,7 +342,7 @@ mod tests {
             let mut steps = Vec::new();
             for (i, &dt) in DTS.iter().enumerate() {
                 if let Some(d) = dilation_at(i) {
-                    c.set_time_dilation(d);
+                    c.set_time_dilation(d).unwrap();
                 }
                 steps.push(c.advance(dt));
             }
@@ -314,7 +353,7 @@ mod tests {
         assert_eq!(bits(&a), bits(&b));
         let step_bits = |s: &[Step]| {
             s.iter()
-                .map(|s| (s.dt.to_bits(), s.tick))
+                .map(|s| (s.dt.to_bits(), s.real_dt.to_bits(), s.tick))
                 .collect::<Vec<_>>()
         };
         assert_eq!(step_bits(&sa), step_bits(&sb));
@@ -345,9 +384,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "finite and not negative")]
-    fn infinite_dilation_is_refused() {
-        SimClock::new_empty().set_time_dilation(f32::INFINITY);
+    fn bad_dilation_is_refused_and_the_old_value_kept() {
+        let mut c = SimClock::new_empty();
+        c.set_time_dilation(0.5).unwrap();
+        for bad in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, -0.5] {
+            let err = c.set_time_dilation(bad).unwrap_err();
+            assert!(matches!(err, ClockError::BadTimeDilation(d) if d.to_bits() == bad.to_bits()));
+            assert!(err.to_string().contains("finite and not negative"));
+            assert_eq!(c.time_dilation(), 0.5);
+        }
+    }
+
+    #[test]
+    fn step_carries_the_undilated_delta() {
+        let mut c = SimClock::new_empty();
+        c.set_time_dilation(0.25).unwrap();
+        let s = c.advance(0.2);
+        assert_eq!(s.real_dt.to_bits(), 0.2f32.to_bits());
+        assert_eq!(s.dt.to_bits(), (0.2f32 * 0.25f32).to_bits());
     }
 
     #[test]

@@ -337,7 +337,7 @@ impl SimClock {
                                                        // (NATIVE_ENGINE_CORE.md, Open): the dilated dt is UNVERIFIED
     pub fn time_seconds(&self) -> f32;  pub fn set_time_dilation(&mut self, d: f32);
 }
-pub enum TickGroup { PreAsyncWork, DuringAsyncWork, PostAsyncWork, PostUpdateWork }
+pub enum TickGroup { PreAsyncWork, DuringAsyncWork, PostAsyncWork, PostUpdateWork, EffectsUpdateWork }  // Core.upk Object.ETickingGroup values 0-4 (TG_MAX = 5)
 ```
 
 ### 3.2 `ow-container`, `ow-package`
