@@ -12,12 +12,18 @@ from the data; no closed form is coded. This file records the choices a later la
     `ow-balance` uses them instead of a copy. Only `is_a` and an optional `field_opt` stay in `offline/data.rs`.
   - The `ow-balance` block of `docs/rust-port/ARCHITECTURE.md` section 3.6 now holds the shipped signatures.
 - **The shipped signatures** differ from the revision 3 sketch:
-  - `region_game_stage(sys, cx, globals_definition, &mut RegionStages, &RegionQuery)`. `RegionQuery` holds the
-    region, the playthrough, the local player pawn's level (`None`: the minimum is used), the completed missions and
-    the controller. `RegionStages` is the caller's store, because the controller field the game stores the stage in
-    is not read.
-  - Kill XP is split: `kill_xp_award` returns the whole party's award as an `f32`, and `kill_xp(cx,
-    globals_definition, &KillCredit)` gives one player's credit.
+  - `region_game_stage(sys, cx, globals_definition, &mut RegionStages, &RegionQuery) -> RegionStage`.
+    `RegionQuery` holds the region, the playthrough, the local player pawn's level (`None`: the minimum is used),
+    the completed missions and the controller. `RegionStage` is the stage with its awesome level
+    (`Option<AwesomeLevel>`). `RegionStages` is the caller's store of `RegionStage`s, because the controller field
+    the game stores them in is not read.
+  - Kill XP is split. `kill_xp_award(sys, cx, globals_definition, &KillEvent)` returns the whole party's award as an
+    `f32`. `KillEvent` carries the native's five arguments: killed, killer, critical, the damage source (a
+    `ClassId`, since `DamageSourceClass` is a class reference) and the damage type definition (an `ObjRef`).
+    `kill_xp(sys, cx, globals_definition, &KillCredit)` gives one player's credit.
+  - `xp_multiplier(sys, cx, kind, pt, player_level)`. The evaluator and the world are in the signature for the
+    UVHM and level-50 branches, which read `PlayThroughBasedBalanceModifiers` (fields that may be
+    `AttributeInitializationData`). Those branches still answer `NotYet`.
   - `mission_xp(sys, cx, curve, &MissionXp)`.
   - The `GlobalsDefinition` object is passed in (`globals_definition`): which `WillowGlobals` property holds it is
     not recorded (the C++ finds `GD_Globals.General.Globals` by path).
@@ -42,18 +48,24 @@ from the data; no closed form is coded. This file records the choices a later la
   are `NotYet { NotRead }`: the entry selection, the field types and the "level cap" input are open in the records.
 - **Kill XP**: the award and one player's credit, as NATIVE_COMBAT_GROUNDWORK.md 5.1 and 5.2 read them, with the C++
   oracle's refusals kept (a vehicle victim, a killer in a vehicle, `DamageTypeExpModifiers` entries:
-  `NotYet { NotPorted }`). The party weights for 2 to 4 players are read from the table as recorded (UNVERIFIED); the
-  offline world itself refuses more than one player (D12).
+  `NotYet { NotPorted }`; the damage source and type reach the award, but the entries' match is not ported). The
+  party weights for 2 to 4 players are read from the table as recorded (UNVERIFIED); the offline world itself
+  refuses more than one player (D12). `PlayerCount` cannot hold the game info's class default 0, which the game
+  treats as outside the table (bonus 0, weight 1). A caller that passes 1 for it gets the same share only because
+  this data's first row is (0, 1): that mapping is the caller's choice, UNVERIFIED for any other table.
 - **Region stage.** It follows the record's step order. Four choices where the record is silent, each UNVERIFIED:
   - the table row is chosen by playthrough index, clamped (`tools/slice_values.py` matches `PlayThroughNumber`
     instead, which agrees on a table in playthrough order);
   - bounds and boosts are evaluated with the player controller as the source and truncated toward zero;
-  - the clamp is UE3 `Clamp`;
+  - the clamp is UE3 `Clamp`: with the bounds out of order (`min > max`), an `x` below `min` gives `min` and any
+    other `x` gives `max`;
   - a region no entry names keeps stage 1 and stores nothing.
 
   The stage is stored in `RegionStages`, per (region, playthrough), because the controller field is not read. It is
   never reset (question 14). UVHM is `NotYet { NeedsRealGame(2) }`, and a region with a DLC expansion is `NotRead`
-  (the expansion's table field is not recorded). The awesome level is not read.
+  (the expansion's table field is not recorded). **Awesome level:** the step-1 default (awesome level 1) comes back
+  with the default stage. A computed stage carries `None`, because the types of `DefaultAwesomeLevel` and an
+  override's `AwesomeLevel` are not read (open item).
 - **Caps.**
   - `max_exp_level`: 50 plus the licensed increments (11, 11, 8), in every playthrough.
   - `item_stage_cap`: 50 outside UVHM; in UVHM with all three packs, 80 plus the OP level. UVHM with fewer packs is
@@ -75,3 +87,6 @@ from the data; no closed form is coded. This file records the choices a later la
   base at 2/8/17/70, Fire XP 395 at stage 8, the six live kill rows of COMBAT_KILL_XP.md (the seventh repeats a
   row), and skill points `max(0, L - 4)`. **UNVERIFIED:** every other branch, and the real-package run (the `DefStore`
   body is not on main, so every lookup answers `NotYet`; open item for the gate).
+- **Doc follow-up for the hub:** `curve.rs` keeps a local `trunc_i64` that refuses NaN and out-of-range values
+  (one range-guarded `as`). `ow_core::num` has no refusing float-to-`i64` form; moving one there is the hub's
+  change.

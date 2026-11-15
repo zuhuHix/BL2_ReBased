@@ -926,28 +926,34 @@ pub fn experience_required(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef
 pub fn experience_span(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, level: ExpLevel) -> Result<i64, BalanceError>; // R(L+1) - R(L)
 // stage.rs: the controller field the game stores the stage in is not read, so the store is the caller's (the
 // world keeps one with its player controller; OfflineWorld holds one)
-pub struct RegionStages { .. }   // per (region, playthrough); new, get, set, iter, len, is_empty; never reset (question 14)
+#[non_exhaustive] pub struct RegionStage { pub stage: GameStage, pub awesome: Option<AwesomeLevel> /* None: not read yet */ }
+                                 // ::new(stage), with_awesome; RegionStage::DEFAULT = stage 1, awesome 1 (step 1)
+pub struct RegionStages { .. }   // RegionStage per (region, playthrough); new, get, set, iter, len, is_empty; never reset (question 14)
 #[non_exhaustive] pub struct RegionQuery<'a> { pub region: ObjRef, pub playthrough: Playthrough,
     pub player_level: Option<ExpLevel> /* local player pawn's; None: the minimum */, pub completed_missions: &'a [ObjRef],
     pub controller: Option<ObjRef> /* the source the bounds are evaluated with */ }   // ::new
 pub fn region_game_stage(sys: &AttributeSystem, cx: &mut EvalCx, globals_definition: ObjRef, stages: &mut RegionStages,
-    q: &RegionQuery) -> Result<GameStage, BalanceError>;   // stored on first query; UVHM NotYet { NeedsRealGame(2) }
+    q: &RegionQuery) -> Result<RegionStage, BalanceError>;   // stored on first query; UVHM NotYet { NeedsRealGame(2) }
 // cap.rs
 pub fn max_exp_level(upgrades: LevelCapUpgrades) -> ExpLevel;   // GetMaxExpLevel: 50 + licensed increments (11, 11, 8)
 pub fn item_stage_cap(pt: Playthrough, op: OpLevel, upgrades: LevelCapUpgrades) -> Result<GameStage, BalanceError>;
 // playthrough.rs
 #[non_exhaustive] pub enum XpKind { Combat, Quests }
-pub fn xp_multiplier(kind: XpKind, pt: Playthrough, player_level: ExpLevel) -> Result<f32, BalanceError>; // 1.0 below 50 in PT 0/1, else NotYet
+pub fn xp_multiplier(sys: &AttributeSystem, cx: &mut EvalCx, kind: XpKind, pt: Playthrough, player_level: ExpLevel)
+    -> Result<f32, BalanceError>;   // 1.0 below 50 in PT 0/1, else NotYet; sys and cx for the PlayThroughBasedBalanceModifiers branches
 pub fn playthrough_modifier(cx: &mut EvalCx, pt: Playthrough) -> Result<Option<ObjRef>, BalanceError>;  // NotYet: entry selection not read
 // xp.rs
 #[non_exhaustive] pub struct MissionXp { pub stage: GameStage, pub percentage: InitData, pub optional: Vec<InitData>,
     pub controller: Option<ObjRef>, pub playthrough: Playthrough, pub player_level: ExpLevel }   // ::new, with_optional
 pub fn mission_xp(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, reward: &MissionXp) -> Result<i32, BalanceError>;
-pub fn kill_xp_award(sys: &AttributeSystem, cx: &mut EvalCx, globals_definition: ObjRef, killed: ObjRef,
-    killer: Option<ObjRef>, critical: bool) -> Result<f32, BalanceError>;   // the whole party's award, not rounded
+#[non_exhaustive] pub struct KillEvent { pub killed: ObjRef, pub killer: Option<ObjRef>, pub critical: bool,
+    pub damage_source: Option<ClassId> /* DamageSourceClass, a class */, pub damage_type: Option<ObjRef> }   // ::new, with_damage
+pub fn kill_xp_award(sys: &AttributeSystem, cx: &mut EvalCx, globals_definition: ObjRef, kill: &KillEvent)
+    -> Result<f32, BalanceError>;   // the whole party's award, not rounded; DamageTypeExpModifiers entries NotYet { NotPorted }
 #[non_exhaustive] pub struct KillCredit { pub points: f32, pub players: PlayerCount, pub is_killer: bool,
     pub player_level: Option<ExpLevel>, pub victim_level: Option<ExpLevel>, pub playthrough: Playthrough }   // ::new
-pub fn kill_xp(cx: &mut EvalCx, globals_definition: ObjRef, credit: &KillCredit) -> Result<i32, BalanceError>; // one player's credit
+pub fn kill_xp(sys: &AttributeSystem, cx: &mut EvalCx, globals_definition: ObjRef, credit: &KillCredit)
+    -> Result<i32, BalanceError>;   // one player's credit; players: N = 0 (the class default) passed as 1 is the caller's choice, UNVERIFIED
 pub fn skill_points_for_level_up(sys: &AttributeSystem, cx: &mut EvalCx, globals_definition: ObjRef,
     controller: Option<ObjRef>) -> Result<i32, BalanceError>;
 // offline.rs
@@ -955,7 +961,7 @@ pub struct OfflineWorld { .. }   // builds globals, GRI, PRI and controller obje
                                  // so offline tools evaluate through the same resolver chains as the running game
 impl OfflineWorld { pub fn new(space: ObjectSpace, defs: Option<DefStore>, snapshot: BalanceSnapshot) -> Result<Self, BalanceError>;
     pub fn with_rng(self, rng: CrtRand) -> Self; pub fn find(&mut self, path: &ObjectPath) -> Result<Option<ObjRef>, BalanceError>;
-    pub fn region_game_stage(&mut self, sys, globals_definition, region, completed_missions) -> Result<GameStage, BalanceError>;
+    pub fn region_game_stage(&mut self, sys, globals_definition, region, completed_missions) -> Result<RegionStage, BalanceError>;
     pub fn skill_points_earned(&mut self, sys, globals_definition, level: ExpLevel) -> Result<i32, BalanceError>;
     /* accessors: snapshot, space(_mut), defs_mut, controller, replication_info, game_replication_info, globals_object,
        region_stages(_mut), player_level, set_player_level, max_exp_level, item_stage_cap */ }

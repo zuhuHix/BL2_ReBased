@@ -16,7 +16,7 @@ use ow_attr::AttributeSystem;
 use ow_attr::api::{AttrError, EvalCx, InitData};
 use ow_core::NotYet;
 use ow_core::num::{trunc_i32, trunc_i64_wrap_i32};
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ClassId, ObjRef};
 use ow_object::value::Value;
 
 use crate::curve::experience_span;
@@ -98,7 +98,13 @@ pub fn mission_xp(
     curve: ObjRef,
     reward: &MissionXp,
 ) -> Result<i32, BalanceError> {
-    let m = xp_multiplier(XpKind::Quests, reward.playthrough, reward.player_level)?;
+    let m = xp_multiplier(
+        sys,
+        cx,
+        XpKind::Quests,
+        reward.playthrough,
+        reward.player_level,
+    )?;
     let span = experience_span(sys, cx, curve, ExpLevel::new(reward.stage.get()))?;
     let mut total = mission_term(sys, cx, span, &reward.percentage, m, reward.controller)?;
     for pct in &reward.optional {
@@ -131,6 +137,44 @@ fn mission_term(
 // The kill award (for the whole party)
 // ---------------------------------------------------------------------------------------------------------------
 
+/// The arguments of `CalculateExperiencePointsForKill(Killer, KilledPawn, bKilledByCritical, DamageSourceClass,
+/// DamageTypeDef)` (NATIVE_COMBAT_GROUNDWORK.md section 5.1).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KillEvent {
+    /// The killed pawn (argument 2).
+    pub killed: ObjRef,
+    /// The killer's controller (argument 1); `None` with no killer.
+    pub killer: Option<ObjRef>,
+    /// `bKilledByCritical` (argument 3).
+    pub critical: bool,
+    /// `DamageSourceClass` (argument 4): a class reference, so a [`ClassId`], matched against an entry's
+    /// `DamageSource` class and its ancestors (step 3b).
+    pub damage_source: Option<ClassId>,
+    /// `DamageTypeDef` (argument 5), matched exactly against an entry's `TypeDefinition` (step 3c).
+    pub damage_type: Option<ObjRef>,
+}
+
+impl KillEvent {
+    /// A kill with no damage source or type.
+    pub fn new(killed: ObjRef, killer: Option<ObjRef>, critical: bool) -> Self {
+        KillEvent {
+            killed,
+            killer,
+            critical,
+            damage_source: None,
+            damage_type: None,
+        }
+    }
+
+    /// The same kill with its damage source class and damage type definition.
+    pub fn with_damage(mut self, source: Option<ClassId>, damage_type: Option<ObjRef>) -> Self {
+        self.damage_source = source;
+        self.damage_type = damage_type;
+        self
+    }
+}
+
 /// `WillowExperiencePipeline.CalculateExperiencePointsForKill` (NATIVE_COMBAT_GROUNDWORK.md section 5.1): the amount
 /// for the whole party before the split, single precision, not rounded.
 ///
@@ -139,8 +183,9 @@ fn mission_term(
 /// 2. The vehicle adjustment: a vehicle victim (`Engine.Vehicle`) or a killer whose pawn drives a vehicle is
 ///    `NotYet { NotPorted }`, as the C++ oracle refuses them (the record reads them at medium confidence).
 /// 3. A critical kill with a killer multiplies by the killer's `ExpScaleForCriticalHitKills` (its class must declare
-///    it: `NotYet { NotRead }` otherwise). The `DamageTypeExpModifiers` factors need the damage source and type: a
-///    non-empty list is `NotYet { NotPorted }` (empty in the game's data).
+///    it: `NotYet { NotRead }` otherwise). The `DamageTypeExpModifiers` factors (5.1 steps 3b and 3c) match the
+///    event's damage source class and damage type definition: a non-empty list is `NotYet { NotPorted }` (the list
+///    is empty in the game's data), whatever the event carries.
 ///
 /// Status: UNVERIFIED as a reading of the native; the awards of seven live kills are reproduced through the data
 /// chain (COMBAT_KILL_XP.md).
@@ -148,10 +193,9 @@ pub fn kill_xp_award(
     sys: &AttributeSystem,
     cx: &mut EvalCx<'_>,
     globals_definition: ObjRef,
-    killed: ObjRef,
-    killer: Option<ObjRef>,
-    critical: bool,
+    kill: &KillEvent,
 ) -> Result<f32, BalanceError> {
+    let (killed, killer, critical) = (kill.killed, kill.killer, kill.critical);
     let formula = required(cx, globals_definition, "BaseEnemyExperienceFormula")?;
     let data = init_data(cx.world.parts().space, &formula)?;
     if is_a(cx.world.parts().space, killed, "Engine.Vehicle")? {
@@ -206,7 +250,11 @@ pub fn kill_xp_award(
 pub struct KillCredit {
     /// The award for the whole party ([`kill_xp_award`]).
     pub points: f32,
-    /// The game's `EffectiveNumPlayers` (1 with no game info, and the single-player row for the class default 0).
+    /// The game's `EffectiveNumPlayers`, which selects the `ExpAwardWeights` row `N - 1` (1 with no game info).
+    ///
+    /// `PlayerCount` cannot hold 0, the `WillowGameInfo` class default. In the game, N = 0 is outside the table and
+    /// gives bonus 0 and weight 1. Passing 1 for it is the caller's choice. It agrees with the record only because
+    /// this data's row 0 is (bonus 0, weight 1), so it is UNVERIFIED for any other table.
     pub players: PlayerCount,
     /// Whether this player's controller is the killer.
     pub is_killer: bool,
@@ -254,6 +302,7 @@ impl KillCredit {
 /// one-player credits of seven live kills are reproduced (COMBAT_KILL_XP.md); more players, a victim above the
 /// player, a difference of 5 or more and the second playthrough are UNVERIFIED readings of the record.
 pub fn kill_xp(
+    sys: &AttributeSystem,
     cx: &mut EvalCx<'_>,
     globals_definition: ObjRef,
     credit: &KillCredit,
@@ -265,7 +314,7 @@ pub fn kill_xp(
         )
         .into());
     };
-    let m = xp_multiplier(XpKind::Combat, credit.playthrough, player_level)?;
+    let m = xp_multiplier(sys, cx, XpKind::Combat, credit.playthrough, player_level)?;
 
     // 1. The share.
     let weights = required(cx, globals_definition, "ExpAwardWeights")?;
@@ -494,7 +543,13 @@ mod tests {
             let (sys, mut world) = fx.into_world();
             let controller = world.controller();
             let mut cx = EvalCx::new(&mut world);
-            let got = kill_xp_award(&sys, &mut cx, globals, pawn, Some(controller), false).unwrap();
+            let got = kill_xp_award(
+                &sys,
+                &mut cx,
+                globals,
+                &KillEvent::new(pawn, Some(controller), false),
+            )
+            .unwrap();
             assert_eq!(got, award, "award {mult} L{victim}");
             let c = KillCredit::new(
                 got,
@@ -505,7 +560,7 @@ mod tests {
                 Playthrough::NORMAL,
             );
             assert_eq!(
-                kill_xp(&mut cx, globals, &c).unwrap(),
+                kill_xp(&sys, &mut cx, globals, &c).unwrap(),
                 credit,
                 "credit L{victim} p{player}"
             );
@@ -523,8 +578,13 @@ mod tests {
             let (sys, mut world) = fx.into_world();
             let controller = world.controller();
             let mut cx = EvalCx::new(&mut world);
-            let award =
-                kill_xp_award(&sys, &mut cx, globals, pawn, Some(controller), false).unwrap();
+            let award = kill_xp_award(
+                &sys,
+                &mut cx,
+                globals,
+                &KillEvent::new(pawn, Some(controller), false),
+            )
+            .unwrap();
             let c = KillCredit::new(
                 award,
                 PlayerCount::SINGLE,
@@ -533,7 +593,7 @@ mod tests {
                 Some(ExpLevel::new(victim)),
                 Playthrough::NORMAL,
             );
-            assert_eq!(kill_xp(&mut cx, globals, &c).unwrap(), want);
+            assert_eq!(kill_xp(&sys, &mut cx, globals, &c).unwrap(), want);
         }
     }
 
@@ -541,7 +601,7 @@ mod tests {
     fn shares_large_differences_and_missing_levels() {
         let mut fx = Fx::new();
         let globals = fx.kill_globals();
-        let (_sys, mut world) = fx.into_world();
+        let (sys, mut world) = fx.into_world();
         let mut cx = EvalCx::new(&mut world);
         let credit = |players: i32, killer: bool, p: Option<i32>, v: Option<i32>| {
             KillCredit::new(
@@ -555,38 +615,38 @@ mod tests {
         };
         // Record 5.2: two players, killer 94 percent, partner 90; four: 86 and 80 (UNVERIFIED readings).
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(2, true, Some(8), Some(8))).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(2, true, Some(8), Some(8))).unwrap(),
             94
         );
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(2, false, Some(8), Some(8))).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(2, false, Some(8), Some(8))).unwrap(),
             90
         );
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(4, true, Some(8), Some(8))).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(4, true, Some(8), Some(8))).unwrap(),
             86
         );
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(4, false, Some(8), Some(8))).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(4, false, Some(8), Some(8))).unwrap(),
             80
         );
         // A difference past the table takes its last entry (lower 0.01, higher 1.15): 100 x 0.01 and 100 x 1.15
         // in single precision are 1.0 and 115.0.
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(1, true, Some(30), Some(8))).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(1, true, Some(30), Some(8))).unwrap(),
             1
         );
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(1, true, Some(8), Some(30))).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(1, true, Some(8), Some(30))).unwrap(),
             115
         );
         // No victim level: no scale. No player level: the multiplier cannot be read.
         assert_eq!(
-            kill_xp(&mut cx, globals, &credit(1, true, Some(8), None)).unwrap(),
+            kill_xp(&sys, &mut cx, globals, &credit(1, true, Some(8), None)).unwrap(),
             100
         );
         assert!(matches!(
-            kill_xp(&mut cx, globals, &credit(1, true, None, Some(8))),
+            kill_xp(&sys, &mut cx, globals, &credit(1, true, None, Some(8))),
             Err(BalanceError::NotYet(_))
         ));
     }
@@ -608,16 +668,22 @@ mod tests {
         let mut cx = EvalCx::new(&mut world);
         // An invented critical factor of 2 on the killer: 60 x 2.
         assert_eq!(
-            kill_xp_award(&sys, &mut cx, globals, pawn, Some(controller), true).unwrap(),
+            kill_xp_award(
+                &sys,
+                &mut cx,
+                globals,
+                &KillEvent::new(pawn, Some(controller), true)
+            )
+            .unwrap(),
             120.0
         );
         // Not critical, or no killer: no factor.
         assert_eq!(
-            kill_xp_award(&sys, &mut cx, globals, pawn, None, true).unwrap(),
+            kill_xp_award(&sys, &mut cx, globals, &KillEvent::new(pawn, None, true)).unwrap(),
             60.0
         );
         assert!(matches!(
-            kill_xp_award(&sys, &mut cx, globals, vehicle, Some(controller), false),
+            kill_xp_award(&sys, &mut cx, globals, &KillEvent::new(vehicle, Some(controller), false)),
             Err(BalanceError::NotYet(n)) if n.missing == Missing::NotPorted
         ));
         // UVHM and level 50 credits: the multiplier is not read.
@@ -631,7 +697,7 @@ mod tests {
                 pt,
             );
             assert!(matches!(
-                kill_xp(&mut cx, globals, &c),
+                kill_xp(&sys, &mut cx, globals, &c),
                 Err(BalanceError::NotYet(_))
             ));
         }
@@ -644,11 +710,33 @@ mod tests {
         fx.add_damage_type_modifier(globals);
         let pawn = fx.enemy(0.5, 8);
         let (sys, mut world) = fx.into_world();
+        let damage_type = world.globals_object();
+        let source = world.space().heap.get(pawn).unwrap().class;
         let mut cx = EvalCx::new(&mut world);
-        assert!(matches!(
-            kill_xp_award(&sys, &mut cx, globals, pawn, None, false),
-            Err(BalanceError::NotYet(n)) if n.missing == Missing::NotPorted
-        ));
+        // With or without the damage source and type (arguments 4 and 5), the entries are not ported.
+        for kill in [
+            KillEvent::new(pawn, None, false),
+            KillEvent::new(pawn, None, false).with_damage(Some(source), Some(damage_type)),
+        ] {
+            assert!(matches!(
+                kill_xp_award(&sys, &mut cx, globals, &kill),
+                Err(BalanceError::NotYet(n)) if n.missing == Missing::NotPorted
+            ));
+        }
+    }
+
+    #[test]
+    fn an_empty_damage_type_list_leaves_the_award() {
+        // The game's data has no DamageTypeExpModifiers entries: steps 3b and 3c are 1, whatever the damage is.
+        let mut fx = Fx::new();
+        let globals = fx.kill_globals();
+        let pawn = fx.enemy(0.5, 8);
+        let (sys, mut world) = fx.into_world();
+        let damage_type = world.globals_object();
+        let source = world.space().heap.get(pawn).unwrap().class;
+        let mut cx = EvalCx::new(&mut world);
+        let kill = KillEvent::new(pawn, None, false).with_damage(Some(source), Some(damage_type));
+        assert_eq!(kill_xp_award(&sys, &mut cx, globals, &kill).unwrap(), 60.0);
     }
 
     // ---- skill points ----

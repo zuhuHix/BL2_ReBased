@@ -21,9 +21,14 @@
 //!
 //! Choices where the record is silent, each UNVERIFIED: the bounds and boosts are `AttributeInitializationData`
 //! evaluated with the player controller as the source and truncated toward zero ([`trunc_i32`], the attribute path);
-//! the clamp is UE3's `Clamp` (below `min` is `min`, else at most `max`), so bounds out of order give `min`. The
-//! awesome level the game stores with the stage is not read here (the record names `DefaultAwesomeLevel` and an
-//! override's `AwesomeLevel`, not their types). The record's playthrough index chooses the table entry by position;
+//! the clamp is UE3's `Clamp` (below `min` is `min`, else below `max` is `x`, else `max`). With the bounds out of
+//! order (`min > max`), an `x` below `min` gives `min` and any other `x` gives `max`: `clamp(8, 9, 7)` is 9,
+//! `clamp(10, 9, 7)` is 7.
+//!
+//! **The awesome level** the game stores with the stage ([`RegionStage::awesome`]): the step-1 default, awesome level
+//! 1, is returned with the default stage. A computed stage carries `None`: the record says an override gives its
+//! `AwesomeLevel` and the default bounds give `DefaultAwesomeLevel`, but not those fields' types, so this port does not
+//! read them yet (open item). The record's playthrough index chooses the table entry by position;
 //! `tools/slice_values.py` matches the entry's `PlayThroughNumber` instead, which agrees on a table in playthrough
 //! order.
 //!
@@ -44,7 +49,7 @@ use ow_object::value::Value;
 use ow_attr::eval::{class_path, elements, field, flag, init_data, object, property, required};
 
 use crate::offline::data::field_opt;
-use crate::types::{BalanceError, ExpLevel, GameStage, Playthrough};
+use crate::types::{AwesomeLevel, BalanceError, ExpLevel, GameStage, Playthrough};
 
 /// The record the rule comes from.
 pub const RECORD: &str = "NATIVE_PROGRESSION.md section 2, \"Region game stage\"";
@@ -52,12 +57,46 @@ pub const RECORD: &str = "NATIVE_PROGRESSION.md section 2, \"Region game stage\"
 /// The stage the routine starts from and returns when no table entry names the region.
 pub const DEFAULT_STAGE: GameStage = GameStage(1);
 
+/// The awesome level the routine starts from (step 1), returned with [`DEFAULT_STAGE`].
+pub const DEFAULT_AWESOME: AwesomeLevel = AwesomeLevel::new(1);
+
+/// What the routine answers and the player controller stores: a game stage and its awesome level.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RegionStage {
+    pub stage: GameStage,
+    /// `None` where the awesome level is not read yet (a computed stage; module documentation).
+    pub awesome: Option<AwesomeLevel>,
+}
+
+impl RegionStage {
+    /// A stage whose awesome level is not read.
+    pub const fn new(stage: GameStage) -> Self {
+        RegionStage {
+            stage,
+            awesome: None,
+        }
+    }
+
+    /// The same stage with its awesome level.
+    pub const fn with_awesome(mut self, awesome: AwesomeLevel) -> Self {
+        self.awesome = Some(awesome);
+        self
+    }
+
+    /// The step-1 defaults: stage 1, awesome level 1.
+    pub const DEFAULT: RegionStage = RegionStage {
+        stage: DEFAULT_STAGE,
+        awesome: Some(DEFAULT_AWESOME),
+    };
+}
+
 /// The region stages a player controller holds: one per (region, playthrough), set the first time the region's stage
 /// is computed in that playthrough and returned unchanged afterwards. Ordered by key (`DetMap`), so a listing is
 /// deterministic.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RegionStages {
-    stored: DetMap<(ObjRef, u8), GameStage>,
+    stored: DetMap<(ObjRef, u8), RegionStage>,
 }
 
 impl RegionStages {
@@ -67,17 +106,22 @@ impl RegionStages {
     }
 
     /// The stage stored for `region` in `pt`, if any.
-    pub fn get(&self, region: ObjRef, pt: Playthrough) -> Option<GameStage> {
+    pub fn get(&self, region: ObjRef, pt: Playthrough) -> Option<RegionStage> {
         self.stored.get(&(region, pt.index())).copied()
     }
 
     /// Stores `stage` for `region` in `pt`, as a saved game restores it. Answers the stage it replaced.
-    pub fn set(&mut self, region: ObjRef, pt: Playthrough, stage: GameStage) -> Option<GameStage> {
+    pub fn set(
+        &mut self,
+        region: ObjRef,
+        pt: Playthrough,
+        stage: RegionStage,
+    ) -> Option<RegionStage> {
         self.stored.insert((region, pt.index()), stage)
     }
 
     /// Every stored stage in key order: `(region, playthrough index, stage)`.
-    pub fn iter(&self) -> impl Iterator<Item = (ObjRef, u8, GameStage)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (ObjRef, u8, RegionStage)> + '_ {
         self.stored.iter().map(|(&(r, p), &s)| (r, p, s))
     }
 
@@ -139,7 +183,7 @@ pub fn region_game_stage(
     globals_definition: ObjRef,
     stages: &mut RegionStages,
     q: &RegionQuery<'_>,
-) -> Result<GameStage, BalanceError> {
+) -> Result<RegionStage, BalanceError> {
     // Step 2: UVHM.
     if q.playthrough.is_uvhm() {
         return Err(NotYet::needs_real_game(
@@ -163,14 +207,14 @@ pub fn region_game_stage(
         .into());
     }
     let Some(entry) = region_entry(cx, globals_definition, q)? else {
-        return Ok(DEFAULT_STAGE);
+        return Ok(RegionStage::DEFAULT);
     };
     // Step 4: the stored stage.
     if let Some(stage) = stages.get(q.region, q.playthrough) {
         return Ok(stage);
     }
     // Step 5: compute and store.
-    let stage = computed_stage(sys, cx, globals_definition, &entry, q)?;
+    let stage = RegionStage::new(computed_stage(sys, cx, globals_definition, &entry, q)?);
     stages.set(q.region, q.playthrough, stage);
     Ok(stage)
 }
@@ -327,6 +371,17 @@ mod tests {
         level: Option<i32>,
         completed: &[ObjRef],
     ) -> Result<GameStage, BalanceError> {
+        ask_full(fx_parts, r, stages, pt, level, completed).map(|s| s.stage)
+    }
+
+    fn ask_full(
+        fx_parts: &mut (AttributeSystem, crate::offline::OfflineWorld),
+        r: &RegionData,
+        stages: &mut RegionStages,
+        pt: Playthrough,
+        level: Option<i32>,
+        completed: &[ObjRef],
+    ) -> Result<RegionStage, BalanceError> {
         let (sys, world) = fx_parts;
         let controller = world.controller();
         let q = RegionQuery::new(
@@ -359,7 +414,7 @@ mod tests {
             assert_eq!(got.unwrap(), GameStage(want), "level {level}");
             assert_eq!(
                 stages.get(r.region, Playthrough::NORMAL),
-                Some(GameStage(want))
+                Some(RegionStage::new(GameStage(want)))
             );
         }
     }
@@ -431,7 +486,7 @@ mod tests {
             GameStage(9)
         );
         assert_eq!(stages.len(), 2);
-        let listed: Vec<_> = stages.iter().map(|(_, p, s)| (p, s)).collect();
+        let listed: Vec<_> = stages.iter().map(|(_, p, s)| (p, s.stage)).collect();
         assert_eq!(listed, [(0, GameStage(7)), (1, GameStage(9))]);
     }
 
@@ -517,7 +572,29 @@ mod tests {
         assert_eq!(clamp(5, 7, 9), 7);
         assert_eq!(clamp(8, 7, 9), 8);
         assert_eq!(clamp(10, 7, 9), 9);
-        // Bounds out of order: min.
+        // Bounds out of order: min below min, else max (x >= min > max).
         assert_eq!(clamp(8, 9, 7), 9);
+        assert_eq!(clamp(9, 9, 7), 7);
+        assert_eq!(clamp(10, 9, 7), 7);
+    }
+
+    #[test]
+    fn the_awesome_level_is_the_default_or_not_read() {
+        // Step 1: stage 1 and awesome level 1 when no entry names the region; a computed stage's awesome level is not
+        // read yet (None), stored as it is answered.
+        let mut fx = Fx::new();
+        let mut r = sanctuary(&mut fx);
+        let listed = r.region;
+        r.region = fx.other_region();
+        let mut w = fx.into_world();
+        let mut stages = RegionStages::new();
+        let got = ask_full(&mut w, &r, &mut stages, Playthrough::NORMAL, Some(8), &[]).unwrap();
+        assert_eq!(got, RegionStage::DEFAULT);
+        assert_eq!(got.awesome, Some(AwesomeLevel::new(1)));
+        r.region = listed;
+        let got = ask_full(&mut w, &r, &mut stages, Playthrough::NORMAL, Some(8), &[]).unwrap();
+        assert_eq!(got, RegionStage::new(GameStage(8)));
+        assert_eq!(got.awesome, None);
+        assert_eq!(stages.get(listed, Playthrough::NORMAL), Some(got));
     }
 }
