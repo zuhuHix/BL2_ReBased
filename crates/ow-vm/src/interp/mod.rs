@@ -18,8 +18,9 @@
 //! `foreach` over dynamic arrays and engine iterators (`iter.rs`), delegates (`delegate.rs`), and the interface
 //! context and casts through `Vm::implements`. A static array used as a whole stays `NotYet`.
 //!
-//! **What waits for other lanes** (each answers `NotYet` naming it): states beyond the C++ approximation and latent
-//! code (W5-STATES).
+//! **State code** (W5-STATES, `crate::states`): a state's code runs as a frame with no locals, from the position the
+//! object's state frame holds; a `GotoLabel` and a latent call hand control back to `crate::states`. Under
+//! `ParityMode::Reference` state code is not run (the C++), and a `GotoLabel` in a function is stepped over.
 //!
 //! **Loading** (`load.rs`). Functions and classes come from the code packages of the definition store, through
 //! `DefStore::code_mut` (its package store and reflection index, so one `CodeIndex` defines every layout). Loading a
@@ -77,7 +78,7 @@ pub use convert::{describe, describe_for_string};
 pub use load::instantiate_from_defaults;
 
 pub(crate) use eval::{Alias, alias_value, is_a_named, is_child, prepare, run_frame, write_alias};
-pub(crate) use load::{find_class, find_function};
+pub(crate) use load::{class_at, declare_state_code, find_class, find_function};
 
 /// The stack a thread running the VM needs (module documentation, "Stack depth"). Measured locally on one shape:
 /// `Limits::max_call_depth` (200) frames, each a statement nesting 252 expression levels that go eval -> native ->
@@ -206,6 +207,9 @@ pub(crate) struct FuncCode {
     failure: Option<String>,
     /// The decoded script, decoded on the first call (the C++ `Function::code` / `decodeFailed`).
     script: RefCell<Option<Result<Rc<Code>, String>>>,
+    /// A state's code (W5-STATES, `crate::states`), not a function: it resumes where the object's state frame says,
+    /// follows labels and stops at a latent call.
+    state_code: bool,
 }
 
 #[derive(Debug)]

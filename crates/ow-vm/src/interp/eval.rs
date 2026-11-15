@@ -28,7 +28,7 @@
 
 use std::rc::Rc;
 
-use ow_core::NotYet;
+use ow_core::{NotYet, ParityMode};
 use ow_object::heap::{HeapError, Step};
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr};
 use ow_object::layout::PropKind;
@@ -300,9 +300,18 @@ fn run(vm: &mut Vm, f: &mut Frame, script: &Code) -> Result<(), VmError> {
             break;
         }
     }
+    // State code (W5-STATES) resumes where the object's state frame says, and hands control back to `crate::states`
+    // at a label in another state's code, a latent call or a state change.
+    let state_object = if f.code.state_code { f.this } else { None };
+    if let Some(o) = state_object {
+        pc = crate::states::resume_at(vm, o)?;
+    }
     while pc < statements.len() && !f.returned {
         let s = &statements[pc];
         vm.tick()?;
+        if let Some(o) = state_object {
+            crate::states::at_statement(vm, o, pc)?;
+        }
         match s.op {
             op::END_OF_SCRIPT | op::STOP => return Ok(()),
             op::RETURN => {
@@ -343,13 +352,36 @@ fn run(vm: &mut Vm, f: &mut Frame, script: &Code) -> Result<(), VmError> {
             op::DYN_ARRAY_ITERATOR | op::ITERATOR | op::ITERATOR_NEXT | op::ITERATOR_POP => {
                 pc = iter::statement(vm, f, &mut iterators, script, s, pc)?;
             }
-            // The C++ steps over both: a label table is data, and a GotoLabel (a jump to a label of state code) is not
-            // run, as latent state code is not (W5-STATES ports state code; UNVERIFIED in the game).
-            op::LABEL_TABLE | op::GOTO_LABEL => pc += 1,
+            // A label table is data.
+            op::LABEL_TABLE => pc += 1,
+            // In state code a GotoLabel jumps to the label (W5-STATES). In a function (none in the installed
+            // packages) the C++ steps over it, which Reference keeps; where the game resumes then is not read.
+            op::GOTO_LABEL => match state_object {
+                Some(o) => {
+                    let label = eval(vm, f, &s.kids[0], f.this)?;
+                    match crate::states::goto_label(vm, o, &label)? {
+                        Some(next) => pc = next,
+                        None => return Ok(()),
+                    }
+                }
+                None if vm.parity == ParityMode::Reference => pc += 1,
+                None => {
+                    return Err(NotYet::not_read(
+                        format!("a GotoLabel in the function {}: where the game resumes", f.path()),
+                        "NATIVE_ENGINE_CORE.md (Object state machine)",
+                    )
+                    .into());
+                }
+            },
             _ => {
                 eval(vm, f, s, f.this)?;
                 pc += 1;
             }
+        }
+        if let Some(o) = state_object
+            && crate::states::yields(vm, o, iterators.is_empty())?
+        {
+            return Ok(());
         }
     }
     Ok(())
