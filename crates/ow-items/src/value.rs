@@ -85,7 +85,8 @@ mod tests {
     fn no_modifier_leaves_the_base() {
         let data = RollData::new(&crate::registry::CensusInput::new(
             std::path::PathBuf::from("."),
-        ));
+        ))
+        .unwrap();
         // Nothing is held: the base reads as 0 and no source has a modifier.
         assert_eq!(
             part_value_total(&data, "Test.Def", &["Test.Part"]),

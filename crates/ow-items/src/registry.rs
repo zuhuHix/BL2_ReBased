@@ -572,11 +572,17 @@ struct Census {
 const PACKAGES_KEPT: usize = 4;
 
 impl Census {
-    /// `RegistryCensus.add` over every (path, class, file) of the scan, in scan order.
+    /// `RegistryCensus.add` over every (path, class, file) of the scan, in scan order, read with the registry's
+    /// schema lines.
     fn new(input: CensusInput) -> Census {
         let mut typer = SchemaTyper::new_empty();
         // The lines are this module's constant and hold no repeat; a failure would be a bug caught by the tests.
         let _ = typer.add_text(&SCHEMA_LINES.join("\n"));
+        Census::with_typer(input, typer)
+    }
+
+    /// The same census, with values read through `typer`.
+    fn with_typer(input: CensusInput, typer: SchemaTyper) -> Census {
         let mut c = Census {
             root: input.root,
             order: Vec::new(),
@@ -969,16 +975,31 @@ const MAX_INIT_DEPTH: u32 = 200;
 /// than [`MAX_INIT_DEPTH`]). Order read from the game's evaluator (NATIVE_PROGRESSION.md section 1, UNVERIFIED in
 /// game); single precision throughout.
 fn attribute_value(census: &mut Census, init: &Pv) -> Result<Option<f64>, ()> {
-    attribute_value_at(census, init, 0)
+    attribute_value_at(census, init, &[], 0)
 }
 
-fn attribute_value_at(census: &mut Census, init: &Pv, depth: u32) -> Result<Option<f64>, ()> {
+/// `weapon_recipe.attribute_value(package, init, level, attributes)`: as [`attribute_value`], with `attributes`
+/// giving the values of base attributes by path (`f32(attributes[attribute])`, passed down to every term).
+///
+/// One difference from the tool, in a rare case and in every caller of this function: the tool evaluates all four
+/// formula terms before it tests for one with no value, so a later term that raises makes the whole call raise;
+/// here the first term with no value ends the call with `Ok(None)` (decision 2026-11-15-21).
+fn attribute_value_at(
+    census: &mut Census,
+    init: &Pv,
+    attributes: &[(String, f64)],
+    depth: u32,
+) -> Result<Option<f64>, ()> {
     if depth > MAX_INIT_DEPTH {
         return Err(());
     }
     let definition = init.at("InitializationDefinition");
-    let mut base = if init.at("BaseValueAttribute").truthy() {
-        None
+    let attribute = init.at("BaseValueAttribute");
+    let mut base = if attribute.truthy() {
+        attribute
+            .as_str()
+            .and_then(|a| attributes.iter().find(|(k, _)| k == a))
+            .map(|(_, v)| f32n(*v))
     } else {
         let constant = init.at("BaseValueConstant");
         Some(f32n(if constant.truthy() {
@@ -1008,7 +1029,7 @@ fn attribute_value_at(census: &mut Census, init: &Pv, depth: u32) -> Result<Opti
                 let term = formula.at(key);
                 let empty = Pv::Map(DetMap::new());
                 let term = if term.truthy() { term } else { &empty };
-                match attribute_value_at(census, term, depth + 1)? {
+                match attribute_value_at(census, term, attributes, depth + 1)? {
                     Some(v) => *slot = v,
                     None => return Ok(None),
                 }
@@ -1047,14 +1068,14 @@ fn attribute_value_at(census: &mut Census, init: &Pv, depth: u32) -> Result<Opti
     // Python max(value, low): value unless low is larger.
     if clamp.at("bEnableMinValueRestriction").truthy()
         && clamp.at("MinValue").truthy()
-        && let Some(low) = attribute_value_at(census, clamp.at("MinValue"), depth + 1)?
+        && let Some(low) = attribute_value_at(census, clamp.at("MinValue"), attributes, depth + 1)?
         && low > value
     {
         value = low;
     }
     if clamp.at("bEnableMaxValueRestriction").truthy()
         && clamp.at("MaxValue").truthy()
-        && let Some(high) = attribute_value_at(census, clamp.at("MaxValue"), depth + 1)?
+        && let Some(high) = attribute_value_at(census, clamp.at("MaxValue"), attributes, depth + 1)?
         && high < value
     {
         value = high;
@@ -1746,6 +1767,100 @@ impl Registry {
             }
         }
         out
+    }
+}
+
+/// Where `weapon_recipe.attribute_value` raises (a definition no package holds or that does not decode, a value that is
+/// not a number, `math.pow` refusing, init data nested too deep); the tools' callers read that as "no value".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Raises;
+
+/// One object's decoded properties as the tool holds them (`decoded()`): a dict by property name.
+#[derive(Debug, Clone)]
+pub struct Props(Rc<Decoded>);
+
+impl std::ops::Deref for Props {
+    type Target = Pv;
+    fn deref(&self) -> &Pv {
+        &self.0.props
+    }
+}
+
+/// The tool's census of one scan as a property lookup, read with given schema lines: what `item_roll.py` and
+/// `weapon_recipe.py` read through `lookup.props` / `lookup.get` and `weapon_recipe.attribute_value`, the same
+/// owner rule and tag-stream reading as the registry ("Where values come from" above). Lane W4-ROLL reads the values
+/// the registry does not hold through it, with `item_roll.py`'s schema lines. Its reads do not touch the registry's
+/// own census, so they cannot change the registry's output.
+pub struct TagLookup {
+    census: RefCell<Census>,
+}
+
+impl fmt::Debug for TagLookup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TagLookup").finish_non_exhaustive()
+    }
+}
+
+impl TagLookup {
+    /// The lookup over `input` with `schema_lines` (`name=Type[:Struct]`, one per property name); `Err` with the
+    /// schema's error when a line does not parse or repeats a name.
+    pub fn new(input: CensusInput, schema_lines: &[&str]) -> Result<TagLookup, String> {
+        let mut typer = SchemaTyper::new_empty();
+        typer
+            .add_text(&schema_lines.join("\n"))
+            .map_err(|e| error_text(&e))?;
+        Ok(TagLookup {
+            census: RefCell::new(Census::with_typer(input, typer)),
+        })
+    }
+
+    /// Whether a package holds `path` (`path in census.owner`).
+    pub fn holds(&self, path: &str) -> bool {
+        self.census.borrow().owner.contains_key(path)
+    }
+
+    /// The class of `path`'s owner export (`census.classes.get(path, '')`).
+    pub fn class_of(&self, path: &str) -> String {
+        self.census.borrow().class_of(path).to_string()
+    }
+
+    /// The paths below `prefix.` with their classes, in path order.
+    pub fn below(&self, prefix: &str) -> Vec<(String, String)> {
+        let census = self.census.borrow();
+        let start = format!("{prefix}.");
+        census
+            .classes
+            .range(start.clone()..)
+            .take_while(|(p, _)| p.starts_with(&start))
+            .map(|(p, c)| (p.clone(), c.clone()))
+            .collect()
+    }
+
+    /// `census.props(path)`: the decoded properties, or why there are none (no holder, or the walk failed).
+    pub fn props(&self, path: &str) -> Result<Props, String> {
+        self.census.borrow_mut().props(path).map(Props)
+    }
+
+    /// `census.get(path)`: the decoded properties, or `None`.
+    pub fn get(&self, path: &str) -> Option<Props> {
+        self.census.borrow_mut().get(path).map(Props)
+    }
+
+    /// `weapon_recipe.attribute_value(lookup, init, level, attributes)` ([`attribute_value_at`]'s documentation):
+    /// `Ok(None)` when the init needs runtime state, `Err(Raises)` where the tool raises.
+    pub fn attribute_value(
+        &self,
+        init: &Pv,
+        attributes: &[(String, f64)],
+    ) -> Result<Option<f64>, Raises> {
+        attribute_value_at(&mut self.census.borrow_mut(), init, attributes, 0).map_err(|()| Raises)
+    }
+
+    /// `item_registry.attribute_constant`: the `ConstantValue` of an attribute whose `ValueResolverChain` is exactly
+    /// one `ConstantAttributeValueResolver` (`None` when there is none; that the game reads it unchanged is
+    /// UNVERIFIED).
+    pub fn attribute_constant(&self, attribute: &Pv) -> Pv {
+        attribute_constant(&mut self.census.borrow_mut(), attribute)
     }
 }
 

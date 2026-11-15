@@ -17,9 +17,30 @@
 //! band. **Not implemented**: the mission-item exception (a `MissionItemDefinition` takes
 //! `GlobalsDefinition.MissionItemRarityLevel`, 500, instead of the sum); the roll rolls no mission item.
 
+use crate::ItemError;
 use crate::merge::RollData;
 use crate::registry::Pv;
-use crate::roll::RollError;
+
+/// `math.trunc(x)` to an integer, refused where Python's raises or the result leaves `i64` (N5: no `as` on an
+/// unchecked float): `x` must be finite and truncate into `i64`. `what` names the oracle step for the message.
+pub(crate) fn trunc_i64(x: f64, what: &str) -> Result<i64, ItemError> {
+    // 2^63 is exactly representable; every finite f64 strictly inside (-2^63 - 1, 2^63) truncates into i64.
+    const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    let t = x.trunc();
+    if !t.is_finite() || !(-LIMIT..LIMIT).contains(&t) {
+        return Err(ItemError::BadData(format!(
+            "{what}: {x} does not truncate to an integer"
+        )));
+    }
+    // In range and integral: the conversion is exact.
+    Ok(t as i64)
+}
+
+/// [`trunc_i64`] into `i32`.
+pub(crate) fn trunc_i32(x: f64, what: &str) -> Result<i32, ItemError> {
+    let t = trunc_i64(x, what)?;
+    i32::try_from(t).map_err(|_| ItemError::BadData(format!("{what}: {t} is out of range")))
+}
 
 /// The globals definition the bands are read from (`weapon_stats.GLOBALS`).
 pub const GLOBALS: &str = "GD_Globals.General.Globals";
@@ -39,7 +60,7 @@ pub struct Rarity {
 }
 
 /// A number reader for rarity terms: `None` when the term has no value.
-pub type TermOf<'a> = dyn FnMut(&Pv) -> Result<Option<f64>, RollError> + 'a;
+pub type TermOf<'a> = dyn FnMut(&Pv) -> Result<Option<f64>, ItemError> + 'a;
 
 /// The truncated terms `(source, value or None)` of the module documentation's sum: the definition, the parts (in
 /// the order given), then the name parts when [`NAME_PARTS_IN_RARITY`].
@@ -49,9 +70,9 @@ pub fn terms(
     parts: &[&str],
     names: &[Option<&str>],
     value: &mut TermOf<'_>,
-) -> Result<Vec<(String, Option<i64>)>, RollError> {
+) -> Result<Vec<(String, Option<i64>)>, ItemError> {
     let mut out = Vec::new();
-    let read = |path: &str, key: &str, value: &mut TermOf<'_>| -> Result<Option<i64>, RollError> {
+    let read = |path: &str, key: &str, value: &mut TermOf<'_>| -> Result<Option<i64>, ItemError> {
         let raw = data
             .get(path)
             .map(|p| p.at(key).clone())
@@ -61,7 +82,9 @@ pub fn terms(
         } else {
             value(&raw)?
         };
-        Ok(v.map(|x| x.trunc() as i64))
+        // item_roll.rarity_terms: math.trunc(value) of each term.
+        v.map(|x| trunc_i64(x, "a rarity term (item_roll.rarity_terms)"))
+            .transpose()
     };
     out.push((
         definition.to_string(),
@@ -102,7 +125,7 @@ pub fn rarity(
     parts: &[&str],
     names: &[Option<&str>],
     value: &mut TermOf<'_>,
-) -> Result<Rarity, RollError> {
+) -> Result<Rarity, ItemError> {
     let terms = terms(data, definition, parts, names, value)?;
     let level = terms.iter().filter_map(|(_, v)| *v).sum();
     Ok(Rarity {

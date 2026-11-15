@@ -46,10 +46,11 @@ use ow_core::rand::{CrtRand, CrtStream, Rand15};
 use ow_core::{DetSet, NotYet, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
+use ow_items::ItemError;
 use ow_items::merge::{RollData, WEAPON_BALANCE_CLASSES};
 use ow_items::registry::{CensusInput, Registry, build_from_census, python_path_text};
 use ow_items::roll::{
-    CENSUS_STAGES, ITEM_KINDS, RollCx, RollError, RollResult, RollWorld, roll, spread_seeds,
+    CENSUS_STAGES, ITEM_KINDS, RollCx, RollResult, RollWorld, roll, spread_seeds,
 };
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropId};
@@ -77,6 +78,7 @@ struct Line {
     weapons: Option<String>,
     rolls: u32,
     seeds: u32,
+    overlay: Option<String>,
 }
 
 fn parse(command: &Command, args: &[String]) -> Result<Line, String> {
@@ -123,13 +125,7 @@ fn parse(command: &Command, args: &[String]) -> Result<Line, String> {
             "--seeds" => line.seeds = to_count(number(value()?)?, arg)?,
             "--playthrough" => line.playthrough = to_i32(number(value()?)?, arg)?,
             "--op-level" => line.op = to_i32(number(value()?)?, arg)?,
-            "--overlay" => {
-                return Err(
-                    "--overlay is not supported by --item-roll yet: the roll reads tag streams, which overlays do \
-                     not patch"
-                        .to_string(),
-                );
-            }
+            "--overlay" => line.overlay = Some(value()?),
             _ => return Err(USAGE.to_string()),
         }
         i += 2;
@@ -153,6 +149,15 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
         Ok(line) => line,
         Err(message) => return fail(&message),
     };
+    if line.overlay.is_some() {
+        // Architecture section 4: a layer not there yet is NotYet (exit 3), not a bad command line.
+        let e = NotYet::not_ported(
+            "--overlay on --item-roll: the roll reads tag streams, which overlays do not patch",
+            ow_items::roll::RECORD,
+        );
+        eprintln!("ow-package (Rust): --item-roll: {e}");
+        return ExitCode::from(NOT_PORTED);
+    }
     let Some(cooked) = line.cooked.clone() else {
         return fail(USAGE);
     };
@@ -165,7 +170,7 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     }
     match execute(&line, Path::new(&cooked), mode) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(RollError::NotYet(e)) => {
+        Err(ItemError::NotYet(e)) => {
             eprintln!("ow-package (Rust): --item-roll: {e}");
             ExitCode::from(NOT_PORTED)
         }
@@ -222,7 +227,7 @@ impl AttrWorld for BareWorld {
     }
 }
 
-fn snapshot(line: &Line, stage: i32) -> Result<BalanceSnapshot, RollError> {
+fn snapshot(line: &Line, stage: i32) -> Result<BalanceSnapshot, ItemError> {
     Ok(BalanceSnapshot::new(
         Playthrough::from_index(line.playthrough)?,
         OpLevel::new(line.op)?,
@@ -234,8 +239,9 @@ fn snapshot(line: &Line, stage: i32) -> Result<BalanceSnapshot, RollError> {
     )?)
 }
 
-/// The world the rolls evaluate in: the offline world when its classes lay out from the store, else a bare one.
-fn world(defs: DefStore, base: BalanceSnapshot) -> Box<dyn AttrWorld> {
+/// The world the rolls evaluate in: the offline world when its classes lay out from the store, else a bare one over
+/// the store. An offline world that refuses the space is an error.
+fn world(defs: DefStore, base: BalanceSnapshot) -> Result<Box<dyn AttrWorld>, ItemError> {
     let mut defs = defs;
     let mut space = ObjectSpace::new();
     let laid_out = [
@@ -247,24 +253,13 @@ fn world(defs: DefStore, base: BalanceSnapshot) -> Box<dyn AttrWorld> {
     .iter()
     .all(|c| defs.class_id(&mut space, c).is_ok());
     if laid_out {
-        // The offline world takes the store; if it refuses the space, the store is gone with it, so build the bare
-        // world from a fresh empty store (it then answers NotYet for every lookup).
-        match OfflineWorld::new(space, Some(defs), base) {
-            Ok(w) => return Box::new(w),
-            Err(_) => {
-                return Box::new(BareWorld {
-                    space: ObjectSpace::new(),
-                    defs: DefStore::new_empty(),
-                    slots: GlobalSlots::default(),
-                });
-            }
-        }
+        return Ok(Box::new(OfflineWorld::new(space, Some(defs), base)?));
     }
-    Box::new(BareWorld {
+    Ok(Box::new(BareWorld {
         space,
         defs,
         slots: GlobalSlots::default(),
-    })
+    }))
 }
 
 struct Session {
@@ -278,7 +273,7 @@ struct Session {
 }
 
 impl Session {
-    fn open(cooked: &Path, line: &Line, mode: ParityMode) -> Result<Session, RollError> {
+    fn open(cooked: &Path, line: &Line, mode: ParityMode) -> Result<Session, ItemError> {
         let mut defs = DefStore::open(
             PathBuf::from(cooked),
             IdentityPolicy::FirstInScanOrder,
@@ -302,10 +297,10 @@ impl Session {
             })
             .map(|e| e.path.clone())
             .collect();
-        let data = RollData::new(&input);
+        let data = RollData::new(&input)?;
         let reg = build_from_census(input, &python_path_text(&root.to_string_lossy()));
         let sys = AttributeSystem::standard()?;
-        let world = world(defs, snapshot(line, 1)?);
+        let world = world(defs, snapshot(line, 1)?)?;
         Ok(Session {
             reg,
             weapons: weapons.into_iter().collect(),
@@ -323,10 +318,10 @@ impl Session {
         balance: &str,
         stage: i32,
         seed: u32,
-    ) -> Result<String, RollError> {
+    ) -> Result<String, ItemError> {
         let snap = snapshot(line, stage)?;
         let path = ObjectPath::parse(balance)
-            .map_err(|e| RollError::BadData(format!("{balance}: {e}")))?;
+            .map_err(|e| ItemError::BadData(format!("{balance}: {e}")))?;
         let mut rng = CrtRand::new(seed);
         let mut rw = RollWorld::new(self.world.as_mut(), &mut rng, false);
         let mut cx = RollCx::new(
@@ -346,7 +341,7 @@ impl Session {
                 outcome_line(balance, stage, seed, "not_rollable", n.reason)
             }
             _ => {
-                return Err(RollError::BadData(
+                return Err(ItemError::BadData(
                     "a roll result this command does not know".to_string(),
                 ));
             }
@@ -383,11 +378,11 @@ fn outcome_line(balance: &str, stage: i32, seed: u32, key: &str, value: &str) ->
     out
 }
 
-fn execute(line: &Line, cooked: &Path, mode: ParityMode) -> Result<(), RollError> {
+fn execute(line: &Line, cooked: &Path, mode: ParityMode) -> Result<(), ItemError> {
     let mut session = Session::open(cooked, line, mode)?;
     if let Some(balance) = &line.balance {
         let (Some(stage), Some(seed)) = (line.stage, line.seed) else {
-            return Err(RollError::BadData(USAGE.to_string()));
+            return Err(ItemError::BadData(USAGE.to_string()));
         };
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
@@ -402,7 +397,7 @@ fn execute(line: &Line, cooked: &Path, mode: ParityMode) -> Result<(), RollError
     let (file, weapons) = match (&line.census, &line.weapons) {
         (Some(f), None) => (f, false),
         (None, Some(f)) => (f, true),
-        _ => return Err(RollError::BadData(USAGE.to_string())),
+        _ => return Err(ItemError::BadData(USAGE.to_string())),
     };
     let seeds: Vec<u32> = if weapons {
         (1..=line.seeds).collect()
@@ -416,7 +411,7 @@ fn execute(line: &Line, cooked: &Path, mode: ParityMode) -> Result<(), RollError
                 // A roll that answers NotYet (Off mode's class mods, for one) is a line of its own, so one gap does
                 // not stop the batch; any other error does.
                 let roll = match session.line(line, &balance, stage, *seed) {
-                    Err(RollError::NotYet(n)) => {
+                    Err(ItemError::NotYet(n)) => {
                         outcome_line(&balance, stage, *seed, "not_yet", &n.missing.to_string())
                     }
                     other => other?,
@@ -426,7 +421,7 @@ fn execute(line: &Line, cooked: &Path, mode: ParityMode) -> Result<(), RollError
             }
         }
     }
-    std::fs::write(file, text).map_err(|e| RollError::BadData(format!("{file}: {e}")))
+    std::fs::write(file, text).map_err(|e| ItemError::BadData(format!("{file}: {e}")))
 }
 
 #[cfg(test)]
@@ -494,18 +489,6 @@ mod tests {
                 "8",
                 "--seed",
                 "1",
-                "--overlay",
-                "o.json",
-            ],
-            &[
-                "--item-roll",
-                "X.Y",
-                "--cooked",
-                ".",
-                "--stage",
-                "8",
-                "--seed",
-                "1",
                 "--census",
                 "c.jsonl",
             ],
@@ -526,6 +509,26 @@ mod tests {
                 "{line:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_overlay_is_not_there_yet() {
+        let line = args(&[
+            "--item-roll",
+            "X.Y",
+            "--cooked",
+            ".",
+            "--stage",
+            "8",
+            "--seed",
+            "1",
+            "--overlay",
+            "o.json",
+        ]);
+        assert_eq!(
+            run(command(), &line, ParityMode::Off),
+            ExitCode::from(NOT_PORTED)
+        );
     }
 
     #[test]

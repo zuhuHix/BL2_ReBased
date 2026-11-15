@@ -223,7 +223,7 @@ command reads it, and the mapping is written into `crates/README.md`):
 | `cmd/vm.rs` | W3-INTERP | `--run`, `--run-batch`, `--native`, `--native-args`, `--self`, `--arg`, `--steps`, `--class` |
 | `cmd/census.rs` | W4-VMTOOLS | `--native-census`, `--vm-sweep`, `--native-selftest`, `--no-static`, `--top`, `--limit`, `--all` |
 | `cmd/items.rs` | W4-REGISTRY | `--item-registry` with `--cooked <dir>`, `[--overlay <file>]` (Rust-only) |
-| `cmd/items_roll.rs` | W4-ROLL | `--item-roll <balance path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--overlay <file>]` (Rust-only) |
+| `cmd/items_roll.rs` | W4-ROLL | `--item-roll <balance path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--overlay <file>]` (NotYet, exit 3); `--item-roll --census <file> --cooked <dir> [--rolls <n>]` (item_roll.py's census rolls); `--item-roll --weapons <file> --cooked <dir> [--seeds <n>]` (weapon_gen_parity's requests) (Rust-only) |
 | `cmd/items_stats.rs` | W4-STATS | `--item-stats` and `--item-card`, each with `--cooked <dir>` and either `--data <definition-data json file>` or the `--item-roll` modifiers, `[--overlay <file>]` (Rust-only) |
 | `cmd/items_pools.rs` | W4-POOLS | `--item-pool <pool path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--overlay <file>]` (Rust-only) |
 | `cmd/behavior.rs` | W5-BEHAVIOR | `--behavior-dump`, `--behavior-run` |
@@ -989,8 +989,23 @@ pub struct Registry { .. }  pub fn build_registry(defs: &mut DefStore, space: &m
 // false (an OfflineWorld); over a world that may run script (the Vm) it answers NotYet { NotPorted }, because the
 // nested evaluation would draw from the inner world's generators (the adapter rule of 3.5).
 pub struct RollWorld<'a> { pub inner: &'a mut dyn AttrWorld, pub rng: &'a mut CrtRand, pub inner_runs_script: bool }   // impl AttrWorld
-pub struct RollCx<'a> { pub balance: &'a BalanceSnapshot, pub eval: EvalCx<'a> }        // eval.world is a RollWorld
-pub fn roll(reg: &Registry, balance: &ObjectPath, cx: &mut RollCx) -> Result<DefinitionData, ItemError>;
+// As shipped by W4-ROLL (PR #319, decision 2026-11-15-21):
+#[non_exhaustive] pub struct RollCx<'a> { pub balance: &'a BalanceSnapshot, pub eval: EvalCx<'a> /* eval.world is a RollWorld */,
+    pub sys: &'a AttributeSystem, pub mode: ParityMode, pub item: Option<ObjRef> /* the item's instance, Off mode */,
+    pub manufacturer: Option<String> /* no manufacturer draw */, pub known: DetMap<String, ObjRef> /* objects by path */,
+    /* pub(crate) data: &'a RollData, the values the registry does not hold (merge.rs, over registry::TagLookup) */ }
+    // ::new(balance, eval, sys, &RollData, mode), with_item, with_manufacturer, with_known
+pub fn roll(reg: &Registry, balance: &ObjectPath, cx: &mut RollCx) -> Result<RollResult, ItemError>;   // either mode
+pub fn roll_candidate(reg: &Registry, balance: &ObjectPath, candidate: &PoolCandidate, cx: &mut RollCx)
+    -> Result<RollResult, ItemError>;   // Off mode only (Reference: ItemError::WrongMode)
+#[non_exhaustive] pub enum RollResult { Item(Box<Rolled>), NotRollable(NotRollable /* the oracle's reason */) }
+impl Rolled { pub fn definition_data(&self) -> Result<DefinitionData, ItemError>; /* to_item_pv, to_weapon_pv: the oracles' JSON */ }
+// candidates.rs: pub fn expand(data, record, stage, cap, value) -> Result<Vec<PoolCandidate>, ItemError>  // NATIVE_LOOT expansion
+//                pub fn pick_candidate(&[PoolCandidate], rng) -> Picked<usize>   // a balance on its own: one draw
+// Off mode and the item's instance: the caller runs expand, draws a candidate (pick_candidate, or its pool's draw),
+// instantiates the item (W4-STATS instantiate_stats, or the world's weapon actor), then calls roll_candidate with
+// RollCx::with_item. roll in Off mode without an instance answers NotYet for the parts that need one (name expressions,
+// context-dependent rarity terms); RollCx has no hook that instantiates.
 pub fn instantiate_stats(data: &DefinitionData, cx: &mut EvalCx) -> Result<ObjRef, ItemError>;  // the weapon/item object the stats live on
 pub fn card(stats_object: ObjRef, cx: &mut EvalCx) -> Result<Card, ItemError>;                 // AttributePresentationDefinition rounding
 pub fn roll_pool(pool: &ObjectPath, cx: &mut RollCx) -> Result<Vec<DefinitionData>, ItemError>;   // the oracle: loot_pools.roll_pool_crt
