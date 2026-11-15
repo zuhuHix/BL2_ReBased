@@ -118,6 +118,18 @@ pub fn band(data: &RollData, level: i64) -> Option<String> {
     None
 }
 
+/// item_roll.rarity's `sum(v for _, v in terms if v is not None)`: Python's integers do not overflow, so a sum that
+/// leaves `i64` is refused instead of wrapping or panicking.
+pub(crate) fn sum_terms(terms: &[(String, Option<i64>)]) -> Result<i64, ItemError> {
+    terms
+        .iter()
+        .filter_map(|(_, v)| *v)
+        .try_fold(0i64, |sum, v| sum.checked_add(v))
+        .ok_or_else(|| {
+            ItemError::BadData("item_roll.rarity: the rarity sum leaves the i64 range".to_string())
+        })
+}
+
 /// The rarity of one roll (module documentation).
 pub fn rarity(
     data: &RollData,
@@ -127,7 +139,7 @@ pub fn rarity(
     value: &mut TermOf<'_>,
 ) -> Result<Rarity, ItemError> {
     let terms = terms(data, definition, parts, names, value)?;
-    let level = terms.iter().filter_map(|(_, v)| *v).sum();
+    let level = sum_terms(&terms)?;
     Ok(Rarity {
         level,
         band: band(data, level),

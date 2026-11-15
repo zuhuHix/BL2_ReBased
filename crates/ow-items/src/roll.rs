@@ -449,16 +449,17 @@ pub fn roll_candidate(
     candidate: &PoolCandidate,
     cx: &mut RollCx,
 ) -> Result<RollResult, ItemError> {
-    let path = balance.as_str();
-    let Some(record) = reg.balance(path) else {
-        return not_rollable("unknown_balance", path);
-    };
+    // Off mode only: the mode is refused before anything else is read (Reference rolls go through `roll`).
     if cx.mode == ParityMode::Reference {
         return Err(ItemError::WrongMode {
             call: "roll_candidate",
             mode: cx.mode,
         });
     }
+    let path = balance.as_str();
+    let Some(record) = reg.balance(path) else {
+        return not_rollable("unknown_balance", path);
+    };
     let kind = record.at("kind").as_str().unwrap_or("").to_string();
     off_roll(reg, path, record, &kind, Some(candidate), cx)
 }
@@ -2493,6 +2494,27 @@ pub(crate) mod tests {
         let snap = snapshot(8);
         let mut world = TestWorld::new();
         for mode in [ParityMode::Reference, ParityMode::Off] {
+            // An unknown balance: Reference is refused first, Off mode answers not rollable.
+            let mut rng = CrtRand::new(1);
+            let mut rw = RollWorld::new(&mut world, &mut rng, false);
+            let mut cx = RollCx::new(&snap, EvalCx::new(&mut rw), &fx.sys, &fx.data, mode);
+            let missing = ObjectPath::parse("GD_RollTest.Bal.Missing").unwrap();
+            match roll_candidate(&fx.reg, &missing, &candidate, &mut cx) {
+                Err(ItemError::WrongMode { call, mode: m }) => {
+                    assert_eq!(
+                        (call, m, mode),
+                        (
+                            "roll_candidate",
+                            ParityMode::Reference,
+                            ParityMode::Reference
+                        )
+                    )
+                }
+                Ok(RollResult::NotRollable(n)) => {
+                    assert_eq!((n.reason, mode), ("unknown_balance", ParityMode::Off))
+                }
+                other => panic!("{other:?}"),
+            }
             let mut rng = CrtRand::new(1);
             let mut rw = RollWorld::new(&mut world, &mut rng, false);
             let mut cx = RollCx::new(&snap, EvalCx::new(&mut rw), &fx.sys, &fx.data, mode);
@@ -2518,6 +2540,25 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_rarity_sum_that_leaves_i64_is_refused() {
+        // Two terms just over i64::MAX / 2 each pass trunc_i64 but overflow the sum; Python's bigint sum would not.
+        let half = i64::MAX / 2 + 1;
+        let terms = vec![
+            ("Test.A".to_string(), Some(half)),
+            ("Test.B".to_string(), Some(half)),
+        ];
+        assert!(
+            matches!(crate::rarity::sum_terms(&terms), Err(ItemError::BadData(m)) if m.contains("item_roll.rarity"))
+        );
+        let fine = vec![
+            ("Test.A".to_string(), Some(half)),
+            ("Test.B".to_string(), None),
+            ("Test.C".to_string(), Some(-half)),
+        ];
+        assert_eq!(crate::rarity::sum_terms(&fine), Ok(0));
     }
 
     #[test]
