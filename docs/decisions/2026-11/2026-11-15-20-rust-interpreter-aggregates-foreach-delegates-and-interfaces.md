@@ -94,7 +94,11 @@ where the Rust output differs from the C++ and why, and what stays open.
       (architecture R3).
   - **Interfaces.**
     - `QueryInterface`, `DynamicCast` and `InterfaceCast` answer child-of or implements.
-    - A "no" through an engine-native stand-in class stays `NotYet` (decision 2026-11-15-08).
+    - A "no" through an engine-native stand-in class stays `NotYet` (decision 2026-11-15-08), in the casts, in
+      `QueryInterface` and in the iterators' InterfaceClass filter (review r1 of PR #318).
+    - **The caller rule.** `Vm::implements` stays a plain `bool`; its callers apply the stand-in check. After a "no" a
+      caller asks `interp::is_child(vm, class, iface)?`, which answers `NotYet` through a stand-in class. A later lane
+      that asks `implements` does the same.
     - `InterfaceContext` passes its operand through.
 - **Recursion, bounds and order (the brief's questions).** Every expression level these files add goes through the
   interpreter's nesting budget (`MAX_NESTING`), including the static-array base walk. The only recursion on values is
@@ -108,14 +112,25 @@ where the Rust output differs from the C++ and why, and what stays open.
   - a frame holds at most `MAX_ITERATORS` (4,096) loop states.
 
   No game value is known to meet any of them. There is no sort comparator (above), so no comparator order.
+
+  **Known gap: the depth bound does not bound a value's size** (review r1 of PR #318). Shared allocations let a shallow
+  value stand for very many leaves: `Items.AddItem(Items)` 60 times stays at depth 60 but holds about 2^60 leaf
+  places. A later `==`, `Find`, `RemoveItem`, `Case` or a print then walks every one of them, with no step tick, so the
+  call hangs instead of giving a typed error (the C++ would run out of memory). Size counting is a Rust follow-up (on
+  the hub's list), not in this lane. Compiled script does not build such a value as far as read.
 - **Where the output differs from the C++, and why.**
   - The heap typing above: an item of the wrong kind refused, a removed element refused, and a static array as a whole
     `NotYet`.
   - A local delegate in Off mode (above).
   - `FindStruct` and `Find` on a struct value: the C++ `elements()` of a struct is its fields, so it searches them;
     here a value that is not an array finds nothing. This is not seen in compiled script.
+  - Delegate function names compare case-insensitively (names are interned without case), where the C++ compares the
+    two spellings byte for byte: the delegate comparisons and the bound check (`delegate.rs`, `parts` and `bound`).
+  - A delegate bound to an object that the heap has since freed: calling it is a `HeapError` (a stale handle) here,
+    where the C++ keeps the object alive through its reference and calls the function on it.
 - **Verified (automated, local, pc-hummer).**
-  - **Unit tests.** 24 new `ow-vm` tests on invented packages.
+  - **Unit tests.** 25 new `ow-vm` tests on invented packages (24 in the three files, and one in `natives_core.rs`
+    from review r1: `QueryInterface` and the InterfaceClass filter answer `NotYet` through a stand-in class).
     - Aggregates: `vm_test.py`'s `Arr` (2) and `Append` (2, one element per assignment). The C++ results of `Length`,
       `Add`, `Insert`, `InsertItem`, `Remove`, `RemoveItem`, `Find` and `FindStruct`. Heap arrays growing with typed
       zeros and refusing a float item. Static-array elements of a property, a local and a struct field, with the
@@ -164,9 +179,12 @@ where the Rust output differs from the C++ and why, and what stays open.
     `WillowGame.WillowPlayerController` with the class as self), against W3-INTERP's recorded C++ outputs.
     - **Under Reference:** 326/326, 312/312, 513/513 and 1,595/1,596 identical (W3-INTERP's stand-in baseline was
       326, 309, 498 and 1,465).
-    - **The one left**, `WillowPlayerController.InitInputSystem`, is not this lane's: `PlayerInput = new(Self)
-      InputClass` gives None in the C++ (no assertion is logged, so its `InputClass` default is not a class value there)
-      and an object here (W3-DEFS's defaults give a class), whose native `InitInputSystem` stub then runs.
+    - **The one left**, `WillowPlayerController.InitInputSystem`, is not this lane's. The function creates its
+      PlayerInput object from the class its `InputClass` default names. In the C++ that creation gives None; here it
+      gives an object (W3-DEFS's defaults give a class), and that object's native `InitInputSystem` stub then runs.
+      W3-INTERP's real-package run on `main` traced it to the C++ reference: its tag readers hold the inherited
+      `InputClass` default as an object stand-in, and its `New` returns None for a value that is not a class
+      (`src/interp.cpp:469`). The Rust result follows the declared `ClassProperty`, and that is the reading kept.
     - **Off adds only the Off rows of decision 2026-11-15-14:** `GotoState` `NotYet` (W5-STATES), `<Class>_<n>` names
       and `FRand`. One more case meets a decision 2026-11-15-08 stand-in class `NotYet`.
   - Nothing was checked in the running game; there was no session in this lane.
@@ -174,8 +192,8 @@ where the Rust output differs from the C++ and why, and what stays open.
   - Rerun `vm_test.py` on the Rust binary once W3-DEFS (class defaults, struct defaults), W4-VMTOOLS
     (`--native-census`), W5-EQUIP and W5-DIALOG land. The inventory fixture's `CachedObjects` array also names no inner
     property; it is W5-EQUIP's `--inventory-move` block and was not part of this grant.
-  - The installed-game rerun on `main` once PR #316 lands (the numbers above are from a local merge).
-  - `InitInputSystem`'s `InputClass` default (W3-DEFS, or a C++ reading to record).
+  - The installed-game rerun on `main` now that PR #316 has landed (the numbers above are from a local merge with its
+    45e1cd44 head).
   - A static array used as a whole, if script is found that needs it.
   - `DynArraySort` and a delegate called through a local in Off mode: both wait for the game's rule to be read.
 - **UNVERIFIED.** Every rule above is the C++ VM's reading, none checked in the running game:

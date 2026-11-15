@@ -408,7 +408,8 @@ fn register_with(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError
 fn interfaces(vm: &mut Vm) -> Result<(), VmError> {
     // Object.QueryInterface (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): the object itself when its class is the
     // interface class or derives from it, or implements it (`Vm::implements`, the C++ Runtime::implements, wired by
-    // W4-INTERP2); else None.
+    // W4-INTERP2); else None. A "no" through an engine-native stand-in class is NotYet (decision 2026-11-15-08), as
+    // the casts answer it: `Vm::implements` is a plain bool and its callers apply that check.
     reg(vm, "Object.QueryInterface(class)", |c| {
         let want = class(c, 0)?;
         let (Some(this), Some(want)) = (c.this, want) else {
@@ -416,6 +417,9 @@ fn interfaces(vm: &mut Vm) -> Result<(), VmError> {
         };
         let own = c.vm.space.heap.get(this)?.class;
         let yes = c.vm.space.classes.is_child_of(own, want) || c.vm.implements(own, want);
+        if !yes {
+            crate::interp::is_child(c.vm, own, want)?;
+        }
         Ok(Value::Object(yes.then_some(this)))
     })
 }
@@ -1154,7 +1158,9 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
     // of it, in creation order; the loop binds the out parameter (index 1). A None BaseClass matches nothing.
     // UNVERIFIED (as in the C++): the real DynamicActors visits only actors spawned at run time, here it is the same
     // list as AllActors; the real walk is live, here the list is taken when the loop starts. An InterfaceClass keeps
-    // the objects whose class implements it (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2).
+    // the objects whose class implements it (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2); a
+    // "no" for an object whose class chain runs through an engine-native stand-in class is NotYet (decision
+    // 2026-11-15-08). Only `implements` decides, as in the C++; `is_child` is asked for that NotYet alone.
     fn actors(c: &mut NativeCall<'_>) -> Result<IteratorResult, VmError> {
         let base = if c.has(0) { class(c, 0)? } else { None };
         let interface = if c.has(2) { class(c, 2)? } else { None };
@@ -1168,7 +1174,11 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
                 None => true,
                 Some(iface) => {
                     let own = c.vm.space.heap.get(o)?.class;
-                    c.vm.implements(own, iface)
+                    let yes = c.vm.implements(own, iface);
+                    if !yes {
+                        crate::interp::is_child(c.vm, own, iface)?;
+                    }
+                    yes
                 }
             };
             if keep {
@@ -2838,6 +2848,40 @@ mod tests {
             .try_call(key, None, vec![leaf_c, Value::Class(Some(h.actor))], &[])
             .unwrap_err();
         assert_eq!(not_yet(e), Missing::NotRead);
+    }
+
+    #[test]
+    fn the_interface_query_answers_not_yet_through_an_engine_native_class() {
+        // A class whose super is an engine-native stand-in (decision 2026-11-15-08): a "no" from the interface table is
+        // not proven, so QueryInterface and the iterators' InterfaceClass filter answer NotYet, as DynamicCast does.
+        let mut h = off();
+        let object = h.object;
+        let native = h.vm.space.classes.define("Engine.StandIn", Some(object), vec![]).unwrap();
+        h.vm.space.classes.mark_native(native).unwrap();
+        let leaf = h.vm.space.classes.define("Game.Leaf", Some(native), vec![]).unwrap();
+        let o = h.vm.instantiate(leaf, "L").unwrap();
+        let key = "Object.QueryInterface(class)";
+        // A yes by the class chain still stands.
+        assert_eq!(h.call_on(key, o, vec![Value::Class(Some(native))]), Value::Object(Some(o)));
+        let e = h
+            .try_call(key, Some(o), vec![Value::Class(Some(h.actor))], &[])
+            .unwrap_err();
+        assert_eq!(not_yet(e), Missing::NotRead);
+        for key in [
+            "Actor.AllActors(class,object,class)",
+            "Actor.DynamicActors(class,object,class)",
+        ] {
+            let id = h.declare(key, 3, &[1]);
+            let it = h.vm.iterator_for(id).unwrap();
+            let args = vec![
+                Arg::new(Value::Class(Some(leaf)), false, true),
+                Arg::new(Value::None, true, true),
+                Arg::new(Value::Class(Some(h.actor)), false, true),
+            ];
+            let mut call = NativeCall::new(&mut h.vm, id, None, args);
+            let e = it(&mut call).unwrap_err();
+            assert_eq!(not_yet(e), Missing::NotRead, "{key}");
+        }
     }
 
     #[test]
