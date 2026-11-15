@@ -162,94 +162,20 @@ fn is_c_space(c: u8) -> bool {
     c == b' ' || (0x09..=0x0d).contains(&c)
 }
 
-/// The length of the longest prefix of `s` (after white space) that C `strtod` reads as a decimal number, `inf`,
-/// `infinity` or `nan` (optionally `nan(...)`), and whether it is a hexadecimal float. `None` when nothing converts.
-pub(crate) fn strtod_prefix(s: &str) -> Option<(usize, usize, bool)> {
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() && is_c_space(b[i]) {
-        i += 1;
-    }
-    let start = i;
-    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
-        i += 1;
-    }
-    let rest = &s[i..];
-    let lower = rest.to_ascii_lowercase();
-    if lower.starts_with("infinity") {
-        return Some((start, i + 8, false));
-    }
-    if lower.starts_with("inf") {
-        return Some((start, i + 3, false));
-    }
-    if lower.starts_with("nan") {
-        let mut end = i + 3;
-        if b.get(end) == Some(&b'(')
-            && let Some(close) = b[end..].iter().position(|&c| c == b')')
-            && b[end + 1..end + close]
-                .iter()
-                .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        {
-            end += close + 1;
-        }
-        return Some((start, end, false));
-    }
-    if lower.starts_with("0x")
-        && (lower
-            .as_bytes()
-            .get(2)
-            .is_some_and(|c| c.is_ascii_hexdigit())
-            || (lower.as_bytes().get(2) == Some(&b'.')
-                && lower
-                    .as_bytes()
-                    .get(3)
-                    .is_some_and(|c| c.is_ascii_hexdigit())))
-    {
-        return Some((start, i, true));
-    }
-    let digits_from = i;
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
-    }
-    let mut mantissa = i - digits_from;
-    if i < b.len() && b[i] == b'.' {
-        let dot = i;
-        i += 1;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        mantissa += i - dot - 1;
-        if mantissa == 0 {
-            return None;
-        }
-    }
-    if mantissa == 0 {
-        return None;
-    }
-    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-        let mut j = i + 1;
-        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
-            j += 1;
-        }
-        let exp_from = j;
-        while j < b.len() && b[j].is_ascii_digit() {
-            j += 1;
-        }
-        if j > exp_from {
-            i = j;
-        }
-    }
-    Some((start, i, false))
-}
-
 /// C `strtod(s, nullptr)` for decimal text, `inf`, `infinity` and `nan` (MSVC's UCRT rounds correctly, as Rust's
 /// parser does): the longest prefix that converts, 0 when none does. A hexadecimal float (`0x1.8p3`) is
 /// `NotYet { NotRead }`: no parser for it is written here.
 pub(crate) fn c_strtod(s: &str) -> Result<f64, VmError> {
-    let Some((start, end, hex)) = strtod_prefix(s) else {
+    let Some(ow_core::num::StrtodPrefix {
+        start,
+        end,
+        hexadecimal,
+        ..
+    }) = ow_core::num::strtod_prefix(s)
+    else {
         return Ok(0.0);
     };
-    if hex {
+    if hexadecimal {
         return Err(NotYet::not_read(
             format!("string to float of the hexadecimal text {s:?}"),
             "lane W3-INTERP (C strtod hexadecimal floats are not parsed)",

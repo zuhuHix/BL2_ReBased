@@ -42,7 +42,9 @@
 //! class layout (the declaring class is the object's class or a super class, the index is below `array_dim`), and
 //! `write` checks the value against the declaration ([`Heap::check_value`]): the variant matches the kind, an object
 //! reference and a delegate's receiver name objects that are not freed, an object reference one of the declared class
-//! or a subclass, a class reference a class of the table that is the declared metaclass or a subclass, a struct has the
+//! or a subclass (an object property declared as a class's ancestor, [`CLASS_ANCESTORS`], also holds a class of the
+//! table: a class is an object in UnrealScript), a class reference a class of the table that is the declared metaclass
+//! or a subclass, a struct has the
 //! declared type and its layout's entry count, and arrays and struct fields are checked element by element. An
 //! interface reference is checked only for not being freed: which classes implement an interface comes from the class
 //! bodies (W2-REFLECT). [`Heap::write_in`] changes one array element or struct field inside a property and checks only
@@ -479,6 +481,13 @@ impl Heap {
                 }) => self.get(*r).map(|_| ()),
                 _ => Ok(()),
             },
+            // A class is an object in UnrealScript: an object property declared as a class's ancestor holds one.
+            (PropKind::Object { class }, Value::Class(c)) if holds_classes(classes, *class) => match c {
+                Some(c) if classes.get_layout(*c).is_none() => {
+                    Err(LayoutError::UnknownClass(*c).into())
+                }
+                _ => Ok(()),
+            },
             (PropKind::Object { class }, Value::Object(r)) => match r {
                 None => Ok(()),
                 Some(r) => {
@@ -731,6 +740,26 @@ impl ObjectSpace {
             .check_value(&self.classes, &PropKind::Struct(s), &v)?;
         Ok(self.classes.set_struct_defaults(s, v)?)
     }
+}
+
+/// The paths of `Core.Class` and the classes it derives from in UE3 (`Class : State : Struct : Field : Object`):
+/// an object property declared as one of them may hold a class value (UNVERIFIED for this executable: the public UE3
+/// chain; granted to lane W3-INTERP in review r2 of PR #314).
+pub const CLASS_ANCESTORS: [&str; 5] = [
+    "Core.Object",
+    "Core.Field",
+    "Core.Struct",
+    "Core.State",
+    "Core.Class",
+];
+
+/// Whether an object property declared as `class` may hold a class value ([`CLASS_ANCESTORS`]).
+fn holds_classes(classes: &ClassTable, class: ClassId) -> bool {
+    classes.get_layout(class).is_some_and(|l| {
+        CLASS_ANCESTORS
+            .iter()
+            .any(|p| l.path().as_str().eq_ignore_ascii_case(p))
+    })
 }
 
 crate::value::assert_not_send!(Heap);
@@ -1812,5 +1841,35 @@ mod tests {
             );
         }
         assert_eq!(w.space.heap.len(), before);
+    }
+
+    #[test]
+    fn an_object_property_declared_as_a_class_ancestor_holds_a_class() {
+        let mut space = ObjectSpace::new();
+        let object = space.classes.declare("Core.Object").unwrap();
+        let owner = space.names.intern("Owner");
+        let decls = vec![PropertyDecl::new(owner, PropKind::Object { class: object })];
+        space.classes.define("Core.Object", None, decls).unwrap();
+        let thing = space.classes.define("Game.Thing", Some(object), vec![]).unwrap();
+        let held = space.names.intern("Held");
+        let narrow = vec![PropertyDecl::new(held, PropKind::Object { class: thing })];
+        let holder = space.classes.define("Game.Holder", Some(object), narrow).unwrap();
+        let o = space.alloc(holder, "H", None, Origin::Runtime).unwrap();
+        let owner = PropAddr::scalar(space.prop(holder, "Owner").unwrap());
+        let held = PropAddr::scalar(space.prop(holder, "Held").unwrap());
+        // Declared Core.Object: a class (or a null class) is stored and read back.
+        space.write(o, owner, Value::Class(Some(thing))).unwrap();
+        assert_eq!(space.read(o, owner).unwrap(), &Value::Class(Some(thing)));
+        space.write(o, owner, Value::Class(None)).unwrap();
+        // A class id the table does not know is refused.
+        assert!(matches!(
+            space.write(o, owner, Value::Class(Some(ClassId::new(999)))),
+            Err(HeapError::Layout(LayoutError::UnknownClass(_)))
+        ));
+        // Declared Game.Thing, which no class derives from: a class is the wrong kind.
+        assert!(matches!(
+            space.write(o, held, Value::Class(Some(thing))),
+            Err(HeapError::WrongKind { .. })
+        ));
     }
 }

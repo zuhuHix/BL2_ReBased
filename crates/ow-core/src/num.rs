@@ -265,6 +265,121 @@ pub fn card_round(x: f32, digits: i32) -> f32 {
     card_round_f64(x, digits) as f32
 }
 
+/// What [`strtod_prefix`] found.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StrtodPrefix {
+    /// Where the number starts (its sign, if any), after the white space.
+    pub start: usize,
+    /// Where the text that converts ends. For a hexadecimal float, where its `0x` starts (the scanner stops there).
+    pub end: usize,
+    /// The text is a C hexadecimal float, which the scanner does not read further.
+    pub hexadecimal: bool,
+}
+
+impl StrtodPrefix {
+    fn decimal(start: usize, end: usize) -> Self {
+        StrtodPrefix {
+            start,
+            end,
+            hexadecimal: false,
+        }
+    }
+}
+
+/// C `isspace` in the C locale.
+fn is_c_space(c: u8) -> bool {
+    c == b' ' || (0x09..=0x0d).contains(&c)
+}
+
+/// The prefix of `s` that C `strtod` (MSVC, the C locale) reads: leading white space skipped, then an optional sign
+/// and a decimal number (digits with an optional fraction and an optional exponent that has digits), `inf`,
+/// `infinity` or `nan` (optionally `nan(chars)`), or the start of a hexadecimal float (`0x` and a hex digit).
+/// `None` when nothing converts. The scanner only: converting the text is the caller's (an `f64` parse for decimal
+/// text; a hexadecimal float is reported, not read). Used by the VM's string-to-float cast and the CLI's `std::stod`.
+pub fn strtod_prefix(s: &str) -> Option<StrtodPrefix> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && is_c_space(b[i]) {
+        i += 1;
+    }
+    let start = i;
+    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+    }
+    let rest = &s[i..];
+    let lower = rest.to_ascii_lowercase();
+    if lower.starts_with("infinity") {
+        return Some(StrtodPrefix::decimal(start, i + 8));
+    }
+    if lower.starts_with("inf") {
+        return Some(StrtodPrefix::decimal(start, i + 3));
+    }
+    if lower.starts_with("nan") {
+        let mut end = i + 3;
+        if b.get(end) == Some(&b'(')
+            && let Some(close) = b[end..].iter().position(|&c| c == b')')
+            && b[end + 1..end + close]
+                .iter()
+                .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        {
+            end += close + 1;
+        }
+        return Some(StrtodPrefix::decimal(start, end));
+    }
+    if lower.starts_with("0x")
+        && (lower
+            .as_bytes()
+            .get(2)
+            .is_some_and(|c| c.is_ascii_hexdigit())
+            || (lower.as_bytes().get(2) == Some(&b'.')
+                && lower
+                    .as_bytes()
+                    .get(3)
+                    .is_some_and(|c| c.is_ascii_hexdigit())))
+    {
+        return Some(StrtodPrefix {
+            start,
+            end: i,
+            hexadecimal: true,
+        });
+    }
+    let digits_from = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let mut mantissa = i - digits_from;
+    if i < b.len() && b[i] == b'.' {
+        let dot = i;
+        i += 1;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        mantissa += i - dot - 1;
+        if mantissa == 0 {
+            return None;
+        }
+    }
+    if mantissa == 0 {
+        return None;
+    }
+    if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
+        let mut j = i + 1;
+        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
+            j += 1;
+        }
+        let exp_from = j;
+        while j < b.len() && b[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > exp_from {
+            i = j;
+        }
+    }
+    Some(StrtodPrefix::decimal(start, i))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,5 +778,24 @@ mod tests {
         assert_eq!(f32r(-0.0).to_bits(), (-0.0f64).to_bits());
         // Halfway between 1 and the next float: ties to even.
         assert_eq!(f32r(1.0 + 1.0 / 16_777_216.0), 1.0);
+    }
+
+    #[test]
+    fn strtod_prefix_scans_what_c_strtod_reads() {
+        let p = |s: &str| strtod_prefix(s).map(|p| (p.start, p.end, p.hexadecimal));
+        assert_eq!(p(" 1.5e2xyz"), Some((1, 6, false)));
+        assert_eq!(p("-.5"), Some((0, 3, false)));
+        assert_eq!(p("1e"), Some((0, 1, false)), "an exponent with no digits is not read");
+        assert_eq!(p("+7."), Some((0, 3, false)));
+        assert_eq!(p("\t-INFINITY!"), Some((1, 10, false)));
+        assert_eq!(p("inf"), Some((0, 3, false)));
+        assert_eq!(p("nan(abc_1)x"), Some((0, 10, false)));
+        assert_eq!(p("nan(a b)"), Some((0, 3, false)), "a malformed nan(...) stops after nan");
+        assert_eq!(p("0x1p3"), Some((0, 0, true)));
+        assert_eq!(p("  0x.8"), Some((2, 2, true)));
+        assert_eq!(p("0x"), Some((0, 1, false)), "0x with no hex digit reads as 0");
+        for none in ["", " ", "x", ".", "-", "e5", "+."] {
+            assert_eq!(p(none), None, "{none:?}");
+        }
     }
 }

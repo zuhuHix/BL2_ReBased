@@ -11,9 +11,15 @@
 //!
 //! **Out arguments alias the caller's storage live**, as the C++ `Slot::alias`: an out argument's place is taken
 //! before the call and travels with the argument ([`Alias`] on `Arg`). A script callee reads and writes the caller's
-//! storage through it, and a native's `NativeCall::set_out` writes through it at once, so `F(x, x)` with two out
-//! parameters sees one variable, and script a native calls back into sees the native's write. An out argument whose
-//! expression is not a storage location (the C++ `scratch`) gets no alias: the callee keeps its own copy.
+//! storage through it, and a native reads it with `NativeCall::arg` and writes it with `NativeCall::set_out` (the only
+//! way to write one), both at once, so `F(x, x)` with two out parameters sees one variable and `x += ++x` reads the
+//! incremented `x`. An out argument whose expression is not a storage location (the C++ `scratch`) gets no alias: the
+//! callee keeps its own copy.
+//!
+//! **Stale frames.** A frame slot is named by the frame's index and the serial number the VM gave the frame
+//! ([`FrameRef`]). A place kept past its frame's return (an `Arg` copied by a native) is a typed stale-frame
+//! `VmError::Script` on its next read or write, never a panic, and never a read of or a write into the frame that took
+//! the index since.
 //!
 //! **Bounds** (Rust-only refusals, decision 2026-11-15-14): a frame holds at most [`MAX_FRAME_SLOTS`] value slots and
 //! all active frames together at most [`MAX_LIVE_SLOTS`], checked before anything is allocated, and the storage is
@@ -44,13 +50,13 @@ use crate::error::VmError;
 /// The object an expression runs against (the C++ `ctx`); `None` is the null object.
 pub(crate) type Ctx = Option<ObjRef>;
 
-/// One running script function (the C++ `Frame`); its storage is `vm.code.frames[id]`.
+/// One running script function (the C++ `Frame`); its storage is `vm.code.frames[at.index]`.
 pub(crate) struct Frame {
     pub(crate) code: Rc<FuncCode>,
     /// The frame's own object (`frame.self`): the call's object, or the owner's class default object.
     pub(crate) this: Ctx,
-    /// The index of this frame's storage on the VM's frame stack.
-    id: usize,
+    /// This frame's storage on the VM's frame stack.
+    at: FrameRef,
     /// Per `code.locals` entry: an optional parameter the call did not supply.
     omitted: Vec<bool>,
     /// Per `code.locals` entry: the caller's storage an out parameter aliases.
@@ -66,28 +72,45 @@ impl Frame {
     }
 }
 
+/// One frame's storage on the VM's frame stack: its index and the serial number the VM gave it when it was pushed.
+/// An index is reused by the next frame pushed after this one returns; the serial is not, so a place that outlived
+/// its frame is told apart from one of the frame now at the index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameRef {
+    index: usize,
+    serial: u64,
+}
+
 /// Where a value lives (the C++ `Value*` of `lval`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Place {
-    /// Slot `.1` of frame `.0` (an index on the VM's frame stack).
-    Slot(usize, usize),
+    /// Slot `.1` of frame `.0`.
+    Slot(FrameRef, usize),
     /// A local-variable reference no declaration of the function has, in frame `.0`.
-    Extra(usize, i32),
+    Extra(FrameRef, i32),
     /// A hidden typed temporary (opcode, operand) of frame `.0`.
-    Typed(usize, u8, i32),
+    Typed(FrameRef, u8, i32),
     /// Element `PropAddr` of an object's property.
     Prop(ObjRef, PropAddr),
     /// Not a storage location: a temporary holding this value (the C++ `scratch`). Writes are dropped.
     Temp(Value),
 }
 
-/// The caller's storage an out argument aliases (carried on `Arg`).
+/// The caller's storage an out argument aliases (carried on `Arg`). A frame slot it names is checked against the
+/// frame's serial on every use: once that frame has returned, the alias is a typed stale-frame error, never a read of
+/// or a write into the frame that took the index since.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Alias(pub(crate) Place);
 
 /// `NativeCall::set_out`'s write through an alias: the value stored as it is (the C++ write through `Arg::alias`).
 pub(crate) fn write_alias(vm: &mut Vm, alias: &Alias, value: Value) -> Result<(), VmError> {
     store(vm, &alias.0, value)
+}
+
+/// `NativeCall::arg`'s read through an alias: the caller's storage as it is now (the C++ read through
+/// `Arg::alias`).
+pub(crate) fn alias_value<'a>(vm: &'a Vm, alias: &'a Alias) -> Result<&'a Value, VmError> {
+    place_ref(vm, &alias.0)
 }
 
 // ------------------------------------------------------------------------------------------------ the frame
@@ -131,14 +154,19 @@ pub(crate) fn run_frame(
         (None, Some(owner)) => Some(class_default(vm, owner)?),
         (None, None) => None,
     };
-    let store = new_frame_store(vm, &code)?;
-    let id = vm.code.frames.len();
+    let mut store = new_frame_store(vm, &code)?;
+    vm.code.frame_serial += 1;
+    store.serial = vm.code.frame_serial;
+    let at = FrameRef {
+        index: vm.code.frames.len(),
+        serial: store.serial,
+    };
     vm.code.live_slots += code.slot_count;
     vm.code.frames.push(store);
     let mut frame = Frame {
         code: code.clone(),
         this,
-        id,
+        at,
         omitted: vec![false; code.locals.len()],
         aliases: vec![None; code.locals.len()],
         switch_value: Value::None,
@@ -148,7 +176,7 @@ pub(crate) fn run_frame(
     for (position, &entry) in code.params.iter().enumerate() {
         match args.get(position) {
             Some(a) if a.supplied => {
-                vm.code.frames[id].slots[code.locals[entry].slot] = a.value.clone();
+                vm.code.frames[at.index].slots[code.locals[entry].slot] = a.value.clone();
                 if a.out {
                     frame.aliases[entry] = a.alias.as_ref().map(|al| al.0.clone());
                 }
@@ -365,7 +393,7 @@ pub(crate) fn lval(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Pla
 fn lval_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Place, VmError> {
     vm.tick()?;
     match e.op {
-        op::LOCAL_VARIABLE | op::LOCAL_OUT_VARIABLE => local_place(f, e.refs[0]),
+        op::LOCAL_VARIABLE | op::LOCAL_OUT_VARIABLE => local_place(vm, f, e.refs[0]),
         op::OP_4C..=op::OP_50 => typed_place(vm, f, e),
         // A state variable reads as an instance variable, as the C++ does (UNVERIFIED in the game).
         op::INSTANCE_VARIABLE | op::OP_5E | op::STATE_VARIABLE => {
@@ -393,11 +421,11 @@ fn lval_inner(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Place, V
 fn local_place_of(f: &Frame, entry: usize) -> Place {
     match &f.aliases[entry] {
         Some(alias) => alias.clone(),
-        None => Place::Slot(f.id, f.code.locals[entry].slot),
+        None => Place::Slot(f.at, f.code.locals[entry].slot),
     }
 }
 
-fn local_place(f: &Frame, reference: i32) -> Result<Place, VmError> {
+fn local_place(vm: &mut Vm, f: &Frame, reference: i32) -> Result<Place, VmError> {
     match f.code.by_export.get(&reference) {
         Some(&entry) => {
             if f.code.locals[entry].decl.array_dim > 1 {
@@ -405,7 +433,14 @@ fn local_place(f: &Frame, reference: i32) -> Result<Place, VmError> {
             }
             Ok(local_place_of(f, entry))
         }
-        None => Ok(Place::Extra(f.id, reference)),
+        None => {
+            // The C++ makes the slot (None) on first use.
+            frame_store_mut(vm, f.at)?
+                .extra
+                .entry(reference)
+                .or_insert(Value::None);
+            Ok(Place::Extra(f.at, reference))
+        }
     }
 }
 
@@ -424,7 +459,7 @@ fn typed_place(vm: &mut Vm, f: &Frame, e: &Expr) -> Result<Place, VmError> {
             ),
         ));
     }
-    vm.code.frames[f.id]
+    frame_store_mut(vm, f.at)?
         .typed
         .entry((e.op, operand))
         .or_insert_with(|| match e.op {
@@ -434,7 +469,7 @@ fn typed_place(vm: &mut Vm, f: &Frame, e: &Expr) -> Result<Place, VmError> {
             op::OP_4F => Value::Bool(false),
             _ => Value::Object(None),
         });
-    Ok(Place::Typed(f.id, e.op, operand))
+    Ok(Place::Typed(f.at, e.op, operand))
 }
 
 /// An instance variable of `ctx`, found by the property's name in the object's class (as the C++ `property()`).
@@ -473,23 +508,51 @@ fn default_place(vm: &mut Vm, f: &mut Frame, reference: i32, ctx: Ctx) -> Result
     property_place(vm, defaults, decl.name)
 }
 
-/// The value at `p`.
-pub(crate) fn read(vm: &Vm, p: &Place) -> Result<Value, VmError> {
-    Ok(match p {
-        Place::Slot(frame, i) => vm.code.frames[*frame].slots[*i].clone(),
-        Place::Extra(frame, r) => vm.code.frames[*frame]
-            .extra
-            .get(r)
-            .cloned()
-            .unwrap_or(Value::None),
-        Place::Typed(frame, o, n) => vm.code.frames[*frame]
+/// The storage of frame `at`, if that frame is still active (its index holds the same serial).
+fn frame_store(vm: &Vm, at: FrameRef) -> Result<&FrameStore, VmError> {
+    vm.code
+        .frames
+        .get(at.index)
+        .filter(|s| s.serial == at.serial)
+        .ok_or_else(|| stale_frame(at))
+}
+
+fn frame_store_mut(vm: &mut Vm, at: FrameRef) -> Result<&mut FrameStore, VmError> {
+    vm.code
+        .frames
+        .get_mut(at.index)
+        .filter(|s| s.serial == at.serial)
+        .ok_or_else(|| stale_frame(at))
+}
+
+fn stale_frame(at: FrameRef) -> VmError {
+    script_error(
+        "",
+        format!(
+            "stale frame: a place names frame {} (serial {}), which has returned",
+            at.index, at.serial
+        ),
+    )
+}
+
+/// The value at `p`, in place.
+fn place_ref<'a>(vm: &'a Vm, p: &'a Place) -> Result<&'a Value, VmError> {
+    let missing = || script_error("", "a frame slot outside its frame's storage");
+    match p {
+        Place::Slot(at, i) => frame_store(vm, *at)?.slots.get(*i).ok_or_else(missing),
+        Place::Extra(at, r) => frame_store(vm, *at)?.extra.get(r).ok_or_else(missing),
+        Place::Typed(at, o, n) => frame_store(vm, *at)?
             .typed
             .get(&(*o, *n))
-            .cloned()
-            .unwrap_or(Value::None),
-        Place::Prop(o, a) => vm.space.read(*o, *a)?.clone(),
-        Place::Temp(v) => v.clone(),
-    })
+            .ok_or_else(missing),
+        Place::Prop(o, a) => Ok(vm.space.read(*o, *a)?),
+        Place::Temp(v) => Ok(v),
+    }
+}
+
+/// The value at `p`.
+pub(crate) fn read(vm: &Vm, p: &Place) -> Result<Value, VmError> {
+    place_ref(vm, p).cloned()
 }
 
 /// An assignment to `p` (the C++ `assign(*target, value)`): the value converted by the assignment rule against what
@@ -505,28 +568,24 @@ pub(crate) fn assign_to(vm: &mut Vm, p: &Place, value: Value) -> Result<Value, V
 /// of the module documentation of `interp` apply.
 pub(crate) fn store(vm: &mut Vm, p: &Place, value: Value) -> Result<(), VmError> {
     match p {
-        Place::Slot(frame, i) => vm.code.frames[*frame].slots[*i] = value,
-        Place::Extra(frame, r) => {
-            vm.code.frames[*frame].extra.insert(*r, value);
+        Place::Slot(at, i) => {
+            let slot = frame_store_mut(vm, *at)?
+                .slots
+                .get_mut(*i)
+                .ok_or_else(|| script_error("", "a frame slot outside its frame's storage"))?;
+            *slot = value;
         }
-        Place::Typed(frame, o, n) => {
-            vm.code.frames[*frame].typed.insert((*o, *n), value);
+        Place::Extra(at, r) => {
+            frame_store_mut(vm, *at)?.extra.insert(*r, value);
+        }
+        Place::Typed(at, o, n) => {
+            frame_store_mut(vm, *at)?.typed.insert((*o, *n), value);
         }
         Place::Prop(o, a) => store_property(vm, *o, *a, value)?,
         Place::Temp(_) => {}
     }
     Ok(())
 }
-
-/// The paths of `Core.Class` and the classes it derives from in UE3 (`Class : State : Struct : Field : Object`): an
-/// object property declared as one of them may hold a class (UNVERIFIED for this executable: the public UE3 chain).
-const CLASS_ANCESTORS: [&str; 5] = [
-    "Core.Object",
-    "Core.Field",
-    "Core.Struct",
-    "Core.State",
-    "Core.Class",
-];
 
 /// A heap write with the representation rules the C++ bag does not need (module documentation of `interp`).
 fn store_property(vm: &mut Vm, object: ObjRef, at: PropAddr, value: Value) -> Result<(), VmError> {
@@ -536,19 +595,7 @@ fn store_property(vm: &mut Vm, object: ObjRef, at: PropAddr, value: Value) -> Re
         .decl(at.prop)
         .map(|d| d.kind.clone())
         .ok_or_else(|| HeapError::from(ow_object::layout::LayoutError::NotAProperty(at.prop)))?;
-    // A class is an object in UnrealScript: an object property declared as a class's ancestor holds one. The slot
-    // has no variant for it, so it is written unchecked after its address is checked.
-    if let (PropKind::Object { class }, Value::Class(_)) = (&kind, &value) {
-        let declared = vm.space.classes.get_layout(*class);
-        if declared.is_some_and(|l| {
-            CLASS_ANCESTORS
-                .iter()
-                .any(|p| l.path().as_str().eq_ignore_ascii_case(p))
-        }) {
-            *vm.space.slot_mut(object, at)? = value;
-            return Ok(());
-        }
-    }
+    // A class into an object property declared as a class's ancestor is the heap's own rule (`check_value`).
     let value = fit_for_heap(vm, &kind, value);
     match vm.space.write(object, at, value) {
         // An object of an engine-native stand-in class: its real chain is unknown, so the refusal is not proven.
