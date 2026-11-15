@@ -1203,8 +1203,10 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
     // when their class is BaseClass or a child of it; a None BaseClass keeps every candidate (NATIVE_ENGINE_CORE.md,
     // "Iterators": None means Actor, and the world's lists hold actors only).
     //
-    // Either way the list is taken when the loop starts, where the game's walk is live (UNVERIFIED as a game rule;
-    // the `foreach` contract takes a list). An InterfaceClass keeps the objects whose class implements it
+    // Either way the list is taken when the loop starts. The game's walk is live (NATIVE_ENGINE_CORE.md, read from
+    // the executable): an actor added during the body is visited, and removing an earlier actor shifts the scan so
+    // the next actor is skipped. The snapshot reproduces neither; it is this port's known divergence (the `foreach`
+    // contract takes a list; decision 2026-11-15-26, a follow-up). An InterfaceClass keeps the objects whose class implements it
     // (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2); a "no" for an object whose class chain
     // runs through an engine-native stand-in class is NotYet (decision 2026-11-15-08). Only `implements` decides, as
     // in the C++; `is_child` is asked for that NotYet alone.
