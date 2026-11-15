@@ -27,17 +27,10 @@ fn ow_package(args: &[&str]) -> (Option<i32>, String) {
 
 #[test]
 fn a_command_says_not_ported_and_exits_3() {
-    let (code, err) = ow_package(&["x", "--names"]);
+    let (code, err) = ow_package(&["x", "--disasm", "1"]);
     assert_eq!(code, Some(3));
     assert!(
-        err.contains("--names is not ported to Rust yet (lane W1-PKG)"),
-        "{err}"
-    );
-    // As in the C++ binary, "--names" in the package position is read as a package path, so the reader is missing.
-    let (code, err) = ow_package(&["--names", "x"]);
-    assert_eq!(code, Some(3));
-    assert!(
-        err.contains("<package> is not ported to Rust yet (lane W1-PKG)"),
+        err.contains("--disasm is not ported to Rust yet (lane W2-SCRIPT)"),
         "{err}"
     );
     let (code, err) = ow_package(&["--native-selftest"]);
@@ -57,12 +50,12 @@ fn no_arguments_print_the_usage_and_exit_1() {
 
 #[test]
 fn a_bad_parity_value_is_an_error_with_exit_1() {
-    let (code, err) = ow_package_with(&["x", "--names"], Some("Reference"));
+    let (code, err) = ow_package_with(&["x", "--disasm", "1"], Some("Reference"));
     assert_eq!(code, Some(1));
     assert_eq!(
         err.trim_end(),
         "ow-package: OW_PARITY must be \"reference\" or unset, not \"Reference\""
     );
-    let (code, _) = ow_package_with(&["x", "--names"], Some("reference"));
+    let (code, _) = ow_package_with(&["x", "--disasm", "1"], Some("reference"));
     assert_eq!(code, Some(3));
 }

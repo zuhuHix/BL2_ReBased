@@ -1,0 +1,2 @@
+python tests/package_test.py {bin}
+python tests/package_test.py {bin} --compressed
