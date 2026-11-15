@@ -9,8 +9,12 @@
 //! fails prints `{"index":..,"error":..}` and the run goes on, while a line that is not a number stops the run with
 //! the lines printed so far kept, as the C++ binary does.
 //!
-//! Lines end in `\n` on every platform (the C++ binary's text-mode streams print `\r\n` on Windows; the parity
-//! harness compares with line ends normalised, hub decision for the Rust port).
+//! Lines end in `\n` on every platform (hub decision for the Rust port). The C++ binary's text-mode streams print
+//! `\r\n` on Windows; the parity harness comparing with line ends normalised is pending the maintainer's yes, so
+//! until then the harness's `diff` lines see the two binaries differ in line ends.
+//!
+//! The index file and the schema files are read as the C++ text-mode `ifstream` reads them on Windows
+//! ([`ow_package::schema::text_mode`]: stop at the first 0x1A byte, `\r\n` to `\n`).
 //!
 //! [`properties_json`] is the C++ `Package::properties` text, for the commands of other families that print it
 //! (`--scene-records`, `--terrain-records`: W2-ASSETS).
@@ -25,7 +29,7 @@ use std::process::ExitCode;
 use ow_core::ParityMode;
 use ow_package::package::{Package, PackageError};
 use ow_package::props::{self, ArrayTyper, PropEntry, PropError, PropValue};
-use ow_package::schema::{SchemaError, SchemaTyper};
+use ow_package::schema::{SchemaError, SchemaTyper, text_mode};
 
 use super::tables::signed_number;
 use crate::args::{Command, USAGE};
@@ -177,6 +181,7 @@ fn batch(package: &Package, args: &[String], out: &mut dyn std::io::Write) -> Re
         typer.load_file(Path::new(&args[6]))?;
     }
     let bytes = std::fs::read(&args[2]).map_err(|_| Failure("cannot open index file".into()))?;
+    let bytes = text_mode(&bytes);
     let text = String::from_utf8_lossy(&bytes);
     for line in text.split('\n') {
         let line = line.strip_suffix('\r').unwrap_or(line);
@@ -254,9 +259,20 @@ fn write_tags(package: &Package, entries: &[PropEntry], out: &mut String) -> Res
                 let _ = write!(out, ",\"element_type\":{}", quote(&element.spec()));
             }
         }
+        // Only the kinds this writer prints are "decoded"; anything else (Raw, and any kind added later) prints as
+        // the C++ prints a value it does not decode.
         let status = match entry.value {
-            PropValue::Raw(_) | PropValue::Delegate { .. } => "unsupported",
-            _ => "decoded",
+            PropValue::Int(_)
+            | PropValue::Float(_)
+            | PropValue::Bool(_)
+            | PropValue::Byte(_)
+            | PropValue::Enum(_)
+            | PropValue::Name(_)
+            | PropValue::Str(_)
+            | PropValue::Object(_)
+            | PropValue::Struct { .. }
+            | PropValue::Array(_) => "decoded",
+            _ => "unsupported",
         };
         let _ = write!(out, ",\"status\":{}}}", quote(status));
     }
@@ -312,8 +328,8 @@ fn write_value(package: &Package, value: &PropValue, out: &mut String) -> Result
             }
             out.push(']');
         }
-        // The C++ format has no delegate form: the walker never produces one (see `PropValue::Delegate`).
-        PropValue::Raw(_) | PropValue::Delegate { .. } => out.push_str("null"),
+        // Raw, and kinds the C++ format has no form for (`Delegate`, never produced by the walker): `null`.
+        _ => out.push_str("null"),
     }
     Ok(())
 }
@@ -451,6 +467,11 @@ mod tests {
         let (out, error) = exec(&dir, "--properties-batch", &[&indices, "--property-offset", "4"]);
         assert_eq!(out, "{\"index\":0,\"error\":\"properties requires a positive export index\"}\n");
         assert_eq!(error.as_deref(), Some("invalid stoll argument"));
+        // Read as the C++ text-mode stream reads it: nothing after a 0x1A byte, `\r\r\n` ends a line in `\r`.
+        let indices = dir.file("indices.txt", b"0\r\r\n0\x1a\nx\n");
+        let (out, error) = exec(&dir, "--properties-batch", &[&indices, "--property-offset", "4"]);
+        let row = "{\"index\":0,\"error\":\"properties requires a positive export index\"}\n";
+        assert_eq!((out, error), (format!("{row}{row}"), None));
     }
 
     #[test]

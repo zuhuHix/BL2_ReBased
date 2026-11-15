@@ -13,7 +13,7 @@ use std::path::Path;
 
 use ow_core::DetMap;
 
-use crate::props::{ArrayTyper, ElementType};
+use crate::props::{ArrayScope, ArrayTyper, ElementType};
 
 /// Why a schema could not be loaded. `Display` gives the C++ text where the C++ loader has the case.
 #[non_exhaustive]
@@ -43,6 +43,27 @@ impl fmt::Display for SchemaError {
 
 impl std::error::Error for SchemaError {}
 
+/// A file's bytes as the C++ binary reads them through a text-mode `std::ifstream` on Windows (the MSVC reference
+/// build): reading stops at the first 0x1A (Ctrl-Z) byte, and each `\r\n` becomes `\n` before lines are split. A
+/// lone `\r` stays. Used for the `--array-schema` files and the `--properties-batch` index file.
+///
+/// UNVERIFIED against a non-MSVC build of the C++ binary, whose text mode does neither.
+pub fn text_mode(bytes: &[u8]) -> Vec<u8> {
+    let end = bytes.iter().position(|&b| b == 0x1a).unwrap_or(bytes.len());
+    let bytes = &bytes[..end];
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Array element types by property name, from schema files.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SchemaTyper {
@@ -58,7 +79,7 @@ impl SchemaTyper {
     /// Adds the lines of the schema file at `path` (C++ `loadSchema`).
     pub fn load_file(&mut self, path: &Path) -> Result<(), SchemaError> {
         let bytes = std::fs::read(path).map_err(|_| SchemaError::Open)?;
-        let text = String::from_utf8(bytes).map_err(|_| SchemaError::NotUtf8)?;
+        let text = String::from_utf8(text_mode(&bytes)).map_err(|_| SchemaError::NotUtf8)?;
         self.add_text(&text)
     }
 
@@ -95,8 +116,8 @@ impl SchemaTyper {
 }
 
 impl ArrayTyper for SchemaTyper {
-    /// The type listed for `property`; `owner_class` is ignored, as the C++ map has no class.
-    fn element(&self, _owner_class: &str, property: &str) -> Option<ElementType> {
+    /// The type listed for `property`; the scope is ignored, as the C++ map is keyed by property name only.
+    fn element(&self, _scope: &ArrayScope<'_>, property: &str) -> Option<ElementType> {
         self.types.get(property).cloned()
     }
 }
@@ -105,20 +126,40 @@ impl ArrayTyper for SchemaTyper {
 mod tests {
     use super::*;
 
+    const SCOPE: ArrayScope<'static> = ArrayScope { owner: "Any", owner_ref: None, path: &[] };
+
+    #[test]
+    fn text_mode_stops_at_ctrl_z() {
+        assert_eq!(text_mode(b"A=IntProperty\n\x1aB=IntProperty\n"), b"A=IntProperty\n");
+        assert_eq!(text_mode(b"1\x1a\n"), b"1");
+        let mut t = SchemaTyper::new_empty();
+        t.add_text(std::str::from_utf8(&text_mode(b"A=IntProperty\x1a\nbad line")).unwrap()).unwrap();
+        assert_eq!((t.len(), t.element(&SCOPE, "A")), (1, Some(ElementType::Int)));
+    }
+
+    #[test]
+    fn text_mode_turns_crlf_into_lf_first() {
+        assert_eq!(text_mode(b"a\r\nb\r\r\nc\rd\r"), b"a\nb\r\nc\rd\r");
+        // `X=Y\r\r\n`: text mode leaves `X=Y\r`, and the loader drops that `\r`, so the value is `Y`.
+        let mut t = SchemaTyper::new_empty();
+        t.add_text(std::str::from_utf8(&text_mode(b"X=IntProperty\r\r\n")).unwrap()).unwrap();
+        assert_eq!(t.element(&SCOPE, "X"), Some(ElementType::Int));
+    }
+
     #[test]
     fn lines_follow_the_cxx_loader() {
         let mut t = SchemaTyper::new_empty();
         t.add_text("# comment\r\n\r\nA=IntProperty\r\nB=StructProperty:Vector\nC=Weird=Thing\nD=StructProperty:")
             .unwrap();
         assert_eq!(t.len(), 4);
-        assert_eq!(t.element("Any", "A"), Some(ElementType::Int));
-        assert_eq!(t.element("Other", "B"), Some(ElementType::Struct("Vector".into())));
+        assert_eq!(t.element(&SCOPE, "A"), Some(ElementType::Int));
+        assert_eq!(t.element(&SCOPE, "B"), Some(ElementType::Struct("Vector".into())));
         // Only the first `=` splits; the rest is the value, kept as text.
-        assert_eq!(t.element("", "C"), Some(ElementType::Other("Weird=Thing".into())));
-        assert_eq!(t.element("", "D"), Some(ElementType::Struct(String::new())));
-        assert_eq!(t.element("", "E"), None);
+        assert_eq!(t.element(&SCOPE, "C"), Some(ElementType::Other("Weird=Thing".into())));
+        assert_eq!(t.element(&SCOPE, "D"), Some(ElementType::Struct(String::new())));
+        assert_eq!(t.element(&SCOPE, "E"), None);
         // A key differing only in case is another key (std::map<std::string, ...>).
-        assert_eq!(t.element("", "a"), None);
+        assert_eq!(t.element(&SCOPE, "a"), None);
     }
 
     #[test]
@@ -153,7 +194,7 @@ mod tests {
         std::fs::write(&path, b"A=IntProperty\n").unwrap();
         let mut t = SchemaTyper::new_empty();
         t.load_file(&path).unwrap();
-        assert_eq!(t.element("", "A"), Some(ElementType::Int));
+        assert_eq!(t.element(&SCOPE, "A"), Some(ElementType::Int));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
