@@ -1,0 +1,6 @@
+# AI-assisted (Claude Code). Lane W5-WORLD: the world, actors, timers and the tick (crates/ow-world/src/{world,query,actors,timers}.rs).
+#
+# No line. The C++ binary has no command that runs the world: its only timer code is the mover adapter's scoped
+# SetTimer/ClearTimer behind --mover-event (lane W5-DIALOG), and spawn, destroy, the tick and the world's iterator
+# walk exist in Rust only. Every rule has a Rust unit test on an invented package instead (crates/ow-world/src/
+# world/tests.rs, decision 2026-11-15-26).
