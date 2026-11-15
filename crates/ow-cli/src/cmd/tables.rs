@@ -343,6 +343,172 @@ fn imports(package: &Package, args: &[String], out: &mut String) -> Result<(), F
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ow_package::testkit::{Export, PackageBuilder};
+
+    /// The main fixture (invented): an import outer chain, a numbered name, an empty-named outer, a control
+    /// character and a quote in names, payloads.
+    fn fixture() -> Vec<u8> {
+        let mut b = PackageBuilder::new_empty();
+        let core = b.add_import("Core", "Package", 0, "Core");
+        let class = b.add_import("Core", "Class", core, "Thing");
+        let mut obj = Export::new(class, "Obj", vec![1, 2, 3]);
+        obj.number = 3;
+        let obj = b.add_export_with(obj);
+        let empty = b.add_export(0, "", vec![]);
+        let mut ctl = Export::new(obj, "Ctl\u{1}\"q", vec![255]);
+        ctl.outer = empty;
+        ctl.super_ = class;
+        ctl.archetype = obj;
+        b.add_export_with(ctl);
+        b.build()
+    }
+
+    /// The cyclic fixture: export 1 is fine, exports 2 and 3 are each other's outer.
+    fn cyclic() -> Vec<u8> {
+        let mut b = PackageBuilder::new_empty();
+        b.add_export(0, "Ok", vec![]);
+        let mut a = Export::new(0, "A", vec![]);
+        a.outer = 3;
+        b.add_export_with(a);
+        let mut c = Export::new(0, "B", vec![]);
+        c.outer = 2;
+        b.add_export_with(c);
+        b.build()
+    }
+
+    /// A temporary directory for one test, removed on drop.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("ow-cli-tables-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Runs `flag` with `extra` arguments on `package` bytes the way `run` does, and returns stdout with the line
+    /// end as `\n`, and the error text if the command failed.
+    fn exec(dir: &TempDir, package: &[u8], flag: &str, extra: &[&str]) -> (String, Option<String>) {
+        let path = dir.0.join("fixture.upk");
+        std::fs::write(&path, package).unwrap();
+        let mut args = vec![path.to_string_lossy().into_owned()];
+        if !flag.is_empty() {
+            args.push(flag.to_string());
+        }
+        args.extend(extra.iter().map(|s| s.to_string()));
+        let mut out = String::new();
+        let error = execute(if flag.is_empty() { "<package>" } else { flag }, &args, &mut out)
+            .err()
+            .map(|Failure(text)| text);
+        (out.replace(NEWLINE, "\n"), error)
+    }
+
+    // The expected texts below are what the C++ binary (build/Release/ow-package.exe, src/ at 4800f3d) printed for
+    // these fixtures, line ends as `\n`.
+
+    #[test]
+    fn table_commands_print_the_cxx_bytes() {
+        let dir = TempDir::new("tables");
+        let p = fixture();
+        let ok = |flag: &str, extra: &[&str], expected: &str| {
+            assert_eq!(exec(&dir, &p, flag, extra), (expected.to_string(), None), "{flag} {extra:?}");
+        };
+        ok("", &[], "{\"version\":832,\"licensee\":46,\"names\":8,\"imports\":2,\"exports\":3}\n");
+        ok(
+            "--names",
+            &[],
+            "[\"Core\",\"Package\",\"Class\",\"Thing\",\"Obj\",\"\",\"Ctl\\u0001\\\"q\",\"None\"]\n",
+        );
+        ok(
+            "--imports",
+            &[],
+            concat!(
+                "[{\"index\":-1,\"name\":\"Core\",\"path\":\"Core\",\"class_package\":\"Core\",\"class_name\":\"Package\",\"outer_index\":0},",
+                "{\"index\":-2,\"name\":\"Thing\",\"path\":\"Core.Thing\",\"class_package\":\"Core\",\"class_name\":\"Class\",\"outer_index\":-1}]\n"
+            ),
+        );
+        ok(
+            "--exports",
+            &[],
+            concat!(
+                "[{\"index\":1,\"name\":\"Obj_2\",\"path\":\"Obj_2\",\"class\":\"Core.Thing\",\"class_index\":-2,\"outer_index\":0,",
+                "\"super_index\":0,\"archetype_index\":0,\"size\":3,\"offset\":446},",
+                "{\"index\":2,\"name\":\"\",\"path\":\"\",\"class\":\"Class\",\"class_index\":0,\"outer_index\":0,",
+                "\"super_index\":0,\"archetype_index\":0,\"size\":0,\"offset\":449},",
+                "{\"index\":3,\"name\":\"Ctl\\u0001\\\"q\",\"path\":\"Ctl\\u0001\\\"q\",\"class\":\"Obj_2\",\"class_index\":1,\"outer_index\":2,",
+                "\"super_index\":-2,\"archetype_index\":1,\"size\":1,\"offset\":449}]\n"
+            ),
+        );
+        ok(
+            "--census",
+            &[],
+            "{\"exports\":3,\"classes\":{\"Class\":1,\"Core.Thing\":1,\"Obj_2\":1}}\n",
+        );
+        ok("--payload", &["1"], "[1,2,3]\n");
+        ok("--payload", &["3"], "[255]\n");
+        ok(
+            "--payloads",
+            &["3", "1"],
+            "[{\"index\":3,\"payload\":[255]},{\"index\":1,\"payload\":[1,2,3]}]\n",
+        );
+
+        let file = dir.0.join("payload.bin");
+        let file_arg = file.to_string_lossy().into_owned();
+        ok("--payload-file", &["1", &file_arg], "{\"index\":1,\"bytes\":3}\n");
+        assert_eq!(std::fs::read(&file).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn bad_requests_print_nothing_and_say_why() {
+        let dir = TempDir::new("bad");
+        let p = fixture();
+        let err = |flag: &str, extra: &[&str]| {
+            let (out, error) = exec(&dir, &p, flag, extra);
+            assert_eq!(out, "", "{flag} {extra:?}");
+            error.unwrap_or_default()
+        };
+        assert_eq!(err("--payloads", &["1", "4"]), "invalid object reference");
+        assert_eq!(err("--payloads", &["1", "0"]), "payload requires a positive export index");
+        assert_eq!(err("--payload", &["x"]), "invalid stoll argument");
+        assert!(err("--names", &["extra"]).starts_with("usage: ow-package <package>"));
+        assert!(err("--bogus", &[]).starts_with("usage: ow-package <package>"));
+    }
+
+    /// A cyclic outer chain fails `--exports` part way: the records before it, and the failing record up to its
+    /// `"path":`, are already printed, as the C++ `<<` chain leaves them in `std::cout`.
+    #[test]
+    fn a_cyclic_outer_chain_keeps_the_partial_output() {
+        let dir = TempDir::new("cyclic");
+        let p = cyclic();
+        assert_eq!(
+            exec(&dir, &p, "--exports", &[]),
+            (
+                concat!(
+                    "[{\"index\":1,\"name\":\"Ok\",\"path\":\"Ok\",\"class\":\"Class\",\"class_index\":0,\"outer_index\":0,",
+                    "\"super_index\":0,\"archetype_index\":0,\"size\":0,\"offset\":312},{\"index\":2,\"name\":\"A\",\"path\":"
+                )
+                .to_string(),
+                Some("cyclic or excessively deep object outer chain".to_string())
+            )
+        );
+        // Commands that never build a path are unaffected.
+        assert_eq!(exec(&dir, &p, "--imports", &[]), ("[]\n".to_string(), None));
+        assert_eq!(
+            exec(&dir, &p, "--census", &[]),
+            ("{\"exports\":3,\"classes\":{\"Class\":3}}\n".to_string(), None)
+        );
+        assert_eq!(
+            exec(&dir, &p, "--names", &[]),
+            ("[\"Ok\",\"A\",\"B\",\"None\"]\n".to_string(), None)
+        );
+    }
 
     #[test]
     fn signed_numbers_follow_stoll_and_the_i32_range() {
