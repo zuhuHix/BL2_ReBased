@@ -19,8 +19,11 @@
 //! - A static-array property (`array_dim > 1`) patched without an index on its first segment: a [`PatchValue::List`]
 //!   sets the whole array (exactly `array_dim` elements, element `i` to `PropAddr` index `i`; another length does not
 //!   type), any other value sets element 0. With an index, the patch sets that element only.
-//! - A patch whose object is a class default (`Default__<Class>`, or a path inside one) fails with
-//!   `DefError::NotADefinition` and counts as failed, not pending: overlays patch definitions, not class defaults.
+//! - A patch whose object is a class default (`Default__<Class>`, or a path inside one) counts as failed, not
+//!   pending, and the error depends on the overlay's kind: for [`OverlayKind::LiveCapture`] (and `Test`) it is
+//!   `DefError::NotADefinition`, as a capture lists definitions only; for [`OverlayKind::TextMod`] and
+//!   [`OverlayKind::Hotfix`] it is `DefError::NotYet`, since mods and micropatches do set class defaults and patching
+//!   them is a missing feature, not bad data.
 //! - A patch whose object no package holds stays pending (`OverlayStatus::pending`).
 //! - The numbers Python's `json.dumps` writes for non-finite floats, `NaN`, `Infinity` and `-Infinity`, are accepted
 //!   as [`PatchValue::Number`] text (they type only into a float).
