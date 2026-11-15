@@ -409,5 +409,8 @@ mod tests {
         }
         let good = stream(&[&[17 + 4], b"abcd", &EOS]);
         assert_eq!(decompress(&good, 4).unwrap(), b"abcd");
+        // The accepted marker with the two low (trailing-literal) bits of its word set still ends the stream.
+        let low_bits = stream(&[&[17 + 4], b"abcd", &[0x11, 0x03, 0x00]]);
+        assert_eq!(decompress(&low_bits, 4).unwrap(), b"abcd");
     }
 }
