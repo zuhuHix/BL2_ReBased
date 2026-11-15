@@ -192,7 +192,7 @@ The scaffold creates every file below with a `//!` header naming its owner lane 
 | `ow-object` | `ids.rs`, `value.rs`, `names.rs`, `heap.rs`, `layout.rs` (W1-OBJ); `reflect.rs`, `class_body.rs` (W2-REFLECT); `decode.rs`, `cdo.rs`, `prefix.rs` (W3-DECODE) |
 | `ow-defs` | `store.rs`, `identity.rs`, `overlay.rs`, `keys.rs`, `tail.rs` (W3-DEFS) |
 | `ow-script` | `ops.rs`, `function.rs`, `decode.rs`, `disasm.rs`, `check.rs` (W2-SCRIPT) |
-| `ow-attr` | `math.rs`, `stack.rs` (W1-ATTRMATH); `api.rs`, `registry.rs` (W2-ATTRAPI); `eval.rs`, `expr.rs`, `value_resolvers/` (W3-ATTREVAL); `context_resolvers/` (W3-ATTRCTX); `effects.rs`, `storage.rs` (W3-ATTREFFECTS) |
+| `ow-attr` | `math.rs`, `stack.rs` (W1-ATTRMATH); `api.rs`, `registry.rs` (W2-ATTRAPI; `registry.rs` only delegates to the files below and the W3 lanes do not edit it); `eval.rs`, `expr.rs`, `value_resolvers/` (W3-ATTREVAL); `context_resolvers/` (W3-ATTRCTX); `effects.rs`, `storage.rs` (W3-ATTREFFECTS). W2-ATTRAPI placed the `NotPorted` stubs in the W3 files; they stay the W3 owners' |
 | `ow-balance` | `types.rs` (W1-BALTYPES); `curve.rs`, `stage.rs`, `cap.rs`, `playthrough.rs`, `xp.rs`, `offline.rs` (W3-BALANCE) |
 | `ow-items` | `data.rs` (W1-ITEMDATA); `registry.rs` (W4-REGISTRY); `merge.rs`, `candidates.rs`, `pick.rs`, `names.rs`, `rarity.rs`, `value.rs`, `roll.rs` (W4-ROLL); `stats.rs`, `cards.rs` (W4-STATS); `pools.rs` (W4-POOLS) |
 | `ow-vm` | `api.rs`, `services.rs`, `error.rs` (W2-VMAPI); `interp/` (W3-INTERP, then W4-INTERP2 adds `interp/aggregate.rs`, `interp/iter.rs`, `interp/delegate.rs`); `natives_core.rs` (W3-CORENAT); `census.rs`, `sweep.rs` (W4-VMTOOLS); `states.rs`, `latent.rs` (W5-STATES) |
@@ -610,16 +610,24 @@ pub enum PowForm { Single /* progression.cpp */, DoubleThenSingle /* weapon_gen.
 // Both forms stay parameters of the frozen API even after 5.3 settles the game's form (callers then pass the settled one).
 pub fn combine_base(mode: BaseValueMode, base: f32, def_value: f32) -> f32;
 
-// api.rs, registry.rs (W2-ATTRAPI). Shipped shapes (W2-ATTRAPI; replaces the revision 3 sketch): module path
+// api.rs, registry.rs (W2-ATTRAPI). Shipped shapes (W2-ATTRAPI, review r1; replaces the revision 3 sketch): module path
 // ow_attr::api for the traits and data, ow_attr::registry for AttributeSystem and let_base.
+// State that outlives one evaluation is the WORLD's (the global slots: one process-wide pair in the game; the
+// generators), so a nested evaluation started by attribute_changed (EvalCx::new(world).with_forms(forms)) is the
+// same context. The only per-call state is EvalCx::forms, which attribute_changed receives.
 pub trait AttrWorld {
     fn parts(&mut self) -> WorldParts<'_>;            // one split borrow: both halves at once (DefStore lookups need both)
-    fn globals(&mut self) -> Result<Option<ObjRef>, AttrError>;                       // NoContextNeeded target
-    fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError>;
+    fn globals(&mut self) -> Result<ObjRef, AttrError>;   // NoContextNeeded target; never None (NATIVE_ATTRIBUTES 5,
+                                                      // progression.cpp:84): a world without one -> NotYet { LayerAbsent }
+    fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError>;   // Ok(None) only in a world modelling no game info
+                                                      // (offline tool, unit test); the VM world: Some or an error
     fn engine_query(&mut self, q: EngineQuery, source: ObjRef) -> Result<Option<ObjRef>, AttrError>;  // default: NotYet { LayerAbsent("ow-world") }
-    fn attribute_changed(&mut self, owner: ObjRef, value_prop: PropId) -> Result<(), AttrError>;     // notify-flag properties only
-    fn rng(&mut self, s: CrtStream) -> &mut dyn Rand15;                               // random variance, Random resolver
+    fn global_slots(&mut self) -> &mut GlobalSlots;   // GlobalAttributeValueResolver's slots, owned by the world
+    fn attribute_changed(&mut self, owner: ObjRef, value_prop: PropId, forms: NumForms) -> Result<(), AttrError>;  // notify-flag properties only
+    fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError>;   // none: NotYet (progression.cpp:209 refuses)
 }
+// Adapter rule: an adapter that overrides rng() (a roll's one generator) must not hand attribute_changed to a world that
+// runs script with its own generators; it runs the notification against itself, or runs no script.
 #[non_exhaustive] pub struct WorldParts<'a> { pub space: &'a mut ObjectSpace, pub defs: Option<&'a mut DefStore> }
 impl WorldParts<'_> { pub fn new(space, defs) -> Self; pub fn defs(&mut self) -> Result<&mut DefStore, AttrError> /* None: NotYet { LayerAbsent("ow-defs") } */ }
 #[non_exhaustive] pub enum EngineQuery { ResourcePool { resource: ObjRef }, EquippedInventory { location: u8 },
@@ -633,8 +641,8 @@ pub enum AttrError { NotYet(NotYet), Heap(HeapError), Layout(LayoutError), BadDa
 pub struct GlobalSlots { pub experience_point_test_level: f32 /* slot 0 */, pub badass_token_test_rank: f32 /* slot 1 */ }
                                     // get(i): 0.0 beyond slot 1; set(i): NotYet { NotRead } beyond slot 1
 pub struct NumForms { pub pow: PowForm, pub combine: CombineForm }   // defaults DoubleThenSingle, WeaponGen (section 5.3)
-pub struct EvalCx<'a> { pub world: &'a mut dyn AttrWorld, pub globals: GlobalSlots, pub forms: NumForms }   // no RNG field: one borrow, world.rng()
-impl<'a> EvalCx<'a> { pub fn new(world: &'a mut dyn AttrWorld) -> Self; with_globals(..); with_forms(..) }
+pub struct EvalCx<'a> { pub world: &'a mut dyn AttrWorld, pub forms: NumForms }   // no RNG or slots field: both are the world's
+impl<'a> EvalCx<'a> { pub fn new(world: &'a mut dyn AttrWorld) -> Self; with_forms(..) }
 // Resolvers get the calling system, so a resolver can resolve another definition's chain with the same cx.
 pub trait ContextResolver { fn resolve(&self, sys: &AttributeSystem, resolver: ObjRef, attr: ObjRef, source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Option<ObjRef>, AttrError>; }
 pub trait ValueResolver {
@@ -656,6 +664,9 @@ pub fn modifier_id_of(modifier: ObjRef) -> ModifierId;   // generation << 32 | i
 // Add and remove take the AttributeModifier OBJECT (the stack holds object references; its Type and Value are read at
 // each recompute) and answer an outcome, not a count: a plain attribute's remove answers true and changes nothing
 // (NATIVE_ATTRIBUTES section 3), which a count of 0 would read as false. .succeeded() is the native's bool.
+// Chain rule (NATIVE_ATTRIBUTES section 1): the value resolvers are asked in order while the previous one succeeded; the
+// outcome is the LAST resolver asked; nothing is rolled back, so a failing outcome means the chain failed, not that no
+// storage changed. Implementations add no rollback. (With one resolver a failure leaves its storage as it was.)
 #[non_exhaustive] pub enum AddModifierOutcome { Added, Duplicate, AppliedInPlace /* plain attribute */, Refused(Refusal) }
 #[non_exhaustive] pub enum RemoveModifierOutcome { Removed { count: usize }, NotPresent, PlainNoOp /* true */, Refused(Refusal) }
 #[non_exhaustive] pub enum Refusal { NoContext, NoValueResolvers, NullResolver, NotWritable, NotAnAttribute }
@@ -664,27 +675,45 @@ pub struct AttributeSystem { .. }   // immutable registry keyed by the EXACT res
                                     // held as Rc<AttributeSystem>; a caller clones the Rc, then lends the world:
                                     //   let attrs = vm.attrs.clone(); attrs.evaluate_init(&d, src, None, &mut EvalCx::new(&mut vm))?;
                                     // (no borrow of vm.attrs is live while vm is lent, so no E0502)
+// Every entry point below is a one-line delegate into its owner's file (section 2.3): eval.rs, expr.rs (W3-ATTREVAL),
+// effects.rs, storage.rs (W3-ATTREFFECTS); standard() calls value_resolvers::register (W3-ATTREVAL) and
+// context_resolvers::register (W3-ATTRCTX). W2-ATTRAPI placed those bodies as NotYet { NotPorted } stubs; the W3 lanes
+// fill their own files and do not edit registry.rs.
 impl AttributeSystem {
     pub fn new_empty() -> Self;                                                       // the placeholder's constructor, kept
-    pub fn standard() -> Self;                                                        // every resolver class the notes read (W3 fills)
+    pub fn standard() -> Result<Self, AttrError>;                                     // every resolver class the notes read
     pub fn with_value_resolver(self, class_path: &str, r: impl ValueResolver + 'static) -> Result<Self, AttrError>;   // twice: refused
     pub fn with_context_resolver(self, class_path: &str, r: impl ContextResolver + 'static) -> Result<Self, AttrError>;
     pub fn value_resolver(&self, space: &ObjectSpace, resolver: ObjRef) -> Result<&dyn ValueResolver, AttrError>;
     pub fn context_resolver(&self, space: &ObjectSpace, resolver: ObjRef) -> Result<&dyn ContextResolver, AttrError>;
-    // Until its W3 lane fills it, every method below returns NotYet { NotPorted }. `override_source` is the script's
-    // OptionalOverrideContextSource, tried first. A script "Object ContextSource" may be None, so sources are Option.
+    // `override_source` is the script's OptionalOverrideContextSource, tried first. A script "Object ContextSource" may
+    // be None, so sources are Option.
+    // eval.rs (W3-ATTREVAL)
     pub fn resolve_context(&self, attr: ObjRef, source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Option<ObjRef>, AttrError>;
+    pub fn resolve_contexts(&self, attr: ObjRef, source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Vec<ObjRef>, AttrError>;   // ResolveContexts
     pub fn value_of(&self, attr: ObjRef, source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Option<AttrValue>, AttrError>; // None: chain did not resolve
     pub fn base_value_of(..same..) -> Result<Option<AttrValue>, AttrError>;
+    pub fn value_from_context(&self, attr: ObjRef, context: Option<ObjRef>, cx: &mut EvalCx) -> Result<f32, AttrError>;       // GetValueFromContext
+    pub fn base_value_from_context(..same..) -> Result<f32, AttrError>;                                                       // GetBaseValueFromContext
     pub fn evaluate_init(&self, data: &InitData, source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<f32, AttrError>;
+    // expr.rs (W3-ATTREVAL)
     pub fn expressions_hold(&self, exprs: &[ExprData], mode: ExprMode, source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<bool, AttrError>;
+    // effects.rs (W3-ATTREFFECTS)
     pub fn add_modifier(&self, attr: ObjRef, context: Option<ObjRef>, modifier: ObjRef, suppress_notify: bool, cx: &mut EvalCx) -> Result<AddModifierOutcome, AttrError>;
     pub fn remove_modifier(&self, attr: ObjRef, context: Option<ObjRef>, modifier: ObjRef, suppress_notify: bool, cx: &mut EvalCx) -> Result<RemoveModifierOutcome, AttrError>;
-    pub fn set_base(&self, attr: ObjRef, source: Option<ObjRef>, v: f32, suppress_notify: bool, cx: &mut EvalCx) -> Result<bool, AttrError>; // the native's bool
+    pub fn set_base(&self, attr: ObjRef, source: Option<ObjRef>, v: f32, suppress_notify: bool, cx: &mut EvalCx) -> Result<bool, AttrError>; // the native's bool; stops at the first failure, no rollback
     pub fn apply_effects(&self, effects: &[EffectData], source: Option<ObjRef>, override_source: Option<ObjRef>, cx: &mut EvalCx) -> Result<Applied, AttrError>;
     pub fn remove_effects(&self, applied: Applied, cx: &mut EvalCx) -> Result<(), AttrError>;
+    // storage.rs (W3-ATTREFFECTS): the by-name Object natives, no definition, no chains
+    pub fn add_modifier_by_name(&self, object: ObjRef, modifier: ObjRef, attribute_name: NameId, suppress_notify: bool, cx: &mut EvalCx) -> Result<AddModifierOutcome, AttrError>;
+    pub fn remove_modifier_by_name(..same..) -> Result<RemoveModifierOutcome, AttrError>;
+    pub fn attribute_value_by_name(&self, object: ObjRef, attribute_name: NameId, cx: &mut EvalCx) -> Result<f32, AttrError>;  // 0.0: not an attribute
 }
-pub fn let_base(space: &mut ObjectSpace, owner: ObjRef, c: AttrCompanions, v: f32, form: CombineForm) -> Result<(), AttrError>; // 0x5F: base + recompute, no notification (UNVERIFIED)
+// storage.rs (W3-ATTREFFECTS). 0x5F: the right side is a typed Value stored into the base companion with the ordinary
+// assignment's conversion to the base's type (an Int stays an integer, interp.cpp:593), then the value is recomputed in
+// `form`; no change notification (NATIVE_BYTECODE_OPCODES opcode 5F, high confidence; NATIVE_LEVEL_UP_ATTRIBUTES's pool
+// rebase depends on it; interp.cpp:566-569). The NATIVE_ATTRIBUTES "Open" line on the typed let predates that reading.
+pub fn let_base(space: &mut ObjectSpace, owner: ObjRef, c: AttrCompanions, rhs: Value, form: CombineForm) -> Result<(), AttrError>; // UNVERIFIED in the game
 ```
 
 ### 3.6 `ow-balance`
@@ -1266,7 +1295,9 @@ W1-NUM is the lane to start first and review first.
   traits, `AttributeSystem` (immutable, shared as `Rc`, `new_empty()` kept) with every public method returning
   `NotYet { NotPorted }` until W3 fills it, the registry returning `NotYet { NotRead }` for an unknown resolver class,
   and a test `AttrWorld` over a synthetic `ObjectSpace`.
-- Owns: `crates/ow-attr/src/{api,registry}.rs`.
+- Owns: `crates/ow-attr/src/{api,registry}.rs`; in review r1 it also placed the `NotYet { NotPorted }` stubs in
+  `eval.rs`, `expr.rs`, `effects.rs`, `storage.rs`, `value_resolvers/mod.rs` and `context_resolvers/mod.rs`, which
+  stay their W3 owners' files (each `AttributeSystem` method is a one-line delegate into them).
 - Inputs: W1-OBJ, W1-ATTRMATH, W1-RAND. (Takes `DefStore` by type; until W3-DEFS lands the test world uses a
   hand-filled space and `parts().defs` is `None`, which the methods turn into `NotYet`.)
 - Done when: the test world compiles against every trait; an unknown resolver class gives the typed error.
@@ -1352,7 +1383,10 @@ W1-NUM is the lane to start first and review first.
   (ObjectProperty incl. the inherited-property question, Constant, SimpleMath, Conditional, Global slots 0/1,
   PlayerSkill, ResourcePoolState, AttributeSlotEffect, Badass, Manufacturer, WeaponType); random variance through
   `AttrWorld::rng(CrtStream::AttributeVariance)`; every other resolver class `NotYet { NotRead }`.
-- Owns: `crates/ow-attr/src/{eval,expr}.rs`, `crates/ow-attr/src/value_resolvers/*`.
+- Owns: `crates/ow-attr/src/{eval,expr}.rs`, `crates/ow-attr/src/value_resolvers/*`. The bodies of `resolve_context`,
+  `resolve_contexts`, `value_of`, `base_value_of`, `value_from_context`, `base_value_from_context` and `evaluate_init`
+  are `eval.rs`'s stubs, `expressions_hold`'s is `expr.rs`'s, and the registrations go in `value_resolvers::register`;
+  `registry.rs` (W2-ATTRAPI) only delegates and is not edited.
 - Inputs: W2-ATTRAPI, W3-DEFS.
 - Not yet: context resolvers beyond NoContextNeeded and a fixed test context (W3-ATTRCTX); effects (W3-ATTREFFECTS).
 - Done when: the `ow-attr` gate of section 6 for the evaluator fixtures; section 5.3 settled or reported for both
@@ -1364,7 +1398,8 @@ W1-NUM is the lane to start first and review first.
   NoContextNeeded, ResourcePool, WeaponResourcePool, GameInfo, BalancedActor, Inventory, EquippedInventory,
   StatusEffectChance, Designer, Skill) over `AttrWorld`, engine-side lookups through `engine_query`; the ~8 unread
   `NotYet`.
-- Owns: `crates/ow-attr/src/context_resolvers/*`.
+- Owns: `crates/ow-attr/src/context_resolvers/*`. The registrations go in `context_resolvers::register`, which
+  `AttributeSystem::standard` calls; `registry.rs` (W2-ATTRAPI) is not edited.
 - Inputs: W2-ATTRAPI, W3-DEFS.
 - Done when: each resolver has a synthetic-world test (chain ends at the first None; empty chain is None; override
   context first) and the `pawn`/`mind`/`controller` cases of `progression.hpp` reproduce.
@@ -1373,7 +1408,10 @@ W1-NUM is the lane to start first and review first.
 - Goal: `add_modifier`, `remove_modifier`, `set_base`, `apply_effects` (value evaluated once at apply time, override
   context first, applied records kept), `remove_effects`, plain-attribute permanence, notification only for notify-flag
   properties through `AttrWorld::attribute_changed`.
-- Owns: `crates/ow-attr/src/{effects,storage}.rs`.
+- Owns: `crates/ow-attr/src/{effects,storage}.rs`. The bodies of `add_modifier`, `remove_modifier`, `set_base`,
+  `apply_effects`, `remove_effects` are `effects.rs`'s stubs; the by-name natives (`add_modifier_by_name`,
+  `remove_modifier_by_name`, `attribute_value_by_name`) and `let_base` are `storage.rs`'s; `registry.rs` (W2-ATTRAPI)
+  only delegates and is not edited. The chain outcome rule of 3.5 holds: no rollback.
 - Inputs: W2-ATTRAPI, W3-DEFS, W1-ATTRMATH.
 - Done when: the effect cases of `skill_effects_test.py` and `weapon_gen_test.py` (part effects in slot order),
   re-expressed as Rust tests (both files test other binaries or Python tools), and the `ResourcePool` clamp rule

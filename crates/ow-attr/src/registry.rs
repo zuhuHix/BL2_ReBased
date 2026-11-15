@@ -9,30 +9,25 @@
 //! let v = attrs.evaluate_init(&data, source, None, &mut EvalCx::new(&mut vm))?;
 //! ```
 //!
-//! Every entry point returns `NotYet { NotPorted }` until its W3 lane fills it (W3-ATTREVAL: `resolve_context`,
-//! `value_of`, `base_value_of`, `evaluate_init`, `expressions_hold`; W3-ATTREFFECTS: `add_modifier`,
-//! `remove_modifier`, `set_base`, `apply_effects`, `remove_effects`, [`let_base`]). Those lanes replace the bodies
-//! here and keep the signatures.
+//! Every entry point is a one-line delegate into the file of the lane that owns the rule (architecture section 2.3):
+//! `eval.rs` and `expr.rs` (W3-ATTREVAL), `effects.rs` and `storage.rs` (W3-ATTREFFECTS); [`AttributeSystem::standard`]
+//! calls `value_resolvers::register` (W3-ATTREVAL) and `context_resolvers::register` (W3-ATTRCTX). Those lanes fill
+//! their own files and do not edit this one. Until they do, every entry point returns `NotYet { NotPorted }`.
 
 use std::fmt;
 
 use ow_core::{DetMap, NotYet, ObjectPath};
 use ow_object::heap::ObjectSpace;
-use ow_object::ids::ObjRef;
+use ow_object::ids::{NameId, ObjRef};
 use ow_object::layout::AttrCompanions;
+use ow_object::value::Value;
 
 use crate::api::{
     AddModifierOutcome, Applied, AttrError, AttrValue, ContextResolver, EffectData, EvalCx,
     ExprData, ExprMode, InitData, RemoveModifierOutcome, ValueResolver,
 };
 use crate::stack::CombineForm;
-
-/// The record the "not ported" entry points cite.
-const LANES: &str = "architecture.md section 3.5 (W3 attribute lanes)";
-
-fn not_ported<T>(what: &'static str) -> Result<T, AttrError> {
-    Err(NotYet::not_ported(what, LANES).into())
-}
+use crate::{context_resolvers, effects, eval, expr, storage, value_resolvers};
 
 /// The resolver registry and the evaluator entry points. Resolvers are keyed by their **exact** class path
 /// (case-insensitive, `:` equal to `.`): a subclass is not served by its parent's entry, because an unread subclass
@@ -78,10 +73,11 @@ impl AttributeSystem {
         Self::default()
     }
 
-    /// Every resolver class the notes read (NATIVE_ATTRIBUTES.md sections 5 and 6). Empty until W3-ATTREVAL and
-    /// W3-ATTRCTX register their classes here.
-    pub fn standard() -> Self {
-        Self::new_empty()
+    /// Every resolver class the notes read (NATIVE_ATTRIBUTES.md sections 5 and 6), registered by
+    /// `value_resolvers::register` and `context_resolvers::register`. None yet.
+    pub fn standard() -> Result<Self, AttrError> {
+        let sys = value_resolvers::register(Self::new_empty())?;
+        context_resolvers::register(sys)
     }
 
     /// Registers the value resolver for class `class_path`. A path registered twice is refused.
@@ -150,21 +146,31 @@ impl AttributeSystem {
         }
     }
 
-    /// `ResolveContext(ContextSource)`: the attribute definition `attr`'s context chain run on `source`
-    /// (NATIVE_ATTRIBUTES.md section 1). `Ok(None)`: the chain did not resolve (an empty chain included).
+    /// `AttributeDefinitionBase.ResolveContext(ContextSource)`: the attribute definition `attr`'s context chain run
+    /// on `source` (NATIVE_ATTRIBUTES.md section 1). `Ok(None)`: the chain did not resolve (an empty chain included).
     pub fn resolve_context(
         &self,
         attr: ObjRef,
         source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<ObjRef>, AttrError> {
-        let _ = (attr, source, cx);
-        not_ported("AttributeSystem::resolve_context")
+        eval::resolve_context(self, attr, source, cx)
     }
 
-    /// `GetValue(ContextSource, out ResolvedContext, OptionalOverrideContextSource)`: the override source is tried
-    /// first, then `source`. `Ok(None)`: no context resolved (the native then returns 0.0 and a None context;
-    /// `StaticGetAttributeValueOrDefault` returns its default).
+    /// `AttributeDefinitionBase.ResolveContexts(ContextSource, out ResolvedContexts)`: the definition's list of
+    /// contexts (one at most for an `AttributeDefinition`; the multi-context expansion otherwise).
+    pub fn resolve_contexts(
+        &self,
+        attr: ObjRef,
+        source: Option<ObjRef>,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<Vec<ObjRef>, AttrError> {
+        eval::resolve_contexts(self, attr, source, cx)
+    }
+
+    /// `AttributeDefinition.GetValue(ContextSource, out ResolvedContext, OptionalOverrideContextSource)`: the
+    /// override source is tried first, then `source`. `Ok(None)`: no context resolved (the native then returns 0.0
+    /// and a None context; `StaticGetAttributeValueOrDefault` returns its default).
     pub fn value_of(
         &self,
         attr: ObjRef,
@@ -172,11 +178,10 @@ impl AttributeSystem {
         override_source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<AttrValue>, AttrError> {
-        let _ = (attr, source, override_source, cx);
-        not_ported("AttributeSystem::value_of")
+        eval::value_of(self, attr, source, override_source, cx)
     }
 
-    /// `GetBaseValue`: as [`AttributeSystem::value_of`] with each resolver's base-value method.
+    /// `AttributeDefinition.GetBaseValue`: as [`AttributeSystem::value_of`] with each resolver's base-value method.
     pub fn base_value_of(
         &self,
         attr: ObjRef,
@@ -184,12 +189,33 @@ impl AttributeSystem {
         override_source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<AttrValue>, AttrError> {
-        let _ = (attr, source, override_source, cx);
-        not_ported("AttributeSystem::base_value_of")
+        eval::base_value_of(self, attr, source, override_source, cx)
     }
 
-    /// `EvaluateInitializationData(InitializationData, ContextSource, OptionalOverrideContextSource)`
-    /// (NATIVE_PROGRESSION.md section 1, NATIVE_ATTRIBUTES.md section 1).
+    /// `AttributeDefinitionBase.GetValueFromContext(Context)`: the value chain on an already-resolved context; 0.0
+    /// for a None context or an empty chain (NATIVE_ATTRIBUTES.md section 1).
+    pub fn value_from_context(
+        &self,
+        attr: ObjRef,
+        context: Option<ObjRef>,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<f32, AttrError> {
+        eval::value_from_context(self, attr, context, cx)
+    }
+
+    /// `AttributeDefinitionBase.GetBaseValueFromContext(Context)`: as [`AttributeSystem::value_from_context`] with
+    /// each resolver's base-value method.
+    pub fn base_value_from_context(
+        &self,
+        attr: ObjRef,
+        context: Option<ObjRef>,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<f32, AttrError> {
+        eval::base_value_from_context(self, attr, context, cx)
+    }
+
+    /// `AttributeInitializationDefinition.EvaluateInitializationData(InitializationData, ContextSource,
+    /// OptionalOverrideContextSource)` (NATIVE_PROGRESSION.md section 1, NATIVE_ATTRIBUTES.md section 1).
     pub fn evaluate_init(
         &self,
         data: &InitData,
@@ -197,11 +223,10 @@ impl AttributeSystem {
         override_source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<f32, AttrError> {
-        let _ = (data, source, override_source, cx);
-        not_ported("AttributeSystem::evaluate_init")
+        eval::evaluate_init(self, data, source, override_source, cx)
     }
 
-    /// `EvaluateExpressions(Mode, ContextSource, Expressions, OptionalOverrideContextSource)`
+    /// `AttributeExpression.EvaluateExpressions(Mode, ContextSource, Expressions, OptionalOverrideContextSource)`
     /// (NATIVE_ATTRIBUTES.md section 11).
     pub fn expressions_hold(
         &self,
@@ -211,13 +236,14 @@ impl AttributeSystem {
         override_source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<bool, AttrError> {
-        let _ = (exprs, mode, source, override_source, cx);
-        not_ported("AttributeSystem::expressions_hold")
+        expr::expressions_hold(self, exprs, mode, source, override_source, cx)
     }
 
-    /// `AddAttributeModifier(Context, Modifier, bSuppressNotify)`: `context` is the **resolved** context, not a
-    /// source; `modifier` is the `AttributeModifier` object (its `Type` and `Value` are read at each recompute).
-    /// Notifies through [`crate::api::AttrWorld::attribute_changed`] unless `suppress_notify`.
+    /// `AttributeDefinitionBase.AddAttributeModifier(Context, Modifier, bSuppressNotify)`: `context` is the
+    /// **resolved** context, not a source; `modifier` is the `AttributeModifier` object (its `Type` and `Value` are
+    /// read at each recompute). Notifies through [`crate::api::AttrWorld::attribute_changed`] unless
+    /// `suppress_notify`. The outcome is the chain's success; an earlier writable resolver's change is not rolled
+    /// back (see [`AddModifierOutcome`]).
     pub fn add_modifier(
         &self,
         attr: ObjRef,
@@ -226,11 +252,11 @@ impl AttributeSystem {
         suppress_notify: bool,
         cx: &mut EvalCx<'_>,
     ) -> Result<AddModifierOutcome, AttrError> {
-        let _ = (attr, context, modifier, suppress_notify, cx);
-        not_ported("AttributeSystem::add_modifier")
+        effects::add_modifier(self, attr, context, modifier, suppress_notify, cx)
     }
 
-    /// `RemoveAttributeModifier(Context, Modifier, bSuppressNotify)`: removes every copy of `modifier`.
+    /// `AttributeDefinitionBase.RemoveAttributeModifier(Context, Modifier, bSuppressNotify)`: removes every copy of
+    /// `modifier`. The outcome is the chain's success, with no rollback (see [`RemoveModifierOutcome`]).
     pub fn remove_modifier(
         &self,
         attr: ObjRef,
@@ -239,13 +265,12 @@ impl AttributeSystem {
         suppress_notify: bool,
         cx: &mut EvalCx<'_>,
     ) -> Result<RemoveModifierOutcome, AttrError> {
-        let _ = (attr, context, modifier, suppress_notify, cx);
-        not_ported("AttributeSystem::remove_modifier")
+        effects::remove_modifier(self, attr, context, modifier, suppress_notify, cx)
     }
 
-    /// `SetAttributeBaseValue(ContextSource, BaseValue, bSuppressNotify)`. `Ok(true)` only when at least one
-    /// context and one resolver were found and every set succeeded (NATIVE_ATTRIBUTES.md section 1), the bool the
-    /// script sees.
+    /// `AttributeDefinitionBase.SetAttributeBaseValue(ContextSource, BaseValue, bSuppressNotify)`. `Ok(true)` only
+    /// when at least one context and one resolver were found and every set succeeded (NATIVE_ATTRIBUTES.md section
+    /// 1), the bool the script sees. The calls stop at the first failure; earlier sets stay (no rollback).
     pub fn set_base(
         &self,
         attr: ObjRef,
@@ -254,8 +279,7 @@ impl AttributeSystem {
         suppress_notify: bool,
         cx: &mut EvalCx<'_>,
     ) -> Result<bool, AttrError> {
-        let _ = (attr, source, value, suppress_notify, cx);
-        not_ported("AttributeSystem::set_base")
+        effects::set_base(self, attr, source, value, suppress_notify, cx)
     }
 
     /// `AttributeEffect.ApplyAttributeEffects(ContextSource, InAttributeEffects, out OutModifiers,
@@ -268,27 +292,71 @@ impl AttributeSystem {
         override_source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<Applied, AttrError> {
-        let _ = (effects, source, override_source, cx);
-        not_ported("AttributeSystem::apply_effects")
+        effects::apply_effects(self, effects, source, override_source, cx)
     }
 
     /// `AttributeEffect.RemoveAttributeEffects(EffectModifiers)`: removes every record's modifier from its context.
     pub fn remove_effects(&self, applied: Applied, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-        let _ = (applied, cx);
-        not_ported("AttributeSystem::remove_effects")
+        effects::remove_effects(self, applied, cx)
+    }
+
+    /// `Object.AddModifier(mod, AttributeName, bSuppressNotify)`: the property-level add of NATIVE_ATTRIBUTES.md
+    /// section 3 on `object`'s property `attribute_name`, with no definition and no chains (section 1).
+    pub fn add_modifier_by_name(
+        &self,
+        object: ObjRef,
+        modifier: ObjRef,
+        attribute_name: NameId,
+        suppress_notify: bool,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<AddModifierOutcome, AttrError> {
+        storage::add_modifier_by_name(self, object, modifier, attribute_name, suppress_notify, cx)
+    }
+
+    /// `Object.RemoveModifier(mod, AttributeName, bSuppressNotify)`: the property-level remove, by name.
+    pub fn remove_modifier_by_name(
+        &self,
+        object: ObjRef,
+        modifier: ObjRef,
+        attribute_name: NameId,
+        suppress_notify: bool,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<RemoveModifierOutcome, AttrError> {
+        storage::remove_modifier_by_name(
+            self,
+            object,
+            modifier,
+            attribute_name,
+            suppress_notify,
+            cx,
+        )
+    }
+
+    /// `Object.GetAttributeValueByName(AttributeName)`: the property's stored value, 0.0 if the name is not an
+    /// attribute (NATIVE_ATTRIBUTES.md section 1).
+    pub fn attribute_value_by_name(
+        &self,
+        object: ObjRef,
+        attribute_name: NameId,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<f32, AttrError> {
+        storage::attribute_value_by_name(self, object, attribute_name, cx)
     }
 }
 
-/// The script VM's typed let into an attribute property (opcode 0x5F): writes the base companion and recomputes the
-/// value from the stack in `form`, with no notification. UNVERIFIED (NATIVE_ATTRIBUTES.md, Open: the typed-let
-/// opcodes are read as "set the base and recompute"; whether they notify is not read).
+/// The script VM's typed let into an attribute property (opcode 0x5F): stores `rhs` into the base companion,
+/// converted to the base property's own type the way an ordinary assignment converts (so an `Int` right side keeps
+/// its integer, `interp.cpp:593`), then recomputes the value from the base and the stack in `form`. **No change
+/// notification**: NATIVE_BYTECODE_OPCODES.md (opcode 5F, high confidence for what it does) reads it so,
+/// NATIVE_LEVEL_UP_ATTRIBUTES.md (the pool rebase) depends on it and `interp.cpp:566-569` implements it. The "Open"
+/// line of NATIVE_ATTRIBUTES.md about how the typed let runs predates that reading and is stale. Status: UNVERIFIED in
+/// the running game.
 pub fn let_base(
     space: &mut ObjectSpace,
     owner: ObjRef,
     companions: AttrCompanions,
-    value: f32,
+    rhs: Value,
     form: CombineForm,
 ) -> Result<(), AttrError> {
-    let _ = (space, owner, companions, value, form);
-    not_ported("ow_attr::registry::let_base")
+    storage::let_base(space, owner, companions, rhs, form)
 }
