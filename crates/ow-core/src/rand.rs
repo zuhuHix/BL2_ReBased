@@ -19,8 +19,10 @@
 //!
 //! Status: no game sequence is reproduced. The game's own seeds and generator for these streams are not read
 //! (`ITEM_ROLL.md`, decision D5), so a Rust run and a game run with "the same" world seed draw different numbers. The
-//! script-stream convention on [`CrtRand`] (`rand15 % limit`, `rand15 / 32767`) is the public UE3 `appRand`
-//! convention, UNVERIFIED for this executable (not read from it).
+//! per-draw formulas of a script stream on [`CrtRand`] (`rand15 % limit`, `rand15 / 32767`) follow the public UE3
+//! `appRand`/`appFrand` convention, UNVERIFIED for this executable (not read from it). In that convention `Rand` and
+//! `FRand` draw from one `rand()` state; the split into two [`ScriptStream`]s is a project choice that copies the C++
+//! stand-in's two statics, also UNVERIFIED.
 
 use crate::parity::ParityMode;
 
@@ -42,7 +44,8 @@ pub trait ScriptRng {
 ///
 /// Status: verified bit-exact against `src/weapon_gen.cpp` `CrtRand::Rand`, `tools/weapon_recipe.py` `CrtRand` and the
 /// MSVC C runtime `rand()` (1,000 draws from each of 20 invented seeds; generator described in the tests).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Not `Copy`: a copy would silently fork a stream (one RNG per roll).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrtRand {
     pub state: u32,
 }
@@ -85,7 +88,8 @@ impl ScriptRng for CrtRand {
 ///
 /// Status: a reference stand-in, not a game rule. Verified bit-exact against the C++ formulas (1,000 draws of each
 /// output from 20 invented seeds, including the C++ seeds 12345 and 54321).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Not `Copy`, for the same reason as [`CrtRand`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmLcg {
     pub state: u32,
 }
@@ -130,9 +134,18 @@ impl ScriptRng for VmLcg {
     }
 }
 
-/// `rand15 / 32767` in double: `tools/weapon_recipe.py` `pick` and `tools/loot_pools.py` (`rng.rand() / 32767.0`).
+/// `rand15 / 32767` in double: the listed-pool probability draw, `rand() / 32767.0 < chance` (`src/weapon_gen.cpp:1676`,
+/// `tools/loot_pools.py:310`). Not the weighted pick's form: that is [`weighted_draw`].
 pub fn frand_f64(r: &mut dyn Rand15) -> f64 {
     f64::from(r.rand15()) / 32_767.0
+}
+
+/// `total * rand15 / 32767` in double, evaluated left to right: the weighted pick's draw (`src/weapon_gen.cpp:757`
+/// `PickPart` and `:1410`, `tools/weapon_recipe.py:389` `pick`, `tools/loot_pools.py:278` `crt_choice`). It is not
+/// `total * frand_f64(r)`: the two roundings differ in the last bit for many draws (for example total 0.7, rand
+/// 16716), and the pick's interval test is exact, so the wrong form changes picks near a boundary.
+pub fn weighted_draw(r: &mut dyn Rand15, total: f64) -> f64 {
+    total * f64::from(r.rand15()) / 32_767.0
 }
 
 /// `rand15 / 32767` in single. Each rule names which of [`frand_f64`] and this its oracle uses.
@@ -196,7 +209,9 @@ impl CrtStream {
     }
 }
 
-/// The two script streams. Two, because the C++ VM keeps two separate states (one for `Rand`, one for `FRand`).
+/// The two script streams. Two, because the C++ VM stand-in keeps two separate states (one for `Rand`, one for
+/// `FRand`). In Off mode the split is a project choice copied from that stand-in, UNVERIFIED: in the public UE3
+/// convention both draw from one `rand()` state.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ScriptStream {
@@ -254,7 +269,7 @@ pub fn stream_seed(world_seed: u64, id: u64) -> u32 {
 }
 
 /// One script stream's generator: CrtRand in [`ParityMode::Off`], the C++ stand-in under Reference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ScriptGen {
     Crt(CrtRand),
     Lcg(VmLcg),
@@ -531,6 +546,20 @@ mod tests {
         assert_eq!(splitmix64(0), 0xE220_A839_7B1D_CDAF);
         assert_eq!(splitmix64(g), 0x6E78_9E6A_A1B9_65F4);
         assert_eq!(splitmix64(g.wrapping_mul(2)), 0x06C4_5D18_8009_454F);
+    }
+
+    #[test]
+    fn weighted_draw_is_left_to_right() {
+        // A seed whose first draw is 16716, found by search (the state is the whole generator).
+        let seed = (0u32..)
+            .find(|&s| CrtRand::new(s).rand15() == 16_716)
+            .unwrap();
+        let total = 0.7f64;
+        let picked = weighted_draw(&mut CrtRand::new(seed), total);
+        assert_eq!(picked.to_bits(), (total * 16_716.0 / 32_767.0).to_bits());
+        // The other association rounds differently for this draw.
+        let other = total * frand_f64(&mut CrtRand::new(seed));
+        assert_ne!(picked.to_bits(), other.to_bits());
     }
 
     #[test]
