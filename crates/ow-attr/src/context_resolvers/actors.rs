@@ -150,7 +150,7 @@ impl ContextResolver for Weapon {
 
 /// `OffHandWeaponAttributeContextResolver` (confidence high): a weapon -> itself; a pawn or a controller -> the
 /// pawn's `OffHandWeapon`; anything else -> None. A pawn class without `OffHandWeapon` is `NotYet { NotRead }`.
-/// Package not recorded: not registered ([`super::PACKAGE_NOT_RECORDED`]).
+/// Registered as `Engine.OffHandWeaponAttributeContextResolver` ([`super::READ_FROM_PACKAGES`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OffHandWeapon;
 
@@ -207,8 +207,8 @@ impl ContextResolver for PlayerReplicationInfo {
 
 /// `PlayerControllerAttributeContextResolver` (confidence medium-low): the player controller reachable from the
 /// source, itself or through its owner interface (NATIVE_ITEM_RULES.md: `IPlayerBehavior`, then `IPlayerMaster`).
-/// The interface tests are the engine's: [`EngineQuery::PlayerController`]. A None source -> None. Package not
-/// recorded: not registered ([`super::PACKAGE_NOT_RECORDED`]).
+/// The interface tests are the engine's: [`EngineQuery::PlayerController`]. A None source -> None.
+/// Registered as `WillowGame.PlayerControllerAttributeContextResolver` ([`super::READ_FROM_PACKAGES`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlayerController;
 

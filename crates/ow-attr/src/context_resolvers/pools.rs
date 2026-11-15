@@ -54,8 +54,8 @@ impl ContextResolver for ResourcePool {
 
 /// `WeaponResourcePoolAttributeContextResolver`: as [`ResourcePool`] with the resolver's `PrimaryHandResource`, or
 /// its `OffHandResource` when the source weapon's `bOffHand` is set. That the two resources are the resolver's
-/// fields is this port's reading of the record. A source that is not a weapon is `NotYet { NotRead }`. Package not
-/// recorded: not registered ([`super::PACKAGE_NOT_RECORDED`]).
+/// fields is this port's reading of the record. A source that is not a weapon is `NotYet { NotRead }`.
+/// Registered as `Engine.WeaponResourcePoolAttributeContextResolver` ([`super::READ_FROM_PACKAGES`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WeaponResourcePool;
 

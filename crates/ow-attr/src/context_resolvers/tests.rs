@@ -532,13 +532,12 @@ fn weapon() {
 #[test]
 fn off_hand_weapon() {
     let mut s = scene();
-    // Not registered by `standard` (package not recorded): the test registers it under an invented path.
-    s.sys = AttributeSystem::new_empty()
-        .with_context_resolver("Test.OffHandWeaponAttributeContextResolver", OffHandWeapon)
-        .unwrap()
-        .with_context_resolver(NO_CONTEXT, NoContextNeeded)
-        .unwrap();
-    let r = registered(&mut s, "Test.OffHandWeaponAttributeContextResolver", vec![]);
+    // Reached through `standard` at its path read from the packages.
+    let r = registered(
+        &mut s,
+        "Engine.OffHandWeaponAttributeContextResolver",
+        vec![],
+    );
     let (pc, off_gun, thing) = (s.pc, s.off_gun, s.thing);
     three_rules(&mut s, r, pc, off_gun, Some(thing));
     let sys = &s.sys;
@@ -575,17 +574,9 @@ fn player_replication_info() {
 #[test]
 fn player_controller_is_the_engines_lookup() {
     let mut s = scene();
-    s.sys = AttributeSystem::new_empty()
-        .with_context_resolver(
-            "Test.PlayerControllerAttributeContextResolver",
-            PlayerController,
-        )
-        .unwrap()
-        .with_context_resolver(NO_CONTEXT, NoContextNeeded)
-        .unwrap();
     let r = registered(
         &mut s,
-        "Test.PlayerControllerAttributeContextResolver",
+        "WillowGame.PlayerControllerAttributeContextResolver",
         vec![],
     );
     let (pc, player, thing) = (s.pc, s.player, s.thing);
@@ -703,14 +694,6 @@ fn resource_pool() {
 #[test]
 fn weapon_resource_pool_follows_the_hand() {
     let mut s = scene();
-    s.sys = AttributeSystem::new_empty()
-        .with_context_resolver(
-            "Test.WeaponResourcePoolAttributeContextResolver",
-            WeaponResourcePool,
-        )
-        .unwrap()
-        .with_context_resolver(NO_CONTEXT, NoContextNeeded)
-        .unwrap();
     let res_class = resolver_class(
         &mut s.w.space,
         s.c.object,
@@ -728,7 +711,7 @@ fn weapon_resource_pool_follows_the_hand() {
     ];
     let r = registered(
         &mut s,
-        "Test.WeaponResourcePoolAttributeContextResolver",
+        "Engine.WeaponResourcePoolAttributeContextResolver",
         props,
     );
     s.w.link(r, "PrimaryHandResource", main);
@@ -760,18 +743,10 @@ fn weapon_resource_pool_follows_the_hand() {
 #[test]
 fn equipped_inventory() {
     let mut s = scene();
-    s.sys = AttributeSystem::new_empty()
-        .with_context_resolver(
-            "Test.EquippedInventoryAttributeContextResolver",
-            EquippedInventory,
-        )
-        .unwrap()
-        .with_context_resolver(NO_CONTEXT, NoContextNeeded)
-        .unwrap();
     let props = vec![("EquipmentLocation", PropKind::Byte { enum_: None })];
     let r = registered(
         &mut s,
-        "Test.EquippedInventoryAttributeContextResolver",
+        "WillowGame.EquippedInventoryAttributeContextResolver",
         props,
     );
     s.w.set(r, "EquipmentLocation", Value::Byte(3));
@@ -836,16 +811,13 @@ fn the_unported_resolvers_say_what_they_wait_for() {
             assert_eq!(walk(&s.sys, &[], Some(player), &mut s.w), Ok(None));
         }
     }
-    // The skill resolver (package not recorded), registered here under an invented path.
-    let sys = AttributeSystem::new_empty()
-        .with_context_resolver("Test.SkillAttributeContextResolver", Skill)
-        .unwrap();
-    let r = registered(&mut s, "Test.SkillAttributeContextResolver", vec![]);
+    // The skill resolver, through `standard` at its path.
+    let r = registered(&mut s, "WillowGame.SkillAttributeContextResolver", vec![]);
     assert_eq!(
-        missing(walk(&sys, &[Some(r)], Some(player), &mut s.w)),
+        missing(walk(&s.sys, &[Some(r)], Some(player), &mut s.w)),
         Missing::NotRead
     );
-    assert_eq!(walk(&sys, &[Some(r)], None, &mut s.w), Ok(None));
+    assert_eq!(walk(&s.sys, &[Some(r)], None, &mut s.w), Ok(None));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -891,13 +863,19 @@ fn standard_registers_every_recorded_class_once_and_no_guessed_path() {
             "{path}"
         );
     }
-    // The classes whose package is not recorded are served under no package.
-    for (class, _) in PACKAGE_NOT_RECORDED {
-        for package in ["Engine", "GearboxFramework", "WillowGame"] {
-            let path = format!("{package}.{class}");
-            let r = s.w.resolver(object, &path, vec![]);
+    // The paths read from the packages are served there, and the same class name under another package is not.
+    for path in READ_FROM_PACKAGES {
+        let r = s.w.resolver(object, path, vec![]);
+        assert!(s.sys.context_resolver(&s.w.space, r).is_ok(), "{path}");
+        let (package, class) = path.split_once('.').unwrap();
+        for other in ["Engine", "GearboxFramework", "WillowGame"] {
+            if other == package {
+                continue;
+            }
+            let elsewhere = format!("{other}.{class}");
+            let r = s.w.resolver(object, &elsewhere, vec![]);
             let got = s.sys.context_resolver(&s.w.space, r).map(|_| ());
-            assert!(matches!(got, Err(AttrError::NotYet(_))), "{path}");
+            assert!(matches!(got, Err(AttrError::NotYet(_))), "{elsewhere}");
         }
     }
     let key = ObjectPath::parse("Engine.PawnAttributeContextResolver").unwrap();
@@ -1170,5 +1148,67 @@ fn an_unread_class_names_where_it_is_known_from() {
             "GearboxFramework.AIComponentAttributeContextResolver",
             "WillowGame.InventoryDefinitionAttributeContextResolver",
         ]
+    );
+}
+
+/// Each class whose package was read from the installed packages (decision 2026-11-15-22) is reached through
+/// `standard` at that path, and the path reaches that class's resolver: one answer that only it gives.
+#[test]
+fn each_path_read_from_the_packages_reaches_its_resolver() {
+    let mut s = scene();
+    let (pc, player, off_gun, gun) = (s.pc, s.player, s.off_gun, s.gun);
+    // OffHandWeapon: a pawn gives its off-hand weapon (Weapon would give `gun`).
+    let r = registered(&mut s, READ_FROM_PACKAGES[0], vec![]);
+    assert_eq!(
+        walk(&s.sys, &[Some(r)], Some(player), &mut s.w),
+        Ok(Some(off_gun))
+    );
+    // WeaponResourcePool: the main-hand resource's pool of a weapon.
+    let res_class = resolver_class(
+        &mut s.w.space,
+        s.c.object,
+        "Test.ResourceDefinition",
+        vec![],
+    );
+    let ammo = s.w.obj(res_class, "Ammo");
+    let pool = s.w.obj(s.c.object, "AmmoPool");
+    let props = vec![
+        ("PrimaryHandResource", obj_kind(res_class)),
+        ("OffHandResource", obj_kind(res_class)),
+    ];
+    let r = registered(&mut s, READ_FROM_PACKAGES[1], props);
+    s.w.link(r, "PrimaryHandResource", ammo);
+    s.w.queries
+        .push(((EngineQuery::ResourcePool { resource: ammo }, gun), pool));
+    assert_eq!(
+        walk(&s.sys, &[Some(r)], Some(gun), &mut s.w),
+        Ok(Some(pool))
+    );
+    // PlayerController: the engine's lookup.
+    s.w.queries
+        .push(((EngineQuery::PlayerController, player), pc));
+    let r = registered(&mut s, READ_FROM_PACKAGES[2], vec![]);
+    assert_eq!(
+        walk(&s.sys, &[Some(r)], Some(player), &mut s.w),
+        Ok(Some(pc))
+    );
+    // EquippedInventory: the item at the resolver's location.
+    let item = s.w.obj(s.c.actor, "Shield");
+    s.w.queries.push((
+        (EngineQuery::EquippedInventory { location: 2 }, player),
+        item,
+    ));
+    let props = vec![("EquipmentLocation", PropKind::Byte { enum_: None })];
+    let r = registered(&mut s, READ_FROM_PACKAGES[3], props);
+    s.w.set(r, "EquipmentLocation", Value::Byte(2));
+    assert_eq!(
+        walk(&s.sys, &[Some(r)], Some(player), &mut s.w),
+        Ok(Some(item))
+    );
+    // Skill: its script body is not read.
+    let r = registered(&mut s, READ_FROM_PACKAGES[4], vec![]);
+    assert_eq!(
+        missing(walk(&s.sys, &[Some(r)], Some(player), &mut s.w)),
+        Missing::NotRead
     );
 }

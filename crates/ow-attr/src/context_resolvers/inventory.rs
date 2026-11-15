@@ -11,8 +11,8 @@ use crate::api::{AttrError, ContextResolver, EngineQuery, EvalCx};
 use crate::registry::AttributeSystem;
 
 /// `EquippedInventoryAttributeContextResolver`: the item the source's inventory manager holds at the resolver's
-/// `EquipmentLocation` byte ([`EngineQuery::EquippedInventory`]); None for a None source. Package not recorded: not
-/// registered ([`super::PACKAGE_NOT_RECORDED`]).
+/// `EquipmentLocation` byte ([`EngineQuery::EquippedInventory`]); None for a None source. Registered as
+/// `WillowGame.EquippedInventoryAttributeContextResolver` ([`super::READ_FROM_PACKAGES`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EquippedInventory;
 
