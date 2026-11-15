@@ -20,7 +20,9 @@ use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 
 use crate::curve::experience_span;
-use crate::offline::data::{elements, field, init_data, is_a, number, object, property, required};
+use ow_attr::eval::{elements, field, init_data, number, object, property, required};
+
+use crate::offline::data::is_a;
 use crate::playthrough::{XpKind, xp_multiplier};
 use crate::types::{BalanceError, ExpLevel, GameStage, PlayerCount, Playthrough};
 

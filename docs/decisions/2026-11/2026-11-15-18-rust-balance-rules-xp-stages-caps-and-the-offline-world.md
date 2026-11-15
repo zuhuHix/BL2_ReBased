@@ -4,15 +4,39 @@ AI-assisted (Claude Code). Lane W3-BALANCE of the Rust port fills `crates/ow-bal
 (architecture section 3.6). No parsing behaviour changes. Every amount goes through the one evaluator (`ow-attr`)
 from the data; no closed form is coded. This file records the choices a later lane should be able to find.
 
-- **Additive contract change:** `BalanceError::Attr(AttrError)` (listed in section 3.6, anticipated by
-  `types.rs`), with `From<AttrError>` (a `NotYet` stays `NotYet`) and `source()`. That is the one edit outside the
-  lane's own files.
+- **Edits outside the lane's own files** (each granted by the hub):
+  - `BalanceError::Attr(AttrError)` in `types.rs`, additive and listed in section 3.6, with `From<AttrError>` (a
+    `NotYet` stays `NotYet`) and `source()`.
+  - `ow-attr`'s definition readers in `eval.rs` are now `pub`, unchanged in behaviour: `ensure_loaded`,
+    `class_path`, `property`, `required`, `field`, `number`, `flag`, `object`, `elements` and `init_data`.
+    `ow-balance` uses them instead of a copy. Only `is_a` and an optional `field_opt` stay in `offline/data.rs`.
+  - The `ow-balance` block of `docs/rust-port/ARCHITECTURE.md` section 3.6 now holds the shipped signatures.
+- **The shipped signatures** differ from the revision 3 sketch:
+  - `region_game_stage(sys, cx, globals_definition, &mut RegionStages, &RegionQuery)`. `RegionQuery` holds the
+    region, the playthrough, the local player pawn's level (`None`: the minimum is used), the completed missions and
+    the controller. `RegionStages` is the caller's store, because the controller field the game stores the stage in
+    is not read.
+  - Kill XP is split: `kill_xp_award` returns the whole party's award as an `f32`, and `kill_xp(cx,
+    globals_definition, &KillCredit)` gives one player's credit.
+  - `mission_xp(sys, cx, curve, &MissionXp)`.
+  - The `GlobalsDefinition` object is passed in (`globals_definition`): which `WillowGlobals` property holds it is
+    not recorded (the C++ finds `GD_Globals.General.Globals` by path).
+- **Where the C++ oracle refuses but the records read the rule, the port implements the rule** (hub decision). Each
+  case is UNVERIFIED in the game:
+  - `src/mission_script.cpp` `experienceReward` throws "the playthrough experience multiplier is not implemented"
+    for any playthrough other than the first. The port uses the record's `m = 1.0` for the second playthrough
+    below level 50.
+  - The same function stops on any optional objective (`notImplemented`). The port adds a truncated term for each
+    completed optional objective (NATIVE_PROGRESSION.md section 2).
+
+  Where the C++ refuses and the record reads the rule only at medium confidence, the refusal is kept as
+  `NotYet { NotPorted }`: a vehicle victim, a killer in a vehicle, and `DamageTypeExpModifiers` entries.
+- **`tools/slice_values.py` stays.** Section 6 says it is deleted at this gate, but other tools still use it. Its
+  deletion is W7-RETIRE's call.
 - **XP curve.** `R(n) = max(0, trunc(f(n)) - trunc(f(1)))`, with the level put in global slot 0 and left there, as the
   game's routine leaves it. A NaN point or one outside the `i64` range is refused, not saturated.
-- **Mission XP** goes further than the C++ oracle (`mission_script.cpp`), which refuses every playthrough but the
-  first and any optional objective. Both are read in NATIVE_PROGRESSION.md section 2, so the port computes them:
-  completed optional objectives add their own truncated terms, and the second playthrough below level 50 takes
-  `m = 1.0`.
+- **Mission XP**: `trunc(float(span x pct x m))` per term, with optional objectives and the second playthrough as
+  above.
 - **The XP multiplier helper** (`playthrough.rs`) answers 1.0 only in the first two playthroughs below level 50. UVHM,
   level 50 or more, and `playthrough_modifier` (which `PlayThroughBasedBalanceModifiers` entry serves a playthrough)
   are `NotYet { NotRead }`: the entry selection, the field types and the "level cap" input are open in the records.
