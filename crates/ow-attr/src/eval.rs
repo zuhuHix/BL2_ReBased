@@ -10,6 +10,10 @@
 //!
 //! # Reading definitions
 //!
+//! The readers below (`ensure_loaded`, `class_path`, `property`, `required`, `field`, `number`, `flag`, `object`,
+//! `elements`, `init_data`) are public so the crates above (`ow-balance`) read definition data the same way instead of
+//! keeping a copy (hub grant, W3-BALANCE).
+//!
 //! Every property read goes through [`property`], which first makes sure the object is loaded: an unloaded
 //! definition handle (`Origin::Resource`, no slots: what `ow-defs` hands out for a referenced definition) is loaded
 //! through the world's `DefStore`; any other live object is read as it is. A world without a store answers
@@ -169,7 +173,7 @@ impl Drop for Guard {
 /// [`DefStore::ensure_loaded`](ow_defs::DefStore::ensure_loaded) loads it, or leaves it as it is when it is a
 /// stand-in that stays one. Every other live object (run-time objects, loaded definitions, class defaults) is read as
 /// it is. A world without a store answers `NotYet { LayerAbsent("ow-defs") }` for a slotless resource handle.
-pub(crate) fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> {
+pub fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> {
     let WorldParts { space, defs, .. } = cx.world.parts();
     let (resource, slotless) = {
         let o = space.heap.get(obj)?;
@@ -194,7 +198,7 @@ pub(crate) fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), Attr
 }
 
 /// The class path of `obj`, for messages.
-pub(crate) fn class_path(space: &ObjectSpace, obj: ObjRef) -> String {
+pub fn class_path(space: &ObjectSpace, obj: ObjRef) -> String {
     match space.heap.get(obj) {
         Ok(o) => match space.classes.get_layout(o.class) {
             Some(l) => l.path().as_str().to_string(),
@@ -206,11 +210,7 @@ pub(crate) fn class_path(space: &ObjectSpace, obj: ObjRef) -> String {
 
 /// Property `name` of `obj` (element 0), loaded first; `Ok(None)` when the object's class (its whole super chain)
 /// has no property of that name.
-pub(crate) fn property(
-    cx: &mut EvalCx<'_>,
-    obj: ObjRef,
-    name: &str,
-) -> Result<Option<Value>, AttrError> {
+pub fn property(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Option<Value>, AttrError> {
     ensure_loaded(cx, obj)?;
     let space = cx.world.parts().space;
     let class = space.heap.get(obj)?.class;
@@ -221,7 +221,7 @@ pub(crate) fn property(
 }
 
 /// Property `name` of `obj`, which the class must have (`BadData` naming both otherwise).
-pub(crate) fn required(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Value, AttrError> {
+pub fn required(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Value, AttrError> {
     match property(cx, obj, name)? {
         Some(v) => Ok(v),
         None => {
@@ -234,11 +234,7 @@ pub(crate) fn required(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<V
 }
 
 /// Field `name` of the struct value `v`.
-pub(crate) fn field<'v>(
-    space: &ObjectSpace,
-    v: &'v Value,
-    name: &str,
-) -> Result<&'v Value, AttrError> {
+pub fn field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Result<&'v Value, AttrError> {
     let bad = |reason: String| AttrError::BadData {
         reason: reason.into(),
     };
@@ -285,7 +281,7 @@ fn wrong(what: &str, v: &Value) -> AttrError {
 }
 
 /// A stored number as a float: a float as it is, an int or a byte converted (NATIVE_ATTRIBUTES.md section 3).
-pub(crate) fn number(what: &str, v: &Value) -> Result<f32, AttrError> {
+pub fn number(what: &str, v: &Value) -> Result<f32, AttrError> {
     match v {
         Value::Float(f) => Ok(*f),
         // int -> float rounds to nearest, as the C++ float(int) and the native's conversion.
@@ -295,7 +291,7 @@ pub(crate) fn number(what: &str, v: &Value) -> Result<f32, AttrError> {
     }
 }
 
-pub(crate) fn flag(what: &str, v: &Value) -> Result<bool, AttrError> {
+pub fn flag(what: &str, v: &Value) -> Result<bool, AttrError> {
     match v {
         Value::Bool(b) => Ok(*b),
         other => Err(wrong(what, other)),
@@ -317,7 +313,7 @@ pub(crate) fn name(what: &str, v: &Value) -> Result<NameId, AttrError> {
 }
 
 /// An object reference; `Value::None` reads as no object.
-pub(crate) fn object(what: &str, v: &Value) -> Result<Option<ObjRef>, AttrError> {
+pub fn object(what: &str, v: &Value) -> Result<Option<ObjRef>, AttrError> {
     match v {
         Value::Object(o) => Ok(*o),
         Value::None => Ok(None),
@@ -326,14 +322,14 @@ pub(crate) fn object(what: &str, v: &Value) -> Result<Option<ObjRef>, AttrError>
 }
 
 /// The elements of an array value.
-pub(crate) fn elements<'v>(what: &str, v: &'v Value) -> Result<&'v [Value], AttrError> {
+pub fn elements<'v>(what: &str, v: &'v Value) -> Result<&'v [Value], AttrError> {
     v.elements().ok_or_else(|| AttrError::BadData {
         reason: format!("{what}: expected an array, found {}", v.kind_name()).into(),
     })
 }
 
 /// An `AttributeInitializationData` struct value as [`InitData`].
-pub(crate) fn init_data(space: &ObjectSpace, v: &Value) -> Result<InitData, AttrError> {
+pub fn init_data(space: &ObjectSpace, v: &Value) -> Result<InitData, AttrError> {
     Ok(InitData {
         base_value_constant: number("BaseValueConstant", field(space, v, "BaseValueConstant")?)?,
         base_value_attribute: object("BaseValueAttribute", field(space, v, "BaseValueAttribute")?)?,

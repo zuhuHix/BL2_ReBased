@@ -81,7 +81,11 @@ fn declared(space: &ObjectSpace, obj: ObjRef, name: &str) -> Result<Option<PropI
 fn must_declare(space: &ObjectSpace, obj: ObjRef, name: &str) -> Result<PropId, BalanceError> {
     declared(space, obj, name)?.ok_or_else(|| {
         BalanceError::Attr(AttrError::BadData {
-            reason: format!("{} declares no {name}", data::class_path(space, obj)).into(),
+            reason: format!(
+                "{} declares no {name}",
+                ow_attr::eval::class_path(space, obj)
+            )
+            .into(),
         })
     })
 }
@@ -403,7 +407,7 @@ impl AttrWorld for OfflineWorld {
         value_prop: PropId,
         _forms: NumForms,
     ) -> Result<(), AttrError> {
-        let class = data::class_path(&self.space, owner);
+        let class = ow_attr::eval::class_path(&self.space, owner);
         Err(NotYet::layer_absent(
             format!(
                 "the change notification of {class} (property {value_prop:?}) in the offline world"

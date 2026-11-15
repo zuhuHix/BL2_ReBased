@@ -41,9 +41,9 @@ use ow_core::{DetMap, NotYet};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 
-use crate::offline::data::{
-    class_path, elements, field, field_opt, flag, init_data, object, property, required,
-};
+use ow_attr::eval::{class_path, elements, field, flag, init_data, object, property, required};
+
+use crate::offline::data::field_opt;
 use crate::types::{BalanceError, ExpLevel, GameStage, Playthrough};
 
 /// The record the rule comes from.
