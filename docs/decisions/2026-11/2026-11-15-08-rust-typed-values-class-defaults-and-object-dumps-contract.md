@@ -7,8 +7,8 @@ the loading half of the C++ VM that the reflection lane left: the tag reader (`T
 `instantiateExport` and the `--object-dump` branch of `src/cli.cpp` (`valueJson`). Values are typed through the
 reflection layouts (decision 2026-11-15-06) and stored in heap slots (decision 2026-11-15-02), not in the C++
 name-keyed bag. This file records the shipped interface, where it differs from revision 3 of
-`docs/rust-port/ARCHITECTURE.md` section 3.3, and where the output differs from the C++. Review r1 of PR #304 shaped
-the contract before its freeze (the hub's decisions are marked "hub").
+`docs/rust-port/ARCHITECTURE.md` section 3.3, and where the output differs from the C++. Reviews r1 and r2 of PR #304
+shaped the contract before its freeze (the hub's decisions are marked "hub").
 
 - **Interface.**
   - `decode::ValueCx` borrows the store, the `CodeIndex`, the `ObjectSpace` and a `DecodeState` (the C++ `Runtime`'s
@@ -18,17 +18,27 @@ the contract before its freeze (the hub's decisions are marked "hub").
     every decoded object, component and interface reference points at. It is held as `&dyn` and called re-entrantly, so
     a resolver that decodes (a definition store loading the target lazily, W3-DEFS) gets the nested references too;
     state goes behind a `RefCell` not held across a call into `cx`. The default, `StandIns`, is the C++ policy
-    (`ValueCx::resource`); `ValueCx::with_resolver` sets another.
+    (`ValueCx::resource`); `ValueCx::with_resolver` sets another. Resolver calls nest at most 64 deep, whichever resolver
+    runs (`MAX_RESOLVE_DEPTH`; past it the reference is the typed `ResolveTooDeep` and the counter is restored on every
+    path), so lazily loaded definitions that lead back to themselves end.
   - `ValueCx::apply_tags` is `applyTaggedDefaults` and returns where the stream ended (past its `None` tag, from the
     payload start: the start of any untagged tail, for `DefStore::raw_tail`). `cdo::class_default` and
     `cdo::instantiate_export(cx, package, index, PropertyPrefix) -> Result<Instance, _>` (`Instance { object,
     tags_end }`, non-exhaustive) are the C++ functions of the same meaning. A failed `instantiate_export` frees the object
     it allocated, as the C++ drops its local object; a class default whose own stream breaks keeps its earlier writes,
-    as in the C++.
+    as in the C++. A class default object is registered before its tags are applied, as the C++ `buildDefaults` sets
+    `defaultsBuilt` first: a resolver that instantiates an export of the same class while those tags are read gets the
+    object being built, with the tags applied so far, instead of starting another one.
   - `PropertyPrefix` is the contract's enum (4, 8, 26). `to_value` takes the walker tree's package
     (`to_value(tree, decl, package, cx)`), since its references are package-relative. `ReflectionTyper::new(store, code,
     space, package, mode)` answers from the cache only; `decode::prepare_typer` loads a package's classes first.
-    `DecodeState::is_native_stand_in(ClassId)` marks the engine-native stand-in classes (below).
+    `DecodeState::is_native_stand_in(ClassId)` marks the engine-native stand-in classes (below). The answer is the
+    state's own, so one `DecodeState` serves one `ObjectSpace` for life; nothing enforces that yet. A mark every state
+    sees belongs in the class table (W1-OBJ's `layout.rs`, for example an additive `ClassTable::mark_native` /
+    `is_native`), and the object space has no identity a state could check, so review r2's item 8 stops here, for the
+    hub.
+  - `heap::Heap::alloc_stand_in` / `ObjectSpace::alloc_stand_in` (additive in W1-OBJ's `heap.rs`, granted in review r2)
+    allocate an object of a defined class with no property slots and no outer.
 - **Reading rules (the C++ ones).** A tag's header is checked outside the per-value guard, so a bad header ends the
   stream (and is logged as `defaults: Default__X: <error>` for a class default); a value read inside its tag's size that
   fails or does not end there is skipped and logged as `defaults: skipped <Class>.<Property> (<Type>)`. Attribute
@@ -37,16 +47,18 @@ the contract before its freeze (the hub's decisions are marked "hub").
   fixed-layout structs the C++ VM reads as tagged streams fail and are skipped, as in the C++. A struct starts from its
   defaults; the default stream (52-byte header, word at +44 zero, FITTED) applies only when consumed exactly. Static
   arrays take one tag per element and ignore an index past them. `to_value` keeps the same struct nesting bound (16,
-  counted as the VM reader counts; the package walker itself accepts 32) and skips, inside a struct, a field the struct
+  counted as the VM reader counts, the next level checked only for a struct that enters a tagged stream, so a native
+  struct at 16 is read; the package walker itself accepts 32) and skips, inside a struct, a field the struct
   does not declare, a field that does not type and a value the heap would refuse, as the C++ `tagged` does.
-- **Stand-ins (hub).** A stand-in is a heap object of the target's class with `Origin::Resource` and no property slots,
-  as the C++ stand-in holds no properties. The heap (W1-OBJ's file) only allocates an object with its class's whole
-  slot vector, so the stand-in drops it at once, and that transient work counts against `DecodeState::stand_in_budget`
-  (16 M slots in all, `STAND_IN_BUDGET`), past which a stand-in is the typed `StandInBudget` error. This is the budget
-  alternative the hub allowed: a slotless stand-in that never fails would need a heap change. A reference outside the
-  package's tables is an error too, where the C++ makes a stand-in named `?` that fails later, when printed.
+- **Stand-ins (hub).** A stand-in is a heap object of the target's class with `Origin::Resource` and no property slots
+  (`alloc_stand_in`), as the C++ stand-in holds no properties; a stand-in costs one object, whatever its class. Under
+  `ParityMode::Reference` a reference outside the package's tables gets the C++ stand-in named `?`, of class
+  `Core.Object`, with `Origin::Resource { owner, index }`: the property keeps it (an array with one such element keeps
+  the others), and `--object-dump` fails while printing its path with the C++ text `invalid object reference`, after
+  the JSON printed so far, as the C++ streams it. In Off it is a typed error and the property is skipped.
 - **Engine-native classes (hub).** 38 classes are referenced by the nine code packages and exported by no installed
-  package (Core's reflection classes, `Engine.StaticMesh`, `Engine.Level`, `Engine.Model`, the net classes). Only under
+  package (Core's reflection classes, `Engine.StaticMesh`, `Engine.Level`, `Engine.Model`, the net classes). A layout
+  something else defined at that path (an overlay, a native pack) is used in either mode. Failing that, only under
   `ParityMode::Reference`, and only when the class is genuinely absent (no installed package holds the import, or the
   class path names a missing package or export; every other failure is returned), a stand-in of such an object gets
   the class defined at its import path with no properties of its own under `Core.Object` (once, if nothing defined that
@@ -65,14 +77,21 @@ the contract before its freeze (the hub's decisions are marked "hub").
   - arrays with elements inside a struct's default stream stay empty (the C++ reads those streams with no array
     typing). Off types and decodes them;
   - an enum value name the declared enum lacks gives 0. Off refuses it and skips the property, so no value is guessed;
-  - an enum value is matched by the C++ `enumPosition` rule: the enum export's own entries in their package's spelling,
-    without their FName numbers, against the value's whole text, so a numbered value (stored as a base name and a
-    number) matches nothing and gives 0. Off gives its position in the declared enum.
+  - an enum value is placed by the C++ `byteFromEnum`: the first Enum export of the package being read named as the
+    tag's enum, else the enum a `ByteProperty` declaration's type reference names when its name matches, else 0; then
+    the C++ `enumPosition`: that export's own entries in their package's spelling, without their FName numbers,
+    against the value's whole text, the position kept to its low 8 bits as the C++ `uint8_t` (257 is 1). A numbered
+    value (stored as a base name and a number) matches nothing and gives 0. Off gives the position in the declared
+    enum, and a position past 255 is the typed `EnumPastByte`.
 - **Struct defaults that need themselves (hub).** Only Off reads arrays in default streams, so only there can a
   struct's defaults wait on their own (`A { array<B> }`, `B { array<A> }`). They are refused the same way whichever
   struct is asked first: every struct whose stream met the cycle, swallowed or not, fails with
   `StructDefaultsCycle` and publishes nothing; a value of such a struct, and a class holding one by value, fail with it.
-  Struct defaults waiting on others nest at most 64 deep (a Rust-only bound).
+  Struct defaults waiting on others nest at most 64 deep (a Rust-only bound), and meeting that bound goes through the
+  same barrier: in a ring longer than 64, every struct fails with `DefaultsTooDeep` and publishes nothing, whatever
+  the starting struct. Each struct's and enum's export is the one its declaring property's type reference names,
+  recorded when a class's layout is first used (the C++ `structAt(decl.package, decl.typeRef)`), so a second
+  `PackageId` for the same file still finds it; a struct no recorded class declares is still found by its path.
 - **Two R7 exceptions, accepted as pinned (hub).** The typed slots hold what the bag did not, so `--object-dump`
   differs from the C++ in both modes, on class default objects and on every other export, with and without `--all`:
   - **class properties**: these packages tag a class property `ObjectProperty`, its reference naming the class. The
@@ -117,26 +136,27 @@ the contract before its freeze (the hub's decisions are marked "hub").
   - A Sanctuary sample, beyond class default objects (`OW_PARITY=reference`): the ten `Sanctuary_*` packages but the
     Air and Hole variants (43,540 exports); per package and export class, the first, middle and last export (3,374
     exports of 571 classes), each at prefixes 4, 8 and 26, with and without `--all`: 20,244 runs per binary. 11,862 runs
-    fail on the C++ binary (mostly a prefix that is wrong for that export); 11,856 of them fail with the same exit code
-    and text on the Rust binary, and in 6 the C++ fails printing an invalid object reference (its stand-in for it is
-    named `?`) where the Rust skips that property and prints the rest. Of the 8,382 runs both decode, 3,505 are
-    byte-identical (1,592 with `--all`, 1,913 without), and the classifier puts every other difference in the two
-    exceptions (17,241 undeclared keys of 277 names; 1,873 class values: 1,695 paths and 178 explicit nulls) except 81:
-    31 the class exception without `--all` (the C++ `sameValue` hiding, above), 20 class values naming a class no
-    installed package exports (above), the 6 invalid references, 4 (2 values, 2 log lines) where the heap refuses a
-    `GearboxFramework.WiringMesh` in a property declared `Engine.StaticMesh` (an engine-native stand-in class with no
-    known subclasses; the C++ checks nothing), and 20 where reflection cannot lay out
-    `WillowGame.WillowImpactDefinition` when it is reached from `Sanctuary_Dynamic` (`AlreadyDefined` for the struct
-    `ImpactResponseParameters`; suspected: one package reached under a second `PackageId`, decision 2026-11-15-05,
-    while the struct cache is keyed by id; reflection's, reported to the hub). Off mode differs from the reference mode
-    in 847 of the 20,244 runs: log lines, references to engine-native classes (`Model`, `StaticMesh`) left as `NotYet`,
-    the decoded enum arrays and numbered enum values.
+    fail on the C++ binary (mostly a prefix that is wrong for that export) and all 11,862 fail the same way on the Rust
+    binary, stdout included: 6 of them are a reference outside the tables, where both print the JSON up to that
+    property and then `invalid object reference`. Of the 8,382 runs both decode, 3,505 are byte-identical (1,592 with
+    `--all`, 1,913 without), and the classifier puts every other difference in the two exceptions (17,241 undeclared
+    keys of 277 names; 1,873 class values: 1,695 paths and 178 explicit nulls) except 75: 31 the class exception
+    without `--all` (the C++ `sameValue` hiding, above), 20 class values naming a class no installed package exports
+    (above), 4 (2 values, 2 log lines) where the heap refuses a `GearboxFramework.WiringMesh` in a property declared
+    `Engine.StaticMesh` (an engine-native stand-in class with no known subclasses; the C++ checks nothing), and 20 where
+    reflection cannot lay out `WillowGame.WillowImpactDefinition` when it is reached from `Sanctuary_Dynamic`
+    (`AlreadyDefined` for the struct `ImpactResponseParameters`; one package reached under a second `PackageId`,
+    decision 2026-11-15-05, while reflection's struct cache is keyed by id; REFLECT-FIX's, a separate lane). Off mode
+    differs from the reference mode in 853 of the 20,244 runs: log lines, references to engine-native classes (`Model`,
+    `StaticMesh`) left as `NotYet`, the decoded enum arrays, numbered enum values, and the 6 references outside the
+    tables, skipped there.
   - The 619 attribute definitions of `Startup.upk` (1,238 runs): no difference in either mode besides 120 class values
     in 40 runs. `ContextResolverChain` decodes in all 619, equal to the C++ VM's: 612 non-empty chains, 503 of one
     resolver and 109 of two, in their stored order.
   - 20 command lines with bad options, numbers, prefixes, indices and paths: stdout, stderr and exit code equal.
-    `tests/object_dump_test.py` (class defaults, prefixes 4, 8 and 26, a struct default, the refusals) passes on both
-    binaries.
+    `tests/object_dump_test.py` (class defaults, prefixes 4, 8 and 26, an object reference, an enum, arrays, the print
+    order, a struct default, a reference outside the tables, the refusals) passes on the C++ binary (ctest
+    `object-dump-synthetic`, with `--reference`) and on the Rust binary in both modes (`tests/rust_parity.d/decode.txt`).
   - The reflection typer against the five schemas over every export of the 914 packages under `CookedPCConsole`
     (2,058,664 exports, tag streams walked at prefix 4, 8 or 26: 2,026,612 under Reference, 2,027,459 in Off): of 36
     schema entries, 18 agree wherever the walk meets them and 18 differ (301,124 array tags agree, 109,669 differ, in
@@ -147,8 +167,10 @@ the contract before its freeze (the hub's decisions are marked "hub").
     entries); `ReferencedTextureGuids` (38,421 tags on materials); and 18 tags met by walks at the wrong prefix in three
     BrushComponent exports.
   - Rust unit tests on invented packages for each rule above, including `tests/behavior_test.py` case 4, both cycle
-    orders, both name-table orders for the reference enum rule, the rollback of a failed instantiation, the resolver
-    hook, the stand-in budget and the element widths of each mode; the CLI test texts were checked byte for byte
+    orders and a 65-struct ring from two starts, both name-table orders and the two `byteFromEnum` steps for the
+    reference enum rule, a 258-value enum, the rollback of a failed instantiation, the resolver hook, a class default
+    named by its own defaults through a loading resolver, the resolve bound, slotless stand-ins, the `?` stand-in, an
+    overlay-defined native class in Off, a native struct at the depth bound and the element widths of each mode; the CLI test texts were checked byte for byte
     against the C++ binary on the same package.
 - **What a byte-identical dump does not show** (review r1). Equal `--object-dump` text does not establish equal heap
   contents: without `--all` the values equal to the class default's are not printed; references print as paths, not

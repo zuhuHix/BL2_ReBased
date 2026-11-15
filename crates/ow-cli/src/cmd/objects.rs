@@ -55,12 +55,13 @@ const MAX_PRINT_DEPTH: u32 = 12;
 
 pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     let _ = command;
-    match execute(args, mode) {
-        Ok(out) => {
-            // Ignore a failed write (a closed pipe), as the C++ binary does.
-            let _ = std::io::stdout().lock().write_all(out.as_bytes());
-            ExitCode::SUCCESS
-        }
+    let mut out = String::new();
+    let outcome = execute(args, mode, &mut out);
+    // What was printed before a failure stays printed, as the C++ streams it (a reference it cannot name fails
+    // half way through the JSON). Ignore a failed write (a closed pipe), as the C++ binary does.
+    let _ = std::io::stdout().lock().write_all(out.as_bytes());
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             let _ = writeln!(std::io::stderr().lock(), "ow-package: {message}");
             ExitCode::from(1)
@@ -73,7 +74,7 @@ fn text(e: &dyn std::error::Error) -> String {
 }
 
 /// `args` is the command line without the program name: `args[0]` the source package, `args[1]` the mode.
-fn execute(args: &[String], mode: ParityMode) -> Result<String, String> {
+fn execute(args: &[String], mode: ParityMode, out: &mut String) -> Result<(), String> {
     let source = Package::load(Path::new(&args[0])).map_err(|e| text(&e))?;
     let everything = args.len() == 7;
     if (args.len() != 6 && args.len() != 7)
@@ -115,7 +116,7 @@ fn execute(args: &[String], mode: ParityMode) -> Result<String, String> {
         .path_of(index)
         .map_err(|e| text(&e))?;
     let class_path = printer.code.class(key).path.clone();
-    let mut out = format!(
+    *out = format!(
         "{{\"path\":{},\"class\":{},\"properties\":{{",
         quote(&path),
         quote(&class_path)
@@ -138,7 +139,7 @@ fn execute(args: &[String], mode: ParityMode) -> Result<String, String> {
         }
         first = false;
         let _ = write!(out, "{}:", quote(&key));
-        printer.value(&mut out, &value, 0)?;
+        printer.value(out, &value, 0)?;
     }
     out.push_str("},\"log\":[");
     for (i, line) in cx.state.log.iter().enumerate() {
@@ -148,7 +149,7 @@ fn execute(args: &[String], mode: ParityMode) -> Result<String, String> {
         out.push_str(&quote(line));
     }
     out.push_str("]}\n");
-    Ok(out)
+    Ok(())
 }
 
 /// The C++ `sameValue` for two values of one property (both from the same slots, so of the same kinds): what
@@ -441,9 +442,10 @@ mod tests {
         if all {
             args.push("--all".into());
         }
-        let out = execute(&args, mode);
+        let mut out = String::new();
+        let outcome = execute(&args, mode, &mut out);
         let _ = std::fs::remove_dir_all(&dir);
-        out
+        outcome.map(|()| out)
     }
 
     // Each expected text below is what the C++ binary printed for the same package (line end aside), checked locally.
