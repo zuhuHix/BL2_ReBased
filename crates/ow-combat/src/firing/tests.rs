@@ -5,7 +5,7 @@
 //!   tolerances, so each C++ case has its Rust twin.
 //! - `bit_equal_to_cpp`: the values those cases (plus invented edge cases: odd inputs, NaN, empty and out-of-range
 //!   arguments) produce, compared by `to_bits()` against [`CPP_BITS`], the bit patterns the C++ reference prints for the
-//!   same calls (`src/weapon_firing.cpp` built with MSVC 14.50 `/O2`, x86_64, zuhu desktop, 2026-11-15; the printing
+//!   same calls (`src/weapon_firing.cpp` built with MSVC 14.50 `/O2`, x86_64, zuhu desktop, 2026-11-15, extended in review r1; the printing
 //!   program is kept under the lane's `local/p2/W1-FIRING/`). Every input is invented.
 
 use super::*;
@@ -588,8 +588,8 @@ fn level_rows() -> Vec<LevelChanceScale> {
     ]
 }
 
-fn index_value(index: usize) -> f64 {
-    f64::from(u32::try_from(index).expect("small index"))
+fn index_value(index: i32) -> f64 {
+    f64::from(index)
 }
 
 /// The same calls, in the same order, as the C++ printing program that produced [`CPP_BITS`].
@@ -1100,6 +1100,197 @@ fn values() -> Vec<(&'static str, f64)> {
     bad.impulse(-100.0);
     p("bad min", bad.value);
     p("cone nan yaw", accuracy_offset(nan, 0.0, 0.1, 0.2).yaw);
+
+    // Review r1: branches the first table did not reach.
+    let mut flat2 = Pattern {
+        lines: vec![PatternLine {
+            start_pitch: 4,
+            start_yaw: -60,
+            end_pitch: 4,
+            end_yaw: 60,
+            start_only: false,
+        }],
+        scale_by_spread: true,
+        min_pattern_scale: 3.0,
+        base_pattern_spread: 0.0,
+        ..Pattern::default()
+    };
+    index = 0;
+    let o = pattern_offset(&flat2, 5.0, &mut index, 0.0, 0.8);
+    p("pattern base zero yaw", o.yaw);
+    p("pattern base zero pitch", o.pitch);
+    flat2.base_pattern_spread = -2.0;
+    index = 0;
+    p(
+        "pattern base negative yaw",
+        pattern_offset(&flat2, 5.0, &mut index, 0.0, 0.8).yaw,
+    );
+    let mut two = Pattern {
+        lines: vec![
+            PatternLine {
+                start_pitch: 1,
+                start_yaw: 2,
+                end_pitch: 3,
+                end_yaw: 4,
+                start_only: true,
+            },
+            PatternLine {
+                start_pitch: 50,
+                start_yaw: 60,
+                end_pitch: 70,
+                end_yaw: 80,
+                start_only: true,
+            },
+        ],
+        fire_randomly: true,
+        ..Pattern::default()
+    };
+    for (pitch_name, index_name, start, pick) in [
+        ("pick negative pitch", "pick negative index", 1, -0.7),
+        ("pick huge pitch", "pick huge index", 0, 2.0e9),
+        (
+            "pick huge negative pitch",
+            "pick huge negative index",
+            0,
+            -2.0e9,
+        ),
+        ("pick second pitch", "pick second index", 0, 0.75),
+    ] {
+        index = start;
+        let o = pattern_offset(&two, 1.0, &mut index, pick, 0.0);
+        p(pitch_name, o.pitch);
+        p(index_name, index_value(index));
+    }
+    two.fire_randomly = false;
+    for (pitch_name, index_name, start) in [
+        ("index negative pitch", "index negative index", -3),
+        ("index past end pitch", "index past end index", 7),
+        ("index one pitch", "index one index", 1),
+    ] {
+        index = start;
+        let o = pattern_offset(&two, 1.0, &mut index, 0.0, 0.0);
+        p(pitch_name, o.pitch);
+        p(index_name, index_value(index));
+    }
+    let o = spread_offset(2.2, -0.4, 0.3);
+    p("spread r1 below pitch", o.pitch);
+    p("spread r1 below yaw", o.yaw);
+    let o = spread_offset(2.2, 1.7, 0.3);
+    p("spread r1 above pitch", o.pitch);
+    p("spread r1 above yaw", o.yaw);
+    let slow = KickData {
+        speed: 0.01,
+        recovery_time: 50.0,
+        ..chase
+    };
+    let mut longk = Kick {
+        target_pitch: 900.0,
+        target_yaw: -300.0,
+        recover_left: 50.0,
+        ..Kick::default()
+    };
+    longk.tick(40.0, &slow);
+    p("long frame cur pitch", longk.current_pitch);
+    p("long frame cur yaw", longk.current_yaw);
+    p("long frame tgt pitch", longk.target_pitch);
+    p("long frame recover", longk.recover_left);
+    let mut uncapped = Kick {
+        target_pitch: 900.0,
+        recover_left: 50.0,
+        ..Kick::default()
+    };
+    for _ in 0..1000 {
+        uncapped.tick(0.04, &slow);
+    }
+    p("cap steps cur pitch", uncapped.current_pitch);
+    let zv = KickData {
+        up: 1.0,
+        down: 0.0,
+        left: 1.0,
+        right: 1.0,
+        min_vertical: 0.3,
+        min_horizontal: 0.25,
+        ..kd
+    };
+    let mut zk = Kick::default();
+    zk.add(100.0, &zv, 1.0, 0.0, 0.9);
+    p("zero vertical pitch", zk.target_pitch);
+    p("zero vertical yaw", zk.target_yaw);
+    p("zero vertical recover", zk.recover_left);
+    let mut zh = Kick::default();
+    zh.add(100.0, &zv, 1.0, 0.6, 0.5);
+    p("zero horizontal pitch", zh.target_pitch);
+    p("zero horizontal yaw", zh.target_yaw);
+    let mut fovk = Kick::default();
+    fovk.add(100.0, &zv, f64::INFINITY, 0.6, 0.9);
+    p("fov inf pitch", fovk.target_pitch);
+    p("fov inf recover", fovk.recover_left);
+    let mut fovn = Kick::default();
+    fovn.add(100.0, &zv, nan, 0.6, 0.9);
+    p("fov nan yaw", fovn.target_yaw);
+    let badrec = KickData {
+        recovery_time: nan,
+        ..zv
+    };
+    let mut br = Kick::default();
+    br.add(50.0, &badrec, 1.0, 0.6, 0.9);
+    p("recovery nan recover", br.recover_left);
+    p("kick amount nan zoom", Kick::amount(1.5, nan, 2.0));
+    p(
+        "kick amount inf zoom",
+        Kick::amount(1.5, f64::INFINITY, 2.0),
+    );
+    p("kick amount nan multiplier", Kick::amount(1.5, 0.5, nan));
+    let bounds = AccuracyPool {
+        min_value: 3.0,
+        max_value: 9.0,
+        idle_delay: 0.0,
+        ..AccuracyPool::default()
+    };
+    let mut nv = AccuracyPool {
+        value: nan,
+        ..bounds
+    };
+    nv.tick(0.1);
+    p("tick nan value", nv.value);
+    let mut nr = AccuracyPool {
+        value: 6.0,
+        idle_rate: nan,
+        ..bounds
+    };
+    nr.tick(0.1);
+    p("tick nan rate", nr.value);
+    let mut ir = AccuracyPool {
+        value: 6.0,
+        idle_rate: f64::NEG_INFINITY,
+        ..bounds
+    };
+    ir.tick(0.1);
+    p("tick inf rate", ir.value);
+    let mut iv = AccuracyPool {
+        min_value: 3.0,
+        max_value: 9.0,
+        value: f64::INFINITY,
+        ..AccuracyPool::default()
+    };
+    iv.impulse(1.0);
+    p("impulse inf value", iv.value);
+    let mut nd = AccuracyPool {
+        value: 7.0,
+        ..AccuracyPool::default()
+    };
+    nd.tick(nan);
+    nd.tick(-1.0);
+    p("tick bad dt value", nd.value);
+    p("tick bad dt idle", nd.idle_for);
+    p(
+        "falloff nan distance",
+        radius_damage_scale(nan, 100.0, &defaults, false),
+    );
+    p(
+        "falloff nan radius",
+        radius_damage_scale(10.0, nan, &defaults, false),
+    );
     out
 }
 
@@ -1290,4 +1481,50 @@ const CPP_BITS: &[(&str, u64)] = &[
     ("bad max", 0x4024000000000000),
     ("bad min", 0x3ff0000000000000),
     ("cone nan yaw", 0x0000000000000000),
+    ("pattern base zero yaw", 0x4042000000000000),
+    ("pattern base zero pitch", 0x4010000000000000),
+    ("pattern base negative yaw", 0x4042000000000000),
+    ("pick negative pitch", 0x3ff0000000000000),
+    ("pick negative index", 0x3ff0000000000000),
+    ("pick huge pitch", 0x3ff0000000000000),
+    ("pick huge index", 0x3ff0000000000000),
+    ("pick huge negative pitch", 0x3ff0000000000000),
+    ("pick huge negative index", 0x3ff0000000000000),
+    ("pick second pitch", 0x4049000000000000),
+    ("pick second index", 0x0000000000000000),
+    ("index negative pitch", 0x3ff0000000000000),
+    ("index negative index", 0x3ff0000000000000),
+    ("index past end pitch", 0x3ff0000000000000),
+    ("index past end index", 0x3ff0000000000000),
+    ("index one pitch", 0x4049000000000000),
+    ("index one index", 0x0000000000000000),
+    ("spread r1 below pitch", 0x0000000000000000),
+    ("spread r1 below yaw", 0x4076800000000000),
+    ("spread r1 above pitch", 0x0000000000000000),
+    ("spread r1 above yaw", 0xc07e000000000000),
+    ("long frame cur pitch", 0x40654162a09c0738),
+    ("long frame cur yaw", 0xc04c572e2b7ab438),
+    ("long frame tgt pitch", 0x406680000000012e),
+    ("long frame recover", 0x40240000000001e0),
+    ("cap steps cur pitch", 0x406542dddf57dd57),
+    ("zero vertical pitch", 0x0000000000000000),
+    ("zero vertical yaw", 0x4051800000000000),
+    ("zero vertical recover", 0x3ff0000000000000),
+    ("zero horizontal pitch", 0x4052c00000000000),
+    ("zero horizontal yaw", 0x0000000000000000),
+    ("fov inf pitch", 0x0000000000000000),
+    ("fov inf recover", 0x0000000000000000),
+    ("fov nan yaw", 0x0000000000000000),
+    ("recovery nan recover", 0x0000000000000000),
+    ("kick amount nan zoom", 0x40711110cb295e9e),
+    ("kick amount inf zoom", 0x40711110cb295e9e),
+    ("kick amount nan multiplier", 0x0000000000000000),
+    ("tick nan value", 0x4008000000000000),
+    ("tick nan rate", 0x4018000000000000),
+    ("tick inf rate", 0x4018000000000000),
+    ("impulse inf value", 0x4008000000000000),
+    ("tick bad dt value", 0x401c000000000000),
+    ("tick bad dt idle", 0x0000000000000000),
+    ("falloff nan distance", 0x0000000000000000),
+    ("falloff nan radius", 0x0000000000000000),
 ];

@@ -4,9 +4,9 @@
 //! the reference until W7-RETIRE; architecture section 6, row `ow-combat::firing`).
 //!
 //! Rules are own-words readings in `docs/verification/NATIVE_WEAPON_FIRING.md` (section numbers below); every one is
-//! **UNVERIFIED** in game unless that note or `docs/verification/WEAPON_PROJECTILES.md` says how it was confirmed
-//! (real-game question 9 of architecture section 12 covers the spread distribution and the proc rate). Porting a rule
-//! changes nothing about what is known about it.
+//! **UNVERIFIED** in game unless `docs/verification/WEAPON_PROJECTILES.md` says how it was confirmed; each function's
+//! `Status:` line cites that record's row (section 3 table, cited by its rule) or section 10, with the record's own
+//! status. Porting a rule changes nothing about what is known about it.
 //!
 //! Conventions, kept from the C++ so results are bit-equal on the reference target (architecture 5.1 N1):
 //! - Arithmetic is `f64`, in the C++ operation order (left to right, no reassociation, no fused multiply-add).
@@ -35,7 +35,9 @@ fn cmax(a: f64, b: f64) -> f64 {
     if a < b { b } else { a }
 }
 
-/// `std::clamp(v, lo, hi)`: `(v < lo) ? lo : (hi < v) ? hi : v`. Callers keep `lo <= hi`, as the C++ requires.
+/// `std::clamp(v, lo, hi)` for `lo <= hi`: `lo` when `v < lo`, `hi` when `hi < v`, else `v` (a NaN `v` comes back as
+/// `v`). MSVC's `std::clamp` tests `hi < v` first (libstdc++ tests `v < lo` first); the two orders give the same result
+/// whenever `lo <= hi`, which every call site keeps, as the C++ requires.
 fn cclamp(v: f64, lo: f64, hi: f64) -> f64 {
     if v < lo {
         lo
@@ -88,14 +90,15 @@ impl Default for Pattern {
     }
 }
 
-/// Section 1.3. `index` is the weapon's `NextFiringPatternIndex` and is advanced; `pick` (0..1) chooses the line when
-/// firing randomly; `t` (0..1) is the point on the line. No lines: no offset and `index` untouched. An `index` out of
-/// range starts again at line 0 (the C++ also resets a negative one; `usize` cannot hold one).
-/// Status: UNVERIFIED (NATIVE_WEAPON_FIRING.md 1.3).
+/// Section 1.3. `index` is the weapon's `NextFiringPatternIndex` (a script int) and is advanced; `pick` (0..1) chooses
+/// the line when firing randomly; `t` (0..1) is the point on the line. No lines: no offset and `index` untouched. An
+/// `index` (or a random pick) below 0 or past the last line starts again at line 0, as the C++.
+/// Status: read from native code (NATIVE_WEAPON_FIRING.md 1.3); WEAPON_PROJECTILES.md section 3, row "Pattern": the
+/// cooked lines equal the live dump; the offset rule itself is UNVERIFIED in game.
 pub fn pattern_offset(
     pattern: &Pattern,
     spread_degrees: f64,
-    index: &mut usize,
+    index: &mut i32,
     pick: f64,
     t: f64,
 ) -> Offset {
@@ -109,7 +112,7 @@ pub fn pattern_offset(
     let at: i32 = if pattern.fire_randomly {
         trunc_i32_f64(pick * f64::from(count_i)).min(count_i - 1)
     } else {
-        i32::try_from(*index).unwrap_or(-1)
+        *index
     };
     let at = if at < 0 || at >= count_i {
         0
@@ -141,12 +144,14 @@ pub fn pattern_offset(
         offset.pitch *= scale;
         offset.yaw *= scale;
     }
-    *index = (at + 1) % count;
+    // `at` < count <= i32::MAX, so the sum and the conversion back are exact.
+    *index = i32::try_from((at + 1) % count).unwrap_or(0);
     offset
 }
 
 /// Section 1.4: yaw uniform across a disc of diameter `spread_degrees`, pitch uniform on the chord at that yaw.
-/// `r1`, `r2` in [0, 1). Status: UNVERIFIED (NATIVE_WEAPON_FIRING.md 1.4; real-game question 9).
+/// `r1`, `r2` in [0, 1). Status: **confirmed live** 2026-11-03 (WEAPON_PROJECTILES.md section 3, row "Spread", and
+/// section 10: 420 `AddSpread` draws, yaw and pitch/chord SDs of a uniform draw, none outside the disc).
 pub fn spread_offset(spread_degrees: f64, r1: f64, r2: f64) -> Offset {
     if spread_degrees == 0.0 {
         return Offset::default();
@@ -162,7 +167,7 @@ pub fn spread_offset(spread_degrees: f64, r1: f64, r2: f64) -> Offset {
 }
 
 /// Section 1.5. Spin-up: the interval moves linearly from `max(multiplier * base, base)` to `base` as the percent goes
-/// 0 -> 1. Status: UNVERIFIED (NATIVE_WEAPON_FIRING.md 1.5).
+/// 0 -> 1. Status: read from native code only (WEAPON_PROJECTILES.md section 3, row "Spin-up"); UNVERIFIED in game.
 pub fn fire_interval(
     base: f64,
     spins_up_to_full_rate: bool,
@@ -209,7 +214,9 @@ pub fn burst_interval(interval: f64, current_fire_interval: f64, base_fire_inter
 
 /// Section 1.5 refire (`ShouldRefire`): with `AutomaticBurstCount` N > 0 a press fires N shots even if the trigger is
 /// let go, then waits for a new press; N = 0 fires while the trigger is held. The state belongs to the weapon in hand:
-/// the host resets it when the weapon changes or is holstered. Status: UNVERIFIED.
+/// the host resets it when the weapon changes or is holstered. Status: consistent with live (WEAPON_PROJECTILES.md
+/// section 3, row "AutomaticBurstCount": count-1 guns fired once per hold, count-0 guns repeatedly); bursts of more
+/// than one shot are not measured, UNVERIFIED.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Burst {
     /// Shots still owed by the burst in progress.
@@ -260,7 +267,8 @@ impl Burst {
 
 /// Section 1.7: flat additions are divided among pellets, the scaled base is not. Not called by a host yet (the
 /// retired UE5 host fired the evaluated card damage); kept for when skills and relics add modifiers at run time (the
-/// split was seen live with a shield skill). Status: UNVERIFIED beyond that observation.
+/// split was seen live with a shield skill). Status: **confirmed live** (WEAPON_PROJECTILES.md section 3, row
+/// "Per-pellet damage": a skill's flat addition split over 7 Jakobs pellets).
 pub fn multi_projectile_damage(
     base: f64,
     pre_add: f64,
@@ -292,7 +300,9 @@ impl Default for Falloff {
 }
 
 /// Section 3.1 (`WillowDamageTypeDefinition.CalcRadiusDamageScale` with the stock linear fallback). Returns 0 outside
-/// the radius. Status: UNVERIFIED (NATIVE_WEAPON_FIRING.md 3.1).
+/// the radius. Status: **confirmed live** for the full-damage flag (WEAPON_PROJECTILES.md section 3, row "Splash":
+/// the same damage at all 21 distances) and for the band formula (row "Falloff otherwise": `CalcRadiusDamageScale`
+/// returned 0.603975 where the formula gives 0.603976); the "not handled" linear fallback is UNVERIFIED.
 pub fn radius_damage_scale(
     distance: f64,
     radius: f64,
@@ -335,8 +345,9 @@ pub fn explosion_radius(formula_radius: f64) -> f64 {
 }
 
 /// Section 4.2: the product of the percent factors, times 0.01, clamped to [0, 1]. The hit path passes the radius
-/// scale times [`status_level_scale`] as `extra_scale`; friendly fire, skills and relics are not modelled and count as
-/// 1. Status: UNVERIFIED (the native roll was not read; real-game question 9).
+/// scale times [`status_level_scale`] as `extra_scale`; friendly fire, skills and relics are not modelled and each
+/// counts as one. Status: UNVERIFIED (WEAPON_PROJECTILES.md section 3, row "Status chance": the live proc counts run above the
+/// card chance and the missing factor is not settled; sections 10 and 13; the native roll was not read).
 pub fn status_chance(
     base_chance_percent: f64,
     target_modifier: f64,
@@ -374,8 +385,9 @@ impl Default for LevelChanceScale {
 
 /// Section 4.2 LevelScale. With n = min(|instigator - target|, rows), row n - 1; an instigator above the target takes
 /// `higher`, below takes `lower`; equal levels (or no rows) give 1.
-/// Status: UNVERIFIED: the higher/lower mapping and the row choice come from the data and fit the live Maliwan proc
-/// counts (shooter 54 against a level-7 target); the native roll was not read and the same-level case not measured.
+/// Status: UNVERIFIED (WEAPON_PROJECTILES.md section 3, row "Status chance x the level-difference scale"): the
+/// mapping and the row choice come from the data; equal levels did not give x1 with skills on (section 10) and were
+/// consistent with x1 with skills off (section 13, small sample); the higher-level scale is unmeasured.
 pub fn status_level_scale(
     instigator_level: i32,
     target_level: i32,
@@ -454,7 +466,11 @@ pub struct Motion {
 /// launch direction, gravity scaled by GravityScaling. Light bullets (section 2.2): the manager's flight was not read;
 /// AirFriction changes the speed in proportion to the speed each frame, `v *= 1 - F dt` (Torgue gyrojets carry
 /// -10 / -6: the live fit, 2026-10-23, grew x(1 + 10 dt) per frame, uncapped, no gravity). Semi-implicit Euler: the
-/// velocity is updated, then the position moves with the new velocity. Status: UNVERIFIED beyond that fit.
+/// velocity is updated, then the position moves with the new velocity. Status (WEAPON_PROJECTILES.md section 3):
+/// **confirmed live** that light bullets fly straight at constant speed with no gravity (row "Light bullets"), the
+/// AirFriction factor x(1 - F dt) per frame, uncapped (row "AirFriction"), and the rocket MaxSpeed (row "Rocket
+/// MaxSpeed"); weapon rockets were seen not to fall at all (row "Weapon rockets do not fall"), so a caller passes
+/// `gravity_z` 0 for them; the integration scheme itself is the host's, UNVERIFIED.
 pub fn step(flight: &mut Flight, motion: &Motion, dt: f64) {
     let v = flight.velocity;
     let drag = 1.0 - motion.air_friction * dt;
@@ -484,14 +500,16 @@ pub fn step(flight: &mut Flight, motion: &Motion, dt: f64) {
 }
 
 /// Momentum of a bullet or trace hit (section 1.2, NATIVE_WEAPON_TRIGGER_AMMO `ProcessInstantHitBullet`): the weapon
-/// type's InstantHitMomentum is multiplied by 100 once at weapon setup. Status: confirmed live (800 for a type value
-/// of 8), per the C++ header.
+/// type's InstantHitMomentum is multiplied by 100 once at weapon setup. Status (WEAPON_PROJECTILES.md section 3, row
+/// "Per-hit momentum"): the type values match live reads; the x100 factor is read from native code (the C++ header
+/// also notes 800 read for a type value of 8); the effect of the hit on a pawn is not measured, UNVERIFIED.
 pub fn hit_momentum(instant_hit_momentum: f64) -> f64 {
     instant_hit_momentum * 100.0
 }
 
 /// The victim's velocity change: momentum / Mass, or momentum x 100 when Mass <= 0.01 (engine `Pawn.TakeDamage`,
-/// NATIVE_DAMAGE_DEATH 0.1; the upward part some damage types add is not included). Status: UNVERIFIED.
+/// NATIVE_DAMAGE_DEATH 0.1; the upward part some damage types add is not included). Status: UNVERIFIED
+/// (WEAPON_PROJECTILES.md section 3, row "A hit changes the target's velocity").
 pub fn momentum_velocity(momentum: &Vec3, mass: f64) -> Vec3 {
     let scale = if mass > 0.01 { 1.0 / mass } else { 100.0 };
     Vec3 {
@@ -507,8 +525,8 @@ pub const DOT_PERIOD: f64 = 0.33;
 /// Damage-over-time clock of one status effect application, as measured in the running game: the elapsed time builds
 /// up each frame; once it reaches the period a tick deals dps x the time built up and the clock drops by one period,
 /// so a frame's overshoot is paid again by the next tick. `dt` is already clamped by the caller to the effect's
-/// remaining time. Returns this frame's tick damage, 0 when none. Status: the clock is the live measurement; the
-/// native DOT code was not read.
+/// remaining time. Returns this frame's tick damage, 0 when none. Status: **confirmed live** on 94 ticks
+/// (WEAPON_PROJECTILES.md section 3, row "DOT", ratio 1.00000); the native DOT code was not read.
 pub fn dot_advance(accumulated: &mut f64, dt: f64, damage_per_second: f64, period: f64) -> f64 {
     *accumulated += cmax(0.0, dt);
     if *accumulated < period {
@@ -536,7 +554,9 @@ fn ordered(lo: f64, hi: f64) -> (f64, f64) {
 /// values the C++ uses (min 2, max 12, start at max, idle rate -8 per second after a 0.2 s delay), before the held
 /// weapon's external accuracy slots scale them. Each shot adds the type's PerShotAccuracyImpulse (x
 /// BurstShotAccuracyImpulseScale inside an automatic burst); the sum is clamped to [min, max] and restarts the idle
-/// delay. Status: UNVERIFIED in game beyond the bound of the cone (PROJECTILE_FIRING_PATTERNS_LIVE R2).
+/// delay. Status (WEAPON_PROJECTILES.md section 10, one gun with Maya's skills on): **confirmed live** that the pool
+/// rises by the shot's impulse, holds for the idle delay (0.176-0.200 s against the data's 0.2 s) and then falls
+/// linearly to its floor; the per-gun values (rate and floor with the weapon's scales) are UNVERIFIED live.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AccuracyPool {
     pub min_value: f64,
@@ -618,7 +638,8 @@ impl AccuracyPool {
 }
 
 /// The aim offset of one shot from the accuracy pool: the same draw as [`spread_offset`] with the pool value as the
-/// diameter, times `1 - zoom_effect` (fully zoomed: no pool cone). Status: UNVERIFIED.
+/// diameter, times `1 - zoom_effect` (fully zoomed: no pool cone). Status: UNVERIFIED (WEAPON_PROJECTILES.md section
+/// 10: `1 - ZoomEffect` only partly seen; zoomed pitch offsets near 0, zoomed yaw offsets larger than the cone).
 pub fn accuracy_offset(pool_degrees: f64, zoom_effect: f64, r1: f64, r2: f64) -> Offset {
     if !pool_degrees.is_finite() || pool_degrees <= 0.0 {
         return Offset::default();
@@ -678,9 +699,12 @@ impl Default for KickData {
 /// NATIVE_WEAPON_FIRING 1.6 / NATIVE_WEAPON_TRIGGER_AMMO section 5: the view kick. A shot's kick (rotator units) is
 /// impulse x 182.0444 x lerp(1, WeaponKickZoomMultiplier, zoom) (or the Hyperion AlternativeWeaponKick), rescaled by
 /// the FOV ratio and split into vertical and horizontal parts by two draws; the targets decay linearly to 0 over
-/// WeaponKickRecoveryTime from the last kick and the current amounts chase them at WeaponKickSpeed. Whether the
-/// current amounts are a view offset or a per-frame view change is open (to be read live); the retired host used them
-/// as an offset. Status: UNVERIFIED except the chase step (live fit, WEAPON_PROJECTILES.md section 10).
+/// WeaponKickRecoveryTime from the last kick and the current amounts chase them at WeaponKickSpeed. The current
+/// amounts are a view offset that returns to the aim, not a permanent view change.
+/// Status (WEAPON_PROJECTILES.md section 10): **confirmed live** that the controller rotation never moves (so the kick
+/// is a view offset), that the targets fall linearly to 0 at WeaponKickRecoveryTime, and that the current amounts chase
+/// them by (target - current) x WeaponKickSpeed x dt per frame (fitted 8.00, the type's 8). The vertical / horizontal
+/// split and its signs are not fitted: UNVERIFIED. The 1/30 s substeps are the host's guard against hitches.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Kick {
     /// Rotator units.
@@ -696,7 +720,9 @@ impl Kick {
     /// [`Kick::tick`] substeps longer frames (seconds).
     pub const MAX_STEP: f64 = 1.0 / 30.0;
 
-    /// Kick amount (rotator units) of one shot before the split; keeps the impulse's sign.
+    /// Kick amount (rotator units) of one shot before the split; keeps the impulse's sign. Status: **confirmed live**
+    /// that the kick passed to `AddWeaponKick` is impulse x 182.0444, x WeaponKickZoomMultiplier when fully zoomed
+    /// (WEAPON_PROJECTILES.md section 10); partial zoom (the lerp) and a negative impulse are UNVERIFIED.
     pub fn amount(impulse_degrees: f64, zoom_effect: f64, zoom_multiplier: f64) -> f64 {
         if !impulse_degrees.is_finite() || !zoom_multiplier.is_finite() {
             return 0.0;
