@@ -24,8 +24,11 @@
 //! itself, or two structs arrays of each other. The reflection lane (W2-REFLECT) defines in that order.
 //!
 //! **Zero and default values.** [`ClassTable::zero_value`] is the plain zero of a kind. Struct defaults (the default
-//! stream a struct export carries, read by W3-DECODE) are set with [`ClassTable::set_struct_default`] /
-//! [`ClassTable::set_struct_defaults`] and applied by [`ClassTable::struct_defaults`] and
+//! stream a struct export carries, read by W3-DECODE) are set through the object space,
+//! [`ObjectSpace::set_struct_default`](crate::heap::ObjectSpace::set_struct_default) /
+//! [`ObjectSpace::set_struct_defaults`](crate::heap::ObjectSpace::set_struct_defaults), which check the references
+//! a default holds against the heap, and [`ObjectSpace::free`](crate::heap::ObjectSpace::free) clears freed objects
+//! out of them. They are applied by [`ClassTable::struct_defaults`] and
 //! [`ClassTable::default_value`], which is the C++ `Runtime::zeroValue`. They are computed on each call, so defaults
 //! set at any time reach every struct and class that holds the struct; new objects start from
 //! [`ClassTable::default_slots`].
@@ -46,7 +49,7 @@ use std::rc::Rc;
 use ow_core::{FixedHashMap, IdentError, ObjectPath};
 use ow_package::PackageId;
 
-use crate::ids::{ClassId, EnumId, NameId, PropAddr, PropId, StructId};
+use crate::ids::{ClassId, EnumId, NameId, ObjRef, PropAddr, PropId, StructId};
 use crate::value::Value;
 
 /// What a property holds. Mirrors the property export classes (`IntProperty`, `ObjectProperty`, ...); a
@@ -440,8 +443,9 @@ impl StructLayout {
             .checked_sub(1)?;
         (entry < self.slot_count).then(|| (self.field_slots[i], &self.fields[i]))
     }
-    /// The struct's own default entries, as set by [`ClassTable::set_struct_defaults`] and
-    /// [`ClassTable::set_struct_default`].
+    /// The struct's own default entries, as set through
+    /// [`ObjectSpace::set_struct_default`](crate::heap::ObjectSpace::set_struct_default) and
+    /// [`ObjectSpace::set_struct_defaults`](crate::heap::ObjectSpace::set_struct_defaults).
     pub fn own_defaults(&self) -> &[(u32, Value)] {
         &self.defaults
     }
@@ -878,8 +882,11 @@ impl ClassTable {
     }
 
     /// Sets every default entry of struct `s` from the complete struct value `v` (so the struct's own defaults win
-    /// over those of the structs it holds). See [`ClassTable::struct_defaults`].
-    pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), LayoutError> {
+    /// over those of the structs it holds). See [`ClassTable::struct_defaults`]. Checks only the shape ([`fits`]):
+    /// the public, reference-checking setter is `ObjectSpace::set_struct_defaults`.
+    ///
+    /// [`fits`]: ClassTable::fits
+    pub(crate) fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), LayoutError> {
         let layout = self.struct_checked(s)?;
         if !self.fits(&PropKind::Struct(s), &v) {
             return Err(LayoutError::BadDefault {
@@ -896,8 +903,9 @@ impl ClassTable {
     }
 
     /// Sets one default entry of struct `s` (a static-array element is an entry of its own), as one tag of the
-    /// struct's default stream sets one field. Entries not set keep the composed base.
-    pub fn set_struct_default(
+    /// struct's default stream sets one field. Entries not set keep the composed base. Checks only the shape: the
+    /// public, reference-checking setter is `ObjectSpace::set_struct_default`.
+    pub(crate) fn set_struct_default(
         &mut self,
         s: StructId,
         entry: u32,
@@ -920,6 +928,16 @@ impl ClassTable {
             Err(i) => defaults.insert(i, (entry, v)),
         }
         Ok(())
+    }
+
+    /// Clears every reference for which `dead` is true out of every struct's own default entries, as
+    /// `ObjectSpace::free` does for the objects it frees.
+    pub(crate) fn clear_refs_in_defaults(&mut self, dead: &dyn Fn(ObjRef) -> bool) {
+        for layout in &mut self.structs {
+            for (_, v) in &mut layout.defaults {
+                crate::value::clear_refs(v, dead);
+            }
+        }
     }
 
     /// The default value of struct `s`, computed on each call: every field at its zero, every by-value struct field

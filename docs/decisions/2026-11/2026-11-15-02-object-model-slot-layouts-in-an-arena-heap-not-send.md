@@ -23,8 +23,14 @@ read here and no parsing behaviour changes; this file records how the Rust objec
   the slot's generation, so a handle kept outside the heap (a VM frame: clearing those is the VM's job) is refused from
   then on, also after the slot is reused; a slot whose generation would wrap is retired. UE3 clears references when its
   collector removes an object; when that happens after `Destroy()` in BL2, and whether a delegate keeps its function
-  name with a null object, is UNVERIFIED. Nothing calls `free` yet: who frees what and when is for the world and VM
-  lanes.
+  name with a null object, is UNVERIFIED. Each `free` walks the whole heap once; `free_many` frees a set (a tick's
+  dead projectiles) in one walk, and refuses a stale or repeated handle without changing anything. Struct defaults
+  live in the class table, which the heap cannot reach: `ObjectSpace::free` / `free_many` also clear the dead handles
+  out of every struct default, and `alloc` checks a new object's initial values as a write would, so a default left
+  stale by a bare `Heap::free` (or of the wrong class) is refused, never copied into an object. Freeing an object
+  that is another's outer leaves that inner object with no outer; UE3 keeps an outer alive while its inners refer to
+  it, or collects them together, and which applies here is UNVERIFIED. Nothing calls `free` yet: who frees what and
+  when is for the world and VM lanes.
 - **Live objects** are the instances (made at run time or instantiated from an export) in creation order. Class default
   objects and resource stand-ins are not live, as in the C++ (`Runtime::liveObjects` tracks only what `instantiate`
   made).
@@ -35,9 +41,11 @@ read here and no parsing behaviour changes; this file records how the Rust objec
 - **Equality.** `same_value` follows the C++ `sameValue` (UnrealScript `==`) for values of one kind. `sameValue` answers
   by the left side's kind, so mixed kinds are lopsided there: `Name == Str` compares lower-cased texts and `Str == Name`
   bytes; `Class(null) == None` is true and `None == Class(null)` false; an int against a string, an object or `None`
-  compares integer fields both leave at 0. In Rust a name and a string are unequal in both orders, a null class equals
-  `None` in both orders (as the interpreter's `None` literal is a null object reference, `EX_NoObject`), and other
-  unrelated kinds are unequal. `sameValue` returns false for every delegate pair; the interpreter's delegate operators
+  compares integer fields both leave at 0; `Object(null) == Class(c)` compares the (null) object fields, so it is true
+  for every class, while `Class(c) == Object(null)` is true only for a null class. In Rust a name and a string are
+  unequal in both orders; a null class equals `None`, `Object(None)` and `Interface(None)` in both orders, because the
+  interpreter's `None` literal is a null object reference (`EX_NoObject`) and `ClassVar == None` must hold for a null
+  class, and a class that is not null equals none of them; other unrelated kinds are unequal. `sameValue` returns false for every delegate pair; the interpreter's delegate operators
   (`EX_EqualEqual_DelDel` and its siblings) compare object and function name byte for byte. Rust compares object and
   function too, but the function names case-insensitively, because names are interned (UNVERIFIED in the running
   game). No C++ test pins any of these cases.
@@ -45,12 +53,16 @@ read here and no parsing behaviour changes; this file records how the Rust objec
   The C++ keeps each value's own spelling, so where one name is spelt two ways an output port that must stay
   byte-identical to the C++ has to check that case. A name carries UE3's FName instance number: a trailing `_<digits>`
   (no leading zero, below `i32::MAX`) is split off, so `Projectile_1234` is the entry `Projectile` with number 1235 and
-  numbered spawns do not grow the table. The split rule is the public UE3 convention, UNVERIFIED for this executable.
+  numbered spawns do not grow the table. Only the name table makes ids, and renumbering (`NameTable::with_number`)
+  goes back through the text, so one text is always one id (`Foo_5_3` without its number is `Foo_5`, the entry `Foo`
+  with number 6). The split rule is the public UE3 convention, UNVERIFIED for this executable.
 - **Struct defaults.** `zero_value` is the plain zero. The C++ `Runtime::zeroValue` applies struct defaults
   (`applyStructDefaults`, stream layout FITTED); its Rust counterpart is `default_value` / `struct_defaults`, computed
   on each call from the zero, the defaults of by-value inner structs and the struct's own default entries, so defaults
-  set later reach every struct that holds it. New objects start from these defaults. Reading the default stream out of
-  a package stays W3-DECODE's.
+  set later reach every struct that holds it. New objects start from these defaults. Defaults are set through
+  `ObjectSpace::set_struct_default(s)`, which checks a reference as a heap write does (not freed, the declared class);
+  the class table's own setters, which check only the shape, are crate-private. Reading the default stream out of a
+  package stays W3-DECODE's.
 - **Writes are checked.** A heap write checks the value against the declaration: the variant fits the kind, an object
   reference and a delegate's receiver name objects that are not freed, an object reference one of the declared class or
   a subclass, a class reference a class of the table that is the declared metaclass or a subclass, a struct its
@@ -62,5 +74,5 @@ read here and no parsing behaviour changes; this file records how the Rust objec
 - **Attribute companions** are checked as the C++ `companions()` (`src/interp.cpp`) checks them: the value property
   is an attribute kind with high flag bit 31, the stack an array, the base has high flag bit 30, all in one class.
 
-Verified: 51 unit tests on synthetic class tables (`cargo test -p ow-object`). Nothing here has been compared with the
+Verified: 57 unit tests on synthetic class tables (`cargo test -p ow-object`). Nothing here has been compared with the
 running game; the C++ VM is the reference for every rule above except the differences listed under Equality.

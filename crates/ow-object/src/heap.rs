@@ -6,7 +6,9 @@
 //! slot and its generation. Life has three steps:
 //!
 //! 1. [`Heap::alloc`] creates the object with every slot at its kind's default value (zero, struct defaults applied:
-//!    [`ClassTable::default_slots`]).
+//!    [`ClassTable::default_slots`]), after checking those values as a write would ([`Heap::check_value`]), so a
+//!    struct default that names a freed object or an object of the wrong class is refused, never copied into the new
+//!    object.
 //! 2. [`Heap::destroy`] marks it destroyed (UE3's pending kill, the C++ `Object::destroyed`): it stays readable and
 //!    writable, so script that runs after `Destroy()` still works, but [`Heap::live`] no longer yields it.
 //! 3. [`Heap::free`] is the garbage-collection step. It removes the object and, in the same call, clears every
@@ -15,12 +17,22 @@
 //!    an object whose outer it was gets no outer. The slot's generation goes up, so a handle kept outside the heap (a VM
 //!    local, a frame: clearing those is the VM's job, W2-VMAPI) is refused from then on ([`HeapError::Stale`]), also
 //!    after the slot holds a new object. A slot whose generation would wrap is retired instead of reused, so an old
-//!    handle can never become valid again. Freeing costs a walk over every object in the heap.
+//!    handle can never become valid again. Each call walks every object in the heap once, so freeing many objects
+//!    (a tick's dead projectiles) should go through [`Heap::free_many`], which clears a whole set in one walk.
+//!
+//! The heap does not reach the class table, where struct defaults live: [`ObjectSpace::free`] and
+//! [`ObjectSpace::free_many`] free in the heap **and** clear the dead handles out of every struct default, so a later
+//! object never starts with one. Freeing through [`Heap::free`] alone leaves such a default stale, and the next
+//! [`Heap::alloc`] that would copy it fails with [`HeapError::Stale`].
+//!
+//! Freeing an object that is another object's outer leaves that inner object with no outer. UE3 keeps an outer alive
+//! while its inner objects refer to it, or collects them together; which of the two the world does, and whether this
+//! case arises, is for the lanes that call `free` (UNVERIFIED: not observed in the game).
 //!
 //! UE3 clears references to an object when its garbage collector removes it, not when `Destroy()` runs; how long after
 //! `Destroy()` that happens in BL2, and whether a delegate keeps its function name with a null object, is UNVERIFIED.
 //! Who frees what and when (the world after a tick, a collector for non-actor objects) is for the lanes above.
-//! Decision file 2026-11-15, "Object model: slot layouts in an arena heap, not Send".
+//! Decision file 2026-11-15-02, "Object model: slot layouts in an arena heap, not Send".
 //!
 //! **Live objects.** [`Heap::live`] yields the instances ([`Origin::Runtime`] and [`Origin::Export`]) of a class and its
 //! subclasses in creation order, skipping destroyed ones. Class default objects and resource stand-ins are not live
@@ -48,7 +60,8 @@ use ow_package::PackageId;
 use crate::ids::{ClassId, NameId, ObjRef, PropAddr, PropId, StructId};
 use crate::layout::{ClassTable, LayoutError, PropKind};
 use crate::names::NameTable;
-use crate::value::{DelegateValue, Value};
+use crate::value::{DelegateValue, Value, clear_refs};
+use ow_core::FixedHashSet;
 
 /// Where an object came from.
 #[non_exhaustive]
@@ -148,6 +161,8 @@ pub enum HeapError {
     SlotMissing { object: ObjRef, slot: usize },
     /// Step `at` of a [`Heap::write_in`] path does not lead anywhere.
     BadPath { at: usize, reason: &'static str },
+    /// The same handle twice in one [`Heap::free_many`].
+    FreedTwice(ObjRef),
 }
 
 impl fmt::Display for HeapError {
@@ -181,6 +196,7 @@ impl fmt::Display for HeapError {
                 write!(f, "object {object:?} has no slot {slot}")
             }
             HeapError::BadPath { at, reason } => write!(f, "path step {at}: {reason}"),
+            HeapError::FreedTwice(o) => write!(f, "{o:?} given twice to free_many"),
         }
     }
 }
@@ -197,35 +213,6 @@ impl From<LayoutError> for HeapError {
 struct Entry {
     generation: u32,
     object: Option<Object>,
-}
-
-/// Whether `v` holds a reference to `dead`: an object or interface reference, a delegate's receiver, inside arrays and
-/// structs too.
-fn mentions(v: &Value, dead: ObjRef) -> bool {
-    match v {
-        Value::Object(Some(r)) | Value::Interface(Some(r)) => *r == dead,
-        Value::Delegate(Some(d)) => d.object == Some(dead),
-        Value::Struct(s) => s.fields.iter().any(|f| mentions(f, dead)),
-        Value::Array(a) => a.iter().any(|e| mentions(e, dead)),
-        _ => false,
-    }
-}
-
-/// Clears every reference to `dead` in `v`, copying a shared aggregate only when it holds one.
-fn clear_refs(v: &mut Value, dead: ObjRef) {
-    if !mentions(v, dead) {
-        return;
-    }
-    match v {
-        Value::Object(r) | Value::Interface(r) => *r = None,
-        Value::Delegate(d) => *d = None,
-        Value::Struct(s) => Rc::make_mut(s)
-            .fields
-            .iter_mut()
-            .for_each(|f| clear_refs(f, dead)),
-        Value::Array(a) => Rc::make_mut(a).iter_mut().for_each(|e| clear_refs(e, dead)),
-        _ => {}
-    }
 }
 
 /// The arena. See the module documentation.
@@ -247,7 +234,8 @@ impl Heap {
     }
 
     /// Creates an object of class `class` (defined in `classes`) with every slot at its default value
-    /// ([`ClassTable::default_slots`]). The outer, if given, must be a handle to an object that is not freed.
+    /// ([`ClassTable::default_slots`]), each checked as a write would check it. The outer, if given, must be a handle
+    /// to an object that is not freed.
     pub fn alloc(
         &mut self,
         classes: &ClassTable,
@@ -257,6 +245,13 @@ impl Heap {
         origin: Origin,
     ) -> Result<ObjRef, HeapError> {
         let slots = classes.default_slots(class)?;
+        let mut cursor = slots.iter();
+        for (_, decl) in classes.props(class)? {
+            for _ in 0..decl.array_dim {
+                let value = cursor.next().expect("default_slots follows props");
+                self.check_value(classes, &decl.kind, value)?;
+            }
+        }
         if let Some(o) = outer {
             self.get(o)?;
         }
@@ -514,31 +509,50 @@ impl Heap {
     }
 
     /// Removes `o` and clears every reference to it held in the heap (module documentation). Every handle to it is
-    /// refused from now on; the slot is reused with a new generation (or retired if the generation would wrap).
+    /// refused from now on; the slot is reused with a new generation (or retired if the generation would wrap). This
+    /// does not reach struct defaults in the class table: [`ObjectSpace::free`] does both.
     pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError> {
-        self.get(o)?;
-        let entry = &mut self.entries[o.index() as usize];
-        let object = entry.object.take().ok_or(HeapError::Stale(o))?;
-        if let Some(next) = entry.generation.checked_add(1) {
-            entry.generation = next;
-            self.free.push(o.index());
-        } else {
-            // Retired: the generation stays at u32::MAX with no object, so no handle matches it again.
+        let mut freed = self.free_many(&[o])?;
+        Ok(freed.pop().expect("one object freed"))
+    }
+
+    /// [`Heap::free`] for a set of objects in one walk over the heap: removes each, then clears every reference to any
+    /// of them. Refused, with nothing changed, if a handle is stale or appears twice. Returns the objects in the order
+    /// given.
+    pub fn free_many(&mut self, objects: &[ObjRef]) -> Result<Vec<Object>, HeapError> {
+        let mut dead = FixedHashSet::default();
+        for &o in objects {
+            self.get(o)?;
+            if !dead.insert(o) {
+                return Err(HeapError::FreedTwice(o));
+            }
         }
+        let mut freed = Vec::with_capacity(objects.len());
+        for &o in objects {
+            let entry = &mut self.entries[o.index() as usize];
+            freed.push(entry.object.take().expect("checked above"));
+            if let Some(next) = entry.generation.checked_add(1) {
+                entry.generation = next;
+                self.free.push(o.index());
+            } else {
+                // Retired: the generation stays at u32::MAX with no object, so no handle matches it again.
+            }
+        }
+        let is_dead = |r: ObjRef| dead.contains(&r);
         for other in self.entries.iter_mut().filter_map(|e| e.object.as_mut()) {
-            if other.outer == Some(o) {
+            if other.outer.is_some_and(is_dead) {
                 other.outer = None;
             }
-            other.slots.iter_mut().for_each(|v| clear_refs(v, o));
+            other.slots.iter_mut().for_each(|v| clear_refs(v, &is_dead));
         }
-        self.count -= 1;
-        self.stale_in_order += 1;
+        self.count -= objects.len();
+        self.stale_in_order += objects.len();
         if self.stale_in_order > 32 && self.stale_in_order * 2 > self.order.len() {
             let entries = &self.entries;
             self.order.retain(|r| Self::is_current(entries, *r));
             self.stale_in_order = 0;
         }
-        Ok(object)
+        Ok(freed)
     }
 
     /// The instances ([`Origin::is_instance`]) of class `base` or a subclass that are neither destroyed nor freed, in
@@ -625,6 +639,48 @@ impl ObjectSpace {
     /// [`Heap::live`] through this space's classes.
     pub fn live(&self, base: ClassId) -> impl Iterator<Item = ObjRef> + '_ {
         self.heap.live(&self.classes, base)
+    }
+
+    /// Frees `o` in the heap ([`Heap::free`]) and clears it out of every struct default in the class table.
+    pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError> {
+        let mut freed = self.free_many(&[o])?;
+        Ok(freed.pop().expect("one object freed"))
+    }
+
+    /// Frees a set of objects in one heap walk ([`Heap::free_many`]) and clears them out of every struct default.
+    pub fn free_many(&mut self, objects: &[ObjRef]) -> Result<Vec<Object>, HeapError> {
+        let freed = self.heap.free_many(objects)?;
+        let dead: FixedHashSet<ObjRef> = objects.iter().copied().collect();
+        self.classes.clear_refs_in_defaults(&|r| dead.contains(&r));
+        Ok(freed)
+    }
+
+    /// Sets default entry `entry` of struct `s` (a static-array element is an entry of its own), as one tag of the
+    /// struct's default stream sets one field, after checking `v` as a heap write would ([`Heap::check_value`]: a
+    /// reference names an object that is not freed, of the declared class). Applied by
+    /// [`ClassTable::struct_defaults`].
+    pub fn set_struct_default(
+        &mut self,
+        s: StructId,
+        entry: u32,
+        v: Value,
+    ) -> Result<(), HeapError> {
+        let layout = self
+            .classes
+            .struct_layout(s)
+            .ok_or(LayoutError::StructNotDefined(s))?;
+        if let Some((_, decl)) = layout.entry_field(entry) {
+            self.heap.check_value(&self.classes, &decl.kind, &v)?;
+        }
+        Ok(self.classes.set_struct_default(s, entry, v)?)
+    }
+
+    /// Sets every default entry of struct `s` from the complete struct value `v`, after checking it as a heap write
+    /// would.
+    pub fn set_struct_defaults(&mut self, s: StructId, v: Value) -> Result<(), HeapError> {
+        self.heap
+            .check_value(&self.classes, &PropKind::Struct(s), &v)?;
+        Ok(self.classes.set_struct_defaults(s, v)?)
     }
 }
 
@@ -1410,5 +1466,207 @@ mod tests {
     fn object_new_starts_in_the_default_state() {
         let o = Object::new(ClassId::new(0), NameId::NONE, None, vec![], Origin::Runtime);
         assert_eq!((o.state, o.destroyed), (None, false));
+    }
+
+    /// The Hit struct's id and its `Who` entry (entry 0) through the Actor's LastHit property.
+    fn hit_ty(w: &World) -> StructId {
+        let last_hit = w.p(w.actor, "LastHit");
+        match &w.space.classes.decl(last_hit).unwrap().kind {
+            PropKind::Struct(s) => *s,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn who_of_last_hit(w: &World, o: ObjRef) -> Value {
+        let last_hit = w.p(w.actor, "LastHit");
+        w.space
+            .read(o, last_hit.into())
+            .unwrap()
+            .as_struct()
+            .unwrap()
+            .fields[0]
+            .clone()
+    }
+
+    #[test]
+    fn struct_defaults_are_checked_against_the_heap() {
+        let mut w = world();
+        let hit = hit_ty(&w);
+        let p = w.new_obj(w.pawn, "P");
+        let i = w.new_obj(w.info, "I");
+        let gone = w.new_obj(w.actor, "Gone");
+        w.space.free(gone).unwrap();
+        // A freed object and an object of the wrong class are refused as defaults.
+        assert_eq!(
+            w.space.set_struct_default(hit, 0, obj(gone)),
+            Err(HeapError::Stale(gone))
+        );
+        assert_eq!(
+            w.space.set_struct_default(hit, 0, obj(i)),
+            Err(HeapError::WrongClass {
+                expected: w.actor,
+                found: w.info
+            })
+        );
+        let whole = |who| Value::structure(hit, vec![who, Value::Float(0.0)]);
+        assert_eq!(
+            w.space.set_struct_defaults(hit, whole(obj(gone))),
+            Err(HeapError::Stale(gone))
+        );
+        assert!(matches!(
+            w.space.set_struct_defaults(hit, whole(obj(i))),
+            Err(HeapError::WrongClass { .. })
+        ));
+        assert!(matches!(
+            w.space.set_struct_default(hit, 5, Value::Int(0)),
+            Err(HeapError::Layout(LayoutError::BadDefault { .. }))
+        ));
+        assert!(
+            w.space
+                .classes
+                .struct_layout(hit)
+                .unwrap()
+                .own_defaults()
+                .is_empty()
+        );
+        // A live object of the right class is accepted and reaches new objects.
+        w.space.set_struct_default(hit, 0, obj(p)).unwrap();
+        let a = w.new_obj(w.actor, "A");
+        assert_eq!(who_of_last_hit(&w, a), obj(p));
+        w.space
+            .set_struct_defaults(hit, whole(Value::Object(None)))
+            .unwrap();
+        let b = w.new_obj(w.actor, "B");
+        assert_eq!(who_of_last_hit(&w, b), Value::Object(None));
+    }
+
+    #[test]
+    fn object_space_free_clears_struct_defaults() {
+        let mut w = world();
+        let hit = hit_ty(&w);
+        let p = w.new_obj(w.pawn, "P");
+        w.space.set_struct_default(hit, 0, obj(p)).unwrap();
+        let before = w.new_obj(w.actor, "Before");
+        w.space.free(p).unwrap();
+        // The default no longer names p; the object made before had its copy cleared by the heap walk.
+        assert_eq!(
+            w.space.classes.struct_layout(hit).unwrap().own_defaults(),
+            [(0, Value::Object(None))]
+        );
+        assert_eq!(who_of_last_hit(&w, before), Value::Object(None));
+        // The slot is reused, and a new object never starts with the stale handle.
+        let reuse = w.new_obj(w.pawn, "Reuse");
+        assert_eq!(reuse.index(), p.index());
+        let after = w.new_obj(w.actor, "After");
+        assert_eq!(who_of_last_hit(&w, after), Value::Object(None));
+    }
+
+    #[test]
+    fn alloc_refuses_a_default_the_heap_cannot_vouch_for() {
+        let mut w = world();
+        let hit = hit_ty(&w);
+        let p = w.new_obj(w.pawn, "P");
+        w.space.set_struct_default(hit, 0, obj(p)).unwrap();
+        // Freeing through the heap alone does not reach the class table: the default goes stale, and alloc refuses
+        // to copy it.
+        w.space.heap.free(p).unwrap();
+        assert_eq!(
+            w.space.alloc(w.actor, "A", None, Origin::Runtime),
+            Err(HeapError::Stale(p))
+        );
+        // The unchecked (crate-private) setter can store a wrong-class reference; alloc refuses that too.
+        let i = w.new_obj(w.info, "I");
+        w.space.classes.set_struct_default(hit, 0, obj(i)).unwrap();
+        assert_eq!(
+            w.space.alloc(w.actor, "B", None, Origin::Runtime),
+            Err(HeapError::WrongClass {
+                expected: w.actor,
+                found: w.info
+            })
+        );
+        // Classes that do not hold the struct are not affected.
+        assert!(w.space.alloc(w.info, "J", None, Origin::Runtime).is_ok());
+        let count = w.space.heap.len();
+        w.space
+            .set_struct_default(hit, 0, Value::Object(None))
+            .unwrap();
+        assert!(w.space.alloc(w.actor, "C", None, Origin::Runtime).is_ok());
+        assert_eq!(
+            w.space.heap.len(),
+            count + 1,
+            "the refused allocs added nothing"
+        );
+    }
+
+    #[test]
+    fn free_many_clears_a_set_in_one_call() {
+        let mut w = world();
+        let a = w.new_obj(w.actor, "A");
+        let x = w.new_obj(w.actor, "X");
+        let y = w.new_obj(w.pawn, "Y");
+        let keep = w.new_obj(w.actor, "Keep");
+        let others = w.p(w.actor, "Others");
+        let target = w.p(w.actor, "Target");
+        w.space
+            .write(
+                a,
+                others.into(),
+                Value::array(vec![obj(x), obj(keep), obj(y)]),
+            )
+            .unwrap();
+        w.space.write(a, target.into(), obj(y)).unwrap();
+        let hit = hit_ty(&w);
+        w.space.set_struct_default(hit, 0, obj(x)).unwrap();
+        // A stale handle or a repeated one refuses the whole call, changing nothing.
+        let gone = w.new_obj(w.actor, "Gone");
+        w.space.free(gone).unwrap();
+        assert_eq!(
+            w.space.free_many(&[x, gone]).err(),
+            Some(HeapError::Stale(gone))
+        );
+        assert_eq!(
+            w.space.free_many(&[x, y, x]).err(),
+            Some(HeapError::FreedTwice(x))
+        );
+        assert!(w.space.heap.contains(x) && w.space.heap.contains(y));
+        let len = w.space.heap.len();
+
+        let freed = w.space.free_many(&[x, y]).unwrap();
+        assert_eq!(
+            freed.iter().map(|o| o.class).collect::<Vec<_>>(),
+            [w.actor, w.pawn]
+        );
+        assert_eq!(w.space.heap.len(), len - 2);
+        assert_eq!(
+            w.space.read(a, others.into()),
+            Ok(&Value::array(vec![
+                Value::Object(None),
+                obj(keep),
+                Value::Object(None)
+            ]))
+        );
+        assert_eq!(w.space.read(a, target.into()), Ok(&Value::Object(None)));
+        assert_eq!(
+            w.space.classes.struct_layout(hit).unwrap().own_defaults(),
+            [(0, Value::Object(None))]
+        );
+        assert_eq!(w.space.live(w.actor).collect::<Vec<_>>(), [a, keep]);
+        assert!(w.space.free_many(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn freeing_an_outer_leaves_its_inner_objects_without_one() {
+        let mut w = world();
+        let outer = w.new_obj(w.actor, "Outer");
+        let inner = w
+            .space
+            .alloc(w.info, "Inner", Some(outer), Origin::Runtime)
+            .unwrap();
+        w.space.free(outer).unwrap();
+        assert_eq!(w.space.heap.get(inner).unwrap().outer, None);
+        assert!(
+            w.space.heap.contains(inner),
+            "the inner object is not freed with it (UNVERIFIED rule)"
+        );
     }
 }

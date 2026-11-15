@@ -102,6 +102,17 @@ impl NameTable {
         }
     }
 
+    /// The name with `n`'s base text and instance `number` (`number` 0: the base alone), through
+    /// [`NameTable::intern_number`], so the result is the one id of its text: for `n = intern("Foo_5_3")` (base
+    /// `Foo_5`), `with_number(n, 0)` is `intern("Foo_5")`, which is the entry `Foo` with number 6.
+    ///
+    /// # Panics
+    /// If `n` was not made by this table.
+    pub fn with_number(&mut self, n: NameId, number: u32) -> NameId {
+        let base = self.base_text(n).to_owned();
+        self.intern_number(&base, number)
+    }
+
     /// The id of `s` (any case) if its base is interned, without adding it.
     pub fn find(&self, s: &str) -> Option<NameId> {
         let (base, number) = split(s);
@@ -214,7 +225,10 @@ mod tests {
         assert_eq!((plain.index(), plain.number()), (first.index(), 0));
         assert_eq!(t.intern("PROJECTILE_1234"), first);
         assert_ne!(t.intern("Projectile_1233"), first);
-        assert_eq!(t.find("projectile_7"), Some(first.with_number(8)));
+        assert_eq!(
+            t.find("projectile_7"),
+            Some(NameId::new(first.raw_index(), 8))
+        );
     }
 
     #[test]
@@ -243,6 +257,41 @@ mod tests {
     }
 
     #[test]
+    fn renumbering_keeps_one_id_per_text() {
+        let mut t = NameTable::new();
+        // Foo_5_3: base Foo_5, number 4. Without its number it is the text Foo_5, whose id is (Foo, 6).
+        let a = t.intern("Foo_5_3");
+        assert_eq!((t.base_text(a), a.number()), ("Foo_5", 4));
+        let plain = t.with_number(a, 0);
+        assert_eq!(plain, t.intern("Foo_5"));
+        assert_eq!((t.base_text(plain), plain.number()), ("Foo", 6));
+        assert_ne!(
+            plain,
+            NameId::new(a.raw_index(), 0),
+            "a raw renumbering would mint a second id"
+        );
+        assert_eq!(t.with_number(a, 4), a);
+        assert_eq!(t.with_number(a, 1), t.intern("Foo_5_0"));
+        // Foo_3_4 both ways: down to Foo_3, and from Foo_3's base (Foo) up again.
+        let b = t.intern("Foo_3_4");
+        assert_eq!((t.base_text(b), b.number()), ("Foo_3", 5));
+        let foo_3 = t.with_number(b, 0);
+        assert_eq!(foo_3, t.intern("Foo_3"));
+        assert_eq!(t.text(foo_3), "Foo_3");
+        assert_eq!(
+            t.with_number(foo_3, 5),
+            t.intern("Foo_4"),
+            "Foo_3's base is Foo"
+        );
+        assert_eq!(t.intern_number("Foo_3", 5), b);
+        // Every result prints as it compares.
+        for n in [a, plain, b, foo_3] {
+            let text = t.text(n).into_owned();
+            assert_eq!(t.intern(&text), n, "{text}");
+        }
+    }
+
+    #[test]
     fn package_names_carry_their_number() {
         let mut t = NameTable::new();
         let n = t.intern_number("Actor_5", 2);
@@ -254,6 +303,6 @@ mod tests {
         assert_eq!(t.intern_number("", 4), t.intern("_3"));
         assert_eq!(t.intern_number("Foo", u32::MAX), t.intern("Foo_4294967294"));
         assert_eq!(t.intern_number("None", 0), NameId::NONE);
-        assert_eq!(t.intern_number("None", 1), NameId::NONE.with_number(1));
+        assert_eq!(t.intern_number("None", 1), NameId::new(0, 1));
     }
 }
