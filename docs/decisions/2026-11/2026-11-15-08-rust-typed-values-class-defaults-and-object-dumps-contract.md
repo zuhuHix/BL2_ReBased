@@ -32,11 +32,9 @@ shaped the contract before its freeze (the hub's decisions are marked "hub").
   - `PropertyPrefix` is the contract's enum (4, 8, 26). `to_value` takes the walker tree's package
     (`to_value(tree, decl, package, cx)`), since its references are package-relative. `ReflectionTyper::new(store, code,
     space, package, mode)` answers from the cache only; `decode::prepare_typer` loads a package's classes first.
-    `DecodeState::is_native_stand_in(ClassId)` marks the engine-native stand-in classes (below). The answer is the
-    state's own, so one `DecodeState` serves one `ObjectSpace` for life; nothing enforces that yet. A mark every state
-    sees belongs in the class table (W1-OBJ's `layout.rs`, for example an additive `ClassTable::mark_native` /
-    `is_native`), and the object space has no identity a state could check, so review r2's item 8 stops here, for the
-    hub.
+    `DecodeState::is_native_stand_in(classes, ClassId)` tells the engine-native stand-in classes (below). It answers
+    from `ClassTable::mark_native` / `is_native` (additive in W1-OBJ's `layout.rs`, granted after review r2), so every
+    `DecodeState` over one object space agrees, whichever state defined the class.
   - `heap::Heap::alloc_stand_in` / `ObjectSpace::alloc_stand_in` (additive in W1-OBJ's `heap.rs`, granted in review r2)
     allocate an object of a defined class with no property slots and no outer.
 - **Reading rules (the C++ ones).** A tag's header is checked outside the per-value guard, so a bad header ends the
@@ -62,7 +60,7 @@ shaped the contract before its freeze (the hub's decisions are marked "hub").
   `ParityMode::Reference`, and only when the class is genuinely absent (no installed package holds the import, or the
   class path names a missing package or export; every other failure is returned), a stand-in of such an object gets
   the class defined at its import path with no properties of its own under `Core.Object` (once, if nothing defined that
-  path first), listed in `DecodeState::native_classes` and marked by `is_native_stand_in`, so W3-INTERP can answer
+  path first), listed in `DecodeState::native_classes` and marked in the class table (`is_native_stand_in`), so W3-INTERP can answer
   `NotYet` for `IsA` through one. Outside the reference mode it is a `NotYet { NotRead }` and the property is skipped. A
   class an overlay or a native pack defines must be defined before any decode, or the stand-in class takes its path.
 - **Array element widths (hub).** `ParityMode::Reference` keeps the C++ widths: an enum-byte element is one byte, a

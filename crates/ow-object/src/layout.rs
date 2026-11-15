@@ -46,7 +46,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use ow_core::{FixedHashMap, IdentError, ObjectPath};
+use ow_core::{FixedHashMap, FixedHashSet, IdentError, ObjectPath};
 use ow_package::PackageId;
 
 use crate::ids::{ClassId, EnumId, NameId, ObjRef, PropAddr, PropId, StructId};
@@ -491,6 +491,8 @@ pub struct ClassTable {
     enum_by_path: FixedHashMap<ObjectPath, EnumId>,
     empty_str: Rc<str>,
     empty_array: Value,
+    /// Classes marked as engine-native stand-ins ([`ClassTable::mark_native`]).
+    native: FixedHashSet<ClassId>,
 }
 
 impl Default for ClassTable {
@@ -522,7 +524,25 @@ impl ClassTable {
             enum_by_path: FixedHashMap::default(),
             empty_str: Rc::from(""),
             empty_array: Value::array(Vec::new()),
+            native: FixedHashSet::default(),
         }
+    }
+
+    /// Marks class `c` as an engine-native stand-in: a class no installed package exports, defined by its import path
+    /// with no properties of its own so that a reference to one of its objects can be held (W3-DECODE, `decode.rs`).
+    /// The mark lives in the table, so every reader of the table sees it (`IsA` through such a class is not the game's
+    /// answer). Additive (granted in review r2 of PR #304); an id this table did not make is refused.
+    pub fn mark_native(&mut self, c: ClassId) -> Result<(), LayoutError> {
+        if self.classes.get(c.index()).is_none() {
+            return Err(LayoutError::UnknownClass(c));
+        }
+        self.native.insert(c);
+        Ok(())
+    }
+
+    /// Whether class `c` was marked by [`ClassTable::mark_native`].
+    pub fn is_native(&self, c: ClassId) -> bool {
+        self.native.contains(&c)
     }
 
     /// The id of the class at `path`, reserving one (declared, not defined) if the path is new. A declared class can
@@ -1819,5 +1839,25 @@ mod tests {
             .with_source(3, 17);
         assert_eq!(d.attr, Some(links));
         assert_eq!(d.source, Some((3, 17)));
+    }
+
+    #[test]
+    fn a_native_mark_is_the_tables() {
+        let mut t = ClassTable::new();
+        let object = t.define("Core.Object", None, Vec::new()).unwrap();
+        let mesh = t
+            .define("Engine.StaticMesh", Some(object), Vec::new())
+            .unwrap();
+        assert!(!t.is_native(mesh));
+        assert_eq!(t.mark_native(mesh), Ok(()));
+        assert!(t.is_native(mesh) && !t.is_native(object));
+        let copy = t.clone();
+        assert!(copy.is_native(mesh), "the mark travels with the table");
+        let stranger = ClassId::new(99);
+        assert_eq!(
+            t.mark_native(stranger),
+            Err(LayoutError::UnknownClass(stranger))
+        );
+        assert!(!t.is_native(stranger));
     }
 }
