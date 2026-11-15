@@ -188,7 +188,7 @@ The scaffold creates every file below with a `//!` header naming its owner lane 
 |---|---|
 | `ow-core` | `lib.rs`, `notyet.rs`, `ident.rs`, `detmap.rs`, `ordmap.rs`, `parity.rs` (W0-SCAFFOLD); `num.rs`, `units.rs`, `fmt.rs` (W1-NUM); `rand.rs` (W1-RAND); `sim.rs` (W1-SIM) |
 | `ow-container` | `lib.rs` (signature: W0; body: W1-LZO), `lzo.rs`, `chunks.rs` (W1-LZO) |
-| `ow-package` | `reader.rs`, `header.rs`, `tables.rs`, `package.rs` (W1-PKG); `testkit.rs` behind feature `test-support` (placeholder: W0; real: W1-TESTKIT); `props.rs`, `schema.rs` (W2-PROPS); `store.rs` (W2-STORE) |
+| `ow-package` | `reader.rs`, `header.rs`, `tables.rs`, `package.rs` (W1-PKG); `testkit.rs` behind feature `test-support` (placeholder: W0; real: W1-TESTKIT), its children `testkit/reflect.rs` (W2-REFLECT) and `testkit/script.rs` (W2-SCRIPT), declared as placeholders by W1-TESTKIT; `props.rs`, `schema.rs` (W2-PROPS); `store.rs` (W2-STORE) |
 | `ow-object` | `ids.rs`, `value.rs`, `names.rs`, `heap.rs`, `layout.rs` (W1-OBJ); `reflect.rs`, `class_body.rs` (W2-REFLECT); `decode.rs`, `cdo.rs`, `prefix.rs` (W3-DECODE) |
 | `ow-defs` | `store.rs`, `identity.rs`, `overlay.rs`, `keys.rs`, `tail.rs` (W3-DEFS) |
 | `ow-script` | `ops.rs`, `function.rs`, `decode.rs`, `disasm.rs`, `check.rs` (W2-SCRIPT) |
@@ -815,7 +815,8 @@ returns) in the same PR. W7-RETIRE owns the split files and deletes each only wh
 | `ow-core::num` / `fmt` (choke points, `f32r`, both truncation forms, rounding, every output format) | W1-NUM | its PR lands | every rule and CLI lane |
 | `ow-core::rand` (`Rand15`, `ScriptRng`, `CrtRand`, `VmLcg`, `CrtStream`, `ScriptStream`, `GameRng`) | W1-RAND | its PR lands | items, VM natives, combat, AI |
 | `ow-core::sim` (`SimClock`, `TickGroup`) | W1-SIM | its PR lands | VM, world, behavior, pools |
-| `ow-package::testkit` builders | W1-TESTKIT | its PR lands | every W2+ lane with synthetic packages |
+| `ow-package::testkit` builders (`testkit.rs`) | W1-TESTKIT | its PR lands | every W2+ lane with synthetic packages |
+| `testkit/reflect.rs`, `testkit/script.rs` helpers | W2-REFLECT, W2-SCRIPT | each owner's PR lands | W3+ lanes with reflection exports or script bodies |
 | `ow-object` IDs, `PropAddr`, `Value` (`Rc`, `!Send`: D18), `Heap`, `ClassTable`, `PropertyDecl`, `ObjectSpace` | W1-OBJ | its PR lands | reflect, decode, defs, attr, VM |
 | `ow-package` `Package`, `Reader`, `PropValue`, `ArrayTyper` | W1-PKG, W2-PROPS | their PRs land | script, reflect, decode, assets |
 | `ow-attr` stack math, `Modifier`, `PowForm`, `CombineForm` | W1-ATTRMATH | its PR lands | attr lanes, VM 5F |
@@ -1009,7 +1010,8 @@ W1-NUM is the lane to start first and review first.
   and `container()` helpers in `tests/` (`package_test.py`, `properties_test.py`, `runtime_test.py`,
   `global_resolve_test.py`, `assets_test.py`), LZO containers of literal runs, the partial-compression shape. It
   writes bytes only; it does not use the reader, so it runs beside W1-PKG.
-- Owns: `crates/ow-package/src/testkit.rs` (and `testkit/` children).
+- Owns: `crates/ow-package/src/testkit.rs` and `testkit/tests.rs`; declares the placeholder children `testkit/reflect.rs`
+  (W2-REFLECT) and `testkit/script.rs` (W2-SCRIPT), not their contents.
 - Inputs: W0.
 - Not yet: any reading or checking (W1-PKG's tests use it).
 - Tests / done when: for each Python helper, the same invented inputs give byte-identical output to the Python helper
@@ -1068,7 +1070,8 @@ W1-NUM is the lane to start first and review first.
 **W2-SCRIPT: bytecode decoder** · M-L · game: yes · Opus 5.5 medium
 - Goal: port `src/script.*`: `readFunction`, `decode`, `format`/`disassemble`, `checkPackage`; CLI `--script-check`,
   `--disasm`.
-- Owns: `crates/ow-script/src/*`, `crates/ow-cli/src/cmd/script.rs`, `tests/rust_parity.d/script.txt`.
+- Owns: `crates/ow-script/src/*`, `crates/ow-cli/src/cmd/script.rs`, `tests/rust_parity.d/script.txt`,
+  `crates/ow-package/src/testkit/script.rs`.
 - Inputs: W1-PKG, W1-TESTKIT.
 - Not yet: execution.
 - Done when: the cases of `tests/script_disasm_test.py` (which tests only the Python decoder) re-expressed as Rust
@@ -1079,7 +1082,7 @@ W1-NUM is the lane to start first and review first.
 **W2-REFLECT: reflection and class bodies** · M-L · game: yes · Opus 5.5 high
 - Goal: load Class/Struct/Enum/Property exports into `ClassTable` layouts (including the attribute companions and the
   byte-attribute shift), `decode_class_body`, interface tables; CLI `--class-check`, `--interface-compare`.
-- Owns: `crates/ow-object/src/{reflect,class_body}.rs`, `crates/ow-cli/src/cmd/classes.rs`,
+- Owns: `crates/ow-object/src/{reflect,class_body}.rs`, `crates/ow-package/src/testkit/reflect.rs`, `crates/ow-cli/src/cmd/classes.rs`,
   `tests/rust_parity.d/reflect.txt`.
 - Inputs: W1-PKG, W1-OBJ, W1-TESTKIT, W2-STORE (cross-package super classes).
 - Not yet: tagged default values, CDOs.
