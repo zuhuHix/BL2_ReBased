@@ -28,8 +28,10 @@ with tempfile.TemporaryDirectory() as folder:
     (root / 'ToyPawns.upk').write_bytes(build_pawns().build())
     (root / 'Startup.upk').write_bytes(build_startup().build())
 
-    # the same run as combat_test.py's rollpool case; its exit and errors are checked there
+    # the same run as combat_test.py's rollpool case. Its exit and errors are checked here too: on the Rust binary this file runs
+    # only with OW_PARITY=reference and combat_test.py only without it, so combat_test.py's check does not cover this run.
     code, got = combat_run(root, 'seed:3', 'spawn:ToyPawns/Pawn_Loot:4:6:Balance_Low', 'rollpool:0:Pool_Gated:4:5', 'rollpool:0:Pool_Gated:5:5', 'rollpool:0:Pool_Coins:4:7')
+    assert code == 0 and got['errors'] == [], (code, got['errors'])
     result = got['steps'][4]['result']
     check('loot: 7 calls of Pool_Coins at stage 4 make 21 stand-in inventories, coins with bDropOnDeath set',
           got['rows'].get('loot.roll.Pool_Coins.stage4.items') == 21 and got['rows'].get('loot.roll.Pool_Coins.stage4.true') == 7
