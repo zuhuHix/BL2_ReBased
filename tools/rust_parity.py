@@ -8,22 +8,30 @@ binary and prints PASS or FAIL per line, then a summary. Stdlib only.
 
 Manifest lines (files are read in name order; blank lines and lines starting with '#' are skipped):
 
-  <command>          A test command, split like a POSIX shell line (shlex). `{bin}` is replaced by the Rust binary's
-                     path, and a first word `python` by the Python running this script. It runs from the repository
-                     root and passes when it exits 0.
+  <command>          A test command, split like a POSIX shell line (shlex). It must name `{bin}`, which is replaced by
+                     the Rust binary's path; a first word `python` is replaced by the Python running this script. It
+                     runs from the repository root and passes when it exits 0 and its output reports no skipped
+                     unittest case (`skipped=N`, `OK (skipped`).
   diff <args>        `ow-package` arguments. They run on the C++ binary (--cxx) and on the Rust binary (--bin); the
-                     line passes when stdout (bytes) and the exit code are equal.
+                     line passes when stdout (bytes) and the exit code are equal. So that two binaries failing the
+                     same way cannot pass, a line where either binary exits non-zero or the C++ stdout is empty
+                     passes only with the `stderr` marker, which compares stderr too.
 
 Trailing markers, in any order, after the command or the arguments:
 
-  stderr             (diff lines only) stderr must be equal too.
+  stderr             (diff lines only) stderr must be equal too; needed for an expected error.
   mode=reference     the line runs with OW_PARITY=reference (both binaries, for a diff line). Every other line runs
                      with OW_PARITY removed from the environment, whatever the caller's environment holds. This
                      script is the only place that sets the variable (docs/rust-port/ARCHITECTURE.md rule R3).
 
+A line holding a marker word anywhere but at its end, a `#` (no inline comments) or a backslash (write paths with
+forward slashes) is a bad line and fails, as does any entry of the manifest folder other than README.md and *.txt
+files (a lane's file with a wrong name would otherwise never run).
+
 There is no expected-failure marker: a line is in the manifest when it passes. Exit code 0 when every line passes
 (also when the manifest holds no line, which the summary says), 1 when any line fails, 2 for a usage error (a
-binary that is not there, or diff lines without a C++ binary).
+binary that is not there, or diff lines without a C++ binary). A command that outruns --timeout is stopped with its
+child processes (the process tree of the PID this script started) and its line fails.
 
 A binary path ending in `.py` is run with this Python. Only the self-test (tests/rust_parity_test.py) uses that, for
 its stand-in binaries.
@@ -32,6 +40,7 @@ its stand-in binaries.
 import argparse
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -57,6 +66,10 @@ class Line:
     def __init__(self, path, number, text):
         self.where = f'{path.name}:{number}'
         self.text = text
+        if '#' in text:
+            raise BadLine("'#' inside a line (only whole-line comments are allowed)")
+        if '\\' in text:
+            raise BadLine('a backslash in the line (write paths with forward slashes)')
         try:
             words = shlex.split(text, posix=True)
         except ValueError as e:
@@ -69,6 +82,9 @@ class Line:
                 self.reference = True
             else:
                 self.stderr = True
+        misplaced = [w for w in words if w in MARKERS]
+        if misplaced:
+            raise BadLine(f'the marker {misplaced[0]} must come at the end of the line')
         self.diff = bool(words) and words[0] == 'diff'
         if self.diff:
             words = words[1:]
@@ -78,21 +94,28 @@ class Line:
             raise BadLine('the line holds only markers')
         elif self.stderr:
             raise BadLine('the stderr marker is for diff lines only')
+        elif not any('{bin}' in w for w in words):
+            raise BadLine('a test command must name {bin} (else it tests some other binary)')
         self.words = words
 
 
 def read_manifest(manifest_dir, only):
     """Returns (files, lines, problems): the manifest files read, their parsed lines in file and line order, and
     (where, text, message) for each line that failed to parse. Only *.txt files are manifests (the folder's
-    README.md is not). A --file name that is not there raises BadLine."""
-    files = sorted(p for p in manifest_dir.glob('*.txt') if p.is_file())
+    README.md is not); any other entry of the folder is a problem. A --file name that is not there raises BadLine."""
+    files, problems = [], []
+    for p in sorted(manifest_dir.iterdir()):
+        if p.is_file() and p.suffix == '.txt':
+            files.append(p)
+        elif not (p.is_file() and p.name == 'README.md'):
+            problems.append((p.name, '', 'not a manifest file (only README.md and *.txt files belong here)'))
     if only:
         wanted = set(only)
         missing = wanted - {p.name for p in files}
         if missing:
             raise BadLine(f'no manifest file {", ".join(sorted(missing))} in {manifest_dir}')
         files = [p for p in files if p.name in wanted]
-    lines, problems = [], []
+    lines = []
     for path in files:
         for number, raw in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
             text = raw.strip()
@@ -122,12 +145,34 @@ def environment(reference):
 def run(argv, env, timeout):
     """(exit code, stdout bytes, stderr bytes); a timeout or a program that cannot start gives exit code None."""
     try:
-        done = subprocess.run(argv, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return None, b'', f'timed out after {timeout} s'.encode()
+        proc = subprocess.Popen(argv, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, start_new_session=(os.name != 'nt'))
     except OSError as e:
         return None, b'', f'cannot start: {e}'.encode()
-    return done.returncode, done.stdout, done.stderr
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop_tree(proc)
+        return None, b'', f'timed out after {timeout} s; stopped it and its child processes'.encode()
+    return proc.returncode, out, err
+
+
+def stop_tree(proc):
+    """Stops the process this script started and its children (a child ow-package can hold the pipes open). Only
+    that PID's tree, never a process by image name (AGENTS.md rule 10)."""
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        import signal
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)   # its own session, started above
+        except ProcessLookupError:
+            pass
+    try:
+        proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def shorten(data):
@@ -152,10 +197,15 @@ def run_test_line(line, binary, timeout):
     if argv[0] == 'python':
         argv[0] = sys.executable
     code, out, err = run(argv, environment(line.reference), timeout)
+    text = (out + err).decode('utf-8', 'replace')
     if code == 0:
-        return []
-    tail = (out + err).decode('utf-8', 'replace').splitlines()[-SHOWN_TAIL:]
-    return [f'exit code {code}'] + [f'  | {t}' for t in tail]
+        skipped = re.search(r'skipped=\d+', text) or re.search(r'OK \(skipped', text)
+        if not skipped:
+            return []
+        reason = f'exit code 0, but the output reports skipped cases ({skipped.group(0)})'
+    else:
+        reason = f'exit code {code}'
+    return [reason] + [f'  | {t}' for t in text.splitlines()[-SHOWN_TAIL:]]
 
 
 def run_diff_line(line, binary, cxx, timeout):
@@ -175,6 +225,14 @@ def run_diff_line(line, binary, cxx, timeout):
         reasons.append(f'stdout differs: {first_difference(c_out, r_out)}')
     if line.stderr and c_err != r_err:
         reasons.append(f'stderr differs: {first_difference(c_err, r_err)}')
+    # Two binaries that both refuse the arguments agree on exit code and (empty) stdout; without a stderr comparison
+    # that would pass whatever the cause. Such a line must say what error it expects.
+    if not line.stderr:
+        if c_code != 0 or r_code != 0:
+            reasons.append(f'a binary exited non-zero (C++ {c_code}, Rust {r_code}): '
+                           'an expected error needs the stderr marker')
+        elif not c_out:
+            reasons.append('the C++ stdout is empty: a line with no output needs the stderr marker')
     return reasons
 
 

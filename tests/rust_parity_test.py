@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -149,13 +150,121 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("stdout differs: line 1: C++ 'cxx-only', Rust 'rust-only'", out)
 
-    def test_diff_compares_exit_codes(self):
-        # The stand-ins print the same stdout, so only the exit code can differ; here they agree on 3.
+    def test_an_expected_error_needs_the_stderr_marker(self):
+        # Both stand-ins exit 3 with the same stdout. Without `stderr` the line fails (two binaries refusing the
+        # arguments the same way must not pass); with it, equal stderr passes and different stderr fails.
         self.write('d.txt', '''\
             diff --exit 3 x
+            diff --exit 3 x stderr
+            diff --exit 3 --err boom x stderr
             ''')
         code, out, _ = self.runner()
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'PASS', 'd.txt:3': 'FAIL'}, out)
+        self.assertIn('a binary exited non-zero (C++ 3, Rust 3): an expected error needs the stderr marker', out)
+
+    def test_both_binaries_refusing_the_same_way_fails(self):
+        # The probe of review r1: every C++ error exits 1 with empty stdout, and so does a Rust usage error. Both
+        # stand-ins here do exactly that, with different stderr text.
+        for binary, who in ((self.rust, 'rust'), (self.cxx, 'cxx')):
+            binary.write_text(f"import sys\nsys.stderr.write('{who}: bad command line\\n')\nsys.exit(1)\n",
+                              encoding='utf-8')
+        self.write('d.txt', '''\
+            diff --nmaes local/not-there.upk
+            diff --nmaes local/not-there.upk stderr
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'FAIL'}, out)
+        self.assertIn('exited non-zero (C++ 1, Rust 1)', out)
+        self.assertIn('stderr differs', out)
+
+    def test_empty_cxx_stdout_needs_the_stderr_marker(self):
+        # Both exit 0 and print nothing.
+        for binary in (self.rust, self.cxx):
+            binary.write_text('import sys\nsys.exit(0)\n', encoding='utf-8')
+        self.write('d.txt', '''\
+            diff --quiet x
+            diff --quiet x stderr
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'PASS'}, out)
+        self.assertIn('the C++ stdout is empty', out)
+
+    def test_misplaced_markers_comments_and_backslashes_are_bad_lines(self):
+        self.write('a.txt', f'''\
+            diff mode=reference --names x.upk
+            diff stderr --names x.upk
+            diff --names x.upk  # inline comment
+            diff --names local\\\\x.upk
+            {self.check_line('<unset>')} # a comment
+            {self.check_line('<unset>').replace(' {bin}', ' mode=reference {bin}')}
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.summary(out), (0, 6, 6, 1))
+        self.assertEqual(out.count('must come at the end of the line'), 3, out)
+        self.assertEqual(out.count("'#' inside a line"), 2, out)
+        self.assertEqual(out.count('a backslash in the line'), 1, out)
+
+    def test_a_test_line_without_bin_is_a_bad_line(self):
+        self.write('a.txt', f'python {self.checker.as_posix()} somebinary <unset> 0\n')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertIn('a test command must name {bin}', out)
+
+    def test_skipped_unittest_cases_fail_the_line(self):
+        # A unittest file whose cases skip exits 0; the line still fails. One with no skip passes.
+        for name, body in (('skips', 'raise unittest.SkipTest("no data")'), ('runs', 'pass')):
+            (self.tmp / f'{name}_test.py').write_text(textwrap.dedent(f'''\
+                import sys, unittest
+                class T(unittest.TestCase):
+                    def test_a(self):
+                        {body}
+                    def test_b(self):
+                        pass
+                if __name__ == '__main__':
+                    sys.argv[1:] = []
+                    unittest.main()
+                '''), encoding='utf-8')
+        self.write('a.txt', f'''\
+            python {(self.tmp / 'skips_test.py').as_posix()} {{bin}}
+            python {(self.tmp / 'runs_test.py').as_posix()} {{bin}}
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'a.txt:1': 'FAIL', 'a.txt:2': 'PASS'}, out)
+        self.assertIn('the output reports skipped cases (skipped=1)', out)
+
+    def test_other_entries_in_the_manifest_folder_fail(self):
+        self.write('a.txt', self.check_line('<unset>') + '\n')
+        self.write('README.md', 'not a manifest\n')
+        self.write('pkg.text', self.check_line('<unset>') + '\n')
+        self.write('pkg.md', self.check_line('<unset>') + '\n')
+        (self.manifest / 'sub').mkdir()
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.summary(out), (1, 3, 4, 1))
+        self.assertEqual(out.count('not a manifest file'), 3, out)
+        for name in ('pkg.text', 'pkg.md', 'sub'):
+            self.assertIn(f'FAIL {name} ', out)
+
+    def test_a_timeout_stops_the_whole_process_tree(self):
+        # The Rust stand-in starts a grandchild that holds the inherited pipes open for 60 s, then sleeps itself.
+        # With a 2 s timeout the line fails quickly: the runner stops the tree of the PID it started.
+        self.rust.write_text(textwrap.dedent('''\
+            import subprocess, sys, time
+            subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+            time.sleep(60)
+            '''), encoding='utf-8')
+        self.write('d.txt', 'diff x\n')
+        started = time.monotonic()
+        code, out, _ = self.runner('--timeout', '2')
+        elapsed = time.monotonic() - started
+        self.assertEqual(code, 1, out)
+        self.assertIn('Rust binary: timed out after 2.0 s; stopped it and its child processes', out)
+        self.assertLess(elapsed, 45, out)
 
     def test_diff_with_different_exit_codes_fails(self):
         # Same stdout, but the C++ stand-in exits one higher than asked.
