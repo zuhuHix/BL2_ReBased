@@ -203,10 +203,14 @@ fn the_parity_mode_is_a_value_and_reaches_the_rng() {
     assert_eq!(off.parity, ParityMode::Off);
     assert_eq!(reference.parity, ParityMode::Reference);
     assert_eq!(reference.rng.mode(), ParityMode::Reference);
-    let seeded = fixture(ParityMode::Off)
-        .vm
-        .with_rng(GameRng::from_world_seed(7, ParityMode::Off));
-    assert_eq!(seeded.rng.world_seed(), 7);
+    // Reseeding keeps the VM's own mode: an Off VM never runs on the Reference streams.
+    let seeded = fixture(ParityMode::Off).vm.with_world_seed(7);
+    assert_eq!(seeded.rng, GameRng::from_world_seed(7, ParityMode::Off));
+    let seeded = fixture(ParityMode::Reference).vm.with_world_seed(7);
+    assert_eq!(
+        seeded.rng,
+        GameRng::from_world_seed(7, ParityMode::Reference)
+    );
 }
 
 #[derive(Debug, Default)]
@@ -544,17 +548,19 @@ fn instantiate_names() {
     let obj = fx.vm.space.heap.get(named).unwrap();
     assert_eq!(fx.vm.space.names.text(obj.name), "Pool_7");
     assert_eq!(obj.origin, Origin::Runtime);
-    assert!(matches!(
-        fx.vm.instantiate(fx.pool, ""),
-        Err(VmError::NotYet(NotYet {
-            missing: Missing::NotRead,
-            ..
-        }))
-    ));
-    let mut rf = fixture(ParityMode::Reference);
-    let o = rf.vm.instantiate(rf.sub_pool, "").unwrap();
-    let obj = rf.vm.space.heap.get(o).unwrap();
-    assert_eq!(rf.vm.space.names.text(obj.name), "SubPool_0");
+    // Unnamed objects: <Class>_<n>, one counter per class, the same in both modes.
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut fx = fixture(mode);
+        let name = |vm: &mut Vm, c| {
+            let o = vm.instantiate(c, "").unwrap();
+            let n = vm.space.heap.get(o).unwrap().name;
+            vm.space.names.text(n).into_owned()
+        };
+        assert_eq!(name(&mut fx.vm, fx.pool), "Pool_0");
+        assert_eq!(name(&mut fx.vm, fx.pool), "Pool_1");
+        assert_eq!(name(&mut fx.vm, fx.sub_pool), "SubPool_0");
+        assert_eq!(name(&mut fx.vm, fx.pool), "Pool_2");
+    }
 }
 
 #[test]
@@ -637,6 +643,16 @@ fn world_queries_go_through_the_hooks() {
     );
     assert_eq!(hooks.borrow().queries, vec![EngineQuery::PlayerController]);
     assert!(fx.vm.world_hooks().is_some());
+    // Hooks still borrowed (a host holding them) are an attribute error, not a RefCell panic.
+    let held = hooks.borrow_mut();
+    assert!(matches!(fx.vm.globals(), Err(AttrError::World(t)) if t.contains("already borrowed")));
+    assert!(matches!(fx.vm.game_info(), Err(AttrError::World(_))));
+    assert!(matches!(
+        fx.vm.engine_query(EngineQuery::PlayerController, o),
+        Err(AttrError::World(_))
+    ));
+    drop(held);
+    assert_eq!(fx.vm.globals(), Ok(g));
 }
 
 #[test]
@@ -708,6 +724,66 @@ fn native_packs_register_into_the_vm() {
     assert!(Pack.register(&mut fx.vm).is_err(), "a pack registers once");
     assert_eq!(fx.vm.call(twice, None, vec![]).unwrap().ret, Value::Int(7));
     assert!(fx.vm.service::<Counter>().is_some());
+}
+
+#[test]
+fn a_host_holding_a_service_borrow_gets_an_error() {
+    let mut fx = fixture(ParityMode::Off);
+    let counter = fx.vm.add_service(Counter::default()).unwrap();
+    let twice = declare_twice(&mut fx.vm);
+    fx.vm.stub_policy = StubPolicy::LogAndZero;
+    let held = counter.borrow();
+    assert!(matches!(
+        fx.vm.call(twice, None, vec![]),
+        Err(VmError::ServiceBorrowed(_))
+    ));
+    drop(held);
+    assert!(fx.vm.call(twice, None, vec![]).is_ok());
+}
+
+#[test]
+fn the_call_depth_is_checked_before_a_bytecode_frame() {
+    let mut fx = fixture(ParityMode::Off);
+    let script = fx
+        .vm
+        .declare_function(FunctionDecl::script(path("Game.Thing.Run")))
+        .unwrap();
+    // Under the limit: the frame would be made; the interpreter is not here yet.
+    assert!(matches!(
+        fx.vm.call(script, None, vec![]),
+        Err(VmError::NotYet(NotYet {
+            missing: Missing::NotPorted,
+            ..
+        }))
+    ));
+    // At the limit: refused before any frame, as C++.
+    fx.vm.limits.max_call_depth = 0;
+    assert!(matches!(
+        fx.vm.call(script, None, vec![]),
+        Err(VmError::Script { message, .. }) if message == "call depth limit reached in Game.Thing.Run"
+    ));
+    // The counter is back at 0 after each call.
+    fx.vm.limits.max_call_depth = 1;
+    assert!(matches!(
+        fx.vm.call(script, None, vec![]),
+        Err(VmError::NotYet(_))
+    ));
+}
+
+#[test]
+fn interpreter_stub_sites_follow_the_policy() {
+    let mut fx = fixture(ParityMode::Off);
+    assert_eq!(
+        fx.vm
+            .stub_site("DynArraySort", "UNIMPLEMENTED DynArraySort".into()),
+        Err(VmError::UnboundNative("DynArraySort".into()))
+    );
+    assert!(fx.vm.log.is_empty());
+    fx.vm.stub_policy = StubPolicy::LogAndZero;
+    fx.vm
+        .stub_site("native index 300", "UNIMPLEMENTED native index 300".into())
+        .unwrap();
+    assert_eq!(fx.vm.log, ["UNIMPLEMENTED native index 300"]);
 }
 
 #[test]

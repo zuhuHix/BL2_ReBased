@@ -794,46 +794,80 @@ detached object of the item's class in the offline `ObjectSpace`; in the world i
 
 ### 3.8 `ow-vm` (contract W2-VMAPI)
 
+*Shipped shapes (W2-VMAPI, PR #295, review r1; replaces the revision 3 sketch).* Module paths `ow_vm::api`,
+`ow_vm::error`, `ow_vm::services`. Every enum and struct below that may grow is `#[non_exhaustive]` (`StubPolicy`,
+`Limits`, `CallCensus`, `FunctionDecl`, `IteratorResult`, `Arg`, `CallResult`, `NativeCall`, `VmError`). `Vm` itself
+implements `ow_attr::api::AttrWorld` (no separate view type), and is `!Send` by a compile-time check (D18).
+
 ```rust
-pub struct Vm { pub space: ObjectSpace, pub defs: DefStore, pub attrs: Rc<AttributeSystem>,
-                pub rng: GameRng, pub clock: SimClock, pub parity: ParityMode, pub log: Vec<String>,
-                pub limits: Limits /* step_limit 5,000,000 per top-level call, as C++ */, pub stub_policy: StubPolicy,
-                pub census: Option<CallCensus>, pub trace: Option<Vec<String>>, .. }
+pub struct Vm { pub space: ObjectSpace, pub defs: DefStore, pub attrs: Rc<AttributeSystem>, pub rng: GameRng,
+                pub global_slots: GlobalSlots /* the world owns the process-wide pair */, pub clock: SimClock,
+                pub parity: ParityMode, pub log: Vec<String>, pub limits: Limits, pub stub_policy: StubPolicy,
+                pub census: Option<CallCensus>, pub trace: Option<Vec<String>>, .. /* functions, natives, iterators,
+                notification overrides, services, per-class name counters, step and depth counters: private */ }
+pub struct Limits { pub step_limit: u64 /* 5,000,000 per top-level call */, pub max_call_depth: u32 /* 200 bytecode frames,
+                    counted in the Vm so it carries through natives, checked before a frame is made */ }
 pub enum StubPolicy { LogAndZero /* census, sweep, exploration (Phase 2 harness) */,
-                      Refuse { allow: BTreeSet<String> } /* gameplay runs and gates: an unbound native is VmError::UnboundNative */ }
+                      Refuse { allow: BTreeSet<String> } /* gameplay runs and gates: a stub site is VmError::UnboundNative */ }
+impl StubPolicy { pub fn refuse_all() -> Self; pub fn allows_stub(&self, key: &str) -> bool; }
+pub struct CallCensus { pub script_calls, pub native_calls, pub stub_calls, pub none_contexts: DetMap<String, u64> }
+pub struct FunctionDecl { pub path: ObjectPath, pub owner: Option<ClassId>, pub native_key: Option<String> /* "Class.Name(types)" */,
+                          pub is_static: bool, pub params: Vec<PropertyDecl>, pub result: Option<PropertyDecl> }
+impl FunctionDecl { pub fn script(path); pub fn native(path, key); with_owner; with_static; with_params; with_result;
+                    is_native; display_key }
 pub type NativeFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<Value, VmError>>;
-pub struct NativeCall<'a> { pub vm: &'a mut Vm, pub function: FuncId, pub this: Option<ObjRef>, pub args: Vec<Arg> }
-pub struct Arg { pub value: Value, pub out: bool, pub supplied: bool }   // out values copied back after the native returns
-impl NativeCall<'_> { pub fn arg(&self, i: usize) -> &Value; pub fn set_out(&mut self, i: usize, v: Value); pub fn has(&self, i: usize) -> bool;
+pub type IteratorFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<IteratorResult, VmError>>;
+pub struct IteratorResult { pub out_param: usize, pub items: Vec<Value> }   // ::new
+pub type AttrNotifyFn = Rc<dyn Fn(&mut Vm, ObjRef, PropId, NumForms) -> Result<(), AttrError>>;   // a class's change notification
+pub struct NativeCall<'a> { pub vm: &'a mut Vm, pub function: FuncId, pub this: Option<ObjRef>, pub args: Vec<Arg> }   // ::new
+pub struct Arg { pub value: Value, pub out: bool, pub supplied: bool }   // ::new; out values copied back after the native returns
+pub struct CallResult { pub ret: Value, pub outs: Vec<Value> }
+impl NativeCall<'_> { pub fn arg(&self, i: usize) -> Result<&Value, VmError>; pub fn set_out(&mut self, i: usize, v: Value) -> Result<(), VmError>;
+                      pub fn has(&self, i: usize) -> bool;   // arg/set_out: BadArgument past the params; set_out refuses a non-out param
                       pub fn call_script(&mut self, f: FuncId, this: Option<ObjRef>, args: Vec<Value>) -> Result<CallResult, VmError>; }
 impl Vm {
     pub fn new(space: ObjectSpace, defs: DefStore, attrs: Rc<AttributeSystem>, mode: ParityMode) -> Self;
-                                                   // rng = from_world_seed(0, mode), clock at 0; the binary passes parity_mode()
-    pub fn with_rng(self, rng: GameRng) -> Self;
-    pub fn find_class(&mut self, path: &str) -> Result<ClassId, VmError>;  pub fn find_function(&mut self, path: &str) -> Result<FuncId, VmError>;
-    pub fn instantiate(&mut self, c: ClassId, name: &str) -> Result<ObjRef, VmError>;
-    pub fn instantiate_export(&mut self, pkg: PackageId, index: i32, prefix: PropertyPrefix) -> Result<ObjRef, VmError>;
-    pub fn call(&mut self, f: FuncId, this: Option<ObjRef>, args: Vec<Value>) -> Result<CallResult, VmError>;  // CallResult { ret, outs }
-    pub fn register_native(&mut self, key: &str, f: NativeFn) -> Result<(), VmError>;
-    pub fn register_iterator(&mut self, key: &str, f: IteratorFn) -> Result<(), VmError>;
+        // rng = from_world_seed(0, mode), clock at 0, slots 0, stub_policy = Refuse with nothing allowed; the binary passes parity_mode()
+    pub fn with_world_seed(self, seed: u64) -> Self;   // reseeds in the VM's own mode (no Off VM on Reference streams)
+    pub fn with_stub_policy(self, p: StubPolicy) -> Self;
+    pub fn find_class(&mut self, path: &str) -> Result<ClassId, VmError>;     // known classes; else NotYet { LayerAbsent } until loading
+    pub fn declare_function(&mut self, d: FunctionDecl) -> Result<FuncId, VmError>;  pub fn function(&self, f: FuncId) -> Option<&FunctionDecl>;
+    pub fn find_function(&mut self, path: &str) -> Result<FuncId, VmError>;   // declared functions; else NotYet { LayerAbsent }
+    pub fn instantiate(&mut self, c: ClassId, name: &str) -> Result<ObjRef, VmError>;   // "" -> <Class>_<n>, per-class counter (UNVERIFIED numbering)
+    // instantiate_export(pkg, index, PropertyPrefix): absent until W3-DECODE's ow_object::prefix exists
+    pub fn call(&mut self, f: FuncId, this: Option<ObjRef>, args: Vec<Value>) -> Result<CallResult, VmError>;
+        // top-level: fresh step budget; from inside a native: shares budget and depth (C++ callFromNative); refused
+        // while any service is borrowed; script function without override: NotYet { NotPorted } until W3-INTERP
+    pub fn register_native(&mut self, key: &str, f: NativeFn) -> Result<(), VmError>;  pub fn has_native(&self, key: &str) -> bool;
+    pub fn register_iterator(&mut self, key: &str, f: IteratorFn) -> Result<(), VmError>;  pub fn iterator_for(&self, f: FuncId) -> Option<IteratorFn>;
     pub fn override_script(&mut self, path: &str, f: NativeFn) -> Result<(), VmError>;
-    pub fn service<T: 'static>(&self) -> Option<Rc<RefCell<T>>>;  pub fn add_service<T: 'static>(&mut self, t: T);
+    pub fn register_attribute_notify(&mut self, class_path: &str, f: AttrNotifyFn) -> Result<(), VmError>;
+    pub fn service<T: 'static>(&self) -> Option<Rc<RefCell<T>>>;  pub fn add_service<T: 'static>(&mut self, t: T) -> Result<Rc<RefCell<T>>, VmError>;
+    pub fn set_world_hooks(&mut self, h: Rc<RefCell<dyn WorldHooks>>) -> Result<(), VmError>;  pub fn world_hooks(&self) -> Option<Rc<RefCell<dyn WorldHooks>>>;
+    pub(crate) fn tick(&mut self) -> Result<(), VmError>;                      // one step (the interpreter's per-expression seam)
+    pub(crate) fn stub_site(&mut self, key: &str, text: String) -> Result<(), VmError>;   // every stub site consults the policy
 }
 pub trait NativePack { fn register(&self, vm: &mut Vm) -> Result<(), VmError>; }   // every crate above the VM exports one
 pub enum VmError { Script { function: String, message: String }, StepLimit, UnboundNative(String), NotYet(NotYet),
-                   Heap(HeapError), Def(DefError), Attr(AttrError), Decode(String) }
+                   Heap(HeapError), Attr(AttrError), Decode(String), Registration { key: String, reason: &'static str },
+                   BadArgument { function: String, index: usize, reason: &'static str }, ServiceBorrowed(&'static str) }
+                   // Def(DefError) pending W3-DEFS (additive); From<NotYet | HeapError | AttrError>
+impl From<VmError> for AttrError { .. }   // NotYet, Heap and Attr pass through unchanged; the rest as AttrError::World(text)
 ```
 
 ```rust
 // The one upward hook the VM's AttrWorld implementation calls; frozen by W2-VMAPI, implemented by ow-world.
 pub trait WorldHooks {
-    fn globals(&mut self, w: WorldParts<'_>) -> Result<Option<ObjRef>, AttrError>;
-    fn game_info(&mut self, w: WorldParts<'_>) -> Result<Option<ObjRef>, AttrError>;
+    fn globals(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError>;     // the running game always has one
+    fn game_info(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError>;   // likewise (progression.cpp:84,87)
     fn engine_query(&mut self, q: EngineQuery, source: ObjRef, w: WorldParts<'_>) -> Result<Option<ObjRef>, AttrError>;
 }
-// Held as a service, Rc<RefCell<dyn WorldHooks>>: Vm clones the Rc out of the service map, borrows it, and passes its
-// own parts, so no borrow of the map is live. Balance state (region stages, playthrough) is not part of this trait:
-// it is a separate service whose type lives in ow-world (it names ow-balance types, which ow-vm may not).
+// Held as Rc<RefCell<dyn WorldHooks>> in its own slot of the service map (set_world_hooks): Vm clones the Rc out,
+// try-borrows it (a hook already borrowed is AttrError::World, not a panic) and passes its own parts. Without hooks,
+// globals, game_info and engine_query are NotYet { LayerAbsent("ow-world") }. Balance state (region stages,
+// playthrough) is not part of this trait: it is a separate service whose type lives in ow-world (it names ow-balance
+// types, which ow-vm may not). AttrWorld::rng is the VM's GameRng C-rand streams; global_slots is Vm::global_slots;
+// attribute_changed runs the nearest registered AttrNotifyFn in the owner's class chain (none: nothing, UNVERIFIED).
 ```
 
 **Stub policy per command.** A logged zero-result stub is a declared policy of the exploration commands (the Phase 2
@@ -846,8 +880,17 @@ harness), not a stand-in; the gameplay commands refuse an unbound native.
 | `--native-census`, `--vm-sweep` | `LogAndZero` | `vm_test.py:886-889` (a stub counted once) |
 | `--behavior-run`, `--kismet-run`, `--mission-run`, `--slice-run`, `--combat-run`, `--inventory-move`, `--mover-event`, every `ow-host` world | `Refuse { allow }` (the allow list, each entry with its reason, lives with the command) | the gameplay gates of section 6 |
 
-Services are `Rc<RefCell<T>>` held in a `BTreeMap<TypeId, ..>`; a native borrows one only for a short scope and never
-across `call_script`. That rule is in the contract's doc comment and is the review bar's first check.
+**Stub sites.** Every stub site consults `StubPolicy::allows_stub` with a stated key, logs the C++ text when allowed
+and is `UnboundNative(key)` under `Refuse` otherwise: an unbound native (key `Class.Name(types)`, `UNIMPLEMENTED <key>`,
+`interp.cpp:692`) in `Vm::call`, and the interpreter's five through `Vm::stub_site`: a function name not found
+(`<Class>.<Name>`, `interp.cpp:634`), a native index with no function (`native index <n>`, `:663`), an unhandled
+primitive cast (`primitive cast 0x<hh>`, `:217`), `DynArraySort` (`:467`), and a `foreach` over an iterator native with
+nothing bound (the iterator's key, `:866`). The table with the logged texts is on `StubPolicy` in `api.rs`.
+
+Services are `Rc<RefCell<T>>`, one per type, kept in registration order (a `TypeId` index for lookups only); a native
+borrows one only for a short scope and never across `call_script`. That rule is in the contract's doc comment and is
+the review bar's first check; the VM enforces it: any call while a service is borrowed is `VmError::ServiceBorrowed`,
+naming the first borrowed service in registration order.
 
 ### 3.9 Native packs, world and host
 
@@ -1363,6 +1406,11 @@ W1-NUM is the lane to start first and review first.
   CLI `--run`, `--run-batch`, `--native`, `--native-args`, `--self`, `--arg`, `--steps`.
 - Owns: `crates/ow-vm/src/interp/*` (except the three W4-INTERP2 files, created as `NotYet` stubs here),
   `crates/ow-cli/src/cmd/vm.rs`, `tests/rust_parity.d/vm.txt`.
+- Granted edits in W2-VMAPI's `crates/ow-vm/src/api.rs` (hub decision, W2-VMAPI review r1): the body of
+  `Vm::run_bytecode` after its depth check (the script branch of `Vm::invoke`), function and class loading behind
+  `Vm::find_function` / `Vm::find_class`, and calls of the `pub(crate)` seams `Vm::tick` and `Vm::stub_site`. Any other
+  change to `api.rs` or `error.rs` is a contract change (section 7). The 0x5F typed let converts the right-hand side
+  with the VM's assignment rule (`interp.cpp:511-522`) before `let_base`, which refuses another kind.
 - Inputs: W2-SCRIPT, W2-VMAPI, W3-DECODE, W3-DEFS, W1-ATTRMATH.
 - Not yet: struct/array element ops, `foreach`, delegates, interfaces (W4-INTERP2), states and latent code (W5-STATES).
 - Done when: Rust unit tests on `testkit` packages for every feature this lane owns, re-expressed from the

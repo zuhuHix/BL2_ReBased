@@ -11,7 +11,8 @@
 //! holds a borrow across `NativeCall::call_script`**. The VM enforces it: a nested call made while any service is
 //! borrowed fails with [`VmError::ServiceBorrowed`] instead of panicking later inside the callee.
 //!
-//! Nothing iterates this map for output, so the `TypeId` order (which differs between builds) never reaches a result
+//! The services are kept in registration order, and that is the only order anything walks them in (the borrow check
+//! names the first borrowed one), so no text depends on the `TypeId` order, which differs between builds
 //! (architecture N7).
 
 use std::any::{Any, TypeId, type_name};
@@ -44,13 +45,16 @@ struct Entry {
 /// The service map of one VM. `!Send`, as the VM is (decision D18).
 #[derive(Default)]
 pub struct Services {
-    map: BTreeMap<TypeId, Entry>,
+    /// Registration order.
+    entries: Vec<Entry>,
+    /// `TypeId` -> position in `entries`, for lookups only.
+    index: BTreeMap<TypeId, usize>,
     hooks: Option<Rc<RefCell<dyn WorldHooks>>>,
 }
 
 impl std::fmt::Debug for Services {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.map.values().map(|e| e.name).collect();
+        let names: Vec<&str> = self.entries.iter().map(|e| e.name).collect();
         f.debug_struct("Services")
             .field("services", &names)
             .field("hooks", &self.hooks.is_some())
@@ -67,27 +71,25 @@ impl Services {
     /// each thinking they own the state is a wiring bug, not something to resolve by order).
     pub fn add<T: 'static>(&mut self, value: T) -> Result<Rc<RefCell<T>>, VmError> {
         let id = TypeId::of::<T>();
-        if self.map.contains_key(&id) {
+        if self.index.contains_key(&id) {
             return Err(VmError::Registration {
                 key: type_name::<T>().to_string(),
                 reason: "a service of this type is already added",
             });
         }
         let cell = Rc::new(RefCell::new(value));
-        self.map.insert(
-            id,
-            Entry {
-                any: cell.clone(),
-                probe: cell.clone(),
-                name: type_name::<T>(),
-            },
-        );
+        self.index.insert(id, self.entries.len());
+        self.entries.push(Entry {
+            any: cell.clone(),
+            probe: cell.clone(),
+            name: type_name::<T>(),
+        });
         Ok(cell)
     }
 
     /// The service of type `T`, if one was added. The `Rc` is a clone: holding it borrows nothing.
     pub fn get<T: 'static>(&self) -> Option<Rc<RefCell<T>>> {
-        let entry = self.map.get(&TypeId::of::<T>())?;
+        let entry = &self.entries[*self.index.get(&TypeId::of::<T>())?];
         entry.any.clone().downcast::<RefCell<T>>().ok()
     }
 
@@ -108,9 +110,10 @@ impl Services {
         self.hooks.clone()
     }
 
-    /// `Err(ServiceBorrowed)` naming the first service (in map order) or the hooks that a borrow still holds.
+    /// `Err(ServiceBorrowed)` naming the first service in registration order, then the hooks, that a borrow still
+    /// holds.
     pub fn check_none_borrowed(&self) -> Result<(), VmError> {
-        if let Some(entry) = self.map.values().find(|e| e.probe.borrowed()) {
+        if let Some(entry) = self.entries.iter().find(|e| e.probe.borrowed()) {
             return Err(VmError::ServiceBorrowed(entry.name));
         }
         if self.hooks.as_ref().is_some_and(|h| h.borrowed()) {
@@ -157,5 +160,27 @@ mod tests {
         ));
         drop(guard);
         assert_eq!(s.check_none_borrowed(), Ok(()));
+    }
+
+    #[test]
+    fn the_first_borrowed_service_in_registration_order_is_named() {
+        for counter_first in [true, false] {
+            let mut s = Services::new();
+            let (counter, other) = if counter_first {
+                let c = s.add(Counter(0)).unwrap();
+                (c, s.add(Other).unwrap())
+            } else {
+                let o = s.add(Other).unwrap();
+                (s.add(Counter(0)).unwrap(), o)
+            };
+            let _a = counter.borrow();
+            let _b = other.borrow();
+            let named = match s.check_none_borrowed() {
+                Err(VmError::ServiceBorrowed(name)) => name,
+                other => panic!("{other:?}"),
+            };
+            let expect = if counter_first { "Counter" } else { "Other" };
+            assert!(named.ends_with(expect), "{named}");
+        }
     }
 }
