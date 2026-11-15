@@ -2100,13 +2100,13 @@ fn goto_state_under_reference_runs_the_state_events_of_loaded_states() {
         r.vm.log,
         ["GotoState: state Nope is not declared on Mach; name set, no state events"]
     );
-    // Outside Reference, GotoState is NotYet until W5-STATES.
+    // Outside Reference, GotoState is the game's state machine (W5-STATES, `crate::states`), which reads the State
+    // export's body. This fixture's state A has a 16-byte stand-in body, which does not read: a typed Decode error.
+    // The state machine's own tests (`states.rs`) build real State bodies.
     let mut off = start(ParityMode::Off);
     let m = off.object("Core.Mach");
-    assert_eq!(
-        not_yet(off.call("Core.Mach.GoA", Some(m), vec![])).missing,
-        Missing::NotPorted
-    );
+    let e = off.call("Core.Mach.GoA", Some(m), vec![]).unwrap_err();
+    assert!(matches!(e, VmError::Decode(_)), "{e:?}");
 }
 
 #[test]
@@ -2259,10 +2259,18 @@ fn the_worst_case_nesting_fits_the_vm_stack() {
 
 #[test]
 fn goto_label_steps_over_and_a_state_variable_reads_as_an_instance_variable() {
-    let mut r = start(ParityMode::Off);
+    // A GotoLabel in a function: stepped over under Reference (the C++); NotYet otherwise (W5-STATES, decision
+    // 2026-11-15-27: where the game resumes is not read, and no installed function has one).
+    let mut reference = start(ParityMode::Reference);
     assert_eq!(
-        r.on("Core.Foo", "Core.Foo.StepsOverGotoLabel", vec![]),
+        reference.on("Core.Foo", "Core.Foo.StepsOverGotoLabel", vec![]),
         Value::Int(1)
+    );
+    let mut r = start(ParityMode::Off);
+    let o = r.object("Core.Foo");
+    assert_eq!(
+        not_yet(r.call("Core.Foo.StepsOverGotoLabel", Some(o), vec![])).missing,
+        Missing::NotRead
     );
     let o = r.object("Core.Foo");
     let foo = r.vm.find_class("Core.Foo").unwrap();

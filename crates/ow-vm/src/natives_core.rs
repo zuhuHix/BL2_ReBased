@@ -34,8 +34,10 @@
 //! (architecture section 6.1; the per-draw formulas are the public UE3 convention, UNVERIFIED, see `ow_core::rand`).
 //!
 //! **States.** `GotoState` reproduces the C++ name-and-events approximation only under `ParityMode::Reference` (a
-//! stand-in, section 6.1, pinned by `tests/vm_states_test.py`); otherwise it is `NotYet { NotPorted }` until W5-STATES
-//! ports the game's state machine (NATIVE_ENGINE_CORE.md). Under Reference it reads the states a class declares and
+//! stand-in, section 6.1, pinned by `tests/vm_states_test.py`), and there `IsInState` compares the name and `Enable`
+//! and `Disable` do nothing, as in the C++. Otherwise the four hand over to `crate::states`, the game's state machine
+//! as NATIVE_ENGINE_CORE.md reads it (W5-STATES, decision 2026-11-15-27), and [`register`] also binds the natives the
+//! C++ leaves unbound (`PushState`, `PopState`, `Actor.Sleep`). Under Reference it reads the states a class declares and
 //! the method lookup by class and state (C++ `Class::states`, `Runtime::findMethod`) from the classes the VM loaded:
 //! [`register`] wires `Vm::class_declares_state` and `Vm::find_method` (W3-INTERP; a class defined by hand, with no
 //! package behind it, declares no state). The algorithm itself is tested here over a stand-in lookup (decision
@@ -90,7 +92,10 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
             vm.find_method(class, name, state)
         }
     }
-    register_with(vm, Rc::new(LoadedStates))
+    register_with(vm, Rc::new(LoadedStates))?;
+    // Outside Reference only (W5-STATES): PushState, PopState and Actor.Sleep.
+    crate::states::register(vm)?;
+    crate::latent::register(vm)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1197,8 +1202,11 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
         };
         Ok(Value::Name(state.unwrap_or(NameId::NONE)))
     })?;
-    // bTestStateStack is ignored (there is no state stack), as in the C++.
+    // Under Reference bTestStateStack is ignored (there is no state stack), as in the C++; otherwise crate::states.
     reg(vm, "Object.IsInState(name,bool)", |c| {
+        if c.vm.parity != ParityMode::Reference {
+            return crate::states::is_in_state_native(c);
+        }
         let Some(this) = c.this else {
             return Ok(Value::Bool(false));
         };
@@ -1206,9 +1214,19 @@ fn objects(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError> {
         let current = state.map_or_else(String::new, |s| name_text(c.vm, s));
         Ok(Value::Bool(lowered(&current) == lowered(&text(c, 0)?)))
     })?;
-    // Probe enabling is not modelled (as in the C++).
-    reg(vm, "Object.Enable(name)", |_| Ok(Value::None))?;
-    reg(vm, "Object.Disable(name)", |_| Ok(Value::None))?;
+    // Under Reference probe enabling is not modelled (as in the C++); otherwise crate::states.
+    reg(vm, "Object.Enable(name)", |c| {
+        if c.vm.parity != ParityMode::Reference {
+            return crate::states::enable_native(c, true);
+        }
+        Ok(Value::None)
+    })?;
+    reg(vm, "Object.Disable(name)", |c| {
+        if c.vm.parity != ParityMode::Reference {
+            return crate::states::enable_native(c, false);
+        }
+        Ok(Value::None)
+    })?;
     reg(vm, "Object.LogInternal(string,name)", |c| {
         let line = format!("Log: {}", text(c, 0)?);
         c.vm.log.push(line);
@@ -1230,18 +1248,15 @@ const MAX_NESTED_STATE_CHANGES: u32 = 8;
 /// order (UNVERIFIED against the game): when the state changes, or bForceEvents is set, EndState(new state) runs on
 /// the old state, then the name is set, then BeginState(old state) runs on the new one. A state name that no class
 /// of the chain declares only sets the name (logged). Latent state code (labels, Sleep, FinishAnim) is not run: a
-/// Label argument is logged and ignored, and bKeepStack is ignored. Otherwise `NotYet { NotPorted }` until W5-STATES.
+/// Label argument is logged and ignored, and bKeepStack is ignored. Otherwise the game's state machine
+/// (`crate::states`, W5-STATES).
 fn goto_state(
     c: &mut NativeCall<'_>,
     states: &dyn StateLookup,
     depth: &Cell<u32>,
 ) -> Result<Value, VmError> {
     if c.vm.parity != ParityMode::Reference {
-        return Err(NotYet::not_ported(
-            "Object.GotoState: the game's state machine (states, labels, latent code, the state stack)",
-            "lane W5-STATES (NATIVE_ENGINE_CORE.md)",
-        )
-        .into());
+        return crate::states::goto_state_native(c);
     }
     let Some(this) = c.this else {
         return Ok(Value::None);
@@ -3014,6 +3029,16 @@ mod tests {
             h.call_on("Object.GetStateName()", p, vec![]),
             Value::Name(state)
         );
+        // Outside Reference IsInState reads the object's state frame (W5-STATES): a name poked into the heap with
+        // no frame is not a state. The name comparison below is the C++'s, under Reference.
+        let firing = h.name("FIRING");
+        assert_eq!(
+            h.call_on("Object.IsInState(name,bool)", p, vec![firing.clone()]),
+            b(false)
+        );
+        let mut h = build(ParityMode::Reference, true, None);
+        let p = h.vm.instantiate(h.pawn, "P").unwrap();
+        h.vm.space.heap.get_mut(p).unwrap().state = Some(h.vm.space.names.intern("Firing"));
         let firing = h.name("FIRING");
         assert_eq!(
             h.call_on(
@@ -3056,18 +3081,19 @@ mod tests {
 
     const GOTO: &str = "Object.GotoState(name,name,bool,bool)";
 
-    /// The replacement test of the GotoState stand-in (architecture 6.1): outside Reference it is NotYet NotPorted,
-    /// whatever its arguments.
+    /// Outside Reference GotoState is the game's state machine (W5-STATES, `crate::states`, whose own tests cover
+    /// it on package-loaded states). Here, on classes defined by hand (no state declared): a state name that no
+    /// class of the chain declares leaves no state and is logged; no object does nothing.
     #[test]
-    fn goto_state_is_not_ported_outside_reference() {
+    fn goto_state_outside_reference_is_the_state_machine() {
         let mut h = off();
         let p = h.vm.instantiate(h.pawn, "P").unwrap();
         let a = h.name("A");
-        let e = h.try_call(GOTO, Some(p), vec![a], &[]).unwrap_err();
-        assert_eq!(not_yet(e), Missing::NotPorted);
-        let e = h.try_call(GOTO, None, vec![], &[]).unwrap_err();
-        assert_eq!(not_yet(e), Missing::NotPorted);
+        assert_eq!(h.try_call(GOTO, Some(p), vec![a], &[]).unwrap().ret, Value::None);
         assert_eq!(h.vm.space.heap.get(p).unwrap().state, None);
+        assert_eq!(h.vm.log.len(), 1);
+        assert!(h.vm.log[0].starts_with("GotoState (A): state not found in "), "{:?}", h.vm.log);
+        assert_eq!(h.try_call(GOTO, None, vec![], &[]).unwrap().ret, Value::None);
     }
 
     #[test]

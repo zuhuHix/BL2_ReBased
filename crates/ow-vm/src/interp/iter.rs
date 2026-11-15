@@ -72,6 +72,11 @@ enum Source {
 }
 
 impl Iterators {
+    /// No loop is running (W5-STATES: a latent call inside a `foreach` of state code is refused).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.states.is_empty()
+    }
+
     fn push(&mut self, f: &Frame, state: State) -> Result<(), VmError> {
         if self.states.len() >= MAX_ITERATORS {
             return Err(script_error(

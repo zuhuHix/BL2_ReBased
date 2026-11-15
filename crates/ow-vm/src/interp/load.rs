@@ -390,6 +390,39 @@ fn declare_package_function(
             slot_count: slot,
             failure,
             script: Default::default(),
+            state_code: false,
+        }),
+    );
+    Ok(id)
+}
+
+/// W5-STATES' seam: declares the code of a State export as a function the interpreter runs as state code
+/// (`crate::states`): `path` (not a package path, so no lookup finds it), `info` the script's place in `package`
+/// (from `states::read_state_body`), no parameters or locals.
+pub(crate) fn declare_state_code(
+    vm: &mut Vm,
+    package: PackageId,
+    owner: ClassId,
+    path: &str,
+    info: FunctionInfo,
+) -> Result<FuncId, VmError> {
+    let object_path = ObjectPath::parse(path).map_err(|e| script_error(path, e.to_string()))?;
+    let id = vm.declare_function(FunctionDecl::script(object_path).with_owner(owner))?;
+    vm.code.code.insert(
+        id,
+        Rc::new(FuncCode {
+            package,
+            path: path.to_string(),
+            info,
+            owner: Some(owner),
+            locals: Vec::new(),
+            by_export: FixedHashMap::default(),
+            params: Vec::new(),
+            result: None,
+            slot_count: 0,
+            failure: None,
+            script: Default::default(),
+            state_code: true,
         }),
     );
     Ok(id)
