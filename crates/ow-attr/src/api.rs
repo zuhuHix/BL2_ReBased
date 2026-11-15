@@ -157,18 +157,33 @@ pub enum EngineQuery {
 /// Implementations must give every borrow from one method at a time: [`parts`] is the only way to the object
 /// space and the store, and it gives both at once.
 ///
+/// **State that outlives one evaluation lives in the world**, so a nested evaluation (script run by
+/// [`attribute_changed`], which builds a fresh `EvalCx::new(world)`) sees the same state: the [`GlobalSlots`] (one
+/// process-wide pair in the game) and the generators. The only per-call state is [`EvalCx::forms`], and
+/// [`attribute_changed`] receives it so the nested context is rebuilt exactly.
+///
+/// **Adapters** that override [`rng`] (a roll's one generator) must not hand [`attribute_changed`] to a world that
+/// runs script with its own generators, or the nested evaluation would bypass the roll's: such an adapter runs the
+/// notification against itself, or runs no script (`Ok(())` for a notification its rule set has none for, or
+/// `NotYet`).
+///
 /// [`rng`]: AttrWorld::rng
 /// [`parts`]: AttrWorld::parts
+/// [`attribute_changed`]: AttrWorld::attribute_changed
 pub trait AttrWorld {
     /// The object space and the definition store, borrowed together (one split borrow: `DefStore` lookups need the
     /// space too).
     fn parts(&mut self) -> WorldParts<'_>;
 
     /// The engine globals object: what `NoContextNeededAttributeContextResolver` returns for a None source
-    /// (NATIVE_ATTRIBUTES.md section 5). `Ok(None)` when the world has none.
-    fn globals(&mut self) -> Result<Option<ObjRef>, AttrError>;
+    /// (NATIVE_ATTRIBUTES.md section 5: that resolver never answers None; `progression.cpp:84`). A world without one
+    /// answers `NotYet { LayerAbsent(..) }`, never a silent None, so a constant attribute cannot quietly fall back to
+    /// its `BaseValueConstant` or a default.
+    fn globals(&mut self) -> Result<ObjRef, AttrError>;
 
-    /// The game info object (`GameInfoAttributeContextResolver`). `Ok(None)` when the world has none.
+    /// The game info object (`GameInfoAttributeContextResolver`). `Ok(None)` only for a world that models no game
+    /// info at all (an offline tool's world, a unit test); the running game always has one
+    /// (`progression.cpp:87` treats the resolver as always resolving), so the VM world answers `Some` or an error.
     fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError>;
 
     /// An engine-side lookup for a context resolver. `Ok(None)`: the lookup ran and found nothing (the chain stops).
@@ -188,16 +203,28 @@ pub trait AttrWorld {
         .into())
     }
 
+    /// `GlobalAttributeValueResolver`'s slots. The world owns them because the game keeps one process-wide pair
+    /// (`SetGlobalAttributeValue` stores into it; the XP curve sets slot 0 before it evaluates).
+    fn global_slots(&mut self) -> &mut GlobalSlots;
+
     /// The change notification (NATIVE_ATTRIBUTES.md section 4): called after a successful add, remove or set-base
-    /// that was not suppressed, **only** for a property carrying the notify flag
-    /// (`PropertyDecl::notifies`). `value_prop` is the attribute's value property on `owner`. The VM implementation
-    /// dispatches the owner class's override (`ResourcePool` clamps `CurrentValue`, `Skill` flags a refresh on
-    /// `Grade`), which may run script, so it has the whole world.
-    fn attribute_changed(&mut self, owner: ObjRef, value_prop: PropId) -> Result<(), AttrError>;
+    /// that was not suppressed, **only** for a property carrying the notify flag (`PropertyDecl::notifies`).
+    /// `value_prop` is the attribute's value property on `owner`; `forms` are the calling evaluation's
+    /// [`EvalCx::forms`], for a nested `EvalCx::new(self).with_forms(forms)`. The VM implementation dispatches the
+    /// owner class's override (`ResourcePool` clamps `CurrentValue`, `Skill` flags a refresh on `Grade`), which may
+    /// run script, so it has the whole world.
+    fn attribute_changed(
+        &mut self,
+        owner: ObjRef,
+        value_prop: PropId,
+        forms: NumForms,
+    ) -> Result<(), AttrError>;
 
     /// The generator for stream `s`: random variance in initialization data draws from
-    /// `CrtStream::AttributeVariance`. A roll's world returns its one generator for every stream.
-    fn rng(&mut self, s: CrtStream) -> &mut dyn Rand15;
+    /// `CrtStream::AttributeVariance`. A roll's world returns its one generator for every stream. A world with no
+    /// generator answers `NotYet { LayerAbsent(..) }`, as the oracle refuses ("no random source",
+    /// `progression.cpp:209`).
+    fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -206,7 +233,7 @@ pub trait AttrWorld {
 
 /// `GlobalAttributeValueResolver`'s two slots (`EGlobalAttributes`; NATIVE_ATTRIBUTES.md section 6): 0
 /// `ExperiencePointTestLevel`, 1 `BadassTokenTestRank`. The XP curve sets slot 0 to the level it evaluates
-/// (NATIVE_PROGRESSION.md section 3). The caller owns them; nothing here keeps them between calls.
+/// (NATIVE_PROGRESSION.md section 3). Owned by the world ([`AttrWorld::global_slots`]), as the game keeps one pair.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GlobalSlots {
     /// Slot 0, `ExperiencePointTestLevel`.
@@ -255,29 +282,23 @@ pub struct NumForms {
     pub combine: CombineForm,
 }
 
-/// One evaluation's context: the lent world, the global slots and the numeric forms. There is no RNG field: the
-/// generator comes from `world.rng(..)`, so the world is borrowed once.
+/// One evaluation's context: the lent world and the numeric forms. Everything else an evaluation reads or keeps
+/// (the global slots, the generators) is the world's, so a nested `EvalCx::new(world).with_forms(forms)` is the same
+/// context.
 ///
 /// Built from anything that implements [`AttrWorld`]: `EvalCx::new(&mut vm)`.
 pub struct EvalCx<'a> {
     pub world: &'a mut dyn AttrWorld,
-    pub globals: GlobalSlots,
     pub forms: NumForms,
 }
 
 impl<'a> EvalCx<'a> {
-    /// Global slots at 0, the default forms.
+    /// The default forms.
     pub fn new(world: &'a mut dyn AttrWorld) -> Self {
         EvalCx {
             world,
-            globals: GlobalSlots::default(),
             forms: NumForms::default(),
         }
-    }
-
-    pub fn with_globals(mut self, globals: GlobalSlots) -> Self {
-        self.globals = globals;
-        self
     }
 
     pub fn with_forms(mut self, forms: NumForms) -> Self {
@@ -289,7 +310,6 @@ impl<'a> EvalCx<'a> {
 impl fmt::Debug for EvalCx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EvalCx")
-            .field("globals", &self.globals)
             .field("forms", &self.forms)
             .finish_non_exhaustive()
     }
@@ -546,7 +566,13 @@ pub fn modifier_id_of(modifier: ObjRef) -> ModifierId {
 // Outcomes
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Why an add or remove changed nothing and answered false (NATIVE_ATTRIBUTES.md sections 1 and 3).
+// How a chain answers (NATIVE_ATTRIBUTES.md section 1): the value resolvers are asked in order, each only while the
+// previous one succeeded, and the chain's outcome is the answer of the LAST resolver asked (the first failure, or the
+// last success). Nothing is rolled back: when a later resolver fails, what an earlier writable resolver changed stays
+// changed. So a failing outcome says the chain failed, not that no storage changed; implementations must not add a
+// rollback. With one resolver (the usual chain) a failing outcome does leave that resolver's storage as it was.
+
+/// Why the chain answered false (NATIVE_ATTRIBUTES.md sections 1 and 3).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Refusal {
@@ -562,17 +588,18 @@ pub enum Refusal {
     NotAnAttribute,
 }
 
-/// What [`AttributeSystem::add_modifier`] did. [`AddModifierOutcome::succeeded`] is the bool the script sees.
+/// What [`AttributeSystem::add_modifier`] answered: the last resolver asked (see the chain rule above this type; no
+/// rollback). [`AddModifierOutcome::succeeded`] is the bool the script sees.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AddModifierOutcome {
     /// Stack attribute: appended, value recomputed (true).
     Added,
-    /// Stack attribute: that modifier object is already on the stack; nothing changed (false).
+    /// Stack attribute: that modifier object is already on this stack, which this resolver left unchanged (false).
     Duplicate,
     /// Plain attribute: the stored value was edited in place, permanently (true).
     AppliedInPlace,
-    /// Nothing changed (false).
+    /// The chain failed here (false). Earlier resolvers' changes, if any, stay.
     Refused(Refusal),
 }
 
@@ -586,7 +613,8 @@ impl AddModifierOutcome {
     }
 }
 
-/// What [`AttributeSystem::remove_modifier`] did. [`RemoveModifierOutcome::succeeded`] is the bool the script sees.
+/// What [`AttributeSystem::remove_modifier`] answered: the last resolver asked (see the chain rule above
+/// [`Refusal`]; no rollback). [`RemoveModifierOutcome::succeeded`] is the bool the script sees.
 ///
 /// An enum, not a count: a plain attribute's remove answers true and changes nothing (NATIVE_ATTRIBUTES.md
 /// section 3), which a count of 0 would report as false.
@@ -595,11 +623,11 @@ impl AddModifierOutcome {
 pub enum RemoveModifierOutcome {
     /// Stack attribute: every copy removed (`count >= 1`), value recomputed (true).
     Removed { count: usize },
-    /// Stack attribute: the modifier was not on the stack; nothing changed (false).
+    /// Stack attribute: the modifier was not on this stack, which this resolver left unchanged (false).
     NotPresent,
     /// Plain attribute: a successful no-op (true).
     PlainNoOp,
-    /// Nothing changed (false).
+    /// The chain failed here (false). Earlier resolvers' changes, if any, stay.
     Refused(Refusal),
 }
 
@@ -624,17 +652,30 @@ mod tests {
     use ow_core::rand::CrtRand;
     use ow_object::heap::Origin;
     use ow_object::ids::ClassId;
+    use ow_object::value::Value;
 
     use super::*;
 
-    /// The test world: a hand-filled space, no definition store, one generator, a log of notifications. It holds
-    /// its `Rc<AttributeSystem>` the way the VM does, so the clone-the-Rc pattern is exercised.
+    /// What the test world's notification saw: the owner, the property, the forms it was handed, and what a nested
+    /// context rebuilt from them reads (its forms and global slot 0).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct Seen {
+        owner: ObjRef,
+        prop: PropId,
+        nested_forms: NumForms,
+        nested_slot0: f32,
+    }
+
+    /// The test world: a hand-filled space, no definition store, one generator, the global slots, a log of
+    /// notifications. It holds its `Rc<AttributeSystem>` the way the VM does, so the clone-the-Rc pattern is
+    /// exercised. It runs no script.
     struct TestWorld {
         space: ObjectSpace,
         attrs: Rc<AttributeSystem>,
         globals: Option<ObjRef>,
-        rng: CrtRand,
-        changed: Vec<(ObjRef, PropId)>,
+        rng: Option<CrtRand>,
+        slots: GlobalSlots,
+        changed: Vec<Seen>,
         streams: Vec<CrtStream>,
     }
 
@@ -642,27 +683,49 @@ mod tests {
         fn parts(&mut self) -> WorldParts<'_> {
             WorldParts::new(&mut self.space, None)
         }
-        fn globals(&mut self) -> Result<Option<ObjRef>, AttrError> {
-            Ok(self.globals)
+        fn globals(&mut self) -> Result<ObjRef, AttrError> {
+            self.globals.ok_or_else(|| {
+                NotYet::layer_absent("the engine globals object", "ow-world", "test world").into()
+            })
         }
         fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
             Ok(None)
+        }
+        fn global_slots(&mut self) -> &mut GlobalSlots {
+            &mut self.slots
         }
         fn attribute_changed(
             &mut self,
             owner: ObjRef,
             value_prop: PropId,
+            forms: NumForms,
         ) -> Result<(), AttrError> {
-            self.changed.push((owner, value_prop));
+            // A nested evaluation, as the VM's script would start one.
+            let nested = EvalCx::new(self).with_forms(forms);
+            let nested_forms = nested.forms;
+            let nested_slot0 = nested.world.global_slots().get(0);
+            self.changed.push(Seen {
+                owner,
+                prop: value_prop,
+                nested_forms,
+                nested_slot0,
+            });
             Ok(())
         }
-        fn rng(&mut self, s: CrtStream) -> &mut dyn Rand15 {
+        fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
             self.streams.push(s);
-            &mut self.rng
+            match self.rng.as_mut() {
+                Some(r) => Ok(r),
+                None => {
+                    Err(NotYet::layer_absent("a random source", "ow-world", "test world").into())
+                }
+            }
         }
     }
 
-    /// The `ow_items::RollWorld` shape: everything forwarded to `inner` except `rng`.
+    /// The `ow_items::RollWorld` shape: everything forwarded to `inner` except `rng`. Forwarding
+    /// `attribute_changed` is allowed here only because the inner test world runs no script (the trait's adapter
+    /// rule).
     struct OneRng<'a> {
         inner: &'a mut dyn AttrWorld,
         rng: &'a mut CrtRand,
@@ -672,7 +735,7 @@ mod tests {
         fn parts(&mut self) -> WorldParts<'_> {
             self.inner.parts()
         }
-        fn globals(&mut self) -> Result<Option<ObjRef>, AttrError> {
+        fn globals(&mut self) -> Result<ObjRef, AttrError> {
             self.inner.globals()
         }
         fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
@@ -685,15 +748,19 @@ mod tests {
         ) -> Result<Option<ObjRef>, AttrError> {
             self.inner.engine_query(q, source)
         }
+        fn global_slots(&mut self) -> &mut GlobalSlots {
+            self.inner.global_slots()
+        }
         fn attribute_changed(
             &mut self,
             owner: ObjRef,
             value_prop: PropId,
+            forms: NumForms,
         ) -> Result<(), AttrError> {
-            self.inner.attribute_changed(owner, value_prop)
+            self.inner.attribute_changed(owner, value_prop, forms)
         }
-        fn rng(&mut self, _s: CrtStream) -> &mut dyn Rand15 {
-            self.rng
+        fn rng(&mut self, _s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
+            Ok(self.rng)
         }
     }
 
@@ -747,7 +814,7 @@ mod tests {
         ) -> Result<Option<ObjRef>, AttrError> {
             match source {
                 Some(s) => Ok(Some(s)),
-                None => cx.world.globals(),
+                None => cx.world.globals().map(Some),
             }
         }
     }
@@ -777,7 +844,8 @@ mod tests {
             space,
             attrs: Rc::new(attrs),
             globals: Some(globals),
-            rng: CrtRand::new(7),
+            rng: Some(CrtRand::new(7)),
+            slots: GlobalSlots::default(),
             changed: Vec::new(),
             streams: Vec::new(),
         };
@@ -819,11 +887,8 @@ mod tests {
 
     #[test]
     fn an_unknown_resolver_class_is_not_read() {
-        for sys in [
-            AttributeSystem::new_empty(),
-            AttributeSystem::standard(),
-            registered(),
-        ] {
+        let standard = AttributeSystem::standard().unwrap();
+        for sys in [AttributeSystem::new_empty(), standard, registered()] {
             let (mut w, c) = world(AttributeSystem::new_empty());
             let r = obj(&mut w, c.unknown, "R");
             let e = sys.value_resolver(&w.space, r).err().unwrap();
@@ -909,10 +974,33 @@ mod tests {
     }
 
     #[test]
+    fn a_world_without_globals_or_rng_says_so() {
+        let (mut w, c) = world(registered());
+        let ctx_r = obj(&mut w, c.ctx, "Ctx");
+        let attr = obj(&mut w, c.object, "Att");
+        w.globals = None;
+        w.rng = None;
+        let attrs = w.attrs.clone();
+        let mut cx = EvalCx::new(&mut w);
+        let context = attrs
+            .context_resolver(cx.world.parts().space, ctx_r)
+            .unwrap();
+        // NoContextNeeded never answers None; a world without globals is an error, not a silent None.
+        let e = context
+            .resolve(&attrs, ctx_r, attr, None, &mut cx)
+            .err()
+            .unwrap();
+        assert_eq!(missing(e).0, Missing::LayerAbsent("ow-world"));
+        let e = cx.world.rng(CrtStream::AttributeVariance).err().unwrap();
+        assert_eq!(missing(e).0, Missing::LayerAbsent("ow-world"));
+    }
+
+    #[test]
     fn every_entry_point_is_not_ported_yet() {
         let (mut w, c) = world(registered());
         let a = obj(&mut w, c.object, "Att");
         let m = obj(&mut w, c.object, "Modifier");
+        let name = w.space.names.intern("MaxValue");
         let attrs = w.attrs.clone();
         let mut cx = EvalCx::new(&mut w);
         let data = InitData::constant(1.0);
@@ -926,8 +1014,11 @@ mod tests {
         };
         let errors = [
             attrs.resolve_context(a, Some(a), &mut cx).err(),
+            attrs.resolve_contexts(a, None, &mut cx).err(),
             attrs.value_of(a, Some(a), None, &mut cx).err(),
             attrs.base_value_of(a, None, Some(a), &mut cx).err(),
+            attrs.value_from_context(a, Some(a), &mut cx).err(),
+            attrs.base_value_from_context(a, None, &mut cx).err(),
             attrs.evaluate_init(&data, Some(a), None, &mut cx).err(),
             attrs
                 .expressions_hold(&[expr], ExprMode::And, Some(a), None, &mut cx)
@@ -937,6 +1028,11 @@ mod tests {
             attrs.set_base(a, Some(a), 4.0, false, &mut cx).err(),
             attrs.apply_effects(&[effect], Some(a), None, &mut cx).err(),
             attrs.remove_effects(Applied::default(), &mut cx).err(),
+            attrs.add_modifier_by_name(a, m, name, false, &mut cx).err(),
+            attrs
+                .remove_modifier_by_name(a, m, name, false, &mut cx)
+                .err(),
+            attrs.attribute_value_by_name(a, name, &mut cx).err(),
         ];
         for e in errors {
             assert_eq!(missing(e.expect("not ported yet")).0, Missing::NotPorted);
@@ -948,7 +1044,9 @@ mod tests {
             base: p,
             stack: p,
         };
-        let e = crate::registry::let_base(&mut w.space, owner, companions, 1.0, CombineForm::Vm5F);
+        // The typed let takes the right side as a typed value: an integer above 2^24 is conveyed exactly.
+        let rhs = Value::Int(16_777_217);
+        let e = crate::registry::let_base(&mut w.space, owner, companions, rhs, CombineForm::Vm5F);
         assert_eq!(missing(e.err().unwrap()).0, Missing::NotPorted);
     }
 
@@ -987,17 +1085,28 @@ mod tests {
     }
 
     #[test]
-    fn notification_and_rng_go_through_the_world() {
+    fn a_nested_evaluation_sees_the_same_slots_and_forms() {
         let (mut w, c) = world(AttributeSystem::new_empty());
         let owner = obj(&mut w, c.object, "Pool");
         let p = prop0(&c);
+        let forms = NumForms {
+            pow: PowForm::Single,
+            combine: CombineForm::Vm5F,
+        };
         {
-            let cx = EvalCx::new(&mut w);
-            cx.world.attribute_changed(owner, p).unwrap();
+            let cx = EvalCx::new(&mut w).with_forms(forms);
+            cx.world.global_slots().set(0, 12.0).unwrap();
+            cx.world.attribute_changed(owner, p, cx.forms).unwrap();
         }
-        assert_eq!(w.changed, vec![(owner, p)]);
+        let seen = Seen {
+            owner,
+            prop: p,
+            nested_forms: forms,
+            nested_slot0: 12.0,
+        };
+        assert_eq!(w.changed, vec![seen]);
         let mut same = CrtRand::new(7);
-        let first = w.rng(CrtStream::AttributeVariance).rand15();
+        let first = w.rng(CrtStream::AttributeVariance).unwrap().rand15();
         assert_eq!(first, same.rand15());
         assert_eq!(w.streams, vec![CrtStream::AttributeVariance]);
     }
@@ -1006,7 +1115,7 @@ mod tests {
     fn an_adapter_forwards_everything_but_rng() {
         let (mut w, c) = world(AttributeSystem::new_empty());
         let owner = obj(&mut w, c.object, "Owner");
-        let globals = w.globals;
+        let globals = w.globals.unwrap();
         let p = prop0(&c);
         let mut roll = CrtRand::new(99);
         let mut expected = CrtRand::new(99);
@@ -1019,14 +1128,16 @@ mod tests {
             assert_eq!(cx.world.globals(), Ok(globals));
             assert_eq!(cx.world.game_info(), Ok(None));
             assert!(cx.world.parts().space.heap.contains(owner));
+            cx.world.global_slots().set(1, 2.0).unwrap();
             for s in [CrtStream::AttributeVariance, CrtStream::ItemRoll] {
-                assert_eq!(cx.world.rng(s).rand15(), expected.rand15());
+                assert_eq!(cx.world.rng(s).unwrap().rand15(), expected.rand15());
             }
-            cx.world.attribute_changed(owner, p).unwrap();
+            cx.world.attribute_changed(owner, p, cx.forms).unwrap();
         }
-        // The inner world's generator was never drawn from; its notification log was written.
+        // The inner world's generator was never drawn from; its slots and notification log were written.
         assert!(w.streams.is_empty());
-        assert_eq!(w.changed, vec![(owner, p)]);
+        assert_eq!(w.slots.get(1), 2.0);
+        assert_eq!(w.changed.len(), 1);
     }
 
     #[test]
@@ -1055,14 +1166,9 @@ mod tests {
         );
         assert_eq!(missing(g.set(2, 1.0).err().unwrap()).0, Missing::NotRead);
         let (mut w, _) = world(AttributeSystem::new_empty());
-        let forms = NumForms {
-            pow: PowForm::Single,
-            combine: CombineForm::Vm5F,
-        };
-        let cx = EvalCx::new(&mut w).with_globals(g).with_forms(forms);
-        assert_eq!(cx.globals.get(0), 12.0);
-        assert_eq!(cx.forms, forms);
+        let cx = EvalCx::new(&mut w);
         let defaults = NumForms::default();
+        assert_eq!(cx.forms, defaults);
         assert_eq!(
             (defaults.pow, defaults.combine),
             (PowForm::default(), CombineForm::default())
