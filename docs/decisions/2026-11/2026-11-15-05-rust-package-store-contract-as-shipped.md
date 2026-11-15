@@ -13,7 +13,14 @@ revision 3 of `docs/rust-port/ARCHITECTURE.md` section 3.2.
 - **`scan()` keeps the `PackageId`s it handed out.** It empties the loaded-package cache, the global caches and the
   global index, as the C++ `scan` does. The packages themselves stay in the store, so an id given out earlier still
   names its package, in the same way a C++ caller's `shared_ptr` keeps its package. A later load of the same file gets
-  a new id.
+  a new id. Equal ids are the same package, but one file can have several ids: after `scan()`, and for a package the
+  global fallback matched (next bullet). Compare `get(id).source` for file identity. Every package handed out stays
+  alive for the store's lifetime.
+- **A global-fallback answer is the exact package that matched, under an id of its own.** That package goes neither
+  into the path cache nor in place of a copy loaded earlier from the same path, which is the C++ behaviour: `findGlobal`
+  returns the fresh candidate and does not cache it. Review r1 of PR #299 found that the first form returned the
+  older cached copy's id with the fresh export index. If the file had been rewritten in between, that named the wrong
+  object or an export out of range. A regression test rewrites a synthetic file between a load and the lookup.
 - **`resolve` returns `None` only for reference 0.** An export is checked and returned as itself. An import whose
   target is found nowhere is `Err(StoreError::ImportNotFound)`, as the C++ throws "import target not found".
 - **`resolve_path` returns `None` where the package has no such export.** The C++ throws "object not found" there.
@@ -23,8 +30,9 @@ revision 3 of `docs/rust-port/ARCHITECTURE.md` section 3.2.
     a name with two or more files as ambiguous, as the C++ does, and the store never picks one (identity policy is
     W3-DEFS);
   - `load_path`;
-  - `adopt`, which puts an already loaded package into the store under its source path. The C++
-    `resolve(const Package&)` loads that path again; the bytes are the same unless the file changed;
+  - `adopt`, which puts a package from `Package::load` (whose `source` is the real file) into the store under that
+    path. If the path is already loaded, the loaded package wins: its id is returned and the package passed in is
+    dropped, as the C++ `resolve(const Package&)` gets the cached package from `loadPath`;
   - `shared`, which returns the `Arc<Package>` for threaded tools (D18);
   - `set_resolve_check` and `take_check_log`.
 - **`ResolveCheck` is the C++ `OPENWILLOW_RESOLVE_CHECK` oracle as a value.** Each global lookup also runs the full
@@ -38,6 +46,15 @@ revision 3 of `docs/rust-port/ARCHITECTURE.md` section 3.2.
   ends (hub decision, change pending). Until then, four synthetic `--resolve` error lines that differ only in line
   ends stay out of `tests/rust_parity.d/store.txt`.
 
+- **Known differences from the C++ store.**
+  - **Package names are keyed in Unicode.** The C++ narrows file names through the Windows ANSI code page, so with
+    code page 1252 a file `é.umap` has a stem holding the byte 0xE9, which does not match an import's UTF-8 name. The
+    Rust stem does match it. Hub decision: ANSI narrowing is not reproduced. The installed game's package names are
+    all ASCII, so this changes no result there. For a non-ASCII file name, the C++ result depends on the machine's code
+    page. UNVERIFIED beyond that reading of the C++.
+  - **The folder walk goes on after an error.** The MSVC iterator skips only permission errors and ends the whole
+    scan on any other error. The Rust walk skips the folder or entry that fails and goes on. UNVERIFIED (see below).
+
 - **Verified (automated).** `tests/global_resolve_test.py` passes on the Rust binary and on the C++ binary.
   Unit tests in `store.rs` re-express its cases and add:
   - named and nested imports;
@@ -50,13 +67,14 @@ revision 3 of `docs/rust-port/ARCHITECTURE.md` section 3.2.
 
   A local sample of 10,000 import references was drawn from the 202,188 imports of the installed `CookedPCConsole`
   tree (914 files) with seed 20261115. Each was run through `--resolve` on both binaries, comparing the exit code,
-  stdout and stderr with line ends normalised. At the time of writing, 4,159 of the 10,000 had been compared: all
-  4,159 matched (4,044 resolved, 115 "import target not found" on both). The rest of the run is recorded in the
-  lane's handoff, not here.
+  stdout and stderr with line ends normalised. All 10,000 were compared and all 10,000 matched, 0 differed: 9,697
+  resolved on both binaries and 303 failed with "import target not found" on both. Count agreement on this sample
+  is parity with the C++ store, not with the game.
 - **UNVERIFIED.**
   - Whether the game picks the same file when several packages hold a path (object identity, W3-DEFS). Parity here
     is with the C++ store.
-  - Package stems with non-ASCII characters: the C++ narrows them with the ANSI code page, the Rust store uses the
-    lossy UTF-8 form.
+  - Package stems with non-ASCII characters (the known difference above).
+  - Which non-permission errors end the MSVC folder walk, and so where the two scans can differ.
+  - Junctions and other reparse points in the cooked tree: not checked in either walk.
   - The scan order for non-ASCII names. It compares UTF-16 units element by element, written from the standard's
     `path` comparison, and no listing has such a name.
