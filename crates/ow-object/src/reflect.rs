@@ -1,1 +1,1439 @@
-//! Owner: lane W2-REFLECT. Not started: this file is a scaffold stub (W0-SCAFFOLD); the owner lane fills it.
+//! Owner: lane W2-REFLECT. Reflection from the code packages: the class loader of `src/vm.cpp` (`Runtime::classAt`,
+//! `loadClass`, `resolveRef`, `indexOf`, `findExport`, `implements`, `implementsStructurally`) with its two oracles
+//! (`checkClassBodies`, `compareInterfaces` in `src/vm_sweep.cpp`), and the loading of Class, ScriptStruct, Enum and
+//! property exports into [`ClassTable`] layouts (architecture section 3.3, decision D14).
+//!
+//! **Two halves.** [`CodeIndex`] first loads classes the C++ way: lazily, by package-relative reference, caching
+//! each reference's answer and each class by its export. A class keeps what the C++ `Class` keeps for the interface
+//! rules: its super class, its decoded body ([`decode_class_body`]) or the reason it did not decode, and the names of
+//! the functions it declares. That half answers `--class-check` and `--interface-compare` exactly as the C++ binary
+//! does. Its second half, [`CodeIndex::define_layout`], turns a loaded class into a [`ClassTable`] definition: the
+//! super class first, then the class's own property declarations typed through their references (a struct by value
+//! defined first, an enum read from its export, a referenced class only declared), then the attribute companions.
+//! The C++ VM has no such table (it keeps a name-keyed bag); the declarations it reads (`readProperty`,
+//! `childProperties`, `structAt`) are the same ones read here.
+//!
+//! **Declarations.** A class's or struct's own properties are its child exports whose class name ends in `Property`,
+//! in descending export order (the C++ rule: children are exported in reverse declaration order; checked there over
+//! 5,980 of 5,984 Core and Engine functions). A child smaller than the 40-byte header is skipped, as the C++ skips it
+//! (a property-class default object). The header gives the array dimension (low 16 bits of the word at +16, 0 read
+//! as 1), the 64-bit flags at +20 and, from +40 (+42 when flag `0x20` adds a replication offset), up to three type
+//! references. Which reference means what is the C++ reading: an object, component or interface property names its
+//! class first, a class property its metaclass second, a struct property its struct, an array property its inner
+//! declaration, a byte property its enum (or 0); an attribute value property names its modifier stack and then its
+//! base, and a byte attribute names its enum first, so there the stack is the second reference and the base the
+//! third (the byte-attribute shift, `companions()` in `src/interp.cpp`, NATIVE_BYTECODE_OPCODES.md).
+//!
+//! **Enums** are `[net index][None][next][count][count names]` and must end exactly at the serial size (the count
+//! bound 1024 is `enumNames` in `src/behavior.cpp`; the exact end is the structural check PHASELOCK_STOCK_DATA.md
+//! records, which holds for all 792 Enum exports of the nine code packages).
+//!
+//! **Not yet.** A `MapProperty` declaration has no [`PropKind`] in the W1-OBJ contract, so a class declaring one
+//! returns `NotYet` from [`CodeIndex::define_layout`], and so does every subclass (50 map properties in 32 classes
+//! of the nine code packages, among them `Engine.WorldInfo` and `WillowGame.WillowPlayerController`). Tagged default
+//! values, struct defaults and class default objects are W3-DECODE's; function parameter layouts are the VM's.
+//!
+//! Status: a port. Every rule here has the label its record gives it; the interface table rule and the meaning of
+//! the class body's fields are UNVERIFIED in the running game (NATIVE_CLASS_SERIAL_LAYOUT.md), and so is the
+//! declaration order rule above.
+
+use std::collections::BTreeMap;
+use std::fmt;
+use std::rc::Rc;
+
+use ow_core::{FixedHashMap, FixedHashSet, NotYet, PackageName};
+use ow_package::PackageId;
+use ow_package::package::{Package, PackageError};
+use ow_package::reader::{ReadError, Reader};
+use ow_package::store::{PackageStore, StoreError};
+use ow_package::tables;
+
+use crate::class_body::{ClassBody, ClassBodyError, decode_class_body};
+use crate::ids::{ClassId, EnumId, StructId};
+use crate::layout::{ClassTable, LayoutError, PropKind, PropertyDecl};
+use crate::names::NameTable;
+
+/// The nine code packages, in the order the C++ loads them (`buildNativeIndex`, `compareInterfaces`).
+pub const CODE_PACKAGES: [&str; 9] = [
+    "Core",
+    "Engine",
+    "GameFramework",
+    "GearboxFramework",
+    "WillowGame",
+    "GFxUI",
+    "IpDrv",
+    "OnlineSubsystemSteamworks",
+    "AkAudio",
+];
+
+/// The interfaces `--interface-compare` reports one by one (the C++ `slice` map, in its key order).
+pub const SLICE_INTERFACES: [&str; 4] = [
+    "IMission",
+    "IMissionDirector",
+    "IMissionObjective",
+    "IUsable",
+];
+
+/// How many import links `resolveRef` follows before it stops (its `depth < 64`).
+pub const MAX_IMPORT_DEPTH: usize = 64;
+
+/// The largest enum `enumNames` (`src/behavior.cpp`) reads.
+pub const MAX_ENUM_COUNT: i32 = 1024;
+
+/// The 40-byte property header (`readProperty`).
+pub const PROPERTY_HEADER: usize = 40;
+
+/// Property flag `0x20`: a 16-bit replication offset follows the header.
+pub const CPF_NET: u64 = 0x20;
+
+/// Why reflection failed. `Display` gives the C++ text where the C++ has one; wrappers name the class, struct, enum
+/// or property and carry the cause as their `source()`.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReflectError {
+    /// A store operation failed. Transparent.
+    Store(StoreError),
+    /// A package object could not be named. Transparent.
+    Package(PackageError),
+    /// A read failed. Transparent.
+    Read(ReadError),
+    /// "export is not a class: <path>"
+    NotAClass(String),
+    /// "class path must be Package.Class: <path>"
+    ClassPath(String),
+    /// "class not found: <path>"
+    ClassNotFound(String),
+    /// "not a property export": the export a reference names is missing or smaller than the 40-byte header.
+    NotAProperty,
+    /// "read past the package data"
+    PastData,
+    /// A child export of a class or struct whose class name ends in `Property` but is no property class read here.
+    UnknownPropertyClass(String),
+    /// "<property> names no <what>": a type reference that is 0 where one is required.
+    NoReference {
+        property: String,
+        what: &'static str,
+    },
+    /// "<what> reference <n> of <property> resolves to nothing": no installed package holds the target.
+    Unresolved {
+        property: String,
+        what: &'static str,
+        reference: i32,
+    },
+    /// "<what> reference of <property> names a <found> export": the target is not of the expected class.
+    WrongTarget {
+        property: String,
+        what: &'static str,
+        found: String,
+    },
+    /// "invalid enum count" (`enumNames`), or a count past the export's end.
+    EnumCount,
+    /// "enum does not end at the serial size"
+    EnumTrailing,
+    /// "<path> holds itself by value": a struct cycle that is not broken by an array.
+    StructCycle(String),
+    /// "cyclic super chain at <path>"
+    SuperCycle(String),
+    /// The class table refused a definition. Transparent.
+    Layout(LayoutError),
+    /// "class <path>", with the cause as `source()`.
+    InClass {
+        path: String,
+        error: Box<ReflectError>,
+    },
+    /// "struct <path>", with the cause as `source()`.
+    InStruct {
+        path: String,
+        error: Box<ReflectError>,
+    },
+    /// "enum <path>", with the cause as `source()`.
+    InEnum {
+        path: String,
+        error: Box<ReflectError>,
+    },
+    NotYet(NotYet),
+}
+
+impl fmt::Display for ReflectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReflectError::Store(e) => e.fmt(f),
+            ReflectError::Package(e) => e.fmt(f),
+            ReflectError::Read(e) => e.fmt(f),
+            ReflectError::NotAClass(path) => write!(f, "export is not a class: {path}"),
+            ReflectError::ClassPath(path) => write!(f, "class path must be Package.Class: {path}"),
+            ReflectError::ClassNotFound(path) => write!(f, "class not found: {path}"),
+            ReflectError::NotAProperty => f.write_str("not a property export"),
+            ReflectError::PastData => f.write_str("read past the package data"),
+            ReflectError::UnknownPropertyClass(class) => {
+                write!(f, "unknown property class {class}")
+            }
+            ReflectError::NoReference { property, what } => write!(f, "{property} names no {what}"),
+            ReflectError::Unresolved {
+                property,
+                what,
+                reference,
+            } => write!(
+                f,
+                "{what} reference {reference} of {property} resolves to nothing"
+            ),
+            ReflectError::WrongTarget {
+                property,
+                what,
+                found,
+            } => write!(f, "{what} reference of {property} names a {found} export"),
+            ReflectError::EnumCount => f.write_str("invalid enum count"),
+            ReflectError::EnumTrailing => f.write_str("enum does not end at the serial size"),
+            ReflectError::StructCycle(path) => write!(f, "{path} holds itself by value"),
+            ReflectError::SuperCycle(path) => write!(f, "cyclic super chain at {path}"),
+            ReflectError::Layout(e) => e.fmt(f),
+            ReflectError::InClass { path, .. } => write!(f, "class {path}"),
+            ReflectError::InStruct { path, .. } => write!(f, "struct {path}"),
+            ReflectError::InEnum { path, .. } => write!(f, "enum {path}"),
+            ReflectError::NotYet(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ReflectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReflectError::Store(e) => e.source(),
+            ReflectError::Package(e) => e.source(),
+            ReflectError::InClass { error, .. }
+            | ReflectError::InStruct { error, .. }
+            | ReflectError::InEnum { error, .. } => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl From<StoreError> for ReflectError {
+    fn from(e: StoreError) -> Self {
+        ReflectError::Store(e)
+    }
+}
+impl From<PackageError> for ReflectError {
+    fn from(e: PackageError) -> Self {
+        ReflectError::Package(e)
+    }
+}
+impl From<ReadError> for ReflectError {
+    fn from(e: ReadError) -> Self {
+        ReflectError::Read(e)
+    }
+}
+impl From<LayoutError> for ReflectError {
+    fn from(e: LayoutError) -> Self {
+        ReflectError::Layout(e)
+    }
+}
+
+fn in_class(path: &str) -> impl FnOnce(ReflectError) -> ReflectError + '_ {
+    move |error| ReflectError::InClass {
+        path: path.to_string(),
+        error: Box::new(error),
+    }
+}
+
+fn in_struct(path: &str) -> impl FnOnce(ReflectError) -> ReflectError + '_ {
+    move |error| ReflectError::InStruct {
+        path: path.to_string(),
+        error: Box::new(error),
+    }
+}
+
+/// ASCII lower case (`lower()` in `src/vm.cpp`: `std::tolower` in the C locale, byte by byte).
+fn lower(text: &str) -> String {
+    text.to_ascii_lowercase()
+}
+
+/// A class loaded by [`CodeIndex::class_at`]: an index into the index's class list, stable for its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClassKey(u32);
+
+impl ClassKey {
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// One loaded class: the part of the C++ `Class` the interface rules and the layout need.
+#[derive(Debug, Clone)]
+pub struct ClassInfo {
+    pub package: PackageId,
+    pub export: i32,
+    /// The export's name.
+    pub name: String,
+    /// `<package file stem>.<name>`, the C++ `Class::path`; the class's path in the [`ClassTable`].
+    pub path: String,
+    pub super_class: Option<ClassKey>,
+    /// The decoded body, or why it did not decode (synthetic packages give classes a 16-byte stand-in body).
+    pub body: Result<ClassBody, ClassBodyError>,
+    /// Lower-cased function name -> the function export (the C++ `Class::functions` keys). A later child of the same
+    /// lower-cased name replaces an earlier one, as the C++ map assignment does.
+    pub functions: BTreeMap<String, i32>,
+    /// The error the super chain gave while this class loaded, returned by every later [`CodeIndex::class_at`].
+    load_error: Option<ReflectError>,
+    /// The resolved interface entries of the body: `None` until resolved (lazily, entry by entry, as the C++).
+    interface_targets: Vec<Option<Option<ClassKey>>>,
+}
+
+impl ClassInfo {
+    /// The C++ `Class::isInterface`: the body decoded and carries class flag bit 14.
+    pub fn is_interface(&self) -> bool {
+        self.body.as_ref().is_ok_and(ClassBody::is_interface)
+    }
+
+    pub fn body_decoded(&self) -> bool {
+        self.body.is_ok()
+    }
+}
+
+/// The C++ `PackageIndex` of one package: each export's class name, each export's children, the first export of each
+/// lower-cased object path.
+#[derive(Debug, Default)]
+struct PackageIndex {
+    class_names: Vec<String>,
+    children: FixedHashMap<i32, Vec<i32>>,
+    by_path: FixedHashMap<String, i32>,
+}
+
+/// `classNameOf`: `Class` for an export with class reference 0, `?` where the class reference cannot be named.
+fn class_name_of(package: &Package, index: i32) -> String {
+    let Some(object) = usize::try_from(index)
+        .ok()
+        .filter(|&i| i >= 1)
+        .and_then(|i| package.exports.get(i - 1))
+    else {
+        return "Class".to_string();
+    };
+    if object.class == 0 {
+        return "Class".to_string();
+    }
+    match package.object(object.class) {
+        Ok(class) => class.name.clone(),
+        Err(_) => "?".to_string(),
+    }
+}
+
+fn build_index(package: &Package) -> PackageIndex {
+    let mut index = PackageIndex {
+        class_names: Vec::with_capacity(package.exports.len()),
+        ..PackageIndex::default()
+    };
+    let mut paths: Vec<String> = Vec::with_capacity(package.exports.len());
+    for (position, object) in package.exports.iter().enumerate() {
+        let reference = position as i32 + 1;
+        index.class_names.push(class_name_of(package, reference));
+        if object.outer > 0 {
+            index
+                .children
+                .entry(object.outer)
+                .or_default()
+                .push(reference);
+        }
+        // Outers usually come before what they hold; otherwise the slow path, and the bare name if that fails.
+        let outer = object.outer;
+        let path = if outer > 0 && outer < reference && !paths[outer as usize - 1].is_empty() {
+            format!("{}.{}", paths[outer as usize - 1], object.name)
+        } else if outer == 0 {
+            object.name.clone()
+        } else {
+            package
+                .path_of(reference)
+                .unwrap_or_else(|_| object.name.clone())
+        };
+        index.by_path.entry(lower(&path)).or_insert(reference);
+        paths.push(path);
+    }
+    index
+}
+
+/// One property declaration as read (`readProperty`), before it is typed.
+#[derive(Debug, Clone)]
+struct RawProperty {
+    package: PackageId,
+    index: i32,
+    name: String,
+    class: String,
+    flags: u64,
+    array_dim: i32,
+    refs: [i32; 3],
+}
+
+/// The C++ `checkClassBodies` summary of one package.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClassCheck {
+    pub package: String,
+    pub classes: usize,
+    pub exact: usize,
+    pub default_objects: usize,
+    pub interface_classes: usize,
+    pub classes_with_interfaces: usize,
+    pub interface_entries: usize,
+    pub entries_to_interface_classes: usize,
+    pub table_struct_properties: usize,
+    pub table_null: usize,
+    pub failures: Vec<String>,
+}
+
+/// The C++ `compareInterfaces` counts over the nine code packages.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InterfaceComparison {
+    pub classes: usize,
+    pub interfaces: usize,
+    pub both_yes: usize,
+    pub table_only_yes: usize,
+    pub coded_only_yes: usize,
+    /// The functions-only rule (no `I<Upper>` name condition): both, table only, stand-in only.
+    pub functions_only: [usize; 3],
+    /// Per [`SLICE_INTERFACES`] name: table yes, table no, disagreements with the coded rule and with the
+    /// functions-only rule.
+    pub slice: BTreeMap<String, [usize; 4]>,
+}
+
+/// What [`CodeIndex::define_layouts`] did over one set of classes.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LayoutSummary {
+    pub classes: usize,
+    pub defined: usize,
+    /// Every class that did not get a layout, with the error (its cause chain names the first failure).
+    pub failures: Vec<(String, ReflectError)>,
+}
+
+/// The reflection index over a store: loaded classes, cached reference answers, per-package lookup tables, and the
+/// layouts defined from them. Built empty with [`CodeIndex::new`] and filled lazily, or by [`load_code_packages`].
+#[derive(Debug, Default)]
+pub struct CodeIndex {
+    classes: Vec<ClassInfo>,
+    by_export: FixedHashMap<(PackageId, i32), ClassKey>,
+    ref_cache: FixedHashMap<(PackageId, i32), Option<(PackageId, i32)>>,
+    indexes: FixedHashMap<PackageId, Rc<PackageIndex>>,
+    layouts: FixedHashMap<ClassKey, Result<ClassId, ReflectError>>,
+    by_class_id: FixedHashMap<ClassId, ClassKey>,
+    class_in_progress: FixedHashSet<ClassKey>,
+    structs: FixedHashMap<(PackageId, i32), Result<StructId, ReflectError>>,
+    struct_in_progress: FixedHashMap<(PackageId, i32), StructId>,
+    enums: FixedHashMap<(PackageId, i32), Result<EnumId, ReflectError>>,
+}
+
+/// Loads the nine code packages ([`CODE_PACKAGES`]) and every class they export, and defines each class's layout
+/// in `classes`. A package that is not in the store fails the call. A class whose layout cannot be defined (a `NotYet`
+/// declaration, a reference no package holds) does not: it stays declared, and [`CodeIndex::layout_of`] and
+/// [`CodeIndex::layout_failures`] report it.
+pub fn load_code_packages(
+    store: &mut PackageStore,
+    names: &mut NameTable,
+    classes: &mut ClassTable,
+) -> Result<CodeIndex, ReflectError> {
+    let mut index = CodeIndex::new();
+    let mut packages = Vec::with_capacity(CODE_PACKAGES.len());
+    for name in CODE_PACKAGES {
+        packages.push(index.package(store, name)?);
+    }
+    for package in packages {
+        index.define_layouts(store, names, classes, package)?;
+    }
+    Ok(index)
+}
+
+impl CodeIndex {
+    pub fn new() -> Self {
+        CodeIndex::default()
+    }
+
+    /// The loaded class `key`.
+    ///
+    /// # Panics
+    /// When `key` was not made by this index (a caller bug).
+    pub fn class(&self, key: ClassKey) -> &ClassInfo {
+        &self.classes[key.index()]
+    }
+
+    /// Every class loaded so far, in load order.
+    pub fn classes(&self) -> impl Iterator<Item = (ClassKey, &ClassInfo)> {
+        self.classes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (ClassKey(i as u32), c))
+    }
+
+    /// The package named `name` (C++ `Runtime::package`, `PackageStore::loadPackage`).
+    pub fn package(
+        &mut self,
+        store: &mut PackageStore,
+        name: &str,
+    ) -> Result<PackageId, ReflectError> {
+        let parsed = PackageName::parse(name)
+            .map_err(|_| ReflectError::Store(StoreError::PackageNotFound(name.to_string())))?;
+        Ok(store.load(&parsed)?)
+    }
+
+    fn index_of(&mut self, store: &PackageStore, package: PackageId) -> Rc<PackageIndex> {
+        Rc::clone(
+            self.indexes
+                .entry(package)
+                .or_insert_with(|| Rc::new(build_index(store.get(package)))),
+        )
+    }
+
+    /// The class name of export `index` of `package` (`classNameOf`).
+    pub fn class_name(&mut self, store: &PackageStore, package: PackageId, index: i32) -> String {
+        let table = self.index_of(store, package);
+        usize::try_from(index)
+            .ok()
+            .filter(|&i| i >= 1)
+            .and_then(|i| table.class_names.get(i - 1))
+            .cloned()
+            .unwrap_or_else(|| "Class".to_string())
+    }
+
+    /// The first export of `package` at `object_path`, ASCII case folded, a leading `<package>.` dropped; 0 for none
+    /// (C++ `Runtime::findExport`).
+    pub fn find_export(
+        &mut self,
+        store: &PackageStore,
+        package: PackageId,
+        object_path: &str,
+    ) -> i32 {
+        let table = self.index_of(store, package);
+        let mut wanted = lower(object_path);
+        let prefix = format!("{}.", lower(&store.get(package).name));
+        if wanted.starts_with(&prefix) {
+            wanted.drain(..prefix.len());
+        }
+        table.by_path.get(&wanted).copied().unwrap_or(0)
+    }
+
+    /// Resolves `reference` of `package` to the package and export that hold the object (C++ `resolveRef`), cached.
+    /// `None` where the target is in no installed package (some imports name engine-native objects such as
+    /// `Core.Class`, which have no export). An import whose chain is all imports is looked up in the package its root
+    /// names, without the store's global fallback; one nested in a local export goes through
+    /// [`PackageStore::resolve`]. Every failure is "nothing", as the C++ catches it.
+    pub fn resolve_ref(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        reference: i32,
+    ) -> Option<(PackageId, i32)> {
+        if reference == 0 {
+            return None;
+        }
+        if reference > 0 {
+            let exports = store.get(package).exports.len();
+            return (reference as usize <= exports).then_some((package, reference));
+        }
+        if let Some(&cached) = self.ref_cache.get(&(package, reference)) {
+            return cached;
+        }
+        let result = self.resolve_import(store, package, reference);
+        self.ref_cache.insert((package, reference), result);
+        result
+    }
+
+    fn resolve_import(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        reference: i32,
+    ) -> Option<(PackageId, i32)> {
+        let source = store.shared(package);
+        let mut cursor = reference;
+        let mut all_imports = true;
+        let mut depth = 0;
+        while cursor != 0 && depth < MAX_IMPORT_DEPTH {
+            let object = source.object(cursor).ok()?;
+            if cursor > 0 {
+                all_imports = false;
+                break;
+            }
+            if object.outer == 0 {
+                break;
+            }
+            cursor = object.outer;
+            depth += 1;
+        }
+        if all_imports && cursor < 0 {
+            let root = source.object(cursor).ok()?.name.clone();
+            let full = source.path_of(reference).ok()?;
+            let target = self.package(store, &root).ok()?;
+            let index = self.find_export(store, target, &full);
+            (index != 0).then_some((target, index))
+        } else {
+            store.resolve(package, reference).ok().flatten()
+        }
+    }
+
+    /// The class `reference` of `package` names, loaded on first use (C++ `Runtime::classAt`). `Ok(None)` where the
+    /// reference resolves to nothing. A target that is not a Class export is an error ("export is not a class"), and
+    /// so is a super chain that holds one; a class whose super chain failed keeps that error.
+    pub fn class_at(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ClassKey>, ReflectError> {
+        let Some(target) = self.resolve_ref(store, package, reference) else {
+            return Ok(None);
+        };
+        if let Some(&key) = self.by_export.get(&target) {
+            return match &self.classes[key.index()].load_error {
+                Some(error) => Err(error.clone()),
+                None => Ok(Some(key)),
+            };
+        }
+        self.load_class(store, target.0, target.1).map(Some)
+    }
+
+    /// C++ `loadClass`: registered before its super class loads, so a cyclic reference finds it.
+    fn load_class(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        index: i32,
+    ) -> Result<ClassKey, ReflectError> {
+        let pkg = store.shared(package);
+        if self.class_name(store, package, index) != "Class" {
+            return Err(ReflectError::NotAClass(pkg.path_of(index)?));
+        }
+        let exported = &pkg.exports[index as usize - 1];
+        let key = ClassKey(u32::try_from(self.classes.len()).expect("fewer than 2^32 classes"));
+        let body = decode_class_body(&pkg, index);
+        let interface_targets = match &body {
+            Ok(b) => vec![None; b.interfaces.len()],
+            Err(_) => Vec::new(),
+        };
+        self.classes.push(ClassInfo {
+            package,
+            export: index,
+            name: exported.name.clone(),
+            path: format!("{}.{}", pkg.name, exported.name),
+            super_class: None,
+            body,
+            functions: BTreeMap::new(),
+            load_error: None,
+            interface_targets,
+        });
+        self.by_export.insert((package, index), key);
+        if exported.super_ != 0 {
+            match self.class_at(store, package, exported.super_) {
+                Ok(super_class) => self.classes[key.index()].super_class = super_class,
+                Err(error) => {
+                    self.classes[key.index()].load_error = Some(error.clone());
+                    return Err(error);
+                }
+            }
+        }
+        let table = self.index_of(store, package);
+        let mut functions = BTreeMap::new();
+        for &child in table.children.get(&index).map(Vec::as_slice).unwrap_or(&[]) {
+            if table.class_names[child as usize - 1] == "Function" {
+                functions.insert(lower(&pkg.exports[child as usize - 1].name), child);
+            }
+        }
+        self.classes[key.index()].functions = functions;
+        Ok(key)
+    }
+
+    /// The class at `path` (`Package.Class`, C++ `Runtime::findClass`).
+    pub fn find_class(
+        &mut self,
+        store: &mut PackageStore,
+        path: &str,
+    ) -> Result<ClassKey, ReflectError> {
+        let Some((package, rest)) = path.split_once('.') else {
+            return Err(ReflectError::ClassPath(path.to_string()));
+        };
+        let id = self.package(store, package)?;
+        let index = self.find_export(store, id, rest);
+        if index == 0 {
+            return Err(ReflectError::ClassNotFound(path.to_string()));
+        }
+        self.class_at(store, id, index)?
+            .ok_or_else(|| ReflectError::ClassNotFound(path.to_string()))
+    }
+
+    /// The class and its super classes, nearest first. A cyclic chain stops after every loaded class was visited.
+    pub fn super_chain(&self, key: ClassKey) -> impl Iterator<Item = ClassKey> + '_ {
+        let mut cursor = Some(key);
+        let mut left = self.classes.len();
+        std::iter::from_fn(move || {
+            let here = cursor.filter(|_| left > 0)?;
+            left -= 1;
+            cursor = self.classes[here.index()].super_class;
+            Some(here)
+        })
+    }
+
+    /// Whether `class` is `base` or derives from it (C++ `Class::isChildOf`).
+    pub fn is_child_of(&self, class: ClassKey, base: ClassKey) -> bool {
+        self.super_chain(class).any(|c| c == base)
+    }
+
+    /// Whether the class chain of `class` declares a function named `name`, ASCII case folded (C++ `findMethod`
+    /// with no state).
+    pub fn find_method(&self, class: ClassKey, name: &str) -> Option<i32> {
+        let key = lower(name);
+        self.super_chain(class)
+            .find_map(|c| self.classes[c.index()].functions.get(&key).copied())
+    }
+
+    /// C++ `Runtime::implements`: `iface` is an interface class and the interface table of `class` or of a super
+    /// class names `iface` or a class derived from it (NATIVE_CLASS_SERIAL_LAYOUT.md, UNVERIFIED in the running
+    /// game). Entries resolve on first use, one by one, as the C++ resolves them; an entry that fails to load is no
+    /// class. A chain whose bodies did not all decode (synthetic packages) falls back to
+    /// [`CodeIndex::implements_structurally`], as the C++ does.
+    pub fn implements(
+        &mut self,
+        store: &mut PackageStore,
+        class: ClassKey,
+        iface: ClassKey,
+    ) -> bool {
+        let decoded = self.classes[iface.index()].body_decoded()
+            && self
+                .super_chain(class)
+                .all(|c| self.classes[c.index()].body_decoded());
+        if !decoded {
+            return self.implements_structurally(class, iface);
+        }
+        if !self.classes[iface.index()].is_interface() {
+            return false;
+        }
+        let chain: Vec<ClassKey> = self.super_chain(class).collect();
+        for cursor in chain {
+            let entries = self.classes[cursor.index()].interface_targets.len();
+            for entry in 0..entries {
+                let target = match self.classes[cursor.index()].interface_targets[entry] {
+                    Some(target) => target,
+                    None => {
+                        let info = &self.classes[cursor.index()];
+                        let (package, class_ref) = (
+                            info.package,
+                            info.body
+                                .as_ref()
+                                .map_or(0, |b| b.interfaces[entry].class_ref),
+                        );
+                        let target = self.class_at(store, package, class_ref).ok().flatten();
+                        self.classes[cursor.index()].interface_targets[entry] = Some(target);
+                        target
+                    }
+                };
+                if target.is_some_and(|t| self.is_child_of(t, iface)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// C++ `implementsStructurally`, the earlier stand-in kept as the fallback and the comparison baseline: the
+    /// interface is named `I<Upper>...`, declares at least one function, and the class chain defines every one.
+    pub fn implements_structurally(&self, class: ClassKey, iface: ClassKey) -> bool {
+        let name = self.classes[iface.index()].name.as_bytes();
+        if name.len() < 2 || name[0] != b'I' || !name[1].is_ascii_uppercase() {
+            return false;
+        }
+        self.functions_only(class, iface)
+    }
+
+    /// The structural rule as NATIVE_CLASS_SERIAL_LAYOUT.md describes it (functions only, no name condition).
+    pub fn functions_only(&self, class: ClassKey, iface: ClassKey) -> bool {
+        let functions = &self.classes[iface.index()].functions;
+        !functions.is_empty()
+            && functions
+                .keys()
+                .all(|f| self.find_method(class, f).is_some())
+    }
+
+    /// C++ `checkClassBodies`: over every export of `package` with class reference 0, the body decodes and ends
+    /// exactly at the serial size, the default object is `Default__<Class>` of that class, each interface entry
+    /// names an interface class, and each table pointer is a `VfTable_` StructProperty child naming the interface.
+    pub fn check_class_bodies(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+    ) -> Result<ClassCheck, ReflectError> {
+        let pkg = store.shared(package);
+        let table = self.index_of(store, package);
+        let mut check = ClassCheck {
+            package: pkg.name.clone(),
+            ..ClassCheck::default()
+        };
+        for (position, exported) in pkg.exports.iter().enumerate() {
+            let index = position as i32 + 1;
+            if exported.class != 0 {
+                continue;
+            }
+            check.classes += 1;
+            let path = pkg.path_of(index)?;
+            let body = match decode_class_body(&pkg, index) {
+                Ok(body) => body,
+                Err(error) => {
+                    check.failures.push(format!("{path}: {error}"));
+                    continue;
+                }
+            };
+            check.exact += 1;
+            let default_ok = body.default_object > 0 && {
+                let default = &pkg.exports[body.default_object as usize - 1];
+                default.name == format!("Default__{}", exported.name) && default.class == index
+            };
+            if default_ok {
+                check.default_objects += 1;
+            } else {
+                check.failures.push(format!(
+                    "{path}: default object is not Default__{} of this class",
+                    exported.name
+                ));
+            }
+            if body.is_interface() {
+                check.interface_classes += 1;
+            }
+            if !body.interfaces.is_empty() {
+                check.classes_with_interfaces += 1;
+            }
+            for entry in &body.interfaces {
+                check.interface_entries += 1;
+                let target = self
+                    .class_at(store, package, entry.class_ref)
+                    .ok()
+                    .flatten();
+                let interface_name = &pkg.object(entry.class_ref)?.name;
+                if target.is_some_and(|t| self.classes[t.index()].is_interface()) {
+                    check.entries_to_interface_classes += 1;
+                } else {
+                    check.failures.push(format!(
+                        "{path}: interface entry {interface_name} is not an interface class"
+                    ));
+                }
+                if entry.table_property == 0 {
+                    check.table_null += 1;
+                    continue;
+                }
+                let property = pkg.object(entry.table_property)?;
+                if entry.table_property > 0
+                    && table.class_names[entry.table_property as usize - 1] == "StructProperty"
+                    && property.outer == index
+                    && property.name.starts_with("VfTable_")
+                    && property.name.contains(interface_name.as_str())
+                {
+                    check.table_struct_properties += 1;
+                } else {
+                    check.failures.push(format!(
+                        "{path}: table pointer {} is not a VfTable_ StructProperty child",
+                        property.name
+                    ));
+                }
+            }
+        }
+        Ok(check)
+    }
+
+    /// C++ `compareInterfaces`: every (class, interface) pair of the nine code packages, answered by the interface
+    /// table ([`CodeIndex::implements`]), by the coded structural rule and by the functions-only rule. Classes whose
+    /// body did not decode are left out, as the C++ leaves them out.
+    pub fn compare_interfaces(
+        &mut self,
+        store: &mut PackageStore,
+    ) -> Result<InterfaceComparison, ReflectError> {
+        let mut interfaces = Vec::new();
+        let mut subjects = Vec::new();
+        for name in CODE_PACKAGES {
+            let package = self.package(store, name)?;
+            let exports = store.get(package).exports.len();
+            for index in 1..=exports as i32 {
+                if store.get(package).exports[index as usize - 1].class != 0 {
+                    continue;
+                }
+                let Some(class) = self.class_at(store, package, index)? else {
+                    continue;
+                };
+                let info = &self.classes[class.index()];
+                if !info.body_decoded() {
+                    continue;
+                }
+                if info.is_interface() {
+                    interfaces.push(class);
+                } else {
+                    subjects.push(class);
+                }
+            }
+        }
+        let mut result = InterfaceComparison {
+            classes: subjects.len(),
+            interfaces: interfaces.len(),
+            slice: SLICE_INTERFACES
+                .iter()
+                .map(|n| (n.to_string(), [0; 4]))
+                .collect(),
+            ..InterfaceComparison::default()
+        };
+        for &class in &subjects {
+            for &iface in &interfaces {
+                let table = self.implements(store, class, iface);
+                let coded = self.implements_structurally(class, iface);
+                let plain = self.functions_only(class, iface);
+                match (table, coded) {
+                    (true, true) => result.both_yes += 1,
+                    (true, false) => result.table_only_yes += 1,
+                    (false, true) => result.coded_only_yes += 1,
+                    (false, false) => {}
+                }
+                match (table, plain) {
+                    (true, true) => result.functions_only[0] += 1,
+                    (true, false) => result.functions_only[1] += 1,
+                    (false, true) => result.functions_only[2] += 1,
+                    (false, false) => {}
+                }
+                if let Some(counts) = result.slice.get_mut(&self.classes[iface.index()].name) {
+                    counts[if table { 0 } else { 1 }] += 1;
+                    if table != coded {
+                        counts[2] += 1;
+                    }
+                    if table != plain {
+                        counts[3] += 1;
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    // ------------------------------------------------------------------------------------------------ layouts
+
+    /// The layout outcome of a loaded class, once [`CodeIndex::define_layout`] ran for it.
+    pub fn layout_of(&self, key: ClassKey) -> Option<&Result<ClassId, ReflectError>> {
+        self.layouts.get(&key)
+    }
+
+    /// The loaded class a [`ClassTable`] class was defined from.
+    pub fn key_of(&self, class: ClassId) -> Option<ClassKey> {
+        self.by_class_id.get(&class).copied()
+    }
+
+    /// Every class whose layout failed, in load order, with its error.
+    pub fn layout_failures(&self) -> Vec<(&str, &ReflectError)> {
+        self.classes()
+            .filter_map(|(key, info)| match self.layouts.get(&key) {
+                Some(Err(e)) => Some((info.path.as_str(), e)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Loads every export of `package` whose class name is `Class` and defines its layout. Only a load failure that
+    /// the C++ would throw (a super chain holding a non-class) ends the call; layout failures are counted in the
+    /// summary and kept per class.
+    pub fn define_layouts(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        package: PackageId,
+    ) -> Result<LayoutSummary, ReflectError> {
+        let mut summary = LayoutSummary::default();
+        let exports = store.get(package).exports.len() as i32;
+        for index in 1..=exports {
+            if self.class_name(store, package, index) != "Class" {
+                continue;
+            }
+            let Some(key) = self.class_at(store, package, index)? else {
+                continue;
+            };
+            summary.classes += 1;
+            match self.define_layout(store, names, classes, key) {
+                Ok(_) => summary.defined += 1,
+                Err(error) => summary
+                    .failures
+                    .push((self.classes[key.index()].path.clone(), error)),
+            }
+        }
+        Ok(summary)
+    }
+
+    /// Defines the layout of loaded class `key` in `classes` (once; later calls return the first outcome): the super
+    /// class's layout first, then this class's own declarations, then its attribute companions. Each class, struct
+    /// and enum path is `<package file stem>.<object path>`; a class a property refers to is only declared.
+    pub fn define_layout(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        key: ClassKey,
+    ) -> Result<ClassId, ReflectError> {
+        if let Some(outcome) = self.layouts.get(&key) {
+            return outcome.clone();
+        }
+        let path = self.classes[key.index()].path.clone();
+        if !self.class_in_progress.insert(key) {
+            return Err(ReflectError::SuperCycle(path));
+        }
+        let outcome = self
+            .define_layout_inner(store, names, classes, key, &path)
+            .map_err(in_class(&path));
+        self.class_in_progress.remove(&key);
+        if let Ok(id) = outcome {
+            self.by_class_id.insert(id, key);
+        }
+        self.layouts.insert(key, outcome.clone());
+        outcome
+    }
+
+    fn define_layout_inner(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        key: ClassKey,
+        path: &str,
+    ) -> Result<ClassId, ReflectError> {
+        let (package, export) = (
+            self.classes[key.index()].package,
+            self.classes[key.index()].export,
+        );
+        let super_id = match self.classes[key.index()].super_class {
+            Some(s) => Some(self.define_layout(store, names, classes, s)?),
+            None => {
+                // The C++ loader leaves a super class it cannot resolve null; a layout without it would be wrong.
+                let super_ref = store.get(package).exports[export as usize - 1].super_;
+                if super_ref != 0 {
+                    return Err(ReflectError::Unresolved {
+                        property: path.to_string(),
+                        what: "super class",
+                        reference: super_ref,
+                    });
+                }
+                None
+            }
+        };
+        let raws = self.child_properties(store, package, export)?;
+        let mut decls = Vec::with_capacity(raws.len());
+        for raw in &raws {
+            decls.push(self.declaration(store, names, classes, raw)?);
+        }
+        let id = classes.define(path, super_id, decls)?;
+        for raw in &raws {
+            self.link_attribute(store, names, classes, id, raw)?;
+        }
+        Ok(id)
+    }
+
+    /// Links the companions an attribute value property names (flag bit 63): its stack and base, from its own
+    /// references, shifted by one for a byte attribute.
+    fn link_attribute(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        class: ClassId,
+        raw: &RawProperty,
+    ) -> Result<(), ReflectError> {
+        let byte = raw.class == "ByteAttributeProperty";
+        let attribute =
+            byte || raw.class == "FloatAttributeProperty" || raw.class == "IntAttributeProperty";
+        if !attribute || raw.flags & PropertyDecl::STACK_ATTRIBUTE == 0 {
+            return Ok(());
+        }
+        let (stack_ref, base_ref) = if byte {
+            (raw.refs[1], raw.refs[2])
+        } else {
+            (raw.refs[0], raw.refs[1])
+        };
+        let stack = self.referenced_property(store, raw, stack_ref, "modifier stack")?;
+        let base = self.referenced_property(store, raw, base_ref, "base value")?;
+        let value = names.intern(&raw.name);
+        let base = names.intern(&base.name);
+        let stack = names.intern(&stack.name);
+        classes.link_attribute(class, value, base, stack)?;
+        Ok(())
+    }
+
+    /// The property export `reference` of `raw`'s package names (C++ `declAt`).
+    fn referenced_property(
+        &mut self,
+        store: &mut PackageStore,
+        raw: &RawProperty,
+        reference: i32,
+        what: &'static str,
+    ) -> Result<RawProperty, ReflectError> {
+        if reference == 0 {
+            return Err(ReflectError::NoReference {
+                property: raw.name.clone(),
+                what,
+            });
+        }
+        let (package, index) =
+            self.resolve_ref(store, raw.package, reference)
+                .ok_or_else(|| ReflectError::Unresolved {
+                    property: raw.name.clone(),
+                    what,
+                    reference,
+                })?;
+        self.read_property(store, package, index)
+    }
+
+    /// C++ `childProperties`: the child exports of `outer` whose class name ends in `Property`, in descending export
+    /// order, each read with [`CodeIndex::read_property`]; one smaller than the header is not a declaration.
+    fn child_properties(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        outer: i32,
+    ) -> Result<Vec<RawProperty>, ReflectError> {
+        let table = self.index_of(store, package);
+        let mut found: Vec<i32> = table
+            .children
+            .get(&outer)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .copied()
+            .filter(|&c| table.class_names[c as usize - 1].ends_with("Property"))
+            .collect();
+        found.sort_unstable_by(|a, b| b.cmp(a));
+        let mut result = Vec::with_capacity(found.len());
+        for index in found {
+            match self.read_property(store, package, index) {
+                Ok(raw) => result.push(raw),
+                Err(ReflectError::NotAProperty) => {} // a property-class default object, not a declaration
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(result)
+    }
+
+    /// C++ `readProperty`: the 40-byte header and up to three type references inside the export.
+    fn read_property(
+        &mut self,
+        store: &PackageStore,
+        package: PackageId,
+        index: i32,
+    ) -> Result<RawProperty, ReflectError> {
+        let class = self.class_name(store, package, index);
+        let pkg = store.get(package);
+        let object = usize::try_from(index)
+            .ok()
+            .filter(|&i| i >= 1)
+            .and_then(|i| pkg.exports.get(i - 1))
+            .ok_or(ReflectError::NotAProperty)?;
+        if object.size < PROPERTY_HEADER as i32 {
+            return Err(ReflectError::NotAProperty);
+        }
+        let at = usize::try_from(object.offset).map_err(|_| ReflectError::PastData)?;
+        let end = at + object.size as usize;
+        let u32_at = |offset: usize| -> Result<u32, ReflectError> {
+            pkg.data
+                .get(offset..offset + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .ok_or(ReflectError::PastData)
+        };
+        let array_dim = ((u32_at(at + 16)? & 0xFFFF) as i32).max(1);
+        let flags = u64::from(u32_at(at + 20)?) | (u64::from(u32_at(at + 24)?) << 32);
+        let type_at = at + PROPERTY_HEADER + if flags & CPF_NET != 0 { 2 } else { 0 };
+        let mut refs = [0i32; 3];
+        for (slot, value) in refs.iter_mut().enumerate() {
+            let word = type_at + 4 * slot;
+            if word + 4 > end {
+                break;
+            }
+            *value = u32_at(word)? as i32;
+        }
+        Ok(RawProperty {
+            package,
+            index,
+            name: object.name.clone(),
+            class,
+            flags,
+            array_dim,
+            refs,
+        })
+    }
+
+    /// A typed declaration from a raw one.
+    fn declaration(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        raw: &RawProperty,
+    ) -> Result<PropertyDecl, ReflectError> {
+        let kind = self.kind(store, names, classes, raw, true)?;
+        Ok(PropertyDecl::new(names.intern(&raw.name), kind)
+            .with_flags(raw.flags)
+            .with_array_dim(raw.array_dim)
+            .with_source(raw.package, raw.index))
+    }
+
+    /// The kind a property class and its references give. `by_value` is false inside an array, where a struct that
+    /// is being defined (an array of itself) needs only its declaration.
+    fn kind(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        raw: &RawProperty,
+        by_value: bool,
+    ) -> Result<PropKind, ReflectError> {
+        Ok(match raw.class.as_str() {
+            "IntProperty" => PropKind::Int,
+            "FloatProperty" => PropKind::Float,
+            "BoolProperty" => PropKind::Bool,
+            "StrProperty" => PropKind::Str,
+            "NameProperty" => PropKind::Name,
+            "DelegateProperty" => PropKind::Delegate,
+            "FloatAttributeProperty" => PropKind::FloatAttribute,
+            "IntAttributeProperty" => PropKind::IntAttribute,
+            "ByteProperty" => PropKind::Byte {
+                enum_: self.enum_ref(store, names, classes, raw, raw.refs[0])?,
+            },
+            "ByteAttributeProperty" => PropKind::ByteAttribute {
+                enum_: self.enum_ref(store, names, classes, raw, raw.refs[0])?,
+            },
+            "ObjectProperty" | "ComponentProperty" => PropKind::Object {
+                class: self.class_ref(store, classes, raw, raw.refs[0], "class")?,
+            },
+            "InterfaceProperty" => PropKind::Interface {
+                class: self.class_ref(store, classes, raw, raw.refs[0], "interface class")?,
+            },
+            "ClassProperty" => PropKind::Class {
+                meta: self.class_ref(store, classes, raw, raw.refs[1], "metaclass")?,
+            },
+            "StructProperty" => {
+                PropKind::Struct(self.struct_ref(store, names, classes, raw, by_value)?)
+            }
+            "ArrayProperty" => {
+                let inner = self.referenced_property(store, raw, raw.refs[0], "inner property")?;
+                PropKind::Array(Box::new(self.kind(store, names, classes, &inner, false)?))
+            }
+            "MapProperty" => {
+                return Err(ReflectError::NotYet(NotYet::layer_absent(
+                    format!("MapProperty {}", raw.name),
+                    "a map kind in ow-object's PropKind",
+                    "W1-OBJ contract (architecture section 3.3)",
+                )));
+            }
+            other => return Err(ReflectError::UnknownPropertyClass(other.to_string())),
+        })
+    }
+
+    /// `<package stem>.<object path>` of export `index`.
+    fn object_path(
+        store: &PackageStore,
+        package: PackageId,
+        index: i32,
+    ) -> Result<String, ReflectError> {
+        let pkg = store.get(package);
+        Ok(format!("{}.{}", pkg.name, pkg.path_of(index)?))
+    }
+
+    /// The class a reference names, declared in `classes`: a resolved Class export is `<stem>.<name>`; an import no
+    /// installed package holds (an engine-native class such as `Core.Class`) is declared by its import path.
+    fn class_ref(
+        &mut self,
+        store: &mut PackageStore,
+        classes: &mut ClassTable,
+        raw: &RawProperty,
+        reference: i32,
+        what: &'static str,
+    ) -> Result<ClassId, ReflectError> {
+        if reference == 0 {
+            return Err(ReflectError::NoReference {
+                property: raw.name.clone(),
+                what,
+            });
+        }
+        let path = match self.resolve_ref(store, raw.package, reference) {
+            Some((package, index)) => {
+                let found = self.class_name(store, package, index);
+                if found != "Class" {
+                    return Err(ReflectError::WrongTarget {
+                        property: raw.name.clone(),
+                        what,
+                        found,
+                    });
+                }
+                let pkg = store.get(package);
+                format!("{}.{}", pkg.name, pkg.exports[index as usize - 1].name)
+            }
+            None if reference < 0 => store.get(raw.package).path_of(reference)?,
+            None => {
+                return Err(ReflectError::Unresolved {
+                    property: raw.name.clone(),
+                    what,
+                    reference,
+                });
+            }
+        };
+        Ok(classes.declare(&path)?)
+    }
+
+    /// The enum a byte property names (`None` for reference 0), read and defined on first use.
+    fn enum_ref(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        raw: &RawProperty,
+        reference: i32,
+    ) -> Result<Option<EnumId>, ReflectError> {
+        if reference == 0 {
+            return Ok(None);
+        }
+        let target = self
+            .resolve_ref(store, raw.package, reference)
+            .ok_or_else(|| ReflectError::Unresolved {
+                property: raw.name.clone(),
+                what: "enum",
+                reference,
+            })?;
+        let found = self.class_name(store, target.0, target.1);
+        if found != "Enum" {
+            return Err(ReflectError::WrongTarget {
+                property: raw.name.clone(),
+                what: "enum",
+                found,
+            });
+        }
+        if let Some(outcome) = self.enums.get(&target) {
+            return outcome.clone().map(Some);
+        }
+        let outcome = Self::object_path(store, target.0, target.1).and_then(|path| {
+            read_enum(store.get(target.0), target.1)
+                .and_then(|values| {
+                    let ids = values.iter().map(|v| names.intern(v)).collect();
+                    Ok(classes.define_enum(&path, ids)?)
+                })
+                .map_err(|error| ReflectError::InEnum {
+                    path: path.clone(),
+                    error: Box::new(error),
+                })
+        });
+        self.enums.insert(target, outcome.clone());
+        outcome.map(Some)
+    }
+
+    /// The struct a struct property names, defined on first use (its super struct and by-value fields first).
+    fn struct_ref(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        raw: &RawProperty,
+        by_value: bool,
+    ) -> Result<StructId, ReflectError> {
+        let reference = raw.refs[0];
+        if reference == 0 {
+            return Err(ReflectError::NoReference {
+                property: raw.name.clone(),
+                what: "struct",
+            });
+        }
+        let target = self
+            .resolve_ref(store, raw.package, reference)
+            .ok_or_else(|| ReflectError::Unresolved {
+                property: raw.name.clone(),
+                what: "struct",
+                reference,
+            })?;
+        let found = self.class_name(store, target.0, target.1);
+        if found != "ScriptStruct" {
+            return Err(ReflectError::WrongTarget {
+                property: raw.name.clone(),
+                what: "struct",
+                found,
+            });
+        }
+        if let Some(&id) = self.struct_in_progress.get(&target) {
+            if by_value {
+                return Err(ReflectError::StructCycle(Self::object_path(
+                    store, target.0, target.1,
+                )?));
+            }
+            return Ok(id);
+        }
+        self.define_struct(store, names, classes, target)
+    }
+
+    /// C++ `structAt` as a [`ClassTable`] definition: the super struct, then the struct's own child properties.
+    fn define_struct(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        target: (PackageId, i32),
+    ) -> Result<StructId, ReflectError> {
+        if let Some(outcome) = self.structs.get(&target) {
+            return outcome.clone();
+        }
+        let path = Self::object_path(store, target.0, target.1)?;
+        let declared = classes.declare_struct(&path)?;
+        self.struct_in_progress.insert(target, declared);
+        let outcome = self
+            .define_struct_inner(store, names, classes, target, &path)
+            .map_err(in_struct(&path));
+        self.struct_in_progress.remove(&target);
+        self.structs.insert(target, outcome.clone());
+        outcome
+    }
+
+    fn define_struct_inner(
+        &mut self,
+        store: &mut PackageStore,
+        names: &mut NameTable,
+        classes: &mut ClassTable,
+        target: (PackageId, i32),
+        path: &str,
+    ) -> Result<StructId, ReflectError> {
+        let super_ref = store.get(target.0).exports[target.1 as usize - 1].super_;
+        let super_id = if super_ref == 0 {
+            None
+        } else {
+            let parent = self
+                .resolve_ref(store, target.0, super_ref)
+                .ok_or_else(|| ReflectError::Unresolved {
+                    property: path.to_string(),
+                    what: "super struct",
+                    reference: super_ref,
+                })?;
+            if self.struct_in_progress.contains_key(&parent) {
+                return Err(ReflectError::StructCycle(path.to_string()));
+            }
+            Some(self.define_struct(store, names, classes, parent)?)
+        };
+        let raws = self.child_properties(store, target.0, target.1)?;
+        let mut fields = Vec::with_capacity(raws.len());
+        for raw in &raws {
+            fields.push(self.declaration(store, names, classes, raw)?);
+        }
+        Ok(classes.define_struct(path, super_id, fields)?)
+    }
+}
+
+/// The values of Enum export `index`: `[net index][None][next][count][count names]`, count at most
+/// [`MAX_ENUM_COUNT`], ending exactly at the serial size.
+fn read_enum(package: &Package, index: i32) -> Result<Vec<String>, ReflectError> {
+    let object = package.object(index)?;
+    let start = usize::try_from(object.offset).map_err(|_| ReflectError::PastData)?;
+    let size = usize::try_from(object.size).map_err(|_| ReflectError::PastData)?;
+    let mut r = Reader::new(&package.data).with_limit(start + size);
+    r.set_pos(start + 16);
+    let count = r.i32()?;
+    if !(0..=MAX_ENUM_COUNT).contains(&count) {
+        return Err(ReflectError::EnumCount);
+    }
+    let mut values = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        values.push(tables::read_name(&mut r, &package.names)?);
+    }
+    if r.pos() != r.limit() {
+        return Err(ReflectError::EnumTrailing);
+    }
+    Ok(values)
+}
+
+#[cfg(test)]
+mod tests;
