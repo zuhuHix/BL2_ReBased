@@ -2,11 +2,11 @@
 //! definition, its parts and its name parts (architecture section 3.7). The card that presents them is
 //! [`crate::cards`].
 //!
-//! **What the stats are** (weapon: script `WillowWeapon.InitializeInternal`, read with `research/script_disasm.py`;
-//! NATIVE_WEAPON_RULES.md sections 1 and 12; UNVERIFIED in game unless the record says otherwise):
+//! **What the stats are** (weapon: script `WillowWeapon.InitializeInternal` and its helpers, read with
+//! `research/script_disasm.py`; NATIVE_WEAPON_RULES.md sections 1 and 12; UNVERIFIED in game unless the record says
+//! otherwise):
 //!
-//! 1. the bases: the weapon type's base fields ([`TYPE_BASES`]) with the class defaults the cooked types leave out
-//!    ([`TYPE_DEFAULTS`], [`WEAPON_DEFAULTS`]); a spinning barrel's spin-up time;
+//! 1. the bases (`CalculateWeaponBaseValues`, then `CalculatePartDependentWeaponBaseValues` once the parts are known);
 //! 2. the effects, in this order: the type's `WeaponAttributeEffects`, each part's in slot order, the activated
 //!    internal attribute slots, then the prefix's and the title's;
 //! 3. each attribute's modifier stack folded with `ow_attr::stack::combine` in the `WeaponGen` form (the sums in
@@ -19,17 +19,21 @@
 //! **Two modes** (rule R3; the mode is the caller's):
 //!
 //! - [`ParityMode::Reference`] reproduces `tools/weapon_stats.evaluate` exactly ([`Values`], [`weapon_attributes`]),
-//!   stand-ins included, so `tools/weapon_gen_parity.py`'s comparison can run on Rust output: the values come from
-//!   the owners' tag streams ([`RollData`]), an attribute operand resolves only for `Weapon_Is_<Maker>`, the weapon
-//!   level and attributes whose only resolver is a constant one (`weapon_stats.resolver_constant`), and anything else
-//!   leaves the value unresolved, as the tool does. The fold is `ow-attr`'s.
-//! - [`ParityMode::Off`] is the game's path as the records read it: [`instantiate_stats`] makes the item's instance
-//!   object (the weapon or item class of its kind) in the offline space, writes the bases and applies every effect
-//!   through `ow_attr` (`set_base`, `apply_effects`, `value_of`), so a value comes from the real resolver chains and
-//!   the attribute stacks on the instance. Items (shield, grenade mod, class mod, relic) carry no stats of their own:
-//!   their effects reach the owner (the shield pool, for one), which is the world's object; offline the effect values
-//!   are evaluated through the evaluator with the instance as the source, and the owner's stacks folded as above
-//!   ([`ItemStats`]).
+//!   stand-ins included, so `tools/weapon_gen_parity.py`'s comparison can run on Rust output. The values come from
+//!   the owners' tag streams ([`RollData`]). The bases are the tool's: the ten type fields of [`TYPE_BASES`] with the
+//!   class defaults it restates ([`TYPE_DEFAULTS`], [`WEAPON_DEFAULTS`]) and a spinning barrel's spin-up time, a
+//!   subset of the script's (UNVERIFIED as a list; enough for the card). An attribute operand resolves only for
+//!   `Weapon_Is_<Maker>`, the weapon level and attributes with a constant resolver subobject
+//!   (`weapon_stats.resolver_constant`); anything else leaves the value unresolved, as the tool does. The fold is
+//!   `ow-attr`'s.
+//! - [`ParityMode::Off`] follows the script functions as read, with every value through `ow-attr` (UNVERIFIED in
+//!   game): [`instantiate_stats`] makes the item's instance in the offline space (or [`instantiate_onto`] takes the
+//!   caller's, the world's weapon actor), [`weapon_base_values`] and [`weapon_part_base_values`] set the bases the two
+//!   script functions set ([`WEAPON_BASE_VALUES`], [`WEAPON_PART_BASE_VALUES`]), and [`apply_weapon_effects`] applies
+//!   the effects with `apply_effects`, so the stats are the instance's own attribute stacks, read back with `value_of`.
+//!   Items (shield, grenade mod, class mod, relic) carry no stats of their own: their effects reach the owner (the
+//!   shield pool, for one), which is the world's object; offline the effect values are evaluated through the evaluator
+//!   with the instance as the source, and the owner's stacks folded as above ([`ItemStats`]).
 //!
 //! **Items** (`tools/prepare_stock_shield.py`, script `WillowItem.InitializeInternal` and
 //! `ApplyAllExternalAttributeEffects`; UNVERIFIED in game): the definition's `ExternalAttributeEffects`, then every
@@ -39,9 +43,7 @@
 //! data, UNVERIFIED in game).
 
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use ow_attr::AttributeSystem;
 use ow_attr::api::{AttrError, EffectData, EvalCx, InitData};
@@ -52,14 +54,11 @@ use ow_defs::overlay::{Overlay, PatchValue};
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
-use ow_package::package::Package;
-use ow_package::props::{self, PropValue};
-use ow_package::schema::SchemaTyper;
 
 use crate::ItemError;
 use crate::data::{DefinitionData, ItemKind, ItemSlot, WeaponSlot};
-use crate::merge::{Props, RollData, SCHEMA_LINES};
-use crate::registry::{CensusInput, ITEM_SLOTS, Pv, WEAPON_SLOTS};
+use crate::merge::{Props, RollData};
+use crate::registry::{ITEM_SLOTS, Pv, WEAPON_SLOTS};
 use crate::roll::Rolled;
 
 /// The record a `NotYet` of the stats names.
@@ -68,9 +67,10 @@ pub const RECORD: &str = "architecture section 3.7 (ow-items stats)";
 /// The weapon attributes' package (`D_Attributes.Weapon`).
 pub const ATTR: &str = "D_Attributes.Weapon.";
 
-/// `weapon_stats.TYPE_BASES`: a `WeaponTypeDefinition` property and the attribute it initializes (the attribute's
-/// `ObjectPropertyAttributeValueResolver.PropertyName` names the `WillowWeapon` property; `FireRate` to
-/// `FireInterval` is an inference, as the tool says).
+/// `weapon_stats.TYPE_BASES`, the Reference bases: a `WeaponTypeDefinition` property and the attribute it initializes
+/// (the attribute's `ObjectPropertyAttributeValueResolver.PropertyName` names the `WillowWeapon` property). Ten of the
+/// script's 22 type fields ([`WEAPON_BASE_VALUES`]); the list is the tool's, UNVERIFIED as the game's set. The script
+/// confirms `FireRate` into `FireInterval`.
 pub const TYPE_BASES: [(&str, &str); 10] = [
     ("InstantHitDamage", "WeaponDamage"),
     ("FireRate", "WeaponFireInterval"),
@@ -426,6 +426,14 @@ impl<'a> StatsData<'a> {
             return Ok(None);
         }
         self.props(path).map(Some)
+    }
+
+    /// `package.extra_names[path][name]`: every element of a static array, from the owner's tag stream as the
+    /// registry decoded it (a live overlay does not patch it, as `LivePackage` does not); raises as
+    /// [`StatsData::props`].
+    pub fn statics(&self, path: &str, name: &str) -> Result<Vec<Pv>, ItemError> {
+        let decoded: Props = self.data.props(path).map_err(raises)?;
+        Ok(decoded.statics(name).to_vec())
     }
 
     /// `package.props(path).get(key)` (raises as [`StatsData::props`]).
@@ -1130,86 +1138,6 @@ impl Stacks {
 
 // ---- the gestalt ---------------------------------------------------------------------------------------------------
 
-/// The static-array elements of a decoded object (`weapon_recipe.static_arrays`), which the registry's lookup keeps
-/// only the last of: read from the owner's tag stream (the first holder's file, its last export of the path, as the
-/// registry's owner rule), with the roll's schema lines.
-pub struct StaticArrays {
-    owners: DetMap<String, (PathBuf, i32)>,
-    typer: SchemaTyper,
-    package: RefCell<Option<(PathBuf, Arc<Package>)>>,
-}
-
-impl std::fmt::Debug for StaticArrays {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StaticArrays").finish_non_exhaustive()
-    }
-}
-
-impl StaticArrays {
-    pub fn new(input: &CensusInput) -> Result<StaticArrays, ItemError> {
-        let mut owners = DetMap::new();
-        for entry in &input.paths {
-            let Some(first) = entry.holders.first() else {
-                continue;
-            };
-            let export = entry
-                .holders
-                .iter()
-                .filter(|h| h.file == first.file)
-                .map(|h| h.export)
-                .last()
-                .unwrap_or(first.export);
-            owners.insert(entry.path.clone(), (first.file.clone(), export));
-        }
-        let mut typer = SchemaTyper::new_empty();
-        typer
-            .add_text(&SCHEMA_LINES.join("\n"))
-            .map_err(|e| ItemError::BadData(format!("the stats' schema lines: {e}")))?;
-        Ok(StaticArrays {
-            owners,
-            typer,
-            package: RefCell::new(None),
-        })
-    }
-
-    /// Every element of the name property `property` of `path`, in element order (`None` for an element that is
-    /// not a name). Empty when no package holds the path or the property is untagged.
-    pub fn names(&self, path: &str, property: &str) -> Result<Vec<Option<String>>, ItemError> {
-        let Some((file, export)) = self.owners.get(path).cloned() else {
-            return Ok(Vec::new());
-        };
-        let pkg = {
-            let mut cache = self.package.borrow_mut();
-            match cache.as_ref() {
-                Some((f, p)) if *f == file => Arc::clone(p),
-                _ => {
-                    let p = Package::load(&file)
-                        .map_err(|e| ItemError::BadData(format!("{}: {e}", file.display())))?;
-                    *cache = Some((file.clone(), Arc::clone(&p)));
-                    p
-                }
-            }
-        };
-        let walked = props::read_tagged(&pkg, export, 4, &self.typer)
-            .map_err(|e| ItemError::BadData(format!("{path}: {e}")))?;
-        let mut found: Vec<(i32, Option<String>)> = walked
-            .entries
-            .iter()
-            .filter(|e| e.tag.is_some() && e.name == property)
-            .map(|e| {
-                let text = match &e.value {
-                    PropValue::Name(n) | PropValue::Str(n) => Some(n.clone()),
-                    _ => None,
-                };
-                (e.index, text)
-            })
-            .collect();
-        // Python's sort is stable: equal indices keep their order.
-        found.sort_by_key(|(i, _)| *i);
-        Ok(found.into_iter().map(|(_, t)| t).collect())
-    }
-}
-
 /// A weapon's assembly fields of `weapon_recipe.roll`: the type's gestalt mesh, the fragment names the parts draw
 /// (sorted, unique) and the material part's material.
 #[non_exhaustive]
@@ -1222,11 +1150,7 @@ pub struct Assembly {
 
 /// `weapon_recipe.part_fragments` for every part, the type's `GestaltMesh` and the material part's `Material`
 /// (evidence: the 6 slice guns' gestalt data, WEAPON_VISUALS.md; UNVERIFIED rule).
-pub fn assembly(
-    stats: &StatsData<'_>,
-    statics: &StaticArrays,
-    recipe: &WeaponRecipe,
-) -> Result<Assembly, ItemError> {
+pub fn assembly(stats: &StatsData<'_>, recipe: &WeaponRecipe) -> Result<Assembly, ItemError> {
     let gestalt = if recipe.weapon_type.is_empty() {
         Pv::Null
     } else {
@@ -1244,7 +1168,12 @@ pub fn assembly(
                 .as_str()
                 .map(str::to_string),
         ];
-        names.extend(statics.names(part, "AdditionalGestaltModeSkeletalMeshNames")?);
+        names.extend(
+            stats
+                .statics(part, "AdditionalGestaltModeSkeletalMeshNames")?
+                .iter()
+                .map(|n| n.as_str().map(str::to_string)),
+        );
         for n in names.into_iter().flatten() {
             if !n.is_empty() && n != "None" {
                 fragments.insert(n);
@@ -1285,6 +1214,25 @@ impl ItemStats {
             .iter()
             .map(|(label, attr)| (*label, self.value_over(attr, SHIELD_POOL_BASE)))
             .collect()
+    }
+
+    /// The shield card's numbers in `mode`. Reference refuses (`BadData`) a number that is not finite or not above 0,
+    /// as `prepare_stock_shield.stats` refuses it (a capacity of 0 equips as no shield, and the host would replace a
+    /// rate or delay of 0 or less with its stand-ins). Off mode gives the numbers as they are: whether the game
+    /// treats such a shield specially is not read.
+    pub fn shield_card(&self, mode: ParityMode) -> Result<Vec<(&'static str, f64)>, ItemError> {
+        let values = self.shield();
+        if mode == ParityMode::Reference {
+            for (label, v) in &values {
+                if !v.is_finite() || *v <= 0.0 {
+                    return Err(ItemError::BadData(format!(
+                        "{label} evaluates to {}; it must be above 0 (prepare_stock_shield refuses it)",
+                        ow_core::fmt::fmt_py_repr(*v)
+                    )));
+                }
+            }
+        }
+        Ok(values)
     }
 }
 
@@ -1706,11 +1654,8 @@ fn path_of(cx: &mut EvalCx<'_>, obj: ObjRef) -> String {
 }
 
 /// The item's instance (Off mode; module documentation): an object of its kind's class ([`instance_class`]) with
-/// `ExpLevel` at `level` where the class declares it. For a weapon, the type's bases are written with `set_base` and
-/// every effect (type, parts in slot order, the activated internal slots, the name parts) applied with
-/// `apply_effects`, all with the instance as the source, so its stats are its own attributes. For an item, the
-/// external effects and slots are evaluated with the instance as the source ([`ItemStats`]). `known` names objects
-/// the caller holds by path (tests); everything else comes from the world's definition store.
+/// `ExpLevel` at `level` where the class declares it, then [`instantiate_onto`]. `known` names objects the caller
+/// holds by path (tests); everything else comes from the world's definition store.
 pub fn instantiate_stats(
     data: &DefinitionData,
     level: i32,
@@ -1747,10 +1692,24 @@ pub fn instantiate_stats(
                 .map_err(AttrError::from)?;
         }
     }
+    instantiate_onto(object, data, sys, cx, known)
+}
+
+/// The stats of `data` set up on `object`, an instance the caller has (the world's weapon actor, or the object
+/// [`instantiate_stats`] made). A weapon runs, in the script's order (`WillowWeapon.InitializeInternal`),
+/// [`weapon_base_values`], [`weapon_part_base_values`] with its barrel and body, and [`apply_weapon_effects`]; its
+/// stats are then its own attribute stacks. An item's external effects and slots are evaluated with `object` as the
+/// source ([`ItemStats`]).
+pub fn instantiate_onto(
+    object: ObjRef,
+    data: &DefinitionData,
+    sys: &AttributeSystem,
+    cx: &mut EvalCx<'_>,
+    known: &DetMap<String, ObjRef>,
+) -> Result<Instance, ItemError> {
     let definition = find(cx, known, data.definition.as_str())?;
     let mut parts: Vec<ObjRef> = Vec::new();
-    let slots: Vec<Option<ObjectPath>> = data.parts.to_vec();
-    for p in slots.iter().flatten() {
+    for p in data.parts.iter().flatten() {
         parts.push(find(cx, known, p.as_str())?);
     }
     let mut names: Vec<ObjRef> = Vec::new();
@@ -1758,7 +1717,16 @@ pub fn instantiate_stats(
         names.push(find(cx, known, n.as_str())?);
     }
     if data.kind == ItemKind::Weapon {
-        weapon_instance(object, definition, &parts, &names, sys, cx, known)?;
+        let mut slot = |s: WeaponSlot| -> Result<Option<ObjRef>, ItemError> {
+            match data.parts.get(s.index()).and_then(Option::as_ref) {
+                Some(p) => Ok(Some(find(cx, known, p.as_str())?)),
+                None => Ok(None),
+            }
+        };
+        let (barrel, body) = (slot(WeaponSlot::Barrel)?, slot(WeaponSlot::Body)?);
+        weapon_base_values(object, definition, sys, cx)?;
+        weapon_part_base_values(object, barrel, body, sys, cx)?;
+        apply_weapon_effects(object, definition, &parts, &names, sys, cx)?;
         return Ok(Instance {
             object,
             external: ItemStats::default(),
@@ -1771,38 +1739,333 @@ pub fn instantiate_stats(
     Ok(Instance { object, external })
 }
 
-/// The weapon half of [`instantiate_stats`].
-fn weapon_instance(
+/// How one base of [`WEAPON_BASE_VALUES`] is formed from its source field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseFrom {
+    /// The field's value as it is (a plain float or int field).
+    Copy,
+    /// `EvaluateInitializationData(field, the weapon)`.
+    Evaluate,
+}
+
+/// `WillowWeapon.CalculateWeaponBaseValues` as read from script (`research/script_disasm.py`, 2026-11-15;
+/// UNVERIFIED in game): each entry sets the base of a weapon attribute property (opcode 0x5F, the attribute let,
+/// which recomputes the value and sends no change notification) from a field of the weapon type, in this order.
+/// After these, `InstantHitMomentum` is multiplied by 100; the three entries of [`WEAPON_OVERHEAT_VALUES`] follow
+/// only for a type with `bUseOverheatBehavior`.
+pub const WEAPON_BASE_VALUES: [(&str, &str, BaseFrom); 22] = [
+    ("ShotCost", "ShotCost", BaseFrom::Copy),
+    ("ClipSize", "ClipSize", BaseFrom::Copy),
+    ("InstantHitDamage", "InstantHitDamage", BaseFrom::Evaluate),
+    (
+        "InstantHitMomentum",
+        "InstantHitMomentum",
+        BaseFrom::Evaluate,
+    ),
+    ("ProjectilesPerShot", "ProjectilesPerShot", BaseFrom::Copy),
+    ("MeleeDamage", "MeleeDamage", BaseFrom::Evaluate),
+    (
+        "BaseStatusEffectChanceModifier",
+        "BaseStatusEffectChanceModifier",
+        BaseFrom::Evaluate,
+    ),
+    (
+        "StatusEffectDamage",
+        "StatusEffectDamage",
+        BaseFrom::Evaluate,
+    ),
+    ("ExtraShotDelay", "ExtraShotDelay", BaseFrom::Evaluate),
+    ("AimError", "AIAimError", BaseFrom::Copy),
+    ("Spread", "Spread", BaseFrom::Copy),
+    (
+        "PerShotAccuracyImpulse",
+        "PerShotAccuracyImpulse",
+        BaseFrom::Copy,
+    ),
+    ("WeaponRange", "Range", BaseFrom::Copy),
+    ("FireInterval", "FireRate", BaseFrom::Copy),
+    ("BurstInterval", "BurstInterval", BaseFrom::Copy),
+    ("AutomaticBurstCount", "AutomaticBurstCount", BaseFrom::Copy),
+    (
+        "BurstShotAccuracyImpulseScale",
+        "BurstShotAccuracyImpulseScale",
+        BaseFrom::Copy,
+    ),
+    ("ReloadTime", "ReloadTime", BaseFrom::Copy),
+    ("EquipTime", "EquipTime", BaseFrom::Copy),
+    ("PutDownTime", "PutDownTime", BaseFrom::Copy),
+    ("ZoomedEndFOV", "ZoomedEndFOV", BaseFrom::Copy),
+    ("ZoomedRate", "ZoomedRate", BaseFrom::Copy),
+];
+
+/// The factor `CalculateWeaponBaseValues` multiplies `InstantHitMomentum` by after setting it (script, UNVERIFIED in
+/// game).
+pub const MOMENTUM_SCALE: f32 = 100.0;
+
+/// The overheat bases `CalculateWeaponBaseValues` sets when the type has `bUseOverheatBehavior` (script, UNVERIFIED).
+pub const WEAPON_OVERHEAT_VALUES: [(&str, &str); 3] = [
+    ("OverheatRegenDelay", "OverheatRegenDelay"),
+    ("FireRegenDelay", "FireRegenDelay"),
+    ("RegenRate", "RegenRate"),
+];
+
+/// `WillowWeapon.CalculatePartDependentWeaponBaseValues` as read from script (2026-11-15; UNVERIFIED in game): for
+/// the barrel, then the body, when the part is set: with `bIsSpinningEnabled` its spin-up and spin-down durations,
+/// with `bFlapsEnabled` its flap expand and collapse durations, each `EvaluateInitializationData(field, the weapon)`
+/// into a weapon attribute base; and the weapon's `BodyVariation` takes the body's `PartVariation` (a plain
+/// assignment). Each entry: (part flag, part field, barrel property, body property). That the flap block does not
+/// sit inside the spin block is this reading of the jump targets, UNVERIFIED.
+pub const WEAPON_PART_BASE_VALUES: [(&str, &str, &str, &str); 4] = [
+    (
+        "bIsSpinningEnabled",
+        "SpinUpDuration",
+        "BarrelSpinUpDuration",
+        "MagazineSpinUpDuration",
+    ),
+    (
+        "bIsSpinningEnabled",
+        "SpinDownDuration",
+        "BarrelSpinDownDuration",
+        "MagazineSpinDownDuration",
+    ),
+    (
+        "bFlapsEnabled",
+        "FlapsExpandDuration",
+        "BarrelFlapsExpandDuration",
+        "BodyFlapsExpandDuration",
+    ),
+    (
+        "bFlapsEnabled",
+        "FlapsCollapseDuration",
+        "BarrelFlapsCollapseDuration",
+        "BodyFlapsCollapseDuration",
+    ),
+];
+
+/// The property `name` of `obj`'s class, `BadData` when the class declares none (the script names it, so a class
+/// without it is not the class the script runs on).
+fn declared(
+    cx: &mut EvalCx<'_>,
+    obj: ObjRef,
+    name: &str,
+) -> Result<ow_object::ids::PropId, ItemError> {
+    let parts = cx.world.parts();
+    let class = parts.space.heap.get(obj).map_err(AttrError::from)?.class;
+    parts.space.prop(class, name).ok_or_else(|| {
+        ItemError::BadData(format!(
+            "{} declares no {name}",
+            ow_attr::eval::class_path(parts.space, obj)
+        ))
+    })
+}
+
+/// The 0x5F attribute let on `weapon`'s property `name`: `rhs` converted to the property's kind (a float into an int
+/// or byte attribute as the attribute path converts it, `ow_attr::stack::store_as`; an int into a float as C does),
+/// stored into the base companion and the value recomputed in the world's combine form, with no change notification
+/// (`ow_attr::registry::let_base`; NATIVE_BYTECODE_OPCODES opcode 5F). The script-side conversion of the right side is
+/// the VM's (`ow-vm` W3-INTERP); this offline copy follows the attribute store's, UNVERIFIED where they could differ.
+fn let_attribute_base(
+    cx: &mut EvalCx<'_>,
+    weapon: ObjRef,
+    name: &str,
+    rhs: Value,
+) -> Result<(), ItemError> {
+    let prop = declared(cx, weapon, name)?;
+    let form = cx.forms.combine;
+    let parts = cx.world.parts();
+    let decl =
+        parts.space.classes.decl(prop).ok_or_else(|| {
+            ItemError::BadData(format!("{name}: a property without a declaration"))
+        })?;
+    let Some(companions) = decl.attr else {
+        return Err(ItemError::BadData(format!(
+            "{name} is not an attribute property (no base or stack companion), so the attribute let cannot set it"
+        )));
+    };
+    let kind = match decl.kind {
+        ow_object::layout::PropKind::IntAttribute => NumKind::Int,
+        ow_object::layout::PropKind::ByteAttribute { .. } => NumKind::Byte,
+        _ => NumKind::Float,
+    };
+    let as_float = |v: &Value| -> Result<f32, ItemError> {
+        match v {
+            Value::Float(x) => Ok(*x),
+            // The C conversion of an int or byte to float (round to nearest).
+            Value::Int(i) => Ok(*i as f32),
+            Value::Byte(b) => Ok(f32::from(*b)),
+            other => Err(ItemError::BadData(format!(
+                "{name}: a {} cannot be an attribute base",
+                other.kind_name()
+            ))),
+        }
+    };
+    let converted = match (kind, &rhs) {
+        (NumKind::Int, Value::Int(i)) => Value::Int(*i),
+        (NumKind::Int, Value::Byte(b)) => Value::Int(i32::from(*b)),
+        (NumKind::Byte, Value::Byte(b)) => Value::Byte(*b),
+        (k, v) => match ow_attr::stack::store_as(as_float(v)?, k) {
+            Combined::Float(x) => Value::Float(x),
+            Combined::Int(i) => Value::Int(i),
+            Combined::Byte(b) => Value::Byte(b),
+        },
+    };
+    ow_attr::registry::let_base(parts.space, weapon, companions, converted, form)?;
+    Ok(())
+}
+
+/// The value of `holder`'s field `field` for a base: an init evaluated with `weapon` as the source, or a plain
+/// number as it is.
+fn base_source(
+    cx: &mut EvalCx<'_>,
+    sys: &AttributeSystem,
+    weapon: ObjRef,
+    holder: ObjRef,
+    field_name: &str,
+    from: BaseFrom,
+) -> Result<Value, ItemError> {
+    let prop = declared(cx, holder, field_name)?;
+    let v = {
+        let parts = cx.world.parts();
+        parts
+            .space
+            .read(holder, PropAddr::scalar(prop))
+            .map_err(AttrError::from)?
+            .clone()
+    };
+    match (from, &v) {
+        (BaseFrom::Evaluate, Value::Struct(_)) => {
+            let init = init_of(cx, &v)?;
+            Ok(Value::Float(sys.evaluate_init(
+                &init,
+                Some(weapon),
+                None,
+                cx,
+            )?))
+        }
+        (BaseFrom::Evaluate, other) => Err(ItemError::BadData(format!(
+            "{field_name} is a {}, not an AttributeInitializationData",
+            other.kind_name()
+        ))),
+        (BaseFrom::Copy, _) => Ok(v),
+    }
+}
+
+/// `CalculateWeaponBaseValues` on `weapon` from `weapon_type` ([`WEAPON_BASE_VALUES`]; the type's untagged fields
+/// hold their class defaults, as the store loads them). The bases W5-EQUIP's override of the script function binds.
+pub fn weapon_base_values(
+    weapon: ObjRef,
+    weapon_type: ObjRef,
+    sys: &AttributeSystem,
+    cx: &mut EvalCx<'_>,
+) -> Result<(), ItemError> {
+    for (property, field_name, from) in WEAPON_BASE_VALUES {
+        let v = base_source(cx, sys, weapon, weapon_type, field_name, from)?;
+        let_attribute_base(cx, weapon, property, v)?;
+    }
+    let momentum = declared(cx, weapon, "InstantHitMomentum")?;
+    let current = {
+        let parts = cx.world.parts();
+        parts
+            .space
+            .read(weapon, PropAddr::scalar(momentum))
+            .map_err(AttrError::from)?
+            .clone()
+    };
+    let scaled = match current {
+        Value::Float(x) => Value::Float(x * MOMENTUM_SCALE),
+        other => {
+            return Err(ItemError::BadData(format!(
+                "InstantHitMomentum holds a {}, not a float",
+                other.kind_name()
+            )));
+        }
+    };
+    let_attribute_base(cx, weapon, "InstantHitMomentum", scaled)?;
+    let overheat = declared(cx, weapon_type, "bUseOverheatBehavior")?;
+    let uses_overheat = {
+        let parts = cx.world.parts();
+        bool_of(
+            parts
+                .space
+                .read(weapon_type, PropAddr::scalar(overheat))
+                .map_err(AttrError::from)?,
+        )
+    };
+    if uses_overheat {
+        for (property, field_name) in WEAPON_OVERHEAT_VALUES {
+            let v = base_source(cx, sys, weapon, weapon_type, field_name, BaseFrom::Copy)?;
+            let_attribute_base(cx, weapon, property, v)?;
+        }
+    }
+    Ok(())
+}
+
+/// `CalculatePartDependentWeaponBaseValues` on `weapon` ([`WEAPON_PART_BASE_VALUES`]).
+pub fn weapon_part_base_values(
+    weapon: ObjRef,
+    barrel: Option<ObjRef>,
+    body: Option<ObjRef>,
+    sys: &AttributeSystem,
+    cx: &mut EvalCx<'_>,
+) -> Result<(), ItemError> {
+    for (part, is_barrel) in [(barrel, true), (body, false)] {
+        let Some(part) = part else {
+            continue;
+        };
+        for (flag, field_name, barrel_property, body_property) in WEAPON_PART_BASE_VALUES {
+            let set = {
+                let prop = declared(cx, part, flag)?;
+                let parts = cx.world.parts();
+                bool_of(
+                    parts
+                        .space
+                        .read(part, PropAddr::scalar(prop))
+                        .map_err(AttrError::from)?,
+                )
+            };
+            if !set {
+                continue;
+            }
+            let v = base_source(cx, sys, weapon, part, field_name, BaseFrom::Evaluate)?;
+            let property = if is_barrel {
+                barrel_property
+            } else {
+                body_property
+            };
+            let_attribute_base(cx, weapon, property, v)?;
+        }
+        if !is_barrel {
+            let from = declared(cx, part, "PartVariation")?;
+            let to = declared(cx, weapon, "BodyVariation")?;
+            let parts = cx.world.parts();
+            let v = parts
+                .space
+                .read(part, PropAddr::scalar(from))
+                .map_err(AttrError::from)?
+                .clone();
+            parts
+                .space
+                .write(weapon, PropAddr::scalar(to), v)
+                .map_err(AttrError::from)?;
+        }
+    }
+    Ok(())
+}
+
+/// `ApplyAllWeaponAttributeEffects`, the internal slots and `ApplyNamePartWeaponAttributeEffects` on `weapon`: the
+/// type's `WeaponAttributeEffects`, each part's in slot order, the activated internal slots (graded over the type's
+/// and the parts' upgrades; at most the type's `AttributeSlotMaxActivated` slots activate, class default 19, values
+/// outside 1..19 read as 19: the record's rule for weapons, not applied by the Python tool, UNVERIFIED in game), then
+/// the name parts', all applied with `apply_effects` and `weapon` as the source. Returns the applied records (what
+/// an unequip removes).
+pub fn apply_weapon_effects(
     weapon: ObjRef,
     weapon_type: ObjRef,
     parts: &[ObjRef],
     names: &[ObjRef],
     sys: &AttributeSystem,
     cx: &mut EvalCx<'_>,
-    known: &DetMap<String, ObjRef>,
-) -> Result<(), ItemError> {
-    // The bases: a type field the type leaves untagged holds the class default, as the store applies it.
-    for (field_name, name) in TYPE_BASES {
-        let Some(v) = read(cx, weapon_type, field_name)? else {
-            continue;
-        };
-        let value = match &v {
-            Value::Struct(_) => {
-                let init = init_of(cx, &v)?;
-                sys.evaluate_init(&init, Some(weapon), None, cx)?
-            }
-            other => {
-                // A decoded float or int field; a weapon base is a single-precision value.
-                number_of(other)? as f32
-            }
-        };
-        let attribute = find(cx, known, &format!("{ATTR}{name}"))?;
-        if !sys.set_base(attribute, Some(weapon), value, true, cx)? {
-            return Err(ItemError::BadData(format!(
-                "the base of {ATTR}{name} could not be set on the weapon"
-            )));
-        }
-    }
+) -> Result<ow_attr::api::Applied, ItemError> {
     let effects_of = |cx: &mut EvalCx<'_>, holder: ObjRef| -> Result<Vec<EffectData>, ItemError> {
         let mut out = Vec::new();
         for v in elements(read(cx, holder, "WeaponAttributeEffects")?)? {
@@ -1810,16 +2073,24 @@ fn weapon_instance(
         }
         Ok(out)
     };
+    let limit = match read(cx, weapon_type, "AttributeSlotMaxActivated")? {
+        Some(Value::Int(n)) if (1..=19).contains(&n) => usize::try_from(n).unwrap_or(19),
+        Some(Value::Byte(n)) if (1..=19).contains(&n) => usize::from(n),
+        _ => 19,
+    };
     let mut effects = effects_of(cx, weapon_type)?;
     let mut grades: DetMap<String, f64> = DetMap::new();
-    let mut activated: DetSet<String> = DetSet::new();
+    let mut activated: Vec<String> = Vec::new();
     let mut count = |cx: &mut EvalCx<'_>, holder: ObjRef| -> Result<(), ItemError> {
         for u in elements(read(cx, holder, "AttributeSlotUpgrades")?)? {
             let name = name_field(cx, &u, "SlotName")?;
             let increase = number_of(&field(cx, &u, "GradeIncrease")?)?;
             *grades.entry(name.clone()).or_insert(0.0) += increase;
-            if bool_of(&field(cx, &u, "bActivateSlot")?) {
-                activated.insert(name);
+            if bool_of(&field(cx, &u, "bActivateSlot")?)
+                && !activated.contains(&name)
+                && activated.len() < limit
+            {
+                activated.push(name);
             }
         }
         Ok(())
@@ -1884,11 +2155,7 @@ fn weapon_instance(
     for n in names {
         effects.extend(effects_of(cx, *n)?);
     }
-    // `apply_effects` makes its modifiers of the space's `Core.AttributeModifier`, which a store-built space may only
-    // declare (a stack property names the class) until something lays it out: lay it out first.
-    class_id(cx, ow_attr::storage::ATTRIBUTE_MODIFIER_CLASS)?;
-    sys.apply_effects(&effects, Some(weapon), None, cx)?;
-    Ok(())
+    Ok(sys.apply_effects(&effects, Some(weapon), None, cx)?)
 }
 
 /// The item half of [`instantiate_stats`]: the item rule with each init evaluated through `ow-attr` with the

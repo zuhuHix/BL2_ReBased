@@ -41,7 +41,7 @@ use ow_object::ids::ObjRef;
 use crate::ItemError;
 use crate::registry::Pv;
 use crate::stats::{
-    ATTR, AccuracyPool, Bucket, StatsData, Values, WeaponAttributes, WeaponRecipe, accuracy_pool,
+    ATTR, AccuracyPool, Stacks, StatsData, Values, WeaponAttributes, WeaponRecipe, accuracy_pool,
     instance_stat, price_init, short, weapon_attributes,
 };
 use crate::value::sale_value_cap;
@@ -1479,14 +1479,13 @@ fn sale_value(
 }
 
 /// `weapon_stats.zoom_multiplier`: 80 over the type's `ZoomedEndFOV` after the zoom slot's modifiers, or `None`.
-fn zoom_multiplier(weapon_type: &Pv, modifiers: Option<&Bucket>) -> Option<f64> {
+fn zoom_multiplier(weapon_type: &Pv, stacks: &Stacks, attribute: &str) -> Option<f64> {
     let fov = weapon_type.at("ZoomedEndFOV").number()?;
     if fov <= 0.0 {
         return None;
     }
-    let b = modifiers.cloned().unwrap_or_default();
-    let factor = (1.0 + b.scale_up) / (1.0 + b.scale_down);
-    let effective = f32r((f32r(fov) + b.pre_add) * factor + b.post_add);
+    // `combine(f32(fov), mods)`: the same fold as every weapon attribute (Stacks::fold, ow-attr's WeaponGen form).
+    let effective = stacks.fold(attribute, f32r(fov), false);
     if effective <= 0.0 {
         return None;
     }
@@ -1537,7 +1536,7 @@ pub fn weapon_card(
         }
     }
     let zoom = if asks_zoom {
-        zoom_multiplier(&weapon_type, attributes.stacks.get(&zoom_attribute))
+        zoom_multiplier(&weapon_type, &attributes.stacks, &zoom_attribute)
     } else {
         None
     };

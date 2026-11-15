@@ -1,0 +1,9 @@
+# AI-assisted (Claude Code). Lane W4-STATS: --item-card (crates/ow-items/src/{stats,cards}.rs).
+#
+# tests/item_stats_rust_test.py builds an invented install and compares the Rust --item-card (--requests, --data) with
+# tools/weapon_gen_parity.python_gun (weapon_recipe.roll, weapon_stats.evaluate, weapon_firing.accuracy_pool_of) and
+# tools/prepare_stock_shield.stats on the C++ reader. It pins the reference stand-ins of architecture section 6.1 (the
+# roll's and weapon_stats' operand subset), so the line runs in Reference mode. The Off-mode replacements are Rust
+# tests in crates/ow-items/src/stats/tests.rs (decision 2026-11-15-24).
+
+python tests/item_stats_rust_test.py build/Release/ow-package.exe {bin} mode=reference

@@ -243,7 +243,14 @@ fn new_modifier(
     value: f32,
 ) -> Result<ObjRef, AttrError> {
     let WorldParts { space, defs, .. } = cx.world.parts();
-    let class = match (space.classes.by_path(ATTRIBUTE_MODIFIER_CLASS), defs) {
+    // A class the space has laid out is used as it is. One it only declares (a stack property of a store-built class
+    // names the modifier class without laying it out) or does not know is laid out through the store, which defines
+    // it in the space (`DefStore::class_id`); without a store neither can be used.
+    let laid_out = space
+        .classes
+        .by_path(ATTRIBUTE_MODIFIER_CLASS)
+        .filter(|c| space.classes.layout(*c).is_defined());
+    let class = match (laid_out, defs) {
         (Some(c), _) => c,
         (None, Some(defs)) => defs.class_id(space, ATTRIBUTE_MODIFIER_CLASS)?,
         (None, None) => {
@@ -1612,5 +1619,92 @@ mod tests {
         let e = new_modifier(&mut EvalCx::new(&mut w), None, ModifierType::Scale, 1.0).unwrap_err();
         let named = matches!(&e, AttrError::BadData { reason } if reason.contains(ATTRIBUTE_MODIFIER_CLASS));
         assert!(named, "{e:?}");
+    }
+
+    #[test]
+    fn a_modifier_class_the_space_only_declares_is_laid_out_through_the_store() {
+        use crate::api::{AttrWorld, GlobalSlots, NumForms, WorldParts};
+        use ow_core::rand::{CrtStream, Rand15};
+        use ow_defs::DefStore;
+        use ow_defs::identity::IdentityPolicy;
+        use ow_object::ids::PropId;
+        use ow_package::testkit::reflect::Declarations;
+
+        // An invented Core package: Object, and AttributeModifier with Type (a byte) and Value (a float).
+        let mut d = Declarations::new(&["Float", "Byte"]);
+        let object = d.cls("Object", 0);
+        d.default_object(object, "Object");
+        let modifier = d.cls("AttributeModifier", object);
+        d.prop("Byte", modifier, "Type", 0);
+        d.prop("Float", modifier, "Value", 0);
+        d.default_object(modifier, "AttributeModifier");
+        let core = d.build();
+        let dir =
+            std::env::temp_dir().join(format!("ow-attr-modifier-class-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut defs = DefStore::from_synthetic(
+            &dir,
+            &[("Core.upk", core.as_slice())],
+            IdentityPolicy::FirstInScanOrder,
+            ow_core::ParityMode::Off,
+        )
+        .unwrap();
+        let mut space = ObjectSpace::new();
+        // Declared only, as a stack property's element class is before anything lays it out.
+        let declared = space.classes.declare(ATTRIBUTE_MODIFIER_CLASS).unwrap();
+        assert!(!space.classes.layout(declared).is_defined());
+
+        struct StoreWorld<'a> {
+            space: &'a mut ObjectSpace,
+            defs: &'a mut DefStore,
+            slots: GlobalSlots,
+        }
+        impl AttrWorld for StoreWorld<'_> {
+            fn parts(&mut self) -> WorldParts<'_> {
+                WorldParts::new(self.space, Some(self.defs))
+            }
+            fn globals(&mut self) -> Result<ObjRef, AttrError> {
+                Err(ow_core::NotYet::layer_absent(
+                    "the engine globals object",
+                    "ow-world",
+                    "test world",
+                )
+                .into())
+            }
+            fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
+                Ok(None)
+            }
+            fn global_slots(&mut self) -> &mut GlobalSlots {
+                &mut self.slots
+            }
+            fn attribute_changed(
+                &mut self,
+                _: ObjRef,
+                _: PropId,
+                _: NumForms,
+            ) -> Result<(), AttrError> {
+                Ok(())
+            }
+            fn rng(&mut self, _s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
+                Err(
+                    ow_core::NotYet::layer_absent("a random source", "ow-world", "test world")
+                        .into(),
+                )
+            }
+        }
+        let mut w = StoreWorld {
+            space: &mut space,
+            defs: &mut defs,
+            slots: GlobalSlots::default(),
+        };
+        let m = new_modifier(&mut EvalCx::new(&mut w), None, ModifierType::PreAdd, 2.5).unwrap();
+        let class = space.heap.get(m).unwrap().class;
+        assert!(space.classes.layout(class).is_defined());
+        let value = space.prop(class, "Value").unwrap();
+        assert_eq!(
+            space.read(m, PropAddr::scalar(value)).unwrap(),
+            &Value::Float(2.5)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
