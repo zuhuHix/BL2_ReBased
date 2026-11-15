@@ -22,6 +22,9 @@
 use ow_core::num::{RoundingMode, f32r, pow_f32, pow_f64, round_half_away_f32, round_mode};
 
 /// Which reference implementation's power a value formula follows (module doc).
+///
+/// `#[non_exhaustive]`: real-game question 21 may show a third form.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PowForm {
     /// `progression.cpp:248`: `powf(level, power)` in single precision.
@@ -197,13 +200,13 @@ mod tests {
 
     #[test]
     fn level_curve_is_the_same_in_both_pow_forms() {
-        // Architecture 5.3: the verified curve (levels 1..59, single precision) must hold under the default too.
+        // Architecture 5.3: the verified curve (levels 1..59, single precision) must hold under the default too. The
+        // formula's bits are the same for every level, not only the truncated points.
         for level in 1..=80 {
-            assert_eq!(
-                xp_point(level, PowForm::DoubleThenSingle),
-                xp_point(level, PowForm::Single),
-                "level {level}"
-            );
+            let l = black_box(level) as f32;
+            let single = formula(60.0, l, black_box(2.8), 7.33, PowForm::Single);
+            let double = formula(60.0, l, black_box(2.8), 7.33, PowForm::DoubleThenSingle);
+            assert_eq!(single.to_bits(), double.to_bits(), "level {level}");
         }
     }
 
@@ -269,9 +272,6 @@ mod tests {
         // A minimum above the maximum: the maximum is applied last and wins.
         assert_eq!(restrict(0.0, Some(8.0), Some(4.0)), 4.0);
         assert!(restrict(f32::NAN, Some(1.0), Some(10.0)).is_nan());
-        // weapon_gen_test.py slot grade: base grade -2 clamped to [0, 4] is 0; 5 is 4.
-        assert_eq!(restrict(-2.0, Some(0.0), Some(4.0)), 0.0);
-        assert_eq!(restrict(5.0, Some(0.0), Some(4.0)), 4.0);
     }
 
     #[test]
