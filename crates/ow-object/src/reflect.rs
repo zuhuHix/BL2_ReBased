@@ -460,7 +460,8 @@ pub struct LayoutSummary {
 /// The reflection index over a store: loaded classes, cached reference answers, per-package lookup tables, and the
 /// layouts defined from them. Built empty with [`CodeIndex::new`] and filled lazily, or by [`load_code_packages`].
 /// Everything is keyed by package file, not by store id: the store may hand out several ids for one file, and the
-/// index files them all under the first it met ([`CodeIndex::filed_id`], decision 2026-11-15-10).
+/// index files them all under the first it met ([`CodeIndex::filed_id`], decision 2026-11-15-10). An index is valid
+/// for one scan of the store.
 #[derive(Debug, Default)]
 pub struct CodeIndex {
     classes: Vec<ClassInfo>,
