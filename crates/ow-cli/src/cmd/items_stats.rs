@@ -19,9 +19,11 @@
 //! (`balance`, `stage`, `seed`, `spawn_stage`, `stage_cap`; no cap: Reference applies none). The first form rolls
 //! `--count` seeds from `--seed`; `--weapons` writes every weapon balance `Startup.upk` exports (sorted) at stages
 //! 1, 8, 15, 30, 50 and 80 with seeds 1 to `--seeds` (default 20), the comparison's balance requests;
-//! `--requests` reads `balance <path> <stage> <seed>` lines (the comparison's batch format; a fifth field, a stage
-//! cap, is refused) and writes one line each to `--output`. A roll that is not rollable is
-//! `{"balance":...,"not_rollable":"<reason>"}`; in the batch forms a `NotYet` is `{..., "not_yet": "..."}`.
+//! `--requests` reads `balance <path> <stage> <seed>` lines (the comparison's batch format) and writes one line per
+//! request to `--output`, in order. A roll that is not rollable is `{"balance":...,"not_rollable":"<reason>"}`. In the
+//! batch forms a `NotYet` is `{"balance":...,"not_yet":"<what is missing>"}`, a fifth field (a stage cap, which
+//! Reference does not apply) is such a `not_yet` line, a failed evaluation is `{"balance":...,"error":"<why>"}`, and a
+//! request line that names no gun is `{"line":<n>,"error":"<why>"}`.
 //!
 //! **`--data <file>`**: a JSON object naming the item (`kind`, default `weapon`; `balance`; `definition` or `type`;
 //! `manufacturer`; `parts` by slot name; `prefix`; `title`; `game_stage`, the level unless `--level` gives it), the
@@ -35,7 +37,9 @@
 //! Reference only (`NotYet`, exit 3).
 //!
 //! Output is game data: write it under ignored `local/` only (docs/LEGAL.md). Exit codes: 0 success, 1 a bad command
-//! line or a failed evaluation, 3 a layer not there yet (`NotYet`).
+//! line or a failed evaluation, 3 a layer not there yet (`NotYet`). In the batch forms (`--weapons`, `--requests`) a
+//! failed or `NotYet` evaluation is a line of its own and the command still exits 0; only a batch that cannot run at
+//! all (an unreadable request file, a store that does not open) exits 1 or 3.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -56,6 +60,7 @@ use ow_core::{DetMap, DetSet, NotYet, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_defs::overlay::Overlay;
+use ow_defs::store::DefError;
 use ow_items::ItemError;
 use ow_items::cards::{
     CardText, Localization, NEUTRAL_RED_TEXT, instance_numbers, shield_number_text, weapon_card,
@@ -71,6 +76,8 @@ use ow_items::stats::{
 };
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropId};
+use ow_object::reflect::ReflectError;
+use ow_package::store::StoreError;
 
 use super::NOT_PORTED;
 use crate::args::Command;
@@ -220,6 +227,15 @@ fn red_text(file: Option<&str>) -> Result<[u8; 3], ItemError> {
     Ok([channel(0)?, channel(2)?, channel(4)?])
 }
 
+/// Whether a store error says only that a class (or the package that would hold it) is not in the install.
+fn class_missing(e: &DefError) -> bool {
+    matches!(
+        e,
+        DefError::Reflect(ReflectError::ClassNotFound(_))
+            | DefError::Store(StoreError::PackageNotFound(_))
+    )
+}
+
 fn snapshot(stage: i32) -> Result<BalanceSnapshot, ItemError> {
     Ok(BalanceSnapshot::new(
         Playthrough::NORMAL,
@@ -322,14 +338,24 @@ impl Session {
         let reg = build_from_census(input, &python_path_text(&root.to_string_lossy()));
         let sys = AttributeSystem::standard()?;
         let mut space = ObjectSpace::new();
-        let laid_out = [
+        // The store-only world is the fallback for an install that lacks one of these classes (or its package);
+        // any other store error is passed on, not hidden by the fallback.
+        let mut laid_out = true;
+        for class in [
             PLAYER_CONTROLLER_CLASS,
             REPLICATION_INFO_CLASS,
             GAME_REPLICATION_INFO_CLASS,
             GLOBALS_CLASS,
-        ]
-        .iter()
-        .all(|c| defs.class_id(&mut space, c).is_ok());
+        ] {
+            match defs.class_id(&mut space, class) {
+                Ok(_) => {}
+                Err(e) if class_missing(&e) => {
+                    laid_out = false;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         let world = if laid_out {
             World::Offline(Box::new(OfflineWorld::new(
                 space,
