@@ -387,7 +387,7 @@ pub fn partial(builder: &mut PackageBuilder) -> Vec<u8>;       // build_partial(
 // props.rs (W2-PROPS): the serialized tree, references still package-relative. Every type below is #[non_exhaustive];
 // the structs have `new` constructors.
 pub enum PropValue { Int(i32), Float(f32), Bool(bool), Byte(u8), Enum(String), Name(String), Str(String),
-                     Object(i32), Struct { ty: String, fields: Vec<PropEntry>, start: usize /* from the payload start */ },
+                     Object(i32), Struct { ty: String, fields: Vec<PropEntry>, start: usize /* from the payload start; == compares it */ },
                      Array(Vec<PropValue>),
                      Raw(Vec<u8>) /* a value the C++ walker leaves undecoded (unknown tag type, untyped array): kept, never guessed */,
                      Delegate { object: i32, function: String } /* reserved for W3-DECODE; never produced: delegate tags are Raw */ }
@@ -401,7 +401,8 @@ pub enum ElementType { Int, Float, Name, Str, Object, Byte, Struct(String),
 pub struct ArrayScope<'a> { pub owner: &'a str,         // the export's class object name (`Class` for class 0), or
                                                          // the struct name inside a struct
                             pub owner_ref: Option<i32>, // the owning class or struct, where known (top level only)
-                            pub path: &'a [String] }    // enclosing struct/array property names from the root
+                            pub path: &'a [String],     // enclosing struct/array property names from the root
+                            pub root: &'a StreamRoot }  // the walk's root, the same for every array of one walk
 pub trait ArrayTyper { fn element(&self, scope: &ArrayScope<'_>, property: &str) -> Option<ElementType>; }
 pub struct StreamRoot { pub owner: String, pub owner_ref: Option<i32> }   // StreamRoot::for_export(pkg, export)
 pub fn property_range(pkg: &Package, export: i32, start: usize) -> Result<(usize, usize), PropError>;
@@ -414,7 +415,7 @@ pub enum PropError { Package(PackageError), InStruct { ty: String, error: Box<Pr
                      /* the walker's eleven C++ texts */ .. }
 pub struct SchemaTyper { .. }                      // the --array-schema file (ignores the scope); retired by W3-DECODE's gate
 // As shipped by W2-PROPS (decision 2026-11-15-04): PropError, PropEntry.tag, Struct.start, ElementType::Other and the
-// typer's ArrayScope differ from revision 3 here, to carry what the C++ walker prints and what a reflection typer needs.
+// typer's ArrayScope (with its root) differ from revision 3 here, to carry what the C++ walker prints and what a reflection typer needs.
 
 // store.rs (W2-STORE)
 pub struct PackageStore { .. }
