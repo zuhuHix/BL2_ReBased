@@ -43,6 +43,12 @@ jobs:
       - name: Install Pillow for the tests that need it
         run: python -m pip install pillow==12.2.0
 
+      # The Rust release binary for ctest's rust-parity entry (maintainer decision D15, lane W1-HARNESS): configure
+      # registers that entry only when target/release/ow-package.exe exists, and OW_REQUIRE_TEST_TOOLS=ON fails the
+      # configure without it. The entry runs tools/rust_parity.py over tests/rust_parity.d/ in the ctest step below.
+      - name: Rust release binary for the parity manifest
+        run: cargo build --release -p ow-cli --locked
+
       - name: Configure
         # Default generator: whichever Visual Studio the runner image ships.
         run: cmake -S . -B build -A x64 -DOPENWILLOW_LZO=${{ matrix.lzo }} -DOW_REQUIRE_TEST_TOOLS=ON
