@@ -32,8 +32,10 @@
 //!   reference), as the C++ `Runtime::resource` does, and the store logs `defs: no holder for <path>` once per path
 //!   ([`DefStore::take_log`]). It never decodes as `None`. Its key follows the parity mode: in `ParityMode::Off` it
 //!   is keyed by the folded path, so every reference to that path is the same stand-in (the identity rule); under
-//!   `ParityMode::Reference` it is keyed by (filed id of the importing package, import index), one stand-in per
-//!   import, as the C++ `Runtime::resource` caches it;
+//!   `ParityMode::Reference` it is the decoder's stand-in (`ValueCx::resource`), as the C++ `Runtime::resource`
+//!   caches it: keyed by the export `CodeIndex::resolve_ref` resolves the import to where it resolves (under `Loaded`,
+//!   a holder outside the load set still resolves so, and every import of that export shares the stand-in), and by
+//!   (filed id of the importing package, import index), one stand-in per import, only where it does not resolve;
 //! - under `ParityMode::Reference`, the decoder's `?` stand-in for a reference outside its package's tables (decision
 //!   2026-11-15-08) is kept;
 //! - a stand-in of an engine-native class (`ClassTable::is_native`, Reference mode only) is kept.
@@ -79,8 +81,10 @@
 //! `let (code, store) = defs.code_mut(); *code = load_code_packages(store, &mut w.names, &mut w.classes)?;`. Later,
 //! the store's classes are already in the class table and a second definition of them is refused (`AlreadyDefined`).
 //!
-//! **Iterating definitions.** Loaded definitions are instances (`Origin::Export`), so they appear in `Heap::live()`, in
-//! load order; unloaded handles do not. That order depends on what happened to be loaded, so code that iterates
+//! **Iterating definitions.** Loaded definitions are instances (`Origin::Export`), so they appear in `Heap::live()`;
+//! unloaded handles do not. `live()` yields them in first-sight order (the order their handles were allocated, when a
+//! reference or a lookup first named them), not in load order. That order depends on what happened to be named, so
+//! code that iterates
 //! definitions (W4-INTERP2's iterators included) goes through [`DefStore::exports_of_class`] or [`DefStore::census`]
 //! and loads what it visits, never through `live()`.
 //!
@@ -118,11 +122,12 @@ use ow_package::tables::{self, ObjectEntry};
 
 use crate::identity::{
     Census, CensusEntry, FileFailure, FileIndex, Holders, IdentityPolicy, Owner, class_text,
-    full_class, full_path, is_class_default, path_key,
+    dotted, full_class, full_path, is_class_default, path_key,
 };
 use crate::keys::KeyCache;
 use crate::overlay::{
-    Linking, Overlay, OverlayId, OverlayKind, OverlayStatus, PropertyPath, ValueOrigin, write_patch,
+    Linking, Overlay, OverlayId, OverlayKind, OverlayStatus, PatchValue, PropertyPath, ValueOrigin,
+    write_patch,
 };
 use crate::tail::{Tail, Tails};
 
@@ -550,15 +555,19 @@ impl Linker<'_> {
         if let Some(&answer) = self.handles.borrow().holders.get(key) {
             return Ok(answer);
         }
+        // Searched in the `.` form, as the key is made: `A:B` and `A.B` are one path with one answer.
+        let path = &dotted(path);
         let mut answer = None;
         match self.policy {
             IdentityPolicy::FirstInScanOrder => {
                 for file in cx.store.global_candidates(path) {
-                    // As the store's global fallback: a file that fails to load or search is no candidate.
-                    let Ok(index) = self.handles.borrow_mut().file_index(&file) else {
-                        continue;
-                    };
-                    if let Some(export) = index.find(path) {
+                    // As the store's global fallback: a file that fails to load or whose search fails is no holder.
+                    let found = self
+                        .handles
+                        .borrow_mut()
+                        .file_index(&file)
+                        .and_then(|index| index.find(path));
+                    if let Ok(Some(export)) = found {
                         // Only the holder's file is loaded: its definition is decoded from it.
                         let id = cx.store.load_path(&file)?;
                         answer = cx.code.resolve_ref(cx.store, id, export);
@@ -757,9 +766,15 @@ impl Loader<'_, '_> {
         let entry = pkg.object(index).map_err(package_error)?.clone();
         // The outer is the store's object for the outer's path, unless the outer is code (a cooked `Package` object
         // above a definition, a class above its default subobjects): code has no object here, so the outer stays
-        // `None` (no stand-in of an engine-native class is made for it).
-        let outer_is_code = entry.outer > 0
-            && is_code_class(&self.cx.code.class_name(self.cx.store, package, entry.outer));
+        // `None` (no stand-in of an engine-native class is made for it). An export outer's class is its class
+        // reference's name; an import outer's is the class name the import records.
+        let outer_is_code = match entry.outer {
+            0 => false,
+            o if o > 0 => is_code_class(&self.cx.code.class_name(self.cx.store, package, o)),
+            o => pkg
+                .object(o)
+                .is_ok_and(|import| is_code_class(&import.class_name)),
+        };
         if entry.outer != 0 && !outer_is_code {
             match self.linker.handle_for_ref(self.cx, package, entry.outer) {
                 Ok(outer) => self.cx.space.heap.get_mut(o)?.outer = Some(outer),
@@ -866,6 +881,13 @@ impl Loader<'_, '_> {
         let installed = &self.overlays.installed[overlay];
         let path = installed.paths[patch].clone();
         let p = installed.overlay.patches[patch].clone();
+        if installed.overlay.kind == OverlayKind::LiveCapture
+            && self.untagged_empty(o, &path, &p.value)
+        {
+            // live_overlay.py's skip: the property keeps the value it inherits, as the script leaves it.
+            self.overlays.installed[overlay].status.applied += 1;
+            return;
+        }
         let mut link = PatchLink {
             cx: &mut *self.cx,
             linker: self.linker,
@@ -890,6 +912,38 @@ impl Loader<'_, '_> {
                 },
             )),
         }
+    }
+
+    /// Whether a live-capture patch is one `tools/real_game/live_overlay.py` skips: a whole property (one segment, no
+    /// index) given as `null`, `[]` or `{}` that loaded definition `o`'s own export does not tag. Such a property
+    /// keeps the value the class default object gives it; patching it would set `null` where the declaration takes
+    /// none (an int, a float, a struct: a failed patch) or overwrite a non-empty inherited value.
+    fn untagged_empty(&mut self, o: ObjRef, path: &PropertyPath, value: &PatchValue) -> bool {
+        let empty = match value {
+            PatchValue::Null => true,
+            PatchValue::List(items) => items.is_empty(),
+            PatchValue::Fields(fields) => fields.is_empty(),
+            _ => false,
+        };
+        let [segment] = path.segments.as_slice() else {
+            return false;
+        };
+        if !empty || segment.index.is_some() {
+            return false;
+        }
+        let Ok(Origin::Export { package, index }) = self.cx.space.heap.get(o).map(|x| x.origin)
+        else {
+            return false;
+        };
+        let pkg = self.cx.store.shared(package);
+        let Ok(entry) = pkg.object(index).cloned() else {
+            return false;
+        };
+        let Ok(prefix) = self.derive_prefix(package, index, &segment.name) else {
+            return false;
+        };
+        tag_names(&pkg, &entry, prefix.bytes())
+            .is_some_and(|names| !names.iter().any(|n| n.eq_ignore_ascii_case(&segment.name)))
     }
 
     /// Places every patch of overlay `overlay` (`DefStore::push_overlay`).
@@ -998,47 +1052,41 @@ impl Loader<'_, '_> {
 /// export's serial data (module documentation, "Prefix by class"): each header readable, each value skipped by its
 /// size, nothing past the end.
 fn tags_parse(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> bool {
-    let (Ok(start), Ok(size)) = (usize::try_from(entry.offset), usize::try_from(entry.size)) else {
-        return false;
-    };
-    let Some(payload) = start
+    tag_names(pkg, entry, prefix).is_some()
+}
+
+/// The names of the tags in export `entry`'s stream from `prefix` bytes in, in order, when the stream reaches its
+/// `None` tag inside the export's serial data; `None` otherwise.
+fn tag_names(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> Option<Vec<String>> {
+    let start = usize::try_from(entry.offset).ok()?;
+    let size = usize::try_from(entry.size).ok()?;
+    let payload = start
         .checked_add(size)
-        .and_then(|end| pkg.data.get(start..end))
-    else {
-        return false;
-    };
+        .and_then(|end| pkg.data.get(start..end))?;
     if prefix > payload.len() {
-        return false;
+        return None;
     }
     let mut r = Reader::new(payload);
     r.set_pos(prefix);
+    let mut names = Vec::new();
     loop {
-        let Ok(name) = tables::read_name(&mut r, &pkg.names) else {
-            return false;
-        };
+        let name = tables::read_name(&mut r, &pkg.names).ok()?;
         if name == "None" {
-            return true;
+            return Some(names);
         }
-        let Ok(ty) = tables::read_name(&mut r, &pkg.names) else {
-            return false;
-        };
-        let (Ok(value_size), Ok(array_index)) = (r.i32(), r.i32()) else {
-            return false;
-        };
+        let ty = tables::read_name(&mut r, &pkg.names).ok()?;
+        let (value_size, array_index) = (r.i32().ok()?, r.i32().ok()?);
         if value_size < 0 || array_index < 0 {
-            return false;
+            return None;
         }
-        if (ty == "StructProperty" || ty == "ByteProperty")
-            && tables::read_name(&mut r, &pkg.names).is_err()
-        {
-            return false;
+        if ty == "StructProperty" || ty == "ByteProperty" {
+            tables::read_name(&mut r, &pkg.names).ok()?;
         }
-        if ty == "BoolProperty" && r.skip(1).is_err() {
-            return false;
+        if ty == "BoolProperty" {
+            r.skip(1).ok()?;
         }
-        if r.skip(value_size as usize).is_err() {
-            return false;
-        }
+        r.skip(value_size as usize).ok()?;
+        names.push(name);
     }
 }
 
@@ -1289,17 +1337,20 @@ impl DefStore {
     /// once for its export paths and not kept loaded.
     pub fn owners(&mut self, path: &ObjectPath) -> Result<Holders, DefError> {
         let mut out = Holders::default();
-        for file in self.packages.global_candidates(path.as_str()) {
-            let index = self.handles.borrow_mut().file_index(&file);
-            let export = match index {
+        let path = dotted(path.as_str());
+        for file in self.packages.global_candidates(&path) {
+            let found = self
+                .handles
+                .borrow_mut()
+                .file_index(&file)
+                .and_then(|index| index.find(&path));
+            let export = match found {
                 Err(e) => {
                     out.failures.push(FileFailure::new(file, package_error(e)));
                     continue;
                 }
-                Ok(index) => match index.find(path.as_str()) {
-                    Some(export) => export,
-                    None => continue,
-                },
+                Ok(Some(export)) => export,
+                Ok(None) => continue,
             };
             let id = match self.packages.load_path(&file) {
                 Ok(id) => id,
