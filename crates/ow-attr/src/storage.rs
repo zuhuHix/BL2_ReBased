@@ -20,7 +20,6 @@
 
 use std::rc::Rc;
 
-use ow_core::NotYet;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{NameId, ObjRef, PropAddr, PropId};
 use ow_object::layout::{AttrCompanions, PropKind, PropertyDecl};
@@ -37,8 +36,6 @@ use crate::stack::{
 /// The class of the modifier objects a stack holds and `ApplyAttributeEffects` creates (NATIVE_WEAPON_RULES.md
 /// section 1, NATIVE_SKILLS.md section 4).
 pub const ATTRIBUTE_MODIFIER_CLASS: &str = "Core.AttributeModifier";
-
-const RECORD: &str = "NATIVE_ATTRIBUTES.md section 3";
 
 fn bad(reason: String) -> AttrError {
     AttrError::BadData {
@@ -363,24 +360,20 @@ pub(crate) fn set_base_of(
 /// answers false). Used by the by-name natives; a value resolver that names a property may use it too.
 ///
 /// A stack-flagged property without companions is the record's "Modifier stack not found for attribute", a data
-/// bug: [`AttrError::BadData`]. A flagged property that holds no number (a bool, say) is not read:
-/// `NotYet { NotRead }`.
+/// bug: [`AttrError::BadData`]. So is an attribute flag on a property that holds no number (a bool, say), as
+/// W3-ATTREVAL's `ObjectPropertyAttributeValueResolver` answers it.
 pub fn storage_of(
     space: &ObjectSpace,
     owner: ObjRef,
     p: PropId,
 ) -> Result<Option<Storage>, AttrError> {
     let decl = decl_of(space, p)?;
-    let not_read = || -> AttrError {
-        NotYet::not_read(
-            format!(
-                "an attribute property of kind {} ({})",
-                decl.kind.kind_name(),
-                name_text(space, decl.name)
-            ),
-            RECORD,
-        )
-        .into()
+    let not_a_number = || {
+        bad(format!(
+            "{}: an attribute flag on a {} property",
+            name_text(space, decl.name),
+            decl.kind.kind_name()
+        ))
     };
     if decl.is_stack_attribute() {
         let companions = match decl.attr {
@@ -392,7 +385,7 @@ pub fn storage_of(
                 )));
             }
         };
-        let kind = num_kind(&decl.kind).ok_or_else(not_read)?;
+        let kind = num_kind(&decl.kind).ok_or_else(not_a_number)?;
         return Ok(Some(Storage::Stack {
             owner,
             companions,
@@ -400,7 +393,7 @@ pub fn storage_of(
         }));
     }
     if decl.is_plain_attribute() {
-        let kind = num_kind(&decl.kind).ok_or_else(not_read)?;
+        let kind = num_kind(&decl.kind).ok_or_else(not_a_number)?;
         return Ok(Some(Storage::Plain {
             owner,
             prop: p,
