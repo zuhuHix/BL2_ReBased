@@ -99,8 +99,8 @@ impl ContextResolver for Designer {
 
 /// `SkillAttributeContextResolver` (script-only). `Skill.GetAttributeContexts` does not call it: a chain that starts
 /// with this class means "the context is the skill" there (NATIVE_ATTRIBUTES.md section 10). The class's own
-/// script body is not read, so the resolver is `NotYet { NotRead }` for a source. Package not recorded: not
-/// registered ([`super::PACKAGE_NOT_RECORDED`]).
+/// script body is not read, so the resolver is `NotYet { NotRead }` for a source. Registered as
+/// `WillowGame.SkillAttributeContextResolver` ([`super::READ_FROM_PACKAGES`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Skill;
 

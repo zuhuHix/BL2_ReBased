@@ -15,10 +15,10 @@
 //! [`AttrWorld::engine_query`](crate::api::AttrWorld::engine_query); a resolver that needs a query the contract does
 //! not have yet answers `NotYet`, never a guess.
 //!
-//! Class paths: a class is registered only under a path the repository records (the records, `src/`, or
-//! `research/native_by_class.json`). Five implemented classes have no recorded package (see
-//! [`PACKAGE_NOT_RECORDED`]); they are public here and registered by nobody until their path is checked, so a chain
-//! naming one stays the registry's `NotYet { NotRead }`.
+//! Class paths: a class is registered only under a path the repository records (the records, `src/`,
+//! `research/native_by_class.json`) or that was read from the installed code packages ([`READ_FROM_PACKAGES`],
+//! decision 2026-11-15-22). A path is a name of a game object; reading it settles where the class lives, not what
+//! its resolver does, so each rule keeps its label.
 
 mod actors;
 mod inventory;
@@ -46,23 +46,14 @@ use crate::registry::AttributeSystem;
 /// The record every resolver of this module names.
 pub(crate) const RECORD: &str = "NATIVE_ATTRIBUTES.md section 5";
 
-/// Implemented resolver classes whose package no record names, so they are not registered (registering one under a
-/// guessed package would be an invented path). Each is `(class name, type in this module)`.
-pub const PACKAGE_NOT_RECORDED: &[(&str, &str)] = &[
-    ("OffHandWeaponAttributeContextResolver", "OffHandWeapon"),
-    (
-        "PlayerControllerAttributeContextResolver",
-        "PlayerController",
-    ),
-    (
-        "WeaponResourcePoolAttributeContextResolver",
-        "WeaponResourcePool",
-    ),
-    (
-        "EquippedInventoryAttributeContextResolver",
-        "EquippedInventory",
-    ),
-    ("SkillAttributeContextResolver", "Skill"),
+/// The resolver classes whose package was read from the installed code packages' export tables (each a direct
+/// subclass of `Engine.AttributeContextResolver`; decision 2026-11-15-22). No record named their package before.
+pub const READ_FROM_PACKAGES: &[&str] = &[
+    "Engine.OffHandWeaponAttributeContextResolver",
+    "Engine.WeaponResourcePoolAttributeContextResolver",
+    "WillowGame.PlayerControllerAttributeContextResolver",
+    "WillowGame.EquippedInventoryAttributeContextResolver",
+    "WillowGame.SkillAttributeContextResolver",
 ];
 
 /// Where an unread class is known from: the notes' list of classes not read.
@@ -76,10 +67,9 @@ const CENSUS_ONLY: &str = "research/native_by_class.json (not in the notes)";
 /// with the place it is known from. Each is registered as [`Unread`], so a chain naming one says which class is
 /// missing.
 ///
-/// Left out: `ObjectPropertyContextResolver` and the `BestTarget...` families (no full path recorded), and
-/// `WillowGame.InstanceDataContextResolver`, which the census lists but nothing records as an attribute context
-/// resolver: its name does not say so, and its super class is not recorded, so registering it here would claim a
-/// kind the evidence does not give.
+/// Not listed (an unregistered class answers the registry's `NotYet { NotRead }` all the same): the context resolver
+/// classes the code packages export that no note names, `WillowGame.InstanceDataContextResolver` among them (the
+/// packages show it is a direct subclass of `Engine.AttributeContextResolver`; decision 2026-11-15-22 lists the rest).
 pub const UNREAD: &[(&str, &str)] = &[
     ("Engine.ProjectileAttributeContextResolver", NOT_READ_YET),
     ("Engine.VehicleAttributeContextResolver", NOT_READ_YET),
@@ -118,8 +108,8 @@ pub const UNREAD: &[(&str, &str)] = &[
     ),
 ];
 
-/// Registers every context resolver class this module implements under its recorded path, `NoContextNeeded`
-/// included, and the [`UNREAD`] classes as [`Unread`].
+/// Registers every context resolver class this module implements under its recorded path ([`READ_FROM_PACKAGES`]
+/// included), `NoContextNeeded` included, and the [`UNREAD`] classes as [`Unread`].
 pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrError> {
     let mut sys = sys
         .with_context_resolver(
@@ -129,6 +119,23 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         .with_context_resolver("Engine.ControllerAttributeContextResolver", Controller)?
         .with_context_resolver("Engine.PawnAttributeContextResolver", Pawn)?
         .with_context_resolver("Engine.WeaponAttributeContextResolver", Weapon)?
+        .with_context_resolver(
+            "Engine.OffHandWeaponAttributeContextResolver",
+            OffHandWeapon,
+        )?
+        .with_context_resolver(
+            "Engine.WeaponResourcePoolAttributeContextResolver",
+            WeaponResourcePool,
+        )?
+        .with_context_resolver(
+            "WillowGame.PlayerControllerAttributeContextResolver",
+            PlayerController,
+        )?
+        .with_context_resolver(
+            "WillowGame.EquippedInventoryAttributeContextResolver",
+            EquippedInventory,
+        )?
+        .with_context_resolver("WillowGame.SkillAttributeContextResolver", Skill)?
         .with_context_resolver("Engine.ResourcePoolAttributeContextResolver", ResourcePool)?
         .with_context_resolver("Engine.GameInfoAttributeContextResolver", GameInfo)?
         .with_context_resolver(
